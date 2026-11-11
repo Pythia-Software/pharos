@@ -120,6 +120,10 @@
       "field": "disclosures"
     },
     {
+      "file": "web/src/reader-navigator.tsx",
+      "field": "disclosures"
+    },
+    {
       "file": "web/src/thinking-dashboard.tsx",
       "field": "disclosures"
     },
@@ -429,6 +433,10 @@
     },
     {
       "file": "web/src/delegation.tsx",
+      "field": "timeline_visibility"
+    },
+    {
+      "file": "web/src/reader-navigator.tsx",
       "field": "timeline_visibility"
     }
   ],
@@ -7683,6 +7691,16 @@
       "reason": "A whole-key default atomically writes reader_filter_level, reader_filter, reader_writing, reader_events, reader_labels and reader_highlight_hidden through the classic reader owner; its selected radio is derived from those fields."
     },
     {
+      "key": "80bfd41f2f6475ec:0",
+      "file": "web/src/reader-key-filter.tsx",
+      "owner": "ReaderKeyFilter",
+      "tag": "button",
+      "control": "data-view-field=\"reader_highlight_hidden\" onClick={() => onChange(visible ? [] : all, true)}",
+      "binding": "reader_highlight_hidden",
+      "contract": "view.reader_highlight_hidden",
+      "reason": "The master toggle writes reader_writing, reader_events, reader_labels and available highlight exclusions through the classic reader owner; unavailable exclusions are preserved."
+    },
+    {
       "key": "58b5064e2d686b61:0",
       "file": "web/src/reader-navigator.tsx",
       "owner": "choice",
@@ -7691,6 +7709,16 @@
       "binding": "reader_navigator",
       "contract": "view.reader_navigator",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "4c7e0bb9e5848e3c:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "TimelineLegend",
+      "control": "data-view-field=\"timeline_visibility\" onSelect={(section,values,action)=>setVisibility(previous=>updateTimelineVisibility(previous,section,values,action))}",
+      "binding": "timeline_visibility",
+      "contract": "view.timeline_visibility",
+      "reason": "The embedded timeline key writes timeline_visibility through the shared view state and filters the reader's ribbon."
     },
     {
       "key": "5c536168277a2959:0",
@@ -7727,6 +7755,26 @@
       "control": "onClick={()=>data.jumpContext(entry)}",
       "contract": "transient",
       "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
+    },
+    {
+      "key": "29cfe359713cf44e:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderRibbonSection",
+      "tag": "span",
+      "control": "onClick={event=>{event.preventDefault();event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width);}}",
+      "contract": "transient",
+      "reason": "Clicking a ribbon scrolls and highlights its source message; scroll position is transient and the accordion uses ViewDisclosure."
+    },
+    {
+      "key": "e14ad9c01a55f876:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderRibbonSection",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={viewKey}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "110c067b8fa806e8:0",
@@ -8925,6 +8973,16 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "The shared disclosure keeps the Key control visible in both presentations. disclosures[\"timeline-key\"] stores the expanded labeled Key (default true) or the compact icon-only Key; icons retain their existing visibility menus."
+    },
+    {
+      "key": "bb7bbe4ad6c301fc:0",
+      "file": "web/src/timeline-legend.tsx",
+      "owner": "TimelineLegend",
+      "tag": "button",
+      "control": "data-view-field=\"timeline_visibility\" onClick={()=>onSelect('sections',populated.map(([section])=>section),visible?'hide':'show')}",
+      "binding": "timeline_visibility",
+      "contract": "view.timeline_visibility",
+      "reason": "The embedded timeline master toggle updates timeline_visibility for the sections represented by this conversation."
     },
     {
       "key": "c2ef28fbea4ddd0a:0",

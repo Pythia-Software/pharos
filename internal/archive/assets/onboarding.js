@@ -111,14 +111,20 @@ function pharosClaudeImportSummary(job) {
 // it is offered only after Pharos has stopped on its own or been stopped.
 function pharosClaudeWatchLine(item) {
   const files=`${item.collected||0} of ${item.expected||0} files collected`;
+  const ingestion=item.ingestion;
+  const stages={capturing:'Preserving collected files','discovering inputs':'Reading collected conversations',checking:'Checking for changed conversations',indexing:'Adding conversations to your library','waiting for catalog':'Waiting to save conversations','indexing retained snapshots':'Indexing retained snapshots','saving index':'Saving ingestion results',complete:'Finishing ingestion'};
+  const phase={queued:'Waiting for the library',indexing:stages[ingestion?.stage]||'Preparing ingestion'}[item.phase]||'Collecting export files';
   const line={
-    fetching:{text:item.waiting_file?`Waiting for ${item.waiting_file} from ${item.browser_label||'your browser'} · ${files}`:`Collecting · ${files}`,actions:['stop'],attention:false},
-    paused:{text:`Paused · ${files}`,actions:['retry','stop'],attention:true},
-    stopped:{text:`Stopped · ${files}`,actions:['retry'],attention:false},
-    expired:{text:`Download links expired · ${files}`,actions:[],attention:true},
-    imported:{text:`Imported · ${files}`,actions:[],attention:false},
+    fetching:{text:item.waiting_file?`Waiting for ${item.waiting_file} from ${item.browser_label||'your browser'}`:phase,actions:['stop'],attention:false},
+    paused:{text:ingestion?'Ingestion paused':'Collection paused',actions:['retry','stop'],attention:true},
+    stopped:{text:'Stopped',actions:['retry'],attention:false},
+    expired:{text:'Download links expired',actions:[],attention:true},
+    imported:{text:'Ready in your library',actions:[],attention:false},
   }[item.state]||{text:files,actions:[],attention:false};
-  return {...line,detail:item.message||''};
+  const count=(n,word)=>`${Number(n||0).toLocaleString()} ${word}${n===1?'':'s'}`;
+  const progress=ingestion&&(ingestion.processed||ingestion.conversations||ingestion.messages||ingestion.skipped_current)
+    ?`${count(ingestion.processed,'workspace')} processed · ${count(ingestion.conversations,'conversation')} written · ${count(ingestion.messages,'message')} written${ingestion.skipped_current?` · ${Number(ingestion.skipped_current).toLocaleString()} already current`:''}`:'';
+  return {...line,files,progress,detail:item.message||''};
 }
 
 // Source setup UI.
@@ -267,6 +273,7 @@ function pharosClaudeWatchLine(item) {
 .claude-downloads-watch{margin-top:16px;padding:4px 20px 16px}.layout-preference-card.claude-downloads-watch>.optional-behavior{padding:16px 0;border-bottom:0}
 .claude-watch-how{margin:0 0 12px}.claude-watch-exports{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}.claude-watch-export{min-width:0}.claude-watch-exports:empty{display:none}
 .claude-watch-export h4{margin:0;font-size:var(--fs-base)}.claude-watch-export p{margin:4px 0 0;overflow-wrap:anywhere}
+.claude-watch-library{margin-top:12px;min-width:0;overflow-wrap:anywhere}.claude-watch-library h4{margin:0;font-size:var(--fs-base)}.claude-watch-library p{margin:6px 0}.claude-watch-library ul{margin:6px 0;padding-left:20px}
 .claude-watch-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
 .claude-watch-options{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:0 0 12px}.claude-watch-options>p{flex-basis:100%;margin:0}
 .claude-watch-browser{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;max-width:100%}.claude-watch-browser select{flex:1 1 12em;width:100%;max-width:100%;min-width:0}
@@ -990,8 +997,8 @@ function pharosClaudeWatchLine(item) {
       options.append(label,check,node('p','muted','Choose the browser profile that is signed in to your Claude account. When a download arrives, Pharos remembers that profile for the account’s later exports.'));
       const how=node('p','muted claude-watch-how','To start an export, open Claude, then Settings → Privacy → Export data. When Claude emails you, download the manifest from its link into Downloads. The links work for 24 hours.');
       const problem=node('p','sync-note badtext');problem.setAttribute('role','status');
-      const list=node('div','claude-watch-exports');
-      root.replaceChildren(row,options,how,problem,list);root.hidden=false;
+      const list=node('div','claude-watch-exports'),library=node('div','source-card claude-watch-library');
+      root.replaceChildren(row,options,how,problem,list,library);root.hidden=false;
     }
     refreshClaudeWatch();
   }
@@ -1008,19 +1015,50 @@ function pharosClaudeWatchLine(item) {
     if(watch.enabled)browserOptions(root.querySelector('#claudeDownloadsBrowser'),watch,watch.browser||'');
     problem.textContent=!watch.available?'Opening download links automatically needs the Pharos Mac app on macOS.':watch.enabled?watch.problem||'':'';
     problem.hidden=!problem.textContent;
+    const library=root.querySelector('.claude-watch-library'),libraryStatus=watch.library;
+    const browse=window.pharosQueryTables?.sourceWorkspacesURL?.('claude-ai');
+    const librarySignature=JSON.stringify([libraryStatus,browse]);
+    if(library.dataset.signature!==librarySignature){
+      library.dataset.signature=librarySignature;library.hidden=!libraryStatus;
+      if(libraryStatus){
+        if(!library.firstChild){
+          const title=node('h4','','Claude.ai workspaces in your library'),counts=node('p','claude-library-counts'),error=node('p','claude-library-error muted'),recentLabel=node('p','claude-library-recent-label muted','Recently active imported workspaces'),recent=node('ul','claude-library-recent'),about=node('p','muted','Across all exports in this source. Each Claude.ai conversation is grouped into a workspace.'),browseLink=node('a','claude-library-browse','Browse all Claude.ai workspaces');
+          library.append(title,counts,error,recentLabel,recent,about,browseLink);
+        }
+        const counts=library.querySelector('.claude-library-counts'),error=library.querySelector('.claude-library-error'),recent=library.querySelector('.claude-library-recent'),browseLink=library.querySelector('.claude-library-browse');
+        counts.textContent=`${Number(libraryStatus.workspaces).toLocaleString()} workspaces · ${Number(libraryStatus.conversations).toLocaleString()} conversations`;
+        counts.hidden=!!libraryStatus.error;error.textContent=libraryStatus.error||'';error.hidden=!libraryStatus.error;
+        const existing=new Map([...recent.children].map(entry=>[entry.dataset.workspaceId,entry]));
+        const focused=recent.contains(document.activeElement)?document.activeElement.dataset.focusKey:'';
+        const entries=(libraryStatus.recent||[]).map(workspace=>{
+          let entry=existing.get(workspace.id);
+          if(!entry){entry=node('li');entry.dataset.workspaceId=workspace.id;const link=node('a');link.dataset.focusKey=`claude-workspace:${workspace.id}`;entry.append(link)}
+          const link=entry.firstChild;link.href=workspace.url;if(link.textContent!==workspace.title)link.textContent=workspace.title;
+          return entry;
+        });
+        if(entries.length!==recent.children.length||entries.some((entry,index)=>recent.children[index]!==entry)){
+          recent.replaceChildren(...entries);
+          if(focused)recent.querySelector(`[data-focus-key="${window.CSS.escape(focused)}"]`)?.focus({preventScroll:true});
+        }
+        recent.hidden=!!libraryStatus.error||!entries.length;library.querySelector('.claude-library-recent-label').hidden=recent.hidden;
+        browseLink.hidden=!browse;if(browse)browseLink.href=browse;
+      }
+    }
     const focusKey=list.contains(document.activeElement)?document.activeElement.dataset.focusKey:'';
     // A row whose export did not change is kept as it is, so an open picker
     // or an unsaved profile choice survives polling for another export.
     const existing=new Map([...list.children].map(row=>[row.dataset.id,row]));
     const browsersSignature=(watch.browsers||[]).map(choice=>choice.key+'\u0000'+choice.label).join('\u0001');
     const rows=(watch.exports||[]).slice(0,5).map(item=>{
-      const signature=JSON.stringify([item.state,item.collected,item.expected,item.message,item.waiting_file,item.browser,item.browser_label,item.exported_at,!!watch.enabled,browsersSignature]);
+      const signature=JSON.stringify([item.state,item.phase,item.ingestion,item.collected,item.expected,item.message,item.waiting_file,item.browser,item.browser_label,item.exported_at,!!watch.enabled,browsersSignature]);
       const kept=existing.get(item.id);
       if(kept&&kept.dataset.signature===signature)return kept;
       const line=pharosClaudeWatchLine(item),row=node('div','source-card claude-watch-export'+(line.attention?' attention':''));
       row.dataset.id=item.id;row.dataset.signature=signature;
       const when=item.exported_at?new Date(item.exported_at).toLocaleString():'Claude export';
       row.append(node('h4','',`Export from ${when}`),node('p','',line.text));
+      row.append(node('p','muted',line.files));
+      if(line.progress)row.append(node('p','',line.progress),node('p','muted','This update includes earlier exports in the source. Existing conversations are updated in place.'));
       if(line.detail)row.append(node('p',line.attention?'sync-note badtext':'muted',line.detail));
       if(item.state==='imported'&&window.pharosQueryTables?.sourceConversationsURL){
         const link=node('a','','View Claude.ai conversations →');link.href=window.pharosQueryTables.sourceConversationsURL('claude-ai');
@@ -1043,11 +1081,12 @@ function pharosClaudeWatchLine(item) {
       return row;
     });
     if(rows.length!==list.children.length||rows.some((row,index)=>list.children[index]!==row))list.replaceChildren(...rows);
-    if(focusKey&&!list.contains(document.activeElement))list.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
+    if(focusKey&&!list.contains(document.activeElement))list.querySelector(`[data-focus-key="${window.CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
     // Follow an export in progress while its section is on screen.
     if(watch.enabled&&(watch.exports||[]).some(item=>item.state==='fetching'))claudeWatch.timer=setTimeout(()=>{if(root.isConnected&&!root.parentElement.closest('[hidden]'))refreshClaudeWatch()},3000);
   }
   window.pharosClaudeDownloads={render:renderClaudeWatch};
+  window.addEventListener('pharos:search-ready',()=>{if(claudeWatch.root?.isConnected)refreshClaudeWatch()});
   // This script is deferred: Settings → Sources may already be showing.
   const claudeWatchSection=document.getElementById('claudeDownloadsWatchSection');
   if(claudeWatchSection&&!claudeWatchSection.parentElement.closest('[hidden]'))renderClaudeWatch(claudeWatchSection);

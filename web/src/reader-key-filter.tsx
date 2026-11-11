@@ -6,8 +6,9 @@ import { readerKeyState, updateReaderKeys } from "./reader-key-model";
 
 export type ReaderKey = { id: string; label: string; values: string[]; title?: string; className?: string;
   family?: string; count?: number; children?: ReaderKey[]; available?: boolean; note?: string };
-type ReaderKeys = { items: ReaderKey[]; all: string[]; shown: string[]; onChange: (shown: string[]) => void };
-function ReaderKeyFilter({ items, all, shown, onChange }: ReaderKeys) {
+type ReaderKeys = { items: ReaderKey[]; all: string[]; shown: string[]; groupToggle?: boolean; onChange: (shown: string[], allKinds?: boolean) => void };
+function ReaderKeyFilter({ items, all, shown, groupToggle = false, onChange }: ReaderKeys) {
+  const visible = all.filter(value => shown.includes(value)).length;
   const chip = (item: ReaderKey): React.ReactNode => <span key={item.id} className={`reader-key ${item.className ?? ""}`} data-label-family={item.family} title={item.title} role={item.children ? "group" : undefined} aria-label={item.children ? item.label : undefined}>
     {item.available === false ? <span className="reader-key-unavailable">{item.label}{item.note ? ` · ${item.note}` : ""}</span> : <ChartLegendChip
       item={{ key: item.id, label: item.label, color: "" }} {...readerKeyState(all, shown, item.values)}
@@ -17,7 +18,8 @@ function ReaderKeyFilter({ items, all, shown, onChange }: ReaderKeys) {
       onAction={action => onChange(updateReaderKeys(all, shown, item.values, action))} />}
     {item.children ? <span className="reader-key-children">{item.children.map(chip)}</span> : null}
   </span>;
-  return <>{items.map(chip)}</>;
+  const children = <span className="reader-key-children">{items.map(chip)}</span>;
+  return groupToggle ? <div className="reader-key conversation-key-group" role="group" aria-label="Text highlighting"><button type="button" className="usage-legend-item usage-legend-category conversation-key-toggle" data-view-field="reader_highlight_hidden" aria-pressed={visible === 0 ? false : visible === all.length ? true : "mixed"} disabled={!all.length} title={visible ? "Hide text highlighting" : "Show text highlighting"} onClick={() => onChange(visible ? [] : all, true)}>Text highlighting</button>{children}</div> : children;
 }
 type KeyPreset = { id: string; label: string; note: string };
 type KeyDefaults = { presets: KeyPreset[]; selected: string | null; onChoose: (id: string) => void };

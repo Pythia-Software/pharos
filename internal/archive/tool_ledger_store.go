@@ -466,15 +466,25 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 // concurrent ingest cannot leave a newer transcript with an older ledger.
 func rebuildStoredToolLedger(ctx context.Context, tx *sql.Tx, id string) error {
 	var workspace, provider string
-	var model, effort sql.NullString
-	if err := tx.QueryRowContext(ctx, "SELECT workspace_id,provider,model,effort FROM conversations WHERE id=?", id).Scan(&workspace, &provider, &model, &effort); err != nil {
+	var model, effort, harness sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT workspace_id,provider,model,effort,harness FROM conversations WHERE id=?", id).Scan(&workspace, &provider, &model, &effort, &harness); err != nil {
 		return err
 	}
 	messages, err := storedMessages(ctx, tx, id)
 	if err != nil {
 		return err
 	}
-	record := WorkspaceRecord{Conversations: []ConversationRecord{{Provider: provider, Model: model.String, Effort: effort.String, Messages: messages}}}
+	if harness.String == "claude-ai-export" {
+		for i := range messages {
+			if at, recognized := claudeAIRetainedToolTime(messages[i]); recognized && at != messages[i].CreatedAt {
+				if _, err := tx.ExecContext(ctx, "UPDATE messages SET created_at=? WHERE conversation_id=? AND native_id=?", nilIfEmpty(at), id, messages[i].NativeID); err != nil {
+					return err
+				}
+				messages[i].CreatedAt = at
+			}
+		}
+	}
+	record := WorkspaceRecord{Conversations: []ConversationRecord{{Provider: provider, Model: model.String, Effort: effort.String, Harness: harness.String, Messages: messages}}}
 	prepareRecordAccounting(&record)
 	for i := range messages {
 		normalized := normalizeMessageInference(messages[i])

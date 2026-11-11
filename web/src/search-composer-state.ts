@@ -37,3 +37,9 @@ export function searchURL(state: SearchComposerState): string {
   else { params.set("kind", state.kind); params.set("search", state.file.trim()); if (state.fileCase) params.set("case", "1"); }
   return `/library?${params}`;
 }
+
+export function sourceWorkspacesURL(kind: string, schema: FieldSchema): string {
+  const state = freshSearch(schema);
+  state.query = { ...state.query, where: [{ field: "source_kind", op: "=", value: kind }] };
+  return queryURL("library", state.query);
+}

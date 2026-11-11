@@ -673,7 +673,7 @@ test('timeline zoom retains sessions and blanks out-of-window usage',{skip},asyn
 test('Timeline tool hover selects the recorded call on each overlapping track',{skip},async t=>{
  const api={'GET /api/work/:id/parallel':({query})=>{
   const data=defaultApi['GET /api/work/:id/parallel']({query});
-  return {...data,lanes:data.lanes.map(lane=>lane.session!=='s-root'?lane:{...lane,marks:[lane.marks[0],{...lane.marks[1],start:lane.marks[0].start+20000,end:lane.marks[0].end-10000}]})};
+  return {...data,lanes:data.lanes.map(lane=>lane.session!=='s-root'?lane:{...lane,marks:[lane.marks[0],{...lane.marks[1],start:lane.marks[0].start+20000,end:lane.marks[0].end-10000},{...lane.marks[0],tool_id:'tool-unknown',name:'Claude Docs update',preview:'Update document',start:lane.marks[0].end+20000,end:lane.marks[0].end+20000,end_known:false}]})};
  }};
  const app=await open(t,{url:`/work/${workID}?explorer=timeline`,api,ready:'.lt-session-root'}),{page}=app;
  const root=page.locator('[data-session-id="s-root"] .lt-session-root > summary');
@@ -687,6 +687,14 @@ test('Timeline tool hover selects the recorded call on each overlapping track',{
   const content=page.getByRole('tooltip').locator('pre');await content.waitFor();
   assert.equal(await content.textContent(),preview);
  }
+ const unknown=root.locator('[data-tool-id="tool-unknown"]');
+ const guide=unknown.locator('line');
+ assert.notEqual(await guide.evaluate(line=>getComputedStyle(line).strokeDasharray),'none','an unrecorded end uses a dotted guide');
+ await page.locator('.lt-timeline-legend').getByText('End time unknown',{exact:true}).waitFor();
+ const point=await guide.evaluate(line=>{const p=new DOMPoint((Number(line.getAttribute('x1'))+Number(line.getAttribute('x2')))/2,Number(line.getAttribute('y1'))).matrixTransform(line.getScreenCTM());return {x:p.x,y:p.y};});
+ await page.mouse.move(point.x,point.y);
+ await page.getByRole('tooltip').getByText('End time unknown',{exact:true}).waitFor();
+ await app.shot('tool-end-not-recorded');
 });
 
 test('Timeline Key menus filter ribbons and restore selections with keyboard access',{skip},async t=>{
@@ -1883,6 +1891,8 @@ test('message card labels and sentence events restore independently in the reade
  const at='2026-11-05T14:00:00Z',prompt='Please review the importer and keep the existing CSV format. Show the evidence before changing the parser.',thought='I should compare the parser with the saved fixtures first. The import fails when a quoted cell contains a newline. I will preserve that cell and add a focused check.'+' Additional context.'.repeat(30),reply='The parser now keeps quoted newlines inside their cells. The existing fixtures pass, and the added check covers the failing import.';
  const labeled=(id,role,kind,text,label,segment,seconds)=>({id,native_id:id,role,kind,text,created_at:new Date(Date.parse(at)+seconds*1000).toISOString(),labels:{ids:[label],probs:{[label]:.94},segment}});
  const messages=[labeled('tint-prompt','user','message',prompt,'P.request.work.implement','H-typed',0),labeled('tint-thinking','assistant','reasoning',thought,'C.deliberation.plan','TH',10),labeled('tint-reply','assistant','message',reply,'C.report.verification','AR',25)];
+ messages.push({id:'tint-read',native_id:'tint-read',role:'assistant',kind:'tool_call',call_id:'read-csv',text:JSON.stringify({name:'Read',input:{file_path:'/repo/fixtures.csv'}}),created_at:new Date(Date.parse(at)+30000).toISOString()},
+  {id:'tint-read-result',native_id:'tint-read-result',role:'tool',kind:'tool_result',call_id:'read-csv',text:JSON.stringify({content:'CSV fixture'}),created_at:new Date(Date.parse(at)+31000).toISOString()});
  const sentence='The import fails when a quoted cell contains a newline.';
  messages[1].agent_events=[{id:'e-tint',kind:'obstacle',label:'Obstacle or roadblock',group:'Friction',probability:.91,sentence:[thought.indexOf(sentence),thought.indexOf(sentence)+sentence.length],subject:[],response:[]}];
  const taxonomy=[{id:'P.request.work.implement',name:'Implement',definition:'Requests a concrete change.'},{id:'C.deliberation.plan',name:'Plan',definition:'Considers how to do the work.'},{id:'C.report.verification',name:'Verification',definition:'Reports checks and their evidence.'}];
@@ -1895,9 +1905,64 @@ test('message card labels and sentence events restore independently in the reade
  const elsewhere=['events:event-learning','labels:P.frame'];
  const url=`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all&reader_labels=1&reader_events=1&reader_writing=0&reader_highlight_hidden=${encodeURIComponent(JSON.stringify(elsewhere))}`;
  const app=await open(t,{api,url,ready:'.conversation-panel.show-labels.show-events'}),{page}=app;
+ const assertKeyButtonsFit=async()=>{
+  const overflowing=await page.locator('.transcript-key').evaluate(key=>{
+   const groups=key.querySelectorAll('.reader-key:has(> .reader-key-children), .transcript-timeline-key .is-embedded, .transcript-timeline-key :is(.lt-legend-section, .lt-ontology-role, .lt-ontology-families > .lt-mode-group)');
+   return [...groups].flatMap(group=>{
+    const bounds=group.getBoundingClientRect();
+    return [...group.querySelectorAll('button.usage-legend-item')].filter(button=>{
+     const rect=button.getBoundingClientRect();
+     return rect.top<bounds.top-0.5||rect.bottom>bounds.bottom+0.5||rect.left<bounds.left-0.5||rect.right>bounds.right+0.5;
+    }).map(button=>button.getAttribute('aria-label')||button.textContent.trim());
+   });
+  });
+  assert.deepEqual(overflowing,[],'key buttons stay inside their groups');
+ };
  const reasoning=page.locator('.action-row details').filter({has:page.locator('summary .activity-title',{hasText:'Reasoning'})}).first();
  await reasoning.locator('summary').click();
  await page.locator('.thinking-card mark.agent-event').waitFor();
+ const highlights=page.locator('.transcript-highlights'),highlightGroup=highlights.getByRole('group',{name:'Text highlighting',exact:true}),highlightToggle=highlightGroup.getByRole('button',{name:'Text highlighting',exact:true});
+ for(const name of ['Agent events category','Message labels category'])assert.ok(await highlightGroup.getByRole('button',{name,exact:true}).isVisible(),`${name} belongs to Text highlighting`);
+ await highlightToggle.focus();await highlightToggle.press('Space');
+ assert.equal(await highlightToggle.getAttribute('aria-pressed'),'false');
+ assert.equal(await page.locator('.conversation-panel').evaluate(panel=>panel.classList.contains('show-events')||panel.classList.contains('show-labels')),false);
+ assert.ok(elsewhere.every(key=>JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')).includes(key)),'other conversations retain their exclusions');
+ const highlightsCopy=await open(t,{api,url:path(page),ready:'.transcript-highlights'});
+ assert.equal(await highlightsCopy.page.getByRole('button',{name:'Text highlighting',exact:true}).getAttribute('aria-pressed'),'false');
+ await highlightToggle.click();assert.equal(await highlightToggle.getAttribute('aria-pressed'),'true');
+ assert.equal(await page.locator('.conversation-panel').evaluate(panel=>panel.classList.contains('show-events')&&panel.classList.contains('show-labels')),true);
+ const writingOnlyApi={...api,'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),labels:null,agent_events:null,messages:[{id:'typed-only',native_id:'typed-only',kind:'message',role:'user',text:'Summarize the outlook',created_at:at,authorship:{spans:[{category:'typed',start:0,end:21}]}}]})};
+ const writingOnly=await open(t,{api:writingOnlyApi,url:`/work/${workID}/conversation/${rootConversation}?reader_writing=1&reader_events=1&reader_labels=1`,ready:'.transcript-highlights'});
+ const writingToggle=writingOnly.page.getByRole('button',{name:'Text highlighting',exact:true});await writingToggle.click();
+ for(const field of ['reader_writing','reader_events','reader_labels'])assert.equal(new URL(writingOnly.page.url()).searchParams.get(field),'0',`${field} turns off even when this conversation lacks that highlight`);
+ await writingToggle.click();
+ for(const field of ['reader_writing','reader_events','reader_labels'])assert.equal(new URL(writingOnly.page.url()).searchParams.get(field),'1',`${field} turns back on`);
+ const timelineKey=page.getByRole('region',{name:'Conversation key',exact:true}).getByRole('group',{name:'Timeline key',exact:true});
+ const navigator=page.locator('.reader-navigator'),timelineRange=await navigator.getAttribute('data-range');
+ await timelineKey.getByRole('button',{name:'Plan',exact:true}).waitFor();
+ for(const name of ['Friction','Read / search'])assert.ok(await timelineKey.getByRole('button',{name,exact:true}).isVisible(),`${name} is in the Conversation key`);
+ const timelineChoose=async(name,action)=>{await timelineKey.getByRole('button',{name,exact:true}).click();await page.getByRole('menuitem',{name:action,exact:true}).click();await app.settled();};
+ const plan=timelineKey.getByRole('button',{name:'Plan',exact:true});await plan.focus();await plan.press('ArrowDown');
+ assert.equal(await page.getByRole('menuitem',{name:'Hide',exact:true}).evaluate(element=>element===document.activeElement),true);
+ await page.keyboard.press('Escape');assert.equal(await plan.evaluate(element=>element===document.activeElement),true);
+ await timelineChoose('Plan','Hide');assert.equal(await plan.getAttribute('aria-pressed'),'false');
+ const timelineToggle=timelineKey.getByRole('button',{name:'Timeline',exact:true});assert.equal(await timelineToggle.getAttribute('aria-pressed'),'mixed');
+ await timelineToggle.click();assert.equal(await timelineToggle.getAttribute('aria-pressed'),'false');
+ assert.equal(await navigator.locator('[data-agent-event="e-tint"],[data-tool-id="read-csv"]').count(),0);
+ assert.ok(await page.locator('.thinking-card mark.agent-event:not(.reader-event-hidden)').count(),'timeline visibility leaves text highlights on');
+ await timelineToggle.click();assert.equal(await timelineToggle.getAttribute('aria-pressed'),'true');
+ await plan.click();assert.ok(await page.getByRole('menuitem',{name:'Hide',exact:true}).isVisible());await page.keyboard.press('Escape');
+ await navigator.locator('[data-agent-event="e-tint"]').first().waitFor({state:'attached'});await navigator.locator('[data-tool-id="read-csv"]').first().waitFor({state:'attached'});
+ await timelineChoose('Friction','Hide');assert.equal(await navigator.locator('[data-agent-event="e-tint"]').count(),0);
+ await timelineChoose('Read / search','Hide');assert.equal(await navigator.locator('[data-tool-id="read-csv"]').count(),0);
+ assert.equal(await navigator.getAttribute('data-range'),timelineRange,'filtering the timeline preserves its clock');
+ assert.ok(await page.locator('.thinking-card mark.agent-event:not(.reader-event-hidden)').count(),'timeline choices do not hide transcript highlights');
+ const timelineCopy=await open(t,{api,url:path(page),ready:'.transcript-timeline-key .lt-timeline-legend'});
+ for(const name of ['Friction','Read / search'])assert.equal(await timelineCopy.page.getByRole('group',{name:'Timeline key',exact:true}).getByRole('button',{name,exact:true}).getAttribute('aria-pressed'),'false');
+ await timelineChoose('Friction','Show');await timelineChoose('Read / search','Show');
+ await navigator.locator('[data-agent-event="e-tint"]').first().waitFor({state:'attached'});await navigator.locator('[data-tool-id="read-csv"]').first().waitFor({state:'attached'});
+ await assertKeyButtonsFit();
+ await app.shot('conversation-timeline-key');
  assert.equal(await page.getByText(sentence,{exact:false}).count()>0,true);
  const card=page.locator('.thinking-card'),tip=page.getByRole('tooltip');
  await card.hover({position:{x:3,y:3}});await tip.waitFor();
@@ -1918,7 +1983,9 @@ test('message card labels and sentence events restore independently in the reade
  const choose=async(name,action)=>{await page.locator('.transcript-highlights').getByRole('button',{name,exact:true}).click();await page.getByRole('menuitem',{name:action}).click();await app.settled();};
  await choose('Message labels category',/^Hide$/);
  assert.equal(new URL(page.url()).searchParams.get('reader_labels'),'0');
- await choose('Message labels category',/^Show$/);
+ assert.equal(await highlightToggle.getAttribute('aria-pressed'),'mixed');
+ await highlightToggle.click();assert.equal(await highlightToggle.getAttribute('aria-pressed'),'false');
+ await highlightToggle.click();assert.equal(await highlightToggle.getAttribute('aria-pressed'),'true');
  assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')),elsewhere,'editing this conversation preserves exclusions available elsewhere');
  await choose('Agent events category',/^Hide$/);
  const copied=await open(t,{api,url:path(page),ready:'.conversation-panel.show-labels'});
@@ -1969,6 +2036,7 @@ test('message card labels and sentence events restore independently in the reade
  await app.shot('message-card-tints-light');
  await page.setViewportSize({width:390,height:844});
  await key.scrollIntoViewIfNeeded();
+ await assertKeyButtonsFit();
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await report.click();
  const menu=page.getByRole('menu',{name:'Filter Report',exact:true});

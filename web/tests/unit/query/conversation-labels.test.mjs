@@ -79,7 +79,7 @@ import {workflowSessions} from '../../../src/conversation-labels.ts';
 
 import {conversationRibbon,fingerprintMessageAt} from '../../../src/conversation-fingerprint-model.ts';
 
-import {agentEventClock,textTime,sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
+import {agentEventClock,textTime,sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,toolVisualEnd,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
 import {overlapping} from '../../../src/ribbon-marks';
 
 import {labelIntervals,recordedToolMarks,activityCategory} from '../../../src/label-session-ribbon-model.ts';
@@ -307,6 +307,18 @@ test('tool dots take free lanes for overlapping calls, hit-test by position and 
  assert.equal(new Set([...ribbonToolPlacement(points,at=>at*100,32).values()].map(m=>m.y)).size,3);
  assert.equal(ribbonHits(points,6,.01).length,0);
  assert.equal(sessionRibbonTree([],points.map(item=>item.mark),[],[],[6,10]).items.length,0);
+ // Unknown ends stay unknown in the model, but acquire a bounded, selectable
+ // five-second guide in the drawing; known ends keep their recorded length.
+ const unknown={start:1000,end:1000,end_known:false,name:'unknown',category:'read',count:1,error:false,tool_id:'unknown'};
+ const known={...unknown,start:2000,end:3500,end_known:true,name:'known',tool_id:'known'};
+ assert.equal(toolVisualEnd(unknown,10000),6000);assert.equal(toolVisualEnd(unknown,4000),4000);
+ assert.equal(toolVisualEnd(known,10000),3500);assert.equal(unknown.end,1000);
+ const visualItems=sessionRibbonTree([],[unknown,known],[],[],[0,10000]).items;
+ const visual=ribbonToolPlacement(visualItems,at=>at/100,32,[],{visualEnd:item=>toolVisualEnd(item.mark,10000)});
+ const item=visualItems.find(item=>item.mark.tool_id==='unknown'),guide=visual.get(item.id);
+ assert.equal(guide.x1-guide.x,50);
+ const guideHit=ribbonPointerHits(visualItems,3.5,0,{x:35,y:guide.y},[{...guide,ids:[guide.id]}]);
+ assert.equal(guideHit.items[0].mark.end_known,false);
 });
 
 test('compressed fingerprint segments preserve every original message for informative inspection',()=>{
@@ -476,6 +488,9 @@ test('timeline legends follow drawn intervals, errors and the visible portion of
  const visible=timelineLegendWindow([{messages:[early,late],marks}],[100,250]);
  assert.deepEqual(visible.messages.map(m=>m.id),[],'the preceding report ends at the tool boundary before this window');
  assert.deepEqual(visible.tools,['run']);assert.equal(visible.error,true);
+ const unknown={start:200,end:200,end_known:false,category:'read',name:'Read',error:false};
+ assert.deepEqual(timelineLegendWindow([{messages:[],marks:[unknown]}],[100,250]).unknownTools,['read']);
+ assert.deepEqual(timelineLegendWindow([{messages:[],marks:[unknown]}],[250,300]).unknownTools,[]);
  const thought=message('thought','C.deliberation.plan',{at:at(800),kind:'reasoning'}),unmatched=message('unmatched',null,{at:at(1000)});
  const thinking=timelineLegendWindow([{messages:[thought,unmatched],marks:[],neighbors:[early,thought,unmatched]}],[300,500]);
  assert.deepEqual(thinking.messages.map(m=>m.id),['thought'],'thinking is visible before its recorded endpoint');

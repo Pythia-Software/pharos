@@ -193,8 +193,19 @@ test('Claude collection counts only verified export records and keeps full cover
 const watchLine=vm.runInNewContext(source+';pharosClaudeWatchLine');
 test('a watched Claude export offers retrying only once Pharos has stopped opening links',()=>{
   const waiting=watchLine({state:'fetching',waiting_file:'frames-000.zip',browser_label:'Google Chrome — Work',collected:3,expected:7});
-  assert.match(waiting.text,/frames-000\.zip/);assert.match(waiting.text,/Google Chrome — Work/);assert.match(waiting.text,/3 of 7 files/);
+  assert.match(waiting.text,/frames-000\.zip/);assert.match(waiting.text,/Google Chrome — Work/);assert.match(waiting.files,/3 of 7 files/);
   assert.deepEqual(plain(waiting.actions),['stop']);assert.equal(waiting.attention,false);
+  const queued=watchLine({state:'fetching',phase:'queued',collected:0,expected:6,message:'Waiting for another capture or index to finish.'});
+  assert.match(queued.text,/Waiting for the library/);assert.match(queued.files,/0 of 6 files/);
+  assert.deepEqual(plain(queued.actions),['stop']);assert.match(queued.detail,/another capture or index/);
+  const indexing=watchLine({state:'fetching',phase:'indexing',collected:6,expected:6,ingestion:{stage:'indexing',processed:8,workspaces:6,conversations:6,messages:40,skipped_current:2}});
+  assert.match(indexing.text,/Adding conversations/);assert.match(indexing.files,/6 of 6 files/);
+  assert.match(indexing.progress,/8 workspaces processed/);assert.match(indexing.progress,/6 conversations written/);assert.match(indexing.progress,/40 messages written/);assert.match(indexing.progress,/2 already current/);
+  assert.deepEqual(plain(indexing.actions),['stop']);
+  assert.match(watchLine({state:'fetching',phase:'indexing',ingestion:{stage:'capturing'}}).text,/Preserving/);
+  assert.match(watchLine({state:'fetching',phase:'indexing',ingestion:{stage:'waiting for catalog'}}).text,/Waiting to save/);
+  assert.equal(watchLine({state:'paused',phase:'indexing',ingestion:{stage:'failed'}}).text,'Ingestion paused');
+  assert.equal(watchLine({state:'imported'}).text,'Ready in your library');
   const paused=watchLine({state:'paused',message:'No file arrived.',collected:3,expected:7});
   assert.deepEqual(plain(paused.actions),['retry','stop']);assert.equal(paused.attention,true);assert.equal(paused.detail,'No file arrived.');
   assert.deepEqual(plain(watchLine({state:'stopped'}).actions),['retry']);

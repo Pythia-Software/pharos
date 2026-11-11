@@ -6,7 +6,7 @@ import {useViewEntry} from './view-state';
 import {useRibbonInspector,useRibbonPointer,type RibbonHit} from './label-ribbon-inspector';
 import {PageLink} from './nested-pages';
 import {timelinePreviewText,trimTimelineSnippet} from './timeline-preview';
-import {agentEventClock,ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointerHits,ribbonToolPlacement,ribbonOriginParts,sessionRibbonTree,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
+import {agentEventClock,ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointerHits,ribbonToolPlacement,toolVisualEnd,ribbonOriginParts,sessionRibbonTree,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
 import {shortLabel,specificLabels,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
 import type {TimeRange,TimelineSessionBranch} from './timeline-label-model';
 import {authorshipSegments,callerSource} from './timeline-caller-model';
@@ -62,7 +62,7 @@ function ObservationCard({items,sourceHref,eventHref,close}:{items:RibbonObserva
   {tools.slice(0,4).map(item=>{
    const mark=item.mark!,elapsed=mark.end_known?mark.end-mark.start:null;
    return <SourceContent key={item.id} item={item} sourceHref={sourceHref} close={close}><div className="lt-tool-preview">
-    <div className="lt-observation-tags"><span><i className="lt-tool-swatch" style={{color:item.color}}/>{mark.name}</span><span className={mark.error?'is-error':'lt-tool-meta'}>{elapsed===null?'End not recorded':elapsed<1000?`${Math.round(elapsed)}ms`:`${(elapsed/1000).toLocaleString(undefined,{maximumFractionDigits:2})}s`}{mark.error?' · Error':''}</span></div>
+    <div className="lt-observation-tags"><span><i className="lt-tool-swatch" style={{color:item.color}}/>{mark.name}</span><span className={mark.error?'is-error':'lt-tool-meta'}>{elapsed===null?'End time unknown':elapsed<1000?`${Math.round(elapsed)}ms`:`${(elapsed/1000).toLocaleString(undefined,{maximumFractionDigits:2})}s`}{mark.error?' · Error':''}</span></div>
     {mark.preview?<pre>{timelinePreviewText(mark.preview,{input:true})}{mark.preview_truncated?'…':''}</pre>:<small>Arguments not retained</small>}
    </div></SourceContent>;
   })}
@@ -76,7 +76,7 @@ function EventFocusBand({node,x}:{node:RibbonNode;x:(at:number)=>number}){
  if(!focus)return null;
  return <g pointerEvents="none">{[[focus.target,'is-target'],[focus.message,'is-observation']].flatMap(([id,kind])=>{const span=id?spans.get(id):undefined;if(!span)return [];const left=x(span[0]),right=Math.max(left+4,x(span[1]));return [<rect key={kind} className={`event-link-band ${kind}`} x={left-2} y={1} width={right-left+4} height={30} vectorEffect="non-scaling-stroke"/>];})}</g>;
 }
-export function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,sourceHref,disabled=false,eventLayer,visibility}:{visibility?:TimelineVisibility;clock:TimeScale;eventLayer?:EventLayer;node:RibbonNode;range:TimeRange;brushHandlers:Props["brushHandlers"];preview:TimeRange|null;caller?:boolean;inspector:ReturnType<typeof useRibbonInspector>;sourceHref?:Props["sourceHref"];disabled?:boolean}){
+export function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,sourceHref,disabled=false,eventLayer,visibility,showUnknownTail=true}:{visibility?:TimelineVisibility;showUnknownTail?:boolean;clock:TimeScale;eventLayer?:EventLayer;node:RibbonNode;range:TimeRange;brushHandlers:Props["brushHandlers"];preview:TimeRange|null;caller?:boolean;inspector:ReturnType<typeof useRibbonInspector>;sourceHref?:Props["sourceHref"];disabled?:boolean}){
  const pattern=useId().replace(/:/g,''),container=useRef<HTMLDivElement>(null);
  const [scale,setScale]=useState({x:1,y:1});
  useEffect(()=>{inspector.close();},[range[0],range[1],node.id,visibility]);
@@ -98,7 +98,7 @@ export function SessionRibbon({node,range,clock,brushHandlers,preview,caller,ins
  const layout=useMemo(()=>eventLayout(placedEvents,width,height),[placedEvents,width,height]);
  const eventItems=useMemo(()=>{const own=new Map(node.items.flatMap(item=>item.event?[[item.event.id,item] as const]:[]));return new Map(placedEvents.map(p=>[p.event.id,{...own.get(p.event.id)??{id:JSON.stringify(['event',p.event.id]),start:0,end:0,title:p.event.label,color:'',thinking:p.event.source==='thinking'},event:p.event}]));},[node.items,placedEvents]);
  const px=(at:number)=>Math.max(0,Math.min(width,clock.fraction(at)*width));
- const tools=useMemo(()=>ribbonToolPlacement(inspectItems,px,height,layout?.markers??[]),[inspectItems,clock,width,height,layout]);
+ const tools=useMemo(()=>ribbonToolPlacement(inspectItems,px,height,layout?.markers??[],{visualEnd:item=>item.mark&&showUnknownTail?toolVisualEnd(item.mark,range[1]):item.end}),[inspectItems,clock,width,height,layout,range[1],showUnknownTail]);
  const targets=useMemo(()=>[...[...tools.values()].map(m=>({...m,ids:[m.id],event:null as string|null,arc:null as string|null,events:[] as string[]})),...eventHitTargets(layout).map(t=>({...t,ids:t.events.map(id=>eventItems.get(id)!.id)}))],[tools,layout,eventItems]);
  const hitItems=useMemo(()=>[...inspectItems,...eventItems.values()],[inspectItems,eventItems]);
  const events=useMemo(()=>new Map(placedEvents.map(p=>[p.event.id,p.event])),[placedEvents]);
@@ -110,7 +110,7 @@ export function SessionRibbon({node,range,clock,brushHandlers,preview,caller,ins
   // A round zero-length stroke remains circular in screen space.
   if(item.mark){
    const m=tools.get(item.id);if(!m)return null;const cx=m.x*scale.x,cy=m.y*scale.y;
-   return <g key={item.id} data-tool-id={item.mark.tool_id}>{item.mark.end_known&&item.end>item.start?<line x1={cx} x2={m.x1*scale.x} y1={cy} y2={cy} stroke={item.color} strokeWidth={1} vectorEffect="non-scaling-stroke"/>:null}{item.start>=range[0]&&item.start<=range[1]?<path d={`M${cx} ${cy}h0`} fill="none" stroke={item.color} strokeWidth={2*m.r} strokeLinecap="round" vectorEffect="non-scaling-stroke"/>:null}</g>;
+   return <g key={item.id} data-tool-id={item.mark.tool_id}>{m.x1>m.x?<line x1={cx} x2={m.x1*scale.x} y1={cy} y2={cy} stroke={item.color} strokeWidth={item.mark.end_known?1:1.5} strokeLinecap={item.mark.end_known?undefined:"round"} strokeDasharray={item.mark.end_known?undefined:"0.1 2.5"} vectorEffect="non-scaling-stroke"/>:null}{item.start>=range[0]&&item.start<=range[1]?<path d={`M${cx} ${cy}h0`} fill="none" stroke={item.color} strokeWidth={2*m.r} strokeLinecap="round" vectorEffect="non-scaling-stroke"/>:null}</g>;
   }
   const parts=caller&&item.message?item.authorship?[{category:item.authorship,start:0,end:1}]:authorshipSegments(item.message):[];
   return <g key={item.id}><rect x={left} y={y} width={width} height={height} fill={item.color} opacity={item.inferred ? .3 : 1}/>{parts.map((part,index)=>{

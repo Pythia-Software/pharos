@@ -601,8 +601,27 @@ While Pharos is running it then:
    on its own, because links may work only once.
 4. after the last part, captures and indexes the source (`claude-ai-imports`).
 
-The section lists recent exports with their state. If no file arrives within
-three minutes of opening a link (longer while a browser download is in
+The section shows when an export is waiting for another capture or index to
+finish, collecting files, or indexing its conversations. Its file total comes
+from the manifest, excluding account records; completed collection is shown
+before indexing finishes. Collection resumes automatically when the library
+is free.
+
+After collection, each export reports its ingestion stage: preserving the
+collected files, checking for changes, adding conversations, or saving the
+index. The progress counts workspaces processed, conversations and messages
+written, and records already current in the catalog. These describe the source
+ingestion pass, which includes earlier exports; they are separate from the
+export's collected-file count. An ingestion failure pauses with **Try again**
+and keeps the collected files.
+
+**Claude.ai workspaces in your library** shows source totals and links to its
+recently active workspaces, including while ingestion is in progress. Each
+Claude.ai conversation is grouped into a workspace. **Browse all Claude.ai
+workspaces** opens Search filtered to Claude.ai exports across all dates, so
+older imported conversations are included.
+
+If no file arrives within three minutes of opening a link (longer while a browser download is in
 progress), the export pauses and names the profile it used. **Try again in**
 reopens, one at a time, every link whose part has not been collected, in the
 profile you pick; this also resumes a stopped export. **Stop** ends the export
