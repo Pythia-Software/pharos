@@ -51,6 +51,13 @@ shipped as #271–#273.
 
 ## Upstream Query Table
 
+Query Table 1.0.7 delivered the shared filtered/validated inputs requested in
+[`query-table-label-trend-latency.md`](query-table-label-trend-latency.md),
+including exact text distinct counts across different grouping lists, plus
+stored-source scan sharing for eligible mixed metric batches. Pharos consumes
+the published release without host flags or reducer patches; the handoff records
+the before/after measurements and exact bucket comparisons.
+
 Query Table 1.0.5 delivered
 [`query-table-rate-intervals.md`](query-table-rate-intervals.md) (intervals
 for ratio metrics),
