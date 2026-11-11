@@ -158,6 +158,42 @@ Evidence already discarded by an earlier importer requires re-reading its origin
 
 `effort` is recorded with conversations, messages, agent sessions, model requests, tool calls, and hourly usage. Codex turn contexts, explicit Claude/Conductor settings, TL1 attempts, Antigravity selector suffixes, and canonical/ChatGPT metadata supply the level when present. Missing or explicitly reset levels stay unknown. Multi-effort sessions have no single session effort; request usage retains each level. Aggregate usage that cannot be assigned across effort changes stays unknown, including Claude process remainders.
 
+The existing `agent_sessions.effort` keeps its strict meaning: every retained
+message in that session must carry the same effort. It may be blank because an
+early user, context or metadata message predates recorded configuration, even
+when all retained requests agree. It is not the observed-request summary.
+
+Work detail's agent sessions, MCP `get_work_detail`'s `agent_sessions` section,
+and the delegation API expose a separate `effort_summary` object:
+
+```json
+{"levels":["high"],"known_requests":12,"unknown_requests":1,"state":"single","coverage":"recorded-requests"}
+```
+
+`levels` is a sorted distinct set of normalized effort from that session's `model_requests` rows.
+`state` is `no-requests`, `unknown` (requests exist but all have unknown effort),
+`single`, or `multiple`. A `single` or `multiple` state can include unknown
+requests: always check `unknown_requests`. Missing/null/empty effort, including
+requests after an explicit reset, contributes to the unknown count; the literal
+effort `none` is a known level. A reset without a subsequent recorded request
+does not change this request-only summary. Stored request effort cannot tell
+whether an unknown originated in a missing setting or an explicit reset.
+
+`coverage: "recorded-requests"` never asserts complete historical coverage,
+even when `unknown_requests` is zero. Startup messages, aggregate usage claims,
+and settings without requests do not contribute. A null `effort_summary` means
+the projection is pending or the represented session is not locally available;
+it does not mean no requests. Delegation uses the represented session's summary
+and never substitutes a parent or conversation setting. Cross-workspace context
+nodes have no local request summary. Summaries count stored source/mirror
+records, not deduplicated executions.
+
+The projection lives in `agent_session_effort_summaries`, versioned separately
+from usage attribution. Ingest refreshes it after writing request rows. Request
+inserts, deletes, effort changes and session moves invalidate affected summaries;
+reads expose null until ingest or repair refreshes them. See the
+[summary backfill instructions and census](session-effort-summary.md).
+
 Library exposes all observed `efforts`; Usage, Tools, Tool calls, and Skills expose `effort` for selection, filters, grouping, and metrics. Usage offers an Effort chart split and a model-and-effort preset. The reader shows conversation and turn effort. CLI and HTTP work search accept `effort` (`pharos search --effort high`); MCP work and conversation search accept the same filter.
 
 Use **Model + effort** (`model_effort`) in Usage, Tools, Tool calls, Skills, and TL1 attempts to filter, sort, or group recorded pairs such as `claude-opus-5-5 · high` and `claude-opus-5-5 · low`. Missing effort appears as `Unknown effort`. Library exposes the observed pairs as `model_efforts`, and the Usage chart can split by Model + effort. Separate model and effort filters, sort keys, and grouping keys can also be combined. CLI/HTTP/MCP searches with both model and effort require a matching pair in the same conversation setting or message, so separate models elsewhere in the workspace cannot satisfy the two filters.

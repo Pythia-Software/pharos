@@ -1027,6 +1027,8 @@ func hasUsageEvidence(event map[string]any) bool {
 	return false
 }
 
+// sessionMessageEffort is deliberately strict: aggregate usage can span
+// unobserved requests. Never use the observed-request summary for allocation.
 func sessionMessageEffort(indexes []int, messages []MessageRecord) string {
 	if len(indexes) == 0 {
 		return ""

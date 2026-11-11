@@ -318,6 +318,16 @@ func Run(arguments []string) error {
 			}
 			return printJSON(report)
 		case "repair-usage-attribution":
+			if slices.Contains(args, "--session-effort-only") {
+				repaired, err := catalog.RepairSessionEffortSummaries(ctx, func(done, total int) {
+					op.progress("Summarize recorded request effort", "", "agent session", float64(done), float64(total), total > 0)
+					fmt.Fprintf(os.Stderr, "summarized effort for %d/%d agent sessions\n", done, total)
+				})
+				if err != nil {
+					return fmt.Errorf("summarize request effort after %d agent sessions: %w", repaired, err)
+				}
+				return printJSON(map[string]any{"agent_sessions_summarized": repaired})
+			}
 			repaired, err := catalog.RepairUsageAttribution(ctx, func(done, total int) {
 				op.progress("Repair usage attribution", "", "workspace", float64(done), float64(total), total > 0)
 				if done%100 == 0 || done == total {
@@ -327,7 +337,11 @@ func Run(arguments []string) error {
 			if err != nil {
 				return fmt.Errorf("repair usage attribution after %d workspaces: %w", repaired, err)
 			}
-			return printJSON(map[string]any{"workspaces_repaired": repaired})
+			summarized, err := catalog.RepairSessionEffortSummaries(ctx, nil)
+			if err != nil {
+				return fmt.Errorf("summarize request effort after %d agent sessions: %w", summarized, err)
+			}
+			return printJSON(map[string]any{"workspaces_repaired": repaired, "agent_sessions_summarized": summarized})
 		case "repair-session-bounds":
 			if len(args) > 1 || len(args) == 1 && args[0] != "--apply" {
 				return fmt.Errorf("usage: pharos repair-session-bounds [--apply]")

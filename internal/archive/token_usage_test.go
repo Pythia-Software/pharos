@@ -22,6 +22,47 @@ func TestTokenMetricsHaveStableDigestOrder(t *testing.T) {
 	}
 }
 
+func TestObservedEffortDoesNotAllocateUnknownAggregate(t *testing.T) {
+	c, _ := testCatalog(t)
+	record := WorkspaceRecord{SourceID: "observed-effort", SourceKind: "codex", Account: "local", Conversations: []ConversationRecord{{
+		NativeID: "observed-effort", Provider: "codex", Model: "gpt-test", Account: "local",
+		Messages: []MessageRecord{
+			{NativeID: "startup", Role: "user", Kind: "message", Text: "before recorded configuration", Selected: true},
+			{NativeID: "request", Role: "system", Kind: "metadata", Effort: "high", Text: `{"type":"token_usage_record","response_id":"r1","usage":{"input_tokens":100,"output_tokens":20}}`, Selected: true},
+			{NativeID: "result", Role: "system", Kind: "metadata", Effort: "high", Text: `{"type":"result","usage":{"input_tokens":300,"output_tokens":60}}`, Selected: true},
+		},
+	}}}
+	tx, err := c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, _, err := ingestWorkspace(tx, record, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var summary string
+	if err := c.DB.QueryRow(`SELECT summary_json FROM agent_session_effort_summaries`).Scan(&summary); err != nil {
+		t.Fatal(err)
+	}
+	if got := readSessionEffortSummary(summary); got.KnownRequests != 1 || got.UnknownRequests != 0 || len(got.Levels) != 1 || got.Levels[0] != "high" {
+		t.Fatalf("observed effort: %s", summary)
+	}
+	rows, err := queryMaps(c.DB, `SELECT effort,SUM(total_tokens) tokens FROM agent_session_usage GROUP BY effort`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, row := range rows {
+		got[firstString(row["effort"])] = integer(row["tokens"])
+	}
+	if len(got) != 2 || got["high"] != 120 || got[""] != 240 {
+		t.Fatalf("observed summary relabeled uncertain aggregate: %v", got)
+	}
+}
+
 func TestAgentSessionTimeBounds(t *testing.T) {
 	if decodeSessionBounds(`{"source":"attempt-envelope","started_at":"2026-09-20T10:00:00Z","ended_at":123}`) != nil {
 		t.Fatal("malformed retained bounds must not supply partial proof")

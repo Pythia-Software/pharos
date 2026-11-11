@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +15,170 @@ import (
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
+
+func TestSessionEffortSummarizesOnlyRecordedRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name, settings string
+		levels         []string
+		known, unknown int64
+		state          string
+	}{
+		{"startup-unknown", `"high","high"`, []string{"high"}, 2, 0, "single"},
+		{"unknown-request", `null,"high"`, []string{"high"}, 1, 1, "single"},
+		{"explicit-reset", `"high",null`, []string{"high"}, 1, 1, "single"},
+		{"empty-reset", `"high",""`, []string{"high"}, 1, 1, "single"},
+		{"multiple", `"high","low"`, []string{"high", "low"}, 2, 0, "multiple"},
+		{"multiple-unknown", `"high",null,"low"`, []string{"high", "low"}, 2, 1, "multiple"},
+		{"unknown-only", `null`, []string{}, 0, 1, "unknown"},
+		{"literal-none", `"none"`, []string{"none"}, 1, 0, "single"},
+		{"no-requests", ``, []string{}, 0, 0, "no-requests"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			dir := t.TempDir()
+			lines := []string{
+				`{"type":"session_meta","payload":{"id":"summary","model":"gpt-6"}}`,
+				`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"startup before configuration"}]}}`,
+			}
+			if tc.settings != "" {
+				for i, setting := range strings.Split(tc.settings, ",") {
+					lines = append(lines,
+						fmt.Sprintf(`{"type":"turn_context","payload":{"model":"gpt-6","effort":%s}}`, setting),
+						fmt.Sprintf(`{"type":"token_usage_record","timestamp":"2026-09-20T12:0%d:00Z","payload":{"response_id":"request-%d","usage":{"input_tokens":100,"output_tokens":20}}}`, i, i))
+				}
+			}
+			writeSourceFile(t, filepath.Join(dir, "rollout-summary.jsonl"), strings.Join(lines, "\n"))
+			ingestSource(t, c, SourceConfig{Name: "summary", Kind: "codex", Path: dir, Account: "local", Enabled: true})
+			var summary string
+			var strict sql.NullString
+			var workspace string
+			if err := c.DB.QueryRow(`SELECT es.summary_json,a.effort,a.workspace_id FROM agent_sessions a`+sessionEffortSummaryJoin).Scan(&summary, &strict, &workspace); err != nil {
+				t.Fatal(err)
+			}
+			want := &sessionEffortSummary{Levels: tc.levels, KnownRequests: tc.known, UnknownRequests: tc.unknown, State: tc.state, Coverage: "recorded-requests"}
+			if got := readSessionEffortSummary(summary); !reflect.DeepEqual(got, want) {
+				t.Fatalf("summary %s, want %+v", summary, want)
+			}
+			if strict.String != "" {
+				t.Fatalf("summary changed strict configuration: %q", strict.String)
+			}
+			detail, err := c.WorkDetail(workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := detail["agent_sessions"].([]map[string]any)[0]["effort_summary"]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("detail summary %+v, want %+v", got, want)
+			}
+			bounded, err := c.boundedWorkDetail(map[string]any{"workspace_id": workspace, "section": "agent_sessions"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := bounded["items"].([]map[string]any)[0]["effort_summary"]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("bounded summary %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestSessionEffortBackfillPreservesUsageAndResumes(t *testing.T) {
+	c, config := testCatalog(t)
+	seedDelegation(t, c)
+	if err := c.replacePricing(testPricing(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB,
+		`UPDATE model_requests SET effort='low' WHERE id='request'`,
+		`INSERT INTO model_requests(id,conversation_id,agent_session_id,sequence,model,effort,total_tokens) VALUES('root-request','root','root-session',0,'claude-opus-4-8','high',30)`,
+		`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,effort,attribution,input_tokens,uncached_input_tokens,total_tokens) VALUES('root-session','2026-01-01T00:00:00Z','claude-opus-4-8','high','request',30,30,30),('root-session','2026-01-01T00:00:00Z','claude-opus-4-8','','session-remainder',70,70,70)`,
+		`INSERT INTO usage_attribution_state(workspace_id,version) VALUES('delegation-work','`+usageAttributionVersion+`')`,
+	)
+	snapshot := func(c *Catalog) string {
+		t.Helper()
+		data := map[string]any{}
+		for _, table := range []string{"agent_sessions", "agent_session_usage", "model_requests", "metrics", "usage_attribution_state", "messages", "conversations"} {
+			rows, err := queryMaps(c.DB, "SELECT * FROM "+table+" ORDER BY 1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			data[table] = rows
+		}
+		ledger, err := queryMaps(c.DB, `SELECT u.*,u.model usage_model,a.model session_model,a.conversation_id,a.workspace_id
+ FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id
+ ORDER BY u.agent_session_id,u.usage_hour,u.model,u.effort,u.attribution`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, err := c.usageRowsFromLedger(time.UTC, false, ledger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		priced := false
+		for _, row := range rows {
+			if cost, ok := row["cost_usd"].(float64); ok && cost > 0 {
+				priced = true
+			}
+		}
+		if !priced {
+			t.Fatal("backfill fixture needs a nonzero calculated cost")
+		}
+		data["usage_and_costs"] = rows
+		return jsonText(data)
+	}
+	before := snapshot(c)
+	override(t, &sessionEffortRepairBatchSize, 2)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done, err := c.RepairSessionEffortSummaries(ctx, func(done, total int) { cancel() })
+	if done != 2 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("interrupted repair: %d, %v", done, err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c, err = OpenCatalog(config.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if done, err := c.RepairSessionEffortSummaries(t.Context(), nil); done != 4 || err != nil {
+		t.Fatalf("resumed repair: %d, %v", done, err)
+	}
+	if got := snapshot(c); got != before {
+		t.Fatal("summary backfill changed IDs, tokens, buckets, effort, costs, or source records")
+	}
+	stamp, err := readCacheGenerations(t.Context(), c.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done, err := c.RepairSessionEffortSummaries(t.Context(), nil); done != 0 || err != nil {
+		t.Fatalf("repeated repair: %d, %v", done, err)
+	}
+	if got, err := readCacheGenerations(t.Context(), c.DB); err != nil || got != stamp {
+		t.Fatalf("repeated repair wrote cache state: %+v -> %+v, %v", stamp, got, err)
+	}
+	fixtureExec(t, c, `UPDATE agent_session_effort_summaries SET version='old' WHERE agent_session_id='root-session'`)
+	if done, err := c.RepairSessionEffortSummaries(t.Context(), nil); done != 1 || err != nil {
+		t.Fatalf("stale summary repair: %d, %v", done, err)
+	}
+	// Request changes invalidate the projection without substituting defaults.
+	fixtureExec(t, c, `UPDATE model_requests SET effort=NULL WHERE id='root-request'`)
+	var count int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM agent_session_effort_summaries WHERE agent_session_id='root-session'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("stale summary survived request reset: %d %v", count, err)
+	}
+	if done, err := c.RepairSessionEffortSummaries(t.Context(), nil); done != 1 || err != nil {
+		t.Fatalf("reset repair: %d, %v", done, err)
+	}
+	// Moving a request invalidates both its previous owner and its new owner.
+	fixtureExec(t, c, `UPDATE model_requests SET agent_session_id='embedded' WHERE id='root-request'`)
+	if done, err := c.RepairSessionEffortSummaries(t.Context(), nil); done != 2 || err != nil {
+		t.Fatalf("moved request repair: %d, %v", done, err)
+	}
+	fixtureExec(t, c, `DELETE FROM model_requests WHERE id='root-request'`)
+	if done, err := c.RepairSessionEffortSummaries(t.Context(), nil); done != 1 || err != nil {
+		t.Fatalf("deleted request repair: %d, %v", done, err)
+	}
+}
 
 func TestEffortParsingPreservesTurnChangesAndUnknowns(t *testing.T) {
 	parser := &jsonlAdapter{baseAdapter: baseAdapter{config: SourceConfig{Account: "local"}}, provider: "codex"}
