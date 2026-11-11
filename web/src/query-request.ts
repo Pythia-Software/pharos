@@ -1,6 +1,7 @@
 import { dashboardQuerySettings } from "./dashboard-query-settings";
 import { scopedRequest } from "./result-cache";
 import { QueryError, errorCodeForStatus, queryErrorFromBody, type QueryErrorOptions } from "@pythia-software/query-table-core";
+import { reportSessionShapeCoverage } from "./session-shape-freshness";
 import { reportQueryCoverage } from "./agent-events-freshness";
 import { normalizeConcurrencySettings } from "./concurrency-settings";
 // Linked assumptions apply to every request made by that view, including
@@ -76,7 +77,7 @@ export async function queryRequest<T>(url: string, init: RequestInit = {}, timeo
       return {};
     });
     signal.throwIfAborted();
-    if (response.ok) reportQueryCoverage(url, body);
+    if (response.ok) { reportQueryCoverage(url, body); reportSessionShapeCoverage(url, body); }
     if (!response.ok) {
       const issue = queryErrorFromBody(body, response.status) ?? new QueryError(errorCodeForStatus(response.status), (typeof body.error === "string" ? body.error : body.error?.message) || `Request failed with HTTP ${response.status}`, { status: response.status });
       throw new QueryRequestError(issue.message, response.status, issue.code, issue);

@@ -13,7 +13,7 @@ import { extname, join, normalize, sep } from "node:path";
 import { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import { connectBrowser, engine, launchPlan } from "./engine.mjs";
-import { defaultApi } from "./fixtures.mjs";
+import { defaultApi, projectColorFixture } from "./fixtures.mjs";
 
 export const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const assetRoot = join(repo, "internal", "archive", "assets");
@@ -81,7 +81,7 @@ function serve(routes, state, record) {
     if (path === "/favicon.ico") return response.writeHead(204).end();
     if (path === "/assets/preferences.js") {
       response.writeHead(200, { "Content-Type": types[".js"], "Cache-Control": "no-store" });
-      return response.end(`window.pharosPreferenceValues=${JSON.stringify(state.preferences)};window.pharosPreviewScope="browser-fixture";`);
+      return response.end(`window.pharosPreferenceValues=${JSON.stringify(state.preferences)};window.pharosPreviewScope="browser-fixture";window.pharosProjectColors=${JSON.stringify(state.projectColors)};`);
     }
     if (path.startsWith("/assets/")) {
       const body = asset(path.slice("/assets/".length), state.inbox ? inboxRoot : assetRoot);
@@ -155,8 +155,8 @@ let shotCount = 0;
 // it ends), the API `calls` made so far, and `push(path, document)`, which
 // sends an event on the open event streams of path (see eventStream in
 // fixtures.mjs).
-export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, concurrency = false, managedLibrary = null, managedSession = null, inbox = false, nativeHost = "", ready } = {}) {
-  const state = { concurrency, managedLibrary, managedSession, inbox, nativeHost, preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [], streams: {} };
+export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, projectColors = projectColorFixture, concurrency = false, managedLibrary = null, managedSession = null, inbox = false, nativeHost = "", ready } = {}) {
+  const state = { concurrency, managedLibrary, managedSession, inbox, nativeHost, projectColors: structuredClone(projectColors), preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [], streams: {} };
   const errors = [], failed = [], calls = [], inflight = new Set();
   let wake = () => {};
   const routes = [...routeTable(api), ...(inbox ? [] : routeTable(defaultApi))];

@@ -6,6 +6,10 @@ its hourly ledger with Pharos's historical price book. It includes partially
 unpriced sessions and retained mirrors, not just the Library's representative
 rows.
 
+The [November 2026 cost coverage investigation](cost-coverage-investigation.md)
+classifies the remaining model gaps and distinguishes uncategorized remainders
+from the full token totals of partially priced buckets.
+
 ```sh
 mkdir -p .context/token-cost-audit
 PHAROS_USAGE_AUDIT_CATALOG=/path/to/catalog.sqlite3 \

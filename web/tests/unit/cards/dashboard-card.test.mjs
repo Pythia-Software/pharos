@@ -277,6 +277,7 @@ test('saved dashboard trend previews match smoothing, cumulative totals, shares 
     if(options.selection?.allHidden){assert.equal(preview.state,'empty');assert.deepEqual(preview.series,[]);}
     else assert.deepEqual(preview.series,expected.series.filter(item=>!expected.selected.length || expected.selected.includes(item.key)!==expected.excluded));
     assert.equal(preview.dashboardTrend.prepared,true);
+    assert.equal(preview.dashboardTrend.additive,expected.additive);
     assert.deepEqual(preview.dashboardTrend.references,expected.references);
   }
 });

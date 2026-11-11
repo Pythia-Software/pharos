@@ -46,10 +46,11 @@ var queryCacheTables = []string{
 	// Enqueue and publication invalidate the label view once per conversation;
 	// individual fact/membership writes are internal to that atomic refresh.
 	"message_label_facts_dirty",
+	"session_shape_facts", "session_shape_dirty",
 }
 
 // queryCacheDomains are the tables only some cached views read: what the
-// labeling and agent-event passes write, one conversation at a time, for
+// labeling, agent-event and session-statistics passes write, one conversation at a time, for
 // hours on a large library. A write to one advances its domain's count as
 // well as the generation, so a view that reads neither (cacheGenerations)
 // is not recomputed after every conversation those passes finish.
@@ -60,19 +61,22 @@ var queryCacheDomains = map[string]string{
 	// The agent-event ledger is no cached view's source itself; its stamp
 	// triggers (executionDependentsStampTriggers) advance the generation.
 	"agent_events_conversations": "events",
+	"session_shape_facts":        "sessions", "session_shape_dirty": "sessions",
 }
 
 // cacheGenerations are the cached-view generation and, of its advances, how
 // many were writes to a domain's tables alone.
-type cacheGenerations struct{ all, labels, events int64 }
+type cacheGenerations struct{ all, labels, events, sessions int64 }
 
 // A view's generation counts the advances that can change it. The whole
-// generation is always safe, and is what an older executable's triggers
-// advance alone.
+// source generation includes label and event writes. Session statistics
+// affect only their explicitly selected scope. Older executables advance
+// the whole count alone, conservatively invalidating every scope.
 const (
-	generationAll    = "all"
-	generationEvents = "events" // everything but label writes
-	generationCore   = "core"   // neither label nor agent-event writes
+	generationAll          = "all"
+	generationEvents       = "events"        // core evidence and agent-event writes
+	generationSessionShape = "session_shape" // core evidence and session statistics
+	generationCore         = "core"          // source evidence, without derived-domain writes
 	// The whole generation, and the MCP call log, which no trigger counts:
 	// an agent's every call is written there, and counting it would make
 	// every other view stale (queryResultLedgers).
@@ -82,19 +86,22 @@ const (
 func (g cacheGenerations) of(scope string) int64 {
 	switch scope {
 	case generationCore:
+		return g.all - g.labels - g.events - g.sessions
+	case generationSessionShape:
 		return g.all - g.labels - g.events
 	case generationEvents:
-		return g.all - g.labels
+		return g.all - g.labels - g.sessions
 	}
-	return g.all
+	return g.all - g.sessions
 }
 
-// cacheGenerationsSQL reads cacheGenerations in one statement, so the three
+// cacheGenerationsSQL reads cacheGenerations in one statement, so the domain
 // counts describe one snapshot. A catalog without the domain table (not yet
 // initialized by this build) fails it; readCacheGenerations falls back.
 const cacheGenerationsSQL = `SELECT value,
  COALESCE((SELECT value FROM query_cache_domains WHERE name='labels'),0),
- COALESCE((SELECT value FROM query_cache_domains WHERE name='events'),0)
+ COALESCE((SELECT value FROM query_cache_domains WHERE name='events'),0),
+ COALESCE((SELECT value FROM query_cache_domains WHERE name='sessions'),0)
  FROM query_cache_generation WHERE id=1`
 
 type rowQueryer interface {
@@ -103,7 +110,7 @@ type rowQueryer interface {
 
 func readCacheGenerations(ctx context.Context, q rowQueryer) (cacheGenerations, error) {
 	var g cacheGenerations
-	err := q.QueryRowContext(ctx, cacheGenerationsSQL).Scan(&g.all, &g.labels, &g.events)
+	err := q.QueryRowContext(ctx, cacheGenerationsSQL).Scan(&g.all, &g.labels, &g.events, &g.sessions)
 	if err != nil && strings.Contains(err.Error(), "no such table: query_cache_domains") {
 		g = cacheGenerations{}
 		err = q.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&g.all)
@@ -153,7 +160,7 @@ func (c *Catalog) ensureQueryCacheGeneration() error {
  INSERT INTO query_cache_generation(id,value) SELECT 1,1
  WHERE NOT EXISTS(SELECT 1 FROM query_cache_generation WHERE id=1);
  CREATE TABLE IF NOT EXISTS query_cache_domains (name TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
- INSERT OR IGNORE INTO query_cache_domains(name,value) VALUES('labels',0),('events',0)`); err != nil {
+ INSERT OR IGNORE INTO query_cache_domains(name,value) VALUES('labels',0),('events',0),('sessions',0)`); err != nil {
 		return err
 	}
 	old, err := queryMaps(tx, `SELECT name FROM sqlite_schema WHERE type='trigger' AND name GLOB 'query_cache_*'`)

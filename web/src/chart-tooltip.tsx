@@ -5,6 +5,18 @@ import { overflowTooltip, textIsClipped } from "./overflow-tooltip";
 
 type Tip = { text: string; colors: (string | null)[]; x: number; y: number };
 
+const literalColor = "(?:#[a-f0-9]{3,8}|rgba?\\([\\d.,% ]+\\))";
+const tooltipColor = new RegExp(`^(?:${literalColor}|var\\(\\s*--[a-z0-9_-]+\\s*(?:,\\s*${literalColor}\\s*)?\\))$`, "i");
+
+// Preserve custom-property references so portalled swatches track saved color
+// edits too. Accept only color literals or one property with a literal fallback.
+export function chartTooltipColors(serialized: string | null): (string | null)[] {
+  try {
+    const raw = JSON.parse(serialized ?? "[]");
+    return Array.isArray(raw) ? raw.map(value => typeof value === "string" && tooltipColor.test(value) ? value : null) : [];
+  } catch { return []; }
+}
+
 // One hover boundary for both our marks and the native metric renderer. Keep the
 // bubble outside the cover's clipped link, without intercepting navigation.
 export function ChartTooltip({ children }: { children: React.ReactNode }) {
@@ -44,8 +56,7 @@ export function ChartTooltip({ children }: { children: React.ReactNode }) {
     ].filter(Boolean).join("\n");
     const label = target.querySelector<HTMLElement>("[data-chart-label]");
     if (label) text = overflowTooltip(target.getAttribute("data-chart-tooltip-label") ?? "", text, textIsClipped(label)) ?? "";
-    let colors: (string | null)[] = [];
-    try { const raw = JSON.parse(target.getAttribute("data-chart-colors") ?? "[]"); if (Array.isArray(raw)) colors = raw.map(value => typeof value === "string" && /^(#[a-f0-9]{3,8}|rgba?\([\d.,% ]+\))$/i.test(value) ? value : null); } catch { /* Plain text tooltips remain valid. */ }
+    const colors = chartTooltipColors(target.getAttribute("data-chart-colors"));
     setTip(text ? { text, colors, x: event.clientX, y: event.clientY } : null);
   };
   return <span className="chart-tooltip-host" ref={host} onPointerMove={move} onPointerLeave={() => setTip(null)} onPointerDown={() => setTip(null)} onKeyDownCapture={() => setTip(null)}>

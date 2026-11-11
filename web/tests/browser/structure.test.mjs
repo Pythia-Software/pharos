@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { claudeImportFixture, defaultApi, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
+import { claudeImportFixture, defaultApi, projectColorFixture, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const missingPrices = { ...defaultApi['GET /api/pricing'], unpriced_tokens: 5000,
@@ -398,7 +398,7 @@ const ROUTES = [
       assert.equal(await unmeasured.getAttribute('aria-valuenow'), null, 'unknown work is accessible without a fabricated percentage');
     },
   },
-  { name: "Home", url: "/", ready: ".home-recent-grid .conversation-result-card" },
+  { name: "Home", url: "/", ready: ".home-recent-grid .home-recent-card" },
   { name: "Home without recent conversations", url: "/", ready: ".home-recent-empty", api: { "GET /api/library/recent-conversations": { items: [] } } },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",
     check: page => page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input")) },
@@ -546,6 +546,21 @@ const ROUTES = [
     analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "started_at", op: ">=", value: "-30d" }, { field: "started_at", op: "<", value: "+0s" }, { any: [{ field: "harness", op: "!=", value: "antigravity-cli" }, { field: "harness", op: "is_null", value: "" }] }] }) })}`,
     ready: `.usage-session-shape-dashboard ${overTimeReady}`,
     check: async page => assert.equal(await page.locator(".usage-session-shape-dashboard .dashboard-population-chip").count(), 1, "the population is not shown beside the controls") },
+  { name: "Session shape dashboard with statistics pending", url: "/analyze?analyze_topic=session_shape", api: {
+    "* /api/query/:dataset/:operation": async call => {
+      const answer = await defaultApi["* /api/query/:dataset/:operation"](call);
+      return call.params.dataset === "session_shape" && call.params.operation === "query-v3"
+        ? { ...answer, coverage: { state: "pending", pending_sessions: 5, stale_sessions: 2, missing_sessions: 3 } } : answer;
+    },
+  }, ready: `.usage-session-shape-dashboard ${overTimeReady}`,
+    check: page => page.locator(".usage-session-shape-dashboard .usage-dashboard-note[role=status]").waitFor() },
+  { name: "Session shape query with statistics pending", url: "/analyze?analyze_mode=query&analyze_data=session_shape", api: {
+    "* /api/query/:dataset/:operation": async call => {
+      const answer = await defaultApi["* /api/query/:dataset/:operation"](call);
+      return call.params.dataset === "session_shape" && call.params.operation === "query-v3"
+        ? { ...answer, coverage: { state: "pending", pending_sessions: 5, stale_sessions: 2, missing_sessions: 3 } } : answer;
+    },
+  }, ready: ".usage-workspace-table .usage-dashboard-note[role=status]" },
   { name: "Analyze binned distribution", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "distribution", metric: "active_time", split: "none" }))}`, ready: '.usage-analysis-dashboard[aria-busy="false"]' },
   { name: "Analyze trend heatmap", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "sessions", split: "autonomy_band", display: "heatmap", period: "day" }))}`, ready: '.usage-session-shape-dashboard section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
   { name: "Human Words conversation heatmap", url: `/analyze?analyze_topic=human&analyze_days=30&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "typed", split: "none", display: "heatmap", period: "day" }))}`, ready: 'section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
@@ -710,6 +725,7 @@ const ROUTES = [
   { name: "Quick Stats settings", url: "/settings/layout", ready: "#quickStatsExpand", open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsEditor button' },
   { name: "Quick Stats toolbox", url: "/settings/layout", ready: "#quickStatsExpand", preferences: { "pharos-quick-stats-v1": { metrics: ['human_words', 'tokens'], windows: ['today', '24h'] } }, open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsPreview td' },
   { name: "App preferences", url: "/settings/preferences", ready: "#lighthouseSpinOnClick" },
+  { name: "Project colors", url: "/settings/projects", ready: ".project-color-row" },
   { name: "Mac menu disabled", url: "/settings/layout", ready: "#showMacMenuBar", preferences: { 'pharos-menu-bar': { enabled: false } } },
   { name: "Mac menu expanded", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button' },
   { name: "Mac menu syncing", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive .menu-bar-detail', api: {
@@ -1327,9 +1343,9 @@ test("dashboard loading follows the chart and keeps controls usable", { skip }, 
 });
 
 test('Recent conversation links open the selected conversation and search', { skip }, async t => {
-  const { page, settled, calls } = await open(t, { url: '/', ready: '.home-recent-grid .conversation-result-card' });
+  const { page, settled, calls } = await open(t, { url: '/', ready: '.home-recent-grid .home-recent-card' });
   assert.equal(calls.some(call => /\/api\/work\/.+\/conversations\//.test(call.path)), false, 'previews do not load transcripts');
-  await page.locator('.home-recent-grid .conversation-result-title').first().click();
+  await page.locator('.home-recent-grid .home-recent-title').first().click();
   await page.waitForURL(url => url.pathname === `/work/${workID}/conversation/${rootConversation}`);
   await page.locator('#detail .conversation-panel:not(.conversation-loading)').first().waitFor();
   await settled();
@@ -1502,15 +1518,39 @@ test("Usage source links reveal and highlight the exact call, result, or nearest
 });
 
 
+test("project color settings show indexed projects while mounted and retain editor focus", { skip }, async t => {
+  let projects = [];
+  const { page } = await open(t, { url: "/settings/projects", projectColors: [], ready: ".project-color-settings", api: {
+    "GET /api/project-colors": () => projects,
+  } });
+  const refresh = () => page.evaluate(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
+  projects = projectColorFixture.slice(0, 1);
+  await refresh();
+  const first = page.getByLabel(`Color for ${projects[0].name}`, { exact: true });
+  await first.waitFor({ state: "visible" });
+  await first.focus();
+  projects = [...projectColorFixture];
+  await refresh();
+  await page.getByLabel(`Color for ${projects[1].name}`, { exact: true }).waitFor({ state: "visible" });
+  assert.equal(await first.evaluate(element => element === document.activeElement), true, "registry refresh leaves the existing editor focused");
+
+  await page.evaluate(() => window.pharosNavigate("/settings/preferences"));
+  projects = [...projects, { ...projectColorFixture[0], id: "repository:new", name: "New project", key: "c".repeat(64) }];
+  await refresh();
+  await page.getByLabel("Color for New project", { exact: true }).waitFor({ state: "attached" });
+  await page.evaluate(() => window.pharosNavigate("/settings/projects"));
+  assert.equal(await page.getByLabel("Color for New project", { exact: true }).isVisible(), true);
+});
+
 test("clipped labels reveal hidden text and stop repeating it when they fit", { skip }, async t => {
   const names = ["repository/shared-prefix-branch-name/feature-one", "repository/shared-prefix-branch-name/feature-two"];
-  const {page} = await open(t, {url: "/cards?cards=library&card_search=human-repository-words-trend", ready: ".query-chart-legend",
+  const {page} = await open(t, {url: "/cards?cards=library&card_search=human-repository-words-trend", ready: ".query-chart-legend", projectColors: [{ ...projectColorFixture[0], name: names[0] }],
     api: {"* /api/query/:dataset/:operation": call => {
       const response = defaultApi["* /api/query/:dataset/:operation"](call);
       if (!response?.metrics) return response;
       return {...response, metrics: response.metrics.map(metric => {
         const clause = call.body?.metrics?.find(clause => clause.id === metric.id);
-        if (!clause?.groupBy?.includes("repository_name") || !clause.groupBy.includes("day")) return metric;
+        if (!clause?.groupBy?.includes("project_name") || !clause.groupBy.includes("day")) return metric;
         const days = [...new Set(metric.buckets.map(bucket => bucket.keys[clause.groupBy.indexOf("day")]))];
         const buckets = days.flatMap(day => names.map(name => ({keys: clause.groupBy.map(field => field === "day" ? day : name), value: 42, count: 1})));
         return {...metric, buckets, groupCount: buckets.length};
@@ -1524,7 +1564,10 @@ test("clipped labels reveal hidden text and stop repeating it when they fit", { 
     const item = legend.locator("[data-chart-tooltip-label]").filter({hasText: name});
     await item.hover();
     await page.waitForFunction(name => document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])')?.textContent.includes(name), name);
+    await page.locator('[role="tooltip"] .chart-tooltip-swatch').first().waitFor({ state: "visible" });
   }
+  await page.locator(".query-cover-columns > [data-chart-tooltip]").first().hover();
+  await page.locator('[role="tooltip"] .chart-tooltip-swatch').first().waitFor({ state: "visible" });
   await legend.evaluate(element => {element.style.width = "100%";element.style.gridTemplateColumns = "1fr";});
   await legend.locator("[data-chart-tooltip-label]").first().hover();
   await page.waitForFunction(() => !document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])'));

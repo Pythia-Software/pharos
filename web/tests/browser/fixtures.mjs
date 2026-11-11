@@ -806,6 +806,11 @@ const filesLog = [
 const filesDiff = ["diff --git a/internal/archive/api.go b/internal/archive/api.go", "index 1111111..2222222 100644", "--- a/internal/archive/api.go", "+++ b/internal/archive/api.go",
   "@@ -1,4 +1,5 @@ package archive", " package archive", " ", "-// ServeHTTP answers.", "+" + filesCode[2], "+func (s *Server) ServeHTTP() {", " \treturn", ""].join("\n");
 
+export const projectColorFixture = [
+  { id: "repository:pharos", key: "a".repeat(64), name: "pharos", kind: "repository", default_color: "#2a83a4", source: "public/favicon.svg" },
+  { id: "folder:~/notes", key: "b".repeat(64), name: "~/notes", kind: "folder", default_color: "#b27430", source: "Automatic palette" },
+];
+
 export const defaultApi = {
   "GET /api/claude-imports":{jobs:[],run:{running:false},watch:claudeWatchFixture},
   "POST /api/claude-imports/watch":{...claudeWatchFixture,enabled:false},
@@ -826,6 +831,11 @@ export const defaultApi = {
   "POST /api/ask/remove-visit": {ok:true},
 
   // Library preferences, saved views and snapshots.
+  "GET /api/project-colors": ({ state }) => state.projectColors ??= structuredClone(projectColorFixture),
+  "POST /api/project-colors": ({ body, state }) => {
+    state.projectColors = state.projectColors.map(project => project.id === body.id ? { ...project, custom_color: body.color || undefined } : project);
+    return state.projectColors;
+  },
   "GET /api/preferences": ({ state }) => ({ values: state.preferences }),
   "POST /api/preferences": ({ body, state }) => {
     Object.assign(state.preferences, body?.set);
@@ -873,8 +883,8 @@ export const defaultApi = {
     ["Understand token patterns", "pharos", "codex", "gpt-5", 0, "Compare shorter conversations with the deeper delegated work.", "The comparison separates main-agent and helper activity."],
     ["Plan the next iteration", "observatory", "claude", "claude-opus-4-1", 1, "Review the open questions and choose the next small improvement.", "The next iteration starts with clearer navigation and a smaller scope."],
   ].map(([title, repository, provider, model, subagent_depth, first_input, last_response], index) => ({
-    id: index ? `recent-${index}` : rootConversation, workspace_id: workID, title, repository, provider, model, subagent_depth, first_input, last_response,
-    activity_at: new Date(now - index * day).toISOString(), labels_ready: index < 7, events_ready: index < 4,
+    id: index ? `recent-${index}` : rootConversation, workspace_id: workID, title, repository, provider, model, effort: "high", subagent_depth, first_input, last_response,
+    activity_at: new Date(now - index * day).toISOString(), labels_ready: index < 7, events_ready: index < 4, duration_ms: 4980000, tool_calls: 34, tokens: 123456, cost_usd: 2.34, price_status: "complete",
   })) },
   "GET /api/activity": { active: 0, runs: [] },
   "GET /api/library/status": { idle: true, portable: true, library_dir: "/Volumes/Pharos SSD/Pharos", drive: { name: "Pharos SSD", mounted: true, ejectable: true }, activities: [] },

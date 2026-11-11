@@ -1570,7 +1570,7 @@ func upsertConversation(tx *sql.Tx, workspaceID, workItemID string, value Conver
 		}
 	}
 	coverage, extractor := legacyCoverage(value.Coverage, value.Extractor)
-	_, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,work_item_id,provider,model,effort,account,native_id,parent_id,agent_depth,agent_path,agent_nickname,origin,origin_host_id,coverage,started_at,ended_at,aliases_json,harness,harness_version_first,harness_version_last,harness_version_source,extractor) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,account,native_id) DO UPDATE SET workspace_id=excluded.workspace_id,work_item_id=COALESCE(excluded.work_item_id,conversations.work_item_id),parent_id=COALESCE(excluded.parent_id,conversations.parent_id),agent_depth=excluded.agent_depth,agent_path=COALESCE(excluded.agent_path,conversations.agent_path),agent_nickname=COALESCE(excluded.agent_nickname,conversations.agent_nickname),origin=COALESCE(excluded.origin,conversations.origin),origin_host_id=excluded.origin_host_id,model=COALESCE(excluded.model,conversations.model),effort=excluded.effort,coverage=excluded.coverage,started_at=COALESCE(excluded.started_at,conversations.started_at),ended_at=MAX(excluded.ended_at,conversations.ended_at),aliases_json=excluded.aliases_json,harness=COALESCE(excluded.harness,conversations.harness),harness_version_first=COALESCE(conversations.harness_version_first,excluded.harness_version_first),harness_version_last=COALESCE(excluded.harness_version_last,conversations.harness_version_last),harness_version_source=CASE WHEN excluded.harness_version_last IS NOT NULL THEN excluded.harness_version_source ELSE conversations.harness_version_source END,extractor=excluded.extractor`, id, workspaceID, workItem, value.Provider, nilIfEmpty(value.Model), nilIfEmpty(value.Effort), value.Account, value.NativeID, parent, value.AgentDepth, nilIfEmpty(value.AgentPath), nilIfEmpty(value.AgentNickname), nilIfEmpty(value.Origin), host, defaultString(coverage, "complete"), nilIfEmpty(value.StartedAt), nilIfEmpty(value.EndedAt), jsonText(append([]string{}, value.Aliases...)), nilIfEmpty(value.Harness), nilIfEmpty(value.HarnessVersionFirst), nilIfEmpty(value.HarnessVersionLast), versionSource(value), nilIfEmpty(extractor))
+	_, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,work_item_id,provider,model,effort,account,native_id,parent_id,agent_depth,agent_path,agent_nickname,origin,origin_host_id,coverage,started_at,ended_at,aliases_json,harness,harness_version_first,harness_version_last,harness_version_source,extractor,session_bounds_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,account,native_id) DO UPDATE SET workspace_id=excluded.workspace_id,work_item_id=COALESCE(excluded.work_item_id,conversations.work_item_id),parent_id=COALESCE(excluded.parent_id,conversations.parent_id),agent_depth=excluded.agent_depth,agent_path=COALESCE(excluded.agent_path,conversations.agent_path),agent_nickname=COALESCE(excluded.agent_nickname,conversations.agent_nickname),origin=COALESCE(excluded.origin,conversations.origin),origin_host_id=excluded.origin_host_id,model=COALESCE(excluded.model,conversations.model),effort=excluded.effort,coverage=excluded.coverage,started_at=COALESCE(excluded.started_at,conversations.started_at),ended_at=CASE WHEN excluded.ended_at IS NULL THEN conversations.ended_at WHEN conversations.ended_at IS NULL THEN excluded.ended_at ELSE MAX(excluded.ended_at,conversations.ended_at) END,aliases_json=excluded.aliases_json,harness=COALESCE(excluded.harness,conversations.harness),harness_version_first=COALESCE(conversations.harness_version_first,excluded.harness_version_first),harness_version_last=COALESCE(excluded.harness_version_last,conversations.harness_version_last),harness_version_source=CASE WHEN excluded.harness_version_last IS NOT NULL THEN excluded.harness_version_source ELSE conversations.harness_version_source END,extractor=excluded.extractor,session_bounds_json=excluded.session_bounds_json`, id, workspaceID, workItem, value.Provider, nilIfEmpty(value.Model), nilIfEmpty(value.Effort), value.Account, value.NativeID, parent, value.AgentDepth, nilIfEmpty(value.AgentPath), nilIfEmpty(value.AgentNickname), nilIfEmpty(value.Origin), host, defaultString(coverage, "complete"), nilIfEmpty(value.StartedAt), nilIfEmpty(value.EndedAt), jsonText(append([]string{}, value.Aliases...)), nilIfEmpty(value.Harness), nilIfEmpty(value.HarnessVersionFirst), nilIfEmpty(value.HarnessVersionLast), versionSource(value), nilIfEmpty(extractor), sessionBoundsJSON(rootSessionEnvelope(value)))
 	if err != nil {
 		return "", err
 	}
@@ -1858,7 +1858,20 @@ func writeAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversa
 
 // Callers holding a resolved workspace must not reload it for each session.
 func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord, suppressCostState, preserveExisting, preserveUnavailable bool) error {
+	// Maintenance callers can load only messages and usage fields. Recover
+	// the explicitly scoped envelope from the persisted conversation too.
+	if conversation.SessionBounds == nil {
+		var raw sql.NullString
+		if err := tx.QueryRow(`SELECT session_bounds_json FROM conversations WHERE id=?
+			AND agent_depth=0 AND parent_id IS NULL AND coverage='complete'`, conversationID).Scan(&raw); err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		conversation.SessionBounds = decodeSessionBounds(raw.String)
+	}
 	summaries := agentSessionSummariesWithCostState(conversation.Messages, suppressCostState)
+	for i := range summaries {
+		applySessionEnvelope(&summaries[i], conversation)
+	}
 	priorSessions, err := queryMaps(tx, "SELECT id,native_id,total_tokens FROM agent_sessions WHERE conversation_id=?", conversationID)
 	if err != nil {
 		return err
@@ -1955,22 +1968,22 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 			id,workspace_id,conversation_id,native_id,parent_id,delegation_message_id,kind,provider,model,effort,depth,
 			started_at,ended_at,input_tokens,uncached_input_tokens,cache_read_input_tokens,
 			cache_creation_input_tokens,cache_creation_5m_input_tokens,cache_creation_1h_input_tokens,
-			output_tokens,reasoning_output_tokens,unclassified_tokens,total_tokens,usage_status)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+			output_tokens,reasoning_output_tokens,unclassified_tokens,total_tokens,usage_status,time_bounds_source)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
 			workspace_id=excluded.workspace_id,native_id=excluded.native_id,parent_id=excluded.parent_id,delegation_message_id=excluded.delegation_message_id,
 			child_conversation_id=NULL,kind=excluded.kind,provider=excluded.provider,model=excluded.model,effort=excluded.effort,depth=excluded.depth,
 			started_at=excluded.started_at,ended_at=excluded.ended_at,input_tokens=excluded.input_tokens,
 			uncached_input_tokens=excluded.uncached_input_tokens,cache_read_input_tokens=excluded.cache_read_input_tokens,
 			cache_creation_input_tokens=excluded.cache_creation_input_tokens,cache_creation_5m_input_tokens=excluded.cache_creation_5m_input_tokens,
 			cache_creation_1h_input_tokens=excluded.cache_creation_1h_input_tokens,output_tokens=excluded.output_tokens,
-			reasoning_output_tokens=excluded.reasoning_output_tokens,unclassified_tokens=excluded.unclassified_tokens,total_tokens=excluded.total_tokens,usage_status=excluded.usage_status`,
+			reasoning_output_tokens=excluded.reasoning_output_tokens,unclassified_tokens=excluded.unclassified_tokens,total_tokens=excluded.total_tokens,usage_status=excluded.usage_status,time_bounds_source=excluded.time_bounds_source`,
 			ids[summary.nativeID], workspaceID, conversationID, summary.nativeID, parentID, delegationMessageID,
 			kind, conversation.Provider, nilIfEmpty(conversation.Model), nilIfEmpty(sessionMessageEffort(summary.messageIndexes, conversation.Messages)), depth, nilIfEmpty(summary.startedAt), nilIfEmpty(summary.endedAt),
 			integer(summary.counts["input_tokens"]), integer(summary.counts["uncached_input_tokens"]),
 			integer(summary.counts["cache_read_input_tokens"]), integer(summary.counts["cache_creation_input_tokens"]),
 			integer(summary.counts["cache_creation_5m_input_tokens"]), integer(summary.counts["cache_creation_1h_input_tokens"]),
 			integer(summary.counts["output_tokens"]), integer(summary.counts["reasoning_output_tokens"]),
-			integer(unclassified), integer(summary.counts["total_tokens"]), status); err != nil {
+			integer(unclassified), integer(summary.counts["total_tokens"]), status, summary.timeBoundsSource); err != nil {
 			return err
 		}
 		if _, err := tx.Exec("DELETE FROM agent_session_usage WHERE agent_session_id=?", ids[summary.nativeID]); err != nil {

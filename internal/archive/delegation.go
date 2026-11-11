@@ -45,7 +45,7 @@ var delegationMetrics = []delegationMetricSpec{
 	{"filesRead", "Files read", "count", "Distinct file paths recorded by successful read tools. Repeated reads count once; Self + children deduplicates across sessions. Reads without retained paths are incomplete; search/list tools do not count as file reads."},
 	{"messages", "Messages", "count", "Messages recorded in the agent session."}, {"requests", "Model requests", "count", "Distinct recorded model requests."}, {"turns", "User turns", "count", "Retained user message starts; injected agent assignments do not count as user turns."},
 	{"clock", "Clock span", "ms", "Earliest to latest evidence across included sessions, including unclassified time."},
-	{"total", "Agent session spans", "ms", "Sum of the time from each agent session’s first to last recorded activity. Overlapping sessions and gaps both add to this total."},
+	{"total", "Agent session spans", "ms", "Sum of each agent session’s recorded activity span, or its reported enclosing attempt when activity timestamps are unavailable. Overlapping sessions and gaps add to this total; it is not active execution time."},
 	{"toolTime", "Tool elapsed", "ms", "Clock time covered by tool calls across included agent sessions. Overlap counts once; this does not measure CPU time."},
 	{"toolAgent", "Agent tool time", "ms", "Sum of each agent session’s tool time, counting overlap once within each session. Parallel sessions add to the total."},
 	{"toolSum", "Tool duration sum", "ms", "Sum of recorded call durations; overlapping calls accumulate."},
@@ -80,11 +80,12 @@ type delegationAttempt struct {
 	MessageID string `json:"message_id,omitempty"`
 }
 type delegationNode struct {
-	ID             string `json:"id"`
-	ConversationID string `json:"conversation_id"`
-	WorkspaceID    string `json:"workspace_id"`
-	ParentID       string `json:"parent_id,omitempty"`
-	ParentEvidence string `json:"parent_evidence,omitempty"`
+	TimeBoundsSource string `json:"time_bounds_source,omitempty"`
+	ID               string `json:"id"`
+	ConversationID   string `json:"conversation_id"`
+	WorkspaceID      string `json:"workspace_id"`
+	ParentID         string `json:"parent_id,omitempty"`
+	ParentEvidence   string `json:"parent_evidence,omitempty"`
 	// ParentCertainty is the winning parent claim's provenance: native,
 	// derived, or legacy (a stored link of unknown provenance, not verified).
 	ParentCertainty string               `json:"parent_certainty,omitempty"`
@@ -491,7 +492,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		if main {
 			label = firstString(cv["native_id"], label)
 		}
-		n := &delegationNode{ID: nid, WorkspaceID: workspace, ConversationID: cid, Provider: firstString(lead["provider"], cv["provider"]), Model: firstString(lead["model"], cv["model"]), Label: label, Coverage: firstString(cv["coverage"]), Usage: "unavailable", envelopeStart: delegationTime(lead["started_at"]), envelopeEnd: delegationTime(lead["ended_at"]), MessageID: firstString(lead["delegation_message_id"]), Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
+		n := &delegationNode{ID: nid, WorkspaceID: workspace, ConversationID: cid, Provider: firstString(lead["provider"], cv["provider"]), Model: firstString(lead["model"], cv["model"]), Label: label, Coverage: firstString(cv["coverage"]), TimeBoundsSource: firstString(lead["time_bounds_source"]), Usage: "unavailable", envelopeStart: delegationTime(lead["started_at"]), envelopeEnd: delegationTime(lead["ended_at"]), MessageID: firstString(lead["delegation_message_id"]), Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
 		// Embedded executions must not inherit the parent agent's effort.
 		n.Effort = firstString(lead["effort"])
 		if main && n.Effort == "" {
@@ -1187,9 +1188,11 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		if n.Start == nil && !n.timed && (n.envelopeStart != nil || n.envelopeEnd != nil) {
 			n.Start, n.End, quality = n.envelopeStart, n.envelopeEnd, "reported"
 		}
-		if n.Start != nil && n.End != nil {
-			span := max(0, *n.End-*n.Start)
+		if n.Start != nil {
 			n.Self["start"] = delegationNumber(*n.Start, quality, 1, 1)
+		}
+		if n.Start != nil && n.End != nil && *n.End >= *n.Start {
+			span := *n.End - *n.Start
 			n.Self["clock"] = delegationNumber(span, quality, 1, 1)
 			n.Self["total"] = n.Self["clock"]
 			if s.Start == nil || *n.Start < *s.Start {

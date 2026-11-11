@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
 )
 
@@ -860,76 +859,82 @@ func (c *Catalog) refreshSessionShapeFor(ctx context.Context, ids []string) (wor
 	return step, err
 }
 
-// sessionShapeAllFacts returns every conversation's facts: stored facts for
-// clean conversations and fresh ones for a bounded increment of dirty ones.
-// A large backfill is left to maintenance (maintainLibrary, or the
-// maintenance.session-shape task), so a page never writes; partial totals
-// are never returned.
-func (c *Catalog) sessionShapeAllFacts(ctx context.Context) (map[string]sessionShapeFacts, error) {
+// sessionShapeSnapshot keeps usable stored facts while maintenance catches up.
+// Fresh derivation (including damaged facts) shares one bounded request budget.
+// Its pending map distinguishes stale facts from conversations not measured yet.
+type sessionShapeSnapshot struct {
+	facts   map[string]sessionShapeFacts
+	pending map[string]bool
+}
+
+func (c *Catalog) readSessionShapeSnapshot(ctx context.Context) (sessionShapeSnapshot, error) {
+	result := sessionShapeSnapshot{facts: map[string]sessionShapeFacts{}, pending: map[string]bool{}}
 	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	defer tx.Rollback()
-	pending, err := queryMapsContext(ctx, tx, "SELECT conversation_id,revision FROM session_shape_dirty LIMIT ?", sessionShapeInlineLimit+1)
+	rows, err := tx.QueryContext(ctx, `SELECT c.id,f.facts,d.conversation_id IS NOT NULL
+ FROM conversations c LEFT JOIN session_shape_facts f ON f.conversation_id=c.id
+ LEFT JOIN session_shape_dirty d ON d.conversation_id=c.id ORDER BY c.id`)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
-	if len(pending) > sessionShapeInlineLimit {
-		return nil, sessionShapeIndexingError()
-	}
-	dirty, err := deriveSessionShapeRows(ctx, tx, pending)
-	if err != nil {
-		return nil, err
-	}
-	result, skip := map[string]sessionShapeFacts{}, map[string]bool{}
-	for _, derived := range dirty {
-		skip[derived.id] = true
-		if derived.facts != nil {
-			result[derived.id] = *derived.facts
-		}
-	}
-	rows, err := tx.QueryContext(ctx, "SELECT conversation_id,facts FROM session_shape_facts")
-	if err != nil {
-		return nil, err
-	}
-	unreadable := []string{}
 	for rows.Next() {
-		var id, text string
-		if err := rows.Scan(&id, &text); err != nil {
+		var id string
+		var text sql.NullString
+		var dirty bool
+		if err := rows.Scan(&id, &text, &dirty); err != nil {
 			rows.Close()
-			return nil, err
-		}
-		if skip[id] {
-			continue
+			return result, err
 		}
 		var facts sessionShapeFacts
-		if json.Unmarshal([]byte(text), &facts) != nil {
-			unreadable = append(unreadable, id)
-			continue
+		readable := text.Valid && json.Unmarshal([]byte(text.String), &facts) == nil
+		if readable {
+			result.facts[id] = facts
 		}
-		result[id] = facts
+		if dirty || !readable {
+			result.pending[id] = true
+		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return result, err
 	}
-	// Stored facts are disposable; derive any damaged ones again.
-	for _, id := range unreadable {
-		facts, _, err := deriveSessionShapeOf(ctx, tx, id)
-		if err != nil {
-			return nil, err
-		}
-		if facts != nil {
-			result[id] = *facts
+	// Large backfills read stored facts only. A page never scans the entire
+	// transcript backlog or publishes derived data.
+	if len(result.pending) <= sessionShapeInlineLimit {
+		for id := range result.pending {
+			facts, _, err := deriveSessionShapeOf(ctx, tx, id)
+			if err != nil {
+				return result, err
+			}
+			if facts != nil {
+				result.facts[id] = *facts
+			} else {
+				delete(result.facts, id)
+			}
+			delete(result.pending, id)
 		}
 	}
 	return result, nil
 }
 
-func sessionShapeIndexingError() error {
-	return &qt.PlanDiagnostic{Code: qt.ErrorCodeResourceLimit, Message: "Session statistics are being indexed. Retry after Search indexing finishes; incomplete totals are not shown."}
+func (c *Catalog) sessionShapeAllFacts(ctx context.Context) (map[string]sessionShapeFacts, error) {
+	snapshot, err := c.readSessionShapeSnapshot(ctx)
+	return snapshot.facts, err
 }
+
+// Coverage describes the whole deduplicated dataset before query filters.
+// Missing sessions are excluded; sessions with older facts still count.
+type sessionShapeCoverage struct {
+	State   string `json:"state"`
+	Pending int    `json:"pending_sessions"`
+	Stale   int    `json:"stale_sessions"`
+	Missing int    `json:"missing_sessions"`
+}
+
+type sessionShapeTableContextKey struct{}
 
 // sessionShapeOf returns one conversation's facts and evidence: stored, or
 // derived afresh while the conversation is dirty or its stored copy is
@@ -1097,7 +1102,8 @@ type sessionShapeRecord struct {
 
 // sessionShapeTable is the dataset, kept until the catalog changes.
 type sessionShapeTable struct {
-	records []sessionShapeRecord
+	records  []sessionShapeRecord
+	coverage sessionShapeCoverage
 }
 
 // sessionShapeRows is the session_shape dataset: one row per agent session.
@@ -1105,17 +1111,20 @@ type sessionShapeTable struct {
 // (suppressMirrors) and by identity link (usageConversationRoots' canonical
 // conversation), so a session is counted once; each row carries its root.
 func (c *Catalog) sessionShapeTable(ctx context.Context) (*sessionShapeTable, error) {
+	if table, ok := ctx.Value(sessionShapeTableContextKey{}).(*sessionShapeTable); ok {
+		return table, nil
+	}
 	now := c.clock().In(time.Local)
 	return cachedValue(ctx, c, "session-shape:"+now.Format("2006-01-02")+":"+time.Local.String(), func(ctx context.Context) (*sessionShapeTable, error) {
-		facts, err := c.sessionShapeAllFacts(ctx)
+		snapshot, err := c.readSessionShapeSnapshot(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return c.newSessionShapeTable(ctx, facts)
+		return c.newSessionShapeTable(ctx, snapshot)
 	})
 }
 
-func (c *Catalog) newSessionShapeTable(ctx context.Context, facts map[string]sessionShapeFacts) (*sessionShapeTable, error) {
+func (c *Catalog) newSessionShapeTable(ctx context.Context, snapshot sessionShapeSnapshot) (*sessionShapeTable, error) {
 	conversations, err := queryMapsContext(ctx, c.reader(), `SELECT c.id,c.workspace_id,c.provider,c.harness,c.agent_depth,
  (SELECT a.id FROM agent_sessions a WHERE a.conversation_id=c.id AND a.native_id='main') agent_session_id,
  COALESCE(NULLIF(c.model,''),(SELECT a.model FROM agent_sessions a WHERE a.conversation_id=c.id AND a.native_id='main' LIMIT 1)) model,
@@ -1186,11 +1195,23 @@ func (c *Catalog) newSessionShapeTable(ctx context.Context, facts map[string]ses
 	if err != nil {
 		return nil, err
 	}
-	table := &sessionShapeTable{}
+	table := &sessionShapeTable{coverage: sessionShapeCoverage{State: "current"}}
 	for _, conversation := range conversations {
 		id := firstString(conversation["id"])
-		shape, ok := facts[id]
-		if !kept[firstString(conversation["workspace_id"])] || lineage.canonical[id] != id || !ok || shape.Messages == 0 {
+		if !kept[firstString(conversation["workspace_id"])] || lineage.canonical[id] != id {
+			continue
+		}
+		shape, ok := snapshot.facts[id]
+		if snapshot.pending[id] {
+			table.coverage.State = "pending"
+			table.coverage.Pending++
+			if ok {
+				table.coverage.Stale++
+			} else {
+				table.coverage.Missing++
+			}
+		}
+		if !ok || shape.Messages == 0 {
 			continue
 		}
 		at, _ := parseTime(shape.StartedAt)

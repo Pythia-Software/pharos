@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS tl1_attempts (
   PRIMARY KEY(installation_id, attempt_id)
 );
 CREATE INDEX IF NOT EXISTS tl1_attempts_task_idx ON tl1_attempts(installation_id, task_id);
+CREATE INDEX IF NOT EXISTS tl1_attempts_conversation_idx ON tl1_attempts(conversation_native_id);
 CREATE TABLE IF NOT EXISTS tl1_candidates (
   installation_id TEXT NOT NULL,
   candidate_id TEXT NOT NULL,
