@@ -187,7 +187,9 @@ Those reads count object/chunk accesses, including preflight; they are not
 physical disk-read counts or bytes. The catalog had 4,018 indexed messages
 (including block/metadata records). Final unique pack bytes were **4,581,969**;
 metadata including acquisition lookups, receipts, plans/proofs and run progress
-was **595,932 bytes**. Three managed native inputs totaled **5,657,798 logical
+was **595,932 bytes**. These are file lengths, not filesystem allocation: small
+lookup files, directory blocks and temporary files can occupy additional space;
+peak allocation was not measured. Three managed native inputs totaled **5,657,798 logical
 bytes** (all-time 4,091,378; each window 783,210). Applying the plan removed those
 managed native paths. The subsequent capture shared pack inodes, and a new
 catalog rebuilt from graph-only captures with matching message IDs, text,

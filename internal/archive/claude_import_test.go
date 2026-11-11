@@ -1173,7 +1173,7 @@ func claudeCompactionFixture(t *testing.T) (Config, *claudeImportJob, string) {
 	t.Helper()
 	config := claudeImportConfig(t)
 	download := filepath.Join(t.TempDir(), "conversations-000.zip")
-	chatGPTZip(t, download, map[string]string{"conversations.json": claudeAIExport, "future/blob.bin": "\x00exact opaque source\xff", "empty/": ""})
+	chatGPTZip(t, download, map[string]string{"conversations.json": claudeAIExport, "future/blob.bin": "\x00exact opaque source\xff", "empty/": "", "projects/empty/": ""})
 	job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{download}})
 	if err != nil || job.State != "collected" || job.Parts[0].UnitsError != "" {
 		t.Fatal(job, err)

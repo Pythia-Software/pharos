@@ -576,11 +576,11 @@ func retainClaudeSourceUnits(ctx context.Context, config Config, job *claudeImpo
 			return err
 		}
 		for _, entry := range archive.File {
-			units.Supplements = units.Supplements || claudeSupplementGroup(entry.Name) != ""
 			if entry.FileInfo().IsDir() {
 				units.Directories = append(units.Directories, entry.Name)
 				continue
 			}
+			units.Supplements = units.Supplements || claudeSupplementGroup(entry.Name) != ""
 			if claudeConversationName(entry.Name) {
 				continue
 			}
