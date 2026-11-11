@@ -2156,6 +2156,93 @@ test('message card labels and sentence events restore independently in the reade
  await app.shot('message-card-tints-phone');
 });
 
+test('conversation line tags filter matching activity without opening the line',{skip},async t=>{
+ const at='2026-11-05T14:00:00Z';
+ const item=(id,kind,text,extra={})=>({id,native_id:id,role:kind==='tool_result'?'tool':'assistant',kind,text:typeof text==='string'?text:JSON.stringify(text),created_at:at,...extra});
+ const messages=[{...item('ask','message','Inspect the project'),role:'user'},
+  item('thought','reasoning','Consider the next step',{reasoning_format:'summary'}),
+  item('browse','tool_call',{name:'Browser',input:{query:'useful reference'}},{call_id:'browse'}),
+  item('todo','tool_call',{name:'TodoWrite',input:{todos:[]}},{call_id:'todo'}),
+  item('read','tool_call',{name:'Read',input:{file_path:'/repo/example.txt'}},{call_id:'read'}),
+  item('list','tool_call',{name:'List',input:{path:'/repo'}},{call_id:'list'}),
+  item('write','tool_call',{name:'Write',input:{file_path:'/repo/output.txt'}},{call_id:'write'}),
+  item('poll','tool_call',{name:'write_stdin',input:{session_id:1}},{call_id:'poll'}),
+  item('edit','tool_call',{name:'Edit',input:{file_path:'/repo/output.txt'}},{call_id:'edit'}),
+  item('doc-pending','tool_call',{name:'mcp__Claude_Docs__batch',input:{container:{create:{name:'Pending',doc:{markdown:'# Pending'}}},batch:[]}},{call_id:'doc-pending'}),
+  item('doc-short','tool_result','{\"content\":',{call_id:'doc-pending',text_clipped:true,text_bytes:200}),
+  item('doc-created','tool_call',{name:'mcp__Claude_Docs__batch',input:{container:{create:{name:'Complete',doc:{markdown:'# Complete'}}},batch:[]}},{call_id:'doc-created'}),
+  item('doc-result','tool_result',{content:[{type:'text',text:'{\"verdict\":\"allow\"}'}]},{call_id:'doc-created'}),
+  item('answer','message','All done')];
+ const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages}),'GET /api/messages/:id':()=>({text:JSON.stringify({content:[{type:'text',text:'{\"verdict\":\"allow\"}'}]})})};
+ const app=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all`,ready:'.action-row'}),{page}=app;
+ const line=id=>page.locator(`.timeline-entry[data-message-id="${id}"]`),initial=path(page);
+ const browse=line('browse'),details=browse.locator('details.tool-event');
+ const tag=browse.getByRole('button',{name:'Browse',exact:true});
+ await tag.focus();await tag.press('ArrowDown');
+ assert.equal(await page.getByRole('menuitem',{name:'Hide',exact:true}).evaluate(el=>el===document.activeElement),true,'the menu supports keyboard navigation');
+ assert.equal(await details.evaluate(el=>el.open),false,'the tag does not open the line');
+ await page.getByRole('menu',{name:'Filter Browse',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await browse.waitFor({state:'hidden'});assert.equal(await line('todo').isVisible(),true,'other tools remain visible');
+ const key=page.locator('.transcript-tag-key');await key.getByRole('button',{name:'Browse',exact:true}).click();
+ await page.getByRole('menu',{name:'Filter Browse',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();await browse.waitFor();
+ await details.locator('summary .activity-target').click();assert.equal(await details.evaluate(el=>el.open),true,'the line still opens details');
+ await line('write').getByRole('button',{name:'Write category',exact:true}).click();
+ await page.getByRole('menu',{name:'Filter Write category',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await line('write').waitFor({state:'hidden'});await line('edit').waitFor({state:'hidden'});assert.equal(await line('poll').isVisible(),true,'the Poll activity remains visible despite its Write label');
+ await key.getByRole('button',{name:'Write · Write',exact:true}).click();await page.getByRole('menu',{name:'Filter Write · Write',exact:true}).getByRole('menuitem',{name:'Show All',exact:true}).click();await line('write').waitFor();
+ await line('poll').getByRole('button',{name:'Poll',exact:true}).click();await page.getByRole('menu',{name:'Filter Poll',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await line('poll').waitFor({state:'hidden'});assert.equal(await line('write').isVisible(),true,'hiding Poll leaves file writes visible');
+ await key.getByRole('button',{name:'Write · Poll',exact:true}).click();await page.getByRole('menu',{name:'Filter Write · Poll',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();await line('poll').waitFor();
+ const legacy=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all&reader_hidden_tags=${encodeURIComponent(JSON.stringify(['Write']))}`,ready:'.transcript-tag-key'});
+ assert.equal(await legacy.page.locator('.timeline-entry[data-message-id="write"]').isVisible(),false);assert.equal(await legacy.page.locator('.timeline-entry[data-message-id="poll"]').isVisible(),false,'legacy label links hide both categories');
+ await legacy.page.locator('.transcript-tag-key').getByRole('button',{name:'Write · Poll',exact:true}).click();await legacy.page.getByRole('menu',{name:'Filter Write · Poll',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();
+ assert.equal(await legacy.page.locator('.timeline-entry[data-message-id="poll"]').isVisible(),true);assert.equal(await legacy.page.locator('.timeline-entry[data-message-id="write"]').isVisible(),false);
+ const legacyCopy=await open(t,{api,url:path(legacy.page),ready:'.transcript-tag-key'});
+ assert.equal(await legacyCopy.page.locator('.timeline-entry[data-message-id="poll"]').isVisible(),true,'legacy label overrides survive copied URLs');
+ await line('read').getByRole('button',{name:'Read category',exact:true}).click();
+ await page.getByRole('menu',{name:'Filter Read category',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await line('read').waitFor({state:'hidden'});await line('list').waitFor({state:'hidden'});assert.equal(await line('write').isVisible(),true);
+ await key.getByRole('button',{name:'List',exact:true}).click();await page.getByRole('menu',{name:'Filter List',exact:true}).getByRole('menuitem',{name:'Show All',exact:true}).click();await line('read').waitFor();
+ await line('read').getByRole('button',{name:'Read',exact:true}).first().click();
+ await page.getByRole('menu',{name:'Filter Read',exact:true}).getByRole('menuitem',{name:'Hide others',exact:true}).click();
+ await line('write').waitFor({state:'hidden'});assert.equal(await line('read').isVisible(),true);
+ const saved=path(page),copy=await open(t,{api,url:saved,ready:'.transcript-tag-key'});
+ assert.equal(await copy.page.locator('.timeline-entry[data-message-id="write"]').isVisible(),false,'the URL restores hidden tags');
+ await page.evaluate(url=>window.pharosNavigate(url),initial);await line('write').waitFor();
+ await page.evaluate(url=>window.pharosNavigate(url),saved);await line('write').waitFor({state:'hidden'});
+ await key.getByRole('button',{name:'Write · Write',exact:true}).click();
+ await page.getByRole('menu',{name:'Filter Write · Write',exact:true}).getByRole('menuitem',{name:'Show All',exact:true}).click();
+ await line('write').waitFor();
+ const target=line('read').getByRole('button',{name:'Show output for /repo/example.txt',exact:true});await target.click();
+ assert.equal(await target.getAttribute('aria-expanded'),'true','file previews still open');
+ const pending=line('doc-pending'),created=line('doc-created');
+ await pending.getByRole('button',{name:'Requested document creation',exact:true}).click();await page.keyboard.press('Escape');
+ await created.scrollIntoViewIfNeeded();await app.settled();await created.getByRole('button',{name:'Created document',exact:true}).click();await page.getByRole('menu',{name:'Filter Created document',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();await created.waitFor({state:'hidden'});
+ assert.equal(await pending.isVisible(),true,'the still-requested creation remains visible');
+ await pending.getByText('Details',{exact:true}).click();await pending.waitFor({state:'hidden'});
+ await key.scrollIntoViewIfNeeded();await app.settled();await key.getByRole('button',{name:'Created document',exact:true}).click();await page.getByRole('menu',{name:'Filter Created document',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();await pending.waitFor();await created.waitFor();
+ await pending.scrollIntoViewIfNeeded();await app.settled();await pending.getByRole('button',{name:'Created document',exact:true}).click();await page.getByRole('menu',{name:'Filter Created document',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await pending.waitFor({state:'hidden'});await created.waitFor({state:'hidden'});
+ await key.scrollIntoViewIfNeeded();await app.settled();await key.getByRole('button',{name:'Created document',exact:true}).click();await page.getByRole('menu',{name:'Filter Created document',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();await pending.waitFor();await created.waitFor();
+ await page.evaluate(()=>window.pharosView.write('reader_filter_level','thought'));await app.settled();
+ await line('thought').getByRole('button',{name:'Reasoning summary',exact:true}).click();
+ await page.getByRole('menu',{name:'Filter Reasoning summary',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await line('thought').waitFor({state:'hidden'});
+ await page.evaluate(()=>window.pharosFind.open('Consider the next step'));
+ const note=page.locator('.pharos-find-notes');await note.getByText(/hidden Reasoning summary/).waitFor();
+ await note.getByRole('button',{name:'Show',exact:true}).click();await line('thought').waitFor();
+ assert.equal(new URL(page.url()).searchParams.get('reader_filter_level'),'thought','revealing a hidden tag preserves the preset');
+ await page.getByRole('button',{name:'Close Find (Escape)',exact:true}).click();
+ await page.setViewportSize({width:320,height:844});await line('thought').scrollIntoViewIfNeeded();await app.settled();
+ await line('thought').getByRole('button',{name:'Reasoning summary',exact:true}).click();
+ const menu=page.getByRole('menu',{name:'Filter Reasoning summary',exact:true});
+ assert.equal(await menu.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight}),true,'the menu fits on a narrow screen');
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await menu.getByRole('menuitem',{name:'Hide',exact:true}).click();
+ const defaults=page.getByRole('region',{name:'Conversation key',exact:true}).getByRole('button',{name:'Key',exact:true});await defaults.scrollIntoViewIfNeeded();await app.settled();await defaults.click();
+ await page.getByRole('menuitemradio',{name:/^Default/}).click();await line('thought').waitFor();
+});
+
 test('People message-label breakdowns keep their dashboard and saved URL',{skip},async t=>{
  const dashboard=topic=>'/analyze?'+new URLSearchParams({analyze_topic:topic,analyze_window:'30d',analyze_filters:encodeQuery({...EMPTY_QUERY,where:[{field:'repository_name',op:'is_not_null',value:''}]}),analyze_chart:JSON.stringify({metric:'messages',split:'message_family',period:'day',share:true})});
  const app=await open(t,{url:dashboard('human'),ready:'.usage-human-dashboard .usage-chart'}),{page}=app;

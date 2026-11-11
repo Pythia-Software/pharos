@@ -580,6 +580,28 @@ function readerTimelineCategory(message){
   return category==='command'||/exec|terminal/.test(name)||name==='bash'?'run':'other';
 }
 
+// Activity labels can coincide across timeline categories. Keep their URL
+// identities distinct and rebuild the index when a fuller result changes a label.
+function transcriptTagId(category,label){return 'tag:'+JSON.stringify([category,label])}
+function transcriptTagParts(id){if(typeof id!=='string'||!id.startsWith('tag:'))return null;try{const value=JSON.parse(id.slice(4));return Array.isArray(value)&&value.length===2&&value.every(item=>typeof item==='string')?value:null}catch{return null}}
+function transcriptTagIndex(messages,structure,describe){
+  const entries=new WeakMap(),tags=new Map();
+  const add=info=>{const existing=tags.get(info.id);if(existing)existing.count++;else tags.set(info.id,{...info,count:1})};
+  const remove=info=>{const existing=tags.get(info.id);if(existing&&!--existing.count)tags.delete(info.id)};
+  const refresh=message=>{const before=entries.get(message),description=describe(message),after=description?.label?{...description,id:transcriptTagId(description.category,description.label)}:null;if(before?.id===after?.id)return false;if(before)remove(before);if(after){add(after);entries.set(message,after)}else entries.delete(message);return true};
+  messages.forEach(message=>{if(!structure.consumed.has(message))refresh(message)});
+  return{refresh,tagOf:message=>entries.get(message)?.id||null,info:id=>tags.get(id)||null,all:()=>[...tags.keys()],group:category=>[...tags.values()].filter(tag=>tag.category===category).map(tag=>tag.id)};
+}
+// Unscoped label strings were emitted by earlier readers. A scoped show
+// override lets a user show one category while retaining that legacy hide for
+// other categories and conversations.
+function transcriptTagHidden(hidden,id){const parts=transcriptTagParts(id);return hidden.has(id)||Boolean(parts&&hidden.has(parts[1])&&!hidden.has('show:'+id))}
+function transcriptTagSelection(hidden,all,shown){
+  const next=new Set(hidden),selected=new Set(shown);
+  for(const id of all){const label=transcriptTagParts(id)?.[1],override='show:'+id;if(selected.has(id)){next.delete(id);if(label&&next.has(label))next.add(override);else next.delete(override)}else{next.add(id);next.delete(override)}}
+  return next;
+}
+
 // Retain calls with missing timestamps; the navigator chooses a real clock or
 // message order for the entire session before placing these marks.
 function readerNavigatorMarks(model,describe=message=>({name:toolPayload(message).name||'Tool'})){
@@ -665,10 +687,10 @@ function findableText(message){return message.findableText??=message.kind==='mes
 // Counts the events whose findable text matches pattern (a RegExp without the
 // g flag): shown ones, and hidden ones with the kinds hiding them. Results
 // count only when output is searched.
-function transcriptFind(messages,{pattern,shown,output}){
-  const structure=transcriptStructure(messages),kinds=new Set();let visible=0,hidden=0;
-  for(const message of messages){if(structure.consumed.has(message)&&!output||!pattern.test(findableText(message)))continue;const missing=structure.pathOf(message).filter(key=>!shown.has(key));if(missing.length){hidden++;missing.forEach(key=>kinds.add(key))}else visible++}
-  return{shown:visible,hidden,hidden_kinds:TRANSCRIPT_CATEGORIES.map(([key])=>key).filter(key=>kinds.has(key))};
+function transcriptFind(messages,{pattern,shown,output,hiddenTagOf}){
+  const structure=transcriptStructure(messages),kinds=new Set(),tags=new Set();let visible=0,hidden=0;
+  for(const message of messages){if(structure.consumed.has(message)&&!output||!pattern.test(findableText(message)))continue;const missing=structure.pathOf(message).filter(key=>!shown.has(key)),missingTags=hiddenTagOf?.(message)||[];if(missing.length||missingTags.length){hidden++;missing.forEach(key=>kinds.add(key));missingTags.forEach(tag=>tags.add(tag))}else visible++}
+  return{shown:visible,hidden,hidden_kinds:TRANSCRIPT_CATEGORIES.map(([key])=>key).filter(key=>kinds.has(key)),...(hiddenTagOf?{hidden_tags:[...tags]}:{})};
 }
 function transcriptFindPattern(term,regex,caseSensitive){return new RegExp(regex?term:term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),caseSensitive?'u':'iu')}
 
