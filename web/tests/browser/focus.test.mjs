@@ -1095,8 +1095,14 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
     await page.keyboard.press('Escape');
     await page.locator('#usageSummary').waitFor({ state: 'hidden' });
     await page.waitForFunction(element => document.activeElement === element, await more.elementHandle());
+    const guideButton = page.locator('#dataGuideToggle');
+    assert.equal(await guideButton.getAttribute('aria-expanded'), 'false');
     await activateHeaderTool(page, 'dataGuideToggle');
-    await holdsFocus(page, page.getByRole('dialog', {name:'Data Guide',exact:true}), more);
+    const guide = page.getByRole('dialog', {name:'Data Guide',exact:true});
+    await guide.waitFor();
+    await page.waitForFunction(() => document.getElementById('dataGuideToggle').getAttribute('aria-expanded') === 'true');
+    await holdsFocus(page, guide, more);
+    await page.waitForFunction(() => document.getElementById('dataGuideToggle').getAttribute('aria-expanded') === 'false');
   });
 }
 
@@ -1803,9 +1809,12 @@ test("Ask Pharos feedback requires explicit approval of the reviewed draft", { s
 
 test("feedback review keeps focus, fits a phone, and returns focus to its opener", { skip }, async t => {
   const { page, shot } = await open(t, { url: "/settings", ready: "#healthCards .panel" });
+  const feedbackHeader = page.locator("#feedbackSubmitToggle");
+  assert.equal(await feedbackHeader.getAttribute("aria-expanded"), "false");
   await activateHeaderTool(page, "feedbackSubmitToggle");
   const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
   await dialog.waitFor();
+  assert.equal(await feedbackHeader.getAttribute("aria-expanded"), "true");
   await page.waitForFunction(() => document.querySelector(".uifeedback-dialog")?.contains(document.activeElement));
   // A bug report is the default and includes recent logs; the contact email is an app preference.
   assert.equal(await dialog.getByRole("combobox", { name: "Type" }).inputValue(), "bug");
@@ -1818,6 +1827,7 @@ test("feedback review keeps focus, fits a phone, and returns focus to its opener
   await shot("feedback-review");
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "hidden" });
+  assert.equal(await feedbackHeader.getAttribute("aria-expanded"), "false");
   assert.equal(await page.evaluate(() => headerToolAnchor(document.getElementById("feedbackSubmitToggle")) === document.activeElement), true);
 });
 
@@ -1851,9 +1861,13 @@ test("annotated element screenshots render, the annotation surfaces stay on scre
   await page.locator("#feedbackSend").click();
   const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
   await dialog.waitFor();
+  assert.equal(await page.locator("#feedbackSubmitToggle").getAttribute("aria-expanded"), "true");
   await page.waitForFunction(() => document.querySelector(".uifeedback-dialog img")?.naturalWidth > 0);
   await dialog.getByRole("button", { name: "Send feedback", exact: true }).click();
   await page.getByRole("dialog", { name: "Feedback sent", exact: true }).waitFor();
+  assert.equal(await page.locator("#feedbackSubmitToggle").getAttribute("aria-expanded"), "true");
+  await page.getByRole("button", { name: "Close feedback", exact: true }).click();
+  assert.equal(await page.locator("#feedbackSubmitToggle").getAttribute("aria-expanded"), "false");
   assert.equal(new URL(page.url()).pathname, "/settings");
 });
 
@@ -2581,6 +2595,9 @@ async function openAskOverlay(t, width) {
 
 test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip}, async t => {
   const {page,shot,modal,editor}=await openAskOverlay(t,1440);
+  const askHeader=page.locator('#askPharosToggle');
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'true');
+  assert.equal(await askHeader.getAttribute('aria-current'),null);
   await page.evaluate(()=>{
     const original=window.fetch;window.askDraftAttempts=0;
     window.fetch=(input,options)=>{
@@ -2622,6 +2639,8 @@ test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip},
   assert.equal(await editor.evaluate(element=>element.value),'What if we broke it down by model?','removing context preserves the draft');
   await modal.getByRole('button',{name:'Close Ask Pharos',exact:true}).click();
   await modal.waitFor({state:'hidden'});
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'false');
+  assert.equal(await askHeader.getAttribute('aria-current'),null);
   assert.ok(await page.locator('#askPharosToggle').evaluate(element=>element===document.activeElement)||await page.locator('#headerMore').evaluate(element=>element===document.activeElement),'Close returns focus to the header');
   await activateHeaderTool(page,'askPharosToggle');
   await removeContext.waitFor();
@@ -2641,6 +2660,8 @@ test('Ask Pharos errors float over full screen and dismiss without moving it @ 3
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection:{provider:'Removed',model:'',effort:'Default'}},providers:[{id:'Codex'}]},
   }});
   const notice=page.locator('#askPage .pharos-notice');
+  assert.equal(await page.locator('#askPharosToggle').getAttribute('aria-current'),'page');
+  assert.equal(await page.locator('#askPharosToggle').getAttribute('aria-expanded'),'false');
   assert.match(await notice.getByRole('alert').textContent(),/Removed is unavailable/);
   const surface=page.locator('#askPage .pharos-product > :not(.pharos-notice-anchor):not([hidden])').first();
   const shown=await surface.boundingBox(),box=await notice.boundingBox(),ask=await page.locator('#askPage .pharos-product').boundingBox();
@@ -2655,9 +2676,13 @@ test('Ask Pharos errors float over full screen and dismiss without moving it @ 3
 
 test('Ask Pharos full screen moves the chat to its own page and back @ 390', {skip}, async t => {
   const {page,shot,modal,editor,state}=await openAskOverlay(t,390);
+  const askHeader=page.locator('#askPharosToggle');
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'true');
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/ask');
   await modal.waitFor({state:'hidden'});
+  assert.equal(await askHeader.getAttribute('aria-current'),'page');
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'false');
   assert.ok(await editor.evaluate(element=>!!element.closest('#askPage')&&element===document.activeElement),'full screen keeps the composer focused on its page');
   // Suggestions sit inside the composer until the user types.
   const suggestions=page.getByRole('region',{name:'Prompt suggestions',exact:true});
@@ -2677,6 +2702,8 @@ test('Ask Pharos full screen moves the chat to its own page and back @ 390', {sk
   await page.getByRole('button',{name:'Exit full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/analyze');
   await modal.waitFor();
+  assert.equal(await askHeader.getAttribute('aria-current'),null);
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'true');
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'leaving full screen reopens the dialog it came from');
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/ask');
@@ -2685,6 +2712,8 @@ test('Ask Pharos full screen moves the chat to its own page and back @ 390', {sk
   const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});
   await panel.waitFor();
   assert.ok(await modal.isHidden(),'Back leaves full screen, floating a pending question');
+  assert.equal(await askHeader.getAttribute('aria-current'),null);
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'false');
   // Header tabs switch views without a route event; they still leave full screen.
   await panel.locator('.pharos-floating-open').click();await modal.waitFor();
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
