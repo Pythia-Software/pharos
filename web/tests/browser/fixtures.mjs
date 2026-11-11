@@ -73,7 +73,7 @@ datasets.model_requests=Array.from({length:448},(_,index)=>{
   const monday=new Date(at);monday.setUTCDate(monday.getUTCDate()-(monday.getUTCDay()+6)%7);
   return {...datasets.model_requests[index%datasets.model_requests.length],id:'request-'+index,conversation_id:'conversation-'+index%16,
     model:thinkingModels[index%2],effort:thinkingEfforts[(index>>1)%2],speed:index%5?'standard':'fast',requested_at:iso,day:iso.slice(0,10),week:monday.toISOString().slice(0,10),month:iso.slice(0,7),
-    hour_of_day:at.getUTCHours(),gap_seconds:gap,gap_bin:gap===null?null:Math.max(0,waitEdges.findLastIndex(edge=>edge<=gap)-(gap===600?1:0)),
+    hour_of_day:at.getUTCHours(),gap_seconds:gap,gap_bin:gap===null?null:(band=>`${waitEdges[band]}–${waitEdges[band+1]} s`)(Math.max(0,waitEdges.findLastIndex(edge=>edge<=gap)-(gap===600?1:0))),
     timing_quality:gap===null?'No linked tool timestamp':'Usable timing',reasoning_output_tokens:index%3?100+index:0,agent_depth:index%4?0:1};
 });
 // Invented entity measurements for the standalone cross-dashboard scatter.
@@ -725,15 +725,16 @@ export const resourceHistory = (scope = "this library service") => {
 };
 
 // Synthetic numeric timing fixture: UI/layout tests never read a user library.
-// /api/thinking answers only the workload fit's parts (thinking-query.ts
-// reads the rest from model_requests), keyed as the page keys its groups.
+// /api/thinking answers only the workload fit's parts and the time-of-day
+// cells (thinking-query.ts reads the rest from model_requests), keyed as the
+// page keys its groups.
 export function thinkingFixture(query) {
   const periods=Array.from({length:14},(_,i)=>new Date(+summaryDay-(13-i)*day).toISOString().slice(0,10));
   const models=thinkingModels,efforts=thinkingEfforts;
   const by=query.get('groupBy')??'none';
   const keys=by==='model_effort'?models.flatMap(m=>efforts.map(e=>JSON.stringify([m,e]))):by==='model'?models:by==='effort'?efforts:by==='none'?['All requests']:[];
   const groups=keys.map(key=>({key,Adjusted:280,
-    calendar:periods.flatMap(p=>Array.from({length:24},(_,hour)=>({day:p,hour,Ratio:.6+hour/30,Adjusted:80,AdjustedConversations:7}))),
+    calendar:periods.flatMap(p=>Array.from({length:24},(_,hour)=>({day:p,hour,Raw:4+hour/4,Ratio:.6+hour/30,N:90,Adjusted:80,Conversations:8,AdjustedConversations:7}))),
     bands:Array.from({length:8},(_,h)=>({hour:h*3,days:14,n:300,Ratio:.7+h*.08,Low:.6+h*.08,High:.8+h*.08})),comparison:{days:14,Ratio:.7,Low:.6,High:.8}}));
   const response={Adjusted:query.get('view')==='calendar'?1120:0,groups:query.get('view')==='calendar'?groups:[],timezone:query.get('timezone')||'UTC'};
   if(query.get('overview')==='1')Object.assign(response,{

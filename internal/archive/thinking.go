@@ -261,13 +261,16 @@ func thinkingMedian(a []float64) float64 {
 }
 
 // thinkingCalendarCell is one row period and local hour of a group's time of
-// day, with the median workload-adjusted ratio of its supported estimates.
-// The raw waits come from model_requests (thinking-query.ts).
+// day: the median wait of its timed requests and the median workload-adjusted
+// ratio of its estimates, each only when supported (20 values from 3
+// conversations). It is read here rather than through query-v3 because a
+// metric takes one calendar key and the zoned day and hour are computed,
+// so Query Table reads them once per clause rather than in its shared scan.
 type thinkingCalendarCell struct {
-	Day                             string `json:"day"`
-	Hour                            int    `json:"hour"`
-	Ratio                           *float64
-	Adjusted, AdjustedConversations int
+	Day                                               string `json:"day"`
+	Hour                                              int    `json:"hour"`
+	Raw, Ratio                                        *float64
+	N, Adjusted, Conversations, AdjustedConversations int
 }
 type thinkingBand struct {
 	Hour             int `json:"hour"`
@@ -533,32 +536,46 @@ func aggregateThinking(ctx context.Context, records []thinkingRecord, o thinking
 		ratios        []float64
 		conversations map[string]bool
 	}
+	newSample := func() *sample { return &sample{conversations: map[string]bool{}} }
 	add := func(m map[string]*sample, key string, r thinkingRecord) *sample {
 		if m[key] == nil {
-			m[key] = &sample{conversations: map[string]bool{}}
+			m[key] = newSample()
 		}
 		m[key].ratios = append(m[key].ratios, *r.Ratio)
 		m[key].conversations[r.Conversation] = true
 		return m[key]
 	}
 	supported := func(s *sample) bool { return len(s.ratios) >= 20 && len(s.conversations) >= 3 }
+	type cellSample struct{ raw, adjusted *sample }
 	for key, rs := range groups {
 		g := thinkingGroup{Key: key, Calendar: []thinkingCalendarCell{}, Bands: []thinkingBand{}}
-		all := &sample{conversations: map[string]bool{}}
-		cells, daily := map[string]*sample{}, map[string]*sample{}
+		all := newSample()
+		cells, daily := map[string]*cellSample{}, map[string]*sample{}
 		for _, index := range rs {
 			r := records[index]
-			if r.Ratio == nil {
-				continue
+			if r.Ratio != nil {
+				all.ratios = append(all.ratios, *r.Ratio)
+				all.conversations[r.Conversation] = true
 			}
-			all.ratios = append(all.ratios, *r.Ratio)
-			all.conversations[r.Conversation] = true
 			if r.At.IsZero() {
 				continue
 			}
 			hour := r.At.In(o.Zone).Hour()
-			add(cells, thinkingCalendarRow(r.At, o.Rows, o.Zone)+"|"+strconv.Itoa(hour), r)
-			add(daily, thinkingCalendarRow(r.At, "day", o.Zone)+"|"+strconv.Itoa(hour/3*3), r)
+			k := thinkingCalendarRow(r.At, o.Rows, o.Zone) + "|" + strconv.Itoa(hour)
+			c := cells[k]
+			if c == nil {
+				c = &cellSample{raw: newSample(), adjusted: newSample()}
+				cells[k] = c
+			}
+			if r.Gap != nil {
+				c.raw.ratios = append(c.raw.ratios, *r.Gap)
+				c.raw.conversations[r.Conversation] = true
+			}
+			if r.Ratio != nil {
+				c.adjusted.ratios = append(c.adjusted.ratios, *r.Ratio)
+				c.adjusted.conversations[r.Conversation] = true
+				add(daily, thinkingCalendarRow(r.At, "day", o.Zone)+"|"+strconv.Itoa(hour/3*3), r)
+			}
 		}
 		g.Adjusted = len(all.ratios)
 		if o.Metric == "ratio" {
@@ -567,10 +584,15 @@ func aggregateThinking(ctx context.Context, records []thinkingRecord, o thinking
 		}
 		for k, c := range cells {
 			day, hour, _ := strings.Cut(k, "|")
-			cell := thinkingCalendarCell{Day: day, Adjusted: len(c.ratios), AdjustedConversations: len(c.conversations)}
+			cell := thinkingCalendarCell{Day: day, N: len(c.raw.ratios), Conversations: len(c.raw.conversations),
+				Adjusted: len(c.adjusted.ratios), AdjustedConversations: len(c.adjusted.conversations)}
 			cell.Hour, _ = strconv.Atoi(hour)
-			if supported(c) {
-				v := thinkingMedian(c.ratios)
+			if supported(c.raw) {
+				v := thinkingMedian(c.raw.ratios)
+				cell.Raw = &v
+			}
+			if supported(c.adjusted) {
+				v := thinkingMedian(c.adjusted.ratios)
 				cell.Ratio = &v
 			}
 			g.Calendar = append(g.Calendar, cell)

@@ -1,5 +1,15 @@
 # Query Table: one scan for a request's clauses
 
+**Resolved in Query Table 1.0.7**: a metric batch over a stored source reads its
+population once for counts, distinct counts, `quantiles` and date-grouped
+clauses that group by stored text, enum or boolean fields. With Pharos giving
+`model_requests` a stored source while its timings are current, the Time
+view's 19 clauses over 30 days take 2.5 s (from over 30 s), and the other
+Thinking views 1.6–4.3 s, answers unchanged
+([measurements](../thinking-dashboards.md)). Number, calendar and derived
+group keys are not yet shared:
+[`query-table-shared-scan-groupings.md`](query-table-shared-scan-groupings.md).
+
 Pharos consumes unmodified Query Table 1.0.5 (Go `backends/go` v1.0.5, npm
 `@pythia-software/query-table-*` 1.0.5). No local dependency patches are
 permitted; this is a request for upstream work. It builds on

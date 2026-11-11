@@ -128,7 +128,7 @@ test("ribbon query cards retain selected identity, zoom and counting assumptions
 import {evaluateMetrics} from '@pythia-software/query-table-core';
 import modelRequestsDocument from '../../../../schemas/model_requests.schema.json';
 import groupKeys from '../../../../testdata/thinking-group-keys.json';
-import {thinkingClauses,thinkingFromMetrics,thinkingGroupIdentity,thinkingBreakdownFields,thinkingPeriodKey,thinkingStamp,withThinkingFit,sortThinkingGroups,supportedThinkingPeriod,thinkingQueryState} from '../../../src/thinking-query';
+import {thinkingBandLabels,thinkingClauses,thinkingFromMetrics,thinkingGroupIdentity,thinkingBreakdownFields,thinkingPeriodKey,thinkingStamp,withThinkingFit,sortThinkingGroups,supportedThinkingPeriod,thinkingQueryState} from '../../../src/thinking-query';
 const requestsSchema=loadSchema(modelRequestsDocument);
 const evaluate=(rows,state,overview=false,now=Date.parse('2026-11-10T00:00:00Z'))=>{
  const q=thinkingQueryState(state,overview),where=thinkingWhere(q,now);
@@ -140,10 +140,11 @@ const evaluate=(rows,state,overview=false,now=Date.parse('2026-11-10T00:00:00Z')
 // A request as model_requests has it; gap_bin and the calendar fields are
 // given, as the service derives them, in UTC.
 const request=(id,at,gap,{model='m-a',effort='high',conversation='c1',reasoning=0,bin=null,...rest}={})=>({id,conversation_id:conversation,model,effort,speed:'standard',
- provider:'anthropic',harness:'claude-code',project_name:null,machine:'mac',preceding_tool:'shell',agent_depth:0,requested_at:at,gap_seconds:gap,gap_bin:bin,
+ provider:'anthropic',harness:'claude-code',project_name:null,machine:'mac',preceding_tool:'shell',agent_depth:0,requested_at:at,gap_seconds:gap,gap_bin:bin===null?null:thinkingBandLabels[bin],
  reasoning_output_tokens:reasoning,day:at.slice(0,10),month:at.slice(0,7),hour_of_day:Number(at.slice(11,13)),...rest});
 
 test('Thinking group keys match the fitted estimates the service keys',()=>{
+ assert.deepEqual(thinkingBandLabels,groupKeys.bands);
  for(const c of groupKeys.cases){
   const keys=thinkingBreakdownFields[c.groupBy].map(field=>c.row[field]??null);
   const id=thinkingGroupIdentity(c.groupBy,keys);
@@ -215,18 +216,18 @@ test('Thinking reads older hour and day buckets as the nearest query-v3 supports
  assert.equal(legacy.hours,6);assert.equal(legacy.days,1000);
 });
 
-test('time-of-day cells need twenty waits from three conversations and take fitted ratios by key',()=>{
+test('time-of-day cells come whole from the fit, which reads the zoned day and hour',()=>{
  const rows=[];
  for(let i=0;i<24;i++)rows.push(request('x'+i,`2026-11-02T09:${String(i).padStart(2,'0')}:00Z`,2,{bin:5,conversation:'c'+(i%3)}));
- for(let i=0;i<5;i++)rows.push(request('y'+i,`2026-11-02T18:0${i}:00Z`,4,{bin:6,conversation:'c'+(i%3)}));
  const state={...defaultThinking,timezone:'UTC',view:'calendar',groupBy:'model',calendarMetric:'ratio'};
+ assert.ok(thinkingClauses(state,false).every(c=>!c.groupBy.includes('hour_of_day')&&!c.groupBy.includes(state.calendarRows)));
  const data=evaluate(rows,state),g=data.groups[0];
- assert.deepEqual(data.calendarPeriods,['2026-11-02']);
- assert.deepEqual(g.calendar.map(c=>[c.day,c.hour,c.N,c.Raw,c.Conversations]),[['2026-11-02',9,24,2,3],['2026-11-02',18,5,null,3]]);
+ assert.deepEqual(data.calendarPeriods,['2026-11-02']);assert.deepEqual(g.calendar,[]);
+ const cells=[{day:'2026-11-02',hour:9,Raw:2,Ratio:.8,N:24,Adjusted:24,Conversations:3,AdjustedConversations:3},{day:'2026-11-02',hour:18,Raw:null,Ratio:null,N:5,Adjusted:0,Conversations:3,AdjustedConversations:0}];
  const fit={Adjusted:24,timezone:'UTC',groups:[{key:'m-a',Adjusted:24,stats:{...g.stats,median:.8},Conversations:3,bands:[{hour:9,days:1,n:24,Ratio:.8,Low:null,High:null}],comparison:{days:0,Ratio:null,Low:null,High:null},
-  calendar:[{day:'2026-11-02',hour:9,Ratio:.8,Adjusted:24,AdjustedConversations:3}]},{key:'absent',Adjusted:1,bands:[],comparison:{days:0},calendar:[]}],factors:[]};
+  calendar:cells},{key:'absent',Adjusted:1,bands:[],comparison:{days:0},calendar:[]}],factors:[]};
  const merged=withThinkingFit(data,fit,state),m=merged.groups[0];
- assert.equal(merged.Adjusted,24);assert.equal(m.stats.median,.8);assert.equal(m.calendar[0].Ratio,.8);assert.equal(m.calendar[1].Ratio,null);assert.equal(m.calendar[0].Raw,2);
+ assert.equal(merged.Adjusted,24);assert.equal(m.stats.median,.8);assert.deepEqual(m.calendar,cells);
  assert.equal(merged.groups.length,1);assert.deepEqual(merged.factors,[]);
 });
 

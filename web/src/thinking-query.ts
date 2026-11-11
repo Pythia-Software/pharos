@@ -7,13 +7,15 @@ import { loadSchema, metricDateFloor, metricDateNext, type AggregationClause, ty
 import modelRequestDocument from "../../schemas/model_requests.schema.json";
 import { todayBounds } from "./day-window";
 import { postMetrics, type MetricBucket, type MetricResult } from "./metric-request";
-import { supportedThinkingPeriod, thinkingRangeDays, thinkingRequest, thinkingWhere, type ThinkingCalendarCell, type ThinkingCell, type ThinkingGroup, type ThinkingResponse, type ThinkingState, type ThinkingStats } from "./thinking-model";
+import { supportedThinkingPeriod, thinkingRangeDays, thinkingRequest, thinkingWhere, type ThinkingCell, type ThinkingGroup, type ThinkingResponse, type ThinkingState, type ThinkingStats } from "./thinking-model";
 export { maxThinkingDays, supportedThinkingPeriod, thinkingHourChoices } from "./thinking-model";
 
-// Wait bands, as model_requests' gap_bin numbers them: each includes its
+// Wait bands, as model_requests' gap_bin labels them: each includes its
 // lower edge, the last its upper one too.
 export const thinkingEdges = [.1, .2, .3, .5, 1, 2, 3, 5, 10, 20, 30, 50, 100, 200, 300, 500, 600];
 const bands = thinkingEdges.length - 1;
+export const thinkingBandLabels = thinkingEdges.slice(0, bands).map((edge, i) => `${edge}–${thinkingEdges[i + 1]} s`);
+const bandIndex = new Map(thinkingBandLabels.map((label, i) => [label, i]));
 // Exact-linear percentiles: p10 (low whisker), q1, median, p75 (q3), p90
 // (high whisker) and p95.
 const statProbabilities = [.1, .25, .5, .75, .9, .95];
@@ -153,10 +155,6 @@ export function thinkingClauses(state: ThinkingState, overview: boolean): Aggreg
       ...periodPercentiles.map(([key, p]): AggregationClause => ({ id: `period_${key}`, op: "count", expression: `PERCENTILE([gap_seconds],${p})`, groupBy: periods, dateGrouping })),
       { ...conversations("period_conversations", periods, timed), dateGrouping }, { ...count("period_bands", [...periods, "gap_bin"], timed), dateGrouping });
   }
-  if (!overview && state.view === "calendar") {
-    const cells = [...by, state.calendarRows, "hour_of_day"];
-    clauses.push(stats("cell_stats", cells, [.5]), conversations("cell_conversations", cells, timed));
-  }
   if (overview) {
     clauses.push(stats("group_cdf", by, cdfProbabilities));
     for (const field of ["model", "harness"]) clauses.push(count(`${field}_retained`, [field]), stats(`${field}_stats`, [field]), conversations(`${field}_conversations`, [field], timed));
@@ -183,7 +181,7 @@ export function thinkingFromMetrics(state: ThinkingState, overview: boolean, res
   for (const b of buckets("group_stats")) group(b.keys).stats = statsOf(b);
   for (const b of buckets("group_timed")) group(b.keys).Timed = number(b.value);
   for (const b of buckets("group_conversations")) group(b.keys).Conversations = number(b.value);
-  for (const b of buckets("group_bands")) { const band = b.keys[width]; if (typeof band === "number" && band >= 0 && band < bands) group(b.keys).counts[band] += number(b.value); }
+  for (const b of buckets("group_bands")) { const band = bandIndex.get(String(b.keys[width])); if (band !== undefined) group(b.keys).counts[band] += number(b.value); }
   for (const b of buckets("group_cdf")) {
     const summary = quantiles(b);
     if (summary?.n) group(b.keys).cdf = summary.values.map((value, i) => [value, summary.probabilities[i]]);
@@ -211,21 +209,11 @@ export function thinkingFromMetrics(state: ThinkingState, overview: boolean, res
       if (key === "p90") stats.high = value;
     }
     for (const b of buckets("period_conversations")) cell(b.keys).conversations = number(b.value);
-    for (const b of buckets("period_bands")) { const band = b.keys[width + 1]; if (typeof band === "number" && band >= 0 && band < bands) cell(b.keys).counts[band] += number(b.value); }
+    for (const b of buckets("period_bands")) { const band = bandIndex.get(String(b.keys[width + 1])); if (band !== undefined) cell(b.keys).counts[band] += number(b.value); }
   }
   if (!overview && state.view === "calendar") {
+    // The cells themselves come from the fit (withThinkingFit).
     calendar = thinkingPeriods({ interval: state.calendarRows }, zone, range, observed, ms => thinkingPeriodKey(ms, state.calendarRows, zone));
-    const cells = new Map<string, ThinkingCalendarCell>();
-    const cell = (keys: readonly unknown[]) => {
-      const day = String(keys[width]), hour = number(keys[width + 1]), id = `${identity(keys.slice(0, width)).key}|${day}|${hour}`;
-      let c = cells.get(id);
-      if (!c) { cells.set(id, c = { day, hour, Raw: null, Ratio: null, N: 0, Adjusted: 0, Conversations: 0, AdjustedConversations: 0 }); group(keys).calendar.push(c); }
-      return c;
-    };
-    for (const b of buckets("cell_stats")) { const summary = quantiles(b); Object.assign(cell(b.keys), { N: summary?.n ?? 0, Raw: summary?.n ? summary.values[0] : null }); }
-    for (const b of buckets("cell_conversations")) cell(b.keys).Conversations = number(b.value);
-    for (const c of cells.values()) if (c.N < 20 || c.Conversations < 3) c.Raw = null;
-    for (const g of groups.values()) g.calendar.sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : a.hour - b.hour);
   }
   const coverage = (field: "model" | "harness") => {
     const rows = new Map<string, ThinkingGroup>();
@@ -269,11 +257,11 @@ export function sortThinkingGroups(groups: ThinkingGroup[], state: Pick<Thinking
   });
 }
 
-// The slim endpoint's answer: fitted estimates by group, and the overview's
-// and evidence's sections.
+// The slim endpoint's answer: fitted estimates by group, the time-of-day
+// cells (a query-v3 metric takes one calendar key, so the zoned day and hour
+// cells are read with the fit), and the overview's and evidence's sections.
 export type ThinkingFit = Pick<ThinkingResponse, "Adjusted" | "timezone" | "factors" | "compactions" | "traces" | "validation"> & {
-  groups: (Pick<ThinkingGroup, "key" | "Adjusted" | "bands" | "comparison"> & { stats?: ThinkingStats; Conversations?: number;
-    calendar: Pick<ThinkingCalendarCell, "day" | "hour" | "Ratio" | "Adjusted" | "AdjustedConversations">[] })[];
+  groups: (Pick<ThinkingGroup, "key" | "Adjusted" | "bands" | "comparison" | "calendar"> & { stats?: ThinkingStats; Conversations?: number })[];
 };
 
 export async function loadThinkingFit(url: string, signal?: AbortSignal): Promise<ThinkingFit> {
@@ -288,9 +276,8 @@ export function withThinkingFit(data: ThinkingResponse, fit: ThinkingFit, state:
   const groups = data.groups.map(group => {
     const g = fitted.get(group.key);
     if (!g) return group;
-    const cells = new Map(g.calendar.map(cell => [`${cell.day}|${cell.hour}`, cell]));
-    return { ...group, Adjusted: g.Adjusted, bands: g.bands, comparison: g.comparison, ...g.stats ? { stats: g.stats } : {}, ...g.Conversations !== undefined ? { Conversations: g.Conversations } : {},
-      calendar: group.calendar.map(cell => { const c = cells.get(`${cell.day}|${cell.hour}`); return c ? { ...cell, Ratio: c.Ratio, Adjusted: c.Adjusted, AdjustedConversations: c.AdjustedConversations } : cell; }) };
+    return { ...group, Adjusted: g.Adjusted, bands: g.bands, comparison: g.comparison, calendar: g.calendar,
+      ...g.stats ? { stats: g.stats } : {}, ...g.Conversations !== undefined ? { Conversations: g.Conversations } : {} };
   });
   return { ...data, Adjusted: fit.Adjusted, groups: state.view === "calendar" && state.calendarMetric === "ratio" ? sortThinkingGroups(groups, state) : groups,
     ...fit.factors ? { factors: fit.factors } : {}, ...fit.compactions ? { compactions: fit.compactions } : {}, ...fit.traces ? { traces: fit.traces } : {}, ...fit.validation ? { validation: fit.validation } : {} };

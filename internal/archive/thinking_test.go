@@ -11,8 +11,8 @@ import (
 	"os"
 	"reflect"
 	"slices"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -183,8 +183,8 @@ func TestThinkingProjection(t *testing.T) {
 			}
 			continue
 		}
-		if row["gap_bin"] == nil || int(floatOr(row["gap_bin"])) != thinkingBin(gap) {
-			t.Fatalf("wait %v in band %v, want %d", gap, row["gap_bin"], thinkingBin(gap))
+		if row["gap_bin"] != thinkingBandLabel(thinkingBin(gap)) {
+			t.Fatalf("wait %v in band %v, want %q", gap, row["gap_bin"], thinkingBandLabel(thinkingBin(gap)))
 		}
 	}
 	// In a viewer's zone, here one 5:45 ahead of UTC, the calendar fields
@@ -217,9 +217,9 @@ func TestThinkingProjection(t *testing.T) {
 		t.Fatalf("an unknown zone answered %d: %s", w.Code, w.Body.String())
 	}
 	for _, edge := range []float64{0.1, 0.15, 0.2, 499.9, 500, 600} {
-		var band int
-		if err := c.reader().QueryRow("SELECT "+thinkingBinSQL("?1"), edge).Scan(&band); err != nil || band != thinkingBin(edge) {
-			t.Fatalf("band of %v: %d, want %d (%v)", edge, band, thinkingBin(edge), err)
+		var band string
+		if err := c.reader().QueryRow("SELECT "+thinkingBandSQL("?1"), edge).Scan(&band); err != nil || band != thinkingBandLabel(thinkingBin(edge)) {
+			t.Fatalf("band of %v: %q, want %q (%v)", edge, band, thinkingBandLabel(thinkingBin(edge)), err)
 		}
 	}
 
@@ -352,6 +352,28 @@ func TestThinkingAggregation(t *testing.T) {
 	}
 	if len(g.Calendar) != 10 || g.Calendar[0].Day != "2026-10-01" || g.Calendar[0].Hour != 9 || *g.Calendar[1].Ratio != .5 {
 		t.Fatal("daily cells in the named zone", g.Calendar)
+	}
+	if c := g.Calendar[0]; c.N != 24 || c.Conversations != 3 || c.Raw == nil || *c.Raw != 2 {
+		t.Fatal("raw cells give the median wait of timed requests", c)
+	}
+	// Raw waits count every timed request, fitted or not; an untimed request
+	// makes a cell without a wait, and a cell needs twenty waits from three
+	// conversations.
+	extra := slices.Clone(records)
+	for i := 0; i < 5; i++ {
+		gap := 4.0
+		extra = append(extra, thinkingRecord{ID: fmt.Sprint("late", i), Conversation: fmt.Sprint(i % 3), Model: "model", Effort: "high", At: time.Date(2026, 10, 1, 22, i, 0, 0, zone), Gap: &gap})
+	}
+	extra = append(extra, thinkingRecord{ID: "untimed", Conversation: "u", Model: "model", Effort: "high", At: time.Date(2026, 10, 1, 23, 0, 0, 0, zone)},
+		thinkingRecord{ID: "undated", Conversation: "u", Model: "model", Effort: "high"})
+	more, err := aggregateThinking(context.Background(), extra, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells := more.Groups[0].Calendar
+	if len(cells) != 12 || cells[2].Hour != 22 || cells[2].N != 5 || cells[2].Conversations != 3 || cells[2].Raw != nil || cells[2].Adjusted != 0 || cells[2].Ratio != nil ||
+		cells[3].Hour != 23 || cells[3].N != 0 || cells[3].Raw != nil {
+		t.Fatal("unsupported, unfitted and untimed cells", cells[:4])
 	}
 	o.Rows, o.Metric = "month", "ratio"
 	monthly, err := aggregateThinking(context.Background(), records, o)
@@ -647,6 +669,7 @@ func TestThinkingSpeedMigration(t *testing.T) {
 // (testdata/thinking-group-keys.json, also read by thinking-query.test.mjs).
 func TestThinkingGroupKeys(t *testing.T) {
 	var fixture struct {
+		Bands []string
 		Cases []struct {
 			GroupBy, Key, Label string
 			Row                 map[string]any
@@ -655,6 +678,14 @@ func TestThinkingGroupKeys(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/thinking-group-keys.json")
 	if err != nil || json.Unmarshal(data, &fixture) != nil || len(fixture.Cases) == 0 {
 		t.Fatal(err)
+	}
+	for i := range len(thinkingEdges) - 1 {
+		if i >= len(fixture.Bands) || thinkingBandLabel(i) != fixture.Bands[i] {
+			t.Fatalf("wait band %d is %q, want %v", i, thinkingBandLabel(i), fixture.Bands)
+		}
+	}
+	if len(fixture.Bands) != len(thinkingEdges)-1 {
+		t.Fatalf("%d wait bands, want %d", len(fixture.Bands), len(thinkingEdges)-1)
 	}
 	for _, c := range fixture.Cases {
 		text := func(field string) string { value, _ := c.Row[field].(string); return value }
@@ -832,5 +863,18 @@ func TestThinkingQueryV3Shapes(t *testing.T) {
 	got = ask("?timezone=Asia%2FKathmandu", map[string]any{"id": "n", "op": "count", "groupBy": []string{}, "where": []map[string]any{{"field": "hour_of_day", "op": "=", "value": strconv.Itoa(hour)}}})
 	if len(fitted) != want || int(integer(got["n"][0].Value)) != want {
 		t.Fatalf("hour %d in Kathmandu: fit reads %d requests, query-v3 %v, want %d", hour, len(fitted), got["n"][0].Value, want)
+	}
+	// Current timings are read from the stored rows alone; while a refresh is
+	// pending they are derived again. Both give the same answers.
+	batch := []map[string]any{quantiles("gaps", "[gap_seconds]", []string{"model"}, []float64{.5, .9}, timed),
+		{"id": "bands", "op": "count", "groupBy": []string{"model", "gap_bin"}, "where": timed},
+		{"id": "conversations", "op": "count_distinct", "field": "conversation_id", "groupBy": []string{"provider"}},
+		{"id": "labels", "op": "count", "groupBy": []string{"harness", "project_name", "machine"}}}
+	stored := ask("", batch...)
+	if _, err := c.DB.Exec("INSERT OR IGNORE INTO model_request_timing_dirty SELECT DISTINCT conversation_id FROM model_request_timings"); err != nil {
+		t.Fatal(err)
+	}
+	if derived := ask("", batch...); !reflect.DeepEqual(stored, derived) {
+		t.Fatalf("stored timings answer %+v, derived %+v", stored, derived)
 	}
 }

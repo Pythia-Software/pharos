@@ -1,5 +1,6 @@
 {
-  "description": "Thinking breakdown groups: a model_requests row (null is a missing value) and the key and label both /api/thinking (thinkingGroupKey) and thinking-query.ts give it, so the page can merge fitted estimates onto query-v3 groups.",
+  "description": "Thinking breakdown groups: a model_requests row (null is a missing value) and the key and label both /api/thinking (thinkingGroupKey) and thinking-query.ts give it, so the page can merge fitted estimates onto query-v3 groups. bands are the wait bands' labels, gap_bin's values, in order.",
+  "bands": ["0.1–0.2 s", "0.2–0.3 s", "0.3–0.5 s", "0.5–1 s", "1–2 s", "2–3 s", "3–5 s", "5–10 s", "10–20 s", "20–30 s", "30–50 s", "50–100 s", "100–200 s", "200–300 s", "300–500 s", "500–600 s"],
   "cases": [
     { "groupBy": "none", "row": { "model": "m" }, "key": "All requests", "label": "All requests" },
     { "groupBy": "model", "row": { "model": "claude-x" }, "key": "claude-x", "label": "claude-x" },

@@ -202,7 +202,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			table.toolSearchIndexed, err = s.Catalog.toolSearchReady(ctx)
 		}
 		if err == nil && dataset == "model_requests" {
-			table, err = thinkingZonedDataset(table, params.Get("timezone"))
+			table, err = s.Catalog.thinkingQueryDataset(ctx, table, params.Get("timezone"))
 		}
 		if err == nil && dataset == "writing_messages" {
 			table, find, err = s.Catalog.messageFindDataset(ctx, params, table)
@@ -394,6 +394,12 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		}
 		fast := queryPopulationFastCounts(dataset, schema, table)
 		d.PopulationCounter = s.Catalog.populationCounter(queryDatasetGeneration(dataset), narrow, fast...)
+		if dataset == "model_requests" && !q.Rows {
+			// Query Table reads a metric request's population once for all
+			// its metrics, counting it as it goes, only without a host
+			// counter. The Thinking dashboards send up to 19 metrics at a time.
+			d.PopulationCounter = nil
+		}
 		whole = d
 		if newest != nil {
 			var cutoff sql.NullString

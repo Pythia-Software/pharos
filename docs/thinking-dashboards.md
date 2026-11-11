@@ -114,23 +114,45 @@ The dashboards read the Model Requests dataset through
 `POST /api/query/model_requests/query-v3` (`web/src/thinking-query.ts`): the
 population and its counts, each group's retained requests, usable gaps,
 conversations and exact-linear percentiles (Query Table quantiles: p10, q1,
-median, p75, p90, p95), wait bands (`gap_bin`, the edges above), the
+median, p75, p90, p95), wait bands (`gap_bin`, labelled `0.1–0.2 s` … `500–600 s`
+on the edges above), the
 distributions-over-time periods (calendar `every` buckets in the viewer's zone,
 one `PERCENTILE` metric per drawn line, since date grouping takes scalar
-metrics), raw time-of-day cells (`day`/`week`/`month` × `hour_of_day`), the
+metrics), the
 Waiting curves (101 quantiles) and its coverage by model and agent app, and the
 Model and Effort choices. A `timezone` parameter reads the calendar fields in
 the viewer's zone (`pharos_zoned_time`); without one they use the service's.
 Missing provider, agent app, repository, project and machine labels are one
 missing bucket, shown as Unreported (No project for projects). These answers
-go through the result cache like other query-v3 reads. Hour buckets divide a
+go through the result cache like other query-v3 reads.
+
+Each view is one metric request of 9–19 metrics, which Query Table (1.0.7 and
+later) answers in one read of the population. That read needs a source of
+stored values only, so while no conversation awaits a timing refresh and the
+exclusions are current, query-v3 reads `model_request_timings` directly
+(`thinkingQueryDataset`); otherwise it reads `thinkingSource`, which derives
+the marked conversations again, with the same answers more slowly. Blank
+labels are stored as missing ones, so the label fields are plain columns, and
+the wait band is an enum, since the shared read groups only text, enum and
+boolean fields. Metric-only requests on Model Requests carry no host population
+counter, which would also turn the shared read off. The shared read groups
+only stored text, enum and boolean fields, so the breakdown by agent depth (a
+number) reads the population once per metric: about 17 s for all history on
+the replica (measurements below), where other breakdowns take 2–3 s
+([handoff](handoffs/query-table-shared-scan-groupings.md)). Hour buckets divide a
 day (1, 2, 3, 4, 6, 8, 12 or 24 hours) and day buckets count at most 1,000
 days, as Query Table's `every` supports; older links read as the nearest.
 
 `GET /api/thinking` keeps what needs whole conversations in order: the
 workload fit's supported estimates by time of day (cells, three-hour bands and
 paired comparisons), the Waiting factors, compaction pairs and traces, and
-validation. It is read-only, cancellable and has a two-minute execution
+validation. It also gives the time-of-day view's raw cells (median wait,
+timed requests and conversations per row period and local hour, shown when a
+cell has 20 waits from 3 conversations) beside the fitted ones. Query Table
+takes one calendar key per metric, and the zoned day and hour are computed
+columns, which its shared read cannot use: as query-v3 metrics those two
+cells alone took 17.5 s on the replica, against under 2 s for the rest of the
+view. It is read-only, cancellable and has a two-minute execution
 budget for fits. The page merges its groups onto the query-v3 groups by key;
 `testdata/thinking-group-keys.json` pins both sides' keys. Covering timing
 indexes avoid reading conversation/tool bodies and sorting wide request rows.
@@ -164,8 +186,32 @@ loop rebuilds it in the background when it was used recently. See
 measurements and remaining costs.
 
 The fits and SVGs are host-owned. Counts, percentiles, periods and curves,
-native evidence queries and compact cards use published Query Table 1.0.5 APIs. No local package
+native evidence queries and compact cards use published Query Table 1.0.7 APIs. No local package
 patches, generated-bundle edits or dependency replacements are used.
+
+Measured 2026-11-11 on a replica of a production catalog (1.43 million stored
+requests; a 30-day range holds about 297,000), warm, with stored timings
+current. Each view's answer matched `/api/thinking` from before the move
+exactly, except the calendar's ratio view: its groups' wait-band counts there
+counted fitted requests and now count timed ones, as every other view does
+(the calendar does not draw them).
+
+| view | before (`/api/thinking`) | now |
+|---|---|---|
+| Time, daily periods, 30 days, by model | 42 s cold, under 1 s cached | 2.5 s |
+| Time, 6-hour periods, 7 days | 49 ms | 1.6 s |
+| Time, weekly, all history, by model and effort | 0.8 s | 4.3 s |
+| Histogram or heatmap, all history, by agent app, provider, machine, project or preceding tool | 0.4 s | 2.5–2.6 s |
+| Histogram, all history, by agent depth | 0.4 s | 17 s |
+| Reasoning, Wait box, Histogram, 30 days | 0.2–0.4 s | 1.6–1.7 s |
+| Calendar, 30 days or all history | 0.4–1.6 s | 1.8–3.3 s |
+| Waiting, 30 days or all history | 0.9–1.8 s | 1.8–3.4 s |
+
+`/api/thinking` answered from a population it kept in memory once built; the
+query-v3 answers read the catalog each time, through the result cache. While
+conversations await a timing refresh, query-v3 reads the derived source, which
+reads the population once per metric: 16 s to over 30 s per view in the
+measurements before the stored source, until the refresh completes.
 
 ## Statistical support and limits
 
