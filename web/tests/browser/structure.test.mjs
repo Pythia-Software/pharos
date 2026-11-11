@@ -472,7 +472,7 @@ const ROUTES = [
     await page.locator('.tool-output').filter({hasText:'Archived research notes'}).waitFor();
     await page.locator('.tool-event > summary').filter({hasText:'projects/report.json'}).click();
     await page.locator('.export-document').waitFor();
-    await page.locator('.tool-event > summary').filter({hasText:'synthetic-doc'}).click();
+    await page.locator('.tool-event > summary').filter({hasText:'synthetic-doc'}).getByText('Details',{exact:true}).click();
     await page.locator('.mcp-presentation a.markdown-link').waitFor();
     await page.locator('.tool-event > summary').filter({hasText:'Query statistics'}).click();
     await page.locator('.mcp-presentation table').waitFor();
