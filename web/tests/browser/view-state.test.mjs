@@ -1831,6 +1831,7 @@ test('Data Guide terms and example restore and return focus',{skip},async t=>{
  await trigger.click();
  const guide=page.getByRole('dialog',{name:'Data Guide',exact:true});
  await guide.waitFor();
+ await page.waitForFunction(()=>document.getElementById('dataGuideToggle').getAttribute('aria-expanded')==='true');
  const appsBranch=guide.getByText('Apps & machines',{exact:true});
  await appsBranch.click();
  await page.waitForFunction(()=>JSON.parse(new URLSearchParams(location.search).get('nav_expanded'))?.['data-guide']?.apps===false);
@@ -1838,6 +1839,7 @@ test('Data Guide terms and example restore and return focus',{skip},async t=>{
  await page.waitForFunction(()=>new URLSearchParams(location.search).get('guide_entity')==='work_items');
  await page.reload();
  await guide.waitFor();
+ await page.waitForFunction(()=>document.getElementById('dataGuideToggle').getAttribute('aria-expanded')==='true');
  assert.equal(await appsBranch.evaluate(element=>element.closest('details').open),false,'shared guide menu expansion did not restore');
  assert.equal(await guide.getByRole('button',{name:'Work items',exact:true}).getAttribute('aria-current'),'page');
  await guide.getByRole('button',{name:'Conversations',exact:true}).click();
@@ -1883,6 +1885,7 @@ test('Data Guide terms and example restore and return focus',{skip},async t=>{
  await trigger.click();
  await page.keyboard.press('Escape');
  await page.waitForFunction(()=>!document.querySelector('.data-guide').open);
+ await page.waitForFunction(()=>document.getElementById('dataGuideToggle').getAttribute('aria-expanded')==='false');
  assert.equal(await trigger.evaluate(el=>document.activeElement===el),true);
 });
 
