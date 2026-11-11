@@ -7,6 +7,7 @@ import { loadSchema, metricDateFloor, metricDateNext, type AggregationClause, ty
 import modelRequestDocument from "../../schemas/model_requests.schema.json";
 import { todayBounds } from "./day-window";
 import { postMetrics, type MetricBucket, type MetricResult } from "./metric-request";
+import { liveScope } from "./result-cache";
 import { supportedThinkingPeriod, thinkingRangeDays, thinkingRequest, thinkingWhere, type ThinkingCell, type ThinkingGroup, type ThinkingResponse, type ThinkingState, type ThinkingStats } from "./thinking-model";
 export { maxThinkingDays, supportedThinkingPeriod, thinkingHourChoices } from "./thinking-model";
 
@@ -42,6 +43,13 @@ const speedLabel = (value: unknown) => String(value).toLowerCase() === "fast" ? 
 export function thinkingGroupIdentity(by: ThinkingState["groupBy"], keys: readonly unknown[]): Pick<ThinkingGroup, "key" | "label" | "model" | "effort"> {
   const value = (field: string) => keys[thinkingBreakdownFields[by].indexOf(field)];
   const single = (label: string, model = "", effort = "") => ({ key: label, label, model, effort });
+  // A missing value is one group, named; a value spelled like that name is
+  // another, keyed apart with a leading NUL and shown quoted (thinkingNamed).
+  const named = (raw: unknown, missing = "Unreported") => {
+    if (raw === null || raw === undefined || String(raw).trim() === "") return single(missing);
+    const s = String(raw);
+    return s === missing || s.startsWith("\u0000") ? { key: "\u0000" + s, label: `“${s}”`, model: "", effort: "" } : single(s);
+  };
   switch (by) {
     case "none": return single("All requests");
     case "model": return single(text(value("model")), text(value("model")));
@@ -52,10 +60,10 @@ export function thinkingGroupIdentity(by: ThinkingState["groupBy"], keys: readon
       const parts = [model, ...by === "model_speed" ? [] : [effort], ...by === "model_effort" ? [] : [speedLabel(value("speed"))]];
       return { key: JSON.stringify(parts), label: parts.join(" · "), model, effort };
     }
-    case "project": return single(text(value("project_name"), "No project"));
+    case "project": return named(value("project_name"), "No project");
     case "agent_depth": return single(String(value("agent_depth") ?? 0));
     case "preceding_tool": return single(String(value("preceding_tool") ?? ""));
-    default: return single(text(value(thinkingBreakdownFields[by][0])));
+    default: return named(value(thinkingBreakdownFields[by][0]));
   }
 }
 
@@ -289,16 +297,19 @@ export const thinkingQueryState = (state: ThinkingState, overview: boolean): Thi
   supportedThinkingPeriod(overview ? { ...state, view: "histogram", groupBy: state.groupBy === "none" ? "model" : state.groupBy, minimum: 0 } : state);
 
 // loadThinkingData reads one dashboard state: query-v3 for the population,
-// groups, periods, time of day and curves, and /api/thinking only for what
-// needs the fit (time of day, the Waiting overview).
+// groups, periods and curves, and /api/thinking only for what needs the fit
+// (time of day, the Waiting overview). The fit is computed now, so a view
+// that joins it reads query-v3 live too, both ending at the same instant:
+// a stored answer could describe other requests than the fit does.
 export async function loadThinkingData(input: { state: ThinkingState; overview: boolean; where: WhereTerm[]; filters: string; now?: number }, signal?: AbortSignal): Promise<ThinkingResponse> {
   const now = input.now ?? Date.now(), state = thinkingQueryState(input.state, input.overview), schema = modelRequests();
   const where = [...input.where, ...thinkingWhere(state, now)], params = { timezone: state.timezone };
   const needsFit = state.view === "calendar" || input.overview;
   const [results, options, fit] = await Promise.all([
-    postMetrics("model_requests", schema, where, thinkingClauses(state, input.overview), signal, params),
+    needsFit ? postMetrics("model_requests", schema, where, thinkingClauses(state, input.overview), liveScope(signal), params, now)
+      : postMetrics("model_requests", schema, where, thinkingClauses(state, input.overview), signal, params),
     postMetrics("model_requests", schema, [], [{ id: "models", op: "count", groupBy: ["model"] }, { id: "efforts", op: "count", groupBy: ["effort"] }], signal),
-    needsFit ? loadThinkingFit(thinkingRequest(input.state, input.overview, false, input.filters), signal) : undefined,
+    needsFit ? loadThinkingFit(`${thinkingRequest(input.state, input.overview, false, input.filters)}&now=${now}`, signal) : undefined,
   ]);
   const data = thinkingFromMetrics(state, input.overview, results, options, now);
   return fit ? withThinkingFit(data, fit, state) : data;

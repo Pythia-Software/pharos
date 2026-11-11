@@ -144,7 +144,10 @@ are, so those entries turn over once a day.
 Card requests from Home and the Card Library use the cache, including the
 cards drawn by a dashboard's own code: the policy travels on the request's
 abort signal (`resultScope`), so code that only passes a signal down joins
-without knowing about it.
+without knowing about it. A view that joins a query-v3 answer to one computed live elsewhere
+(Thinking's time of day and Waiting overview, beside `/api/thinking`) asks
+for it live with `liveScope`, whose answers still count toward the page's
+readiness.
 
 Dashboards opened as pages use it for their charts and summary numbers.
 Their three loading hooks (`useAnalysisResult`, `useMetrics` and Session

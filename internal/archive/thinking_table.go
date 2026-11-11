@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"strconv"
@@ -358,19 +359,46 @@ func thinkingCalendarColumns(zone string) map[string]string {
 // time zone, as the Thinking dashboards ask (their Range, buckets and time of
 // day follow the viewer's zone). No zone keeps the service's own.
 // thinkingQueryDataset is model_requests for one query: read from the stored
-// timings alone while none await refresh, and with its calendar fields in
-// zone. A refresh that begins after the check leaves this read on the stored
-// rows it found, as one that begins after the query's transaction would.
-func (c *Catalog) thinkingQueryDataset(ctx context.Context, table sqlDataset, zone string) (sqlDataset, error) {
+// timings alone while none await refresh (stored), and with its calendar
+// fields in zone. The choice is made before the query's transaction, so a
+// query that reads the stored timings checks them again inside it
+// (thinkingTimingsCurrent).
+func (c *Catalog) thinkingQueryDataset(ctx context.Context, table sqlDataset, zone string) (sqlDataset, bool, error) {
+	stored := false
+	if derived, _ := ctx.Value(thinkingDerivedOnly{}).(bool); !derived {
+		if err := thinkingTimingsCurrent(ctx, c.reader()); err == nil {
+			table.from, table.base, stored = thinkingStoredDataset.from, thinkingStoredDataset.base, true
+		} else if !errors.Is(err, errThinkingSourceMoved) {
+			return table, false, err
+		}
+	}
+	table, err := thinkingZonedDataset(table, zone)
+	return table, stored, err
+}
+
+// thinkingDerivedOnly, as a context value, makes model_requests read the
+// derived source whatever the timings' state.
+type thinkingDerivedOnly struct{}
+
+// errThinkingSourceMoved says some timings await refresh, so the stored
+// timings alone are not model_requests.
+var errThinkingSourceMoved = errors.New("request timings await refresh")
+
+// thinkingTimingsCurrent says whether the stored timings are all of
+// model_requests as q sees the catalog: nil if so, errThinkingSourceMoved if
+// a conversation awaits refresh or the exclusions are stale.
+func thinkingTimingsCurrent(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) error {
 	var pending bool
-	if err := c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_request_timing_dirty)
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_request_timing_dirty)
  OR EXISTS(SELECT 1 FROM meta WHERE key='model_request_exclusions_stale')`).Scan(&pending); err != nil {
-		return table, err
+		return err
 	}
-	if !pending {
-		table.from, table.base = thinkingStoredDataset.from, thinkingStoredDataset.base
+	if pending {
+		return errThinkingSourceMoved
 	}
-	return thinkingZonedDataset(table, zone)
+	return nil
 }
 
 func thinkingZonedDataset(table sqlDataset, zone string) (sqlDataset, error) {

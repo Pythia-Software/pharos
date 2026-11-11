@@ -147,7 +147,20 @@ func TestThinkingProjection(t *testing.T) {
 	if w = apiCall(t, server, config.APIToken, http.MethodGet, "/api/thinking?view=calendar&filters="+url.QueryEscape(filter), nil); w.Code != 200 {
 		t.Fatal("native filters", w.Code, w.Body.String())
 	}
-	for _, path := range []string{"/api/thinking?filters=invalid", "/api/thinking?period=wrong", "/api/thinking?range=custom&from=invalid", "/api/thinking?minimum=-1", "/api/thinking?hourA=2", "/api/thinking?timezone=Unknown%2Fzone"} {
+	// A rolling Range ends at the page's clock when it sends one, as its
+	// query-v3 read does.
+	groups := func(now time.Time) int {
+		w := apiCall(t, server, config.APIToken, http.MethodGet, fmt.Sprintf("/api/thinking?view=calendar&range=1d&now=%d", now.UnixMilli()), nil)
+		var body struct{ Groups []json.RawMessage }
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		return len(body.Groups)
+	}
+	if before, after := groups(time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)), groups(time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC)); before != 0 || after == 0 {
+		t.Fatalf("Range ending before the requests holds %d groups, after them %d", before, after)
+	}
+	for _, path := range []string{"/api/thinking?filters=invalid", "/api/thinking?period=wrong", "/api/thinking?range=custom&from=invalid", "/api/thinking?minimum=-1", "/api/thinking?hourA=2", "/api/thinking?timezone=Unknown%2Fzone", "/api/thinking?now=soon"} {
 		w = apiCall(t, server, config.APIToken, http.MethodGet, path, nil)
 		if w.Code != 400 {
 			t.Fatalf("invalid controls %s: %d %s", path, w.Code, w.Body.String())
@@ -876,5 +889,27 @@ func TestThinkingQueryV3Shapes(t *testing.T) {
 	}
 	if derived := ask("", batch...); !reflect.DeepEqual(stored, derived) {
 		t.Fatalf("stored timings answer %+v, derived %+v", stored, derived)
+	}
+	// A request that changes after the stored timings were chosen, but before
+	// the query reads them, is read as it now is.
+	if err := c.refreshRequestTimings(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := c.requestTimingsPending(t.Context()); err != nil || pending {
+		t.Fatal("timings current before the race", pending, err)
+	}
+	override(t, &afterThinkingSourceChoice, func() {
+		afterThinkingSourceChoice = func() {}
+		if _, err := c.DB.Exec("UPDATE model_requests SET model='raced' WHERE id=(SELECT MIN(id) FROM model_requests)"); err != nil {
+			t.Error(err)
+		}
+	})
+	raced := ask("", map[string]any{"id": "models", "op": "count", "groupBy": []string{"model"}}, map[string]any{"id": "all", "op": "count", "groupBy": []string{}})
+	found := false
+	for _, b := range raced["models"] {
+		found = found || b.Keys[0] == "raced"
+	}
+	if !found {
+		t.Fatalf("a request changed after the source was chosen is read as it was: %+v", raced["models"])
 	}
 }

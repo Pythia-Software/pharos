@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -134,7 +135,23 @@ func (s *Server) queryV3SourceFields(ctx context.Context, schema qt.Schema, q qt
 	return plan.BaseFields, err
 }
 
+// executeQueryV3 answers one query-v3 request. A Model Requests read that
+// chose the stored timings and then found, in its own transaction, that a
+// conversation began awaiting refresh after the choice reads again from the
+// derived source (thinkingQueryDataset).
 func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.Values, schema qt.Schema, q qt.QueryRequestV3) (qt.QueryResultV3, *libraryFindSummary, error) {
+	result, find, err := s.executeQueryV3Once(ctx, dataset, params, schema, q)
+	if errors.Is(err, errThinkingSourceMoved) {
+		return s.executeQueryV3Once(context.WithValue(ctx, thinkingDerivedOnly{}, true), dataset, params, schema, q)
+	}
+	return result, find, err
+}
+
+// afterThinkingSourceChoice runs between choosing Model Requests' source and
+// opening the query's transaction; tests change the catalog there.
+var afterThinkingSourceChoice = func() {}
+
+func (s *Server) executeQueryV3Once(ctx context.Context, dataset string, params url.Values, schema qt.Schema, q qt.QueryRequestV3) (qt.QueryResultV3, *libraryFindSummary, error) {
 	if err := checkRecordKeywordHostState(dataset, q.HostState, params); err != nil {
 		return qt.QueryResultV3{}, nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidQuery, Message: err.Error()}
 	}
@@ -182,6 +199,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	var required []string
 	var find *libraryFindSet
 	var err error
+	var storedTimings bool
 	// counted is the source projected to what a count reads (narrowCount).
 	var counted string
 	var countedFields []string
@@ -202,7 +220,8 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			table.toolSearchIndexed, err = s.Catalog.toolSearchReady(ctx)
 		}
 		if err == nil && dataset == "model_requests" {
-			table, err = s.Catalog.thinkingQueryDataset(ctx, table, params.Get("timezone"))
+			table, storedTimings, err = s.Catalog.thinkingQueryDataset(ctx, table, params.Get("timezone"))
+			afterThinkingSourceChoice()
 		}
 		if err == nil && dataset == "writing_messages" {
 			table, find, err = s.Catalog.messageFindDataset(ctx, params, table)
@@ -367,6 +386,11 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		return qt.QueryResultV3{}, nil, err
 	}
 	defer release()
+	if storedTimings {
+		if err = thinkingTimingsCurrent(ctx, tx); err != nil {
+			return qt.QueryResultV3{}, nil, err
+		}
+	}
 	if err = authorizeQueryV3Computed(ctx, tx, &d); err != nil {
 		return qt.QueryResultV3{}, nil, err
 	}

@@ -393,16 +393,40 @@ func (c *Catalog) thinkingRecords(ctx context.Context, o thinkingOptions) ([]thi
 }
 
 // thinkingRelabel names a record's missing labels as the dashboards show them.
+// Model and effort are stored with missing ones already named; the other
+// breakdowns keep missing apart from a value that reads as its name
+// (thinkingNamed).
 func thinkingRelabel(r *thinkingRecord) {
 	r.Model = thinkingLabel(r.Model)
 	r.Effort = thinkingLabel(r.Effort)
-	r.Provider = thinkingLabel(r.Provider)
-	r.Harness = thinkingLabel(r.Harness)
+	r.Provider = thinkingNamed(r.Provider, "Unreported")
+	r.Harness = thinkingNamed(r.Harness, "Unreported")
 	r.Repository = thinkingLabel(r.Repository)
-	if strings.TrimSpace(r.Project) == "" {
-		r.Project = "No project"
+	r.Project = thinkingNamed(r.Project, "No project")
+	r.Machine = thinkingNamed(r.Machine, "Unreported")
+}
+
+// thinkingNamed is a breakdown value as a group key: missing is the missing
+// label, and a value spelled like that label (or like an escaped one) is
+// escaped with a leading NUL, so query-v3's separate buckets stay separate
+// groups (thinkingGroupIdentity in thinking-query.ts).
+func thinkingNamed(s, missing string) string {
+	if strings.TrimSpace(s) == "" {
+		return missing
 	}
-	r.Machine = thinkingLabel(r.Machine)
+	if s == missing || strings.HasPrefix(s, "\x00") {
+		return "\x00" + s
+	}
+	return s
+}
+
+// thinkingNamedLabel shows an escaped value in quotes, apart from the
+// missing group it is spelled like.
+func thinkingNamedLabel(key string) string {
+	if value, escaped := strings.CutPrefix(key, "\x00"); escaped {
+		return "“" + value + "”"
+	}
+	return key
 }
 
 func thinkingLabel(s string) string {
@@ -466,14 +490,14 @@ func thinkingGroupKey(r thinkingRecord, by string) (string, string) {
 	case "model_effort":
 		return thinkingTupleKey(r.Model, r.Effort), r.Model + " · " + r.Effort
 	case "provider":
-		s = r.Provider
+		return r.Provider, thinkingNamedLabel(r.Provider)
 	case "harness":
-		s = r.Harness
+		return r.Harness, thinkingNamedLabel(r.Harness)
 	// A link from before projects grouped by repository; it reads as project.
 	case "project", "repository":
-		s = r.Project
+		return r.Project, thinkingNamedLabel(r.Project)
 	case "machine":
-		s = r.Machine
+		return r.Machine, thinkingNamedLabel(r.Machine)
 	case "preceding_tool":
 		s = r.Preceding
 	case "agent_depth":
@@ -642,7 +666,18 @@ func (s *Server) handleThinking(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	r = r.WithContext(ctx)
-	o, err := readThinkingOptions(r.URL.Query(), time.Now())
+	// now (milliseconds) is the clock a rolling or Today Range ends at, so
+	// the page can end it where its query-v3 read ends (loadThinkingData).
+	now := time.Now()
+	if value := r.URL.Query().Get("now"); value != "" {
+		ms, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || ms <= 0 {
+			writeError(w, fmt.Errorf("invalid now"), 400)
+			return
+		}
+		now = time.UnixMilli(ms)
+	}
+	o, err := readThinkingOptions(r.URL.Query(), now)
 	if err != nil {
 		writeError(w, err, 400)
 		return

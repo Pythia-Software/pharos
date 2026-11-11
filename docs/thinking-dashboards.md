@@ -123,7 +123,9 @@ Waiting curves (101 quantiles) and its coverage by model and agent app, and the
 Model and Effort choices. A `timezone` parameter reads the calendar fields in
 the viewer's zone (`pharos_zoned_time`); without one they use the service's.
 Missing provider, agent app, repository, project and machine labels are one
-missing bucket, shown as Unreported (No project for projects). These answers
+missing bucket, shown as Unreported (No project for projects). A value spelled
+like that name (a project called "No project") is a group of its own, keyed
+with a leading NUL and shown in quotes, on both sides. These answers
 go through the result cache like other query-v3 reads.
 
 Each view is one metric request of 9–19 metrics, which Query Table (1.0.7 and
@@ -131,7 +133,10 @@ later) answers in one read of the population. That read needs a source of
 stored values only, so while no conversation awaits a timing refresh and the
 exclusions are current, query-v3 reads `model_request_timings` directly
 (`thinkingQueryDataset`); otherwise it reads `thinkingSource`, which derives
-the marked conversations again, with the same answers more slowly. Blank
+the marked conversations again, with the same answers more slowly. The
+choice is made before the query's transaction, so a query on the stored
+timings checks them again inside it and, if a conversation was marked in
+between, is read again from the derived source. Blank
 labels are stored as missing ones, so the label fields are plain columns, and
 the wait band is an enum, since the shared read groups only text, enum and
 boolean fields. Metric-only requests on Model Requests carry no host population
@@ -153,7 +158,10 @@ takes one calendar key per metric, and the zoned day and hour are computed
 columns, which its shared read cannot use: as query-v3 metrics those two
 cells alone took 17.5 s on the replica, against under 2 s for the rest of the
 view. It is read-only, cancellable and has a two-minute execution
-budget for fits. The page merges its groups onto the query-v3 groups by key;
+budget for fits. The views that join it (time of day, the Waiting overview)
+read query-v3 live rather than from the result cache, and send both reads the
+same `now`, so a Today or rolling Range ends at one instant and both describe
+the same requests. The page merges its groups onto the query-v3 groups by key;
 `testdata/thinking-group-keys.json` pins both sides' keys. Covering timing
 indexes avoid reading conversation/tool bodies and sorting wide request rows.
 Evidence joins stream in request order and the server scans directly into

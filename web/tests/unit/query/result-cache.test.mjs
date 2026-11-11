@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { combineServed, followStale, loadFollowing, resultPolicyHeaders, stillStale, resultScope, resultServed, scopedRequest, staleRetryDelays } from "../../../src/result-cache";
+import { combineServed, followStale, liveScope, loadFollowing, resultPolicyHeaders, stillStale, resultScope, resultServed, scopedRequest, staleRetryDelays } from "../../../src/result-cache";
 
 test("a response says what the result cache served and when it was computed", () => {
   const headers = values => ({ get: name => values[name] ?? null });
@@ -63,4 +63,16 @@ test("a view loads under its policy, shows a stale answer at once and replaces i
   assert.deepEqual((await run(["stale", "stale", "stale"], "cached")).shown.at(-1), [2, stillStale, true], "out of tries, the answer stops saying it is being updated");
   assert.deepEqual((await run(["stale", "", ""], "cached", { failAt: [1, 2] })).shown, [[0, "refreshing", true], [0, "offline", true]], "failed follow-ups leave the stale answer showing, and say why nothing replaced it");
   await assert.rejects(run([], "cached", { failAt: [0] }), /offline/, "the first load's failure is the view's");
+});
+
+test("a live scope computes its requests now and reports them to its parent's scope", () => {
+  const parent = new AbortController(), scope = resultScope(parent.signal, "cached"), live = liveScope(scope.signal);
+  const query = scopedRequest("/api/query/model_requests/query-v3", { method: "POST", signal: live });
+  assert.equal(new Headers(query.init.headers).get("X-Pharos-Cache"), "live");
+  query.note({ get: name => ({ "X-Pharos-Cache": "live", "X-Pharos-Cache-Built": "2026-11-10T10:00:00Z" })[name] ?? null });
+  assert.deepEqual(scope.served(), { state: "live", built: Date.parse("2026-11-10T10:00:00Z") });
+  parent.abort();
+  assert.ok(live.aborted, "aborting the page aborts the live read");
+  const plain = new AbortController().signal;
+  assert.equal(liveScope(plain), plain, "outside a scope requests are made as before");
 });

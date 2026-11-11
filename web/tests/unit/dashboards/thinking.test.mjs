@@ -152,6 +152,37 @@ test('Thinking group keys match the fitted estimates the service keys',()=>{
  }
 });
 
+test('a view joined to the fit reads query-v3 live, at the fit\'s instant',async t=>{
+ const {serverQuery,queryCapabilities,execution}=await import('../../support/query-server.mjs');
+ const {resultScope}=await import('../../../src/result-cache');
+ const {loadThinkingData}=await import('../../../src/thinking-query');
+ const {schemas}=await import('../helpers/recipes.mjs');
+ const seen=[],now=Date.parse('2026-11-05T12:00:00Z'),prior=global.fetch,priorLocation=global.location;
+ global.location={origin:'http://thinking.test',href:'http://thinking.test/'};
+ global.fetch=async(url,init={})=>{
+  const path=String(url),body=init.body?JSON.parse(init.body):undefined,policy=new Headers(init.headers).get('X-Pharos-Cache');
+  if(path.includes('computed-columns'))return Response.json([]);
+  if(path.endsWith('capabilities'))return Response.json({computedExecution:execution,queryCapabilities});
+  if(path.includes('query-v3')){seen.push({kind:body.metrics.length>2?'view':'options',policy,now:body.now});return Response.json(serverQuery(body,[],schemas.model_requests));}
+  seen.push({kind:'fit',now:Number(new URL(path,'http://x').searchParams.get('now'))});
+  return Response.json({Adjusted:0,timezone:'UTC',groups:[]});
+ };
+ t.after(()=>{global.fetch=prior;global.location=priorLocation;});
+ const load=view=>{seen.length=0;return loadThinkingData({state:{...defaultThinking,view,range:'7d',timezone:'UTC'},overview:false,where:[],filters:'',now},resultScope(undefined,'cached').signal);};
+ await load('calendar');
+ assert.deepEqual(seen.filter(r=>r.kind!=='options').sort((a,b)=>a.kind<b.kind?-1:1),[{kind:'fit',now},{kind:'view',policy:'live',now}]);
+ assert.equal(seen.find(r=>r.kind==='options').policy,'cached','the Model and Effort choices are not joined to the fit');
+ await load('histogram');
+ assert.deepEqual(seen.filter(r=>r.kind==='view').map(r=>r.policy),['cached'],'a view without the fit keeps the cache');
+ assert.ok(!seen.some(r=>r.kind==='fit'));
+});
+
+test('a project named like the missing one is a group of its own',()=>{
+ const rows=[request('none','2026-11-02T10:00:00Z',2,{bin:4}),request('named','2026-11-02T11:00:00Z',4,{bin:6,project_name:'No project'})];
+ const data=evaluate(rows,{...defaultThinking,timezone:'UTC',view:'histogram',groupBy:'project',range:'all'});
+ assert.deepEqual(data.groups.map(g=>[g.label,g.Retained,g.stats.n,g.counts.reduce((a,b)=>a+b,0)]).sort(),[['No project',1,1,1],['“No project”',1,1,1]]);
+});
+
 test('query-v3 Thinking keeps missing waits in the denominator and summarises observed ones exactly',()=>{
  const rows=[
   ...[1,2,3,4,5].map((gap,i)=>request('a'+i,`2026-11-0${i+1}T10:00:00Z`,gap+0.5,{conversation:'c'+(i%2),bin:gap<2?4:gap<3?5:gap<5?6:7,reasoning:i*10})),
