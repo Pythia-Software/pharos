@@ -5,7 +5,7 @@
 .file-history-page code, .files-lines, .files-gutter, .files-diff { font: var(--fs-sm)/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .file-history-page code { overflow-wrap: anywhere; }
 .file-history-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 16px; }
-.file-history-form input { flex: 1 1 260px; min-width: 0; }
+.file-history-form input { flex: 1 1 260px; min-width: 0; box-sizing: border-box; height: 30px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; }
 
 /* With a project, the page fills the window: the tree is a full-height
    sidebar that scrolls on its own, beside the pane. */

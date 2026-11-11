@@ -44,6 +44,7 @@ APP_HTML = r'''<!doctype html>
     .menu-bar-preferences-actions{display:flex;align-items:center;gap:12px;flex:none}.menu-bar-expand{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--line);color:var(--ink);white-space:nowrap}.menu-bar-expand[hidden]{display:none}.menu-bar-expand:hover{border-color:var(--accent)}.menu-bar-expand:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}
     .menu-bar-expand .app-icon{width:14px;height:14px;flex:none;transition:transform .15s}.menu-bar-expand[aria-expanded="true"] .app-icon{transform:rotate(180deg)}
     .menu-bar-preferences-body{padding:0 20px 4px;border-top:1px solid var(--line)}
+    .menu-bar-preferences-body select{box-sizing:border-box;height:30px;padding:3px 28px 3px 8px;border:1px solid var(--line);border-radius:5px;background-color:var(--panel);color:var(--ink);font:inherit}
     @media(max-width:560px){.layout-preference-card>.optional-behavior{flex-wrap:wrap;gap:12px}.layout-preference-card>.optional-behavior>div:first-child{flex-basis:100%}.menu-bar-preferences-actions,.layout-preference-card>.optional-behavior>.menu-bar-expand{margin-left:auto}}
     @media(prefers-reduced-motion:reduce){.menu-bar-expand .app-icon{transition:none}}
     /* The menu mockups follow macOS appearance, independently of the app theme. */

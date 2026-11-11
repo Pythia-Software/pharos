@@ -277,7 +277,7 @@ function pharosClaudeWatchLine(item) {
 .claude-watch-library{margin-top:12px;min-width:0;overflow-wrap:anywhere}.claude-watch-library h4{margin:0;font-size:var(--fs-base)}.claude-watch-library p{margin:6px 0}.claude-watch-library ul{margin:6px 0;padding-left:20px}
 .claude-watch-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
 .claude-watch-options{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:0 0 12px}.claude-watch-options>p{flex-basis:100%;margin:0}
-.claude-watch-browser{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;max-width:100%}.claude-watch-browser select{flex:1 1 12em;width:100%;max-width:100%;min-width:0}
+.claude-watch-browser{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;max-width:100%}.claude-watch-browser select{flex:1 1 12em;box-sizing:border-box;width:100%;max-width:100%;min-width:0;height:30px;padding:3px 28px 3px 8px;border:1px solid var(--line);border-radius:5px;background-color:var(--panel);color:var(--ink);font:inherit}
 @media(max-width:560px){.claude-downloads-watch>.optional-behavior{flex-wrap:wrap;gap:12px}.claude-downloads-watch>.optional-behavior>div{flex-basis:100%}}`;
 
   const node = (tag, cls, text) => {
