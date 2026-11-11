@@ -1657,7 +1657,7 @@
         {
           "key": "model",
           "label": "Model",
-          "note": "The export names no model.",
+          "note": "Inspected exports omit model names; explicitly exported message models are retained.",
           "support": "unsupported"
         },
         {
@@ -1673,7 +1673,7 @@
         {
           "key": "message_tokens",
           "label": "Token usage",
-          "note": "Exports have no token counts.",
+          "note": "Inspected exports omit token consumption. Token budgets are not usage; explicit assistant usage is retained when supplied.",
           "support": "unsupported"
         },
         {
@@ -1691,7 +1691,7 @@
         {
           "key": "reasoning",
           "label": "Thinking",
-          "note": "A summary, when the export holds one.",
+          "note": "Exported thinking text or summaries; hidden reasoning is unavailable.",
           "support": "varies"
         },
         {

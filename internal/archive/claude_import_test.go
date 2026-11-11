@@ -135,7 +135,7 @@ func TestClaudeImportCollectsMultipartAndIndexesCapturedFiles(t *testing.T) {
 	}
 	ingestSource(t, c, config.Sources[0])
 	var count int
-	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM conversations WHERE provider='claude'`).Scan(&count); err != nil || count != 2 {
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM conversations WHERE provider='claude'`).Scan(&count); err != nil || count != 3 {
 		t.Fatal(count, err)
 	}
 	if result := runCapture(t, config); !result.OK {
@@ -150,10 +150,10 @@ func TestClaudeImportCollectsMultipartAndIndexesCapturedFiles(t *testing.T) {
 	useHost(t, "host-b")
 	other, _ := testCatalog(t)
 	indexCaptures(t, other, config.CaptureRoot, "host-a")
-	if err := other.DB.QueryRow(`SELECT COUNT(*) FROM conversations WHERE provider='claude'`).Scan(&count); err != nil || count != 2 {
+	if err := other.DB.QueryRow(`SELECT COUNT(*) FROM conversations WHERE provider='claude'`).Scan(&count); err != nil || count != 3 {
 		t.Fatal("offline conversations", count, err)
 	}
-	if err := other.DB.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&count); err != nil || count != 15 {
+	if err := other.DB.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&count); err != nil || count != 18 {
 		t.Fatal("offline messages", count, err)
 	}
 }
