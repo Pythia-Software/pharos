@@ -11,12 +11,13 @@ if [ "$#" -ne 3 ] || [ ! -d "$APP" ] || [ -e "$OUTPUT" ]; then
     echo "Usage: $0 APP OUTPUT.dmg X.Y.Z (OUTPUT must not exist)" >&2
     exit 2
 fi
-for command in hdiutil tiffutil python3 swiftc xcrun uvx; do
+for command in hdiutil tiffutil python3 swiftc xcrun; do
     command -v "$command" >/dev/null 2>&1 || { echo "$command is required." >&2; exit 2; }
 done
+python3 "$ROOT/macos/build_dmg.py" --check
 
 VOLUME="v$VERSION Pharos"
-# dmgbuild records the background by its mounted path; a second volume with the
+# Finder records the background by its mounted path; a second volume with the
 # same name would be mounted as "$VOLUME 1".
 if [ -e "/Volumes/$VOLUME" ]; then
     echo "A volume named $VOLUME is already mounted. Eject it before building this disk image." >&2
@@ -30,9 +31,6 @@ trap 'rm -rf "$WORK"' EXIT
 tiffutil -cathidpicheck "$WORK/background.png" "$WORK/background@2x.png" \
     -out "$WORK/background.tiff"
 
-# dmgbuild writes the .DS_Store directly instead of scripting Finder, so the
+# Write the .DS_Store directly instead of scripting Finder, so the
 # layout does not pick up the release Mac's Finder preferences, such as tabs.
-# Pinned: 1.6.7 writes a background alias that macOS 14 and later resolve.
-uvx --quiet --from dmgbuild==1.6.7 dmgbuild -s "$ROOT/macos/dmg-settings.py" \
-    -D app="$APP" -D background="$WORK/background.tiff" "$VOLUME" "$OUTPUT"
-hdiutil verify -quiet "$OUTPUT"
+python3 "$ROOT/macos/build_dmg.py" "$APP" "$OUTPUT" "$VERSION" "$WORK/background.tiff"
