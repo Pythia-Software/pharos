@@ -1,4 +1,5 @@
 import { EMPTY_QUERY, MAX_WHERE_CLAUSES, coerceValue, groupKeyFields, predicatesOf, type GroupKey, type MetricDateGrouping, type WhereClause, inspectBucketQuery, metricDateFloor, metricDateNext, type AggOp, type AggregationBucket, type AggregationClause, type AggregationResultEntry, type FieldSchema, type MetricDisplay, type MetricValueFormat, type QueryState, type SummaryColumn, type WhereTerm } from "@pythia-software/query-table-core";
+import { currencyDisplay } from "./currency-display";
 import { defaultChartScale, validChartScale, type AxisUnit, type ChartScale } from "./chart-scale";
 import { chartPeriods, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { chartDisplays, validRollingPeriods } from "./chart-series";
@@ -23,6 +24,11 @@ export type AnalysisMeasure = {
   // of two sums names its parts, so units can pool them rather than add
   // their ratios.
   op: AggOp; field?: string; expression?: string; ratio?: [numerator: RatioPart, denominator: RatioPart];
+  // A ratio whose parts count units can carry a confidence interval, so a
+  // small group's value shows how far it could move: proportion (Wilson) for
+  // a share of units with a property, rate (exact Poisson) for a count over
+  // an exposure. Query Table returns and draws the bounds.
+  interval?: "proportion" | "rate";
   // A per-record input makes the measure eligible for record distributions.
   value?: string;
   // Additive measures partition a total, so groups may be shown as shares.
@@ -349,6 +355,7 @@ export function catalogProblems(catalog: AnalysisCatalog): string[] {
   }
   for (const [id, measure] of Object.entries(catalog.measures)) {
     if (measure.ratio && measure.expression) problems.push(`${id} has both a ratio and an expression.`);
+    if (measure.interval && !measure.ratio) problems.push(`${id} has an interval but is not a ratio.`);
     // A mean of per-period means weights a quiet period like a busy one.
     if (measure.op === "avg" && !measure.ratio) problems.push(`${id} is a mean; declare it as a ratio of a sum and a count so periods and windows pool.`);
   }
@@ -811,7 +818,8 @@ const log = (scale?: ChartScale) => ({ mode: scale === "logarithmic" ? "log" as 
 export const measureExpression = (measure: AnalysisMeasure) => measure.ratio ? `${partExpression(measure.ratio[0])}/NULLIF(${partExpression(measure.ratio[1])},0)` : measure.expression;
 // Grouped rows show a measure in its own format: a duration as a duration.
 const cellDisplay = (format: MetricValueFormat): Pick<SummaryColumn, "display"> => format.kind === "duration" && format.sourceUnit === "milliseconds" ? { display: { kind: "duration", sourceUnit: "milliseconds" } }
-  : format.kind === "number" || format.kind === "percent" ? { display: { kind: format.kind, ...format.decimals !== undefined ? { decimals: format.decimals } : {} } } : {};
+  : format.kind === "number" || format.kind === "percent" ? { display: { kind: format.kind, ...format.decimals !== undefined ? { decimals: format.decimals } : {} } }
+  : format.kind === "currency" && format.currency ? { display: currencyDisplay(format) } : {};
 function summary(id: string, measure: AnalysisMeasure): SummaryColumn {
   const expression = measureExpression(measure);
   return expression ? { id, op: "formula", expression, label: measure.label, ...cellDisplay(measure.format) }
@@ -820,6 +828,10 @@ function summary(id: string, measure: AnalysisMeasure): SummaryColumn {
 // A ratio's parts beside it, so grouped rows show what each group pools.
 const ratioParts = (measure: AnalysisMeasure): SummaryColumn[] => measure.ratio ? measure.ratio.map((part, index) => ({ id: index ? "analysis_denominator" : "analysis_numerator", ...partColumn(part),
   label: ratioPart(part).label ? `${ratioPart(part).label![0].toUpperCase()}${ratioPart(part).label!.slice(1)}` : `${ratioPart(part).op === "count" ? "Records with" : "Total"} ${ratioPart(part).field!.replaceAll("_", " ")}` })) : [];
+// A compare bar of a ratio that counts units carries its interval. (Shares
+// of a total are offered only for additive measures, never ratios.)
+const intervalOf = (measure: AnalysisMeasure, state: Pick<ResolvedAnalysis, "view">): Pick<AggregationClause, "interval"> =>
+  measure.interval && measure.ratio && state.view === "compare" ? { interval: { kind: measure.interval } } : {};
 export function aggregate(measure: AnalysisMeasure): Pick<AggregationClause, "op" | "field" | "expression"> {
   const expression = measureExpression(measure);
   return { op: measure.op, ...(measure.field && !expression ? { field: measure.field } : {}), ...(expression ? { expression } : {}) };
@@ -969,7 +981,7 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
       : state.view === "distribution"
       ? { id: "analysis", op: "count", groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "samples", dir: "desc" }], label: measure.label, ...counted,
         distribution: breakdown ? { kind: "box", input: `[${measure.value}]`, whiskers: "tukey" } : { kind: "histogram", input: `[${measure.value}]` }, display: distributionDisplay(Boolean(breakdown)) }
-      : { id: "analysis", ...aggregate(measure), groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...counted, display: compareDisplay(Boolean(breakdown)) };
+      : { id: "analysis", ...aggregate(measure), ...intervalOf(measure, state), groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...counted, display: compareDisplay(Boolean(breakdown)) };
     const query = { ...EMPTY_QUERY, where: run([...recordWhere, ...filter ?? []]), aggregations: [clause] };
     // The supporting query lists what is drawn: a share's selected groups too.
     const supported = run([...recordWhere, ...filter ?? stated(recordFields, run(recordWhere)) ?? []]);
@@ -996,7 +1008,7 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
     : state.view === "distribution"
       ? { id: "analysis", op: "count", field: "analysis_value", ...unitSplit ? { expression: "MEDIAN([analysis_value])" } : {}, groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "samples", dir: "desc" }], label: `${measure.label} per ${unit.label.toLowerCase()}`, ...counted,
         distribution: unitSplit ? { kind: "box", input: "[analysis_value]", whiskers: "tukey" } : { kind: "histogram", input: "[analysis_value]" }, display: distributionDisplay(Boolean(unitSplit)) }
-      : { id: "analysis", ...reduce[state.reduce], groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...counted, display: compareDisplay(Boolean(unitSplit)) };
+      : { id: "analysis", ...reduce[state.reduce], ...pooled ? intervalOf(measure, state) : {}, groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...counted, display: compareDisplay(Boolean(unitSplit)) };
   // Only units with a value are plotted, so only they meet a minimum. A
   // count of units counts every unit.
   const query: QueryState = { ...EMPTY_QUERY, grouping: { source: { ...EMPTY_QUERY, where: run(sourceWhere) }, keys, summaries, representative: null },

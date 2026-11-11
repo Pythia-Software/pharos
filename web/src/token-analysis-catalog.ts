@@ -6,7 +6,7 @@ import { projectBreakdown, projectLegacy } from "./project-analysis";
 // Tokens and Cost over the usage ledger. One record is one agent session's
 // usage of one model and effort on one recorded day.
 
-const tokens = { kind: "number", decimals: 0 } as const, usd = { kind: "number", decimals: 2 } as const, percent = { kind: "percent", decimals: 1 } as const;
+const tokens = { kind: "number", decimals: 0 } as const, usd = { kind: "currency", currency: "USD" } as const, percent = { kind: "percent", decimals: 1 } as const;
 const priced: WhereTerm[] = [{ field: "price_status", op: "=", value: "priced" }];
 const measures: Record<string, AnalysisMeasure> = {
   tokens: { label: "Tokens", unit: "tokens", format: tokens, op: "sum", field: "total_tokens", value: "total_tokens", additive: true, note: "Tokens include cached input and reported reasoning output." },

@@ -3,6 +3,8 @@ import catalog from "../../pricing/model_colors.json";
 import { activities, activityPresentation } from "./machine-activity-data";
 import { orderedValues } from "./session-shape-bands";
 import agentEventKinds from "./agent-event-kinds.json";
+import type { MetricValue } from "@pythia-software/query-table-core";
+import type { MetricTheme } from "@pythia-software/query-table-ui";
 
 // Agent event groups take the reader's event hues (ui.py's --event-* tokens):
 // friction red, learning ochre, second look green, choices blue. A kind is a
@@ -156,9 +158,24 @@ export function colorFields(clause: { groupBy: string[]; dateGrouping?: { interv
   return clause.dateGrouping?.interval === "hourOfDay" ? ["hour_of_day", ...clause.groupBy.slice(1)] : clause.groupBy;
 }
 
+// The key whose palette colours a group of several keys, in priority order:
+// a kind of agent event keeps its colour on every repository's bar, and a
+// model its family's colour beside a provider, repository or effort.
+export const keyColorFields = ["family", "family_group", "root_model_family", "model_family", "root_effort", "effort", "root_provider", "provider", "project_name", "root_project_name", "repository_name"];
+
 // Compound metric groups retain their model palette even when their first key
 // is provider, repository, or a display label flattened for the native renderer.
 export function metricSeriesColor(fields: string[], keys: unknown[]): string {
-  const field = ["root_model_family", "model_family", "root_effort", "effort", "root_provider", "provider", "project_name", "root_project_name", "repository_name"].find(field => fields.includes(field)) ?? fields[0];
+  const field = keyColorFields.find(field => fields.includes(field)) ?? fields[0];
   return chartSeriesStyle(field ?? "generic", String(keys[fields.indexOf(field)] ?? "Unspecified")).color;
+}
+
+// A Query Table theme that colours each bar, box or list row of a grouping by
+// several keys by that palette key (Query Table's colorBy), so the chart
+// agrees with its legend and with the compact covers.
+export function keyColorTheme(fields: string[], buckets: ReadonlyArray<{ keys: ReadonlyArray<unknown> }>): MetricTheme | undefined {
+  const field = fields.length > 1 ? keyColorFields.find(field => fields.includes(field)) : undefined;
+  if (!field) return undefined;
+  const index = fields.indexOf(field), values = [...new Set(buckets.map(bucket => bucket.keys[index]))];
+  return { colorBy: field, dimensions: { [field]: { layer: field, overrides: values.map(value => ({ value: value as MetricValue, color: chartSeriesStyle(field, String(value ?? "Unspecified")).color })) } } };
 }

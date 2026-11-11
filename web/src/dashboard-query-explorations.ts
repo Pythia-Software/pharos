@@ -1,4 +1,5 @@
 import { EMPTY_QUERY, groupKeyField, predicatesOf, type FieldSchema, type GroupKey, type QueryState, type SummaryColumn, type WhereTerm } from "@pythia-software/query-table-core";
+import { currencyDisplay } from "./currency-display";
 import { aggregate, analysisQuery, heatmapSource, isTrendView, measureExpression, noSplit, normalizeAnalysis, partClause, partField, ratioPart, records, selectionWhere, splitValid, unique, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState } from "./dashboard-analysis-model";
 import { trendQuery } from "./dashboard-trend-model";
 import { groupedDashboardQuery } from "./usage-dashboard-model";
@@ -32,7 +33,7 @@ export function dashboardQueryMeaning(query: QueryState): string {
 function summary(id: string, measure: AnalysisMeasure): SummaryColumn {
   const expression = measureExpression(measure);
   return { id, ...(expression ? { op: "formula" as const, expression } : aggregate(measure)), label: measure.label,
-    ...["number", "percent", "duration"].includes(measure.format.kind) ? { display: measure.format as SummaryColumn["display"] } : {} };
+    ...measure.format.kind === "currency" ? { display: currencyDisplay(measure.format) } : ["number", "percent", "duration"].includes(measure.format.kind) ? { display: measure.format as SummaryColumn["display"] } : {} };
 }
 function columns(measure: AnalysisMeasure): SummaryColumn[] {
   return [summary("explore_value", measure), ...measure.ratio?.map((part, index): SummaryColumn => {

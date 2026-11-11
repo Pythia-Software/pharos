@@ -107,10 +107,11 @@ person's repositories they can change or review: where agents hit friction (repo
 obstacles), docs agents found out of date, failures agents stepped around, and choices agents made without asking
 (replies). Cards on thinking against replies, models, who prompted, prompt length and
 subagents were dropped: each difference came mostly from how much text a source narrates or from turn size, not from
-anything the person controls. Intervals for small groups wait on Query Table
-([handoff](handoffs/query-table-rate-intervals.md)), as does colouring a repository × kind bar by its kind
-([handoff](handoffs/query-table-tuple-colors.md)): Query Table colours a two-field bar by the whole pair, so the same
-kind takes a different colour on each repository's row.
+anything the person controls. Compare bars of a rate or share carry a 95%
+confidence interval from Query Table (`interval` on the measure: Wilson for the shares, exact Poisson for events per
+1,000 messages), drawn as whiskers, so a bar of 15 turns no longer looks as certain as one of 128. A repository × kind
+bar takes its kind's colour, as the legend and trend do (`keyColorTheme` in `web/src/chart-colors.ts`, Query Table's
+`colorBy`).
 
 The Weekly digest cards (`web/src/digest-card-recipes.ts`) are the lab digest's "this week against the ones before",
 drawn from what already exists: new problems to fix (open Fixes first seen in the window), problems that keep coming

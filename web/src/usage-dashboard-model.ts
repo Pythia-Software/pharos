@@ -1,5 +1,6 @@
 import { todayBounds } from "./day-window";
 import { EMPTY_QUERY, decodeQueryStrict, inspectBucketQuery, isMetricCycle, type CalendarGroupKey, type GroupKey, type AggregationClause, type QueryState, type SummaryColumn, type CellDisplay, type WhereTerm, type OrderByClause } from "@pythia-software/query-table-core";
+import { currencyDisplay } from "./currency-display";
 import { readUsageWorkspace, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { withTimeRange } from "./chart-range";
 import type { ConcurrencySelection } from "./concurrency";
@@ -50,6 +51,7 @@ function summaryDisplay(clause: AggregationClause): CellDisplay | undefined {
   if (clause.field === "duration_ms" || clause.field === "total_duration_ms" || clause.field === "max_duration_ms") return { kind: "duration", sourceUnit: "milliseconds" };
   const format = clause.display?.format;
   if (format?.kind === "number" || format?.kind === "percent") return { kind: format.kind, ...(format.decimals !== undefined ? { decimals: format.decimals } : {}) };
+  if (format?.kind === "currency" && format.currency) return currencyDisplay(format);
   if (format?.kind === "duration" && (!format.sourceUnit || ["milliseconds", "seconds", "minutes", "hours", "days"].includes(format.sourceUnit))) return {
     kind: "duration", ...(format.sourceUnit ? { sourceUnit: format.sourceUnit as "milliseconds" | "seconds" | "minutes" | "hours" | "days" } : {}), ...(format.decimals !== undefined ? { decimals: format.decimals } : {}),
   };

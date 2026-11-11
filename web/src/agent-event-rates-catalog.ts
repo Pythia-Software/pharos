@@ -22,12 +22,12 @@ const distinct = (field: string, label: string, when?: string): RatioPart => ({ 
 // link into the reader with its events marked.
 const drill: WhereTerm[] = [{ field: "events", op: ">", value: "0" }];
 const shareOf = (field: string, unit: string, label: string, note: string): AnalysisMeasure => ({
-  label, unit: "percent", format: percent, op: "sum", additive: false, drill, note,
+  label, unit: "percent", format: percent, op: "sum", additive: false, drill, note, interval: "proportion",
   ratio: [distinct(field, `${unit} with a matching event`, withEvent), distinct(field, `${unit} read`)],
 });
 
 const measures: Record<string, AnalysisMeasure> = {
-  per_thousand: { label: "Events per 1,000 messages read", unit: "events per 1,000 messages", format: { kind: "number", decimals: 0 }, op: "sum", additive: false, drill,
+  per_thousand: { label: "Events per 1,000 messages read", unit: "events per 1,000 messages", format: { kind: "number", decimals: 0 }, op: "sum", additive: false, drill, interval: "rate",
     ratio: ["events", { op: "count_distinct", field: "message_id", per: 1000, label: "thousands of messages read" }],
     note: "Matching events divided by the agent messages the events pass read (replies and thinking blocks), per 1,000. A message can hold several events." },
   message_share: shareOf("message_id", "messages", "Share of messages read with an event",
