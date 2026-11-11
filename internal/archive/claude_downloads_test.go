@@ -29,8 +29,11 @@ func claudeDownloadsFixture(t *testing.T, created time.Time, browser func(profil
 		collect: func(ctx context.Context, request claudeImportRequest) (*claudeImportJob, error) {
 			return collectClaudeExport(ctx, config, request)
 		},
-		index: func(_ context.Context, name string) error { indexed = append(indexed, name); return nil },
-		now:   time.Now,
+		index: func(_ context.Context, name string, _ ProgressFunc) error {
+			indexed = append(indexed, name)
+			return nil
+		},
+		now: time.Now,
 	}
 	return d, downloads, &opened, &indexed
 }
@@ -43,6 +46,19 @@ func TestClaudeDownloadsOpensEachLinkOnceAndImportsWhatArrives(t *testing.T) {
 		writeClaudeAIZip(t, filepath.Join(downloads, name))
 	})
 	downloads = dir
+	index := d.index
+	indexAttempts := 0
+	d.index = func(ctx context.Context, name string, progress ProgressFunc) error {
+		indexAttempts++
+		fetch := d.Fetches()[0]
+		if fetch.Phase != "indexing" || fetch.Collected != 2 || fetch.Expected != 2 || fetch.Waiting != "" || fetch.WaitingFile != "" {
+			t.Fatalf("indexing progress was not published: %+v", fetch)
+		}
+		if indexAttempts == 1 {
+			return errClaudeImportBusy
+		}
+		return index(ctx, name, progress)
+	}
 	stale := filepath.Join(dir, "conversations-000.zip")
 	writeClaudeAIZip(t, stale)
 	old := time.Now().Add(-14 * 24 * time.Hour)
@@ -57,12 +73,18 @@ func TestClaudeDownloadsOpensEachLinkOnceAndImportsWhatArrives(t *testing.T) {
 		if _, err := d.Check(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+		if i == 2 {
+			fetch := d.Fetches()[0]
+			if fetch.Phase != "queued" || fetch.State != claudeFetchActive || fetch.Collected != 2 || !strings.Contains(fetch.Message, "Indexing starts") {
+				t.Fatalf("indexing wait lost the completed collection: %+v", fetch)
+			}
+		}
 	}
 	if len(*opened) != 2 || !strings.HasSuffix((*opened)[0], "/one") || !strings.HasSuffix((*opened)[1], "/two") {
 		t.Fatal("opened", *opened)
 	}
 	fetches := d.Fetches()
-	if len(fetches) != 1 || fetches[0].State != claudeFetchImported || fetches[0].Collected != 2 || len(*indexed) != 1 {
+	if len(fetches) != 1 || fetches[0].State != claudeFetchImported || fetches[0].Collected != 2 || fetches[0].Message != "" || len(*indexed) != 1 {
 		t.Fatalf("fetches %+v indexed %v", fetches, *indexed)
 	}
 	job, err := loadClaudeJob(d.config(), d.name, fetches[0].ID)
@@ -141,6 +163,9 @@ func TestClaudeDownloadsStopInterruptsCollectionAndKeepsTheDecision(t *testing.T
 			t.Fatal(list)
 		}
 		fetch = list[0]
+		if fetch.Phase != "collecting" || fetch.Expected != 2 {
+			t.Fatalf("collection progress was not published: %+v", fetch)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("listing exports waited for a collection")
 	}
@@ -157,6 +182,98 @@ func TestClaudeDownloadsStopInterruptsCollectionAndKeepsTheDecision(t *testing.T
 	}
 	if list := d.Fetches(); list[0].State != claudeFetchStopped || len(*opened) != 0 {
 		t.Fatalf("%+v %v", list, *opened)
+	}
+}
+
+func TestClaudeDownloadsPausesOnCollectionFailureBeforeAJobExists(t *testing.T) {
+	d, _, opened, _ := claudeDownloadsFixture(t, time.Now().Add(-time.Hour), func(string, string) {})
+	d.collect = func(context.Context, claudeImportRequest) (*claudeImportJob, error) {
+		return nil, errors.New("cannot save the import job")
+	}
+	if more, err := d.Check(context.Background()); more || err != nil {
+		t.Fatal(more, err)
+	}
+	fetch := d.Fetches()[0]
+	if fetch.State != claudeFetchPaused || fetch.Message != "cannot save the import job" || fetch.Expected != 2 || len(*opened) != 0 {
+		t.Fatalf("collection failure was hidden: %+v", fetch)
+	}
+}
+
+func TestClaudeDownloadsReportsIngestionAndRetriesFailure(t *testing.T) {
+	var downloads string
+	d, dir, opened, _ := claudeDownloadsFixture(t, time.Now().Add(-time.Hour), func(_, link string) {
+		name := map[string]string{"one": "conversations-000.zip", "two": "projects-000.zip"}[link[strings.LastIndex(link, "/")+1:]]
+		writeClaudeAIZip(t, filepath.Join(downloads, name))
+	})
+	downloads = dir
+	attempt := 0
+	d.index = func(_ context.Context, _ string, progress ProgressFunc) error {
+		attempt++
+		if attempt == 1 {
+			progress("capturing", 0, 0, 0, 0, 0)
+			progress("indexing", 1, 1, 4, 0, 1)
+			fetch := d.Fetches()[0]
+			if fetch.Ingestion == nil || fetch.Ingestion.Stage != "indexing" || fetch.Ingestion.Conversations != 1 || fetch.Ingestion.Messages != 4 || fetch.Ingestion.Processed != 1 {
+				t.Fatalf("live ingestion progress: %+v", fetch)
+			}
+			return errors.New("catalog write failed")
+		}
+		progress("complete", 0, 0, 0, 2, 2)
+		return nil
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := d.Check(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fetch := d.Fetches()[0]
+	if fetch.State != claudeFetchPaused || !strings.Contains(fetch.Message, "catalog write failed") || fetch.Collected != 2 {
+		t.Fatalf("ingestion failure was hidden: %+v", fetch)
+	}
+	if err := d.Act(fetch.ID, "retry", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fetch = d.Fetches()[0]
+	if fetch.State != claudeFetchImported || fetch.Ingestion.Stage != "complete" || fetch.Ingestion.SkippedCurrent != 2 || fetch.Ingestion.Processed != 2 || len(*opened) != 2 {
+		t.Fatalf("ingestion retry redownloaded files or lost unchanged records: %+v, opened %v", fetch, *opened)
+	}
+}
+
+func TestClaudeDownloadsStopWhileIndexingKeepsCompletedCollection(t *testing.T) {
+	var downloads string
+	d, dir, _, _ := claudeDownloadsFixture(t, time.Now().Add(-time.Hour), func(_, link string) {
+		name := map[string]string{"one": "conversations-000.zip", "two": "projects-000.zip"}[link[strings.LastIndex(link, "/")+1:]]
+		writeClaudeAIZip(t, filepath.Join(downloads, name))
+	})
+	downloads = dir
+	indexed := false
+	d.index = func(ctx context.Context, _ string, progress ProgressFunc) error {
+		indexed = true
+		progress("indexing", 1, 1, 4, 0, 1)
+		fetch := d.Fetches()[0]
+		if fetch.Phase != "indexing" || fetch.Collected != 2 || fetch.Expected != 2 {
+			t.Fatalf("indexing progress: %+v", fetch)
+		}
+		if err := d.Act(fetch.ID, "stop", nil); err != nil {
+			t.Fatal(err)
+		}
+		if ctx.Err() != context.Canceled {
+			t.Fatal("Stop did not cancel indexing")
+		}
+		progress("complete", 2, 2, 8, 0, 2)
+		return ctx.Err()
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := d.Check(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fetch := d.Fetches()[0]
+	if !indexed || fetch.State != claudeFetchStopped || fetch.Collected != 2 || fetch.Expected != 2 || fetch.Ingestion.Workspaces != 1 {
+		t.Fatalf("Stop lost the completed collection: %+v", fetch)
 	}
 }
 
@@ -216,6 +333,29 @@ func TestClaudeDownloadsWatchSettingAndServiceImport(t *testing.T) {
 	probePut(t, filepath.Join(downloads, claudeTestManifestName), `{"version":"1.0","created_at":"`+created+`","total_files":2,"data_files":[`+
 		`{"category":"conversations","part":0,"filename":"conversations-000.zip","export_url":"https://claude.ai/export/3f1b6c0e-5a2d-4e8b-9c71-2d4a6b8e0f13/download/one"},`+
 		`{"category":"projects","part":0,"filename":"projects-000.zip","export_url":"https://claude.ai/export/3f1b6c0e-5a2d-4e8b-9c71-2d4a6b8e0f13/download/two"}]}`)
+	stages := map[string]bool{}
+	index := server.claudeWatch.index
+	server.claudeWatch.index = func(ctx context.Context, name string, progress ProgressFunc) error {
+		return index(ctx, name, func(stage string, workspaces, conversations, messages, skipped, processed int) {
+			progress(stage, workspaces, conversations, messages, skipped, processed)
+			stages[stage] = true
+			if stage == "complete" {
+				fetch := server.claudeWatch.Fetches()[0]
+				if fetch.Ingestion == nil || fetch.Ingestion.Conversations != conversations {
+					t.Fatalf("committed ingestion progress not visible: %+v", fetch)
+				}
+			}
+		})
+	}
+	if !server.ingestMu.TryLock() {
+		t.Fatal("could not reserve the library for another update")
+	}
+	more, err := server.claudeWatch.Check(context.Background())
+	server.ingestMu.Unlock()
+	fetch := server.claudeWatch.Fetches()[0]
+	if err != nil || !more || fetch.Phase != "queued" || fetch.Expected != 2 || !strings.Contains(fetch.Message, "resumes automatically") || len(opened) != 0 {
+		t.Fatalf("busy library: %+v more=%v err=%v opened=%v", fetch, more, err, opened)
+	}
 	for i := 0; i < 6; i++ {
 		if _, err := server.claudeWatch.Check(context.Background()); err != nil {
 			t.Fatal(err)
@@ -228,6 +368,36 @@ func TestClaudeDownloadsWatchSettingAndServiceImport(t *testing.T) {
 	var conversations int
 	if err := server.Catalog.DB.QueryRow(`SELECT count(*) FROM conversations`).Scan(&conversations); err != nil || conversations == 0 {
 		t.Fatal("not indexed", conversations, err)
+	}
+	if !stages["capturing"] || !stages["indexing"] || !stages["complete"] || exports[0].Ingestion == nil || exports[0].Ingestion.Stage != "complete" {
+		t.Fatal("capture/index stages were not reported", stages, exports)
+	}
+	var workspaces int
+	if err := server.Catalog.DB.QueryRow("SELECT count(*) FROM workspaces").Scan(&workspaces); err != nil {
+		t.Fatal(err)
+	}
+	tx := seedTx(t, server.Catalog.DB)
+	for _, other := range []struct{ id, host, source string }{{"other-source", currentHost().ID, "other-imports"}, {"other-host", "another-host", server.claudeWatch.name}} {
+		if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES(?,'claude-ai','',?,?,?)`, other.id, other.id, other.id, now()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`INSERT INTO workspace_sightings(workspace_id,host_id,source_name,first_seen_at,last_seen_at) VALUES(?,?,?,?,?)`, other.id, other.host, other.source, now(), now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitSeed(t, tx)
+	library := server.claudeImportLibrary()
+	if library.Error != "" || library.Workspaces != workspaces || library.Workspaces == 0 || library.Conversations != conversations || len(library.Recent) == 0 {
+		t.Fatalf("workspace results: %+v", library)
+	}
+	for _, workspace := range library.Recent {
+		if workspace.ID == "other-source" || workspace.ID == "other-host" {
+			t.Fatal("workspace results include another source or host", workspace)
+		}
+		var title string
+		if err := server.Catalog.DB.QueryRow("SELECT title FROM workspaces WHERE id=?", workspace.ID).Scan(&title); err != nil || workspace.Title != title || workspace.URL != "/work/"+workspace.ID {
+			t.Fatal("workspace result does not point to the imported workspace", workspace, title, err)
+		}
 	}
 	if code, response = probeCall(t, server, http.MethodPost, "/api/claude-imports/watch", `{"id":"`+exports[0].ID+`","action":"retry"}`); code != 400 {
 		t.Fatal("an imported export can be retried", code, response)

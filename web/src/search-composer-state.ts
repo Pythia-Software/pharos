@@ -1,6 +1,6 @@
 import { decodeQueryStrict, localQuerySnapshotCache, EMPTY_QUERY, encodeQuery, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
 import { newKeywordSearch, readTextSearch, type TextSearchDraft } from "./text-search-model";
-import { readRollingWindow, resolveRollingQuery, rollingQueryMatches, type RollingWindow } from "./query-links";
+import { queryURL, readRollingWindow, resolveRollingQuery, rollingQueryMatches, type RollingWindow } from "./query-links";
 export type SearchComposerState = { text: TextSearchDraft; kind: "text" | "file" | "url"; file: string; fileCase: boolean; query: QueryState; window?: RollingWindow; error?: string };
 export function freshSearch(schema: FieldSchema): SearchComposerState {
   return { text: newKeywordSearch(), kind: "text", file: "", fileCase: false, query: { ...EMPTY_QUERY, where: [], orderBy: schema.defaultSort ?? [], select: schema.defaultSelect ?? [], limit: schema.defaultLimit ?? 50 } };
@@ -32,4 +32,10 @@ export function searchURL(state: SearchComposerState): string {
   if (state.kind === "text") params.set("text_builder", JSON.stringify(state.text));
   else { params.set("kind", state.kind); params.set("search", state.file.trim()); if (state.fileCase) params.set("case", "1"); }
   return `/library?${params}`;
+}
+
+export function sourceWorkspacesURL(kind: string, schema: FieldSchema): string {
+  const state = freshSearch(schema);
+  state.query = { ...state.query, where: [{ field: "source_kind", op: "=", value: kind }] };
+  return queryURL("library", state.query);
 }

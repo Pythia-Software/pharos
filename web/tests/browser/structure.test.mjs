@@ -254,6 +254,43 @@ const ROUTES = [
     if(step==='empty')for(const box of await guide.locator('.pharos-candidate input[type=checkbox]').all())await box.uncheck();
     if(step!=='found')await next.click();
   },shown:'#pharosOnboarding'})),
+  {name:'Claude Downloads watch',url:'/settings/sources',ready:'#claudeDownloadsWatchSection .claude-watch-export',api:{
+    'GET /api/claude-imports':{jobs:[],run:{running:false},watch:{enabled:true,available:true,browser:'',browsers:[],exports:[
+      {id:'queued-export',state:'fetching',phase:'queued',exported_at:'2026-11-10T20:15:05Z',collected:0,expected:6,message:'Waiting for another capture or index to finish. Collection resumes automatically when the library is free.'},
+      {id:'indexing-export',state:'fetching',phase:'indexing',exported_at:'2026-11-10T19:15:05Z',collected:6,expected:6,ingestion:{stage:'indexing',processed:25,workspaces:20,conversations:20,messages:150,skipped_current:5}},
+    ],library:{workspaces:25,conversations:25,recent:[{id:workID,title:'Plan a project with a long workspace title that wraps at narrow window widths',url:`/work/${workID}`}]}}},
+  },check:async(page,app)=>{
+    await page.locator('#claudeDownloadsWatchSection .claude-watch-exports').scrollIntoViewIfNeeded();
+    await app.shot('ingestion');
+    const workspace=page.locator(`#claudeDownloadsWatchSection .claude-watch-library a[href="${work}"]`);
+    await workspace.focus();
+    const next=structuredClone(ROUTES.find(route=>route.name==='Claude Downloads watch').api['GET /api/claude-imports']);
+    next.watch.library.workspaces++;
+    next.watch.library.recent.unshift({id:peerWorkID,title:'Another imported conversation',url:`/work/${peerWorkID}`});
+    next.watch.exports[1].ingestion.messages++;
+    await page.route('**/api/claude-imports',route=>route.fulfill({json:next}),{times:1});
+    const refreshed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/claude-imports');
+    await page.evaluate(()=>window.pharosClaudeDownloads.render(document.getElementById('claudeDownloadsWatchSection')));
+    await refreshed;await app.settled();
+    assert.ok(await workspace.evaluate(element=>element===document.activeElement),'ingestion progress refresh lost the focused workspace link');
+    const stop=page.locator('#claudeDownloadsWatchSection [data-id="indexing-export"]').getByRole('button',{name:'Stop',exact:true});
+    await stop.focus();
+    // Let the next automatic poll restore the original fixture: both the
+    // recent workspace list and the focused export's progress change.
+    await page.waitForResponse(response=>new URL(response.url()).pathname==='/api/claude-imports',{timeout:10000});
+    await app.settled();
+    assert.ok(await stop.evaluate(element=>element===document.activeElement),'automatic ingestion polling lost the focused Stop button');
+    await workspace.click();
+    await page.waitForURL(url=>url.pathname===work);
+    await page.locator('.delegation-table tbody tr').first().waitFor();
+    await page.goBack();
+    await page.locator('#claudeDownloadsWatchSection .claude-watch-export').first().waitFor();
+    await page.getByRole('link',{name:'Browse all Claude.ai workspaces',exact:true}).click();
+    await page.waitForURL('**/library?*');
+    await page.locator('#queryTableLibrary').waitFor();
+    await page.goBack();
+    await page.locator('#claudeDownloadsWatchSection .claude-watch-export').first().waitFor();
+  }},
   {name:'Claude export collection',url:'/settings/sources',ready:'#pharosAddSource',api:{
     'GET /api/claude-imports':({query})=>query.get('id')?claudeImportFixture:{jobs:[{...claudeImportFixture,collected:1,expected:2}],run:{running:false}},
     'POST /api/claude-imports/links':{links:{'part-two':'https://claude.ai/export/download/synthetic-token'}},

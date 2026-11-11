@@ -33,6 +33,7 @@ type claudeFetch struct {
 	Manifest   string `json:"manifest"`
 	ExportedAt string `json:"exported_at"`
 	State      string `json:"state"`
+	Phase      string `json:"phase,omitempty"`
 	Message    string `json:"message,omitempty"`
 	Waiting    string `json:"waiting,omitempty"`
 	// Account is the Claude account or organization the export's links
@@ -51,6 +52,18 @@ type claudeFetch struct {
 	Collected   int               `json:"collected"`
 	Expected    int               `json:"expected"`
 	UpdatedAt   string            `json:"updated_at"`
+	Ingestion   *claudeIngestion  `json:"ingestion,omitempty"`
+}
+
+// Counts describe the source ingestion pass, including earlier exports in the
+// same source. Processed includes records already current in the catalog.
+type claudeIngestion struct {
+	Stage          string `json:"stage"`
+	Workspaces     int    `json:"workspaces"`
+	Conversations  int    `json:"conversations"`
+	Messages       int    `json:"messages"`
+	Processed      int    `json:"processed"`
+	SkippedCurrent int    `json:"skipped_current"`
 }
 
 // Fetch states. Only "fetching" advances on its own; the others wait for the
@@ -81,7 +94,7 @@ type claudeDownloads struct {
 	config  func() Config
 	open    func(browser, link string) error
 	collect func(context.Context, claudeImportRequest) (*claudeImportJob, error)
-	index   func(context.Context, string) error
+	index   func(context.Context, string, ProgressFunc) error
 	now     func() time.Time
 	// problem is the last check's folder error, such as macOS refusing access.
 	problem string
@@ -401,6 +414,16 @@ func (d *claudeDownloads) Check(ctx context.Context) (bool, error) {
 			fetches[id] = fetch
 			changed = true
 		}
+		// The manifest already tells us the total, even when collection has
+		// to wait for the library's ingest lock. Do not report an empty export.
+		if fetch.Expected == 0 {
+			for _, part := range manifest.DataFiles {
+				if !claudeExcludedCategory(part.Category) && !claudeAccountRecord(part.Filename) {
+					fetch.Expected++
+				}
+			}
+			changed = true
+		}
 		fetch.Manifest = file
 		copied := *fetch
 		copied.Opened = map[string]string{}
@@ -441,7 +464,7 @@ func (d *claudeDownloads) Check(ctx context.Context) (bool, error) {
 		}
 		return current != nil && current.State == claudeFetchActive, err
 	}
-	work.UpdatedAt = formatTime(now)
+	work.UpdatedAt = formatTime(d.now())
 	fetches[work.ID] = work
 	if next != nil && work.State == claudeFetchActive {
 		// Record the attempt before opening: a crash must not open a
@@ -479,6 +502,22 @@ func claudePruneFetches(fetches map[string]*claudeFetch) bool {
 
 type claudeNextLink struct{ part, file, link string }
 
+// Publish progress before a potentially long collection or index, without
+// holding the state lock during that work or overwriting a concurrent Stop.
+func (d *claudeDownloads) progress(fetch *claudeFetch) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	fetches := d.load()
+	current := fetches[fetch.ID]
+	if current == nil || current.Revision != fetch.Revision {
+		return context.Canceled
+	}
+	copied := *fetch
+	copied.UpdatedAt = formatTime(d.now())
+	fetches[fetch.ID] = &copied
+	return d.save(fetches)
+}
+
 // advance works on a copy of the export, without the state lock: it collects
 // what arrived, indexes a complete export, and names the next link to open.
 func (d *claudeDownloads) advance(ctx context.Context, fetch *claudeFetch, exported, now time.Time) (*claudeNextLink, error) {
@@ -496,14 +535,21 @@ func (d *claudeDownloads) advance(ctx context.Context, fetch *claudeFetch, expor
 		if err := d.remember(config, fetch); err != nil {
 			return nil, err
 		}
+		fetch.Waiting, fetch.WaitingFile = "", ""
 	}
 	// Collecting re-verifies earlier parts and picks up anything that arrived.
+	fetch.Phase, fetch.Message = "collecting", ""
+	if err := d.progress(fetch); err != nil {
+		return nil, err
+	}
 	job, err := d.collect(ctx, claudeImportRequest{Paths: []string{fetch.Manifest}, Name: d.name})
 	if job == nil || errors.Is(err, context.Canceled) {
-		// Nothing was collected: the library is busy, unavailable or
-		// stopping. The next check tries again.
-		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, errClaudeImportBusy) {
-			fetch.Message = err.Error()
+		// A busy library retries automatically. Other failures need a
+		// visible pause so the person can correct the problem and retry.
+		if errors.Is(err, errClaudeImportBusy) {
+			fetch.Phase, fetch.Message = "queued", "Waiting for another capture or index to finish. Collection resumes automatically when the library is free."
+		} else if err != nil && !errors.Is(err, context.Canceled) {
+			fetch.State, fetch.Message = claudeFetchPaused, err.Error()
 		}
 		return nil, nil
 	}
@@ -517,12 +563,32 @@ func (d *claudeDownloads) advance(ctx context.Context, fetch *claudeFetch, expor
 		}
 	}
 	if job.State == "collected" {
-		if err := d.index(ctx, job.Name); errors.Is(err, errClaudeImportBusy) || errors.Is(err, context.Canceled) {
+		fetch.Phase = "indexing"
+		if err := d.progress(fetch); err != nil {
+			return nil, err
+		}
+		var reported time.Time
+		report := func(stage string, workspaces, conversations, messages, skipped, processed int) {
+			previous := fetch.Ingestion
+			fetch.Ingestion = &claudeIngestion{Stage: stage, Workspaces: workspaces, Conversations: conversations, Messages: messages, Processed: processed, SkippedCurrent: skipped}
+			at := d.now()
+			if previous == nil || previous.Stage != stage || at.Sub(reported) >= time.Second {
+				// Intermediate reporting is best effort; the final state save
+				// below still reports persistence failures to the watch loop.
+				_ = d.progress(fetch)
+				reported = at
+			}
+		}
+		if err := d.index(ctx, job.Name, report); errors.Is(err, errClaudeImportBusy) || errors.Is(err, context.Canceled) {
+			fetch.Phase = "queued"
 			fetch.Message = "Every file is collected. Indexing starts when the library is free."
 			return nil, nil
 		} else if err != nil {
-			fetch.State, fetch.Message = claudeFetchImported, "Every file is collected. Indexing did not finish and runs with the next update: "+err.Error()
+			fetch.State, fetch.Message = claudeFetchPaused, "Every file is collected. Ingestion did not finish: "+err.Error()
 			return nil, nil
+		}
+		if fetch.Ingestion != nil {
+			fetch.Ingestion.Stage = "complete"
 		}
 		fetch.State, fetch.Message = claudeFetchImported, ""
 		return nil, nil
