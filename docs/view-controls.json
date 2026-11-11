@@ -787,6 +787,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:17fab1344161a155:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-history-search-button cursor-interaction\">",
+      "contract": "action",
+      "reason": "Runs the private Ask chat history search using the existing history filter."
+    },
+    {
       "key": "fragment:18322884faef50c0:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -896,6 +905,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:712048819a5a92d8:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-new-chat cursor-interaction\" aria-label=\"New chat\">",
+      "contract": "action",
+      "reason": "Starts a fresh private Ask chat while preserving requests in other chats; the selected chat continues to use ask_chat."
+    },
+    {
       "key": "fragment:7597ea97e661871b:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -957,15 +975,6 @@
       "control": "<details class=\"pharos-activity\" hidden>",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
-      "key": "fragment:92fa25b9d573a1de:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-new-chat cursor-interaction\">",
-      "contract": "action",
-      "reason": "Starts a fresh private Ask chat while preserving requests in other chats; the selected chat continues to use ask_chat."
     },
     {
       "key": "fragment:9669fb9a199fe943:0",
