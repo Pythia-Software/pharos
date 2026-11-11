@@ -355,6 +355,10 @@ that save data still use the serialized writer:
   views may retain the previous origins until the ingest ends.
 - Dirty parallelism timings and MCP metric projections are computed in the
   request's snapshot without being stored; maintenance stores them.
+- Session Shape derives small pending updates in a read snapshot. Larger
+  backlogs serve available stored statistics, with coverage notices for older
+  statistics and sessions not measured yet. Maintenance refreshes the view as
+  it publishes statistics; reading a dashboard never waits for full catch-up.
 - The tool rollup rebuilds in the background. Until the first rollup in a new
   layout exists, tool pages report that it is rebuilding.
 - MCP call history is queued in memory and stored by a background writer, and

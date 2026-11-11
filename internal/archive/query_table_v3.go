@@ -88,13 +88,21 @@ func (s *Server) queryV3Response(parent context.Context, dataset string, params 
 	}
 	ctx, cancel := context.WithTimeout(parent, queryTableDeadline)
 	defer cancel()
+	var coverage any
+	if dataset == "session_shape" {
+		table, err := s.Catalog.sessionShapeTable(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ctx = context.WithValue(ctx, sessionShapeTableContextKey{}, table)
+		coverage = table.coverage
+	}
 	result, find, err := s.executeQueryV3(ctx, dataset, params, schema, request)
 	if err != nil {
 		return nil, err
 	}
 	// Agent-event rows resting on superseded execution evidence are left out
 	// (withheldAgentEvents); say how many, so absent rows read as pending.
-	var coverage map[string]any
 	if dataset == "agent_events" || dataset == "agent_event_messages" || dataset == "agent_event_rates" {
 		if coverage, err = agentEventsCoverage(ctx, s.Catalog.reader()); err != nil {
 			return nil, err
@@ -103,7 +111,7 @@ func (s *Server) queryV3Response(parent context.Context, dataset string, params 
 	return json.Marshal(struct {
 		qt.QueryResultV3
 		Find     *libraryFindSummary `json:"find,omitempty"`
-		Coverage map[string]any      `json:"coverage,omitempty"`
+		Coverage any                 `json:"coverage,omitempty"`
 	}{result, find, coverage})
 }
 

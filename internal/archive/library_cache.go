@@ -115,6 +115,9 @@ func (cache *libraryCache) dataVersion(ctx context.Context, c *Catalog) (int64, 
 		// A new monitor connection's versions cannot be compared with these rows'.
 		cache.rows = nil
 	}
+	if err == nil {
+		version = cache.versions.generations.of(generationAll)
+	}
 	return version, err
 }
 
