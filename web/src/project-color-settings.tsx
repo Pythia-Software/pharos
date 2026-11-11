@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { effectiveProjectColor, loadProjectColors, projectColors, saveProjectColor, type ProjectColor } from "./project-colors";
+import { effectiveProjectColor, loadProjectColors, projectColors, saveProjectColor, useProjectColorRevision, type ProjectColor } from "./project-colors";
 import "./project-colors.css";
 
 function ProjectColorRow({ project, projects, busy, save }: { project: ProjectColor; projects: ProjectColor[]; busy: boolean; save: (project: ProjectColor, color: string) => Promise<void> }) {
@@ -17,17 +17,18 @@ function ProjectColorRow({ project, projects, busy, save }: { project: ProjectCo
 }
 
 export function ProjectColorSettings() {
-  const [projects, setProjects] = useState(projectColors);
+  useProjectColorRevision();
+  const projects = projectColors();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let active = true;
-    void loadProjectColors().then(projects => { if (active) setProjects(projects); }).catch(error => { if (active) setError(error.message); });
+    void loadProjectColors().catch(error => { if (active) setError(error.message); });
     return () => { active = false; };
   }, []);
   async function save(project: ProjectColor, color: string) {
     setBusy(true); setError("");
-    try { setProjects(await saveProjectColor(project.id, color)); }
+    try { await saveProjectColor(project.id, color); }
     catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }

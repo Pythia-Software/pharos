@@ -9,6 +9,26 @@ import * as core from "@pythia-software/query-table-core";
 import { boxBytes, boxDetails, boxDuration, boxOutliers, boxWhiskerExtent, sharedBoxScale } from "../../../src/compact-box-model";
 import { compactPieSlices, pieWedgePath } from "../../../src/compact-pie-model";
 import { overflowTooltip } from "../../../src/overflow-tooltip";
+import { chartTooltipColors } from "../../../src/chart-tooltip";
+import { chartSeriesStyle } from "../../../src/chart-colors";
+import { installProjectColors } from "../../../src/project-colors";
+
+test("tooltip swatches preserve saved and provisional project colors and line positions", t => {
+  installProjectColors([{ id: "repository:app", key: "a".repeat(64), name: "app", kind: "repository", default_color: "#2a83a4", source: "Automatic palette" }]);
+  t.after(() => installProjectColors([]));
+  const saved = chartSeriesStyle("project_name", "app").color;
+  const provisional = chartSeriesStyle("project_name", "new project").color;
+  const colors = [null, saved, provisional, "#123456", "rgb(12, 34, 56)", "rgba(12, 34, 56, .5)", "var(--sea)", null];
+  assert.deepEqual(chartTooltipColors(JSON.stringify(colors)), colors);
+  installProjectColors([{ id: "repository:app", key: "a".repeat(64), name: "app", kind: "repository", default_color: "#2a83a4", custom_color: "#aa6633", source: "Automatic palette" }]);
+  assert.equal(chartTooltipColors(JSON.stringify([saved]))[0], chartSeriesStyle("project_name", "app").color, "hover swatches keep a live reference to an edited project");
+});
+
+test("tooltip swatches reject malformed metadata and arbitrary CSS while retaining valid rows", () => {
+  for (const value of [null, "invalid", "null", "{}", '"#123456"']) assert.deepEqual(chartTooltipColors(value), []);
+  const invalid = [4, {}, false, "url(https://example.com/image)", "var(--sea, url(image))", "var(--sea);color:red", "var()", "var(--sea, #123456);background:red"];
+  assert.deepEqual(chartTooltipColors(JSON.stringify([...invalid, "var(--sea, #123456)", "#abcdef"])), [...invalid.map(() => null), "var(--sea, #123456)", "#abcdef"]);
+});
 
 test("legend hover adds hidden label text and keeps distinct detail", () => {
   const label = "repository/branches/long-shared-prefix/feature-one";
