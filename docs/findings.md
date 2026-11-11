@@ -167,6 +167,24 @@ version updating during the windows, other findings copied in the same scope, an
 how the same pattern moved elsewhere (other repositories, or the other provider
 in the same repository).
 
+### Provisional results
+
+While a finding is being measured, each measurement pass also publishes an early
+read through the last complete day. It uses the fixed plan's metric and before
+window, the available after work, and the same guard checks. The detail page leads
+with estimated net savings and the observed rate or median change; list cards
+carry the early read too. A lower pattern with sufficient work, the existing
+significance check, and passing guards reads "Promising so far"; with less
+evidence it reads "Lower so far". Worsened guards read "Mixed signals", even
+when estimated savings are positive. No work reads "Too early to tell".
+
+These are descriptive snapshots, not probabilities that a change caused a saving
+or will become a win. The bar shows observed change, not confidence. Provisional
+savings include complete days in a partial week, use the same persistence and
+added-context deductions as savings, and remain separate from confirmed totals.
+The final evaluation date never moves. Its result replaces the provisional
+snapshot, using the original fixed window; no early read can declare a win.
+
 ### Savings
 
 Savings accrue weekly from the copy for 90 days, and only count toward the total

@@ -2,11 +2,100 @@ package archive
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestFindingProvisionalResult(t *testing.T) {
+	for _, test := range []struct {
+		name, kind, signal string
+		after, hits        int
+		tokens             int64
+	}{
+		{"enough work supports improvement", "rate", "promising", 8, 0, 100},
+		{"share uses token exposure", "share", "promising", 8, 0, 100},
+		{"mean uses median and unit values", "mean", "promising", 8, 0, 25},
+		{"little work only describes direction", "rate", "lower", 2, 0, 100},
+		{"no work is unknown", "rate", "too_early", 0, 0, 100},
+		{"unchanged", "rate", "similar", 8, 4, 100},
+		{"higher", "rate", "higher", 8, 8, 100},
+		{"guard blocks reassuring signal", "rate", "mixed", 8, 0, 200},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := dayTime("2026-11-10")
+			env := &findingEnv{now: now, today: "2026-11-10", from: now.AddDate(0, 0, -90), convs: map[string]*findingConversation{}}
+			metric := findingMetric{Kind: test.kind, Unit: "conversations"}
+			candidate := &findingCandidate{Metric: metric, Obs: map[string]*findingObs{}}
+			add := func(prefix, day string, count, hits int, tokens int64) {
+				for index := 0; index < count; index++ {
+					id := fmt.Sprintf("%s-%d", prefix, index)
+					env.convs[id] = &findingConversation{ID: id, Day: day, Tokens: tokens}
+					candidate.Obs[id] = &findingObs{Conversation: id, Day: day, Hit: index < hits, Value: float64(tokens), Total: float64(tokens)}
+				}
+			}
+			add("before", "2026-10-20", 8, 4, 100)
+			add("after", "2026-11-03", test.after, test.hits, test.tokens)
+			// Incomplete today must not leak into a provisional comparison.
+			add("today", env.today, 8, 8, 10000)
+			baseline := 0.5
+			if test.kind == "mean" {
+				baseline = 100
+			}
+			exposure := 8.0
+			if test.kind == "share" {
+				exposure *= 100
+			}
+			item := &findingIntervention{Status: interventionWatching, Plan: findingPlan{BeforeFrom: "2026-10-05", AfterFrom: "2026-11-02", AfterTo: "2026-11-17", Metric: metric,
+				BeforeRate: baseline, BeforeExposure: exposure, USDPerEvent: 1, TokensPerEvent: 10, Persists: 0.8}}
+			progress := env.provisionalResult(candidate, item)
+			if progress["signal"] != test.signal || progress["after"].(windowStats).Units != test.after || progress["through"] != "2026-11-09" {
+				t.Fatalf("provisional read: %+v", progress)
+			}
+			if item.Status != interventionWatching || item.Plan.AfterTo != "2026-11-17" || progress["outcome"] != nil {
+				t.Fatalf("an early read changed the fixed result: %+v", item)
+			}
+		})
+	}
+}
+
+func TestFindingProvisionalSavingsBeforeFirstWeek(t *testing.T) {
+	ctx := context.Background()
+	fixture, id, plan, now := copiedFinding(t)
+	// Three complete days are enough to show a provisional estimate, but
+	// neither a win nor full-week savings should be recorded yet.
+	for day := 1; day <= 3; day++ {
+		fixture.conversation(dayTime(plan.AfterFrom).AddDate(0, 0, day-1), false)
+	}
+	fixture.catalog.now = func() time.Time { return now.AddDate(0, 0, 4) }
+	if err := fixture.catalog.RefreshFindings(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := fixture.catalog.FindingDetail(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress := detail["watching"].(map[string]any)["provisional"].(map[string]any)
+	saved := progress["savings"].(map[string]any)
+	if floatOr(saved["tokens"]) <= 0 || progress["after"].(map[string]any)["units"] != float64(3) {
+		t.Fatalf("missing first-days estimate: %+v", progress)
+	}
+	items, _ := loadInterventions(ctx, fixture.catalog.DB, "")
+	if detail["state"] != findingWatching || items[0].Plan.AfterTo != plan.AfterTo || items[0].DecidedAt != "" || items[0].Savings.Weeks != 0 || detail["result"] != nil {
+		t.Fatalf("provisional estimate finalized the attempt: %+v", items[0])
+	}
+	overview, _ := fixture.catalog.FindingsOverview(ctx, "")
+	if summary := overview["summary"].(map[string]any); summary["won"] != 0 || summary["saved"].(findingSavings).USD != 0 {
+		t.Fatalf("provisional savings entered confirmed totals: %+v", summary)
+	}
+	// The fixed-date decision replaces, rather than retaining, the snapshot.
+	result := closeWindow(t, fixture, plan, now, func(int) bool { return false })
+	if result.Status != interventionImproved || result.Result["provisional"] != nil {
+		t.Fatalf("final result did not replace early read: %+v", result)
+	}
+}
 
 // copiedFinding builds four weeks of work where every other conversation
 // fails, copies the python finding's prompt, and returns its ID and plan.
