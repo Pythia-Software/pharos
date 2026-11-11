@@ -394,6 +394,12 @@ func (c *Catalog) decideInterventions(ctx context.Context, env *findingEnv, cand
 			item.Savings = env.savings(candidate, item)
 			changed = true
 		}
+		if item.Status == interventionWatching {
+			// A descriptive snapshot never closes the fixed analysis window or
+			// contributes to confirmed savings. Replace it with the final result
+			// at the planned date, even if the early direction looked promising.
+			item.Result = map[string]any{"provisional": env.provisionalResult(candidate, item)}
+		}
 		if item.Status == interventionImproved && item.RegressedAt == "" && env.regressed(candidate, item) {
 			item.RegressedAt = formatTime(env.now)
 			changed = true
@@ -415,6 +421,43 @@ func (c *Catalog) decideInterventions(ctx context.Context, env *findingEnv, cand
 		}
 		return nil
 	})
+}
+
+// provisionalResult uses only complete days. Keep the same metric, population,
+// comparison and guards as the final result, without interpreting a repeatedly
+// inspected p-value as a probability that the change worked.
+func (env *findingEnv) provisionalResult(candidate *findingCandidate, item *findingIntervention) map[string]any {
+	snapshot := *item
+	snapshot.Plan.AfterTo = max(snapshot.Plan.AfterFrom, min(env.today, snapshot.Plan.AfterTo))
+	result := env.result(candidate, &snapshot, nil, nil, nil)
+	before := result["before"].(windowStats)
+	after := result["after"].(windowStats)
+	signal := "similar"
+	ratio := floatOr(result["ratio"])
+	guardsOK := true
+	for _, guard := range result["guards"].([]map[string]any) {
+		guardsOK = guardsOK && guard["ok"] == true
+	}
+	switch {
+	case before.Exposure <= 0 || before.Units == 0 || after.Exposure <= 0 || after.Units == 0:
+		signal = "too_early"
+	case !guardsOK:
+		signal = "mixed"
+	case result["outcome"] == interventionImproved:
+		signal = "promising"
+	case result["ratio"] == nil || ratio > 1+findingGuardSlack:
+		signal = "higher"
+	case ratio < 1-findingGuardSlack:
+		signal = "lower"
+	}
+	result["signal"] = signal
+	result["measured_at"] = formatTime(env.now)
+	result["through"] = dayTime(snapshot.Plan.AfterTo).AddDate(0, 0, -1).Format("2006-01-02")
+	result["savings"] = env.savingsThrough(candidate, item, true)
+	// Only the fixed-date result owns an outcome. This is an early reading,
+	// not a second way to declare a win.
+	delete(result, "outcome")
+	return result
 }
 
 func nilIfEmptyJSON(value map[string]any) any {
@@ -567,6 +610,12 @@ func (env *findingEnv) harnessNote(candidate *findingCandidate, plan findingPlan
 // done that week, times the cost of one occurrence, less the context the
 // change added.
 func (env *findingEnv) savings(candidate *findingCandidate, item *findingIntervention) findingSavings {
+	return env.savingsThrough(candidate, item, false)
+}
+
+// includePartial adds the current week's complete days for the provisional
+// display only. Official savings retain their full-week accounting.
+func (env *findingEnv) savingsThrough(candidate *findingCandidate, item *findingIntervention, includePartial bool) findingSavings {
 	plan := item.Plan
 	metric := plan.Metric
 	if metric.Kind == "" {
@@ -598,8 +647,14 @@ func (env *findingEnv) savings(candidate *findingCandidate, item *findingInterve
 			to = end
 		}
 		from, until := week.Format("2006-01-02"), to.Format("2006-01-02")
-		if until > env.today || regressed != "" && from >= regressed {
+		if regressed != "" && from >= regressed {
 			break
+		}
+		if until > env.today {
+			if !includePartial || from >= env.today {
+				break
+			}
+			until, to = env.today, dayTime(env.today)
 		}
 		figures, ok := measured[from]
 		if !ok || from > loaded {

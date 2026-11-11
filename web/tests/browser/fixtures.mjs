@@ -250,7 +250,10 @@ const openCard = { id: "drift:repo:repo_explo:abc", state: "open", title: "Codex
   detector: "drift", detector_label: "Instruction drift", target: repoTarget, target_label: "explo", scope_label: "explo", repository_id: "repo_explo", first_seen_at: iso(20 * day), last_seen: iso(day), active: true, new: true };
 const cartCard = { ...openCard, id: "failure:repo:repo_explo:def", title: `${longTitle} in explo`, explanation: "Agents read gzipped files as text.", impact: { usd: 3, tokens: 1e6, minutes: 1, failures: 36 }, impact_note: "34 failed commands", new: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
 const watchingCard = { ...openCard, id: "drift:repo:repo_tl1:ghi", state: "watching", title: "Codex can't find tl1's instructions", new: false, target: "repo:repo_tl1", target_label: "tl1", scope_label: "tl1", repository_id: "repo_tl1", change_label: "A shared instructions file", change: "A shared instructions file",
-  watching: { before: "1 in 3", change: "A shared instructions file", copied_at: iso(12 * day), day: 12, of_days: 28, result_on: new Date(now + 16 * day).toISOString().slice(0, 10), saved_usd: 3.2, target_label: "tl1" } };
+  watching: { before: "1 in 3", change: "A shared instructions file", copied_at: iso(12 * day), day: 12, of_days: 28, result_on: new Date(now + 16 * day).toISOString().slice(0, 10), saved_usd: 3.2, target_label: "tl1",
+    provisional: { signal: "promising", ratio: 0.2, before: { units: 48, rate: 5 / 12, exposure: 48 }, after: { units: 24, rate: 1 / 12, exposure: 24 },
+      through: iso(day).slice(0, 10), guards: [{ name: "tokens per conversation", before: 100000, after: 90000, ok: true }],
+      savings: { usd: 3.2, tokens: 1e6, added_usd: 0, weeks: 2, through: iso(day).slice(0, 10) } } } };
 const findingCards = [openCard, cartCard, watchingCard];
 const findings = {
   status: { built_at: iso(3600000), took_ms: 11000, measured_at: null, conversations_28d: 4482, weekly_conversations: 1120, generation: "g", running: false, phase: null, error: null, current: true },

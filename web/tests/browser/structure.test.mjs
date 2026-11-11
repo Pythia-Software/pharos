@@ -693,6 +693,11 @@ const ROUTES = [
   { name: "Findings table", url: "/findings?view=table", ready: ".findings-table .qt-row" },
   { name: "Findings settings", url: "/findings?view=settings", ready: ".findings-settings .findings-panel" },
   { name: "Finding detail", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-detail svg" },
+  { name: "Finding detail waiting for work", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-early",
+    api: { "GET /api/findings/:id": request => {
+      const detail = defaultApi["GET /api/findings/:id"](request);
+      return { ...detail, watching: { ...detail.watching, provisional: { ...detail.watching.provisional, signal: "too_early", ratio: null, after: { units: 0, exposure: 0 }, savings: { weeks: 0 } } } };
+    } } },
   { name: "MCP dashboard", url: "/analyze?analyze_topic=mcp", ready: `.usage-mcp-dashboard ${analysisReady}` },
   { name: "MCP trends", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({ metric: "failure_rate", split: "tool_name", view: "trend", period: "week", rollingPeriods: 37 }))}`, ready: `.usage-mcp-dashboard ${overTimeReady}` },
   { name: "MCP query", url: "/analyze?analyze_mode=query&analyze_data=mcp_calls&analyze_topic=mcp&analyze_search=1", ready: ".usage-workspace-table .qt-row" },

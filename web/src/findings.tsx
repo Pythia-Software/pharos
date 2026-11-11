@@ -349,10 +349,21 @@ function SnoozeDismiss({ card, act }: { card: Card; act: Act }) {
 
 const dismissReasons: Record<string, string> = { not_real: "not real", not_worth_it: "not worth it", wont_fix: "won't fix" };
 
+const earlySignals: Record<string, { label: string; tone: string; explanation: string }> = {
+  promising: { label: "Promising so far", tone: "good", explanation: "The pattern is substantially lower, with no measured check more than 10% worse." },
+  lower: { label: "Lower so far", tone: "good", explanation: "The pattern is lower. More comparable work will help tell a lasting improvement from variation." },
+  similar: { label: "No clear change yet", tone: "muted", explanation: "The pattern is close to its earlier level. The estimate can still change as more work comes in." },
+  higher: { label: "Higher so far", tone: "warn", explanation: "The pattern is higher than before. More work will help tell whether this continues." },
+  mixed: { label: "Mixed signals", tone: "warn", explanation: "At least one other measured check got worse. A saving alone may not mean the change helped overall." },
+  too_early: { label: "Too early to tell", tone: "muted", explanation: "There isn't enough comparable work yet to describe a direction." },
+};
+
 function stateChip(card: Card): { text: string; tone: string } {
   switch (card.state) {
     case "watching": {
       const watching = card.watching ?? {};
+      const signal = earlySignals[watching.provisional?.signal];
+      if (signal) return { text: `${signal.label} · provisional`, tone: signal.tone };
       return { text: watching.day && watching.of_days ? `Measuring · day ${watching.day} of about ${watching.of_days}` : "Measuring", tone: "watching" };
     }
     case "won": return { text: "Improved", tone: "good" };
@@ -375,7 +386,11 @@ function StateNote({ card }: { card: Card }) {
   if (card.inconclusive) return <p className="findings-note"><Icon name="info" /><span>{card.inconclusive.sentence ? <Text text={card.inconclusive.sentence} /> : `There wasn't enough of this work after ${lowerFirst(card.inconclusive.change ?? "the change")} to tell whether it helped.`}</span></p>;
   if (card.state === "watching" && card.watching) {
     const watching = card.watching;
-    return <p className="findings-note watching"><span className="findings-pulse" aria-hidden="true" /><span>Copied {day(watching.copied_at)} in the prompt for {watching.target_label ?? card.target_label}. Before: {watching.before}.{watching.result_on ? ` First result on ${day(watching.result_on)}.` : ""}{num(watching.saved_usd) > 0 ? ` Saved so far: ${money(watching.saved_usd)}.` : ""}</span></p>;
+    const early = watching.provisional;
+    if (early) return <p className={`findings-note ${earlySignals[early.signal]?.tone ?? "watching"}`}><Icon name="info" /><span>
+      {earlySignals[early.signal]?.explanation} {watching.result_on ? `Final evaluation ${day(watching.result_on)}.` : "The final evaluation is still pending."}
+    </span></p>;
+    return <p className="findings-note watching"><span className="findings-pulse" aria-hidden="true" /><span>Copied {day(watching.copied_at)} in the prompt for {watching.target_label ?? card.target_label}. Before: {watching.before}.{watching.result_on ? ` Final evaluation ${day(watching.result_on)}.` : ""}{num(watching.saved_usd) > 0 ? ` Estimated savings so far: ${money(watching.saved_usd)}.` : ""}</span></p>;
   }
   if (card.state === "won" && card.result) return <p className="findings-note good"><Icon name="check" /><span><Text text={card.result.sentence} /></span></p>;
   if (card.state === "dismissed") return <p className="findings-note"><span>Dismissed {day(card.dismissed?.at)}. It stays hidden until you restore it.</span></p>;
@@ -388,6 +403,11 @@ const impactText = (impact: Impact | undefined, dollars: (value: unknown) => str
   [dollars(impact?.usd), `${compact(impact?.tokens)} tokens`, num(impact?.minutes) > 0 ? minutes(impact?.minutes) : "", num(impact?.failures) > 0 ? counted(Math.round(num(impact?.failures)), "failure") : ""].filter(Boolean).join(" · ");
 
 function ImpactLine({ card, rank }: { card: Card; rank: Rank }) {
+  const early = card.state === "watching" ? card.watching?.provisional : null;
+  if (early?.savings?.weeks && num(early.after?.units) > 0 && num(early.before?.exposure) > 0) return <div className="findings-impact">
+    <span className="findings-impact-lead"><strong>{unitValue[rank](early.savings[rank])}</strong> so far</span>
+    <span className="findings-impact-stake">estimated net savings{early.savings.through ? ` through ${day(early.savings.through)}` : ""}</span>
+  </div>;
   const impact = card.impact ?? { usd: 0, tokens: 0, minutes: 0, failures: 0 };
   const expected = expectedOf(card);
   const brief: Record<Rank, (value: unknown) => string> = { usd: aboutMoney, tokens: value => `${compact(value)} tokens`, minutes: value => `${minutes(value)}`, failures: value => counted(Math.round(num(value)), "failure") };
@@ -709,6 +729,54 @@ function savedText(savings: Row | undefined): React.ReactNode {
   return <>{money(savings.usd)}{added > 0 ? <span className="findings-muted"> (after {money(added)} of added context)</span> : null}</>;
 }
 
+export function findingMetricLabel(metric?: { kind?: string; value?: string }): string {
+  if (metric?.kind === "share") return metric.value === "dollars" ? "Share of spend" : metric.value === "tokens" ? "Share of tokens" : "Share";
+  return metric?.kind === "mean" ? "Typical tokens" : "Pattern rate";
+}
+
+/** A reading of observed change, not a probability of a win or a final result. */
+function ProvisionalResult({ detail }: { detail: Detail }) {
+  const early = detail.watching?.provisional;
+  if (!early) return null;
+  const signal = earlySignals[early.signal] ?? earlySignals.too_early;
+  const savings = early.savings;
+  const before = early.before ?? {};
+  const after = early.after ?? {};
+  const hasWork = num(before.exposure) > 0 && num(after.exposure) > 0 && early.ratio != null;
+  const reduction = hasWork ? (1 - Number(early.ratio)) * 100 : null;
+  const rate = (window: Row) => detail.metric?.kind === "mean" ? `${compact(window.median)} tokens` : `${(num(window.rate) * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+  const unit = String(detail.metric?.unit || "conversations");
+  const failed = (early.guards ?? []).filter((guard: Row) => guard.ok === false);
+  const hasSavings = num(savings?.weeks) > 0 && num(after.units) > 0 && num(before.exposure) > 0;
+  return <section className={`findings-early ${signal.tone}`} aria-label="Provisional result">
+    <div className="findings-early-heading"><span>Early read</span><span>Provisional · can change</span></div>
+    <div className="findings-early-body">
+      <div className="findings-early-savings">
+        <span className="findings-early-amount">{hasSavings ? money(savings.usd) : "—"}</span>
+        <strong>estimated net savings so far</strong>
+        <span>{hasSavings ? `${compact(savings.tokens)} tokens${savings.through ? ` · through ${day(savings.through)}` : ""}` : "Available after the first complete day of relevant work"}</span>
+        {num(savings?.added_usd) > 0 ? <span>After {money(savings.added_usd)} of added context</span> : null}
+      </div>
+      <div className="findings-early-reading">
+        <h2>{signal.label}</h2>
+        <p>{signal.explanation}</p>
+        {hasWork ? <>
+          <div className="findings-early-change"><span>{findingMetricLabel(detail.metric)}: <strong>{rate(before)} → {rate(after)}</strong></span><strong>{Math.abs(reduction!).toLocaleString(undefined, { maximumFractionDigits: 0 })}% {reduction! >= 0 ? "lower" : "higher"}</strong></div>
+          <div className="findings-early-scale" role="img" aria-label={`Observed change: ${Math.abs(reduction!).toFixed(0)}% ${reduction! >= 0 ? "lower" : "higher"}. This is not a probability.`}>
+            <div className="findings-early-track"><span style={{ left: `${50 + Math.max(-100, Math.min(100, reduction!)) / 2}%` }} /></div>
+            <div className="findings-early-scale-labels"><span>Higher</span><span>No change</span><span>Lower</span></div>
+          </div>
+        </> : null}
+      </div>
+    </div>
+    <div className="findings-early-evidence">
+      <span><strong>Comparable work</strong> {counted(num(after.units), unit.slice(0, -1))} since · {counted(num(before.units), unit.slice(0, -1))} before</span>
+      <span><strong>Other checks</strong> {num(after.units) === 0 ? "Waiting for work" : failed.length ? failed.map((guard: Row) => `${guard.name}: ${compact(guard.before)} → ${compact(guard.after)} (worse)`).join("; ") : "No measured check more than 10% worse"}</span>
+    </div>
+    <p className="findings-early-footnote">An API-equivalent estimate against the expected no-change baseline, after added context costs. Other changes can contribute; this remains separate from confirmed savings. {detail.watching?.result_on ? <>Final evaluation <strong>{day(detail.watching.result_on)}</strong>, on the schedule set when the prompt was copied.</> : null}</p>
+  </section>;
+}
+
 const attemptStatus: Record<string, string> = { watching: "measuring", improved: "improved", unchanged: "no change", worse: "got worse", inconclusive: "no clear result", withdrawn: "not applied", not_applied: "not applied" };
 
 function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied: () => void }) {
@@ -723,21 +791,21 @@ function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied
   const [confirming, setConfirming] = useState(false);
   let caption: React.ReactNode = null;
   if (detail.state === "watching") {
-    const before = detail.watching?.before ?? chart?.baseline_phrase;
-    caption = <>Before the change, about {before}. {since ? <>Since then, {since} so far. </> : "Nothing to compare yet. "}The result comes once there has been about as much of this work as before{detail.watching?.result_on ? `, around ${day(detail.watching.result_on)}` : ""}.</>;
+    caption = <>The weekly pattern before and after the prompt was copied. The early read uses complete days{detail.watching?.provisional?.through ? ` through ${day(detail.watching.provisional.through)}` : ""}; the final evaluation{detail.watching?.result_on ? ` is scheduled for ${day(detail.watching.result_on)}` : " follows the fixed measurement window"}.</>;
   } else if (current?.result?.sentence) caption = <Text text={current.result.sentence} />;
   else if (detail.result?.sentence) caption = <Text text={detail.result.sentence} />;
   else if (chart?.baseline_phrase && chart.baseline_phrase !== "none") caption = <>Over the last 28 days: {chart.baseline_phrase}. After you copy a prompt with this finding, its line continues here so you can see whether the change worked.</>;
   const harness = attempts.map(attempt => attempt.result?.harness_note).filter(Boolean);
   const alongside = attempts.flatMap(attempt => attempt.result?.alongside ?? attempt.result?.others ?? []).filter(Boolean);
-  const guards: Row[] = current?.result?.guards ?? [];
+  const early = detail.watching?.provisional;
+  const guards: Row[] = early?.guards ?? current?.result?.guards ?? [];
   const nextIndex = detail.state === "watching" || detail.state === "won" ? num(detail.attempt || attempts.length) : num(detail.attempt || 1) - 1;
   const next = detail.steps?.[nextIndex + (detail.state === "watching" || detail.state === "won" ? 0 : 1)];
   const facts: Array<[string, React.ReactNode] | null | false> = detail.state === "watching" || detail.state === "won" || current ? [
     current ? ["Copied", <>{fullDay(current.copied_at)}, in the prompt for {current.target_label ?? detail.target_label}</>] : null,
-    ["Before", <>{detail.watching?.before ?? (current?.result?.before?.rate !== undefined ? rateText(current.result.before.rate) : current?.plan?.before_rate !== undefined ? rateText(current.plan.before_rate) : chart?.baseline_phrase)} {chart?.kind === "rate" ? unit : ""}</>],
-    detail.state === "watching" ? ["Since", since ? `${since} so far` : "nothing yet"] : current?.result?.after?.rate !== undefined ? ["After", rateText(current.result.after.rate)] : null,
-    current?.savings ? ["Saved so far", savedText(current.savings)] : detail.watching?.saved_usd !== undefined ? ["Saved so far", money(detail.watching.saved_usd)] : null,
+    ["Before", <>{early?.before ? rateText(detail.metric?.kind === "mean" ? early.before.median : early.before.rate) : detail.watching?.before ?? (current?.result?.before?.rate !== undefined ? rateText(current.result.before.rate) : current?.plan?.before_rate !== undefined ? rateText(current.plan.before_rate) : chart?.baseline_phrase)} {chart?.kind === "rate" ? unit : ""}</>],
+    detail.state === "watching" ? ["Since", early ? num(early.after?.units) > 0 ? `${rateText(detail.metric?.kind === "mean" ? early.after.median : early.after.rate)} so far` : "nothing yet" : since ? `${since} so far` : "nothing yet"] : current?.result?.after?.rate !== undefined ? ["After", rateText(current.result.after.rate)] : null,
+    detail.watching?.provisional?.savings ? ["Estimated saving", savedText(detail.watching.provisional.savings)] : current?.savings ? [detail.state === "watching" ? "Estimated saving" : "Saved so far", savedText(current.savings)] : detail.watching?.saved_usd !== undefined ? ["Estimated saving", money(detail.watching.saved_usd)] : null,
     detail.state === "watching" && detail.watching?.result_on ? ["Result", `around ${fullDay(detail.watching.result_on)}`] : current?.result && detail.result?.decided_at ? ["Result", fullDay(detail.result.decided_at)] : null,
     ...guards.map((guard): [string, React.ReactNode] => [`Also checked`, <>{guard.name}: {compact(guard.before)} → {compact(guard.after)}{guard.ok === false ? " (got worse)" : ""}</>]),
     ...harness.map((note, index): [string, React.ReactNode] => [index ? "Note " : "Note", <Text text={note} />]),
@@ -771,14 +839,16 @@ function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied
       </section>
       <section className="findings-panel" aria-labelledby="findingsAttemptsTitle">
         <h2 id="findingsAttemptsTitle">Attempts</h2>
-        {attempts.length ? <ol className="findings-attempts">{attempts.map(attempt => <li key={`${attempt.attempt}-${attempt.copied_at}`} className={attempt.status}>
+        {attempts.length ? <ol className="findings-attempts">{attempts.map(attempt => {
+          const savings = attempt.result?.provisional?.savings ?? attempt.savings;
+          return <li key={`${attempt.attempt}-${attempt.copied_at}`} className={attempt.status}>
           <span className="findings-attempt-mark" aria-hidden="true" />
           <div><strong><Text text={attempt.change} /></strong>
             <span className="findings-muted">{fullDay(attempt.copied_at)} · {attemptStatus[attempt.status] ?? attempt.status}{attempt.regressed_at ? ` · came back ${day(attempt.regressed_at)}` : ""}</span>
             {attempt.result?.sentence ? <p><Text text={attempt.result.sentence} /></p> : null}
-            {attempt.savings && num(attempt.savings.usd) > 0 ? <p className="findings-muted">Saved {money(attempt.savings.usd)}{num(attempt.savings.added_usd) > 0 ? ` after ${money(attempt.savings.added_usd)} of added context` : ""}.</p> : null}
+            {savings && num(savings.usd) > 0 ? <p className="findings-muted">{attempt.status === "watching" ? "Estimated savings: " : "Saved "}{money(savings.usd)}{num(savings.added_usd) > 0 ? ` after ${money(savings.added_usd)} of added context` : ""}.</p> : null}
           </div>
-        </li>)}</ol> : <p className="findings-muted">Nothing tried yet. Copying a prompt with this finding starts the first attempt.</p>}
+        </li>; })}</ol> : <p className="findings-muted">Nothing tried yet. Copying a prompt with this finding starts the first attempt.</p>}
         {next && detail.state !== "dismissed" && detail.state !== "snoozed" ? <p className="findings-next">{detail.state === "watching" ? "If nothing changes, Pharos will suggest" : detail.state === "won" ? "If it comes back, Pharos will suggest" : "After this, Pharos would suggest"}: <Text text={lowerFirst(next.label)} />.</p> : null}
       </section>
     </div>
@@ -830,10 +900,11 @@ function FindingDetail({ id, tab, overview, act, rank, onReview, newIds }: { id:
       <span className={`findings-chip ${chip.tone}`}>{chip.tone === "watching" ? <span className="findings-pulse" aria-hidden="true" /> : null}{chip.text}</span>
       {newIds.has(detail.id) ? <span className="findings-chip new">New</span> : null}
     </div>
-    <p className="findings-detail-explanation"><span className="findings-change-label">Problem</span> <Text text={detail.explanation} /></p>
-    <ImpactLine card={detail} rank={rank} />
+    {detail.state === "watching" ? <ProvisionalResult detail={detail} /> : null}
+    <p className="findings-detail-explanation"><span className="findings-change-label">{detail.state === "watching" ? "Original finding" : "Problem"}</span> <Text text={detail.explanation} /></p>
+    {detail.state !== "watching" ? <ImpactLine card={detail} rank={rank} /> : null}
     <p className="findings-change"><span className="findings-change-label">{solutionLabel(detail)}</span> <Text text={detail.change} /></p>
-    {detail.state !== "watching" ? <StateNote card={detail} /> : null}
+    {detail.state !== "watching" || !detail.watching?.provisional ? <StateNote card={detail} /> : null}
     <div className="findings-actions">
       {detail.state === "open" ? <><AddToPrompt card={detail} targets={overview?.targets ?? []} act={act} />{group ? <button type="button" className="findings-button" onClick={() => onReview(group)} disabled={!group.ticked}>Review that prompt</button> : null}<SnoozeDismiss card={detail} act={act} /></> : null}
       {detail.state === "dismissed" || detail.state === "snoozed" ? <button type="button" className="findings-button" onClick={() => void act(detail.id, { action: "restore" }, "Restored to open findings.")}>Restore</button> : null}
