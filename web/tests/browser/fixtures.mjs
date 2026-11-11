@@ -873,8 +873,8 @@ export const defaultApi = {
     ["Understand token patterns", "pharos", "codex", "gpt-5", 0, "Compare shorter conversations with the deeper delegated work.", "The comparison separates main-agent and helper activity."],
     ["Plan the next iteration", "observatory", "claude", "claude-opus-4-1", 1, "Review the open questions and choose the next small improvement.", "The next iteration starts with clearer navigation and a smaller scope."],
   ].map(([title, repository, provider, model, subagent_depth, first_input, last_response], index) => ({
-    id: index ? `recent-${index}` : rootConversation, workspace_id: workID, title, repository, provider, model, subagent_depth, first_input, last_response,
-    activity_at: new Date(now - index * day).toISOString(), labels_ready: index < 7, events_ready: index < 4,
+    id: index ? `recent-${index}` : rootConversation, workspace_id: workID, title, repository, provider, model, effort: "high", subagent_depth, first_input, last_response,
+    activity_at: new Date(now - index * day).toISOString(), labels_ready: index < 7, events_ready: index < 4, duration_ms: 4980000, tool_calls: 34, tokens: 123456, cost_usd: 2.34, price_status: "complete",
   })) },
   "GET /api/activity": { active: 0, runs: [] },
   "GET /api/library/status": { idle: true, portable: true, library_dir: "/Volumes/Pharos SSD/Pharos", drive: { name: "Pharos SSD", mounted: true, ejectable: true }, activities: [] },

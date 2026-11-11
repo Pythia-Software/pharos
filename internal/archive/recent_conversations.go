@@ -25,12 +25,18 @@ type recentConversation struct {
 	RepositoryID  string `json:"-"`
 	Provider      string `json:"provider"`
 	Model         string `json:"model,omitempty"`
+	Effort        string `json:"effort,omitempty"`
 	ActivityAt    string `json:"activity_at,omitempty"`
 	FirstInput    string `json:"first_input,omitempty"`
 	LastResponse  string `json:"last_response,omitempty"`
 	SubagentDepth int    `json:"subagent_depth"`
 	LabelsReady   bool   `json:"labels_ready"`
 	EventsReady   bool   `json:"events_ready"`
+	DurationMS    *int64 `json:"duration_ms,omitempty"`
+	ToolCalls     int64  `json:"tool_calls"`
+	Tokens        *int64 `json:"tokens,omitempty"`
+	CostUSD       any    `json:"cost_usd,omitempty"`
+	PriceStatus   string `json:"price_status,omitempty"`
 }
 
 func (c *Catalog) recentConversations(ctx context.Context, labels, events bool) ([]recentConversation, error) {
@@ -63,7 +69,7 @@ func (c *Catalog) recentConversations(ctx context.Context, labels, events bool) 
 	// Codex filename continuations. Session depths include agent_depth at
 	// ingestion, so subtract that base before adding the family's depth.
 	rows, err := queryMapsContext(ctx, c.reader(), `WITH RECURSIVE recent AS MATERIALIZED (
-		SELECT c.id,c.workspace_id,c.provider,c.model,COALESCE(c.ended_at,c.started_at) activity_at
+		SELECT c.id,c.workspace_id,c.provider,c.model,c.effort,c.started_at,c.ended_at,COALESCE(c.ended_at,c.started_at) activity_at
 		FROM conversations c WHERE c.parent_id IS NULL AND c.agent_depth=0 AND `+currentGroupConversation("c")+`
 		AND NOT EXISTS(SELECT 1 FROM conversation_launches l WHERE l.child_id=c.id)
 		ORDER BY COALESCE(c.ended_at,c.started_at) DESC,c.id LIMIT ?
@@ -106,12 +112,71 @@ func (c *Catalog) recentConversations(ctx context.Context, labels, events bool) 
 		candidates = append(candidates, recentConversation{
 			ID: firstString(row["id"]), WorkspaceID: firstString(row["workspace_id"]), Title: firstString(row["title"]),
 			RepositoryID: firstString(row["repository_id"]), Repository: firstString(row["repository"]),
-			Provider: firstString(row["provider"]), Model: firstString(row["model"]), ActivityAt: firstString(row["activity_at"]),
+			Provider: firstString(row["provider"]), Model: firstString(row["model"]), Effort: firstString(row["effort"]), ActivityAt: firstString(row["activity_at"]),
 			FirstInput: firstString(row["initiation"]), LastResponse: firstString(row["outcome"]), SubagentDepth: int(integer(row["subagent_depth"])),
 			LabelsReady: integer(row["labels_ready"]) != 0, EventsReady: integer(row["events_ready"]) != 0,
 		})
 	}
-	return selectRecentConversations(candidates), nil
+	selected := selectRecentConversations(candidates)
+	conversationIDs := make([]any, 0, len(selected))
+	for i := range selected {
+		item := &selected[i]
+		_, item.FirstInput, _, err = c.firstHumanPreview(ctx, item.WorkspaceID, item.ID)
+		if err != nil {
+			return nil, err
+		}
+		conversationIDs = append(conversationIDs, item.ID)
+	}
+	if len(selected) == 0 {
+		return selected, nil
+	}
+	ledger, err := queryMapsContext(ctx, c.reader(), `SELECT u.*,u.model usage_model,a.conversation_id,a.model session_model FROM agent_sessions a
+ JOIN agent_session_usage u ON u.agent_session_id=a.id WHERE a.conversation_id IN (`+placeholders(len(conversationIDs))+`) AND u.total_tokens>0`, conversationIDs...)
+	if err != nil {
+		return nil, err
+	}
+	book, err := c.loadPriceBookFrom(ctx, c.reader())
+	if err != nil {
+		return nil, err
+	}
+	byID := map[string]*recentConversation{}
+	for i := range selected {
+		byID[selected[i].ID] = &selected[i]
+	}
+	for _, entry := range ledger {
+		item := byID[firstString(entry["conversation_id"])]
+		if item == nil {
+			continue
+		}
+		tokens := ledgerTokens(entry)
+		if item.Tokens == nil {
+			item.Tokens = new(int64)
+		}
+		*item.Tokens += tokens["total_tokens"]
+		day := ""
+		if hour, ok := parseTime(firstString(entry["usage_hour"])); ok {
+			day = localMidnight(hour, time.Local).Format("2006-01-02")
+		}
+		priced := book.cost(ledgerModel(entry), day, tokens)
+		item.CostUSD = addCost(item.CostUSD, priced.cost)
+		item.PriceStatus = worsePriceStatus(item.PriceStatus, priced.status)
+	}
+	for _, row := range rows {
+		item := byID[firstString(row["id"])]
+		if item == nil {
+			continue
+		}
+		start, startOK := parseTime(firstString(row["started_at"]))
+		end, endOK := parseTime(firstString(row["ended_at"]))
+		if startOK && endOK && !end.Before(start) {
+			ms := end.Sub(start).Milliseconds()
+			item.DurationMS = &ms
+		}
+		if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM tool_calls WHERE conversation_id=?", item.ID).Scan(&item.ToolCalls); err != nil {
+			return nil, err
+		}
+	}
+	return selected, nil
 }
 
 func recentEnrichment(item recentConversation) int {

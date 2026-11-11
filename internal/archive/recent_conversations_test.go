@@ -82,6 +82,17 @@ func TestRecentConversationsCatalog(t *testing.T) {
 	}
 	commitSeed(t, tx)
 	execTx(t, catalog.DB,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES
+		 ('harness','0','h','user','message','<system_instruction>Injected setup</system_instruction>','2026-11-08T00:00:01Z','h'),
+		 ('copy','0','copy','user','message','Copied agent output','2026-11-08T00:00:01.5Z','h'),
+		 ('human','0','u','user','message','<system_instruction>Context</system_instruction>
+
+Please inspect the parser','2026-11-08T00:00:02Z','h')`,
+		`INSERT INTO message_authorship(message_id,conversation_id,workspace_id,sent_at,day,total_chars,spans_json) VALUES('copy','0','0','2026-11-08T00:00:01.5Z','2026-11-08',19,'[{"start":0,"end":19,"category":"quoted"}]')`,
+		`UPDATE conversations SET ended_at='2026-11-08T01:00:00Z',effort='high' WHERE id='0'`,
+		`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,depth,model) VALUES('main-zero','0','0','main','root','codex',0,'gpt-5.3-codex')`,
+		`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,attribution,input_tokens,uncached_input_tokens,total_tokens) VALUES('main-zero','2026-11-08T00:00:00Z','gpt-5.3-codex','request',1000,1000,1000)`,
+		`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status) VALUES('tool-zero','0','0',1,'codex','tool_call','shell','shell','complete')`,
 		`UPDATE conversations SET parent_id='0',agent_depth=1 WHERE id='6'`,
 		`INSERT INTO conversation_group_membership VALUES('7','7',0)`,
 		`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,depth) VALUES('helper','1','1','helper','subagent','codex',2)`,
@@ -94,7 +105,7 @@ func TestRecentConversationsCatalog(t *testing.T) {
 		}
 		return items
 	}
-	// No optional ledgers and no raw messages are needed. Reads don't build
+	// No optional ledgers are needed. Reads do not build
 	// them and skip helpers, retired group members and missing previews.
 	items := read(true, true)
 	if len(items) != 5 {
@@ -107,8 +118,14 @@ func TestRecentConversationsCatalog(t *testing.T) {
 		}
 		return result
 	}
-	if got := byID(items); got["0"].SubagentDepth != 1 || got["1"].SubagentDepth != 2 || got["0"].FirstInput != "0" || got["0"].LastResponse != "Stored reply" {
+	if got := byID(items); got["0"].SubagentDepth != 1 || got["1"].SubagentDepth != 2 || got["0"].FirstInput != "Please inspect the parser" || got["0"].LastResponse != "Stored reply" {
 		t.Fatalf("stored previews and helper shapes: %+v", got)
+	}
+	if got := byID(items)["0"]; got.Effort != "high" || got.DurationMS == nil || *got.DurationMS != 3600000 || got.ToolCalls != 1 || got.Tokens == nil || *got.Tokens != 1000 || got.CostUSD == nil || got.PriceStatus != "priced" {
+		t.Fatalf("conversation metrics: %+v", got)
+	}
+	if got := byID(items)["1"]; got.DurationMS != nil || got.Tokens != nil || got.CostUSD != nil {
+		t.Fatalf("missing measurements presented as zero: %+v", got)
 	}
 	execTx(t, catalog.DB, labelsSchemaDDL, agentEventsLedgerDDL,
 		`INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('2','s',2,'x'),('3','s',2,'x'),('4','s',0,'x')`,
