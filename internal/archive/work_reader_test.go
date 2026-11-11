@@ -158,6 +158,17 @@ func TestWorkConversationUsesReconciledSessionUsage(t *testing.T) {
 	if usage := conversation["token_usage"].(tokenCounts); usage["total_tokens"] != 12350 {
 		t.Fatalf("use reconciled usage and exclude child aliases: %v", usage)
 	}
+	// An unavailable ledger row does not turn missing measurements into zero.
+	if _, err := catalog.DB.Exec(`UPDATE agent_sessions SET usage_status='unavailable',total_tokens=0; DELETE FROM messages WHERE id='m4'`); err != nil {
+		t.Fatal(err)
+	}
+	unknown, err := catalog.WorkConversation("work", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage := unknown["token_usage"].(tokenCounts); len(usage) != 0 {
+		t.Fatalf("missing usage became a measured zero: %v", usage)
+	}
 	for _, message := range conversation["messages"].([]map[string]any) {
 		if message["id"] != "m3" {
 			continue
@@ -222,6 +233,8 @@ func TestClipReaderMessagePreservesProviderEnvelopes(t *testing.T) {
 		{"provider prose", "metadata", jsonText(map[string]any{"message": map[string]any{"content": []any{map[string]any{"type": "text", "text": long}}}}), false},
 		{"thinking blocks", "metadata", jsonText([]any{map[string]any{"type": "thinking", "thinking": long}}), false},
 		{"tool output blocks", "tool_result", jsonText(map[string]any{"content": []any{map[string]any{"type": "text", "text": long}}}), true},
+		{"export document", "attachment", jsonText(map[string]any{"type": "export_file", "file_name": "report.md", "extracted_content": long}), true},
+		{"citation URL", "metadata", jsonText(map[string]any{"url": "https://example.com/" + strings.Repeat("path/", 100), "text": long}), true},
 		{"invalid JSON", "metadata", `{"content":"` + long, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -233,10 +246,30 @@ func TestClipReaderMessagePreservesProviderEnvelopes(t *testing.T) {
 			if !tc.clipped && message["text"] != tc.text {
 				t.Fatal("reader-interpreted content must arrive whole")
 			}
+			if tc.name == "citation URL" && !strings.Contains(firstString(message["text"]), "https://example.com/"+strings.Repeat("path/", 100)) {
+				t.Fatal("citation URL was changed by preview clipping")
+			}
 			if tc.clipped && (message["raw_clipped"] != true || message["text_bytes"] != len(strings.TrimSpace(tc.text))) {
 				t.Fatal("clipped text must retain lazy-original markers")
 			}
 		})
+	}
+	for _, operations := range [][]any{
+		{map[string]any{"status": "applied"}, map[string]any{"status": "rejected"}},
+		{map[string]any{"status": "applied"}, map[string]any{"status": "unknown", "commit_status": "unknown"}},
+	} {
+		receipt := map[string]any{"verdict": "allow", "xml": strings.Repeat("<paragraph>body</paragraph>", 500), "data": map[string]any{"notices": []any{map[string]any{"code": "pending_ended", "opIndex": 0, "as": "resolved", "ids": []string{"pending.1"}}}}, "operation_results": operations}
+		message := map[string]any{"kind": "tool_result", "text": jsonText(map[string]any{"tool": "mcp__Claude_Docs__update", "content": []any{map[string]any{"type": "text", "text": jsonText(receipt)}}})}
+		clipReaderMessage(message)
+		retained := jsonText(message["mcp_receipts"])
+		if message["text_clipped"] != true || !strings.Contains(retained, "pending_ended") || !strings.Contains(retained, "allow") || strings.Contains(retained, "paragraph") {
+			t.Fatalf("clipping must preserve the small outcome receipt without duplicating XML: %s", retained)
+		}
+		for _, operation := range operations {
+			if !strings.Contains(retained, jsonText(operation)) {
+				t.Fatalf("clipping lost operation outcome %s: %s", jsonText(operation), retained)
+			}
+		}
 	}
 }
 
@@ -299,5 +332,46 @@ func TestClipReaderTextKeepsDiffsAndCutsPlainText(t *testing.T) {
 	}
 	if short, ok := clipReaderText("short"); ok || short != "short" {
 		t.Fatal("short text is untouched")
+	}
+}
+
+func TestWorkConversationLinksImportedArtifactsWithinAccount(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	seedReaderWorkspace(t, catalog)
+	const artifact = "fd29a52d-3aac-4fd5-90e5-1c21d41e56a7"
+	tx := seedTx(t, catalog.DB)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if _, err := tx.Exec(statement, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	{
+		for _, account := range []string{"local", "other-account"} {
+			exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES (?,?,?,?,?,?)`, account, "claude-ai", account, account, "Research brief", "2026-11-03")
+			exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES (?,?,?,?,?)`, account, account, "claude", account, "claude-export:artifacts/"+artifact)
+			exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES (?,?,?,?,?,?,?)`, account+"-page", account, "artifacts/"+artifact+"/page.md", "system", "attachment", "{}", account)
+		}
+		exec(`UPDATE messages SET text=? WHERE id='m2'`, jsonText(map[string]any{"tool": "mcp__Claude_Docs__update", "input": map[string]any{"container": map[string]any{"id": artifact}}}))
+	}
+	commitSeed(t, tx)
+	conversation, err := catalog.WorkConversation("work", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := conversation["artifact_links"].(map[string]any)
+	link := links[artifact].(map[string]any)
+	if link["href"] != "/work/local/conversation/local?message=local-page" || link["title"] != "Research brief" {
+		t.Fatalf("link must use the account's stored identities and document attachment: %#v", link)
+	}
+	if _, err := catalog.DB.Exec(`DELETE FROM workspaces WHERE id='local'`); err != nil {
+		t.Fatal(err)
+	}
+	conversation, err = catalog.WorkConversation("work", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conversation["artifact_links"].(map[string]any)) != 0 {
+		t.Fatal("another account's document must not become the fallback")
 	}
 }

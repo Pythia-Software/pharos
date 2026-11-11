@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,8 +92,11 @@ func TestClaudeAIExportKeepsTheActiveBranchAndWhatEachBlockIs(t *testing.T) {
 	for _, message := range conversation.Messages {
 		byID[message.NativeID] = message
 	}
+	if byID["conv-1:export"].CreatedAt != "" {
+		t.Fatal("an untimed export summary must not extend the session's clock span")
+	}
 	want := map[string]struct{ role, kind string }{
-		"m1:block:0": {"system", "context"}, "m1": {"user", "message"}, "m1:attachment:0": {"user", "attachment"}, "m1:files": {"user", "attachment"},
+		"conv-1:export": {"system", "metadata"}, "m1:block:0": {"system", "context"}, "m1": {"user", "message"}, "m1:attachment:0": {"user", "attachment"}, "m1:files": {"user", "attachment"},
 		"m2:block:0": {"assistant", "reasoning"}, "m2:block:1": {"assistant", "tool_call"}, "m2:block:2": {"tool", "tool_result"}, "m2": {"assistant", "message"},
 		"m3": {"user", "message"}, "m3b": {"user", "message"}, "m4:block:0": {"assistant", "metadata"}, "m4": {"assistant", "message"},
 	}
@@ -115,7 +119,7 @@ func TestClaudeAIExportKeepsTheActiveBranchAndWhatEachBlockIs(t *testing.T) {
 	}
 	// An explicit current leaf wins over the newest one.
 	second := records[1].Conversations[0].Messages
-	if len(second) != 3 || !second[1].Selected || second[2].Selected || records[1].Title != "Claude.ai conv-2" {
+	if len(second) != 4 || !second[2].Selected || second[3].Selected || records[1].Title != "Claude.ai conv-2" {
 		t.Fatalf("second = %+v", records[1])
 	}
 
@@ -127,7 +131,7 @@ func TestClaudeAIExportKeepsTheActiveBranchAndWhatEachBlockIs(t *testing.T) {
  {"uuid":"o3","text":"Another","sender":"human","created_at":"2025-01-02T10:02:00Z","content":[{"type":"text","text":"Another"}]},
  {"uuid":"o4","text":"Pear","sender":"assistant","created_at":"2025-01-02T10:03:00Z","content":[{"type":"text","text":"Pear"}]}]}]`))
 	turns := older[0].Conversations[0].Messages
-	if len(turns) != 4 || older[0].Purpose != "Name a fruit" || older[0].Outcome != "Pear" || turns[0].NativeID != "o1" || turns[0].Role != "user" {
+	if len(turns) != 5 || older[0].Purpose != "Name a fruit" || older[0].Outcome != "Pear" || turns[1].NativeID != "o1" || turns[1].Role != "user" {
 		t.Fatalf("older export = %+v", older[0])
 	}
 	for _, turn := range turns {
@@ -165,7 +169,7 @@ func TestClaudeAIExportZipIsCapturedAndIndexedElsewhere(t *testing.T) {
 	if err := other.DB.QueryRow(`SELECT COUNT(DISTINCT c.id), COUNT(m.id) FROM conversations c JOIN messages m ON m.conversation_id=c.id WHERE c.provider='claude'`).Scan(&conversations, &messages); err != nil {
 		t.Fatal(err)
 	}
-	if conversations != 2 || messages != 15 {
+	if conversations != 2 || messages != 17 {
 		t.Fatalf("captured export: %d conversations, %d messages", conversations, messages)
 	}
 }
@@ -182,7 +186,7 @@ func TestClaudeAIExportReadsOnlyWhatItHolds(t *testing.T) {
 	if err := c.DB.QueryRow(`SELECT COUNT(*), (SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage) FROM messages`).Scan(&messages, &tokens); err != nil {
 		t.Fatal(err)
 	}
-	if messages != 2 || tokens != 0 {
+	if messages != 3 || tokens != 0 {
 		t.Fatalf("%d messages counted %d tokens", messages, tokens)
 	}
 
@@ -205,8 +209,159 @@ func TestClaudeAIExportReadsOnlyWhatItHolds(t *testing.T) {
 			t.Errorf("%s export read without error", name)
 		}
 	}
-	if records := discoverClaudeAI(t, writeSourceFileAt(t, `[`+complete+`]`)); len(records) != 1 || len(records[0].Conversations[0].Messages) != 0 {
+	if records := discoverClaudeAI(t, writeSourceFileAt(t, `[`+complete+`]`)); len(records) != 1 || len(records[0].Conversations[0].Messages) != 1 {
 		t.Fatalf("empty conversation = %+v", records)
+	}
+}
+
+func TestClaudeAIExportRetainsSourceFieldsAndExplicitUsage(t *testing.T) {
+	// This is a synthetic compatibility case. The inspected November export
+	// has no usage or model fields; never infer them from prose or budgets.
+	export := `[{"uuid":"audit","name":"Research","future":{"flag":true},"chat_messages":[
+ {"uuid":"ask","sender":"human","text":"Question","updated_at":"2026-11-01T10:00:01Z","future":9007199254740993,"content":[{"type":"text","text":"Question"}]},
+ {"uuid":"reply","sender":"assistant","model":"claude-sonnet-4-5","usage":{"input_tokens":10,"output_tokens":2},"content":[
+ {"type":"token_budget","remaining":null},
+ {"type":"tool_use","id":"call","name":"Search","input":["one","two"],"integration_name":"Library"},
+ {"type":"tool_result","tool_use_id":"call","content":[],"structured_content":{"answer":42},"display_content":{"type":"rich_link","link":{"url":"https://example.com"}}},
+ {"type":"text","text":"Answer","citations":[{"details":{"url":"https://example.com","type":"web_search_citation"}}],"stop_timestamp":"2026-11-01T10:01:00Z"}]}]}]`
+	records := discoverClaudeAI(t, writeSourceFileAt(t, export))
+	conversation := records[0].Conversations[0]
+	byID := map[string]MessageRecord{}
+	for _, m := range conversation.Messages {
+		byID[m.NativeID] = m
+	}
+	if !strings.Contains(byID["audit:export"].RawText, `"future":{"flag":true}`) || !strings.Contains(byID["ask"].RawText, `9007199254740993`) || !strings.Contains(byID["ask"].RawText, `updated_at`) {
+		t.Fatal("conversation or message envelope was lost")
+	}
+	if !strings.Contains(byID["reply:block:1"].Text, `["one","two"]`) || !strings.Contains(byID["reply:block:2"].Text, `structured_content`) || !strings.Contains(byID["reply"].RawText, `citations`) {
+		t.Fatal("structured tool data or citations were lost")
+	}
+	counts := conversationTokenCounts(conversation.Messages)
+	if counts["total_tokens"] != 12 || counts["input_tokens"] != 10 || byID["reply:usage"].Model != "claude-sonnet-4-5" {
+		t.Fatalf("explicit request usage = %v", counts)
+	}
+}
+
+func TestClaudeAIExportSupplementaryDocumentsAndCloudTranscripts(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "export.zip")
+	attachment := filepath.Join(t.TempDir(), "download.zip")
+	chatGPTZip(t, attachment, map[string]string{"report.md": "A downloadable report."})
+	attachmentBytes, err := os.ReadFile(attachment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chatGPTZip(t, file, map[string]string{
+		"conversations.json":                                 `[{"uuid":"chat","chat_messages":[]}]`,
+		"projects/p.json":                                    `{"uuid":"p","name":"Research notes","docs":[{"filename":"report.md","content":"An exported report\nwith two lines."}]}`,
+		"memories/account.json":                              `{"memory_files":[{"path":"profile.md","content":"Recorded preferences"}]}`,
+		"reflections/account.json":                           `{"reflections":[{"content":"Recorded reflection"}],"feedback":[]}`,
+		"artifacts/a/artifact.json":                          `{"id":"a","active_version":"v1","versions":[{"id":"v1","title":"A retained document"}]}`,
+		"artifacts/a/versions/v1/index.html":                 `<h1>Archived document</h1><script>neverExecute()</script>`,
+		"artifacts/a/download.zip":                           string(attachmentBytes),
+		"artifacts/b/download.ZIP":                           string(attachmentBytes),
+		"artifacts/a/versions/v1/photo.webp":                 "RIFF\x00binary-image",
+		"claude_code_cloud/channel_session_transcripts.json": `{"claude_code_cloud":[{"session_id":"cloud","role":"user","content":[{"type":"text","text":"Cloud question"}]},{"session_id":"cloud","role":"assistant","content":[{"type":"tool_use","tool_use_id":"tool","name":"Search","input":"{\"query\":\"history\"}"},{"type":"tool_result","tool_use_id":"tool","content":"A cloud result"},{"type":"text","text":"Cloud answer"}]}]}`,
+		"users.json":                                         `[{"email":"account-only@example.com"}]`,
+	})
+	records := discoverClaudeAI(t, file)
+	var files, calls, results int
+	for _, r := range records {
+		if strings.Contains(jsonText(r), "account-only@example.com") {
+			t.Fatal("account profile entered transcripts")
+		}
+		for _, m := range r.Conversations[0].Messages {
+			if m.Kind == "attachment" {
+				files++
+			}
+			if m.Kind == "tool_call" && m.CallID == "tool" {
+				calls++
+			}
+			if m.Kind == "tool_result" && m.CallID == "tool" {
+				results++
+			}
+		}
+	}
+	if len(records) != 8 || files != 9 || calls != 1 || results != 1 {
+		t.Fatalf("records=%d files=%d calls=%d results=%d", len(records), files, calls, results)
+	}
+	// Unzipping and capturing the same export keeps all files of an artifact
+	// together, even though source discovery visits them separately.
+	unzipped := t.TempDir()
+	archive, err := zip.OpenReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range archive.File {
+		reader, err := entry.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(reader)
+		reader.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSourceFile(t, filepath.Join(unzipped, filepath.FromSlash(entry.Name)), string(data))
+	}
+	archive.Close()
+	if expanded := discoverClaudeAI(t, unzipped); len(expanded) != len(records) {
+		t.Fatalf("unzipped export: %d records, want %d", len(expanded), len(records))
+	} else {
+		for _, record := range expanded {
+			if record.SourceID == "claude-export:artifacts/a" && len(record.Conversations[0].Messages) != 4 {
+				t.Fatal("artifact files were split across replacement records")
+			}
+		}
+	}
+
+	// Nested archives are attachments, not additional export containers. Their
+	// identity and bytes must match before/after unzipping the outer export.
+	for _, input := range []string{file, unzipped} {
+		found := map[string]bool{}
+		for _, record := range discoverClaudeAI(t, input) {
+			for _, message := range record.Conversations[0].Messages {
+				var payload map[string]any
+				if message.Kind != "attachment" {
+					continue
+				}
+				if err := json.Unmarshal([]byte(message.Text), &payload); err != nil {
+					t.Fatal(err)
+				}
+				name := firstString(payload["file_name"])
+				if name != "artifacts/a/download.zip" && name != "artifacts/b/download.ZIP" {
+					continue
+				}
+				if payload["sha256"] != hashBytes(attachmentBytes) || integer(payload["file_size"]) != int64(len(attachmentBytes)) || payload["extracted_content"] != nil {
+					t.Fatalf("archive attachment changed: %v", payload)
+				}
+				found[name] = true
+			}
+		}
+		if len(found) != 2 {
+			t.Fatalf("%s retained %d archive attachments, want 2", input, len(found))
+		}
+	}
+	useHost(t, "export-host")
+	catalog, config := testCatalog(t)
+	source := SourceConfig{Name: "full-export", Kind: "claude-ai", Path: unzipped, Enabled: true}
+	config.Sources = []SourceConfig{source}
+	ingestSource(t, catalog, source)
+	if result := runCapture(t, config); !result.OK {
+		t.Fatalf("capture: %+v", result)
+	}
+	useHost(t, "reader-host")
+	other, _ := testCatalog(t)
+	indexCaptures(t, other, config.CaptureRoot, "export-host")
+	var artifactFiles int
+	if err := other.DB.QueryRow(`SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id='claude-export:artifacts/a'`).Scan(&artifactFiles); err != nil || artifactFiles != 4 {
+		t.Fatalf("captured artifact files: %d, %v", artifactFiles, err)
+	}
+	// Every supplementary JSON is validated before publishing any record.
+	chatGPTZip(t, file, map[string]string{"conversations.json": claudeAIExport, "projects/bad.json": `{`})
+	adapter, _ := MakeAdapter(SourceConfig{Kind: "claude-ai", Path: file})
+	emitted := 0
+	if err := adapter.Discover(func(WorkspaceRecord) error { emitted++; return nil }); err == nil || emitted != 0 {
+		t.Fatalf("damaged supplementary data published %d records: %v", emitted, err)
 	}
 }
 
@@ -249,7 +404,7 @@ func TestClaudeAIExportValidatesAllShardsBeforePublishing(t *testing.T) {
 		t.Fatal("damaged export appeared successful")
 	}
 	var messages int
-	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&messages); err != nil || messages != 15 {
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&messages); err != nil || messages != 18 {
 		t.Fatal("previous messages changed", messages, err)
 	}
 }
@@ -316,7 +471,7 @@ func TestClaudeAIOlderExportLeavesNewerOneAlone(t *testing.T) {
 				}
 				ingestSource(t, c, SourceConfig{Name: "claude-ai", Kind: "claude-ai", Path: newer, Account: "me", Enabled: true})
 				ingestSource(t, c, SourceConfig{Name: "claude-ai-old", Kind: "claude-ai", Path: old, Account: "me", Enabled: true})
-				if all, selected := count(c); all != 12 || selected != 11 {
+				if all, selected := count(c); all != 13 || selected != 12 {
 					t.Fatalf("after the older export: %d messages, %d selected", all, selected)
 				}
 			})
@@ -333,7 +488,7 @@ func TestClaudeAIOlderExportLeavesNewerOneAlone(t *testing.T) {
 			if err := c.DB.QueryRow(`SELECT COUNT(*) FROM messages WHERE native_id='m3' AND selected=0`).Scan(&unselected); err != nil || unselected != 1 {
 				t.Fatalf("the newer branch is not selected: %d %v", unselected, err)
 			}
-			if all, selected := count(c); all != 12 || selected != 11 {
+			if all, selected := count(c); all != 13 || selected != 12 {
 				t.Fatalf("after the newer export: %d messages, %d selected", all, selected)
 			}
 		})
