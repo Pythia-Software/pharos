@@ -263,6 +263,8 @@ func TestUsageBucketsWithMissingAndExplicitModelCoalesce(t *testing.T) {
 			{"unmatched request model stays unpriced", []MessageRecord{{Kind: "metadata", Text: request.Text}, claim}, map[string]float64{"": 65, "<synthetic>": 100}},
 			{"one model with cache TTL", []MessageRecord{{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":5,"output_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":20}},"modelUsage":{"claude-opus-5":{"inputTokens":5,"outputTokens":10,"cacheCreationInputTokens":20}}}`}}, map[string]float64{"claude-opus-5": 35}},
 			{"model identity without redundant counters", []MessageRecord{{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":5,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":200000}}}`}}, map[string]float64{"claude-opus-5": 15}},
+			{"several context windows cannot allocate aggregate usage", []MessageRecord{{Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":100,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":1000000},"claude-haiku-5-5":{"contextWindow":200000}}}`}}, map[string]float64{"<synthetic>": 110}},
+			{"known request leaves ambiguous multi-model remainder", []MessageRecord{request, {Kind: "result", Model: "<synthetic>", Text: `{"type":"result","usage":{"input_tokens":100,"output_tokens":10},"modelUsage":{"claude-opus-5":{"contextWindow":1000000},"claude-haiku-5-5":{"contextWindow":200000}}}`}}, map[string]float64{"claude-opus-5": 65, "<synthetic>": 45}},
 		} {
 			t.Run(check.name, func(t *testing.T) {
 				got := map[string]float64{}
