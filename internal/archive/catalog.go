@@ -242,7 +242,8 @@ func (c *Catalog) Close() error {
 // cannot replace these observations or preserve their consuming-layer scope.
 // 25: explicit root session envelopes and their provenance. Older writers
 // would replace these session bounds with unavailable message-only spans.
-const catalogSchemaVersion = 25
+// 26: retained Claude Chat settings observations, separate from execution data.
+const catalogSchemaVersion = 26
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

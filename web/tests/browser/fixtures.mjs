@@ -250,7 +250,10 @@ const openCard = { id: "drift:repo:repo_explo:abc", state: "open", title: "Codex
   detector: "drift", detector_label: "Instruction drift", target: repoTarget, target_label: "explo", scope_label: "explo", repository_id: "repo_explo", first_seen_at: iso(20 * day), last_seen: iso(day), active: true, new: true };
 const cartCard = { ...openCard, id: "failure:repo:repo_explo:def", title: `${longTitle} in explo`, explanation: "Agents read gzipped files as text.", impact: { usd: 3, tokens: 1e6, minutes: 1, failures: 36 }, impact_note: "34 failed commands", new: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
 const watchingCard = { ...openCard, id: "drift:repo:repo_tl1:ghi", state: "watching", title: "Codex can't find tl1's instructions", new: false, target: "repo:repo_tl1", target_label: "tl1", scope_label: "tl1", repository_id: "repo_tl1", change_label: "A shared instructions file", change: "A shared instructions file",
-  watching: { before: "1 in 3", change: "A shared instructions file", copied_at: iso(12 * day), day: 12, of_days: 28, result_on: new Date(now + 16 * day).toISOString().slice(0, 10), saved_usd: 3.2, target_label: "tl1" } };
+  watching: { before: "1 in 3", change: "A shared instructions file", copied_at: iso(12 * day), day: 12, of_days: 28, result_on: new Date(now + 16 * day).toISOString().slice(0, 10), saved_usd: 3.2, target_label: "tl1",
+    provisional: { signal: "promising", ratio: 0.2, before: { units: 48, rate: 5 / 12, exposure: 48 }, after: { units: 24, rate: 1 / 12, exposure: 24 },
+      through: iso(day).slice(0, 10), guards: [{ name: "tokens per conversation", before: 100000, after: 90000, ok: true }],
+      savings: { usd: 3.2, tokens: 1e6, added_usd: 0, weeks: 2, through: iso(day).slice(0, 10) } } } };
 const findingCards = [openCard, cartCard, watchingCard];
 const findings = {
   status: { built_at: iso(3600000), took_ms: 11000, measured_at: null, conversations_28d: 4482, weekly_conversations: 1120, generation: "g", running: false, phase: null, error: null, current: true },
@@ -459,7 +462,8 @@ datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.
 
 // Settings, sync and the header's library status.
 const hosts = [{ id: "studio", label: "Mac Studio", sources: [{ name: "Claude", captured_at: iso(3 * day), indexed_at: iso(3600000) }] }, { id: "air", label: "MacBook Air with a long machine name", sources: [{ name: "Codex", last_data_at: iso(125 * 60000) }] }, { id: "new", label: "New Mac", sources: [] }];
-const sources = { configured: 2, enabled: 2, items: [
+export const claudeSettingsSourceFixture={name:'claude-chat-settings',kind:'claude-ai-settings',tool:'Claude Chat settings',scope:'host',enabled:true,path:'/Users/example/Library/Application Support/Claude',path_status:'available',coverage:'partial',account:'local'};
+const sources = { configured: 3, enabled: 2, items: [claudeSettingsSourceFixture,
   { name: "claude", kind: "claude", tool: "Claude Code", scope: "host", enabled: true, path: "/Users/someone/.claude/projects", last_success_at: iso(3600000), last_attempt_at: iso(3600000), coverage: "complete", account: "someone@example.com",
     not_recorded: ["Reported cost"], sometimes_recorded: ["Effort", "Title"] },
   { name: "codex", kind: "codex", tool: "Codex", scope: "library", enabled: false, path: "/Users/someone/.codex/sessions/a/very/long/path/that/should/wrap/inside/its/card", last_success_at: iso(day), last_attempt_at: iso(day), coverage: "partial", error: "The source directory could not be read." },
@@ -1025,6 +1029,10 @@ export const defaultApi = {
   "GET /api/index": { active: false, sync_active: false, hosts },
   "GET /api/capture": { active: false, runs: [] },
   "GET /api/sources": sources,
+  "GET /api/claude-chat-settings/setup": ({state})=>state.claudeSettingsSetup??{source:'claude-chat-settings',path:claudeSettingsSourceFixture.path,account:'local',configured:true,enabled:true,scope:'host'},
+  "POST /api/claude-chat-settings/setup": ({state,body})=>state.claudeSettingsSetup={source:'claude-chat-settings',path:body.path,account:'local',configured:true,enabled:true,scope:'host'},
+  "GET /api/claude-chat-settings/recording": ({state,query}) => ({source:query.get('source'),active:false,known_conversations:67,new_conversations:0,...state.claudeSettingsRecording}),
+  "POST /api/claude-chat-settings/recording": ({state,body}) => state.claudeSettingsRecording={source:body.source,active:body.active,known_conversations:67,new_conversations:0,expires_at:new Date(Date.now()+1800000).toISOString()},
   "GET /api/sync/status": syncStatus,
   "GET /api/operations": { journal: { recent: [
     { id: "op-index-history", root_id: "op-index-history", kind: "index.changes.manual", label: "Index changes", trigger: "user", process: "service", state: "succeeded", started_at: iso(145000), updated_at: iso(120000), ended_at: iso(120000), legacy_ref: "run-0" },

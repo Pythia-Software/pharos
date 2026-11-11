@@ -22,6 +22,9 @@ func captureDeliveryFingerprint(ctx context.Context, source SourceConfig, plan c
 		return "", nil
 	}
 	states := []string{jsonText(source)}
+	for _, projection := range plan.projections {
+		states = append(states, projection.rel+":"+hashBytes(projection.data))
+	}
 	for _, item := range plan.files {
 		if err := ctx.Err(); err != nil {
 			return "", err

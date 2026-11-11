@@ -65,6 +65,59 @@ test("filter levels choose categories and Find counts what they hide", () => {
   assert.deepEqual(find("quorum is three", levels.all, true), { shown: 2, hidden: 0, hidden_kinds: [] });
 });
 
+test("Find counts tag-filtered events and paired outputs as hidden", () => {
+  const messages = conversationMessages({ messages: [human(),
+    event("read", "tool_call", { name: "Read", input: { path: "rules.txt" } }, 1, { call_id: "read" }),
+    event("output", "tool_result", { content: "rules.txt contents" }, 2, { call_id: "read" })] });
+  const structure = transcriptStructure(messages);
+  const result = transcriptFind(messages, { pattern: /rules\.txt/, shown: new Set(allKinds()), output: true,
+    hiddenTagOf: message => (structure.consumed.get(message) || message).call_id === "read" ? ["Read"] : [] });
+  assert.deepEqual(plain(result), { shown: 0, hidden: 2, hidden_kinds: [], hidden_tags: ["Read"] });
+});
+
+test("activity tag identities separate categories and follow changed labels", () => {
+  const messages = conversationMessages({ messages: [human(),
+    event("write", "tool_call", {name:"Write",input:{file_path:"/repo/a"}}, 1),
+    event("edit", "tool_call", {name:"Edit",input:{file_path:"/repo/a"}}, 2),
+    event("poll", "tool_call", {name:"write_stdin",input:{session_id:1}}, 3)] });
+  const structure = transcriptStructure(messages);
+  const index = reader.transcriptTagIndex(messages, structure, message => message.kind === "tool_call"
+    ? {category: reader.readerTimelineCategory(message), label: message.native_id === "edit" ? "Edit" : "Write"} : null);
+  const write = messages.find(message => message.native_id === "write"), poll = messages.find(message => message.native_id === "poll");
+  const writeID = index.tagOf(write), pollID = index.tagOf(poll);
+  assert.notEqual(writeID, pollID, "identical labels in different categories have distinct identities");
+  assert.deepEqual(plain(index.group("write")), [writeID, index.tagOf(messages.find(message => message.native_id === "edit"))]);
+  assert.deepEqual(plain(index.group("poll")), [pollID]);
+  let hidden = reader.transcriptTagSelection(new Set(), index.all(), [pollID]);
+  assert.equal(reader.transcriptTagHidden(hidden, writeID), true);
+  assert.equal(reader.transcriptTagHidden(hidden, pollID), false);
+  // Existing URLs hid every matching label. Show one category without losing
+  // the old hide for another category or an unrelated conversation.
+  hidden = reader.transcriptTagSelection(new Set(["Write", "Absent"]), index.all(), [pollID]);
+  assert.equal(reader.transcriptTagHidden(hidden, writeID), true);
+  assert.equal(reader.transcriptTagHidden(hidden, pollID), false);
+  assert.equal(hidden.has("Absent"), true);
+  assert.equal(reader.transcriptTagHidden(new Set([...hidden]), pollID), false, "overrides survive URL round trips");
+  hidden = reader.transcriptTagSelection(hidden, index.all(), index.all());
+  assert.equal(reader.transcriptTagHidden(hidden, writeID), false);
+  assert.equal(reader.transcriptTagHidden(hidden, pollID), false);
+
+  const calls = conversationMessages({messages:[human(),
+    event("pending", "tool_call", {name:"mcp__Claude_Docs__batch",input:{container:{create:{name:"Brief",doc:{markdown:"# Brief"}}},batch:[]}},1),
+    event("complete", "tool_call", {name:"mcp__Claude_Docs__batch",input:{container:{create:{name:"Other",doc:{markdown:"# Other"}}},batch:[]}},2)]});
+  const [pending, complete] = calls.filter(message => message.kind === "tool_call"), receipts = new Map([[pending, []], [complete, [event("receipt", "tool_result", {content:[{type:"text",text:'{"verdict":"allow"}'}]})]]]);
+  const docs = reader.transcriptTagIndex(calls, transcriptStructure(calls), message => message.kind === "tool_call"
+    ? {category: reader.readerTimelineCategory(message), label: reader.mcpPresentation(message, receipts.get(message)).label} : null);
+  const oldID = docs.tagOf(pending), completedID = docs.tagOf(complete);
+  assert.notEqual(oldID, completedID);
+  receipts.set(pending, receipts.get(complete));
+  assert.equal(docs.refresh(pending), true);
+  assert.equal(docs.tagOf(pending), completedID, "updated label joins the matching activity");
+  assert.equal(docs.info(completedID).count, 2);
+  assert.equal(docs.info(oldID), null);
+  assert.deepEqual(plain(docs.group(reader.readerTimelineCategory(pending))), [completedID]);
+});
+
 test("find patterns escape plain terms and respect case", () => {
   assert.equal(transcriptFindPattern("a.b(c)", false, false).test("A.B(C)"), true);
   assert.equal(transcriptFindPattern("a.b(c)", false, false).test("axb(c)"), false);

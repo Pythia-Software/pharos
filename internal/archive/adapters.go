@@ -79,6 +79,7 @@ type ConversationRecord struct {
 }
 
 type WorkspaceRecord struct {
+	ClaudeSettings *claudeSettingsSnapshot `json:"ClaudeSettings,omitempty"`
 	// Catalog recovery restores work items and their links from typed
 	// observations; the incomplete core must not invent a default work item.
 	catalogRecovery                                                              bool

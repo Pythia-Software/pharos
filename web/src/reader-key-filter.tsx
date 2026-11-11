@@ -6,7 +6,7 @@ import { readerKeyState, updateReaderKeys } from "./reader-key-model";
 
 export type ReaderKey = { id: string; label: string; values: string[]; title?: string; className?: string;
   family?: string; count?: number; children?: ReaderKey[]; available?: boolean; note?: string };
-type ReaderKeys = { items: ReaderKey[]; all: string[]; shown: string[]; groupToggle?: boolean; onChange: (shown: string[], allKinds?: boolean) => void };
+export type ReaderKeys = { items: ReaderKey[]; all: string[]; shown: string[]; groupToggle?: boolean; onChange: (shown: string[], allKinds?: boolean) => void };
 function ReaderKeyFilter({ items, all, shown, groupToggle = false, onChange }: ReaderKeys) {
   const visible = all.filter(value => shown.includes(value)).length;
   const chip = (item: ReaderKey): React.ReactNode => <span key={item.id} className={`reader-key ${item.className ?? ""}`} data-label-family={item.family} title={item.title} role={item.children ? "group" : undefined} aria-label={item.children ? item.label : undefined}>
@@ -48,9 +48,22 @@ function readerRoot<Props,>(host: HTMLElement, synchronous: boolean, renderConte
 }
 window.pharosReaderKeys = (host, synchronous = false) => readerRoot(host, synchronous, props => <ReaderKeyFilter {...props} />);
 window.pharosReaderDefaults = (host, synchronous = false) => readerRoot(host, synchronous, props => <ReaderKeyDefaults {...props} />);
+// Line tags are mounted only when opened, keeping long transcripts cheap.
+type LineTag = { label: string; values: string[]; all: string[]; shown: string[]; onChange: (shown: string[]) => void };
+window.pharosReaderLineTag = (host, props) => {
+  const root = createRoot(host);
+  const render = (next: LineTag) => flushSync(() => root.render(<ChartLegendChip
+    item={{key: next.label, label: next.label, color: ""}} {...readerKeyState(next.all, next.shown, next.values)}
+    groupSize={next.values.length > 1 ? next.values.length : undefined} swatch={null}
+    onAction={action => next.onChange(updateReaderKeys(next.all, next.shown, next.values, action))} />));
+  render(props);
+  host.querySelector<HTMLButtonElement>('button')?.click();
+  return {render, dispose: () => queueMicrotask(() => root.unmount())};
+};
 window.dispatchEvent(new Event("pharos:reader-keys-ready"));
 declare global {
   interface Window {
+    pharosReaderLineTag: (host: HTMLElement, props: LineTag) => { render: (props: LineTag) => void; dispose: () => void };
     pharosReaderKeys: (host: HTMLElement, synchronous?: boolean) => { render: (props: ReaderKeys) => void; dispose: () => void };
     pharosReaderDefaults: (host: HTMLElement, synchronous?: boolean) => { render: (props: KeyDefaults) => void; dispose: () => void };
   }

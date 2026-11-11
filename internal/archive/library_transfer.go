@@ -30,6 +30,9 @@ var transferHistoryTables = []string{
 	// Typed execution evidence: an adapter's claims (Cursor copies and echoes)
 	// were retained before it filtered and cannot be derived from the rows.
 	"execution_claims", "execution_evidence_state",
+	// Sanitized conversation selections are retained source observations, even
+	// when the corresponding chat export has not been imported yet.
+	"claude_chat_settings_observations",
 }
 
 type transferFile struct {

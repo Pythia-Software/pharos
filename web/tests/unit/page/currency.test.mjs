@@ -5,6 +5,7 @@ import { formatPreviewValue } from '../../../src/query-previews';
 import { boxAxisCost, boxCost } from '../../../src/compact-box-model';
 import { cellTitle, formatted } from '../../../src/delegation';
 import { loadClassicScript } from '../helpers/classic-script.mjs';
+import { findingMetricLabel } from '../../../src/findings';
 
 const classic = loadClassicScript('currency.js').window.pharosCurrency;
 const stats = loadClassicScript('quick-stats.js');
@@ -31,4 +32,12 @@ test('unavailable dollar amounts do not display NaN or infinity', () => {
     assert.equal(formatUSD(value), '');
     assert.equal(classic.formatUSD(value), '');
   }
+});
+
+test('finding share labels distinguish spending from tokens', () => {
+  assert.equal(findingMetricLabel({ kind: 'share', value: 'dollars' }), 'Share of spend');
+  assert.equal(findingMetricLabel({ kind: 'share', value: 'tokens' }), 'Share of tokens');
+  assert.equal(findingMetricLabel({ kind: 'share' }), 'Share');
+  assert.equal(findingMetricLabel({ kind: 'mean', value: 'tokens' }), 'Typical tokens');
+  assert.equal(findingMetricLabel({ kind: 'rate' }), 'Pattern rate');
 });

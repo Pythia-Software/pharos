@@ -452,7 +452,8 @@ func (view *findingView) card(row *findingRow, state string) map[string]any {
 		copied, _ := parseTime(latest.CopiedAt)
 		day := int(view.now.Sub(copied).Hours()/24) + 1
 		card["watching"] = map[string]any{"copied_at": latest.CopiedAt, "day": day, "of_days": latest.Plan.AfterDays, "result_on": latest.Plan.AfterTo,
-			"before": ratePhrase(defaultString(latest.Plan.Metric.Kind, row.Metric.Kind), latest.Plan.BeforeRate), "change": latest.Change, "saved_usd": latest.Savings.USD, "target_label": view.cart.label(latest.Target)}
+			"before": ratePhrase(defaultString(latest.Plan.Metric.Kind, row.Metric.Kind), latest.Plan.BeforeRate), "change": latest.Change, "saved_usd": latest.Savings.USD, "target_label": view.cart.label(latest.Target),
+			"provisional": latest.Result["provisional"]}
 	case latest.RegressedAt != "":
 		card["regressed"] = map[string]any{"at": latest.RegressedAt, "change": latest.Change, "saved_usd": latest.Savings.USD}
 	case latest.Status == interventionUnchanged:

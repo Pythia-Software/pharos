@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -365,6 +366,42 @@ func TestPeerLinkConfidence(t *testing.T) {
 // A work page lists related work with roles, marks the messages a hand-off
 // is anchored on, and shows certain peers' agent sessions in its Hierarchy
 // and Timeline beside its own, keeping its own totals.
+func TestWorkGroupRetriesOccurrenceChangeBetweenParts(t *testing.T) {
+	c := executionFixture(t,
+		executionFixtureConversation{id: "parent", workspace: "own"},
+		executionFixtureConversation{id: "fork", workspace: "peer", parent: "parent", depth: 1})
+	message := `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected) VALUES(?,?,'evt_copy','user','message','x','x','2026-01-01T00:00:30Z',1)`
+	execTx(t, c.DB,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at,selected) VALUES('copy','fork','evt_copy','user','message','x','x','2026-01-01T00:00:30Z',1)`,
+		`INSERT INTO work_peer_links(left_workspace_id,right_workspace_id,kind,confidence,at,evidence_json) VALUES('own','peer','read_written_by','high','2026-01-01','{}')`)
+	before, err := c.delegationSnapshot(t.Context(), "own")
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, ownReads := workGroupPart, 0
+	override(t, &workGroupPart, func(c *Catalog, ctx context.Context, workspace string, relatives []string) (*delegationSnapshot, error) {
+		snapshot, err := read(c, ctx, workspace, relatives)
+		if workspace == "own" {
+			ownReads++
+			if ownReads == 2 { // the group's own part, after its preliminary lookup
+				fixtureExec(t, c, message, "original", "parent")
+			}
+		}
+		return snapshot, err
+	})
+	group, err := c.workGroupSnapshot(t.Context(), "own", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.Revision != before.Revision {
+		t.Fatal("the interleaved append must leave execution identity unchanged")
+	}
+	parent, fork := group.ByID["s-parent"], group.ByID["s-fork"]
+	if parent == nil || fork == nil || parent.ContextOnly || fork.ContextOnly || !near(parent.Self["messages"].Value, 1) || !near(fork.Self["messages"].Value, 0) {
+		t.Fatal("the group must retry until both parts agree on copied-message ownership", parent, fork)
+	}
+}
+
 func TestWorkPeersOnTheWorkPage(t *testing.T) {
 	c, config := testCatalog(t)
 	diff, _ := seedPeerReview(t, c)
@@ -502,12 +539,32 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 	// The group keeps each part's members and the revision every part shares,
 	// and an evidence commit composes it again from the new snapshots.
 	reviewID := firstString(review["id"])
+	groupBefore, err := c.workGroupSnapshot(t.Context(), "impl", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This uncertain peer is not selected. Its new evidence advances the
+	// archive revision without expiring the selected group's lanes or token.
+	fixtureExec(t, c, `INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule) VALUES('other-c','unrelated','record','launch_outcome','launch:other-late','','derived','test/v1')`)
+	groupAfter, err := c.workGroupSnapshot(t.Context(), "impl", nil, false)
+	if err != nil || groupAfter.ID != groupBefore.ID || groupAfter.Revision == groupBefore.Revision {
+		t.Fatal("unselected work must preserve the group's token", err)
+	}
+	if _, _, err := c.delegationTimelineMessages(t.Context(), groupBefore, []string{reviewID}, 0, 4e12); err != nil {
+		t.Fatal("unselected work must not reject the group's lane read", err)
+	}
 	if _, err := c.DB.Exec(`INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule) VALUES('review-c','late','record','launch_outcome','launch:call-late','','derived','test/v1')`); err != nil {
 		t.Fatal(err)
 	}
 	resolvedGroup, err := c.workGroupSnapshot(t.Context(), "impl", nil, false)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if resolvedGroup.ID == groupAfter.ID {
+		t.Fatal("a selected peer's evidence must expire the group's token")
+	}
+	if _, _, err := c.delegationTimelineMessages(t.Context(), groupAfter, []string{reviewID}, 0, 4e12); !errors.Is(err, errDelegationSnapshotChanged) {
+		t.Fatal("a selected peer's evidence must reject stale group lanes", err)
 	}
 	ownSnapshot, _ := c.delegationSnapshot(t.Context(), "impl")
 	reviewSnapshot, _ := c.delegationSnapshot(t.Context(), "review")

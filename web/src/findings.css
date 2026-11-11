@@ -202,6 +202,39 @@ button.findings-tile[aria-pressed="true"] { border-color: var(--accent); box-sha
 .findings-toast.shown { opacity: 1; transform: translate(-50%, 0); }
 
 /* Detail */
+.findings-early { --early-color: var(--muted); margin: 16px 0 20px; border: 1px solid var(--line); border-top: 3px solid var(--early-color); border-radius: 7px; background: var(--panel); overflow: hidden; }
+.findings-early.good { --early-color: var(--sea); }
+.findings-early.warn { --early-color: var(--warn); }
+.findings-early-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; padding: 12px 20px 0; color: var(--muted); font-size: var(--fs-xs); }
+.findings-early-heading > :first-child { color: var(--early-color); font-weight: 700; text-transform: uppercase; letter-spacing: .1em; }
+.findings-early-body { display: grid; grid-template-columns: minmax(190px, .8fr) minmax(0, 1.5fr); gap: 24px; padding: 16px 20px 20px; }
+.findings-early-savings { display: flex; flex-direction: column; gap: 5px; min-width: 0; padding-right: 20px; border-right: 1px solid var(--line); }
+.findings-early-amount { font: 650 clamp(36px, 4vw, 52px)/1.1 var(--serif); letter-spacing: -.035em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.findings-early-savings strong { font-size: var(--fs-md); font-weight: 500; }
+.findings-early-savings > span:not(.findings-early-amount) { color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; }
+.findings-early-reading { min-width: 0; }
+.findings-early-reading h2 { margin: 0 0 6px; color: var(--early-color); font: 650 var(--fs-xl)/1.25 var(--sans); }
+.findings-early-reading p { margin: 0 0 16px; color: var(--muted); font-size: var(--fs-md); line-height: 1.5; }
+.findings-early-change { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font-size: var(--fs-sm); }
+.findings-early-change > strong { color: var(--early-color); }
+.findings-early-scale { margin-top: 12px; }
+.findings-early-track { position: relative; height: 6px; margin: 0 5px; border-radius: 4px; background: linear-gradient(90deg, color-mix(in srgb, var(--warn) 40%, var(--panel)), var(--line) 50%, color-mix(in srgb, var(--sea) 50%, var(--panel))); }
+.findings-early-track::before { content: ""; position: absolute; left: 50%; top: -3px; height: 12px; border-left: 1px solid var(--muted); }
+.findings-early-track > span { position: absolute; top: -4px; width: 14px; height: 14px; border: 3px solid var(--panel); border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 1px var(--early-color); transform: translateX(-50%); }
+.findings-early-scale-labels { display: flex; justify-content: space-between; margin-top: 8px; color: var(--muted); font-size: var(--fs-xs); }
+.findings-early-evidence { display: flex; flex-wrap: wrap; gap: 10px 24px; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--findings-soft); font-size: var(--fs-sm); line-height: 1.5; }
+.findings-early-evidence > span { min-width: 0; overflow-wrap: anywhere; }
+.findings-early-evidence strong { display: block; margin-bottom: 2px; color: var(--muted); font-size: var(--fs-xs); font-weight: 500; }
+.findings-early-footnote { margin: 0; padding: 12px 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: var(--fs-xs); line-height: 1.5; }
+.findings-early-footnote strong { color: var(--ink); font-weight: 500; }
+@media (max-width: 760px) {
+  .findings-early-body { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .findings-early-savings { border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 16px; }
+}
+@media (forced-colors: active) {
+  .findings-early-track { background: Canvas; border: 1px solid CanvasText; }
+  .findings-early-track > span { background: CanvasText; outline: 1px solid CanvasText; }
+}
 .findings-breadcrumb { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; color: var(--muted); font-size: var(--fs-md); }
 .findings-crumb { height: auto; padding: 0; border: 0; background: none; color: var(--accent); font-size: inherit; }
 .findings-crumb:hover { text-decoration: underline; text-underline-offset: 2px; }

@@ -667,3 +667,99 @@ func TestClaudeImportChecksCRCAndDoesNotRecreateAnUnavailableLibrary(t *testing.
 		t.Fatal("created a new destination after losing the library", err)
 	}
 }
+
+// A periodic export is a new snapshot of a subset of conversations, not a
+// replacement of the account's earlier exports. Exercise collection, capture,
+// indexing and a rebuild from the retained evidence in arrival order.
+func TestClaudeImportFullThenOverlappingPartialExports(t *testing.T) {
+	config := claudeImportConfig(t)
+	c, _ := testCatalog(t)
+	var full []map[string]any
+	if err := json.Unmarshal([]byte(claudeAIExport), &full); err != nil {
+		t.Fatal(err)
+	}
+	var changed []map[string]any
+	if err := json.Unmarshal([]byte(claudeAIExport), &changed); err != nil {
+		t.Fatal(err)
+	}
+	message := func(id, sender, text, parent, at string) map[string]any {
+		return map[string]any{"uuid": id, "sender": sender, "text": text, "parent_message_uuid": parent, "created_at": at, "content": []any{map[string]any{"type": "text", "text": text}}}
+	}
+	changed[0]["chat_messages"] = append(changed[0]["chat_messages"].([]any),
+		message("periodic-user", "human", "One more change", "m4", "2026-10-05T10:00:00Z"),
+		message("periodic-reply", "assistant", "Latest periodic reply", "periodic-user", "2026-10-05T10:01:00Z"))
+	changed[0]["updated_at"], changed[0]["current_leaf_message_uuid"] = "2026-10-05T10:01:00Z", "periodic-reply"
+	newConversation := map[string]any{"uuid": "periodic-conversation", "name": "New since baseline", "created_at": "2026-10-05T12:00:00Z", "updated_at": "2026-10-05T12:01:00Z", "current_leaf_message_uuid": "periodic-new-reply", "chat_messages": []any{
+		message("periodic-new-user", "human", "A new conversation", claudeAIRoot, "2026-10-05T12:00:00Z"),
+		message("periodic-new-reply", "assistant", "A new reply", "periodic-new-user", "2026-10-05T12:01:00Z"),
+	}}
+	collect := func(at string, conversations []map[string]any) *claudeImportJob {
+		t.Helper()
+		dir := t.TempDir()
+		zip := filepath.Join(dir, "conversations-000.zip")
+		chatGPTZip(t, zip, map[string]string{"conversations.json": jsonText(conversations)})
+		exported, err := time.Parse(time.RFC3339, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(zip, exported.Add(time.Minute), exported.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		manifest := filepath.Join(dir, "manifest.json")
+		writeSourceFile(t, manifest, jsonText(claudeManifest{Version: "1.0", CreatedAt: at, DataFiles: []claudeManifestPart{{Filename: "conversations-000.zip", Category: "conversations"}}}))
+		job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+		if err != nil || job.State != "collected" {
+			t.Fatal(job, err)
+		}
+		config, err = LoadConfig(config.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(config.Sources) != 1 {
+			t.Fatal("periodic exports created extra sources", config.Sources)
+		}
+		if result := runCapture(t, config); !result.OK {
+			t.Fatal(result)
+		}
+		indexCaptures(t, c, config.CaptureRoot, "host-a")
+		return job
+	}
+	check := func(c *Catalog, conversations, messages int) {
+		t.Helper()
+		if countRows(t, c, "SELECT COUNT(*) FROM conversations") != conversations || countRows(t, c, "SELECT COUNT(*) FROM messages") != messages {
+			t.Fatalf("want %d conversations / %d messages, got %d / %d", conversations, messages, countRows(t, c, "SELECT COUNT(*) FROM conversations"), countRows(t, c, "SELECT COUNT(*) FROM messages"))
+		}
+	}
+	collect("2026-10-03T00:00:00Z", full)
+	// Totals include one retained export-metadata message per conversation.
+	check(c, 2, 17)
+	// This export omits conv-2 completely, updates conv-1, and adds one chat.
+	delta := []map[string]any{changed[0], newConversation}
+	first := collect("2026-10-06T00:00:00Z", delta)
+	check(c, 3, 22)
+	// Overlap is deduplicated in the catalog; raw snapshots currently retain
+	// even byte-identical exports under their separate manifest identities.
+	repeated := collect("2026-10-08T00:00:00Z", delta)
+	check(c, 3, 22)
+	if first.ID == repeated.ID || first.Parts[0].SHA256 != repeated.Parts[0].SHA256 {
+		t.Fatal("fixture should contain distinct snapshots of identical conversation bytes")
+	}
+	for _, job := range []*claudeImportJob{first, repeated} {
+		if _, err := os.Stat(filepath.Join(claudeImportJobDir(config, job.Name, job.ID), filepath.FromSlash(job.Parts[0].Storage))); err != nil {
+			t.Fatal("retained snapshot missing", err)
+		}
+	}
+	// A delayed older partial snapshot cannot roll the latest reply back.
+	collect("2026-10-04T00:00:00Z", full[:1])
+	check(c, 3, 22)
+	if countRows(t, c, "SELECT COUNT(*) FROM messages WHERE text='Latest periodic reply' AND selected=1") != 1 {
+		t.Fatal("late export lost or duplicated the latest reply")
+	}
+	if err := os.RemoveAll(claudeImportRoot(config, "claude-ai-imports")); err != nil {
+		t.Fatal(err)
+	}
+	useHost(t, "host-b")
+	rebuilt, _ := testCatalog(t)
+	indexCaptures(t, rebuilt, config.CaptureRoot, "host-a")
+	check(rebuilt, 3, 22)
+}
