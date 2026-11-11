@@ -18,6 +18,11 @@ project in different colors, even though the requested coloring dimension is
 the project. This is a remaining limitation of the project-color integration,
 not an invitation to alter tuple identities or collapse the groups locally.
 
+The same blocker applies to model/provider overrides in Settings → Model &
+provider colors. For example, compound slices grouped by `model_family` and
+`provider` must retain the model shade across several provider tuples. Include
+those dimensions in the upstream resolver coverage as well.
+
 ## Minimal reproduction
 
 Render the same clause/result first as a pie, then as a donut:

@@ -76,6 +76,8 @@ import { PageLink, useLocationRevision } from "./nested-pages";
 import { LibraryContent } from "./library-content";
 import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
+import { ModelColorSettings } from "./model-color-settings";
+import { loadModelColors, useModelColorRevision } from "./model-colors";
 import { ProjectColorSettings } from "./project-color-settings";
 import { chartMetricTheme } from "./chart-colors";
 import { loadProjectColors, useProjectColorRevision } from "./project-colors";
@@ -514,6 +516,7 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
 type SurfaceHost = { query: HostQueryOptions; find: (state: HostQueryState | undefined) => string; onState?: (state: HostQueryState | undefined) => void };
 function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, trailing, selectionBar, queryHistory = false, controls, queryContent, querySummary, resultPresentation, presets, optimizeTitle, tableHeading }: { dataset: Dataset; host?: SurfaceHost; usageActions?: boolean; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; selectionBar?: (api: QueryTableApi<Row>) => React.ReactNode; queryHistory?: boolean; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; optimizeTitle?: string; tableHeading?: (api: QueryTableApi<Row>, fallback: React.ReactNode, schemas: OptimizeTableSchemas) => React.ReactNode }) {
   useProjectColorRevision();
+  useModelColorRevision();
   const attention = useMemo(() => createAttentionRegistry(), [dataset]);
   const visible = datasetIsVisible(dataset);
   const schema = useMemo(() => {
@@ -766,7 +769,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
         {queryContent?.(api)}
       </>} /> : api.query.grouping ? <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={api} dataset={dataset} layout={<SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
     {queryContent ? controls?.(api, null) : null}
-    <MetricsPanel api={api} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers} theme={chartMetricTheme()}
+    <MetricsPanel api={api} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers} theme={chartMetricTheme(api.aggregations.clauses, api.aggregations.results)}
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }} />
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
@@ -1782,6 +1785,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["backgroundProcessingWorkload", <BackgroundProcessingWorkload />],
   ["askSettingsPage", <AskPharosSettings />],
   ["projectColorSettings", <ProjectColorSettings />],
+  ["modelColorSettings", <ModelColorSettings />],
   ["settingsPage", <SettingsWorkspace content={document.getElementById("settingsContent")!} />],
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],
@@ -1820,7 +1824,7 @@ if (concurrencyPrototypeEnabled) {
 }
 startConcurrencySummary();
 // New projects discovered while the page stays open join the same palette.
-const refreshProjectColors = () => { void loadProjectColors().catch(() => { /* Retain the last saved palette; Settings exposes a failed read. */ }); };
+const refreshProjectColors = () => { void loadModelColors(location.pathname === "/settings/models").catch(() => {}); void loadProjectColors().catch(() => { /* Retain the last saved palette; Settings exposes a failed read. */ }); };
 window.addEventListener("pharos:usage-refresh", refreshProjectColors);
 window.addEventListener("pharos:data-refresh", refreshProjectColors);
 // Carbon and Parallelism settings shape Usage and parallelism values on the

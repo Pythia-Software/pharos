@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import catalog from '../../../../pricing/model_colors.json';
 import prices from '../../../../pricing/cost_changes.json';
+import { modelCatalogDate, recommendedModelColor } from '../../../src/model-colors';
 import { chartSeriesStyle, colorFields, hourOfDayColors, keyColorTheme, metricSeriesColor, modelColorKey, otherSeriesColor } from '../../../src/chart-colors';
 import { orderedValues } from '../../../src/session-shape-bands';
 import { foldSeries } from '../../../src/chart-series';
@@ -12,11 +13,11 @@ const fold = (names, limit = 5, selected = [], scope = 'model_family') => {
   return { series, bucket: buckets.get(bucketKey) };
 };
 
-test('static catalog covers priced models, with unique colors for model versions and sources', () => {
+test('catalog covers priced models, with coordinated default colors for model versions and sources', () => {
   for (const price of prices.changes) {
     const key = modelColorKey(price.model);
     assert.equal(catalog.models[key]?.provider, price.provider, price.model);
-    assert.equal(chartSeriesStyle('model_family', key).color, catalog.models[key].color);
+    assert.equal(chartSeriesStyle('model_family', key).color, recommendedModelColor(key, catalog.providers[price.provider].color));
   }
   for (const entries of [Object.values(catalog.models), Object.values(catalog.sources)]) {
     assert.equal(new Set(entries.map(entry => entry.color)).size, entries.length);
@@ -25,7 +26,7 @@ test('static catalog covers priced models, with unique colors for model versions
   }
 });
 
-test('newer model versions use darker shades within each class', () => {
+test('later catalog dates use darker shades within each class', () => {
   const luminance = color => color.slice(1).match(/../g)
     .map(channel => parseInt(channel, 16) / 255)
     .map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
@@ -38,7 +39,9 @@ test('newer model versions use darker shades within each class', () => {
     ['gpt-5.5', 'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol'],
   ];
   for (const versions of families) {
+    versions.sort((a, b) => (modelCatalogDate(a) ?? '').localeCompare(modelCatalogDate(b) ?? ''));
     for (let index = 1; index < versions.length; index++) {
+      if (!modelCatalogDate(versions[index - 1]) || modelCatalogDate(versions[index]) === modelCatalogDate(versions[index - 1])) continue;
       const older = chartSeriesStyle('model_family', versions[index - 1]);
       const newer = chartSeriesStyle('model_family', versions[index]);
       assert.ok(luminance(newer.color) < luminance(older.color), `${versions[index]} should be darker than ${versions[index - 1]}`);
@@ -49,7 +52,7 @@ test('newer model versions use darker shades within each class', () => {
 
 test('model normalization keeps snapshots and context variants on the same static color', () => {
   for (const name of ['claude-opus-5-5', 'OPUS-5-5', 'opus-5-5-1m', 'claude-opus-5-5[1m]', 'claude-opus-5-5-20260928', 'claude-opus-5-5-20260928[1m]']) {
-    assert.equal(chartSeriesStyle('model_family', name).color, catalog.models['opus-5-5'].color);
+    assert.equal(chartSeriesStyle('model_family', name).color, chartSeriesStyle('model_family', 'opus-5-5').color);
   }
 });
 
@@ -125,7 +128,7 @@ test('a grouping by several keys colours each bar by its palette key, an event k
   // The compact covers pick the same key.
   assert.equal(metricSeriesColor(['repository_name', 'family'], ['beta', 'env_friction']), chartSeriesStyle('family', 'env_friction').color);
   assert.equal(keyColorTheme(['repository_name', 'model_family'], [{ keys: ['repo', 'opus-5-5'] }]).colorBy, 'model_family');
-  assert.equal(keyColorTheme(['family'], buckets), undefined, 'one key keeps its own colours');
+  assert.equal(keyColorTheme(['family'], buckets), undefined, 'event kinds keep their own colours');
   assert.equal(keyColorTheme(['tool_name', 'agent_session_id'], buckets), undefined, 'no palette key keeps whole-group colours');
 });
 

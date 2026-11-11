@@ -777,7 +777,7 @@ function markdownLinkKind(href){
   if(href.startsWith('#'))return {kind:'fragment',icon:'link',detail:'Jump within this page'};
   if(href.startsWith('/')||href.startsWith('?')){
     const path=new URL(href,'http://pharos.invalid/').pathname;
-    const pages=['/','/home','/cards','/library','/settings','/settings/backups','/settings/libraries','/settings/sources','/settings/sync','/settings/optimization','/settings/mcp','/settings/header','/settings/layout','/settings/preferences','/settings/ask','/sources','/activity','/analyze','/tools','/health','/mcp','/findings'];
+    const pages=['/','/home','/cards','/library','/settings','/settings/backups','/settings/libraries','/settings/sources','/settings/sync','/settings/optimization','/settings/mcp','/settings/header','/settings/layout','/settings/preferences','/settings/projects','/settings/models','/settings/ask','/sources','/activity','/analyze','/tools','/health','/mcp','/findings'];
     if(pages.includes(path)||/^\/work\/[^/]+(?:\/conversation\/[^/]+)?$/.test(path)||/^\/conversation\/[^/]+$/.test(path))return {kind:'page',icon:'link',detail:'Open Pharos view'};
   }
   if(/^mailto:/i.test(href))return {kind:'mail',icon:'mail',detail:'Open in your email app'};

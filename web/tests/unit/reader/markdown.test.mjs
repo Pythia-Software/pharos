@@ -99,7 +99,7 @@ test("Markdown links distinguish local files, local servers, websites and page a
   for (const href of ["https://github.com/org/repo", "https://localhost.example.com", "https://example.com:8443"])
     assert.equal(markdownLinkKind(href).kind, "web", href);
   assert.equal(markdownLinkKind("#notes").kind, "fragment");
-  for (const href of ["/", "/library", "/library?search=cache&view=conversation", "/work/work%2Fid", "/work/work-1/conversation/session-1?message=prompt", "/analyze?analyze_topic=tokens", "/settings/ask", "/conversation/legacy", "?search=cache"]) {
+  for (const href of ["/", "/library", "/library?search=cache&view=conversation", "/work/work%2Fid", "/work/work-1/conversation/session-1?message=prompt", "/analyze?analyze_topic=tokens", "/settings/ask", "/settings/projects", "/settings/models", "/conversation/legacy", "?search=cache"]) {
     assert.equal(markdownLinkKind(href).kind, "page", href);
     const link = elements(markdownTree(`[Pharos](${href})`)).find(item => item.tag === "a");
     assert.equal(link.href, href); assert.equal(link.target, undefined, "in-app navigation stays in the current tab");

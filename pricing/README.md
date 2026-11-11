@@ -2,7 +2,7 @@
 
 ## Dashboard colors
 
-`model_colors.json` is the static dashboard color catalog, bundled with the
+`model_colors.json` is the reviewed brand and model-class catalog, bundled with the
 frontend. Model keys use the same normalization as usage/pricing: no `claude-`
 prefix, snapshot date, or `-1m`/`[1m]` context suffix. Add a unique hex color and
 model class here when adding a priced model. Anthropic models use orange,
@@ -16,10 +16,16 @@ Codex, ChatGPT, Antigravity, etc.) into provider groups without changing table
 filters. Codex and ChatGPT have different green shades. The model chart groups
 stacks and legends by provider, then model class and version; the five largest
 models are initially shown, with the rest behind **Other**. Expanding reveals
-five more at a time without recoloring existing series. Unlisted models and
-other chart dimensions get stable, collision-checked colors, rather than cycling
-through a short palette. Unknown models with recognizable names stay in their
+five more at a time without recoloring existing series. Unlisted models get stable shades; other chart dimensions get stable,
+collision-checked colors rather than cycling through a short palette. Unknown models with recognizable names stay in their
 provider's hue family. Rebuild the frontend after editing this catalog.
+
+Users can override provider and model colors in Settings → Model & provider
+colors. The shared resolver now derives automatic model shades from the chosen
+provider base and the first date in this pricing catalog; stored `models.color`
+values remain reviewed reference swatches rather than the final rendered shade.
+Undated model suggestions are deterministic. User choices take precedence and
+survive changes to provider bases. See [Model colors](../docs/model-colors.md).
 
 Click a chart legend chip to open its filter menu: **Show only this value**,
 **Add to selection** (or **Remove from selection**), and **Show all except this
