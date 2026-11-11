@@ -3267,6 +3267,15 @@
       "reason": "Raw message disclosure is bound by stable message identity through reader_content using bindViewContent and saveViewContent, shared by prose and reasoning cards."
     },
     {
+      "key": "364915225a5a7100:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "claudeSettingsRecordingControl",
+      "tag": "button",
+      "control": "'button', 'source-remove', 'Record me for 30 minutes'",
+      "contract": "settings",
+      "reason": "Starts or stops a bounded collection action for a configured source; recording status is service state, not URL view state."
+    },
+    {
       "key": "b9d31ba372bfa501:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "closePreview",

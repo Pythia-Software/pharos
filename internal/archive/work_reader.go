@@ -156,6 +156,15 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		return nil, err
 	}
 	conversation := rows[0]
+	if firstString(conversation["harness"]) == "claude-ai-export" {
+		observations, err := c.claudeConversationSettings(ctx, firstString(conversation["account"]), firstString(conversation["native_id"]))
+		if err != nil {
+			return nil, err
+		}
+		if len(observations) > 0 {
+			conversation["selected_settings"] = map[string]any{"scope": "observed_conversation_selection", "observations": observations[:min(500, len(observations))], "truncated": len(observations) > 500}
+		}
+	}
 	sessions, err := queryMaps(c.reader(), `SELECT * FROM agent_sessions WHERE workspace_id=? AND conversation_id=? AND usage_status<>'in-child-conversation'`, workspaceID, conversationID)
 	if err != nil {
 		return nil, err

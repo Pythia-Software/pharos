@@ -458,6 +458,15 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 		"findings": {Cadence: cadenceDaily, ExpiresAt: expiresAt},
 	}
 	tx := seedTx(t, c.DB)
+	// Observations can precede the corresponding chat export. Their native
+	// identities, provenance and unknown values must survive independently.
+	if _, err := tx.Exec(`INSERT INTO claude_chat_settings_observations
+	 (host_id,source_name,account,organization_uuid,conversation_uuid,observed_at,time_basis,cache_entry,snapshot_id,model,effort_level,thinking_mode) VALUES
+	 ('settings-host','settings','personal',?,?, '2026-09-01T12:00:00Z','http_date',?,'snapshot-a','claude-opus-fixture','high','auto'),
+	 ('settings-host','settings','personal',?,?, '2026-09-02T12:00:00Z','cache_file_mtime',?,'snapshot-b',NULL,NULL,'disabled')`,
+		settingsOrg, settingsConversation, settingsCacheEntry, settingsOrg, settingsSecond, settingsCacheEntry); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := tx.Exec(`INSERT INTO background_settings(host_id,placements_json) VALUES(?,?)
 	 ON CONFLICT(host_id) DO UPDATE SET placements_json=excluded.placements_json`, currentHost().ID, jsonText(map[string]string{"writing": cadenceDaily, "findings": cadenceHourly})); err != nil {
 		t.Fatal(err)
@@ -468,6 +477,23 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 		}
 	}
 	commitSeed(t, tx)
+	const settingsQuery = "SELECT * FROM claude_chat_settings_observations ORDER BY snapshot_id,conversation_uuid"
+	settingsRows, err := queryMaps(c.DB, settingsQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSettings := func(path string) {
+		t.Helper()
+		db, err := openReadOnlySQLite(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		rows, err := queryMaps(db, settingsQuery)
+		if err != nil || jsonText(rows) != jsonText(settingsRows) {
+			t.Fatalf("settings observations changed in %s: got %s, want %s (%v)", path, jsonText(rows), jsonText(settingsRows), err)
+		}
+	}
 	for id, expression := range map[string]string{"seconds": "[duration_ms]/1000", "double_seconds": "[@computed/seconds]*2"} {
 		if _, err := (qt.SQLiteComputedColumnStore{DB: c.DB}).Save(context.Background(), queryTableScope, "pharos_tool_calls", qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{ID: id, Label: id, Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: expression}}}); err != nil {
 			t.Fatal(err)
@@ -475,7 +501,7 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	}
 	// The source kind alone is not a privacy marker: ordinary imported history
 	// may also identify Pharos as its source.
-	_, err := c.DB.Exec(`UPDATE workspaces SET source_kind='pharos' WHERE source_id='work-1';
+	_, err = c.DB.Exec(`UPDATE workspaces SET source_kind='pharos' WHERE source_id='work-1';
  INSERT OR REPLACE INTO ui_preferences(key,value) VALUES('saved-view','source');
  INSERT INTO cloud_destinations(id,config_json,credential_json,imported_at) VALUES('source-cloud','{"name":"Source backup"}','{"fixture":"upload-only"}','2026-10-23');
  INSERT INTO cloud_backup_runs(id,destination_id,status_json,created_at) VALUES('source-run','source-cloud','{"state":"complete"}','2026-10-23');
@@ -513,6 +539,9 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	if catalogCount(t, b, "messages") != 2 || catalogCount(t, a, "messages") != 4 {
 		t.Fatal("copy did not retain both histories")
 	}
+	assertSettings(a.CatalogPath)
+	assertSettings(b.CatalogPath)
+	assertSettings(filepath.Join(b.CaptureRoot, ".imports", receipt.ID, "history.sqlite3"))
 	for _, marker := range []string{"PRIVATE_ASK_QUESTION", "PRIVATE_ASK_REPLY"} {
 		bytes, err := os.ReadFile(filepath.Join(b.CaptureRoot, ".imports", receipt.ID, "history.sqlite3"))
 		if err != nil || strings.Contains(string(bytes), marker) {
@@ -541,6 +570,7 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 		}
 		t.Fatalf("copy was not idempotent: first=%s second=%s", receipt.SourceDigest, again.SourceDigest)
 	}
+	assertSettings(b.CatalogPath)
 	c = reopenCatalog(t, b.CatalogPath)
 	var preference string
 	err = c.DB.QueryRow("SELECT value FROM ui_preferences WHERE key='saved-view'").Scan(&preference)
@@ -557,6 +587,10 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	}
 	if receipt.State != "complete" || catalogCount(t, a, "messages") != 0 || catalogCount(t, b, "messages") != 2 {
 		t.Fatal("verified move did not empty only the source")
+	}
+	assertSettings(b.CatalogPath)
+	if catalogCount(t, a, "claude_chat_settings_observations") != 0 {
+		t.Fatal("verified move retained source settings observations")
 	}
 	if _, err = os.Stat(preserved); !os.IsNotExist(err) {
 		t.Fatal("delivered evidence was retained in source", err)
@@ -2286,6 +2320,20 @@ func TestLibraryMoveKeepsChangedSource(t *testing.T) {
 }
 
 func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
+	t.Run("settings observations alone need delivery", func(t *testing.T) {
+		c, config := testCatalog(t)
+		pending, _, err := pendingHistory(t.Context(), config)
+		if err != nil || pending {
+			t.Fatal("empty catalog has pending history", pending, err)
+		}
+		execTx(t, c.DB, `INSERT INTO claude_chat_settings_observations
+		 (host_id,source_name,account,organization_uuid,conversation_uuid,observed_at,time_basis,cache_entry,snapshot_id)
+		 VALUES('settings-host','settings','personal','11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','2026-09-01T12:00:00Z','http_date','0123456789abcdef_0','snapshot-a')`)
+		pending, _, err = pendingHistory(t.Context(), config)
+		if err != nil || !pending {
+			t.Fatal("standalone settings observations were not pending", pending, err)
+		}
+	})
 	for _, tc := range []struct {
 		name        string
 		changed     bool

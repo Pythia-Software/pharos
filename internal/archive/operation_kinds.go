@@ -103,6 +103,7 @@ var operationKinds = []operationKind{
 		OnEject: "Stops between files and records; what was captured stays valid, and the next run resumes it.", Latency: "batch", Journal: journalStage, Priority: priorityBackground},
 	{Kind: "capture.this-mac", Class: workClassSource, Label: "Capture this Mac", Verb: "Capturing", Holds: "D:w I:w C(this):w", Affects: "capt:this/*",
 		OnEject: "Stops between files; the next capture resumes it, and what was captured stays valid.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
+	{Kind: "capture.settings", Class: workClassSource, Label: "Collect Claude Chat settings", Verb: "Collecting settings", Holds: "D:w I:w C(this):w", Affects: "capt:this/*", Stop: "work", OnEject: "Stops between reads; saved settings observations remain available to index.", Latency: "record", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "capture.import", Class: workClassSource, Label: "Collect Claude export", Verb: "Collecting", Holds: "D:w I:w C(this):w", Affects: "capt:this/*", OnEject: "Stops between reads; verified files and import jobs remain available to resume.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "capture.cli", Class: workClassSource, Label: "Capture (Terminal)", Verb: "Capturing", Holds: "D:w C(this):w", Affects: "capt:this/*",
 		OnEject: "Pharos cannot stop it; the drive stays busy until it ends.", Latency: "none", Journal: journalNever, Priority: priorityForeground},

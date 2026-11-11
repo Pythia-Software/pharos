@@ -302,6 +302,16 @@ const ROUTES = [
     await guide.getByRole('button',{name:'Show missing download links',exact:true}).click();
     await guide.getByRole('link',{name:/Download projects/}).waitFor();
   },shown:'#pharosOnboarding'},
+  {name:'Claude import settings',url:'/settings/sources',ready:'#pharosAddSource',api:{
+    'GET /api/claude-imports':({query})=>query.get('id')?{...claudeImportFixture,source:{added:['claude-ai-imports']}}:{jobs:[claudeImportFixture],run:{running:false}},
+    'GET /api/claude-chat-settings/setup':{source:'claude-settings',path:'/Users/example/a-very-long-profile-folder-without-breaks-in-the-name/Library/Application Support/Claude',account:'local',configured:true,enabled:false,scope:'host'},
+  },open:async page=>{
+    await page.evaluate(()=>window.pharosOnboarding.open({mode:'import'}));
+    const guide=page.locator('#pharosOnboarding');
+    await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+    await guide.getByRole('button',{name:/Resume export/}).click();
+    await guide.getByRole('heading',{name:'Add model and thinking settings?',exact:true}).waitFor();
+  },shown:'#pharosOnboarding'},
   {name:'Source settings guide',url:'/settings/sources',ready:'#pharosFindSources',open:async page=>{
     const trigger=page.locator('#sourceToolbar').getByRole('button',{name:'Data Guide',exact:true});
     await trigger.click();
