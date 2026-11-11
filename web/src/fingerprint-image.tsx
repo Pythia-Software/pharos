@@ -20,7 +20,7 @@ function observe() {
 const subscribeTheme = (fn: () => void) => {observe(); themeListeners.add(fn); return () => {themeListeners.delete(fn);};};
 const resolvedTheme = (): 'light' | 'dark' => document.documentElement.dataset.theme === 'dark' ? 'dark' : document.documentElement.dataset.theme === 'light' ? 'light' : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 
-export function FingerprintImage({id, workspace = false, profile = 'wide'}: {id: string; workspace?: boolean; profile?: 'wide' | 'card'}) {
+export function FingerprintImage({id, workspace = false, profile = 'wide', linkToSource = true}: {id: string; workspace?: boolean; profile?: 'wide' | 'card'; linkToSource?: boolean}) {
  const theme = useSyncExternalStore<'light' | 'dark'>(subscribeTheme, resolvedTheme, () => 'light');
  const request = useMemo<FingerprintRequest>(() => ({id, entity: workspace ? 'workspace' : 'conversation', profile, events: true}), [id, workspace, profile]);
  const subscribe = useMemo(() => (fn: () => void) => id ? cache.subscribe(request, fn) : () => {}, [request, id]);
@@ -32,7 +32,7 @@ export function FingerprintImage({id, workspace = false, profile = 'wide'}: {id:
  // A bounded sample, labels in progress and withheld events say so beside the image.
  const notes = messageLabelRibbonNotes(image), note = notes.map(n => n.note).join('. ');
  return <div className={'message-label-fingerprint fingerprint-image is-' + profile} title={[image?.stale ? 'Refreshing fingerprint' : snapshot.error, note].filter(Boolean).join('. ') || undefined}>
-  {src && image?.href ? <PageLink href={image.href} aria-label={`Open ${workspace ? 'workspace' : 'conversation'}`}>{picture}</PageLink> : picture}
+  {src && image?.href && linkToSource ? <PageLink href={image.href} aria-label={`Open ${workspace ? 'workspace' : 'conversation'}`}>{picture}</PageLink> : picture}
   {notes.length ? <span className="fingerprint-sampled" aria-label={note}>{notes.map(n => n.badge).join(' · ')}</span> : null}
  </div>;
 }

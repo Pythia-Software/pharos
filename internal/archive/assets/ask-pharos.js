@@ -111,7 +111,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   let frozenAt = null;
   let sessions=[],activeSessionId=null,activeCreatedAt=0,activeUpdatedAt=0,openingSession=null,openingChat=null;
   const sessionLoads=askLoadSequence();
-  let historyQuery="",historyOffset=0,historyMore=false,historyLoad=0,historyTimer=null;
+  let historyQuery="",historyOffset=0,historyMore=false,historyLoad=0;
   let draftPending=null,cancelQueue=Promise.resolve();
   // One composer owns the chat whether it is on Home, in a modal, or tucked away.
   const mountHost=root.parentElement;
@@ -410,7 +410,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const focused=historyList.contains(document.activeElement)?document.activeElement.closest('[data-session-id]')?.dataset.sessionId:null;
     const inboxSessions=historyQuery?sessions:[...requests.values()].map(run=>run.session).concat(sessions.filter(session=>!requests.get(session.id)));
     const entries=askHistoryEntries({sessions:inboxSessions,current:activeSessionId?currentSession():null,query:historyQuery}),now=Date.now();
-    historyList.replaceChildren();find('.pharos-history-empty').hidden=entries.length>0;find('.pharos-history-more').hidden=!historyMore;
+    historyList.replaceChildren();find('.pharos-history-empty').hidden=entries.length>0;find('.pharos-history-empty').textContent=historyQuery?'No chats found.':'Your conversations will appear here.';find('.pharos-history-more').hidden=!historyMore;
     entries.forEach((session,index)=>{
       const row=askHistoryRow(session,{now,labels:providerModels});
       const link=document.createElement('a');link.href=askHistoryURL(location.href,session.id);link.className='pharos-history-entry cursor-interaction';
@@ -456,11 +456,15 @@ window.initPharosAsk = function(root, {previews} = {}) {
     if(wasOpen)chatHistory.close();
     historyTrigger.setAttribute('aria-expanded','false');if(focus&&wasOpen)historyTrigger.focus({preventScroll:true});requestAnimationFrame(checkSeenAnswers);
   }
-  async function refreshHistory(more=false){
+  async function refreshHistory(more=false,showLoading=false){
     const request=++historyLoad;
-    try{const result=await api('sessions?q='+encodeURIComponent(historyQuery)+'&offset='+(more?historyOffset:0));if(request!==historyLoad)return;sessions=more?[...sessions,...result.sessions]:result.sessions;historyOffset=(more?historyOffset:0)+result.sessions.length;historyMore=result.sessions.length===100;if(chatHistory.open)renderHistory();}catch(error){report(error);}
+    const status=find('.pharos-history-search-status'),moreButton=find('.pharos-history-more');
+    historyList.setAttribute('aria-busy','true');status.hidden=!showLoading;moreButton.disabled=true;
+    try{const result=await api('sessions?q='+encodeURIComponent(historyQuery)+'&offset='+(more?historyOffset:0));if(disposed||request!==historyLoad)return;sessions=more?[...sessions,...result.sessions]:result.sessions;historyOffset=(more?historyOffset:0)+result.sessions.length;historyMore=result.sessions.length===100;if(chatHistory.open)renderHistory();}catch(error){if(!disposed&&request===historyLoad)report(error);}finally{if(!disposed&&request===historyLoad){historyList.setAttribute('aria-busy','false');status.hidden=true;moreButton.disabled=false;}}
   }
-  find('.pharos-history-filter').addEventListener('input',event=>{historyQuery=event.target.value;clearTimeout(historyTimer);historyTimer=setTimeout(()=>refreshHistory(),200);});
+  function searchHistory(){historyQuery=find('.pharos-history-filter').value.trim();void refreshHistory(false,true);}
+  find('.pharos-history-search-button').addEventListener('click',searchHistory);
+  find('.pharos-history-filter').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();event.stopPropagation();searchHistory();}});
   find('.pharos-history-more').addEventListener('click',()=>refreshHistory(true));
   function openHistory() {
     if(historyTrigger.hidden||ai.hidden||chatHistory.open)return;
@@ -629,7 +633,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     send.setAttribute('aria-label',label);send.dataset.tooltip=label;
     historyTrigger.hidden=!actions.history||root.classList.contains('pharos-inbox');
     find('.pharos-history-anchor').hidden=historyTrigger.hidden;
-    const clearButton=find('.pharos-clear-chat'),showClear=actions.clear&&!ai.hidden,clearChanged=clearButton.hidden===showClear;
+    const clearButton=find('.pharos-clear-chat'),showClear=actions.clear&&!ai.hidden&&!(presentation==='page'&&turns.length),clearChanged=clearButton.hidden===showClear;
     clearButton.hidden=!showClear;
     clearButton.textContent=actions.clearLabel;clearButton.setAttribute('aria-label',actions.clearLabel);clearButton.title=turns.length?'Start a new chat':'Clear draft';
     if(clearChanged){updateSurface();if(!ai.hidden)autoFit();}
@@ -671,9 +675,9 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const badge=document.createElement('span');badge.className='pharos-agent-badge';
     badge.append(find('#pharos-logo-'+turn.cli.toLowerCase()).content.firstElementChild.cloneNode(true));avatar.append(badge);
     avatar.setAttribute('aria-label','Pharos with '+turn.cli);avatar.removeAttribute('aria-hidden');avatar.setAttribute('role','img');
-    const receipt=document.createElement('span');receipt.className='pharos-receipt';
-    get('.pharos-agent-message').append(receipt);
-    const view={element,get,receipt,previews:new Map(),hasPreview:false};turnViews.set(turn.id,view);thread.append(element);
+    const readMarker=document.createElement('span');readMarker.className='pharos-read-marker';readMarker.setAttribute('aria-hidden','true');
+    get('.pharos-agent-message').append(readMarker);
+    const view={element,get,readMarker,previews:new Map(),hasPreview:false};turnViews.set(turn.id,view);thread.append(element);
     get('.pharos-retry').addEventListener('click',()=>startRequest(turn));
     get('.pharos-retry-model').addEventListener('click',retryWithDifferentModel);
     get('.pharos-recovery-search').addEventListener('click',useRegular);
@@ -683,13 +687,13 @@ window.initPharosAsk = function(root, {previews} = {}) {
       event.preventDefault();stop();openDestination(turn,link.getAttribute('href'));
     }));
     updateTurn(turn);
-    seenObserver.observe(receipt);
+    seenObserver.observe(readMarker);
   }
   function updateTurn(turn) {
     const view=turnViews.get(turn.id);if(!view)return;
     const {element,get}=view,loading=turn.status==='loading',answered=element.dataset.status==='loading'&&!loading;
     element.dataset.status=turn.status;
-    view.receipt.hidden=loading||turn.status==='canceled';view.receipt.textContent=turn.seenAt?'Seen':'Unseen';
+    view.readMarker.hidden=loading||turn.status==='canceled';
     get('.pharos-agent-message').setAttribute('aria-busy',String(loading));
     get('.pharos-waiting').hidden=!loading;
     if(loading&&!view.puzzle)view.puzzle=askPuzzleMotion(get('.pharos-puzzle'));
@@ -789,8 +793,8 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const viewport=threadViewport.getBoundingClientRect();
     for(const turn of turns){
       const view=turnViews.get(turn.id),key=activeSessionId+':'+turn.id+':'+turn.startedAt;
-      if(!view||!askAnswerUnread(turn)||reading.has(key)||!view.receipt.getClientRects().length)continue;
-      const box=view.receipt.getBoundingClientRect();
+      if(!view||!askAnswerUnread(turn)||reading.has(key)||!view.readMarker.getClientRects().length)continue;
+      const box=view.readMarker.getBoundingClientRect();
       if(box.top<Math.max(0,viewport.top)||box.bottom>Math.min(innerHeight,viewport.bottom)||box.right<=0||box.left>=innerWidth)continue;
       const id=activeSessionId,startedAt=turn.startedAt;
       reading.add(key);
@@ -1281,5 +1285,5 @@ window.initPharosAsk = function(root, {previews} = {}) {
     if(draftPending){const payload=draftPending;draftPending=null;void fetch('/api/ask/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),keepalive:true});}
   });
   syncFullscreen();render();syncTheme();void refreshStatus().then(visitChanged).catch(report);
-  return ()=>{saveVisit.stop();ideaSeen?.disconnect();disposePreviews();popOutMotion?.cancel();if(overlay.open)overlay.close();mount(mountHost);overlay.remove();floating.remove();announcement.remove();if(headerButton)headerButton.disabled=true;disposed=true;ideaController.abort();clearTimeout(ideaRetry);sessionLoads.invalidate();requests.forEach(run=>{run.controller.abort();releaseRequest(run);});seenObserver.disconnect();stop();glows.forEach(glow=>glow.destroy());pageTrace.destroy();clearTimeout(draftTimer);cancelAnimationFrame(threadLayoutFrame);cancelAnimationFrame(overlayLayoutFrame);cancelAnimationFrame(edgeLayoutFrame);overlayObserver.disconnect();threadObserver.disconnect();historyHeaderObserver.disconnect();clearInterval(ideaTimer);clearTimeout(ideaScrollEnd);ideaMotion?.cancel();edgeObserver.disconnect();ideaObserver.disconnect();clearTimeout(historyTimer);themeObserver.disconnect();cleanup.forEach(fn=>fn());window.removeEventListener('pharos:ask-config',configChanged);window.removeEventListener('pharos:visit',visitChanged);window.removeEventListener('pharos:route',routeChanged);};
+  return ()=>{saveVisit.stop();ideaSeen?.disconnect();disposePreviews();popOutMotion?.cancel();if(overlay.open)overlay.close();mount(mountHost);overlay.remove();floating.remove();announcement.remove();if(headerButton)headerButton.disabled=true;disposed=true;ideaController.abort();clearTimeout(ideaRetry);sessionLoads.invalidate();requests.forEach(run=>{run.controller.abort();releaseRequest(run);});seenObserver.disconnect();stop();glows.forEach(glow=>glow.destroy());pageTrace.destroy();clearTimeout(draftTimer);cancelAnimationFrame(threadLayoutFrame);cancelAnimationFrame(overlayLayoutFrame);cancelAnimationFrame(edgeLayoutFrame);overlayObserver.disconnect();threadObserver.disconnect();historyHeaderObserver.disconnect();clearInterval(ideaTimer);clearTimeout(ideaScrollEnd);ideaMotion?.cancel();edgeObserver.disconnect();ideaObserver.disconnect();themeObserver.disconnect();cleanup.forEach(fn=>fn());window.removeEventListener('pharos:ask-config',configChanged);window.removeEventListener('pharos:visit',visitChanged);window.removeEventListener('pharos:route',routeChanged);};
 };

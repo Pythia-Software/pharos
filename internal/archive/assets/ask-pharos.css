@@ -107,15 +107,16 @@
 @starting-style{#pharos-ask .pharos-chat-history[open]::backdrop{background:transparent}}
 @media(prefers-reduced-motion:reduce){#pharos-ask .pharos-chat-history,#pharos-ask .pharos-chat-history::backdrop{transition:none}}
 #pharos-ask .pharos-history-entry:hover,#pharos-ask .pharos-history-close:hover{background:color-mix(in srgb,var(--pharos-sea) 8%,var(--pharos-panel))}
-#pharos-ask .pharos-history-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 14px 10px 18px}
+#pharos-ask .pharos-history-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:16px 14px 10px 18px}
 #pharos-ask .pharos-history-heading h3{margin:0;font-size:15px;font-weight:600}
+#pharos-ask .pharos-history-heading-actions{display:flex;align-items:center;gap:6px}
 #pharos-ask .pharos-history-close{border:0;background:transparent;border-radius:6px;width:30px;min-height:30px!important;padding:0;font-size:20px!important;color:var(--pharos-muted)!important}
-#pharos-ask .pharos-history-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 8px 14px;scrollbar-gutter:stable}
-#pharos-ask .pharos-history-empty{margin:16px 10px;font-size:12px;color:var(--pharos-muted)}
+#pharos-ask .pharos-history-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 0 14px}
+#pharos-ask .pharos-history-empty{margin:16px 18px;font-size:12px;color:var(--pharos-muted)}
 #pharos-ask .pharos-history-list{display:grid;gap:2px}
-#pharos-ask .pharos-history-entry{position:relative;display:grid;gap:3px;width:100%;min-width:0;border:0;border-radius:8px;background:transparent;padding:10px;text-align:left;text-decoration:none;color:inherit}
-#pharos-ask .pharos-history-entry[aria-current="true"]{background:color-mix(in srgb,var(--pharos-sea) 10%,var(--pharos-panel))}
-#pharos-ask .pharos-history-entry[aria-current="true"]::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:2px;background:var(--pharos-sea)}
+#pharos-ask .pharos-history-entry{position:relative;display:grid;gap:3px;width:100%;min-width:0;border:0;border-radius:0;background:transparent;padding:10px 18px;text-align:left;text-decoration:none;color:inherit}
+#pharos-ask .pharos-history-entry:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,transparent)}
+#pharos-ask .pharos-history-entry[aria-current="true"]{color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,transparent)}
 #pharos-ask .pharos-history-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;font-size:12px;line-height:1.3}
 #pharos-ask .pharos-history-meta{display:flex;align-items:center;gap:10px;min-width:0;font-size:11px;color:var(--pharos-muted)}
 #pharos-ask .pharos-history-model{display:inline-flex;align-items:center;gap:5px;min-width:0;flex:0 1 auto;overflow:hidden}
@@ -299,7 +300,14 @@
 .ask-settings {max-width:660px}.ask-settings label {display:flex;gap:10px;align-items:center;margin:16px 0}.ask-settings select {max-width:100%;background:var(--panel);color:var(--ink);border:1px solid var(--line);padding:7px;border-radius:6px}.ask-settings p {color:var(--muted)}
 .ask-consent {max-width:min(520px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:14px;padding:24px}.ask-consent::backdrop {background:#0007;backdrop-filter:blur(3px)}.ask-consent button {margin:5px}
 
-#pharos-ask .pharos-history-filter{width:auto;margin:0 16px 4px 18px;padding:8px 9px;border:1px solid var(--pharos-line);border-radius:6px;background:var(--pharos-panel);color:var(--pharos-ink);font:inherit}
+#pharos-ask .pharos-history-search{margin:0 16px 8px 18px}
+#pharos-ask .pharos-history-search-row{display:flex;gap:6px;align-items:stretch}
+#pharos-ask .pharos-history-search-field{position:relative;flex:1;min-width:0}
+#pharos-ask .pharos-history-search-field svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--pharos-muted);pointer-events:none}
+#pharos-ask .pharos-product .pharos-history-filter{box-sizing:border-box;width:100%;min-width:0;margin:0;padding:8px 8px 8px 30px;border:1px solid var(--pharos-line);border-radius:6px;background:var(--pharos-panel);color:var(--pharos-ink);font-family:inherit;font-size:12px;line-height:1.4}
+#pharos-ask .pharos-product .pharos-history-search-button{padding:8px;border:1px solid var(--pharos-line);border-radius:6px;background:var(--pharos-panel);color:var(--pharos-ink);font-size:12px;cursor:pointer}
+#pharos-ask .pharos-history-search-button:hover{border-color:var(--accent)}
+#pharos-ask .pharos-history-search-status{display:block;margin:6px 0 0;font-size:11px;color:var(--pharos-muted)}
 
 /* Header and floating progress use the same glow as the composer. */
 .ask-pharos-toggle{position:relative}
@@ -399,7 +407,7 @@ main>#ask.active{box-sizing:border-box;max-width:none;height:100%;padding:0}
 #pharos-ask .pharos-destination-result{min-width:0}
 #pharos-ask .pharos-destination-result.has-preview{border:1px solid var(--pharos-line);border-radius:9px;background:var(--pharos-panel)}
 #pharos-ask .has-preview:has(.pharos-destination:hover){border-color:var(--pharos-violet)}
-#pharos-ask .has-preview>.pharos-destination{border:0;border-top:1px solid var(--pharos-line);border-radius:0;transform:none}
+#pharos-ask .has-preview>.pharos-destination{border:0;border-top:1px solid var(--pharos-line);border-radius:0 0 8px 8px;transform:none}
 #pharos-ask .pharos-chart-preview{margin:0;min-width:0;--query-card-width:100%}
 #pharos-ask .pharos-chart-preview .query-card{transform:none;cursor:default}
 #pharos-ask .pharos-chart-preview .query-card:hover{border-color:var(--pharos-violet)}
@@ -407,6 +415,11 @@ main>#ask.active{box-sizing:border-box;max-width:none;height:100%;padding:0}
 #pharos-ask .pharos-chart-preview>.card-library-collected{padding:8px 4px 0;font-size:11px}
 
 #pharos-ask .pharos-work-preview{box-sizing:content-box;min-height:36px;margin:0;padding:8px 12px;min-width:0;font-size:12px;line-height:18px}
+#pharos-ask .pharos-work-preview.has-fingerprint{display:grid;grid-template-columns:minmax(0,1fr) minmax(80px,30%);align-items:center;gap:12px}
+#pharos-ask .pharos-work-preview-details,#pharos-ask .pharos-work-preview-fingerprint{min-width:0}
+#pharos-ask .pharos-work-preview-fingerprint{width:100%;max-width:240px;justify-self:end}
+#pharos-ask .pharos-work-preview-fingerprint .fingerprint-image{width:100%}
+@media(max-width:600px){#pharos-ask .pharos-work-preview.has-fingerprint{grid-template-columns:minmax(0,1fr);gap:6px}#pharos-ask .pharos-work-preview-fingerprint{justify-self:start}}
 #pharos-ask .pharos-work-preview-line{margin:0;overflow:hidden;color:var(--pharos-ink);text-overflow:ellipsis;white-space:nowrap}
 #pharos-ask .pharos-work-preview-line+.pharos-work-preview-line{color:var(--pharos-muted)}
 #pharos-ask .pharos-work-preview-line span+span::before{content:"·";margin:0 6px;color:var(--pharos-muted)}
@@ -418,14 +431,16 @@ main>#ask.active{box-sizing:border-box;max-width:none;height:100%;padding:0}
 
 /* Fullscreen Ask keeps the inbox beside the conversation. Narrow windows use
    the same history as an accessible drawer, leaving room for the editor. */
-#pharos-ask .pharos-new-chat{margin:4px 18px;padding:8px 12px;border:1px solid var(--pharos-line);border-radius:8px;background:var(--pharos-bg);text-align:left;cursor:pointer}
-#pharos-ask .pharos-history-help{margin:4px 18px 14px;color:var(--pharos-muted);font-size:12px}
+#pharos-ask .pharos-product .pharos-new-chat{display:inline-flex;align-items:center;gap:5px;padding:6px 8px;border:1px solid var(--pharos-line);border-radius:6px;background:var(--pharos-bg);font-size:12px;cursor:pointer}
+#pharos-ask .pharos-new-chat:hover{border-color:var(--accent)}
+#pharos-ask .pharos-history-help{margin:0 18px 14px;color:var(--pharos-muted);font-size:12px}
 #pharos-ask .pharos-history-state{font-size:11px;color:var(--pharos-muted)}
 #pharos-ask .pharos-history-entry[data-unread="true"] .pharos-history-title{font-weight:600}
 #pharos-ask .pharos-history-entry[data-unread="true"] .pharos-history-state{color:var(--pharos-sea);font-weight:600}
 #pharos-ask .pharos-history-entry[data-unread="true"] .pharos-history-state::before{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:currentColor}
 #pharos-ask .pharos-history-entry[data-running="true"] .pharos-history-state{color:var(--pharos-violet)}
-#pharos-ask .pharos-receipt{display:block;margin-top:12px;font-size:11px;color:var(--pharos-muted)}
+#pharos-ask .pharos-agent-message{position:relative}
+#pharos-ask .pharos-read-marker{position:absolute;bottom:0;left:0;width:1px;height:1px;pointer-events:none}
 #askPage>#pharos-ask.pharos-inbox{position:relative}
 #askPage #pharos-ask.pharos-inbox .pharos-product{padding-left:290px;min-width:0}
 #askPage #pharos-ask.pharos-inbox .pharos-chat-history{position:absolute;inset:0 auto 0 0;width:290px;height:100%;max-height:100%;border:0;border-right:1px solid var(--pharos-line);box-shadow:none;transition:none;transform:none;background:var(--pharos-bg)}
