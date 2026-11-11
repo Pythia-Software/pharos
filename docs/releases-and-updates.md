@@ -124,10 +124,23 @@ disk image, notarizes and staples both app and image, signs the final image
 with Sparkle, verifies the uploaded bytes, and publishes the signed appcast last. It keeps the disk image and
 checksum under `dist/releases/vX.Y.Z/`. If publication fails after the tag is
 pushed, inspect the tag and draft release before retrying; never replace the
-asset of a published version. The disk image's Finder layout is written by
-[dmgbuild](https://dmgbuild.readthedocs.io/), which the script runs with `uvx`,
-so install [uv](https://docs.astral.sh/uv/) on the release Mac. Finder is not
-scripted, and its settings on the release Mac do not affect the layout.
+asset of a published version. The disk image is packaged by
+`macos/make-release-dmg.sh` and `macos/build_dmg.py`, using Apple's `hdiutil`
+and `ditto`. Python 3.10 or newer must be on `PATH`; no Python packages are
+downloaded or installed during packaging. The helper writes the Finder layout
+directly with the checked-in MIT-licensed `ds_store` and `mac_alias` libraries.
+Their versions, source hashes and maintenance instructions are recorded in
+[macos/vendor/README.md](../macos/vendor/README.md). Finder is not scripted,
+and its settings on the release Mac do not affect the layout. Packaging checks
+the copied app's signature, release version, layout and Applications shortcut,
+then remounts and checks the final compressed image before exposing its output.
+
+The packaging smoke test uses a disposable ad hoc signed app, the real release
+artwork and a real disk image, without signing credentials or publication:
+`PHAROS_DMG_TESTS=1 python3 -m unittest discover -s tools -p test_release_dmg.py`.
+It also resolves the background Alias after remounting at a different path.
+Before changing layout or format code, also open the image in Finder on macOS 14
+and the current macOS release, including a Retina display, to check appearance.
 
 The disk image opens in Finder. Drag `Pharos.app` onto the Applications shortcut
 and open the installed copy. The setup guide asks where the library lives:

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {availableReaderNavigators,readerGeometry,readerVisibleWindow,readerNavigatorClock,nearestReaderMessage} from '../../../src/reader-navigator-model';
 import {reader,event,human,render} from '../helpers/transcript.mjs';
 import {plain} from '../helpers/classic-script.mjs';
-import {sessionRibbonTree} from '../../../src/label-session-ribbon-model';
+import {sessionRibbonTree,activityCategory} from '../../../src/label-session-ribbon-model';
 
 test('navigator choices reflect drawable measurements and meaningful turn boundaries',()=>{
   const byID=new Map([['a',[0,1]],['b',[1,2]]]);
@@ -90,4 +90,19 @@ test('untimed tools and delegations keep ordinal marks with unknown durations',(
   const mixed=readerNavigatorClock(messages.map((message,index)=>index===0?{...message,at:'2026-10-01T00:00:00Z'}:message),marks);
   assert.equal(mixed.timed,true);
   assert.equal(mixed.marks.length,0,'missing times never become ordinal positions on a real clock');
+});
+
+test('reader tool categories match the timeline for tool calls',()=>{
+  for(const [name,input,category] of [
+    ['Read',{file_path:'/repo/a'},'read'],['Search',{query:'climate'},'read'],
+    ['Write',{file_path:'/repo/a'},'write'],['Bash',{command:'go test'},'run'],
+    ['GitStatus',{},'git'],['Browser',{url:'https://example.com'},'network'],
+    ['wait_agent',{},'wait'],['write_stdin',{},'poll'],['Task',{},'delegate'],['Custom',{},'other'],
+  ]){
+    const {events,graph}=render([human(),event('call','tool_call',{name,input},1,{call_id:'c'})]);
+    const call=events.find(message=>message.kind==='tool_call'),mark=reader.readerNavigatorMarks({...graph,messages:events})[0];
+    assert.equal(reader.readerTimelineCategory(call),category,name);
+    assert.equal(mark.category,category,name);
+    assert.equal(activityCategory({name,category:({run:'command',write:'edit',delegate:'agent'})[category]??category}),category,name);
+  }
 });

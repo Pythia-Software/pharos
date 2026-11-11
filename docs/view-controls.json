@@ -120,6 +120,10 @@
       "field": "disclosures"
     },
     {
+      "file": "web/src/reader-navigator.tsx",
+      "field": "disclosures"
+    },
+    {
       "file": "web/src/thinking-dashboard.tsx",
       "field": "disclosures"
     },
@@ -7751,6 +7755,26 @@
       "control": "onClick={()=>data.jumpContext(entry)}",
       "contract": "transient",
       "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
+    },
+    {
+      "key": "29cfe359713cf44e:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderRibbonSection",
+      "tag": "span",
+      "control": "onClick={event=>{event.preventDefault();event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width);}}",
+      "contract": "transient",
+      "reason": "Clicking a ribbon scrolls and highlights its source message; scroll position is transient and the accordion uses ViewDisclosure."
+    },
+    {
+      "key": "e14ad9c01a55f876:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderRibbonSection",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={viewKey}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "110c067b8fa806e8:0",

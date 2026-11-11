@@ -1,5 +1,5 @@
 .reader-navigator-host{position:sticky;top:0;z-index:6;background:var(--bg);border-block:1px solid var(--line);isolation:isolate;transform:translateZ(0)}
-.reader-navigator{position:relative;padding:7px var(--workspace-page-gutter,16px);font-size:var(--fs-xs);--navigator-label:72px}
+.reader-navigator{position:relative;padding:7px var(--workspace-page-gutter,16px);font-size:var(--fs-xs);--navigator-label:190px}
 .reader-navigator-choice{display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-size:10px;color:var(--muted);white-space:nowrap}
 .reader-navigator-choice input{margin:0;width:11px;height:11px;accent-color:var(--accent)}
 .reader-navigator-hidden{display:inline-flex;flex-wrap:wrap;gap:4px 12px}
@@ -33,4 +33,15 @@
 .reader-navigator-key.is-bare{margin:0}
 /* Tool swatches keep their own dot-and-line shape (delegation.css). */
 .reader-navigator-key i:not(.lt-tool-swatch){width:8px;height:8px;display:inline-block}
-@media(max-width:580px){.reader-navigator{--navigator-label:64px;padding:5px 8px}.reader-navigator-context-note{left:8px;max-width:calc(100% - 16px)}.reader-navigator-key{gap:4px 8px}}
+@media(max-width:580px){.reader-navigator{--navigator-label:110px;padding:5px 8px}.reader-navigator-context-note{left:8px;max-width:calc(100% - 16px)}.reader-navigator-key{gap:4px 8px}}
+
+/* Expand the same session, message-mode, event and tool hierarchy as Timeline. */
+.reader-section-node>summary,.reader-section-leaf{display:grid;grid-template-columns:var(--navigator-label) minmax(0,1fr);align-items:center;list-style:none;min-height:28px}
+.reader-section-node>summary::-webkit-details-marker{display:none}
+.reader-section-node>summary{cursor:pointer}
+.reader-section-label{display:flex;align-items:center;min-width:0;gap:3px;font-size:10px;color:var(--muted);overflow:hidden}
+.reader-section-label>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reader-section-chevron{flex:none;display:inline-block;transition:transform .16s;font-size:14px}
+.reader-section-node[open]>summary .reader-section-chevron{transform:rotate(90deg)}
+.reader-section-track{display:block;min-width:0;height:28px;cursor:pointer;background:var(--panel);border-bottom:1px solid var(--line)}
+.reader-section-track .lt-session-ribbon{height:28px;width:100%}

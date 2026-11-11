@@ -21,8 +21,9 @@ import (
 // messages that carried each request's usage (model_requests.source_message_id,
 // final_message_id), which occurrence ownership classifies requests by. v14
 // reads the file of a patch a code-mode script holds as a string literal, and
-// of a patch recorded as a list of changes.
-const toolLedgerVersion = "tools-v14-code-mode-patches"
+// of a patch recorded as a list of changes. v15 repairs Claude.ai export
+// tool-block timestamps before replaying the ledger.
+const toolLedgerVersion = "tools-v15-claude-ai-tool-time"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the

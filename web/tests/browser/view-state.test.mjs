@@ -673,7 +673,7 @@ test('timeline zoom retains sessions and blanks out-of-window usage',{skip},asyn
 test('Timeline tool hover selects the recorded call on each overlapping track',{skip},async t=>{
  const api={'GET /api/work/:id/parallel':({query})=>{
   const data=defaultApi['GET /api/work/:id/parallel']({query});
-  return {...data,lanes:data.lanes.map(lane=>lane.session!=='s-root'?lane:{...lane,marks:[lane.marks[0],{...lane.marks[1],start:lane.marks[0].start+20000,end:lane.marks[0].end-10000}]})};
+  return {...data,lanes:data.lanes.map(lane=>lane.session!=='s-root'?lane:{...lane,marks:[lane.marks[0],{...lane.marks[1],start:lane.marks[0].start+20000,end:lane.marks[0].end-10000},{...lane.marks[0],tool_id:'tool-unknown',name:'Claude Docs update',preview:'Update document',start:lane.marks[0].end+20000,end:lane.marks[0].end+20000,end_known:false}]})};
  }};
  const app=await open(t,{url:`/work/${workID}?explorer=timeline`,api,ready:'.lt-session-root'}),{page}=app;
  const root=page.locator('[data-session-id="s-root"] .lt-session-root > summary');
@@ -687,6 +687,14 @@ test('Timeline tool hover selects the recorded call on each overlapping track',{
   const content=page.getByRole('tooltip').locator('pre');await content.waitFor();
   assert.equal(await content.textContent(),preview);
  }
+ const unknown=root.locator('[data-tool-id="tool-unknown"]');
+ const guide=unknown.locator('line');
+ assert.notEqual(await guide.evaluate(line=>getComputedStyle(line).strokeDasharray),'none','an unrecorded end uses a dotted guide');
+ await page.locator('.lt-timeline-legend').getByText('End time unknown',{exact:true}).waitFor();
+ const point=await guide.evaluate(line=>{const p=new DOMPoint((Number(line.getAttribute('x1'))+Number(line.getAttribute('x2')))/2,Number(line.getAttribute('y1'))).matrixTransform(line.getScreenCTM());return {x:p.x,y:p.y};});
+ await page.mouse.move(point.x,point.y);
+ await page.getByRole('tooltip').getByText('End time unknown',{exact:true}).waitFor();
+ await app.shot('tool-end-not-recorded');
 });
 
 test('Timeline Key menus filter ribbons and restore selections with keyboard access',{skip},async t=>{
@@ -1943,15 +1951,15 @@ test('message card labels and sentence events restore independently in the reade
  assert.ok(await page.locator('.thinking-card mark.agent-event:not(.reader-event-hidden)').count(),'timeline visibility leaves text highlights on');
  await timelineToggle.click();assert.equal(await timelineToggle.getAttribute('aria-pressed'),'true');
  await plan.click();assert.ok(await page.getByRole('menuitem',{name:'Hide',exact:true}).isVisible());await page.keyboard.press('Escape');
- await navigator.locator('[data-agent-event="e-tint"]').waitFor({state:'attached'});await navigator.locator('[data-tool-id="read-csv"]').waitFor({state:'attached'});
- await timelineChoose('Friction','Hide');await navigator.locator('[data-agent-event="e-tint"]').waitFor({state:'detached'});
- await timelineChoose('Read / search','Hide');await navigator.locator('[data-tool-id="read-csv"]').waitFor({state:'detached'});
+ await navigator.locator('[data-agent-event="e-tint"]').first().waitFor({state:'attached'});await navigator.locator('[data-tool-id="read-csv"]').first().waitFor({state:'attached'});
+ await timelineChoose('Friction','Hide');assert.equal(await navigator.locator('[data-agent-event="e-tint"]').count(),0);
+ await timelineChoose('Read / search','Hide');assert.equal(await navigator.locator('[data-tool-id="read-csv"]').count(),0);
  assert.equal(await navigator.getAttribute('data-range'),timelineRange,'filtering the timeline preserves its clock');
  assert.ok(await page.locator('.thinking-card mark.agent-event:not(.reader-event-hidden)').count(),'timeline choices do not hide transcript highlights');
  const timelineCopy=await open(t,{api,url:path(page),ready:'.transcript-timeline-key .lt-timeline-legend'});
  for(const name of ['Friction','Read / search'])assert.equal(await timelineCopy.page.getByRole('group',{name:'Timeline key',exact:true}).getByRole('button',{name,exact:true}).getAttribute('aria-pressed'),'false');
  await timelineChoose('Friction','Show');await timelineChoose('Read / search','Show');
- await navigator.locator('[data-agent-event="e-tint"]').waitFor({state:'attached'});await navigator.locator('[data-tool-id="read-csv"]').waitFor({state:'attached'});
+ await navigator.locator('[data-agent-event="e-tint"]').first().waitFor({state:'attached'});await navigator.locator('[data-tool-id="read-csv"]').first().waitFor({state:'attached'});
  await assertKeyButtonsFit();
  await app.shot('conversation-timeline-key');
  assert.equal(await page.getByText(sentence,{exact:false}).count()>0,true);

@@ -9,14 +9,16 @@ import {ChartTooltip} from './chart-tooltip';
 import {ViewDisclosure} from './view-disclosure';
 import {useViewEntry} from './view-state';
 import {sliceGroupState,type LegendAction} from './chart-selection';
-import {timelineSelection,timelineSectionVisible,timelineGroupCounts,type TimelineVisibility,type TimelineVisibilitySection,type TimelineVisibilityKey} from './timeline-visibility';
+import {timelineSelection,timelineSectionVisible,timelineGroupCounts,timelineValueVisible,type TimelineVisibility,type TimelineVisibilitySection,type TimelineVisibilityKey} from './timeline-visibility';
 import {eventGroup,type AgentEventLink} from './event-link-layout';
 
 export const timelineToolCategories:Record<string,string>={read:'Read / search',write:'Edit / write',run:'Run / build / test',git:'Git',network:'Network',delegate:'Delegate / message',wait:'Wait call',poll:'Poll / delay',other:'Other tool'};
 
+function UnknownToolKey(){return <span className="lt-unknown-tail-key"><i className="lt-tool-swatch lt-unknown-tail" aria-hidden="true"/>End time unknown</span>}
+
 /** Use the same elapsed attribution and text composition as the drawn ribbons. */
 export function timelineLegendWindow(streams:{id?:string;messages:LabelMessage[];marks:ActivityMark[];neighbors?:LabelMessage[];caller?:boolean}[],range:TimeRange){
-  const messages=new Map<string,LabelMessage>(),origins=new Set<string>(),tools=new Set<string>(),populated=new Set<string>();let error=false;
+  const messages=new Map<string,LabelMessage>(),origins=new Set<string>(),tools=new Set<string>(),unknownTools=new Set<string>(),populated=new Set<string>();let error=false;
   const overlaps=(start:number,end:number)=>start<=range[1]&&end>=range[0];
   for(const stream of streams){
     for(const {message,start,end} of labelIntervals(stream.messages,stream.marks,30*60*1000,stream.neighbors??stream.messages)){
@@ -25,9 +27,9 @@ export function timelineLegendWindow(streams:{id?:string;messages:LabelMessage[]
       messages.set(JSON.stringify([message.session_id,message.id]),message);
       if(stream.caller)for(const part of authorshipSegments(message))if(overlaps(start+(end-start)*part.start,start+(end-start)*part.end))origins.add(part.category);
     }
-    if(!stream.caller)for(const mark of stream.marks)if(overlaps(mark.start,mark.end_known?Math.max(mark.start,mark.end):mark.start)){if(stream.id)populated.add(stream.id);if(mark.error)error=true;else tools.add(mark.category);}
+    if(!stream.caller)for(const mark of stream.marks)if(overlaps(mark.start,mark.end_known?Math.max(mark.start,mark.end):mark.start)){if(stream.id)populated.add(stream.id);if(mark.error)error=true;else tools.add(mark.category);if(!mark.end_known)unknownTools.add(mark.error?'error':mark.category);}
   }
-  return {messages:[...messages.values()],origins:[...origins],tools:[...tools],error,populated:[...populated]};
+  return {messages:[...messages.values()],origins:[...origins],tools:[...tools],unknownTools:[...unknownTools],error,populated:[...populated]};
 }
 
 /** Keep only present specific colors, ordered beside their parent mode and role. */
@@ -40,7 +42,7 @@ export function timelineModeGroups(messages:LabelMessage[],taxonomy:Taxonomy=[])
   });
 }
 
-export function TimelineLegend({messages,origins,taxonomy,tools,error,events=[],visibility,onSelect,previewOnly=false,onOpenTimeline,embedded=false}:{previewOnly?:boolean;onOpenTimeline?:()=>void;embedded?:boolean;messages:LabelMessage[];origins:string[];taxonomy:Taxonomy;tools:Record<string,string>;error:boolean;events?:AgentEventLink[];visibility:TimelineVisibility;onSelect:(section:TimelineVisibilityKey,values:string[],action:LegendAction)=>void}){
+export function TimelineLegend({messages,origins,taxonomy,tools,error,unknownTools=[],events=[],visibility,onSelect,previewOnly=false,onOpenTimeline,embedded=false}:{previewOnly?:boolean;onOpenTimeline?:()=>void;embedded?:boolean;messages:LabelMessage[];origins:string[];taxonomy:Taxonomy;tools:Record<string,string>;error:boolean;unknownTools?:string[];events?:AgentEventLink[];visibility:TimelineVisibility;onSelect:(section:TimelineVisibilityKey,values:string[],action:LegendAction)=>void}){
   const [fullExpanded]=useViewEntry('disclosures','timeline-key',true,!previewOnly&&!embedded);
   const expanded=embedded||!previewOnly&&fullExpanded;
   const previewHint='Open the full Timeline to change visibility.';
@@ -84,5 +86,6 @@ export function TimelineLegend({messages,origins,taxonomy,tools,error,events=[],
   return <ChartTooltip><div className={`lt-timeline-legend${expanded?'':' is-compact'}${previewOnly?' is-readonly':''}${embedded?' is-embedded conversation-key-group':''}`} data-view-field="timeline_visibility">
     {embedded?<><button type="button" className="usage-legend-item usage-legend-category conversation-key-toggle" data-view-field="timeline_visibility" aria-pressed={visible===0?false:hidden===0?true:'mixed'} disabled={!populated.length} title={visible?'Hide timeline elements':'Show timeline elements'} onClick={()=>onSelect('sections',populated.map(([section])=>section),visible?'hide':'show')}>Timeline</button><div className="timeline-key-sections">{content}</div></>:previewOnly?<button type="button" className="lt-key-open" aria-label="Edit key in full Timeline" data-chart-tooltip={previewHint} onClick={onOpenTimeline}>Key</button>:<ViewDisclosure viewKey="timeline-key" className="lt-key-disclosure" defaultOpen summary="Key">{expanded?content:null}</ViewDisclosure>}
     {!expanded?content:null}
+    {unknownTools.some(id=>timelineSectionVisible(visibility,'tools')&&timelineValueVisible(visibility,'tools',id))?<UnknownToolKey/>:null}
   </div></ChartTooltip>;
 }
