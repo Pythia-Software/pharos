@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"net/url"
+	"os"
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -126,23 +129,38 @@ func TestThinkingProjection(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Retained != 12 || result.Timed != 4 || result.Summary.Median == nil || *result.Summary.Median != 10 {
-		t.Fatal(result)
+	// The endpoint keeps only what needs whole conversations in order; the
+	// counts, waits and coverage come from model_requests (thinking-query.ts).
+	if result.Timezone != "UTC" || result.Groups == nil || result.Validation != nil || !strings.Contains(w.Header().Get("Server-Timing"), "fit") {
+		t.Fatal(w.Body.String())
 	}
-	if len(result.Coverage) != 3 || len(result.AgentCoverage) == 0 {
-		t.Fatal("coverage must include untimed models and harnesses", result.Coverage, result.AgentCoverage)
+	for _, unused := range []string{"Retained", "summary", "coverage", "periods", "Models"} {
+		if strings.Contains(w.Body.String(), `"`+unused+`"`) {
+			t.Fatalf("the endpoint still answers %s: %s", unused, w.Body.String())
+		}
 	}
 	invalidField, _ := qt.EncodeQueryLink(qt.LinkQuery{Where: []qt.WhereTerm{{Field: "not_a_column", Op: "=", Value: "x"}}})
 	if w := apiCall(t, server, config.APIToken, http.MethodGet, "/api/thinking?filters="+url.QueryEscape(invalidField), nil); w.Code != 400 {
 		t.Fatal("invalid native fields must not broaden the population", w.Code, w.Body.String())
 	}
 	filter, _ := qt.EncodeQueryLink(qt.LinkQuery{Where: []qt.WhereTerm{{Field: "model", Op: "=", Value: "second-model"}}})
-	w = apiCall(t, server, config.APIToken, http.MethodGet, "/api/thinking?filters="+url.QueryEscape(filter), nil)
-	var selected thinkingResponse
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &selected) != nil || selected.Retained != 1 || selected.Timed != 1 {
-		t.Fatal("native filters must intersect the dashboard population", w.Code, w.Body.String())
+	if w = apiCall(t, server, config.APIToken, http.MethodGet, "/api/thinking?view=calendar&filters="+url.QueryEscape(filter), nil); w.Code != 200 {
+		t.Fatal("native filters", w.Code, w.Body.String())
 	}
-	for _, path := range []string{"/api/thinking?filters=invalid", "/api/thinking?period=wrong", "/api/thinking?range=custom&from=invalid", "/api/thinking?minimum=-1", "/api/thinking?hourA=2", "/api/thinking?timezone=Unknown%2Fzone"} {
+	// A rolling Range ends at the page's clock when it sends one, as its
+	// query-v3 read does.
+	groups := func(now time.Time) int {
+		w := apiCall(t, server, config.APIToken, http.MethodGet, fmt.Sprintf("/api/thinking?view=calendar&range=1d&now=%d", now.UnixMilli()), nil)
+		var body struct{ Groups []json.RawMessage }
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		return len(body.Groups)
+	}
+	if before, after := groups(time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)), groups(time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC)); before != 0 || after == 0 {
+		t.Fatalf("Range ending before the requests holds %d groups, after them %d", before, after)
+	}
+	for _, path := range []string{"/api/thinking?filters=invalid", "/api/thinking?period=wrong", "/api/thinking?range=custom&from=invalid", "/api/thinking?minimum=-1", "/api/thinking?hourA=2", "/api/thinking?timezone=Unknown%2Fzone", "/api/thinking?now=soon"} {
 		w = apiCall(t, server, config.APIToken, http.MethodGet, path, nil)
 		if w.Code != 400 {
 			t.Fatalf("invalid controls %s: %d %s", path, w.Code, w.Body.String())
@@ -161,6 +179,63 @@ func TestThinkingProjection(t *testing.T) {
 		t.Fatal("native query and dashboard population differ", rows, err)
 	}
 
+	// The dashboard's wait bands and local hours, as native fields.
+	banded, err := thinkingRequestDataset.Rows(t.Context(), c.reader(), querytable.Query{Select: []string{"id", "gap_seconds", "gap_bin", "hour_of_day", "requested_at"}, Limit: 20}, schema)
+	if err != nil || banded.Total != 12 {
+		t.Fatal(banded, err)
+	}
+	for _, row := range banded.Rows {
+		at, _ := time.Parse(time.RFC3339Nano, fmt.Sprint(row["requested_at"]))
+		if row["hour_of_day"] == nil || int(floatOr(row["hour_of_day"])) != at.Local().Hour() {
+			t.Fatalf("hour of day %v for %v", row["hour_of_day"], at)
+		}
+		gap, ok := row["gap_seconds"].(float64)
+		if !ok {
+			if row["gap_bin"] != nil {
+				t.Fatalf("a request without a wait has band %v", row["gap_bin"])
+			}
+			continue
+		}
+		if row["gap_bin"] != thinkingBandLabel(thinkingBin(gap)) {
+			t.Fatalf("wait %v in band %v, want %q", gap, row["gap_bin"], thinkingBandLabel(thinkingBin(gap)))
+		}
+	}
+	// In a viewer's zone, here one 5:45 ahead of UTC, the calendar fields
+	// follow that zone rather than the service's.
+	kathmandu, _ := time.LoadLocation("Asia/Kathmandu")
+	zoned, err := thinkingZonedDataset(thinkingRequestDataset, "Asia/Kathmandu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := zoned.Rows(t.Context(), c.reader(), querytable.Query{Select: []string{"id", "requested_at", "day", "week", "month", "hour_of_day"}, Limit: 20}, schema)
+	if err != nil || local.Total != 12 {
+		t.Fatal(local, err)
+	}
+	for _, row := range local.Rows {
+		at, _ := time.Parse(time.RFC3339Nano, fmt.Sprint(row["requested_at"]))
+		at = at.In(kathmandu)
+		monday := at.AddDate(0, 0, -((int(at.Weekday()) + 6) % 7))
+		if row["day"] != at.Format("2006-01-02") || row["week"] != monday.Format("2006-01-02") || row["month"] != at.Format("2006-01") || int(floatOr(row["hour_of_day"])) != at.Hour() {
+			t.Fatalf("zoned calendar %v for %v", row, at)
+		}
+	}
+	if _, err := thinkingZonedDataset(thinkingRequestDataset, "Nowhere/Zone"); err == nil {
+		t.Fatal("an unknown zone was accepted")
+	}
+	count := ungroupedRowsRequest(time.Now(), qt.WhereTerm{Field: "hour_of_day", Op: ">=", Value: "0"})
+	if w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/model_requests/query-v3?timezone=Asia%2FKathmandu", count); w.Code != 200 {
+		t.Fatalf("a zoned count answered %d: %s", w.Code, w.Body.String())
+	}
+	if w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/model_requests/query-v3?timezone=Nowhere%2FZone", count); w.Code != 400 {
+		t.Fatalf("an unknown zone answered %d: %s", w.Code, w.Body.String())
+	}
+	for _, edge := range []float64{0.1, 0.15, 0.2, 499.9, 500, 600} {
+		var band string
+		if err := c.reader().QueryRow("SELECT "+thinkingBandSQL("?1"), edge).Scan(&band); err != nil || band != thinkingBandLabel(thinkingBin(edge)) {
+			t.Fatalf("band of %v: %q, want %q (%v)", edge, band, thinkingBandLabel(thinkingBin(edge)), err)
+		}
+	}
+
 	for _, field := range []string{"service_tier", "speed_source"} {
 		selected, err := thinkingRequestDataset.Rows(t.Context(), c.reader(), querytable.Query{Select: []string{"id", "speed", field}, Where: []querytable.WhereTerm{{Field: "speed", Op: "=", Value: "fast"}}, Limit: 20}, schema)
 		want := map[string]string{"service_tier": "priority", "speed_source": "service_tier"}[field]
@@ -172,14 +247,6 @@ func TestThinkingProjection(t *testing.T) {
 		selected, err := thinkingRequestDataset.Rows(t.Context(), c.reader(), querytable.Query{Select: []string{"id", "speed", by}, Where: []querytable.WhereTerm{{Field: "speed", Op: "=", Value: "fast"}}, Limit: 20}, schema)
 		if err != nil || selected.Total != 1 || selected.Rows[0]["speed"] != "fast" {
 			t.Fatalf("native speed breakdown %s: %+v %v", by, selected, err)
-		}
-		opts, err := readThinkingOptions(url.Values{"groupBy": {by}, "overview": {"1"}}, time.Now())
-		if err != nil {
-			t.Fatal(err)
-		}
-		grouped, err := aggregateThinking(t.Context(), records, opts)
-		if err != nil || grouped.Retained != 12 || len(grouped.Groups) < 2 {
-			t.Fatalf("speed groups %s: %+v %v", by, grouped, err)
 		}
 	}
 	v3Schema, err := sqliteQuerySchema("model_requests")
@@ -293,23 +360,47 @@ func TestThinkingAggregation(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := result.Groups[0]
-	if result.Timed != 240 || result.Adjusted != 240 || g.Comparison.Days != 5 || *g.Comparison.Ratio != .5 {
+	if result.Adjusted != 240 || g.Adjusted != 240 || g.Stats != nil || g.Comparison.Days != 5 || *g.Comparison.Ratio != .5 || len(g.Bands) != 8 || g.Bands[3].Days != 5 {
 		t.Fatal(result, g)
 	}
-	o.Rows = "month"
+	if len(g.Calendar) != 10 || g.Calendar[0].Day != "2026-10-01" || g.Calendar[0].Hour != 9 || *g.Calendar[1].Ratio != .5 {
+		t.Fatal("daily cells in the named zone", g.Calendar)
+	}
+	if c := g.Calendar[0]; c.N != 24 || c.Conversations != 3 || c.Raw == nil || *c.Raw != 2 {
+		t.Fatal("raw cells give the median wait of timed requests", c)
+	}
+	// Raw waits count every timed request, fitted or not; an untimed request
+	// makes a cell without a wait, and a cell needs twenty waits from three
+	// conversations.
+	extra := slices.Clone(records)
+	for i := 0; i < 5; i++ {
+		gap := 4.0
+		extra = append(extra, thinkingRecord{ID: fmt.Sprint("late", i), Conversation: fmt.Sprint(i % 3), Model: "model", Effort: "high", At: time.Date(2026, 10, 1, 22, i, 0, 0, zone), Gap: &gap})
+	}
+	extra = append(extra, thinkingRecord{ID: "untimed", Conversation: "u", Model: "model", Effort: "high", At: time.Date(2026, 10, 1, 23, 0, 0, 0, zone)},
+		thinkingRecord{ID: "undated", Conversation: "u", Model: "model", Effort: "high"})
+	more, err := aggregateThinking(context.Background(), extra, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells := more.Groups[0].Calendar
+	if len(cells) != 12 || cells[2].Hour != 22 || cells[2].N != 5 || cells[2].Conversations != 3 || cells[2].Raw != nil || cells[2].Adjusted != 0 || cells[2].Ratio != nil ||
+		cells[3].Hour != 23 || cells[3].N != 0 || cells[3].Raw != nil {
+		t.Fatal("unsupported, unfitted and untimed cells", cells[:4])
+	}
+	o.Rows, o.Metric = "month", "ratio"
 	monthly, err := aggregateThinking(context.Background(), records, o)
-	if err != nil || len(monthly.Groups[0].Calendar) != 2 || *monthly.Groups[0].Calendar[1].Raw != 2 {
-		t.Fatal("pool individual observations before medians", monthly, err)
+	if err != nil || len(monthly.Groups[0].Calendar) != 2 || *monthly.Groups[0].Calendar[1].Ratio != .5 || monthly.Groups[0].Calendar[1].Adjusted != 120 {
+		t.Fatal("pool individual estimates before medians", monthly, err)
 	}
-	if result.CalendarBounds[result.CalendarPeriods[0]].From != "2026-10-01T06:00:00Z" {
-		t.Fatal("named-zone date boundaries", result.CalendarBounds)
+	if stats := monthly.Groups[0].Stats; stats == nil || stats.N != 240 || *stats.Median != .75 || *monthly.Groups[0].Conversations != 3 {
+		t.Fatal("the ratio metric describes the estimates", stats)
 	}
-	o.View = "reasoning"
-	records[0].Gap = nil
-	tokens, _ := aggregateThinking(context.Background(), records, o)
-	if tokens.Groups[0].Stats.N != 240 || tokens.Timed != 239 {
-		t.Fatal("reasoning population must not depend on timing")
+	o.View = "time"
+	if other, _ := aggregateThinking(context.Background(), records, o); len(other.Groups) != 0 {
+		t.Fatal("only time of day reads the fitted cells", other)
 	}
+	o.View = "calendar"
 	for i, v := range thinkingEdges[:len(thinkingEdges)-1] {
 		if thinkingBin(v) != i {
 			t.Fatal("left inclusive bins", v)
@@ -400,73 +491,6 @@ func TestThinkingModelsAndPairs(t *testing.T) {
 	if !reflect.DeepEqual(thinkingRanks([]float64{8, 2, 2}), []float64{2, .5, .5}) {
 		t.Fatal("tied ranks")
 	}
-}
-
-func TestThinkingDSTBuckets(t *testing.T) {
-	zone, _ := time.LoadLocation("America/Denver")
-	first, _ := time.Parse(time.RFC3339, "2026-11-01T07:30:00Z")
-	second := first.Add(time.Hour)
-	a, b := thinkingPeriod(first, "hour", 1, 1, zone), thinkingPeriod(second, "hour", 1, 1, zone)
-	if a.Equal(b) || !thinkingNext(a, "hour", 1, 1).Equal(b) {
-		t.Fatal("repeated local hours must remain separate", a, b)
-	}
-	start := thinkingPeriod(first, "hours", 6, 1, zone)
-	next := thinkingNext(start, "hours", 6, 1)
-	if next.Hour() != 6 || next.Sub(start) != 7*time.Hour {
-		t.Fatal("six civil hours include the DST transition", start, next)
-	}
-	if !thinkingPeriod(next.Add(time.Minute), "hours", 6, 1, zone).Equal(next) {
-		t.Fatal("period assignment and boundaries disagree")
-	}
-	for _, sample := range []struct{ zone, date string }{
-		{"America/Denver", "2026-03-08"}, {"America/Denver", "2026-11-01"},
-		{"Europe/Berlin", "2026-03-29"}, {"Europe/Berlin", "2026-10-25"},
-		{"Australia/Lord_Howe", "2026-10-04"}, {"Australia/Lord_Howe", "2026-04-05"},
-	} {
-		for _, hours := range []int{1, 2, 3, 4, 6, 8, 12, 24, 5} {
-			t.Run(fmt.Sprintf("%s/%s/%dh", sample.zone, sample.date, hours), func(t *testing.T) {
-				zone, err := time.LoadLocation(sample.zone)
-				if err != nil {
-					t.Fatal(err)
-				}
-				date, err := time.ParseInLocation("2006-01-02", sample.date, zone)
-				if err != nil {
-					t.Fatal(err)
-				}
-				from, to := date.AddDate(0, 0, -1), date.AddDate(0, 0, 2)
-				records := []thinkingRecord{}
-				for at := from; at.Before(to); at = at.Add(15 * time.Minute) {
-					gap := 2.0
-					records = append(records, thinkingRecord{ID: at.Format(time.RFC3339), Conversation: "one", Model: "one", At: at, Gap: &gap})
-				}
-				o, err := readThinkingOptions(url.Values{"view": {"time"}, "period": {"hours"}, "hours": {fmt.Sprint(hours)}, "timezone": {sample.zone}, "range": {"custom"}, "from": {from.Format(time.RFC3339)}, "to": {to.Format(time.RFC3339)}}, time.Now())
-				if err != nil {
-					t.Fatal(err)
-				}
-				v, err := aggregateThinking(t.Context(), records, o)
-				if err != nil {
-					t.Fatal(err)
-				}
-				shown := 0
-				for _, key := range v.Periods {
-					shown += v.Groups[0].Periods[key].Stats.N
-				}
-				if shown != len(records) {
-					t.Fatalf("renderable buckets contain %d of %d observations", shown, len(records))
-				}
-				for _, r := range records {
-					key := thinkingPeriodKey(thinkingPeriod(r.At, o.Period, hours, 1, zone), o.Period)
-					bounds, ok := v.PeriodBounds[key]
-					lo, _ := time.Parse(time.RFC3339Nano, bounds.From)
-					hi, _ := time.Parse(time.RFC3339Nano, bounds.To)
-					if !ok || r.At.Before(lo) || !r.At.Before(hi) {
-						t.Fatalf("%s assigned outside its rendered bucket %s: %+v", r.At, key, bounds)
-					}
-				}
-			})
-		}
-	}
-
 }
 
 func TestThinkingCachedPopulationParityAndFreshness(t *testing.T) {
@@ -650,5 +674,242 @@ func TestThinkingSpeedMigration(t *testing.T) {
 	var speed string
 	if err := c.DB.QueryRow("SELECT speed FROM model_request_timings WHERE id='request-1'").Scan(&speed); err != nil || speed != "fast" {
 		t.Fatalf("migrated speed %q: %v", speed, err)
+	}
+}
+
+// The page merges fitted estimates onto query-v3 groups by key, so Go keys a
+// record's group as thinking-query.ts keys the same row
+// (testdata/thinking-group-keys.json, also read by thinking-query.test.mjs).
+func TestThinkingGroupKeys(t *testing.T) {
+	var fixture struct {
+		Bands []string
+		Cases []struct {
+			GroupBy, Key, Label string
+			Row                 map[string]any
+		}
+	}
+	data, err := os.ReadFile("../../testdata/thinking-group-keys.json")
+	if err != nil || json.Unmarshal(data, &fixture) != nil || len(fixture.Cases) == 0 {
+		t.Fatal(err)
+	}
+	for i := range len(thinkingEdges) - 1 {
+		if i >= len(fixture.Bands) || thinkingBandLabel(i) != fixture.Bands[i] {
+			t.Fatalf("wait band %d is %q, want %v", i, thinkingBandLabel(i), fixture.Bands)
+		}
+	}
+	if len(fixture.Bands) != len(thinkingEdges)-1 {
+		t.Fatalf("%d wait bands, want %d", len(fixture.Bands), len(thinkingEdges)-1)
+	}
+	for _, c := range fixture.Cases {
+		text := func(field string) string { value, _ := c.Row[field].(string); return value }
+		depth, _ := c.Row["agent_depth"].(float64)
+		r := thinkingRecord{Model: text("model"), Effort: text("effort"), Speed: text("speed"), Provider: text("provider"), Harness: text("harness"),
+			Project: text("project_name"), Machine: text("machine"), Preceding: text("preceding_tool"), Depth: int(depth)}
+		thinkingRelabel(&r)
+		if key, label := thinkingGroupKey(r, c.GroupBy); key != c.Key || label != c.Label {
+			t.Errorf("%s %v: key %q label %q, want %q %q", c.GroupBy, c.Row, key, label, c.Key, c.Label)
+		}
+	}
+}
+
+// The Thinking dashboards read model_requests through query-v3
+// (thinking-query.ts). The service answers each shape they send with the
+// statistics the records give.
+func TestThinkingQueryV3Shapes(t *testing.T) {
+	c, config := testCatalog(t)
+	seedThinking(t, c)
+	records, err := c.thinkingRecords(t.Context(), thinkingOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, c)
+	type bucket struct {
+		Keys         []any
+		Value        any
+		Distribution *struct {
+			Summary *struct {
+				N      int
+				Values []float64
+			}
+		}
+	}
+	ask := func(params string, metrics ...map[string]any) map[string][]bucket {
+		t.Helper()
+		body := map[string]any{"version": 3, "profile": "qt-sqlite-v1", "now": time.Now().UnixMilli(), "rows": false, "source": map[string]any{"where": []any{}, "limit": 1},
+			"result": map[string]any{"where": []any{}, "limit": 1}, "metrics": metrics}
+		w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/model_requests/query-v3"+params, body)
+		var result struct {
+			Metrics []struct {
+				ID, Error string
+				Buckets   []bucket
+			}
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Metrics == nil {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+		out := map[string][]bucket{}
+		for _, m := range result.Metrics {
+			if m.Error != "" {
+				t.Fatalf("%s: %s", m.ID, m.Error)
+			}
+			out[m.ID] = m.Buckets
+		}
+		return out
+	}
+	timed := []map[string]any{{"field": "gap_seconds", "op": "is_not_null", "value": ""}}
+	quantiles := func(id, input string, groupBy []string, probabilities []float64, where []map[string]any) map[string]any {
+		return map[string]any{"id": id, "op": "count", "groupBy": groupBy, "where": where, "distribution": map[string]any{"kind": "quantiles", "input": input, "probabilities": probabilities}}
+	}
+	gaps, reasoning := map[string][]float64{}, map[string][]float64{}
+	var first, last time.Time
+	for _, r := range records {
+		if r.Gap != nil {
+			gaps[r.Model] = append(gaps[r.Model], *r.Gap)
+		}
+		if r.Reasoning > 0 {
+			reasoning[r.Model] = append(reasoning[r.Model], r.Reasoning)
+		}
+		if first.IsZero() || r.At.Before(first) {
+			first = r.At
+		}
+		if r.At.After(last) {
+			last = r.At
+		}
+	}
+	got := ask("", quantiles("gaps", "[gap_seconds]", []string{"model"}, []float64{.1, .25, .5, .75, .9, .95}, nil),
+		quantiles("reasoning", "[reasoning_output_tokens]", []string{"model"}, []float64{.1, .25, .5, .75, .9, .95}, []map[string]any{{"field": "reasoning_output_tokens", "op": ">", "value": "0"}}),
+		map[string]any{"id": "first", "op": "min", "field": "requested_at", "groupBy": []string{}}, map[string]any{"id": "last", "op": "max", "field": "requested_at", "groupBy": []string{}})
+	for id, values := range map[string]map[string][]float64{"gaps": gaps, "reasoning": reasoning} {
+		for _, b := range got[id] {
+			want := thinkingSummarize(slices.Clone(values[firstString(b.Keys[0])]))
+			q := b.Distribution
+			if want.N == 0 {
+				if q != nil && q.Summary != nil {
+					t.Fatalf("%s %v: %+v without values", id, b.Keys, q.Summary)
+				}
+				continue
+			}
+			if q == nil || q.Summary == nil || int(q.Summary.N) != want.N || q.Summary.Values[2] != *want.Median || math.Abs(q.Summary.Values[5]-*want.P95) > 1e-9 || math.Abs(q.Summary.Values[0]-*want.Low) > 1e-9 {
+				t.Fatalf("%s %v: %+v, want %+v", id, b.Keys, b.Distribution, want)
+			}
+		}
+	}
+	for id, want := range map[string]time.Time{"first": first, "last": last} {
+		at, err := time.Parse(time.RFC3339Nano, firstString(got[id][0].Value))
+		if err != nil || !at.Equal(want) {
+			t.Fatalf("%s request %v (%T), want %v", id, got[id][0].Value, got[id][0].Value, want)
+		}
+	}
+	// Six-hour buckets in a named zone: percentiles and wait bands per period.
+	zone, _ := time.LoadLocation("America/Denver")
+	dateGrouping := map[string]any{"field": "requested_at", "interval": "hour", "every": 6, "timeZone": "America/Denver", "includeEmpty": false, "range": "observed"}
+	got = ask("", map[string]any{"id": "median", "op": "count", "expression": "PERCENTILE([gap_seconds],0.5)", "groupBy": []string{"requested_at", "model"}, "dateGrouping": dateGrouping},
+		map[string]any{"id": "bands", "op": "count", "groupBy": []string{"requested_at", "model", "gap_bin"}, "where": timed, "dateGrouping": dateGrouping})
+	period := func(at time.Time) time.Time {
+		at = at.In(zone)
+		return time.Date(at.Year(), at.Month(), at.Day(), at.Hour()/6*6, 0, 0, 0, zone)
+	}
+	for _, b := range got["median"] {
+		start, _ := time.Parse(time.RFC3339Nano, firstString(b.Keys[0]))
+		values := []float64{}
+		for _, r := range records {
+			if r.Gap != nil && r.Model == firstString(b.Keys[1]) && period(r.At).Equal(start) {
+				values = append(values, *r.Gap)
+			}
+		}
+		if len(values) == 0 && b.Value != nil || len(values) > 0 && b.Value != thinkingMedian(values) {
+			t.Fatalf("period %v: median %v of %v", b.Keys, b.Value, values)
+		}
+	}
+	banded := 0
+	for _, b := range got["bands"] {
+		banded += int(integer(b.Value))
+	}
+	if want := len(slices.Concat(slices.Collect(maps.Values(gaps))...)); banded != want {
+		t.Fatalf("bands hold %d of %d waits", banded, want)
+	}
+	// Time-of-day cells in the viewer's zone.
+	kathmandu, _ := time.LoadLocation("Asia/Kathmandu")
+	got = ask("?timezone=Asia%2FKathmandu", quantiles("cells", "[gap_seconds]", []string{"model", "day", "hour_of_day"}, []float64{.5}, nil))
+	cells := 0
+	for _, b := range got["cells"] {
+		q := b.Distribution
+		n := 0
+		for _, r := range records {
+			at := r.At.In(kathmandu)
+			if r.Gap != nil && r.Model == firstString(b.Keys[0]) && at.Format("2006-01-02") == firstString(b.Keys[1]) && at.Hour() == int(floatOr(b.Keys[2])) {
+				n++
+			}
+		}
+		if q != nil && q.Summary != nil {
+			cells += int(q.Summary.N)
+		}
+		if n > 0 && (q == nil || q.Summary == nil || int(q.Summary.N) != n) {
+			t.Fatalf("cell %v: %+v, want %d waits", b.Keys, b.Distribution, n)
+		}
+	}
+	if want := len(slices.Concat(slices.Collect(maps.Values(gaps))...)); cells != want {
+		t.Fatalf("cells hold %d of %d waits", cells, want)
+	}
+	// A filter on a calendar field selects the same requests for the fit
+	// (/api/thinking) as for query-v3: both read it in the viewer's zone.
+	hour := records[0].At.In(kathmandu).Hour()
+	want := 0
+	for _, r := range records {
+		if r.At.In(kathmandu).Hour() == hour {
+			want++
+		}
+	}
+	filter := []qt.WhereTerm{{Field: "hour_of_day", Op: "=", Value: strconv.Itoa(hour)}}
+	token, err := qt.EncodeQueryLink(qt.LinkQuery{Where: filter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := readThinkingOptions(url.Values{"filters": {token}, "timezone": {"Asia/Kathmandu"}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fitted, err := c.thinkingRecords(t.Context(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = ask("?timezone=Asia%2FKathmandu", map[string]any{"id": "n", "op": "count", "groupBy": []string{}, "where": []map[string]any{{"field": "hour_of_day", "op": "=", "value": strconv.Itoa(hour)}}})
+	if len(fitted) != want || int(integer(got["n"][0].Value)) != want {
+		t.Fatalf("hour %d in Kathmandu: fit reads %d requests, query-v3 %v, want %d", hour, len(fitted), got["n"][0].Value, want)
+	}
+	// Current timings are read from the stored rows alone; while a refresh is
+	// pending they are derived again. Both give the same answers.
+	batch := []map[string]any{quantiles("gaps", "[gap_seconds]", []string{"model"}, []float64{.5, .9}, timed),
+		{"id": "bands", "op": "count", "groupBy": []string{"model", "gap_bin"}, "where": timed},
+		{"id": "conversations", "op": "count_distinct", "field": "conversation_id", "groupBy": []string{"provider"}},
+		{"id": "labels", "op": "count", "groupBy": []string{"harness", "project_name", "machine"}}}
+	stored := ask("", batch...)
+	if _, err := c.DB.Exec("INSERT OR IGNORE INTO model_request_timing_dirty SELECT DISTINCT conversation_id FROM model_request_timings"); err != nil {
+		t.Fatal(err)
+	}
+	if derived := ask("", batch...); !reflect.DeepEqual(stored, derived) {
+		t.Fatalf("stored timings answer %+v, derived %+v", stored, derived)
+	}
+	// A request that changes after the stored timings were chosen, but before
+	// the query reads them, is read as it now is.
+	if err := c.refreshRequestTimings(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := c.requestTimingsPending(t.Context()); err != nil || pending {
+		t.Fatal("timings current before the race", pending, err)
+	}
+	override(t, &afterThinkingSourceChoice, func() {
+		afterThinkingSourceChoice = func() {}
+		if _, err := c.DB.Exec("UPDATE model_requests SET model='raced' WHERE id=(SELECT MIN(id) FROM model_requests)"); err != nil {
+			t.Error(err)
+		}
+	})
+	raced := ask("", map[string]any{"id": "models", "op": "count", "groupBy": []string{"model"}}, map[string]any{"id": "all", "op": "count", "groupBy": []string{}})
+	found := false
+	for _, b := range raced["models"] {
+		found = found || b.Keys[0] == "raced"
+	}
+	if !found {
+		t.Fatalf("a request changed after the source was chosen is read as it was: %+v", raced["models"])
 	}
 }

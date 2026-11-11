@@ -27,14 +27,14 @@ export function isThinkingCardAddress(address: string): boolean {
 }
 
 // The population the page draws: its query filters and its controls.
-export function readThinkingCard(address: string, now = new Date()): { topic: "thinking-overview" | "thinking-detail"; state: ThinkingState; where: WhereTerm[]; filters: string } {
+export function readThinkingCard(address: string, now = new Date()): { topic: "thinking-overview" | "thinking-detail"; state: ThinkingState; where: WhereTerm[]; native: WhereTerm[]; filters: string } {
   const url = new URL(address, location.origin), params = url.searchParams, topic = params.get("analyze_topic") ?? "";
   if (url.origin !== location.origin || url.pathname !== "/analyze" || params.get("analyze_mode") !== "dashboards" || !isThinkingTopic(topic)) throw new Error("This dashboard card is unavailable.");
   const filters = params.get("analyze_filters"), native = filters ? decodeQueryStrict(filters) : EMPTY_QUERY;
   if (!native || native.grouping) throw new Error("This card's Thinking filters are invalid.");
   let state: ThinkingState;
   try { state = initialThinking(params); } catch { throw new Error("This card's Thinking view is invalid."); }
-  return { topic, state, where: [...native.where, ...thinkingWhere(state, now.getTime())], filters: filters ?? "" };
+  return { topic, state, where: [...native.where, ...thinkingWhere(state, now.getTime())], native: native.where, filters: filters ?? "" };
 }
 
 const recipe = (id: string) => thinkingCardRecipes.find(item => item.id === id)!;

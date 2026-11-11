@@ -63,6 +63,20 @@ export function resultScope(parent: AbortSignal | undefined, policy: ResultPolic
   return { signal: controller.signal, served: () => combineServed(...scope.served) };
 }
 
+// liveScope is a signal whose query requests are computed now, whatever the
+// parent asks, and whose served answers count as the parent scope's. A view
+// that joins a query-v3 answer to one computed live elsewhere reads both at
+// the same moment this way. Without a parent scope it is the parent.
+export function liveScope(parent: AbortSignal | undefined): AbortSignal | undefined {
+  const outer = parent ? scopes.get(parent) : undefined;
+  if (!parent || !outer) return parent;
+  const controller = new AbortController();
+  if (parent.aborted) controller.abort(parent.reason);
+  else parent.addEventListener("abort", () => controller.abort(parent.reason), { once: true });
+  scopes.set(controller.signal, { policy: "live", served: outer.served });
+  return controller.signal;
+}
+
 // scopedRequest names the scope's policy on a query request; its note
 // records what the response says was served.
 export function scopedRequest(url: string, init: RequestInit): { init: RequestInit; note: (headers: { get(name: string): string | null }) => void } {

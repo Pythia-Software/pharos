@@ -64,6 +64,18 @@ const longTitle = "Investigate why the incremental indexer re-reads every captur
 export const queryFixtureDatasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
 const datasets = queryFixtureDatasets;
+// Timed model requests for Thinking: two models and efforts over two weeks,
+// waits across every band, and some requests without a usable wait.
+const thinkingModels=['gpt-6.1-sol','claude-opus-5-5'],thinkingEfforts=['low','high'];
+const waitEdges=[.1,.2,.3,.5,1,2,3,5,10,20,30,50,100,200,300,500,600];
+datasets.model_requests=Array.from({length:448},(_,index)=>{
+  const at=new Date(now-(index%14+.05+(index*7%24)/25)*day),iso=at.toISOString(),gap=index%9===0?null:Math.min(600,.12*Math.pow(1.7,index%17));
+  const monday=new Date(at);monday.setUTCDate(monday.getUTCDate()-(monday.getUTCDay()+6)%7);
+  return {...datasets.model_requests[index%datasets.model_requests.length],id:'request-'+index,conversation_id:'conversation-'+index%16,
+    model:thinkingModels[index%2],effort:thinkingEfforts[(index>>1)%2],speed:index%5?'standard':'fast',requested_at:iso,day:iso.slice(0,10),week:monday.toISOString().slice(0,10),month:iso.slice(0,7),
+    hour_of_day:at.getUTCHours(),gap_seconds:gap,gap_bin:gap===null?null:(band=>`${waitEdges[band]}–${waitEdges[band+1]} s`)(Math.max(0,waitEdges.findLastIndex(edge=>edge<=gap)-(gap===600?1:0))),
+    timing_quality:gap===null?'No linked tool timestamp':'Usable timing',reasoning_output_tokens:index%3?100+index:0,agent_depth:index%4?0:1};
+});
 // Invented entity measurements for the standalone cross-dashboard scatter.
 datasets.scatter = ["conversation","work","agent_session","message"].flatMap(point_kind => Array.from({length:8},(_,index)=>({
   ...datasets.scatter[index], id:`${point_kind}:point-${index}`,entity_id:`point-${index}`,point_kind,
@@ -713,23 +725,19 @@ export const resourceHistory = (scope = "this library service") => {
 };
 
 // Synthetic numeric timing fixture: UI/layout tests never read a user library.
+// /api/thinking answers only the workload fit's parts and the time-of-day
+// cells (thinking-query.ts reads the rest from model_requests), keyed as the
+// page keys its groups.
 export function thinkingFixture(query) {
-  const edges=[.1,.2,.3,.5,1,2,3,5,10,20,30,50,100,200,300,500,600];
   const periods=Array.from({length:14},(_,i)=>new Date(+summaryDay-(13-i)*day).toISOString().slice(0,10));
-  const bounds=Object.fromEntries(periods.map(p=>[p,{From:p+"T00:00:00.000Z",To:new Date(Date.parse(p)+day).toISOString()}]));
-  const models=['gpt-6.1-sol','claude-opus-5-5'],efforts=['low','high'];
-  const stats=(factor=1)=>({n:320,median:8*factor,p75:15*factor,p90:30*factor,p95:45*factor,q1:3*factor,q3:15*factor,low:1*factor,high:30*factor});
-  const counts=[0,0,1,1,5,10,20,40,80,70,50,25,10,5,2,1];
+  const models=thinkingModels,efforts=thinkingEfforts;
   const by=query.get('groupBy')??'none';
-  const labels=by==='model_effort'?models.flatMap(m=>efforts.map(e=>[m+' · '+e,m,e])):by==='model'?models.map(m=>[m,m,'']):by==='effort'?efforts.map(e=>[e,'',e]):[['All selected requests','','']];
-  const groups=labels.map(([label,model,effort],i)=>({key:label,label,model,effort,Retained:400,Timed:320,Adjusted:280,Conversations:16,RetainedConversations:20,stats:stats(1+i*.2),counts,
-    periods:Object.fromEntries(periods.map(p=>[p,{stats:stats(1+i*.2),retained:400,conversations:16,counts}])),
-    calendar:periods.flatMap(p=>Array.from({length:24},(_,hour)=>({day:p,hour,Raw:8+hour,Ratio:.6+hour/30,N:100,Adjusted:80,Conversations:8,AdjustedConversations:7}))),
-    bands:Array.from({length:8},(_,h)=>({hour:h*3,days:14,n:300,Ratio:.7+h*.08,Low:.6+h*.08,High:.8+h*.08})),comparison:{days:14,Ratio:.7,Low:.6,High:.8},
-    cdf:Array.from({length:101},(_,p)=>[.1+Math.pow(p/100,3)*150,p/100])}));
-  const response={periodBounds:bounds,calendarBounds:bounds,Retained:1600,Timed:1280,Adjusted:1120,Conversations:40,Hidden:0,Models:models,Efforts:efforts,edges,groups,summary:stats(),periods,calendarPeriods:periods,From:'',To:'',timezone:query.get('timezone')||'UTC'};
+  const keys=by==='model_effort'?models.flatMap(m=>efforts.map(e=>JSON.stringify([m,e]))):by==='model'?models:by==='effort'?efforts:by==='none'?['All requests']:[];
+  const groups=keys.map(key=>({key,Adjusted:280,
+    calendar:periods.flatMap(p=>Array.from({length:24},(_,hour)=>({day:p,hour,Raw:4+hour/4,Ratio:.6+hour/30,N:90,Adjusted:80,Conversations:8,AdjustedConversations:7}))),
+    bands:Array.from({length:8},(_,h)=>({hour:h*3,days:14,n:300,Ratio:.7+h*.08,Low:.6+h*.08,High:.8+h*.08})),comparison:{days:14,Ratio:.7,Low:.6,High:.8}}));
+  const response={Adjusted:query.get('view')==='calendar'?1120:0,groups:query.get('view')==='calendar'?groups:[],timezone:query.get('timezone')||'UTC'};
   if(query.get('overview')==='1')Object.assign(response,{
-    coverage:groups,agentCoverage:[{...groups[0],key:'codex',label:'Codex'},{...groups[0],key:'claude',label:'Claude'}],
     factors:models.flatMap(model=>['context','reasoning','other'].map((factor,i)=>({model,factor,Ratio:1.2+i*.1,Low:1.1+i*.1,High:1.3+i*.1,N:1200,Conversations:40}))),
     compactions:Array.from({length:32},(_,i)=>({ID:'compact-'+i,Model:models[i%2],Effort:'high',Conversation:'conv-'+i,Gap:.2+i/40,Context:.3,Output:.7,Before:10,After:4})),
     traces:[{ID:'stream-1',Model:models[0],Conversation:rootConversation,Workspace:workID,Count:36,Points:Array.from({length:36},(_,i)=>({ID:'request-'+i,At:iso((36-i)*60000),Rank:i,Context:i<18?10000+i*3000:12000+(i-18)*2000,Cache:1000,Output:100+i*7,Gap:2+i%12,Smooth:4+i%5,Compaction:i===18}))}],
