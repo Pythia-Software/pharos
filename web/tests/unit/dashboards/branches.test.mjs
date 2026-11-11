@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import branchDocument from "../../../../schemas/branch_usage.schema.json";
-import { catalogProblems } from "../../../src/dashboard-analysis-model";
+import { catalogProblems, readAnalysisLink } from "../../../src/dashboard-analysis-model";
+import { trendQuery } from "../../../src/dashboard-trend-model";
 import { branchAnalysisCatalog, branchCoverage, branchCoverageLabels, branchSummaryMetrics, branchUsageDisplay } from "../../../src/branch-analysis-catalog";
 import { dashboardDefaults } from "../../../src/dashboard-defaults";
 
@@ -21,6 +22,23 @@ test("the spend-by-branch catalog is valid and its coverage matches the dataset"
   assert.deepEqual(split.where, branchAnalysisCatalog.breakdowns.branch.where);
   assert.equal(branchSummaryMetrics.find(metric => metric.id === "branches").field, "project_branch");
   assert.ok(field("project_branch").aggregate.groupable);
+  assert.equal(field("source_kind").label, "Source");
+  assert.equal(branchAnalysisCatalog.breakdowns.source_kind.label, "Source");
+  assert.equal(field("channel").label, "Channel");
+  assert.ok(field("channel_status").aggregate.groupable);
+});
+
+test("branch links preserve Source and Channel splits and query the selected dimension", () => {
+  for (const split of ["source_kind", "channel"]) {
+    const state = JSON.parse(JSON.stringify({ ...dashboardDefaults.branches, v: 3, view: "trend", metric: "cost", split, period: "day" }));
+    const where = [{ field: "channel", op: "=", value: "conductor" }];
+    const restored = readAnalysisLink(branchAnalysisCatalog, state, where);
+    assert.equal(restored.state.split, split);
+    assert.deepEqual(restored.where, where);
+    const { query } = trendQuery(branchAnalysisCatalog, restored.state, restored.where);
+    assert.deepEqual(query.aggregations[0].groupBy, ["usage_at", split]);
+    assert.deepEqual(query.where, where);
+  }
 });
 
 test("the coverage split lists every coverage, and a row without a branch says why", () => {
