@@ -27,7 +27,7 @@ export function EventLinkLegend({events,renderGroup,heading=<strong>Agent events
  const hint=(icon:React.ReactNode,label:string)=>renderHint?renderHint(icon,label):<span>{icon}{label}</span>;
  return <div className="lt-legend-line event-link-legend">{heading}{EVENT_GROUPS.filter(g=>groups.has(g.name)).map(g=>renderGroup?<React.Fragment key={g.key}>{renderGroup(g)}</React.Fragment>:<span key={g.key}><EventGlyph group={g.name}/>{g.short}</span>)}
   {linked?hint(<svg width="26" height="12" aria-hidden="true"><path d="M2 10C8 2 16 3 24 3" fill="none" stroke="var(--event-link)" strokeWidth="1.2"/><path d="M2 7V11" stroke="var(--event-link)" strokeWidth="2"/></svg>,'Arc back to the earlier text it is about'):null}
-  {open?hint(<EventGlyph group={events.find(e=>!linkedTarget(e))!.group} hollow/>,'On the axis: no target found'):null}</div>;
+  {open?hint(<EventGlyph group={events.find(e=>!linkedTarget(e))!.group} hollow/>,'Open: Ungrounded'):null}</div>;
 }
 /** One card per mark: a merged mark (event-merge.ts) lists every kind with its probability, then its text once and each target once. */
 export function EventLinkCard({events,href,close}:{events:AgentEventLink[];href?:(e:AgentEventLink)=>string|null;close?:()=>void}){

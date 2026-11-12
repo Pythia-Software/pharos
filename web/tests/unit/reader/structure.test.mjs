@@ -2,7 +2,7 @@
 // (reader-model.js). The fixture test is the JS half of
 // internal/archive/transcript_find_test.go; both read
 // testdata/transcript-find-fixtures.json.
-import { readerKeyState, updateReaderKeys } from "../../../src/reader-key-model";
+import { readerKeyState, readerLineOptionLabel, readerLineScopes, updateReaderKeys } from "../../../src/reader-key-model";
 import { sidebarWidth } from "../../../src/workspace-inbox-model";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -263,6 +263,15 @@ test("reader legend keys isolate values and categories, combine choices, and all
   assert.deepEqual(readerKeyState(all, ['read'], tools), {active:false,mixed:true,dimmed:false,selectionActive:true,soleSelection:false,visibleCount:1,hiddenCount:1});
   assert.equal(readerKeyState(all, [], tools).dimmed, true);
   assert.equal(readerKeyState(all, all, tools).selectionActive, false);
+  assert.deepEqual(readerLineScopes(['read'], {label:'Read',values:['read']}), [{label:'Specific activity',values:['read']}]);
+  assert.deepEqual(readerLineScopes(['read'], {label:'Read',values:['read','edit']}), [
+    {label:'Specific activity',values:['read']}, {label:'Category: Read',values:['read','edit']},
+  ]);
+  assert.deepEqual(readerLineScopes(['read'], {label:'Read',values:[]}), [{label:'Specific activity',values:['read']}]);
+  assert.equal(readerLineOptionLabel('hide', undefined, 1, 0), 'Hide this activity');
+  assert.equal(readerLineOptionLabel('only', 'Read', 2, 0), 'Show only the Read category');
+  assert.equal(readerLineOptionLabel('show', 'Read', 1, 2), 'Show 2 hidden labels in the Read category');
+  assert.equal(readerLineOptionLabel('hide', 'Read', 1, 2), 'Hide 1 visible label in the Read category');
   const hidden = ['events:event-friction', 'labels:P.frame', 'writing'], available = ['writing', 'events:event-learning'];
   const exclusions = shown => plain(reader.readerHighlightExclusions(hidden, available, shown));
   assert.deepEqual(exclusions(available), ['events:event-friction', 'labels:P.frame'], 'adding writing preserves keys absent from this conversation');

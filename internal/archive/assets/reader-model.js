@@ -975,8 +975,8 @@ const READER_HIGHLIGHTS=[
   {id:'events',field:'reader_events',pref:'pharos-reader-events',fallback:false,label:'Agent events',title:'Sentences where an agent hit friction, learned something or made a choice you may not see (sentence classifier). Hover a highlighted sentence for its events.'},
   {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:false,label:'Message labels',title:'Tint each message card by what it does (message classifier). Hover the card for its labels.'}];
 // The highlights a conversation offers, in READER_HIGHLIGHTS order: whether
-// each has anything to show (available, else why not in title), a note on
-// its coverage, and a legend of the hues it uses here (label families or
+// each has anything to show (available, else why not in title), a status
+// note when needed, and a legend of the hues it uses here (label families or
 // event groups). Human writing is offered only where there is some; a
 // classifier only once it has run on the library, so its row can say why a
 // conversation has nothing to show.
@@ -986,8 +986,8 @@ function readerHighlightOptions(conversation,messages,taxonomy=[]){
     if(option.id==='writing'){if(messages.some(hasHumanWriting))options.push({...option,available:true,note:'',legend:[]});continue}
     if(option.id==='events'){const summary=conversation?.agent_events;if(!summary)continue;
       const views=messages.map(message=>messageEventView(message)).filter(Boolean),count=views.reduce((sum,view)=>sum+view.length,0),groups=new Set(views.flat().map(event=>event.group));
-      options.push({...option,available:count>0,title:count?option.title:'No agent events found in this conversation',note:`${count} event${count===1?'':'s'} in ${views.length} of ${summary.messages_read??0} agent messages read${summary.pending?'. Waiting to be rebuilt for changed transcripts or session evidence; which messages these belong to may change':''}`,
-        legend:[...EVENT_GROUPS.filter(([group])=>groups.has(group)).map(([group])=>({name:group,className:eventGroupClass(group)})),...(views.flat().some(event=>event.target)?[{name:'Earlier text an event points back at (numbered pairs)',className:'event-target-legend'}]:[])]});continue}
+      options.push({...option,available:count>0,title:count?option.title:'No agent events found in this conversation',note:summary.pending?'Waiting to be rebuilt for changed transcripts or session evidence; which messages these belong to may change':'',
+        legend:[...EVENT_GROUPS.filter(([group])=>groups.has(group)).map(([group])=>({name:group,className:eventGroupClass(group)})),...(views.flat().some(event=>event.target)?[{name:'Earlier text linked to an event',className:'event-target-legend'}]:[])]});continue}
     const summary=conversation?.labels;if(!summary)continue;
     const families=new Set(messages.map(message=>messageLabelView(message,taxonomy)?.family).filter(family=>family!==undefined));
     options.push({...option,available:Boolean(summary.labeled),title:summary.labeled?option.title:'Pharos has not labeled this conversation yet',note:summary.pending?(summary.labeled?'Still labeling this conversation':'Not labeled yet'):'',

@@ -16,7 +16,7 @@ export function LegendMenu({ name, label, menuLabel, title, heading, marker, suf
   const menuId = useId();
   function close(restoreFocus: boolean) {
     setOpen(false);
-    if (restoreFocus) trigger.current?.focus();
+    if (restoreFocus) trigger.current?.focus({ preventScroll: true });
   }
   useLayoutEffect(() => {
     if (!open || !menu.current || !trigger.current) return;
@@ -41,8 +41,15 @@ export function LegendMenu({ name, label, menuLabel, title, heading, marker, suf
       event.preventDefault();
       close(true);
     };
+    const anchor = trigger.current?.getBoundingClientRect();
     const dismiss = (event: Event) => {
       if (event.target instanceof Node && menu.current?.contains(event.target)) return;
+      // A scroll queued before opening has already positioned the trigger.
+      // Dismiss only when scrolling actually moves the menu's anchor.
+      if (event.type === "scroll" && anchor) {
+        const current = trigger.current?.getBoundingClientRect();
+        if (current?.left === anchor.left && current.top === anchor.top) return;
+      }
       close(false);
     };
     document.addEventListener("pointerdown", outside);

@@ -171,6 +171,14 @@ type Lane = {
   omitted_segments?: ExecutionSegment[];
 };
 export type Activity = Span & { snapshot: string; lanes: Lane[]; inference: string; taxonomy?: Taxonomy };
+
+/** Both the Timeline and reader use the same workspace activity evidence. */
+export function timelineActivityGaps(activity:Activity,rows:Session[]):IdleGap[]{
+  const byID=new Map(rows.map(row=>[row.id,row]));
+  const busy=activity.lanes.flatMap(lane=>laneBusy(lane,byID.get(lane.session)));
+  const callers=splitTimelineCallers(nativeTimelineLabels(activity).messages,rows).caller.flatMap(message=>{const at=message.at?Date.parse(message.at):NaN;return Number.isFinite(at)?[at]:[];});
+  return idleGaps({busy,callers});
+}
 type Props = {
   workspace: string;
   includeUncertain?: boolean;
@@ -805,6 +813,23 @@ export function DelegationExplorer({
       ? [...data.rows, ...data.ancestors].sort((a, b) => a.order - b.order)
       : data.rows;
   }, [data, mode, tab, compact]);
+  // The reader is mounted separately from this explorer. Send it the same
+  // whole-workspace evidence used by Timeline, including other sessions.
+  useEffect(()=>{
+    const panel=contextHost?.closest<HTMLElement>('.conversation-panel') as (HTMLElement&{pharosReaderIdleGaps?:IdleGap[]})|null;
+    if(!panel||!data||data.start==null||data.end==null)return;
+    const included=new Set(data.rows.map(row=>row.id));
+    for(const row of rows){if(included.size>=100)break;included.add(row.id);}
+    const ids=rows.filter(row=>included.has(row.id)).map(row=>row.id).join(',');
+    if(!ids)return;
+    const controller=new AbortController(),params=new URLSearchParams({snapshot:data.snapshot,start:String(data.start),end:String(Math.max(data.start+1,data.end)),sessions:ids,width:'1000',labels:'1',...(relativesKey?{relatives:relativesKey}:{}),...(includeUncertain?{include_uncertain:'1'}:{})});
+    const publish=(gaps?:IdleGap[])=>{panel.pharosReaderIdleGaps=gaps;panel.dispatchEvent(new Event('pharos:reader-idle'));};
+    publish();
+    readJSON<Activity>(`${endpoint}/parallel?${params}`,controller.signal).then(activity=>{
+      if(!controller.signal.aborted&&activity.snapshot===data.snapshot)publish(timelineActivityGaps(activity,rows));
+    },error=>{if(!controller.signal.aborted&&snapshotChanged(error))snapshotInvalidated(data.snapshot);});
+    return()=>{controller.abort();publish();};
+  },[contextHost,data,rows,endpoint,relativesKey,includeUncertain,snapshotInvalidated]);
   const byID = useMemo(
     () => new Map([...rows, ...(data?.focus || [])].map((n) => [n.id, n])),
     [rows, data],
@@ -929,6 +954,8 @@ export function DelegationExplorer({
     };
   }, [contextHost, data, conversation]);
   const headingHost = contextHost?.closest(".conversation-head")?.querySelector(".conversation-title-line");
+  const workspaceTitle = statsHost?.closest(".work-heading")?.querySelector("h1")?.textContent?.trim();
+  const repeatsWorkspaceTitle = !!workspaceTitle && shownSession?.label.trim() === workspaceTitle;
   const unresolvedNote = selection.unresolved && (
     <small className="delegation-truncation" role="note">
       The saved session link no longer identifies one session{shownSession ? "; this transcript has only this session" : ". Choose a session in the hierarchy"}.
@@ -936,7 +963,7 @@ export function DelegationExplorer({
   );
   const heading = shownSession ? (
     <div
-      className="delegation-session-heading"
+      className={`delegation-session-heading${repeatsWorkspaceTitle ? " repeats-workspace-title" : ""}`}
       data-session={shownSession.id}
     >
       <h2>{shownSession.label}</h2>
@@ -1748,10 +1775,7 @@ export function ParallelActivity({
   }, [visibleActivity, timeline, skipIdle, wholeWindow, idleSource, data.snapshot, onSnapshotLoaded]);
   const gaps = useMemo<IdleGap[]>(() => {
     if (!timeline || !idleSource) return [];
-    const byID = new Map(rows.map(row => [row.id, row]));
-    const busy = idleSource.lanes.flatMap(lane => laneBusy(lane, byID.get(lane.session)));
-    const callers = splitTimelineCallers(nativeTimelineLabels(idleSource).messages, rows).caller.flatMap(message => { const at = message.at ? Date.parse(message.at) : NaN; return Number.isFinite(at) ? [at] : []; });
-    return idleGaps({ busy, callers });
+    return timelineActivityGaps(idleSource,rows);
   }, [timeline, idleSource, rows]);
   const shownGaps = skipIdle ? gaps : [];
   const fullScale = useMemo(() => timeScale(full, shownGaps), [full[0], full[1], shownGaps]);

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {availableReaderNavigators,readerGeometry,readerVisibleWindow,readerNavigatorClock,nearestReaderMessage} from '../../../src/reader-navigator-model';
+import {availableReaderNavigators,readerGeometry,readerVisibleWindow,readerNavigatorClock,readerNavigatorScale,nearestReaderMessage} from '../../../src/reader-navigator-model';
 import {reader,event,human,render} from '../helpers/transcript.mjs';
 import {plain} from '../helpers/classic-script.mjs';
 import {sessionRibbonTree,activityCategory} from '../../../src/label-session-ribbon-model';
@@ -51,6 +51,25 @@ test('clock preserves missing timestamps and explicitly falls back to source ord
   assert.equal(untimed.timed,false);assert.deepEqual(untimed.range,[0,1]);
   assert.equal(nearestReaderMessage(untimed.byID,1),'b');
   assert.equal(nearestReaderMessage(new Map([['a',[0,1]],['b',[4,5]]]),4.5),'b');
+});
+
+test('navigator compresses idle gaps before a caller resumes while retaining activity',()=>{
+  const base=Date.parse('2026-10-01T00:00:00Z'),at=minute=>new Date(base+minute*60000).toISOString();
+  const message=(id,minute,role='assistant')=>({id,at:at(minute),kind:'message',role,labels:[],text:'',segment:'',chunks:0,text_source:'test',truncated:false});
+  const messages=[message('start',0,'user'),message('reply',1),message('assignment',20,'user'),message('resume',40,'user'),message('end',41)];
+  const clock=readerNavigatorClock(messages,[]);
+  const scale=readerNavigatorScale(clock,['start','resume']);
+  assert.equal(scale.cuts.length,1,'an embedded agent assignment is activity but not a caller');
+  assert.deepEqual([scale.cuts[0].start,scale.cuts[0].end],[base+20*60000,base+40*60000]);
+  const resume=base+40*60000;
+  assert.ok(scale.fraction(resume)-scale.fraction(base+20*60000)<.03,'the idle gap takes little space');
+  assert.equal(nearestReaderMessage(clock.byID,scale.time(scale.fraction(resume))),'resume');
+  assert.equal(readerNavigatorScale(clock,['start','resume'],false).cuts.length,0,'the shared setting can restore linear time');
+  const busyClock=readerNavigatorClock(messages,[{start:base+19*60000,end:base+39*60000,end_known:true,category:'delegate',count:1,error:false,name:'Subagent'}]);
+  assert.equal(readerNavigatorScale(busyClock,['start','resume']).cuts.length,0,'a running subagent prevents a gap');
+  assert.equal(readerNavigatorScale(clock,['start','resume'],true,[]).cuts.length,0,'workspace evidence also protects activity in other sessions');
+  const untimed=readerNavigatorClock([message('start',0),{...message('end',1),at:null}].map(m=>({...m,at:null})),[]);
+  assert.equal(readerNavigatorScale(untimed,['start','end']).compressed,false);
 });
 
 test('navigator tool marks use the transcript failure policy',()=>{

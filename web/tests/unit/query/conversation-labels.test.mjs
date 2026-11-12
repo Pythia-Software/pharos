@@ -72,7 +72,7 @@ import {timelinePreviewText,trimTimelineSnippet} from '../../../src/timeline-pre
 
 import {nativeTimelineLabels} from '../../../src/label-timeline-overlay.tsx';
 
-import {timelineModeGroups,timelineLegendWindow} from '../../../src/timeline-legend.tsx';
+import {timelineModeGroups,timelineLegendWindow,timelineLegendDomains,timelineLegendCounts} from '../../../src/timeline-legend.tsx';
 import {timelineValueVisible,timelineSectionVisible,timelineEventVisible,updateTimelineVisibility,visibleTimelineTree} from '../../../src/timeline-visibility';
 
 import {workflowSessions} from '../../../src/conversation-labels.ts';
@@ -168,6 +168,15 @@ test('timeline Show and Hide preserve independent hidden values and Show All res
  assert.equal(timelineValueVisible(state,'tools','read'),true);
  assert.equal(timelineValueVisible(state,'tools','error'),false,'showing one value in a hidden section leaves its siblings hidden');
  assert.deepEqual(updateTimelineVisibility(state,'tools',[],'clear'),{});
+ const domains=timelineLegendDomains([message('a','C.report.finding'),message('b',null)],[],[],{read:'Read'},false,[]);
+ state={};
+ for(const [section,values] of Object.entries(domains))for(const value of values){
+  assert.ok(timelineLegendCounts(state,domains).visible>0,'the remaining key values keep the timeline visible');
+  state=updateTimelineVisibility(state,section,[value],'hide');
+ }
+ assert.equal(timelineLegendCounts(state,domains).visible,0,'individually hiding every key value hides the timeline');
+ state=updateTimelineVisibility(state,'modes',[domains.modes[0]],'show');
+ assert.equal(timelineLegendCounts(state,domains).visible,1,'one restored value shows the timeline');
 });
 
 test('timeline section headings isolate whole layers, fill partial selections and restore hidden values',()=>{

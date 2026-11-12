@@ -2,10 +2,11 @@ import type {LabelMessage,Taxonomy} from './conversation-labels';
 import {labelIntervals,type ActivityMark} from './label-session-ribbon-model';
 import type {AgentEventLink} from './event-link-layout';
 import type {TimeRange} from './timeline-label-model';
+import {idleGaps,laneBusy,timeScale,type IdleGap} from './timeline-idle-model';
 
 export type ReaderContext={title:string;color:string;message:{id:string};sample:{stream:string;compact?:boolean;trigger?:string;size:number|null;window?:number|null};from:number;width:number;label:string};
 export type ReaderNavigatorMark=Omit<ActivityMark,'start'|'end'>&{start:number|null;end:number|null};
-export type ReaderNavigatorData={sessionID:string;messages:LabelMessage[];marks:ReaderNavigatorMark[];events:AgentEventLink[];taxonomy:Taxonomy;turns:{target:HTMLDetailsElement;messages:string[];label:string}[];contexts:ReaderContext[];jumpContext:(entry:ReaderContext)=>void;jumpMessage:(id:string)=>void};
+export type ReaderNavigatorData={sessionID:string;messages:LabelMessage[];marks:ReaderNavigatorMark[];callerIDs:string[];events:AgentEventLink[];taxonomy:Taxonomy;turns:{target:HTMLDetailsElement;messages:string[];label:string}[];contexts:ReaderContext[];jumpContext:(entry:ReaderContext)=>void;jumpMessage:(id:string)=>void};
 export type ReaderSpan={top:number;bottom:number;start:number;end:number};
 export type ReaderGeometry={spans:ReaderSpan[];ends:number[]};
 export type ReaderNavigatorChoice='timeline'|'context'|'turns';
@@ -37,6 +38,19 @@ export function readerNavigatorClock(messages:LabelMessage[],sourceMarks:ReaderN
   for(const span of byID.values()){start=Math.min(start,span[0]);end=Math.max(end,span[1]);}
   const range:TimeRange=Number.isFinite(start)?[start,Math.max(start+1,end)]:[0,1];
   return {messages:drawn,marks,byID,range,timed};
+}
+
+/** Use the timeline's idle rule with all retained conversation activity. */
+export function readerNavigatorScale(clock:ReturnType<typeof readerNavigatorClock>,callerIDs:string[],skipIdle=true,workspaceGaps?:IdleGap[]){
+  if(!clock.timed||!skipIdle)return timeScale(clock.range);
+  if(workspaceGaps)return timeScale(clock.range,workspaceGaps);
+  const callers=new Set(callerIDs);
+  const busy=laneBusy({marks:clock.marks,messages:clock.messages.map(message=>({created_at:message.at}))});
+  const resumed=clock.messages.flatMap(message=>{
+    const at=message.at?Date.parse(message.at):NaN;
+    return callers.has(message.id)&&Number.isFinite(at)?[at]:[];
+  });
+  return timeScale(clock.range,idleGaps({busy,callers:resumed}));
 }
 
 export function readerGeometry(spans:ReaderSpan[]):ReaderGeometry{
