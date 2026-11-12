@@ -108,6 +108,8 @@ type Server struct {
 	claudeImports           claudeImportRun
 	claudeWatch             *claudeDownloads
 	claudeWatchWake         chan struct{}
+	chatGPTImports          *chatGPTImports
+	chatGPTWatchWake        chan struct{}
 	claudeSettingsRecording claudeSettingsRecording
 	claudeSettingsWake      chan struct{}
 }
@@ -118,6 +120,8 @@ func NewServer(config Config, catalog *Catalog) *Server {
 	server.claudeWatchWake = make(chan struct{}, 1)
 	server.claudeSettingsWake = make(chan struct{}, 1)
 	server.claudeWatch = server.newClaudeDownloads()
+	server.chatGPTWatchWake = make(chan struct{}, 1)
+	server.chatGPTImports = server.newChatGPTImports()
 	server.life.init()
 	server.ops = newOpRegistry("service")
 	server.ops.releasing = server.releasing
@@ -221,6 +225,7 @@ func (s *Server) Serve() error {
 		s.daemon("refreshResults", func(ctx context.Context) { s.refreshResults(ctx, i == 0) })
 	}
 	s.daemon("claudeDownloads", s.claudeDownloadsLoop)
+	s.daemon("chatGPTDownloads", s.chatGPTImportsLoop)
 	s.daemon("claudeSettingsRecording", s.claudeSettingsRecordingLoop)
 	s.refreshGitInBackground(true)
 	s.countUpgradeInBackground()
@@ -413,6 +418,12 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		s.getClaudeSettingsSetup(w, r)
 	case path == "/api/claude-chat-settings/recording":
 		s.getClaudeSettingsRecording(w, r)
+	case path == "/api/claude-chat-settings/coverage":
+		s.getClaudeSettingsCoverage(w, r)
+	case path == "/api/chatgpt-imports":
+		writeJSON(w, s.chatGPTImportsDocument(), 200)
+	case strings.HasPrefix(path, "/api/chatgpt-assets/"):
+		s.chatGPTAsset(w, r)
 	case path == "/api/claude-imports":
 		s.getClaudeImports(w, r)
 	case path == "/api/markdown-link":
@@ -1077,6 +1088,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.postClaudeSettingsSetup(w, body)
 	case path == "/api/claude-chat-settings/recording":
 		s.postClaudeSettingsRecording(w, body)
+	case path == "/api/chatgpt-imports":
+		s.postChatGPTImports(w, body)
 	case path == "/api/claude-imports/watch":
 		s.postClaudeWatch(w, body)
 	case path == "/api/claude-imports" || path == "/api/claude-imports/links" || path == "/api/claude-imports/cancel":

@@ -463,6 +463,7 @@ datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.
 // Settings, sync and the header's library status.
 const hosts = [{ id: "studio", label: "Mac Studio", sources: [{ name: "Claude", captured_at: iso(3 * day), indexed_at: iso(3600000) }] }, { id: "air", label: "MacBook Air with a long machine name", sources: [{ name: "Codex", last_data_at: iso(125 * 60000) }] }, { id: "new", label: "New Mac", sources: [] }];
 export const claudeSettingsSourceFixture={name:'claude-chat-settings',kind:'claude-ai-settings',tool:'Claude Chat settings',scope:'host',enabled:true,path:'/Users/example/Library/Application Support/Claude',path_status:'available',coverage:'partial',account:'local'};
+export const claudeSettingsCoverageFixture={account:'local',conversations:3,missing_models:2,setup:{source:'claude-chat-settings',path:'/Users/example/Library/Application Support/Claude',account:'local',configured:true,enabled:false,scope:'host'}};
 const sources = { configured: 3, enabled: 2, items: [claudeSettingsSourceFixture,
   { name: "claude", kind: "claude", tool: "Claude Code", scope: "host", enabled: true, path: "/Users/someone/.claude/projects", last_success_at: iso(3600000), last_attempt_at: iso(3600000), coverage: "complete", account: "someone@example.com",
     not_recorded: ["Reported cost"], sometimes_recorded: ["Effort", "Title"] },
@@ -824,6 +825,8 @@ export const projectColorFixture = [
 ];
 
 export const defaultApi = {
+  "GET /api/chatgpt-imports":{enabled:false,available:true,exports:[],library:{workspaces:0,conversations:0,recent:[]}},
+  "POST /api/chatgpt-imports":{enabled:false,available:true,exports:[],library:{workspaces:0,conversations:0,recent:[]}},
   "GET /api/claude-imports":{jobs:[],run:{running:false},watch:claudeWatchFixture},
   "POST /api/claude-imports/watch":{...claudeWatchFixture,enabled:false},
   "GET /api/thinking": ({query}) => thinkingFixture(query),
@@ -1031,6 +1034,7 @@ export const defaultApi = {
   "GET /api/index": { active: false, sync_active: false, hosts },
   "GET /api/capture": { active: false, runs: [] },
   "GET /api/sources": sources,
+  "GET /api/claude-chat-settings/coverage": {accounts:[]},
   "GET /api/claude-chat-settings/setup": ({state})=>state.claudeSettingsSetup??{source:'claude-chat-settings',path:claudeSettingsSourceFixture.path,account:'local',configured:true,enabled:true,scope:'host'},
   "POST /api/claude-chat-settings/setup": ({state,body})=>state.claudeSettingsSetup={source:'claude-chat-settings',path:body.path,account:'local',configured:true,enabled:true,scope:'host'},
   "GET /api/claude-chat-settings/recording": ({state,query}) => ({source:query.get('source'),active:false,known_conversations:67,new_conversations:0,...state.claudeSettingsRecording}),

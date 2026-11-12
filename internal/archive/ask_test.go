@@ -1,12 +1,14 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -69,6 +71,153 @@ func askReply(ids ...string) []byte {
 		choices = append(choices, map[string]string{"id": id, "description": "Explore the recorded evidence."})
 	}
 	return []byte(jsonText(map[string]any{"message": "Here are useful places to look.", "destinations": choices, "lookup": askLookup{Kind: "none"}, "clarification": nil}))
+}
+
+func askTestUpload(t *testing.T, s *Server, name string, data []byte) askAttachment {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write(data)
+	_ = writer.Close()
+	request := httptest.NewRequest("POST", "/api/ask/attachments", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response := httptest.NewRecorder()
+	s.askHTTP(response, request)
+	if response.Code != 200 {
+		t.Fatalf("upload: %d %s", response.Code, response.Body.String())
+	}
+	var item askAttachment
+	if err := json.Unmarshal(response.Body.Bytes(), &item); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(item.Path)) })
+	return item
+}
+
+func TestAskAttachments(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	s := askTestServer(t)
+	askEnable(t, s)
+	items := []askAttachment{
+		{ID: "page-1", Kind: "url", Name: "Tokens", URL: "/analyze?analyze_topic=tokens&range=7d"},
+		{ID: "element-1", Kind: "element", Name: "Tokens by model", URL: "/analyze?analyze_topic=tokens&range=7d", Selector: "#tokens-chart", Offset: 5},
+		askTestUpload(t, s, "original.bin", []byte{0, 255, 1, 2, 3}),
+	}
+	items[2].Offset = 11
+	askOK(t, s, "session", map[string]any{"id": "chat-1", "draft": "Review this", "draftAttachments": items, "selection": askInput()["selection"]})
+	saved, err := s.askSession(t.Context(), "chat-1")
+	if err != nil || !reflect.DeepEqual(saved.DraftAttachments, items) {
+		t.Fatalf("draft attachments: %+v %v", saved, err)
+	}
+	calls := 0
+	override(t, &askRunCLI, func(_ context.Context, provider askProvider, _ askSelection, prompt string) ([]byte, error) {
+		calls++
+		if provider.attachmentBytes != items[2].Size {
+			t.Errorf("file transfer allowance lost attached bytes: %d", provider.attachmentBytes)
+		}
+		_, raw, _ := strings.Cut(prompt, "Context JSON:\n")
+		var data struct {
+			Conversation []struct {
+				Attachments     []askAttachment
+				QuestionContent []any
+			}
+		}
+		if err := json.Unmarshal([]byte(raw), &data); err != nil || len(data.Conversation) == 0 || !reflect.DeepEqual(data.Conversation[0].Attachments, items) {
+			t.Errorf("lost attached context: %s (%v)", raw, err)
+		}
+		wantContent := []any{map[string]string{"attachmentID": items[0].ID}, "Where", map[string]string{"attachmentID": items[1].ID}, " am I ", map[string]string{"attachmentID": items[2].ID}, "wasting time?"}
+		if len(data.Conversation) > 0 && jsonText(data.Conversation[0].QuestionContent) != jsonText(wantContent) {
+			t.Errorf("lost inline attachment order: %+v", data.Conversation[0].QuestionContent)
+		}
+		if calls == 1 {
+			return nil, fmt.Errorf("retry this request")
+		}
+		return askReply(), nil
+	})
+	input := askInput()
+	input["attachments"] = items
+	askOK(t, s, "send", input)
+	saved, err = s.askSession(t.Context(), "chat-1")
+	if err != nil || len(saved.DraftAttachments) != 0 || !reflect.DeepEqual(saved.Conversation[0].Attachments, items) {
+		t.Fatalf("submitted attachments: %+v %v", saved, err)
+	}
+	input["retry"] = true
+	input["attachments"] = []askAttachment{{ID: "replacement", Kind: "url", Name: "Other", URL: "/library"}}
+	askOK(t, s, "send", input)
+	saved, err = s.askSession(t.Context(), "chat-1")
+	if err != nil || len(saved.Conversation) != 1 || !reflect.DeepEqual(saved.Conversation[0].Attachments, items) {
+		t.Fatalf("retry changed attachments: %+v %v", saved, err)
+	}
+	for _, bad := range []askAttachment{
+		{ID: "bad", Kind: "url", Name: "External", URL: "https://example.com/"},
+		{ID: "bad", Kind: "element", Name: "Missing selector", URL: "/library"},
+		{ID: "bad", Kind: "file", Name: "not attached", Path: "/etc/passwd"},
+		{ID: "bad", Kind: "file", Name: "large", Path: filepath.Join(s.askAttachmentRoot(), "bad", "large"), Size: askAttachmentFileBytes + 1},
+	} {
+		if err := s.validateAskAttachments([]askAttachment{bad}); err == nil {
+			t.Errorf("accepted invalid attachment: %s", bad.Name)
+		}
+	}
+	if err := s.validateAskAttachments(append(items, items[0])); err == nil {
+		t.Error("accepted duplicate attachment ID")
+	}
+	want := []any{"A🧭", map[string]string{"attachmentID": "first"}, map[string]string{"attachmentID": "second"}, "B"}
+	if got := askAttachmentContent("A🧭B", []askAttachment{{ID: "first", Offset: 3}, {ID: "second", Offset: 3}}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("inline Unicode attachment order: %+v", got)
+	}
+}
+
+func TestAskOriginalFileScope(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	s := askTestServer(t)
+	original := []byte{0, 255, 42, 17}
+	file := askTestUpload(t, s, "original.pdf", original)
+	data, err := os.ReadFile(file.Path)
+	if err != nil || !bytes.Equal(data, original) {
+		t.Fatalf("original bytes changed: %v", err)
+	}
+	request := map[string]any{"id": 1, "method": "tools/call", "params": map[string]any{"name": "read_attached_file", "arguments": map[string]any{"path": file.Path}}}
+	result := mapValue(readAskAttachment(request, []askAttachment{file})["result"])
+	if result["isError"] == true {
+		t.Fatalf("file read failed: %+v", result)
+	}
+	content := result["content"].([]map[string]any)[0]
+	resource := mapValue(content["resource"])
+	if resource["blob"] != "AP8qEQ==" || resource["mimeType"] != "application/pdf" {
+		t.Fatalf("original resource changed: %+v", content)
+	}
+	mapValue(mapValue(request["params"])["arguments"])["path"] = "/etc/passwd"
+	if mapValue(readAskAttachment(request, []askAttachment{file})["result"])["isError"] != true {
+		t.Error("read an unattached path")
+	}
+	manifest := filepath.Join(t.TempDir(), "service.json")
+	_, err = s.askMCP(manifest, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newMCPServer(s.Config().Path)
+	m.service = manifest
+	if !reflect.DeepEqual(m.askFileScope(), []askAttachment{file}) {
+		t.Fatal("MCP lost its exact attachment scope")
+	}
+	m.service = ""
+	if len(m.askFileScope()) != 0 {
+		t.Fatal("general MCP acquired private attachment access")
+	}
+	if err = os.Remove(file.Path); err != nil {
+		t.Fatal(err)
+	}
+	if err = askFilesAvailable([]askAttachment{file}); err == nil {
+		t.Error("missing file could be submitted")
+	}
+	mapValue(mapValue(request["params"])["arguments"])["path"] = file.Path
+	if mapValue(readAskAttachment(request, []askAttachment{file})["result"])["isError"] != true {
+		t.Error("missing temporary file looked available")
+	}
 }
 
 func TestAskFeedbackDraftConversation(t *testing.T) {
@@ -1864,6 +2013,41 @@ func TestAskCLIStreamingProcess(t *testing.T) {
 			raw, err := askRunCLI(t.Context(), p, askSelection{Model: "test-model", Effort: "Default"}, "test question")
 			if err != nil || strings.TrimSpace(string(raw)) != string(askReply("home")) {
 				t.Fatalf("lost structured response: %s, %v", raw, err)
+			}
+			// Real attachment bytes may be echoed into one event before the
+			// small final answer. Exercise the accepted 3 MiB text-file case
+			// through every adapter, without invoking an installed provider.
+			original := bytes.Repeat([]byte("x"), 3<<20)
+			attached := askAttachment{ID: "large-file", Kind: "file", Name: "large.txt", Path: filepath.Join(dir, "large.txt"), MIME: "text/plain", Size: int64(len(original))}
+			if err := os.WriteFile(attached.Path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			request := map[string]any{"id": 1, "params": map[string]any{"arguments": map[string]any{"path": attached.Path}}}
+			result := mapValue(readAskAttachment(request, []askAttachment{attached})["result"])
+			if result["isError"] == true {
+				t.Fatalf("attachment read: %+v", result)
+			}
+			var event map[string]any
+			switch provider {
+			case "Codex":
+				event = map[string]any{"type": "item.completed", "item": map[string]any{"id": "file-call", "type": "mcp_tool_call", "server": "pharos", "tool": "read_attached_file", "result": result}}
+			case "Claude":
+				event = map[string]any{"type": "user", "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": "file-call", "content": result["content"]}}}}
+			case "Antigravity":
+				event = map[string]any{"event": "step_update", "step_update": map[string]any{"step_index": 1, "step_type": "tool", "state": "DONE", "tool_name": "call_mcp_tool", "tool_info": map[string]any{"result": result}}}
+			}
+			withAttachment := preamble + "cat <<'ATTACHMENT_EVENT'\n" + jsonText(event) + "\nATTACHMENT_EVENT\n" + strings.TrimPrefix(script, preamble)
+			if err := os.WriteFile(path, []byte(withAttachment), 0700); err != nil {
+				t.Fatal(err)
+			}
+			p.attachmentBytes = attached.Size
+			raw, err = askRunCLI(t.Context(), p, askSelection{Model: "test-model", Effort: "Default"}, "use the attached file")
+			if err != nil || strings.TrimSpace(string(raw)) != string(askReply("home")) {
+				t.Fatalf("large attachment prevented the final answer: %v", err)
+			}
+			p.attachmentBytes = 0
+			if _, err := askRunCLI(t.Context(), p, askSelection{Model: "test-model", Effort: "Default"}, "without file allowance"); err == nil {
+				t.Fatal("an unexpected transcript bypassed the normal stream bound")
 			}
 		})
 	}

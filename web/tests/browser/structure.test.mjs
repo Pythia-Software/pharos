@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { claudeImportFixture, defaultApi, projectColorFixture, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
+import { claudeImportFixture, claudeSettingsCoverageFixture, defaultApi, projectColorFixture, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const missingPrices = { ...defaultApi['GET /api/pricing'], unpriced_tokens: 5000,
@@ -258,7 +258,10 @@ const ROUTES = [
     const guide=page.locator('#pharosOnboarding'),next=guide.getByRole('button',{name:'Continue',exact:true});
     await guide.locator('.pharos-places>summary').waitFor();
     if(step==='start'){await guide.locator('.pharos-places>summary').click();return}
-    if(step==='import'){await guide.getByRole('button',{name:'Import an export',exact:true}).click();return}
+    if(step==='import'){
+      await guide.getByRole('button',{name:'Import an export',exact:true}).click();
+      await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();return;
+    }
     if(step==='manual'){
       await guide.getByRole('radio',{name:/tell Pharos where to look/}).check();await next.click();
       await guide.getByRole('checkbox',{name:/Cursor/}).check();return;
@@ -268,7 +271,46 @@ const ROUTES = [
     await guide.locator('.pharos-candidate').first().waitFor();
     if(step==='empty')for(const box of await guide.locator('.pharos-candidate input[type=checkbox]').all())await box.uncheck();
     if(step!=='found')await next.click();
-  },shown:'#pharosOnboarding'})),
+  },shown:'#pharosOnboarding',check:step==='import'?async(page)=>{
+    const guide=page.locator('#pharosOnboarding');await guide.getByRole('radio',{name:'ChatGPT',exact:true}).check();
+    await guide.getByLabel('Export',{exact:true}).fill('~/Downloads/export.zip');
+    await guide.getByRole('button',{name:'Import',exact:true}).click();await guide.getByRole('switch').waitFor();
+    assert.deepEqual(await layoutProblems(page),[],'managed ZIP collection report fits the setup dialog');
+  }:undefined})),
+  {name:'ChatGPT Downloads watch',url:'/settings/sources',ready:'#chatGPTDownloadsWatchSection .claude-watch-export',api:{
+    'GET /api/chatgpt-imports':{enabled:true,available:true,exports:[{id:'chat-export',filename:'a'.repeat(64)+'-2026-11-11-21-59-32-'+ 'b'.repeat(32)+'.zip',state:'fetching',phase:'indexing',collected:1,expected:1,ingestion:{stage:'indexing',processed:2,conversations:2,messages:10}}],library:{workspaces:2,conversations:2,recent:[{id:workID,title:'An imported ChatGPT conversation',url:work}]}},
+  },check:async(page,app)=>{
+    const stop=page.locator('#chatGPTDownloadsWatchSection').getByRole('button',{name:'Stop',exact:true});await stop.focus();
+    const next=structuredClone(ROUTES.find(route=>route.name==='ChatGPT Downloads watch').api['GET /api/chatgpt-imports']);next.exports[0].ingestion.messages++;
+    await page.route('**/api/chatgpt-imports',route=>route.fulfill({json:next}),{times:1});
+    const refreshed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/chatgpt-imports');
+    await page.evaluate(()=>window.pharosChatGPTDownloads.render(document.getElementById('chatGPTDownloadsWatchSection')));await refreshed;await app.settled();
+    assert.equal(await page.locator('#chatGPTDownloadsWatchSection [data-focus-key="chat-export:stop"]').evaluate(element=>element===document.activeElement),true,'progress polling preserves Stop focus');
+    // Enabling/checking returns before the worker discovers a download.
+    // The page must observe its later result without a manual render call.
+    const root=page.locator('#chatGPTDownloadsWatchSection'),toggle=root.getByRole('switch');
+    let report={enabled:false,available:true,exports:[],library:{workspaces:2,conversations:2,recent:[]}};
+    await page.route('**/api/chatgpt-imports',async route=>{
+      if(route.request().method()==='POST'){
+        const body=route.request().postDataJSON();
+        if(typeof body.enabled==='boolean')report={...report,enabled:body.enabled,exports:[]};
+      }
+      await route.fulfill({json:report});
+    });
+    await toggle.click();await page.waitForFunction(()=>document.querySelector('#chatGPTDownloadsWatch').getAttribute('aria-checked')==='false');
+    await toggle.click();await page.waitForFunction(()=>document.querySelector('#chatGPTDownloadsWatch').getAttribute('aria-checked')==='true');
+    report={...report,exports:[{id:'discovered-later',filename:'new-export.zip',state:'fetching',phase:'indexing',collected:1,expected:1}]};
+    await root.locator('[data-id="discovered-later"]').getByRole('button',{name:'Stop',exact:true}).waitFor({timeout:10000});
+    report={...report,exports:[],library:{workspaces:3,conversations:3,recent:[]}};
+    await root.getByText('3 workspaces · 3 conversations',{exact:true}).waitFor({timeout:10000});
+    const check=root.getByRole('button',{name:'Check Downloads now',exact:true});
+    await check.click();await page.waitForFunction(()=>!document.querySelector('#chatGPTDownloadsCheck').disabled);
+    await toggle.focus();
+    report={...report,problem:'Downloads access needs attention.',library:{workspaces:4,conversations:4,recent:[]}};
+    await root.getByText('4 workspaces · 4 conversations',{exact:true}).waitFor({timeout:10000});
+    await root.getByText('Downloads access needs attention.',{exact:true}).waitFor();
+    assert.equal(await toggle.evaluate(element=>element===document.activeElement),true,'empty-watch refresh preserves focus');
+  }},
   {name:'Claude Downloads watch',url:'/settings/sources',ready:'#claudeDownloadsWatchSection .claude-watch-export',api:{
     'GET /api/claude-imports':{jobs:[],run:{running:false},watch:{enabled:true,available:true,browser:'',browsers:[],exports:[
       {id:'queued-export',state:'fetching',phase:'queued',exported_at:'2026-11-10T20:15:05Z',collected:0,expected:6,message:'Waiting for another capture or index to finish. Collection resumes automatically when the library is free.'},
@@ -317,15 +359,22 @@ const ROUTES = [
     await guide.getByRole('button',{name:'Show missing download links',exact:true}).click();
     await guide.getByRole('link',{name:/Download projects/}).waitFor();
   },shown:'#pharosOnboarding'},
-  {name:'Claude import settings',url:'/settings/sources',ready:'#pharosAddSource',api:{
+  {name:'Claude import model backfill',url:'/settings/sources',ready:'#pharosAddSource',api:{
     'GET /api/claude-imports':({query})=>query.get('id')?{...claudeImportFixture,source:{added:['claude-ai-imports']}}:{jobs:[claudeImportFixture],run:{running:false}},
-    'GET /api/claude-chat-settings/setup':{source:'claude-settings',path:'/Users/example/a-very-long-profile-folder-without-breaks-in-the-name/Library/Application Support/Claude',account:'local',configured:true,enabled:false,scope:'host'},
+    'GET /api/claude-chat-settings/setup':{enabled:false},
+    'GET /api/claude-chat-settings/coverage':({state})=>({accounts:state.importIndexed?[claudeSettingsCoverageFixture]:[]}),
+    'POST /api/capture':{run:{id:'capture-model-backfill',kind:'capture',state:'complete',sources:['claude-ai-imports'],results:[]}},
+    'GET /api/capture':{active:false,runs:[{id:'capture-model-backfill',kind:'capture',state:'complete',sources:['claude-ai-imports'],results:[]}]},
+    'POST /api/index':({state})=>{state.importIndexed=true;return {run:{id:'index-model-backfill',state:'complete',sources:['claude-ai-imports'],results:[]}}},
+    'GET /api/activity':{active:0,runs:[{id:'index-model-backfill',state:'complete',sources:['claude-ai-imports'],results:[]}]},
   },open:async page=>{
     await page.evaluate(()=>window.pharosOnboarding.open({mode:'import'}));
     const guide=page.locator('#pharosOnboarding');
     await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
     await guide.getByRole('button',{name:/Resume export/}).click();
-    await guide.getByRole('heading',{name:'Add model and thinking settings?',exact:true}).waitFor();
+    await guide.getByRole('button',{name:'Capture and index conversations',exact:true}).click();
+    await guide.getByRole('button',{name:'Index now',exact:true}).click();
+    await guide.getByRole('button',{name:'Capture settings',exact:true}).waitFor();
   },shown:'#pharosOnboarding'},
   {name:'Source settings guide',url:'/settings/sources',ready:'#pharosFindSources',open:async page=>{
     const trigger=page.locator('#sourceToolbar').getByRole('button',{name:'Data Guide',exact:true});
@@ -371,6 +420,9 @@ const ROUTES = [
   {name:"Ask Pharos opted out",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:false},providers:askProviders}}},
   {name:"Ask Pharos ready",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI},
   {name:"Ask Pharos full screen",url:"/ask",ready:"#askPage #pharos-ask .pharos-ai:not([hidden])",api:askAPI},
+  {name:"Ask Pharos attachment menu",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.getByRole('button',{name:'Attach context',exact:true}).click(),shown:'#pharos-context-menu:popover-open'},
+  {name:"Ask Pharos attachment review",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:async page=>{await page.getByRole('button',{name:'Attach context',exact:true}).click();await page.getByRole('button',{name:'Attach current URL',exact:false}).click();await page.locator('#pharos-question').getByRole('button',{name:/Inspect attachment:/}).click();},shown:'.pharos-context-review[open]'},
+  {name:"Ask Pharos element picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:async page=>{await page.getByRole('button',{name:'Attach context',exact:true}).click();await page.getByRole('button',{name:'Select a page element',exact:false}).click();},shown:'.pharos-floating-selection:not([hidden])'},
   {name:"Ask Pharos model picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-model-trigger").click(),shown:"#pharos-model-menu:not([hidden])"},
   {name:"Ask Pharos history",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-history-trigger").click(),shown:"#pharos-chat-history[open]"},
   {name:"Ask Pharos conversation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-turn",api:askAPI,check:async page=>{
@@ -477,6 +529,10 @@ const ROUTES = [
   { name: "Daily repository writing", url: "/cards?cards=library&card_search=human-repository-words-trend", ready: '[data-card-id="human-repository-words-trend"] .query-cover-columns' },
   { name: "Weekday distributions", url: "/cards?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
   { name: "Search table", url: "/library?view=table", ready: "#queryTableLibrary .qt-row" },
+  { name: "Claude missing model settings in conversation", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .claude-settings-backfill button", api:{
+    ...claudeResearchAPI,
+    'GET /api/claude-chat-settings/coverage':{accounts:[{...claudeSettingsCoverageFixture,conversations:1,missing_models:1}]},
+  } },
   { name: "Claude export research", url: `${work}/conversation/${rootConversation}`, api: claudeResearchAPI, ready: ".message-citations", open: async page => {
     await page.locator('.tool-event > summary').filter({hasText:'notes.pdf'}).click();
     await page.locator('.tool-output').filter({hasText:'Archived research notes'}).waitFor();
@@ -777,6 +833,9 @@ const ROUTES = [
     },shown:`#cloud-step-${step-1}`
   })),
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
+  { name: "Claude missing model settings", url: "/settings/sources", ready: "#claudeSettingsBackfill button", api:{
+    'GET /api/claude-chat-settings/coverage':{accounts:[claudeSettingsCoverageFixture]},
+  } },
   { name: "Background Processing", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
   { name: "Background Processing integrity warning", url: "/settings/sync", ready: ".sync-warning", api: {
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], issues: [{ id: "mismatch", source_name: "codex", unit: `/sessions/${"long-workspace-name/".repeat(12)}rollout.jsonl` }] },
@@ -847,6 +906,19 @@ const ROUTES = [
   { name: "Workspace overview with pending evidence", url: work, api: pendingEvidenceApi, ready: ".delegation-table .delegation-relatives" },
   { name: "Workspace Timeline with pending events", url: `${work}?explorer=timeline`, api: pendingEvidenceApi, ready: ".lt-recursive-lane .lt-session-notice", check: page => page.locator("[role=status].delegation-truncation").first().waitFor() },
   { name: "Workspace sessions sidebar with pending evidence", url: `${work}/conversation/${rootConversation}`, api: pendingEvidenceApi, ready: ".delegation-inbox-heading" },
+  {name:'ChatGPT export context',url:`${work}/conversation/${rootConversation}`,ready:'.chatgpt-references',api:{
+    'GET /api/work/:id/conversations/:conversation':{id:rootConversation,workspace_id:workID,provider:'chatgpt',messages:[
+      {id:'chat-settings',role:'system',kind:'metadata',text:JSON.stringify({source:'chatgpt_export',settings:{default_model_slug:'bidi',voice:'saved-voice',memory_scope:'global_enabled',is_starred:true}})},
+      {id:'chat-ask',role:'user',kind:'message',text:'A spoken question',raw_text:JSON.stringify({author:{role:'user'},content:{content_type:'multimodal_text',parts:[{content_type:'audio_transcription',text:'A spoken question',direction:'in'}]}})},
+      {id:'chat-reply',role:'assistant',kind:'message',text:'A cited answer',raw_text:JSON.stringify({author:{role:'assistant'},content:{content_type:'text',parts:['A cited answer']},metadata:{content_references:[{type:'webpage',url:'https://example.com',title:'A reference with a long title that should wrap within the conversation reader'}],search_result_groups:[{entries:[{url:'https://another.example',title:'Search result',snippet:'A source-provided snippet.'}]}]}})},
+      {id:'chat-audio',role:'user',kind:'attachment',text:JSON.stringify({type:'chatgpt_asset',name:'question.wav',mime_type:'audio/wav',available:true})},
+      {id:'chat-missing',role:'system',kind:'attachment',text:JSON.stringify({type:'chatgpt_asset',name:'missing-file.gif',available:false})},
+    ]},
+  },open:async page=>{await page.locator('.chatgpt-references > summary').click();await page.locator('.action-row').filter({hasText:'question.wav'}).locator(':scope > details > summary').click();await page.locator('audio[controls]').waitFor();},shown:'.chatgpt-references[open]',check:async(page,app)=>{
+    const key=await page.locator('.chatgpt-references').getAttribute('data-view-key');await page.waitForFunction(()=>new URLSearchParams(location.search).has('disclosures'));
+    await page.reload();await page.locator('.chatgpt-references[open]').waitFor();await page.locator('.chatgpt-references a').first().waitFor();
+    assert.equal(await page.locator('.chatgpt-references').getAttribute('data-view-key'),key);
+  }},
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, api: tokenEvidenceAPI, ready: ".conversation-panel .turn" },
   { name: "Quick search", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => page.keyboard.press("ControlOrMeta+k"), shown: "#searchDialog[open]" },

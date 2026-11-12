@@ -1660,7 +1660,8 @@
         {
           "key": "model",
           "label": "Model",
-          "support": "supported"
+          "note": "Some exports record only an opaque label such as bidi; the underlying model is unknown.",
+          "support": "varies"
         },
         {
           "key": "effort",
@@ -1683,12 +1684,14 @@
         {
           "key": "tool_calls",
           "label": "Tool calls",
-          "support": "supported"
+          "note": "Some exports retain search references and tool icons without the calls themselves.",
+          "support": "varies"
         },
         {
           "key": "tool_results",
           "label": "Tool results",
-          "support": "supported"
+          "note": "Only when explicit tool replies are exported.",
+          "support": "varies"
         },
         {
           "key": "reasoning",
@@ -1724,7 +1727,7 @@
         }
       ],
       "display_name": "ChatGPT",
-      "export": "In ChatGPT, open Settings → Data controls → Export data. The email it sends links to a ZIP.",
+      "export": "In ChatGPT, open Settings → Data controls → Export data. Allow about 24 hours for the export email; delivery time can vary. Download its ZIP into Downloads, then choose it here.",
       "kind": "chatgpt",
       "setup": false
     },

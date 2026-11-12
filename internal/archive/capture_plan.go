@@ -16,9 +16,10 @@ type captureItem struct {
 }
 
 type capturePlan struct {
-	files, databases []captureItem
-	projections      []captureProjection
-	retainAbsent     bool
+	files, databases    []captureItem
+	projections         []captureProjection
+	retainAbsent        bool
+	claudeExportObjects bool
 	// skipped exist but are not captured (databases without conversations),
 	// so they are not missing either.
 	skipped []string
@@ -119,9 +120,9 @@ func (p *capturePlan) canonical(ctx context.Context, source SourceConfig, info f
 
 // chatGPT plans a ChatGPT export source's capture.
 func (p *capturePlan) chatGPT(ctx context.Context, source SourceConfig, info fs.FileInfo) error {
-	// The conversation files, or the ZIP whole; the export's account
-	// files beside them are not read.
-	files, err := (&chatGPTAdapter{baseAdapter{config: source}}).exportFiles()
+	// Preserve selected sidecars and media as well as conversation shards.
+	// Managed ZIPs have already excluded account profile/settings/ad records.
+	files, err := chatGPTCaptureFiles(sourceFiles{ctx: ctx}, source.Path)
 	if err != nil {
 		return fmt.Errorf("ChatGPT export is unavailable: %w", err)
 	}
@@ -145,6 +146,10 @@ func (p *capturePlan) claudeAI(ctx context.Context, source SourceConfig, info fs
 		return fmt.Errorf("Claude.ai export is unavailable: %w", err)
 	}
 	for _, input := range inputs {
+		p.claudeExportObjects = p.claudeExportObjects || input.objectInventory
+		if input.retired {
+			continue
+		}
 		rel, _ := filepath.Rel(source.Path, input.path)
 		if !info.IsDir() {
 			rel = filepath.Base(input.path)

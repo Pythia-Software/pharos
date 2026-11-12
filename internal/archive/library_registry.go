@@ -17,6 +17,7 @@ import (
 
 const libraryDescriptorName = "pharos-library.json"
 const libraryFormatVersion = 1
+const libraryClaudeObjectsVersion = 2
 
 var libraryVolumeIdentity = volumeIdentity
 
@@ -123,7 +124,7 @@ func readLibraryDescriptor(config Config) (LibraryDescriptor, error) {
 	if err = json.Unmarshal(b, &d); err != nil {
 		return d, err
 	}
-	if d.Version != libraryFormatVersion || d.ID == "" || d.Instance == "" {
+	if (d.Version != libraryFormatVersion && d.Version != libraryClaudeObjectsVersion) || d.ID == "" || d.Instance == "" {
 		return d, fmt.Errorf("this library needs a newer Pharos or a valid library descriptor")
 	}
 	inode, err := observeLibraryDirectory(filepath.Dir(descriptorPath(config)))

@@ -60,7 +60,7 @@ glow, filling the page's full width and height, its transcript above the editor.
 While working, the signal trace runs around the page's edge instead.
 Before the first question, the suggestions sit there instead, inside the
 composer, until the user types. The composer's full
-screen button opens it from Home or the overlay and keeps the page context chip;
+screen button opens it from Home or the overlay and keeps the draft attachments;
 pressed again, it returns to the page it came from, where Home shows the chat
 inline and any other page reopens the overlay. Back, the navigation, or opening
 an answer also leave full screen; a pending question then floats as usual.
@@ -155,19 +155,42 @@ conversation grows, it expands equally above and below its original center until
 it reaches a viewport edge, then uses the remaining space, keeping the
 editor and controls visible while the transcript scrolls. Opening, height changes,
 and repositioning animate gently; reduced motion disables those animations.
-A dismissible context chip is an atomic inline part of
-the prompt, alongside ordinary text. Drag it to a caret position within the
-prompt, or focus it and use Alt+Left/Right to move it with the keyboard. Backspace
-or Delete removes a focused chip; undo and redo restore text edits and chip
-movement or removal. The editor supports multiple chips without merging their
-metadata into the question text. The page chip attaches that page's local URI,
-including its filters and view settings, to the request.
-Reloading the same chat in the same tab preserves chip placement with the draft;
-stale positions never replace a newer text draft.
-Removing the chip preserves the draft and omits that URI from subsequent requests
-in the open modal. Opening the modal again attaches the current page. Retries
-retain the original request's URI. This context stays out of the indexed
-conversation text.
+Opening chat never automatically attaches the page. A plus menu in the composer
+offers Attach files, Attach current URL, and Select a page element. Removable
+attachment chips sit inline with the draft, wrap naturally, and use distinct URL,
+file and selection icons. Element chips say “Highlighted element”; URL chips say
+“Page URL”, and file names truncate to a compact width. The + button sits in the
+normal composer action row. Dragging a chip, or using Alt + Left/Right, moves it
+between words. Drafts, history and the agent prompt preserve that placement.
+Clicking one shows the exact attached
+URL, selected element name and selector, or original file name and temporary path.
+The URL carries the selected view's filters and controls. Element selection
+reuses the annotation picker, including Up for a parent and Down for a child,
+without enabling its toolbar, creating a feedback annotation, or taking a screenshot.
+While picking, the composer becomes picture in picture over its originating page.
+That panel explains the purple highlight, names the hovered target, and shows
+the keyboard controls and Cancel. Selecting or canceling restores the previous
+composer surface, including full screen, and preserves the draft.
+
+Files of any type are copied unchanged into a private temporary directory;
+they are not imported, extracted, or stored as another document format. The agent
+receives the original name and temporary path. Its private Pharos MCP connection
+offers read_attached_file for only the explicitly attached paths in this chat,
+while its ordinary filesystem and command tools remain disabled. The general
+library MCP connection has no access to these attachments. Temporary files
+removed by the OS must be attached again; missing files are reported explicitly.
+Allow eight attachments, at most 20 MiB per file and 50 MiB of files per message.
+Attachment drafts persist with the private Ask session. Sending moves them into
+that message and clears the composer's attachment list; follow-ups retain the
+earlier message's context, and retries keep its original attachments. Removing
+a draft attachment preserves the typed question. Attachment context stays out
+of indexed conversation text.
+Retrying with another model carries those same original file pointers, URLs,
+elements and unsent draft attachments into the new prompt, preserving their
+placement. If the combined context exceeds attachment limits, keep the old chat
+and report the limit instead of dropping attachments. CLI event-stream allowances
+include attached file bytes and JSON encoding overhead; final-answer and
+diagnostic limits remain separate.
 
 A picture-in-picture icon moves the chat from either Home or the overlay into
 a draggable, dismissible progress panel. Keep the icon in the composer footer,
@@ -313,7 +336,7 @@ submitted messages or draft. Show Clear whenever the composer has a draft or a
 conversation, as a text button floating in the composer's upper-right corner.
 In the modal, place a matching Close text button beside Clear. Their transparent
 container takes no height in the prompt layout. Text wraps around the controls
-on its first line; context chips flow inline with it. Use a transparent background
+on its first line; attachment chips flow inline with it. Use a transparent background
 and border, and the short tooltip “Clear chat and start fresh”. Keep the controls
 outside the scrollable transcript so they remain reachable while reading earlier
 replies.

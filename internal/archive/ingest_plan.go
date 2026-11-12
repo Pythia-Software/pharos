@@ -28,6 +28,7 @@ type sourceWorkPlan struct {
 	continueOnError   bool
 	discoverySeconds  float64
 	captureSignature  string
+	preflight         func(func([]sourcePart) bool) error
 }
 
 type partialPlanner interface {
@@ -88,6 +89,24 @@ func (p *sourceWorkPlan) observe(record *WorkspaceRecord) {
 }
 
 func (p *sourceWorkPlan) discover(ctx context.Context, unchanged func([]sourcePart) bool, emit partEmitter) error {
+	if p.preflight != nil {
+		// Preflight and execution share one classification. Callers may report
+		// discoveries/count skipped groups from unchanged, so don't count twice.
+		original := unchanged
+		classified := map[string]bool{}
+		unchanged = func(parts []sourcePart) bool {
+			key := partsSignature(parts)
+			if value, ok := classified[key]; ok {
+				return value
+			}
+			value := original != nil && original(parts)
+			classified[key] = value
+			return value
+		}
+		if err := p.preflight(unchanged); err != nil {
+			return err
+		}
+	}
 	failures := []error{p.discoveryError}
 	for _, group := range p.groups {
 		if err := ctx.Err(); err != nil {

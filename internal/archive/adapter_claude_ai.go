@@ -19,7 +19,7 @@ import (
 type claudeAIAdapter struct{ baseAdapter }
 
 // claudeAIExtractor versions the parser; bump it when parsing changes.
-const claudeAIExtractor = "claude-ai-v4"
+const claudeAIExtractor = "claude-ai-v7"
 
 // claudeAIRoot is the parent a conversation's first message names.
 const claudeAIRoot = "00000000-0000-4000-8000-000000000000"
@@ -36,6 +36,10 @@ func (a *claudeAIAdapter) Fingerprint() (string, error) {
 	}
 	var values []string
 	for _, input := range inputs {
+		if input.retired {
+			values = append(values, a.original(input.path)+":"+input.sha256)
+			continue
+		}
 		value, err := a.files().pathFingerprint(input.path, func(string, os.DirEntry) bool { return true })
 		if err != nil {
 			return "", err
@@ -68,6 +72,7 @@ func (c *claudeAIConversation) UnmarshalJSON(data []byte) error {
 	}
 	decoder = json.NewDecoder(strings.NewReader(string(data)))
 	decoder.UseNumber()
+	c.Fields = nil
 	if err := decoder.Decode(&c.Fields); err != nil {
 		return err
 	}
@@ -161,6 +166,24 @@ func (a *claudeAIAdapter) Discover(emit func(WorkspaceRecord) error) error {
 func (a *claudeAIAdapter) readExport(input claudeExportInput, emit func(WorkspaceRecord) error, check func(claudeAIConversation) error) error {
 	if err := a.context().Err(); err != nil {
 		return err
+	}
+	if input.units != nil {
+		for _, unit := range input.units.Conversations {
+			conversation, err := input.units.conversation(a.files(), input.objectRoot, unit)
+			if err != nil {
+				return err
+			}
+			if emit != nil {
+				if err := emit(a.record(conversation, a.original(input.path), unit.Observed)); err != nil {
+					return err
+				}
+			} else if check != nil {
+				if err := check(conversation); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	}
 	if strings.EqualFold(filepath.Ext(input.path), ".zip") {
 		if _, err := a.files().Database(input.path); err != nil {
@@ -452,7 +475,7 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 	title := defaultString(conversation.Name, "Claude.ai "+short(conversation.UUID))
 	created, updated := iso(conversation.CreatedAt), iso(conversation.UpdatedAt)
 	return WorkspaceRecord{Observed: version, SourceID: conversation.UUID, SourceKind: "claude-ai", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Metadata: claudeConversationMetadata(conversation),
-		Conversations: []ConversationRecord{{NativeID: conversation.UUID, Provider: "claude", Account: a.config.Account, Origin: "user-export", Harness: "claude-ai-export", Coverage: "complete", Messages: messages, StartedAt: created, EndedAt: updated, Observed: version}}}
+		Conversations: []ConversationRecord{{NativeID: conversation.UUID, Provider: "claude", Account: a.config.Account, Origin: "user-export", Harness: "claude-ai-export", Coverage: "unknown", Messages: messages, StartedAt: created, EndedAt: updated, Observed: version}}}
 }
 
 func claudeAIToolPayload(block map[string]any, name string) map[string]any {

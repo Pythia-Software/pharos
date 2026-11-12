@@ -107,6 +107,15 @@ var replaceProcess = replaceProcessNative
 
 func (m *mcpServer) handle(request map[string]any) map[string]any {
 	method := firstString(request["method"])
+	if scope := m.askFileScope(); len(scope) > 0 {
+		if method == "tools/list" {
+			tools := append([]map[string]any{}, mcpTools...)
+			return mcpResult(request, map[string]any{"tools": append(tools, askReadAttachmentTool)})
+		}
+		if method == "tools/call" && firstString(mapValue(request["params"])["name"]) == "read_attached_file" {
+			return readAskAttachment(request, scope)
+		}
+	}
 	if method != "tools/list" && method != "tools/call" {
 		return handleMCP(nil, request)
 	}

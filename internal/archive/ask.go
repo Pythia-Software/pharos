@@ -29,23 +29,24 @@ type askCard struct {
 	Href        string `json:"href"`
 }
 type askTurn struct {
-	Feedback   *askFeedback  `json:"feedback,omitempty"`
-	ID         string        `json:"id"`
-	SeenAt     int64         `json:"seenAt,omitempty"`
-	Prompt     string        `json:"prompt"`
-	CurrentURI string        `json:"currentURI,omitempty"`
-	CLI        string        `json:"cli"`
-	Model      string        `json:"model"`
-	ModelLabel string        `json:"modelLabel"`
-	Effort     string        `json:"effort"`
-	Fast       bool          `json:"fast,omitempty"`
-	Status     string        `json:"status"`
-	Message    string        `json:"message"`
-	Reply      string        `json:"reply"`
-	ElapsedMs  int64         `json:"elapsedMs"`
-	StartedAt  int64         `json:"startedAt"`
-	Cards      []askCard     `json:"cards"`
-	Activity   []askProgress `json:"activity,omitempty"`
+	Feedback    *askFeedback    `json:"feedback,omitempty"`
+	ID          string          `json:"id"`
+	SeenAt      int64           `json:"seenAt,omitempty"`
+	Prompt      string          `json:"prompt"`
+	CurrentURI  string          `json:"currentURI,omitempty"`
+	Attachments []askAttachment `json:"attachments,omitempty"`
+	CLI         string          `json:"cli"`
+	Model       string          `json:"model"`
+	ModelLabel  string          `json:"modelLabel"`
+	Effort      string          `json:"effort"`
+	Fast        bool            `json:"fast,omitempty"`
+	Status      string          `json:"status"`
+	Message     string          `json:"message"`
+	Reply       string          `json:"reply"`
+	ElapsedMs   int64           `json:"elapsedMs"`
+	StartedAt   int64           `json:"startedAt"`
+	Cards       []askCard       `json:"cards"`
+	Activity    []askProgress   `json:"activity,omitempty"`
 	// Omitted counts destinations the agent returned that Pharos could not
 	// open; the page notes them and does not open a lone remaining card.
 	Omitted       int               `json:"omitted,omitempty"`
@@ -56,17 +57,18 @@ type askTurn struct {
 	SuggestionEdited bool   `json:"suggestionEdited,omitempty"`
 }
 type askSession struct {
-	HostID             string       `json:"hostID"`
-	QuestionCount      int          `json:"questionCount,omitempty"`
-	UnreadCount        int          `json:"unreadCount,omitempty"`
-	LastStatus         string       `json:"lastStatus,omitempty"`
-	ID                 string       `json:"id"`
-	CreatedAt          int64        `json:"createdAt"`
-	UpdatedAt          int64        `json:"updatedAt"`
-	Selection          askSelection `json:"selection"`
-	Draft              string       `json:"draft"`
-	ClarificationDraft string       `json:"clarificationDraft,omitempty"`
-	Conversation       []askTurn    `json:"conversation"`
+	HostID             string          `json:"hostID"`
+	QuestionCount      int             `json:"questionCount,omitempty"`
+	UnreadCount        int             `json:"unreadCount,omitempty"`
+	LastStatus         string          `json:"lastStatus,omitempty"`
+	ID                 string          `json:"id"`
+	CreatedAt          int64           `json:"createdAt"`
+	UpdatedAt          int64           `json:"updatedAt"`
+	Selection          askSelection    `json:"selection"`
+	Draft              string          `json:"draft"`
+	DraftAttachments   []askAttachment `json:"draftAttachments,omitempty"`
+	ClarificationDraft string          `json:"clarificationDraft,omitempty"`
+	Conversation       []askTurn       `json:"conversation"`
 	// Models lists, in history summaries only, each CLI and model the chat's
 	// turns used, most recently used first.
 	Models []askModelUse `json:"models,omitempty"`
@@ -413,10 +415,14 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Errorf("GET or POST required"), 405)
 		return
 	}
+	if r.URL.Path == "/api/ask/attachments" && r.Method == http.MethodPost {
+		s.askUpload(w, r)
+		return
+	}
 	ctx := r.Context()
 	var body map[string]any
 	if r.Method == http.MethodPost {
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&body); err != nil {
 			writeError(w, err, 400)
 			return
 		}
@@ -620,6 +626,18 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		session.Draft = draft
+		if raw, ok := body["draftAttachments"]; ok {
+			var items []askAttachment
+			if err := json.Unmarshal([]byte(jsonText(raw)), &items); err != nil {
+				fail(fmt.Errorf("invalid draft attachments"))
+				return
+			}
+			if err := s.validateAskAttachments(items); err != nil {
+				fail(err)
+				return
+			}
+			session.DraftAttachments = items
+		}
 		if raw, ok := body["clarificationDraft"]; ok {
 			text, valid := raw.(string)
 			if !valid || len(text) > 12000 {
@@ -630,6 +648,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if saving := s.ask.saving[id]; saving != nil {
 			saving.session.Draft = draft
+			saving.session.DraftAttachments = session.DraftAttachments
 			if _, ok := body["clarificationDraft"]; ok {
 				saving.session.ClarificationDraft = session.ClarificationDraft
 			}
@@ -860,6 +879,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		fresh, readErr := s.askSession(context.WithoutCancel(ctx), session.ID)
 		if readErr == nil {
 			session.Draft = fresh.Draft
+			session.DraftAttachments = fresh.DraftAttachments
 			session.ClarificationDraft = fresh.ClarificationDraft
 			for i := range session.Conversation {
 				for _, saved := range fresh.Conversation {
@@ -1001,13 +1021,15 @@ func (s *Server) dropFinishedAsk(id string) {
 
 func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession, askProvider, context.Context, context.CancelFunc, error) {
 	var input struct {
-		ID         string
-		TurnID     string
-		Prompt     string
-		CurrentURI string
-		Draft      string
-		Selection  askSelection
-		Retry      bool
+		ID               string
+		TurnID           string
+		Prompt           string
+		CurrentURI       string
+		Attachments      []askAttachment
+		DraftAttachments []askAttachment
+		Draft            string
+		Selection        askSelection
+		Retry            bool
 		// Suggestion is the suggested question the prompt began as.
 		Suggestion struct{ ID, Text string }
 	}
@@ -1029,6 +1051,12 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 	}
 	if input.CurrentURI != "" && !askSafeURL(input.CurrentURI) {
 		return fail(fmt.Errorf("invalid current page URI"))
+	}
+	if err := s.validateAskAttachments(input.Attachments); err != nil {
+		return fail(err)
+	}
+	if err := s.validateAskAttachments(input.DraftAttachments); err != nil {
+		return fail(err)
 	}
 	p, err := s.askProvider(ctx, input.Selection.Provider)
 	if err != nil {
@@ -1064,6 +1092,7 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 				return fail(fmt.Errorf("message was already submitted; reload the chat to see its result"))
 			}
 			input.CurrentURI = turn.CurrentURI
+			input.Attachments = turn.Attachments
 			input.Prompt = turn.Prompt
 			input.Suggestion.ID, input.Suggestion.Text = turn.Suggestion, ""
 			if !turn.SuggestionEdited {
@@ -1076,6 +1105,9 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 	if len(session.Conversation) >= 200 {
 		return fail(fmt.Errorf("start a fresh chat to continue; this chat has 200 questions"))
 	}
+	if err := askFilesAvailable(input.Attachments); err != nil {
+		return fail(err)
+	}
 	label := input.Selection.Model
 	for _, model := range p.Models {
 		if model.ID == input.Selection.Model {
@@ -1083,12 +1115,14 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 		}
 	}
 	turn := askTurn{ID: input.TurnID, Prompt: input.Prompt, CurrentURI: input.CurrentURI, CLI: p.ID, Model: input.Selection.Model, ModelLabel: label, Effort: input.Selection.Effort, Fast: input.Selection.Fast, Status: "loading", StartedAt: time.Now().UnixMilli(), Cards: []askCard{}}
+	turn.Attachments = input.Attachments
 	if askSuggestionFamilyKnown(input.Suggestion.ID) {
 		turn.Suggestion = input.Suggestion.ID
 		turn.SuggestionEdited = input.Prompt != strings.TrimSpace(input.Suggestion.Text) && askSimilar(input.Prompt, input.Suggestion.Text) < 0.6
 	}
 	session.Conversation = append(session.Conversation, turn)
 	session.Draft = input.Draft
+	session.DraftAttachments = input.DraftAttachments
 	session.ClarificationDraft = ""
 	session.UpdatedAt = time.Now().UnixMilli()
 	if err = s.saveAskSession(ctx, session, true); err != nil {

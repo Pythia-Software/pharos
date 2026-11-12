@@ -845,6 +845,25 @@
       "reason": "Clears an unsent Ask draft or starts a new chat after a question; Ask identity continues to use ask_chat."
     },
     {
+      "key": "fragment:39c80d3ac8b4ae4f:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-attach-element cursor-interaction\">",
+      "contract": "editing",
+      "reason": "Explicit private Ask message attachments: the menu, file chooser, element selection, preview and removal edit or inspect chat context; drafts persist in the Ask session, not the content view URL."
+    },
+    {
+      "key": "fragment:41885d09cc2331ee:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-icon-control pharos-context-trigger cursor-interaction\" aria-label=\"Attach context\" aria-expanded=\"false\" aria-haspopup=\"dialog\" aria-controls=\"pharos-context-menu\" data-tooltip=\"Attach context\">",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Explicit private Ask message attachments: the menu, file chooser, element selection, preview and removal edit or inspect chat context; drafts persist in the Ask session, not the content view URL."
+    },
+    {
       "key": "fragment:41d3d827aee0e721:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -861,6 +880,15 @@
       "control": "<button type=\"button\" class=\"pharos-window-close cursor-interaction\" aria-label=\"Close Ask Pharos\" title=\"Close Ask Pharos (Escape)\" hidden>",
       "contract": "transient",
       "reason": "Closes or floats the private Ask composer; Ask chat identity continues to use ask_chat."
+    },
+    {
+      "key": "fragment:540c77a73c82d1e8:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-attach-files cursor-interaction\">",
+      "contract": "editing",
+      "reason": "Explicit private Ask message attachments: the menu, file chooser, element selection, preview and removal edit or inspect chat context; drafts persist in the Ask session, not the content view URL."
     },
     {
       "key": "fragment:584408b697814075:0",
@@ -1045,6 +1073,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:a8ee87085856da93:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-attach-url cursor-interaction\">",
+      "contract": "editing",
+      "reason": "Explicit private Ask message attachments: the menu, file chooser, element selection, preview and removal edit or inspect chat context; drafts persist in the Ask session, not the content view URL."
+    },
+    {
       "key": "fragment:a9ad79f64dbaf85e:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -1052,6 +1089,15 @@
       "control": "<button type=\"button\" class=\"pharos-browse-hint-dismiss cursor-interaction\" aria-label=\"Dismiss browse hint\" title=\"Don’t show for a while\">",
       "contract": "settings",
       "reason": "Snoozes the Ask browse hint in UI preferences; not view state."
+    },
+    {
+      "key": "fragment:acd1c0dfbc71909c:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-modal-secondary pharos-context-review-close cursor-interaction\">",
+      "contract": "editing",
+      "reason": "Explicit private Ask message attachments: the menu, file chooser, element selection, preview and removal edit or inspect chat context; drafts persist in the Ask session, not the content view URL."
     },
     {
       "key": "fragment:ad63fe0a924cd37a:0",
@@ -1117,6 +1163,15 @@
       "reason": "Dismisses an Ask error message; the message is not view state and does not survive a reload."
     },
     {
+      "key": "fragment:debc6ae8d3225a89:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "input",
+      "control": "<input class=\"pharos-context-files\" type=\"file\" multiple aria-label=\"Attach files\" hidden>",
+      "contract": "editing",
+      "reason": "Chooses original files for a private Ask message draft. Uploads make temporary copies; their pointers persist in the Ask session, outside content view URLs."
+    },
+    {
       "key": "fragment:e7f5c133da4818c2:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -1161,6 +1216,16 @@
       "disclosure": true,
       "contract": "editing",
       "reason": "Reports whether the private Ask composer dialog is open; Ask chat identity uses ask_chat and composer presentation is restored by Ask."
+    },
+    {
+      "key": "9ccb59e9bb2b10f5:0",
+      "file": "internal/archive/assets/ask-pharos.js",
+      "owner": "<module>",
+      "tag": "aria-expanded",
+      "control": "contextTrigger",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Explicit private Ask message attachments: the menu, file chooser, element selection, preview and removal edit or inspect chat context; drafts persist in the Ask session, not the content view URL."
     },
     {
       "key": "eedffbde75af05e5:0",
@@ -1241,13 +1306,22 @@
       "reason": "Reports whether the private Ask composer dialog is open; Ask chat identity uses ask_chat and composer presentation is restored by Ask."
     },
     {
-      "key": "6c90fe78404cee3a:0",
+      "key": "60aa56d7dbfd5751:0",
       "file": "internal/archive/assets/ask-prompt.js",
-      "owner": "makeChip",
+      "owner": "askPromptChipNode",
       "tag": "button",
       "control": "'button'",
       "contract": "editing",
-      "reason": "Removes a context chip from the unsent Ask prompt draft."
+      "reason": "Inspects explicit message attachment metadata or removes a draft attachment; attachment order and text positions are saved with the Ask session, not page view state."
+    },
+    {
+      "key": "60aa56d7dbfd5751:1",
+      "file": "internal/archive/assets/ask-prompt.js",
+      "owner": "askPromptChipNode",
+      "tag": "button",
+      "control": "'button'",
+      "contract": "editing",
+      "reason": "Inspects explicit message attachment metadata or removes a draft attachment; attachment order and text positions are saved with the Ask session, not page view state."
     },
     {
       "key": "78f30533f5901a54:0",
@@ -2212,6 +2286,15 @@
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
+      "key": "a1a17837e66eb1f2:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "claudeExportRoutine",
+      "tag": "button",
+      "control": "'button', '', 'Copy daily export prompt'",
+      "contract": "action",
+      "reason": "Copies the visible daily export starter prompt to the clipboard; task creation happens later in Claude Desktop and does not change the Pharos view."
+    },
+    {
       "key": "6d145e032336655c:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "exportsLink",
@@ -2291,6 +2374,24 @@
       "control": "'input'",
       "contract": "settings",
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+    },
+    {
+      "key": "aa053c6ea5d6f456:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderChatGPTWatch",
+      "tag": "button",
+      "control": "'button', '', 'Check Downloads now'",
+      "contract": "action",
+      "reason": "Per-Mac opt-in Downloads setting, or explicit immediate check; saved outside library content view URLs."
+    },
+    {
+      "key": "e91e519c4965885f:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderChatGPTWatch",
+      "tag": "button",
+      "control": "'button', 'toggle'",
+      "contract": "settings",
+      "reason": "Per-Mac opt-in Downloads setting, or explicit immediate check; saved outside library content view URLs."
     },
     {
       "key": "0e2730981692c4d8:0",
@@ -2390,6 +2491,15 @@
       "control": "'summary', '', 'What each tool records'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
+    },
+    {
+      "key": "5634aeb0adbdf213:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "showChatGPTWatch",
+      "tag": "button",
+      "control": "'button', '', action==='retry'?'Try again':'Stop'",
+      "contract": "action",
+      "reason": "Retry or stop a managed import job; operational action without content view state."
     },
     {
       "key": "7390be4d645bfa9a:0",
@@ -3338,13 +3448,33 @@
       "reason": "Line tag menus write reader_hidden_tags through the transcript tag filter; the menu itself is transient."
     },
     {
-      "key": "364915225a5a7100:0",
+      "key": "1d7776906a3fbbb9:0",
       "file": "internal/archive/assets/ui.py",
-      "owner": "claudeSettingsRecordingControl",
+      "owner": "chatGPTReferences",
+      "tag": "details",
+      "control": "'details', 'chatgpt-references'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Shared classic disclosure binding uses the stable message identity in data-view-key; opening only materializes preserved references."
+    },
+    {
+      "key": "7f4d8fd709cce319:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "chatGPTReferences",
+      "tag": "summary",
+      "control": "'summary', '', 'Exported references and search results'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Shared classic disclosure binding uses the stable message identity in data-view-key; opening only materializes preserved references."
+    },
+    {
+      "key": "f632dd36fb28ffec:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "claudeSettingsBackfillControl",
       "tag": "button",
-      "control": "'button', 'source-remove', 'Record me for 30 minutes'",
-      "contract": "settings",
-      "reason": "Starts or stops a bounded collection action for a configured source; recording status is service state, not URL view state."
+      "control": "'button', 'source-remove', 'Capture settings'",
+      "contract": "action",
+      "reason": "Captures and indexes cached conversation settings once; job progress and missing-model counts are service state, not URL view state."
     },
     {
       "key": "b9d31ba372bfa501:0",
@@ -3915,6 +4045,24 @@
       "control": "'button', 'source-remove', 'Cancel'",
       "contract": "settings",
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
+      "key": "246ed090316debe1:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "toolEvent",
+      "tag": "details",
+      "control": "'details', 'tool-event conversation-event'",
+      "contract": "reader",
+      "reason": "Attachment body is inserted under actionRow, whose existing bindReaderView message identity owns openness; this temporary wrapper is discarded when its event body is mounted."
+    },
+    {
+      "key": "a519973d1b618ac3:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "toolEvent",
+      "tag": "summary",
+      "control": "'summary', '', toolPreview(message)",
+      "contract": "reader",
+      "reason": "Attachment body is inserted under actionRow, whose existing bindReaderView message identity owns openness; this temporary wrapper is discarded when its event body is mounted."
     },
     {
       "key": "aa5a6fe4f81bf10b:0",
