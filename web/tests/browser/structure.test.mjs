@@ -371,6 +371,9 @@ const ROUTES = [
   {name:"Ask Pharos opted out",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:false},providers:askProviders}}},
   {name:"Ask Pharos ready",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI},
   {name:"Ask Pharos full screen",url:"/ask",ready:"#askPage #pharos-ask .pharos-ai:not([hidden])",api:askAPI},
+  {name:"Ask Pharos attachment menu",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.getByRole('button',{name:'Attach context',exact:true}).click(),shown:'#pharos-context-menu:popover-open'},
+  {name:"Ask Pharos attachment review",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:async page=>{await page.getByRole('button',{name:'Attach context',exact:true}).click();await page.getByRole('button',{name:'Attach current URL',exact:false}).click();await page.locator('#pharos-question').getByRole('button',{name:/Inspect attachment:/}).click();},shown:'.pharos-context-review[open]'},
+  {name:"Ask Pharos element picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:async page=>{await page.getByRole('button',{name:'Attach context',exact:true}).click();await page.getByRole('button',{name:'Select a page element',exact:false}).click();},shown:'.pharos-floating-selection:not([hidden])'},
   {name:"Ask Pharos model picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-model-trigger").click(),shown:"#pharos-model-menu:not([hidden])"},
   {name:"Ask Pharos history",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-history-trigger").click(),shown:"#pharos-chat-history[open]"},
   {name:"Ask Pharos conversation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-turn",api:askAPI,check:async page=>{

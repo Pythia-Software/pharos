@@ -12,6 +12,27 @@ import { loadClassicScript, plain } from './helpers/classic-script.mjs';
 const model = loadClassicScript('ask-model.js',{TextEncoder,TextDecoder});
 const prompt = loadClassicScript('ask-prompt.js');
 
+test('Ask attachments preserve URLs, element identity and original file pointers',()=>{
+  const page={id:'url-1',kind:'url',name:'Tokens',url:'/analyze?analyze_topic=tokens&range=7d'};
+  const element={id:'element-1',kind:'element',name:'Tokens by model',url:page.url,selector:'#tokens-chart'};
+  const file={id:'file-1',kind:'file',name:'original.pdf',path:'/tmp/private/original.pdf',mime:'application/pdf',size:42};
+  assert.deepEqual(plain(model.askAddAttachments([page],[{...page,id:'duplicate'},element,file])),[page,element,file]);
+  assert.deepEqual(plain(model.askAttachmentDetails(element)),[['URL',page.url],['Element',element.name],['Selector',element.selector]]);
+  assert.deepEqual(plain(model.askAttachmentDetails(file)),[['File','original.pdf'],['Temporary path',file.path],['Type','application/pdf'],['Size','42 bytes']]);
+  assert.throws(()=>model.askAddAttachments([],Array.from({length:9},(_,i)=>({...file,id:'file-'+i}))),/8 items/);
+  assert.throws(()=>model.askAddAttachments([],[{...file,size:51*1024*1024}]),/50 MiB/);
+  const parts=['  Explain ',model.askAttachmentChip(element),' using ',model.askAttachmentChip(file),model.askAttachmentChip(page),' please.  '];
+  const positioned=plain(model.askPositionedAttachments(parts,[page,element,file]));
+  assert.deepEqual(positioned.map(item=>[item.id,item.offset]),[['element-1',10],['file-1',17],['url-1',17]]);
+  assert.deepEqual(plain(model.askAttachmentParts(prompt.askPromptText(parts),positioned)),plain(parts));
+  assert.deepEqual(plain(model.askPositionedAttachments(parts,[page,element,file],prompt.askPromptText(parts))).map(item=>item.offset),[8,15,15],'trimming keeps references beside the same text');
+  const moved=prompt.askPromptMoveChip(parts,file.id,0),movedItems=plain(model.askPositionedAttachments(moved,[page,element,file]));
+  assert.equal(movedItems[0].id,file.id);assert.equal(movedItems[0].offset,0);
+  assert.deepEqual(plain(model.askAttachmentParts(prompt.askPromptText(moved),movedItems)),plain(moved));
+  assert.deepEqual(plain(model.askAttachmentParts('🧭!', [{...page,offset:1}])),[plain(model.askAttachmentChip(page)),'🧭!'],'never split a surrogate pair');
+  assert.equal(model.askAttachmentChip(element).label,'Highlighted element');
+});
+
 test('Ask progress puzzles produce distinct solvable shuffles using adjacent moves',()=>{
   let seed=19;const random=()=>((seed=(seed*16807)%2147483647)/2147483647);
   let previous=null;
@@ -324,6 +345,28 @@ test('retrying with another model restores the full conversation and unsent draf
   assert.equal(model.askRetryDraft({}), '');
   assert.equal(model.askRetryDraft({turns:[{prompt:'Try this',status:'canceled',reply:'Request canceled'}]}),'You:\nTry this\n\nPharos (canceled):\nRequest canceled');
   assert.equal(model.askRetryDraft({turns:[{prompt:'Hello',reply:''}]}),'You:\nHello');
+  const file={id:'file-a',kind:'file',name:'notes.pdf',path:'/tmp/private/notes.pdf',size:42,offset:5};
+  const url={id:'url-a',kind:'url',name:'Tokens',url:'/analyze?analyze_topic=tokens',offset:0};
+  const element={id:'element-a',kind:'element',name:'Chart',url:url.url,selector:'#chart',offset:4};
+  const draftFile={id:'file-b',kind:'file',name:'draft.csv',path:'/tmp/private/draft.csv',size:12,offset:6};
+  const attachedTurns=[{...turns[0],attachments:[file,url]},{...turns[2],attachments:[element]}];
+  const retry=plain(model.askRetryContext({turns:attachedTurns,draft:'Use these notes',draftAttachments:[draftFile,{...url,offset:0}]}));
+  assert.equal(retry.draft,model.askRetryDraft({turns:attachedTurns,draft:'Use these notes'}));
+  assert.deepEqual(retry.attachments.map(item=>item.id),['file-a','element-a','url-a','file-b']);
+  for(const item of retry.attachments){
+    const position={
+      'file-a':retry.draft.indexOf('Find slow')+file.offset,
+      'element-a':retry.draft.indexOf('You:\nThis week')+5+element.offset,
+      'url-a':retry.draft.indexOf('Use these notes'),
+      'file-b':retry.draft.indexOf('Use these notes')+draftFile.offset,
+    }[item.id];
+    assert.equal(item.offset,position);
+  }
+  assert.equal(retry.attachments[0].path,file.path,'retry uses the same original temporary file');
+  assert.equal(file.offset,5,'retry must not change saved attachment positions');
+  const onlyContext=plain(model.askRetryContext({draftAttachments:[draftFile]}));
+  assert.equal(onlyContext.attachments.length,1,'an attachment-only unsent draft also survives');
+  assert.throws(()=>model.askRetryContext({draftAttachments:Array.from({length:9},(_,i)=>({...file,id:'file-'+i,path:'/tmp/file-'+i}))}),/8 items/,'retry must report a limit instead of silently dropping context');
 });
 test('retry transcripts fit the server byte limit while prioritizing recent turns and the unsent draft', () => {
   const turns=[
@@ -340,6 +383,10 @@ test('retry transcripts fit the server byte limit while prioritizing recent turn
   assert.ok(text.includes('Latest question\n\nPharos (error):\nNo response'));
   assert.ok(text.endsWith('You (unsent draft):\n'+draft));
   assert.equal(turns[0].reply.length,8000,'formatting must not modify the saved conversation');
+  const file={id:'old-file',kind:'file',name:'source.txt',path:'/tmp/source.txt',offset:0,size:10};
+  const retry=model.askRetryContext({turns:[{...turns[0],attachments:[file]},...turns.slice(1)],draft});
+  assert.equal(retry.draft,text);
+  assert.equal(retry.attachments[0].path,file.path,'shortening old text must keep context a later question may refer to');
 });
 test('retry transcript limits count UTF-8 bytes, including labels, and safely shorten oversized messages', () => {
   const exact={turns:[{prompt:'x'.repeat(11995)}]};
