@@ -333,7 +333,7 @@ func (r *probeRun) claudeSettings(dir, foundBy string) {
 		return
 	}
 	candidate.Unit = "settings snapshot"
-	candidate.Detail = "Selected model, effort and thinking mode from cached conversation lists. Chat text and credentials are excluded. Open older chats in Claude while recording to collect more; cache coverage is incomplete."
+	candidate.Detail = "Selected model, effort and thinking mode from cached conversation lists. Chat text and credentials are excluded. To make older settings available, open the Claude desktop app, select Chat, click View all below Recents, then scroll down to your oldest conversation. Return to Pharos and capture settings once. Cache coverage is incomplete."
 	r.keep(candidate)
 }
 

@@ -127,6 +127,23 @@ function pharosClaudeWatchLine(item) {
   return {...line,files,progress,detail:item.message||''};
 }
 
+// A deliberate one-time capture uses existing capture/index jobs and never starts recording.
+async function captureClaudeSettings(coverage,{call,runs,conversation='',progress=()=>{}}){
+  if(!runs)throw Error('Library controls are still loading. Try again.');
+  progress('Preparing settings capture…');
+  const setup=await call('/api/claude-chat-settings/setup',{method:'POST',body:JSON.stringify({account:coverage.account,path:coverage.setup.path,capture_only:true})});
+  progress('Capturing settings…');
+  const captured=await runs.capture([setup.source]);
+  if(captured?.state!=='complete')throw Error('Settings capture did not complete. Try again when the current capture has finished.');
+  progress('Indexing settings…');
+  const indexed=await runs.index({sources:[setup.source],only_needed:true});
+  if(indexed?.state!=='complete')throw Error('Settings were captured, but indexing did not complete. Try again to finish.');
+  const result=await call('/api/claude-chat-settings/coverage?account='+encodeURIComponent(coverage.account)+'&conversation='+encodeURIComponent(conversation));
+  const current=result.accounts.find(item=>item.account===coverage.account);
+  if(!current||!Number.isSafeInteger(current.missing_models)||current.missing_models<0)throw Error('Settings were captured, but model coverage could not be confirmed. Reload this page to check it.');
+  return current;
+}
+
 // Source setup UI.
 // Detect installed tools and familiar data folders before offering choices. The same
 // guide runs inside application setup and from Settings → Sources. Approval
@@ -224,7 +241,6 @@ function pharosClaudeWatchLine(item) {
 .pharos-claude-downloads{display:grid;gap:12px;margin:16px 0}
 .pharos-claude-downloads a{overflow-wrap:anywhere}
 .pharos-claude-parts{max-width:100%;overflow-wrap:anywhere}
-.pharos-onboard.pharos-settings-prompt:not(.pharos-embedded){width:min(600px,calc(100% - 48px));height:fit-content}
 .pharos-modes.pharos-pair{grid-template-columns:repeat(2,minmax(0,1fr))}
 .pharos-chips{display:flex;flex-wrap:wrap;gap:8px;border:0;margin:0;padding:0;min-width:0}
 .pharos-onboard .pharos-chip-option{display:inline-flex;align-items:center;gap:8px;margin:0;padding:8px 14px;border:1px solid var(--line);border-radius:20px;background:var(--bg);font:600 13px/1.3 var(--sans);cursor:pointer}
@@ -429,13 +445,13 @@ function pharosClaudeWatchLine(item) {
     const body=node('div','pharos-onboard-body'),actions=node('div','pharos-onboard-actions');
     let wizard=createPharosSourceWizard();
     let choice='scan';
-    const claudeSettingsOffered=new Set(),claudeSettingsSources=new Map();
+    const claudeSettingsSources=new Map();
     active={embedded:!!embedded,opener:document.activeElement,stage:0,back:()=>renderStart()};
     const guide=node('button','pharos-source-guide','Data Guide');guide.type='button';guide.dataset.viewField='guide_open';guide.onclick=()=>window.pharosOpenDataGuide('sources',guide).catch(failure=>{guide.textContent='Retry Data Guide';guide.title=failure.message});
     dialog.append(title,intro,guide,body,actions);
     if(embedded){embedded.classList.add('source-setup-open');embedded.setAttribute('aria-labelledby',title.id);embedded.querySelector('.application-body').append(dialog)}
     else{document.body.append(dialog);dialog.showModal();dialog.addEventListener('cancel',event=>{event.preventDefault();active?.back()})}
-    const heading=(text,description)=>{dialog.classList.remove('pharos-settings-prompt');guide.hidden=false;title.textContent=text;intro.textContent=description;intro.hidden=false;body.scrollTop=0;title.focus()};
+    const heading=(text,description)=>{guide.hidden=false;title.textContent=text;intro.textContent=description;intro.hidden=false;body.scrollTop=0;title.focus()};
     const step=n=>node('span','pharos-source-progress',`Step ${n} of 3`);
     const error=node('p','pharos-error');error.setAttribute('role','status');
     const fail=failure=>{error.textContent=failure.message;body.prepend(error)};
@@ -636,46 +652,6 @@ function pharosClaudeWatchLine(item) {
       actions.replaceChildren(step(3),button('Back',false,renderFound),add);
     }
 
-    // Reuse the import modal as an optional setup step. Choices last for this
-    // import flow; enabling is durable, while continuing without stays optional.
-    function renderClaudeSettingsSetup(back,job,setup=null,failure=null){
-      const view=active,key=job.name+'/'+job.id;
-      heading('Add model and thinking settings?','Pharos saves only conversation IDs, selected models, effort levels, thinking modes, and observation timestamps from Claude Desktop.');
-      dialog.classList.add('pharos-settings-prompt');guide.hidden=true;
-      clear();
-      const marker=node('section','pharos-claude-settings-setup');body.append(marker);
-      const current=()=>active===view&&marker.isConnected;
-      const next=()=>{claudeSettingsOffered.add(key);renderClaudeCollection(back,{id:job.id,name:job.name})};
-      active.back=next;
-      marker.append(node('p','','While Pharos is running, automatic updates periodically check for changes to these settings.'));
-      if(failure)fail(failure);
-      const skip=button('Continue without settings',false,next);
-      if(!setup){
-        actions.replaceChildren(skip,button('Check again',true,async()=>{try{const plan=await call('/api/claude-chat-settings/setup?name='+encodeURIComponent(job.name));if(!current())return;if(plan.enabled){claudeSettingsSources.set(key,plan.source);next()}else renderClaudeSettingsSetup(back,job,plan)}catch(error){if(current())fail(error)}}));
-        return;
-      }
-      let path=setup.path;
-      if(setup.configured&&setup.scope==='library')marker.append(node('p','pharos-muted','This enables the shared source on every Mac.'));
-      // The usual folder needs no setup. Offer a chooser only if enabling
-      // fails, so an unavailable or moved folder can still be corrected here.
-      let folder;
-      const showFolder=()=>{
-        if(setup.configured||folder)return;
-        folder=pathField('Claude settings folder',path,'~/Library/Application Support/Claude','source',value=>{path=value},fail);
-        marker.append(node('label','pharos-folder-label','Claude Desktop folder'),folder.row);
-      };
-      const enable=button('Enable and continue',true,async()=>{
-        enable.disabled=skip.disabled=true;error.textContent='';
-        try{
-          const saved=await call('/api/claude-chat-settings/setup',{method:'POST',body:JSON.stringify({name:job.name,path})});
-          if(!current())return;
-          if(!saved.enabled)throw Error('Settings capture was not enabled. You can retry or continue without it.');
-          claudeSettingsSources.set(key,saved.source);window.loadSources?.();next();
-        }catch(failure){if(current()){showFolder();fail(failure);enable.disabled=skip.disabled=false}}
-      });
-      actions.replaceChildren(skip,enable);
-    }
-
     async function renderClaudeCollection(back, selectedJob=null, wait=false) {
       const view=active;
       heading('Collect your Claude export.','Download links use your signed-in browser. Pharos verifies completed files and keeps a resumable copy in your library.');
@@ -700,13 +676,12 @@ function pharosClaudeWatchLine(item) {
         const job=await call('/api/claude-imports?id='+encodeURIComponent(chosen.id)+'&name='+encodeURIComponent(chosen.name));
         if(!current())return;
         const settingsKey=job.name+'/'+job.id;
-        if(job.source&&!claudeSettingsOffered.has(settingsKey)){
+        if(job.source){
           let setup;
           try{setup=await call('/api/claude-chat-settings/setup?name='+encodeURIComponent(job.name))}
-          catch(failure){if(current())renderClaudeSettingsSetup(back,job,null,failure);return}
+          catch{if(current())body.append(node('p','pharos-muted','Could not check saved Claude settings sources. You can capture missing settings after importing.'))}
           if(!current())return;
-          if(!setup.enabled){renderClaudeSettingsSetup(back,job,setup);return}
-          claudeSettingsOffered.add(settingsKey);claudeSettingsSources.set(settingsKey,setup.source);
+          if(setup?.enabled)claudeSettingsSources.set(settingsKey,setup.source);else claudeSettingsSources.delete(settingsKey);
         }
         const summary=pharosClaudeImportSummary(job);if(job.error)fail(Error(job.error));
         progress.textContent=`Collected ${summary.collected} of ${summary.expected} files · ${plural(summary.conversations,'conversation')} · ${plural(summary.messages,'message')} in the supplied export.`;
@@ -980,7 +955,7 @@ function pharosClaudeWatchLine(item) {
     if (!shown()) return toast(summary);
     setTitle(body, run?.state === 'complete' ? `${label} is in the library` : `Indexing ${label}`);
     body.replaceChildren(node('p', 'pharos-lead', summary), indexRows(run));
-    if(run?.state==='complete')body.append(optionalBackup());
+    if(run?.state==='complete'){body.append(optionalBackup());if(typeof claudeSettingsBackfillNotice==='function')body.append(claudeSettingsBackfillNotice())}
     if (run?.error && run.state !== 'complete') body.append(node('p', 'pharos-error', run.error));
     active.back=close;
     const done = button('Done', true, close);

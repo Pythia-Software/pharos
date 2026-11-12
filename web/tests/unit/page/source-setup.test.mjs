@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import {assets} from '../helpers/classic-script.mjs';
 import registry from '../../../../testdata/providers.json';
 const source=readFileSync(join(assets,'onboarding.js'),'utf8').split('// Source setup UI.')[0];
-const [makeWizard,capabilityRows]=vm.runInNewContext(source+';[createPharosSourceWizard,pharosCapabilityRows]');
+const [makeWizard,capabilityRows,captureSettings]=vm.runInNewContext(source+';[createPharosSourceWizard,pharosCapabilityRows,captureClaudeSettings]');
 const create=()=>makeWizard(registry.providers);
 const plain=value=>structuredClone(value);
 const candidate=(kind,path=kind)=>({name:kind,kind,path,acceptable:true,recommended:true,status:'found'});
@@ -211,4 +211,31 @@ test('a watched Claude export offers retrying only once Pharos has stopped openi
   assert.deepEqual(plain(watchLine({state:'stopped'}).actions),['retry']);
   assert.deepEqual(plain(watchLine({state:'expired'}).actions),[]);
   assert.deepEqual(plain(watchLine({state:'imported',collected:7,expected:7}).actions),[]);
+});
+
+test('one-time Claude settings capture indexes only its account source and refreshes coverage',async()=>{
+  const requests=[],jobs=[],progress=[];
+  const result=await captureSettings({account:'work',setup:{path:'/cache'}},{
+    call:async(path,options)=>{requests.push({path,body:options?JSON.parse(options.body):null});return options?{source:'work-settings'}:{accounts:[{account:'work',missing_models:0}]}},
+    runs:{capture:async names=>{jobs.push(['capture',plain(names)]);return {state:'complete'}},index:async options=>{jobs.push(['index',plain(options)]);return {state:'complete'}}},
+    conversation:'chat/id',progress:text=>progress.push(text),
+  });
+  assert.equal(result.missing_models,0);
+  assert.deepEqual(requests[0].body,{account:'work',path:'/cache',capture_only:true});
+  assert.deepEqual(jobs,[['capture',['work-settings']],['index',{sources:['work-settings'],only_needed:true}]]);
+  assert.equal(requests[1].path,'/api/claude-chat-settings/coverage?account=work&conversation=chat%2Fid');
+  assert.equal(progress.length,3);
+});
+
+test('one-time settings capture keeps failures retryable and never indexes a failed capture',async()=>{
+  for(const failed of ['capture','index','coverage']){
+    const jobs=[];
+    await assert.rejects(()=>captureSettings({account:'local',setup:{path:'/cache'}},{
+      call:async(path,options)=>options?{source:'settings'}:{accounts:[]},runs:{
+        capture:async()=>{jobs.push('capture');return {state:failed==='capture'?'failed':'complete'}},
+        index:async()=>{jobs.push('index');return {state:failed==='index'?'interrupted':'complete'}},
+      },
+    }),/did not complete|could not be confirmed/);
+    assert.deepEqual(jobs,failed==='capture'?['capture']:['capture','index']);
+  }
 });

@@ -733,16 +733,13 @@ needs indexing. The API can still target one host or source with `POST
 `"auto_upgrade": true` continues with pending library upgrade work after a
 successful index, even if the browser closes.
 
-### Claude Chat settings and recording
+### Claude Chat settings and missing model selections
 
-Add **Claude Chat settings** using **Look for sources** in Settings → Sources.
-It is a separate source from Claude.ai exports. The Claude import modal also offers
-**Enable and continue** once conversation files have been collected. It reuses a
-paused settings source or creates a companion source with the export’s account
-label, then includes it when you capture and index the import. If a matching
-source is enabled, the prompt is skipped. **Continue without settings** leaves
-settings capture unchanged and lets the import proceed. If Claude Desktop is
-unavailable, you can choose its folder or continue without it.
+**Claude Chat settings** is a separate source from Claude.ai exports. Imports
+include a matching settings source if it is already enabled. Otherwise, the
+import proceeds with the export alone and checks for missing model information
+after indexing. You can also add this source using **Look for sources** in
+Settings → Sources and enable it for automatic updates.
 
 A manually configured source is:
 
@@ -765,13 +762,27 @@ schedule and source selection. Every acquisition preserves only the allowed sett
 projection before indexing it. Previously captured observations survive cache eviction
 and can be indexed on another Mac without Claude installed.
 
-In Settings → Sources, **Record me for 30 minutes** checks about every five seconds
-while you page through Claude’s conversation history/sidebar and open old chats.
-It shows the number of conversations collected and newly discovered during the
-session. **Stop recording**, the time limit, or pausing/removing the source ends
-recording. Another index takes precedence; recording retries on the next check.
-Recording ends when Pharos stops and is not resumed automatically after a restart.
-It does not operate Claude or fetch conversations from the network.
+When imported Claude Chat conversations have no recorded model or current model
+selection, Pharos offers **Add missing Claude model settings** in Settings →
+Sources, in an affected conversation, and after indexing an import. The prompt
+shows how many imported conversations need model information for that account:
+
+1. Open the Claude desktop app and select the **Chat** tab.
+2. Click **View all** at the bottom of the **Recents** list.
+3. Scroll down until you reach your oldest conversation, letting older chats
+   load as you go.
+4. Return to Pharos and click **Capture settings**.
+
+That button captures the available settings and indexes them in one action, then
+reports how many conversations still lack model information. It creates a paused
+settings source if needed and preserves the enabled/paused state of an existing
+source. No recording session or ongoing source acquisition is required. Loading
+the history list makes settings available without opening each conversation.
+
+The prompt is absent when there are no affected imported chats. Explicitly
+reported assistant models and current observed model selections both resolve the
+prompt. A newer unknown or conflicting selection does not inherit an older model.
+Missing effort or thinking mode alone does not trigger another backfill prompt.
 
 Only settings present in Claude’s cache can be collected. Opening a chat does not
 guarantee Claude writes another supported cache entry. The current parser supports

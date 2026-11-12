@@ -3338,13 +3338,13 @@
       "reason": "Line tag menus write reader_hidden_tags through the transcript tag filter; the menu itself is transient."
     },
     {
-      "key": "364915225a5a7100:0",
+      "key": "f632dd36fb28ffec:0",
       "file": "internal/archive/assets/ui.py",
-      "owner": "claudeSettingsRecordingControl",
+      "owner": "claudeSettingsBackfillControl",
       "tag": "button",
-      "control": "'button', 'source-remove', 'Record me for 30 minutes'",
-      "contract": "settings",
-      "reason": "Starts or stops a bounded collection action for a configured source; recording status is service state, not URL view state."
+      "control": "'button', 'source-remove', 'Capture settings'",
+      "contract": "action",
+      "reason": "Captures and indexes cached conversation settings once; job progress and missing-model counts are service state, not URL view state."
     },
     {
       "key": "b9d31ba372bfa501:0",

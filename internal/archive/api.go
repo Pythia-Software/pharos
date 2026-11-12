@@ -413,6 +413,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		s.getClaudeSettingsSetup(w, r)
 	case path == "/api/claude-chat-settings/recording":
 		s.getClaudeSettingsRecording(w, r)
+	case path == "/api/claude-chat-settings/coverage":
+		s.getClaudeSettingsCoverage(w, r)
 	case path == "/api/claude-imports":
 		s.getClaudeImports(w, r)
 	case path == "/api/markdown-link":
