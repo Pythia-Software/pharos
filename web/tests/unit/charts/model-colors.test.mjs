@@ -6,9 +6,37 @@ import rules from '../../../../pricing/model_color_rules.json';
 import prices from '../../../../pricing/cost_changes.json';
 import { generateModelColors, generatedColorLuminance } from '../../../src/model-color-generation';
 import { modelCatalogDates } from '../../../src/model-color-identity';
-import { colorHSL, compareModelColors, customModelColor, effectiveModelColor, installModelColors, knownModels, modelClass, modelColorKey, modelPaletteGroups, modelProvider, loadModelColors, modelPalette, modelSeriesColor, previewModelColor, recommendedModelColor, saveModelColor, shadeChoices } from '../../../src/model-colors';
+import { colorHSL, compareModelColors, customModelColor, effectiveModelColor, installModelColors, knownModels, modelClass, modelColorKey, modelPaletteComparison, modelPaletteGroups, modelProvider, loadModelColors, modelPalette, modelSeriesColor, previewModelColor, providerColorWarnings, recommendedModelColor, saveModelColor, shadeChoices } from '../../../src/model-colors';
 import { chartMetricTheme, chartSeriesStyle, keyColorTheme, metricSeriesColor } from '../../../src/chart-colors';
 const palette = (overrides = {}, models = []) => ({ overrides, models, sources: [] });
+
+test('comparison rows appear only for actual proposed model-color changes', t => {
+  t.after(() => installModelColors(palette()));
+  installModelColors(palette());
+  const names = ['gpt-6-sol', 'gpt-6-luna'], base = catalog.providers.openai.color;
+  assert.equal(modelPaletteComparison(names, base).changed, false);
+  assert.equal(modelPaletteComparison(names, '#7547b3').changed, true);
+  assert.equal(modelPaletteComparison(names, base, {'model:gpt-6-sol':effectiveModelColor('model', 'gpt-6-sol')}).changed, false);
+  assert.equal(modelPaletteComparison(names, base, {'model:gpt-6-sol':'#abcdef'}).changed, true);
+  installModelColors(palette({'model:gpt-6-sol':'#abcdef'}));
+  assert.equal(modelPaletteComparison(['gpt-6-sol'], '#7547b3').changed, false, 'a provider edit cannot alter an explicit model choice');
+});
+
+test('palette quality warnings inspect actual version separation and extreme bases', t => {
+  t.after(() => installModelColors(palette()));
+  installModelColors(palette());
+  for (const provider of ['anthropic', 'google', 'openai']) {
+    const names = Object.keys(catalog.models).filter(name => catalog.models[name].provider === provider);
+    const base = catalog.providers[provider].color;
+    assert.deepEqual(providerColorWarnings(provider, base, modelPaletteComparison(names, base).entries), [], `${provider} defaults are usable`);
+    assert.ok(providerColorWarnings(provider, '#ffffff', modelPaletteComparison(names, '#ffffff').entries).some(warning => /very light/.test(warning)));
+    assert.ok(providerColorWarnings(provider, '#000000', modelPaletteComparison(names, '#000000').entries).some(warning => /very dark/.test(warning)));
+  }
+  const entries = ['sonnet-4', 'sonnet-4-5'].map(name => ({name, saved:'#112233', preview:'#112233'}));
+  assert.ok(providerColorWarnings('anthropic', catalog.providers.anthropic.color, entries).some(warning => /hard to distinguish/.test(warning)));
+  const siblings = ['fable-5-2', 'mythos-5-2', 'haiku'].map(name => ({name, saved:'#112233', preview:'#112233'}));
+  assert.deepEqual(providerColorWarnings('anthropic', catalog.providers.anthropic.color, siblings), [], 'same-day siblings and undated aliases do not imply failed version separation');
+});
 
 test('live palette previews preserve saved colors and explicit model choices until save', t => {
   t.after(() => installModelColors(palette()));

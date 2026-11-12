@@ -1,3 +1,5 @@
+import { linear, perceptualColor } from "./model-color-math";
+export { colorLuminance as generatedColorLuminance } from "./model-color-math";
 import { inferModelClass, matchModelClass, modelCatalogDates, modelColorKey, type ColorPrice } from "./model-color-identity";
 export { modelCatalogDates } from "./model-color-identity";
 
@@ -16,10 +18,6 @@ export type ColorRules = {
   contemporary_step: number;
   providers: Record<string, { hue: number; saturation: number; ranked_classes: string[]; classes: Record<string, ClassRule> }>;
 };
-const linear = (value: number) => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
-export function generatedColorLuminance(color: string): number {
-  return [1, 3, 5].reduce((sum, at, index) => sum + linear(parseInt(color.slice(at, at + 2), 16) / 255) * [.2126, .7152, .0722][index], 0);
-}
 function colorAtLevel(hue: number, saturation: number, level: number): string {
   const channels = (lightness: number) => {
     const a = saturation * Math.min(lightness, 1 - lightness);
@@ -33,17 +31,11 @@ function colorAtLevel(hue: number, saturation: number, level: number): string {
   }
   return "#" + channels((low + high) / 2).map(value => Math.round(value * 255).toString(16).padStart(2, "0")).join("");
 }
-function perceptual(color: string): number[] {
-  const [r, g, b] = [1, 3, 5].map(at => linear(parseInt(color.slice(at, at + 2), 16) / 255));
-  const l = Math.cbrt(.4122214708 * r + .5363325363 * g + .0514459929 * b);
-  const m = Math.cbrt(.2119034982 * r + .6806995451 * g + .1073969566 * b);
-  const s = Math.cbrt(.0883024619 * r + .2817188376 * g + .6299787005 * b);
-  return [.2104542553 * l + .793617785 * m - .0040720468 * s, 1.9779984951 * l - 2.428592205 * m + .4505937099 * s, .0259040371 * l + .7827717662 * m - .808675766 * s];
-}
+
 function rampColor(first: string, last: string, position: number): string {
   if (position === 0) return first;
   if (position === 1) return last;
-  const start = perceptual(first), end = perceptual(last);
+  const start = perceptualColor(first), end = perceptualColor(last);
   const [L, a, b] = start.map((value, index) => value * (1 - position) + end[index] * position);
   const l = (L + .3963377774 * a + .2158037573 * b) ** 3;
   const m = (L - .1055613458 * a - .0638541728 * b) ** 3;

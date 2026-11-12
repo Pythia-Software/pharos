@@ -7324,15 +7324,6 @@
       "reason": "Edits a persistent provider/model color preference. Draft input and shade suggestions affect only the live comparison until Save color; restoring a saved choice is an explicit settings action."
     },
     {
-      "key": "3c1e4f6836df7e32:0",
-      "file": "web/src/model-color-settings.tsx",
-      "owner": "ColorEditor",
-      "tag": "button",
-      "control": "onClick={() => void save(kind, name, \"\")} aria-label={`Restore ${kind === \"provider\" ? \"brand color\" : kind === \"model\" ? \"recommended shade\" : \"provider color\"} for ${label}`}",
-      "contract": "settings",
-      "reason": "Edits or restores a persistent library provider/model color preference. Pickers and shade suggestions hold a draft until Save color; automatic model shades follow the provider."
-    },
-    {
       "key": "9e410a841f70ee04:0",
       "file": "web/src/model-color-settings.tsx",
       "owner": "ColorEditor",
@@ -7342,26 +7333,40 @@
       "reason": "Edits or restores a persistent library provider/model color preference. Pickers and shade suggestions hold a draft until Save color; automatic model shades follow the provider."
     },
     {
-      "key": "6cd1dcd9d8cb0ee1:0",
+      "key": "a0e826a410603c73:0",
       "file": "web/src/model-color-settings.tsx",
-      "owner": "ProviderColorCard",
-      "tag": "ViewDisclosure",
-      "control": "viewKey={`model-colors:${provider}`}",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound directly to the registered view field."
+      "owner": "ColorEditor",
+      "tag": "button",
+      "control": "onClick={() => void save(kind, name, \"\")} aria-label={`Restore ${kind === \"provider\" ? \"brand color\" : \"recommended shade\"} for ${label}`}",
+      "contract": "settings",
+      "reason": "Restores a persistent provider brand or recommended model color preference; this is an explicit settings action."
     },
     {
-      "key": "dd10416627c952a6:0",
+      "key": "933390c62be7dd1b:0",
+      "file": "web/src/model-color-settings.tsx",
+      "owner": "PaletteBanner",
+      "tag": "button",
+      "control": "id={controlID(entry.name)} aria-label={`Edit color for ${entry.name}`} onClick={() => select(entry.name)}",
+      "contract": "settings",
+      "reason": "Opens the transient inline editor for a persistent model color preference. Editor selection is temporary settings interaction, not a shared view input."
+    },
+    {
+      "key": "111d4cff6702abe0:0",
       "file": "web/src/model-color-settings.tsx",
       "owner": "ProviderColorCard",
-      "tag": "ViewDisclosure",
-      "control": "viewKey={`source-colors:${provider}`}",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound directly to the registered view field."
+      "tag": "button",
+      "control": "onClick={() => setDrafts({})}",
+      "contract": "settings",
+      "reason": "Discards unapplied local provider/model color drafts without changing saved preferences or the current view."
+    },
+    {
+      "key": "12783477df2f46ef:0",
+      "file": "web/src/model-color-settings.tsx",
+      "owner": "ProviderColorCard",
+      "tag": "button",
+      "control": "onClick={() => { document.getElementById(`model-color-${provider}-${encodeURIComponent(selected)}`)?.focus(); setSelected(null); }} aria-label={`Close editor for ${selected}`}",
+      "contract": "settings",
+      "reason": "Dismisses the transient settings editor and returns keyboard focus to its originating model swatch."
     },
     {
       "key": "1cd6c49e2f9528e1:0",

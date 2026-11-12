@@ -1,3 +1,4 @@
+import { colorDistance, colorLuminance } from "./model-color-math";
 import { useSyncExternalStore } from "react";
 import catalog from "../../pricing/model_colors.json";
 import prices from "../../pricing/cost_changes.json";
@@ -55,11 +56,6 @@ export function colorHSL(color: string): [number, number, number] {
 function hex(h: number, s: number, l: number) {
   const a = s * Math.min(l, 1 - l);
   return "#" + [0, 8, 4].map(offset => { const k = (offset + h / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, "0"); }).join("");
-}
-function colorLuminance(color: string): number {
-  return [1, 3, 5].map(at => parseInt(color.slice(at, at + 2), 16) / 255)
-    .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4)
-    .reduce((total, value, index) => total + value * [.2126, .7152, .0722][index], 0);
 }
 // Set relative luminance while retaining a shade's hue. Choose the nearest
 // RGB rounding to keep fallback shades inside their reviewed class range.
@@ -142,6 +138,37 @@ export function previewModelColor(name: string, providerColor: string, draft?: s
   const key = modelColorKey(name);
   return draft ?? customModelColor("model", key) ?? recommendedModelColor(key, providerColor);
 }
+export type ModelPaletteEntry = { name: string; saved: string; preview: string };
+export function modelPaletteComparison(names: readonly string[], providerColor: string, drafts: Record<string, string> = {}): { entries: ModelPaletteEntry[]; changed: boolean } {
+  const entries = names.map(name => ({name, saved: effectiveModelColor("model", name), preview: previewModelColor(name, providerColor, drafts[`model:${name}`])}));
+  return {entries, changed: entries.some(entry => entry.saved !== entry.preview)};
+}
+export function providerColorWarnings(provider: ModelProvider, base: string, entries: readonly ModelPaletteEntry[]): string[] {
+  const warnings: string[] = [], brightness = colorLuminance(base);
+  if (brightness > .85) warnings.push("This base color is very light. Some model shades may blend into light backgrounds.");
+  if (brightness < .015) warnings.push("This base color is very dark. Some model shades may blend into dark backgrounds.");
+  const families = new Map<string, Map<string, ModelPaletteEntry>>();
+  for (const entry of [...entries].sort((a, b) => compareModelColors(a.name, b.name))) {
+    const date = modelCatalogDate(entry.name), family = modelClass(entry.name);
+    if (!date || !family) continue;
+    if (!families.has(family)) families.set(family, new Map());
+    // Undated aliases and same-date siblings deliberately share nearby tones.
+    if (!families.get(family)!.has(date)) families.get(family)!.set(date, entry);
+  }
+  const pairs: [ModelPaletteEntry, ModelPaletteEntry][] = [];
+  for (const releases of families.values()) {
+    const versions = [...releases.values()];
+    for (let i = 1; i < versions.length; i++) pairs.push([versions[i - 1], versions[i]]);
+  }
+  const latest = rankedModelClasses(provider).flatMap(family => {
+    const releases = families.get(family);
+    return releases?.size ? [[...releases.values()].at(-1)!] : [];
+  });
+  for (let i = 1; i < latest.length; i++) pairs.push([latest[i - 1], latest[i]]);
+  if (pairs.some(([a, b]) => colorDistance(a.preview, b.preview) < .025)) warnings.push("Some neighboring model shades are hard to distinguish. Adjust the color for more separation.");
+  return warnings;
+}
+
 export function effectiveModelColor(kind: ColorKind, key: string): string {
   if (kind === "model") key = modelColorKey(key);
   const custom = customModelColor(kind, key);

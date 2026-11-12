@@ -3,21 +3,28 @@
 Settings → Model & provider colors saves a base color for each model provider
 (Anthropic, Google, OpenAI, or the Other providers group). The existing brand
 palette supplies defaults. Recorded provider labels such as Claude, Codex,
-ChatGPT and Antigravity follow that palette; each label can also have its own
-choice. Models stay in their provider's color family: oranges for Anthropic,
+ChatGPT and Antigravity follow that palette. Models stay in their provider's color family: oranges for Anthropic,
 blues for Google, greens for OpenAI, and purples for Other providers. Classes
 use different parts of that range, with versions following a smooth light-to-dark progression. Each model
 editor offers five suggested shades, a free color picker, light/dark previews,
 Save color, and Use recommended. Provider editors offer Restore brand.
 
-Each provider shows its saved palette beside a live preview. Provider and model
-picker drafts update the preview immediately without saving preferences or
-recoloring charts. Explicit saved model choices remain exact during a provider
-preview; a draft model color overrides that choice only in the preview until
-saved. Every swatch has a visible model label. Banners group by class and then
-catalog date, with undated entries last; Fable and Mythos have separate display
-groups while retaining their shared color policy. Dense labels rotate vertically,
-and comparison panels stack on narrow screens.
+Each provider shows one saved-color row. A proposed-color row appears beneath
+it only when a draft changes an actual model color; both rows share the same
+model labels. Select a model swatch or label to open its single inline editor.
+Provider and model drafts stay local until Save color; Discard changes clears
+pending edits. The former model-editor list and recorded-provider-label editors
+are removed. Existing stored source-label choices remain supported by the shared
+resolver for compatibility.
+
+Every swatch has a visible model label. Banners group by class and then catalog
+date, with undated entries last; Fable and Mythos have separate display groups
+while retaining their shared color policy. Dense labels rotate vertically.
+Light/dark samples use square borders in both model and project settings.
+Advisory warnings flag extremely light/dark bases and insufficient perceptual
+separation between adjacent dated versions or contemporary core classes. Aliases
+and same-date siblings do not create false variety warnings. Warnings do not
+prevent saving a deliberate choice.
 
 `pricing/model_color_rules.json` owns the palette policy. Provider hues keep
 Anthropic orange, Google blue and OpenAI green. `ranked_classes` records the
