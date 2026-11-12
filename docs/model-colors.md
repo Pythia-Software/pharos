@@ -25,7 +25,10 @@ resolver for compatibility.
 
 Every swatch has a visible model label. Banners group by class and then catalog
 date, with undated entries last; Fable and Mythos have separate display groups
-while retaining their shared color policy. Dense labels rotate vertically.
+while retaining their shared color policy. Class headings stay on one compact
+horizontal line and truncate when needed, with full names available on hover.
+Dense model labels rotate vertically. Picker buttons, save/reset buttons and
+light/dark samples share the same row height; picker buttons have no border.
 Light/dark samples use square outer borders in both model and project settings;
 the color chips have no inner border.
 Advisory warnings flag extremely light/dark bases and insufficient perceptual

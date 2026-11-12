@@ -8,12 +8,12 @@
 .model-color-name{min-width:0;flex:1;overflow-wrap:anywhere}
 .model-color-name small{display:block;margin-top:4px;font-size:var(--fs-xs)}
 .model-color-provider .model-color-name strong{font-size:var(--fs-lg)}
-.model-color-controls{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:10px}
-.model-color-controls>button{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:4px;white-space:nowrap}
-.model-color-picker{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:8px 12px;border:1px solid currentColor;border-radius:6px;box-shadow:0 1px 3px #0003;font-size:var(--fs-sm);font-weight:600;cursor:pointer;white-space:nowrap}
+.model-color-controls{--color-control-height:30px;display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:10px}
+.model-color-controls>button{height:var(--color-control-height);border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:4px;white-space:nowrap}
+.model-color-picker{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:var(--color-control-height);min-height:0;padding:0 12px;border:0;border-radius:6px;box-shadow:none;font-size:var(--fs-sm);font-weight:600;cursor:pointer;white-space:nowrap}
 .model-color-picker .app-icon{width:18px;height:18px;flex:none}
 .model-color-picker code{font-size:var(--fs-sm);font-weight:600}
-.model-color-controls .model-color-picker input{position:absolute;inset:0;width:100%;height:100%;padding:0;margin:0;opacity:0;cursor:pointer}
+.model-color-controls .model-color-picker input{position:absolute;inset:0;width:100%;height:100%;padding:0;margin:0;border:0;opacity:0;cursor:pointer}
 .model-color-picker:focus-within{outline:2px solid var(--ink);outline-offset:3px}
 .model-color-picker:has(input:disabled){opacity:.5;cursor:default}
 .model-color-model .model-color-name{flex-basis:230px}
@@ -22,8 +22,8 @@
 .model-palette-row{display:grid;grid-template-columns:52px minmax(0,1fr);gap:8px;align-items:start;min-width:0}
 .model-palette-row-name{height:32px;display:flex;align-items:center;font-size:var(--fs-xs);font-weight:600}
 .model-palette-cells{display:grid;gap:3px;min-width:0}
-.model-palette-group{min-width:0;container:palette-group / inline-size}
-.model-palette-group>span{display:block;height:44px;font-size:var(--fs-xs);font-weight:600;line-height:1.2;overflow-wrap:anywhere}
+.model-palette-group{min-width:0}
+.model-palette-group>span{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:var(--fs-xs);font-weight:600;line-height:1.2}
 .model-palette-cells .model-palette-swatch{display:flex;align-items:center;justify-content:center;width:100%;height:32px;min-width:0;min-height:0;padding:0;border:0;border-radius:0;box-shadow:none}
 .model-palette-cells button.model-palette-swatch{cursor:pointer}
 .model-palette-swatch .app-icon{width:16px;height:16px;max-width:100%;pointer-events:none}
@@ -34,7 +34,6 @@
 .model-palette-actions{padding:0 18px 12px;display:flex;justify-content:flex-end}
 .model-inline-editor{border-top:1px solid var(--line)}
 .model-palette-warnings{margin:0 18px 12px;padding:10px 12px 10px 28px;border-left:3px solid var(--warn);background:var(--bg);font-size:var(--fs-sm);line-height:1.5}
-@container palette-group (max-width:52px){.model-palette-group>span{writing-mode:vertical-rl;transform:rotate(180deg);justify-self:center;white-space:nowrap;overflow-wrap:normal}}
 @container model-palette (min-width:800px){.model-palette-chart[data-density=medium] .model-palette-label{writing-mode:horizontal-tb;transform:none;justify-self:stretch;white-space:normal;min-height:0;text-align:start;line-height:1.25}}
 @container model-palette (max-width:500px){.model-palette-chart .model-palette-label{writing-mode:vertical-rl;transform:rotate(180deg);justify-self:center;white-space:nowrap;line-height:1;min-height:0;text-align:end}}
 @media(max-width:1050px){.model-color-editor{align-items:flex-start;flex-direction:column}.model-color-controls{justify-content:flex-start}.model-color-model .model-color-name{flex-basis:auto}.model-color-controls .project-color-previews{margin-right:auto}}
