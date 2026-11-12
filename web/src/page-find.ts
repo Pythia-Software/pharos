@@ -25,7 +25,7 @@ type Entry = { node: Text; start: number; chain: Disclosure[] };
 type Index = { content: string; entries: Entry[]; pending: { element: Pending; chain: Disclosure[]; offset: number }[] };
 declare global { interface Window { pharosFind: { open: (text?: string) => void; next: () => void; previous: () => void; close: () => void; registerNote: (provider: NoteProvider) => () => void } } }
 
-const EXCLUDED = "script,style,template,noscript,textarea,input,select,svg,[inert],[aria-hidden='true'],.pharos-find,.pharos-attention-status";
+const EXCLUDED = "script,style,template,noscript,textarea,input,select,svg,[inert],[aria-hidden='true'],.pharos-find,.pharos-attention-status,.pharos-attention-dismiss";
 const notes = new Set<NoteProvider>();
 let bar: HTMLElement | undefined, input: HTMLInputElement, caseButton: HTMLButtonElement, regexButton: HTMLButtonElement;
 let previousButton: HTMLButtonElement, nextButton: HTMLButtonElement, expandButton: HTMLButtonElement, statusText: HTMLElement, noteList: HTMLElement;

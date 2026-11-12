@@ -2,24 +2,24 @@
   "version": 1,
   "dependencies": {
     "@pythia-software/query-table-core": {
-      "version": "1.0.7",
+      "version": "1.0.9",
       "status": "reviewed",
-      "reason": "Reviewed the published Query Table 1.0.7 packages against 1.0.5: all installed files in core, React, UI and codegen are byte-identical except package.json release and dependency version pins. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed the published Query Table 1.0.9 packages against 1.0.7: core, React and codegen are byte-identical except package.json release and dependency version pins; 1.0.8 changed only the Go backend. UI 1.0.9 splits MetricsEditor.tsx and QueryBuilder.tsx into metricsEditor/ and queryBuilder/ modules (MetricsEditor now takes its props object whole); its sources keep the same user-visible strings, aria-label and role attributes, onChange handlers and useState/useEffect/useLayoutEffect calls (178/52/9), with no storage, history or URL access. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-react": {
-      "version": "1.0.7",
+      "version": "1.0.9",
       "status": "reviewed",
-      "reason": "Reviewed the published Query Table 1.0.7 packages against 1.0.5: all installed files in core, React, UI and codegen are byte-identical except package.json release and dependency version pins. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed the published Query Table 1.0.9 packages against 1.0.7: core, React and codegen are byte-identical except package.json release and dependency version pins; 1.0.8 changed only the Go backend. UI 1.0.9 splits MetricsEditor.tsx and QueryBuilder.tsx into metricsEditor/ and queryBuilder/ modules (MetricsEditor now takes its props object whole); its sources keep the same user-visible strings, aria-label and role attributes, onChange handlers and useState/useEffect/useLayoutEffect calls (178/52/9), with no storage, history or URL access. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-ui": {
-      "version": "1.0.7",
+      "version": "1.0.9",
       "status": "reviewed",
-      "reason": "Reviewed the published Query Table 1.0.7 packages against 1.0.5: all installed files in core, React, UI and codegen are byte-identical except package.json release and dependency version pins. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed the published Query Table 1.0.9 packages against 1.0.7: core, React and codegen are byte-identical except package.json release and dependency version pins; 1.0.8 changed only the Go backend. UI 1.0.9 splits MetricsEditor.tsx and QueryBuilder.tsx into metricsEditor/ and queryBuilder/ modules (MetricsEditor now takes its props object whole); its sources keep the same user-visible strings, aria-label and role attributes, onChange handlers and useState/useEffect/useLayoutEffect calls (178/52/9), with no storage, history or URL access. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
     },
     "@pythia-software/query-table-codegen": {
-      "version": "1.0.7",
+      "version": "1.0.9",
       "status": "reviewed",
-      "reason": "Reviewed the published Query Table 1.0.7 packages against 1.0.5: all installed files in core, React, UI and codegen are byte-identical except package.json release and dependency version pins. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
+      "reason": "Reviewed the published Query Table 1.0.9 packages against 1.0.7: core, React and codegen are byte-identical except package.json release and dependency version pins; 1.0.8 changed only the Go backend. UI 1.0.9 splits MetricsEditor.tsx and QueryBuilder.tsx into metricsEditor/ and queryBuilder/ modules (MetricsEditor now takes its props object whole); its sources keep the same user-visible strings, aria-label and role attributes, onChange handlers and useState/useEffect/useLayoutEffect calls (178/52/9), with no storage, history or URL access. No controls or URL ownership changed. The 1.0.5 review remains applicable: native query state owns Query Table controls, saved query links and itemDetails.jsonInspections; transient hover tooltips do not persist. The remaining JSON display and semantic reveal API gaps are tracked in docs/query-table-url-state-handoff.md."
     }
   },
   "bindings": [
@@ -117,6 +117,10 @@
     },
     {
       "file": "web/src/logs-page.tsx",
+      "field": "disclosures"
+    },
+    {
+      "file": "web/src/reader-navigator.tsx",
       "field": "disclosures"
     },
     {
@@ -345,6 +349,10 @@
     },
     {
       "file": "internal/archive/assets/ui.py",
+      "field": "reader_hidden_tags"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
       "field": "reader_highlight_hidden"
     },
     {
@@ -429,6 +437,10 @@
     },
     {
       "file": "web/src/delegation.tsx",
+      "field": "timeline_visibility"
+    },
+    {
+      "file": "web/src/reader-navigator.tsx",
       "field": "timeline_visibility"
     }
   ],
@@ -779,6 +791,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:17fab1344161a155:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-history-search-button cursor-interaction\">",
+      "contract": "action",
+      "reason": "Runs the private Ask chat history search using the existing history filter."
+    },
+    {
       "key": "fragment:18322884faef50c0:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -824,6 +845,25 @@
       "reason": "Clears an unsent Ask draft or starts a new chat after a question; Ask identity continues to use ask_chat."
     },
     {
+      "key": "fragment:39c80d3ac8b4ae4f:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-attach-element cursor-interaction\">",
+      "contract": "editing",
+      "reason": "Explicit private Ask message attachments: the menu, file chooser, element selection, preview and removal edit or inspect chat context; drafts persist in the Ask session, not the content view URL."
+    },
+    {
+      "key": "fragment:41885d09cc2331ee:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-icon-control pharos-context-trigger cursor-interaction\" aria-label=\"Attach context\" aria-expanded=\"false\" aria-haspopup=\"dialog\" aria-controls=\"pharos-context-menu\" data-tooltip=\"Attach context\">",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Explicit private Ask message attachments: the menu, file chooser, element selection, preview and removal edit or inspect chat context; drafts persist in the Ask session, not the content view URL."
+    },
+    {
       "key": "fragment:41d3d827aee0e721:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -840,6 +880,15 @@
       "control": "<button type=\"button\" class=\"pharos-window-close cursor-interaction\" aria-label=\"Close Ask Pharos\" title=\"Close Ask Pharos (Escape)\" hidden>",
       "contract": "transient",
       "reason": "Closes or floats the private Ask composer; Ask chat identity continues to use ask_chat."
+    },
+    {
+      "key": "fragment:540c77a73c82d1e8:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-attach-files cursor-interaction\">",
+      "contract": "editing",
+      "reason": "Explicit private Ask message attachments: the menu, file chooser, element selection, preview and removal edit or inspect chat context; drafts persist in the Ask session, not the content view URL."
     },
     {
       "key": "fragment:584408b697814075:0",
@@ -886,6 +935,15 @@
       "control": "<input class=\"pharos-history-filter\" type=\"search\" aria-label=\"Find a prior chat\" placeholder=\"Find a prior chat…\" />",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
+      "key": "fragment:712048819a5a92d8:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-new-chat cursor-interaction\" aria-label=\"New chat\">",
+      "contract": "action",
+      "reason": "Starts a fresh private Ask chat while preserving requests in other chats; the selected chat continues to use ask_chat."
     },
     {
       "key": "fragment:7597ea97e661871b:0",
@@ -949,15 +1007,6 @@
       "control": "<details class=\"pharos-activity\" hidden>",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
-      "key": "fragment:92fa25b9d573a1de:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-new-chat cursor-interaction\">",
-      "contract": "action",
-      "reason": "Starts a fresh private Ask chat while preserving requests in other chats; the selected chat continues to use ask_chat."
     },
     {
       "key": "fragment:9669fb9a199fe943:0",
@@ -1024,6 +1073,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:a8ee87085856da93:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-attach-url cursor-interaction\">",
+      "contract": "editing",
+      "reason": "Explicit private Ask message attachments: the menu, file chooser, element selection, preview and removal edit or inspect chat context; drafts persist in the Ask session, not the content view URL."
+    },
+    {
       "key": "fragment:a9ad79f64dbaf85e:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -1031,6 +1089,15 @@
       "control": "<button type=\"button\" class=\"pharos-browse-hint-dismiss cursor-interaction\" aria-label=\"Dismiss browse hint\" title=\"Don’t show for a while\">",
       "contract": "settings",
       "reason": "Snoozes the Ask browse hint in UI preferences; not view state."
+    },
+    {
+      "key": "fragment:acd1c0dfbc71909c:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-modal-secondary pharos-context-review-close cursor-interaction\">",
+      "contract": "editing",
+      "reason": "Explicit private Ask message attachments: the menu, file chooser, element selection, preview and removal edit or inspect chat context; drafts persist in the Ask session, not the content view URL."
     },
     {
       "key": "fragment:ad63fe0a924cd37a:0",
@@ -1096,6 +1163,15 @@
       "reason": "Dismisses an Ask error message; the message is not view state and does not survive a reload."
     },
     {
+      "key": "fragment:debc6ae8d3225a89:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "input",
+      "control": "<input class=\"pharos-context-files\" type=\"file\" multiple aria-label=\"Attach files\" hidden>",
+      "contract": "editing",
+      "reason": "Chooses original files for a private Ask message draft. Uploads make temporary copies; their pointers persist in the Ask session, outside content view URLs."
+    },
+    {
       "key": "fragment:e7f5c133da4818c2:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -1130,6 +1206,26 @@
       "control": "<button type=\"button\" class=\"pharos-browse pharos-icon-control cursor-interaction\" aria-label=\"Float Ask Pharos\" data-tooltip=\"Float chat\">",
       "contract": "transient",
       "reason": "Closes or floats the private Ask composer; Ask chat identity continues to use ask_chat."
+    },
+    {
+      "key": "7ba5bc15f450ed24:0",
+      "file": "internal/archive/assets/ask-pharos.js",
+      "owner": "<module>",
+      "tag": "aria-expanded",
+      "control": "headerButton",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Reports whether the private Ask composer dialog is open; Ask chat identity uses ask_chat and composer presentation is restored by Ask."
+    },
+    {
+      "key": "9ccb59e9bb2b10f5:0",
+      "file": "internal/archive/assets/ask-pharos.js",
+      "owner": "<module>",
+      "tag": "aria-expanded",
+      "control": "contextTrigger",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Explicit private Ask message attachments: the menu, file chooser, element selection, preview and removal edit or inspect chat context; drafts persist in the Ask session, not the content view URL."
     },
     {
       "key": "eedffbde75af05e5:0",
@@ -1200,13 +1296,32 @@
       "reason": "Ask prompt ideas are suggestions for the unapplied chat composer; their picker visibility is editor state."
     },
     {
-      "key": "6c90fe78404cee3a:0",
+      "key": "af298390432d54c5:0",
+      "file": "internal/archive/assets/ask-pharos.js",
+      "owner": "updateSurface",
+      "tag": "aria-expanded",
+      "control": "headerButton",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Reports whether the private Ask composer dialog is open; Ask chat identity uses ask_chat and composer presentation is restored by Ask."
+    },
+    {
+      "key": "60aa56d7dbfd5751:0",
       "file": "internal/archive/assets/ask-prompt.js",
-      "owner": "makeChip",
+      "owner": "askPromptChipNode",
       "tag": "button",
       "control": "'button'",
       "contract": "editing",
-      "reason": "Removes a context chip from the unsent Ask prompt draft."
+      "reason": "Inspects explicit message attachment metadata or removes a draft attachment; attachment order and text positions are saved with the Ask session, not page view state."
+    },
+    {
+      "key": "60aa56d7dbfd5751:1",
+      "file": "internal/archive/assets/ask-prompt.js",
+      "owner": "askPromptChipNode",
+      "tag": "button",
+      "control": "'button'",
+      "contract": "editing",
+      "reason": "Inspects explicit message attachment metadata or removes a draft attachment; attachment order and text positions are saved with the Ask session, not page view state."
     },
     {
       "key": "78f30533f5901a54:0",
@@ -1622,6 +1737,16 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
+    },
+    {
+      "key": "7226953cc5aabf08:0",
+      "file": "internal/archive/assets/data-guide.js",
+      "owner": "Qh",
+      "tag": "aria-expanded",
+      "control": "document.getElementById(\"dataGuideToggle\")",
+      "disclosure": true,
+      "contract": "view.guide_open",
+      "reason": "The header reflects the Data Guide dialog state owned by the shared guide_open view binding."
     },
     {
       "key": "6a2c5c95cbcbc1d8:0",
@@ -2159,6 +2284,15 @@
       "control": "'details', 'pharos-source-rename'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
+    },
+    {
+      "key": "a1a17837e66eb1f2:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "claudeExportRoutine",
+      "tag": "button",
+      "control": "'button', '', 'Copy daily export prompt'",
+      "contract": "action",
+      "reason": "Copies the visible daily export starter prompt to the clipboard; task creation happens later in Claude Desktop and does not change the Pharos view."
     },
     {
       "key": "6d145e032336655c:0",
@@ -2774,16 +2908,6 @@
       "reason": "Navigation, clipboard, refresh or bookmark/history mutation action; no applied content view state."
     },
     {
-      "key": "html:2ce0e745682cc646:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:shell>",
-      "tag": "button",
-      "control": "<button id=\"dataGuideToggle\" class=\"header-icon\" type=\"button\" hidden data-view-field=\"guide_open\" aria-label=\"Data Guide\" title=\"Data Guide\" aria-haspopup=\"dialog\" onclick=\"pharosOpenDataGuide(undefined,headerToolAnchor(this))\">",
-      "binding": "guide_open",
-      "contract": "view.guide_open",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
       "key": "html:302c09e984c88945:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
@@ -3134,6 +3258,17 @@
       "reason": "Opens an unapplied composer or transient navigation/tools menu."
     },
     {
+      "key": "html:f7a4636522ae6053:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"dataGuideToggle\" class=\"header-icon\" type=\"button\" hidden data-view-field=\"guide_open\" aria-label=\"Data Guide\" title=\"Data Guide\" aria-haspopup=\"dialog\" aria-controls=\"dataGuideDialog\" aria-expanded=\"false\" onclick=\"pharosOpenDataGuide(undefined,headerToolAnchor(this))\">",
+      "binding": "guide_open",
+      "disclosure": true,
+      "contract": "view.guide_open",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "html:faaffa7fb259a5cc:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
@@ -3294,6 +3429,25 @@
       "reason": "Raw message disclosure is bound by stable message identity through reader_content using bindViewContent and saveViewContent, shared by prose and reasoning cards."
     },
     {
+      "key": "b47c85f8099cfd6e:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "button",
+      "tag": "aria-expanded",
+      "control": "trigger",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "The tag menu is transient; its visibility actions write reader_hidden_tags."
+    },
+    {
+      "key": "dd6a02887789ab38:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "button",
+      "tag": "button",
+      "control": "'button', '', label",
+      "contract": "view.reader_hidden_tags",
+      "reason": "Line tag menus write reader_hidden_tags through the transcript tag filter; the menu itself is transient."
+    },
+    {
       "key": "1d7776906a3fbbb9:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "chatGPTReferences",
@@ -3312,6 +3466,15 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Shared classic disclosure binding uses the stable message identity in data-view-key; opening only materializes preserved references."
+    },
+    {
+      "key": "f632dd36fb28ffec:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "claudeSettingsBackfillControl",
+      "tag": "button",
+      "control": "'button', 'source-remove', 'Capture settings'",
+      "contract": "action",
+      "reason": "Captures and indexes cached conversation settings once; job progress and missing-model counts are service state, not URL view state."
     },
     {
       "key": "b9d31ba372bfa501:0",
@@ -5172,6 +5335,16 @@
       "reason": "Composite illustration delegates term and conversation selections to guide_entity and guide_example through shared useViewState bindings."
     },
     {
+      "key": "3adcb82a9b8d8169:0",
+      "file": "web/src/data-taxonomy.tsx",
+      "owner": "DataTaxonomyModal",
+      "tag": "aria-expanded",
+      "control": "document.getElementById(\"dataGuideToggle\")",
+      "disclosure": true,
+      "contract": "view.guide_open",
+      "reason": "The header reflects the Data Guide dialog state owned by the shared guide_open view binding."
+    },
+    {
       "key": "66209fc099270fa0:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "DataTaxonomyModal",
@@ -5192,14 +5365,14 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "aa1d3fedd850af1b:0",
+      "key": "f6f8510693f78716:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "DataTaxonomyModal",
       "tag": "dialog",
-      "control": "data-view-field=\"guide_open\" onClick={event => { if (event.target !== event.currentTarget) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.currentTarget.close(); }}",
+      "control": "id=\"dataGuideDialog\" data-view-field=\"guide_open\" onClick={event => { if (event.target !== event.currentTarget) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.currentTarget.close(); }}",
       "binding": "guide_open",
       "contract": "view.guide_open",
-      "reason": "Bound by the shared view-state primitive."
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "2aeccf1d7c617d6b:0",
@@ -5343,15 +5516,6 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
-      "key": "7387f1cf2fb13437:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "DelegationExplorer",
-      "tag": "button",
-      "control": "onClick={() => { resetPage(); setRevision((v) => v + 1); }}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
       "key": "7c36e39864e8e78f:0",
       "file": "web/src/delegation.tsx",
       "owner": "DelegationExplorer",
@@ -5407,6 +5571,15 @@
       "control": "onClick={() => single ? setReaderView(t) : display(t)} onKeyDown={(event) => { if ( ![\"ArrowLeft\", \"ArrowRight\", \"Home\", \"End\"].includes( event.key, ) ) return; event.preventDefault(); const nextIndex = event.key === \"Home\" ? 0 : event.key === \"End\" ? tabs.length - 1 : (index + (event.key === \"ArrowRight\" ? 1 : tabs.length - 1)) % tabs.length; if (single) setReaderView(tabs[nextIndex]); else display(tabs[nextIndex]); event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>(\"button\")[nextIndex].focus(); }}",
       "contract": "view.reader_view",
       "reason": "Single-agent tabs bind reader_view through useViewState; workspace tabs use the existing explorer URL owner (readDelegationRoute/display), including keyboard selection and workspace-history restoration."
+    },
+    {
+      "key": "ee2c45eb4ad775d6:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "DelegationExplorer",
+      "tag": "button",
+      "control": "onClick={() => { snapshotRecovery.current.reset(); resetPage(); setRevision((v) => v + 1); }}",
+      "contract": "delegation",
+      "reason": "Refresh analysis retries current archive reads and resets delegation_page through useViewState; zoom, selected session and disclosures retain their URL owners. The recovery retry budget is transient request state."
     },
     {
       "key": "ef8df6715bf8aa5d:0",
@@ -7748,6 +7921,16 @@
       "reason": "A whole-key default atomically writes reader_filter_level, reader_filter, reader_writing, reader_events, reader_labels and reader_highlight_hidden through the classic reader owner; its selected radio is derived from those fields."
     },
     {
+      "key": "80bfd41f2f6475ec:0",
+      "file": "web/src/reader-key-filter.tsx",
+      "owner": "ReaderKeyFilter",
+      "tag": "button",
+      "control": "data-view-field=\"reader_highlight_hidden\" onClick={() => onChange(visible ? [] : all, true)}",
+      "binding": "reader_highlight_hidden",
+      "contract": "view.reader_highlight_hidden",
+      "reason": "The master toggle writes reader_writing, reader_events, reader_labels and available highlight exclusions through the classic reader owner; unavailable exclusions are preserved."
+    },
+    {
       "key": "58b5064e2d686b61:0",
       "file": "web/src/reader-navigator.tsx",
       "owner": "choice",
@@ -7756,6 +7939,16 @@
       "binding": "reader_navigator",
       "contract": "view.reader_navigator",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "4c7e0bb9e5848e3c:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "TimelineLegend",
+      "control": "data-view-field=\"timeline_visibility\" onSelect={(section,values,action)=>setVisibility(previous=>updateTimelineVisibility(previous,section,values,action))}",
+      "binding": "timeline_visibility",
+      "contract": "view.timeline_visibility",
+      "reason": "The embedded timeline key writes timeline_visibility through the shared view state and filters the reader's ribbon."
     },
     {
       "key": "5c536168277a2959:0",
@@ -7792,6 +7985,26 @@
       "control": "onClick={()=>data.jumpContext(entry)}",
       "contract": "transient",
       "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
+    },
+    {
+      "key": "29cfe359713cf44e:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderRibbonSection",
+      "tag": "span",
+      "control": "onClick={event=>{event.preventDefault();event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width);}}",
+      "contract": "transient",
+      "reason": "Clicking a ribbon scrolls and highlights its source message; scroll position is transient and the accordion uses ViewDisclosure."
+    },
+    {
+      "key": "e14ad9c01a55f876:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderRibbonSection",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={viewKey}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "110c067b8fa806e8:0",
@@ -8785,6 +8998,15 @@
       "reason": "Range and preset-driven time buckets update the shared Thinking URL state. Date inputs use the viewer’s local zone; custom and brushed boundaries remain half-open ISO instants."
     },
     {
+      "key": "25857434f6090cdb:0",
+      "file": "web/src/thinking-dashboard.tsx",
+      "owner": "ThinkingDashboard",
+      "tag": "button",
+      "control": "onClick={() => setReload((n) => n + 1)}",
+      "contract": "editing",
+      "reason": "Try again retries a failed read without changing the applied view."
+    },
+    {
       "key": "27abd21aa517ce02:0",
       "file": "web/src/thinking-dashboard.tsx",
       "owner": "ThinkingDashboard",
@@ -8942,15 +9164,6 @@
       "reason": "Changes the shared Thinking state, including synchronized range brushing and control resets."
     },
     {
-      "key": "fe037810cdd7016d:0",
-      "file": "web/src/thinking-dashboard.tsx",
-      "owner": "ThinkingDashboard",
-      "tag": "button",
-      "control": "onClick={() => setRefresh((n) => n + 1)}",
-      "contract": "editing",
-      "reason": "Refresh retries a read without changing the applied view."
-    },
-    {
       "key": "ff2a2d2e22b3d073:0",
       "file": "web/src/thinking-dashboard.tsx",
       "owner": "ThinkingDashboard",
@@ -8990,6 +9203,16 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "The shared disclosure keeps the Key control visible in both presentations. disclosures[\"timeline-key\"] stores the expanded labeled Key (default true) or the compact icon-only Key; icons retain their existing visibility menus."
+    },
+    {
+      "key": "bb7bbe4ad6c301fc:0",
+      "file": "web/src/timeline-legend.tsx",
+      "owner": "TimelineLegend",
+      "tag": "button",
+      "control": "data-view-field=\"timeline_visibility\" onClick={()=>onSelect('sections',populated.map(([section])=>section),visible?'hide':'show')}",
+      "binding": "timeline_visibility",
+      "contract": "view.timeline_visibility",
+      "reason": "The embedded timeline master toggle updates timeline_visibility for the sections represented by this conversation."
     },
     {
       "key": "c2ef28fbea4ddd0a:0",
@@ -9129,6 +9352,16 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "99007fa4a5a1f099:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "<module>",
+      "tag": "aria-expanded",
+      "control": "header",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Reports whether the feedback draft dialog is open; feedback editing is excluded from URL view state."
+    },
+    {
       "key": "0b44ca3da1ae991b:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
@@ -9208,6 +9441,26 @@
       "control": "onClick={proposal ? () => void send() : undefined}",
       "contract": "action",
       "reason": "Explicit user approval submits the currently reviewed feedback report; consent is never restored from a URL."
+    },
+    {
+      "key": "6c546552716af68f:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "aria-expanded",
+      "control": "header",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Reports whether the feedback draft dialog is open; feedback editing is excluded from URL view state."
+    },
+    {
+      "key": "6c546552716af68f:1",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "aria-expanded",
+      "control": "header",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Reports whether the feedback draft dialog is open; feedback editing is excluded from URL view state."
     },
     {
       "key": "6f6ae816efe5c29f:0",
@@ -9320,11 +9573,11 @@
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
     {
-      "key": "700edc4b2becb461:0",
+      "key": "c202d5e5f4e27369:0",
       "file": "web/src/usage-chart.tsx",
       "owner": "CustomPeriod",
       "tag": "input",
-      "control": "aria-label={`Number of ${period}`} value={draft} onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber)) onChange(event.target.valueAsNumber); }} onBlur={() => setDraft(String(value))}",
+      "control": "aria-label={`Number of ${period}`} value={draft} onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber) && event.target.valueAsNumber <= max) onChange(event.target.valueAsNumber); }} onBlur={() => setDraft(String(value))}",
       "contract": "dashboard",
       "reason": "analyze_chart/analyze_filters carry applied chart choices; chart_pins carries deliberate pins. Custom date/period drafts apply through these callbacks."
     },
@@ -9345,6 +9598,15 @@
       "control": "onClick={onExpand}",
       "contract": "dashboard",
       "reason": "The shared legend delegates expansion to AnalysisTrend, which writes analyze_chart.seriesLimit through changeState and the dashboard URL owner. Group outlines add no independent state."
+    },
+    {
+      "key": "1875b96cf86486ff:0",
+      "file": "web/src/usage-chart.tsx",
+      "owner": "PeriodControl",
+      "tag": "ChartSelect",
+      "control": "value={String(view.hours)} onChange={value => onChange({ hours: Number(value) })}",
+      "contract": "dashboard",
+      "reason": "The page's applied view (analyze_chart, or view.thinking on Thinking) carries the chosen hours; the select offers only hour counts the page's engine supports."
     },
     {
       "key": "5c8d176e8700d3fd:0",
@@ -9551,6 +9813,15 @@
       "control": "\"button\"",
       "contract": "action",
       "reason": "Transient context menu action clears linked attention from the URL."
+    },
+    {
+      "key": "49d6d21da0c782c6:0",
+      "file": "web/src/view-attention.ts",
+      "owner": "syncDismissButtons",
+      "tag": "button",
+      "control": "\"button\"",
+      "contract": "action",
+      "reason": "Dismisses linked attention by clearing its highlight and reveal URL parameters."
     },
     {
       "key": "a77d7bde4338f61f:0",

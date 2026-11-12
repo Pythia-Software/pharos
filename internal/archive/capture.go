@@ -45,7 +45,8 @@ const (
 	// the captures holding a kind it cannot read: a writer stamps the lowest
 	// version describing its encoded entries (writerVersion), and
 	// capturePlainManifestVersion when there are none.
-	captureManifestVersion      = captureSnapshotsVersion
+	captureManifestVersion      = captureClaudeObjectsVersion
+	captureClaudeObjectsVersion = 9
 	capturePlainManifestVersion = 5
 	// captureGenerationsVersion: encoded snapshot generations.
 	captureGenerationsVersion = 6
@@ -82,6 +83,7 @@ var (
 )
 
 type captureManifest struct {
+	ClaudeExportObjects  bool                            `json:"claude_export_objects,omitempty"`
 	DeliveredFingerprint string                          `json:"source_fingerprint,omitempty"`
 	RetainedInputCapture bool                            `json:"retained_input_capture,omitempty"`
 	SQLiteRecordCapture  bool                            `json:"sqlite_record_capture,omitempty"`
@@ -572,6 +574,7 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 		return c.finish(err)
 	}
 	c.mergeMappings(plan)
+	c.manifest.ClaudeExportObjects = c.manifest.ClaudeExportObjects || plan.claudeExportObjects
 	// Publish writer compatibility before any rotation or record temporary.
 	// A crash must not leave a version-1 writer free to prune new inputs.
 	if err := c.commit(false); err != nil {
@@ -582,12 +585,15 @@ func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig,
 	for _, rel := range plan.skipped {
 		present[path.Join(captureFilesDir, rel)] = true
 	}
-	err = c.captureFiles(plan.files, present)
+	err = c.captureProjections(plan.projections, present)
+	if err == nil {
+		err = c.captureFiles(plan.files, present)
+	}
 	if err == nil {
 		c.phase("copying database snapshots")
 		err = c.captureDatabases(plan.databases, present)
 	}
-	if err == nil && plan.complete {
+	if err == nil && plan.complete && !plan.retainAbsent {
 		c.markMissing(present)
 	}
 	if err == nil && plan.complete && len(c.result.Errors) == 0 && source.Options["sqlite_record_capture"] == true {
@@ -850,7 +856,7 @@ func (c *sourceCapture) captureFiles(items []captureItem, present map[string]boo
 		jobs = append(jobs, job{item, previous})
 		c.result.BytesPlanned += info.Size()
 	}
-	c.result.FilesPlanned = len(jobs)
+	c.result.FilesPlanned += len(jobs)
 	if err := c.ensureSpace(c.result.BytesPlanned); err != nil {
 		return err
 	}
@@ -969,6 +975,11 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 	destination := filepath.Join(c.dir, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return nil, nil, toDestination(err)
+	}
+	if c.source.Kind == "claude-ai" {
+		if entry, handled, err := c.linkClaudeSourcePack(item, source, info, previous); handled {
+			return entry, nil, err
+		}
 	}
 	temporary := destination + captureTempSuffix
 	out, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)

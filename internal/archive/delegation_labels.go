@@ -107,9 +107,9 @@ func (c *Catalog) delegationTimelineMessages(ctx context.Context, snapshot *dele
 			conversations = append(conversations, n.ConversationID)
 		}
 	}
-	// Ownership, occurrences and message rows are read in one transaction
-	// whose resolution is the snapshot's: a lane never pairs the snapshot's
-	// graph with rows (or copies) of a newer generation.
+	// Ownership, occurrences and message rows are read in one transaction.
+	// Its resolution may be newer globally, but the graph's dependency
+	// components must still match before its lanes can use that resolution.
 	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, nil, err
@@ -119,9 +119,13 @@ func (c *Catalog) delegationTimelineMessages(ctx context.Context, snapshot *dele
 	if err != nil {
 		return nil, nil, err
 	}
-	// Compare the Revision, not the generation: core keeps the Revision when
-	// new evidence leaves every decision unchanged, so such a lane is valid.
-	if res.Revision != snapshot.Revision {
+	// Check even when the resolution revision is unchanged: a late original
+	// can change copied-message ownership without changing execution identity.
+	current, err := snapshot.executionDependenciesCurrent(ctx, committedReads{tx})
+	if err != nil {
+		return nil, nil, err
+	}
+	if !current {
 		return nil, nil, errDelegationSnapshotChanged
 	}
 	occurrences, err := res.Occurrences(ctx, tx, uniqueStrings(conversations))

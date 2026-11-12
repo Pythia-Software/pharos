@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { claudeImportFixture, defaultApi, projectColorFixture, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
+import { claudeImportFixture, claudeSettingsCoverageFixture, defaultApi, projectColorFixture, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const missingPrices = { ...defaultApi['GET /api/pricing'], unpriced_tokens: 5000,
@@ -43,6 +43,21 @@ const markdownLinkAPI = {
     return {status:"unavailable",detail:href.startsWith('http')?"Local server unavailable on this Mac":"File unavailable on this Mac"};
   },
   "POST /api/markdown-link": ({query}) => ({opened:"/workspace/"+query.get("href").split(":")[0],revealed:false}),
+};
+// Synthetic Claude export data exercises sources and non-coding attachments.
+const claudeResearchAPI = {
+  "GET /api/work/:id/conversations/:conversation": { id: rootConversation, workspace_id: workID, provider: "claude", harness: "claude-ai-export", artifact_links:{"synthetic-doc":{title:"synthetic-doc",href:`/work/${workID}/conversation/${rootConversation}?message=export-project`}}, messages: [
+    {id:"research-question",native_id:"research-question",role:"user",kind:"message",text:"Compare the published company reports."},
+    {id:"research-attachment",native_id:"research-attachment",role:"user",kind:"attachment",text:JSON.stringify({type:"file_attachment",file_name:"notes.pdf",file_type:"application/pdf",file_size:48,extracted_content:"Archived research notes\n<script>window.exportScriptRan=true</script>"})},
+    {id:"export-project",native_id:"export-project",role:"system",kind:"attachment",text:JSON.stringify({type:"export_file",file_name:"projects/report.json",extracted_content:JSON.stringify({name:"Research",docs:[{filename:"report.md",content:"# Exported report\nA document paragraph, retained with its source metadata."}]})})},
+    {id:"doc-add",native_id:"doc-add",role:"assistant",kind:"tool_call",call_id:"docs-add",text:JSON.stringify({tool:"mcp__Claude_Docs__update",input:{container:{id:"synthetic-doc"},payload:{ops:[{op:"replace",target:{ids:["pending.1"]},with:{as:"markdown",from:{kind:"inline",content:"## Added research\n\nA **readable** addition with [a source](https://example.com/report).\n\n<script>window.exportScriptRan=true</script>"}}}]}}})},
+    {id:"doc-result",native_id:"doc-result",role:"tool",kind:"tool_result",call_id:"docs-add",text:JSON.stringify({content:[{type:"text",text:JSON.stringify({verdict:"allow",data:{notices:[{code:"pending_ended",as:"resolved",opIndex:0,ids:["pending.1"]}]}})}]})},
+    {id:"stat-call",native_id:"stat-call",role:"assistant",kind:"tool_call",call_id:"stats",text:JSON.stringify({tool:"mcp__pharos__query_statistics",input:{metric:"calls"}})},
+    {id:"stat-result",native_id:"stat-result",role:"tool",kind:"tool_result",call_id:"stats",text:JSON.stringify({content:[{type:"text",text:JSON.stringify({rows:[{tool:"Docs",count:3},{tool:"Browser",count:0}]})}]})},
+    {id:"github-read",native_id:"github-read",role:"assistant",kind:"tool_call",call_id:"github-read",text:JSON.stringify({tool:"mcp__codex_apps__github.fetch_file",input:{repository_full_name:"example/repo",path:"report.md"}})},
+    {id:"github-result",native_id:"github-result",role:"tool",kind:"tool_result",call_id:"github-read",text:JSON.stringify({content:JSON.stringify({structuredContent:{encoding:"utf-8",content:"# Report",display_url:"https://github.com/example/repo/blob/main/report.md"}})})},
+    {id:"research-answer",native_id:"research-answer",role:"assistant",kind:"message",text:"The reports describe different assumptions. Review the sources before comparing their forecasts.",raw_text:JSON.stringify({type:"text",text:"The reports describe different assumptions.",citations:[{details:{type:"web_search_citation",url:"https://example.com/company/reports/annual-report",title:"Published company report"}},{details:{type:"document_citation",document_title:"Uploaded notes"}}]})},
+  ]},
 };
 const work = `/work/${workID}`;
 const tokenEvidenceAPI = {
@@ -243,7 +258,10 @@ const ROUTES = [
     const guide=page.locator('#pharosOnboarding'),next=guide.getByRole('button',{name:'Continue',exact:true});
     await guide.locator('.pharos-places>summary').waitFor();
     if(step==='start'){await guide.locator('.pharos-places>summary').click();return}
-    if(step==='import'){await guide.getByRole('button',{name:'Import an export',exact:true}).click();return}
+    if(step==='import'){
+      await guide.getByRole('button',{name:'Import an export',exact:true}).click();
+      await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();return;
+    }
     if(step==='manual'){
       await guide.getByRole('radio',{name:/tell Pharos where to look/}).check();await next.click();
       await guide.getByRole('checkbox',{name:/Cursor/}).check();return;
@@ -254,7 +272,8 @@ const ROUTES = [
     if(step==='empty')for(const box of await guide.locator('.pharos-candidate input[type=checkbox]').all())await box.uncheck();
     if(step!=='found')await next.click();
   },shown:'#pharosOnboarding',check:step==='import'?async(page)=>{
-    const guide=page.locator('#pharosOnboarding');await guide.getByLabel('Export',{exact:true}).fill('~/Downloads/export.zip');
+    const guide=page.locator('#pharosOnboarding');await guide.getByRole('radio',{name:'ChatGPT',exact:true}).check();
+    await guide.getByLabel('Export',{exact:true}).fill('~/Downloads/export.zip');
     await guide.getByRole('button',{name:'Import',exact:true}).click();await guide.getByRole('switch').waitFor();
     assert.deepEqual(await layoutProblems(page),[],'managed ZIP collection report fits the setup dialog');
   }:undefined})),
@@ -340,6 +359,23 @@ const ROUTES = [
     await guide.getByRole('button',{name:'Show missing download links',exact:true}).click();
     await guide.getByRole('link',{name:/Download projects/}).waitFor();
   },shown:'#pharosOnboarding'},
+  {name:'Claude import model backfill',url:'/settings/sources',ready:'#pharosAddSource',api:{
+    'GET /api/claude-imports':({query})=>query.get('id')?{...claudeImportFixture,source:{added:['claude-ai-imports']}}:{jobs:[claudeImportFixture],run:{running:false}},
+    'GET /api/claude-chat-settings/setup':{enabled:false},
+    'GET /api/claude-chat-settings/coverage':({state})=>({accounts:state.importIndexed?[claudeSettingsCoverageFixture]:[]}),
+    'POST /api/capture':{run:{id:'capture-model-backfill',kind:'capture',state:'complete',sources:['claude-ai-imports'],results:[]}},
+    'GET /api/capture':{active:false,runs:[{id:'capture-model-backfill',kind:'capture',state:'complete',sources:['claude-ai-imports'],results:[]}]},
+    'POST /api/index':({state})=>{state.importIndexed=true;return {run:{id:'index-model-backfill',state:'complete',sources:['claude-ai-imports'],results:[]}}},
+    'GET /api/activity':{active:0,runs:[{id:'index-model-backfill',state:'complete',sources:['claude-ai-imports'],results:[]}]},
+  },open:async page=>{
+    await page.evaluate(()=>window.pharosOnboarding.open({mode:'import'}));
+    const guide=page.locator('#pharosOnboarding');
+    await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+    await guide.getByRole('button',{name:/Resume export/}).click();
+    await guide.getByRole('button',{name:'Capture and index conversations',exact:true}).click();
+    await guide.getByRole('button',{name:'Index now',exact:true}).click();
+    await guide.getByRole('button',{name:'Capture settings',exact:true}).waitFor();
+  },shown:'#pharosOnboarding'},
   {name:'Source settings guide',url:'/settings/sources',ready:'#pharosFindSources',open:async page=>{
     const trigger=page.locator('#sourceToolbar').getByRole('button',{name:'Data Guide',exact:true});
     await trigger.click();
@@ -384,6 +420,9 @@ const ROUTES = [
   {name:"Ask Pharos opted out",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:false},providers:askProviders}}},
   {name:"Ask Pharos ready",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI},
   {name:"Ask Pharos full screen",url:"/ask",ready:"#askPage #pharos-ask .pharos-ai:not([hidden])",api:askAPI},
+  {name:"Ask Pharos attachment menu",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.getByRole('button',{name:'Attach context',exact:true}).click(),shown:'#pharos-context-menu:popover-open'},
+  {name:"Ask Pharos attachment review",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:async page=>{await page.getByRole('button',{name:'Attach context',exact:true}).click();await page.getByRole('button',{name:'Attach current URL',exact:false}).click();await page.locator('#pharos-question').getByRole('button',{name:/Inspect attachment:/}).click();},shown:'.pharos-context-review[open]'},
+  {name:"Ask Pharos element picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:async page=>{await page.getByRole('button',{name:'Attach context',exact:true}).click();await page.getByRole('button',{name:'Select a page element',exact:false}).click();},shown:'.pharos-floating-selection:not([hidden])'},
   {name:"Ask Pharos model picker",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-model-trigger").click(),shown:"#pharos-model-menu:not([hidden])"},
   {name:"Ask Pharos history",url:"/",ready:"#pharos-ask .pharos-ai:not([hidden])",api:askAPI,open:page=>page.locator("#pharos-ask .pharos-history-trigger").click(),shown:"#pharos-chat-history[open]"},
   {name:"Ask Pharos conversation",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-turn",api:askAPI,check:async page=>{
@@ -490,12 +529,34 @@ const ROUTES = [
   { name: "Daily repository writing", url: "/cards?cards=library&card_search=human-repository-words-trend", ready: '[data-card-id="human-repository-words-trend"] .query-cover-columns' },
   { name: "Weekday distributions", url: "/cards?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
   { name: "Search table", url: "/library?view=table", ready: "#queryTableLibrary .qt-row" },
+  { name: "Claude missing model settings in conversation", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .claude-settings-backfill button", api:{
+    ...claudeResearchAPI,
+    'GET /api/claude-chat-settings/coverage':{accounts:[{...claudeSettingsCoverageFixture,conversations:1,missing_models:1}]},
+  } },
+  { name: "Claude export research", url: `${work}/conversation/${rootConversation}`, api: claudeResearchAPI, ready: ".message-citations", open: async page => {
+    await page.locator('.tool-event > summary').filter({hasText:'notes.pdf'}).click();
+    await page.locator('.tool-output').filter({hasText:'Archived research notes'}).waitFor();
+    await page.locator('.tool-event > summary').filter({hasText:'projects/report.json'}).click();
+    await page.locator('.export-document').waitFor();
+    await page.locator('.tool-event > summary').filter({hasText:'synthetic-doc'}).getByText('Details',{exact:true}).click();
+    await page.locator('.mcp-presentation a.markdown-link').waitFor();
+    await page.locator('.tool-event > summary').filter({hasText:'Query statistics'}).click();
+    await page.locator('.mcp-presentation table').waitFor();
+  }, shown: ".tool-event[open] .tool-output", check: async page => {
+    assert.equal(await page.locator('.claude-export-usage-note').isVisible(),true);
+    assert.equal(await page.evaluate(()=>window.exportScriptRan),undefined,'exported source is displayed as text');
+  } },
   { name: "Markdown links in transcript", url: `${work}/conversation/${rootConversation}`, api: markdownLinkAPI, ready: ".conversation-panel .markdown-link" },
   { name: "Markdown links in Search", url: "/library", api: {...conversationResultAPI,...markdownLinkAPI}, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("link",{name:"Running dev server",exact:true}).waitFor();}, shown: ".result-turn-content .markdown-link" },
   { name: "Search nested reviews and human writing", url: "/library?reader_writing=0&reader_events=1&reader_labels=1", api: authoredTurnAPI, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("button",{name:/Sub-agent · Reviewer 5/}).waitFor();}, shown: ".result-turn-content .human-written",
     check: async page => {
       const painted = await page.locator(".result-turn-content .human-written").first().evaluate(element => getComputedStyle(element).backgroundColor);
       assert.notEqual(painted, "rgba(0, 0, 0, 0)", "human writing remains highlighted when the reader preference is off");
+      const mark = page.locator(".result-turn-content .human-written").first();
+      await mark.hover();const tip=page.getByRole("tooltip");await tip.waitFor();
+      assert.match(await tip.textContent(), /Human writing.*typed or dictated/s);
+      await page.locator(".result-turn-content .result-message-label").first().hover();
+      assert.equal(await tip.isVisible(),false);
     } },
   { name: "Transcript human writing", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".conversation-panel .human-written" },
   { name: "Transcript expanded sub-agent", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".subagent-run", open: async page => { await page.locator(".subagent-run > summary").first().click(); }, shown: ".subagent-body" },
@@ -703,6 +764,11 @@ const ROUTES = [
   { name: "Findings table", url: "/findings?view=table", ready: ".findings-table .qt-row" },
   { name: "Findings settings", url: "/findings?view=settings", ready: ".findings-settings .findings-panel" },
   { name: "Finding detail", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-detail svg" },
+  { name: "Finding detail waiting for work", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-early",
+    api: { "GET /api/findings/:id": request => {
+      const detail = defaultApi["GET /api/findings/:id"](request);
+      return { ...detail, watching: { ...detail.watching, provisional: { ...detail.watching.provisional, signal: "too_early", ratio: null, after: { units: 0, exposure: 0 }, savings: { weeks: 0 } } } };
+    } } },
   { name: "MCP dashboard", url: "/analyze?analyze_topic=mcp", ready: `.usage-mcp-dashboard ${analysisReady}` },
   { name: "MCP trends", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({ metric: "failure_rate", split: "tool_name", view: "trend", period: "week", rollingPeriods: 37 }))}`, ready: `.usage-mcp-dashboard ${overTimeReady}` },
   { name: "MCP query", url: "/analyze?analyze_mode=query&analyze_data=mcp_calls&analyze_topic=mcp&analyze_search=1", ready: ".usage-workspace-table .qt-row" },
@@ -767,6 +833,9 @@ const ROUTES = [
     },shown:`#cloud-step-${step-1}`
   })),
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
+  { name: "Claude missing model settings", url: "/settings/sources", ready: "#claudeSettingsBackfill button", api:{
+    'GET /api/claude-chat-settings/coverage':{accounts:[claudeSettingsCoverageFixture]},
+  } },
   { name: "Background Processing", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
   { name: "Background Processing integrity warning", url: "/settings/sync", ready: ".sync-warning", api: {
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], issues: [{ id: "mismatch", source_name: "codex", unit: `/sessions/${"long-workspace-name/".repeat(12)}rollout.jsonl` }] },
@@ -1894,6 +1963,18 @@ test('Older card dashboard restoration cannot overwrite a later route', { skip }
   await app.settled();
   assert.equal(new URL(page.url()).searchParams.get('analyze_topic'), 'calls');
   await page.getByRole('heading', { name: 'Tool Calls', exact: true }).waitFor();
+});
+
+test("MCP targets navigate to imported documents and external GitHub files", {skip}, async t=>{
+ const app=await open(t,{url:`${work}/conversation/${rootConversation}`,api:claudeResearchAPI,ready:".mcp-target"});
+ const {page}=app;
+ await page.locator('a.mcp-target').filter({hasText:'synthetic-doc'}).first().click();
+ await page.waitForURL(url=>url.searchParams.get('message')==='export-project');
+ await page.locator('.export-document').first().waitFor();
+ await page.route('https://github.com/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>GitHub destination</title><main>Archived file destination</main>'}));
+ await page.locator('a.mcp-target[href="https://github.com/example/repo/blob/main/report.md"]').first().click();
+ await page.waitForURL('https://github.com/example/repo/blob/main/report.md');
+ await page.getByRole('main').waitFor();
 });
 
 test("Markdown local destinations become navigable only after availability is confirmed", { skip }, async t => {

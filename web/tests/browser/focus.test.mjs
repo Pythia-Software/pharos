@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
-import { claudeImportFixture, defaultApi, workID, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
+import { claudeImportFixture, claudeSettingsSourceFixture, claudeSettingsCoverageFixture, defaultApi, workID, rootConversation, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 test('the Lighthouse menu action shares its saved setting with App preferences', {skip}, async t => {
@@ -1095,8 +1095,14 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
     await page.keyboard.press('Escape');
     await page.locator('#usageSummary').waitFor({ state: 'hidden' });
     await page.waitForFunction(element => document.activeElement === element, await more.elementHandle());
+    const guideButton = page.locator('#dataGuideToggle');
+    assert.equal(await guideButton.getAttribute('aria-expanded'), 'false');
     await activateHeaderTool(page, 'dataGuideToggle');
-    await holdsFocus(page, page.getByRole('dialog', {name:'Data Guide',exact:true}), more);
+    const guide = page.getByRole('dialog', {name:'Data Guide',exact:true});
+    await guide.waitFor();
+    await page.waitForFunction(() => document.getElementById('dataGuideToggle').getAttribute('aria-expanded') === 'true');
+    await holdsFocus(page, guide, more);
+    await page.waitForFunction(() => document.getElementById('dataGuideToggle').getAttribute('aria-expanded') === 'false');
   });
 }
 
@@ -1372,10 +1378,23 @@ test("conversation navigation focuses the requested reader unless focus moved wh
 });
 
 for (const merged of [false, true]) test(`transcript navigators follow layout changes in ${merged ? "merged" : "split"} workspaces`, { skip }, async t => {
+  let sourceOnly = false;
   const api = merged ? {
     "GET /api/work/:id": call => {
       const work = defaultApi["GET /api/work/:id"](call);
-      return { ...work, conversations: work.conversations.slice(0, 1), attempts: [{ attempt_no: 1, result: "Retained archive evidence\n".repeat(40) }] };
+      return { ...work, title:sourceOnly ? 'Financial outlook' : work.title, source_kind: sourceOnly ? 'chatgpt' : 'claude', repository_name: sourceOnly ? null : work.repository_name, location: sourceOnly ? null : work.location, branch: sourceOnly ? null : work.branch,
+        conversations: sourceOnly ? [{...work.conversations[0],provider:'chatgpt',model:null,first_prompt:'Summarize the outlook'}] : work.conversations.slice(0, 1), attempts: sourceOnly ? [] : [{ attempt_no: 1, result: "Retained archive evidence\n".repeat(40) }],
+        handoffs: sourceOnly ? [] : [{ candidate_id:'candidate-1', custody_holder:'agent', custody_version:'1' }],
+        identity_links: sourceOnly ? [] : [{ related_provider:'codex', relationship:'related', confidence:'high' }],
+        receipt: sourceOnly ? null : {outcome:'complete',package_bytes:1024,package_hash:'test-hash'}, preservation_completeness: sourceOnly ? 'partial' : 'complete' };
+    },
+    "GET /api/work/:id/conversations/:conversation": call => {
+      const conversation=defaultApi["GET /api/work/:id/conversations/:conversation"](call);
+      if(!sourceOnly)return conversation;
+      return {...conversation,provider:'chatgpt',model:null,title:'Financial outlook',messages:[
+        {id:'chat-prompt',native_id:'chat-prompt',kind:'message',role:'user',text:'Summarize the outlook',created_at:'2026-11-10T18:00:00Z'},
+        {id:'chat-reply',native_id:'chat-reply',kind:'message',role:'assistant',text:'Here is a summary of the outlook.',created_at:'2026-11-10T18:00:10Z'},
+      ]};
     },
     "GET /api/work/:id/delegation": call => {
       const data = defaultApi["GET /api/work/:id/delegation"](call);
@@ -1421,11 +1440,17 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
   assert.equal(new URL(page.url()).searchParams.get('reader_navigator'),new URL(saved).searchParams.get('reader_navigator'));
 
   if (merged) {
+    assert.match(await page.locator('.work-heading > .meta').innerText(), /Source: claude/);
     // The overview grows without resizing the transcript or its scrollport.
     // The selected turn and the progress band must still describe the viewport.
     for (const expanded of [true, false]) {
       await page.getByText("Archive details", { exact: true }).click();
       assert.equal(await page.locator(".archive-details").evaluate(details => details.open), expanded);
+      if(expanded){
+        const details=page.locator('.archive-body');
+        for(const text of ['Retained archive evidence','candidate-1','Related source identities','Preservation receipt','test-hash'])assert.ok(await details.getByText(text,{exact:false}).count(),`${text} remains in Archive details`);
+        assert.doesNotMatch(await details.innerText(),/Source · claude/);
+      }
       await settled();
       await page.locator(".turn").nth(6).evaluate(turn => turn.scrollIntoView({ block: "center", behavior: "instant" }));
       await page.waitForFunction(() => {
@@ -1435,6 +1460,31 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
         return middle >= viewport.left && middle <= viewport.right;
       });
     }
+    sourceOnly=true;
+    await page.reload();
+    await page.locator('.reader-navigator').waitFor();
+    const context=await page.locator('.work-heading > .meta').innerText();
+    assert.match(context,/Repository not identified/);
+    assert.match(context,/Source: chatgpt/);
+    assert.equal(await page.locator('.archive-details').isVisible(),false,'source alone does not need Archive details');
+    assert.doesNotMatch(await page.locator('.coverage-warning').innerText(),/See Archive details/);
+    await shot('source-only-heading');
+  } else {
+    // The child fixture is a single exchange without context measurements.
+    // Keep unavailable choices in the URL so they return on another session.
+    const all = encodeURIComponent(JSON.stringify(['timeline','context','turns']));
+    await page.evaluate(url=>window.pharosNavigate(url), `/work/${workID}/conversation/conv-child?reader_navigator=${all}`);
+    await page.getByRole('article',{name:'User message',exact:true}).getByText('Review the change (conv-child)',{exact:true}).waitFor();
+    await page.locator('.reader-navigator-timeline').waitFor();
+    for(const name of ['Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).count(),0,`${name} is unavailable`);
+    await shot('session-navigator-unmeasured');
+    await page.getByRole('checkbox',{name:'Timeline',exact:true}).uncheck();
+    const state=new URL(page.url()).searchParams.get('reader_navigator');
+    assert.deepEqual(JSON.parse(state),['context','turns']);
+    await page.evaluate(url=>window.pharosNavigate(url), `/work/${workID}/conversation/conv-root?reader_navigator=${encodeURIComponent(state)}`);
+    await page.locator('.reader-navigator-context .token-marker').first().waitFor();
+    for(const name of ['Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).isChecked(),true,`${name} returns when available`);
+    await shot('session-navigator-measured');
   }
 });
 
@@ -1458,28 +1508,75 @@ test('overlapping context profiles reveal the stream actually clicked', {skip}, 
 });
 
 test('untimed session navigator draws calls and failures and reveals by message order', {skip}, async t=>{
-  const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-timeline',api:{
+  let timed=false;
+  const {page,settled,shot}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-timeline',viewport:{width:1920,height:1050},api:{
     'GET /api/work/:id/conversations/:conversation':call=>{
       const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
       if(call.params.conversation!=='conv-root')return body;
-      const event=(id,kind,text,extra={})=>({id,native_id:id,kind,role:'assistant',created_at:null,text:typeof text==='string'?text:JSON.stringify(text),...extra});
+      let tick=0;
+      const event=(id,kind,text,extra={})=>({id,native_id:id,kind,role:'assistant',created_at:timed?new Date(Date.UTC(2026,10,1)+tick++*10000).toISOString():null,text:typeof text==='string'?text:JSON.stringify(text),...extra});
       return {...body,messages:[event('prompt','message','Check the files',{role:'user'}),
         event('command','tool_call',{name:'Bash',input:{command:'check'}},{call_id:'cmd'}),
         event('result','tool_result',{exit_code:1,content:'Process exited with code 1'},{call_id:'cmd'}),
         event('delegate','delegation',{name:'Task',input:{description:'Review files'}},{call_id:'agent'}),
         event('done','delegation_result',{content:'Reviewed'},{call_id:'agent'}),
-        event('reply','message','Finished checking the files')]};
+        event('search','tool_call',{name:'Search',input:{query:'climate outlook'}},{call_id:'search-call'}),
+        event('search-result','tool_result',{content:'Search results'},{call_id:'search-call'}),
+        event('web','tool_call',{name:'Browser',input:{url:'https://example.com/report'}},{call_id:'web-call'}),
+        event('reply','message','Finished checking the files',{agent_events:[{id:'obstacle',kind:'obstacle',label:'Obstacle',group:'Friction',probability:.9,sentence:[0,27],subject:[],response:[]}]})]};
     },
   }});
-  const navigator=page.locator('.reader-navigator'),key=navigator.getByLabel('Timeline key');
-  for(const name of ['Run','Delegation','Error'])assert.ok(await key.getByText(name,{exact:true}).isVisible());
+  const navigator=page.locator('.reader-navigator'),key=page.getByRole('group',{name:'Timeline key',exact:true});
+  for(const name of ['Delegate / message','Error','Network'])await key.getByRole('button',{name,exact:true}).waitFor();
   assert.ok(await navigator.getByText('Message order · timestamps unavailable',{exact:true}).isVisible());
+  assert.equal(await key.getByText('End time unknown',{exact:true}).count(),0,'ordinal timelines have no seconds-based guide');
+  assert.equal(await navigator.locator('.reader-navigator-timeline [data-tool-id="web-call"] line').count(),0);
+  assert.equal(await page.locator('.timeline-entry[data-message-id="search"] .timeline-time').innerText(),'—');
+  const sections=navigator.locator('.reader-section-node').first();
+  await sections.locator(':scope > summary .reader-section-label').click();
+  await navigator.getByText('Message modes',{exact:true}).waitFor();
+  await navigator.getByText('Agent events',{exact:true}).waitFor();
+  const events=navigator.locator('.reader-section-node').filter({has:page.getByText('Agent events',{exact:true})}).last();
+  await events.locator(':scope > summary .reader-section-label').click();
+  await events.getByText('Friction',{exact:true}).waitFor();
+  const tools=navigator.locator('.reader-section-node').filter({has:page.getByText('Tool actions',{exact:true})}).last();
+  await tools.locator(':scope > summary .reader-section-label').click();
+  await navigator.locator('.reader-section-node').getByText('Run',{exact:true}).waitFor();
+  await key.getByRole('button',{name:'Error',exact:true}).click();
+  await page.getByRole('menuitem',{name:'Hide',exact:true}).click();
+  await page.waitForFunction(()=>!document.querySelector('.reader-navigator [data-tool-id="cmd"]'));
+  await key.getByRole('button',{name:'Error',exact:true}).click();
+  await page.getByRole('menuitem',{name:'Show',exact:true}).click();
+  await navigator.locator('[data-tool-id="cmd"]').first().waitFor({state:'attached'});
+  const search=page.locator('.query-chip').filter({hasText:'climate outlook'});
+  await search.click();assert.equal(await search.getAttribute('aria-expanded'),'true');
+  await search.click();assert.equal(await search.getAttribute('aria-expanded'),'false');
+  const web=page.locator('.action-web-link');assert.equal(await web.getAttribute('href'),'https://example.com/report');
+  assert.ok(await web.locator('.markdown-link-icon :is(img,svg)').count());
+  assert.ok(await web.locator('.external-indicator').isVisible());
+  assert.ok(await page.locator('.action-row').filter({has:web}).getByText('Network',{exact:true}).isVisible());
+  await shot('reader-timeline-sections');
+  await page.setViewportSize({width:320,height:900});
+  assert.ok(await navigator.evaluate(element=>element.scrollWidth<=element.clientWidth),'expanded timeline fits on a narrow screen');
+  await shot('reader-timeline-mobile');
+  await page.setViewportSize({width:1920,height:1050});
+  await page.reload();await navigator.locator('.reader-navigator-timeline').waitFor();
+  await navigator.getByText('Agent events',{exact:true}).waitFor();
+  await navigator.locator('.reader-section-node').getByText('Run',{exact:true}).waitFor();
   await navigator.getByRole('button',{name:'Browse session timeline'}).focus();
   await page.keyboard.press('End');await settled();
   await page.waitForFunction(()=>{
     const target=document.querySelector('[data-message-id="reply"].authorship-target'),bounds=target?.getBoundingClientRect();
     return bounds?.height>0&&bounds.top<innerHeight&&bounds.bottom>document.querySelector('.reader-navigator-host').getBoundingClientRect().bottom;
   });
+  timed=true;
+  await page.reload();await navigator.locator('.reader-navigator-timeline').waitFor();
+  await key.getByText('End time unknown',{exact:true}).waitFor();
+  assert.ok(await navigator.locator('.reader-navigator-timeline [data-tool-id="web-call"] line').count(),'timed calls with an unknown end show a guide');
+  await key.getByRole('button',{name:'Network',exact:true}).click();
+  await page.getByRole('menuitem',{name:'Hide',exact:true}).click();
+  await key.getByText('End time unknown',{exact:true}).waitFor({state:'detached'});
+  assert.equal(await navigator.locator('[data-tool-id="web-call"]').count(),0);
 });
 
 test('session navigator scrolling reuses transcript geometry on a long session', {skip}, async t=>{
@@ -1712,9 +1809,12 @@ test("Ask Pharos feedback requires explicit approval of the reviewed draft", { s
 
 test("feedback review keeps focus, fits a phone, and returns focus to its opener", { skip }, async t => {
   const { page, shot } = await open(t, { url: "/settings", ready: "#healthCards .panel" });
+  const feedbackHeader = page.locator("#feedbackSubmitToggle");
+  assert.equal(await feedbackHeader.getAttribute("aria-expanded"), "false");
   await activateHeaderTool(page, "feedbackSubmitToggle");
   const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
   await dialog.waitFor();
+  assert.equal(await feedbackHeader.getAttribute("aria-expanded"), "true");
   await page.waitForFunction(() => document.querySelector(".uifeedback-dialog")?.contains(document.activeElement));
   // A bug report is the default and includes recent logs; the contact email is an app preference.
   assert.equal(await dialog.getByRole("combobox", { name: "Type" }).inputValue(), "bug");
@@ -1727,6 +1827,7 @@ test("feedback review keeps focus, fits a phone, and returns focus to its opener
   await shot("feedback-review");
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "hidden" });
+  assert.equal(await feedbackHeader.getAttribute("aria-expanded"), "false");
   assert.equal(await page.evaluate(() => headerToolAnchor(document.getElementById("feedbackSubmitToggle")) === document.activeElement), true);
 });
 
@@ -1760,9 +1861,13 @@ test("annotated element screenshots render, the annotation surfaces stay on scre
   await page.locator("#feedbackSend").click();
   const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
   await dialog.waitFor();
+  assert.equal(await page.locator("#feedbackSubmitToggle").getAttribute("aria-expanded"), "true");
   await page.waitForFunction(() => document.querySelector(".uifeedback-dialog img")?.naturalWidth > 0);
   await dialog.getByRole("button", { name: "Send feedback", exact: true }).click();
   await page.getByRole("dialog", { name: "Feedback sent", exact: true }).waitFor();
+  assert.equal(await page.locator("#feedbackSubmitToggle").getAttribute("aria-expanded"), "true");
+  await page.getByRole("button", { name: "Close feedback", exact: true }).click();
+  assert.equal(await page.locator("#feedbackSubmitToggle").getAttribute("aria-expanded"), "false");
   assert.equal(new URL(page.url()).pathname, "/settings");
 });
 
@@ -1876,6 +1981,54 @@ test('Mac menu editing preserves focus when adding, moving, and removing items',
   await press(visibility);
   await options.waitFor({ state: 'hidden' });
   assert.ok(await visibility.evaluate(element => document.activeElement === element), 'disabling the menu keeps its toggle reachable');
+});
+
+test('Ask Pharos attachments restore focus and preserve the draft through full-screen element selection', {skip,timeout:60000}, async t => {
+  const selection={provider:'Codex',model:'test-model',effort:'Low'},sessions=new Map(),submitted=[];
+  const {page,settled,shot}=await open(t,{url:'/analyze?analyze_topic=thinking-overview',ready:'h1',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/sessions':()=>({sessions:[...sessions.values()]}),
+    'GET /api/ask/session':({query})=>sessions.get(query.get('id')),
+    'POST /api/ask/attachments':{id:'file-sample',kind:'file',name:'notes.csv',path:'/tmp/pharos-sample/notes.csv',size:42,mime:'text/csv'},
+    'POST /api/ask/session':({body})=>{const session={conversation:[],createdAt:Date.now(),updatedAt:Date.now(),...sessions.get(body.id),...body};sessions.set(body.id,session);return session;},
+    'POST /api/ask/send':({body})=>{submitted.push(body);const session={...sessions.get(body.id),...body,conversation:[{id:body.turnID,prompt:body.prompt,attachments:body.attachments,cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',reply:'I received the attached context.',cards:[]}]};sessions.set(body.id,session);return session;},
+  }});
+  await activateHeaderTool(page,'askPharosToggle');
+  const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  await question.fill('Explain this chart using the attached notes.');
+  const plus=page.getByRole('button',{name:'Attach context',exact:true});
+  await plus.click();await page.getByRole('button',{name:'Attach current URL',exact:false}).click();
+  const chips=page.locator('#pharos-question');
+  await chips.getByRole('button',{name:/Inspect attachment:/}).click();
+  await page.getByRole('dialog',{name:'Attached context Pharos receives',exact:true}).waitFor();
+  await page.keyboard.press('Escape');
+  assert.ok(await chips.getByRole('button',{name:/Inspect attachment:/}).evaluate(node=>document.activeElement===node));
+  await page.locator('.pharos-context-files').setInputFiles({name:'notes.csv',mimeType:'text/csv',buffer:Buffer.from('model,comment\nexample,Investigate this week')});
+  await chips.getByRole('button',{name:'Inspect attachment: notes.csv',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Full screen',exact:true}).click();
+  await page.waitForURL(url=>url.pathname==='/ask');
+  await plus.click();await page.getByRole('button',{name:'Select a page element',exact:false}).click();
+  const panel=page.locator('.pharos-floating');await panel.getByText('Selecting an element',{exact:true}).waitFor();
+  await page.waitForURL(url=>url.pathname==='/analyze');
+  const heading=page.getByRole('heading',{level:1}).first();await heading.hover();
+  await page.locator('#feedbackHighlight.visible').waitFor();
+  await page.keyboard.press('ArrowUp');await page.keyboard.press('ArrowDown');
+  await shot('ask-context-picker');await heading.click();
+  await page.waitForURL(url=>url.pathname==='/ask');await question.waitFor();
+  assert.ok(await question.evaluate(node=>node.value.includes('attached notes')));
+  await plus.click();await page.getByRole('button',{name:'Select a page element',exact:false}).click();
+  await panel.getByText('Selecting an element',{exact:true}).waitFor();await page.keyboard.press('Escape');
+  await page.waitForURL(url=>url.pathname==='/ask');
+  await shot('ask-context-attachments');
+  await page.getByRole('button',{name:'Send question',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'I received the attached context.'}).waitFor();
+  assert.equal(submitted.length,1);
+  assert.ok(!submitted[0].currentURI,'context is supplied only through explicit attachments');
+  assert.equal(submitted[0].attachments.length,3);
+  await page.locator('.pharos-user-question').getByRole('button',{name:'Inspect attachment: notes.csv',exact:true}).click();
+  await page.getByRole('dialog',{name:'Attached context Pharos receives',exact:true}).waitFor();
+  await page.keyboard.press('Escape');await settled();
 });
 
 test('Ask Pharos invitation gives focus back to existing search when dismissed', {skip}, async t => {
@@ -2021,8 +2174,12 @@ test('Ask Pharos keeps long chats scrollable and the editor reachable @ 390', {s
 
 test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
-  const turn={id:'first-turn',prompt:'Which commands keep failing?',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'clarification',reply:'',clarification:{question:'Which project?',options:['Pharos','All projects']},cards:[],elapsedMs:1000};
-  const original={id:'failed-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'Keep the time range to this week.',conversation:[turn,{...turn,id:'failed-turn',prompt:'Pharos',status:'error',clarification:null,reply:'The agent returned an empty response; try again'}]};
+  const file={id:'file-original',kind:'file',name:'notes.pdf',path:'/tmp/private/notes.pdf',size:42,offset:6};
+  const url={id:'url-original',kind:'url',name:'Tokens',url:'/analyze?analyze_topic=tokens',offset:12};
+  const element={id:'element-original',kind:'element',name:'Selected chart',url:url.url,selector:'#chart',offset:0};
+  const draftFile={id:'file-draft',kind:'file',name:'draft.csv',path:'/tmp/private/draft.csv',size:12,offset:5};
+  const turn={id:'first-turn',prompt:'Which commands keep failing?',attachments:[file,url],cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'clarification',reply:'',clarification:{question:'Which project?',options:['Pharos','All projects']},cards:[],elapsedMs:1000};
+  const original={id:'failed-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'Keep the time range to this week.',draftAttachments:[draftFile],conversation:[turn,{...turn,id:'failed-turn',prompt:'Pharos',attachments:[element],status:'error',clarification:null,reply:'The agent returned an empty response; try again'}]};
   const sessions=new Map([[original.id,original]]);
   const {page,settled,shot,calls}=await open(t,{url:'/?ask_chat=failed-chat',viewport:{width:320,height:900},ready:'.pharos-recovery:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
@@ -2030,11 +2187,11 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
     'GET /api/ask/session':({query})=>sessions.get(query.get('id')),
     'GET /api/ask/sessions':()=>({sessions:[...sessions.values()]}),
     'POST /api/ask/session':({body})=>{
-      const session={...(sessions.get(body.id)||{id:body.id,createdAt:Date.now(),updatedAt:Date.now(),conversation:[]}),draft:body.draft,selection:body.selection};
+      const session={...(sessions.get(body.id)||{id:body.id,createdAt:Date.now(),updatedAt:Date.now(),conversation:[]}),draft:body.draft,draftAttachments:body.draftAttachments,selection:body.selection};
       sessions.set(body.id,session);return session;
     },
     'POST /api/ask/send':({body})=>{
-      const session={...sessions.get(body.id),draft:'',conversation:[{...turn,id:body.turnID,prompt:body.prompt,status:'multiple',clarification:null,reply:'Your retry completed.'}]};
+      const session={...sessions.get(body.id),draft:'',draftAttachments:[],conversation:[{...turn,id:body.turnID,prompt:body.prompt,attachments:body.attachments,status:'multiple',clarification:null,reply:'Your retry completed.'}]};
       sessions.set(body.id,session);return session;
     },
   }});
@@ -2077,15 +2234,22 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   await page.keyboard.press('Escape');await saved;await settled();
   assert.ok(await page.locator('.pharos-model-trigger').evaluate(element=>element===document.activeElement),'Escape returns focus to the model control');
   assert.equal(sessions.get(newID).draft,expected);
+  assert.deepEqual(sessions.get(newID).draftAttachments.map(item=>item.id),[file.id,url.id,element.id,draftFile.id]);
   assert.deepEqual(sessions.get(original.id).conversation,original.conversation,'the prior chat remains in history');
   await page.reload();await settled();
   await page.waitForFunction(text=>document.querySelector('#pharos-question')?.value===text,expected);
+  await question.getByRole('button',{name:'Inspect attachment: notes.pdf',exact:true}).click();
+  await page.getByRole('dialog',{name:'Attached context Pharos receives',exact:true}).waitFor();
+  await page.keyboard.press('Escape');
   assert.ok(await page.getByRole('button',{name:'Send question',exact:true}).isEnabled());
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   await page.getByRole('status').filter({hasText:'Your retry completed.'}).waitFor();
   await settled();
   assert.equal(sessions.get(newID).conversation[0].prompt,expected,'the restored transcript can be sent after reload');
   assert.equal(calls.find(call=>call.path==='/api/ask/send').body.selection.fast,true,'Fast survives reload into the request');
+  const sentAttachments=calls.find(call=>call.path==='/api/ask/send').body.attachments;
+  assert.deepEqual(sentAttachments.map(item=>item.id),[file.id,url.id,element.id,draftFile.id]);
+  assert.equal(sentAttachments[0].path,file.path);assert.equal(sentAttachments[1].url,url.url);assert.equal(sentAttachments[2].selector,element.selector);
 });
 
 // Whether focus moved while the chat loaded is unit tested (askFocusAfterLoad);
@@ -2208,7 +2372,7 @@ test('Ask Pharos chat links survive reload and browser Back', {skip,timeout:6000
   assert.equal(page.url(),contextURL,'opening a chat in the overlay must preserve the page URI');
 });
 
-// The long URI exceeds what a saved prompt chip may hold, so reload restores the context alone.
+// Explicit URL attachments survive reload even when the page URI is long.
 for(const url of ['/analyze?analyze_topic=tokens', '/analyze?analyze_topic=tokens&history_search='+'x'.repeat(2100)]) test(`Ask Pharos restores its open and floating surfaces after reload (${url.length>2000?'Analyze, long URI':'Analyze'})`,{skip},async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   let session=null;
@@ -2227,14 +2391,16 @@ for(const url of ['/analyze?analyze_topic=tokens', '/analyze?analyze_topic=token
   await activateHeaderTool(page,'askPharosToggle');
   const saved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST');
   await question.evaluate(element=>{element.value='Keep this open question';element.dispatchEvent(new Event('input',{bubbles:true}));});await saved;await settled();
-  const chip=question.getByRole('group',{name:/^About/});
-  if(url.length<=2000){await chip.focus();await page.keyboard.press('Alt+ArrowRight');}
+  await page.getByRole('button',{name:'Attach context',exact:true}).click();
+  const attached=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&response.request().postDataJSON().draftAttachments?.length===1);
+  await page.getByRole('button',{name:'Attach current URL',exact:false}).click();await attached;
+  const chip=page.locator('#pharos-question').getByRole('button',{name:/Inspect attachment:/});
   const inlineDraft=await question.innerText();await question.focus();
   await reload();
   await modal.waitFor();
   await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this open question');
   assert.ok(await question.evaluate(element=>element===document.activeElement),'the restored modal focuses its editor');
-  assert.equal(await question.innerText(),inlineDraft,'reload preserves the context chip position within the draft');
+  assert.equal(await question.innerText(),inlineDraft,'reload preserves the draft alongside its explicit attachment');
   assert.equal(await chip.count(),1,'reload keeps the page context');
   assert.equal(page.url(),pageURL,'restoring the overlay keeps the underlying page URI');
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
@@ -2308,58 +2474,46 @@ for(const mode of ['choice','other']) test(`Ask Pharos clarification supports ${
   await shot('answered');
 });
 
-test('Ask Pharos prompt chips drag into text and support keyboard editing @ 1440',{skip},async t=>{
-  const width=1440;
-  const selection={provider:'Codex',model:'test-model',effort:'Low'};let sent;
-  const {page,shot}=await open(t,{viewport:{width,height:800},ready:'.pharos-ai:not([hidden])',api:{
+test('Ask Pharos inline attachments drag between words and preserve keyboard editing @ 1440',{skip},async t=>{
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};let sent,draft;
+  const {page,shot}=await open(t,{viewport:{width:1440,height:800},url:'/analyze?analyze_topic=tokens',ready:'#askPharosToggle:not([disabled])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
-    'GET /api/ask/sessions':{sessions:[]},'POST /api/ask/session':({body})=>body,
-    'POST /api/ask/send':({body})=>{sent=body;return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,currentURI:body.currentURI,cli:'Codex',model:'test-model',effort:'Low',status:'multiple',reply:'Here is the breakdown.',cards:[]}]};},
+    'GET /api/ask/sessions':{sessions:[]},'POST /api/ask/session':({body})=>{draft=body;return body;},
+    'POST /api/ask/send':({body})=>{sent=body;return {id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,attachments:body.attachments,cli:'Codex',model:'test-model',effort:'Low',status:'multiple',reply:'Here is the breakdown.',cards:[]}]};},
   }});
-  await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
-  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true}),chip=page.getByRole('group',{name:/^About .+ context\./});
   await activateHeaderTool(page,'askPharosToggle');
-  assert.equal(await chip.count(),0,'the home page is not attached as context');
-  await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'Ask Pharos',exact:true}).waitFor({state:'hidden'});
-  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=tokens'));
-  await activateHeaderTool(page,'askPharosToggle');await chip.waitFor();
-  const contextURI=await page.evaluate(()=>askPageURI(location.href));
-  await editor.press('End');await page.keyboard.insertText('Find usage by model');
-  assert.equal(await editor.evaluate(element=>element.value),'Find usage by model');
-  const beforeDrag=await editor.innerText();
-  // Drop at the caret after “Find ”, using the rendered text's real location.
+  const editor=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  await editor.fill('Find usage by model');
+  await page.getByRole('button',{name:'Attach context',exact:true}).click();await page.getByRole('button',{name:'Attach current URL',exact:false}).click();
+  const inspect=page.locator('#pharos-question').getByRole('button',{name:/Inspect attachment:/});
+  await inspect.focus();await page.keyboard.press('Enter');
+  await page.getByRole('dialog',{name:'Attached context Pharos receives',exact:true}).waitFor();
+  await page.keyboard.press('Escape');assert.ok(await inspect.evaluate(node=>node===document.activeElement));
+  const chip=editor.getByRole('group',{name:/Page URL context/});
   const target=await editor.evaluate(element=>{
-    const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);
-    while(walker.nextNode())if(walker.currentNode.data.includes('Find usage by model')){
-      const range=document.createRange();range.setStart(walker.currentNode,5);range.collapse(true);
-      const caret=range.getBoundingClientRect(),box=element.getBoundingClientRect();return {x:caret.x-box.x+1,y:caret.y-box.y+caret.height/2};
-    }
-    throw new Error('The typed prompt is missing');
+    const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);let text;
+    while(walker.nextNode())if(walker.currentNode.data.startsWith('Find usage')){text=walker.currentNode;break;}
+    const range=document.createRange();range.setStart(text,5);range.setEnd(text,6);const rect=range.getBoundingClientRect();
+    return {x:rect.left+1,y:rect.top+rect.height/2};
   });
-  await chip.dragTo(editor,{sourcePosition:{x:12,y:12},targetPosition:target});
-  assert.match(await editor.innerText(),/Find .*About .*usage by model/s,'the chip moves between the words at the drop caret');
-  assert.equal(await editor.evaluate(element=>element.value),'Find usage by model','dragging preserves the question');
-  await shot('chip-between-words');
-  await editor.press('Meta+z');
-  assert.equal(await editor.innerText(),beforeDrag,'undo restores the chip position');
-  await editor.press('Meta+Shift+z');
-  assert.match(await editor.innerText(),/Find .*About .*usage by model/s);
+  const source=await chip.boundingBox();
+  await page.mouse.move(source.x+source.width/2,source.y+source.height/2);await page.mouse.down();
+  await page.mouse.move(target.x,target.y,{steps:20});await page.mouse.up();
+  await page.waitForFunction(()=>document.querySelector('#pharos-question').firstChild?.textContent==='Find ');
+  const savedDraft=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&JSON.parse(response.request().postData()).draftAttachments?.[0]?.offset===6);
   await chip.focus();await page.keyboard.press('Alt+ArrowRight');
-  assert.match(await editor.innerText(),/Find u.*About .*sage by model/s,'keyboard movement relocates the same chip');
-  await page.keyboard.press('Backspace');
-  assert.ok(await editor.evaluate(element=>element===document.activeElement),'removing a focused chip returns to the editor');
-  assert.equal(await editor.evaluate(element=>element.value),'Find usage by model');
-  await editor.press('Meta+z');await chip.waitFor();
-  await editor.press('Meta+a');await page.keyboard.press('Backspace');
-  assert.equal(await editor.evaluate(element=>element.value),'','select-all deletion clears text and context together');
-  await editor.press('Meta+z');await chip.waitFor();
-  assert.equal(await editor.evaluate(element=>element.value),'Find usage by model','undo restores the selected prompt and chip');
+  await page.waitForFunction(()=>document.querySelector('#pharos-question').firstChild?.textContent==='Find u');
+  await savedDraft;
+  assert.equal(draft.draft,'Find usage by model');assert.equal(draft.draftAttachments[0].offset,6);
+  await shot('attachment-preview');
+  await page.locator('#pharos-question').getByRole('button',{name:/Remove attachment:/}).click();
+  assert.ok(await editor.evaluate(node=>node===document.activeElement));
+  assert.equal(await editor.evaluate(node=>node.value),'Find usage by model');
   await editor.press('Meta+ArrowDown');await page.keyboard.press('Shift+Enter');await page.keyboard.insertText('this week');
-  assert.equal(await editor.evaluate(element=>element.value),'Find usage by model\nthis week');
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   await page.getByRole('status').filter({hasText:'Here is the breakdown.'}).waitFor();
-  assert.equal(sent.prompt,'Find usage by model\nthis week');assert.equal(sent.currentURI,contextURI);
+  assert.equal(sent.prompt,'Find usage by model\nthis week');assert.ok(!sent.currentURI);assert.deepEqual(sent.attachments,[]);
 });
 
 for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce']])test(`Ask Pharos dialog grows within the viewport and settles back after Clear (${motion}) @ ${width}`,{skip},async t=>{
@@ -2485,11 +2639,15 @@ async function openAskOverlay(t, width) {
   }});
   await app.page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
   await activateHeaderTool(app.page,'askPharosToggle');
+  await app.page.getByRole('button',{name:'Attach context',exact:true}).click();await app.page.getByRole('button',{name:'Attach current URL',exact:false}).click();
   return {...app,state,modal:app.page.getByRole('dialog',{name:'Ask Pharos',exact:true}),editor:app.page.getByRole('textbox',{name:'Ask a question',exact:true})};
 }
 
 test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip}, async t => {
   const {page,shot,modal,editor}=await openAskOverlay(t,1440);
+  const askHeader=page.locator('#askPharosToggle');
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'true');
+  assert.equal(await askHeader.getAttribute('aria-current'),null);
   await page.evaluate(()=>{
     const original=window.fetch;window.askDraftAttempts=0;
     window.fetch=(input,options)=>{
@@ -2514,8 +2672,8 @@ test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip},
   await page.waitForFunction(()=>window.askDraftAttempts>=2);
   assert.ok(await modal.locator('.pharos-notice').isHidden(),'the recovered save leaves no error');
   const reachable=element=>{const box=element.getBoundingClientRect(),target=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2);return box.left>=0&&box.right<=innerWidth&&(element===target||element.contains(target));};
-  const removeContext=modal.getByRole('button',{name:'Remove page context',exact:true});
-  for(const name of ['Clear','Close Ask Pharos','Remove page context'])assert.ok(await modal.getByRole('button',{name,exact:true}).evaluate(reachable),name+' must stay reachable');
+  const removeContext=modal.getByRole('button',{name:/^Remove attachment:/});
+  for(const button of [modal.getByRole('button',{name:'Clear',exact:true}),modal.getByRole('button',{name:'Close Ask Pharos',exact:true}),removeContext])assert.ok(await button.evaluate(reachable),'the control must stay reachable');
   assert.ok(await editor.evaluate(element=>{
     const controls=[...element.closest('form').querySelectorAll('.pharos-window-controls button:not([hidden])')].map(button=>button.getBoundingClientRect());
     const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);
@@ -2531,9 +2689,10 @@ test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip},
   assert.equal(await editor.evaluate(element=>element.value),'What if we broke it down by model?','removing context preserves the draft');
   await modal.getByRole('button',{name:'Close Ask Pharos',exact:true}).click();
   await modal.waitFor({state:'hidden'});
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'false');
+  assert.equal(await askHeader.getAttribute('aria-current'),null);
   assert.ok(await page.locator('#askPharosToggle').evaluate(element=>element===document.activeElement)||await page.locator('#headerMore').evaluate(element=>element===document.activeElement),'Close returns focus to the header');
   await activateHeaderTool(page,'askPharosToggle');
-  await removeContext.waitFor();
   await page.getByRole('button',{name:'Switch to non-AI search',exact:true}).click();
   await modal.getByRole('button',{name:'Search past work',exact:true}).click();
   await modal.getByRole('textbox',{name:'Text for rule 1.1',exact:true}).fill('cache');
@@ -2550,6 +2709,8 @@ test('Ask Pharos errors float over full screen and dismiss without moving it @ 3
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection:{provider:'Removed',model:'',effort:'Default'}},providers:[{id:'Codex'}]},
   }});
   const notice=page.locator('#askPage .pharos-notice');
+  assert.equal(await page.locator('#askPharosToggle').getAttribute('aria-current'),'page');
+  assert.equal(await page.locator('#askPharosToggle').getAttribute('aria-expanded'),'false');
   assert.match(await notice.getByRole('alert').textContent(),/Removed is unavailable/);
   const surface=page.locator('#askPage .pharos-product > :not(.pharos-notice-anchor):not([hidden])').first();
   const shown=await surface.boundingBox(),box=await notice.boundingBox(),ask=await page.locator('#askPage .pharos-product').boundingBox();
@@ -2564,9 +2725,13 @@ test('Ask Pharos errors float over full screen and dismiss without moving it @ 3
 
 test('Ask Pharos full screen moves the chat to its own page and back @ 390', {skip}, async t => {
   const {page,shot,modal,editor,state}=await openAskOverlay(t,390);
+  const askHeader=page.locator('#askPharosToggle');
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'true');
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/ask');
   await modal.waitFor({state:'hidden'});
+  assert.equal(await askHeader.getAttribute('aria-current'),'page');
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'false');
   assert.ok(await editor.evaluate(element=>!!element.closest('#askPage')&&element===document.activeElement),'full screen keeps the composer focused on its page');
   // Suggestions sit inside the composer until the user types.
   const suggestions=page.getByRole('region',{name:'Prompt suggestions',exact:true});
@@ -2579,13 +2744,15 @@ test('Ask Pharos full screen moves the chat to its own page and back @ 390', {sk
   await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
   await state.received;
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),state.sent?.id,'the page names the chat it is showing');
-  assert.ok(state.sent.currentURI.startsWith('/analyze?'),'the question keeps the page it was asked about');
+  assert.ok(state.sent.attachments[0].url.startsWith('/analyze?'),'the question keeps the explicitly attached page');
   // The transcript fills the page, keeping the composer at the bottom.
   await page.waitForFunction(()=>{const box=document.querySelector('.pharos-send').getBoundingClientRect();return box.bottom<=innerHeight&&box.bottom>innerHeight-120;});
   await shot('ask-full-screen');
   await page.getByRole('button',{name:'Exit full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/analyze');
   await modal.waitFor();
+  assert.equal(await askHeader.getAttribute('aria-current'),null);
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'true');
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'leaving full screen reopens the dialog it came from');
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/ask');
@@ -2594,6 +2761,8 @@ test('Ask Pharos full screen moves the chat to its own page and back @ 390', {sk
   const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});
   await panel.waitFor();
   assert.ok(await modal.isHidden(),'Back leaves full screen, floating a pending question');
+  assert.equal(await askHeader.getAttribute('aria-current'),null);
+  assert.equal(await askHeader.getAttribute('aria-expanded'),'false');
   // Header tabs switch views without a route event; they still leave full screen.
   await panel.locator('.pharos-floating-open').click();await modal.waitFor();
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
@@ -2625,7 +2794,7 @@ test('Ask Pharos full screen keeps a chat that is still loading', {skip}, async 
   const held=id=>new Promise(resolve=>{gates[id]=resolve;});
   let waiting={};
   t.after(()=>Object.values(gates).forEach(open=>open()));
-  const {page,settled}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+  const {page,settled,shot}=await open(t,{url:'/',viewport:{width:1920,height:1050},ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:Object.values(chats)}),
@@ -2641,13 +2810,14 @@ test('Ask Pharos full screen keeps a chat that is still loading', {skip}, async 
   await page.waitForURL(url=>url.pathname==='/ask'&&url.searchParams.get('ask_chat')==='slow');
   release('slow');waiting={};
   await page.locator('#askPage .pharos-user-question').filter({hasText:'Slow question'}).waitFor();
+  await shot('fullscreen-conversation');
   // Leaving full screen for the dialog while another chat loads keeps that chat.
   await activateHeaderTool(page,'settingsToggle');await page.waitForURL(url=>url.pathname==='/settings');
   await activateHeaderTool(page,'askPharosToggle');
   await page.getByRole('button',{name:'Full screen',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/ask');
-  await page.locator('.pharos-ai').getByRole('button',{name:'New Chat',exact:true}).click();
   if(!await page.getByRole('dialog',{name:'Chat history',exact:true}).isVisible())await page.getByRole('button',{name:'History',exact:true}).click();
+  await page.getByRole('dialog',{name:'Chat history',exact:true}).getByRole('button',{name:'New chat',exact:true}).click();
   waiting={other:held('other')};
   await page.getByRole('link',{name:'Open chat: Other question',exact:true}).click();
   await page.getByRole('button',{name:'Exit full screen',exact:true}).click();
@@ -2662,7 +2832,7 @@ test('Ask Pharos full screen keeps a chat that is still loading', {skip}, async 
 // Placement of dragged and resized progress is unit tested in ask-pharos.test.mjs.
 test('Ask Pharos floating progress keeps focus and a ready response leaves the page alone @ 390', {skip}, async t => {
   const {page,shot,modal,editor,state}=await openAskOverlay(t,390);
-  await modal.getByRole('button',{name:'Remove page context',exact:true}).click();
+  await modal.getByRole('button',{name:/^Remove attachment:/}).click();
   await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   const browseHint=page.locator('.pharos-browse-hint');await browseHint.waitFor();
@@ -2692,7 +2862,7 @@ test('Ask Pharos floating progress keeps focus and a ready response leaves the p
   state.finish();
   await panel.getByRole('button',{name:/Your response is ready/}).waitFor();
   assert.equal(new URL(page.url()).pathname,'/settings','a ready response must leave the current page alone');
-  assert.equal(state.sent.currentURI,'','the request respects the removed page context');
+  assert.ok(!state.sent.currentURI,'the request respects the removed page context');
   await shot('ask-floating-ready');
   await panel.getByRole('button',{name:/Your response is ready/}).click();
   await page.locator('.pharos-destination:not([hidden])').click();
@@ -2707,7 +2877,7 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   let finish;
   const response=new Promise(resolve=>{finish=resolve;});t.after(()=>finish());
-  const {page}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+  const {page,shot}=await open(t,{url:'/',viewport:{width:1920,height:1050},ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':{sessions:[]},
@@ -2770,6 +2940,7 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   await page.keyboard.press('Escape');
   await page.locator('body>header .brand').click();
   await page.locator('#homeAskSearch').getByRole('button',{name:'A. Tokens',exact:true}).waitFor();
+  await shot('home-answer');
   assert.ok((await homeFrame.boundingBox()).width>emptyHomeWidth,'a restored conversation uses more of the available Home width');
   await page.locator('#homeAskSearch').getByRole('button',{name:'New Chat',exact:true}).click();
   assert.ok(Math.abs((await homeFrame.boundingBox()).width-emptyHomeWidth)<1,'clearing the conversation restores the Home composer width');
@@ -2933,21 +3104,26 @@ test('Ask Pharos loads chart previews behind the floating panel so a ready answe
   assert.equal(queries(),loaded,'opening a just-loaded answer reuses its charts');
 });
 
-for (const width of [1440,320]) test(`Ask Pharos work previews fit beside their links @ ${width}`, {skip}, async t => {
+for (const width of [1920,320]) test(`Ask Pharos work previews fit beside their links @ ${width}`, {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
-  const cards=[{id:'work',title:'Long work',description:'The whole workspace.',href:'/work/'+workID},{id:'conversation',title:'Root conversation',description:'One conversation in it.',href:'/work/'+workID+'?conversation=conv-root'}];
+  const cards=[{id:'work',title:'Long work',description:'The whole workspace.',href:'/work/'+workID},{id:'conversation',title:'Root conversation',description:'One conversation in it.',href:'/work/'+workID+'?conversation=conv-root'},{id:'child',title:'Child conversation',description:'A second conversation.',href:'/work/'+workID+'/conversation/conv-child'}];
+  // Synthetic ribbon used only to exercise image loading and preview layout.
+  const colors=['#399bed','#20bfae','#b36df1','#f4b632','#ef9535','#2bc48e','#f16b52','#eace32'];
+  const ribbon='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 40">'+colors.map((color,index)=>`<rect x="${index*40}" y="${8+index%3*4}" width="38" height="${24-index%3*8}" fill="${color}"/>`).join('')+'</svg>');
   let session;
-  const {page,shot}=await open(t,{url:'/library',ready:'.conversation-result-card',viewport:{width,height:900},api:{
+  const home=width===1920;
+  const {page,shot,calls}=await open(t,{url:home?'/':'/library',ready:home?'#pharos-ask .pharos-ai:not([hidden])':'.conversation-result-card',viewport:{width,height:home?1050:900},api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
     'GET /api/ask/sessions':()=>({sessions:session?[session]:[]}),
     'GET /api/ask/session':()=>session,
     'POST /api/ask/session':({body})=>(session={...session,...body}),
     'POST /api/ask/send':({body})=>(session={id:body.id,createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'Your work.',cards}]}),
+    'POST /api/fingerprints':({body})=>({items:body.items.map(item=>({...item,state:'ready',href:'/work/'+workID+'/conversation/'+item.id,images:{light:ribbon,dark:ribbon}}))}),
   }});
   await page.waitForFunction(()=>document.querySelector('.pharos-current-settings')?.textContent.includes('Test Model'));
-  await activateHeaderTool(page,'askPharosToggle');
-  const modal=page.getByRole('dialog',{name:'Ask Pharos',exact:true});
+  if(!home)await activateHeaderTool(page,'askPharosToggle');
+  const surface=home?page.locator('#homeAskSearch'):page.getByRole('dialog',{name:'Ask Pharos',exact:true});
   const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
   await question.fill('What did I do in the long work?');
   const before=page.url();
@@ -2957,10 +3133,14 @@ for (const width of [1440,320]) test(`Ask Pharos work previews fit beside their 
     await figure.waitFor();await figure.scrollIntoViewIfNeeded();
     await page.waitForFunction(title=>document.querySelector(`figure[aria-label="Work preview: ${title}"]`)?.getAttribute('aria-busy')==='false',card.title);
     assert.equal(await page.getByRole('link',{name:new RegExp(card.title)}).getAttribute('href'),card.href);
+    if(card.id!=='work')await figure.getByRole('img',{name:'Conversation fingerprint',exact:true}).waitFor();
   }
+  const requested=calls.filter(call=>call.path==='/api/fingerprints').flatMap(call=>call.body.items);
+  for(const id of ['conv-root','conv-child'])assert.ok(requested.some(item=>item.entity==='conversation'&&item.id===id),'the conversation ID selects its fingerprint');
   for (const card of cards) assert.equal(await page.getByRole('figure',{name:'Work preview: '+card.title,exact:true}).locator('p').count(),2,'where/when and who/how much render');
-  assert.equal(page.url(),before,'previews leave the underlying page URL alone');
-  assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'loading previews must not move focus out of Ask');
+  const after=new URL(page.url());if(home)after.searchParams.delete('ask_chat');
+  assert.equal(after.href,before,'previews leave the underlying page URL alone');
+  assert.ok(await surface.evaluate(element=>element.contains(document.activeElement)),'loading previews must not move focus out of Ask');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'work preview overflowed the viewport');
   assert.ok(await page.evaluate(()=>[...document.querySelectorAll('.pharos-work-preview')].every(el=>el.scrollWidth<=el.clientWidth)),'work preview content overflowed its card');
   await shot('ask-work-previews');
@@ -3289,17 +3469,54 @@ test('Browser clipboard denial displays copy failure and leaves focus on the cop
   assert.ok(await page.locator('#navigatorCopy').evaluate(element => element === document.activeElement));
 });
 
+for(const surface of ['import','Downloads'])test(`Claude daily export prompt copying keeps focus through failure and retry in ${surface}`,{skip},async t=>{
+  const {page,shot}=await open(t,{url:'/settings/sources',ready:'#pharosImportSource'});
+  let parent=page.locator('#claudeDownloadsWatchSection');
+  if(surface==='import'){
+    await page.locator('#pharosImportSource').click();
+    parent=page.locator('#pharosOnboarding');
+    await parent.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+  }
+  const routine=parent.locator('.pharos-claude-routine'),copy=routine.getByRole('button',{name:'Copy daily export prompt',exact:true});
+  await copy.waitFor();
+  await page.evaluate(()=>{
+    window.exportPromptCopies=[];
+    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:text=>{
+      window.exportPromptCopies.push(text);window.exportPromptClipboard=Promise.withResolvers();return window.exportPromptClipboard.promise;
+    }}});
+  });
+  await copy.click();
+  await page.waitForFunction(()=>!!window.exportPromptClipboard);
+  assert.ok(await copy.evaluate(el=>el===document.activeElement),'copying keeps keyboard focus');
+  await page.evaluate(()=>window.exportPromptClipboard.reject(Error('Clipboard permission denied')));
+  await routine.getByRole('status').filter({hasText:'Could not copy'}).waitFor();
+  assert.ok(await copy.evaluate(el=>el===document.activeElement),'failure keeps focus for retry');
+  await copy.click();
+  await page.waitForFunction(()=>window.exportPromptCopies.length===2);
+  await page.evaluate(()=>window.exportPromptClipboard.resolve());
+  await routine.getByRole('status').filter({hasText:'Copied.'}).waitFor();
+  assert.ok(await copy.evaluate(el=>el===document.activeElement),'success keeps focus');
+  const prompt=await routine.locator('pre').innerText();
+  assert.deepEqual(await page.evaluate(()=>window.exportPromptCopies),[prompt,prompt],'each attempt copies the visible starter prompt');
+  await shot('daily-export-prompt');
+});
+
 test('Ask fullscreen inbox keeps concurrent chats running and reads only visible answers', {skip,timeout:60000}, async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'},sessions=new Map(),finish=new Map(),attempts=new Map();
   let recordFirst,releaseReceipt,receiptStarted,secondAttempt;
   const firstRecording=new Promise(resolve=>{recordFirst=resolve;}),oldReceipt=new Promise(resolve=>{releaseReceipt=resolve;});
   const readingError=new Promise(resolve=>{receiptStarted=resolve;});
-  t.after(()=>{recordFirst();releaseReceipt();});
+  const heldSearch=Promise.withResolvers(),searchStarted=Promise.withResolvers();
+  t.after(()=>{recordFirst();releaseReceipt();heldSearch.resolve();});
   t.after(()=>{for(const resolve of finish.values())resolve();});
-  const {page,settled,shot,calls}=await open(t,{url:'/ask',ready:'.pharos-new-chat',api:{
+  const {page,settled,shot,calls}=await open(t,{url:'/ask',viewport:{width:1920,height:1050},ready:'.pharos-new-chat',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
     'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
-    'GET /api/ask/sessions':()=>({sessions:[...sessions.values()]}),
+    'GET /api/ask/sessions':async({query})=>{
+      const term=query.get('q')||'';
+      if(term==='First'){searchStarted.resolve();await heldSearch.promise;}
+      return {sessions:[...sessions.values()].filter(session=>!term||session.conversation.some(turn=>turn.prompt.includes(term)))};
+    },
     'GET /api/ask/session':({query})=>sessions.get(query.get('id')),
     'POST /api/ask/session':({body})=>{const saved={createdAt:Date.now(),updatedAt:Date.now(),conversation:[],...sessions.get(body.id),...body};sessions.set(body.id,saved);return saved;},
     'POST /api/ask/read':async({body})=>{
@@ -3344,7 +3561,7 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   assert.ok(await question.evaluate(element=>element===document.activeElement),'background completion preserves focus');
   await shot('ask-inbox-background-answer');
   await first.click();await page.getByRole('status').filter({hasText:'The answer to First question'}).waitFor();
-  await page.locator('.pharos-receipt').filter({hasText:'Seen'}).waitFor();
+  await first.locator('.pharos-history-state').filter({hasText:'Seen'}).waitFor();
   finish.get('Second question')();await settled();
   assert.ok(calls.some(call=>call.path==='/api/ask/read'),'viewing an answer saves a receipt');
   const transcript=page.getByRole('region',{name:'Chat messages, scroll for earlier replies'});
@@ -3358,7 +3575,7 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   await first.click();await page.getByRole('status').filter({hasText:'The answer to First question'}).waitFor();
   await second.click();await page.getByRole('button',{name:'Try again',exact:true}).click();
   await page.getByRole('status').filter({hasText:'Recovered answer'}).waitFor();
-  await page.locator('.pharos-receipt').filter({hasText:'Seen'}).waitFor();
+  await second.locator('.pharos-history-state').filter({hasText:'Seen'}).waitFor();
   const acknowledged=page.waitForResponse(response=>response.url().endsWith('/api/ask/read')&&response.request().postDataJSON()?.startedAt===secondAttempt);
   releaseReceipt();const response=await acknowledged;await response.finished();await settled();
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
@@ -3371,6 +3588,20 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   assert.match(await first.getAttribute('aria-describedby').then(id=>page.locator('#'+id).textContent()),/Current chat/);
   await second.click();await page.getByRole('status').filter({hasText:'Recovered answer'}).waitFor();
   assert.equal(await second.getAttribute('aria-current'),'true');assert.equal(await first.getAttribute('aria-current'),'false');
+  await shot('ask-inbox-selected');
+  const sendsBeforeSearch=calls.filter(call=>call.path==='/api/ask/send').length;
+  const filter=drawer.getByRole('searchbox',{name:'Find a prior chat',exact:true}),search=drawer.getByRole('button',{name:'Search',exact:true});
+  await filter.fill('First');await search.click();await searchStarted.promise;
+  await drawer.getByRole('status').filter({hasText:'Searching…'}).waitFor();
+  await shot('ask-inbox-searching');
+  await filter.fill('Second');await filter.press('Enter');
+  await second.waitFor();await drawer.getByRole('status').filter({hasText:'Searching…'}).waitFor({state:'hidden'});
+  const stale=page.waitForResponse(response=>response.url().includes('/api/ask/sessions?')&&new URL(response.url()).searchParams.get('q')==='First');
+  heldSearch.resolve();await stale;await settled();
+  assert.equal(await first.count(),0,'an older search must not replace the latest results');
+  assert.ok(await filter.evaluate(element=>element===document.activeElement),'search keeps keyboard focus');
+  await filter.fill('');await search.click();await first.waitFor();await second.waitFor();
+  assert.equal(calls.filter(call=>call.path==='/api/ask/send').length,sendsBeforeSearch,'searching does not send a question');
   await newChat.click();
   assert.equal(await first.getAttribute('aria-current'),'false');assert.equal(await second.getAttribute('aria-current'),'false');
   await page.setViewportSize({width:390,height:844});
@@ -3414,4 +3645,113 @@ test('Claude export inspection preserves the replacement form when an older requ
   await completed;
   assert.equal(await newer.inputValue(),'/new-export-draft');
   assert.ok(await newer.evaluate(element=>document.activeElement===element));
+});
+
+
+test('Claude settings capture preserves focus through failures, progress and completion', {skip}, async t => {
+  for(const reader of [false,true])await t.test(reader?'conversation reader':'Sources',async t=>{
+    let captured=false,failOnce=true;
+    const refresh=Promise.withResolvers();
+    let selectedSettings={observations:[{organization_uuid:'example-org',observed_at:'2026-11-12T12:00:00Z',time_basis:'capture',model:'claude-opus-4-6',effort_level:'high',thinking_mode:'enabled'}]};
+    const captureRun={id:'settings-capture',kind:'capture',state:'complete',sources:['claude-chat-settings'],results:[]};
+    const indexRun={id:'settings-index',kind:'index',state:'complete',sources:['claude-chat-settings'],results:[]};
+    const {page}=await open(t,{url:reader?`/work/${workID}/conversation/${rootConversation}`:'/settings/sources',api:{
+      'GET /api/sources':{configured:1,enabled:0,items:[{...claudeSettingsSourceFixture,enabled:false}]},
+      'GET /api/work/:id/conversations/:conversation':async()=>{
+        if(captured)await refresh.promise;
+        return {id:rootConversation,workspace_id:workID,provider:'claude',harness:'claude-ai-export',selected_settings:captured?selectedSettings:undefined,messages:[
+          {id:'backfill-question',role:'user',kind:'message',text:'Compare these reports.'},
+          {id:'backfill-answer',role:'assistant',kind:'message',text:'The reports use different assumptions.'},
+        ]};
+      },
+      'GET /api/claude-chat-settings/coverage':()=>({accounts:[{...claudeSettingsCoverageFixture,missing_models:captured?0:2}]}),
+      'POST /api/claude-chat-settings/setup':claudeSettingsCoverageFixture.setup,
+      'POST /api/capture':()=>({run:{...captureRun,state:failOnce?'failed':'complete'}}),
+      'GET /api/capture':()=>({active:false,runs:[{...captureRun,state:failOnce?'failed':'complete'}]}),
+      'POST /api/index':()=>{captured=true;return {run:indexRun}},
+      'GET /api/activity':{active:0,runs:[indexRun]},
+    }});
+    const notice=page.locator(reader?'.conversation-panel .claude-settings-backfill':'#claudeSettingsBackfill');
+    const button=notice.getByRole('button');
+    await button.waitFor();
+    let source,turn;
+    if(reader){
+      await page.locator('.source-details > summary').click();
+      await page.locator('.turn > summary').click();
+      source=await page.locator('.source-details').elementHandle();
+      turn=await page.locator('.turn').elementHandle();
+      assert.ok(await source.evaluate(el=>el.open));
+      assert.ok(await turn.evaluate(el=>!el.open));
+    }
+    await button.click();
+    await notice.getByRole('status').filter({hasText:'Settings capture did not complete'}).waitFor();
+    assert.ok(await button.evaluate(el=>document.activeElement===el),'a failed capture keeps its action focused');
+    failOnce=false;
+    await button.click();
+    if(reader){
+      await notice.getByRole('status').filter({hasText:'Refreshing Source details'}).waitFor();
+      assert.ok(await button.evaluate(el=>document.activeElement===el),'refreshing metadata keeps the action focused');
+      refresh.resolve();
+      await page.locator('.source-details dd').filter({hasText:'claude-opus-4-6'}).waitFor();
+    }
+    await notice.getByRole('status').filter({hasText:'Settings captured.'}).waitFor();
+    assert.ok(await button.evaluate(el=>document.activeElement===el),'completion leaves focus on the same action');
+    if(reader){
+      assert.ok(await source.evaluate(el=>el.isConnected&&el.open),'refresh keeps the existing Source details open');
+      assert.ok(await turn.evaluate(el=>el.isConnected&&!el.open),'refresh keeps the existing turn closed');
+      // A later capture can remove a selection; old facts must not linger.
+      selectedSettings=undefined;
+      await button.click();
+      await page.locator('.source-details dd').filter({hasText:'claude-opus-4-6'}).waitFor({state:'detached'});
+      await notice.getByRole('status').filter({hasText:'Settings captured.'}).waitFor();
+      assert.ok(await button.evaluate(el=>document.activeElement===el));
+    }
+  });
+});
+
+test('Claude import offers one-time model backfill after indexing without moving focus', {skip},async t=>{
+  const job={...claudeImportFixture,source:{added:['claude-ai-imports'],enabled:[],declined:[],skipped:[]}};
+  let indexed=false;
+  const captureRun={id:'import-capture',kind:'capture',state:'complete',sources:['claude-ai-imports'],results:[]};
+  const indexRun={id:'import-index',kind:'index',state:'complete',sources:['claude-ai-imports'],results:[]};
+  const {page}=await open(t,{url:'/settings/sources',api:{
+    'GET /api/claude-imports':({query})=>query.get('id')?job:{jobs:[job],run:{running:false,id:job.id,name:job.name}},
+    'POST /api/claude-imports':{started:true},
+    'GET /api/claude-chat-settings/setup':{enabled:false},
+    'GET /api/claude-chat-settings/coverage':()=>({accounts:indexed?[claudeSettingsCoverageFixture]:[]}),
+    'POST /api/capture':{run:captureRun},
+    'GET /api/capture':{active:false,runs:[captureRun]},
+    'POST /api/index':()=>{indexed=true;return {run:indexRun}},
+    'GET /api/activity':{active:0,runs:[indexRun]},
+  }});
+  const guide=page.locator('#pharosOnboarding');
+  await page.evaluate(()=>window.pharosOnboarding.open({mode:'import'}));
+  await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+  await guide.getByRole('textbox',{name:'Export',exact:true}).fill('/example/claude-export.json');
+  await guide.getByRole('button',{name:'Import',exact:true}).click();
+  await guide.getByRole('button',{name:'Capture and index conversations',exact:true}).click();
+  await guide.getByRole('button',{name:'Index now',exact:true}).waitFor();
+  assert.ok(await guide.getByRole('button',{name:'Index now',exact:true}).evaluate(el=>el===document.activeElement),'capture continues in the same modal');
+  await guide.getByRole('button',{name:'Index now',exact:true}).click();
+  await guide.getByRole('button',{name:'Capture settings',exact:true}).waitFor();
+  assert.ok(await guide.getByRole('button',{name:'Done',exact:true}).evaluate(el=>el===document.activeElement),'missing-model guidance does not take focus after indexing');
+});
+
+test('a late Claude settings check leaves a replacement import form and its focus alone', {skip},async t=>{
+  const pending=Promise.withResolvers(),job={...claudeImportFixture,source:{added:['claude-ai-imports'],enabled:[],declined:[],skipped:[]}};
+  const {page}=await open(t,{url:'/settings/sources',api:{
+    'GET /api/claude-imports':({query})=>query.get('id')?job:{jobs:[job],run:{running:false}},
+    'GET /api/claude-chat-settings/setup':()=>pending.promise,
+  }});
+  await page.evaluate(()=>window.pharosOnboarding.open({mode:'import'}));
+  const guide=page.locator('#pharosOnboarding');
+  await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+  const requested=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/claude-chat-settings/setup');
+  await guide.getByRole('button',{name:/Resume export/}).click();await requested;
+  await page.keyboard.press('Escape');
+  const field=guide.getByRole('textbox',{name:'Export',exact:true});await field.fill('/replacement-import');
+  const completed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/claude-chat-settings/setup');
+  pending.resolve({enabled:false,path:'/example/Claude',account:'local'});await completed;
+  assert.equal(await field.inputValue(),'/replacement-import');
+  assert.ok(await field.evaluate(el=>el===document.activeElement));
 });

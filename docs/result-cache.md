@@ -144,7 +144,10 @@ are, so those entries turn over once a day.
 Card requests from Home and the Card Library use the cache, including the
 cards drawn by a dashboard's own code: the policy travels on the request's
 abort signal (`resultScope`), so code that only passes a signal down joins
-without knowing about it.
+without knowing about it. A view that joins a query-v3 answer to one computed live elsewhere
+(Thinking's time of day and Waiting overview, beside `/api/thinking`) asks
+for it live with `liveScope`, whose answers still count toward the page's
+readiness.
 
 Dashboards opened as pages use it for their charts and summary numbers.
 Their three loading hooks (`useAnalysisResult`, `useMetrics` and Session
@@ -163,8 +166,10 @@ answers a row request live whatever it asks for, unless it is a first page
 of at most 50 rows (a card's short list). Session Shape's list of sessions
 to read is loaded live for the same reason.
 
-Dashboard content that does not come from `query-v3` (Thinking, Habits,
-Parallelism, Usage history) is not stored yet.
+Dashboard content that does not come from `query-v3` (Thinking's fitted
+estimates, factors, compactions and traces; Habits, Parallelism, Usage
+history) is not stored yet. Thinking's counts, percentiles, periods and curves
+come from `query-v3` and are stored like any dashboard's.
 
 ## Adding a domain
 

@@ -20,9 +20,17 @@
               <button type="button" class="pharos-latest cursor-interaction" hidden>Latest reply <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14m-5-5 5 5 5-5"/></svg></button>
             </div>
             <div class="pharos-question-field">
+              <p class="pharos-file-status" role="status" hidden>Copying files…</p>
               <div id="pharos-question" role="textbox" aria-label="Ask a question" aria-multiline="true" contenteditable="true" data-placeholder="Ask about your past work…" spellcheck="true"></div>
             </div>
             <div class="pharos-composer-footer">
+              <section id="pharos-context-menu" class="pharos-context-menu" popover="auto" aria-label="Attach context">
+                <h3>Attach context</h3>
+                <button type="button" class="pharos-attach-files cursor-interaction">Attach files…<small>Original files · 20 MiB each, 50 MiB total</small></button>
+                <button type="button" class="pharos-attach-url cursor-interaction">Attach current URL<small class="pharos-context-page-name"></small></button>
+                <button type="button" class="pharos-attach-element cursor-interaction">Select a page element<small>URL + chosen element · ↑ Parent / ↓ Child</small></button>
+              </section>
+              <input class="pharos-context-files" type="file" multiple aria-label="Attach files" hidden>
               <div class="pharos-picker-anchor">
                 <button type="button" class="pharos-model-trigger cursor-interaction" aria-expanded="false" aria-haspopup="dialog" aria-controls="pharos-model-menu"><span class="pharos-current-settings">Choose a model</span><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="chevron-down" aria-hidden="true" class="lucide lucide-chevron-down"><path d="m6 9 6 6 6-6"></path></svg></button>
                 <section id="pharos-model-menu" class="pharos-model-menu" role="dialog" aria-label="Model selection" popover="manual" hidden>
@@ -40,14 +48,14 @@
                 </section>
               </div>
               <div class="pharos-composer-actions">
+                <button type="button" class="pharos-icon-control pharos-context-trigger cursor-interaction" aria-label="Attach context" aria-expanded="false" aria-haspopup="dialog" aria-controls="pharos-context-menu" data-tooltip="Attach context"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-plus"/></svg></button>
                 <button type="button" class="pharos-icon-control pharos-search-mode cursor-interaction" aria-label="Switch to non-AI search" data-tooltip="Regular search"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="arrow-left-right" aria-hidden="true" class="lucide lucide-arrow-left-right"><path d="M8 3 4 7l4 4"></path><path d="M4 7h16"></path><path d="m16 21 4-4-4-4"></path><path d="M20 17H4"></path></svg></button>
                 <div class="pharos-history-anchor">
                   <button type="button" class="pharos-icon-control pharos-history-trigger cursor-interaction" aria-label="History" data-tooltip="Chat history" aria-expanded="false" aria-haspopup="dialog" aria-controls="pharos-chat-history"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.4 10a8.7 8.7 0 1 1 .2 4.7M3.4 4.8V10h5.2M12 7v5l3.2 2"/></svg></button>
                   <dialog id="pharos-chat-history" class="pharos-chat-history" aria-labelledby="pharos-chat-history-title">
-                    <div class="pharos-history-heading"><h3 id="pharos-chat-history-title">Chat history</h3><button type="button" class="pharos-history-close cursor-interaction" aria-label="Close chat history" title="Close (Escape)">&#215;</button></div>
-                    <button type="button" class="pharos-new-chat cursor-interaction">New chat</button>
+                    <div class="pharos-history-heading"><h3 id="pharos-chat-history-title">Chat history</h3><div class="pharos-history-heading-actions"><button type="button" class="pharos-new-chat cursor-interaction" aria-label="New chat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New</button><button type="button" class="pharos-history-close cursor-interaction" aria-label="Close chat history" title="Close (Escape)">&#215;</button></div></div>
                     <p class="pharos-history-help">Up to two chats can answer at once.</p>
-                    <input class="pharos-history-filter" type="search" aria-label="Find a prior chat" placeholder="Find a prior chat…" />
+                    <div class="pharos-history-search"><div class="pharos-history-search-row"><span class="pharos-history-search-field"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input class="pharos-history-filter" type="search" aria-label="Find a prior chat" placeholder="Find a prior chat…" /></span><button type="button" class="pharos-history-search-button cursor-interaction">Search</button></div><span class="pharos-history-search-status" role="status" hidden>Searching…</span></div>
                     <div class="pharos-history-scroll"><p class="pharos-history-empty">Your conversations will appear here.</p>
                     <div class="pharos-history-list"></div><button type="button" class="pharos-history-more pharos-plain" hidden>More chats</button></div>
                   </dialog>
@@ -84,6 +92,11 @@
         <p>Your Pharos page visits and earlier Ask Pharos chats are available to this private navigation agent. Page visits are never exposed through the general MCP service.</p>
         <p id="pharos-consent-choice">This is optional. No other use of Pharos involves AI. When Ask Pharos is disabled, Pharos will never access your agentic CLIs.</p>
         <div class="pharos-consent-actions"><button type="button" class="pharos-solid pharos-enable cursor-interaction" autofocus>Enable Ask Pharos</button><button type="button" class="pharos-modal-secondary pharos-cancel cursor-interaction">Not right now</button><button type="button" class="pharos-plain pharos-never cursor-interaction">No, and don&#8217;t show this again</button></div>
+      </dialog>
+      <dialog class="pharos-modal pharos-context-review" aria-labelledby="pharos-context-review-title">
+        <h3 id="pharos-context-review-title">Attached context Pharos receives</h3>
+        <dl class="pharos-context-details"></dl>
+        <button type="button" class="pharos-modal-secondary pharos-context-review-close cursor-interaction">Close</button>
       </dialog>
     </section>
   <template id="pharos-turn-template">

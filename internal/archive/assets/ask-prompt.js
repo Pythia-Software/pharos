@@ -79,8 +79,24 @@ function askPromptRestore(parts,text){
   return askPromptText(normalized)===text?normalized:null;
 }
 
-function initAskPromptEditor(element){
-  const chips=new Map();let disabled=false,dragged=null,touch=null,history=[],historyIndex=-1;
+function askPromptChipNode(chip,{onInspect,onRemove}={}){
+  const node=document.createElement('span');node.className='pharos-page-context';node.contentEditable='false';node.dataset.promptChip=chip.id;node.dataset.chipKind=chip.type;
+  const inspect=document.createElement('button');inspect.type='button';inspect.className='pharos-context-inspect cursor-interaction';
+  inspect.setAttribute('aria-label','Inspect attachment: '+chip.label);
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');
+  const paths={url:'M10 13a5 5 0 0 0 7 .2l3-3a5 5 0 0 0-7-7l-2 2 M14 11a5 5 0 0 0-7-.2l-3 3a5 5 0 0 0 7 7l2-2',file:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6',element:'M8 3H3v5 M16 3h5v5 M3 16v5h5 M21 16v5h-5 M8 8h8v8H8z'};
+  const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',paths[chip.type]||paths.url);svg.append(path);
+  const label=document.createElement('span');label.className='pharos-context-label';label.textContent=chip.label;
+  inspect.append(svg,label);inspect.onclick=()=>onInspect?.(chip,inspect);node.append(inspect);
+  node.addEventListener('click',event=>{if(event.target===node)onInspect?.(chip,node);});
+  if(onRemove){
+    const remove=document.createElement('button');remove.type='button';remove.className='pharos-context-remove cursor-interaction';remove.setAttribute('aria-label','Remove attachment: '+chip.label);remove.textContent='×';remove.onclick=()=>onRemove(chip.id);node.append(remove);
+  }
+  return node;
+}
+
+function initAskPromptEditor(element,{onInspect}={}){
+  const chips=new Map();let disabled=false,dragged=null,touch=null,history=[],historyIndex=-1,lastCaret=null,suppressClick=false;
   const chipNode=node=>node?.nodeType===1&&node.hasAttribute('data-prompt-chip');
   function readNode(node){
     if(node.nodeType===3)return [node.data];
@@ -111,6 +127,7 @@ function initAskPromptEditor(element){
     const range=value.getRangeAt(0);return [offsetAt(range.startContainer,range.startOffset),offsetAt(range.endContainer,range.endOffset)];
   }
   function caret(offset){
+    lastCaret=offset;
     const range=document.createRange();let remaining=Math.max(0,offset),found=false;
     function visit(parent){for(const node of parent.childNodes){
       if(node.nodeType===3){if(remaining<=node.length){range.setStart(node,remaining);found=true;return;}remaining-=node.length;}
@@ -125,13 +142,11 @@ function initAskPromptEditor(element){
   function syncEmpty(){element.dataset.empty=String(!read().length);}
   function makeChip(chip){
     chips.set(chip.id,{...chip});
-    const node=document.createElement('span');node.className='pharos-page-context';node.contentEditable='false';node.draggable=true;node.tabIndex=0;node.dataset.promptChip=chip.id;
+    const node=askPromptChipNode(chip,{onInspect,onRemove:removeChip});node.draggable=true;node.tabIndex=0;
     node.setAttribute('role','group');node.setAttribute('aria-label',chip.label+' context. Drag to move, or use Alt and arrow keys.');
-    const label=document.createElement('span');label.className='pharos-context-label';label.textContent=chip.label;label.title=chip.value;
-    const remove=document.createElement('button');remove.type='button';remove.className='pharos-context-remove cursor-interaction';remove.setAttribute('aria-label','Remove '+(chip.type==='page'?'page':chip.label)+' context');remove.title=remove.getAttribute('aria-label');remove.textContent='×';
-    remove.addEventListener('click',()=>removeChip(chip.id));node.append(label,remove);
     node.addEventListener('keydown',event=>{
       if(event.target!==node)return;
+      if(event.key==='Enter'){event.preventDefault();node.querySelector('.pharos-context-inspect').click();}
       if(['Backspace','Delete'].includes(event.key)){event.preventDefault();removeChip(chip.id);}
       if(event.altKey&&['ArrowLeft','ArrowRight'].includes(event.key)){
         event.preventDefault();event.stopPropagation();const next=askPromptStepChip(read(),chip.id,event.key==='ArrowLeft'?-1:1);
@@ -185,6 +200,8 @@ function initAskPromptEditor(element){
   element.setSelectionRange=(start,end=start)=>{caret(start);if(end!==start){const value=window.getSelection(),anchor=value.getRangeAt(0).cloneRange();caret(end);const focus=value.getRangeAt(0);anchor.setEnd(focus.endContainer,focus.endOffset);value.removeAllRanges();value.addRange(anchor);}};
   element.addEventListener('input',event=>{syncEmpty();if(!event.isComposing)remember();});
   element.addEventListener('compositionend',remember);
+  for(const event of ['keyup','pointerup','blur','input'])element.addEventListener(event,()=>{const value=window.getSelection();if(value?.anchorNode&&element.contains(value.anchorNode))lastCaret=selection()[0];});
+  element.addEventListener('click',event=>{if(suppressClick){event.preventDefault();event.stopImmediatePropagation();suppressClick=false;}},true);
   element.addEventListener('keydown',event=>{
     if((event.metaKey||event.ctrlKey)&&!event.altKey&&(event.key.toLowerCase()==='z'||event.key.toLowerCase()==='y')){
       event.preventDefault();restoreHistory(event.shiftKey||event.key.toLowerCase()==='y'?1:-1);
@@ -217,10 +234,10 @@ function initAskPromptEditor(element){
   element.addEventListener('dragend',()=>{dragged=null;element.querySelectorAll('.pharos-chip-dragging').forEach(node=>node.classList.remove('pharos-chip-dragging'));});
   element.addEventListener('pointerdown',event=>{
     const chip=event.target.closest('[data-prompt-chip]');
-    if(event.pointerType==='touch'&&chip&&!event.target.closest('button')&&!disabled){touch={id:chip.dataset.promptChip,x:event.clientX,y:event.clientY,moved:false};chip.setPointerCapture(event.pointerId);}
+    if(event.pointerType==='touch'&&chip&&!event.target.closest('.pharos-context-remove')&&!disabled){touch={id:chip.dataset.promptChip,x:event.clientX,y:event.clientY,moved:false};chip.setPointerCapture(event.pointerId);}
   });
   element.addEventListener('pointermove',event=>{if(!touch)return;touch.moved||=Math.hypot(event.clientX-touch.x,event.clientY-touch.y)>5;if(touch.moved){event.preventDefault();const position=atPoint(event.clientX,event.clientY);if(position!==null)caret(position);}});
-  element.addEventListener('pointerup',event=>{if(touch?.moved){const position=atPoint(event.clientX,event.clientY);if(position!==null)move(touch.id,position);}touch=null;});
+  element.addEventListener('pointerup',event=>{if(touch?.moved){suppressClick=true;setTimeout(()=>{suppressClick=false;},0);const position=atPoint(event.clientX,event.clientY);if(position!==null)move(touch.id,position);}touch=null;});
   element.addEventListener('pointercancel',()=>{touch=null;});
   write([]);remember();
   return {
@@ -228,6 +245,11 @@ function initAskPromptEditor(element){
     // The character before a prompt offset; a chip reads as U+FFFC.
     charBefore:offset=>{const last=askPromptSplit(read(),offset)[0].at(-1);return last===undefined?'':typeof last==='string'?last.slice(-1):'\uFFFC';},
     document:read,
+    setDocument:parts=>{write(parts);lastCaret=null;history=[snapshot()];historyIndex=0;},
+    insertChips:added=>{
+      const parts=read(),position=Math.min(askPromptLength(parts),lastCaret??askPromptLength(parts));
+      write(askPromptSplice(parts,position,0,added),position+added.length);changed();
+    },
     restore:parts=>{const restored=askPromptRestore(parts,element.value);if(!restored)return false;write(restored);history=[snapshot()];historyIndex=0;return true;},
     removeChip:id=>{if(read().some(part=>part?.id===id))removeChip(id);},
     setChip:chip=>{

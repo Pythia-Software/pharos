@@ -1,5 +1,5 @@
 {
-  "index_version": "claude-ai-v2",
+  "index_version": "claude-ai-v7",
   "records": [
     {
       "SourceID": "conv-1",
@@ -24,12 +24,28 @@
           "Account": "local",
           "ParentNativeID": "",
           "Origin": "user-export",
-          "Coverage": "complete",
+          "Coverage": "unknown",
           "StartedAt": "2026-10-01T10:00:00.000Z",
           "EndedAt": "2026-10-01T10:09:00.000Z",
           "Harness": "claude-ai-export",
           "Aliases": null,
           "Messages": [
+            {
+              "NativeID": "conv-1:export",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"details\":{\"account\":{\"uuid\":\"acct\"},\"created_at\":\"2026-10-01T10:00:00Z\",\"name\":\"Trip\",\"summary\":\"Planning\",\"updated_at\":\"2026-10-01T10:09:00Z\",\"uuid\":\"conv-1\"},\"text\":\"Planning\",\"type\":\"claude_ai_conversation\"}",
+              "Model": "",
+              "Effort": "",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/conversations.json:conv-1",
+              "RawText": "{\"claude_ai_conversation\":{\"account\":{\"uuid\":\"acct\"},\"created_at\":\"2026-10-01T10:00:00Z\",\"name\":\"Trip\",\"summary\":\"Planning\",\"updated_at\":\"2026-10-01T10:09:00Z\",\"uuid\":\"conv-1\"}}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
             {
               "NativeID": "m1:block:0",
               "Role": "system",
@@ -42,7 +58,7 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:conv-1:message:m1:block:0",
-              "RawText": "{\"injection_source\":\"date_note\",\"prompt\":\"Today is October 1.\",\"type\":\"injected_prompt_block\"}",
+              "RawText": "{\"claude_ai_message\":{\"created_at\":\"2026-10-01T10:00:00Z\",\"parent_message_uuid\":\"00000000-0000-4000-8000-000000000000\",\"sender\":\"human\",\"text\":\"Plan a trip\",\"uuid\":\"m1\"},\"injection_source\":\"date_note\",\"prompt\":\"Today is October 1.\",\"type\":\"injected_prompt_block\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -82,7 +98,7 @@
               "NativeID": "m1:files",
               "Role": "user",
               "Kind": "attachment",
-              "Text": "{\"file_names\":[\"notes.pdf\"],\"type\":\"files\"}",
+              "Text": "{\"file_names\":[\"notes.pdf\"],\"files\":[{\"file_name\":\"notes.pdf\",\"file_uuid\":\"f1\"}],\"type\":\"files\"}",
               "Model": "",
               "Effort": "",
               "CreatedAt": "2026-10-01T10:00:00.000Z",
@@ -106,7 +122,7 @@
               "PreviousNativeID": "m1",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:conv-1:message:m2:block:0",
-              "RawText": "{\"summaries\":[{\"summary\":\"Weighing destinations\"}],\"thinking\":\"\",\"type\":\"thinking\"}",
+              "RawText": "{\"claude_ai_message\":{\"created_at\":\"2026-10-01T10:01:00Z\",\"parent_message_uuid\":\"m1\",\"sender\":\"assistant\",\"text\":\"Here is a plan\",\"uuid\":\"m2\"},\"summaries\":[{\"summary\":\"Weighing destinations\"}],\"thinking\":\"\",\"type\":\"thinking\"}",
               "SourceOrder": 0,
               "Selected": true,
               "ReasoningFormat": "summary"
@@ -118,7 +134,7 @@
               "Text": "{\"input\":{\"query\":\"quiet beaches\"},\"tool\":\"WebSearch\"}",
               "Model": "",
               "Effort": "",
-              "CreatedAt": "2026-10-01T10:01:00.000Z",
+              "CreatedAt": "",
               "ParentNativeID": "",
               "PreviousNativeID": "m1",
               "CallID": "tu1",
@@ -134,7 +150,7 @@
               "Text": "{\"content\":[{\"text\":\"Results\",\"type\":\"text\"}],\"is_error\":false,\"tool\":\"WebSearch\"}",
               "Model": "",
               "Effort": "",
-              "CreatedAt": "2026-10-01T10:01:00.000Z",
+              "CreatedAt": "",
               "ParentNativeID": "",
               "PreviousNativeID": "m1",
               "CallID": "tu1",
@@ -171,7 +187,7 @@
               "PreviousNativeID": "m2",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:conv-1:message:m3",
-              "RawText": "{\"text\":\"Make it cheaper\",\"type\":\"text\"}",
+              "RawText": "{\"claude_ai_message\":{\"created_at\":\"2026-10-01T10:02:00Z\",\"parent_message_uuid\":\"m2\",\"sender\":\"human\",\"text\":\"Make it cheaper\",\"uuid\":\"m3\"},\"text\":\"Make it cheaper\",\"type\":\"text\"}",
               "SourceOrder": 0,
               "Selected": false
             },
@@ -187,7 +203,7 @@
               "PreviousNativeID": "m2",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:conv-1:message:m3b",
-              "RawText": "{\"text\":\"Make it shorter\",\"type\":\"text\"}",
+              "RawText": "{\"claude_ai_message\":{\"created_at\":\"2026-10-01T10:05:00Z\",\"parent_message_uuid\":\"m2\",\"sender\":\"human\",\"text\":\"Make it shorter\",\"uuid\":\"m3b\"},\"text\":\"Make it shorter\",\"type\":\"text\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -203,7 +219,7 @@
               "PreviousNativeID": "m3b",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:conv-1:message:m4:block:0",
-              "RawText": "{\"summaries\":[],\"thinking\":\"\",\"type\":\"thinking\"}",
+              "RawText": "{\"claude_ai_message\":{\"created_at\":\"2026-10-01T10:06:00Z\",\"parent_message_uuid\":\"m3b\",\"sender\":\"assistant\",\"text\":\"A shorter plan\",\"uuid\":\"m4\"},\"summaries\":[],\"thinking\":\"\",\"type\":\"thinking\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -256,12 +272,28 @@
           "Account": "local",
           "ParentNativeID": "",
           "Origin": "user-export",
-          "Coverage": "complete",
+          "Coverage": "unknown",
           "StartedAt": "2026-10-02T10:00:00.000Z",
           "EndedAt": "2026-10-02T10:03:00.000Z",
           "Harness": "claude-ai-export",
           "Aliases": null,
           "Messages": [
+            {
+              "NativeID": "conv-2:export",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"details\":{\"account\":{\"uuid\":\"acct\"},\"created_at\":\"2026-10-02T10:00:00Z\",\"current_leaf_message_uuid\":\"n2\",\"name\":\"\",\"updated_at\":\"2026-10-02T10:03:00Z\",\"uuid\":\"conv-2\"},\"text\":\"\",\"type\":\"claude_ai_conversation\"}",
+              "Model": "",
+              "Effort": "",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/conversations.json:conv-2",
+              "RawText": "{\"claude_ai_conversation\":{\"account\":{\"uuid\":\"acct\"},\"created_at\":\"2026-10-02T10:00:00Z\",\"current_leaf_message_uuid\":\"n2\",\"name\":\"\",\"updated_at\":\"2026-10-02T10:03:00Z\",\"uuid\":\"conv-2\"}}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
             {
               "NativeID": "n1",
               "Role": "user",
@@ -274,7 +306,7 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:conv-2:message:n1",
-              "RawText": "{\"text\":\"Hello\",\"type\":\"text\"}",
+              "RawText": "{\"claude_ai_message\":{\"created_at\":\"2026-10-02T10:00:00Z\",\"parent_message_uuid\":\"00000000-0000-4000-8000-000000000000\",\"sender\":\"human\",\"text\":\"Hello\",\"uuid\":\"n1\"},\"text\":\"Hello\",\"type\":\"text\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -290,7 +322,7 @@
               "PreviousNativeID": "n1",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:conv-2:message:n2",
-              "RawText": "{\"text\":\"Hi\",\"type\":\"text\"}",
+              "RawText": "{\"claude_ai_message\":{\"created_at\":\"2026-10-02T10:01:00Z\",\"parent_message_uuid\":\"n1\",\"sender\":\"assistant\",\"text\":\"Hi\",\"uuid\":\"n2\"},\"text\":\"Hi\",\"type\":\"text\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -306,7 +338,7 @@
               "PreviousNativeID": "n1",
               "CallID": "",
               "EvidenceLocator": "$ROOT/002/conversations.json:conv-2:message:n2b",
-              "RawText": "{\"text\":\"Hi again\",\"type\":\"text\"}",
+              "RawText": "{\"claude_ai_message\":{\"created_at\":\"2026-10-02T10:02:00Z\",\"parent_message_uuid\":\"n1\",\"sender\":\"assistant\",\"text\":\"Hi again\",\"uuid\":\"n2b\"},\"text\":\"Hi again\",\"type\":\"text\"}",
               "SourceOrder": 0,
               "Selected": false
             }

@@ -22,6 +22,7 @@ import (
 // manifest contains expiring download capabilities and is never a capture input.
 const claudeInventoryName = "claude-export.json"
 const claudeInventoryFormat = "pharos-claude-export-v1"
+const claudeObjectInventoryFormat = "pharos-claude-export-v2"
 
 var claudeExportLimits = struct {
 	Manifest, Member, Expanded, Archive int64
@@ -29,6 +30,7 @@ var claudeExportLimits = struct {
 }{8 << 20, 1 << 30, 32 << 30, 16 << 30, 100000, 10000, 12}
 
 type claudeExportAsset struct {
+	Retirement    string `json:"retirement_proof,omitempty"`
 	Path          string `json:"path"`
 	Filename      string `json:"filename"`
 	Category      string `json:"category"`
@@ -38,22 +40,32 @@ type claudeExportAsset struct {
 	// SourceModified is the downloaded file's time, which orders a snapshot
 	// collected without a manifest; the stored copy's time is collection time.
 	SourceModified string `json:"source_modified_at,omitempty"`
+	Units          string `json:"source_units,omitempty"`
+	UnitsSHA256    string `json:"source_units_sha256,omitempty"`
+	Retired        bool   `json:"native_retired,omitempty"`
 }
 
 type claudeExportInventory struct {
-	Format    string              `json:"format"`
-	CreatedAt string              `json:"created_at,omitempty"`
-	Account   string              `json:"account_uuid,omitempty"`
-	Files     []claudeExportAsset `json:"files"`
-	Missing   []string            `json:"missing"`
+	Groups    []claudeSupplementObservation `json:"supplement_groups,omitempty"`
+	Format    string                        `json:"format"`
+	CreatedAt string                        `json:"created_at,omitempty"`
+	Account   string                        `json:"account_uuid,omitempty"`
+	Files     []claudeExportAsset           `json:"files"`
+	Missing   []string                      `json:"missing"`
 }
 
 type claudeExportInput struct {
-	path          string
-	conversations bool
-	version       int64
-	snapshot      string
-	sha256        string
+	groupObservations []claudeSupplementObservation
+	path              string
+	member            string // Known supplementary member, for an unzipped export.
+	conversations     bool
+	version           int64
+	snapshot          string
+	sha256            string
+	units             *claudeSourceUnits
+	objectRoot        string
+	retired           bool
+	objectInventory   bool
 }
 
 // Export paths use slash semantics, independently of the indexing host. This
@@ -116,7 +128,7 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 	}
 	// A managed collection keeps its inventories in known places. Anything
 	// else is a person's folder, which may hold unrelated files: only its own
-	// top-level conversation files are read, as an unzipped export has them.
+	// conversation files and known supplementary directories are read.
 	// ZIPs there are not read, since they can carry account records that
 	// collection would strip.
 	inventories, err := claudeInventories(files, root)
@@ -124,6 +136,8 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 		return nil, err
 	}
 	var candidates []string
+	var inputs []claudeExportInput
+	objectInputs := map[string]bool{}
 	if len(inventories) == 0 {
 		entries, err := files.ReadDir(root)
 		if err != nil {
@@ -133,18 +147,48 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 			if entry.Type().IsRegular() && claudeConversationName(entry.Name()) {
 				candidates = append(candidates, filepath.Join(root, entry.Name()))
 			}
+			if entry.IsDir() && claudeSupplementDirectory(entry.Name()) {
+				err := files.WalkDir(filepath.Join(root, entry.Name()), func(name string, item fs.DirEntry, walkErr error) error {
+					if walkErr != nil {
+						return walkErr
+					}
+					if err := files.context().Err(); err != nil {
+						return err
+					}
+					if item.Type()&os.ModeSymlink != 0 {
+						return fmt.Errorf("Claude export contains a symbolic link: %s", name)
+					}
+					if item.IsDir() {
+						return nil
+					}
+					if !item.Type().IsRegular() {
+						return fmt.Errorf("Claude export contains a non-regular file: %s", name)
+					}
+					rel, err := filepath.Rel(root, name)
+					if err != nil {
+						return err
+					}
+					inputs = append(inputs, claudeExportInput{path: name, member: filepath.ToSlash(rel), snapshot: root})
+					if len(inputs) > claudeExportLimits.Entries {
+						return errors.New("Claude export exceeds the entry limit")
+					}
+					return nil
+				})
+				if err != nil {
+					return nil, err
+				}
+			}
 		}
 		if len(candidates) > claudeExportLimits.Parts {
 			return nil, fmt.Errorf("Claude export exceeds the file limit")
 		}
 	}
-	var inputs []claudeExportInput
 	for _, name := range inventories {
 		var inventory claudeExportInventory
 		if err := claudeReadJSON(files, name, &inventory); err != nil {
 			return nil, fmt.Errorf("Claude export inventory %s: %w", name, err)
 		}
-		if inventory.Format != claudeInventoryFormat {
+		if inventory.Format != claudeInventoryFormat && inventory.Format != claudeObjectInventoryFormat {
 			return nil, fmt.Errorf("unsupported Claude export inventory format")
 		}
 		if len(inventory.Files) > claudeExportLimits.Parts {
@@ -158,7 +202,7 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 			}
 			version = at.UnixNano()
 		}
-		inputs = append(inputs, claudeExportInput{path: name})
+		inputs = append(inputs, claudeExportInput{path: name, objectInventory: inventory.Format == claudeObjectInventoryFormat})
 		seen := map[string]bool{}
 		for _, asset := range inventory.Files {
 			if !claudeExportPath(asset.Path) || seen[asset.Path] {
@@ -171,9 +215,21 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 					return nil, fmt.Errorf("Claude export contains a symbolic link: %s", asset.Path)
 				}
 			}
-			info, err := files.Stat(local)
-			if err != nil || !info.Mode().IsRegular() || info.Size() != asset.Size {
-				return nil, fmt.Errorf("Claude export part %s is missing or its size changed", asset.Filename)
+			if asset.Retired {
+				if inventory.Format != claudeObjectInventoryFormat || asset.Units == "" || !validRecordHash(asset.UnitsSHA256) {
+					return nil, errors.New("retired Claude input lacks its versioned replacement proof")
+				}
+				part := strings.TrimSuffix(filepath.Base(asset.Path), filepath.Ext(asset.Path))
+				proofPath, err := readClaudeRetirementProof(files, root, filepath.Base(filepath.Dir(name)), part, asset)
+				if err != nil {
+					return nil, err
+				}
+				inputs = append(inputs, claudeExportInput{path: proofPath})
+			} else {
+				info, err := files.Stat(local)
+				if err != nil || !info.Mode().IsRegular() || info.Size() != asset.Size {
+					return nil, fmt.Errorf("Claude export part %s is missing or its size changed", asset.Filename)
+				}
 			}
 			partVersion := version
 			if partVersion == 0 && asset.SourceModified != "" {
@@ -181,7 +237,45 @@ func claudeExportInputs(files sourceFiles, root string) ([]claudeExportInput, er
 					partVersion = at.UnixNano()
 				}
 			}
-			inputs = append(inputs, claudeExportInput{path: local, conversations: asset.Conversations, version: partVersion, snapshot: name, sha256: asset.SHA256})
+			input := claudeExportInput{groupObservations: inventory.Groups, path: local, conversations: asset.Conversations, version: partVersion, snapshot: name, sha256: asset.SHA256, retired: asset.Retired}
+			// A standalone copied snapshot still replays its authoritative native
+			// part without requiring the parent collection's optional object pool.
+			useUnits := asset.Units != ""
+			if filepath.Dir(name) == root && !asset.Retired {
+				if _, err := files.Stat(filepath.Join(root, "objects")); errors.Is(err, fs.ErrNotExist) {
+					useUnits = false
+				} else if err != nil {
+					return nil, err
+				}
+			}
+			if useUnits {
+				if !claudeExportPath(asset.Units) || !strings.HasPrefix(asset.Units, "units/") {
+					return nil, errors.New("unsafe Claude source-unit receipt path")
+				}
+				unitPath, err := claudeOwnedPath(filepath.Dir(name), asset.Units)
+				if err != nil {
+					return nil, err
+				}
+				units, err := readClaudeSourceUnits(files, unitPath, asset.SHA256, asset.UnitsSHA256)
+				if err != nil {
+					return nil, err
+				}
+				input.units, input.objectRoot = units, root
+				inputs = append(inputs, claudeExportInput{path: unitPath})
+				for _, pack := range units.packs() {
+					if objectInputs[pack] {
+						continue
+					}
+					objectInputs[pack] = true
+					packPath := filepath.Join(root, filepath.FromSlash(pack))
+					info, err := files.Stat(packPath)
+					if err != nil || !info.Mode().IsRegular() {
+						return nil, errors.New("Claude source object pack is unavailable")
+					}
+					inputs = append(inputs, claudeExportInput{path: packPath})
+				}
+			}
+			inputs = append(inputs, input)
 		}
 	}
 	if len(inventories) == 0 {
@@ -248,6 +342,9 @@ func claudeInventories(files sourceFiles, root string) ([]string, error) {
 }
 
 func verifyClaudeExportInput(files sourceFiles, input claudeExportInput) error {
+	if input.retired {
+		return nil
+	}
 	if input.sha256 == "" {
 		return nil
 	}

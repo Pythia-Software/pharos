@@ -1,4 +1,47 @@
 // Interaction rules shared by the composer and its unit tests.
+const askAttachmentLimit = 8, askAttachmentByteLimit = 50 * 1024 * 1024, askAttachmentFileLimit = 20 * 1024 * 1024;
+function askAttachmentSize(items) {
+  return items.reduce((total,item)=>total+(item.size||0),0);
+}
+function askAddAttachments(current, added) {
+  const result=[...current];
+  for(const item of added){
+    if(item.kind!=='file'&&result.some(other=>other.kind===item.kind&&other.url===item.url&&other.selector===item.selector))continue;
+    result.push(item);
+  }
+  if(result.length>askAttachmentLimit)throw new Error('Attach at most 8 items.');
+  if(askAttachmentSize(result)>askAttachmentByteLimit)throw new Error('Files must total at most 50 MiB.');
+  return result;
+}
+function askAttachmentDetails(item) {
+  return item.kind==='file'?[['File',item.name],['Temporary path',item.path],['Type',item.mime||'application/octet-stream'],['Size',item.size+' bytes']]:[
+    ['URL',item.url],...(item.kind==='element'?[['Element',item.name],['Selector',item.selector]]:[])
+  ];
+}
+function askAttachmentChip(item) {
+  return {id:item.id,type:item.kind,label:item.kind==='element'?'Highlighted element':item.kind==='url'?'Page URL':item.name,value:item.id};
+}
+// Offsets count plain-text UTF-16 units; attachments at the same offset keep
+// their order. The stored metadata can reconstruct the editor on any surface.
+function askAttachmentParts(text,items=[]) {
+  const parts=[];let previous=0;
+  for(const item of [...items].sort((a,b)=>(a.offset||0)-(b.offset||0))){
+    let offset=Math.max(previous,Math.min(text.length,item.offset||0));
+    if(offset>0&&offset<text.length&&/[\uD800-\uDBFF]/.test(text[offset-1])&&/[\uDC00-\uDFFF]/.test(text[offset]))offset--;
+    parts.push(text.slice(previous,offset),askAttachmentChip(item));previous=offset;
+  }
+  parts.push(text.slice(previous));return parts.filter(part=>part!=='');
+}
+function askPositionedAttachments(parts,items,text) {
+  const byID=new Map(items.map(item=>[item.id,item])),result=[];
+  let offset=0;
+  const leading=text===undefined?0:text.length-text.trimStart().length,limit=text===undefined?Infinity:text.trim().length;
+  for(const part of parts){
+    if(typeof part==='string')offset+=part.length;
+    else if(byID.has(part.id))result.push({...byID.get(part.id),offset:Math.max(0,Math.min(limit,offset-leading))});
+  }
+  return result;
+}
 // The library chooses suggestions (GET /api/ask/suggestions,
 // docs/ask-suggestions.md); keep only well-formed, distinct questions.
 function askSuggestionItems(list) {
@@ -139,7 +182,7 @@ function askComposerActions({draft = '', turns = [], pending = false, opening = 
   return {send: enabled && !!model && !pending && !opening && !!draft.trim(), stop: pending, history: true, clear: populated, clearLabel: turns.length ? 'New Chat' : 'Clear', modelLocked: turns.length > 0};
 }
 // Carry the visible conversation into a fresh, editable prompt for another model.
-function askRetryDraft({turns = [], draft = ''}) {
+function askRetryContext({turns = [], draft = '', draftAttachments = []}) {
   const messages=[];
   for(const turn of turns){
     const prompt='You:\n'+turn.prompt;
@@ -148,36 +191,59 @@ function askRetryDraft({turns = [], draft = ''}) {
       ...(turn.cards||[]).map(card=>[card.title,card.description,card.href].filter(Boolean).join('\n')),
     ].filter(text=>text&&text.trim()).join('\n\n');
     const status=['error','canceled'].includes(turn.status)?' ('+turn.status+')':'';
-    messages.push(prompt+(reply?'\n\nPharos'+status+':\n'+reply:''));
+    messages.push({text:prompt+(reply?'\n\nPharos'+status+':\n'+reply:''),attachments:(turn.attachments||[]).map(item=>({...item,offset:5+Math.min(turn.prompt.length,item.offset||0)}))});
   }
-  const unsent=draft.trim()?'You (unsent draft):\n'+draft:'';
-  const full=[...messages,unsent].filter(Boolean).join('\n\n');
+  const prefix='You (unsent draft):\n';
+  const unsent=draft.trim()||draftAttachments.length?{text:prefix+draft,attachments:draftAttachments.map(item=>({...item,offset:prefix.length+Math.min(draft.length,item.offset||0)}))}:null;
+  const all=[...messages,...(unsent?[unsent]:[])];
+  const full=all.map(message=>message.text).join('\n\n');
   // Match the server's prompt/draft limit, including labels and omission notices.
   const limit=12000,encoder=new TextEncoder(),bytes=text=>encoder.encode(text).length;
-  if(bytes(full)<=limit)return full;
   const notice='[Earlier conversation omitted or shortened to fit.]\n\n';
-  const shorten=(text,budget)=>{
-    if(bytes(text)<=budget)return text;
-    const suffix='\n[Message shortened.]',encoded=encoder.encode(text);
+  const shorten=(message,budget)=>{
+    if(bytes(message.text)<=budget)return message;
+    const suffix='\n[Message shortened.]',encoded=encoder.encode(message.text);
     let end=Math.max(0,budget-bytes(suffix));
     // Do not cut a multibyte code point or introduce a replacement character.
     while(end>0&&(encoded[end]&0xc0)===0x80)end--;
-    return new TextDecoder().decode(encoded.subarray(0,end))+suffix;
+    const text=new TextDecoder().decode(encoded.subarray(0,end));
+    return {text:text+suffix,attachments:message.attachments.map(item=>({...item,offset:Math.min(text.length,item.offset)}))};
   };
   let remaining=limit-bytes(notice);
-  const kept=[];
-  if(unsent){const text=shorten(unsent,remaining);kept.push(text);remaining-=bytes(text)+2;}
-  for(let i=messages.length-1;i>=0;i--){
-    const text=messages[i];
-    if(bytes(text)>remaining){
-      // Keep a useful part of the latest turn if even that turn is too large.
-      if(i===messages.length-1&&remaining>bytes('\n[Message shortened.]'))kept.unshift(shorten(text,remaining));
-      break;
+  let kept=all,start='';
+  if(bytes(full)>limit){
+    kept=[];start=notice;
+    if(unsent){const message=shorten(unsent,remaining);kept.push(message);remaining-=bytes(message.text)+2;}
+    for(let i=messages.length-1;i>=0;i--){
+      const message=messages[i];
+      if(bytes(message.text)>remaining){
+        // Keep a useful part of the latest turn if even that turn is too large.
+        if(i===messages.length-1&&remaining>bytes('\n[Message shortened.]'))kept.unshift(shorten(message,remaining));
+        break;
+      }
+      kept.unshift(message);remaining-=bytes(message.text)+2;
     }
-    kept.unshift(text);remaining-=bytes(text)+2;
   }
-  return notice+kept.join('\n\n');
+  // A repeated reference needs one chip. Prefer its most recent placement,
+  // including an unsent draft, while keeping all distinct retained context.
+  const attachments=new Map();let offset=start.length;
+  const remember=(item,position)=>{
+    const key=JSON.stringify(item.kind==='file'?['file',item.path]:[item.kind,item.url,item.selector||'']);
+    attachments.set(key,{...item,offset:position});
+  };
+  // Text can be shortened without losing a file or page a later question
+  // still refers to. Context from omitted text sits beside the omission note.
+  for(const message of all)for(const item of message.attachments)remember(item,0);
+  for(const message of kept){
+    for(const item of message.attachments)remember(item,offset+item.offset);
+    offset+=message.text.length+2;
+  }
+  const items=[...attachments.values()].sort((a,b)=>a.offset-b.offset);
+  // Fail before clearing the old chat if a combined retry exceeds attachment
+  // limits; never silently discard context to make a new draft fit.
+  return {draft:start+kept.map(message=>message.text).join('\n\n'),attachments:askAddAttachments([],items)};
 }
+function askRetryDraft(input) { return askRetryContext(input).draft; }
 // Chart previews stay in the answer for inspection. A lone ordinary link opens
 // itself unless the agent offered a choice or the user has started browsing.
 function askShouldNavigate({cards = [], omitted = 0, draft = '', enabled, regular, edited, browsing = false, hasPreview = false}) {

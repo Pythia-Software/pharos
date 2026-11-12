@@ -1,5 +1,6 @@
 import { formatUSD } from "./currency";
 import { CursorPagination } from "./cursor-pagination";
+import { DelegationRequestError, DelegationSnapshotRecovery, snapshotChanged } from "./delegation-loading";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewState } from "./view-state";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -24,7 +25,7 @@ import {timelineSessionBranches} from "./timeline-label-model";
 import {sessionOutsideWindow,launchAttemptNote,laneCoverage,segmentPosition,type ExecutionSegment,type LaunchAttempt,type SessionAncestry} from "./delegation-ancestry";
 import {delegationAliasRequests,normalizeDelegationView,readerSelection,unresolvedAliases,type DelegationAliases} from "./delegation-aliases";
 import {coverageSummary,eventsPendingNote,occurrenceNote,omittedSegmentsNote,parentNote,qualityMark,sessionCountText,timelineEventsPending,timelineEventsPendingNote,type ExecutionCoverage,type ParentCertainty} from "./delegation-coverage";
-import {TimelineLegend,timelineLegendWindow} from "./timeline-legend";
+import {TimelineLegend,timelineLegendWindow,timelineToolCategories} from "./timeline-legend";
 import {updateTimelineVisibility,type TimelineVisibility} from "./timeline-visibility";
 import {ribbonSourceURL,type RibbonObservation} from "./label-session-ribbon-model";
 
@@ -188,17 +189,7 @@ type Props = {
 };
 type Tint = "all" | "off" | "sort";
 type Range = [number, number];
-const categories: Record<string, string> = {
-  read: "Read / search",
-  write: "Edit / write",
-  run: "Run / build / test",
-  git: "Git",
-  network: "Network",
-  delegate: "Delegate / message",
-  wait: "Wait call",
-  poll: "Poll / delay",
-  other: "Other tool",
-};
+const categories = timelineToolCategories;
 const defaultColumns = [
   "tokens",
   "cost",
@@ -316,6 +307,9 @@ export function clampRange(range: Range, full: Range): Range {
   const start = Math.max(full[0], Math.min(full[1] - width, range[0]));
   return [start, start + width];
 }
+export function refreshedTimelineRange(range: Range, previousFull: Range, full: Range): Range {
+  return range[0] === previousFull[0] && range[1] === previousFull[1] ? full : clampRange(range, full);
+}
 export function timelinePointerTime(clientX:number,rect:{left:number;width:number},full:Range){
   return full[0]+(clientX-rect.left)/Math.max(1,rect.width)*(full[1]-full[0]);
 }
@@ -335,7 +329,7 @@ export function timelineDragRange(mode:string,initial:Range,full:Range,anchor:nu
 async function readJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, { signal });
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+  if (!response.ok) throw new DelegationRequestError(body.error || `HTTP ${response.status}`, response.status, body.code);
   return body;
 }
 export function metricText(metric: Metric | undefined, unit = "tokens") {
@@ -557,6 +551,7 @@ export function DelegationExplorer({
   const relativesKey = [...new Set(relatives)].sort().join(",");
   const [pageIndex, setPageIndex] = useViewState("delegation_page", "0",active);
   const livePages = useRef(new CursorPagination());
+  const snapshotRecovery = useRef(new DelegationSnapshotRecovery());
   const [cursor, setCursor] = useState(""),
     [pages, setPages] = useState<string[]>([]);
   const [data, setData] = useState<Analysis | null>(null),
@@ -570,6 +565,20 @@ export function DelegationExplorer({
   // Session IDs a restored URL names, resolved with the next page so saved
   // selection, folds and disclosures follow an execution identity upgrade.
   const aliasRequests = useRef<string[]>(delegationAliasRequests(new URLSearchParams(location.search)));
+  const snapshotLoaded = useCallback((snapshot: string) => snapshotRecovery.current.succeeded(snapshot), []);
+  const snapshotInvalidated = useCallback((snapshot: string) => {
+    const recovery = snapshotRecovery.current.changed(snapshot);
+    if (recovery === 'ignore') return;
+    if (recovery === 'exhausted') {
+      setError('The archive is still changing. Refresh analysis to try again.');
+      return;
+    }
+    // Re-resolve selections and disclosures if execution identities changed.
+    aliasRequests.current = delegationAliasRequests(new URLSearchParams(location.search));
+    livePages.current.reset();
+    setCursor(''); setPages([]);
+    setRevision(value => value + 1);
+  }, []);
   const single = !!data && data.session_count === 1 && !data.rows.some(n => n.context_only || n.parent_id || n.external_parent || n.external_child);
   const timeline = single ? readerView === "timeline" : tab === "timeline";
   useEffect(() => {
@@ -634,11 +643,13 @@ export function DelegationExplorer({
     loadPage()
       .then(
         (body) => {
+          if (controller.signal.aborted) return;
           if (body.aliases && aliasRequests.current.length) {
             aliasRequests.current = [];
             restoreAliases(body.aliases);
           }
           setData(body);
+          snapshotRecovery.current.loaded(body.snapshot);
           setRange((old) =>
             old && data?.snapshot === body.snapshot
               ? old
@@ -648,7 +659,9 @@ export function DelegationExplorer({
                       body.start!,
                       Math.max(body.start! + 1, body.end!),
                     ];
-                    return !data && initial.range && initial.range.every(Number.isFinite)
+                    return old && data?.start != null && data.end != null
+                      ? refreshedTimelineRange(old, [data.start, Math.max(data.start + 1, data.end)], full)
+                      : !data && initial.range && initial.range.every(Number.isFinite)
                       ? clampRange(initial.range, full)
                       : full;
                   })()
@@ -681,6 +694,7 @@ export function DelegationExplorer({
   ]);
   useEffect(() => {
     const refresh = () => {
+      snapshotRecovery.current.reset();
       livePages.current.reset();
       setRevision((v) => v + 1);
       setCursor("");
@@ -1083,6 +1097,7 @@ export function DelegationExplorer({
               {error}{" "}
               <button
                 onClick={() => {
+                  snapshotRecovery.current.reset();
                   resetPage();
                   setRevision((v) => v + 1);
                 }}
@@ -1226,6 +1241,8 @@ export function DelegationExplorer({
                   includeUncertain={includeUncertain}
                   relatives={relativesKey}
                   data={data}
+                  onSnapshotChanged={snapshotInvalidated}
+                  onSnapshotLoaded={snapshotLoaded}
                   rows={rows}
                   range={range}
                   setRange={setRange}
@@ -1580,6 +1597,8 @@ export function ParallelActivity({
   toggle,
   selected,
   openNode,
+  onSnapshotChanged,
+  onSnapshotLoaded,
   timeline=false,single=false,compact=false,previewOnly=false,openOverview,
 }: {
   previewOnly?:boolean;openOverview?:()=>void;
@@ -1589,6 +1608,8 @@ export function ParallelActivity({
   /** The explorer's loaded relatives; lanes must name the same snapshot. */
   relatives?: string;
   data: Analysis;
+  onSnapshotChanged: (snapshot: string) => void;
+  onSnapshotLoaded: (snapshot: string) => void;
   rows: Session[];
   range: Range;
   setRange: (range: Range) => void;
@@ -1598,9 +1619,19 @@ export function ParallelActivity({
   selected: string;
   openNode: (node: Session, message?: string, sourceConversation?: string) => void;
 }) {
-  const [activity, setActivity] = useState<Activity | null>(null),
+  const [activity, setActivity] = useState<(Activity & { sessions: string }) | null>(null),
     [error, setError] = useState("");
-  const nativeLabels=useMemo(()=>nativeTimelineLabels(activity?.snapshot===data.snapshot&&activity.start===range[0]&&activity.end===range[1]?activity:null),[activity,data.snapshot,range[0],range[1]]);
+  // A page may carry extra ancestor context; lane requests remain bounded.
+  const laneRows = useMemo(() => {
+    const included = new Set(data.rows.map((n) => n.id));
+    for (const n of rows) {
+      if (included.size >= 100) break;
+      included.add(n.id);
+    }
+    return rows.filter((n) => included.has(n.id));
+  }, [rows, data.rows]);
+  const ids = laneRows.map((n) => n.id).join(",");
+  const nativeLabels=useMemo(()=>nativeTimelineLabels(activity?.snapshot===data.snapshot&&activity.sessions===ids&&activity.start===range[0]&&activity.end===range[1]?activity:null),[activity,data.snapshot,ids,range[0],range[1]]);
   const labelData=nativeLabels;
   // Events per kind across every session (whole conversations, not the zoom window): a merged mark shows its rarest kind (event-merge.ts).
   const eventCounts=useMemo(()=>eventKindCounts([...nativeLabels.events.values()].flat()),[nativeLabels]);
@@ -1637,7 +1668,7 @@ export function ParallelActivity({
   // Idle gaps are found over the whole workspace, so the overview and every
   // zoomed window share one clock; a zoomed window fetches the whole range once.
   const [skipIdle, setSkipIdle] = useViewState<boolean>("timeline_idle", true, timeline && location.pathname.startsWith("/work/"));
-  const [wholeActivity, setWholeActivity] = useState<Activity | null>(null);
+  const [wholeActivity, setWholeActivity] = useState<(Activity & { sessions: string }) | null>(null);
   const track = useRef<HTMLDivElement>(null);
   const clock = useRef<HTMLDivElement>(null);
   const [trackWidth, setTrackWidth] = useState(900);
@@ -1655,16 +1686,6 @@ export function ParallelActivity({
     if (clock.current) observer.observe(clock.current);
     return () => { clearTimeout(timer); observer.disconnect(); };
   }, [timeline,recursive]);
-  // A page may carry extra ancestor context; lane requests remain bounded.
-  const laneRows = useMemo(() => {
-    const included = new Set(data.rows.map((n) => n.id));
-    for (const n of rows) {
-      if (included.size >= 100) break;
-      included.add(n.id);
-    }
-    return rows.filter((n) => included.has(n.id));
-  }, [rows, data.rows]);
-  const ids = laneRows.map((n) => n.id).join(",");
   useEffect(() => {
     setMark(null);
     setBrush(null);
@@ -1684,28 +1705,47 @@ export function ParallelActivity({
       ...(includeUncertain ? {include_uncertain: "1"} : {}),
     });
     readJSON<Activity>(`${endpoint}/parallel?${params}`, controller.signal)
-      .then(setActivity, (e) => {
-        if (e.name !== "AbortError") setError(e.message);
+      .then(value => {
+        if (controller.signal.aborted) return;
+        setActivity({ ...value, sessions: ids });
+      }, (e) => {
+        if (controller.signal.aborted) return;
+        if (snapshotChanged(e)) {
+          setActivity(null);
+          onSnapshotChanged(data.snapshot);
+        } else if (e.name !== "AbortError") setError(e.message);
       })
       .finally(() => {
         if (!controller.signal.aborted) setPending(false);
       });
     return () => controller.abort();
-  }, [endpoint, relatives, includeUncertain, ids, data.snapshot, range, trackWidth,timeline]);
+  }, [endpoint, relatives, includeUncertain, ids, data, range, trackWidth,timeline,onSnapshotChanged]);
   const visibleActivity =
-    activity?.start === range[0] && activity?.end === range[1]
+    activity?.snapshot === data.snapshot && activity.sessions === ids && activity.start === range[0] && activity.end === range[1]
       ? activity
       : null;
   const wholeWindow = range[0] === full[0] && range[1] === full[1];
   useEffect(() => {
     if (!timeline || !skipIdle || wholeWindow) return;
-    if (wholeActivity?.snapshot === data.snapshot && wholeActivity.start === full[0] && wholeActivity.end === full[1] && (wholeActivity as Activity & { sessions?: string }).sessions === ids) return;
+    if (wholeActivity?.snapshot === data.snapshot && wholeActivity.start === full[0] && wholeActivity.end === full[1] && wholeActivity.sessions === ids) return;
     const controller = new AbortController();
     const params = new URLSearchParams({ snapshot: data.snapshot, start: String(full[0]), end: String(full[1]), sessions: ids, width: "1000", labels: "1", ...(relatives ? {relatives} : {}), ...(includeUncertain ? {include_uncertain: "1"} : {}) });
-    readJSON<Activity>(`${endpoint}/parallel?${params}`, controller.signal).then(value => setWholeActivity({ ...value, sessions: ids } as Activity), () => {});
+    readJSON<Activity>(`${endpoint}/parallel?${params}`, controller.signal).then(value => {
+      if (!controller.signal.aborted) setWholeActivity({ ...value, sessions: ids });
+    }, error => {
+      if (!controller.signal.aborted && snapshotChanged(error)) {
+        setWholeActivity(null);
+        onSnapshotChanged(data.snapshot);
+      }
+    });
     return () => controller.abort();
-  }, [timeline, skipIdle, wholeWindow, endpoint, relatives, includeUncertain, ids, data.snapshot, full[0], full[1]]);
-  const idleSource = wholeWindow ? visibleActivity : wholeActivity?.snapshot === data.snapshot && wholeActivity.start === full[0] && wholeActivity.end === full[1] ? wholeActivity : null;
+  }, [timeline, skipIdle, wholeWindow, endpoint, relatives, includeUncertain, ids, data, full[0], full[1],onSnapshotChanged]);
+  const idleSource = wholeWindow ? visibleActivity : wholeActivity?.snapshot === data.snapshot && wholeActivity.sessions === ids && wholeActivity.start === full[0] && wholeActivity.end === full[1] ? wholeActivity : null;
+  useEffect(() => {
+    // Both reads must settle before recovery is rearmed: a successful visible
+    // window must not fuel endless retries of a failing idle-window read.
+    if (visibleActivity && (!timeline || !skipIdle || wholeWindow || idleSource)) onSnapshotLoaded(data.snapshot);
+  }, [visibleActivity, timeline, skipIdle, wholeWindow, idleSource, data.snapshot, onSnapshotLoaded]);
   const gaps = useMemo<IdleGap[]>(() => {
     if (!timeline || !idleSource) return [];
     const byID = new Map(rows.map(row => [row.id, row]));
@@ -1827,7 +1867,7 @@ export function ParallelActivity({
         scale={fullScale}
         idle={timeline&&!previewOnly?{skip:skipIdle,set:setSkipIdle,gaps:gaps.length}:undefined}
       />
-      {timeline?<TimelineLegend previewOnly={previewOnly} onOpenTimeline={openOverview} data-view-field="timeline_visibility" visibility={timelineVisibility} onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))} messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error} events={[...nativeLabels.events.values()].flat()}/>:<div className="delegation-legend">
+      {timeline?<TimelineLegend previewOnly={previewOnly} onOpenTimeline={openOverview} data-view-field="timeline_visibility" visibility={timelineVisibility} onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))} messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error} unknownTools={legend.unknownTools} events={[...nativeLabels.events.values()].flat()}/>:<div className="delegation-legend">
         {!timeline?<span>
           <i className="model" />
           Model / orchestration · inferred

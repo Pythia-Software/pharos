@@ -552,10 +552,22 @@ complete result wherever its ownership is marked resolved; a bound that blocks
 that conclusion produces incomplete coverage.
 
 Retain existing cache coalescing, bounded family caches, and snapshot mismatch
-responses. Timeline and navigator requests use the same resolution revision.
-If new evidence arrives between requests, refresh or reject the mixed revision;
-do not combine an old graph with newly attributed activity. Projecting a window
-does not rerun ownership with only that window's evidence.
+responses. Timeline and navigator snapshots capture the execution/occurrence
+component digests and transcript/session workspace placement of their
+contributing conversations, including context and continuation segments. Their
+tokens hash those dependencies with the displayed rows, rather than the
+catalog-wide revision. Lane reads recheck the captured dependency signatures
+inside their read transaction before using its resolution and occurrence
+ownership. Unrelated evidence can advance the global revision without expiring
+the view; changed ancestry, missing referents arriving, deletions and copied
+message ownership still require a refresh. Workspace regrouping also requires a
+refresh: its placement signature is captured and rechecked separately from the
+execution component digest because lane queries filter by workspace. The check
+also runs when execution identity keeps the same revision, since occurrence
+ownership can change alone.
+Peer composition retains its common-resolution requirement and combines the
+parts' dependency manifests. Projecting a window does not rerun ownership with
+only that window's evidence.
 
 Global consumers can scan compact identity evidence once per generation.
 Interactive family lookups need indexed adjacency, bounded metadata pages and

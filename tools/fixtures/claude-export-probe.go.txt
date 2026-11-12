@@ -1,0 +1,366 @@
+//go:build probe
+
+// Synthetic scratch-only measurement. Run through tools/claude-export-probe.py,
+// which supplies its counters in a temporary Go overlay.
+package archive
+
+import (
+	"bytes"
+	"compress/gzip"
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+// This is a size/parse prototype, not a durable store or a second catalog writer.
+// Object bytes are actually compressed and written into a single scratch pack.
+type claudeProbeStore struct {
+	dir                    string
+	objects                map[string]json.RawMessage
+	current                map[string]string
+	receipts               [][]string
+	fullConversations      map[string]bool
+	wholeConversationBytes int64
+	messageBytes           int64
+	descriptorBytes        int64
+	parsedBytes            int64
+	parsedConversations    int64
+}
+
+func claudeProbeGzip(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	var result bytes.Buffer
+	writer := gzip.NewWriter(&result)
+	if _, err := writer.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return result.Bytes()
+}
+
+func (s *claudeProbeStore) put(t *testing.T, value any, payload bool) string {
+	t.Helper()
+	raw := []byte(jsonText(value))
+	hash := hashBytes(raw)
+	if _, ok := s.objects[hash]; ok {
+		return hash
+	}
+	s.objects[hash] = raw
+	encoded := claudeProbeGzip(t, raw)
+	if payload {
+		s.messageBytes += int64(len(encoded))
+	} else {
+		s.descriptorBytes += int64(len(encoded))
+	}
+	pack, err := os.OpenFile(filepath.Join(s.dir, "objects.pack"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Fixed length prefix; payload hash/offset index is measured separately.
+	if _, err := pack.Write(make([]byte, 8)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pack.Write(encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := pack.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}
+
+func (s *claudeProbeStore) acquire(t *testing.T, conversations []map[string]any) {
+	t.Helper()
+	refs := []string{}
+	for _, conversation := range conversations {
+		full := []byte(jsonText(conversation))
+		fullHash := hashBytes(full)
+		if !s.fullConversations[fullHash] {
+			s.fullConversations[fullHash] = true
+			s.wholeConversationBytes += int64(len(claudeProbeGzip(t, full)))
+		}
+		envelope := map[string]any{}
+		for key, value := range conversation {
+			if key != "chat_messages" {
+				envelope[key] = value
+			}
+		}
+		messages := []string{}
+		for _, message := range conversation["chat_messages"].([]any) {
+			messages = append(messages, s.put(t, message, true))
+		}
+		envelopeRef := s.put(t, envelope, false)
+		ref := s.put(t, map[string]any{"envelope": envelopeRef, "messages": messages}, false)
+		refs = append(refs, ref)
+		// Verify the prototype's source-faithful transformation on every input.
+		replay := s.conversation(t, ref)
+		if jsonText(replay) != string(full) {
+			t.Fatal("prototype lost source fields")
+		}
+		id := firstString(conversation["uuid"])
+		if s.current[id] != ref {
+			s.parsedBytes += int64(len(full) + 2)
+			if err := decodeClaudeConversations(strings.NewReader("["+string(full)+"]"), func(claudeAIConversation) error {
+				s.parsedConversations++
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			s.current[id] = ref
+		}
+	}
+	s.receipts = append(s.receipts, refs)
+	probePut(t, filepath.Join(s.dir, "receipts.json"), jsonText(s.receipts))
+	// Index values stand for a fixed offset/length pair, not a production index.
+	index := map[string][2]int64{}
+	for hash, raw := range s.objects {
+		index[hash] = [2]int64{0, int64(len(raw))}
+	}
+	probePut(t, filepath.Join(s.dir, "index.json"), jsonText(index))
+	probePut(t, filepath.Join(s.dir, "current.json"), jsonText(s.current))
+}
+
+func (s *claudeProbeStore) conversation(t *testing.T, ref string) map[string]any {
+	t.Helper()
+	var descriptor struct {
+		Envelope string
+		Messages []string
+	}
+	if err := json.Unmarshal(s.objects[ref], &descriptor); err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(s.objects[descriptor.Envelope]))
+	decoder.UseNumber()
+	if err := decoder.Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	messages := []any{}
+	for _, hash := range descriptor.Messages {
+		var message any
+		decoder := json.NewDecoder(bytes.NewReader(s.objects[hash]))
+		decoder.UseNumber()
+		if err := decoder.Decode(&message); err != nil {
+			t.Fatal(err)
+		}
+		messages = append(messages, message)
+	}
+	result["chat_messages"] = messages
+	return result
+}
+
+func claudeProbeConversation(day, extension int) map[string]any {
+	id := fmt.Sprintf("conversation-%d", day)
+	messages := []any{}
+	total := 4
+	if day == -40 {
+		total = 128 + extension
+	}
+	for i := 0; i < total; i++ {
+		var body strings.Builder
+		for j := 0; j < 8; j++ {
+			body.WriteString(hashBytes([]byte(fmt.Sprintf("%s/%d/%d", id, i, j))))
+		}
+		parent := claudeAIRoot
+		if i > 0 {
+			parent = fmt.Sprintf("%s-message-%d", id, i-1)
+		}
+		messages = append(messages, map[string]any{
+			"uuid": fmt.Sprintf("%s-message-%d", id, i), "sender": "assistant",
+			"parent_message_uuid": parent, "created_at": "2026-09-01T00:00:00Z",
+			"text": body.String(), "future_field": map[string]any{"number": json.Number("9007199254740993"), "empty": []any{}},
+		})
+	}
+	return map[string]any{"uuid": id, "name": id, "chat_messages": messages,
+		"created_at": "2026-07-01T00:00:00Z", "updated_at": time.Date(2026, 9, 1+extension, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		"unknown_envelope": map[string]any{"keep": true}, "current_leaf_message_uuid": fmt.Sprintf("%s-message-%d", id, total-1)}
+}
+
+func claudeProbeExport(window, day int) []map[string]any {
+	result := []map[string]any{claudeProbeConversation(-40, day)}
+	if day == 0 {
+		for old := -12; old < 0; old++ {
+			result = append(result, claudeProbeConversation(old, 0))
+		}
+	} else {
+		for recent := max(1, day-window+1); recent <= day; recent++ {
+			result = append(result, claudeProbeConversation(recent, 0))
+		}
+	}
+	return result
+}
+
+// Allocated bytes are stat blocks, deduplicated by inode within a layer.
+// They do not measure APFS shared extents or filesystem metadata overhead.
+func claudeProbeDisk(t *testing.T, root string) map[string]int64 {
+	t.Helper()
+	result := map[string]int64{}
+	inodes := map[string]bool{}
+	err := filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		kind := "metadata"
+		if strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".pack") {
+			kind = "payload"
+		}
+		result[kind+"_logical"] += info.Size()
+		stat := reflect.Indirect(reflect.ValueOf(info.Sys()))
+		blocks, dev, ino := stat.FieldByName("Blocks"), stat.FieldByName("Dev"), stat.FieldByName("Ino")
+		if !blocks.IsValid() || !dev.IsValid() || !ino.IsValid() {
+			return fmt.Errorf("stat allocation unavailable")
+		}
+		key := fmt.Sprintf("%v:%v", dev.Interface(), ino.Interface())
+		if !inodes[key] {
+			result[kind+"_allocated"] += blocks.Int() * 512
+			inodes[key] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func TestClaudeExportLifecycleProbe(t *testing.T) {
+	for _, window := range []int{7, 30} {
+		for _, batch := range []bool{false, true} {
+			t.Run(fmt.Sprintf("window-%d-batch-%t", window, batch), func(t *testing.T) {
+				config := claudeImportConfig(t)
+				downloads, candidate := t.TempDir(), t.TempDir()
+				store := &claudeProbeStore{dir: candidate, objects: map[string]json.RawMessage{}, current: map[string]string{}, fullConversations: map[string]bool{}}
+				catalog, _ := testCatalog(t)
+				steps := []map[string]any{}
+				logicalExportBytes := int64(0)
+				for day := 0; day <= 28; day++ {
+					if day != 0 && !batch && day%7 != 0 {
+						continue
+					}
+					conversations := claudeProbeExport(window, day)
+					directory := filepath.Join(downloads, fmt.Sprintf("day-%02d", day))
+					if err := os.MkdirAll(directory, 0700); err != nil {
+						t.Fatal(err)
+					}
+					zipPath := filepath.Join(directory, "conversations-000.zip")
+					chatGPTZip(t, zipPath, map[string]string{"conversations.json": jsonText(conversations)})
+					info, err := os.Stat(zipPath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					logicalExportBytes += info.Size()
+					manifest := claudeImportManifest(t, directory, claudeManifestPart{Filename: "conversations-000.zip", Category: "conversations"})
+					var m claudeManifest
+					raw, err := os.ReadFile(manifest)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := json.Unmarshal(raw, &m); err != nil {
+						t.Fatal(err)
+					}
+					m.CreatedAt = time.Date(2026, 9, 1+day, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
+					probePut(t, manifest, jsonText(m))
+					claudeProbeCounts = map[string]int64{}
+					job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+					if err != nil || job.State != "collected" {
+						t.Fatal(job, err)
+					}
+					collection := claudeProbeCounts
+					config, err = LoadConfig(config.Path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					claudeProbeCounts = map[string]int64{}
+					result := ingestSource(t, catalog, config.Sources[0])
+					counts := claudeProbeCounts
+					beforeBytes, beforeRecords := store.parsedBytes, store.parsedConversations
+					claudeProbeCounts = map[string]int64{}
+					store.acquire(t, conversations)
+					steps = append(steps, map[string]any{"day": day, "collection": collection, "index": counts,
+						"catalog": result, "prototype_parsed_bytes": store.parsedBytes - beforeBytes,
+						"prototype_parsed_conversations": store.parsedConversations - beforeRecords})
+				}
+				claudeProbeCounts = map[string]int64{}
+				warm := ingestSource(t, catalog, config.Sources[0])
+				warmCounts := claudeProbeCounts
+				// A distinct catalog handle/adapter discards process-local reader state.
+				restarted := reopenCatalog(t, catalog.Path)
+				claudeProbeCounts = map[string]int64{}
+				repeat := ingestSource(t, restarted, config.Sources[0])
+				restartCounts := claudeProbeCounts
+				restarted.Close()
+				// A new manifest with identical ZIP bytes still creates a snapshot.
+				last := filepath.Join(downloads, "day-28", "manifest.json")
+				var m claudeManifest
+				raw, err := os.ReadFile(last)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(raw, &m); err != nil {
+					t.Fatal(err)
+				}
+				m.CreatedAt = "2026-09-30T00:00:00Z"
+				probePut(t, last, jsonText(m))
+				claudeProbeCounts = map[string]int64{}
+				job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{last}})
+				if err != nil || job.State != "collected" {
+					t.Fatal(job, err)
+				}
+				claudeProbeCounts = map[string]int64{}
+				identical := ingestSource(t, catalog, config.Sources[0])
+				identicalCounts := claudeProbeCounts
+				before := store.messageBytes + store.descriptorBytes
+				store.acquire(t, claudeProbeExport(window, 28))
+				if store.messageBytes+store.descriptorBytes != before {
+					t.Fatal("identical export added prototype payload")
+				}
+				if result := runCapture(t, config); !result.OK {
+					t.Fatal(result)
+				}
+				collectionDisk := claudeProbeDisk(t, claudeImportRoot(config, job.Name))
+				captureDisk := claudeProbeDisk(t, filepath.Join(config.CaptureRoot, "host-a", job.Name))
+				// Preserve and compare the production catalog's searchable identities.
+				expected := countRows(t, catalog, "SELECT COUNT(*) FROM conversations")
+				expectedMessages := countRows(t, catalog, "SELECT COUNT(*) FROM messages")
+				if err := os.RemoveAll(downloads); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.RemoveAll(claudeImportRoot(config, job.Name)); err != nil {
+					t.Fatal(err)
+				}
+				other, _ := testCatalog(t)
+				claudeProbeCounts = map[string]int64{}
+				indexCaptures(t, other, config.CaptureRoot, "host-a")
+				if got := countRows(t, other, "SELECT COUNT(*) FROM conversations"); got != expected {
+					t.Fatalf("offline conversations: %d != %d", got, expected)
+				}
+				if got := countRows(t, other, "SELECT COUNT(*) FROM messages"); got != expectedMessages {
+					t.Fatalf("offline messages: %d != %d", got, expectedMessages)
+				}
+				output := map[string]any{"window_days": window, "daily_batch": batch, "weeks": 4, "steps": steps,
+					"logical_download_zip_bytes": logicalExportBytes, "collection_disk": collectionDisk, "capture_disk": captureDisk,
+					"prototype_disk": claudeProbeDisk(t, candidate), "prototype_message_gzip_bytes": store.messageBytes,
+					"prototype_descriptor_gzip_bytes": store.descriptorBytes, "whole_conversation_gzip_bytes": store.wholeConversationBytes,
+					"warm": warm, "warm_counts": warmCounts, "new_handle_repeat": repeat, "new_handle_counts": restartCounts,
+					"identical_new_manifest": identical, "identical_counts": identicalCounts,
+					"offline_counts": claudeProbeCounts, "offline_conversations": expected, "offline_messages": expectedMessages}
+				t.Log("CLAUDE_PROBE_RESULT " + jsonText(output))
+			})
+		}
+	}
+}

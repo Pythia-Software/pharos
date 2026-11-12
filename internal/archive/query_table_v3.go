@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -134,7 +135,23 @@ func (s *Server) queryV3SourceFields(ctx context.Context, schema qt.Schema, q qt
 	return plan.BaseFields, err
 }
 
+// executeQueryV3 answers one query-v3 request. A Model Requests read that
+// chose the stored timings and then found, in its own transaction, that a
+// conversation began awaiting refresh after the choice reads again from the
+// derived source (thinkingQueryDataset).
 func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.Values, schema qt.Schema, q qt.QueryRequestV3) (qt.QueryResultV3, *libraryFindSummary, error) {
+	result, find, err := s.executeQueryV3Once(ctx, dataset, params, schema, q)
+	if errors.Is(err, errThinkingSourceMoved) {
+		return s.executeQueryV3Once(context.WithValue(ctx, thinkingDerivedOnly{}, true), dataset, params, schema, q)
+	}
+	return result, find, err
+}
+
+// afterThinkingSourceChoice runs between choosing Model Requests' source and
+// opening the query's transaction; tests change the catalog there.
+var afterThinkingSourceChoice = func() {}
+
+func (s *Server) executeQueryV3Once(ctx context.Context, dataset string, params url.Values, schema qt.Schema, q qt.QueryRequestV3) (qt.QueryResultV3, *libraryFindSummary, error) {
 	if err := checkRecordKeywordHostState(dataset, q.HostState, params); err != nil {
 		return qt.QueryResultV3{}, nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidQuery, Message: err.Error()}
 	}
@@ -157,6 +174,11 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			return qt.QueryResultV3{}, nil, err
 		}
 	}
+	if zone := params.Get("timezone"); dataset == "model_requests" && zone != "" {
+		if _, err := thinkingLocation(zone); err != nil {
+			return qt.QueryResultV3{}, nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeInvalidQuery, Message: "invalid timezone"}
+		}
+	}
 	if dataset == "usage" {
 		var err error
 		ctx, err = withCarbonPreferences(ctx, params.Get("carbon_settings"))
@@ -177,6 +199,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	var required []string
 	var find *libraryFindSet
 	var err error
+	var storedTimings bool
 	// counted is the source projected to what a count reads (narrowCount).
 	var counted string
 	var countedFields []string
@@ -195,6 +218,10 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		}
 		if dataset == "tool_calls" {
 			table.toolSearchIndexed, err = s.Catalog.toolSearchReady(ctx)
+		}
+		if err == nil && dataset == "model_requests" {
+			table, storedTimings, err = s.Catalog.thinkingQueryDataset(ctx, table, params.Get("timezone"))
+			afterThinkingSourceChoice()
 		}
 		if err == nil && dataset == "writing_messages" {
 			table, find, err = s.Catalog.messageFindDataset(ctx, params, table)
@@ -359,6 +386,11 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		return qt.QueryResultV3{}, nil, err
 	}
 	defer release()
+	if storedTimings {
+		if err = thinkingTimingsCurrent(ctx, tx); err != nil {
+			return qt.QueryResultV3{}, nil, err
+		}
+	}
 	if err = authorizeQueryV3Computed(ctx, tx, &d); err != nil {
 		return qt.QueryResultV3{}, nil, err
 	}
@@ -386,6 +418,20 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		}
 		fast := queryPopulationFastCounts(dataset, schema, table)
 		d.PopulationCounter = s.Catalog.populationCounter(queryDatasetGeneration(dataset), narrow, fast...)
+		if dataset == "model_requests" && !q.Rows {
+			// Query Table reads a metric request's population once for all
+			// its metrics, counting it as it goes, only without a host
+			// counter. The Thinking dashboards send up to 19 metrics at a time.
+			d.PopulationCounter = nil
+			// Its sources (stored timings, or those plus conversations derived
+			// again) and computed columns (the zoned calendar fields, the
+			// model tuples) are deterministic within the query's transaction,
+			// so the shared read may cover them too, though they fail Query
+			// Table's stored-source proof. Asserting that materializes the
+			// population first, which costs a stored read about a tenth, so it
+			// is asserted only where the proof would fail.
+			d.SQLiteSharedMetricsSource = !storedTimings || table.computes(slices.Concat(required, whereFields(q.Source.Where), whereFields(q.Result.Where)))
+		}
 		whole = d
 		if newest != nil {
 			var cutoff sql.NullString

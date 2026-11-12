@@ -164,8 +164,8 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
   const sentHere = useRef(false), wasCollapsed = useRef(false), receiptMessage = useRef<HTMLParagraphElement>(null);
   const busyRef = useRef(busy); busyRef.current = busy;
   const closeRef = useRef<() => void>(() => close?.()); closeRef.current = () => { void keepDraft(); };
-  useEffect(() => { if (proposal) return; const el = dialog.current!, previous = document.activeElement; el.showModal(); const cancel = (e: Event) => { e.preventDefault(); if (!busyRef.current) closeRef.current(); }; el.addEventListener("cancel", cancel);
-    return () => { el.removeEventListener("cancel", cancel); el.close(); if (previous instanceof HTMLElement) restoreFocus(previous); };
+  useEffect(() => { if (proposal) return; const el = dialog.current!, previous = document.activeElement, header = document.getElementById("feedbackSubmitToggle"); el.showModal(); header?.setAttribute("aria-expanded", "true"); const cancel = (e: Event) => { e.preventDefault(); if (!busyRef.current) closeRef.current(); }; el.addEventListener("cancel", cancel);
+    return () => { el.removeEventListener("cancel", cancel); el.close(); header?.setAttribute("aria-expanded", "false"); if (previous instanceof HTMLElement) restoreFocus(previous); };
   }, []);
   useEffect(() => {
     let mounted = true;
@@ -300,7 +300,7 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
     </>}{error && <p role="alert" className="uifeedback-error">{error}</p>}
   </div>;
   return proposal ? <section className="uifeedback-inline" aria-label={title} data-feedback-ui>{content}</section>
-    : <dialog className="uifeedback-dialog" ref={dialog} aria-labelledby="uifeedback-title" data-feedback-ui><form onSubmit={event => { event.preventDefault(); void send(); }}>{content}</form></dialog>;
+    : <dialog id="uifeedback-dialog" className="uifeedback-dialog" ref={dialog} aria-labelledby="uifeedback-title" data-feedback-ui><form onSubmit={event => { event.preventDefault(); void send(); }}>{content}</form></dialog>;
 }
 function restoreFocus(opener: HTMLElement) {
   const target = opener.getClientRects().length ? opener : document.getElementById("headerMore"); target?.focus();
@@ -316,7 +316,7 @@ if (toolbar) { const button = document.createElement("button"); button.type = "b
   let active = false;
   const open = (opener: HTMLElement) => { if (active) return; active = true; const host = document.createElement("div"); document.body.append(host); const root = createRoot(host); root.render(<Composer close={() => { root.unmount(); host.remove(); active = false; restoreFocus(opener); }} />); };
   button.onclick = () => open(button);
-  const header = document.getElementById("feedbackSubmitToggle"); if (header instanceof HTMLButtonElement) header.onclick = () => open(header);
+  const header = document.getElementById("feedbackSubmitToggle"); if (header instanceof HTMLButtonElement) { header.setAttribute("aria-haspopup", "dialog"); header.setAttribute("aria-controls", "uifeedback-dialog"); header.setAttribute("aria-expanded", "false"); header.onclick = () => open(header); }
   // The Mac app's context menu; focus returns to the header button, or More.
   window.pharosSendFeedback = () => open(header instanceof HTMLButtonElement ? header : button);
 }

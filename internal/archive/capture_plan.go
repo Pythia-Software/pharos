@@ -16,7 +16,10 @@ type captureItem struct {
 }
 
 type capturePlan struct {
-	files, databases []captureItem
+	files, databases    []captureItem
+	projections         []captureProjection
+	retainAbsent        bool
+	claudeExportObjects bool
 	// skipped exist but are not captured (databases without conversations),
 	// so they are not missing either.
 	skipped []string
@@ -143,6 +146,10 @@ func (p *capturePlan) claudeAI(ctx context.Context, source SourceConfig, info fs
 		return fmt.Errorf("Claude.ai export is unavailable: %w", err)
 	}
 	for _, input := range inputs {
+		p.claudeExportObjects = p.claudeExportObjects || input.objectInventory
+		if input.retired {
+			continue
+		}
 		rel, _ := filepath.Rel(source.Path, input.path)
 		if !info.IsDir() {
 			rel = filepath.Base(input.path)

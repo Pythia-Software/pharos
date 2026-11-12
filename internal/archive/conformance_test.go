@@ -69,6 +69,7 @@ var conformanceCases = map[string]conformanceCase{
 		writeSourceFile(t, filepath.Join(root, "conversations.json"), string(data))
 		return conformanceSource("chatgpt", root)
 	}},
+	claudeSettingsKind: {build: claudeSettingsFixture, secrets: []string{claudeSettingsSecret}},
 	"claude-ai": {build: func(t *testing.T) SourceConfig {
 		root := t.TempDir()
 		writeSourceFile(t, filepath.Join(root, "conversations.json"), claudeAIExport)
@@ -234,6 +235,12 @@ func conformanceRead(t *testing.T, kind string, check bool) (string, string) {
 		t.Fatalf("index the capture: %v", result.Error)
 	}
 	for _, record := range records {
+		if record.ClaudeSettings != nil {
+			if countRows(t, catalog, "SELECT COUNT(*) FROM claude_chat_settings_observations WHERE snapshot_id=?", record.SourceID) != len(record.ClaudeSettings.Conversations) {
+				t.Error("settings observation was not indexed")
+			}
+			continue
+		}
 		if countRows(t, catalog, "SELECT COUNT(*) FROM workspaces WHERE source_id=?", record.SourceID) == 0 {
 			t.Errorf("workspace %s was read but not indexed", record.SourceID)
 		}
@@ -594,6 +601,13 @@ func conformanceGolden(t *testing.T, kind, version, records string) {
 func conformanceObserved(records []WorkspaceRecord, catalog *Catalog) map[string]bool {
 	seen := map[string]bool{}
 	for _, record := range records {
+		if record.ClaudeSettings != nil {
+			seen["timestamps"] = record.ClaudeSettings.ObservedAt != ""
+			for _, row := range record.ClaudeSettings.Conversations {
+				seen["model"] = seen["model"] || row.Model != nil
+				seen["effort"] = seen["effort"] || row.Effort != nil
+			}
+		}
 		seen["cwd"] = seen["cwd"] || record.Location != ""
 		seen["git_branch"] = seen["git_branch"] || firstString(record.Metadata["branch"]) != ""
 		// A title the tool gave, not the fallback of the provider's name

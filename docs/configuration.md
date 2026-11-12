@@ -447,7 +447,8 @@ storage, other apps' containers, Mail, Messages, and other volumes.
 | Cursor CLI | `~/.cursor`, when it has a chat (`chats/<hash>/<chat>/store.db`); each chat is a session |
 | Zed | `~/Library/Application Support/Zed`, when `threads/threads.db` holds a thread; each thread of Zed's agent is a session |
 | ChatGPT | nothing on disk: export your data from ChatGPT, then **Import an export** (or add a `chatgpt` source) for the downloaded ZIP, the folder it unzips to, or one of its conversation files |
-| Claude.ai | nothing on disk: export your data from Claude.ai, then **Import an export** (or add a `claude-ai` source) for the downloaded ZIP, its `conversations.json`, or the folder holding it |
+| Claude.ai | Export chat transcripts from Claude.ai, then **Import an export** (or add a `claude-ai` source). Claude Desktop’s local conversation selections are a separate **Claude Chat settings** source. |
+| Claude Chat settings | `~/Library/Application Support/Claude` (or its `Cache/Cache_Data` folder): cached conversation UUIDs, selected models, effort levels and thinking modes; no chat text, credentials, quota or token counts |
 
 The app and its service do not inherit the shell's environment, so Pharos also
 reads `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `XDG_DATA_HOME`, `CLINE_DATA_DIR`, `CLINE_DIR`, `OPENCLAW_STATE_DIR` and `HERMES_HOME` from the login shell (`$SHELL -l -i -c`,
@@ -568,8 +569,8 @@ single-ZIP exports do, the collected copy leaves it out; a ZIP with nothing
 else is not kept.
 
 **Capture and index conversations** uses the existing capture/index workflow.
-Projects, memory, artifact files and unknown ZIP categories are retained as raw
-export evidence; this importer currently indexes conversations. It preserves the
+Projects, memory, artifacts, reflections and cloud transcripts are indexed as
+source documents/conversations; unknown ZIP categories remain retained evidence. It preserves the
 existing account identity configuration and records native account UUIDs as
 metadata. It does not infer missing project associations or token usage. A set
 without a manifest has unknown completeness; an incomplete manifest remains
@@ -594,9 +595,27 @@ Claude account (the UUID in the export's links), the profile whose download
 actually arrived. That account's later exports open there, even if the general
 choice differs, so two Claude accounts in two profiles each keep their own.
 
-Request the export yourself: in Claude, open Settings → Privacy → Export data.
-When Claude emails you, download the manifest from its link into Downloads.
-While Pharos is running it then:
+**Request a daily Claude export** appears in the Claude.ai import screen and
+the Downloads import section. **Copy daily export prompt** supplies a starter
+prompt for Claude Desktop to set up a daily 9 AM task using browser access.
+It asks for the rolling last 30 days, recalculated on each run; if Claude's
+export screen has no date filter, it asks for a full export instead. The prompt
+asks Claude to test an export request, verify scheduled browser access, and
+explain any requirements to keep apps open or stay signed in. Scheduling and
+browser access depend on the user's Claude account and setup; copying the
+prompt does not create a task in Pharos or Claude. For a complete starting
+archive, request all history before using a rolling window.
+
+This follows Anthropic's [export instructions](https://support.claude.com/en/articles/9450526-export-your-claude-data)
+and [scheduled-task guidance](https://support.claude.com/en/articles/13854387-schedule-recurring-tasks-in-claude-cowork).
+The export instructions do not document a date filter, so the prompt checks
+the options available rather than promising a 30-day export.
+
+You can also request the export yourself: in Claude, open Settings → Privacy
+→ Export data. Each day an export email arrives, use its link to download the
+manifest into Downloads within 24 hours. Keep the Downloads import switch on,
+Pharos running, and the selected browser profile signed in to Claude. Pharos
+then:
 
 1. lists the top level of `~/Downloads` every 15 minutes, 30 seconds after it
    starts, and when you choose **Check Downloads now**. It opens only files
@@ -660,6 +679,8 @@ pharos --config /path/to/library.toml claude-import collect /path/to/manifest.js
 pharos --config /path/to/library.toml claude-import status
 pharos --config /path/to/library.toml claude-import collect --job JOB_ID /path/to/downloaded/file.zip
 pharos --config /path/to/library.toml claude-import watch /path/to/claude-export-inbox
+pharos --config /path/to/library.toml claude-import compact --prepare
+pharos --config /path/to/library.toml claude-import compact --apply PLAN_ID
 ```
 
 `collect` also accepts a folder or several ZIP/JSON paths. Put flags before paths;
@@ -674,6 +695,15 @@ The authenticated local API exposes the same jobs through `POST /api/claude-impo
 `GET /api/claude-imports?id=JOB_ID&name=NAME`. POST returns acceptance; poll the GET
 response's `run` and the saved job for completion. Closing the UI does not stop
 collection. `POST /api/claude-imports/cancel` requests cancellation.
+
+The explicit `compact` command plans and verifies source-unit replacements;
+`--prepare` also migrates legacy parts additively. Review its returned plan, then
+apply its ID with services using that library closed. Apply removes only verified
+managed native parts; Downloads, captured native copies, pins and backups remain.
+Incomplete jobs stay protected. Graph-only retirement requires newer Pharos
+readers (library descriptor 2, capture manifest 9). See [source units and
+compaction](claude-export-storage.md) for the format, recovery and remaining
+metadata-scan limits. Automatic cleanup is not enabled.
 
 Collected snapshots and credential-free receipts live in
 `<capture_root>/.claude-imports/<host-id>/<source-name>/snapshots/`. Expiring download
@@ -746,6 +776,72 @@ needs indexing. The API can still target one host or source with `POST
 /api/index` using `{"host": …}` or `{"sources": […]}`. Passing
 `"auto_upgrade": true` continues with pending library upgrade work after a
 successful index, even if the browser closes.
+
+### Claude Chat settings and missing model selections
+
+**Claude Chat settings** is a separate source from Claude.ai exports. Imports
+include a matching settings source if it is already enabled. Otherwise, the
+import proceeds with the export alone and checks for missing model information
+after indexing. You can also add this source using **Look for sources** in
+Settings → Sources and enable it for automatic updates.
+
+A manually configured source is:
+
+```toml
+[[sources]]
+name = "claude-chat-settings"
+kind = "claude-ai-settings"
+path = "~/Library/Application Support/Claude"
+account = "local"
+enabled = true
+```
+
+Use the same `account` label as the Claude.ai export source to associate settings
+with imported conversations. UUIDs match within that account label; organization
+UUIDs remain part of each observation. Account labels do not prove two organizations
+are the same, so observations from different organizations remain separate.
+
+The enabled source participates in automatic updates, using the configured update
+schedule and source selection. Every acquisition preserves only the allowed settings
+projection before indexing it. Previously captured observations survive cache eviction
+and can be indexed on another Mac without Claude installed.
+
+When imported Claude Chat conversations have no recorded model or current model
+selection, Pharos offers **Add missing Claude model settings** in Settings →
+Sources, in an affected conversation, and after indexing an import. The prompt
+shows how many imported conversations need model information for that account:
+
+1. Open the Claude desktop app and select the **Chat** tab.
+2. Click **View all** at the bottom of the **Recents** list.
+3. Scroll down until you reach your oldest conversation, letting older chats
+   load as you go.
+4. Return to Pharos and click **Capture settings**.
+
+That button captures the available settings and indexes them in one action, then
+reports how many conversations still lack model information. It creates a paused
+settings source if needed and preserves the enabled/paused state of an existing
+source. No recording session or ongoing source acquisition is required. Loading
+the history list makes settings available without opening each conversation.
+
+The prompt is absent when there are no affected imported chats. Explicitly
+reported assistant models and current observed model selections both resolve the
+prompt. A newer unknown or conflicting selection does not inherit an older model.
+Missing effort or thinking mode alone does not trigger another backfill prompt.
+
+Only settings present in Claude’s cache can be collected. Opening a chat does not
+guarantee Claude writes another supported cache entry. The current parser supports
+Chromium simple HTTP cache version 5, plain JSON and Zstandard conversation-list
+responses from `claude.ai/api/organizations/<uuid>/chat_conversations_v2`.
+Incomplete or unsupported entries are skipped with capture warnings so valid
+observations can still be saved. The source never claims complete chat-history
+coverage.
+
+Imported conversations expose these observations in **Source details** and in the
+conversation API’s `selected_settings` object. These are saved selections at the
+response’s HTTP Date (or explicitly labelled cache-file modification time), not
+proof of the settings used for each message. Missing fields stay unknown, and a
+newer observation with an unknown field does not inherit an older value. No token
+or cost estimates are generated by this source.
 
 ## Running from an external drive
 
@@ -1001,6 +1097,7 @@ upload permissions keep their existing behavior.
 | `canonical`, `tl1-export` | the export file, or the directory's `*.json` |
 | `chatgpt`, `chatgpt-export` | A selected ZIP, or managed hashed ZIP snapshots and their receipt; folder inputs retain producer-declared evidence (or recognized conversation/sidecar/media files for legacy folders), excluding account records. Conversation shards take precedence over `conversations.json`. |
 | `claude-ai` | a chosen ZIP or conversations file, a folder's top-level conversations files (never its other ZIPs), or every verified part and the credential-free inventories of a managed export collection, whole |
+| `claude-ai-settings` | filtered, immutable JSON projections of supported Claude Desktop HTTP conversation-list cache entries; original cache files are never copied |
 | `copilot` | each session's `events.jsonl` and `workspace.yaml` under `session-state` (or an older release's flat `<id>.jsonl`); not `session-store.db`, Copilot's own index, nor its config, logs or file snapshots |
 | `opencode` | a snapshot of each `opencode*.db` holding only its session, message, part and project tables: OpenCode keeps credentials, accounts and settings in the same database, so a snapshot is a copy of those tables, row by row, and nothing else is ever written to the capture, even by one that stops part way. With `sqlite_record_capture`, the rows copied before indexing leave out the same tables. A session deleted in OpenCode before its last capture was indexed is indexed from an older snapshot that holds it |
 | `openclaw` | selective snapshots of native session and transcript tables, including embedded compressed payloads and canonical reset/deletion archive blobs before file publication; referenced cold archives and, for legacy JSONL, `sessions.json`. Authentication, configuration, workspace files and memory indexes are excluded |

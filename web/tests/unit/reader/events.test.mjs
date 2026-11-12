@@ -281,6 +281,142 @@ test("parsed message bodies are reused and update when an original replaces a pr
     { same: true, shared: true, path: "after", raw: "after", source: "before", missing: null });
 });
 
+
+test("Claude export citations and attachment names preserve research sources", () => {
+  const message = event("research", "message", "A researched answer", 0, {raw_text: JSON.stringify({type:"text",text:"A researched answer",citations:[
+    {details:{type:"web_search_citation",url:"https://example.com/report",title:"Published report",cited_text:"Source excerpt"}},
+    {details:{type:"document_citation",document_title:"Uploaded paper"}},
+    {details:{url:"javascript:alert(1)",title:"Unsafe source"}},
+  ]})});
+  const citations = plain(reader.messageCitations(message));
+  assert.deepEqual(citations, [
+    {title:"Published report",url:"https://example.com/report",quote:"Source excerpt"},
+    {title:"Uploaded paper",url:"",quote:""},
+    {title:"Unsafe source",url:"",quote:""},
+  ]);
+  for (const [payload, expected] of [
+    [{type:"file_attachment",file_name:"notes.pdf"},"notes.pdf"],
+    [{type:"files",file_names:["chart.csv","paper.pdf"]},"chart.csv, paper.pdf"],
+    [{type:"document",title:"Company brief",file_uuid:"f1"},"Company brief"],
+    [{type:"image",file_uuid:"img"},"Image · img"],
+  ]) assert.equal(reader.attachmentSummary(event("attachment","attachment",payload)),expected);
+});
+
+
+test("export documents expose prose while keeping unrelated metadata out of the narrative", () => {
+  const payload={type:"export_file",file_name:"projects/p.json",extracted_content:JSON.stringify({name:"Research",is_private:true,prompt_template:"Cite sources",docs:[{filename:"report.md",content:"# Report\nOriginal exported paragraph."}]})};
+  assert.deepEqual(plain(reader.exportDocumentSections(payload)),[{title:"Research · prompt template",text:"Cite sources"},{title:"report.md",text:"# Report\nOriginal exported paragraph."}]);
+  assert.deepEqual(plain(reader.exportDocumentSections({...payload,file_name:"index.html"})),[]);
+});
+
+
+test("retained export summaries do not create a second user turn", () => {
+  const {graph}=render([event("export","metadata",{type:"claude_ai_conversation",text:"Archived summary"},0,{role:"system"}),human(),event("reply","message","An answer")]);
+  assert.equal(graph.turns.length,1);
+  assert.equal(graph.turns[0].human.native_id,"human");
+  assert.deepEqual(ids(graph.turns[0].events),["export","reply"]);
+  const [summary]=reader.turnSummaryData({messages:[event("export","metadata",{type:"claude_ai_conversation",text:"Archived summary"},0,{role:"system"}),human(),event("reply","message","An answer")]});
+  assert.equal(summary.prompt,"Inspect the rules and report the result.");
+  assert.equal(summary.outcome,"An answer");
+  assert.equal(summary.replies,1);
+});
+
+test('Claude Docs additions use receipts and resolve the imported document identity', () => {
+  const id='fd29a52d-3aac-4fd5-90e5-1c21d41e56a7';
+  const call=event('add','tool_call',{tool:'mcp__Claude_Docs__update',input:{container:{kind:'project',id},payload:JSON.stringify({ops:[{op:'replace',target:{kind:'blocks',ids:['section.1']},with:{from:{kind:'inline',content:'## Findings\n\nA **recorded** finding.'},as:'markdown'}}]})}});
+  const receipt=event('receipt','tool_result',{content:[{type:'text',text:JSON.stringify({verdict:'allow',data:{notices:[{code:'pending_ended',as:'resolved',opIndex:0,ids:['section.1']}]}})}]});
+  const links={[id]:{title:'Research brief',href:'/work/imported/conversation/document?message=page'}};
+  const view=reader.mcpPresentation(call,[receipt],links);
+  assert.equal(view.label,'Added to document');assert.equal(view.target,'Research brief');assert.equal(view.href,links[id].href);
+  assert.equal(view.sections[0].format,'markdown');assert.match(view.sections[0].text,/\*\*recorded\*\*/);
+  const clipped=event('clipped','tool_result',{tool:'mcp__Claude_Docs__update',content:[{type:'text',text:'{\"verdict\":\"allow\",\"xml\":\"short…'}]});
+  clipped.mcp_receipts=reader.mcpRecords([receipt]);
+  assert.equal(reader.mcpPresentation(call,[clipped],links).label,'Added to document','small receipts survive lazy output clipping');
+  assert.equal(toolCategory(call),'edit');assert.equal(fileChanges(call,receipt),null,'document changes are not invented file diffs');
+  assert.match(reader.mcpPresentation(call,[],links).label,/Requested/);
+  const replace=event('replace','tool_result',{content:[{type:'text',text:'{"verdict":"allow"}'}]});
+  assert.equal(reader.mcpPresentation(call,[replace],links).label,'Updated document','replacement without placeholder evidence is not an addition');
+  assert.equal(reader.mcpPresentation(call,[receipt]).href,'','unimported documents do not acquire invented local links');
+});
+
+test('MCP envelopes preserve failed, partial, unknown and missing outcomes', () => {
+  const call=event('update','tool_call',{name:'mcp__Claude_Docs__update',input:{payload:{ops:[]}}});
+  for(const [body,status]of [
+    [{isError:true,content:[{type:'text',text:'Denied'}]},'failed'],
+    [{content:[{type:'text',text:'{"verdict":"deny","error":"Revision conflict"}'}]},'failed'],
+    [{content:[{type:'text',text:'{"acks":[{"verdict":"allow"},{"verdict":"deny"}]}'}]},'partial'],
+    [{structuredContent:{status:'unknown'}},'unknown'],
+    [{content:[{type:'text',text:JSON.stringify({verdict:'allow',operation_results:[{status:'applied'},{status:'rejected'}]})}]},'partial'],
+  ]){
+    const result=event(status,'tool_result',{content:JSON.stringify(body)}),view=reader.mcpPresentation(call,[result]);
+    assert.equal(view.status,status);assert.equal(toolFailed(call,[result]),['failed','partial'].includes(status));
+    assert.doesNotMatch(view.label,/^Added|^Created|^Updated/);
+  }
+  const clipped=event('clipped','tool_result',{content:[{type:'text',text:'{"verdict":"allow","xml":"short…'}]});
+  for(const [operation,status]of [['rejected','partial'],['unknown','unknown']]){
+    clipped.mcp_receipts=[{verdict:'allow'},{status:'applied'},{status:operation}];
+    const view=reader.mcpPresentation(call,[clipped]);
+    assert.equal(view.status,status);assert.doesNotMatch(view.label,/^Updated document$/);
+    assert.equal(toolFailed(call,[clipped]),status==='partial');
+  }
+  assert.equal(reader.mcpPresentation(call).status,'missing');
+  assert.equal(reader.mcpPresentation(event('unknown','tool_call',{name:'mcp__unfamiliar__update',input:{content:'kept'}})),null);
+  assert.equal(reader.mcpPresentation(event('future','tool_call',{name:'mcp__Claude_Docs__transform',input:{content:'kept'}})),null);
+});
+
+test('Docs creation, comments, excerpts and exported Unicode Markdown have readable content', () => {
+  const present=(method,input,value)=>reader.mcpPresentation(event(method,'tool_call',{name:'mcp__Claude_Docs__'+method,input}),[event('output','tool_result',{content:[{type:'text',text:JSON.stringify(value)+'\n\nViewer instructions retained in raw output.'}]})]);
+  const create=present('batch',{container:{create:{name:'Brief',doc:{markdown:'# Brief\n\nOpening.'}}},batch:[]},{verdict:'allow',frame:{slug:'recorded-id'}});
+  assert.equal(create.label,'Created document');assert.match(create.sections[0].text,/# Brief/);
+  const tab=present('batch',{batch:[{verb:'create',object:'file',payload:{value:{birthName:'Appendix.ldoc'}}},{verb:'create',object:'node',engine:'prose',payload:{parent:{id:'$lid:f2'},source:{as:'markdown',from:{kind:'inline',content:'# Appendix\n\nTab content.'}}}},{verb:'update',ref:{object:'project'},payload:{patch:[{op:'set',path:['tabs','$lid:f2'],value:{name:'Appendix'}}]}}]},{verdict:'allow'});
+  assert.equal(tab.label,'Added document tab');assert.equal(tab.sections[0].title,'New tab · Appendix');assert.match(tab.sections[0].text,/Tab content/);
+  const comment=present('create',{object:'utterance',payload:JSON.stringify({value:{body:'Please confirm.',parent:{anchor:{text:'The assumption'}}}})},{verdict:'allow'});
+  assert.equal(comment.sections[0].text,'The assumption');assert.equal(comment.sections[1].text,'Please confirm.');
+  const excerpt=present('read',{payload:{kind:'search',text:'term'}},{verdict:'allow',data:{xml:"<doc><gap blocks='2'/><paragraph>Human &amp; readable</paragraph></doc>",complete:false}});
+  assert.match(excerpt.sections[0].text,/blocks omitted/);assert.match(excerpt.sections[0].text,/Human & readable/);assert.doesNotMatch(excerpt.sections[0].text,/<paragraph/);
+  const markdown='# Café 日本語\n\n**Readable** export.',exported=present('export',{format:'markdown'},{verdict:'allow',data:{format:'markdown',name:'Brief.md',bytes_b64:Buffer.from(markdown).toString('base64')}});
+  assert.equal(exported.sections[0].text,markdown);assert.equal(exported.sections[0].format,'markdown');
+  assert.equal(present('update',{payload:{ops:[{op:'future_transform'}]}},{verdict:'allow'}),null,'future operations retain the generic source view');
+  assert.equal(reader.mcpMarkdownExport({format:'pdf',bytes_b64:Buffer.from(markdown).toString('base64')}),'');
+  assert.equal(reader.mcpMarkdownExport({format:'markdown',bytes_b64:'broken'}),'');
+});
+
+test('common MCP families unwrap native and Codex responses without receipt boilerplate', () => {
+  const present=(name,input,body)=>reader.mcpPresentation(event('call','tool_call',{tool:name,input}),[event('result','tool_result',{content:JSON.stringify(body)})]);
+  const memory=present('mcp__memory__memory_read',{path:'/areas/topic.md'},{content:[{type:'text',text:'Receipt text'}],structured_content:{parsed:{name:'Topic',body:'- Remember **this**.'}}});
+  assert.equal(memory.sections[0].text,'- Remember **this**.');assert.equal(memory.sections[0].format,'markdown');
+  for(const name of ['mcp__remote-devices__Claude_Browser__browser_batch','mcp__claude-in-chrome__browser_batch','mcp__chrome__batch']){
+    const browser=present(name,{actions:[{name:'computer',input:{action:'left_click',action_summary:'Select Pickup'}},{name:'get_page_text',input:{tabId:'seed'}}]},{content:[{type:'text',text:'Visible page text'}]});
+    assert.equal(browser.family,'browser');assert.equal(browser.sections[0].text,'Select Pickup');assert.equal(browser.sections.at(-1).text,'Visible page text');
+  }
+  for(const name of ['mcp__codex_apps__github.fetch_file','mcp__codex_apps__github_fetch_file']){
+    const github=present(name,{repository_full_name:'owner/repo',path:'app.go'},{content:[{type:'text',text:'Action completed.'}],structuredContent:{content:'package app',display_url:'https://github.com/owner/repo/blob/main/app.go'}});
+    assert.equal(github.family,'github');assert.equal(github.sections[0].text,'package app');assert.match(github.href,/github.com/);
+  }
+  const comments=present('mcp__conductor__DiffComment',{comments:[{file:'app.go',lineNumber:4,body:'Check this branch.'}]},{content:[{type:'text',text:'Posted'}]});
+  assert.equal(comments.sections[0].title,'app.go:4');assert.equal(comments.sections[0].text,'Check this branch.');
+  const source=present('mcp__codex_apps__github.fetch_file',{path:'error.json'},{structuredContent:{encoding:'utf-8',display_url:'https://github.com/owner/repo/blob/main/error.json',content:'{\"error\":\"example\",\"isError\":true,\"status\":\"failed\"}'}});
+  assert.equal(source.status,'recorded','fetched JSON fields are source content, not tool outcome flags');
+  const page=present('mcp__chrome__get_page_text',{}, {content:[{type:'text',text:'{\"error\":\"a page describing errors\",\"status\":\"failed\"}'}]});
+  assert.equal(page.status,'recorded');assert.match(page.sections[0].text,/a page describing errors/);
+  const pharos=present('mcp__pharos__search_conversations',{query:'retained context'},{items:[{title:'Research',snippet:'A **useful** excerpt.'}],has_more:true});
+  assert.equal(pharos.sections[0].text,'A **useful** excerpt.');assert.ok(pharos.facts.some(([key])=>key==='Coverage'));
+  const stats=present('mcp__pharos__query_statistics',{metric:'tools'},{rows:[{tool:'Docs',count:3},{tool:'Browser',count:0}]});
+  assert.deepEqual(plain(stats.sections[0].rows),[['Docs','3'],['Browser','0']]);
+  const overview=present('mcp__pharos__get_conversation_overview',{}, {title:'Parser review',request:{text:'Review **this**.'},last_response:{text:'A recorded finding.'},note:'Extractive previews.'});
+  assert.equal(overview.target,'Parser review');assert.deepEqual(plain(overview.sections.map(section=>section.text)),['Review **this**.','A recorded finding.','Extractive previews.']);
+  const work=present('mcp__pharos__get_work_detail',{}, {items:[{title:'Research',purpose:'Compare reports',outcome:'Drafted brief'}]});
+  assert.deepEqual(plain(work.sections.map(section=>section.text)),['Research','Compare reports','Drafted brief']);
+  const groups=present('mcp__pharos__query_statistics',{}, {groups:[{keys:{provider:'claude'},values:{calls:0,cost:null}}],population_complete:false});
+  assert.deepEqual(plain(groups.sections[0].rows),[['claude','0','Unavailable']]);
+  assert.ok(groups.facts.some(([key,value])=>key==='Population'&&value==='Incomplete'));
+  const gmail=present('mcp__Gmail__search_threads',{query:'from:example.com'},{structured_content:{threads:[],resultCountEstimate:'1'}});
+  assert.deepEqual(plain(gmail.facts),[['Threads retained','0'],['Estimated matches','1']]);
+  const link=present('mcp__pharos__site_link',{}, {title:'Habits',summary:'Recorded view',url:'/analyze?analyze_days=30'});
+  assert.equal(link.href,'/analyze?analyze_days=30');
+  assert.equal(present('mcp__pharos__site_link',{}, {url:'javascript:alert(1)'}).href,'');
+});
+
 test('ChatGPT references and voice remain evidence without synthesizing tool calls',()=>{
   const message={id:'chat-message',kind:'message',role:'assistant',text:'A cited answer',raw_text:JSON.stringify({author:{role:'assistant'},content:{content_type:'multimodal_text',parts:[{content_type:'audio_transcription',text:'A cited answer',direction:'out'}]},metadata:{model_slug:'bidi',content_references:[{type:'webpage',url:'https://example.com',title:'Citation'},{type:'widget',dil:{url:'https://do-not-execute.example'}}],search_result_groups:[{domain:'example.com',entries:[{url:'https://example.com',title:'Duplicate'},{url:'javascript:alert(1)',title:'Unsafe'},{url:'https://another.example',title:'Result',snippet:'Exported snippet'}]}]}})};
   const context=reader.chatGPTMessageContext(message);

@@ -353,8 +353,16 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		}
 		result.Parsed += physicalPartCount(parts)
 		if record == nil {
-			err := tracker.hold(c, parts)
-			return err
+			for _, part := range parts {
+				if part.evidenceObservation {
+					err := c.acceptRepeatedObservation(ctx, adapter, parts, tracker)
+					if err == nil {
+						c.boundWAL(ctx, walSizeLimit)
+					}
+					return err
+				}
+			}
+			return tracker.hold(c, parts)
 		}
 		retainedRecordIdentity(captureViewOf(adapter), record, parts)
 		if mode.plan != nil {
@@ -372,7 +380,10 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		var storedDigest string
 		if err := c.DB.QueryRow(`SELECT digest FROM source_record_states WHERE host_id=? AND source_name=? AND source_kind=?
 			AND source_account=? AND source_id=?`, host, config.Name, record.SourceKind, record.Account, record.SourceID).Scan(&storedDigest); err == nil && storedDigest == digest {
-			if !mode.force {
+			// Evidence-bearing records must still verify current authority and
+			// advance their source time in acceptUnchangedEvidence below. The
+			// last parsed digest can outlive another source's publication.
+			if !mode.force && record.EvidenceIdentity == "" {
 				result.SkippedCurrent++
 				return tracker.hold(c, parts)
 			}
@@ -455,7 +466,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 					return err
 				}
 			}
-			if mode.written != nil && !copied {
+			if mode.written != nil && !copied && record.ClaudeSettings == nil {
 				workspaceID, err = storedWorkspaceID(tx, *record)
 				if err != nil {
 					return err
@@ -485,7 +496,9 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			result.SkippedCurrent++
 			return nil
 		}
-		result.Workspaces++
+		if record.ClaudeSettings == nil {
+			result.Workspaces++
+		}
 		result.Conversations += conversations
 		result.Messages += messages
 		if mode.written != nil && workspaceID != "" {
@@ -676,7 +689,9 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 			return commitErr
 		}
 		c.boundWAL(context.Background(), walSizeLimit)
-		result.Workspaces++
+		if record.ClaudeSettings == nil {
+			result.Workspaces++
+		}
 		result.Conversations += conversations
 		result.Messages += messages
 		delete(selected, record.SourceID)
@@ -753,6 +768,9 @@ func ingestCopyModeContext(ctx context.Context, tx *sql.Tx, record WorkspaceReco
 }
 
 func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture, force bool, repositoryOptions ...repositoryOptions) (int, int, error) {
+	if record.ClaudeSettings != nil {
+		return 0, 0, ingestClaudeSettings(ctx, tx, record, host, source)
+	}
 	// The caller already holds the catalog writer. Check cancellation within
 	// this atomic record, but never pause for queries while holding that lock.
 	if err := ctx.Err(); err != nil {

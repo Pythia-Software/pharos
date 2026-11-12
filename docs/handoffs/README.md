@@ -102,6 +102,14 @@ rows through one materialized validation stage per field. On 1.5 million
 rows the compiled request takes 8.5 s where the same aggregate written by
 hand takes 2.4 s. It can be sent directly to the Query Table team.
 
+[`query-table-shared-clause-scans.md`](query-table-shared-clause-scans.md)
+(resolved in 1.0.7) asked for one read of a metric request's population
+across its clauses; the Thinking dashboards moved onto query-v3 with it.
+[`query-table-shared-scan-groupings.md`](query-table-shared-scan-groupings.md)
+(resolved in 1.0.8) asked for number group keys and a shared read over
+derived and computed sources; the agent depth breakdown and views while
+timings await refresh now take seconds, not tens of seconds.
+
 [`query-table-go-link-codec.md`](query-table-go-link-codec.md) asked for Go
 `EncodeQueryLink` and `DecodeQueryLink`, at parity with `encodeQuery` and
 `decodeQueryStrict`, for the [site map](../site-map.md)'s link tools. Query
