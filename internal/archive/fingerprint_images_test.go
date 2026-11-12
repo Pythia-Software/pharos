@@ -52,6 +52,9 @@ func renderFingerprintTestEntity(t *testing.T, c *Catalog, entity, id string, wa
 
 func TestFingerprintWaitsForAnalysis(t *testing.T) {
 	c, config := seedFingerprintLibrary(t)
+	if err := c.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{agentEventsFlag: false}}); err != nil {
+		t.Fatal(err)
+	}
 	srv := testServer(t, config, c)
 	if err := c.ensureLabelsSchema(t.Context()); err != nil {
 		t.Fatal(err)
@@ -138,6 +141,75 @@ UPDATE fingerprint_entities SET priority=100 WHERE entity='conversation' AND id=
 			}
 		})
 	}
+	t.Run("unavailable labeler", func(t *testing.T) {
+		useSupportDir(t)
+		c, config := seedFingerprintLibrary(t)
+		config.Labels.Enabled = true
+		config.Labels.Worker, config.Labels.Runtime = "", ""
+		if err := c.ensureLabelsSchema(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.ensureAgentEventsLedger(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		s := testServer(t, config, c)
+		if err := c.scheduleDefaultModelBackfill(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('fp-a','pending');
+INSERT INTO agent_events_dirty(conversation_id,token) VALUES('fp-a','pending');
+UPDATE fingerprint_entities SET dirty=0;
+UPDATE fingerprint_entities SET dirty=1,next_attempt=0 WHERE (entity='conversation' AND id='fp-a') OR (entity='workspace' AND id='fp-w')`)
+		ctx := s.fingerprintContext(t.Context())
+		if pending, err := c.fingerprintImagesPending(ctx); err != nil || !pending {
+			t.Fatalf("unavailable models held fingerprints: %v %v", pending, err)
+		}
+		if did, more, err := c.renderFingerprintBatch(ctx, workAllocation{CPUs: 1}, false, time.Minute); err != nil || more || did != 2 {
+			t.Fatalf("render while unavailable: count=%d more=%v %v", did, more, err)
+		}
+		for _, entity := range []fingerprintRequest{{"conversation", "fp-a", "wide"}, {"workspace", "fp-w", "wide"}} {
+			if image, err := c.fingerprintMetadata(t.Context(), entity, true); err != nil || image.State != "ready" {
+				t.Fatalf("%s fingerprint: %+v %v", entity.Entity, image, err)
+			}
+		}
+		deferred, err := c.freshnessDeferred(t.Context())
+		if err != nil || deferred["labels"].generation <= deferred["labels"].completed || deferred["agent_events"].generation <= deferred["agent_events"].completed {
+			t.Fatalf("rendering acknowledged model backlog: %v %v", deferred, err)
+		}
+		if !s.Config().Labels.Enabled || !s.agentEventsEnabled(t.Context()) {
+			t.Fatal("unavailable worker changed the model settings")
+		}
+		// A configured but missing worker or runtime has the same fallback.
+		worker := filepath.Join(t.TempDir(), "worker")
+		for _, settings := range []LabelerSettings{{Enabled: true, Worker: worker}, {Enabled: true, Worker: worker, Runtime: filepath.Join(t.TempDir(), "missing-runtime")}} {
+			if settings.Runtime != "" {
+				if err := os.WriteFile(worker, []byte("worker"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.configMu.Lock()
+			s.config.Labels = settings
+			s.configMu.Unlock()
+			if policy := fingerprintPolicy(s.fingerprintContext(t.Context())); policy.labels || policy.events {
+				t.Fatalf("missing worker or runtime still holds fingerprints: %+v", policy)
+			}
+		}
+		// Once the worker is available, model backlog is a dependency again;
+		// missing downloadable assets do not make it permanently unavailable.
+		s.configMu.Lock()
+		s.config.Labels = LabelerSettings{Enabled: true, Worker: worker}
+		s.configMu.Unlock()
+		execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=1,next_attempt=0 WHERE entity='conversation' AND id='fp-a'`)
+		if pending, err := c.fingerprintImagesPending(s.fingerprintContext(t.Context())); err != nil || pending {
+			t.Fatalf("available worker did not restore the dependency: %v %v", pending, err)
+		}
+		// A completed model update invalidates the provisional images.
+		execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=0 WHERE entity='conversation' AND id='fp-a';
+DELETE FROM message_labels_dirty WHERE conversation_id='fp-a'`)
+		if dirty := countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1 AND ((entity='conversation' AND id='fp-a') OR (entity='workspace' AND id='fp-w'))`); dirty != 2 {
+			t.Fatalf("model update did not requeue provisional fingerprints: %d", dirty)
+		}
+	})
 	t.Run("requested passes", testFingerprintRequestedPasses)
 	t.Run("blocked maintenance demand", func(t *testing.T) {
 		c, config := seedFingerprintLibrary(t)

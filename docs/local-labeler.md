@@ -8,17 +8,17 @@ in [library labeling](library-labeling.md) (taxonomy `candidate-0.3`; the
 research is in [labeler-research/](labeler-research/README.md), the decision
 in [shipping-encoder.md](labeler-research/shipping-encoder.md)).
 
-**Off by default.** Labels are stored in the catalog, shown by
+**On by default.** Labels are stored in the catalog, shown by
 `pharos labels status` and `pharos labels explain`, and highlighted in the
 conversation reader when its **Message labels** highlight is on
 ([In the reader](#in-the-reader)). The [Message Labels dashboard and query pages](message-labels.md)
 explore the stored labels without running inference. Conversation timelines
 combine message labels, caller-text origin and recorded tool actions.
 
-## Turning it on
+## Background processing
 
 In **Settings → Background Processing**, open the **Message labels** step
-and turn on **Message labels**. This saves `labels_enabled` in the library’s
+to turn **Message labels** off or back on. This saves `labels_enabled` in the library’s
 configuration and applies it immediately, without restarting Pharos. The
 **Agent events** step has its own **Agent events (preview)** switch for
 [agent events](agent-events.md). Disabled models appear under **Only when you ask**. The control stays
@@ -37,7 +37,7 @@ runtime instead, and comes first:
 
 | Key | Environment | Meaning |
 |---|---|---|
-| `labels_enabled` | — | `true` labels messages as the chain's last stage and in the Message labels background item, and downloads the model when it is missing (default `false`) |
+| `labels_enabled` | — | `true` labels messages as the chain's last stage and in the Message labels background item, and downloads the model when it is missing (default `true`) |
 | `labels_model_dir` | `PHAROS_LABELS_MODEL_DIR` | the model directory (below); default the app bundle's, then the download |
 | `labels_variant` | — | `int8` or `fp32`; managed downloads use the model release's default, while custom directories retain int8 unless set |
 | `labels_worker` | `PHAROS_LABELS_WORKER` | the worker executable; default `pharos-labeler-ort` beside `pharos` |

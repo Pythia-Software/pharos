@@ -462,6 +462,10 @@ func TestAgentEventsAreAChainStageOnlyWhenEnabled(t *testing.T) {
 		seedLabelingCatalog(t, catalog)
 		config.Labels, config.AgentEvents = agentEventsTestSettings(t)
 		config.Labels.Enabled, config.AgentEvents.Enabled = false, mode == "configuration"
+		if mode == "off" {
+			execTx(t, catalog.DB, `INSERT INTO ui_preferences(key,value) VALUES('`+agentEventsFlag+`','false')`)
+			catalog.flags.invalidate()
+		}
 		if mode == "settings switch" {
 			execTx(t, catalog.DB, `INSERT INTO ui_preferences(key,value) VALUES('`+agentEventsFlag+`','true')`)
 			catalog.flags.invalidate()

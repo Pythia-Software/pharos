@@ -18,7 +18,7 @@ test("Agent Experience is listed by its Settings switch or by the library's conf
   const saved = globalThis.window;
   t.after(() => { globalThis.window = saved; });
   const page = (preference, configured) => ({ pharosPrefs: { get: (key, fallback) => key === AGENT_EVENTS_KEY && preference !== undefined ? preference : fallback }, pharosConfiguredFlags: configured });
-  for (const [preference, configured, listed] of [[undefined, {}, false], [true, {}, true], [undefined, { [AGENT_EVENTS_KEY]: true }, true], [false, undefined, false]]) {
+  for (const [preference, configured, listed] of [[undefined, {}, true], [true, {}, true], [false, { [AGENT_EVENTS_KEY]: true }, true], [false, undefined, false]]) {
     globalThis.window = page(preference, configured);
     assert.equal(agentEventsEnabled(), listed, `preference ${preference}, configured ${JSON.stringify(configured)}`);
   }

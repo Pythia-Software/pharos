@@ -44,8 +44,9 @@ func (f *featureFlagCache) invalidate() {
 	f.mu.Unlock()
 }
 
-// featureFlag reports whether the boolean preference key is true. Anything
-// else (missing, not a boolean, unreadable) is off.
+// featureFlag reports whether the boolean preference key is true. Agent
+// events default on when no preference has been saved; other missing flags,
+// invalid values and unreadable preferences are off.
 func (c *Catalog) featureFlag(ctx context.Context, key string) bool {
 	if c == nil {
 		return false
@@ -62,7 +63,9 @@ func (c *Catalog) featureFlag(ctx context.Context, key string) bool {
 	err := c.reader().QueryRowContext(ctx, "SELECT value FROM ui_preferences WHERE key=?", key).Scan(&raw)
 	if err == nil {
 		_ = json.Unmarshal([]byte(raw), &on)
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	} else if errors.Is(err, sql.ErrNoRows) {
+		on = key == agentEventsFlag
+	} else {
 		// A failed read is not cached: the next caller asks again.
 		return false
 	}

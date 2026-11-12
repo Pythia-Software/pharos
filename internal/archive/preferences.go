@@ -118,8 +118,9 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 		b.mu.Unlock()
 	}
 	_, setsEvents := updates[agentEventsFlag]
-	checkEvents := c.work != nil && (setsEvents || slices.Contains(deletes, agentEventsFlag))
-	wasEventsEnabled := checkEvents && c.work.server.agentEventsEnabled(ctx)
+	checkEvents := setsEvents || slices.Contains(deletes, agentEventsFlag)
+	wasEventsEnabled := checkEvents && c.featureFlag(ctx, agentEventsFlag)
+	wasEventsEffective := checkEvents && c.work != nil && c.work.server.agentEventsEnabled(ctx)
 	err := c.writeTransaction(ctx, "ui-preferences", func(tx *sql.Tx) error {
 		for key, value := range updates {
 			if _, err := tx.Exec("INSERT INTO ui_preferences(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
@@ -130,6 +131,11 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 			if _, err := tx.Exec("DELETE FROM ui_preferences WHERE key=?", key); err != nil {
 				return err
 			}
+		}
+		// Turning the events pass back on must revisit earlier messages even
+		// when the disabled stage had already been acknowledged.
+		if checkEvents && !wasEventsEnabled && (updates[agentEventsFlag] == "true" || slices.Contains(deletes, agentEventsFlag)) {
+			return markSyncDeferredStage(tx, "agent_events")
 		}
 		return nil
 	})
@@ -146,7 +152,7 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 			b.mu.Unlock()
 		}
 		c.rememberSavedFlags(updates, deletes)
-		if checkEvents && wasEventsEnabled != c.work.server.agentEventsEnabled(ctx) {
+		if checkEvents && c.work != nil && wasEventsEffective != c.work.server.agentEventsEnabled(ctx) {
 			c.work.runner.InterruptKinds([]string{"analysis.agent_events"}, "agent analysis policy changed; reissue the request with the current analyses")
 			c.work.runner.Wake()
 		}

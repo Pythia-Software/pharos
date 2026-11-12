@@ -735,6 +735,61 @@ func TestBackgroundLabelRunTimesWhileDeferred(t *testing.T) {
 	}
 }
 
+func TestModelDefaultsAndOneTimeBackfill(t *testing.T) {
+	useSupportDir(t)
+	catalog, config := testCatalog(t)
+	if err := os.WriteFile(config.Path, []byte("# Library settings\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadConfig(config.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.CatalogPath, loaded.APIToken = config.CatalogPath, config.APIToken
+	server := testServer(t, loaded, catalog)
+	ctx := t.Context()
+	if !loaded.Labels.Enabled || !server.agentEventsEnabled(ctx) {
+		t.Fatal("both models should be enabled with no saved settings")
+	}
+	if events := server.agentEventsSettings(ctx); events["enabled"] != true || events["can_change"] != true {
+		t.Fatalf("default agent events switch: %v", events)
+	}
+	// Simulate an existing library whose disabled stages were acknowledged.
+	execTx(t, catalog.DB, `INSERT INTO sync_deferred(name,generation,completed_generation,changed_at) VALUES('labels',2,2,'2026-01-01'),('agent_events',2,2,'2026-01-01') ON CONFLICT(name) DO UPDATE SET generation=2,completed_generation=2`)
+	if err := catalog.scheduleDefaultModelBackfill(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deferred, err := catalog.freshnessDeferred(ctx)
+	if err != nil || deferred["labels"].generation <= deferred["labels"].completed || deferred["agent_events"].generation <= deferred["agent_events"].completed {
+		t.Fatalf("existing messages were not scheduled: %v %v", deferred, err)
+	}
+	execTx(t, catalog.DB, `UPDATE sync_deferred SET completed_generation=generation WHERE name IN ('labels','agent_events')`)
+	if err := catalog.scheduleDefaultModelBackfill(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deferred, err = catalog.freshnessDeferred(ctx)
+	if err != nil || deferred["labels"].generation != deferred["labels"].completed || deferred["agent_events"].generation != deferred["agent_events"].completed {
+		t.Fatalf("backfill was scheduled more than once: %v %v", deferred, err)
+	}
+	if response := apiCall(t, server, loaded.APIToken, http.MethodPost, "/api/labels/settings", map[string]any{"enabled": false}); response.Code != http.StatusOK {
+		t.Fatalf("turn labels off: %d %s", response.Code, response.Body.String())
+	}
+	if err := catalog.SetUIPreferences(ctx, map[string]any{"set": map[string]any{agentEventsFlag: false}}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := LoadConfig(config.Path)
+	if err != nil || reloaded.Labels.Enabled || server.agentEventsEnabled(ctx) {
+		t.Fatalf("off choices were not saved: labels=%t events=%t err=%v", reloaded.Labels.Enabled, server.agentEventsEnabled(ctx), err)
+	}
+	if err := catalog.SetUIPreferences(ctx, map[string]any{"set": map[string]any{agentEventsFlag: true}}); err != nil {
+		t.Fatal(err)
+	}
+	deferred, err = catalog.freshnessDeferred(ctx)
+	if err != nil || !server.agentEventsEnabled(ctx) || deferred["agent_events"].generation <= deferred["agent_events"].completed {
+		t.Fatalf("turning events back on did not schedule earlier messages: %v %v", deferred, err)
+	}
+}
+
 // The settings API: modes, the daily time, the interval, overrides within
 // the allowed choices, and Run now; the status snapshot carries the
 // schedule.
@@ -746,6 +801,9 @@ func TestMessageLabelsSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := testServer(t, config, catalog)
+	if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{agentEventsFlag: false}}); err != nil {
+		t.Fatal(err)
+	}
 	read := func() map[string]any {
 		t.Helper()
 		response := apiCall(t, server, config.APIToken, http.MethodGet, "/api/background", nil)
@@ -1353,6 +1411,9 @@ func TestBackgroundPassHonorsHeldPrerequisites(t *testing.T) {
 // starts, not from the plan made before the pass.
 func TestBackgroundReviewBringsAlongStagesPendingWhenTheChainStarts(t *testing.T) {
 	catalog, config := testCatalog(t)
+	if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{agentEventsFlag: false}}); err != nil {
+		t.Fatal(err)
+	}
 	server := testServer(t, config, catalog)
 	ctx := context.Background()
 	settings, _ := catalog.backgroundSettings(ctx, time.Now())
