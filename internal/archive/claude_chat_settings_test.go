@@ -488,3 +488,123 @@ enabled = false
 		t.Fatal("shared source was duplicated instead of enabled", source)
 	}
 }
+
+func TestClaudeSettingsMissingModelCoverage(t *testing.T) {
+	c, _ := testCatalog(t)
+	model, other := "claude-test", "claude-other"
+	for _, tc := range []struct {
+		name, harness, reported, messageModel string
+		models                                []*string
+		conflict, wrongAccount                bool
+		want                                  int64
+	}{
+		{name: "missing", want: 1},
+		{name: "reported", reported: model},
+		{name: "assistant", messageModel: model},
+		{name: "selection", models: []*string{&model}},
+		{name: "unknown-reset", models: []*string{&model, nil}, want: 1},
+		{name: "conflict", models: []*string{&model, &other}, conflict: true, want: 1},
+		{name: "other-account", models: []*string{&model}, wrongAccount: true, want: 1},
+		{name: "other-harness", harness: "claude-code-cloud-export"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			harness := defaultString(tc.harness, "claude-ai-export")
+			ingestRecords(t, c, WorkspaceRecord{SourceKind: "claude-ai", SourceID: tc.name, Account: tc.name,
+				Conversations: []ConversationRecord{{NativeID: settingsConversation, Provider: "claude", Account: tc.name,
+					Harness: harness, Model: tc.reported, Messages: []MessageRecord{{NativeID: "reply", Role: "assistant", Kind: "message", Text: "reply", Model: tc.messageModel}}}}})
+			for i, selected := range tc.models {
+				date := fmt.Sprintf("2026-09-%02dT12:00:00Z", i+1)
+				if tc.conflict {
+					date = "2026-09-01T12:00:00Z"
+				}
+				account := tc.name
+				if tc.wrongAccount {
+					account = "unrelated"
+				}
+				snapshot := claudeSettingsSnapshot{Version: 1, Organization: settingsOrg, ObservedAt: date, TimeBasis: "http_date", CacheEntry: settingsCacheEntry,
+					Conversations: []claudeConversationSetting{{Conversation: settingsConversation, Model: selected}}}
+				record := claudeSettingsRecord(SourceConfig{Account: account}, snapshot)
+				if err := c.writeTransaction(t.Context(), "coverage observation", func(tx *sql.Tx) error {
+					return ingestClaudeSettings(t.Context(), tx, record, "host", "settings")
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			coverage, err := c.claudeSettingsCoverage(t.Context(), tc.name, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.harness != "" {
+				if len(coverage) != 0 {
+					t.Fatal("non-chat export counted", coverage)
+				}
+				return
+			}
+			if len(coverage) != 1 || coverage[0].Conversations != 1 || coverage[0].MissingModels != tc.want {
+				t.Fatalf("coverage = %+v, want missing=%d", coverage, tc.want)
+			}
+			var id string
+			if err := c.reader().QueryRow("SELECT id FROM conversations WHERE account=?", tc.name).Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			filtered, err := c.claudeSettingsCoverage(t.Context(), "", id)
+			if err != nil || len(filtered) != 1 || filtered[0] != coverage[0] {
+				t.Fatal("conversation filter", filtered, err)
+			}
+		})
+	}
+}
+
+func TestClaudeSettingsCaptureOnlySetup(t *testing.T) {
+	probeHome(t)
+	useHost(t, "settings-backfill-host")
+	path := probeLibrary(t, "")
+	server := probeServer(t, path)
+	settings := claudeSettingsFixture(t)
+	export := SourceConfig{Name: "export", Kind: "claude-ai", Account: "work", Enabled: true, Path: writeSourceFileAt(t, `[{"uuid":"`+settingsConversation+`","chat_messages":[{"uuid":"prompt","sender":"human","text":"question"}]}]`)}
+	ingestSource(t, server.Catalog, export)
+	code, doc := probeCall(t, server, http.MethodGet, "/api/claude-chat-settings/coverage", "")
+	if code != 200 || !strings.Contains(jsonText(doc), `"missing_models":1`) || !strings.Contains(jsonText(doc), `"configured":false`) {
+		t.Fatal(code, doc)
+	}
+	for _, account := range []string{"", "unrelated"} {
+		code, _ := probeCall(t, server, http.MethodPost, "/api/claude-chat-settings/setup", jsonText(map[string]any{"capture_only": true, "account": account, "path": settings.Path}))
+		if code != 400 {
+			t.Fatal("accepted an account without imported chats", code)
+		}
+	}
+	body := jsonText(map[string]any{"capture_only": true, "account": "work", "path": settings.Path})
+	for range 2 {
+		code, setup := probeCall(t, server, http.MethodPost, "/api/claude-chat-settings/setup", body)
+		if code != 200 || setup["enabled"] != false || setup["account"] != "work" {
+			t.Fatal(code, setup)
+		}
+	}
+	config := server.Config()
+	if len(config.Sources) != 1 || config.Sources[0].Enabled || config.Sources[0].Kind != claudeSettingsKind {
+		t.Fatal("one-time capture enabled ongoing acquisition or duplicated a source", config.Sources)
+	}
+	// Explicit named captures may read a paused source; indexing joins metadata
+	// without rewriting the exported conversation or starting a recorder.
+	summary, err := Capture(t.Context(), config, config.Sources, nil)
+	if err != nil || !summary.OK {
+		t.Fatal(summary, err)
+	}
+	targets, err := captureTargets(config.CaptureRoot, nil, true, nil)
+	if err != nil || len(targets) != 1 {
+		t.Fatal(targets, err)
+	}
+	if result := server.Catalog.IndexCapture(t.Context(), targets[0], nil); result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	coverage, err := server.Catalog.claudeSettingsCoverage(t.Context(), "work", "")
+	if err != nil || len(coverage) != 1 || coverage[0].MissingModels != 0 {
+		t.Fatal(coverage, err)
+	}
+	if server.claudeSettingsRecording.cancel != nil || server.Config().Sources[0].Enabled {
+		t.Fatal("one-time capture started ongoing collection")
+	}
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM conversations WHERE model IS NOT NULL AND model<>''") != 0 {
+		t.Fatal("observed selections became executed models")
+	}
+}

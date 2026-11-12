@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { claudeImportFixture, defaultApi, projectColorFixture, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
+import { claudeImportFixture, claudeSettingsCoverageFixture, defaultApi, projectColorFixture, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const missingPrices = { ...defaultApi['GET /api/pricing'], unpriced_tokens: 5000,
@@ -320,15 +320,22 @@ const ROUTES = [
     await guide.getByRole('button',{name:'Show missing download links',exact:true}).click();
     await guide.getByRole('link',{name:/Download projects/}).waitFor();
   },shown:'#pharosOnboarding'},
-  {name:'Claude import settings',url:'/settings/sources',ready:'#pharosAddSource',api:{
+  {name:'Claude import model backfill',url:'/settings/sources',ready:'#pharosAddSource',api:{
     'GET /api/claude-imports':({query})=>query.get('id')?{...claudeImportFixture,source:{added:['claude-ai-imports']}}:{jobs:[claudeImportFixture],run:{running:false}},
-    'GET /api/claude-chat-settings/setup':{source:'claude-settings',path:'/Users/example/a-very-long-profile-folder-without-breaks-in-the-name/Library/Application Support/Claude',account:'local',configured:true,enabled:false,scope:'host'},
+    'GET /api/claude-chat-settings/setup':{enabled:false},
+    'GET /api/claude-chat-settings/coverage':({state})=>({accounts:state.importIndexed?[claudeSettingsCoverageFixture]:[]}),
+    'POST /api/capture':{run:{id:'capture-model-backfill',kind:'capture',state:'complete',sources:['claude-ai-imports'],results:[]}},
+    'GET /api/capture':{active:false,runs:[{id:'capture-model-backfill',kind:'capture',state:'complete',sources:['claude-ai-imports'],results:[]}]},
+    'POST /api/index':({state})=>{state.importIndexed=true;return {run:{id:'index-model-backfill',state:'complete',sources:['claude-ai-imports'],results:[]}}},
+    'GET /api/activity':{active:0,runs:[{id:'index-model-backfill',state:'complete',sources:['claude-ai-imports'],results:[]}]},
   },open:async page=>{
     await page.evaluate(()=>window.pharosOnboarding.open({mode:'import'}));
     const guide=page.locator('#pharosOnboarding');
     await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
     await guide.getByRole('button',{name:/Resume export/}).click();
-    await guide.getByRole('heading',{name:'Add model and thinking settings?',exact:true}).waitFor();
+    await guide.getByRole('button',{name:'Capture and index conversations',exact:true}).click();
+    await guide.getByRole('button',{name:'Index now',exact:true}).click();
+    await guide.getByRole('button',{name:'Capture settings',exact:true}).waitFor();
   },shown:'#pharosOnboarding'},
   {name:'Source settings guide',url:'/settings/sources',ready:'#pharosFindSources',open:async page=>{
     const trigger=page.locator('#sourceToolbar').getByRole('button',{name:'Data Guide',exact:true});
@@ -480,6 +487,10 @@ const ROUTES = [
   { name: "Daily repository writing", url: "/cards?cards=library&card_search=human-repository-words-trend", ready: '[data-card-id="human-repository-words-trend"] .query-cover-columns' },
   { name: "Weekday distributions", url: "/cards?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
   { name: "Search table", url: "/library?view=table", ready: "#queryTableLibrary .qt-row" },
+  { name: "Claude missing model settings in conversation", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .claude-settings-backfill button", api:{
+    ...claudeResearchAPI,
+    'GET /api/claude-chat-settings/coverage':{accounts:[{...claudeSettingsCoverageFixture,conversations:1,missing_models:1}]},
+  } },
   { name: "Claude export research", url: `${work}/conversation/${rootConversation}`, api: claudeResearchAPI, ready: ".message-citations", open: async page => {
     await page.locator('.tool-event > summary').filter({hasText:'notes.pdf'}).click();
     await page.locator('.tool-output').filter({hasText:'Archived research notes'}).waitFor();
@@ -780,6 +791,9 @@ const ROUTES = [
     },shown:`#cloud-step-${step-1}`
   })),
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
+  { name: "Claude missing model settings", url: "/settings/sources", ready: "#claudeSettingsBackfill button", api:{
+    'GET /api/claude-chat-settings/coverage':{accounts:[claudeSettingsCoverageFixture]},
+  } },
   { name: "Background Processing", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
   { name: "Background Processing integrity warning", url: "/settings/sync", ready: ".sync-warning", api: {
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], issues: [{ id: "mismatch", source_name: "codex", unit: `/sessions/${"long-workspace-name/".repeat(12)}rollout.jsonl` }] },
