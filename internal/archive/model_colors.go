@@ -67,7 +67,7 @@ func (c *Catalog) modelColors(ctx context.Context, inventory bool) (modelColorPa
 	return palette, nil
 }
 
-func (c *Catalog) setModelColor(ctx context.Context, id, color string) error {
+func validateModelColor(id, color string) error {
 	kind, key, ok := strings.Cut(id, ":")
 	if !ok || key == "" || len(key) > 256 || strings.ContainsAny(key, "\x00\r\n") || (kind != "provider" && kind != "model" && kind != "source") {
 		return fmt.Errorf("choose a provider or model color")
@@ -83,12 +83,31 @@ func (c *Catalog) setModelColor(ctx context.Context, id, color string) error {
 	if color != "" && !validProjectColor(color) {
 		return fmt.Errorf("choose a six-digit hex color")
 	}
-	return c.writeTransaction(ctx, "model color", func(tx *sql.Tx) error {
-		if color == "" {
-			_, err := tx.ExecContext(ctx, `DELETE FROM ui_preferences WHERE key=?`, modelColorPrefix+id)
+	return nil
+}
+
+// Validate the whole proposed palette before saving any of its choices.
+func (c *Catalog) setModelColors(ctx context.Context, changes map[string]string) error {
+	if len(changes) == 0 {
+		return fmt.Errorf("choose at least one color change")
+	}
+	for id, color := range changes {
+		if err := validateModelColor(id, color); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO ui_preferences(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, modelColorPrefix+id, jsonText(strings.ToLower(color)))
-		return err
+	}
+	return c.writeTransaction(ctx, "model colors", func(tx *sql.Tx) error {
+		for id, color := range changes {
+			var err error
+			if color == "" {
+				_, err = tx.ExecContext(ctx, `DELETE FROM ui_preferences WHERE key=?`, modelColorPrefix+id)
+			} else {
+				_, err = tx.ExecContext(ctx, `INSERT INTO ui_preferences(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, modelColorPrefix+id, jsonText(strings.ToLower(color)))
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }

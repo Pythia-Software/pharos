@@ -64,4 +64,28 @@ func TestModelColorsPersistIndependentChoicesAndDiscoverUnpricedModels(t *testin
 	if response := preferencesCall(t, server, http.MethodGet, "/settings/models", ""); response.Code != http.StatusOK {
 		t.Fatalf("settings route: %d", response.Code)
 	}
+
+	reset = modelColorPalette{}
+	response = preferencesCall(t, server, http.MethodPost, "/api/model-colors", `{"changes":{"provider:openai":"#334455","model:gpt-local":"","model:opus-custom":"#AABBCC"}}`)
+	if err := json.Unmarshal(response.Body.Bytes(), &reset); err != nil || response.Code != http.StatusOK {
+		t.Fatalf("palette save: %d %v", response.Code, err)
+	}
+	if _, present := reset.Overrides["model:gpt-local"]; present || reset.Overrides["provider:openai"] != "#334455" || reset.Overrides["model:opus-custom"] != "#aabbcc" || reset.Overrides["source:codex"] != "#654321" || reset.Overrides["provider:reflection"] != "#557799" {
+		t.Fatalf("palette save lost independent choices or removals: %+v", reset)
+	}
+	beforeInvalid := jsonText(reset.Overrides)
+	for _, body := range []string{
+		`{"changes":{}}`, `{"changes":[]}`, `{"changes":{"model:gpt-local":null}}`,
+		`{"changes":{"model:gpt-local":"#aabbcc","provider:unknown":"#123456"}}`,
+		`{"changes":{"provider:openai":"red","model:gpt-local":"#aabbcc"}}`,
+		`{"changes":{"provider:openai":"#123456"},"id":"model:gpt-local","color":"#123456"}`,
+	} {
+		if result := preferencesCall(t, server, http.MethodPost, "/api/model-colors", body); result.Code != http.StatusBadRequest {
+			t.Fatalf("invalid palette edit: %s: %d", body, result.Code)
+		}
+		after, err := reopened.modelColors(t.Context(), false)
+		if err != nil || jsonText(after.Overrides) != beforeInvalid {
+			t.Fatalf("invalid palette was partially saved: %+v %v", after, err)
+		}
+	}
 }

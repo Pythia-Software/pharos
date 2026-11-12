@@ -7,9 +7,27 @@ import prices from '../../../../pricing/cost_changes.json';
 import { generateModelColors, generatedColorLuminance } from '../../../src/model-color-generation';
 import { colorForeground, colorLuminance } from '../../../src/model-color-math';
 import { modelCatalogDates, modelTimelineDates } from '../../../src/model-color-identity';
-import { colorHSL, compareModelColors, customModelColor, effectiveModelColor, installModelColors, knownModels, modelClass, modelColorKey, modelPaletteComparison, modelPaletteGroups, modelProvider, loadModelColors, modelPalette, modelSeriesColor, previewModelColor, providerColorWarnings, recommendedModelColor, saveModelColor } from '../../../src/model-colors';
+import { colorHSL, compareModelColors, customModelColor, editModelColorDrafts, effectiveModelColor, installModelColors, knownModels, modelClass, modelColorKey, modelPaletteComparison, modelPaletteGroups, modelProvider, loadModelColors, modelPalette, modelSeriesColor, previewModelColor, providerColorWarnings, recommendedModelColor, saveModelColor, saveModelColors } from '../../../src/model-colors';
 import { chartMetricTheme, chartSeriesStyle, keyColorTheme, metricSeriesColor } from '../../../src/chart-colors';
 const palette = (overrides = {}, models = []) => ({ overrides, models, sources: [] });
+
+test('palette drafts retain deliberate colors during provider edits and stage resets without saving', t => {
+  t.after(() => installModelColors(palette())); installModelColors(palette());
+  const base = '#7547b3', original = effectiveModelColor('model', 'gpt-6-sol');
+  const providerDraft = {'provider:openai':base};
+  const pinned = editModelColorDrafts(providerDraft, 'model', 'gpt-6-sol', original, base);
+  assert.equal(pinned['model:gpt-6-sol'], original, 'choosing the old color under a new base creates a deliberate override');
+  assert.deepEqual(providerDraft, {'provider:openai':base}, 'draft edits do not mutate their input');
+  assert.deepEqual(editModelColorDrafts(pinned, 'model', 'gpt-6-sol', '', base), providerDraft, 'resetting an unsaved override removes only that draft');
+  installModelColors(palette({'model:gpt-6-sol':'#abcdef'}));
+  const reset = editModelColorDrafts(providerDraft, 'model', 'gpt-6-sol', '', base);
+  assert.equal(reset['model:gpt-6-sol'], '');
+  assert.equal(previewModelColor('gpt-6-sol', base, reset['model:gpt-6-sol']), recommendedModelColor('gpt-6-sol', base));
+  assert.equal(customModelColor('model', 'gpt-6-sol'), '#abcdef');
+  assert.deepEqual(editModelColorDrafts(reset, 'model', 'gpt-6-sol', '#abcdef', base), providerDraft, 'returning to the saved override cancels its reset');
+  installModelColors(palette({'provider:openai':'#112233'}));
+  assert.equal(editModelColorDrafts({}, 'provider', 'openai', '', base)['provider:openai'], '', 'restoring a brand stages removal of the saved provider choice');
+});
 
 test('comparison rows appear only for actual proposed model-color changes', t => {
   t.after(() => installModelColors(palette()));
@@ -21,6 +39,9 @@ test('comparison rows appear only for actual proposed model-color changes', t =>
   assert.equal(modelPaletteComparison(names, base, {'model:gpt-6-sol':'#abcdef'}).changed, true);
   installModelColors(palette({'model:gpt-6-sol':'#abcdef'}));
   assert.equal(modelPaletteComparison(['gpt-6-sol'], '#7547b3').changed, false, 'a provider edit cannot alter an explicit model choice');
+  const reset = modelPaletteComparison(['gpt-6-sol'], '#7547b3', {'model:gpt-6-sol':''});
+  assert.equal(reset.entries[0].preview, recommendedModelColor('gpt-6-sol', '#7547b3'), 'a pending reset follows the proposed provider palette');
+  assert.equal(effectiveModelColor('model', 'gpt-6-sol'), '#abcdef', 'reset preview leaves saved choices alone');
 });
 
 test('palette quality warnings inspect actual version separation and extreme bases', t => {
@@ -355,6 +376,27 @@ test('failed reads and saves retain the palette; an old read cannot undo a succe
   assert.equal(modelPalette().overrides['provider:openai'], '#112233');
   assert.ok(knownModels().includes('gpt-local'), 'a save during discovery keeps the newly discovered models');
 
+});
+
+test('a palette save sends all drafts and removals together and installs only a successful response', async t => {
+  t.after(() => installModelColors(palette()));
+  const before = {'provider:openai':'#225588', 'model:gpt-6-sol':'#ee1122', 'model:sonnet-4-5':'#aa7755'};
+  installModelColors(palette(before));
+  const changes = {'provider:openai':'#7547b3', 'model:gpt-6-sol':'', 'model:gpt-6-luna':'#abcdef'};
+  let succeed = false, calls = 0;
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    calls++;
+    assert.deepEqual(JSON.parse(options.body), {changes});
+    return {ok:succeed, json:async () => palette({'provider:openai':'#7547b3', 'model:gpt-6-luna':'#abcdef', 'model:sonnet-4-5':'#aa7755'})};
+  });
+  await assert.rejects(saveModelColors(changes), /could not be saved/);
+  assert.deepEqual(modelPalette().overrides, before);
+  succeed = true;
+  await saveModelColors(changes);
+  assert.equal(calls, 2, 'one request per complete save attempt');
+  assert.equal(customModelColor('model', 'gpt-6-sol'), undefined);
+  assert.equal(customModelColor('model', 'gpt-6-luna'), '#abcdef');
+  assert.equal(customModelColor('model', 'sonnet-4-5'), '#aa7755');
 });
 
 test('picker text and edit icons retain readable contrast on palette and custom colors', () => {

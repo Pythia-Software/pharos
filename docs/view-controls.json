@@ -7306,40 +7306,31 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "02550ec595dc5885:0",
-      "file": "web/src/model-color-settings.tsx",
-      "owner": "ColorEditor",
-      "tag": "button",
-      "control": "onClick={() => void save(kind, name, draft)} aria-label={`Save color for ${label}`}",
-      "contract": "settings",
-      "reason": "Saves a persistent library provider/model color preference. The native color picker holds an unapplied draft until Save color."
-    },
-    {
       "key": "3755037a7f824e46:0",
       "file": "web/src/model-color-settings.tsx",
       "owner": "ColorEditor",
       "tag": "input",
       "control": "aria-label={`Color for ${label}`} value={draft} onInput={event => setDraft(event.currentTarget.value)} onChange={event => setDraft(event.target.value)}",
       "contract": "settings",
-      "reason": "Edits a persistent provider/model color preference. Draft input affects only the live comparison until Save color; restoring a saved choice is an explicit settings action."
+      "reason": "Edits a persistent provider/model color preference. Draft input affects only the live comparison until the provider header Save action commits the palette."
     },
     {
-      "key": "a0e826a410603c73:0",
+      "key": "faa5d716e2934161:0",
       "file": "web/src/model-color-settings.tsx",
       "owner": "ColorEditor",
       "tag": "button",
-      "control": "onClick={() => void save(kind, name, \"\")} aria-label={`Restore ${kind === \"provider\" ? \"brand color\" : \"recommended shade\"} for ${label}`}",
+      "control": "onClick={reset} aria-label={`Restore ${kind === \"provider\" ? \"brand color\" : \"recommended shade\"} for ${label}`}",
       "contract": "settings",
-      "reason": "Restores a persistent provider brand or recommended model color preference; this is an explicit settings action."
+      "reason": "Stages removal of a saved provider/model color override. Restore brand and Use recommended affect the preview until the provider header Save action commits the palette."
     },
     {
-      "key": "933390c62be7dd1b:0",
+      "key": "ea540ed463e58650:0",
       "file": "web/src/model-color-settings.tsx",
       "owner": "PaletteBanner",
       "tag": "button",
-      "control": "id={controlID(entry.name)} aria-label={`Edit color for ${entry.name}`} onClick={() => select(entry.name)}",
+      "control": "id={row === \"saved\" ? controlID(entry.name) : undefined} aria-label={`Edit ${row === \"preview\" ? \"preview \" : \"\"}color for ${entry.name}`} onClick={() => select(entry.name)}",
       "contract": "settings",
-      "reason": "Toggles the transient inline editor for a persistent model color preference. The active swatch and its label close the editor on repeated activation; editor selection is not a shared view input."
+      "reason": "Saved and Preview swatches toggle the same transient inline model-color editor. This local editing selection is not a shared view input."
     },
     {
       "key": "111d4cff6702abe0:0",
@@ -7349,6 +7340,15 @@
       "control": "onClick={() => setDrafts({})}",
       "contract": "settings",
       "reason": "Discards unapplied local provider/model color drafts without changing saved preferences or the current view."
+    },
+    {
+      "key": "eed1fdb113187def:0",
+      "file": "web/src/model-color-settings.tsx",
+      "owner": "ProviderColorCard",
+      "tag": "button",
+      "control": "onClick={() => void saveDrafts()} aria-label={`Save palette for ${brand.label}`}",
+      "contract": "settings",
+      "reason": "Saves all pending provider and model color drafts for this provider in one atomic settings request."
     },
     {
       "key": "1cd6c49e2f9528e1:0",

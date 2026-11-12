@@ -846,8 +846,10 @@ export const defaultApi = {
   "GET /api/model-colors": ({ state }) => state.modelColors ??= { overrides: {}, models: ["gpt-local"], sources: [] },
   "POST /api/model-colors": ({ body, state }) => {
     state.modelColors ??= { overrides: {}, models: ["gpt-local"], sources: [] };
-    if (body.color) state.modelColors.overrides[body.id] = body.color;
-    else delete state.modelColors.overrides[body.id];
+    for (const [id, color] of Object.entries(body.changes ?? {[body.id]: body.color})) {
+      if (color) state.modelColors.overrides[id] = color;
+      else delete state.modelColors.overrides[id];
+    }
     return state.modelColors;
   },
   "GET /api/project-colors": ({ state }) => state.projectColors ??= structuredClone(projectColorFixture),

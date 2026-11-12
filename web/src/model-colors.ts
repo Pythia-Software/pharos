@@ -136,7 +136,15 @@ export function customModelColor(kind: ColorKind, key: string): string | undefin
 // Drafts never install a palette or update mounted chart CSS properties.
 export function previewModelColor(name: string, providerColor: string, draft?: string): string {
   const key = modelColorKey(name);
+  if (draft === "") return recommendedModelColor(key, providerColor);
   return draft ?? customModelColor("model", key) ?? recommendedModelColor(key, providerColor);
+}
+export function editModelColorDrafts(drafts: Record<string, string>, kind: ColorKind, name: string, color: string, providerColor: string): Record<string, string> {
+  const next = {...drafts}, id = `${kind}:${name}`;
+  const inherited = kind === "model" ? previewModelColor(name, providerColor) : effectiveModelColor(kind, name);
+  const unchanged = color === "" ? !customModelColor(kind, name) : color === inherited;
+  if (unchanged) delete next[id]; else next[id] = color;
+  return next;
 }
 export type ModelPaletteEntry = { name: string; saved: string; preview: string };
 export function modelPaletteComparison(names: readonly string[], providerColor: string, drafts: Record<string, string> = {}): { entries: ModelPaletteEntry[]; changed: boolean } {
@@ -229,8 +237,10 @@ export function loadModelColors(inventory = false): Promise<ModelPalette> {
     return palette;
   })().finally(() => { pending = undefined; });
 }
-export async function saveModelColor(kind: ColorKind, key: string, color: string) {
-  const response = await fetch("/api/model-colors", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: `${kind}:${key}`, color }) });
+async function persistModelColors(body: unknown) {
+  const response = await fetch("/api/model-colors", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!response.ok) throw new Error("Color could not be saved. Try again.");
   installModelColors(await response.json());
 }
+export const saveModelColor = (kind: ColorKind, key: string, color: string) => persistModelColors({ id: `${kind}:${key}`, color });
+export const saveModelColors = (changes: Record<string, string>) => persistModelColors({ changes });

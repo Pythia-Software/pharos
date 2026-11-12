@@ -11,15 +11,20 @@ Cyber, turquoise for Rosalind, chartreuse for Codex, and lime for general GPT.
 Other developers have independently customizable palettes. Classes
 use different parts of that range, with versions following a smooth light-to-dark progression. Each model
 editor offers a prominent color-picker button with its hex value, light/dark previews,
-Save color, and Use recommended. Provider editors offer Restore brand.
+and Use recommended. Provider headers offer Save, Discard changes and Restore
+brand; a model editor is a compact single row without an individual Save button.
 
 Each provider shows one saved-color row. A proposed-color row appears beneath
 it only when a draft changes an actual model color; both rows share the same
-model labels. Select a model swatch or label to toggle its single inline editor. The active
-swatch shows an edit icon in a contrasting color. Instructions appear once in
+model labels. Select a swatch in either row or a model label to toggle its single
+inline editor. Both rows show an edit icon on the active model, in a contrasting
+color for that row’s background. Instructions appear once in
 the page introduction.
-Provider and model drafts stay local until Save color; Discard changes clears
-pending edits. The former model-editor list and recorded-provider-label editors
+Provider and model drafts, including Use recommended and Restore brand, stay
+local until the provider header’s Save action. That action commits all pending
+changes for the provider in one atomic request. Discard changes beside Save clears
+all its pending edits. A reset preview follows the proposed provider color even
+when the model currently has a saved override. The former model-editor list and recorded-provider-label editors
 are removed. Existing stored source-label choices remain supported by the shared
 resolver for compatibility.
 
@@ -97,8 +102,8 @@ or query identities. Known catalog models and models observed in conversations,
 agent sessions, hourly usage, and model requests appear in the editor. Saved
 choices remain editable even if their models disappear from the current data.
 
-`/api/model-colors` reads saved choices (`?inventory=1` also discovers models) and accepts one `{id,color}` edit at a
-time. IDs use `provider:`, `model:`, or `source:` and existing stable keys.
+`/api/model-colors` reads saved choices (`?inventory=1` also discovers models) and accepts a batch `{changes:{id:color,...}}` or a legacy single `{id,color}` edit.
+The entire batch is validated before a single transaction writes its changes. IDs use `provider:`, `model:`, or `source:` and existing stable keys.
 Each override is a separate JSON-string preference under `pharos-model-color:`
 in the library's `ui_preferences`, preserving independent edits and traveling
 with the library. An empty color removes only that override. Reads never write
