@@ -37,7 +37,10 @@ window.initPharosAsk = function(root, {previews} = {}) {
   let clarificationDraft='';
   const connectProvider = find('#pharos-connect-provider');
   const question = find('#pharos-question');
-  const promptEditor=initAskPromptEditor(question);
+  const promptEditor=initAskPromptEditor(question,{onInspect:(chip,trigger)=>{const item=attachmentCatalog.get(chip.id);if(item)inspectAttachment(item,trigger);}});
+  let draftAttachments=[],attachmentRead=0,fileBusy=false,elementPicking=null;
+  const attachmentCatalog=new Map();
+  const contextMenu=find('#pharos-context-menu'),contextTrigger=find('.pharos-context-trigger'),contextReview=find('.pharos-context-review');
   const promptHints=askPromptHints();
   const picker = find('#pharos-model-menu');
   const pickerTrigger = find('.pharos-model-trigger');
@@ -71,8 +74,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const provider=askSelectionProvider(status.settings.selection,providers);
     try {await loadModels(provider);defaultSelection=askValidSelection(status.settings.selection,providers)?status.settings.selection:null;if(!turns.length&&!activeSessionId)setChoices(defaultSelection||defaultFor(provider));connectProvider.value=provider;}
     catch(error){report(error);regularOverride=true;}
-    loadingModels=false;const restoring=surfaceRestorePending,restored=restoreSurface();await loadChatHistory();
-    if(restoring&&askRestorePresentation(location.href,savedSurface)&&(!savedSurface.id||savedSurface.id===activeSessionId)&&promptEditor.restore(savedSurface.prompt))contextURI=promptEditor.chips().find(chip=>chip.id==='page')?.value||'';
+    loadingModels=false;const restored=restoreSurface();await loadChatHistory();
     render();
     if(restored&&presentation==='modal')question.focus({preventScroll:true});
   }
@@ -120,7 +122,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   // which drops its modal backdrop and focus trap while leaving it open.
   function mount(host){closeHistory();host.append(root);}
   mount(homeHost);
-  listen(window,'pharos:ask-home',event=>{homeHost=event.detail||mountHost;restoreHome();});
+  listen(window,'pharos:ask-home',event=>{homeHost=event.detail||mountHost;restoreHome();syncFloatingHome();});
   const overlay=document.createElement('dialog');
   overlay.id='askPharosDialog';overlay.className='pharos-ask-dialog';overlay.setAttribute('aria-label','Ask Pharos');
   let overlayLayoutFrame=null,overlayViewportHeight=0;
@@ -153,7 +155,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   overlay.addEventListener('transitionend',event=>{if(event.target===overlay)sizePicker();});
   const floating=document.createElement('aside');
   floating.className='pharos-floating';floating.hidden=true;floating.setAttribute('aria-label','Ask Pharos progress');
-  floating.innerHTML='<button type="button" class="pharos-floating-drag" aria-label="Move Ask Pharos progress" title="Drag to move; use arrow keys to reposition">⠿</button><button type="button" class="pharos-floating-open" title="Reopen Ask Pharos"><div class="pharos-floating-copy"><strong>Ask Pharos</strong><span></span></div><svg class="pharos-floating-expand" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M3 3l6 6m12-6-6 6M3 21l6-6m12 6-6-6"/></svg></button><button type="button" class="pharos-floating-dismiss" aria-label="Dismiss Ask Pharos progress">×</button>';
+  floating.innerHTML='<button type="button" class="pharos-floating-drag" aria-label="Move Ask Pharos progress" title="Drag to move; use arrow keys to reposition">⠿</button><button type="button" class="pharos-floating-open" title="Reopen Ask Pharos"><div class="pharos-floating-copy"><strong>Ask Pharos</strong><span></span></div><svg class="pharos-floating-return" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="12" width="6" height="5" rx=".7" fill="currentColor" stroke="none"/><path d="M12 12 8 8m0 3V8h3"/></svg></button><button type="button" class="pharos-floating-dismiss" aria-label="Dismiss Ask Pharos progress">×</button>';
   const announcement=document.createElement('span');announcement.className='pharos-floating-announcement';announcement.setAttribute('role','status');
   document.body.append(overlay,floating,announcement);
   const headerButton=document.getElementById('askPharosToggle');
@@ -162,9 +164,21 @@ window.initPharosAsk = function(root, {previews} = {}) {
   const glows=[composerGlow,createPharosGlow(floating,{radius:13})],pageTrace=createPharosEdgeTrace(find('.pharos-page-trace'));
   if(headerButton)glows.push(createPharosGlow(headerButton.querySelector('.ask-pharos-icon'),{outline:document.querySelector('#ph-icon-chat path').getAttribute('d')}));
   const browseButton=find('.pharos-browse'),browseHint=find('.pharos-browse-hint'),windowClose=find('.pharos-window-close'),composerHeader=find('.pharos-composer-header');
+  const floatingIndicator=document.createElement('div');floatingIndicator.className='pharos-home-floating-indicator';floatingIndicator.setAttribute('aria-hidden','true');
+  floatingIndicator.append(browseButton.querySelector('svg').cloneNode(true));find('.pharos-ai-frame').append(floatingIndicator);
+  cleanup.push(()=>{floatingIndicator.remove();product.inert=false;root.classList.remove('pharos-home-floating');});
   const fullscreenButton=find('.pharos-fullscreen'),pageHost=document.getElementById('askPage');
   let presentation='home',returnFocus=null,contextURI='',floatPosition=null,drag=null,suppressReopen=false,navigatedTurn=null,popOutMotion=null,fullscreenReturn=null,holdFloating=false;
+  function syncFloatingHome() {
+    const onHome=presentation==='floating'&&homeHost!==mountHost&&homeHost.isConnected&&['/','/home'].includes(location.pathname);
+    if(presentation==='floating'){
+      const host=onHome?homeHost:overlay;
+      if(root.parentElement!==host)mount(host);
+    }
+    product.inert=onHome;root.classList.toggle('pharos-home-floating',onHome);
+  }
   function updateSurface() {
+    syncFloatingHome();
     syncHistorySurface();
     const turn=turns.at(-1),state=askFloatingState(turn,{navigated:!!turn&&turn.id===navigatedTurn});
     glows.forEach(glow=>glow.setWorking(!!pending));pageTrace.setWorking(!!pending);
@@ -172,7 +186,11 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const showPuzzle=!ai.hidden&&!document.hidden&&!['floating','dismissed'].includes(presentation);
     turnViews.forEach(view=>view.puzzle?.setWorking(showPuzzle));
     floating.dataset.ready=String(state.ready);
-    floating.querySelector('.pharos-floating-open span').textContent=state.message;
+    floating.querySelector('.pharos-floating-open span').textContent=elementPicking?'The purple outline follows your cursor.':state.message;
+    floating.classList.toggle('pharos-selecting-element',!!elementPicking);
+    floating.querySelector('.pharos-floating-open strong').textContent=elementPicking?'Selecting an element':'Ask Pharos';
+    floating.querySelector('.pharos-floating-open').disabled=!!elementPicking;
+    floating.querySelector('.pharos-floating-dismiss').setAttribute('aria-label',elementPicking?'Cancel element selection':'Dismiss Ask Pharos progress');
     browseButton.parentElement.hidden=ai.hidden;
     const fullscreen=presentation==='page',fullscreenLabel=fullscreen?'Exit full screen':'Full screen';
     fullscreenButton.hidden=ai.hidden||!pageHost;
@@ -197,7 +215,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   }
   listen(document,'visibilitychange',()=>{updateSurface();checkSeenAnswers();});
   function restoreHome() {
-    if(holdFloating||presentation==='modal'||homeHost===mountHost||!['/','/home'].includes(location.pathname))return;
+    if(elementPicking||holdFloating||presentation==='modal'||homeHost===mountHost||!['/','/home'].includes(location.pathname))return;
     const returning=presentation!=='home'||root.parentElement!==homeHost;
     if(!returning)return;
     presentation='home';if(root.parentElement!==homeHost)mount(homeHost);
@@ -209,16 +227,14 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const target=returnFocus!==document.body&&returnFocus?.isConnected&&returnFocus.getClientRects().length?returnFocus:headerButton?.getClientRects().length?headerButton:document.getElementById('headerMore');
     target?.focus({preventScroll:true});
   }
-  function attachPageChip(uri){promptEditor.setChip({id:'page',type:'page',value:uri,label:'About '+(window.historyTitle?.(uri)||new URL(uri,location.origin).pathname)});}
-  // Only the header button asks about the page it was pressed on, and the home
-  // page is not a subject; reopening or restoring keeps the prompt as it was.
+  // Opening Ask never attaches context; the plus menu owns that choice.
   function openOverlay(fromHeader=false) {
+    if(elementPicking){elementPicking.cancel?.();return;}
     surfaceRestorePending=false;
     if(presentation==='page'){question.focus({preventScroll:true});return;}
     if(presentation==='modal')return;
     returnFocus=document.activeElement;
-    if(fromHeader&&['/','/home'].includes(location.pathname)){contextURI='';promptEditor.removeChip('page');}
-    else if(fromHeader){contextURI=askPageURI(location.href);attachPageChip(contextURI);}
+    if(fromHeader)contextURI=askPageURI(location.href);
     regularOverride=false;
     delete overlay.dataset.positioned;overlay.style.removeProperty('height');overlay.style.removeProperty('--pharos-dialog-top');
     presentation='modal';mount(overlay);overlay.showModal();
@@ -234,7 +250,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     closePicker();closeHistory();
     presentation='floating';
     if(overlay.open)overlay.close();
-    // A closed dialog retains the composer while the separate progress panel is visible.
+    // Keep the composer in its closed dialog unless Home can show it disabled.
     mount(overlay);updateSurface();
     // The window may have changed size while this panel was hidden.
     const rect=floating.getBoundingClientRect();positionFloating(rect.left,rect.top);
@@ -341,7 +357,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   // Nested model/history menus consume Escape before closing the whole search.
   root.addEventListener('keydown',event=>{if(event.key==='Escape'&&event.defaultPrevented)event.stopPropagation();});
   floating.querySelector('.pharos-floating-open').addEventListener('click',()=>openOverlay());
-  floating.querySelector('.pharos-floating-dismiss').addEventListener('click',()=>{surfaceRestorePending=false;presentation='dismissed';updateSurface();});
+  floating.querySelector('.pharos-floating-dismiss').addEventListener('click',()=>{if(elementPicking){elementPicking.cancel?.();return;}surfaceRestorePending=false;presentation='dismissed';restoreHome();updateSurface();});
   const handle=floating.querySelector('.pharos-floating-drag');
   // Like picture in picture: drag the panel itself, or tap to reopen it.
   floating.addEventListener('pointerdown',event=>{
@@ -380,14 +396,91 @@ window.initPharosAsk = function(root, {previews} = {}) {
     else if(restored==='page'){if(typeof savedSurface.fullscreenReturn==='string')fullscreenReturn=savedSurface.fullscreenReturn;}
     else if(restored!=='home'){presentation='dismissed';mount(overlay);}
     contextURI=typeof savedSurface.contextURI==='string'?savedSurface.contextURI:'';
-    // The saved prompt replaces this when it can be restored; one too long to
-    // restore must still keep its page context.
-    if(contextURI)attachPageChip(contextURI);
     const point=savedSurface.floatPosition;
     if(point&&Number.isFinite(point.x)&&Number.isFinite(point.y)&&restored==='floating')positionFloating(point.x,point.y);
     updateSurface();return restored!=='home';
   }
-  function currentSession(){return {id:activeSessionId,createdAt:activeCreatedAt,updatedAt:activeUpdatedAt,conversation:turns,draft:question.value,clarificationDraft,selection:copySelection(choices)};}
+  function closeContextMenu(){if(contextMenu.matches(':popover-open'))contextMenu.hidePopover();}
+  function inspectAttachment(item,trigger){
+    closeContextMenu();const details=find('.pharos-context-details');details.replaceChildren();
+    for(const [label,value] of askAttachmentDetails(item)){
+      const term=document.createElement('dt'),description=document.createElement('dd');term.textContent=label;
+      if(label==='Contents'){const pre=document.createElement('pre');pre.textContent=value;description.append(pre);}else description.textContent=value;
+      details.append(term,description);
+    }
+    openModal(contextReview,trigger);
+  }
+  function setDraft(text,items=[]){
+    draftAttachments=items;attachmentCatalog.clear();items.forEach(item=>attachmentCatalog.set(item.id,item));
+    promptEditor.setDocument(askAttachmentParts(text,items));syncComposerActions();scheduleThreadLayout();
+  }
+  function captureAttachments(){draftAttachments=askPositionedAttachments(promptEditor.document(),[...attachmentCatalog.values()]);}
+  function addAttachments(items){
+    captureAttachments();const next=askAddAttachments(draftAttachments,items),added=next.filter(item=>!draftAttachments.some(old=>old.id===item.id));
+    added.forEach(item=>attachmentCatalog.set(item.id,item));clearNotice('attachments');
+    if(added.length)promptEditor.insertChips(added.map(askAttachmentChip));question.focus({preventScroll:true});
+  }
+  contextTrigger.addEventListener('click',()=>{
+    if(contextMenu.matches(':popover-open')){closeContextMenu();return;}
+    closePicker();closeHistory();find('.pharos-context-page-name').textContent=window.historyTitle?.(location.href)||askPageURI(location.href);
+    contextMenu.showPopover();const rect=contextTrigger.getBoundingClientRect(),box=contextMenu.getBoundingClientRect();
+    contextMenu.style.left=Math.max(8,Math.min(rect.left,innerWidth-box.width-8))+'px';
+    contextMenu.style.top=Math.max(8,rect.top-box.height-8)+'px';
+  });
+  contextMenu.addEventListener('toggle',event=>contextTrigger.setAttribute('aria-expanded',String(event.newState==='open')));
+  find('.pharos-attach-url').addEventListener('click',()=>{
+    closeContextMenu();try{const url=askPageURI(location.href);addAttachments([{id:crypto.randomUUID(),kind:'url',url,name:(window.historyTitle?.(url)||document.title||url).slice(0,300)}]);}catch(error){report(error,{source:'attachments'});}
+  });
+  const contextFiles=find('.pharos-context-files');
+  find('.pharos-attach-files').addEventListener('click',()=>{closeContextMenu();contextFiles.click();});
+  contextFiles.addEventListener('change',async()=>{
+    const files=[...contextFiles.files],read=++attachmentRead;contextFiles.value='';if(!files.length)return;
+    fileBusy=true;syncComposerActions();
+    try{
+      if(files.length+draftAttachments.length>askAttachmentLimit)throw new Error('Attach at most 8 items.');
+      if(files.some(file=>file.size>askAttachmentFileLimit))throw new Error('Files must be at most 20 MiB each.');
+      if(files.reduce((sum,file)=>sum+file.size,askAttachmentSize(draftAttachments))>askAttachmentByteLimit)throw new Error('Files must total at most 50 MiB.');
+      const items=await Promise.all(files.map(async file=>{const data=new FormData();data.append('file',file);return askReadResponse(await fetch('/api/ask/attachments',{method:'POST',body:data}));}));
+      if(!disposed&&attachmentRead===read)addAttachments(items);
+    }catch(error){if(!disposed&&attachmentRead===read)report(error,{source:'attachments'});}
+    finally{if(attachmentRead===read){fileBusy=false;syncComposerActions();}}
+  });
+  find('.pharos-context-review-close').addEventListener('click',()=>closeModal(contextReview));
+  contextReview.addEventListener('cancel',event=>{event.preventDefault();event.stopPropagation();closeModal(contextReview);});
+  const selectionHelp=document.createElement('div');selectionHelp.className='pharos-floating-selection';selectionHelp.hidden=true;
+  selectionHelp.innerHTML='<span class="pharos-selection-target" role="status">Move over the page</span><span>↑ Parent · ↓ Child · Click to attach · Esc to cancel</span>';
+  floating.append(selectionHelp);floating.dataset.feedbackUi='';
+  const floatingObserver=new ResizeObserver(()=>{if(!disposed&&!floating.hidden){const rect=floating.getBoundingClientRect();positionFloating(rect.left,rect.top);}});
+  floatingObserver.observe(floating);cleanup.push(()=>floatingObserver.disconnect());
+  cleanup.push(()=>{const selection=elementPicking;elementPicking=null;selection?.cancel?.();attachmentRead++;});
+  function finishElementSelection(selection){
+    if(elementPicking!==selection)return;
+    elementPicking=null;selectionHelp.hidden=true;
+    if(selection.surface==='page'){
+      presentation='dismissed';mount(overlay);fullscreenReturn=selection.fullscreenReturn;
+      window.pharosNavigate?.(selection.href);syncFullscreen();render();question.focus({preventScroll:true});
+    }else if(selection.surface==='home'&&['/','/home'].includes(location.pathname)){
+      presentation='home';mount(homeHost);render();question.focus({preventScroll:true});
+    }else openOverlay();
+    updateSurface();
+  }
+  find('.pharos-attach-element').addEventListener('click',()=>{
+    closeContextMenu();
+    if(!window.pharosElementPicker){report(new Error('Element selection is unavailable. Reload Pharos and try again.'),{source:'attachments'});return;}
+    const selection={surface:presentation,href:location.href,fullscreenReturn,navigating:true,cancel:null};elementPicking=selection;
+    if(presentation==='page'){
+      const target=fullscreenExit();browse(false);
+      holdFloating=true;try{window.pharosNavigate?.(target.href);}finally{holdFloating=false;}
+    }else browse(false);
+    selection.navigating=false;selectionHelp.hidden=false;selectionHelp.querySelector('.pharos-selection-target').textContent='Move over the page';updateSurface();
+    selection.cancel=window.pharosElementPicker.select({
+      exclude:element=>!!element.closest('#pharos-ask,.pharos-floating'),
+      onTarget:target=>{selectionHelp.querySelector('.pharos-selection-target').textContent=target.label;},
+      onCancel:()=>finishElementSelection(selection),
+      onSelect:target=>{finishElementSelection(selection);try{addAttachments([{id:crypto.randomUUID(),kind:'element',name:target.label,url:askPageURI(target.url),selector:target.selector}]);}catch(error){report(error,{source:'attachments'});}}
+    });
+  });
+  function currentSession(){return {id:activeSessionId,createdAt:activeCreatedAt,updatedAt:activeUpdatedAt,conversation:turns,draft:question.value,draftAttachments:[...draftAttachments],clarificationDraft,selection:copySelection(choices)};}
   function sessionRecords(){return activeSessionId?[currentSession(),...sessions.filter(s=>s.id!==activeSessionId)]:sessions;}
   function writeHistory(){try{if(activeSessionId)sessionStorage.setItem(activeKey,activeSessionId);else sessionStorage.removeItem(activeKey);}catch{}}
   function syncChatURL(id, push=false){
@@ -400,12 +493,13 @@ window.initPharosAsk = function(root, {previews} = {}) {
   function flushDraft(){clearTimeout(draftTimer);draftTimer=null;const payload=draftPending;draftPending=null;if(payload)writeQueue=writeQueue.catch(()=>{}).then(()=>askRetryBackground(()=>api('session',payload))).then(()=>clearNotice('draft'),error=>report(error,{source:'draft',lead:'Your draft wasn\u2019t saved.'}));return writeQueue;}
   function saveChat(touch=true){
     if(disposed)return;
+    captureAttachments();
     surfaceRestorePending=false;
-    if(turns.length||question.value.length){if(!activeSessionId){sessionLoads.invalidate();activeSessionId=crypto.randomUUID();activeCreatedAt=Date.now();syncChatURL(activeSessionId);}if(touch)activeUpdatedAt=Date.now();sessions=sessionRecords();}
+    if(turns.length||question.value.length||draftAttachments.length){if(!activeSessionId){sessionLoads.invalidate();activeSessionId=crypto.randomUUID();activeCreatedAt=Date.now();syncChatURL(activeSessionId);}if(touch)activeUpdatedAt=Date.now();sessions=sessionRecords();}
     writeHistory();syncComposerActions();if(chatHistory.open)renderHistory();
     clearTimeout(draftTimer);
     if(!activeSessionId||!accessEnabled)return;
-    draftPending={id:activeSessionId,draft:question.value,clarificationDraft,selection:copySelection(choices)};
+    draftPending={id:activeSessionId,draft:question.value,draftAttachments:[...draftAttachments],clarificationDraft,selection:copySelection(choices)};
     draftTimer=setTimeout(flushDraft,300);
   }
   // History is a drawer from the left. Each row names its turns, the models
@@ -476,9 +570,10 @@ window.initPharosAsk = function(root, {previews} = {}) {
   }
   function activateSession(session) {
     chosenIdea=null;
+    attachmentRead++;fileBusy=false;setDraft(session.draft||'',session.draftAttachments||[]);
     activeSessionId=session.id;activeCreatedAt=session.createdAt;activeUpdatedAt=session.updatedAt;
     pending=requests.get(session.id)||null;
-    turns=askRestoreTurns(session.conversation,pending?.turn);question.value=session.draft||'';clarificationDraft=session.clarificationDraft||'';setChoices(session.selection);writeHistory();
+    turns=askRestoreTurns(session.conversation,pending?.turn);clarificationDraft=session.clarificationDraft||'';setChoices(session.selection);writeHistory();
     if(pending)pending.session=currentSession();
     if(chatHistory.open)renderHistory();
     threadFollowing=true;
@@ -507,12 +602,12 @@ window.initPharosAsk = function(root, {previews} = {}) {
     chosenIdea=null;
     sessionLoads.invalidate();openingSession=null;
     saveChat(false);flushDraft();if(pending)pending.browsing=true;pending=null;closeHistory();closePicker();
-    turns=[];if(defaultSelection)setChoices(defaultSelection);activeSessionId=null;activeCreatedAt=0;activeUpdatedAt=0;question.value='';clarificationDraft='';threadFollowing=true;writeHistory();syncChatURL(null,!!navigate);renderThread();render();if(chatHistory.open)renderHistory();if(navigate)question.focus({preventScroll:true});
+    attachmentRead++;fileBusy=false;setDraft('');turns=[];if(defaultSelection)setChoices(defaultSelection);activeSessionId=null;activeCreatedAt=0;activeUpdatedAt=0;question.value='';clarificationDraft='';threadFollowing=true;writeHistory();syncChatURL(null,!!navigate);renderThread();render();if(chatHistory.open)renderHistory();if(navigate)question.focus({preventScroll:true});
   }
   async function loadChatHistory(){
     const request=sessionLoads.next();
     const data=await api('sessions');if(disposed||!sessionLoads.current(request))return;sessions=data.sessions;historyOffset=sessions.length;historyMore=sessions.length===100;if(chatHistory.open)renderHistory();
-    if(turns.length||question.value.length)return;
+    if(turns.length||question.value.length||draftAttachments.length)return;
     const id=new URL(location.href).searchParams.get('ask_chat')||sessionStorage.getItem(activeKey);
     if(id){
       openingSession=request;openingChat=id;syncComposer();
@@ -557,7 +652,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
 
   }
   function closeModals() {
-    for(const dialog of [consent])if(dialog.open)dialog.close();
+    for(const dialog of [consent,contextReview])if(dialog.open)dialog.close();
     sizeModal();
   }
   function openModal(dialog,returnFocus=document.activeElement) {
@@ -633,11 +728,13 @@ window.initPharosAsk = function(root, {previews} = {}) {
   function syncComposerActions() {
     const actions=askComposerActions({draft:question.value,turns,pending:!!pending,opening:openingSession!==null,enabled:accessEnabled,model:choices.model});
     const send=find('.pharos-send'),label=actions.stop?'Stop':'Send question';
-    send.disabled=!(actions.send||actions.stop);send.dataset.action=actions.stop?'stop':'send';
+    send.disabled=!(actions.stop||actions.send&&!fileBusy);send.dataset.action=actions.stop?'stop':'send';
+    find('.pharos-file-status').hidden=!fileBusy;
+    contextTrigger.disabled=openingSession!==null||fileBusy;
     send.setAttribute('aria-label',label);send.dataset.tooltip=label;
     historyTrigger.hidden=!actions.history||root.classList.contains('pharos-inbox');
     find('.pharos-history-anchor').hidden=historyTrigger.hidden;
-    const clearButton=find('.pharos-clear-chat'),showClear=actions.clear&&!ai.hidden&&!(presentation==='page'&&turns.length),clearChanged=clearButton.hidden===showClear;
+    const clearButton=find('.pharos-clear-chat'),showClear=(actions.clear||draftAttachments.length>0)&&!ai.hidden&&!(presentation==='page'&&turns.length),clearChanged=clearButton.hidden===showClear;
     clearButton.hidden=!showClear;
     clearButton.textContent=actions.clearLabel;clearButton.setAttribute('aria-label',actions.clearLabel);clearButton.title=turns.length?'Start a new chat':'Clear draft';
     if(clearChanged){updateSurface();if(!ai.hidden)autoFit();}
@@ -673,7 +770,8 @@ window.initPharosAsk = function(root, {previews} = {}) {
     const element=find('#pharos-turn-template').content.firstElementChild.cloneNode(true);
     element.dataset.turnId=turn.id;
     const get=selector=>element.querySelector(selector);
-    get('.pharos-user-question').textContent=turn.prompt;
+    const byID=new Map((turn.attachments||[]).map(item=>[item.id,item]));
+    get('.pharos-user-question').replaceChildren(...askAttachmentParts(turn.prompt,turn.attachments).map(part=>typeof part==='string'?document.createTextNode(part):askPromptChipNode(part,{onInspect:(_,trigger)=>inspectAttachment(byID.get(part.id),trigger)})));
     const avatar=get('.pharos-agent-avatar');avatar.dataset.provider=turn.cli;
     avatar.append(find('#pharos-lighthouse-template').content.firstElementChild.cloneNode(true));
     const badge=document.createElement('span');badge.className='pharos-agent-badge';
@@ -1134,13 +1232,16 @@ window.initPharosAsk = function(root, {previews} = {}) {
 
   function useRegular() {stop();closePicker();closeHistory(); regularOverride = true;render(); find('.home-search-trigger')?.focus();}
   function retryWithDifferentModel() {
-    const draft=askRetryDraft({turns,draft:question.value});
-    clearChat();question.value=draft;autoFit();saveChat();render();openPicker();
+    try{
+      captureAttachments();const retry=askRetryContext({turns,draft:question.value,draftAttachments});
+      clearChat();setDraft(retry.draft,retry.attachments);autoFit();saveChat();render();openPicker();
+    }catch(error){report(error,{source:'attachments'});}
   }
   find('.pharos-search-mode').addEventListener('click', useRegular);
   find('.pharos-ai-mode').addEventListener('click', () => {regularOverride = false; stop(); render(); find('#pharos-question').focus();});
   function openPicker() {
     if(pickerTrigger.disabled)return;
+    closeContextMenu();
     closeHistory();
     picker.hidden = false;picker.showPopover();pickerTrigger.setAttribute('aria-expanded','true');showPickerPage(null);
   }
@@ -1216,7 +1317,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     turn.message='Starting '+turn.cli+'…';
     const browseHintStart=askStartBrowseHint(window.pharosPrefs?.get(browseHintKey,0));window.pharosPrefs?.set(browseHintKey,browseHintStart.snoozed);
     const run=trackRequest(turn,{edited:false,browsing:presentation==='floating'||presentation==='dismissed',hint:browseHintStart.hint});
-    const input={id:run.id,turnID:turn.id,prompt:turn.prompt,draft:question.value,selection:copySelection(choices),retry,currentURI:turn.currentURI,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,...(turn.offer&&{suggestion:turn.offer})};
+    const input={id:run.id,turnID:turn.id,prompt:turn.prompt,draft:question.value,draftAttachments:[...draftAttachments],attachments:turn.attachments||[],selection:copySelection(choices),retry,currentURI:turn.currentURI,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,...(turn.offer&&{suggestion:turn.offer})};
     sessions=sessionRecords();turns.forEach(updateTurn);syncComposer();writeHistory();if(chatHistory.open)renderHistory();
     try {
       await writeQueue;await cancelQueue;if(!requestCurrent(run))return;
@@ -1249,14 +1350,15 @@ window.initPharosAsk = function(root, {previews} = {}) {
   }
   function watchRequest(turn){const run=trackRequest(turn);syncComposer();pollRequest(run);}
   function submitQuestion(value,preserveDraft=false){
-    if(pending||openingSession!==null||!accessEnabled||!value.trim()||!choices.model)return;
+    if(pending||openingSession!==null||fileBusy||!accessEnabled||!value.trim()||!choices.model)return;
     if(requests.size>=2){report(new Error('Two questions are already running. Wait for an answer or stop one before asking another.'));return;}
     const prompt=value.trim();closePicker();closeHistory();
     if(!activeSessionId){sessionLoads.invalidate();activeSessionId=crypto.randomUUID();activeCreatedAt=Date.now();}
     activeUpdatedAt=Date.now();syncChatURL(activeSessionId);threadFollowing=true;
-    const turn={id:crypto.randomUUID(),prompt,currentURI:['modal','page'].includes(presentation)?contextURI:askPageURI(location.href),cli:choices.provider,model:choices.model,modelLabel:modelLabel(),effort:choices.effort,...(choices.fast&&{fast:true}),status:'loading',message:'',reply:'',cards:[],elapsedMs:0,...(chosenIdea&&{offer:{id:chosenIdea.id,text:chosenIdea.text}})};
+    captureAttachments();
+    const turn={id:crypto.randomUUID(),prompt,attachments:preserveDraft?[]:askPositionedAttachments(promptEditor.document(),draftAttachments,value),cli:choices.provider,model:choices.model,modelLabel:modelLabel(),effort:choices.effort,...(choices.fast&&{fast:true}),status:'loading',message:'',reply:'',cards:[],elapsedMs:0,...(chosenIdea&&{offer:{id:chosenIdea.id,text:chosenIdea.text}})};
     chosenIdea=null;
-    turns.push(turn);appendTurn(turn);if(!preserveDraft)question.value='';clarificationDraft='';autoFit();startRequest(turn,false);
+    turns.push(turn);appendTurn(turn);if(!preserveDraft)setDraft('');clarificationDraft='';autoFit();startRequest(turn,false);
   }
   function ask(){submitQuestion(question.value);}
   find('.pharos-send').addEventListener('click',()=>{if(pending)stop();else ask();});
@@ -1264,7 +1366,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   if(detachDictation)cleanup.push(detachDictation);
   ai.addEventListener('submit', event => {event.preventDefault(); ask();});
   find('#pharos-question').addEventListener('keydown', event => {if(event.target===question&&event.key === 'Enter' && !event.shiftKey && !event.isComposing){event.preventDefault();if(!pending)ask();}});
-  question.addEventListener('input', () => {contextURI=promptEditor.chips().find(chip=>chip.id==='page')?.value||'';if(!question.value.trim())chosenIdea=null;if(pending)pending.edited=true;syncSuggestions();autoFit();saveChat();});
+  question.addEventListener('input', () => {if(!question.value.trim())chosenIdea=null;if(pending)pending.edited=true;syncSuggestions();autoFit();saveChat();});
   function syncTheme(){appearance=document.documentElement.dataset.theme==='dark'?'dark':'light';drawEdge();drawIdeas();}
   const themeObserver=new MutationObserver(syncTheme);themeObserver.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme','style']});
   const configChanged=event=>{if(event.detail!==root)void refreshStatus().then(visitChanged).catch(report);};listen(window,'pharos:ask-config',configChanged);
@@ -1279,10 +1381,10 @@ window.initPharosAsk = function(root, {previews} = {}) {
     saveVisit.add(input);
   };
   listen(window,'pharos:visit',visitChanged);
-  const routeChanged=()=>{surfaceRestorePending=false;sessionLoads.invalidate();openingSession=null;flushDraft();if(presentation==='modal')closeOverlay();syncFullscreen();restoreHome();if(!['home','page'].includes(presentation))return;if(!askChatPage(location.pathname)){if(pending)browse();}else if(accessEnabled){const id=new URL(location.href).searchParams.get('ask_chat');if(id&&id!==activeSessionId)void openSession(id);else if(!id&&activeSessionId)clearChat(false);else{if(id)regularOverride=false;render();}}};
+  const routeChanged=()=>{if(elementPicking){if(!elementPicking.navigating)elementPicking.cancel?.();return;}surfaceRestorePending=false;sessionLoads.invalidate();openingSession=null;flushDraft();if(presentation==='modal')closeOverlay();syncFullscreen();restoreHome();if(!['home','page'].includes(presentation))return;if(!askChatPage(location.pathname)){if(pending)browse();}else if(accessEnabled){const id=new URL(location.href).searchParams.get('ask_chat');if(id&&id!==activeSessionId)void openSession(id);else if(!id&&activeSessionId)clearChat(false);else{if(id)regularOverride=false;render();}}};
   listen(window,'pharos:route',routeChanged);
   // Header tabs switch views with pharos:view alone, so full screen ends here too.
-  listen(window,'pharos:view',()=>{syncFullscreen();restoreHome();if(presentation==='home'&&pending&&!['/','/home'].includes(location.pathname))browse();});
+  listen(window,'pharos:view',()=>{syncFullscreen();restoreHome();syncFloatingHome();if(presentation==='home'&&pending&&!['/','/home'].includes(location.pathname))browse();});
   listen(window,'pagehide',()=>{
     // A second reload during startup must not replace the state still loading.
     if(!surfaceRestorePending)try{sessionStorage.setItem(surfaceKey,JSON.stringify({page:askPageURI(location.href),id:activeSessionId||sessionStorage.getItem(activeKey),presentation,contextURI,floatPosition,fullscreenReturn,prompt:promptEditor.document()}));}catch{}

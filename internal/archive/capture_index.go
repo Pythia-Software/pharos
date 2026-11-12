@@ -779,17 +779,28 @@ func (m *indexMarker) save(dir string, manifest *captureManifest) error {
 // evidence locator is <original path>:<line>..., or sqlite:<original path>:...
 // for a database, so a reader strips those to get the path.
 func capturedPathFor(captureRoot, host, source, original string) (string, error) {
+	file, _, err := capturedFileFor(captureRoot, host, source, original)
+	return file, err
+}
+
+// capturedFileFor also returns the view belonging to the resolved evidence.
+// Readers need its encoding metadata, including when a transfer owns the file.
+func capturedFileFor(captureRoot, host, source, original string) (string, *captureView, error) {
 	if !validCaptureName(host) || !validCaptureName(source) {
-		return "", fmt.Errorf("invalid host or source name")
+		return "", nil, fmt.Errorf("invalid host or source name")
 	}
-	if path, err := capturedPathIn(captureRoot, host, source, original); err == nil {
-		return path, nil
+	if file, err := capturedPathIn(captureRoot, host, source, original); err == nil {
+		dir := filepath.Join(captureRoot, host, source)
+		if manifest, err := loadCaptureManifest(dir); err == nil {
+			return file, newCaptureView(Host{ID: host}, dir, manifest), nil
+		}
 	}
 	// Transfer evidence is immutable and outside normal capture retention. Only
 	// published, verified inventories may supply evidence, including a previous
 	// import carried through another library.
 	var found string
 	var latest string
+	var view *captureView
 	_ = filepath.WalkDir(filepath.Join(captureRoot, ".imports"), func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -812,13 +823,14 @@ func capturedPathFor(captureRoot, host, source, original string) (string, error)
 		manifest, e := loadCaptureManifest(filepath.Join(root, host, source))
 		if e == nil && (found == "" || manifest.LastDataAt > latest) {
 			found, latest = candidate, manifest.LastDataAt
+			view = newCaptureView(Host{ID: host}, filepath.Join(root, host, source), manifest)
 		}
 		return nil
 	})
 	if found != "" {
-		return found, nil
+		return found, view, nil
 	}
-	return "", fmt.Errorf("%s was not captured from %s/%s", original, host, source)
+	return "", nil, fmt.Errorf("%s was not captured from %s/%s", original, host, source)
 }
 
 func capturedPathIn(captureRoot, host, source, original string) (string, error) {

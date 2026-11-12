@@ -712,7 +712,13 @@ func TestInferenceSpeedIngestionAndReplay(t *testing.T) {
 			if result := c.Ingest(adapter, nil); result.Error != nil {
 				t.Fatal(result.Error)
 			}
-			rows, err := queryMaps(c.DB, "SELECT * FROM messages ORDER BY created_at,source_order")
+			query := "SELECT * FROM messages"
+			// ChatGPT also retains a system metadata record for exported
+			// conversation settings. This fixture tests its two assistant replies.
+			if sample.provider == "chatgpt" {
+				query += " WHERE role='assistant'"
+			}
+			rows, err := queryMaps(c.DB, query+" ORDER BY created_at,source_order")
 			if err != nil || len(rows) != 2 {
 				t.Fatalf("messages %+v: %v", rows, err)
 			}

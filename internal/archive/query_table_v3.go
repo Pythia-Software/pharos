@@ -443,6 +443,14 @@ func (s *Server) executeQueryV3Once(ctx context.Context, dataset string, params 
 			// its metrics, counting it as it goes, only without a host
 			// counter. The Thinking dashboards send up to 19 metrics at a time.
 			d.PopulationCounter = nil
+			// Its sources (stored timings, or those plus conversations derived
+			// again) and computed columns (the zoned calendar fields, the
+			// model tuples) are deterministic within the query's transaction,
+			// so the shared read may cover them too, though they fail Query
+			// Table's stored-source proof. Asserting that materializes the
+			// population first, which costs a stored read about a tenth, so it
+			// is asserted only where the proof would fail.
+			d.SQLiteSharedMetricsSource = !storedTimings || table.computes(slices.Concat(required, whereFields(q.Source.Where), whereFields(q.Result.Where)))
 		}
 		whole = d
 		if newest != nil {

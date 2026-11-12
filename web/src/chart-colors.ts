@@ -1,6 +1,6 @@
 import {shortLabel,stateColor} from "./conversation-labels";
 import catalog from "../../pricing/model_colors.json";
-import { modelColorKey, modelProvider, modelSeriesColor, knownModels, knownSources, modelProviders } from "./model-colors";
+import { modelColorKey, modelColorOrder, modelProvider, modelSeriesColor, knownModels, knownSources, modelProviders } from "./model-colors";
 export { modelColorKey } from "./model-colors";
 import { activities, activityPresentation } from "./machine-activity-data";
 import { orderedValues } from "./session-shape-bands";
@@ -131,11 +131,10 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
   }
   if (scope === "model_family") {
     const key = modelColorKey(name), model = Object.hasOwn(models, key) ? models[key] : undefined, provider = model?.provider ?? modelProvider(key);
-    const modelClass = model?.class ?? (/codex/.test(key) ? "Codex" : /gemini.*flash/.test(key) ? "Flash" : /gemini.*pro/.test(key) ? "Pro" : key.split(/[-.]/)[0]);
     return {
       color: modelSeriesColor("model", key),
       group: catalog.providers[provider].label,
-      order: `${providerOrder.indexOf(provider)}:${modelClass}:${key}`,
+      order: modelColorOrder(key),
     };
   }
   if (scope === "provider") {

@@ -1,5 +1,5 @@
 {
-  "index_version": "claude-ai-v4",
+  "index_version": "claude-ai-v7",
   "records": [
     {
       "SourceID": "conv-1",
@@ -24,7 +24,7 @@
           "Account": "local",
           "ParentNativeID": "",
           "Origin": "user-export",
-          "Coverage": "complete",
+          "Coverage": "unknown",
           "StartedAt": "2026-10-01T10:00:00.000Z",
           "EndedAt": "2026-10-01T10:09:00.000Z",
           "Harness": "claude-ai-export",
@@ -272,7 +272,7 @@
           "Account": "local",
           "ParentNativeID": "",
           "Origin": "user-export",
-          "Coverage": "complete",
+          "Coverage": "unknown",
           "StartedAt": "2026-10-02T10:00:00.000Z",
           "EndedAt": "2026-10-02T10:03:00.000Z",
           "Harness": "claude-ai-export",

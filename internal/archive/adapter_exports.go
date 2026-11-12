@@ -22,10 +22,14 @@ import (
 // numbered shards conversations-000.json, conversations-001.json, and so on.
 // Each conversation is a tree of messages; the export records no token
 // usage.
-type chatGPTAdapter struct{ baseAdapter }
+type chatGPTAdapter struct {
+	baseAdapter
+	bundle         *chatGPTBundle
+	snapshotHashes map[string]string
+}
 
 // chatGPTExtractor versions the parser; bump it when parsing changes.
-const chatGPTExtractor = "chatgpt-v2"
+const chatGPTExtractor = "chatgpt-v3"
 
 func (a *chatGPTAdapter) indexVersion() string { return chatGPTExtractor }
 
@@ -62,6 +66,23 @@ func (a *chatGPTAdapter) exportFiles() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if content, err := chatGPTSidecar(a.files(), filepath.Join(a.config.Path, chatGPTInventoryName)); err == nil {
+		var inventory chatGPTInventory
+		if json.Unmarshal(content, &inventory) != nil || inventory.Format != chatGPTInventoryFormat {
+			return nil, errors.New("invalid ChatGPT collection inventory")
+		}
+		files := []string{}
+		a.snapshotHashes = inventory.SHA256
+		for _, name := range inventory.Files {
+			if !claudeExportPath(name) || filepath.Ext(name) != ".zip" || !validExportHash(inventory.SHA256[name]) {
+				return nil, errors.New("invalid ChatGPT snapshot path")
+			}
+			files = append(files, filepath.Join(a.config.Path, filepath.FromSlash(name)))
+		}
+		return files, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	names := []string{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -79,7 +100,7 @@ func (a *chatGPTAdapter) exportFiles() ([]string, error) {
 }
 
 func (a *chatGPTAdapter) Fingerprint() (string, error) {
-	files, err := a.exportFiles()
+	files, err := chatGPTCaptureFiles(a.files(), a.config.Path)
 	if err != nil {
 		return "", err
 	}
@@ -119,6 +140,16 @@ func (a *chatGPTAdapter) Discover(emit func(WorkspaceRecord) error) error {
 var errChatGPTEmit = errors.New("ChatGPT export not indexed")
 
 func (a *chatGPTAdapter) discoverFile(file string, emit func(WorkspaceRecord) error) error {
+	if expected := a.snapshotHashes[filepath.Base(file)]; expected != "" {
+		actual, err := chatGPTFileHash(a.files(), file)
+		if err != nil {
+			return err
+		}
+		if actual != expected {
+			return fmt.Errorf("ChatGPT snapshot %s failed its retained checksum; retry collection from the original ZIP", filepath.Base(file))
+		}
+	}
+
 	source, err := a.files().Open(file)
 	if err != nil {
 		return fmt.Errorf("cannot read ChatGPT export %s: %w", file, err)
@@ -130,11 +161,22 @@ func (a *chatGPTAdapter) discoverFile(file string, emit func(WorkspaceRecord) er
 	}
 	version, origin := info.ModTime().UnixNano(), a.original(file)
 	if !strings.EqualFold(filepath.Ext(file), ".zip") {
+		a.bundle, err = a.folderBundle(file)
+		if err != nil {
+			return err
+		}
 		return a.decode(source, file, origin, version, emit)
 	}
 	archive, err := exportZip(source, info.Size())
 	if err != nil {
 		return fmt.Errorf("cannot read ChatGPT export %s: %w", file, err)
+	}
+	if err := checkChatGPTZIP(a.context(), archive, false); err != nil {
+		return err
+	}
+	a.bundle, err = chatGPTZIPBundle(archive, origin)
+	if err != nil {
+		return err
 	}
 	entries := map[string]*zip.File{}
 	names := []string{}
@@ -189,6 +231,23 @@ type chatGPTConversation struct {
 	CurrentNode    string                 `json:"current_node"`
 	DefaultModel   string                 `json:"default_model_slug"`
 	Mapping        map[string]chatGPTNode `json:"mapping"`
+	Metadata       map[string]any         `json:"-"`
+}
+
+func (c *chatGPTConversation) UnmarshalJSON(data []byte) error {
+	type plain chatGPTConversation
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode((*plain)(c)); err != nil {
+		return err
+	}
+	decoder = json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&c.Metadata); err != nil {
+		return err
+	}
+	delete(c.Metadata, "mapping")
+	return nil
 }
 
 type chatGPTNode struct {
@@ -201,13 +260,16 @@ type chatGPTNode struct {
 // can be large. A conversation not in the shape ChatGPT writes is reported,
 // and the others are read.
 func (a *chatGPTAdapter) decode(content io.Reader, file, origin string, version int64, emit func(WorkspaceRecord) error) error {
-	decoder := json.NewDecoder(content)
+	decoder := json.NewDecoder(claudeContextReader{a.context(), content})
 	decoder.UseNumber()
 	if token, err := decoder.Token(); err != nil || token != json.Delim('[') {
 		return fmt.Errorf("ChatGPT export %s must contain an array", file)
 	}
 	failures := []error{}
 	for index := 0; decoder.More(); index++ {
+		if err := a.context().Err(); err != nil {
+			return err
+		}
 		var conversation chatGPTConversation
 		if err := decoder.Decode(&conversation); err != nil {
 			// A value of the wrong type is read past; anything else
@@ -238,6 +300,9 @@ func (a *chatGPTAdapter) decode(content io.Reader, file, origin string, version 
 	if err := ensureEOF(decoder); err != nil {
 		failures = append(failures, fmt.Errorf("ChatGPT export %s: %w", file, err))
 	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		failures = append(failures, fmt.Errorf("ChatGPT export %s has trailing data", file))
+	}
 	return errors.Join(failures...)
 }
 
@@ -252,7 +317,7 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 	// read is the message each node, or the nearest node above it, was
 	// read as; calls and tools are the call each call or reply node
 	// belongs to, and its tool; replies marks the replies.
-	read, calls, tools, kinds := map[string]string{}, map[string]string{}, map[string]string{}, map[string]string{}
+	read, calls, tools := map[string]string{}, map[string]string{}, map[string]string{}
 	replies := map[string]bool{}
 	// onward is the reply a reply runs on into: of the tool's replies
 	// after it, the one on the current branch, else the first. Another is
@@ -286,7 +351,6 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 			continue
 		}
 		id, role, contentType := defaultString(message["id"], nodeID), defaultString(author["role"], "unknown"), firstString(content["content_type"])
-		kinds[nodeID] = contentType
 		// A message's own metadata says how fast it was served.
 		inference, _ := inferenceSetting(message)
 		base := func(suffix string) MessageRecord {
@@ -301,7 +365,7 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 			}
 		}
 		item := base("")
-		item.RawText = accountingRaw(message)
+		item.RawText = jsonText(message)
 		switch contentType {
 		case "user_editable_context":
 			// The person's custom instructions, which ChatGPT hides and
@@ -340,9 +404,8 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 		case contentType == "reasoning_recap":
 			// "Thought for 12 seconds": the reasoning it follows is already
 			// read; alone, it says only that the model reasoned.
-			if kinds[node.Parent] != "thoughts" {
-				add(reasoningRecord(item, "", "", "hidden"))
-			}
+			item.Kind, item.Text = "metadata", jsonText(map[string]any{"source": "chatgpt_reasoning_recap", "label": firstString(content["content"], messageText(content["parts"])), "note": "Source-reported reasoning duration, not measured request latency."})
+			add(item)
 		case role == "assistant" && recipient != "" && recipient != "all":
 			// A message to a tool (python, browser, dalle.text2im, ...) is
 			// the call; the tool's reply follows it.
@@ -411,8 +474,28 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 		if text := messageText(content["parts"]); !own && text != "" {
 			add(injectedContext(item, "chatgpt_"+defaultString(contentType, "message"), text))
 		}
+		// Image-only and empty messages still own source metadata and a
+		// native identity. Keep their envelope without inventing prose.
+		if !own {
+			item.Kind, item.Text = "metadata", jsonText(map[string]any{"source": "chatgpt_message", "content_type": contentType, "note": "Source message contains no displayable text."})
+			add(item)
+		}
+		for _, raw := range reasoningList(metadata["attachments"]) {
+			if attachment := mapValue(raw); attachment != nil {
+				attachments = append(attachments, attachment)
+			}
+		}
+		seenAttachments := map[string]bool{}
 		for index, attachment := range attachments {
 			attached := base(fmt.Sprintf(":part:%d", index))
+			attachment = a.bundle.resolve(attachment)
+			key := firstString(attachment["source_file"]) + "|" + firstString(attachment["member"])
+			if key != "|" {
+				if seenAttachments[key] {
+					continue
+				}
+				seenAttachments[key] = true
+			}
 			attached.Kind, attached.Text, attached.RawText = "attachment", jsonText(attachment), jsonText(attachment)
 			add(attached)
 		}
@@ -433,8 +516,42 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 	if len(unread) > 0 {
 		coverage = "partial"
 	}
-	return WorkspaceRecord{Observed: version, SourceID: nativeID, SourceKind: "chatgpt", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Metadata: map[string]any{},
+	record := WorkspaceRecord{Observed: version, SourceID: nativeID, SourceKind: "chatgpt", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Metadata: map[string]any{"chatgpt_export": conversation.Metadata},
 		Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "chatgpt", Model: defaultString(model, conversation.DefaultModel), Account: a.config.Account, Origin: "user-export", Harness: "chatgpt-export", Coverage: coverage, Unread: unread, Messages: messages, StartedAt: created, EndedAt: updated, Observed: version}}}
+	if a.bundle != nil {
+		for _, share := range a.bundle.shares {
+			if firstString(share["conversation_id"]) == nativeID {
+				record.Metadata["chatgpt_sharing"] = share
+			}
+		}
+		seen := map[string]bool{}
+		for _, m := range messages {
+			if m.Kind == "attachment" {
+				var v map[string]any
+				_ = json.Unmarshal([]byte(m.Text), &v)
+				seen[firstString(v["source_file"])+"|"+firstString(v["member"])] = true
+			}
+		}
+		for _, f := range a.bundle.library {
+			if firstString(f["origination_thread_id"]) != nativeID {
+				continue
+			}
+			asset := a.bundle.asset(firstString(f["file_id"]))
+			key := firstString(asset["source_file"]) + "|" + firstString(asset["member"])
+			if seen[key] && asset["available"] == true {
+				continue
+			}
+			seen[key] = true
+			record.Conversations[0].Messages = append(record.Conversations[0].Messages, MessageRecord{NativeID: nativeID + ":library:" + firstString(f["file_id"]), Role: "system", Kind: "attachment", Text: jsonText(asset), RawText: jsonText(asset), CreatedAt: iso(f["created_at"]), Selected: true, EvidenceLocator: origin + ":library:" + firstString(f["file_id"])})
+		}
+	}
+	context := map[string]any{"source": "chatgpt_export", "settings": conversation.Metadata}
+	if sharing := record.Metadata["chatgpt_sharing"]; sharing != nil {
+		context["sharing"] = sharing
+	}
+	evidence := MessageRecord{NativeID: nativeID + ":export-context", Role: "system", Kind: "metadata", Text: jsonText(context), RawText: jsonText(context), CreatedAt: created, Selected: true, EvidenceLocator: origin + ":settings"}
+	record.Conversations[0].Messages = append([]MessageRecord{evidence}, record.Conversations[0].Messages...)
+	return record
 }
 
 // chatGPTContent is a message's text, and the files (images, audio) its

@@ -310,15 +310,29 @@ test("export documents expose prose while keeping unrelated metadata out of the 
 });
 
 
-test("retained export summaries do not create a second user turn", () => {
-  const {graph}=render([event("export","metadata",{type:"claude_ai_conversation",text:"Archived summary"},0,{role:"system"}),human(),event("reply","message","An answer")]);
-  assert.equal(graph.turns.length,1);
-  assert.equal(graph.turns[0].human.native_id,"human");
-  assert.deepEqual(ids(graph.turns[0].events),["export","reply"]);
-  const [summary]=reader.turnSummaryData({messages:[event("export","metadata",{type:"claude_ai_conversation",text:"Archived summary"},0,{role:"system"}),human(),event("reply","message","An answer")]});
-  assert.equal(summary.prompt,"Inspect the rules and report the result.");
-  assert.equal(summary.outcome,"An answer");
-  assert.equal(summary.replies,1);
+test("retained export summaries and settings do not create extra turns", () => {
+  for(const [provider,payload]of [
+    ['claude',{type:'claude_ai_conversation',text:'Archived summary'}],
+    ['chatgpt',{source:'chatgpt_export',settings:{default_model_slug:'bidi',voice:'saved-voice'}}],
+  ]){
+    const metadata=event('export','metadata',payload,0,{role:'system'});
+    const {conversation,graph}=render([metadata,human(),event('reply','message','An answer')],{provider});
+    assert.equal(graph.turns.length,1,provider);
+    assert.equal(graph.turns[0].human.native_id,'human');
+    assert.deepEqual(ids(graph.turns[0].events),['export','reply']);
+    const [summary]=reader.turnSummaryData(conversation);
+    assert.equal(summary.prompt,'Inspect the rules and report the result.');
+    assert.equal(summary.outcome,'An answer');
+    assert.equal(summary.replies,1);
+    const [outline]=reader.conversationOutline(conversation);
+    assert.equal(outline.label,'Turn 1');
+    assert.deepEqual(ids(outline.messages),['human','export','reply']);
+    assert.deepEqual(plain(reader.messageJSON(outline.messages[1])),payload,'source evidence remains available');
+    if(provider==='chatgpt')assert.deepEqual(plain(reader.chatGPTConversationContext(conversation).facts),[['Recorded model label','bidi'],['Saved voice','saved-voice']]);
+    const metadataOnly=render([metadata],{provider}).graph;
+    assert.equal(metadataOnly.turns.length,1,'evidence without a user message is retained');
+    assert.deepEqual(ids(metadataOnly.turns[0].events),['export']);
+  }
 });
 
 test('Claude Docs additions use receipts and resolve the imported document identity', () => {
@@ -415,4 +429,20 @@ test('common MCP families unwrap native and Codex responses without receipt boil
   const link=present('mcp__pharos__site_link',{}, {title:'Habits',summary:'Recorded view',url:'/analyze?analyze_days=30'});
   assert.equal(link.href,'/analyze?analyze_days=30');
   assert.equal(present('mcp__pharos__site_link',{}, {url:'javascript:alert(1)'}).href,'');
+});
+
+test('ChatGPT references and voice remain evidence without synthesizing tool calls',()=>{
+  const message={id:'chat-message',kind:'message',role:'assistant',text:'A cited answer',raw_text:JSON.stringify({author:{role:'assistant'},content:{content_type:'multimodal_text',parts:[{content_type:'audio_transcription',text:'A cited answer',direction:'out'}]},metadata:{model_slug:'bidi',content_references:[{type:'webpage',url:'https://example.com',title:'Citation'},{type:'widget',dil:{url:'https://do-not-execute.example'}}],search_result_groups:[{domain:'example.com',entries:[{url:'https://example.com',title:'Duplicate'},{url:'javascript:alert(1)',title:'Unsafe'},{url:'https://another.example',title:'Result',snippet:'Exported snippet'}]}]}})};
+  const context=reader.chatGPTMessageContext(message);
+  assert.deepEqual(plain(context.references.map(value=>value.url)),['https://example.com/','https://another.example/']);
+  assert.deepEqual(plain(context.directions),['out']);assert.equal(context.model,'bidi');
+  assert.equal(reader.normalizeMessages([message]).length,1);assert.equal(reader.normalizeMessages([message])[0].kind,'message');
+  assert.equal(reader.chatGPTMessageContext({...message,source_provider:'chatgpt',raw_text:'clipped',raw_clipped:true}).clipped,true);
+  assert.equal(reader.chatGPTMessageContext({text:'ordinary prose'}),null);
+});
+
+test('ChatGPT saved conversation settings preserve unknowns and keep the original model label',()=>{
+  const context=reader.chatGPTConversationContext({provider:'chatgpt',messages:[{kind:'metadata',text:JSON.stringify({source:'chatgpt_export',settings:{default_model_slug:'bidi',voice:'saved-voice',is_starred:true,is_archived:false,is_read_only:null,memory_scope:'global_enabled'},sharing:{id:'share'}})}]});
+  assert.deepEqual(plain(context.facts),[['Recorded model label','bidi'],['Saved voice','saved-voice'],['Memory scope','global_enabled'],['Archived','No'],['Starred','Yes'],['Sharing record','Included in export']]);
+  assert.equal(reader.chatGPTConversationContext({provider:'claude',messages:[]}),null);
 });

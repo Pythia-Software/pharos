@@ -3,7 +3,7 @@
 Stored message labels appear in three production surfaces: the Message Labels
 dashboard, its native Query Table, and conversation timelines. Reading these
 views does not start inference. Configure labeling in
-[Background Processing](local-labeler.md#turning-it-on).
+[Background Processing](local-labeler.md#background-processing).
 
 ## Dashboard and query pages
 

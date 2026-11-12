@@ -353,8 +353,16 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		}
 		result.Parsed += physicalPartCount(parts)
 		if record == nil {
-			err := tracker.hold(c, parts)
-			return err
+			for _, part := range parts {
+				if part.evidenceObservation {
+					err := c.acceptRepeatedObservation(ctx, adapter, parts, tracker)
+					if err == nil {
+						c.boundWAL(ctx, walSizeLimit)
+					}
+					return err
+				}
+			}
+			return tracker.hold(c, parts)
 		}
 		retainedRecordIdentity(captureViewOf(adapter), record, parts)
 		if mode.plan != nil {
@@ -372,7 +380,10 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		var storedDigest string
 		if err := c.DB.QueryRow(`SELECT digest FROM source_record_states WHERE host_id=? AND source_name=? AND source_kind=?
 			AND source_account=? AND source_id=?`, host, config.Name, record.SourceKind, record.Account, record.SourceID).Scan(&storedDigest); err == nil && storedDigest == digest {
-			if !mode.force {
+			// Evidence-bearing records must still verify current authority and
+			// advance their source time in acceptUnchangedEvidence below. The
+			// last parsed digest can outlive another source's publication.
+			if !mode.force && record.EvidenceIdentity == "" {
 				result.SkippedCurrent++
 				return tracker.hold(c, parts)
 			}

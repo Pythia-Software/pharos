@@ -72,8 +72,7 @@ type Config struct {
 	OutcomeReworkDays int
 	CaptureRecoveryID string
 
-	// Labels configures the local message labeler (docs/local-labeler.md),
-	// off unless labels_enabled is set.
+	// Labels configures the local message labeler (docs/local-labeler.md).
 	Labels LabelerSettings
 	// AgentEvents configures the agent events pass (docs/agent-events.md);
 	// it runs on the labeler's worker and budget.

@@ -890,6 +890,35 @@ func TestThinkingQueryV3Shapes(t *testing.T) {
 	if derived := ask("", batch...); !reflect.DeepEqual(stored, derived) {
 		t.Fatalf("stored timings answer %+v, derived %+v", stored, derived)
 	}
+	// The shared read is asserted over the stored timings only for a request
+	// that reads a computed column, wherever it reads it.
+	schema, err := sqliteQuerySchema("model_requests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		metric map[string]any
+		where  []qt.WhereTerm
+		want   bool
+	}{
+		{map[string]any{"id": "m", "op": "count", "groupBy": []string{"model", "agent_depth"}}, nil, false},
+		{map[string]any{"id": "m", "op": "count", "groupBy": []string{"model", "hour_of_day"}}, nil, true},
+		{map[string]any{"id": "m", "op": "count_distinct", "field": "model_effort", "groupBy": []string{}}, nil, true},
+		{map[string]any{"id": "m", "op": "count", "groupBy": []string{"model"}}, []qt.WhereTerm{{Field: "day", Op: "=", Value: "2026-10-20"}}, true},
+		{map[string]any{"id": "m", "op": "count", "groupBy": []string{"model"}, "where": []map[string]any{{"field": "hour_of_day", "op": "=", "value": "3"}}}, nil, true},
+	} {
+		var q qt.QueryRequestV3
+		body, _ := json.Marshal(map[string]any{"version": 3, "profile": "qt-sqlite-v1", "now": time.Now().UnixMilli(), "rows": false,
+			"source": map[string]any{"where": c.where, "limit": 1}, "result": map[string]any{"where": []any{}, "limit": 1}, "metrics": []any{c.metric}})
+		if err := json.Unmarshal(body, &q); err != nil {
+			t.Fatal(err)
+		}
+		required, err := server.queryV3SourceFields(t.Context(), schema, q)
+		read := slices.Concat(required, whereFields(q.Source.Where), whereFields(q.Result.Where))
+		if err != nil || thinkingStoredDataset.computes(read) != c.want {
+			t.Fatalf("%v where %v reads %v: computed %v, want %v (%v)", c.metric, c.where, read, thinkingStoredDataset.computes(read), c.want, err)
+		}
+	}
 	// A request that changes after the stored timings were chosen, but before
 	// the query reads them, is read as it now is.
 	if err := c.refreshRequestTimings(t.Context()); err != nil {

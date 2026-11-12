@@ -15,8 +15,10 @@
     "check-schemas": "node generate-schemas.mjs --check",
     "generate-recipes": "node generate-recipe-snapshot.mjs",
     "check-recipes": "node generate-recipe-snapshot.mjs --check",
+    "generate-model-colors": "node generate-model-colors.mjs",
+    "check-model-colors": "node generate-model-colors.mjs --check",
     "typecheck": "tsc --noEmit",
-    "check": "npm run check-host-boundaries && npm run typecheck && npm run check-schemas && npm run check-recipes && npm run check-view-controls && npm run check-site-map && npm run build && npm run check-bundle && npm test",
+    "check": "npm run check-host-boundaries && npm run typecheck && npm run check-schemas && npm run check-recipes && npm run check-model-colors && npm run check-view-controls && npm run check-site-map && npm run build && npm run check-bundle && npm test",
     "check-host-boundaries": "node host-boundaries.mjs",
     "test": "node tests/run.mjs unit",
     "test:unit": "node tests/run.mjs unit",
@@ -37,9 +39,9 @@
     "check-view-controls": "node view-controls.mjs"
   },
   "dependencies": {
-    "@pythia-software/query-table-core": "1.0.7",
-    "@pythia-software/query-table-react": "1.0.7",
-    "@pythia-software/query-table-ui": "1.0.7",
+    "@pythia-software/query-table-core": "1.0.9",
+    "@pythia-software/query-table-react": "1.0.9",
+    "@pythia-software/query-table-ui": "1.0.9",
     "@types/markdown-it": "14.1.2",
     "html-to-image": "1.11.13",
     "markdown-it": "15.0.2",
@@ -47,7 +49,7 @@
     "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@pythia-software/query-table-codegen": "1.0.7",
+    "@pythia-software/query-table-codegen": "1.0.9",
     "@types/react": "18.3.28",
     "@types/react-dom": "18.3.7",
     "esbuild": "0.27.2",

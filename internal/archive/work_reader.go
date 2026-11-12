@@ -201,6 +201,9 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 	}
 	prepare := func(message map[string]any) {
 		estimates.observe(message)
+		if conversation["provider"] == "chatgpt" {
+			message["source_provider"] = "chatgpt"
+		}
 		if firstString(message["kind"]) == "delegation_result" && childCalls[firstString(message["call_id"])] {
 			message["usage_in_child_conversation"] = true
 		}

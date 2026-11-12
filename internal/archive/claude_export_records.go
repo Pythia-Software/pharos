@@ -39,48 +39,60 @@ func claudeSupplementGroup(name string) string {
 func (a *claudeAIAdapter) readSupplement(input claudeExportInput, emit func(WorkspaceRecord) error, check func(string, string) error) error {
 	// A discovered member can itself be a ZIP attachment. Only an outer
 	// export is a container whose entries should be enumerated.
-	outerArchive := input.member == "" && strings.EqualFold(filepath.Ext(input.path), ".zip")
-	if !outerArchive && input.member == "" {
-		return nil
-	}
-	if outerArchive {
-		if _, err := a.files().Database(input.path); err != nil {
-			return err
-		}
-	}
-	file, err := a.files().Open(input.path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
 	type member struct {
 		name string
 		open func() (io.ReadCloser, error)
 	}
 	var members []member
-	if outerArchive {
-		archive, err := exportZip(file, info.Size())
+	version := input.version
+	if input.units != nil {
+		for _, entry := range input.units.Members {
+			members = append(members, member{entry.Name, func() (io.ReadCloser, error) {
+				data, err := input.units.member(a.files(), input.objectRoot, entry)
+				if err != nil {
+					return nil, err
+				}
+				return io.NopCloser(bytes.NewReader(data)), nil
+			}})
+		}
+	} else {
+		outerArchive := input.member == "" && strings.EqualFold(filepath.Ext(input.path), ".zip")
+		if !outerArchive && input.member == "" {
+			return nil
+		}
+		if outerArchive {
+			if _, err := a.files().Database(input.path); err != nil {
+				return err
+			}
+		}
+		file, err := a.files().Open(input.path)
 		if err != nil {
 			return err
 		}
-		if _, err := claudeZipListing(archive); err != nil {
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil {
 			return err
 		}
-		for _, entry := range archive.File {
-			if !entry.FileInfo().IsDir() {
-				members = append(members, member{entry.Name, entry.Open})
-			}
+		if version == 0 {
+			version = info.ModTime().UnixNano()
 		}
-	} else {
-		members = append(members, member{input.member, func() (io.ReadCloser, error) { return a.files().Open(input.path) }})
-	}
-	version := input.version
-	if version == 0 {
-		version = info.ModTime().UnixNano()
+		if outerArchive {
+			archive, err := exportZip(file, info.Size())
+			if err != nil {
+				return err
+			}
+			if _, err := claudeZipListing(archive); err != nil {
+				return err
+			}
+			for _, entry := range archive.File {
+				if !entry.FileInfo().IsDir() {
+					members = append(members, member{entry.Name, entry.Open})
+				}
+			}
+		} else {
+			members = append(members, member{input.member, func() (io.ReadCloser, error) { return a.files().Open(input.path) }})
+		}
 	}
 	origin := a.original(input.path)
 	records := map[string]*WorkspaceRecord{}

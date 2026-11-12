@@ -229,7 +229,7 @@ func labelerSettingsFrom(root map[string]any, base string) LabelerSettings {
 	}
 	dir := env("PHAROS_LABELS_MODEL_DIR", resolvePath(base, stringValue(root, "labels_model_dir", "")))
 	settings := LabelerSettings{
-		Enabled:    boolValue(root, "labels_enabled", false),
+		Enabled:    boolValue(root, "labels_enabled", true),
 		ModelDir:   dir,
 		Variant:    stringValue(root, "labels_variant", labelsAssets.Model.modelVariant(dir)),
 		Worker:     env("PHAROS_LABELS_WORKER", resolvePath(base, stringValue(root, "labels_worker", ""))),

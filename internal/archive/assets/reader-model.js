@@ -74,6 +74,36 @@ function exportDocumentSections(value){
   visit(document,value.file_name);return sections;
 }
 
+// ChatGPT source context stays evidence: references are not invented tool calls,
+// and a saved voice choice is not proof of a retained assistant recording.
+function chatGPTMessageContext(message){
+  const raw=messageJSON(message,true);
+  if(!raw?.author||!raw?.content?.content_type)return message.source_provider==='chatgpt'&&message.raw_clipped?{references:[],directions:[],referenceKinds:[],model:'',clipped:true}:null;
+  const metadata=raw.metadata||{},references=[],seen=new Set();
+  const link=value=>{if(typeof value!=='string')return null;try{const url=new URL(value);return ['http:','https:'].includes(url.protocol)?url.href:null}catch{return null}};
+  const visit=(value,depth=0)=>{
+    if(!value||typeof value!=='object'||depth>12)return;
+    if(Array.isArray(value)){value.forEach(item=>visit(item,depth+1));return}
+    const url=link(value.url||value.href);
+    if(url&&!seen.has(url)){seen.add(url);references.push({url,title:String(value.title||value.name||url),snippet:typeof value.snippet==='string'?value.snippet:'',attribution:typeof value.attribution==='string'?value.attribution:''})}
+    // Never interpret widget declarations or compressed payloads as code.
+    for(const [key,child]of Object.entries(value))if(!['dil','widget','data','payload'].includes(key))visit(child,depth+1);
+  };
+  visit(metadata.content_references);visit(metadata.search_result_groups);visit(metadata.citations);
+  const parts=Array.isArray(raw.content.parts)?raw.content.parts:[],directions=[...new Set(parts.filter(part=>part?.content_type==='audio_transcription').map(part=>part.direction).filter(value=>typeof value==='string'))];
+  const referenceKinds=[...new Set((Array.isArray(metadata.content_references)?metadata.content_references:[]).map(value=>value?.type).filter(value=>typeof value==='string'))];
+  return {references,directions,referenceKinds,model:typeof metadata.model_slug==='string'?metadata.model_slug:'',clipped:!!message.raw_clipped};
+}
+function chatGPTConversationContext(conversation){
+  if(conversation.provider!=='chatgpt')return null;
+  const evidence=(conversation.messages||[]).map(message=>messageJSON(message)).find(value=>value?.source==='chatgpt_export');
+  const settings=evidence?.settings||{},facts=[];
+  for(const [key,label]of [['default_model_slug','Recorded model label'],['voice','Saved voice'],['voice_name','Saved voice'],['memory_scope','Memory scope']])if(settings[key]!=null&&typeof settings[key]!=='object')facts.push([label,String(settings[key])]);
+  for(const [key,label]of [['is_archived','Archived'],['is_starred','Starred'],['is_do_not_remember','Do not remember'],['is_study_mode','Study mode'],['is_read_only','Read only']])if(typeof settings[key]==='boolean')facts.push([label,settings[key]?'Yes':'No']);
+  if(evidence?.sharing)facts.push(['Sharing record','Included in export']);
+  return {facts,settings};
+}
+
 // Token accounting
 // Cached input is part of Codex input; Claude reports it separately. Reasoning is
 // part of output. Never add either subset a second time to a reported total.
@@ -329,10 +359,10 @@ function conversationGraph(messages){
   messages.filter(message=>message.parent_native_id).forEach(message=>{if(!childrenByParent.has(message.parent_native_id))childrenByParent.set(message.parent_native_id,[]);childrenByParent.get(message.parent_native_id).push(message);});
   messages.filter(message=>message.call_id&&['delegation_result','tool_result','error'].includes(message.kind)).forEach(message=>{const delegation=delegationCalls.has(message.call_id),regular=(message.kind==='tool_result'||message.kind==='error')&&toolCalls.has(message.call_id),map=delegation?delegationResultsByCall:regular?toolResultsByCall:null;if(map){if(!map.has(message.call_id))map.set(message.call_id,[]);map.get(message.call_id).push(message);consumed.add(message.native_id)}});
   const parentIds=new Set(messages.filter(message=>message.kind==='delegation').flatMap(message=>[message.native_id,message.call_id]).filter(Boolean)),top=messages.filter(message=>(!message.parent_native_id||!parentIds.has(message.parent_native_id))&&!consumed.has(message.native_id)),turns=[];
-  // Export summaries are archive metadata, not an extra agent setup turn.
+  // Export summaries and settings are archive metadata, not an extra setup turn.
   // Keep them with the first recorded user turn when one exists.
   const user=top.find(message=>message.role==='user'&&message.kind==='message');
-  if(user){const metadata=top.filter(message=>message.kind==='metadata'&&messageJSON(message)?.type==='claude_ai_conversation');for(const message of metadata)top.splice(top.indexOf(message),1);top.splice(top.indexOf(user)+1,0,...metadata)}
+  if(user){const metadata=top.filter(message=>{if(message.kind!=='metadata')return false;const value=messageJSON(message);return value?.type==='claude_ai_conversation'||value?.source==='chatgpt_export'});for(const message of metadata)top.splice(top.indexOf(message),1);top.splice(top.indexOf(user)+1,0,...metadata)}
   let current=null;for(const message of top){if(message.role==='user'&&message.kind==='message'){if(current)turns.push(current);current={human:message,events:[]}}else{if(!current)current={human:null,events:[]};current.events.push(message)}}if(current)turns.push(current);
   return{childrenByParent,delegationResultsByCall,toolResultsByCall,consumed,turns};
 }

@@ -37,6 +37,7 @@ type claudeManifestPart struct {
 }
 
 type claudeImportPart struct {
+	Retirement     string `json:"retirement_proof,omitempty"`
 	OriginalHash   string `json:"original_sha256,omitempty"`
 	ID             string `json:"id"`
 	Filename       string `json:"filename"`
@@ -56,25 +57,30 @@ type claudeImportPart struct {
 	Manifest       bool   `json:"manifest,omitempty"`
 	Storage        string `json:"storage,omitempty"`
 	SourceModified string `json:"source_modified_at,omitempty"`
+	Units          string `json:"source_units,omitempty"`
+	UnitsSHA256    string `json:"source_units_sha256,omitempty"`
+	UnitsError     string `json:"source_units_error,omitempty"`
+	Retired        bool   `json:"native_retired,omitempty"`
 	// Hint belongs to the user's explicitly selected input, never a URL.
 	Hint string `json:"input_path,omitempty"`
 }
 
 type claudeImportJob struct {
-	Error        string             `json:"error,omitempty"`
-	Version      int                `json:"version"`
-	ID           string             `json:"id"`
-	Name         string             `json:"name"`
-	State        string             `json:"state"`
-	CreatedAt    string             `json:"created_at"`
-	ExportedAt   string             `json:"exported_at,omitempty"`
-	UpdatedAt    string             `json:"updated_at"`
-	ManifestHash string             `json:"manifest_sha256,omitempty"`
-	Completeness string             `json:"completeness"`
-	Directories  []string           `json:"directories"`
-	Parts        []claudeImportPart `json:"parts"`
-	Warnings     []string           `json:"warnings"`
-	Source       *ProbeAcceptResult `json:"source,omitempty"`
+	Groups       []claudeSupplementObservation `json:"supplement_groups,omitempty"`
+	Error        string                        `json:"error,omitempty"`
+	Version      int                           `json:"version"`
+	ID           string                        `json:"id"`
+	Name         string                        `json:"name"`
+	State        string                        `json:"state"`
+	CreatedAt    string                        `json:"created_at"`
+	ExportedAt   string                        `json:"exported_at,omitempty"`
+	UpdatedAt    string                        `json:"updated_at"`
+	ManifestHash string                        `json:"manifest_sha256,omitempty"`
+	Completeness string                        `json:"completeness"`
+	Directories  []string                      `json:"directories"`
+	Parts        []claudeImportPart            `json:"parts"`
+	Warnings     []string                      `json:"warnings"`
+	Source       *ProbeAcceptResult            `json:"source,omitempty"`
 }
 
 type claudeImportRequest struct {
@@ -140,10 +146,14 @@ func claudeImportLock(config Config, name string) (io.Closer, error) {
 		}
 	}()
 	root := claudeImportRoot(config, name)
+	lockPath, err := claudeOwnedPath(config.CaptureRoot, path.Join(".claude-imports", currentHost().ID, name, ".import.lock"))
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(filepath.Join(root, ".import.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +308,7 @@ func loadClaudeJob(config Config, name, id string) (*claudeImportJob, error) {
 	if err := claudeReadJSON(sourceFiles{}, filepath.Join(claudeImportJobDir(config, name, id), "job.json"), &job); err != nil {
 		return nil, err
 	}
-	if job.Version != 1 || job.ID != id || job.Name != name || len(job.Parts) > claudeExportLimits.Parts {
+	if (job.Version != 1 && job.Version != 2) || job.ID != id || job.Name != name || len(job.Parts) > claudeExportLimits.Parts {
 		return nil, errors.New("invalid or unsupported Claude import job")
 	}
 	for _, part := range job.Parts {
@@ -308,6 +318,12 @@ func loadClaudeJob(config Config, name, id string) (*claudeImportJob, error) {
 		}
 		if part.Storage != "" && part.Storage != path.Join("parts", part.ID+strings.ToLower(filepath.Ext(part.Filename))) {
 			return nil, errors.New("Claude import job has an unexpected storage path")
+		}
+		if part.Units != "" && part.Units != path.Join("units", part.ID+".json") {
+			return nil, errors.New("Claude import job has an unexpected source-unit path")
+		}
+		if part.Retired && (job.Version != 2 || part.Units == "" || !validRecordHash(part.UnitsSHA256)) {
+			return nil, errors.New("retired Claude part lacks a versioned source-unit receipt")
 		}
 		if !claudeExportPath(part.Filename) || part.Storage != "" && !claudeExportPath(part.Storage) {
 			return nil, errors.New("Claude import job contains an unsafe path")
@@ -569,6 +585,21 @@ func collectClaudeExport(ctx context.Context, config Config, request claudeImpor
 		}
 		if part.State == "collected" {
 			if err := verifyClaudeStoredPart(ctx, dir, *part); err == nil {
+				priorUnits, priorHash := part.Units, part.UnitsSHA256
+				part.UnitsError = ""
+				if err := retainClaudeSourceUnits(ctx, config, job, part); err != nil {
+					part.UnitsError = err.Error()
+				}
+				// A verified retry must not temporarily erase/rewrite completed group
+				// metadata, changing the source fingerprint despite identical evidence.
+				if priorUnits != part.Units || priorHash != part.UnitsSHA256 {
+					if err := publishClaudeInventory(config, job); err != nil {
+						return job, err
+					}
+				}
+				if err := saveClaudeJob(config, job); err != nil {
+					return job, err
+				}
 				continue
 			}
 			part.State, part.Error = "damaged", "The collected file changed; supply that part again."
@@ -583,6 +614,12 @@ func collectClaudeExport(ctx context.Context, config Config, request claudeImpor
 			}
 		} else if part.State != "damaged" {
 			part.State, part.Error = "missing", "Download this part in your signed-in browser, then check the folder again."
+		}
+		if job.Parts[index].State == "collected" {
+			job.Parts[index].UnitsError = ""
+			if err := retainClaudeSourceUnits(ctx, config, job, &job.Parts[index]); err != nil {
+				job.Parts[index].UnitsError = err.Error()
+			}
 		}
 		if err := saveClaudeLinks(config, job.ID, links); err != nil {
 			return job, err
@@ -603,6 +640,9 @@ func collectClaudeExport(ctx context.Context, config Config, request claudeImpor
 			job.State = "incomplete"
 		}
 	}
+	if err := prepareClaudeSupplementObservations(config, job); err != nil {
+		return job, err
+	}
 	if err := publishClaudeInventory(config, job); err != nil {
 		return job, err
 	}
@@ -618,6 +658,9 @@ func collectClaudeExport(ctx context.Context, config Config, request claudeImpor
 		job.Source = &result
 	}
 	if err := saveClaudeJob(config, job); err != nil {
+		return job, err
+	}
+	if err := publishClaudeSupplementHeads(config, job); err != nil {
 		return job, err
 	}
 	return job, nil
@@ -722,7 +765,26 @@ func (r claudeContextReader) Read(p []byte) (int, error) {
 }
 
 func verifyClaudeStoredPart(ctx context.Context, dir string, part claudeImportPart) error {
-	file, err := os.Open(filepath.Join(dir, filepath.FromSlash(part.Storage)))
+	if part.Retired {
+		if filepath.Base(filepath.Dir(dir)) != "snapshots" || !validRecordHash(filepath.Base(dir)) {
+			return errors.New("invalid retired Claude snapshot root")
+		}
+		root := filepath.Dir(filepath.Dir(dir))
+		asset := claudeExportAsset{SHA256: part.SHA256, UnitsSHA256: part.UnitsSHA256, Retirement: part.Retirement}
+		if _, err := readClaudeRetirementProof(sourceFiles{ctx: ctx}, root, filepath.Base(dir), part.ID, asset); err != nil {
+			return err
+		}
+		units, err := readClaudeSourceUnits(sourceFiles{ctx: ctx}, filepath.Join(dir, part.Units), part.SHA256, part.UnitsSHA256)
+		if err != nil {
+			return err
+		}
+		return verifyClaudeUnitClosure(ctx, root, units)
+	}
+	name, err := claudeOwnedPath(dir, part.Storage)
+	if err != nil {
+		return err
+	}
+	file, err := os.Open(name)
 	if err != nil {
 		return err
 	}
@@ -740,6 +802,8 @@ func verifyClaudeStoredPart(ctx context.Context, dir string, part claudeImportPa
 
 func collectClaudePart(ctx context.Context, config Config, job *claudeImportJob, index int, from string, links map[string]string) error {
 	part := job.Parts[index]
+	part.Retired = false
+	part.Retirement = ""
 	part.Conversations, part.Messages, part.IsConversation, part.Manifest = 0, 0, false, false
 	dir := claudeImportJobDir(config, job.Name, job.ID)
 	source, err := openClaudeImportInput(job.Directories, from)
@@ -988,7 +1052,17 @@ func withoutClaudeAccountRecords(ctx context.Context, source *os.File, size int6
 }
 
 func publishClaudeInventory(config Config, job *claudeImportJob) error {
-	inventory := claudeExportInventory{Format: claudeInventoryFormat, CreatedAt: job.ExportedAt, Files: []claudeExportAsset{}, Missing: []string{}}
+	groups := job.Groups
+	// Intermediate collection receipts can have a different available closure
+	// than the last completed observation. Publish complete metadata only once
+	// its membership has been recomputed at collection completion.
+	if job.State != "collected" {
+		groups = nil
+	}
+	inventory := claudeExportInventory{Groups: groups, Format: claudeInventoryFormat, CreatedAt: job.ExportedAt, Files: []claudeExportAsset{}, Missing: []string{}}
+	if job.Version == 2 {
+		inventory.Format = claudeObjectInventoryFormat
+	}
 	for _, part := range job.Parts {
 		if part.State == claudePartExcluded {
 			continue
@@ -997,7 +1071,7 @@ func publishClaudeInventory(config Config, job *claudeImportJob) error {
 			inventory.Missing = append(inventory.Missing, part.Filename)
 			continue
 		}
-		inventory.Files = append(inventory.Files, claudeExportAsset{Path: part.Storage, Filename: part.Filename, Category: part.Category, SHA256: part.SHA256, Size: part.Size, Conversations: part.IsConversation, SourceModified: part.SourceModified})
+		inventory.Files = append(inventory.Files, claudeExportAsset{Path: part.Storage, Filename: part.Filename, Category: part.Category, SHA256: part.SHA256, Size: part.Size, Conversations: part.IsConversation, SourceModified: part.SourceModified, Units: part.Units, UnitsSHA256: part.UnitsSHA256, Retired: part.Retired, Retirement: part.Retirement})
 	}
 	name := filepath.Join(claudeImportJobDir(config, job.Name, job.ID), claudeInventoryName)
 	content := []byte(jsonText(inventory))

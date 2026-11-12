@@ -93,7 +93,7 @@
 .pricing-notice button{max-width:100%;white-space:normal}
 .pricing-notice details,.pricing-notice>p{margin-top:12px}
 .pricing-notice summary{cursor:pointer;font-size:var(--fs-sm)}
-.pricing-notice textarea{display:block;box-sizing:border-box;width:100%;max-width:100%;margin-top:10px;resize:vertical;font-family:var(--mono,monospace);font-size:var(--fs-sm)}
+.pricing-notice textarea{display:block;box-sizing:border-box;width:100%;max-width:100%;margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:5px;background:var(--bg);color:var(--ink);resize:vertical;font-family:var(--mono,monospace);font-size:var(--fs-sm)}
 
 .usage-dashboard-links .usage-query-contributors{--query-purpose:light-dark(#26734b,#7acda0)}
 .usage-dashboard-links .usage-query-compare{--query-purpose:light-dark(#7545b0,#c5a0f5)}

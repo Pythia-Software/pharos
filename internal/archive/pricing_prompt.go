@@ -54,7 +54,7 @@ func (c *Catalog) pricingRefreshPrompt(health map[string]any) string {
 	}
 	var prompt strings.Builder
 	fmt.Fprintf(&prompt, "Refresh the API price history that Pharos uses to compute API-equivalent cost. Today is %s.\n\n", today)
-	fmt.Fprintf(&prompt, "Work in %s. Edit only `pricing/cost_changes.json` and, when needed, `pricing/model_colors.json`. Read `pricing/README.md` first: it defines the file contracts, and the rules below restate the parts that matter most.\n\n", location)
+	fmt.Fprintf(&prompt, "Work in %s. Edit `pricing/cost_changes.json` and regenerate `pricing/model_colors.json`. Edit `pricing/model_color_rules.json` only when a genuinely new class needs a rule and reviewed capability order. Read `pricing/README.md` first: it defines the file contracts, and the rules below restate the parts that matter most.\n\n", location)
 
 	prompt.WriteString("## What to research\n\n")
 	unpriced, _ := health["unpriced_models"].([]map[string]any)
@@ -103,7 +103,7 @@ func (c *Catalog) pricingRefreshPrompt(health map[string]any) string {
 
 ## Dashboard model colors
 
-For each newly priced model, add its normalized key to ` + "`pricing/model_colors.json`" + ` if missing. Follow ` + "`pricing/README.md`" + ` for provider colors, model classes, unique shades, and ordering of older and newer versions. Preserve existing model colors. Alias rows do not need a separate color unless their target model is missing one.
+For each newly priced model, run ` + "`npm --prefix web run generate-model-colors -- --preview`" + ` after updating prices. The generator adds recognizable models and rebalances the entire default palette using ` + "`pricing/model_color_rules.json`" + `. Existing default colors may change; do not preserve them at the expense of useful version separation. Follow ` + "`pricing/README.md`" + ` for class and provider rules. A genuinely new class needs an explicit rule and capability order; do not guess its rank. Alias rows do not need a separate color unless their target model is missing one.
 
 ## Check your work
 

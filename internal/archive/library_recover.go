@@ -275,10 +275,11 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 			if e = json.Unmarshal(data, &prior); e != nil {
 				return Config{}, e
 			}
-			if prior.Version > libraryFormatVersion {
+			if prior.Version > libraryClaudeObjectsVersion {
 				return Config{}, fmt.Errorf("this library copy requires a newer Pharos")
 			}
 			descriptor.RecoveredFrom = prior.ID
+			descriptor.Version = max(descriptor.Version, prior.Version)
 		}
 	}
 	if err = durableJSON(descriptorPath(config), descriptor); err != nil {

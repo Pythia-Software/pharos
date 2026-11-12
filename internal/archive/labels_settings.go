@@ -9,6 +9,29 @@ import (
 	"strconv"
 )
 
+// scheduleDefaultModelBackfill gives existing libraries one chance to process
+// messages whose disabled stages were previously acknowledged as complete.
+// The receipt and both generations commit together, so a restart never
+// requeues them after a user has turned either model off.
+func (c *Catalog) scheduleDefaultModelBackfill(ctx context.Context) error {
+	return c.writeTransaction(ctx, "schedule default model backfill", func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO meta(key,value) VALUES('default_model_backfill_v1','1')`)
+		if err != nil {
+			return err
+		}
+		inserted, err := result.RowsAffected()
+		if err != nil || inserted == 0 {
+			return err
+		}
+		for _, name := range []string{"labels", "agent_events"} {
+			if err := markSyncDeferredStage(tx, name); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // labelsSettings is always visible in Settings, including before labels
 // have been enabled or their ledger has been built.
 func (s *Server) labelsSettings() map[string]any {

@@ -127,6 +127,31 @@ function pharosClaudeWatchLine(item) {
   return {...line,files,progress,detail:item.message||''};
 }
 
+// The same ingestion counts as Claude, with a single verified ZIP.
+function pharosChatGPTWatchLine(item) {
+  const line=pharosClaudeWatchLine(item);
+  if(item.state==='fetching'&&item.phase==='collecting')line.text='Copying and verifying export';
+  line.files=item.collected?'ZIP verified and preserved':'ZIP awaiting verification';
+  return line;
+}
+
+// A deliberate one-time capture uses existing capture/index jobs and never starts recording.
+async function captureClaudeSettings(coverage,{call,runs,conversation='',progress=()=>{}}){
+  if(!runs)throw Error('Library controls are still loading. Try again.');
+  progress('Preparing settings capture…');
+  const setup=await call('/api/claude-chat-settings/setup',{method:'POST',body:JSON.stringify({account:coverage.account,path:coverage.setup.path,capture_only:true})});
+  progress('Capturing settings…');
+  const captured=await runs.capture([setup.source]);
+  if(captured?.state!=='complete')throw Error('Settings capture did not complete. Try again when the current capture has finished.');
+  progress('Indexing settings…');
+  const indexed=await runs.index({sources:[setup.source],only_needed:true});
+  if(indexed?.state!=='complete')throw Error('Settings were captured, but indexing did not complete. Try again to finish.');
+  const result=await call('/api/claude-chat-settings/coverage?account='+encodeURIComponent(coverage.account)+'&conversation='+encodeURIComponent(conversation));
+  const current=result.accounts.find(item=>item.account===coverage.account);
+  if(!current||!Number.isSafeInteger(current.missing_models)||current.missing_models<0)throw Error('Settings were captured, but model coverage could not be confirmed. Reload this page to check it.');
+  return current;
+}
+
 // Source setup UI.
 // Detect installed tools and familiar data folders before offering choices. The same
 // guide runs inside application setup and from Settings → Sources. Approval
@@ -224,7 +249,10 @@ function pharosClaudeWatchLine(item) {
 .pharos-claude-downloads{display:grid;gap:12px;margin:16px 0}
 .pharos-claude-downloads a{overflow-wrap:anywhere}
 .pharos-claude-parts{max-width:100%;overflow-wrap:anywhere}
-.pharos-onboard.pharos-settings-prompt:not(.pharos-embedded){width:min(600px,calc(100% - 48px));height:fit-content}
+.pharos-claude-routine{min-width:0;margin:16px 0;padding:16px;border:1px solid var(--line);border-radius:8px}
+.pharos-claude-routine h3{margin:0 0 8px}.pharos-claude-routine p{margin:8px 0}
+.pharos-claude-routine pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;margin:12px 0;padding:12px;background:var(--bg);border-radius:6px;user-select:text}
+.pharos-claude-routine [role=status]:empty{display:none}
 .pharos-modes.pharos-pair{grid-template-columns:repeat(2,minmax(0,1fr))}
 .pharos-chips{display:flex;flex-wrap:wrap;gap:8px;border:0;margin:0;padding:0;min-width:0}
 .pharos-onboard .pharos-chip-option{display:inline-flex;align-items:center;gap:8px;margin:0;padding:8px 14px;border:1px solid var(--line);border-radius:20px;background:var(--bg);font:600 13px/1.3 var(--sans);cursor:pointer}
@@ -277,7 +305,7 @@ function pharosClaudeWatchLine(item) {
 .claude-watch-library{margin-top:12px;min-width:0;overflow-wrap:anywhere}.claude-watch-library h4{margin:0;font-size:var(--fs-base)}.claude-watch-library p{margin:6px 0}.claude-watch-library ul{margin:6px 0;padding-left:20px}
 .claude-watch-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
 .claude-watch-options{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:0 0 12px}.claude-watch-options>p{flex-basis:100%;margin:0}
-.claude-watch-browser{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;max-width:100%}.claude-watch-browser select{flex:1 1 12em;width:100%;max-width:100%;min-width:0}
+.claude-watch-browser{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;max-width:100%}.claude-watch-browser select{flex:1 1 12em;box-sizing:border-box;width:100%;max-width:100%;min-width:0;height:30px;padding:3px 28px 3px 8px;border:1px solid var(--line);border-radius:5px;background-color:var(--panel);color:var(--ink);font:inherit}
 @media(max-width:560px){.claude-downloads-watch>.optional-behavior{flex-wrap:wrap;gap:12px}.claude-downloads-watch>.optional-behavior>div{flex-basis:100%}}`;
 
   const node = (tag, cls, text) => {
@@ -296,6 +324,23 @@ function pharosClaudeWatchLine(item) {
     return body;
   };
   const toast = message => { if (typeof window.feedbackToast === 'function') window.feedbackToast(message); };
+  function claudeExportRoutine(){
+    const section=node('section','pharos-claude-routine');
+    const prompt=node('pre','','Help me keep my Claude conversations up to date in Pharos. Use browser access in Claude Desktop to open Claude’s Settings → Privacy → Export data. Set up a daily scheduled task at 9 AM in my local timezone to request an export of the rolling last 30 days of conversations, recalculating the date range each day. If the export screen has no date filter, request the full export and tell me. Test the export request once now, verify that this browser task can run on the schedule, and tell me what must stay open or signed in. If scheduling or browser access is unavailable, explain what I need to enable. Leave the emailed download for me to initiate. Confirm the saved task’s schedule and export scope.');
+    const copy=node('button','','Copy daily export prompt'),status=node('p','pharos-muted');copy.type='button';status.setAttribute('role','status');
+    copy.onclick=async()=>{
+      if(copy.getAttribute('aria-busy')==='true')return;
+      copy.setAttribute('aria-busy','true');status.textContent='';
+      try{await window.pharosHost.clipboard.writeText(prompt.textContent);status.textContent='Copied. Paste this into Claude Desktop.'}
+      catch{status.textContent='Could not copy the prompt. Select the text above and copy it, or try again.'}
+      finally{copy.removeAttribute('aria-busy')}
+    };
+    section.append(node('h3','','Request a daily Claude export'),
+      node('p','pharos-muted','Paste this starter prompt into Claude Desktop with scheduled tasks and browser access available. Claude will check which export options and scheduling capabilities your account supports.'),prompt,copy,status,
+      node('p','pharos-muted','Each day, when Claude’s email arrives, use its link to download the export manifest into Downloads within 24 hours. With Import Claude exports from Downloads turned on in Settings → Sources, Pharos running, and your chosen browser profile signed in to Claude, Pharos collects the remaining files and imports your conversations.'),
+      node('p','pharos-muted','For your first import, request all history to preserve conversations older than 30 days. You can also request an export yourself in Claude’s Settings → Privacy → Export data.'));
+    return section;
+  }
   const plural = (count, unit) => `${Number(count).toLocaleString()} ${unit}${count === 1 ? '' : 's'}`;
   const size = value => {
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -429,13 +474,13 @@ function pharosClaudeWatchLine(item) {
     const body=node('div','pharos-onboard-body'),actions=node('div','pharos-onboard-actions');
     let wizard=createPharosSourceWizard();
     let choice='scan';
-    const claudeSettingsOffered=new Set(),claudeSettingsSources=new Map();
+    const claudeSettingsSources=new Map();
     active={embedded:!!embedded,opener:document.activeElement,stage:0,back:()=>renderStart()};
     const guide=node('button','pharos-source-guide','Data Guide');guide.type='button';guide.dataset.viewField='guide_open';guide.onclick=()=>window.pharosOpenDataGuide('sources',guide).catch(failure=>{guide.textContent='Retry Data Guide';guide.title=failure.message});
     dialog.append(title,intro,guide,body,actions);
     if(embedded){embedded.classList.add('source-setup-open');embedded.setAttribute('aria-labelledby',title.id);embedded.querySelector('.application-body').append(dialog)}
     else{document.body.append(dialog);dialog.showModal();dialog.addEventListener('cancel',event=>{event.preventDefault();active?.back()})}
-    const heading=(text,description)=>{dialog.classList.remove('pharos-settings-prompt');guide.hidden=false;title.textContent=text;intro.textContent=description;intro.hidden=false;body.scrollTop=0;title.focus()};
+    const heading=(text,description)=>{guide.hidden=false;title.textContent=text;intro.textContent=description;intro.hidden=false;body.scrollTop=0;title.focus()};
     const step=n=>node('span','pharos-source-progress',`Step ${n} of 3`);
     const error=node('p','pharos-error');error.setAttribute('role','status');
     const fail=failure=>{error.textContent=failure.message;body.prepend(error)};
@@ -636,46 +681,6 @@ function pharosClaudeWatchLine(item) {
       actions.replaceChildren(step(3),button('Back',false,renderFound),add);
     }
 
-    // Reuse the import modal as an optional setup step. Choices last for this
-    // import flow; enabling is durable, while continuing without stays optional.
-    function renderClaudeSettingsSetup(back,job,setup=null,failure=null){
-      const view=active,key=job.name+'/'+job.id;
-      heading('Add model and thinking settings?','Pharos saves only conversation IDs, selected models, effort levels, thinking modes, and observation timestamps from Claude Desktop.');
-      dialog.classList.add('pharos-settings-prompt');guide.hidden=true;
-      clear();
-      const marker=node('section','pharos-claude-settings-setup');body.append(marker);
-      const current=()=>active===view&&marker.isConnected;
-      const next=()=>{claudeSettingsOffered.add(key);renderClaudeCollection(back,{id:job.id,name:job.name})};
-      active.back=next;
-      marker.append(node('p','','While Pharos is running, automatic updates periodically check for changes to these settings.'));
-      if(failure)fail(failure);
-      const skip=button('Continue without settings',false,next);
-      if(!setup){
-        actions.replaceChildren(skip,button('Check again',true,async()=>{try{const plan=await call('/api/claude-chat-settings/setup?name='+encodeURIComponent(job.name));if(!current())return;if(plan.enabled){claudeSettingsSources.set(key,plan.source);next()}else renderClaudeSettingsSetup(back,job,plan)}catch(error){if(current())fail(error)}}));
-        return;
-      }
-      let path=setup.path;
-      if(setup.configured&&setup.scope==='library')marker.append(node('p','pharos-muted','This enables the shared source on every Mac.'));
-      // The usual folder needs no setup. Offer a chooser only if enabling
-      // fails, so an unavailable or moved folder can still be corrected here.
-      let folder;
-      const showFolder=()=>{
-        if(setup.configured||folder)return;
-        folder=pathField('Claude settings folder',path,'~/Library/Application Support/Claude','source',value=>{path=value},fail);
-        marker.append(node('label','pharos-folder-label','Claude Desktop folder'),folder.row);
-      };
-      const enable=button('Enable and continue',true,async()=>{
-        enable.disabled=skip.disabled=true;error.textContent='';
-        try{
-          const saved=await call('/api/claude-chat-settings/setup',{method:'POST',body:JSON.stringify({name:job.name,path})});
-          if(!current())return;
-          if(!saved.enabled)throw Error('Settings capture was not enabled. You can retry or continue without it.');
-          claudeSettingsSources.set(key,saved.source);window.loadSources?.();next();
-        }catch(failure){if(current()){showFolder();fail(failure);enable.disabled=skip.disabled=false}}
-      });
-      actions.replaceChildren(skip,enable);
-    }
-
     async function renderClaudeCollection(back, selectedJob=null, wait=false) {
       const view=active;
       heading('Collect your Claude export.','Download links use your signed-in browser. Pharos verifies completed files and keeps a resumable copy in your library.');
@@ -700,13 +705,12 @@ function pharosClaudeWatchLine(item) {
         const job=await call('/api/claude-imports?id='+encodeURIComponent(chosen.id)+'&name='+encodeURIComponent(chosen.name));
         if(!current())return;
         const settingsKey=job.name+'/'+job.id;
-        if(job.source&&!claudeSettingsOffered.has(settingsKey)){
+        if(job.source){
           let setup;
           try{setup=await call('/api/claude-chat-settings/setup?name='+encodeURIComponent(job.name))}
-          catch(failure){if(current())renderClaudeSettingsSetup(back,job,null,failure);return}
+          catch{if(current())body.append(node('p','pharos-muted','Could not check saved Claude settings sources. You can capture missing settings after importing.'))}
           if(!current())return;
-          if(!setup.enabled){renderClaudeSettingsSetup(back,job,setup);return}
-          claudeSettingsOffered.add(settingsKey);claudeSettingsSources.set(settingsKey,setup.source);
+          if(setup?.enabled)claudeSettingsSources.set(settingsKey,setup.source);else claudeSettingsSources.delete(settingsKey);
         }
         const summary=pharosClaudeImportSummary(job);if(job.error)fail(Error(job.error));
         progress.textContent=`Collected ${summary.collected} of ${summary.expected} files · ${plural(summary.conversations,'conversation')} · ${plural(summary.messages,'message')} in the supplied export.`;
@@ -753,8 +757,8 @@ function pharosClaudeWatchLine(item) {
       let chosen=exports[0]?.kind,path='';
       const kinds=node('fieldset','pharos-modes pharos-pair');kinds.append(node('legend','pharos-visually-hidden','Which export'));
       const how=node('p','pharos-muted pharos-export-how');
-      const recent=node('div');
-      const describe=()=>{how.textContent=exports.find(item=>item.kind===chosen)?.how||'';recent.replaceChildren();if(chosen==='claude-ai'){
+      const recent=node('div'),routine=claudeExportRoutine();
+      const describe=()=>{how.textContent=exports.find(item=>item.kind===chosen)?.how||'';routine.hidden=chosen!=='claude-ai';recent.replaceChildren();if(chosen==='claude-ai'){
         call('/api/claude-imports').then(report=>{if(chosen!=='claude-ai'||!recent.isConnected)return;if(!report.watch?.enabled&&report.watch?.available)recent.append(node('p','pharos-muted','To import each new Claude export as it arrives, turn on Import Claude exports from Downloads in Settings → Sources.'));for(const job of (report.jobs||[]).slice(0,5))recent.append(button(`Resume export: ${job.collected}/${job.expected} files`,false,()=>renderClaudeCollection(()=>renderImport(back),job)))}).catch(failure=>{if(recent.isConnected)fail(failure)});
       }};
       for(const item of exports){
@@ -765,13 +769,19 @@ function pharosClaudeWatchLine(item) {
       describe();
       const field=pathField('Export',path,'~/Downloads/export.zip','export',value=>{path=value},fail);
       body.append(kinds,how,recent,node('h3','','The export'),field.row,
-        node('p','pharos-muted','For Claude, choose the manifest or a folder containing its downloaded ZIPs. A legacy ZIP or conversations.json also works. macOS may ask to let Pharos read Downloads.'));
+        node('p','pharos-muted','For Claude, choose the manifest or a folder containing its downloaded ZIPs. A legacy ZIP or conversations.json also works. macOS may ask to let Pharos read Downloads.'),routine);
       const add=button('Import',true,async()=>{
         const submittingView=active;
         const value=path.trim();
         if(!value.startsWith('/')&&!value.startsWith('~/')){fail(Error('Enter an absolute path, or one starting with ~/.'));field.input.focus();return}
         const buttons=[...actions.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);error.textContent='';
-        try{if(chosen==='claude-ai'){await call('/api/claude-imports',{method:'POST',body:JSON.stringify({paths:[value]})});if(active!==submittingView||!field.input.isConnected)return;renderClaudeCollection(()=>renderImport(back),null,true)}else{const result=await call('/api/sources/import',{method:'POST',body:JSON.stringify({kind:chosen,path:value})});window.loadSources?.();renderResult(result,body,actions,status)}}
+        try{if(chosen==='claude-ai'){await call('/api/claude-imports',{method:'POST',body:JSON.stringify({paths:[value]})});if(active!==submittingView||!field.input.isConnected)return;renderClaudeCollection(()=>renderImport(back),null,true)}else if(chosen==='chatgpt'&&value.toLowerCase().endsWith('.zip')){
+          await call('/api/chatgpt-imports',{method:'POST',body:JSON.stringify({path:value})});
+          if(active!==submittingView||!field.input.isConnected)return;
+          heading('Your ChatGPT export.','Pharos verifies the ZIP, preserves a snapshot, and adds its conversations to your library.');clear();
+          const report=node('div');body.append(report);renderChatGPTWatch(report);
+          actions.replaceChildren(button('Done',true,()=>{close();window.loadSources?.()}));
+        }else{const result=await call('/api/sources/import',{method:'POST',body:JSON.stringify({kind:chosen,path:value})});window.loadSources?.();renderResult(result,body,actions,status)}}
         catch(failure){if(active!==submittingView||!field.input.isConnected)return;fail(failure);buttons.forEach(b=>b.disabled=false)}
       });
       actions.replaceChildren(button('Back',false,back),add);
@@ -980,7 +990,7 @@ function pharosClaudeWatchLine(item) {
     if (!shown()) return toast(summary);
     setTitle(body, run?.state === 'complete' ? `${label} is in the library` : `Indexing ${label}`);
     body.replaceChildren(node('p', 'pharos-lead', summary), indexRows(run));
-    if(run?.state==='complete')body.append(optionalBackup());
+    if(run?.state==='complete'){body.append(optionalBackup());if(typeof claudeSettingsBackfillNotice==='function')body.append(claudeSettingsBackfillNotice())}
     if (run?.error && run.state !== 'complete') body.append(node('p', 'pharos-error', run.error));
     active.back=close;
     const done = button('Done', true, close);
@@ -1049,7 +1059,7 @@ function pharosClaudeWatchLine(item) {
       const how=node('p','muted claude-watch-how','To start an export, open Claude, then Settings → Privacy → Export data. When Claude emails you, download the manifest from its link into Downloads. The links work for 24 hours.');
       const problem=node('p','sync-note badtext');problem.setAttribute('role','status');
       const list=node('div','claude-watch-exports'),library=node('div','source-card claude-watch-library');
-      root.replaceChildren(row,options,how,problem,list,library);root.hidden=false;
+      root.replaceChildren(row,options,how,claudeExportRoutine(),problem,list,library);root.hidden=false;
     }
     refreshClaudeWatch();
   }
@@ -1136,6 +1146,72 @@ function pharosClaudeWatchLine(item) {
     // Follow an export in progress while its section is on screen.
     if(watch.enabled&&(watch.exports||[]).some(item=>item.state==='fetching'))claudeWatch.timer=setTimeout(()=>{if(root.isConnected&&!root.parentElement.closest('[hidden]'))refreshClaudeWatch()},3000);
   }
+  const chatGPTWatch={root:null,timer:0};
+  const chatGPTPost=body=>call('/api/chatgpt-imports',{method:'POST',body:JSON.stringify(body)});
+  function renderChatGPTWatch(root){
+    if(!root)return;
+    if(chatGPTWatch.root!==root){
+      chatGPTWatch.root=root;
+      const row=node('div','optional-behavior'),copy=node('div'),title=node('h3','','Import ChatGPT exports from Downloads'),about=node('p','muted','Off by default. Pharos checks Downloads every 15 minutes while running, verifies completed ChatGPT export ZIPs, and preserves their conversations and files. Only ZIPs with ChatGPT’s export filename pattern are detected automatically.');
+      const suffix=root.id==='chatGPTDownloadsWatchSection'?'':'Report';
+      title.id='chatGPTDownloadsWatchTitle'+suffix;about.id='chatGPTDownloadsWatchDescription'+suffix;
+      const toggle=node('button','toggle');toggle.type='button';toggle.id='chatGPTDownloadsWatch'+suffix;toggle.setAttribute('role','switch');toggle.setAttribute('aria-labelledby',title.id);toggle.setAttribute('aria-describedby',about.id);
+      toggle.onclick=async()=>{toggle.disabled=true;try{showChatGPTWatch(await chatGPTPost({enabled:toggle.getAttribute('aria-checked')!=='true'}))}catch(failure){toast(failure.message);toggle.disabled=false}};
+      copy.append(title,about);row.append(copy,toggle);
+      const check=node('button','','Check Downloads now');check.type='button';check.id='chatGPTDownloadsCheck'+suffix;check.dataset.chatgptCheck='true';
+      check.onclick=async()=>{check.disabled=true;try{showChatGPTWatch(await chatGPTPost({action:'check'}))}catch(failure){toast(failure.message)}finally{check.disabled=false}};
+      const how=node('p','muted','In ChatGPT, open Settings → Data controls → Export data. Allow about 24 hours for delivery; timing may vary. Download the emailed ZIP into Downloads. Renamed ZIPs can be selected with Import an export. Account profile, account settings, and advertising records are excluded from managed snapshots.');
+      const problem=node('p','sync-note badtext');problem.setAttribute('role','status');
+      root.replaceChildren(row,check,how,problem,node('div','claude-watch-exports'),node('div','source-card claude-watch-library'));root.hidden=false;
+    }
+    refreshChatGPTWatch();
+  }
+  async function refreshChatGPTWatch(){
+    clearTimeout(chatGPTWatch.timer);
+    try{showChatGPTWatch(await call('/api/chatgpt-imports'))}catch(failure){if(chatGPTWatch.root?.isConnected)toast(failure.message)}
+  }
+  function showChatGPTWatch(watch){
+    const root=chatGPTWatch.root;if(!root?.isConnected||!watch)return;
+    clearTimeout(chatGPTWatch.timer);
+    const toggle=root.querySelector('[role="switch"]');toggle.disabled=false;toggle.classList.toggle('on',!!watch.enabled);toggle.setAttribute('aria-checked',String(!!watch.enabled));
+    root.querySelector('[data-chatgpt-check]').hidden=!watch.enabled;
+    const problem=root.querySelector('.badtext');problem.textContent=watch.problem||'';problem.hidden=!problem.textContent;
+    const list=root.querySelector('.claude-watch-exports'),existing=new Map([...list.children].map(row=>[row.dataset.id,row]));
+    const focusKey=list.contains(document.activeElement)?document.activeElement.dataset.focusKey:'';
+    const rows=(watch.exports||[]).slice(0,5).map(item=>{
+      const signature=JSON.stringify(item),kept=existing.get(item.id);if(kept?.dataset.signature===signature)return kept;
+      const line=pharosChatGPTWatchLine(item),row=node('div','source-card claude-watch-export'+(line.attention?' attention':''));row.dataset.id=item.id;row.dataset.signature=signature;
+      row.append(node('h4','',item.filename||'ChatGPT export'),node('p','',line.text),node('p','muted',line.files));
+      if(line.progress)row.append(node('p','',line.progress),node('p','muted','Counts include earlier snapshots in this source. Conversations are updated in place.'));
+      if(line.detail)row.append(node('p',line.attention?'sync-note badtext':'muted',line.detail));
+      if(item.excluded?.length)row.append(node('p','muted',`Excluded account files: ${item.excluded.join(', ')}`));
+      const actions=node('div','claude-watch-actions');
+      for(const action of line.actions){
+        const button=node('button','',action==='retry'?'Try again':'Stop');button.type='button';button.dataset.focusKey=`${item.id}:${action}`;
+        button.onclick=async()=>{button.disabled=true;try{showChatGPTWatch(await chatGPTPost({id:item.id,action}))}catch(failure){toast(failure.message);button.disabled=false}};actions.append(button);
+      }
+      row.append(actions);return row;
+    });
+    if(rows.length!==list.children.length||rows.some((row,index)=>list.children[index]!==row))list.replaceChildren(...rows);
+    if(focusKey&&!list.contains(document.activeElement))list.querySelector(`[data-focus-key="${window.CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
+    const library=root.querySelector('.claude-watch-library'),status=watch.library;
+    library.hidden=!status;
+    if(status){
+      if(!library.firstChild)library.append(node('h4','','ChatGPT workspaces in your library'),node('p','chatgpt-library-counts'),node('ul','chatgpt-library-recent'),node('p','muted','Each ChatGPT conversation is grouped into a workspace.'),node('a','chatgpt-library-browse','Browse ChatGPT conversations →'));
+      library.querySelector('.chatgpt-library-counts').textContent=status.error||`${Number(status.workspaces).toLocaleString()} workspaces · ${Number(status.conversations).toLocaleString()} conversations`;
+      const recent=library.querySelector('ul'),existing=new Map([...recent.children].map(row=>[row.dataset.id,row])),focused=recent.contains(document.activeElement)?document.activeElement.dataset.workspaceId:'';
+      const entries=(status.recent||[]).map(workspace=>{const row=existing.get(workspace.id)||node('li');row.dataset.id=workspace.id;if(!row.firstChild){const link=node('a');link.dataset.workspaceId=workspace.id;row.append(link)}row.firstChild.href=workspace.url;row.firstChild.textContent=workspace.title;return row});
+      if(entries.length!==recent.children.length||entries.some((row,index)=>recent.children[index]!==row))recent.replaceChildren(...entries);
+      if(focused&&!recent.contains(document.activeElement))recent.querySelector(`[data-workspace-id="${window.CSS.escape(focused)}"]`)?.focus({preventScroll:true});
+      const browse=window.pharosQueryTables?.sourceConversationsURL?.('chatgpt'),link=library.querySelector('.chatgpt-library-browse');link.hidden=!browse;if(browse)link.href=browse;
+    }
+    // The worker discovers jobs after the POST response. Keep observing an
+    // enabled watch even when it is currently empty or all jobs are settled.
+    if(watch.enabled||(watch.exports||[]).some(item=>item.state==='fetching'))chatGPTWatch.timer=setTimeout(()=>{if(root.isConnected&&!root.closest('[hidden]'))refreshChatGPTWatch()},3000);
+  }
+  window.pharosChatGPTDownloads={render:renderChatGPTWatch};
+  const chatGPTSection=document.getElementById('chatGPTDownloadsWatchSection');
+  if(chatGPTSection&&!chatGPTSection.parentElement.closest('[hidden]'))renderChatGPTWatch(chatGPTSection);
   window.pharosClaudeDownloads={render:renderClaudeWatch};
   window.addEventListener('pharos:search-ready',()=>{if(claudeWatch.root?.isConnected)refreshClaudeWatch()});
   // This script is deferred: Settings → Sources may already be showing.

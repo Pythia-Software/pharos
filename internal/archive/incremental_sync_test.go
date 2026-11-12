@@ -23,6 +23,9 @@ func TestScheduledSyncDefersAnalysesAndManualSyncRefreshesGitHub(t *testing.T) {
 	calls := stubGitHub(t, true, map[string]string{"acme/sync": `{"id":42,"full_name":"acme/sync"}`})
 	server := automaticTestServer(t, stableCodexSource(t, 1))
 	catalog := server.Catalog
+	if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{agentEventsFlag: false}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := catalog.DB.Exec(`INSERT INTO repositories(id,canonical_remote,normalized_remote,display_name,created_at,updated_at)
 		VALUES('github-sync','https://github.com/acme/sync.git','github.com/acme/sync','sync','t','t')`); err != nil {
 		t.Fatal(err)
@@ -159,6 +162,9 @@ func TestManualSyncRefreshesRecentHumanWords(t *testing.T) {
 			source := stableCodexSource(t, 1)
 			server := automaticTestServer(t, source)
 			catalog := server.Catalog
+			if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{agentEventsFlag: false}}); err != nil {
+				t.Fatal(err)
+			}
 			catalog.now = func() time.Time { return time.Date(2026, 9, 1, 1, 15, 0, 0, time.UTC) }
 			ingestSource(t, catalog, source)
 			generation, _, err := catalog.authorshipGenerations()
