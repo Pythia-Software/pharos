@@ -2,6 +2,8 @@ export const linear = (value: number) => value <= .04045 ? value / 12.92 : ((val
 export function colorLuminance(color: string): number {
   return [1, 3, 5].reduce((sum, at, index) => sum + linear(parseInt(color.slice(at, at + 2), 16) / 255) * [.2126, .7152, .0722][index], 0);
 }
+// Choose the stronger black/white contrast for text and icons on a swatch.
+export const colorForeground = (color: string): string => colorLuminance(color) > .179 ? "#000000" : "#ffffff";
 export function perceptualColor(color: string): number[] {
   const [r, g, b] = [1, 3, 5].map(at => linear(parseInt(color.slice(at, at + 2), 16) / 255));
   const l = Math.cbrt(.4122214708 * r + .5363325363 * g + .0514459929 * b);

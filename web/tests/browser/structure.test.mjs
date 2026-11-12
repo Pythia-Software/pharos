@@ -1976,7 +1976,7 @@ test("model color editors preview and save inline while retaining focus", { skip
   await card.scrollIntoViewIfNeeded();
   await shot("model-colors-live-preview");
   await page.getByRole("button", { name: "Save color for OpenAI", exact: true }).click();
-  await page.getByText("gpt-6-sol", {exact:true}).click();
+  await page.locator("label").filter({hasText:/^gpt-6-sol$/}).click();
   const model = page.getByLabel("Color for gpt-6-sol", { exact: true });
   await model.waitFor();
   await model.focus();
@@ -1995,8 +1995,13 @@ test("model color editors preview and save inline while retaining focus", { skip
   assert.equal(await model.inputValue(), "#ee1122", "provider reset preserves the model choice");
   await page.getByRole("button", { name: "Restore recommended shade for gpt-6-sol", exact: true }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="Color for gpt-6-sol"]')?.value !== "#ee1122");
-  await page.getByRole("button", {name: "Close editor for gpt-6-sol", exact: true}).click();
-  assert.equal(await page.getByRole("button", {name: "Edit color for gpt-6-sol", exact:true}).evaluate(element => element === document.activeElement), true, "closing the inline editor restores swatch focus");
+  await page.getByRole("button", {name: "Edit color for gpt-6-sol", exact: true}).click();
+  await model.waitFor({state: "detached"});
+  assert.equal(await page.getByRole("button", {name: "Edit color for gpt-6-sol", exact:true}).evaluate(element => element === document.activeElement), true, "toggling the inline editor keeps focus on its swatch");
+  await page.getByRole("button", {name: "Edit color for gpt-6-sol", exact:true}).press("Enter");
+  await model.waitFor();
+  await page.locator("label").filter({hasText:/^gpt-6-sol$/}).click();
+  await model.waitFor({state:"detached"});
   await provider.fill("#ffffff");
   await page.getByRole("status", {name: "OpenAI color warnings", exact: true}).waitFor();
   await card.scrollIntoViewIfNeeded();

@@ -10,12 +10,14 @@ OpenAI. Specialized OpenAI classes use separate hues: yellow for Image, cyan for
 Cyber, turquoise for Rosalind, chartreuse for Codex, and lime for general GPT.
 Other developers have independently customizable palettes. Classes
 use different parts of that range, with versions following a smooth light-to-dark progression. Each model
-editor offers five suggested shades, a free color picker, light/dark previews,
+editor offers a prominent color-picker button with its hex value, light/dark previews,
 Save color, and Use recommended. Provider editors offer Restore brand.
 
 Each provider shows one saved-color row. A proposed-color row appears beneath
 it only when a draft changes an actual model color; both rows share the same
-model labels. Select a model swatch or label to open its single inline editor.
+model labels. Select a model swatch or label to toggle its single inline editor. The active
+swatch shows an edit icon in a contrasting color. Instructions appear once in
+the page introduction.
 Provider and model drafts stay local until Save color; Discard changes clears
 pending edits. The former model-editor list and recorded-provider-label editors
 are removed. Existing stored source-label choices remain supported by the shared
@@ -24,7 +26,8 @@ resolver for compatibility.
 Every swatch has a visible model label. Banners group by class and then catalog
 date, with undated entries last; Fable and Mythos have separate display groups
 while retaining their shared color policy. Dense labels rotate vertically.
-Light/dark samples use square borders in both model and project settings.
+Light/dark samples use square outer borders in both model and project settings;
+the color chips have no inner border.
 Advisory warnings flag extremely light/dark bases and insufficient perceptual
 separation between adjacent dated versions or contemporary core classes. Aliases
 and same-date siblings do not create false variety warnings. Warnings do not

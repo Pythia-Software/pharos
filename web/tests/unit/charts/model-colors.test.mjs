@@ -5,8 +5,9 @@ import catalog from '../../../../pricing/model_colors.json';
 import rules from '../../../../pricing/model_color_rules.json';
 import prices from '../../../../pricing/cost_changes.json';
 import { generateModelColors, generatedColorLuminance } from '../../../src/model-color-generation';
+import { colorForeground, colorLuminance } from '../../../src/model-color-math';
 import { modelCatalogDates, modelTimelineDates } from '../../../src/model-color-identity';
-import { colorHSL, compareModelColors, customModelColor, effectiveModelColor, installModelColors, knownModels, modelClass, modelColorKey, modelPaletteComparison, modelPaletteGroups, modelProvider, loadModelColors, modelPalette, modelSeriesColor, previewModelColor, providerColorWarnings, recommendedModelColor, saveModelColor, shadeChoices } from '../../../src/model-colors';
+import { colorHSL, compareModelColors, customModelColor, effectiveModelColor, installModelColors, knownModels, modelClass, modelColorKey, modelPaletteComparison, modelPaletteGroups, modelProvider, loadModelColors, modelPalette, modelSeriesColor, previewModelColor, providerColorWarnings, recommendedModelColor, saveModelColor } from '../../../src/model-colors';
 import { chartMetricTheme, chartSeriesStyle, keyColorTheme, metricSeriesColor } from '../../../src/chart-colors';
 const palette = (overrides = {}, models = []) => ({ overrides, models, sources: [] });
 
@@ -277,9 +278,7 @@ test('recommendations remain stable when models arrive and undated local models 
   installModelColors(palette({ 'model:opus-future': '#2255aa' }));
   assert.ok(knownModels().includes('opus-future'), 'temporarily absent saved models stay editable');
   assert.equal(effectiveModelColor('model', 'claude-opus-future-20261110[1m]'), '#2255aa');
-  assert.equal(new Set(shadeChoices('#2255aa')).size, 5);
   for (const base of ['#000000', '#ffffff', '#ff0000', '#00ff00', '#0000ff', '#2255aa']) {
-    for (const shade of shadeChoices(base)) assert.match(shade, /^#[0-9a-f]{6}$/);
     for (const model of ['gpt-local', 'opus-5-5']) assert.match(recommendedModelColor(model, base), /^#[0-9a-f]{6}$/);
   }
 });
@@ -356,4 +355,11 @@ test('failed reads and saves retain the palette; an old read cannot undo a succe
   assert.equal(modelPalette().overrides['provider:openai'], '#112233');
   assert.ok(knownModels().includes('gpt-local'), 'a save during discovery keeps the newly discovered models');
 
+});
+
+test('picker text and edit icons retain readable contrast on palette and custom colors', () => {
+  for (const color of [...Object.values(catalog.models).map(model => model.color), '#000000', '#ffffff', '#ff0000', '#00ff00', '#0000ff', '#777777']) {
+    const levels = [colorLuminance(color), colorLuminance(colorForeground(color))].sort((a, b) => a - b);
+    assert.ok((levels[1] + .05) / (levels[0] + .05) >= 4.5, color);
+  }
 });

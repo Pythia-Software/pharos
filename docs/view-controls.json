@@ -7312,7 +7312,7 @@
       "tag": "button",
       "control": "onClick={() => void save(kind, name, draft)} aria-label={`Save color for ${label}`}",
       "contract": "settings",
-      "reason": "Edits or restores a persistent library provider/model color preference. Pickers and shade suggestions hold a draft until Save color; automatic model shades follow the provider."
+      "reason": "Saves a persistent library provider/model color preference. The native color picker holds an unapplied draft until Save color."
     },
     {
       "key": "3755037a7f824e46:0",
@@ -7321,16 +7321,7 @@
       "tag": "input",
       "control": "aria-label={`Color for ${label}`} value={draft} onInput={event => setDraft(event.currentTarget.value)} onChange={event => setDraft(event.target.value)}",
       "contract": "settings",
-      "reason": "Edits a persistent provider/model color preference. Draft input and shade suggestions affect only the live comparison until Save color; restoring a saved choice is an explicit settings action."
-    },
-    {
-      "key": "9e410a841f70ee04:0",
-      "file": "web/src/model-color-settings.tsx",
-      "owner": "ColorEditor",
-      "tag": "button",
-      "control": "aria-label={`Try ${shade} for ${label}`} onClick={() => setDraft(shade)}",
-      "contract": "settings",
-      "reason": "Edits or restores a persistent library provider/model color preference. Pickers and shade suggestions hold a draft until Save color; automatic model shades follow the provider."
+      "reason": "Edits a persistent provider/model color preference. Draft input affects only the live comparison until Save color; restoring a saved choice is an explicit settings action."
     },
     {
       "key": "a0e826a410603c73:0",
@@ -7348,7 +7339,7 @@
       "tag": "button",
       "control": "id={controlID(entry.name)} aria-label={`Edit color for ${entry.name}`} onClick={() => select(entry.name)}",
       "contract": "settings",
-      "reason": "Opens the transient inline editor for a persistent model color preference. Editor selection is temporary settings interaction, not a shared view input."
+      "reason": "Toggles the transient inline editor for a persistent model color preference. The active swatch and its label close the editor on repeated activation; editor selection is not a shared view input."
     },
     {
       "key": "111d4cff6702abe0:0",
@@ -7358,15 +7349,6 @@
       "control": "onClick={() => setDrafts({})}",
       "contract": "settings",
       "reason": "Discards unapplied local provider/model color drafts without changing saved preferences or the current view."
-    },
-    {
-      "key": "12783477df2f46ef:0",
-      "file": "web/src/model-color-settings.tsx",
-      "owner": "ProviderColorCard",
-      "tag": "button",
-      "control": "onClick={() => { document.getElementById(`model-color-${provider}-${encodeURIComponent(selected)}`)?.focus(); setSelected(null); }} aria-label={`Close editor for ${selected}`}",
-      "contract": "settings",
-      "reason": "Dismisses the transient settings editor and returns keyboard focus to its originating model swatch."
     },
     {
       "key": "1cd6c49e2f9528e1:0",

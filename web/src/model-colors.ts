@@ -126,10 +126,6 @@ export function recommendedModelColor(name: string, base: string): string {
   if (!color) { color = calculateRecommendedColor(name, base); recommendations.set(key, color); }
   return color;
 }
-export function shadeChoices(base: string): string[] {
-  const [h, s] = colorHSL(base);
-  return [.72, .62, .52, .42, .32].map(l => hex(h, s, l));
-}
 const empty = (): ModelPalette => ({ overrides: {}, models: [], sources: [] });
 let palette = empty(), revision = 0;
 const listeners = new Set<() => void>();
