@@ -258,7 +258,10 @@ const ROUTES = [
     const guide=page.locator('#pharosOnboarding'),next=guide.getByRole('button',{name:'Continue',exact:true});
     await guide.locator('.pharos-places>summary').waitFor();
     if(step==='start'){await guide.locator('.pharos-places>summary').click();return}
-    if(step==='import'){await guide.getByRole('button',{name:'Import an export',exact:true}).click();return}
+    if(step==='import'){
+      await guide.getByRole('button',{name:'Import an export',exact:true}).click();
+      await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();return;
+    }
     if(step==='manual'){
       await guide.getByRole('radio',{name:/tell Pharos where to look/}).check();await next.click();
       await guide.getByRole('checkbox',{name:/Cursor/}).check();return;
