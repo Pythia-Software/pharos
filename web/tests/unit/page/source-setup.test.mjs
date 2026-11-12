@@ -212,3 +212,11 @@ test('a watched Claude export offers retrying only once Pharos has stopped openi
   assert.deepEqual(plain(watchLine({state:'expired'}).actions),[]);
   assert.deepEqual(plain(watchLine({state:'imported',collected:7,expected:7}).actions),[]);
 });
+
+test('ChatGPT collection and indexing progress describe a verified snapshot separately',()=>{
+  const watchLine=vm.runInNewContext(source+';pharosChatGPTWatchLine');
+  assert.match(watchLine({state:'fetching',phase:'collecting'}).text,/verifying/);
+  const indexing=watchLine({state:'fetching',phase:'indexing',collected:1,expected:1,ingestion:{stage:'indexing',processed:2,conversations:2,messages:10}});
+  assert.match(indexing.files,/verified/);assert.match(indexing.progress,/2 conversations/);assert.deepEqual(plain(indexing.actions),['stop']);
+  assert.deepEqual(plain(watchLine({state:'paused'}).actions),['retry','stop']);
+});

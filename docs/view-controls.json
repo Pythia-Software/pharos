@@ -2242,6 +2242,24 @@
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
+      "key": "aa053c6ea5d6f456:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderChatGPTWatch",
+      "tag": "button",
+      "control": "'button', '', 'Check Downloads now'",
+      "contract": "action",
+      "reason": "Per-Mac opt-in Downloads setting, or explicit immediate check; saved outside library content view URLs."
+    },
+    {
+      "key": "e91e519c4965885f:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderChatGPTWatch",
+      "tag": "button",
+      "control": "'button', 'toggle'",
+      "contract": "settings",
+      "reason": "Per-Mac opt-in Downloads setting, or explicit immediate check; saved outside library content view URLs."
+    },
+    {
       "key": "0e2730981692c4d8:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "renderClaudeWatch",
@@ -2339,6 +2357,15 @@
       "control": "'summary', '', 'What each tool records'",
       "contract": "editing",
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
+    },
+    {
+      "key": "5634aeb0adbdf213:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "showChatGPTWatch",
+      "tag": "button",
+      "control": "'button', '', action==='retry'?'Try again':'Stop'",
+      "contract": "action",
+      "reason": "Retry or stop a managed import job; operational action without content view state."
     },
     {
       "key": "7390be4d645bfa9a:0",
@@ -3267,6 +3294,26 @@
       "reason": "Raw message disclosure is bound by stable message identity through reader_content using bindViewContent and saveViewContent, shared by prose and reasoning cards."
     },
     {
+      "key": "1d7776906a3fbbb9:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "chatGPTReferences",
+      "tag": "details",
+      "control": "'details', 'chatgpt-references'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Shared classic disclosure binding uses the stable message identity in data-view-key; opening only materializes preserved references."
+    },
+    {
+      "key": "7f4d8fd709cce319:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "chatGPTReferences",
+      "tag": "summary",
+      "control": "'summary', '', 'Exported references and search results'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Shared classic disclosure binding uses the stable message identity in data-view-key; opening only materializes preserved references."
+    },
+    {
       "key": "b9d31ba372bfa501:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "closePreview",
@@ -3835,6 +3882,24 @@
       "control": "'button', 'source-remove', 'Cancel'",
       "contract": "settings",
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
+      "key": "246ed090316debe1:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "toolEvent",
+      "tag": "details",
+      "control": "'details', 'tool-event conversation-event'",
+      "contract": "reader",
+      "reason": "Attachment body is inserted under actionRow, whose existing bindReaderView message identity owns openness; this temporary wrapper is discarded when its event body is mounted."
+    },
+    {
+      "key": "a519973d1b618ac3:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "toolEvent",
+      "tag": "summary",
+      "control": "'summary', '', toolPreview(message)",
+      "contract": "reader",
+      "reason": "Attachment body is inserted under actionRow, whose existing bindReaderView message identity owns openness; this temporary wrapper is discarded when its event body is mounted."
     },
     {
       "key": "aa5a6fe4f81bf10b:0",

@@ -470,10 +470,10 @@ func init() {
 			Plan:    (*capturePlan).canonical, Preservation: retainedInputs,
 		},
 		{
-			Kind: "chatgpt", DisplayName: "ChatGPT", Export: "In ChatGPT, open Settings → Data controls → Export data. The email it sends links to a ZIP.", Instructions: "ChatGPT's custom instructions (Settings → Personalization)", KindAliases: []string{"chatgpt-export"}, Mutation: "retrieval-only", MirrorRank: 1,
-			Content: contentCapabilities{Supported: "model tool_calls tool_results timestamps", Varies: "effort speed reasoning title", NotApplicable: "cwd git_branch subagents harness_version",
-				Notes: map[string]string{"speed": "When the export records the tier.", "reasoning": "Or only how long it thought.", "message_tokens": "Exports have no token counts."}, VariesNote: "When the export holds it."},
-			New:  func(base baseAdapter) Adapter { return &chatGPTAdapter{base} },
+			Kind: "chatgpt", DisplayName: "ChatGPT", Export: "In ChatGPT, open Settings → Data controls → Export data. Allow about 24 hours for the export email; delivery time can vary. Download its ZIP into Downloads, then choose it here.", Instructions: "ChatGPT's custom instructions (Settings → Personalization)", KindAliases: []string{"chatgpt-export"}, Mutation: "retrieval-only", MirrorRank: 1,
+			Content: contentCapabilities{Supported: "timestamps", Varies: "model tool_calls tool_results effort speed reasoning title", NotApplicable: "cwd git_branch subagents harness_version",
+				Notes: map[string]string{"model": "Some exports record only an opaque label such as bidi; the underlying model is unknown.", "tool_calls": "Some exports retain search references and tool icons without the calls themselves.", "tool_results": "Only when explicit tool replies are exported.", "speed": "When the export records the tier.", "reasoning": "Or only how long it thought.", "message_tokens": "Exports have no token counts."}, VariesNote: "When the export holds it."},
+			New:  func(base baseAdapter) Adapter { return &chatGPTAdapter{baseAdapter: base} },
 			Plan: (*capturePlan).chatGPT, Preservation: retainedInputs,
 		},
 		{

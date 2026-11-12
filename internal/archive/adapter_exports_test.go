@@ -165,6 +165,7 @@ func TestChatGPTExportReadsTheCurrentBranch(t *testing.T) {
 		got = append(got, message.NativeID+" "+message.Role+" "+message.Kind+" <"+message.PreviousNativeID+"> "+message.CallID+selected)
 	}
 	want := []string{
+		chatGPTCodeID + ":export-context system metadata <> ",
 		// The hidden system message and the custom instructions are
 		// context.
 		"system system " + contextKind + " <> ",
@@ -176,7 +177,7 @@ func TestChatGPTExportReadsTheCurrentBranch(t *testing.T) {
 		"first assistant message <ask>  (unselected)",
 		"thoughts assistant reasoning <ask> ",
 		// The recap after them sums them up; it keeps its ID.
-		"recap system " + contextKind + " <thoughts> ",
+		"recap assistant metadata <thoughts> ",
 		"call assistant tool_call <recap> call",
 		"output tool tool_result <call> call",
 		"answer assistant message <output> ",
@@ -262,7 +263,7 @@ func TestChatGPTExportReadsTheCurrentBranch(t *testing.T) {
 			selected = append(selected, message.NativeID+" "+message.Kind)
 		}
 	}
-	if want := []string{"ask message", "search tool_call", "results tool_result", "newer message"}; !slices.Equal(selected, want) {
+	if want := []string{chatGPTSearchID + ":export-context metadata", "ask message", "search tool_call", "results tool_result", "newer message"}; !slices.Equal(selected, want) {
 		t.Fatalf("selected %v, want %v", selected, want)
 	}
 }
@@ -310,6 +311,7 @@ func TestChatGPTExportReadsReasoningAndToolReplies(t *testing.T) {
 		byID[message.NativeID] = message
 	}
 	want := []string{
+		id + ":export-context system metadata  ",
 		"ask user message  ",
 		"o1 assistant reasoning summary ",
 		// A thought without its text is read as its summary.

@@ -280,3 +280,19 @@ test("parsed message bodies are reused and update when an original replaces a pr
   assert.deepEqual({ same, shared, path: toolPayload(normalized).input.path, raw: messageJSON(normalized, true).input.path, source: messageJSON(message).input.path, missing: messageJSON({}) },
     { same: true, shared: true, path: "after", raw: "after", source: "before", missing: null });
 });
+
+test('ChatGPT references and voice remain evidence without synthesizing tool calls',()=>{
+  const message={id:'chat-message',kind:'message',role:'assistant',text:'A cited answer',raw_text:JSON.stringify({author:{role:'assistant'},content:{content_type:'multimodal_text',parts:[{content_type:'audio_transcription',text:'A cited answer',direction:'out'}]},metadata:{model_slug:'bidi',content_references:[{type:'webpage',url:'https://example.com',title:'Citation'},{type:'widget',dil:{url:'https://do-not-execute.example'}}],search_result_groups:[{domain:'example.com',entries:[{url:'https://example.com',title:'Duplicate'},{url:'javascript:alert(1)',title:'Unsafe'},{url:'https://another.example',title:'Result',snippet:'Exported snippet'}]}]}})};
+  const context=reader.chatGPTMessageContext(message);
+  assert.deepEqual(plain(context.references.map(value=>value.url)),['https://example.com/','https://another.example/']);
+  assert.deepEqual(plain(context.directions),['out']);assert.equal(context.model,'bidi');
+  assert.equal(reader.normalizeMessages([message]).length,1);assert.equal(reader.normalizeMessages([message])[0].kind,'message');
+  assert.equal(reader.chatGPTMessageContext({...message,source_provider:'chatgpt',raw_text:'clipped',raw_clipped:true}).clipped,true);
+  assert.equal(reader.chatGPTMessageContext({text:'ordinary prose'}),null);
+});
+
+test('ChatGPT saved conversation settings preserve unknowns and keep the original model label',()=>{
+  const context=reader.chatGPTConversationContext({provider:'chatgpt',messages:[{kind:'metadata',text:JSON.stringify({source:'chatgpt_export',settings:{default_model_slug:'bidi',voice:'saved-voice',is_starred:true,is_archived:false,is_read_only:null,memory_scope:'global_enabled'},sharing:{id:'share'}})}]});
+  assert.deepEqual(plain(context.facts),[['Recorded model label','bidi'],['Saved voice','saved-voice'],['Memory scope','global_enabled'],['Archived','No'],['Starred','Yes'],['Sharing record','Included in export']]);
+  assert.equal(reader.chatGPTConversationContext({provider:'claude',messages:[]}),null);
+});

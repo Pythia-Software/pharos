@@ -253,7 +253,45 @@ const ROUTES = [
     await guide.locator('.pharos-candidate').first().waitFor();
     if(step==='empty')for(const box of await guide.locator('.pharos-candidate input[type=checkbox]').all())await box.uncheck();
     if(step!=='found')await next.click();
-  },shown:'#pharosOnboarding'})),
+  },shown:'#pharosOnboarding',check:step==='import'?async(page)=>{
+    const guide=page.locator('#pharosOnboarding');await guide.getByLabel('Export',{exact:true}).fill('~/Downloads/export.zip');
+    await guide.getByRole('button',{name:'Import',exact:true}).click();await guide.getByRole('switch').waitFor();
+    assert.deepEqual(await layoutProblems(page),[],'managed ZIP collection report fits the setup dialog');
+  }:undefined})),
+  {name:'ChatGPT Downloads watch',url:'/settings/sources',ready:'#chatGPTDownloadsWatchSection .claude-watch-export',api:{
+    'GET /api/chatgpt-imports':{enabled:true,available:true,exports:[{id:'chat-export',filename:'a'.repeat(64)+'-2026-11-11-21-59-32-'+ 'b'.repeat(32)+'.zip',state:'fetching',phase:'indexing',collected:1,expected:1,ingestion:{stage:'indexing',processed:2,conversations:2,messages:10}}],library:{workspaces:2,conversations:2,recent:[{id:workID,title:'An imported ChatGPT conversation',url:work}]}},
+  },check:async(page,app)=>{
+    const stop=page.locator('#chatGPTDownloadsWatchSection').getByRole('button',{name:'Stop',exact:true});await stop.focus();
+    const next=structuredClone(ROUTES.find(route=>route.name==='ChatGPT Downloads watch').api['GET /api/chatgpt-imports']);next.exports[0].ingestion.messages++;
+    await page.route('**/api/chatgpt-imports',route=>route.fulfill({json:next}),{times:1});
+    const refreshed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/chatgpt-imports');
+    await page.evaluate(()=>window.pharosChatGPTDownloads.render(document.getElementById('chatGPTDownloadsWatchSection')));await refreshed;await app.settled();
+    assert.equal(await page.locator('#chatGPTDownloadsWatchSection [data-focus-key="chat-export:stop"]').evaluate(element=>element===document.activeElement),true,'progress polling preserves Stop focus');
+    // Enabling/checking returns before the worker discovers a download.
+    // The page must observe its later result without a manual render call.
+    const root=page.locator('#chatGPTDownloadsWatchSection'),toggle=root.getByRole('switch');
+    let report={enabled:false,available:true,exports:[],library:{workspaces:2,conversations:2,recent:[]}};
+    await page.route('**/api/chatgpt-imports',async route=>{
+      if(route.request().method()==='POST'){
+        const body=route.request().postDataJSON();
+        if(typeof body.enabled==='boolean')report={...report,enabled:body.enabled,exports:[]};
+      }
+      await route.fulfill({json:report});
+    });
+    await toggle.click();await page.waitForFunction(()=>document.querySelector('#chatGPTDownloadsWatch').getAttribute('aria-checked')==='false');
+    await toggle.click();await page.waitForFunction(()=>document.querySelector('#chatGPTDownloadsWatch').getAttribute('aria-checked')==='true');
+    report={...report,exports:[{id:'discovered-later',filename:'new-export.zip',state:'fetching',phase:'indexing',collected:1,expected:1}]};
+    await root.locator('[data-id="discovered-later"]').getByRole('button',{name:'Stop',exact:true}).waitFor({timeout:10000});
+    report={...report,exports:[],library:{workspaces:3,conversations:3,recent:[]}};
+    await root.getByText('3 workspaces · 3 conversations',{exact:true}).waitFor({timeout:10000});
+    const check=root.getByRole('button',{name:'Check Downloads now',exact:true});
+    await check.click();await page.waitForFunction(()=>!document.querySelector('#chatGPTDownloadsCheck').disabled);
+    await toggle.focus();
+    report={...report,problem:'Downloads access needs attention.',library:{workspaces:4,conversations:4,recent:[]}};
+    await root.getByText('4 workspaces · 4 conversations',{exact:true}).waitFor({timeout:10000});
+    await root.getByText('Downloads access needs attention.',{exact:true}).waitFor();
+    assert.equal(await toggle.evaluate(element=>element===document.activeElement),true,'empty-watch refresh preserves focus');
+  }},
   {name:'Claude Downloads watch',url:'/settings/sources',ready:'#claudeDownloadsWatchSection .claude-watch-export',api:{
     'GET /api/claude-imports':{jobs:[],run:{running:false},watch:{enabled:true,available:true,browser:'',browsers:[],exports:[
       {id:'queued-export',state:'fetching',phase:'queued',exported_at:'2026-11-10T20:15:05Z',collected:0,expected:6,message:'Waiting for another capture or index to finish. Collection resumes automatically when the library is free.'},
@@ -799,6 +837,19 @@ const ROUTES = [
   { name: "Workspace overview with pending evidence", url: work, api: pendingEvidenceApi, ready: ".delegation-table .delegation-relatives" },
   { name: "Workspace Timeline with pending events", url: `${work}?explorer=timeline`, api: pendingEvidenceApi, ready: ".lt-recursive-lane .lt-session-notice", check: page => page.locator("[role=status].delegation-truncation").first().waitFor() },
   { name: "Workspace sessions sidebar with pending evidence", url: `${work}/conversation/${rootConversation}`, api: pendingEvidenceApi, ready: ".delegation-inbox-heading" },
+  {name:'ChatGPT export context',url:`${work}/conversation/${rootConversation}`,ready:'.chatgpt-references',api:{
+    'GET /api/work/:id/conversations/:conversation':{id:rootConversation,workspace_id:workID,provider:'chatgpt',messages:[
+      {id:'chat-settings',role:'system',kind:'metadata',text:JSON.stringify({source:'chatgpt_export',settings:{default_model_slug:'bidi',voice:'saved-voice',memory_scope:'global_enabled',is_starred:true}})},
+      {id:'chat-ask',role:'user',kind:'message',text:'A spoken question',raw_text:JSON.stringify({author:{role:'user'},content:{content_type:'multimodal_text',parts:[{content_type:'audio_transcription',text:'A spoken question',direction:'in'}]}})},
+      {id:'chat-reply',role:'assistant',kind:'message',text:'A cited answer',raw_text:JSON.stringify({author:{role:'assistant'},content:{content_type:'text',parts:['A cited answer']},metadata:{content_references:[{type:'webpage',url:'https://example.com',title:'A reference with a long title that should wrap within the conversation reader'}],search_result_groups:[{entries:[{url:'https://another.example',title:'Search result',snippet:'A source-provided snippet.'}]}]}})},
+      {id:'chat-audio',role:'user',kind:'attachment',text:JSON.stringify({type:'chatgpt_asset',name:'question.wav',mime_type:'audio/wav',available:true})},
+      {id:'chat-missing',role:'system',kind:'attachment',text:JSON.stringify({type:'chatgpt_asset',name:'missing-file.gif',available:false})},
+    ]},
+  },open:async page=>{await page.locator('.chatgpt-references > summary').click();await page.locator('.action-row').filter({hasText:'question.wav'}).locator(':scope > details > summary').click();await page.locator('audio[controls]').waitFor();},shown:'.chatgpt-references[open]',check:async(page,app)=>{
+    const key=await page.locator('.chatgpt-references').getAttribute('data-view-key');await page.waitForFunction(()=>new URLSearchParams(location.search).has('disclosures'));
+    await page.reload();await page.locator('.chatgpt-references[open]').waitFor();await page.locator('.chatgpt-references a').first().waitFor();
+    assert.equal(await page.locator('.chatgpt-references').getAttribute('data-view-key'),key);
+  }},
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, api: tokenEvidenceAPI, ready: ".conversation-panel .turn" },
   { name: "Quick search", url: "/library?view=table", ready: "#queryTableLibrary .qt-row", open: page => page.keyboard.press("ControlOrMeta+k"), shown: "#searchDialog[open]" },

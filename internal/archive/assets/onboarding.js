@@ -127,6 +127,14 @@ function pharosClaudeWatchLine(item) {
   return {...line,files,progress,detail:item.message||''};
 }
 
+// The same ingestion counts as Claude, with a single verified ZIP.
+function pharosChatGPTWatchLine(item) {
+  const line=pharosClaudeWatchLine(item);
+  if(item.state==='fetching'&&item.phase==='collecting')line.text='Copying and verifying export';
+  line.files=item.collected?'ZIP verified and preserved':'ZIP awaiting verification';
+  return line;
+}
+
 // Source setup UI.
 // Detect installed tools and familiar data folders before offering choices. The same
 // guide runs inside application setup and from Settings → Sources. Approval
@@ -720,7 +728,13 @@ function pharosClaudeWatchLine(item) {
         const value=path.trim();
         if(!value.startsWith('/')&&!value.startsWith('~/')){fail(Error('Enter an absolute path, or one starting with ~/.'));field.input.focus();return}
         const buttons=[...actions.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);error.textContent='';
-        try{if(chosen==='claude-ai'){await call('/api/claude-imports',{method:'POST',body:JSON.stringify({paths:[value]})});if(active!==submittingView||!field.input.isConnected)return;renderClaudeCollection(()=>renderImport(back),null,true)}else{const result=await call('/api/sources/import',{method:'POST',body:JSON.stringify({kind:chosen,path:value})});window.loadSources?.();renderResult(result,body,actions,status)}}
+        try{if(chosen==='claude-ai'){await call('/api/claude-imports',{method:'POST',body:JSON.stringify({paths:[value]})});if(active!==submittingView||!field.input.isConnected)return;renderClaudeCollection(()=>renderImport(back),null,true)}else if(chosen==='chatgpt'&&value.toLowerCase().endsWith('.zip')){
+          await call('/api/chatgpt-imports',{method:'POST',body:JSON.stringify({path:value})});
+          if(active!==submittingView||!field.input.isConnected)return;
+          heading('Your ChatGPT export.','Pharos verifies the ZIP, preserves a snapshot, and adds its conversations to your library.');clear();
+          const report=node('div');body.append(report);renderChatGPTWatch(report);
+          actions.replaceChildren(button('Done',true,()=>{close();window.loadSources?.()}));
+        }else{const result=await call('/api/sources/import',{method:'POST',body:JSON.stringify({kind:chosen,path:value})});window.loadSources?.();renderResult(result,body,actions,status)}}
         catch(failure){if(active!==submittingView||!field.input.isConnected)return;fail(failure);buttons.forEach(b=>b.disabled=false)}
       });
       actions.replaceChildren(button('Back',false,back),add);
@@ -1085,6 +1099,72 @@ function pharosClaudeWatchLine(item) {
     // Follow an export in progress while its section is on screen.
     if(watch.enabled&&(watch.exports||[]).some(item=>item.state==='fetching'))claudeWatch.timer=setTimeout(()=>{if(root.isConnected&&!root.parentElement.closest('[hidden]'))refreshClaudeWatch()},3000);
   }
+  const chatGPTWatch={root:null,timer:0};
+  const chatGPTPost=body=>call('/api/chatgpt-imports',{method:'POST',body:JSON.stringify(body)});
+  function renderChatGPTWatch(root){
+    if(!root)return;
+    if(chatGPTWatch.root!==root){
+      chatGPTWatch.root=root;
+      const row=node('div','optional-behavior'),copy=node('div'),title=node('h3','','Import ChatGPT exports from Downloads'),about=node('p','muted','Off by default. Pharos checks Downloads every 15 minutes while running, verifies completed ChatGPT export ZIPs, and preserves their conversations and files. Only ZIPs with ChatGPT’s export filename pattern are detected automatically.');
+      const suffix=root.id==='chatGPTDownloadsWatchSection'?'':'Report';
+      title.id='chatGPTDownloadsWatchTitle'+suffix;about.id='chatGPTDownloadsWatchDescription'+suffix;
+      const toggle=node('button','toggle');toggle.type='button';toggle.id='chatGPTDownloadsWatch'+suffix;toggle.setAttribute('role','switch');toggle.setAttribute('aria-labelledby',title.id);toggle.setAttribute('aria-describedby',about.id);
+      toggle.onclick=async()=>{toggle.disabled=true;try{showChatGPTWatch(await chatGPTPost({enabled:toggle.getAttribute('aria-checked')!=='true'}))}catch(failure){toast(failure.message);toggle.disabled=false}};
+      copy.append(title,about);row.append(copy,toggle);
+      const check=node('button','','Check Downloads now');check.type='button';check.id='chatGPTDownloadsCheck'+suffix;check.dataset.chatgptCheck='true';
+      check.onclick=async()=>{check.disabled=true;try{showChatGPTWatch(await chatGPTPost({action:'check'}))}catch(failure){toast(failure.message)}finally{check.disabled=false}};
+      const how=node('p','muted','In ChatGPT, open Settings → Data controls → Export data. Allow about 24 hours for delivery; timing may vary. Download the emailed ZIP into Downloads. Renamed ZIPs can be selected with Import an export. Account profile, account settings, and advertising records are excluded from managed snapshots.');
+      const problem=node('p','sync-note badtext');problem.setAttribute('role','status');
+      root.replaceChildren(row,check,how,problem,node('div','claude-watch-exports'),node('div','source-card claude-watch-library'));root.hidden=false;
+    }
+    refreshChatGPTWatch();
+  }
+  async function refreshChatGPTWatch(){
+    clearTimeout(chatGPTWatch.timer);
+    try{showChatGPTWatch(await call('/api/chatgpt-imports'))}catch(failure){if(chatGPTWatch.root?.isConnected)toast(failure.message)}
+  }
+  function showChatGPTWatch(watch){
+    const root=chatGPTWatch.root;if(!root?.isConnected||!watch)return;
+    clearTimeout(chatGPTWatch.timer);
+    const toggle=root.querySelector('[role="switch"]');toggle.disabled=false;toggle.classList.toggle('on',!!watch.enabled);toggle.setAttribute('aria-checked',String(!!watch.enabled));
+    root.querySelector('[data-chatgpt-check]').hidden=!watch.enabled;
+    const problem=root.querySelector('.badtext');problem.textContent=watch.problem||'';problem.hidden=!problem.textContent;
+    const list=root.querySelector('.claude-watch-exports'),existing=new Map([...list.children].map(row=>[row.dataset.id,row]));
+    const focusKey=list.contains(document.activeElement)?document.activeElement.dataset.focusKey:'';
+    const rows=(watch.exports||[]).slice(0,5).map(item=>{
+      const signature=JSON.stringify(item),kept=existing.get(item.id);if(kept?.dataset.signature===signature)return kept;
+      const line=pharosChatGPTWatchLine(item),row=node('div','source-card claude-watch-export'+(line.attention?' attention':''));row.dataset.id=item.id;row.dataset.signature=signature;
+      row.append(node('h4','',item.filename||'ChatGPT export'),node('p','',line.text),node('p','muted',line.files));
+      if(line.progress)row.append(node('p','',line.progress),node('p','muted','Counts include earlier snapshots in this source. Conversations are updated in place.'));
+      if(line.detail)row.append(node('p',line.attention?'sync-note badtext':'muted',line.detail));
+      if(item.excluded?.length)row.append(node('p','muted',`Excluded account files: ${item.excluded.join(', ')}`));
+      const actions=node('div','claude-watch-actions');
+      for(const action of line.actions){
+        const button=node('button','',action==='retry'?'Try again':'Stop');button.type='button';button.dataset.focusKey=`${item.id}:${action}`;
+        button.onclick=async()=>{button.disabled=true;try{showChatGPTWatch(await chatGPTPost({id:item.id,action}))}catch(failure){toast(failure.message);button.disabled=false}};actions.append(button);
+      }
+      row.append(actions);return row;
+    });
+    if(rows.length!==list.children.length||rows.some((row,index)=>list.children[index]!==row))list.replaceChildren(...rows);
+    if(focusKey&&!list.contains(document.activeElement))list.querySelector(`[data-focus-key="${window.CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
+    const library=root.querySelector('.claude-watch-library'),status=watch.library;
+    library.hidden=!status;
+    if(status){
+      if(!library.firstChild)library.append(node('h4','','ChatGPT workspaces in your library'),node('p','chatgpt-library-counts'),node('ul','chatgpt-library-recent'),node('p','muted','Each ChatGPT conversation is grouped into a workspace.'),node('a','chatgpt-library-browse','Browse ChatGPT conversations →'));
+      library.querySelector('.chatgpt-library-counts').textContent=status.error||`${Number(status.workspaces).toLocaleString()} workspaces · ${Number(status.conversations).toLocaleString()} conversations`;
+      const recent=library.querySelector('ul'),existing=new Map([...recent.children].map(row=>[row.dataset.id,row])),focused=recent.contains(document.activeElement)?document.activeElement.dataset.workspaceId:'';
+      const entries=(status.recent||[]).map(workspace=>{const row=existing.get(workspace.id)||node('li');row.dataset.id=workspace.id;if(!row.firstChild){const link=node('a');link.dataset.workspaceId=workspace.id;row.append(link)}row.firstChild.href=workspace.url;row.firstChild.textContent=workspace.title;return row});
+      if(entries.length!==recent.children.length||entries.some((row,index)=>recent.children[index]!==row))recent.replaceChildren(...entries);
+      if(focused&&!recent.contains(document.activeElement))recent.querySelector(`[data-workspace-id="${window.CSS.escape(focused)}"]`)?.focus({preventScroll:true});
+      const browse=window.pharosQueryTables?.sourceConversationsURL?.('chatgpt'),link=library.querySelector('.chatgpt-library-browse');link.hidden=!browse;if(browse)link.href=browse;
+    }
+    // The worker discovers jobs after the POST response. Keep observing an
+    // enabled watch even when it is currently empty or all jobs are settled.
+    if(watch.enabled||(watch.exports||[]).some(item=>item.state==='fetching'))chatGPTWatch.timer=setTimeout(()=>{if(root.isConnected&&!root.closest('[hidden]'))refreshChatGPTWatch()},3000);
+  }
+  window.pharosChatGPTDownloads={render:renderChatGPTWatch};
+  const chatGPTSection=document.getElementById('chatGPTDownloadsWatchSection');
+  if(chatGPTSection&&!chatGPTSection.parentElement.closest('[hidden]'))renderChatGPTWatch(chatGPTSection);
   window.pharosClaudeDownloads={render:renderClaudeWatch};
   window.addEventListener('pharos:search-ready',()=>{if(claudeWatch.root?.isConnected)refreshClaudeWatch()});
   // This script is deferred: Settings → Sources may already be showing.

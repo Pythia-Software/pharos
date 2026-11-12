@@ -108,6 +108,8 @@ type Server struct {
 	claudeImports       claudeImportRun
 	claudeWatch         *claudeDownloads
 	claudeWatchWake     chan struct{}
+	chatGPTImports      *chatGPTImports
+	chatGPTWatchWake    chan struct{}
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
@@ -115,6 +117,8 @@ func NewServer(config Config, catalog *Catalog) *Server {
 	server.background.wake = make(chan struct{}, 1)
 	server.claudeWatchWake = make(chan struct{}, 1)
 	server.claudeWatch = server.newClaudeDownloads()
+	server.chatGPTWatchWake = make(chan struct{}, 1)
+	server.chatGPTImports = server.newChatGPTImports()
 	server.life.init()
 	server.ops = newOpRegistry("service")
 	server.ops.releasing = server.releasing
@@ -218,6 +222,7 @@ func (s *Server) Serve() error {
 		s.daemon("refreshResults", func(ctx context.Context) { s.refreshResults(ctx, i == 0) })
 	}
 	s.daemon("claudeDownloads", s.claudeDownloadsLoop)
+	s.daemon("chatGPTDownloads", s.chatGPTImportsLoop)
 	s.refreshGitInBackground(true)
 	s.countUpgradeInBackground()
 	s.warmAskModelsOnStart()
@@ -407,6 +412,10 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/api/claude-imports":
 		s.getClaudeImports(w, r)
+	case path == "/api/chatgpt-imports":
+		writeJSON(w, s.chatGPTImportsDocument(), 200)
+	case strings.HasPrefix(path, "/api/chatgpt-assets/"):
+		s.chatGPTAsset(w, r)
 	case path == "/api/markdown-link":
 		s.markdownLink(w, r)
 	case path == "/api/markdown-favicon":
@@ -1047,6 +1056,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.importSource(w, body)
 	case path == "/api/claude-imports/watch":
 		s.postClaudeWatch(w, body)
+	case path == "/api/chatgpt-imports":
+		s.postChatGPTImports(w, body)
 	case path == "/api/claude-imports" || path == "/api/claude-imports/links" || path == "/api/claude-imports/cancel":
 		s.postClaudeImports(w, r, body)
 	case path == "/api/probe":

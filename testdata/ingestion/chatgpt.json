@@ -1,5 +1,5 @@
 {
-  "index_version": "chatgpt-v2",
+  "index_version": "chatgpt-v3",
   "records": [
     {
       "SourceID": "c0000000-0000-4000-8000-000000000001",
@@ -11,7 +11,17 @@
       "ActivityAt": "2026-11-03T15:35:00.250Z",
       "Location": "",
       "Repository": null,
-      "Metadata": {},
+      "Metadata": {
+        "chatgpt_export": {
+          "conversation_id": "c0000000-0000-4000-8000-000000000001",
+          "create_time": 1793720000.5,
+          "current_node": "answer",
+          "default_model_slug": "gpt-5",
+          "id": "c0000000-0000-4000-8000-000000000001",
+          "title": "Primes",
+          "update_time": 1793720100.25
+        }
+      },
       "Conversations": [
         {
           "NativeID": "c0000000-0000-4000-8000-000000000001",
@@ -28,6 +38,22 @@
           "Aliases": null,
           "Messages": [
             {
+              "NativeID": "c0000000-0000-4000-8000-000000000001:export-context",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"settings\":{\"conversation_id\":\"c0000000-0000-4000-8000-000000000001\",\"create_time\":1793720000.5,\"current_node\":\"answer\",\"default_model_slug\":\"gpt-5\",\"id\":\"c0000000-0000-4000-8000-000000000001\",\"title\":\"Primes\",\"update_time\":1793720100.25},\"source\":\"chatgpt_export\"}",
+              "Model": "",
+              "Effort": "",
+              "CreatedAt": "2026-11-03T15:33:20.500Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/conversations.json:settings",
+              "RawText": "{\"settings\":{\"conversation_id\":\"c0000000-0000-4000-8000-000000000001\",\"create_time\":1793720000.5,\"current_node\":\"answer\",\"default_model_slug\":\"gpt-5\",\"id\":\"c0000000-0000-4000-8000-000000000001\",\"title\":\"Primes\",\"update_time\":1793720100.25},\"source\":\"chatgpt_export\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
               "NativeID": "system",
               "Role": "system",
               "Kind": "context",
@@ -41,7 +67,7 @@
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:system",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"system\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"You are ChatGPT.\"]},\"create_time\":null,\"id\":\"system\",\"metadata\":{\"is_visually_hidden_from_conversation\":true},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -59,7 +85,7 @@
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:instructions",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"user\"},\"content\":{\"content_type\":\"user_editable_context\",\"user_instructions\":\"Answer briefly\",\"user_profile\":\"\"},\"create_time\":null,\"id\":\"instructions\",\"metadata\":{\"is_visually_hidden_from_conversation\":true},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -77,7 +103,7 @@
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:ask",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"user\"},\"content\":{\"content_type\":\"multimodal_text\",\"parts\":[{\"asset_pointer\":\"file-service://file-abc\",\"content_type\":\"image_asset_pointer\",\"height\":480,\"width\":640},\"List the primes below 10\",{\"audio_asset_pointer\":{\"asset_pointer\":\"sediment://file-voice\",\"content_type\":\"audio_asset_pointer\"},\"content_type\":\"real_time_user_audio_video_asset_pointer\",\"frames_asset_pointers\":[]},{\"content_type\":\"audio_transcription\",\"text\":\"Only the odd ones?\"}]},\"create_time\":1793720001,\"id\":\"ask\",\"metadata\":{},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -85,7 +111,7 @@
               "NativeID": "ask:part:0",
               "Role": "user",
               "Kind": "attachment",
-              "Text": "{\"asset_pointer\":\"file-service://file-abc\",\"content_type\":\"image_asset_pointer\",\"height\":480,\"width\":640}",
+              "Text": "{\"asset_pointer\":\"file-service://file-abc\",\"available\":false,\"content_type\":\"image_asset_pointer\",\"height\":480,\"name\":\"image_asset_pointer\",\"type\":\"chatgpt_asset\",\"width\":640}",
               "Model": "",
               "Effort": "",
               "CreatedAt": "2026-11-03T15:33:21.000Z",
@@ -95,7 +121,7 @@
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:ask:part:0",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "{\"asset_pointer\":\"file-service://file-abc\",\"content_type\":\"image_asset_pointer\",\"height\":480,\"width\":640}",
+              "RawText": "{\"asset_pointer\":\"file-service://file-abc\",\"available\":false,\"content_type\":\"image_asset_pointer\",\"height\":480,\"name\":\"image_asset_pointer\",\"type\":\"chatgpt_asset\",\"width\":640}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -103,7 +129,7 @@
               "NativeID": "ask:part:1",
               "Role": "user",
               "Kind": "attachment",
-              "Text": "{\"audio_asset_pointer\":{\"asset_pointer\":\"sediment://file-voice\",\"content_type\":\"audio_asset_pointer\"},\"content_type\":\"real_time_user_audio_video_asset_pointer\",\"frames_asset_pointers\":[]}",
+              "Text": "{\"audio_asset_pointer\":{\"asset_pointer\":\"sediment://file-voice\",\"content_type\":\"audio_asset_pointer\"},\"available\":false,\"content_type\":\"real_time_user_audio_video_asset_pointer\",\"frames_asset_pointers\":[],\"name\":\"real_time_user_audio_video_asset_pointer\",\"type\":\"chatgpt_asset\"}",
               "Model": "",
               "Effort": "",
               "CreatedAt": "2026-11-03T15:33:21.000Z",
@@ -113,7 +139,7 @@
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:ask:part:1",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "{\"audio_asset_pointer\":{\"asset_pointer\":\"sediment://file-voice\",\"content_type\":\"audio_asset_pointer\"},\"content_type\":\"real_time_user_audio_video_asset_pointer\",\"frames_asset_pointers\":[]}",
+              "RawText": "{\"audio_asset_pointer\":{\"asset_pointer\":\"sediment://file-voice\",\"content_type\":\"audio_asset_pointer\"},\"available\":false,\"content_type\":\"real_time_user_audio_video_asset_pointer\",\"frames_asset_pointers\":[],\"name\":\"real_time_user_audio_video_asset_pointer\",\"type\":\"chatgpt_asset\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -132,7 +158,7 @@
               "Speed": "fast",
               "ServiceTier": "priority",
               "SpeedSource": "service_tier",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"Two, three, five.\"]},\"create_time\":1793720002,\"id\":\"first\",\"metadata\":{\"model_slug\":\"gpt-5\",\"reasoning_effort\":\"high\",\"service_tier\":\"priority\"},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": false
             },
@@ -150,16 +176,16 @@
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:thoughts",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"thoughts\",\"thoughts\":[{\"content\":\"Check each number below 10\",\"summary\":\"Primes\"}]},\"create_time\":1793720010,\"id\":\"thoughts\",\"metadata\":{\"is_visually_hidden_from_conversation\":true,\"model_slug\":\"gpt-5\"},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": true,
               "ReasoningFormat": "text"
             },
             {
               "NativeID": "recap",
-              "Role": "system",
-              "Kind": "context",
-              "Text": "{\"source\":\"chatgpt_reasoning_recap\",\"text\":\"Thought for 2 seconds\",\"type\":\"injected_context\"}",
+              "Role": "assistant",
+              "Kind": "metadata",
+              "Text": "{\"label\":\"Thought for 2 seconds\",\"note\":\"Source-reported reasoning duration, not measured request latency.\",\"source\":\"chatgpt_reasoning_recap\"}",
               "Model": "gpt-5",
               "Effort": "high",
               "CreatedAt": "2026-11-03T15:33:31.000Z",
@@ -170,7 +196,7 @@
               "Speed": "fast",
               "ServiceTier": "priority",
               "SpeedSource": "service_tier",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"assistant\"},\"content\":{\"content\":\"Thought for 2 seconds\",\"content_type\":\"reasoning_recap\",\"parts\":[\"Thought for 2 seconds\"]},\"create_time\":1793720011,\"id\":\"recap\",\"metadata\":{\"model_slug\":\"gpt-5\",\"reasoning_effort\":\"high\",\"service_tier\":\"priority\"},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -188,7 +214,7 @@
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:call",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"code\",\"language\":\"python\",\"text\":\"print([2, 3, 5, 7])\"},\"create_time\":1793720012,\"id\":\"call\",\"metadata\":{\"model_slug\":\"gpt-5\"},\"recipient\":\"python\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -206,7 +232,7 @@
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:output",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "",
+              "RawText": "{\"author\":{\"name\":\"python\",\"role\":\"tool\"},\"content\":{\"content_type\":\"execution_output\",\"text\":\"[2, 3, 5, 7]\"},\"create_time\":1793720013,\"id\":\"output\",\"metadata\":{},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -225,7 +251,7 @@
               "Speed": "fast",
               "ServiceTier": "priority",
               "SpeedSource": "service_tier",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"2, 3, 5 and 7.\"]},\"create_time\":1793720014,\"id\":\"answer\",\"metadata\":{\"model_slug\":\"gpt-5\",\"reasoning_effort\":\"high\",\"service_tier\":\"priority\"},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": true
             }
@@ -249,7 +275,14 @@
       "ActivityAt": "2026-11-03T15:51:40.000Z",
       "Location": "",
       "Repository": null,
-      "Metadata": {},
+      "Metadata": {
+        "chatgpt_export": {
+          "create_time": 1793721000,
+          "id": "c0000000-0000-4000-8000-000000000002",
+          "title": "News",
+          "update_time": 1793721100
+        }
+      },
       "Conversations": [
         {
           "NativeID": "c0000000-0000-4000-8000-000000000002",
@@ -266,6 +299,22 @@
           "Aliases": null,
           "Messages": [
             {
+              "NativeID": "c0000000-0000-4000-8000-000000000002:export-context",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"settings\":{\"create_time\":1793721000,\"id\":\"c0000000-0000-4000-8000-000000000002\",\"title\":\"News\",\"update_time\":1793721100},\"source\":\"chatgpt_export\"}",
+              "Model": "",
+              "Effort": "",
+              "CreatedAt": "2026-11-03T15:50:00.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/conversations.json:settings",
+              "RawText": "{\"settings\":{\"create_time\":1793721000,\"id\":\"c0000000-0000-4000-8000-000000000002\",\"title\":\"News\",\"update_time\":1793721100},\"source\":\"chatgpt_export\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
               "NativeID": "ask",
               "Role": "user",
               "Kind": "message",
@@ -279,7 +328,7 @@
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:ask",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"user\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"What's in the news?\"]},\"create_time\":1793721001,\"id\":\"ask\",\"metadata\":{},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -297,7 +346,7 @@
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:search",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"search(\\\"news\\\")\"]},\"create_time\":1793721002,\"id\":\"search\",\"metadata\":{},\"recipient\":\"browser\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -315,7 +364,7 @@
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:results",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "",
+              "RawText": "{\"author\":{\"name\":\"browser\",\"role\":\"tool\"},\"content\":{\"content_type\":\"tether_browsing_display\",\"result\":\"Headlines\"},\"create_time\":1793721003,\"id\":\"results\",\"metadata\":{},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -334,7 +383,7 @@
               "Speed": "fast",
               "ServiceTier": "priority",
               "SpeedSource": "service_tier",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"Some\",{\"text\":\"headlines.\",\"type\":\"text\"}]},\"create_time\":1793721004,\"id\":\"older\",\"metadata\":{\"model_slug\":\"gpt-5\",\"reasoning_effort\":\"high\",\"service_tier\":\"priority\"},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": false
             },
@@ -353,7 +402,7 @@
               "Speed": "fast",
               "ServiceTier": "priority",
               "SpeedSource": "service_tier",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"Today's headlines.\"]},\"create_time\":1793721005,\"id\":\"newer\",\"metadata\":{\"model_slug\":\"gpt-5\",\"reasoning_effort\":\"high\",\"service_tier\":\"priority\"},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": true
             },
@@ -371,7 +420,7 @@
               "EvidenceLocator": "$ROOT/002/conversations.json:mapping:blank",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
-              "RawText": "",
+              "RawText": "{\"author\":{\"role\":\"system\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"\",\"\"]},\"create_time\":1793721002.5,\"id\":\"blank\",\"metadata\":{\"is_visually_hidden_from_conversation\":true},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": false
             }
