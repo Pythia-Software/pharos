@@ -39,6 +39,8 @@
     }
   ],
   "fields": [
+    {"name": "is_estimate", "label": "Includes estimates", "type": "bool", "group": "Data quality", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "is_estimate", "synthetic": true}, "sqlite": {"expr": "r.\"is_estimate\""}}, "description": "Estimates fill missing source measurements. Generated output only; missing input and cache usage stays unavailable. Costs based on estimated output are partial."},
+    {"name": "input_tokens_available", "label": "Input usage available", "type": "bool", "group": "Data quality", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "input_tokens_available", "synthetic": true}, "sqlite": {"expr": "r.\"input_tokens_available\""}}, "description": "Estimates fill missing source measurements. Generated output only; missing input and cache usage stays unavailable. Costs based on estimated output are partial."},
     {
       "name": "id",
       "label": "Id",

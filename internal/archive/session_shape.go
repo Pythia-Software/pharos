@@ -33,7 +33,7 @@ var sessionShapeInlineLimit = 32
 const (
 	// sessionShapeVersion names the derivation stored in session_shape_facts.
 	// Changing it marks every conversation for recomputation.
-	sessionShapeVersion = "5"
+	sessionShapeVersion = "6"
 	sessionShapeBatch   = 200
 	// A gap between consecutive messages longer than this is idle time.
 	sessionShapeActiveGap = 300.0
@@ -658,7 +658,7 @@ func readSessionShapeInput(ctx context.Context, q queryer, id string) (sessionSh
 	// The ledger orders calls as their messages appear; timestamps can disagree.
 	slices.SortStableFunc(in.calls, func(a, b shapeCall) int { return cmp.Compare(a.position, b.position) })
 	rows, err = queryMapsContext(ctx, q, `SELECT mr.requested_at,mr.input_tokens,COALESCE(mr.model,'') model,mr.native_id IS NULL anonymous FROM model_requests mr
- WHERE mr.conversation_id=? AND COALESCE(mr.agent_session_id,'') NOT IN (SELECT id FROM agent_sessions WHERE conversation_id=? AND native_id<>'main')
+ WHERE mr.is_estimate=0 AND mr.input_tokens_available=1 AND mr.conversation_id=? AND COALESCE(mr.agent_session_id,'') NOT IN (SELECT id FROM agent_sessions WHERE conversation_id=? AND native_id<>'main')
  ORDER BY mr.sequence`, id, id)
 	if err != nil {
 		return in, false, err
@@ -1178,6 +1178,9 @@ func (c *Catalog) newSessionShapeTable(ctx context.Context, snapshot sessionShap
 	}
 	spent := map[string]*tokens{}
 	for _, row := range usage {
+		if estimateFlag(row["is_estimate"]) {
+			continue
+		}
 		id := firstString(row["conversation_id"])
 		total := spent[id]
 		if total == nil {
@@ -1229,7 +1232,7 @@ func (c *Catalog) newSessionShapeTable(ctx context.Context, snapshot sessionShap
 			"agent_session_id": conversation["agent_session_id"],
 			"repository_name":  conversation["repository_name"], "project_name": conversation["project_name"], "provider": conversation["provider"], "harness": conversation["harness"],
 			"model": nilIfEmpty(model), "model_family": nilIfEmpty(modelFamily(defaultString(nilIfEmpty(model), "Unknown model"))), "effort": nilIfEmpty(firstString(conversation["effort"])),
-			"agent_depth": depth, "agent_kind": kind, "subagents": subagents[id], "input_tokens": int64(0), "output_tokens": int64(0), "cost_usd": nil, "price_status": nil} {
+			"agent_depth": depth, "agent_kind": kind, "subagents": subagents[id], "input_tokens": nil, "output_tokens": nil, "cost_usd": nil, "price_status": nil} {
 			row[field] = value
 		}
 		if root := lineage.roots[id]; root != nil {

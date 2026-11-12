@@ -644,9 +644,11 @@ func queryRowActionFields(dataset string, selected []string) []string {
 	var required []string
 	switch dataset {
 	case "tools":
-		required = []string{"day", "tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_category", "provider", "model", "effort", "repository_name", "project_name", "session_kind", "source_kind"}
+		required = []string{"duration_is_estimate", "day", "tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_category", "provider", "model", "effort", "repository_name", "project_name", "session_kind", "source_kind"}
 	case "usage":
-		required = []string{"workspace_id", "conversation_id", "first_usage_at"}
+		required = []string{"workspace_id", "conversation_id", "first_usage_at", "is_estimate", "input_tokens_available", "price_status"}
+	case "model_requests":
+		required = []string{"is_estimate", "input_tokens_available"}
 	case "conversation_activity":
 		required = []string{"workspace_id", "conversation_id", "message_id", "event_at"}
 	case "writing_messages":
@@ -654,7 +656,7 @@ func queryRowActionFields(dataset string, selected []string) []string {
 	case "messages":
 		required = []string{"workspace_id", "conversation_id", "has_authorship"}
 	case "tool_calls":
-		required = []string{"workspace_id", "conversation_id", "call_message_id", "result_message_id", "call_id"}
+		required = []string{"workspace_id", "conversation_id", "call_message_id", "result_message_id", "call_id", "duration_is_estimate"}
 	case "parallelism":
 		required = []string{"conversation_id", "started_at", "location"}
 	case "rhythm":
@@ -683,6 +685,9 @@ func queryRowActionFields(dataset string, selected []string) []string {
 		if slices.ContainsFunc(selected, func(field string) bool { return field == "linked_commits" || field == "landed_commits" }) {
 			required = []string{"project_kind", "git_check", "git_check_reason"}
 		}
+	}
+	if dataset == "library" && queryNeedsEstimateProvenance(qt.QueryRequestV3{Result: qt.WireQuery{Select: selected}}) {
+		required = append(required, "is_estimate")
 	}
 	if len(required) == 0 {
 		return selected

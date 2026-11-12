@@ -430,6 +430,20 @@ func TestSessionShapeCatalogInputs(t *testing.T) {
 	if facts, _, err = c.sessionShapeOf(t.Context(), "cv-3"); err != nil || facts.ContextPeakTokens != nil || facts.ContextPeakRatio != nil {
 		t.Fatal("a zero checkpoint let a cumulative row set the peak", err, shapeValue(facts.ContextPeakTokens))
 	}
+
+	// A response estimate supplies no measured request context or usage for
+	// Session Shape, even when its physical token columns contain zero.
+	seedShapeConversation(t, c, "cv-4", "ws-1", "claude", "claude-sonnet-4-5", "user message 0 hi", "assistant message 5 hello")
+	execTx(t, c.DB,
+		`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,is_estimate) VALUES('estimated','ws-1','cv-4','main','root','claude',1)`,
+		`INSERT INTO model_requests(id,conversation_id,sequence,input_tokens,output_tokens,total_tokens,is_estimate,input_tokens_available) VALUES('estimate','cv-4',0,0,500,500,1,0)`,
+		`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,attribution,output_tokens,total_tokens,is_estimate,input_tokens_available) VALUES('estimated','2026-10-20T10:00:00Z','claude-sonnet-4-5','estimated',500,500,1,0)`)
+	if facts, _, err = c.sessionShapeOf(t.Context(), "cv-4"); err != nil || facts.ContextPeakTokens != nil || facts.ContextPeakRatio != nil {
+		t.Fatal("predicted response became measured context", facts, err)
+	}
+	if row := shapeRows(t, c)["cv-4"]; row["input_tokens"] != nil || row["output_tokens"] != nil {
+		t.Fatal("predicted usage entered measured Session Shape totals", row)
+	}
 }
 
 // Mirrors and aliases produce one row; delegated runs carry their root.

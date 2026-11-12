@@ -188,7 +188,8 @@ const requestEvidenceUpsert = ` ON CONFLICT(message_id) DO UPDATE SET conversati
 func (c *Catalog) ensureRequestEvidence() error {
 	if _, err := c.DB.Exec(`CREATE TABLE IF NOT EXISTS model_request_evidence(message_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
  source_order, native_id, thinking_ms, kind, total, api, tool) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS model_request_evidence_conversation_idx ON model_request_evidence(conversation_id);`); err != nil {
+CREATE INDEX IF NOT EXISTS model_request_evidence_conversation_idx ON model_request_evidence(conversation_id);
+CREATE INDEX IF NOT EXISTS model_request_evidence_native_idx ON model_request_evidence(conversation_id,native_id,thinking_ms);`); err != nil {
 		return err
 	}
 	insert := func(ref string) string {

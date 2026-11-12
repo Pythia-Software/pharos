@@ -255,7 +255,7 @@ func preservedClaudeGroupUsage(q queryer, workspace string, conversations []Conv
 		}
 	}
 	sessions, err := queryMaps(q, `SELECT id,conversation_id,native_id FROM agent_sessions
-		WHERE workspace_id=? AND total_tokens>0 AND usage_status<>'in-child-conversation'`, workspace)
+		WHERE workspace_id=? AND is_estimate=0 AND total_tokens>0 AND usage_status<>'in-child-conversation'`, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +276,7 @@ func preservedClaudeGroupUsage(q queryer, workspace string, conversations []Conv
 		fields = append(fields, "COALESCE(u."+field+",a."+field+",0) AS "+field)
 	}
 	rows, err := queryMaps(q, "SELECT "+strings.Join(fields, ",")+` FROM agent_sessions a
-		LEFT JOIN agent_session_usage u ON u.agent_session_id=a.id WHERE a.id IN (SELECT value FROM json_each(?))`, jsonText(kept))
+		LEFT JOIN agent_session_usage u ON u.agent_session_id=a.id AND u.is_estimate=0 WHERE a.is_estimate=0 AND a.id IN (SELECT value FROM json_each(?))`, jsonText(kept))
 	if err != nil {
 		return nil, err
 	}

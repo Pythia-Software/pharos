@@ -35,7 +35,7 @@ var toolRollupDataset = func() sqlDataset {
 	for _, name := range []string{"id", "day", "week", "month", "repository_name", "project_name", "source_kind", "provider", "model", "effort", "model_family", "session_kind",
 		"tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_name", "command_category", "call_count", "error_count", "error_rate",
 		"no_result_count", "rejected_count", "interrupted_count", "timeout_count", "nonzero_exit_count", "hook_blocked_count", "truncated_count",
-		"timed_count", "total_duration_ms", "avg_duration_ms", "max_duration_ms", "input_bytes", "result_bytes", "result_tokens", "measured_count",
+		"duration_is_estimate", "timed_count", "total_duration_ms", "avg_duration_ms", "max_duration_ms", "input_bytes", "result_bytes", "result_tokens", "measured_count",
 		"avg_result_tokens", "carried_tokens", "output_tokens", "lines_added", "lines_removed", "work_count", "context_cost_usd", "output_cost_usd",
 		"tool_cost_usd", "price_status"} {
 		columns[name] = "d." + name
@@ -122,7 +122,7 @@ var toolCallDataset = sqlDataset{
 		"backgrounded": "t.backgrounded", "file_path": "t.file_path", "repo_path": "t.repo_path", "path_repository": "t.path_repository", "path_scope": "t.path_scope",
 		"status": "t.status", "error_type": "t.error_type", "error_signature": "t.error_signature", "test_failure": "t.test_failure", "exit_code": "t.exit_code", "interrupted": "t.interrupted", "truncated": "t.truncated",
 		"call_count": "1", "error_count": "(t.status='error')",
-		"duration_ms": "t.duration_ms", "duration_source": "t.duration_source",
+		"duration_is_estimate": "t.duration_is_estimate", "duration_ms": "t.duration_ms", "duration_source": "t.duration_source",
 		"input_bytes": "t.input_bytes", "result_bytes": "t.result_bytes", "result_tokens": "t.result_tokens",
 		"result_tokens_source": "t.result_tokens_source", "output_tokens": "t.output_tokens", "parallel_count": "t.parallel_count",
 		"carried_requests": "t.carried_requests", "carried_tokens": "t.carried_tokens",

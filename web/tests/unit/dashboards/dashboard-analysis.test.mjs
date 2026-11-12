@@ -474,3 +474,16 @@ test('standalone scatter plots pair dashboard metrics and keep point-type change
     assert.equal(core.evaluateMetrics(hours,query,schemas.rhythm,{now}).metrics[0].buckets[0].value,expected,id);
   }
 });
+
+
+test("shared usage snapshots retain estimate provenance after filters and grouping", async () => {
+  const source=rows.map((row,index)=>({...row,is_estimate:index===0}));
+  const query=analysisQuery(catalog,{view:"compare",metric:"tokens",split:"provider",minSamples:1},[]).query;
+  const mixed=await runAnalysisQuery("usage",schema,query,{local:{rows:source}});
+  assert.equal(mixed.some(metric=>metric.is_estimate),true);
+  const groupedQuery=analysisQuery(catalog,{view:"distribution",unit:"conversation",metric:"cost",split:"model_family",minSamples:1},[]).query;
+  const grouped=await runAnalysisQuery("usage",schema,groupedQuery,{local:{rows:source}});
+  assert.equal(grouped.some(metric=>metric.is_estimate),true);
+  const measured=await runAnalysisQuery("usage",schema,{...query,where:[{field:"is_estimate",op:"=",value:false}]},{local:{rows:source}});
+  assert.equal(measured.some(metric=>metric.is_estimate),false);
+});

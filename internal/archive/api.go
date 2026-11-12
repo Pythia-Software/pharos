@@ -708,6 +708,12 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/pricing":
 		writeJSON(w, s.Catalog.pricingStatus(), 200)
+	case path == "/api/estimation/assumptions":
+		value, err := estimationManifestResponse()
+		writeResult(w, value, err)
+	case path == "/api/estimation/status":
+		value, err := s.Catalog.UsageEstimationStatus(r.Context())
+		writeResult(w, value, err)
 	case strings.HasPrefix(path, "/api/labels/conversations/"), strings.HasPrefix(path, "/api/labels/workspaces/"):
 		s.getMessageLabelFingerprint(w, r)
 	case strings.HasPrefix(path, "/api/fingerprints/images/"):

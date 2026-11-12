@@ -2,11 +2,232 @@ package archive
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestWorkConversationEstimatesPublishedResponseModels(t *testing.T) {
+	manifest, err := bundledEstimation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, model string }{
+		{"native tool ends", "chat-duration-observed-gaps-v3"},
+		{"missing intermediate text clock", "chat-duration-observed_window-v2"},
+		{"tool starts only", "chat-duration-window-v2"},
+		{"body with recorded settings", "body:claude-opus-5-5:high:standard"},
+		{"body with assumed speed", "coding-body-prior-v4"},
+		{"native thinking takes precedence", ""},
+		{"visible thinking before clipping", "complete-visible-unclocked-v4"},
+		{"sender attachment", ""},
+		{"sender file list", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog, _ := testCatalog(t)
+			// Synthetic source events exercise the real adapter and reader. Long
+			// Unicode text must be measured before the reader clips its body.
+			text := strings.Repeat("界", 6000)
+			input := map[string]any{"path": "/tmp/example"}
+			call := map[string]any{"type": "tool_use", "id": "call", "name": "view", "input": input, "start_timestamp": "2026-11-11T10:00:02Z"}
+			result := map[string]any{"type": "tool_result", "tool_use_id": "call", "content": "File contents", "start_timestamp": "2026-11-11T10:00:06Z"}
+			final := map[string]any{"type": "text", "text": text, "start_timestamp": "2026-11-11T10:00:10Z", "stop_timestamp": "2026-11-11T10:00:12Z"}
+			blocks := []any{call, result, final}
+			user := map[string]any{"uuid": "prompt", "sender": "human", "text": "Go", "created_at": "2026-11-11T10:00:00Z"}
+			reply := map[string]any{"uuid": "reply", "sender": "assistant", "parent_message_uuid": "prompt", "model": "claude-opus-5-5", "effort": "high", "speed": "standard", "created_at": "2026-11-11T10:00:01Z", "text": text}
+			switch tc.name {
+			case "tool starts only":
+				delete(result, "start_timestamp")
+			case "missing intermediate text clock":
+				blocks = append([]any{map[string]any{"type": "text", "text": "Checking the file"}}, blocks...)
+			case "body with recorded settings", "body with assumed speed":
+				delete(final, "stop_timestamp")
+				if tc.name == "body with assumed speed" {
+					delete(reply, "speed")
+				}
+			case "native thinking takes precedence":
+				blocks = append([]any{map[string]any{"type": "thinking", "thinking": "", "start_timestamp": "2026-11-11T10:00:00Z", "stop_timestamp": "2026-11-11T10:00:01Z"}}, blocks...)
+			case "visible thinking before clipping":
+				blocks = append([]any{map[string]any{"type": "thinking", "thinking_hidden": false, "thinking": strings.Repeat("界", 5000)}}, blocks...)
+			case "sender attachment":
+				user["attachments"] = []any{map[string]any{"file_name": "image.png", "file_type": "image/png"}}
+			case "sender file list":
+				user["files"] = []any{map[string]any{"file_name": "document.pdf"}}
+			}
+			reply["content"] = blocks
+			export := []any{map[string]any{"uuid": "synthetic", "created_at": user["created_at"], "chat_messages": []any{user, reply}}}
+			path := filepath.Join(t.TempDir(), "conversations.json")
+			writeSourceFile(t, path, jsonText(export))
+			tx, err := catalog.DB.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			if _, _, err := ingestWorkspace(tx, discoverClaudeAI(t, path)[0], false); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			var conversationID, workspaceID string
+			if err := catalog.DB.QueryRow("SELECT id,workspace_id FROM conversations WHERE native_id='synthetic'").Scan(&conversationID, &workspaceID); err != nil {
+				t.Fatal(err)
+			}
+			conversation, err := catalog.WorkConversation(workspaceID, conversationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			estimates := conversation["usage_estimates"].(*conversationUsageEstimates)
+			if len(estimates.Responses) != 1 {
+				t.Fatal("missing response", estimates)
+			}
+			r := estimates.Responses[0]
+			if r.UsageAt != reply["created_at"] {
+				t.Fatal("reader lost the native response date", r.UsageAt, reply["created_at"])
+			}
+			if r.ResponseModel != tc.model || r.LocalWeight != 0 || len(conversation["token_usage"].(tokenCounts)) != 0 {
+				t.Fatalf("unexpected published route or fabricated reported usage: %+v", r)
+			}
+			_, profile, _ := manifest.resolve(r.Model, r.Effort, r.Speed)
+			characters := 6000
+			if tc.name == "missing intermediate text clock" {
+				characters += len("Checking the file")
+			}
+			visible := profile.TextRate.Expected*float64(characters) + profile.ArgumentRate.Expected*float64(len(jsonText(input))) + profile.ToolOutputTokens.Expected
+			if math.Abs(r.Output.Expected-r.Thinking.Expected-visible) > 1e-6 {
+				t.Fatal("clipping or byte/character conversion changed output estimate", r)
+			}
+			clipped := false
+			for _, m := range conversation["messages"].([]map[string]any) {
+				clipped = clipped || m["raw_clipped"] == true || m["text_clipped"] == true
+			}
+			if !clipped {
+				t.Fatal("fixture must exercise reader clipping")
+			}
+			if tc.name == "native thinking takes precedence" && (r.ClockedBlocks != 1 || r.ThinkingSeconds.Expected != 1) {
+				t.Fatal("native thinking replaced by response fit", r)
+			}
+			if tc.name == "visible thinking before clipping" && (r.VisibleThinkingCharacters != 5000 || r.SecondsAvailable || r.Window == nil || r.Window.Seconds != 12) {
+				t.Fatal("clipping changed visible evidence or an impossible duration was accepted", r)
+			}
+		})
+	}
+}
+
+func TestWorkConversationEstimatesExportBeforeClippingWithoutChangingUsage(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	path := filepath.Join(t.TempDir(), "conversations.json")
+	writeSourceFile(t, path, strings.Replace(claudeAIExport, "Weighing destinations", strings.Repeat("Summary ", 1000), 1))
+	record := discoverClaudeAI(t, path)[0]
+	tx, err := catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = ingestWorkspace(tx, record, false); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var conversationID, workspaceID string
+	if err := catalog.DB.QueryRow("SELECT id,workspace_id FROM conversations WHERE native_id='conv-1'").Scan(&conversationID, &workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := catalog.WorkConversation(workspaceID, conversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	estimates := conversation["usage_estimates"].(*conversationUsageEstimates)
+	if estimates.Output == nil || estimates.Output.Expected <= 0 || len(estimates.Responses) != 2 {
+		t.Fatalf("missing per-response estimates without local donors: %+v", estimates)
+	}
+	if len(conversation["token_usage"].(tokenCounts)) != 0 {
+		t.Fatal("estimated tokens leaked into reported usage")
+	}
+	if estimates.Responses[0].MissingBlocks != 1 || estimates.Responses[0].ThinkingSeconds.Expected != 7 {
+		t.Fatal("clipped summary lost full source features", estimates.Responses[0])
+	}
+	var firstRaw string
+	for _, m := range conversation["messages"].([]map[string]any) {
+		if firstString(m["native_id"]) == "m2:block:0" {
+			firstRaw = firstString(m["raw_text"])
+			if m["raw_clipped"] != true {
+				t.Fatal("test must exercise real reader clipping")
+			}
+		}
+		if firstString(m["kind"]) == "tool_call" {
+			v, ok := m["duration_estimate"].(usageToolEstimate)
+			if !ok || v.Status != "estimated" {
+				t.Fatal("reader did not attach an explicit per-tool estimate", m)
+			}
+		}
+	}
+	if firstRaw == "" {
+		t.Fatal("missing thinking source")
+	}
+	// Corrected source evidence is read afresh rather than reusing old estimates.
+	if _, err := catalog.DB.Exec("UPDATE messages SET selected=0 WHERE conversation_id=?", conversationID); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := catalog.WorkConversation(workspaceID, conversationID)
+	if err != nil || updated["usage_estimates"].(*conversationUsageEstimates).Output != nil {
+		t.Fatal("branch correction did not invalidate the result", err)
+	}
+	t.Run("text-only exports", func(t *testing.T) {
+		catalog, _ := testCatalog(t)
+		var exports []map[string]any
+		if err := json.Unmarshal([]byte(claudeAIExport), &exports); err != nil {
+			t.Fatal(err)
+		}
+		for _, conversation := range exports {
+			for _, raw := range reasoningList(conversation["chat_messages"]) {
+				delete(mapValue(raw), "content")
+			}
+		}
+		path := filepath.Join(t.TempDir(), "conversations.json")
+		writeSourceFile(t, path, jsonText(exports))
+		tx, err := catalog.DB.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		for _, record := range discoverClaudeAI(t, path) {
+			if _, _, err := ingestWorkspace(tx, record, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		conversations, err := queryMaps(catalog.DB, "SELECT id,workspace_id FROM conversations")
+		if err != nil {
+			t.Fatal(err)
+		}
+		estimated := map[string]bool{}
+		for _, row := range conversations {
+			conversation, err := catalog.WorkConversation(firstString(row["workspace_id"]), firstString(row["id"]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(conversation["token_usage"].(tokenCounts)) != 0 {
+				t.Fatal("text-only estimates became reported usage")
+			}
+			for _, response := range conversation["usage_estimates"].(*conversationUsageEstimates).Responses {
+				estimated[response.NativeID] = true
+				if response.Output.Expected <= response.Thinking.Expected || !strings.Contains(response.Basis, "missing_thinking_trace") || response.ClockedBlocks != 0 || response.MissingBlocks != 0 || len(response.Tools) != 0 {
+					t.Fatalf("text-only reply needs visible output plus an explicit missing-thinking prior: %+v", response)
+				}
+			}
+		}
+		if len(estimated) != 3 || !estimated["m2"] || !estimated["m4"] || !estimated["n2"] {
+			t.Fatalf("all three selected text-only replies must receive estimates: %v", estimated)
+		}
+	})
+}
 
 func seedReaderWorkspace(t *testing.T, catalog *Catalog) {
 	t.Helper()

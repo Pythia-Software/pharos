@@ -80,8 +80,8 @@ func (c *Catalog) PricingHealth(ctx context.Context) (map[string]any, error) {
 func (c *Catalog) UsageAttributionHealth(ctx context.Context) ([]map[string]any, error) {
 	return queryMapsContext(ctx, c.reader(), `WITH roots AS (
 		SELECT c.id,w.source_kind,c.provider,
-			(SELECT COALESCE(SUM(total_tokens),0) FROM agent_sessions s WHERE s.conversation_id=c.id AND s.depth=0) session_tokens,
-			(SELECT COALESCE(SUM(total_tokens),0) FROM model_requests m WHERE m.conversation_id=c.id) request_tokens
+			(SELECT COALESCE(SUM(total_tokens),0) FROM agent_sessions s WHERE s.conversation_id=c.id AND s.depth=0 AND s.is_estimate=0) session_tokens,
+			(SELECT COALESCE(SUM(total_tokens),0) FROM model_requests m WHERE m.conversation_id=c.id AND m.is_estimate=0) request_tokens
 		FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
 		WHERE c.agent_depth=0 AND c.started_at>=date('now','-30 day')
 	)

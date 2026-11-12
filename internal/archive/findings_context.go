@@ -338,7 +338,7 @@ func (env *findingEnv) outlierRemovable(candidates map[string]*findingCandidate)
 	inputs := map[string][]float64{}
 	for start := 0; start < len(ids); start += 300 {
 		end := min(start+300, len(ids))
-		rows, err := queryMapsContext(env.ctx, env.db, `SELECT conversation_id,input_tokens FROM model_requests WHERE input_tokens>0 AND conversation_id IN (`+placeholders(end-start)+`)`, ids[start:end]...)
+		rows, err := queryMapsContext(env.ctx, env.db, `SELECT conversation_id,input_tokens FROM model_requests WHERE is_estimate=0 AND input_tokens_available=1 AND input_tokens>0 AND conversation_id IN (`+placeholders(end-start)+`)`, ids[start:end]...)
 		if err != nil {
 			return err
 		}

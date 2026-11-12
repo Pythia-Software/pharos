@@ -68,6 +68,52 @@ func statisticsItems(result map[string]any) []map[string]any {
 	return result["items"].([]map[string]any)
 }
 
+func TestStatisticsEstimatedUsageQuality(t *testing.T) {
+	book := priceBook{}
+	estimated, measured := map[string]statMetricValue{}, map[string]statMetricValue{}
+	usageMetrics(estimated, []map[string]any{{"is_estimate": 1, "input_tokens_available": 0, "output_tokens": 500, "total_tokens": 500}}, book)
+	usageMetrics(measured, []map[string]any{{"input_tokens": 100, "output_tokens": 10, "total_tokens": 110}}, book)
+	for _, reverse := range []bool{false, true} {
+		merged := map[string]statMetricValue{}
+		first, second := measured, estimated
+		if reverse {
+			first, second = second, first
+		}
+		mergeUsageMetrics(merged, first)
+		mergeUsageMetrics(merged, second)
+		if v := merged["input_tokens"]; v.effective("available") != float64(100) || v.effective("complete") != nil || !v.IsEstimate || v.Status != "partial" {
+			t.Fatalf("mixed missing input (reverse=%v): %+v", reverse, v)
+		}
+		if v := merged["total_tokens"]; v.effective("available") != float64(610) || v.effective("complete") != nil || !v.IsEstimate {
+			t.Fatalf("mixed totals (reverse=%v): %+v", reverse, v)
+		}
+	}
+	row := statisticsRow{ID: "chat", Metrics: estimated}
+	snapshot := statisticsSnapshot{Rows: []statisticsRow{row}}
+	for _, quality := range []string{"complete", "available"} {
+		r := statisticsRequest{Entity: "conversation", Scope: "conversation", Quality: quality, Select: []string{"output_tokens", "input_tokens"}, Limit: 50, Budget: 8000,
+			Aggregations: []metricAggregation{{ID: "output", Op: "sum", Metric: "output_tokens"}}}
+		item := statisticsMetadataRow(row, r, snapshot)
+		detail := item["metric_details"].(map[string]any)["output_tokens"].(map[string]any)
+		if !estimateFlag(detail["is_estimate"]) || item["input_tokens"] != nil {
+			t.Fatal("missing provenance or invented input", item)
+		}
+		page, err := statisticsAggregatePage(snapshot, r, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		group := page.(map[string]any)["groups"].([]map[string]any)[0]
+		value := group["values"].(map[string]any)["output"]
+		metadata := group["quality"].(map[string]any)["output"].(map[string]any)
+		if quality == "complete" && (item["output_tokens"] != nil || value != nil || estimateFlag(metadata["is_estimate"])) {
+			t.Fatal("complete quality accepted predictions", item, group)
+		}
+		if quality == "available" && (item["output_tokens"] != float64(500) || value != float64(500) || !estimateFlag(metadata["is_estimate"]) || integer(metadata["estimated_values"]) != 1) {
+			t.Fatal("available quality lost predictions or provenance", item, group)
+		}
+	}
+}
+
 func TestStatisticsOwnAndWorkspaceScope(t *testing.T) {
 	c := statisticsFixture(t)
 	args := map[string]any{"entity": "conversation", "select": []string{"total_tokens", "cost_usd", "user_turn_count", "tool_error_count", "tool_call_count", "compaction_count", "wall_clock_span_seconds"}, "order_by": map[string]any{"metric": "total_tokens"}, "max_output_tokens": 8000}

@@ -84,7 +84,7 @@ func refreshSessionEffortSummaries(ctx context.Context, tx *sql.Tx, ids []string
 		summaries[id] = &s
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT agent_session_id,effort,COUNT(*) FROM model_requests
- WHERE agent_session_id IN (SELECT value FROM json_each(?)) GROUP BY agent_session_id,effort`, jsonText(ids))
+ WHERE is_estimate=0 AND agent_session_id IN (SELECT value FROM json_each(?)) GROUP BY agent_session_id,effort`, jsonText(ids))
 	if err != nil {
 		return err
 	}

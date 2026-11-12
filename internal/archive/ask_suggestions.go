@@ -367,7 +367,7 @@ func askContextOutput(ctx context.Context, run *askSignalRun) (askSignal, error)
 func askCompaction(ctx context.Context, run *askSignalRun) (askSignal, error) {
 	rows, err := run.c.reader().QueryContext(ctx, `SELECT COALESCE(r.display_name,''),COUNT(*),COUNT(DISTINCT m.conversation_id),SUM(m.requested_at>=?)
  FROM model_requests m JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
- WHERE m.requested_at>=? AND m.compacted_before>0 GROUP BY 1`, askSince(run.now, 7), askSince(run.now, 28))
+ WHERE m.is_estimate=0 AND m.requested_at>=? AND m.compacted_before>0 GROUP BY 1`, askSince(run.now, 7), askSince(run.now, 28))
 	if err != nil {
 		return askSignal{}, err
 	}
@@ -414,7 +414,7 @@ func (run *askSignalRun) usageWindow(ctx context.Context) (*askUsageWindow, erro
 	rows, err := run.c.reader().QueryContext(ctx, `SELECT u.usage_hour>=?,s.depth>0,COALESCE(r.display_name,''),u.model,
  SUM(u.total_tokens),SUM(u.input_tokens),SUM(u.cache_read_input_tokens),SUM(u.output_tokens),SUM(u.reasoning_output_tokens)
  FROM agent_session_usage u JOIN agent_sessions s ON s.id=u.agent_session_id JOIN workspaces w ON w.id=s.workspace_id
- LEFT JOIN repositories r ON r.id=w.repository_id WHERE u.usage_hour>=? GROUP BY 1,2,3,4`, askSince(run.now, 7), askSince(run.now, 28))
+ LEFT JOIN repositories r ON r.id=w.repository_id WHERE u.is_estimate=0 AND u.usage_hour>=? GROUP BY 1,2,3,4`, askSince(run.now, 7), askSince(run.now, 28))
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +429,7 @@ func (run *askSignalRun) usageWindow(ctx context.Context) (*askUsageWindow, erro
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if err := run.c.reader().QueryRowContext(ctx, "SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage WHERE usage_hour>=? AND usage_hour<?",
+	if err := run.c.reader().QueryRowContext(ctx, "SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage WHERE is_estimate=0 AND usage_hour>=? AND usage_hour<?",
 		askSince(run.now, 56), askSince(run.now, 28)).Scan(&window.before); err != nil {
 		return nil, err
 	}
@@ -572,7 +572,7 @@ func askDelegation(ctx context.Context, run *askSignalRun) (askSignal, error) {
 func askParallel(ctx context.Context, run *askSignalRun) (askSignal, error) {
 	var busy, peak int
 	err := run.c.reader().QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(MAX(n),0) FROM (SELECT COUNT(DISTINCT s.conversation_id) n
- FROM agent_session_usage u JOIN agent_sessions s ON s.id=u.agent_session_id WHERE u.usage_hour>=? AND s.depth=0 GROUP BY u.usage_hour) WHERE n>=2`,
+ FROM agent_session_usage u JOIN agent_sessions s ON s.id=u.agent_session_id WHERE u.is_estimate=0 AND u.usage_hour>=? AND s.depth=0 GROUP BY u.usage_hour) WHERE n>=2`,
 		askSince(run.now, 28)).Scan(&busy, &peak)
 	if err != nil || busy < 5 {
 		return askSignal{}, err

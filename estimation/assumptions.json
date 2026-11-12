@@ -1,0 +1,1709 @@
+{
+  "version": 4,
+  "revision": "2026-11-12.4",
+  "published_at": "2026-11-12",
+  "provider": "claude",
+  "methodology": "docs/claude-estimation-report.md",
+  "notes": "Published estimates, not provider telemetry or billing. Native thinking intervals take precedence. Source-gated response models refine missing-trace estimates; explicit summary/block and unknown-setting fallbacks remain available. Coding records calibrate model/effort rates and nonthinking output conversion, including a per-tool unrendered-output allowance. Ranges are sensitivity scenarios, not calibrated chat confidence intervals. No input-token or API-cost estimates. Local refinements remain in the user library. V3 separates argument generation from post-argument execution, adds complete-native-clock gap inference, and respects explicit visible thinking as a conservative estimated contribution floor. Text throughput does not identify a model or establish thinking throughput. V4 adds a separately validated complete-visible/unclocked thinking model and end-to-end scalar replay evaluation. Native timing and incomplete/hidden trace fallbacks keep precedence. A learned provider-wide body prior follows supported exact body models for complete tool-bearing responses without usable timing. Visible unclocked duration is independently predicted from native chat character/stream clocks; token and duration models remain independent.",
+  "profiles": {
+    "claude-default": {
+      "thinking_tokens_per_second": {
+        "expected": 60,
+        "lower": 15,
+        "upper": 130
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 400,
+        "lower": 0,
+        "upper": 4000
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-low": {
+      "thinking_tokens_per_second": {
+        "expected": 60,
+        "lower": 15,
+        "upper": 130
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 80,
+        "lower": 0,
+        "upper": 640
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-medium": {
+      "thinking_tokens_per_second": {
+        "expected": 60,
+        "lower": 15,
+        "upper": 130
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 300,
+        "lower": 0,
+        "upper": 2400
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-high": {
+      "thinking_tokens_per_second": {
+        "expected": 60,
+        "lower": 15,
+        "upper": 130
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 600,
+        "lower": 0,
+        "upper": 4800
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-xhigh": {
+      "thinking_tokens_per_second": {
+        "expected": 60,
+        "lower": 15,
+        "upper": 130
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 1200,
+        "lower": 0,
+        "upper": 9600
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-max": {
+      "thinking_tokens_per_second": {
+        "expected": 60,
+        "lower": 15,
+        "upper": 130
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 2000,
+        "lower": 0,
+        "upper": 16000
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-fable-5-2-high-standard": {
+      "thinking_tokens_per_second": {
+        "expected": 73.8237,
+        "lower": 30.7147,
+        "upper": 92.5671
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 600,
+        "lower": 0,
+        "upper": 4800
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-fable-5-2-medium-standard": {
+      "thinking_tokens_per_second": {
+        "expected": 74.6006,
+        "lower": 44.9198,
+        "upper": 92.1805
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 300,
+        "lower": 0,
+        "upper": 2400
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-haiku-5-5-high-standard": {
+      "thinking_tokens_per_second": {
+        "expected": 238.9724,
+        "lower": 73.7986,
+        "upper": 254.8414
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 600,
+        "lower": 0,
+        "upper": 4800
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-haiku-5-5-low-standard": {
+      "thinking_tokens_per_second": {
+        "expected": 241.537,
+        "lower": 227.1731,
+        "upper": 255.7945
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 80,
+        "lower": 0,
+        "upper": 640
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-haiku-5-5-medium-standard": {
+      "thinking_tokens_per_second": {
+        "expected": 232.938,
+        "lower": 161.4679,
+        "upper": 259.8909
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 300,
+        "lower": 0,
+        "upper": 2400
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-opus-5-5-high-standard": {
+      "thinking_tokens_per_second": {
+        "expected": 65.2478,
+        "lower": 22.5265,
+        "upper": 91.7896
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 600,
+        "lower": 0,
+        "upper": 4800
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-opus-5-5-medium-standard": {
+      "thinking_tokens_per_second": {
+        "expected": 73.4281,
+        "lower": 25.974,
+        "upper": 99.0757
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 300,
+        "lower": 0,
+        "upper": 2400
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    },
+    "claude-sonnet-5-5-medium-standard": {
+      "thinking_tokens_per_second": {
+        "expected": 99.4639,
+        "lower": 29.3213,
+        "upper": 117.0524
+      },
+      "text_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      },
+      "seconds_per_summary": {
+        "expected": 7,
+        "lower": 1,
+        "upper": 25
+      },
+      "seconds_per_thinking_block": {
+        "expected": 8,
+        "lower": 1,
+        "upper": 45
+      },
+      "thinking_tokens_without_trace": {
+        "expected": 300,
+        "lower": 0,
+        "upper": 2400
+      },
+      "argument_tokens_per_byte": {
+        "expected": 0.3969840873129512,
+        "lower": 0.1,
+        "upper": 0.8
+      },
+      "tool_call_output_tokens": {
+        "expected": 86.60945695517314,
+        "lower": 0,
+        "upper": 350
+      },
+      "visible_thinking_tokens_per_character": {
+        "expected": 0.37963703993633924,
+        "lower": 0.15,
+        "upper": 1.0
+      }
+    }
+  },
+  "models": [
+    {
+      "model": "*",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Broad Claude prior for an unobserved model; effort controls the missing-trace assumption, not an asserted measured token budget."
+    },
+    {
+      "model": "*",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Broad Claude prior for an unobserved model; effort controls the missing-trace assumption, not an asserted measured token budget."
+    },
+    {
+      "model": "*",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Broad Claude prior for an unobserved model; effort controls the missing-trace assumption, not an asserted measured token budget."
+    },
+    {
+      "model": "*",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Broad Claude prior for an unobserved model; effort controls the missing-trace assumption, not an asserted measured token budget."
+    },
+    {
+      "model": "*",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Broad Claude prior for an unobserved model; effort controls the missing-trace assumption, not an asserted measured token budget."
+    },
+    {
+      "model": "*",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Unreported model or effort. These broad engineering assumptions are not a measured chat model mixture."
+    },
+    {
+      "model": "claude-opus-4-6",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-6",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-6",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-6",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-6",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-6",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-7",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-7",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-7",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-7",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-7",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-7",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-8",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-8",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-8",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-8",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-8",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-4-8",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-5",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-5",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-5",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-5",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-5",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-5",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-5",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-5",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-5",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-5",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-5",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-5",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-1",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-1",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-1",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-1",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-1",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-1",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-5-5",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-5-5",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-opus-5-5",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-5-5",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-5-5",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-5-5",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-5-5",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-sonnet-5-5",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "low",
+      "speed": "*",
+      "profile": "claude-low",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "medium",
+      "speed": "*",
+      "profile": "claude-medium",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "high",
+      "speed": "*",
+      "profile": "claude-high",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "xhigh",
+      "speed": "*",
+      "profile": "claude-xhigh",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "max",
+      "speed": "*",
+      "profile": "claude-max",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "*",
+      "speed": "*",
+      "profile": "claude-default",
+      "basis": "assumption",
+      "notes": "Explicit model fallback to the broad Claude prior; overridden by a supported exact standard-speed study row."
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "high",
+      "speed": "standard",
+      "profile": "claude-fable-5-2-high-standard",
+      "basis": "coding-study",
+      "donor_requests": 631,
+      "donor_families": 53,
+      "notes": "2026-11-11 study: positive reported thinking tokens / native thinkingDurationMs, 0.1\u2013600 seconds; arithmetic mean of per-family mean rates. Chat transfer remains an assumption."
+    },
+    {
+      "model": "claude-fable-5-2",
+      "effort": "medium",
+      "speed": "standard",
+      "profile": "claude-fable-5-2-medium-standard",
+      "basis": "coding-study",
+      "donor_requests": 2003,
+      "donor_families": 66,
+      "notes": "2026-11-11 study: positive reported thinking tokens / native thinkingDurationMs, 0.1\u2013600 seconds; arithmetic mean of per-family mean rates. Chat transfer remains an assumption."
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "effort": "high",
+      "speed": "standard",
+      "profile": "claude-haiku-5-5-high-standard",
+      "basis": "coding-study",
+      "donor_requests": 41,
+      "donor_families": 23,
+      "notes": "2026-11-11 study: positive reported thinking tokens / native thinkingDurationMs, 0.1\u2013600 seconds; arithmetic mean of per-family mean rates. Chat transfer remains an assumption."
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "speed": "standard",
+      "profile": "claude-haiku-5-5-low-standard",
+      "basis": "coding-study",
+      "donor_requests": 16,
+      "donor_families": 15,
+      "notes": "2026-11-11 study: positive reported thinking tokens / native thinkingDurationMs, 0.1\u2013600 seconds; arithmetic mean of per-family mean rates. Chat transfer remains an assumption."
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "effort": "medium",
+      "speed": "standard",
+      "profile": "claude-haiku-5-5-medium-standard",
+      "basis": "coding-study",
+      "donor_requests": 46,
+      "donor_families": 23,
+      "notes": "2026-11-11 study: positive reported thinking tokens / native thinkingDurationMs, 0.1\u2013600 seconds; arithmetic mean of per-family mean rates. Chat transfer remains an assumption."
+    },
+    {
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "speed": "standard",
+      "profile": "claude-opus-5-5-high-standard",
+      "basis": "coding-study",
+      "donor_requests": 37940,
+      "donor_families": 473,
+      "notes": "2026-11-11 study: positive reported thinking tokens / native thinkingDurationMs, 0.1\u2013600 seconds; arithmetic mean of per-family mean rates. Chat transfer remains an assumption."
+    },
+    {
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "speed": "standard",
+      "profile": "claude-opus-5-5-medium-standard",
+      "basis": "coding-study",
+      "donor_requests": 24088,
+      "donor_families": 334,
+      "notes": "2026-11-11 study: positive reported thinking tokens / native thinkingDurationMs, 0.1\u2013600 seconds; arithmetic mean of per-family mean rates. Chat transfer remains an assumption."
+    },
+    {
+      "model": "claude-sonnet-5-5",
+      "effort": "medium",
+      "speed": "standard",
+      "profile": "claude-sonnet-5-5-medium-standard",
+      "basis": "coding-study",
+      "donor_requests": 72,
+      "donor_families": 12,
+      "notes": "2026-11-11 study: positive reported thinking tokens / native thinkingDurationMs, 0.1\u2013600 seconds; arithmetic mean of per-family mean rates. Chat transfer remains an assumption."
+    }
+  ],
+  "default_tool_seconds": {
+    "expected": 3,
+    "lower": 0.05,
+    "upper": 60
+  },
+  "tools": [
+    {
+      "runtime": "claude-ai-export",
+      "tool": "web_search",
+      "seconds": {
+        "expected": 1.2609,
+        "lower": 0.746,
+        "upper": 1.8292
+      },
+      "basis": "chat-study",
+      "donor_calls": 106,
+      "notes": "2026-11-11 original export: native tool-use start to paired tool-result observation; workload-specific descriptive prior."
+    },
+    {
+      "runtime": "claude-ai-export",
+      "tool": "str_replace",
+      "seconds": {
+        "expected": 5.8985,
+        "lower": 2.0111,
+        "upper": 11.61
+      },
+      "basis": "chat-study",
+      "donor_calls": 28,
+      "notes": "2026-11-11 original export: native tool-use start to paired tool-result observation; workload-specific descriptive prior."
+    },
+    {
+      "runtime": "claude-ai-export",
+      "tool": "web_fetch",
+      "seconds": {
+        "expected": 1.0693,
+        "lower": 0.2597,
+        "upper": 2.1589
+      },
+      "basis": "chat-study",
+      "donor_calls": 25,
+      "notes": "2026-11-11 original export: native tool-use start to paired tool-result observation; workload-specific descriptive prior."
+    },
+    {
+      "runtime": "claude-ai-export",
+      "tool": "bash_tool",
+      "seconds": {
+        "expected": 6.1736,
+        "lower": 2.4656,
+        "upper": 10.1053
+      },
+      "basis": "chat-study",
+      "donor_calls": 18,
+      "notes": "2026-11-11 original export: native tool-use start to paired tool-result observation; workload-specific descriptive prior."
+    }
+  ],
+  "completion_unobservable_tools": [
+    "Agent",
+    "Task",
+    "Workflow",
+    "launch_extended_search_task",
+    "ask_user_input_v0",
+    "AskUserQuestion",
+    "request_user_input",
+    "request_user_input_async"
+  ],
+  "local_refinement": {
+    "minimum_requests": 50,
+    "minimum_families": 10,
+    "prior_families": 20,
+    "maximum_requests": 50000,
+    "maximum_age_days": 90
+  },
+  "response_models": [
+    {
+      "id": "body:claude-fable-5-2:medium:standard",
+      "evidence": "body",
+      "model": "claude-fable-5-2",
+      "effort": "medium",
+      "speed": "standard",
+      "intercept": 955.2936660391886,
+      "coefficients": {
+        "argument_kbytes": 228.21033700591502,
+        "tool_command": 322.2360485278866,
+        "tool_read": 1118.0294943627134,
+        "tool_web": 22.575457447318193
+      },
+      "donor_responses": 91,
+      "donor_families": 52,
+      "minimum_tools": 1,
+      "maximum_tools": 247,
+      "maximum_visible_characters": 52320,
+      "minimum_window_seconds": 0.0,
+      "maximum_window_seconds": 0.0,
+      "lower_multiplier": 0.0,
+      "upper_multiplier": 4.0,
+      "basis": "coding-study",
+      "notes": "Nonnegative arithmetic model; family-balanced fit with supported setting-group shrinkage. Thinking tokens for a completed tool-bearing self response with no thinking trace. Native clocks and explicit block/summary evidence take precedence. Sensitivity is not a chat confidence interval.",
+      "unit": "tokens",
+      "requires_reported_settings": true
+    },
+    {
+      "id": "body:claude-opus-5-5:high:standard",
+      "evidence": "body",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "speed": "standard",
+      "intercept": 1971.5266458781352,
+      "coefficients": {
+        "argument_kbytes": 136.030285466342,
+        "tool_command": 129.81759330235965,
+        "tool_read": 1569.550075904386,
+        "tool_other": 284.4430520633406
+      },
+      "donor_responses": 979,
+      "donor_families": 371,
+      "minimum_tools": 1,
+      "maximum_tools": 247,
+      "maximum_visible_characters": 52320,
+      "minimum_window_seconds": 0.0,
+      "maximum_window_seconds": 0.0,
+      "lower_multiplier": 0.0,
+      "upper_multiplier": 4.0,
+      "basis": "coding-study",
+      "notes": "Nonnegative arithmetic model; family-balanced fit with supported setting-group shrinkage. Thinking tokens for a completed tool-bearing self response with no thinking trace. Native clocks and explicit block/summary evidence take precedence. Sensitivity is not a chat confidence interval.",
+      "unit": "tokens",
+      "requires_reported_settings": true
+    },
+    {
+      "id": "body:claude-opus-5-5:medium:standard",
+      "evidence": "body",
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "speed": "standard",
+      "intercept": 2156.538476655335,
+      "coefficients": {
+        "visible_kchars": 175.50082088822808,
+        "argument_kbytes": 124.6249306422198,
+        "tool_command": 123.50318635488595,
+        "tool_read": 214.6266866939809,
+        "tool_search": 239.1689152540132
+      },
+      "donor_responses": 628,
+      "donor_families": 252,
+      "minimum_tools": 1,
+      "maximum_tools": 247,
+      "maximum_visible_characters": 52320,
+      "minimum_window_seconds": 0.0,
+      "maximum_window_seconds": 0.0,
+      "lower_multiplier": 0.0,
+      "upper_multiplier": 4.0,
+      "basis": "coding-study",
+      "notes": "Nonnegative arithmetic model; family-balanced fit with supported setting-group shrinkage. Thinking tokens for a completed tool-bearing self response with no thinking trace. Native clocks and explicit block/summary evidence take precedence. Sensitivity is not a chat confidence interval.",
+      "unit": "tokens",
+      "requires_reported_settings": true
+    },
+    {
+      "id": "chat-duration-window-v2",
+      "evidence": "window",
+      "model": "*",
+      "effort": "*",
+      "speed": "*",
+      "intercept": 0.0,
+      "coefficients": {
+        "visible_kchars": 0.7469304260556396,
+        "tool_web": 1.4252822753065209,
+        "tool_other": 0.5425903200222326,
+        "elapsed_minutes": 9.237748922478076,
+        "first_call_minutes": 46.55793778618552
+      },
+      "donor_responses": 68,
+      "donor_families": 47,
+      "minimum_tools": 1,
+      "maximum_tools": 250,
+      "maximum_visible_characters": 1000000,
+      "minimum_window_seconds": 0.1,
+      "maximum_window_seconds": 1800,
+      "lower_multiplier": 0.0,
+      "upper_multiplier": 4.0,
+      "basis": "chat-duration-study",
+      "notes": "Predicts recorded thinking seconds with native thinking clocks masked. Coding model/effort rates convert seconds to token estimates. Global source-specific duration fallback, not chat token ground truth.",
+      "unit": "seconds",
+      "requires_reported_settings": false
+    },
+    {
+      "id": "chat-duration-observed_window-v2",
+      "evidence": "observed_window",
+      "model": "*",
+      "effort": "*",
+      "speed": "*",
+      "intercept": 0.0,
+      "coefficients": {
+        "argument_kbytes": 0.11634335924632407,
+        "tool_read": 0.743714150140732,
+        "tool_other": 0.21408222858541043,
+        "residual_minutes": 43.091709549620006
+      },
+      "donor_responses": 63,
+      "donor_families": 43,
+      "minimum_tools": 1,
+      "maximum_tools": 250,
+      "maximum_visible_characters": 1000000,
+      "minimum_window_seconds": 0.1,
+      "maximum_window_seconds": 1800,
+      "lower_multiplier": 0.0,
+      "upper_multiplier": 4.0,
+      "basis": "chat-duration-study",
+      "notes": "Predicts recorded thinking seconds with native thinking clocks masked. Coding model/effort rates convert seconds to token estimates. Global source-specific duration fallback, not chat token ground truth.",
+      "unit": "seconds",
+      "requires_reported_settings": false
+    },
+    {
+      "id": "chat-duration-observed-gaps-v3",
+      "evidence": "observed_gaps",
+      "unit": "seconds",
+      "model": "*",
+      "effort": "*",
+      "speed": "*",
+      "intercept": 1.5731200582531022,
+      "coefficients": {
+        "gap_excess_minutes": 55.217487895781574
+      },
+      "donor_responses": 56,
+      "donor_families": 40,
+      "minimum_tools": 1,
+      "maximum_tools": 250,
+      "maximum_visible_characters": 1000000,
+      "minimum_window_seconds": 0.1,
+      "maximum_window_seconds": 1800,
+      "lower_multiplier": 0,
+      "upper_multiplier": 4,
+      "requires_reported_settings": false,
+      "basis": "chat-duration-study",
+      "notes": "Native chat masked-thinking-duration fit. Requires all native text and call-to-result spans, subtracts one second per uncovered gap, and uses interval unions. Gaps are predictors, not measured thinking or model-request counts."
+    },
+    {
+      "id": "coding-body-prior-v4",
+      "evidence": "body_prior",
+      "unit": "tokens",
+      "model": "*",
+      "effort": "*",
+      "speed": "*",
+      "intercept": 2785.1609490889455,
+      "coefficients": {
+        "argument_kbytes": 149.25086701973655,
+        "tool_command": 132.6821306838471,
+        "tool_read": 1481.4642591965296
+      },
+      "donor_responses": 3083,
+      "donor_families": 1380,
+      "minimum_tools": 1,
+      "maximum_tools": 247,
+      "maximum_visible_characters": 52321,
+      "minimum_window_seconds": 0,
+      "maximum_window_seconds": 0,
+      "lower_multiplier": 0,
+      "upper_multiplier": 4,
+      "requires_reported_settings": false,
+      "basis": "coding-study",
+      "notes": "Global coding-transfer prior for complete tool-bearing responses with entirely missing thinking traces and no usable native window or supported exact body fit. Explicit model/effort-independent published fallback, not inferred identity or chat token telemetry."
+    }
+  ],
+  "response_window": {
+    "maximum_clock_skew_seconds": 0.25,
+    "maximum_seconds": 1800,
+    "gap_overhead_seconds": 1
+  },
+  "tool_categories": {
+    "web_search": "web",
+    "web_fetch": "web",
+    "bash_tool": "command",
+    "str_replace": "edit",
+    "create_file": "edit",
+    "view": "read",
+    "launch_extended_search_task": "agent",
+    "ask_user_input_v0": "user"
+  },
+  "tool_timing": {
+    "argument_seconds_per_character": {
+      "expected": 0.0035489794031290304,
+      "lower": 0.001,
+      "upper": 0.02
+    },
+    "default_execution_seconds": {
+      "expected": 0.8424314198594288,
+      "lower": 0,
+      "upper": 5.0
+    },
+    "execution_tools": [
+      {
+        "runtime": "claude-ai-export",
+        "tool": "memory_read",
+        "seconds": {
+          "expected": 0.47319291520620366,
+          "lower": 0,
+          "upper": 5.0
+        },
+        "basis": "native-chat-execution-study",
+        "donor_calls": 5,
+        "notes": "Post-argument-stop to result observation, family-balanced arithmetic mean shrunk toward native-chat global execution mean. Transport/harness overhead can remain."
+      },
+      {
+        "runtime": "claude-ai-export",
+        "tool": "memory_write",
+        "seconds": {
+          "expected": 0.5305256323516919,
+          "lower": 0,
+          "upper": 5.0
+        },
+        "basis": "native-chat-execution-study",
+        "donor_calls": 6,
+        "notes": "Post-argument-stop to result observation, family-balanced arithmetic mean shrunk toward native-chat global execution mean. Transport/harness overhead can remain."
+      },
+      {
+        "runtime": "claude-ai-export",
+        "tool": "weather_fetch",
+        "seconds": {
+          "expected": 0.619968303923855,
+          "lower": 0,
+          "upper": 5.0
+        },
+        "basis": "native-chat-execution-study",
+        "donor_calls": 5,
+        "notes": "Post-argument-stop to result observation, family-balanced arithmetic mean shrunk toward native-chat global execution mean. Transport/harness overhead can remain."
+      },
+      {
+        "runtime": "claude-ai-export",
+        "tool": "web_fetch",
+        "seconds": {
+          "expected": 0.6104451584195509,
+          "lower": 0,
+          "upper": 5.0
+        },
+        "basis": "native-chat-execution-study",
+        "donor_calls": 19,
+        "notes": "Post-argument-stop to result observation, family-balanced arithmetic mean shrunk toward native-chat global execution mean. Transport/harness overhead can remain."
+      },
+      {
+        "runtime": "claude-ai-export",
+        "tool": "web_search",
+        "seconds": {
+          "expected": 0.9478088966557762,
+          "lower": 0,
+          "upper": 5.0
+        },
+        "basis": "native-chat-execution-study",
+        "donor_calls": 88,
+        "notes": "Post-argument-stop to result observation, family-balanced arithmetic mean shrunk toward native-chat global execution mean. Transport/harness overhead can remain."
+      }
+    ],
+    "maximum_argument_seconds": 600,
+    "maximum_argument_characters": 1000000,
+    "donor_calls": 191,
+    "donor_families": 43,
+    "supported_tools": [
+      "bash_tool",
+      "create_file",
+      "image_search",
+      "link_preview_display_v0",
+      "memory_read",
+      "memory_write",
+      "present_files",
+      "product_carousel_display_v0",
+      "str_replace",
+      "user_location_v0",
+      "user_time_v0",
+      "view",
+      "visualize:read_me",
+      "visualize:show_widget",
+      "weather_fetch",
+      "web_fetch",
+      "web_search"
+    ]
+  },
+  "visible_thinking_models": [
+    {
+      "model": "*",
+      "effort": "*",
+      "speed": "*",
+      "tokens_per_character": 0.7587070644416017,
+      "tokens_per_block": 5.544548563862707,
+      "donor_requests": 6154,
+      "donor_families": 126,
+      "maximum_characters": 111292,
+      "maximum_blocks": 2,
+      "lower_multiplier": 0,
+      "upper_multiplier": 4,
+      "notes": "Family-balanced nonnegative arithmetic fit with supported-model shrinkage. Only complete explicitly visible thinking with no usable native clocks. Not a tokenizer or provider counter."
+    }
+  ],
+  "visible_thinking_duration": {
+    "seconds_per_character": 0.0091372552184613,
+    "text_to_thinking_duration_ratio": 1.751124079929149,
+    "minimum_text_characters": 40,
+    "minimum_text_seconds": 0.1,
+    "maximum_text_seconds": 600,
+    "minimum_text_characters_per_second": 20,
+    "maximum_text_characters_per_second": 1000,
+    "maximum_thinking_characters": 25359,
+    "donor_blocks": 123,
+    "donor_families": 40,
+    "lower_multiplier": 0,
+    "upper_multiplier": 4,
+    "notes": "Native-chat arithmetic duration fits for explicitly visible unclocked thinking. Use observed same-response text rate when available, otherwise a character-duration fit. Predict duration independently of coding token conversion; never infer model identity.",
+    "maximum_thinking_seconds": 600
+  }
+}

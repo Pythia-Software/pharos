@@ -39,7 +39,7 @@ func (r *executionResolution) Occurrences(ctx context.Context, q queryer, conver
 // returns and how they are written; a derivative's dependency digest that
 // includes them records it, so a change to either supersedes every digest.
 // v2: an event ID shared on cyclic ancestry is an unresolved candidate.
-const occurrenceDependencyVersion = "occurrence-dependency/v2"
+const occurrenceDependencyVersion = "occurrence-dependency/v3-recorded-requests"
 
 // occurrenceDependencyLines returns, per conversation (the copy's
 // transcript), the occurrence facts Lookup and Partial decide its
@@ -208,11 +208,19 @@ func requestOccurrenceClaims(ctx context.Context, q queryer, claims []executionC
 	}
 	sort.Strings(transcripts)
 	rows, err := queryMapsContext(ctx, q, `SELECT id,conversation_id,COALESCE(source_message_id,'') source,COALESCE(final_message_id,'') final
- FROM model_requests WHERE conversation_id IN (SELECT value FROM json_each(?)) ORDER BY id`, jsonText(transcripts))
+ FROM model_requests WHERE is_estimate=0 AND conversation_id IN (SELECT value FROM json_each(?)) ORDER BY id`, jsonText(transcripts))
+	recorded := "is_estimate=0 AND "
+	if err != nil && strings.Contains(err.Error(), "no such column: is_estimate") {
+		recorded = "" // These legacy tables predate predictions entirely.
+		rows, err = queryMapsContext(ctx, q, `SELECT id,conversation_id,COALESCE(source_message_id,'') source,COALESCE(final_message_id,'') final FROM model_requests WHERE conversation_id IN (SELECT value FROM json_each(?)) ORDER BY id`, jsonText(transcripts))
+	}
 	if err != nil && strings.Contains(err.Error(), "no such column") {
 		// A ledger from before requests recorded their messages.
-		rows, err = queryMapsContext(ctx, q, `SELECT id,conversation_id,'' source,'' final FROM model_requests
- WHERE conversation_id IN (SELECT value FROM json_each(?)) ORDER BY id`, jsonText(transcripts))
+		rows, err = queryMapsContext(ctx, q, `SELECT id,conversation_id,'' source,'' final FROM model_requests WHERE `+recorded+`conversation_id IN (SELECT value FROM json_each(?)) ORDER BY id`, jsonText(transcripts))
+		if err != nil && strings.Contains(err.Error(), "no such column: is_estimate") {
+			recorded = ""
+			rows, err = queryMapsContext(ctx, q, `SELECT id,conversation_id,'' source,'' final FROM model_requests WHERE conversation_id IN (SELECT value FROM json_each(?)) ORDER BY id`, jsonText(transcripts))
+		}
 	}
 	if err != nil {
 		if strings.Contains(err.Error(), "no such table") {
@@ -260,7 +268,7 @@ func requestOccurrenceClaims(ctx context.Context, q queryer, claims []executionC
 	// exactly one did.
 	opened := map[string][]string{}
 	if len(originals) > 0 {
-		found, err := queryMapsContext(ctx, q, `SELECT id,source_message_id FROM model_requests WHERE source_message_id IN (SELECT value FROM json_each(?)) ORDER BY id`,
+		found, err := queryMapsContext(ctx, q, `SELECT id,source_message_id FROM model_requests WHERE `+recorded+`source_message_id IN (SELECT value FROM json_each(?)) ORDER BY id`,
 			jsonText(slices.Sorted(maps.Keys(originals))))
 		if err != nil {
 			return nil, err

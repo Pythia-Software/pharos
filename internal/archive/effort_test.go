@@ -347,6 +347,13 @@ func TestEffortUsageMigrationPreservesLegacyAccounting(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	ingestUsageFixture(t, catalog)
 	// Recreate the previous layout using exactly its old key, then initialize again.
+	// The previous catalog had neither canonical prediction triggers nor their
+	// installation marker. Remove them before simulating its table layout.
+	triggers := queryRows(t, catalog, "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'usage_estimation_store_%'")
+	for _, trigger := range triggers {
+		execTx(t, catalog.DB, "DROP TRIGGER "+sqlIdentifier(firstString(trigger["name"])))
+	}
+	execTx(t, catalog.DB, "DELETE FROM meta WHERE key='usage_estimation_store_version'")
 	if _, err := catalog.DB.Exec(`ALTER TABLE agent_session_usage RENAME TO usage_new;
  CREATE TABLE agent_session_usage AS SELECT agent_session_id,usage_hour,model,attribution,input_tokens,uncached_input_tokens,
  cache_read_input_tokens,cache_creation_input_tokens,cache_creation_5m_input_tokens,cache_creation_1h_input_tokens,

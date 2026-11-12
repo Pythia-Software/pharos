@@ -20,14 +20,18 @@ var usageSummaryWindows = []struct {
 
 // usageSummaryWindow is one window's topline totals.
 type usageSummaryWindow struct {
-	Key          string                        `json:"key"`
-	From         string                        `json:"from,omitempty"`
-	Until        string                        `json:"until,omitempty"`
-	HumanWords   int64                         `json:"human_words"`
-	Messages     int64                         `json:"messages"`
-	Tokens       int64                         `json:"tokens"`
-	CostUSD      any                           `json:"cost_usd"`
-	CarbonTokens map[string]map[string]float64 `json:"carbon_tokens"`
+	IsEstimate           bool                          `json:"is_estimate"`
+	CostIsEstimate       bool                          `json:"cost_is_estimate"`
+	PriceStatus          string                        `json:"price_status"`
+	InputTokensAvailable bool                          `json:"input_tokens_available"`
+	Key                  string                        `json:"key"`
+	From                 string                        `json:"from,omitempty"`
+	Until                string                        `json:"until,omitempty"`
+	HumanWords           int64                         `json:"human_words"`
+	Messages             int64                         `json:"messages"`
+	Tokens               int64                         `json:"tokens"`
+	CostUSD              any                           `json:"cost_usd"`
+	CarbonTokens         map[string]map[string]float64 `json:"carbon_tokens"`
 	*quickStatsCounts
 }
 
@@ -88,7 +92,7 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 	cutoffs := make([]time.Time, len(usageSummaryWindows))
 	ends := make([]time.Time, len(usageSummaryWindows))
 	for index, window := range usageSummaryWindows {
-		windows[index] = &usageSummaryWindow{Key: window.key, Until: now.UTC().Format(time.RFC3339Nano)}
+		windows[index] = &usageSummaryWindow{InputTokensAvailable: true, Key: window.key, Until: now.UTC().Format(time.RFC3339Nano)}
 		cutoffs[index], ends[index] = usageSummaryBounds(window.key, window.span, now)
 		windows[index].Until = ends[index].UTC().Format(time.RFC3339Nano)
 		if !cutoffs[index].IsZero() {
@@ -142,6 +146,9 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 			day = localMidnight(hour, time.Local).Format("2006-01-02")
 		}
 		priced := book.cost(entry.model, day, entry.tokens)
+		if entry.isEstimate && priced.cost != nil {
+			priced.status = "partial"
+		}
 		tier, _ := carbon.tier(entry.model)
 		carbonParts := map[string]int64{
 			"uncached_input": entry.tokens["uncached_input_tokens"] + entry.tokens["unclassified_tokens"],
@@ -182,6 +189,10 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 			if share == 0 {
 				continue
 			}
+			window.IsEstimate = window.IsEstimate || entry.isEstimate
+			window.InputTokensAvailable = window.InputTokensAvailable && !entry.missingInput
+			window.PriceStatus = worsePriceStatus(window.PriceStatus, priced.status)
+			window.CostIsEstimate = window.CostIsEstimate || entry.isEstimate && priced.cost != nil
 			window.Tokens += int64(float64(entry.tokens["total_tokens"])*share + .5)
 			if window.CarbonTokens == nil {
 				window.CarbonTokens = map[string]map[string]float64{}
@@ -204,6 +215,7 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 type usageSummaryEntry struct {
 	workspaceID, hour, model string
 	tokens                   map[string]int64
+	isEstimate, missingInput bool
 }
 
 const usageSummaryAuthorshipSQL = `SELECT sent_at,typed_words FROM message_authorship WHERE typed_words>0`
@@ -216,7 +228,7 @@ const usageSummaryAuthorshipSQL = `SELECT sent_at,typed_words FROM message_autho
 // the primary-key indexes, which would fetch the full records again.
 const usageSummaryLedgerSQL = `SELECT a.workspace_id,w.source_kind,u.usage_hour,u.model,COALESCE(a.model,''),
 	u.total_tokens,u.uncached_input_tokens,u.cache_read_input_tokens,u.cache_creation_input_tokens,
-	u.cache_creation_1h_input_tokens,u.output_tokens,u.unclassified_tokens
+	u.cache_creation_1h_input_tokens,u.output_tokens,u.unclassified_tokens,u.is_estimate,u.input_tokens_available
 	FROM agent_session_usage u
 	JOIN agent_sessions a INDEXED BY agent_sessions_summary_idx ON a.id=u.agent_session_id
 	JOIN workspaces w INDEXED BY workspaces_library_idx ON w.id=a.workspace_id
@@ -235,10 +247,13 @@ func (c *Catalog) usageSummaryLedger(ctx context.Context) ([]usageSummaryEntry, 
 		var entry usageSummaryEntry
 		var source, sessionModel string
 		var total, input, read, write, write1h, output, unclassified int64
+		var estimated, inputAvailable int64
 		if err := rows.Scan(&entry.workspaceID, &source, &entry.hour, &entry.model, &sessionModel,
-			&total, &input, &read, &write, &write1h, &output, &unclassified); err != nil {
+			&total, &input, &read, &write, &write1h, &output, &unclassified, &estimated, &inputAvailable); err != nil {
 			return nil, err
 		}
+		entry.isEstimate = estimated != 0
+		entry.missingInput = inputAvailable == 0
 		entry.model = strings.TrimSpace(entry.model)
 		if entry.model == "" {
 			entry.model = strings.TrimSpace(sessionModel)

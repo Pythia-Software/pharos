@@ -48,6 +48,7 @@
     }
   ],
   "fields": [
+    {"name": "duration_is_estimate", "label": "Duration estimated", "type": "bool", "group": "Data quality", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "duration_is_estimate", "synthetic": true}, "sqlite": {"expr": "r.\"duration_is_estimate\""}}, "description": "Estimates fill missing source measurements. Generated output only; missing input and cache usage stays unavailable. Costs based on estimated output are partial."},
     {"name":"agent_session_id","label":"Agent session ID","type":"text","group":"Context","select":{"default":false},"aggregate":{"groupable":true},"bindings":{"sqlite":{"expr":"r.\"agent_session_id\""}},"description":"Recorded owner of this message or ledger record; ambiguous ownership is missing."},
     {
       "name": "id",

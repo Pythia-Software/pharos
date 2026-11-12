@@ -441,7 +441,7 @@ func (c *Catalog) tl1AttemptUsageContext(ctx context.Context, installationID str
 	prefix := installationID + ":"
 	rows, err := queryMapsContext(ctx, c.reader(), `SELECT c.native_id,u.usage_hour,u.model usage_model,s.model session_model,`+strings.Join(sums, ",")+`
 		FROM conversations c JOIN workspaces w ON w.id=c.workspace_id JOIN agent_sessions s ON s.conversation_id=c.id JOIN agent_session_usage u ON u.agent_session_id=s.id
-		WHERE w.source_kind='tl1' AND c.native_id>=? AND c.native_id<? AND u.total_tokens>0`, prefix, prefix+"￿")
+		WHERE u.is_estimate=0 AND w.source_kind='tl1' AND c.native_id>=? AND c.native_id<? AND u.total_tokens>0`, prefix, prefix+"￿")
 	if err != nil {
 		return nil, err
 	}

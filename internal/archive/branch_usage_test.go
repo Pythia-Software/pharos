@@ -11,6 +11,7 @@ import (
 	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
+	"github.com/gbdubs/pharos/estimation"
 )
 
 // usageEvent is a Claude Code assistant event in a session with usage, on
@@ -367,6 +368,16 @@ func TestToolDerivationsScheduleTheToolsStage(t *testing.T) {
 	for range 2 {
 		if err := catalog.scheduleToolDerivations(); err != nil || pending() != 1 {
 			t.Fatalf("changed rules: %d pending, %v", pending(), err)
+		}
+	}
+	execTx(t, catalog.DB, `UPDATE sync_deferred SET completed_generation=generation WHERE name='tools'`)
+	// A new manifest must refresh existing libraries even when their messages,
+	// tool layout, and reported usage have not changed. Whitespace changes the
+	// digest without changing any point coefficient used by other test cases.
+	override(t, &estimation.Assumptions, append(append([]byte{}, estimation.Assumptions...), '\n'))
+	for range 2 {
+		if err := catalog.scheduleToolDerivations(); err != nil || pending() != 1 {
+			t.Fatalf("new estimation manifest: %d pending, %v", pending(), err)
 		}
 	}
 }

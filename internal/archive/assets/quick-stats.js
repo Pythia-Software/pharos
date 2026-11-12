@@ -85,7 +85,7 @@ function createQuickStatsCache({scope = '', storage, now = () => Date.now(), con
   const date = new Date(now());
   return JSON.stringify([Intl.DateTimeFormat().resolvedOptions().timeZone, date.getFullYear(), date.getMonth(), date.getDate()]);
 }} = {}) {
-  const entries = new Map(), pending = new Map(), lifetime = 7 * 86400000, key = 'pharos-quick-stats-cache-v1:' + scope;
+  const entries = new Map(), pending = new Map(), lifetime = 7 * 86400000, key = 'pharos-quick-stats-cache-v2:' + scope;
   let generation = 1;
   if (storage === undefined) { try { storage = globalThis.localStorage; } catch {} }
   const valid = entry => entry && typeof entry.details === 'boolean' && typeof entry.context === 'string'
@@ -365,4 +365,19 @@ function initQuickStatsEditor(metrics, initial, changed, buildTable) {
 
 function quickStatsSettingsURL() {
   return '/settings/layout?' + new URLSearchParams({disclosures: JSON.stringify({quickStatsSettings: true}), reveal: 'section:quickStatsSettings'});
+}
+
+// Missing usage is not a measured zero. Keep provenance tied to the selected
+// window and metric, including partial output-only API equivalents.
+function quickStatsMetricCaveat(field, bucket) {
+  const flagged = value => value === true || value === 1;
+  if (['tool_time_ms','timed_tool_calls'].includes(field) && flagged(bucket?.tool_time_is_estimate))
+    return {suffix:'*',note:'Includes estimated tool durations. Spans can overlap and are not wall-clock time.'};
+  if (['tokens','co2e_g'].includes(field) && flagged(bucket?.is_estimate))
+    return {suffix:'*',note:'Includes estimated generated output. Missing input and cache usage are not included.'};
+  if (field==='cost_usd' && flagged(bucket?.cost_is_estimate ?? bucket?.is_estimate))
+    return {suffix:'*',note:'Includes estimated output cost only; input and cache usage are unavailable. This API price equivalent is partial.'};
+  if (field==='cost_usd' && ['partial','unpriced'].includes(bucket?.price_status))
+    return {suffix:'+',note:'Known-priced subtotal only; some usage is unpriced or incomplete.'};
+  return null;
 }

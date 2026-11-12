@@ -756,7 +756,7 @@ func statisticsMetricEvidence(row statisticsRow, r statisticsRequest) map[string
 		if r.Scope == "workspace" {
 			owner = row.Workspace
 		}
-		m[name] = map[string]any{"value": v.Value, "effective_value": v.effective(r.Quality), "status": v.Status, "scope": r.Scope, "owner_id": owner}
+		m[name] = map[string]any{"value": v.Value, "effective_value": v.effective(r.Quality), "status": v.Status, "scope": r.Scope, "owner_id": owner, "is_estimate": v.IsEstimate}
 		if name == "cost_usd" {
 			m[name].(map[string]any)["price_status"] = nilIfEmpty(v.PriceStatus)
 		}
@@ -803,8 +803,8 @@ func statisticsMetadataRow(row statisticsRow, r statisticsRequest, s statisticsS
 		if _, err := metricName(name); err == nil {
 			v := row.Metrics[name]
 			item[name] = v.effective(r.Quality)
-			if v.Status != "complete" {
-				details[name] = map[string]any{"value": v.Value, "status": v.Status}
+			if v.Status != "complete" || v.IsEstimate {
+				details[name] = map[string]any{"value": v.Value, "status": v.Status, "is_estimate": v.IsEstimate}
 				if name == "cost_usd" {
 					details[name].(map[string]any)["price_status"] = nilIfEmpty(v.PriceStatus)
 				}
@@ -911,7 +911,7 @@ func statisticsAggregatePage(s statisticsSnapshot, r statisticsRequest, position
 				values[a.ID] = len(groups[key])
 				continue
 			}
-			count := 0
+			count, estimated := 0, 0
 			total, low, high := 0.0, 0.0, 0.0
 			statuses := map[string]int{}
 			for _, row := range groups[key] {
@@ -928,6 +928,9 @@ func statisticsAggregatePage(s statisticsSnapshot, r statisticsRequest, position
 					high = n
 				}
 				total += n
+				if v.IsEstimate {
+					estimated++
+				}
 				count++
 			}
 			var value any
@@ -946,7 +949,7 @@ func statisticsAggregatePage(s statisticsSnapshot, r statisticsRequest, position
 				}
 			}
 			values[a.ID] = value
-			quality[a.ID] = map[string]any{"usable_values": count, "population": len(groups[key]), "statuses": statuses}
+			quality[a.ID] = map[string]any{"usable_values": count, "population": len(groups[key]), "statuses": statuses, "is_estimate": estimated > 0, "estimated_values": estimated}
 		}
 		items = append(items, map[string]any{"keys": keys[key], "values": values, "quality": quality})
 	}

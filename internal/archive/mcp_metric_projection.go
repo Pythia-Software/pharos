@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const metricProjectionVersion = "metrics-v4-consuming-layer-leaves"
+const metricProjectionVersion = "metrics-v5-estimate-provenance"
 
 // Projections are invalidated by authoritative table writes and by price
 // changes that reprice a workspace's usage (replacePricing), never by MCP audit
@@ -613,7 +613,13 @@ func usageMetrics(values map[string]statMetricValue, rows []map[string]any, book
 	var cost any
 	status := ""
 	partial := false
+	estimated, missingInput, knownInput := false, false, false
 	for _, row := range rows {
+		estimate := estimateFlag(row["is_estimate"])
+		missing := estimate && !estimateFlag(row["input_tokens_available"])
+		estimated = estimated || estimate
+		missingInput = missingInput || missing
+		knownInput = knownInput || !missing
 		for _, name := range []string{"total_tokens", "input_tokens", "output_tokens", "cache_read_input_tokens"} {
 			totals[name] += float64(integer(row[name]))
 		}
@@ -623,13 +629,24 @@ func usageMetrics(values map[string]statMetricValue, rows []map[string]any, book
 			day = localMidnight(hour, time.Local).Format("2006-01-02")
 		}
 		model := firstString(row["model"], row["session_model"])
-		p := book.cost(model, day, ledgerTokens(row))
+		p := book.ledgerCost(row, model, day, ledgerTokens(row))
 		cost = addCost(cost, p.cost)
 		status = worsePriceStatus(status, p.status)
 	}
 	for name, n := range totals {
 		v := metricNumber(n)
-		if partial && name != "total_tokens" {
+		v.IsEstimate = estimated
+		if estimated {
+			v.Status = "partial"
+		}
+		if missingInput && (name == "input_tokens" || name == "cache_read_input_tokens") {
+			v.Status = "partial"
+			if !knownInput {
+				v.Value = nil
+				v.Status = "unavailable"
+			}
+		}
+		if partial && name != "total_tokens" && v.Value != nil {
 			v.Status = "partial"
 		}
 		values[name] = v
@@ -637,6 +654,7 @@ func usageMetrics(values map[string]statMetricValue, rows []map[string]any, book
 	if n, ok := number(cost); ok {
 		v := metricNumber(n)
 		v.PriceStatus = status
+		v.IsEstimate = estimated
 		if status == "assumed" {
 			v.Status = "assumed"
 		} else if status != "priced" {
@@ -644,7 +662,7 @@ func usageMetrics(values map[string]statMetricValue, rows []map[string]any, book
 		}
 		values["cost_usd"] = v
 	} else {
-		values["cost_usd"] = statMetricValue{Status: "unavailable", PriceStatus: status}
+		values["cost_usd"] = statMetricValue{IsEstimate: estimated, Status: "unavailable", PriceStatus: status}
 	}
 }
 
@@ -655,6 +673,10 @@ func mergeUsageMetrics(dest, src map[string]statMetricValue) {
 		if s.Value == nil {
 			v := dest[name]
 			v.PriceStatus = priceStatus
+			v.IsEstimate = v.IsEstimate || s.IsEstimate
+			if s.IsEstimate && v.Value != nil && s.Status != "complete" {
+				v.Status = "partial"
+			}
 			dest[name] = v
 			continue
 		}
@@ -667,10 +689,10 @@ func mergeUsageMetrics(dest, src map[string]statMetricValue) {
 		if d.Value != nil && d.Status != "complete" {
 			status = d.Status
 		}
-		if s.Status == "partial" {
+		if s.Status == "partial" || d.IsEstimate && d.Status != "complete" {
 			status = "partial"
 		}
-		dest[name] = statMetricValue{Value: &n, Status: status, PriceStatus: priceStatus}
+		dest[name] = statMetricValue{IsEstimate: d.IsEstimate || s.IsEstimate, Value: &n, Status: status, PriceStatus: priceStatus}
 	}
 }
 

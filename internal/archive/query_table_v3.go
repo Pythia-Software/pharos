@@ -186,6 +186,26 @@ func (s *Server) executeQueryV3Once(ctx context.Context, dataset string, params 
 			return qt.QueryResultV3{}, nil, err
 		}
 	}
+	// Carry estimate provenance through the grouping reduction using the public
+	// expression API. It is host metadata, not an extra visible result column.
+	estimateField := ""
+	switch dataset {
+	case "usage", "library":
+		estimateField = "is_estimate"
+	case "tool_calls", "tools":
+		estimateField = "duration_is_estimate"
+	}
+	if !queryNeedsEstimateProvenance(q) {
+		estimateField = ""
+	}
+	if q.Grouping != nil && estimateField != "" {
+		group := *q.Grouping
+		group.Summaries = append(append([]qt.SummaryColumn{}, group.Summaries...), qt.SummaryColumn{ID: "__pharos_estimate", Op: "formula", Expression: "MAX(IF([" + estimateField + "],1,0))"})
+		q.Grouping = &group
+		if q.Rows {
+			q.Result.Select = append(append([]string{}, q.Result.Select...), "__pharos_estimate")
+		}
+	}
 	if q.Grouping == nil && q.Rows {
 		q.Result.Select = queryRowActionFields(dataset, q.Result.Select)
 	}
@@ -471,6 +491,13 @@ func (s *Server) executeQueryV3Once(ctx context.Context, dataset string, params 
 			}
 		}
 	}
+	if q.Grouping != nil && estimateField != "" {
+		result.Schema.Fields = slices.DeleteFunc(result.Schema.Fields, func(field qt.ProjectedField) bool { return field.Name == "__pharos_estimate" })
+		for _, row := range result.Rows {
+			row[estimateField] = estimateFlag(row["__pharos_estimate"])
+			delete(row, "__pharos_estimate")
+		}
+	}
 	var summary *libraryFindSummary
 	if find != nil {
 		value := find.summary()
@@ -577,4 +604,31 @@ func queryKind(dataset string, params url.Values, q qt.QueryRequestV3) string {
 	}
 	sum := sha256.Sum256(append(body, params.Encode()...))
 	return dataset + ":" + hex.EncodeToString(sum[:8])
+}
+
+// Only consumption/timing measures need the hidden provenance reduction.
+// Computed expressions remain conservative; plain counts and identity groups
+// avoid reading Library's per-workspace estimate subquery entirely.
+func queryNeedsEstimateProvenance(q qt.QueryRequestV3) bool {
+	relevant := func(value string) bool {
+		return strings.Contains(value, "token") || strings.Contains(value, "cost") || strings.Contains(value, "duration") || strings.Contains(value, "@computed/") || strings.Contains(value, "__pharos_estimate")
+	}
+	for _, field := range q.Result.Select {
+		if relevant(field) {
+			return true
+		}
+	}
+	for _, metric := range q.Metrics {
+		if relevant(metric.Field) || relevant(metric.Expression) || relevant(metric.ExpressionY) {
+			return true
+		}
+	}
+	if q.Grouping != nil {
+		for _, summary := range q.Grouping.Summaries {
+			if relevant(summary.Field) || relevant(summary.Expression) {
+				return true
+			}
+		}
+	}
+	return false
 }

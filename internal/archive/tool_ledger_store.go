@@ -14,7 +14,7 @@ import (
 
 // toolRollupVersion names the tool_usage_daily and tool_call_cube layouts
 // and their derivation.
-const toolRollupVersion = "rollup-v7-projects"
+const toolRollupVersion = "rollup-v8-estimates"
 
 // toolQueryFactsVersion names the tool_query_facts layout. It once followed
 // toolRollupVersion; the facts hold no workspace or project columns, so the
@@ -23,13 +23,14 @@ const toolQueryFactsVersion = "rollup-v6-origins"
 
 // toolLedgerState tracks the in-process ledger backfill and rollup rebuilds.
 type toolLedgerState struct {
-	backfill    sync.Mutex
-	mu          sync.Mutex
-	running     bool
-	done, total int
-	lastError   string
-	rollup      sync.Mutex
-	rolledAt    time.Time
+	estimationError string
+	backfill        sync.Mutex
+	mu              sync.Mutex
+	running         bool
+	done, total     int
+	lastError       string
+	rollup          sync.Mutex
+	rolledAt        time.Time
 	// refreshing is set while currentToolRollup rebuilds in the background.
 	refreshing bool
 }
@@ -164,7 +165,7 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 	if len(requests) > 0 {
 		statement, err := tx.Prepare(changedUpsertSQL(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,effort,speed,service_tier,speed_source,
 			input_tokens,uncached_input_tokens,cache_read_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,
-			context_growth_tokens,compacted_before,tool_call_count,source_message_id,final_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "id"))
+			context_growth_tokens,compacted_before,tool_call_count,source_message_id,final_message_id,is_estimate,input_tokens_available,usage_estimate_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,NULL)`, "id"))
 		if err != nil {
 			return err
 		}
@@ -191,12 +192,12 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		statement.Close()
 	}
 	if len(calls) > 0 {
-		callStatement, err := tx.Prepare(changedUpsertSQL(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_id,call_message_id,result_message_id,
+		callStatement, err := tx.Prepare(toolCallUpsertSQL(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_id,call_message_id,result_message_id,
 			sequence,provider,model,effort,kind,tool_name,tool_category,mcp_server,command,program,subcommand,command_category,command_count,
 			has_pipe,has_redirect,has_heredoc,backgrounded,file_path,started_at,ended_at,duration_ms,duration_source,status,error_type,exit_code,
 			interrupted,truncated,input_bytes,result_bytes,result_tokens,result_tokens_source,request_id,next_request_id,parallel_count,
-			output_tokens,carried_requests,carried_tokens,lines_added,lines_removed,url,host,hosts,url_count,search_query,error_signature,test_failure,repo_path,path_repository,path_repository_id,path_scope,path_absolute)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "id"))
+			output_tokens,carried_requests,carried_tokens,lines_added,lines_removed,url,host,hosts,url_count,search_query,error_signature,test_failure,repo_path,path_repository,path_repository_id,path_scope,path_absolute,duration_is_estimate,duration_estimate_json)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL)`, "id"))
 		if err != nil {
 			return err
 		}
@@ -322,7 +323,11 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		} else if kind == "skill" {
 			table = "skill_usages"
 		}
-		rows, err := queryMaps(tx, "SELECT id FROM "+table+" WHERE conversation_id=?", conversationID)
+		filter := ""
+		if kind == "request" {
+			filter = " AND is_estimate=0"
+		}
+		rows, err := queryMaps(tx, "SELECT id FROM "+table+" WHERE conversation_id=?"+filter, conversationID)
 		if err != nil {
 			return err
 		}
@@ -365,6 +370,17 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		return bumpToolLedgerPartitionGeneration(tx)
 	}
 	return nil
+}
+
+// A native replay can refresh classification without gaining a completion
+// clock. Keep a current prediction in that case; real timing replaces all of
+// its provenance. Source changes already invalidate predictions transactionally.
+func toolCallUpsertSQL(statement string, key ...string) string {
+	statement = changedUpsertSQL(statement, key...)
+	for _, field := range []string{"duration_ms", "duration_source", "duration_is_estimate", "duration_estimate_json"} {
+		statement = strings.Replace(statement, field+"=excluded."+field, field+"=CASE WHEN excluded.duration_ms IS NULL AND tool_calls.duration_is_estimate=1 THEN tool_calls."+field+" ELSE excluded."+field+" END", 1)
+	}
+	return statement
 }
 
 // changedUpsertSQL is statement upserting on key, updating a row only when
@@ -625,6 +641,8 @@ func (c *Catalog) refreshToolRollup() {
 // ledger or identity links changed since the last build. While a backfill is
 // writing, rebuilds are spaced out so each query does not redo the whole
 // rollup.
+var refreshUsageCalibration = (*Catalog).refreshUsageEstimationCalibration
+
 func (c *Catalog) ensureToolRollup(ctx context.Context) error {
 	if err := c.ensureOrigins(ctx); err != nil {
 		return err
@@ -632,6 +650,22 @@ func (c *Catalog) ensureToolRollup(ctx context.Context) error {
 	state := &c.tools
 	state.rollup.Lock()
 	defer state.rollup.Unlock()
+	calibrationErr := refreshUsageCalibration(c, ctx)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	state.mu.Lock()
+	state.estimationError = ""
+	if calibrationErr != nil {
+		state.estimationError = calibrationErr.Error()
+	}
+	state.mu.Unlock()
+	if calibrationErr != nil {
+		fmt.Fprintf(os.Stderr, "Chat calibration deferred; retaining compatible rates or published assumptions: %v\n", calibrationErr)
+	}
+	if err := c.backfillUsageEstimation(ctx); err != nil {
+		return err
+	}
 	if err := c.updateStaleToolRollup(ctx); err != nil {
 		return err
 	}
@@ -645,7 +679,10 @@ func (c *Catalog) ensureToolRollup(ctx context.Context) error {
 		return err
 	}
 	// The stored compaction boundaries need a one-time backfill alongside.
-	return c.backfillCompactionBoundaries(ctx)
+	if err := c.backfillCompactionBoundaries(ctx); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *Catalog) updateStaleToolRollup(ctx context.Context) error {
@@ -678,7 +715,7 @@ func (c *Catalog) rebuildToolRollup(ctx context.Context, generation, day string)
 var toolUsageColumns = []string{"id", "day", "week", "month", "repository_name", "project_name", "source_kind", "provider", "model", "effort", "model_family", "session_kind",
 	"tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_name", "command_category", "call_count", "error_count", "error_rate",
 	"no_result_count", "rejected_count", "interrupted_count", "timeout_count", "nonzero_exit_count", "hook_blocked_count", "truncated_count",
-	"timed_count", "total_duration_ms", "avg_duration_ms", "max_duration_ms", "input_bytes", "result_bytes", "result_tokens", "measured_count",
+	"duration_is_estimate", "timed_count", "total_duration_ms", "avg_duration_ms", "max_duration_ms", "input_bytes", "result_bytes", "result_tokens", "measured_count",
 	"avg_result_tokens", "carried_tokens", "output_tokens", "lines_added", "lines_removed", "work_count", "context_cost_usd", "output_cost_usd",
 	"tool_cost_usd", "price_status", "channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind"}
 
@@ -724,7 +761,7 @@ func toolUsageRecord(book priceBook, row map[string]any) map[string]any {
 		"command_category": row["command_category"], "call_count": calls, "error_count": row["error_count"], "error_rate": errorRate,
 		"no_result_count": row["no_result_count"], "rejected_count": row["rejected_count"], "interrupted_count": row["interrupted_count"],
 		"timeout_count": row["timeout_count"], "nonzero_exit_count": row["nonzero_exit_count"], "hook_blocked_count": row["hook_blocked_count"],
-		"truncated_count": row["truncated_count"], "timed_count": row["timed_count"], "total_duration_ms": row["total_duration_ms"],
+		"truncated_count": row["truncated_count"], "duration_is_estimate": row["duration_is_estimate"], "timed_count": row["timed_count"], "total_duration_ms": row["total_duration_ms"],
 		"avg_duration_ms": avgDuration, "max_duration_ms": row["max_duration_ms"], "input_bytes": row["input_bytes"], "result_bytes": row["result_bytes"],
 		"result_tokens": row["result_tokens"], "measured_count": row["measured_count"], "avg_result_tokens": avgResult, "carried_tokens": row["carried_tokens"],
 		"output_tokens": outputTokens, "lines_added": row["lines_added"], "lines_removed": row["lines_removed"], "work_count": row["work_count"],

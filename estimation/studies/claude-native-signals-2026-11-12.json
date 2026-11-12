@@ -1,0 +1,1196 @@
+{
+  "version": 1,
+  "date": "2026-11-12",
+  "estimator_version": "claude-output-v3",
+  "manifest_revision": "2026-11-12.3",
+  "protocol": {
+    "version": 1,
+    "date": "2026-11-12",
+    "purpose": "Evaluate chat-native streaming, argument/execution decomposition, visible-thinking evidence and unexplained gaps against v2 before promoting any candidate.",
+    "safeguards": [
+      "Production catalog and export are read-only; only scalar private extracts leave them.",
+      "Chat thinking durations and tool spans are targets; chat token truth remains unavailable.",
+      "Mask thinking blocks and their clocks from gap predictors; do not infer request count from gaps.",
+      "Do not equate visible text throughput with thinking throughput or infer a model identity from speed.",
+      "Do not call approximate character conversions mathematical token floors.",
+      "Compare frozen v2 and fair train-only refits on conversation-disjoint hash and forward-time splits. Existing chat data are exploratory, not pristine.",
+      "Select regularization, shrinkage, and feature variants on calibration partitions only, then report test partitions once.",
+      "Fresh coding-family verification excludes all prior studies and the previously used independent reserve, joining root/helper and same-account duplicate API components.",
+      "Freeze visible-thinking conversion and floor choices before inspecting fresh coding token targets.",
+      "Keep measured argument time, estimated execution time, and total call-to-result time distinct. Retain missing/unobservable states, sensitivity and reported usage isolation."
+    ],
+    "candidates": {
+      "tool_duration": [
+        "v2 operation total-span prior",
+        "observed argument seconds plus execution prior",
+        "argument characters divided by global, same-response or earlier-conversation stream rate plus execution prior"
+      ],
+      "visible_thinking": [
+        "v2 native timer times coding rate",
+        "visible characters times coding-trained conversion",
+        "max of v2 and text-derived contribution; explicit thinking_hidden=false only"
+      ],
+      "thinking_rate": [
+        "text throughput reused directly (diagnostic)",
+        "thinking/text throughput ratio fitted on training chat conversations, checked on held-out thinking duration"
+      ],
+      "gaps": [
+        "v2 window and observed-window structures",
+        "uncovered time after union of text generation and native call-to-result spans",
+        "count/excess of uncovered gaps with training-only overhead; no hidden-clock predictor"
+      ]
+    }
+  },
+  "native_chat_checks": {
+    "scope": "Exploratory conversation-disjoint and forward-time native-chat checks; no chat token truth. Thinking clocks are targets only in masked gap/rate tests. Same-response text clocks are observable predictors. Previously examined chat data are not pristine.",
+    "survey": {
+      "responses": 449,
+      "text_rate": {
+        "n": 203,
+        "p10": 151.71946279271157,
+        "p50": 204.33332772702784,
+        "p90": 310.913429182407
+      },
+      "text_chars_duration_pearson": 0.9926476109491741,
+      "responses_with_own_text_rate": 149,
+      "argument_share_of_tool_span": 0.7957728436789737,
+      "execution_seconds": {
+        "n": 218,
+        "p10": 0.1190343618392945,
+        "p50": 0.7519019842147827,
+        "p90": 1.7602906942367555
+      },
+      "argument_chars_per_second": {
+        "n": 162,
+        "p10": 143.93239728502095,
+        "p50": 213.44201040717326,
+        "p90": 400.30876832337015
+      },
+      "visible_thinking_blocks": 159,
+      "thinking_text_rate_ratio": {
+        "n": 151,
+        "p10": 0.2653525768387975,
+        "p50": 0.6089972516708426,
+        "p90": 1.3044253875308223
+      }
+    },
+    "tools": {
+      "hash": {
+        "fit": {
+          "argument_chars_per_second": 283.2743615481389,
+          "text_chars_per_second": 204.70098292986344,
+          "argument_text_rate_ratio": 1.1310911454652564,
+          "execution_global": 0.7772797099781685,
+          "execution_operations": {
+            "bash_tool": 0.7772797099781685,
+            "product_carousel_display_v0": 0.7772797099781685,
+            "present_files": 0.7772797099781685,
+            "memory_read": 0.4406170602655735,
+            "user_time_v0": 0.7772797099781685,
+            "link_preview_display_v0": 0.7772797099781685,
+            "memory_write": 0.49433023797321396,
+            "weather_fetch": 0.7772797099781685,
+            "web_fetch": 0.5832986126356925,
+            "view": 0.7772797099781685,
+            "create_file": 0.7772797099781685,
+            "str_replace": 0.7772797099781685,
+            "web_search": 0.9485237440946077
+          },
+          "total_operations": {
+            "bash_tool": 6.425813997708834,
+            "product_carousel_display_v0": 7.449387073516846,
+            "present_files": 0.4847948948542277,
+            "memory_read": 0.3922388553619385,
+            "user_time_v0": 0.3107948303222656,
+            "link_preview_display_v0": 6.024902105331421,
+            "memory_write": 2.141002357006073,
+            "weather_fetch": 0.7071355978647867,
+            "web_fetch": 0.7063772962206886,
+            "view": 1.604546070098877,
+            "create_file": 193.2821249961853,
+            "str_replace": 5.898491357054029,
+            "web_search": 1.1513396823744817
+          },
+          "train_calls": 176,
+          "train_families": 35
+        },
+        "calibration": {
+          "v2_frozen": {
+            "n": 15,
+            "families": 8,
+            "wape": 1.0603514176878552,
+            "bias": -0.25167404739129684,
+            "mae_seconds": 3.593762410914103
+          },
+          "total_mean_train": {
+            "n": 15,
+            "families": 8,
+            "wape": 2.0417060352397063,
+            "bias": 1.6428783901702586,
+            "mae_seconds": 6.919787422532494
+          },
+          "argument_clock": {
+            "n": 15,
+            "families": 8,
+            "wape": 0.3013349564638216,
+            "bias": -0.07078927253078497,
+            "mae_seconds": 1.0212899436636675
+          },
+          "global_stream": {
+            "n": 15,
+            "families": 8,
+            "wape": 0.34289969708297424,
+            "bias": -0.09738037629648044,
+            "mae_seconds": 1.1621619224857658
+          },
+          "response_stream": {
+            "n": 15,
+            "families": 8,
+            "wape": 0.34258141223607225,
+            "bias": -0.09854382437856782,
+            "mae_seconds": 1.1610831856635393
+          },
+          "past_stream": {
+            "n": 15,
+            "families": 8,
+            "wape": 0.34289969708297424,
+            "bias": -0.09738037629648044,
+            "mae_seconds": 1.1621619224857658
+          },
+          "execution_prior": {
+            "n": 15,
+            "families": 8,
+            "wape": 0.9608838982042288,
+            "bias": -0.22572977572414074,
+            "mae_seconds": 1.0212899436636678
+          }
+        },
+        "test": {
+          "v2_frozen": {
+            "n": 27,
+            "families": 11,
+            "wape": 0.5630443767483498,
+            "bias": 0.1912643156895133,
+            "mae_seconds": 0.6671637919108072
+          },
+          "total_mean_train": {
+            "n": 27,
+            "families": 11,
+            "wape": 0.4274523320365638,
+            "bias": -0.16328659798735898,
+            "mae_seconds": 0.5064977655039994
+          },
+          "argument_clock": {
+            "n": 27,
+            "families": 11,
+            "wape": 0.34260903822880256,
+            "bias": -0.10997931253965881,
+            "mae_seconds": 0.4059650615954979,
+            "paired_family_bootstrap_95_delta_wape": [
+              -0.48504031190095287,
+              -0.05269192473332691
+            ]
+          },
+          "global_stream": {
+            "n": 27,
+            "families": 11,
+            "wape": 0.39667882178732233,
+            "bias": -0.10446261238881094,
+            "mae_seconds": 0.47003354947389037,
+            "paired_family_bootstrap_95_delta_wape": [
+              -0.4298287142850443,
+              0.01646095793249394
+            ]
+          },
+          "response_stream": {
+            "n": 27,
+            "families": 11,
+            "wape": 0.42024300182771834,
+            "bias": -0.08968021781896679,
+            "mae_seconds": 0.49795526996031314
+          },
+          "past_stream": {
+            "n": 27,
+            "families": 11,
+            "wape": 0.4019542485164582,
+            "bias": -0.09738172189226398,
+            "mae_seconds": 0.4762845198163771
+          },
+          "execution_prior": {
+            "n": 27,
+            "families": 11,
+            "wape": 0.42017390052732007,
+            "bias": -0.1348780433989637,
+            "mae_seconds": 0.4059650615954979
+          }
+        }
+      },
+      "time": {
+        "fit": {
+          "argument_chars_per_second": 283.9139095868759,
+          "text_chars_per_second": 200.57725315691812,
+          "argument_text_rate_ratio": 1.28053134872067,
+          "execution_global": 0.7884977076339171,
+          "execution_operations": {
+            "bash_tool": 0.7884977076339171,
+            "present_files": 0.7884977076339171,
+            "memory_read": 0.7884977076339171,
+            "link_preview_display_v0": 0.7884977076339171,
+            "memory_write": 0.5005624588930743,
+            "weather_fetch": 0.7884977076339171,
+            "create_file": 0.7884977076339171,
+            "web_fetch": 1.0367474409103088,
+            "image_search": 0.7884977076339171,
+            "view": 0.7884977076339171,
+            "str_replace": 0.7884977076339171,
+            "web_search": 0.926705313615613
+          },
+          "total_operations": {
+            "bash_tool": 5.858288361476018,
+            "present_files": 0.4847948948542277,
+            "memory_read": 0.29831308126449585,
+            "link_preview_display_v0": 6.024902105331421,
+            "memory_write": 2.141002357006073,
+            "weather_fetch": 0.658552328745524,
+            "create_file": 193.2821249961853,
+            "web_fetch": 1.5834041684865952,
+            "image_search": 0.5376660823822021,
+            "view": 0.8714840412139893,
+            "str_replace": 5.898491357054029,
+            "web_search": 1.057006702139661
+          },
+          "train_calls": 128,
+          "train_families": 33
+        },
+        "calibration": {
+          "v2_frozen": {
+            "n": 47,
+            "families": 11,
+            "wape": 0.5106165466479317,
+            "bias": 0.04069625553581988,
+            "mae_seconds": 0.9560138605077216
+          },
+          "total_mean_train": {
+            "n": 47,
+            "families": 11,
+            "wape": 0.6663150744681906,
+            "bias": 0.28909780916091843,
+            "mae_seconds": 1.2475240977571351
+          },
+          "argument_clock": {
+            "n": 47,
+            "families": 11,
+            "wape": 0.349673409930389,
+            "bias": -0.05483303274476006,
+            "mae_seconds": 0.6546842806779308
+          },
+          "global_stream": {
+            "n": 47,
+            "families": 11,
+            "wape": 0.4301622326801238,
+            "bias": -0.13980624551063364,
+            "mae_seconds": 0.8053813755328523
+          },
+          "response_stream": {
+            "n": 47,
+            "families": 11,
+            "wape": 0.40676218706265216,
+            "bias": -0.11118261518449672,
+            "mae_seconds": 0.7615700887782918
+          },
+          "past_stream": {
+            "n": 47,
+            "families": 11,
+            "wape": 0.40886147767021314,
+            "bias": -0.12898464550405275,
+            "mae_seconds": 0.7655005350813683
+          },
+          "execution_prior": {
+            "n": 47,
+            "families": 11,
+            "wape": 0.6357393768340196,
+            "bias": -0.09969164676837403,
+            "mae_seconds": 0.6546842806779308
+          }
+        },
+        "test": {
+          "v2_frozen": {
+            "n": 43,
+            "families": 10,
+            "wape": 0.646404338992859,
+            "bias": -0.1702090587688194,
+            "mae_seconds": 1.3183883736011595
+          },
+          "total_mean_train": {
+            "n": 43,
+            "families": 10,
+            "wape": 0.8211308618542372,
+            "bias": 0.34282980596592894,
+            "mae_seconds": 1.6747557467829521
+          },
+          "argument_clock": {
+            "n": 43,
+            "families": 10,
+            "wape": 0.1425720190197548,
+            "bias": 0.049918993005412346,
+            "mae_seconds": 0.2907859383638274,
+            "paired_family_bootstrap_95_delta_wape": [
+              -0.8470103664844398,
+              -0.15335475819617558
+            ]
+          },
+          "global_stream": {
+            "n": 43,
+            "families": 10,
+            "wape": 0.2138882126216249,
+            "bias": -0.02124980603092942,
+            "mae_seconds": 0.43624047018316536,
+            "paired_family_bootstrap_95_delta_wape": [
+              -0.784161281981704,
+              -0.07509278977169555
+            ]
+          },
+          "response_stream": {
+            "n": 43,
+            "families": 10,
+            "wape": 0.20546201995841107,
+            "bias": -0.020921880167796027,
+            "mae_seconds": 0.4190546411737051
+          },
+          "past_stream": {
+            "n": 43,
+            "families": 10,
+            "wape": 0.20969328154498476,
+            "bias": -0.01734760017245524,
+            "mae_seconds": 0.4276846050289843
+          },
+          "execution_prior": {
+            "n": 43,
+            "families": 10,
+            "wape": 0.36475274611150177,
+            "bias": 0.12771152367086896,
+            "mae_seconds": 0.29078593836382743
+          }
+        }
+      }
+    },
+    "thinking_stream": {
+      "hash": {
+        "seconds_per_thinking_character": 0.00914477927148696,
+        "text_rate": 200.45967272995745,
+        "inverse_thinking_text_ratio": {
+          "response_stream": 1.7503283089857151,
+          "past_stream": 1.8473604435004845
+        },
+        "test": {
+          "v2_missing_clock": {
+            "n": 36,
+            "families": 11,
+            "wape": 1.6619981998282933,
+            "bias": 1.1831464180074667,
+            "mae_seconds": 7.485976278781891
+          },
+          "chars_global": {
+            "n": 36,
+            "families": 11,
+            "wape": 0.4318622897311336,
+            "bias": 0.21438772685019156,
+            "mae_seconds": 1.9451951614398268
+          },
+          "text_rate_direct": {
+            "n": 36,
+            "families": 11,
+            "wape": 0.4863351785691021,
+            "bias": -0.4446019568142625,
+            "mae_seconds": 2.190552078023662
+          },
+          "response_stream": {
+            "n": 36,
+            "families": 11,
+            "wape": 0.3170272812390071,
+            "bias": -0.02787108225673287,
+            "mae_seconds": 1.4279550407016757
+          },
+          "past_stream": {
+            "n": 36,
+            "families": 11,
+            "wape": 0.41420003326821253,
+            "bias": 0.1879225368399793,
+            "mae_seconds": 1.86564078350798
+          }
+        }
+      },
+      "time": {
+        "seconds_per_thinking_character": 0.008911124926938713,
+        "text_rate": 227.18871892327354,
+        "inverse_thinking_text_ratio": {
+          "response_stream": 1.800200824014888,
+          "past_stream": 1.988962748000469
+        },
+        "test": {
+          "v2_missing_clock": {
+            "n": 26,
+            "families": 10,
+            "wape": 1.0811215763379078,
+            "bias": 0.5953063201662777,
+            "mae_seconds": 8.366852897864122
+          },
+          "chars_global": {
+            "n": 26,
+            "families": 10,
+            "wape": 0.4695863686720561,
+            "bias": 0.21730366050421066,
+            "mae_seconds": 3.634151935834896
+          },
+          "text_rate_direct": {
+            "n": 26,
+            "families": 10,
+            "wape": 0.429688306963469,
+            "bias": -0.41810149717768214,
+            "mae_seconds": 3.325378879657062
+          },
+          "response_stream": {
+            "n": 26,
+            "families": 10,
+            "wape": 0.30223942001475107,
+            "bias": 0.04753416427376605,
+            "mae_seconds": 2.3390456934223742
+          },
+          "past_stream": {
+            "n": 26,
+            "families": 10,
+            "wape": 0.4335330912114358,
+            "bias": 0.16859448603210023,
+            "mae_seconds": 3.3551338535016577
+          }
+        }
+      }
+    },
+    "gaps": {
+      "rows": 70,
+      "families": 50,
+      "candidates": {
+        "v2_start_refit": {
+          "features": [
+            "visible_kchars",
+            "tool_web",
+            "tool_other",
+            "elapsed_minutes",
+            "first_call_minutes"
+          ],
+          "alpha": 10,
+          "calibration": {
+            "hash": {
+              "n": 8,
+              "families": 8,
+              "wape": 0.6330225166034382,
+              "bias": 0.5173757289608671,
+              "mae_seconds": 4.954841795326577
+            },
+            "time": {
+              "n": 17,
+              "families": 10,
+              "wape": 0.5490401308290381,
+              "bias": 0.4146947538342949,
+              "mae_seconds": 14.077144349696527
+            }
+          },
+          "test": {
+            "hash": {
+              "fit": [
+                0.0,
+                3.50847095949795,
+                1.8442901447794338,
+                2.534052189175007,
+                9.475654560693204,
+                39.49759839777698
+              ],
+              "n": 14,
+              "families": 10,
+              "wape": 0.38866637293462636,
+              "bias": 0.11820765249991914,
+              "mae_seconds": 6.68559666912274
+            },
+            "time": {
+              "fit": [
+                0.0,
+                2.738626487308879,
+                0.3181468763361553,
+                2.038471183173699,
+                15.247300081295574,
+                41.7467625855696
+              ],
+              "n": 16,
+              "families": 10,
+              "wape": 0.2255563933534729,
+              "bias": 0.0008233509283589366,
+              "mae_seconds": 7.471735712479875
+            }
+          }
+        },
+        "v2_observed_refit": {
+          "features": [
+            "argument_kbytes",
+            "tool_read",
+            "tool_other",
+            "residual_minutes"
+          ],
+          "alpha": 0.1,
+          "calibration": {
+            "hash": {
+              "n": 8,
+              "families": 8,
+              "wape": 0.3437940713002897,
+              "bias": 0.08991900934026434,
+              "mae_seconds": 2.6909709983212133
+            },
+            "time": {
+              "n": 17,
+              "families": 10,
+              "wape": 0.21394766216929073,
+              "bias": 0.12239955552182055,
+              "mae_seconds": 5.4855227414606365
+            }
+          },
+          "test": {
+            "hash": {
+              "fit": [
+                0.0,
+                0.10758395074120206,
+                1.54342236979642,
+                0.0,
+                41.94802465594702
+              ],
+              "n": 14,
+              "families": 10,
+              "wape": 0.2461299152564779,
+              "bias": 0.11932492335891186,
+              "mae_seconds": 4.233773375313198
+            },
+            "time": {
+              "fit": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                44.44930661241868
+              ],
+              "n": 16,
+              "families": 10,
+              "wape": 0.17087358265304745,
+              "bias": 0.13090836287230512,
+              "mae_seconds": 5.660323925411351
+            }
+          }
+        },
+        "gap_only": {
+          "features": [
+            "uncovered_minutes"
+          ],
+          "alpha": 1,
+          "calibration": {
+            "hash": {
+              "n": 8,
+              "families": 8,
+              "wape": 0.09700158259432225,
+              "bias": -0.021585848473405327,
+              "mae_seconds": 0.7592581354452257
+            },
+            "time": {
+              "n": 17,
+              "families": 10,
+              "wape": 0.18921698684677282,
+              "bias": 0.15263227456028164,
+              "mae_seconds": 4.851439244039632
+            }
+          },
+          "test": {
+            "hash": {
+              "fit": [
+                0.0,
+                51.86743539672156
+              ],
+              "n": 14,
+              "families": 10,
+              "wape": 0.12626412775292345,
+              "bias": -0.001767698694372676,
+              "mae_seconds": 2.1719168179147297
+            },
+            "time": {
+              "fit": [
+                0.0,
+                54.54750627562518
+              ],
+              "n": 16,
+              "families": 10,
+              "wape": 0.0562096861294059,
+              "bias": 0.016100569252654538,
+              "mae_seconds": 1.8619907553770974
+            }
+          }
+        },
+        "gap_excess": {
+          "features": [
+            "gap_excess_minutes"
+          ],
+          "alpha": 1,
+          "calibration": {
+            "hash": {
+              "n": 8,
+              "families": 8,
+              "wape": 0.08618864163337965,
+              "bias": -0.020816529492009524,
+              "mae_seconds": 0.6746222648427895
+            },
+            "time": {
+              "n": 17,
+              "families": 10,
+              "wape": 0.0905139860852989,
+              "bias": 0.04826063350501476,
+              "mae_seconds": 2.3207382780293213
+            }
+          },
+          "test": {
+            "hash": {
+              "fit": [
+                1.6402175678911002,
+                54.93950749396696
+              ],
+              "n": 14,
+              "families": 10,
+              "wape": 0.085702914494986,
+              "bias": 0.006334036802056579,
+              "mae_seconds": 1.474208111588197
+            },
+            "time": {
+              "fit": [
+                1.4276295548347202,
+                56.58261820717114
+              ],
+              "n": 16,
+              "families": 10,
+              "wape": 0.030992104948113695,
+              "bias": 0.006363654630488737,
+              "mae_seconds": 1.0266382340262754
+            }
+          }
+        },
+        "gap_structure": {
+          "features": [
+            "uncovered_minutes",
+            "gap_count"
+          ],
+          "alpha": 1,
+          "calibration": {
+            "hash": {
+              "n": 8,
+              "families": 8,
+              "wape": 0.09700158259432225,
+              "bias": -0.021585848473405327,
+              "mae_seconds": 0.7592581354452257
+            },
+            "time": {
+              "n": 17,
+              "families": 10,
+              "wape": 0.18921698684677282,
+              "bias": 0.15263227456028164,
+              "mae_seconds": 4.851439244039632
+            }
+          },
+          "test": {
+            "hash": {
+              "fit": [
+                0.0,
+                51.86743539672156,
+                0.0
+              ],
+              "n": 14,
+              "families": 10,
+              "wape": 0.12626412775292345,
+              "bias": -0.001767698694372676,
+              "mae_seconds": 2.1719168179147297
+            },
+            "time": {
+              "fit": [
+                0.0,
+                54.54750627562518,
+                0.0
+              ],
+              "n": 16,
+              "families": 10,
+              "wape": 0.0562096861294059,
+              "bias": 0.016100569252654538,
+              "mae_seconds": 1.8619907553770974
+            }
+          }
+        },
+        "gap_body": {
+          "features": [
+            "uncovered_minutes",
+            "visible_kchars",
+            "argument_kbytes",
+            "tools",
+            "tool_read",
+            "tool_web",
+            "tool_other"
+          ],
+          "alpha": 0.1,
+          "calibration": {
+            "hash": {
+              "n": 8,
+              "families": 8,
+              "wape": 0.12553289236171034,
+              "bias": 0.06568355389231677,
+              "mae_seconds": 0.9825805645894405
+            },
+            "time": {
+              "n": 17,
+              "families": 10,
+              "wape": 0.20524323064692604,
+              "bias": 0.18059370440136652,
+              "mae_seconds": 5.262344995168477
+            }
+          },
+          "test": {
+            "hash": {
+              "fit": [
+                0.0,
+                51.08328288845848,
+                0.5579537239586634,
+                0.0,
+                0.0,
+                0.9407131267307797,
+                0.0,
+                0.18947990806813161
+              ],
+              "n": 14,
+              "families": 10,
+              "wape": 0.14835705476144018,
+              "bias": 0.03959230514173547,
+              "mae_seconds": 2.5519455765234786
+            },
+            "time": {
+              "fit": [
+                0.0,
+                55.87076114484519,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "n": 16,
+              "families": 10,
+              "wape": 0.06269177239552773,
+              "bias": 0.0407499092075705,
+              "mae_seconds": 2.0767150410685185
+            }
+          }
+        }
+      },
+      "v2_frozen_previously_trained": {
+        "hash": {
+          "window": {
+            "n": 14,
+            "families": 10,
+            "wape": 0.3098016610097852,
+            "bias": -0.16247166479119945,
+            "mae_seconds": 5.329015055501314
+          },
+          "observed_window": {
+            "n": 14,
+            "families": 10,
+            "wape": 0.2584760064117634,
+            "bias": 0.15165947074107936,
+            "mae_seconds": 4.446143139337897
+          }
+        },
+        "time": {
+          "window": {
+            "n": 16,
+            "families": 10,
+            "wape": 0.32648756132509216,
+            "bias": -0.2779193390723062,
+            "mae_seconds": 10.81516127902563
+          },
+          "observed_window": {
+            "n": 16,
+            "families": 10,
+            "wape": 0.14938729781642401,
+            "bias": 0.10222355850977148,
+            "mae_seconds": 4.948573576172835
+          }
+        }
+      }
+    }
+  },
+  "visible_thinking_exploratory": {
+    "hash": {
+      "coefficient": 0.806306555028008,
+      "train_n": 3217,
+      "train_families": 41,
+      "calibration": {
+        "v2_published_native_rate": {
+          "n": 495,
+          "families": 9,
+          "wape": 0.9072270235832508,
+          "bias": -0.4748757157295412,
+          "floor_exceeds_reported_fraction": 0.6606060606060606
+        },
+        "floor_0.15": {
+          "n": 495,
+          "families": 9,
+          "wape": 0.8523704917110034,
+          "bias": -0.42001918385729375,
+          "floor_exceeds_reported_fraction": 0.6606060606060606
+        },
+        "floor_0.28": {
+          "n": 495,
+          "families": 9,
+          "wape": 0.7587536335077013,
+          "bias": -0.3264023256539916,
+          "floor_exceeds_reported_fraction": 0.6606060606060606
+        },
+        "floor_0.37963703993633924": {
+          "n": 495,
+          "families": 9,
+          "wape": 0.6750691794757078,
+          "bias": -0.24271787162199795,
+          "floor_exceeds_reported_fraction": 0.6606060606060606
+        },
+        "floor_0.806306555028008": {
+          "n": 495,
+          "families": 9,
+          "wape": 0.3627146510275523,
+          "bias": 0.16936317154189504,
+          "floor_exceeds_reported_fraction": 0.806060606060606
+        },
+        "text_only": {
+          "n": 495,
+          "families": 9,
+          "wape": 0.2022968435191069,
+          "bias": -0.015348606057164815,
+          "floor_exceeds_reported_fraction": 0.6989898989898989
+        }
+      },
+      "test": {
+        "v2_published_native_rate": {
+          "n": 797,
+          "families": 14,
+          "wape": 0.9767524638641387,
+          "bias": -0.18419360494509165,
+          "floor_exceeds_reported_fraction": 0.7917189460476788
+        },
+        "floor_0.15": {
+          "n": 797,
+          "families": 14,
+          "wape": 0.94291763351856,
+          "bias": -0.15035877459951258,
+          "floor_exceeds_reported_fraction": 0.7917189460476788
+        },
+        "floor_0.28": {
+          "n": 797,
+          "families": 14,
+          "wape": 0.8707627531836832,
+          "bias": -0.07820389426463617,
+          "floor_exceeds_reported_fraction": 0.7917189460476788
+        },
+        "floor_0.37963703993633924": {
+          "n": 797,
+          "families": 14,
+          "wape": 0.8081876026373008,
+          "bias": -0.01562874371825431,
+          "floor_exceeds_reported_fraction": 0.7917189460476788
+        },
+        "floor_0.806306555028008": {
+          "n": 797,
+          "families": 14,
+          "wape": 0.5688074339439726,
+          "bias": 0.32657909766034054,
+          "floor_exceeds_reported_fraction": 0.8795483061480552
+        },
+        "text_only": {
+          "n": 797,
+          "families": 14,
+          "wape": 0.3071927754060065,
+          "bias": 0.0030963375464707673,
+          "floor_exceeds_reported_fraction": 0.8130489335006273
+        }
+      }
+    },
+    "time": {
+      "coefficient": 0.8275404417624969,
+      "train_n": 1931,
+      "train_families": 39,
+      "calibration": {
+        "v2_published_native_rate": {
+          "n": 1420,
+          "families": 13,
+          "wape": 0.8704828660283864,
+          "bias": -0.3500437604154314,
+          "floor_exceeds_reported_fraction": 0.7077464788732394
+        },
+        "floor_0.15": {
+          "n": 1420,
+          "families": 13,
+          "wape": 0.796251384376221,
+          "bias": -0.27581227876326564,
+          "floor_exceeds_reported_fraction": 0.7077464788732394
+        },
+        "floor_0.28": {
+          "n": 1420,
+          "families": 13,
+          "wape": 0.6944004427390473,
+          "bias": -0.17396133712609183,
+          "floor_exceeds_reported_fraction": 0.7077464788732394
+        },
+        "floor_0.37963703993633924": {
+          "n": 1420,
+          "families": 13,
+          "wape": 0.6073846529491913,
+          "bias": -0.08630878002530591,
+          "floor_exceeds_reported_fraction": 0.7091549295774648
+        },
+        "floor_0.8275404417624969": {
+          "n": 1420,
+          "families": 13,
+          "wape": 0.48083771159940275,
+          "bias": 0.406300776261813,
+          "floor_exceeds_reported_fraction": 0.9
+        },
+        "text_only": {
+          "n": 1420,
+          "families": 13,
+          "wape": 0.3091809869233408,
+          "bias": 0.21885811441623926,
+          "floor_exceeds_reported_fraction": 0.85
+        }
+      },
+      "test": {
+        "v2_published_native_rate": {
+          "n": 1158,
+          "families": 12,
+          "wape": 0.3505482007984491,
+          "bias": 0.11485091896885283,
+          "floor_exceeds_reported_fraction": 0.853195164075993
+        },
+        "floor_0.15": {
+          "n": 1158,
+          "families": 12,
+          "wape": 0.3505482007984491,
+          "bias": 0.11485091896885283,
+          "floor_exceeds_reported_fraction": 0.853195164075993
+        },
+        "floor_0.28": {
+          "n": 1158,
+          "families": 12,
+          "wape": 0.3505482007984491,
+          "bias": 0.11485091896885283,
+          "floor_exceeds_reported_fraction": 0.853195164075993
+        },
+        "floor_0.37963703993633924": {
+          "n": 1158,
+          "families": 12,
+          "wape": 0.3505482007984491,
+          "bias": 0.11485091896885283,
+          "floor_exceeds_reported_fraction": 0.853195164075993
+        },
+        "floor_0.8275404417624969": {
+          "n": 1158,
+          "families": 12,
+          "wape": 0.4919676539796515,
+          "bias": 0.4069426092929641,
+          "floor_exceeds_reported_fraction": 0.9464594127806563
+        },
+        "text_only": {
+          "n": 1158,
+          "families": 12,
+          "wape": 0.5061343986906929,
+          "bias": 0.2845791560890708,
+          "floor_exceeds_reported_fraction": 0.9222797927461139
+        }
+      }
+    },
+    "frozen": {
+      "text_tokens_per_visible_thinking_character": 0.8124320480615124,
+      "lower": 0.1,
+      "upper": 1.5,
+      "donor_requests": 3712,
+      "donor_families": 50,
+      "gate": "Native chat thinking_hidden explicitly false with actual text. Estimated contribution floor only; not a mathematical tokenizer lower bound."
+    }
+  },
+  "visible_thinking_fresh_confirmation": {
+    "frozen_sha256": "5b043ca81ee367104744d0fed51ca1dc879edddd7c66c189b33f13b247886219",
+    "available_independent_families": 607,
+    "reserved_families": 200,
+    "reserved_conversations": 311,
+    "requests_examined": 11246,
+    "eligible_text_requests": 4476,
+    "eligible_text_families": 99,
+    "scope": "Fresh coding text-thinking evidence verifies only the conservative character floor against reported thinking counters. No chat token ground truth. Native coding text is a transfer proxy for explicit chat thinking_hidden=false. Published rates only; no local refinements or fit on these targets.",
+    "baseline": {
+      "n": 4476,
+      "families": 99,
+      "wape": 0.9448907959559623,
+      "bias": -0.256840473893728,
+      "floor_exceeds_reported_fraction": 0.6974977658623771
+    },
+    "candidate": {
+      "n": 4476,
+      "families": 99,
+      "wape": 0.7582253712488839,
+      "bias": -0.07017504918665195,
+      "floor_exceeds_reported_fraction": 0.6974977658623771
+    },
+    "adjusted_requests": 677,
+    "native_timer_requests": 0,
+    "native_timer": {
+      "n": 0
+    },
+    "no_timer": {
+      "baseline": {
+        "n": 4476,
+        "families": 99,
+        "wape": 0.9448907959559623,
+        "bias": -0.256840473893728,
+        "floor_exceeds_reported_fraction": 0.6974977658623771
+      },
+      "candidate": {
+        "n": 4476,
+        "families": 99,
+        "wape": 0.7582253712488839,
+        "bias": -0.07017504918665195,
+        "floor_exceeds_reported_fraction": 0.6974977658623771
+      }
+    },
+    "paired_family_bootstrap_95_delta_wape": [
+      -0.2209761321341622,
+      -0.1571166131471987
+    ],
+    "new_overpredictions_from_adjustment": 0
+  },
+  "frozen_candidates": {
+    "version": 1,
+    "argument_timing": {
+      "argument_chars_per_second": 281.7711478174062,
+      "text_chars_per_second": 209.783234814505,
+      "argument_text_rate_ratio": 1.1567311723614506,
+      "execution_global": 0.8424314198594288,
+      "execution_operations": {
+        "visualize:show_widget": 0.8424314198594288,
+        "present_files": 0.8424314198594288,
+        "product_carousel_display_v0": 0.8424314198594288,
+        "create_file": 0.8424314198594288,
+        "web_fetch": 0.6104451584195509,
+        "link_preview_display_v0": 0.8424314198594288,
+        "view": 0.8424314198594288,
+        "str_replace": 0.8424314198594288,
+        "user_time_v0": 0.8424314198594288,
+        "user_location_v0": 0.8424314198594288,
+        "bash_tool": 0.8424314198594288,
+        "visualize:read_me": 0.8424314198594288,
+        "image_search": 0.8424314198594288,
+        "weather_fetch": 0.619968303923855,
+        "memory_write": 0.5305256323516919,
+        "web_search": 0.9478088966557762,
+        "memory_read": 0.47319291520620366
+      },
+      "total_operations": {
+        "visualize:show_widget": 27.334809064865112,
+        "present_files": 0.4847948948542277,
+        "product_carousel_display_v0": 7.449387073516846,
+        "create_file": 193.2821249961853,
+        "web_fetch": 0.7063772962206886,
+        "link_preview_display_v0": 5.470618486404419,
+        "view": 1.604546070098877,
+        "str_replace": 5.898491357054029,
+        "user_time_v0": 0.2839468717575073,
+        "user_location_v0": 9.976776123046875,
+        "bash_tool": 6.425813997708834,
+        "visualize:read_me": 0.6206400394439697,
+        "image_search": 0.6699015299479167,
+        "weather_fetch": 0.6517477989196777,
+        "memory_write": 2.141002357006073,
+        "web_search": 1.1205605626016624,
+        "memory_read": 0.3922388553619385
+      },
+      "train_calls": 191,
+      "train_families": 43
+    },
+    "gap_model": {
+      "id": "chat-duration-observed-gaps-v3",
+      "evidence": "observed_gaps",
+      "unit": "seconds",
+      "model": "*",
+      "effort": "*",
+      "speed": "*",
+      "intercept": 1.5731200582531022,
+      "coefficients": {
+        "gap_excess_minutes": 55.217487895781574
+      },
+      "donor_responses": 56,
+      "donor_families": 40,
+      "minimum_tools": 1,
+      "maximum_tools": 250,
+      "maximum_visible_characters": 1000000,
+      "minimum_window_seconds": 0.1,
+      "maximum_window_seconds": 1800,
+      "lower_multiplier": 0,
+      "upper_multiplier": 4,
+      "requires_reported_settings": false,
+      "basis": "chat-duration-study",
+      "notes": "Native chat masked-thinking-duration fit. Requires all native text and call-to-result spans, subtracts one second per uncovered gap, and uses interval unions. Gaps are predictors, not measured thinking or model-request counts."
+    },
+    "gap_overhead_seconds": 1.0,
+    "visible_thinking_tokens_per_character": {
+      "expected": 0.37963703993633924,
+      "lower": 0.15,
+      "upper": 1.0
+    },
+    "visible_gate": "Only explicit thinking_hidden=false with actual thinking text. Conservative estimated contribution floor; not a tokenizer lower bound. Reject fitted 0.81 tokens/character because forward-time tests worsened.",
+    "selection_notes": "Global arithmetic argument streaming plus operation execution priors; own/past-response rates did not show stable incremental benefit. Visible text throughput never replaces thinking throughput or supplies model identity. Existing v2 models and fallback priors remain.",
+    "sha256": "5b043ca81ee367104744d0fed51ca1dc879edddd7c66c189b33f13b247886219"
+  },
+  "limitations": [
+    "Native-chat split results use previously examined conversations and small eligible subsets; treat them as exploratory replication, not a new pristine reserve.",
+    "Fresh coding verification covers explicit reasoning text with no usable timers; it does not validate the native-timer override or unknown chat token truth.",
+    "The text-derived floor and ranges are estimates, not guaranteed tokenizer bounds or confidence intervals.",
+    "Text stream rate is not substituted for thinking throughput and does not identify model or speed.",
+    "A gap is not a measured thinking interval or an API-request count.",
+    "No new combined-output token-accuracy claim replaces the older v2 masked-coding benchmark."
+  ],
+  "decision": "Promote native argument/execution decomposition and arithmetic size-based duration fallback for the published native-chat tool allowlist; promote stricter all-native-clock gap route; add conservative visible-thinking contribution for explicit thinking_hidden=false. Keep v2 routes and missing-evidence priors. Reject the larger fitted thinking character conversion and direct text-rate-to-thinking-rate substitution.",
+  "implementation_validation": {
+    "go_focused": "passed",
+    "go_fast": "passed",
+    "go_full": "passed",
+    "web_check": {
+      "status": "passed",
+      "passed": 1779,
+      "skipped": 3
+    },
+    "web_full_matrix": {
+      "status": "passed",
+      "passed": 1779,
+      "skipped": 3
+    },
+    "reader_unit": {
+      "status": "passed",
+      "passed": 13
+    },
+    "claude_export_browser": {
+      "status": "passed",
+      "passed": 2
+    },
+    "fitter_unit": {
+      "status": "passed",
+      "passed": 2
+    },
+    "published_point_parameters_match_freeze": true,
+    "gap_sample_contradictory_clock_cases": 0,
+    "gap_sample_predictions_exceeding_window": 0,
+    "diff_check": "passed"
+  }
+}

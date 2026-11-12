@@ -498,7 +498,11 @@ func (c *Catalog) pricingHealthContext(ctx context.Context) (map[string]any, err
 	since := c.clock().AddDate(0, 0, -29).Format("2006-01-02")
 	var tokens, recentTokens int64
 	var cost, recentCost any
+	health["is_estimate"] = false
+	health["price_status"] = ""
 	for _, row := range rows {
+		health["is_estimate"] = estimateFlag(health["is_estimate"]) || estimateFlag(row["is_estimate"])
+		health["price_status"] = worsePriceStatus(firstString(health["price_status"]), firstString(row["price_status"]))
 		key := firstString(row["price_status"]) + "_tokens"
 		if _, ok := health[key]; ok {
 			health[key] = integer(health[key]) + integer(row["total_tokens"])

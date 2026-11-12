@@ -903,7 +903,7 @@ export const defaultApi = {
     ["Plan the next iteration", "observatory", "claude", "claude-opus-4-1", 1, "Review the open questions and choose the next small improvement.", "The next iteration starts with clearer navigation and a smaller scope."],
   ].map(([title, repository, provider, model, subagent_depth, first_input, last_response], index) => ({
     id: index ? `recent-${index}` : rootConversation, workspace_id: workID, title, repository, provider, model, effort: "high", subagent_depth, first_input, last_response,
-    activity_at: new Date(now - index * day).toISOString(), labels_ready: index < 7, events_ready: index < 4, duration_ms: 4980000, tool_calls: 34, tokens: 123456, cost_usd: 2.34, price_status: "complete",
+    activity_at: new Date(now - index * day).toISOString(), labels_ready: index < 7, events_ready: index < 4, duration_ms: 4980000, tool_calls: 34, tokens: 123456, cost_usd: 2.34, is_estimate: index === 1, price_status: index === 1 ? "partial" : "priced",
   })) },
   "GET /api/activity": { active: 0, runs: [] },
   "GET /api/library/status": { idle: true, portable: true, library_dir: "/Volumes/Pharos SSD/Pharos", drive: { name: "Pharos SSD", mounted: true, ejectable: true }, activities: [] },
@@ -914,6 +914,7 @@ export const defaultApi = {
   "POST /api/sources/import": ({body})=>({added:[body.kind],enabled:[],declined:[],skipped:[]}),
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
   "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0, prompt: "Refresh the API price history in pricing/cost_changes.json." },
+  "GET /api/estimation/status": { conversations: 2, current_conversations: 2, pending_conversations: 0, version: "claude-output-v4", range_kind: "sensitivity_not_confidence", scope: "selected_branch_unreported_output" },
   "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),
   "GET /api/usage/parallelism": {
     generated_at: iso(0), timezone: "Local", period_start: iso(day).slice(0, 10), period_end: iso(0).slice(0, 10),
@@ -930,7 +931,7 @@ export const defaultApi = {
   "GET /api/habits": () => habitsSummary(),
   "GET /api/origins": { machines: [{ id: "machine-fixture", label: "Test Mac", kind: "device" }] },
   "GET /api/usage/history": { oldest_conversation_at: iso(180 * day), active_conversations: { 1: 4, 7: 18, 30: 60, 90: 140, 180: 200, 365: 200, all: 200 } },
-  "GET /api/usage/summary": { generated_at: iso(0), timezone: "UTC", windows: ["1h", "6h", "today", "24h", "7d", "30d", "all", "5m", "15m", "yesterday", "week", "month"].map((key, index) => ({ key, until: key === 'yesterday' ? summaryDay.toISOString() : iso(0), ...(summaryFrom[key] ? {from:summaryFrom[key]} : {}), human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) }, active_conversations: index + 2, message_count: 20 * (index + 1), user_messages: 8 * (index + 1), assistant_messages: 12 * (index + 1), tool_calls: 50 * (index + 1), failed_tool_calls: index + 1, tool_failure_rate: 2, tool_time_ms: (index + 1) * 240000, timed_tool_calls: 40 * (index + 1), delegated_runs: index + 1, active_repositories: Math.min(index + 1, 4) })), carbon_factors: carbonFactors },
+  "GET /api/usage/summary": { generated_at: iso(0), timezone: "UTC", windows: ["1h", "6h", "today", "24h", "7d", "30d", "all", "5m", "15m", "yesterday", "week", "month"].map((key, index) => ({ key, until: key === 'yesterday' ? summaryDay.toISOString() : iso(0), ...(summaryFrom[key] ? {from:summaryFrom[key]} : {}), human_words: 100 * (index + 1), tokens: 1000 * (index + 1), is_estimate: index % 2 === 0, cost_is_estimate: index % 2 === 0, input_tokens_available: index % 2 !== 0, price_status: index % 2 === 0 ? "partial" : "priced", tool_time_is_estimate: index % 2 === 0, cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) }, active_conversations: index + 2, message_count: 20 * (index + 1), user_messages: 8 * (index + 1), assistant_messages: 12 * (index + 1), tool_calls: 50 * (index + 1), failed_tool_calls: index + 1, tool_failure_rate: 2, tool_time_ms: (index + 1) * 240000, timed_tool_calls: 40 * (index + 1), delegated_runs: index + 1, active_repositories: Math.min(index + 1, 4) })), carbon_factors: carbonFactors },
   "GET /api/search/text/options": { providers: ["codex", "claude"], sources: ["conductor"] },
   "POST /api/search/text/validate": ({ body }) => ({ where: body.where ?? { op: ["literal", "regex", "phrase"].includes(body.mode) ? body.mode : "term", text: body.query } }),
   "GET /api/search/text/capabilities": { fuzzy: true, regex: true, case_sensitive: true },

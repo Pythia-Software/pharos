@@ -289,6 +289,7 @@ function records(dataset: UsageDataset, id: string, section: string, label: stri
     orderBy: [{ field: sort, dir: "desc", nulls: "last" }],
   } };
 }
+
 function scoped(group: GroupedQueryIdea, where: WhereTerm[]): GroupedQueryIdea { return { ...group, where }; }
 const eq = (field: string, value: string): WhereClause => ({ field, op: "=", value });
 const positive = (field: string): WhereTerm => ({ field, op: ">", value: "0" });

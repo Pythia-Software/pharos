@@ -1,3 +1,4 @@
+import { UsageEstimateNote } from "./usage-estimate-note";
 import { ScatterMetricPicker } from "./scatter-metric-picker";
 import { DataReadinessIndicator, DataReadinessEmpty } from "./data-readiness";
 import React, { useEffect, useMemo, useState } from "react";
@@ -215,6 +216,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
           const query = analysisInspectQuery(analysis, presentation.sourceBucket(bucket) as typeof bucket, analysis.clause, schema, view.view);
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
         }} /><CreateDashboardCard source={{ catalog, state, where, schema }} /></div>}</DataReadinessEmpty>
+    <UsageEstimateNote results={result.results} dataset={dataset} />
     {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote((catalog.breakdowns[view.split] ?? catalog.components![view.split]).label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}
       {analysis.selection ? <> <button type="button" className="usage-preset-clear" onClick={() => set({ selection: { values: [], excluded: false } })}>Show every group</button></> : null}
       {analysis.selection && catalog.population ? <> <button type="button" className="usage-preset-clear" onClick={() => {

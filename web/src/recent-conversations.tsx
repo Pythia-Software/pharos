@@ -1,3 +1,4 @@
+import { estimateExplanation } from "./usage-estimate-model";
 import React, { useEffect, useState } from "react";
 import { FingerprintImage } from "./fingerprint-image";
 import { formatConcurrencyDuration } from "./concurrency-data";
@@ -8,7 +9,7 @@ type RecentConversation = {
   id: string; workspace_id: string; title: string; repository?: string;
   provider: string; model?: string; effort?: string; activity_at?: string;
   first_input?: string; last_response?: string; subagent_depth: number;
-  labels_ready: boolean; duration_ms?: number; tool_calls?: number; tokens?: number; cost_usd?: number; price_status?: string;
+  labels_ready: boolean; duration_ms?: number; tool_calls?: number; tokens?: number; cost_usd?: number; price_status?: string; is_estimate?: boolean;
 };
 
 function previewText(text: string, role: "user" | "assistant") {
@@ -51,8 +52,8 @@ export function RecentConversations({ active, generation }: { active: boolean; g
               {item.subagent_depth > 0 ? <span>Sub-agents · Depth {item.subagent_depth}</span> : null}
               {item.duration_ms != null ? <span>{formatConcurrencyDuration(item.duration_ms)} elapsed</span> : null}
               {item.tool_calls != null ? <span>{item.tool_calls.toLocaleString()} tool calls</span> : null}
-              {item.tokens != null ? <span>{item.tokens.toLocaleString()} tokens</span> : null}
-              {cost ? <span title={item.price_status && item.price_status !== "complete" ? `Pricing: ${item.price_status}` : "Estimated API list-price equivalent"}>{cost} {item.price_status === "unpriced" || item.price_status === "partial" ? "known " : ""}API cost{item.price_status === "assumed" ? " (estimated)" : ""}</span> : null}
+              {item.tokens != null ? <span title={item.is_estimate?estimateExplanation:undefined}>{item.tokens.toLocaleString()} tokens{item.is_estimate?"*":""}</span> : null}
+              {cost ? <span title={item.is_estimate ? estimateExplanation : item.price_status && item.price_status !== "complete" ? `Pricing: ${item.price_status}` : "Estimated API list-price equivalent"}>{cost}{item.is_estimate?"*":""} {item.price_status === "unpriced" || item.price_status === "partial" ? "known " : ""}API cost{item.price_status === "assumed" ? " (estimated)" : ""}</span> : null}
             </div>
           </div>
           {(item.first_input || item.last_response) ? <div className="home-recent-exchange">

@@ -18,9 +18,9 @@ type metricDefinition struct {
 
 var metricDefinitions = []metricDefinition{
 	{"cost_usd", "USD", "Historical API list-price equivalent; not a bill. Complete requires priced usage; assumed/partial costs require available quality."},
-	{"total_tokens", "tokens", "Reconciled consumption, including aggregate remainders; checkpoints and requests are not added twice."},
+	{"total_tokens", "tokens", "Reconciled consumption, including aggregate remainders; checkpoints and requests are not added twice. Flagged estimates require available quality."},
 	{"input_tokens", "tokens", "Reconciled input including cached input; aggregate-only breakdowns remain partial."},
-	{"output_tokens", "tokens", "Reconciled output including reported reasoning; reasoning is not added twice."},
+	{"output_tokens", "tokens", "Reconciled output including reported reasoning; reasoning is not added twice. Flagged output estimates require available quality."},
 	{"cache_read_input_tokens", "tokens", "Cache-read portion of input; absence of reported usage is unknown."},
 	{"user_turn_count", "count", "Retained user messages of kind message, including prompts supplied by the agent app."},
 	{"tool_call_count", "count", "Recorded tool calls including delegations; compound commands count once."},
@@ -48,6 +48,7 @@ func metricName(name string) (string, error) {
 }
 
 type statMetricValue struct {
+	IsEstimate  bool     `json:"is_estimate,omitempty"`
 	Value       *float64 `json:"value,omitempty"`
 	Status      string   `json:"status"`
 	PriceStatus string   `json:"price_status,omitempty"`

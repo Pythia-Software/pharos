@@ -358,7 +358,7 @@ func (c *Catalog) thinkingRecords(ctx context.Context, o thinkingOptions) ([]thi
 	rows, err := tx.QueryContext(ctx, `SELECT id,conversation_id,COALESCE(agent_session_id,''),workspace_id,model,effort,speed,
  COALESCE(provider,''),COALESCE(harness,''),COALESCE(repository_name,''),COALESCE(project_name,''),COALESCE(machine,''),preceding_tool,timing_quality,
  COALESCE(previous_request_id,''),COALESCE(native_id,''),COALESCE(requested_at,''),observed_millis,sequence,COALESCE(agent_depth,0),input_tokens,
- cache_read_input_tokens,output_tokens,reasoning_output_tokens,gap_seconds,compacted_before FROM (`+thinkingSource+`) d WHERE `+where, args...)
+ cache_read_input_tokens,output_tokens,reasoning_output_tokens,gap_seconds,compacted_before FROM (`+thinkingSource+`) d WHERE is_estimate=0 AND (`+where+`)`, args...)
 	if err != nil {
 		return nil, err
 	}
