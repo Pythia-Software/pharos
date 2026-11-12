@@ -870,6 +870,7 @@ func TestClaudeImportSourceUnitsShareMessagesAndIndexChanges(t *testing.T) {
 			members := map[string]string{"conversations.json": "[]", "claude_code_cloud/channel_session_transcripts.json": cloud}
 			collect(1, members)
 			ingestSource(t, catalog, config.Sources[0])
+			want := catalogEvidence(t, catalog)
 			if !transactional {
 				// Another source can replace one session without replacing the
 				// document's other outputs or its historical parsing checkpoint.
@@ -945,6 +946,9 @@ func TestClaudeImportSourceUnitsShareMessagesAndIndexChanges(t *testing.T) {
 			latest := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC).UnixNano()
 			if countRows(t, catalog, `SELECT COUNT(*) FROM copy_evidence WHERE conversation_id<>'' AND version=?`, latest) != 3 || countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE text LIKE '%fallback cloud%'`) != 0 {
 				t.Fatal("partial group remained selected or its time did not advance")
+			}
+			if catalogEvidence(t, catalog) != want {
+				t.Fatal("repeat advanced evidence without restoring the original cloud title and messages")
 			}
 			collect(4, members)
 			reads := 0
