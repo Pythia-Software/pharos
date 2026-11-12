@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
-import { claudeImportFixture, claudeSettingsSourceFixture, claudeSettingsCoverageFixture, defaultApi, workID, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
+import { claudeImportFixture, claudeSettingsSourceFixture, claudeSettingsCoverageFixture, defaultApi, workID, rootConversation, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 test('the Lighthouse menu action shares its saved setting with App preferences', {skip}, async t => {
@@ -3568,26 +3568,64 @@ test('Claude export inspection preserves the replacement form when an older requ
 
 
 test('Claude settings capture preserves focus through failures, progress and completion', {skip}, async t => {
-  let captured=false,failOnce=true;
-  const captureRun={id:'settings-capture',kind:'capture',state:'complete',sources:['claude-chat-settings'],results:[]};
-  const indexRun={id:'settings-index',kind:'index',state:'complete',sources:['claude-chat-settings'],results:[]};
-  const {page}=await open(t,{url:'/settings/sources',api:{
-    'GET /api/sources':{configured:1,enabled:0,items:[{...claudeSettingsSourceFixture,enabled:false}]},
-    'GET /api/claude-chat-settings/coverage':()=>({accounts:[{...claudeSettingsCoverageFixture,missing_models:captured?0:2}]}),
-    'POST /api/claude-chat-settings/setup':claudeSettingsCoverageFixture.setup,
-    'POST /api/capture':()=>({run:{...captureRun,state:failOnce?'failed':'complete'}}),
-    'GET /api/capture':()=>({active:false,runs:[{...captureRun,state:failOnce?'failed':'complete'}]}),
-    'POST /api/index':()=>{captured=true;return {run:indexRun}},
-    'GET /api/activity':{active:0,runs:[indexRun]},
-  }});
-  const button=page.locator('#claudeSettingsBackfill').getByRole('button');
-  await button.click();
-  await page.getByRole('status').filter({hasText:'Settings capture did not complete'}).waitFor();
-  assert.ok(await button.evaluate(el=>document.activeElement===el),'a failed capture keeps its action focused');
-  failOnce=false;
-  await button.click();
-  await page.getByRole('status').filter({hasText:'Settings captured.'}).waitFor();
-  assert.ok(await button.evaluate(el=>document.activeElement===el),'completion leaves focus on the same action');
+  for(const reader of [false,true])await t.test(reader?'conversation reader':'Sources',async t=>{
+    let captured=false,failOnce=true;
+    const refresh=Promise.withResolvers();
+    let selectedSettings={observations:[{organization_uuid:'example-org',observed_at:'2026-11-12T12:00:00Z',time_basis:'capture',model:'claude-opus-4-6',effort_level:'high',thinking_mode:'enabled'}]};
+    const captureRun={id:'settings-capture',kind:'capture',state:'complete',sources:['claude-chat-settings'],results:[]};
+    const indexRun={id:'settings-index',kind:'index',state:'complete',sources:['claude-chat-settings'],results:[]};
+    const {page}=await open(t,{url:reader?`/work/${workID}/conversation/${rootConversation}`:'/settings/sources',api:{
+      'GET /api/sources':{configured:1,enabled:0,items:[{...claudeSettingsSourceFixture,enabled:false}]},
+      'GET /api/work/:id/conversations/:conversation':async()=>{
+        if(captured)await refresh.promise;
+        return {id:rootConversation,workspace_id:workID,provider:'claude',harness:'claude-ai-export',selected_settings:captured?selectedSettings:undefined,messages:[
+          {id:'backfill-question',role:'user',kind:'message',text:'Compare these reports.'},
+          {id:'backfill-answer',role:'assistant',kind:'message',text:'The reports use different assumptions.'},
+        ]};
+      },
+      'GET /api/claude-chat-settings/coverage':()=>({accounts:[{...claudeSettingsCoverageFixture,missing_models:captured?0:2}]}),
+      'POST /api/claude-chat-settings/setup':claudeSettingsCoverageFixture.setup,
+      'POST /api/capture':()=>({run:{...captureRun,state:failOnce?'failed':'complete'}}),
+      'GET /api/capture':()=>({active:false,runs:[{...captureRun,state:failOnce?'failed':'complete'}]}),
+      'POST /api/index':()=>{captured=true;return {run:indexRun}},
+      'GET /api/activity':{active:0,runs:[indexRun]},
+    }});
+    const notice=page.locator(reader?'.conversation-panel .claude-settings-backfill':'#claudeSettingsBackfill');
+    const button=notice.getByRole('button');
+    await button.waitFor();
+    let source,turn;
+    if(reader){
+      await page.locator('.source-details > summary').click();
+      await page.locator('.turn > summary').click();
+      source=await page.locator('.source-details').elementHandle();
+      turn=await page.locator('.turn').elementHandle();
+      assert.ok(await source.evaluate(el=>el.open));
+      assert.ok(await turn.evaluate(el=>!el.open));
+    }
+    await button.click();
+    await notice.getByRole('status').filter({hasText:'Settings capture did not complete'}).waitFor();
+    assert.ok(await button.evaluate(el=>document.activeElement===el),'a failed capture keeps its action focused');
+    failOnce=false;
+    await button.click();
+    if(reader){
+      await notice.getByRole('status').filter({hasText:'Refreshing Source details'}).waitFor();
+      assert.ok(await button.evaluate(el=>document.activeElement===el),'refreshing metadata keeps the action focused');
+      refresh.resolve();
+      await page.locator('.source-details dd').filter({hasText:'claude-opus-4-6'}).waitFor();
+    }
+    await notice.getByRole('status').filter({hasText:'Settings captured.'}).waitFor();
+    assert.ok(await button.evaluate(el=>document.activeElement===el),'completion leaves focus on the same action');
+    if(reader){
+      assert.ok(await source.evaluate(el=>el.isConnected&&el.open),'refresh keeps the existing Source details open');
+      assert.ok(await turn.evaluate(el=>el.isConnected&&!el.open),'refresh keeps the existing turn closed');
+      // A later capture can remove a selection; old facts must not linger.
+      selectedSettings=undefined;
+      await button.click();
+      await page.locator('.source-details dd').filter({hasText:'claude-opus-4-6'}).waitFor({state:'detached'});
+      await notice.getByRole('status').filter({hasText:'Settings captured.'}).waitFor();
+      assert.ok(await button.evaluate(el=>document.activeElement===el));
+    }
+  });
 });
 
 test('Claude import offers one-time model backfill after indexing without moving focus', {skip},async t=>{
