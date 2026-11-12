@@ -33,6 +33,19 @@ export function modelColorOrder(name: string): string {
   return `${modelProviders.indexOf(provider)}:${index < 0 ? classes.length : index}:${family}:${modelCatalogDate(key) ?? "9999"}:${key}`;
 }
 export const compareModelColors = (a: string, b: string) => modelColorOrder(a).localeCompare(modelColorOrder(b), undefined, { numeric: true });
+// Presentation can split shared color classes without changing their policy.
+export function modelPaletteGroups(names: readonly string[]): { name: string; models: string[] }[] {
+  const groups = new Map<string, { name: string; models: string[] }>();
+  for (const model of [...names].sort(compareModelColors)) {
+    const family = modelClass(model) ?? "Other models";
+    const name = family === "Fable / Mythos" ? modelColorKey(model).startsWith("mythos") ? "Mythos" : "Fable" : family;
+    const key = `${modelProvider(model)}:${name}`;
+    if (!groups.has(key)) groups.set(key, { name, models: [] });
+    groups.get(key)!.models.push(model);
+  }
+  return [...groups.values()].sort((a, b) => modelProvider(a.models[0]) === modelProvider(b.models[0]) && modelClass(a.models[0]) === modelClass(b.models[0])
+    ? a.name.localeCompare(b.name) : compareModelColors(a.models[0], b.models[0]));
+}
 function hash(name: string) { let h = 2166136261; for (const c of name) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
 export function colorHSL(color: string): [number, number, number] {
   const [r, g, b] = [1, 3, 5].map(at => parseInt(color.slice(at, at + 2), 16) / 255);
@@ -124,6 +137,11 @@ const subscribe = (listener: () => void) => { listeners.add(listener); return ()
 export const useModelColorRevision = () => useSyncExternalStore(subscribe, () => revision);
 export const modelPalette = () => palette;
 export function customModelColor(kind: ColorKind, key: string): string | undefined { return Object.hasOwn(palette.overrides, `${kind}:${key}`) ? palette.overrides[`${kind}:${key}`] : undefined; }
+// Drafts never install a palette or update mounted chart CSS properties.
+export function previewModelColor(name: string, providerColor: string, draft?: string): string {
+  const key = modelColorKey(name);
+  return draft ?? customModelColor("model", key) ?? recommendedModelColor(key, providerColor);
+}
 export function effectiveModelColor(kind: ColorKind, key: string): string {
   if (kind === "model") key = modelColorKey(key);
   const custom = customModelColor(kind, key);

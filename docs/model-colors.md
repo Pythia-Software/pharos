@@ -10,6 +10,15 @@ use different parts of that range, with versions following a smooth light-to-dar
 editor offers five suggested shades, a free color picker, light/dark previews,
 Save color, and Use recommended. Provider editors offer Restore brand.
 
+Each provider shows its saved palette beside a live preview. Provider and model
+picker drafts update the preview immediately without saving preferences or
+recoloring charts. Explicit saved model choices remain exact during a provider
+preview; a draft model color overrides that choice only in the preview until
+saved. Every swatch has a visible model label. Banners group by class and then
+catalog date, with undated entries last; Fable and Mythos have separate display
+groups while retaining their shared color policy. Dense labels rotate vertically,
+and comparison panels stack on narrow screens.
+
 `pricing/model_color_rules.json` owns the palette policy. Provider hues keep
 Anthropic orange, Google blue and OpenAI green. `ranked_classes` records the
 capability hierarchy: Haiku → Sonnet → Opus → Fable / Mythos, Flash → Gemini/Argon,

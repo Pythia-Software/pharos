@@ -7315,13 +7315,13 @@
       "reason": "Edits or restores a persistent library provider/model color preference. Pickers and shade suggestions hold a draft until Save color; automatic model shades follow the provider."
     },
     {
-      "key": "0b72ead045cf49ee:0",
+      "key": "3755037a7f824e46:0",
       "file": "web/src/model-color-settings.tsx",
       "owner": "ColorEditor",
       "tag": "input",
-      "control": "aria-label={`Color for ${label}`} value={draft} onChange={event => setDraft(event.target.value)}",
+      "control": "aria-label={`Color for ${label}`} value={draft} onInput={event => setDraft(event.currentTarget.value)} onChange={event => setDraft(event.target.value)}",
       "contract": "settings",
-      "reason": "Edits or restores a persistent library provider/model color preference. Pickers and shade suggestions hold a draft until Save color; automatic model shades follow the provider."
+      "reason": "Edits a persistent provider/model color preference. Draft input and shade suggestions affect only the live comparison until Save color; restoring a saved choice is an explicit settings action."
     },
     {
       "key": "3c1e4f6836df7e32:0",
@@ -7342,22 +7342,22 @@
       "reason": "Edits or restores a persistent library provider/model color preference. Pickers and shade suggestions hold a draft until Save color; automatic model shades follow the provider."
     },
     {
-      "key": "c6f66cb6cbeb0232:0",
+      "key": "6cd1dcd9d8cb0ee1:0",
       "file": "web/src/model-color-settings.tsx",
-      "owner": "ModelColorSettings",
+      "owner": "ProviderColorCard",
       "tag": "ViewDisclosure",
-      "control": "viewKey={`source-colors:${provider}`}",
+      "control": "viewKey={`model-colors:${provider}`}",
       "binding": "disclosures",
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "f86d32b79c4b6b87:0",
+      "key": "dd10416627c952a6:0",
       "file": "web/src/model-color-settings.tsx",
-      "owner": "ModelColorSettings",
+      "owner": "ProviderColorCard",
       "tag": "ViewDisclosure",
-      "control": "viewKey={`model-colors:${provider}`}",
+      "control": "viewKey={`source-colors:${provider}`}",
       "binding": "disclosures",
       "sharedDisclosure": true,
       "contract": "view.disclosures",

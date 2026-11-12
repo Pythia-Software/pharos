@@ -1968,6 +1968,8 @@ test("model color editors save inherited palettes, retain focus, and restore pro
   await page.evaluate(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
   assert.equal(await provider.evaluate(element => element === document.activeElement), true);
   await provider.fill("#7547b3");
+  assert.equal(await provider.evaluate(element => element === document.activeElement), true, "live preview retains picker focus");
+  await shot("model-colors-live-preview");
   await page.getByRole("button", { name: "Save color for OpenAI", exact: true }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="Color for Codex"]')?.value === "#7547b3");
   const card = page.getByRole("region", { name: "OpenAI colors", exact: true });

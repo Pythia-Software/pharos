@@ -6,9 +6,35 @@ import rules from '../../../../pricing/model_color_rules.json';
 import prices from '../../../../pricing/cost_changes.json';
 import { generateModelColors, generatedColorLuminance } from '../../../src/model-color-generation';
 import { modelCatalogDates } from '../../../src/model-color-identity';
-import { colorHSL, compareModelColors, customModelColor, effectiveModelColor, installModelColors, knownModels, modelClass, modelColorKey, modelProvider, loadModelColors, modelPalette, modelSeriesColor, recommendedModelColor, saveModelColor, shadeChoices } from '../../../src/model-colors';
+import { colorHSL, compareModelColors, customModelColor, effectiveModelColor, installModelColors, knownModels, modelClass, modelColorKey, modelPaletteGroups, modelProvider, loadModelColors, modelPalette, modelSeriesColor, previewModelColor, recommendedModelColor, saveModelColor, shadeChoices } from '../../../src/model-colors';
 import { chartMetricTheme, chartSeriesStyle, keyColorTheme, metricSeriesColor } from '../../../src/chart-colors';
 const palette = (overrides = {}, models = []) => ({ overrides, models, sources: [] });
+
+test('live palette previews preserve saved colors and explicit model choices until save', t => {
+  t.after(() => installModelColors(palette()));
+  installModelColors(palette({'model:gpt-6-sol':'#ee1122'}));
+  const savedPalette = structuredClone(modelPalette()), saved = effectiveModelColor('model', 'gpt-6-luna');
+  const preview = previewModelColor('gpt-6-luna', '#7547b3');
+  assert.notEqual(preview, saved);
+  assert.equal(preview, recommendedModelColor('gpt-6-luna', '#7547b3'));
+  assert.equal(effectiveModelColor('model', 'gpt-6-luna'), saved);
+  assert.equal(previewModelColor('claude-opus-5-5', '#7547b3', '#123456'), '#123456');
+  assert.equal(previewModelColor('gpt-6-sol', '#7547b3'), '#ee1122');
+  assert.equal(previewModelColor('gpt-6-sol', '#7547b3', '#abcdef'), '#abcdef');
+  assert.deepEqual(modelPalette(), savedPalette);
+});
+
+test('palette banners group classes and dates, separating Fable and Mythos presentation', () => {
+  const names = ['mythos-5-2', 'sonnet-5-5', 'opus-5-5', 'haiku', 'sonnet-4', 'fable-5-2', 'haiku-4-5', 'fable-5', '3-5-haiku', 'unclassified-model'];
+  const groups = modelPaletteGroups(names);
+  assert.deepEqual(groups.map(group => group.name), ['Haiku', 'Sonnet', 'Opus', 'Fable', 'Mythos', 'Other models']);
+  assert.deepEqual(groups[0].models, ['3-5-haiku', 'haiku-4-5', 'haiku']);
+  assert.deepEqual(groups[1].models, ['sonnet-4', 'sonnet-5-5']);
+  assert.deepEqual(groups[3].models, ['fable-5', 'fable-5-2']);
+  assert.equal(modelClass('fable-5-2'), modelClass('mythos-5-2'), 'shared color policy stays intact');
+  assert.deepEqual(new Set(groups.flatMap(group => group.models)), new Set(names), 'every model has one labeled swatch');
+  assert.deepEqual(modelPaletteGroups([...names].reverse()), groups);
+});
 
 test('palette generation is reproducible, ignores previous colors and leaves inputs untouched', () => {
   const before = structuredClone(catalog), priceBefore = structuredClone(prices), ruleBefore = structuredClone(rules);
