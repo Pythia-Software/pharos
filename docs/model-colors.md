@@ -149,3 +149,54 @@ identity. Reflection, DeepSeek, OpenCode and Microsoft retain their existing
 model matcher selects the color provider; no source-recorded provider, pricing
 row or query identity is rewritten. The API validates provider preference keys
 against the same embedded color catalog as the frontend.
+
+## Local algorithm playground
+
+Run `nvm use`, then `npm --prefix web run demo:model-colors` and open
+`http://127.0.0.1:18790`. Pass `-- --port 0` to choose a free port, or an explicit
+port. The loopback server builds the standalone experiment into the gitignored
+`.context/model-color-lab/` directory. It watches its sources; refresh after edits.
+It needs the installed web dependencies but no running Pharos service or library.
+
+The playground compares the exact production resolver against three experimental
+OKLCH policies: **Chroma ladder** weights capability tier and release position,
+**Hue fan** also spreads tiers over adjacent hues, and **Freshness first** gives
+the latest release in each class its strongest color. Root pickers, vividness,
+tier weight, frontier lightness and hue spread update the provider's full catalog
+palette and representative charts. Light/dark appearances use identical colors.
+Neutral roots retain their neutral intent; specialist hue offsets are optional.
+
+The default preset is Hue fan with vividness 100%, tier emphasis 50%, frontier
+lightness 67% and core tier hue spread 30°. Specialists have a separate spread
+control (0–300°, starting at 75°). Wider hue fan scales their existing authored
+hue offsets around the provider root, keeping the relative class relationships;
+a lone specialist with no authored offset gets its own hue at half the span.
+Original specialist hues restores the earlier fixed offsets, and Use provider
+root removes those offsets. These controls leave core tiers and independent
+developers unchanged. Preview specialist mix selects a synthetic chart with the
+latest catalog model from each specialist class, so the effect is visible in
+charts as well as the settings palette. In this mix, the chart reference uses
+the selected algorithm with its original specialist hues, so the comparison
+isolates the specialist treatment. Specialist positions do not imply rank.
+
+The model identities, reviewed tier order and catalog/observed dates come from
+the repository. Release position is an ordinal over distinct dates within each
+class, with a midpoint for undated labels. Same-date siblings share that position
+and get a small symmetric hue offset. Usage is explicitly synthetic, with
+frontier-heavy, balanced, historical and specialist mixes; both chart panels use identical
+data and root colors. The inspector shows chroma, lightness and fill contrast,
+and the workload summary reports weighted chroma and closest pair separation.
+
+All experiment controls and root colors are preserved in its URL. Export palette
+downloads JSON with the inputs, metadata, current colors and experimental colors.
+There are no library writes, no saved user overrides are loaded, and no production
+recommendations change. The prototype exposes close colors rather than claiming
+to satisfy the production generator's full spacing constraints; unknown-model
+fallbacks and catalog rebalance policy remain production integration work after
+choosing an approach. Sources live in `web/experiments/model-color-lab/` and the
+launcher is `tools/model-color-lab.mjs`. The standard web typecheck includes the
+experiment; to check just the experiment:
+
+```sh
+npx --prefix web tsc --project web/experiments/model-color-lab/tsconfig.json --noEmit
+```
