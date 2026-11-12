@@ -310,15 +310,29 @@ test("export documents expose prose while keeping unrelated metadata out of the 
 });
 
 
-test("retained export summaries do not create a second user turn", () => {
-  const {graph}=render([event("export","metadata",{type:"claude_ai_conversation",text:"Archived summary"},0,{role:"system"}),human(),event("reply","message","An answer")]);
-  assert.equal(graph.turns.length,1);
-  assert.equal(graph.turns[0].human.native_id,"human");
-  assert.deepEqual(ids(graph.turns[0].events),["export","reply"]);
-  const [summary]=reader.turnSummaryData({messages:[event("export","metadata",{type:"claude_ai_conversation",text:"Archived summary"},0,{role:"system"}),human(),event("reply","message","An answer")]});
-  assert.equal(summary.prompt,"Inspect the rules and report the result.");
-  assert.equal(summary.outcome,"An answer");
-  assert.equal(summary.replies,1);
+test("retained export summaries and settings do not create extra turns", () => {
+  for(const [provider,payload]of [
+    ['claude',{type:'claude_ai_conversation',text:'Archived summary'}],
+    ['chatgpt',{source:'chatgpt_export',settings:{default_model_slug:'bidi',voice:'saved-voice'}}],
+  ]){
+    const metadata=event('export','metadata',payload,0,{role:'system'});
+    const {conversation,graph}=render([metadata,human(),event('reply','message','An answer')],{provider});
+    assert.equal(graph.turns.length,1,provider);
+    assert.equal(graph.turns[0].human.native_id,'human');
+    assert.deepEqual(ids(graph.turns[0].events),['export','reply']);
+    const [summary]=reader.turnSummaryData(conversation);
+    assert.equal(summary.prompt,'Inspect the rules and report the result.');
+    assert.equal(summary.outcome,'An answer');
+    assert.equal(summary.replies,1);
+    const [outline]=reader.conversationOutline(conversation);
+    assert.equal(outline.label,'Turn 1');
+    assert.deepEqual(ids(outline.messages),['human','export','reply']);
+    assert.deepEqual(plain(reader.messageJSON(outline.messages[1])),payload,'source evidence remains available');
+    if(provider==='chatgpt')assert.deepEqual(plain(reader.chatGPTConversationContext(conversation).facts),[['Recorded model label','bidi'],['Saved voice','saved-voice']]);
+    const metadataOnly=render([metadata],{provider}).graph;
+    assert.equal(metadataOnly.turns.length,1,'evidence without a user message is retained');
+    assert.deepEqual(ids(metadataOnly.turns[0].events),['export']);
+  }
 });
 
 test('Claude Docs additions use receipts and resolve the imported document identity', () => {
