@@ -1406,7 +1406,9 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
   await page.locator("#navigator.open").waitFor();
   await page.evaluate(() => document.querySelector("main").scrollTo(0, 1200));
   await page.locator('.reader-navigator').waitFor();
-  for(const name of ['Timeline','Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).isChecked(),true,'all navigators are shown by default');
+  for(const name of ['Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).isChecked(),true,'available navigators are shown by default');
+  assert.equal(await page.getByRole('checkbox',{name:'Timeline',exact:true}).count(),0);
+  const timelineKey=()=>page.getByRole('group',{name:'Timeline key',exact:true}).getByRole('button',{name:'Timeline',exact:true});
   await page.getByRole('checkbox', {name:'Turns',exact:true}).check();
   await page.getByRole('checkbox', {name:'Context',exact:true}).check();
   await page.locator('.turn').nth(6).evaluate(turn=>turn.scrollIntoView({block:'center',behavior:'instant'}));
@@ -1420,12 +1422,33 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
 
   await shot('session-navigator');
   const navigator = page.locator('.reader-navigator');
-  await page.getByRole('checkbox', {name:'Timeline',exact:true}).uncheck();
+  await timelineKey().click();
   assert.equal(await navigator.locator('.reader-navigator-timeline').count(),0);
   await page.getByRole('checkbox', {name:'Context',exact:true}).uncheck();
   await page.getByRole('checkbox', {name:'Turns',exact:true}).uncheck();
   assert.equal(await navigator.locator('.reader-navigator-track').count(),0);
-  await page.getByRole('checkbox', {name:'Timeline',exact:true}).check();
+  await page.waitForFunction(()=>!document.querySelector('.workspace-reader-content').style.getPropertyValue('--reader-navigator-height'));
+  await page.reload();
+  await navigator.waitFor();
+  for(const name of ['Context','Turns'])assert.equal(await navigator.getByRole('checkbox',{name,exact:true}).isChecked(),false,'hidden navigators stay hidden after reload');
+  assert.equal(await timelineKey().getAttribute('aria-pressed'),'false');
+  assert.equal(await navigator.locator('.reader-navigator-timeline').count(),0);
+  await navigator.scrollIntoViewIfNeeded();
+  await shot('all-navigators-hidden');
+  const hiddenRail=await navigator.evaluate(element=>{
+    const rail=element.closest('.reader-navigator-host'),scroller=element.closest('.workspace-reader-content');
+    scroller.scrollTop=scroller.scrollHeight;
+    return {bottom:rail.getBoundingClientRect().bottom,top:scroller.getBoundingClientRect().top};
+  });
+  assert.ok(hiddenRail.bottom<=hiddenRail.top,'the hidden navigator scrolls away with the transcript');
+  await shot('hidden-navigators-scrolled');
+  await timelineKey().click();
+  const shownRail=await navigator.evaluate(element=>{
+    const rail=element.closest('.reader-navigator-host'),scroller=element.closest('.workspace-reader-content');
+    scroller.scrollTop+=rail.getBoundingClientRect().top-scroller.getBoundingClientRect().top+100;
+    return {top:rail.getBoundingClientRect().top,viewportTop:scroller.getBoundingClientRect().top};
+  });
+  assert.ok(Math.abs(shownRail.top-shownRail.viewportTop)<2,'showing a navigator restores the sticky rail');
   await page.getByRole('checkbox', {name:'Turns',exact:true}).check();
   await navigator.getByRole('button', {name:'Browse session timeline'}).focus();
   await page.keyboard.press('End');
@@ -1478,9 +1501,9 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
     await page.locator('.reader-navigator-timeline').waitFor();
     for(const name of ['Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).count(),0,`${name} is unavailable`);
     await shot('session-navigator-unmeasured');
-    await page.getByRole('checkbox',{name:'Timeline',exact:true}).uncheck();
-    const state=new URL(page.url()).searchParams.get('reader_navigator');
-    assert.deepEqual(JSON.parse(state),['context','turns']);
+    await timelineKey().click();
+    assert.equal(await page.locator('.reader-navigator-timeline').count(),0);
+    const state=JSON.stringify(['timeline','context','turns']);
     await page.evaluate(url=>window.pharosNavigate(url), `/work/${workID}/conversation/conv-root?reader_navigator=${encodeURIComponent(state)}`);
     await page.locator('.reader-navigator-context .token-marker').first().waitFor();
     for(const name of ['Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).isChecked(),true,`${name} returns when available`);
@@ -1509,6 +1532,7 @@ test('overlapping context profiles reveal the stream actually clicked', {skip}, 
 
 test('untimed session navigator draws calls and failures and reveals by message order', {skip}, async t=>{
   let timed=false;
+  const longQuery='select:'+Array.from({length:40},(_,index)=>`mcp__service__search_resource_${index}`).join(',');
   const {page,settled,shot}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-timeline',viewport:{width:1920,height:1050},api:{
     'GET /api/work/:id/conversations/:conversation':call=>{
       const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
@@ -1523,15 +1547,21 @@ test('untimed session navigator draws calls and failures and reveals by message 
         event('search','tool_call',{name:'Search',input:{query:'climate outlook'}},{call_id:'search-call'}),
         event('search-result','tool_result',{content:'Search results'},{call_id:'search-call'}),
         event('web','tool_call',{name:'Browser',input:{url:'https://example.com/report'}},{call_id:'web-call'}),
+        event('long-search','tool_call',{name:'Search',input:{query:longQuery}},{call_id:'long-search-call'}),
+        event('long-result','tool_result',{content:'Search results'},{call_id:'long-search-call'}),
         event('reply','message','Finished checking the files',{agent_events:[{id:'obstacle',kind:'obstacle',label:'Obstacle',group:'Friction',probability:.9,sentence:[0,27],subject:[],response:[]}]})]};
     },
   }});
   const navigator=page.locator('.reader-navigator'),key=page.getByRole('group',{name:'Timeline key',exact:true});
   for(const name of ['Delegate / message','Error','Network'])await key.getByRole('button',{name,exact:true}).waitFor();
+  await shot('ungrounded-legend');
   assert.ok(await navigator.getByText('Message order · timestamps unavailable',{exact:true}).isVisible());
   assert.equal(await key.getByText('End time unknown',{exact:true}).count(),0,'ordinal timelines have no seconds-based guide');
   assert.equal(await navigator.locator('.reader-navigator-timeline [data-tool-id="web-call"] line').count(),0);
-  assert.equal(await page.locator('.timeline-entry[data-message-id="search"] .timeline-time').innerText(),'—');
+  assert.equal(await page.locator('.timeline-entry[data-message-id="search"] .timeline-time').innerText(),'');
+  const actionRow=page.locator('.timeline-entry[data-message-id="search"]');
+  const contentInset=async()=>actionRow.evaluate(row=>row.querySelector('.timeline-content').getBoundingClientRect().left-row.getBoundingClientRect().left);
+  assert.ok(Math.abs(await contentInset())<1,'untimed actions use the full row width');
   const sections=navigator.locator('.reader-section-node').first();
   await sections.locator(':scope > summary .reader-section-label').click();
   await navigator.getByText('Message modes',{exact:true}).waitFor();
@@ -1551,12 +1581,28 @@ test('untimed session navigator draws calls and failures and reveals by message 
   const search=page.locator('.query-chip').filter({hasText:'climate outlook'});
   await search.click();assert.equal(await search.getAttribute('aria-expanded'),'true');
   await search.click();assert.equal(await search.getAttribute('aria-expanded'),'false');
+  const longSearch=page.locator('.timeline-entry[data-message-id="long-search"] .query-chip');
+  const checkLongSearch=async()=>{
+    const shortHeight=(await search.boundingBox()).height;
+    const result=await longSearch.evaluate(button=>{const text=button.querySelector('.query-chip-label');return {height:button.getBoundingClientRect().height,clipped:text.scrollWidth>text.clientWidth,title:button.title}});
+    assert.ok(result.height<=shortHeight+1,'long activity chips stay on one line');
+    assert.ok(result.clipped,'long activity chip text is truncated');
+    assert.equal(result.title,longQuery,'the full query remains available');
+  };
+  await checkLongSearch();
+  await longSearch.click();assert.equal(await longSearch.getAttribute('aria-expanded'),'true');
+  await longSearch.click();assert.equal(await longSearch.getAttribute('aria-expanded'),'false');
   const web=page.locator('.action-web-link');assert.equal(await web.getAttribute('href'),'https://example.com/report');
   assert.ok(await web.locator('.markdown-link-icon :is(img,svg)').count());
   assert.ok(await web.locator('.external-indicator').isVisible());
-  assert.ok(await page.locator('.action-row').filter({has:web}).getByText('Network',{exact:true}).isVisible());
+  const browse=page.locator('.action-row').filter({has:web}).getByRole('button',{name:'Browse',exact:true});
+  await browse.scrollIntoViewIfNeeded();await settled();await browse.click();
+  await page.getByRole('menu',{name:'Filter Browse',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).waitFor();
+  await page.keyboard.press('Escape');
   await shot('reader-timeline-sections');
   await page.setViewportSize({width:320,height:900});
+  await checkLongSearch();
+  assert.ok(Math.abs(await contentInset())<1,'untimed actions use the full row width on a narrow screen');
   assert.ok(await navigator.evaluate(element=>element.scrollWidth<=element.clientWidth),'expanded timeline fits on a narrow screen');
   await shot('reader-timeline-mobile');
   await page.setViewportSize({width:1920,height:1050});
@@ -1572,11 +1618,54 @@ test('untimed session navigator draws calls and failures and reveals by message 
   timed=true;
   await page.reload();await navigator.locator('.reader-navigator-timeline').waitFor();
   await key.getByText('End time unknown',{exact:true}).waitFor();
+  assert.match(await page.locator('.timeline-entry[data-message-id="search"] .timeline-time').innerText(),/^\+\d/,'available timestamps remain visible');
+  assert.ok(await contentInset()>0,'timed actions retain their time column');
   assert.ok(await navigator.locator('.reader-navigator-timeline [data-tool-id="web-call"] line').count(),'timed calls with an unknown end show a guide');
   await key.getByRole('button',{name:'Network',exact:true}).click();
   await page.getByRole('menuitem',{name:'Hide',exact:true}).click();
   await key.getByText('End time unknown',{exact:true}).waitFor({state:'detached'});
   assert.equal(await navigator.locator('[data-tool-id="web-call"]').count(),0);
+});
+
+test('session navigator skips idle time and keeps scrolling and navigation aligned', {skip}, async t=>{
+  const base=Date.UTC(2026,9,1);let anotherActive=false;
+  const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-turn',api:{
+    'GET /api/work/:id/conversations/:conversation':call=>{
+      const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
+      if(call.params.conversation!=='conv-root')return body;
+      return {...body,messages:[['first','user',0],['first-reply','assistant',1],['resume','user',60],['last','assistant',61]].map(([id,role,minute])=>({
+        id,native_id:id,role,kind:'message',text:`Message ${id}`,created_at:new Date(base+minute*60000).toISOString(),
+      }))};
+    },
+    'GET /api/work/:id/delegation':call=>({...defaultApi['GET /api/work/:id/delegation'](call),start:base,end:base+61*60000}),
+    'GET /api/work/:id/parallel':call=>{
+      const activity=defaultApi['GET /api/work/:id/parallel'](call);
+      return {...activity,lanes:activity.lanes.map(lane=>({...lane,model_inferred:[],marks:anotherActive&&lane.session==='s-child'?[{start:base+60000,end:base+60*60000,end_known:true}]:[],messages:lane.session==='s-root'?[['first','user',0],['first-reply','assistant',1],['resume','user',60],['last','assistant',61]].map(([id,role,minute])=>({id,role,kind:'message',created_at:new Date(base+minute*60000).toISOString(),text:id})):[]}))};
+    },
+  }});
+  const navigator=page.locator('.reader-navigator'),track=navigator.locator('.reader-navigator-timeline');
+  await page.waitForFunction(()=>Array.isArray(document.querySelector('.conversation-panel').pharosReaderIdleGaps));
+  await navigator.locator('.lt-idle-cut-line').first().waitFor({state:'attached'});
+  const turn=navigator.locator('.reader-navigator-turn').nth(1);
+  const relativeLeft=()=>turn.evaluate(element=>{const track=element.parentElement.getBoundingClientRect(),mark=element.getBoundingClientRect();return (mark.left-track.left)/track.width;});
+  assert.ok(await relativeLeft()<.6,'the resumed turn follows the compressed gap');
+  const bounds=await track.boundingBox();
+  await page.mouse.click(bounds.x+bounds.width*.75,bounds.y+bounds.height/2);
+  await page.waitForFunction(()=>document.querySelector('[data-message-id="resume"].authorship-target, [data-message-id="last"].authorship-target'));
+  await settled();
+  await page.locator('.turn').nth(1).evaluate(element=>element.scrollIntoView({block:'center',behavior:'instant'}));
+  await page.waitForFunction(()=>{
+    const turn=document.querySelectorAll('.reader-navigator-turn')[1].getBoundingClientRect(),band=document.querySelector('.reader-navigator-window').getBoundingClientRect();
+    return !document.querySelector('.reader-navigator-window').hidden&&turn.left<=band.right&&turn.right>=band.left;
+  });
+  await page.evaluate(()=>window.pharosView.write('timeline_idle',false));
+  await page.waitForFunction(()=>!document.querySelector('.reader-navigator .lt-idle-cut-line'));
+  assert.ok(await relativeLeft()>.9,'the shared setting restores linear time');
+  anotherActive=true;
+  await page.evaluate(()=>window.pharosView.write('timeline_idle',true));
+  await page.reload();
+  await page.waitForFunction(()=>Array.isArray(document.querySelector('.conversation-panel')?.pharosReaderIdleGaps));
+  assert.equal(await navigator.locator('.lt-idle-cut-line').count(),0,'activity in another session keeps the gap visible');
 });
 
 test('session navigator scrolling reuses transcript geometry on a long session', {skip}, async t=>{

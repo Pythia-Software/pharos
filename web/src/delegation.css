@@ -520,6 +520,12 @@
 .delegation-session-heading h2 {
   overflow-wrap: anywhere;
 }
+.workspace-inbox.merged .delegation-session-heading.repeats-workspace-title h2 {
+  display: none;
+}
+.workspace-inbox.merged .conversation-head:has(.delegation-session-heading.repeats-workspace-title) {
+  padding-top: 8px;
+}
 .delegation-session-heading small {
   display: block;
   color: var(--muted);

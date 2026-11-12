@@ -64,6 +64,28 @@ test("missing or invalid timestamps omit the age instead of inventing one", () =
   assert.equal(reader.relativeAge(now, NaN), "");
 });
 
+test("action relative times omit missing or invalid timestamps", () => {
+  const source=readFileSync(join(assets,'ui.py'),'utf8');
+  const relativeTime=vm.runInNewContext('('+source.slice(source.indexOf('function relativeTime('),source.indexOf('\nfunction transcriptHasActionTimes('))+')');
+  const start='2026-10-20T15:20:00Z';
+  for(const value of [undefined,null,'','invalid'])assert.equal(relativeTime(value,start),'');
+  for(const origin of [undefined,null,'','invalid'])assert.equal(relativeTime(start,origin),'');
+  assert.equal(relativeTime('2026-10-20T15:21:05Z',start),'+1m05s');
+});
+
+test("action timestamp column accounts for all turns and nested actions", () => {
+  const source=readFileSync(join(assets,'ui.py'),'utf8');
+  const helperSource=source.slice(source.indexOf('function relativeTime('),source.indexOf('\nfunction timelineEntry('));
+  const hasActionTimes=vm.runInNewContext(helperSource+';transcriptHasActionTimes');
+  const start='2026-10-20T15:20:00Z',human={kind:'message',created_at:start},call={kind:'tool_call',native_id:'call',created_at:null},result={kind:'tool_result',native_id:'result',created_at:start};
+  const turn={human,events:[call],owned:[human,call,result]},consumed=new Set(['result']);
+  assert.equal(hasActionTimes([turn],consumed),false,'message and paired result times do not reserve an empty action column');
+  assert.equal(hasActionTimes([{...turn,owned:[human,{...call,created_at:'invalid'}]}],consumed),false);
+  const nested={...call,native_id:'nested',created_at:'2026-10-20T15:20:10Z'};
+  assert.equal(hasActionTimes([turn,{...turn,owned:[human,call,nested]}],consumed),true,'a timed nested action in a later turn retains the column');
+  assert.equal(hasActionTimes([{...turn,human:{...human,created_at:null},events:[call],owned:[nested]}],consumed),false,'relative time needs a usable turn start');
+});
+
 test("JSON-string command arguments show the command and associate failures with it", () => {
   const { events, graph } = render([human(),
     event("cmd", "tool_call", { name: "exec_command", arguments: JSON.stringify({ cmd: "npm test", workdir: "/repo" }) }, 10, { call_id: "command-1" }),

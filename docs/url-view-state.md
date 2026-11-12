@@ -160,8 +160,9 @@ Analysis source-query links also retain the dashboard chart/population and opene
 
 `<page>/query` also publishes `schema_name`, an inspection template, and a `properties_path` to the paginated property catalogue. Use that schema name (for example `pharos_mcp_calls`) in each inspection scope. `JsonInspectionState`, `JsonMatchIdentity` and related types are generated from the installed core declarations. Returning a native `JsonValueView` directly from a property renderer lets Query Table bind its controlled state and semantic registry; wrapping that element in a host div hides it from the supported integration.
 
-The session reader's `reader_navigator` stores any combination of `timeline`,
-`context` and `turns` (default `["timeline","context","turns"]`); `[]` hides the bars. All bars
+The session reader's `reader_navigator` controls the `context` and `turns` bars.
+The legacy `timeline` value is still accepted, but the Timeline key controls that
+bar: it is hidden when every populated key item is disabled. All bars
 share the session clock and one visible-window indicator. Scroll progress and
 keyboard browsing positions are transient. Clicking a bar materializes, scrolls
 to and highlights its source without moving keyboard focus. Entirely untimed
