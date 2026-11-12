@@ -23,7 +23,8 @@ import (
 // The probe looks only in the fixed places where supported agents keep their
 // conversations. It never walks the home directory, never enters a folder that
 // macOS guards with a privacy prompt, and indexes nothing: a location becomes a
-// source only when the user accepts it into this host's file.
+// source only when the user accepts it into this host's file. The guided
+// wizard can also explicitly request a separate, bounded Downloads check.
 
 const (
 	probeWalkLimit      = 250_000 // directory entries walked per location
@@ -68,6 +69,7 @@ type ProbeStatus struct {
 
 type ProbeReport struct {
 	ProbeStatus
+	Downloads   *DownloadScan    `json:"downloads,omitempty"`
 	Home        string           `json:"home"`
 	ShellEnv    string           `json:"shell_env"`
 	Environment []ProbeVariable  `json:"environment"`

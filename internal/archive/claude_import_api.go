@@ -323,11 +323,24 @@ func (s *Server) claudeWatchDocument() map[string]any {
 		browsers = append(browsers, listBrowserProfiles()...)
 	}
 	exports := s.claudeWatch.Fetches()
+	// Collection jobs include manual imports, not just watched downloads.
+	// A failed listing leaves the date unknown rather than implying no import.
+	jobs, jobsErr := listClaudeImports(config)
+	lastImport := ""
+	for _, job := range jobs {
+		if job.State == "collected" && job.UpdatedAt > lastImport {
+			lastImport = job.UpdatedAt
+		}
+	}
 	for i := range exports {
 		exports[i].BrowserLabel = browserProfileLabel(exports[i].Browser, browsers)
+		if exports[i].State == claudeFetchImported && exports[i].UpdatedAt > lastImport {
+			lastImport = exports[i].UpdatedAt
+		}
 	}
 	return map[string]any{"enabled": setting.Enabled, "available": browserOpenAvailable(), "folder": s.claudeWatch.dir, "problem": problem,
-		"browser": setting.Browser, "browsers": browsers, "exports": exports, "library": s.claudeImportLibrary()}
+		"browser": setting.Browser, "browsers": browsers, "exports": exports, "library": s.claudeImportLibrary(),
+		"last_import_at": lastImport, "import_history_available": jobsErr == nil, "routine_done_at": setting.RoutineDoneAt}
 }
 
 type claudeImportWorkspace struct {
@@ -404,6 +417,11 @@ func (s *Server) postClaudeWatch(w http.ResponseWriter, body map[string]any) {
 	id, _ := body["id"].(string)
 	action, _ := body["action"].(string)
 	switch {
+	case action == "routine_done":
+		if _, err := updateClaudeWatchSetting(config, func(setting *claudeWatchSetting) { setting.RoutineDoneAt = now() }); err != nil {
+			writeError(w, err, 500)
+			return
+		}
 	case hasEnabled || hasBrowser && id == "":
 		if hasEnabled && enabled && !browserOpenAvailable() {
 			writeError(w, errBrowserOpenUnsupported, 400)

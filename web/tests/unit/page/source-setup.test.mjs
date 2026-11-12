@@ -191,6 +191,18 @@ test('Claude collection counts only verified export records and keeps full cover
 });
 
 const watchLine=vm.runInNewContext(source+';pharosClaudeWatchLine');
+const routineDue=vm.runInNewContext(source+';pharosClaudeRoutineDue');
+test('Claude export reminder waits a week after an import or an acknowledgement',()=>{
+  const now=Date.parse('2026-11-12T12:00:00Z'),week=7*24*60*60*1000;
+  const date=age=>new Date(now-age).toISOString();
+  assert.equal(routineDue({import_history_available:true},now),true);
+  assert.equal(routineDue({last_import_at:date(week)},now),false);
+  assert.equal(routineDue({last_import_at:date(week+1)},now),true);
+  assert.equal(routineDue({last_import_at:date(week+1),routine_done_at:date(1000)},now),false);
+  assert.equal(routineDue({last_import_at:date(week+1),routine_done_at:date(week+1)},now),true);
+  assert.equal(routineDue({import_history_available:false},now),false);
+  assert.equal(routineDue({last_import_at:'invalid'},now),true);
+});
 test('a watched Claude export offers retrying only once Pharos has stopped opening links',()=>{
   const waiting=watchLine({state:'fetching',waiting_file:'frames-000.zip',browser_label:'Google Chrome — Work',collected:3,expected:7});
   assert.match(waiting.text,/frames-000\.zip/);assert.match(waiting.text,/Google Chrome — Work/);assert.match(waiting.files,/3 of 7 files/);
@@ -246,4 +258,19 @@ test('ChatGPT collection and indexing progress describe a verified snapshot sepa
   const indexing=watchLine({state:'fetching',phase:'indexing',collected:1,expected:1,ingestion:{stage:'indexing',processed:2,conversations:2,messages:10}});
   assert.match(indexing.files,/verified/);assert.match(indexing.progress,/2 conversations/);assert.deepEqual(plain(indexing.actions),['stop']);
   assert.deepEqual(plain(watchLine({state:'paused'}).actions),['retry','stop']);
+});
+
+
+test('source limitations use provider notes and fall back to the source lists',()=>{
+  const html=readFileSync(join(assets,'ui.py'),'utf8');
+  const start=html.indexOf('function sourceLimitGroups('),end=html.indexOf('\nwindow.pharosSourceInfoButton=',start);
+  const limits=vm.runInNewContext(html.slice(start,end)+';sourceLimitGroups');
+  const grouped=plain(limits({kind:'codex'},registry.providers));
+  assert.ok(grouped.missing.some(item=>item.label==='Reported cost'));
+  assert.ok(grouped.varying.find(item=>item.label==='Thinking').note.includes('encrypted'));
+  assert.ok(!grouped.missing.some(item=>item.support==='not-applicable'));
+  const fallback=plain(limits({kind:'unknown',not_recorded:['Model'],sometimes_recorded:['Title']},[]));
+  assert.deepEqual(fallback.missing.map(item=>item.label),['Model']);
+  assert.deepEqual(fallback.varying.map(item=>item.label),['Title']);
+  assert.equal(limits({kind:'unknown'},[]).missing.length,0);
 });

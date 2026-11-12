@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -861,6 +862,57 @@ func TestProbeSelectedTools(t *testing.T) {
 	probePut(t, filepath.Join(home, ".gemini", "antigravity", "not-a-conversation"), "")
 	if code, status := probeCall(t, server, http.MethodGet, "/api/probe/status?discovery=none", ""); code != 200 || status["new_sources"] != float64(0) {
 		t.Fatal("status for the tools-first UI discovered unselected tools", code, status)
+	}
+}
+
+func TestProbeFindsDownloadedExportsOnlyOnRequest(t *testing.T) {
+	home := probeHome(t)
+	useHost(t, "download-probe-mac")
+	downloads := filepath.Join(home, "Downloads")
+	probePut(t, filepath.Join(downloads, "unpacked-claude", "conversations.json"), `[{"uuid":"one","chat_messages":[]}]`)
+	probePut(t, filepath.Join(downloads, "unknown", "conversations.json"), `[]`)
+	chatGPTZip(t, filepath.Join(downloads, "chat.zip"), map[string]string{"conversations.json": `[{"id":"one","mapping":{}}]`})
+	chatGPTZip(t, filepath.Join(downloads, "photos.zip"), map[string]string{"photo.jpg": "image"})
+	manifest := claudeImportManifest(t, downloads, claudeManifestPart{Filename: "conversations-000.zip", Category: "conversations"})
+	claudeImportManifest(t, filepath.Join(downloads, "claude-folder"), claudeManifestPart{Filename: "conversations-000.zip", Category: "conversations"})
+	outside := filepath.Join(home, "outside")
+	probePut(t, filepath.Join(outside, "conversations.json"), `[{"chat_messages":[]}]`)
+	if err := os.Symlink(outside, filepath.Join(downloads, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	server := probeServer(t, probeLibrary(t, ""))
+	if code, result := probeCall(t, server, http.MethodPost, "/api/probe", `{"kinds":[]}`); code != 200 || result["downloads"] != nil {
+		t.Fatal("ordinary discovery checked Downloads", code, result)
+	}
+	code, result := probeCall(t, server, http.MethodPost, "/api/probe", `{"kinds":[],"downloads":true}`)
+	if code != 200 {
+		t.Fatal(code, result)
+	}
+	var scan DownloadScan
+	data, _ := json.Marshal(result["downloads"])
+	if err := json.Unmarshal(data, &scan); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, export := range scan.Exports {
+		got[export.Path] = export.Kind
+	}
+	want := map[string]string{"~/Downloads/chat.zip": "chatgpt", "~/Downloads/unpacked-claude": "claude-ai", "~/Downloads/claude-folder": "claude-ai", "~/Downloads/unknown": "", tildeWithin(home, manifest): "claude-ai"}
+	if !reflect.DeepEqual(got, want) || scan.Problem != "" || scan.Incomplete {
+		t.Fatal("unexpected exports", scan)
+	}
+	if len(server.Config().Sources) != 0 {
+		t.Fatal("discovery imported a source")
+	}
+	if code, result = probeCall(t, server, http.MethodPost, "/api/probe", `{"kinds":[],"only_locations":true,"downloads":true}`); code != 200 || result["downloads"] != nil {
+		t.Fatal("named locations checked Downloads", code, result)
+	}
+	if err := os.RemoveAll(downloads); err != nil {
+		t.Fatal(err)
+	}
+	probePut(t, downloads, "not a directory")
+	if scan := scanDownloadExports(home); scan.Problem == "" {
+		t.Fatal("failed listing was reported as no exports", scan)
 	}
 }
 

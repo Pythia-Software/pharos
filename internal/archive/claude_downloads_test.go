@@ -311,6 +311,9 @@ func TestClaudeDownloadsWatchSettingAndServiceImport(t *testing.T) {
 	if watch := mapValue(response["watch"]); code != 200 || watch["enabled"] != false || watch["available"] != browserOpenAvailable() {
 		t.Fatal(code, response)
 	}
+	if code, response = probeCall(t, server, http.MethodPost, "/api/claude-imports/watch", `{"action":"routine_done"}`); code != 200 || response["routine_done_at"] == "" || loadClaudeWatchSetting(server.Config()).RoutineDoneAt == "" {
+		t.Fatal("routine acknowledgement was not saved", code, response)
+	}
 	listed := 0
 	override(t, &listBrowserProfiles, func() []browserProfile {
 		listed++
@@ -364,6 +367,9 @@ func TestClaudeDownloadsWatchSettingAndServiceImport(t *testing.T) {
 	exports := server.claudeWatch.Fetches()
 	if len(opened) != 2 || len(exports) != 1 || exports[0].State != claudeFetchImported || exports[0].Message != "" {
 		t.Fatalf("opened %v exports %+v", opened, exports)
+	}
+	if code, response = probeCall(t, server, http.MethodGet, "/api/claude-imports", ""); code != 200 || mapValue(response["watch"])["last_import_at"] == "" || mapValue(response["watch"])["import_history_available"] != true {
+		t.Fatal("completed import is missing from reminder history", code, response)
 	}
 	var conversations int
 	if err := server.Catalog.DB.QueryRow(`SELECT count(*) FROM conversations`).Scan(&conversations); err != nil || conversations == 0 {
