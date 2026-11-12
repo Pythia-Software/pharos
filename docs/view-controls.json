@@ -2299,6 +2299,15 @@
       "reason": "Copies the visible daily export starter prompt to the clipboard; task creation happens later in Claude Desktop and does not change the Pharos view."
     },
     {
+      "key": "b0a33e92ec465a20:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "claudeExportRoutine",
+      "tag": "button",
+      "control": "'button', '', 'I’ve set this up'",
+      "contract": "action",
+      "reason": "Acknowledges the export setup reminder for this library and Mac; it does not select a content view."
+    },
+    {
       "key": "6d145e032336655c:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "exportsLink",
@@ -3307,6 +3316,24 @@
       "control": "<input type=\"checkbox\" id=\"feedbackIncludeText\">",
       "contract": "editing",
       "reason": "Feedback/annotation/bookmark draft or mutation, explicitly excluded."
+    },
+    {
+      "key": "5330de7a66667d17:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<module>",
+      "tag": "button",
+      "control": "'button', 'source-info-button', icon('info')",
+      "contract": "transient",
+      "reason": "Opens temporary source ingestion information without changing the saved view."
+    },
+    {
+      "key": "e91ec901e257f7ab:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<module>",
+      "tag": "button",
+      "control": "'button', 'source-info-close', 'Close'",
+      "contract": "transient",
+      "reason": "Opens or closes temporary source ingestion information without changing the saved view."
     },
     {
       "key": "268e44e7d57fe32e:0",

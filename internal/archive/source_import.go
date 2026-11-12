@@ -12,9 +12,8 @@ import (
 )
 
 // sourceImport adds a downloaded export (ChatGPT, Claude.ai) as one of this
-// Mac's sources. Its history is in the cloud, so there is nothing to find:
-// the person names the ZIP, the folder it unzips to, or its conversations
-// file, and capture copies it into the library like any source.
+// Mac's sources. The person chooses a downloaded ZIP, extracted folder,
+// or conversations file, and capture copies it into the library like any source.
 type sourceImport struct {
 	Kind string `json:"kind"`
 	Path string `json:"path"`

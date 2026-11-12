@@ -1018,8 +1018,8 @@
   let hostsData = null, hostsBusy = null, hostsError = null;
 
   async function loadHosts() {
-    const [sources, index, capture] = await Promise.all([call('/api/sources'), call('/api/index'), call('/api/capture')]);
-    hostsData = {sources, index, capture};
+    const [sources, index, capture, providers] = await Promise.all([call('/api/sources'), call('/api/index'), call('/api/capture'), window.pharosSourceProviders()]);
+    hostsData = {sources, index, capture, providers};
     renderHosts();
     annotateCards();
     const running = index.active || index.sync_active || capture.active;
@@ -1029,7 +1029,7 @@
   function renderHosts() {
     const grid = document.getElementById('sourceGrid');
     if (!grid || !hostsData) return;
-    const {index} = hostsData;
+    const {index, providers} = hostsData;
     const captured = index.hosts || [];
     renderHeaderAction();
 
@@ -1040,7 +1040,9 @@
         const card = node('article', 'source-card remote'), head = node('div', 'source-card-head'), title = node('div');
         card.dataset.host = host.id;
         card.dataset.source = source.name;
-        title.append(node('h3', '', source.name), node('span', 'source-host', [host.label || host.id, host.user].filter(Boolean).join(' · ')));
+        const titleRow = node('div', 'source-title-row'); titleRow.append(node('h3', '', source.name));
+        const info = window.pharosSourceInfoButton(source, providers); if (info) titleRow.append(info);
+        title.append(titleRow, node('span', 'source-host', [host.label || host.id, host.user].filter(Boolean).join(' · ')));
         head.append(title);
         const path = node('div', 'source-path', source.path || 'No path recorded'), facts = node('dl', 'source-facts');
         for (const [label, value] of [['Last indexed', source.indexed_at], ['Last index attempt', source.last_attempt_at]]) {
