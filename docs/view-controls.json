@@ -436,6 +436,10 @@
       "field": "timeline_idle"
     },
     {
+      "file": "web/src/reader-navigator.tsx",
+      "field": "timeline_idle"
+    },
+    {
       "file": "web/src/delegation.tsx",
       "field": "timeline_visibility"
     },
@@ -7908,21 +7912,38 @@
       "reason": "A whole-key default atomically writes reader_filter_level, reader_filter, reader_writing, reader_events, reader_labels and reader_highlight_hidden through the classic reader owner; its selected radio is derived from those fields."
     },
     {
-      "key": "80bfd41f2f6475ec:0",
+      "key": "a25228228588be5c:0",
       "file": "web/src/reader-key-filter.tsx",
       "owner": "ReaderKeyFilter",
       "tag": "button",
-      "control": "data-view-field=\"reader_highlight_hidden\" onClick={() => onChange(visible ? [] : all, true)}",
-      "binding": "reader_highlight_hidden",
-      "contract": "view.reader_highlight_hidden",
-      "reason": "The master toggle writes reader_writing, reader_events, reader_labels and available highlight exclusions through the classic reader owner; unavailable exclusions are preserved."
+      "control": "data-view-field={groupField} onClick={() => onChange(visible ? [] : all, true)}",
+      "contract": "reader",
+      "reason": "The shared key master receives reader_filter or reader_highlight_hidden from its classic owner. Content writes reader_filter and reader_filter_level and restores available activity labels when showing all; highlighting writes reader_writing, reader_events, reader_labels and reader_highlight_hidden."
     },
     {
-      "key": "58b5064e2d686b61:0",
+      "key": "0f264e6bb1e4b293:0",
+      "file": "web/src/reader-key-filter.tsx",
+      "owner": "ReaderLineTag",
+      "tag": "button",
+      "control": "onClick={() => choose(() => onChange(updateReaderKeys(all, shown, scope.values, option.action)))}",
+      "contract": "view.reader_hidden_tags",
+      "reason": "Action and category visibility choices write reader_hidden_tags through the classic transcript tag filter."
+    },
+    {
+      "key": "2dedb4ed64b08f55:0",
+      "file": "web/src/reader-key-filter.tsx",
+      "owner": "ReaderLineTag",
+      "tag": "button",
+      "control": "onClick={() => choose(() => onChange(updateReaderKeys(all, shown, values, \"clear\")))}",
+      "contract": "view.reader_hidden_tags",
+      "reason": "Show All writes reader_hidden_tags through the classic transcript tag filter."
+    },
+    {
+      "key": "a8c13f42ec7e071b:0",
       "file": "web/src/reader-navigator.tsx",
       "owner": "choice",
       "tag": "input",
-      "control": "data-view-field=\"reader_navigator\" checked={shown.includes(name)} onChange={event=>{const checked=event.currentTarget.checked;setShown(previous=>choices.filter(item=>item===name?checked:previous.includes(item)));}}",
+      "control": "data-view-field=\"reader_navigator\" checked={shown.includes(name)} onChange={event=>{const checked=event.currentTarget.checked;setShown(previous=>checked?[...previous.filter(item=>item!==name),name]:previous.filter(item=>item!==name));}}",
       "binding": "reader_navigator",
       "contract": "view.reader_navigator",
       "reason": "Bound directly to the registered view field."

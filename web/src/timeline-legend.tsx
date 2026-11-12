@@ -42,6 +42,16 @@ export function timelineModeGroups(messages:LabelMessage[],taxonomy:Taxonomy=[])
   });
 }
 
+/** The legend and the conversation navigator use the same populated values. */
+export function timelineLegendDomains(messages:LabelMessage[],origins:string[],taxonomy:Taxonomy,tools:Record<string,string>,error:boolean,events:AgentEventLink[]){
+  const modes=timelineModeGroups(messages,taxonomy);
+  return {modes:[...modes.flatMap(family=>[...(family.direct?[family.id]:[]),...family.labels]),...(messages.some(message=>!functionStates(message,'label').length)?['?']:[])],events:[...new Set(events.map(event=>eventGroup(event.group).key))],tools:[...Object.keys(tools),...(error?['error']:[])],origins:callerSources.filter(source=>origins.includes(source.id)).map(source=>source.id)};
+}
+
+export function timelineLegendCounts(visibility:TimelineVisibility,domains:ReturnType<typeof timelineLegendDomains>){
+  return Object.entries(domains).reduce((total,[section,values])=>{const counts=timelineGroupCounts(visibility,section as TimelineVisibilitySection,values);return {visible:total.visible+counts.visibleCount,hidden:total.hidden+counts.hiddenCount};},{visible:0,hidden:0});
+}
+
 export function TimelineLegend({messages,origins,taxonomy,tools,error,unknownTools=[],events=[],visibility,onSelect,previewOnly=false,onOpenTimeline,embedded=false}:{previewOnly?:boolean;onOpenTimeline?:()=>void;embedded?:boolean;messages:LabelMessage[];origins:string[];taxonomy:Taxonomy;tools:Record<string,string>;error:boolean;unknownTools?:string[];events?:AgentEventLink[];visibility:TimelineVisibility;onSelect:(section:TimelineVisibilityKey,values:string[],action:LegendAction)=>void}){
   const [fullExpanded]=useViewEntry('disclosures','timeline-key',true,!previewOnly&&!embedded);
   const expanded=embedded||!previewOnly&&fullExpanded;
@@ -67,10 +77,10 @@ export function TimelineLegend({messages,origins,taxonomy,tools,error,unknownToo
     </div>;
   }
   const eventKeys=[...new Set(events.map(event=>eventGroup(event.group).key))];
-  const domains={modes:[...modes.flatMap(modeKeys),...(uncategorized?['?']:[])],events:eventKeys,tools:[...Object.keys(tools),...(error?['error']:[])],origins:sources.map(source=>source.id)};
+  const domains=timelineLegendDomains(messages,origins,taxonomy,tools,error,events);
   const hasHidden=Object.entries(domains).some(([section,values])=>timelineGroupCounts(visibility,section as TimelineVisibilitySection,values).hiddenCount>0);
   const populated=Object.entries(domains).filter(([,values])=>values.length>0) as [TimelineVisibilitySection,string[]][];
-  const counts=populated.map(([section,values])=>timelineGroupCounts(visibility,section,values)),visible=counts.reduce((sum,count)=>sum+count.visibleCount,0),hidden=counts.reduce((sum,count)=>sum+count.hiddenCount,0);
+  const {visible,hidden}=timelineLegendCounts(visibility,domains);
   const content=<>
     {modes.length||uncategorized?section('modes','Message modes',[...modes.flatMap(modeKeys),...(uncategorized?['?']:[])],<div className="lt-mode-groups">{['P','C'].map(root=>{const families=modes.filter(family=>family.id===root||family.id.startsWith(root+'.'));return families.length?<div className="lt-ontology-role" role="group" aria-label={root==='P'?'Sender':'Receiver'} key={root}>
       {chip('modes',root,root==='P'?'Sender':'Receiver',null,families.flatMap(modeKeys),true)}

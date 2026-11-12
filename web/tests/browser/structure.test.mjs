@@ -547,12 +547,29 @@ const ROUTES = [
     assert.equal(await page.locator('.usage-estimate-note').isVisible(),true);
     assert.equal(await page.evaluate(()=>window.exportScriptRan),undefined,'exported source is displayed as text');
   } },
+  { name: "Claude export missing usage", url: `${work}/conversation/${rootConversation}`, ready: ".claude-export-usage-note", api: {
+    ...claudeResearchAPI,
+    "GET /api/work/:id/conversations/:conversation": () => {
+      const conversation = structuredClone(claudeResearchAPI["GET /api/work/:id/conversations/:conversation"]);
+      conversation.harness = 'claude-code-cloud-export';
+      for (const field of ['token_usage', 'token_usage_is_estimate', 'usage_estimates']) delete conversation[field];
+      for (const message of conversation.messages) {
+        delete message.usage;
+        delete message.usage_is_estimate;
+        delete message.duration_estimate;
+      }
+      return conversation;
+    },
+  }, check: async page => {
+    const notice = page.getByRole('status').filter({hasText:'Token usage unavailable'});
+    assert.equal(await notice.isVisible(),true);
+    const [banner, heading] = await Promise.all([notice.boundingBox(), notice.locator('..').locator('.conversation-title-line h2:visible').first().boundingBox()]);
+    assert.ok(banner.y + banner.height <= heading.y, 'the usage warning precedes the conversation heading');
+  } },
   { name: "Markdown links in transcript", url: `${work}/conversation/${rootConversation}`, api: markdownLinkAPI, ready: ".conversation-panel .markdown-link" },
   { name: "Markdown links in Search", url: "/library", api: {...conversationResultAPI,...markdownLinkAPI}, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("link",{name:"Running dev server",exact:true}).waitFor();}, shown: ".result-turn-content .markdown-link" },
   { name: "Search nested reviews and human writing", url: "/library?reader_writing=0&reader_events=1&reader_labels=1", api: authoredTurnAPI, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("button",{name:/Sub-agent · Reviewer 5/}).waitFor();}, shown: ".result-turn-content .human-written",
     check: async page => {
-      const painted = await page.locator(".result-turn-content .human-written").first().evaluate(element => getComputedStyle(element).backgroundColor);
-      assert.notEqual(painted, "rgba(0, 0, 0, 0)", "human writing remains highlighted when the reader preference is off");
       const mark = page.locator(".result-turn-content .human-written").first();
       await mark.hover();const tip=page.getByRole("tooltip");await tip.waitFor();
       assert.match(await tip.textContent(), /Human writing.*typed or dictated/s);

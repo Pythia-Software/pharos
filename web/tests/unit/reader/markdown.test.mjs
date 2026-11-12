@@ -206,10 +206,10 @@ test("the reader offers each highlight the conversation has marks for, each show
   assert.deepEqual(plain(options.map(option => [option.id, option.field, option.available])),
     [['writing', 'reader_writing', true], ['events', 'reader_events', true], ['labels', 'reader_labels', true]]);
   assert.deepEqual(plain(options[1].legend), [{ name: 'Friction', className: 'event-friction' }]);
-  assert.equal(options[1].note, '1 event in 1 of 1 agent messages read');
+  assert.equal(options[1].note, '');
   // Events awaiting a rebuild stay inspectable here, but never read as current.
   const rebuilding = reader.readerHighlightOptions({ ...conversation, agent_events: { messages_read: 1, pending: true } }, [human, agent]);
-  assert.match(rebuilding[1].note, /^1 event in 1 of 1 agent messages read\. Waiting to be rebuilt .* may change$/);
+  assert.match(rebuilding[1].note, /^Waiting to be rebuilt .* may change$/);
   assert.deepEqual(plain(options[2].legend), [{ name: 'Report', family: 'C.report' }]);
   // Human writing is on by default and the classifiers are opt-in; a link
   // wins over the saved choice, which wins over the default.
@@ -221,7 +221,7 @@ test("the reader offers each highlight the conversation has marks for, each show
   // once it has run; one with nothing here is offered but off.
   const plainOptions = reader.readerHighlightOptions({ labels: { labeled: false, pending: true }, agent_events: { messages_read: 3 } }, [{ role: 'assistant', kind: 'message', text: 'Done.' }]);
   assert.deepEqual(plain(plainOptions.map(option => [option.id, option.available, option.note])),
-    [['events', false, '0 events in 0 of 3 agent messages read'], ['labels', false, 'Not labeled yet']]);
+    [['events', false, ''], ['labels', false, 'Not labeled yet']]);
   assert.deepEqual(shown(() => true), ['events', 'labels', 'writing']);
   const overlapping=[{group:'Friction',probability:.9},{group:'Reactions and learning',probability:.8}];
   assert.deepEqual(plain(reader.readerEventHighlights(overlapping,new Set(['events:event-learning']))),[overlapping[1]],'hiding the strongest group leaves the other hue and hover content');

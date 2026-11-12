@@ -15,3 +15,21 @@ export function readerKeyState(all: string[], shown: string[], values: string[])
   return { active: selectionActive && count === values.length, mixed: count > 0 && count < values.length,
     dimmed: count === 0, selectionActive, soleSelection: false, visibleCount: count, hiddenCount: values.length - count };
 }
+
+// A category with the same members as the action has no distinct choices.
+export function readerLineScopes(values: string[], category?: { label: string; values: string[] }) {
+  const action = new Set(values), group = new Set(category?.values ?? []);
+  const scopes = [{ label: "Specific activity", values }];
+  if (category && group.size && (group.size !== action.size || [...group].some(value => !action.has(value)))) {
+    scopes.push({ label: `Category: ${category.label}`, values: category.values });
+  }
+  return scopes;
+}
+
+export function readerLineOptionLabel(action: LegendAction, category: string | undefined, visible: number, hidden: number) {
+  const target = category ? `the ${category} category` : "this activity";
+  if (action === "only") return `Show only ${target}`;
+  if (action === "show") return visible && hidden ? `Show ${hidden} hidden ${hidden === 1 ? "label" : "labels"} in ${target}` : `Show ${target}`;
+  if (action === "hide") return visible && hidden ? `Hide ${visible} visible ${visible === 1 ? "label" : "labels"} in ${target}` : `Hide ${target}`;
+  return "Show All";
+}

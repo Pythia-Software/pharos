@@ -579,6 +579,12 @@ for(const width of [1440,390])test(`single-agent Conversation and Timeline share
  const api={'GET /api/work/:id':{...work,conversations:[work.conversations[0]]},'GET /api/work/:id/delegation':analysis};
  const app=await open(t,{url:`/work/${workID}`,api,viewport:{width,height:900},ready:'.delegation-single'}),{page}=app;
  await page.locator('.conversation-panel:not(.conversation-loading)').waitFor();
+ await page.locator('.delegation-session-heading small').waitFor();
+ assert.equal(await page.getByRole('heading',{name:work.title,exact:true}).count(),1,'the workspace and its sole session share one visible title');
+ assert.ok(await page.getByRole('button',{name:'Copy conversation name',exact:true}).isVisible());
+ assert.ok(await page.getByRole('button',{name:'Copy conversation ID',exact:true}).isVisible());
+ assert.match(await page.locator('.delegation-session-heading small').textContent(),/claude/);
+ await app.shot(`single-session-heading-${width}`);
  assert.equal(await page.getByRole('tab',{name:'Conversation',exact:true}).getAttribute('aria-selected'),'true');
  await page.getByRole('tab',{name:'Timeline',exact:true}).click();await page.locator('.lt-session-root').first().waitFor();await app.settled();
  assert.equal(await page.locator('.conversation-panel').isVisible(),false);
@@ -600,6 +606,24 @@ for(const width of [1440,390])test(`single-agent Conversation and Timeline share
  await page.goForward();await app.settled();
  assert.equal(await page.locator('.conversation-panel').isVisible(),false);
  await app.shot(`single-timeline-${width}`);
+});
+
+test('session headings retain distinct names and return when the workspace splits',{skip},async t=>{
+ const work=defaultApi['GET /api/work/:id']({params:{id:workID}}),base=defaultApi['GET /api/work/:id/delegation']({query:new URLSearchParams()});
+ let split=false;
+ const api={
+  'GET /api/work/:id':{...work,conversations:[work.conversations[0]]},
+  'GET /api/work/:id/delegation':()=>{
+   const root={...base.rows[0],label:split?work.title:'A distinct session name',child_count:split?1:0};
+   return {...base,rows:split?[root,base.rows[1]]:[root],focus:split?[root,base.focus[1]]:[root],session_count:split?2:1,total:split?2:1};
+  },
+ };
+ const app=await open(t,{url:`/work/${workID}`,api,ready:'.delegation-session-heading h2'}),{page}=app;
+ assert.equal(await page.locator('.delegation-session-heading h2').textContent(),'A distinct session name');
+ assert.ok(await page.locator('.delegation-session-heading h2').isVisible());
+ split=true;await page.reload();
+ await page.locator('.workspace-inbox:not(.merged) .delegation-session-heading h2').waitFor();
+ assert.equal(await page.locator('.delegation-session-heading h2').textContent(),work.title);
 });
 
 test('Timeline resizing, window controls and Caller disclosures restore without changing their source identities',{skip},async t=>{
@@ -828,7 +852,7 @@ test('Timeline Key menus filter ribbons and restore selections with keyboard acc
  await page.keyboard.press('Escape');assert.equal(await choices.evaluate(el=>el===document.activeElement),true);
  const eventHints=button('Agent events category');
  await eventHints.first().hover();await page.getByRole('tooltip').getByText('Arc back to the earlier text it is about',{exact:true}).waitFor();
- await eventHints.nth(1).hover();await page.getByRole('tooltip').getByText('On the axis: no target found',{exact:true}).waitFor();
+ await eventHints.nth(1).hover();await page.getByRole('tooltip').getByText('Open: Ungrounded',{exact:true}).waitFor();
  await eventHints.first().click();await page.getByRole('menu',{name:'Filter Agent events category',exact:true}).waitFor();
  await page.keyboard.press('Escape');
  await app.shot('timeline-key-compact');
@@ -1108,6 +1132,23 @@ test('reader category and disclosure state survive a fresh browser', {skip},asyn
  assert.ok(await fresh.page.locator('.turn').evaluateAll(turns=>turns.length>1&&turns.every(turn=>!turn.open)));
  await fresh.page.getByRole('button',{name:'Open All Turns',exact:true}).click();
  assert.ok(await fresh.page.locator('.turn').evaluateAll(turns=>turns.length>1&&turns.every(turn=>turn.open)));
+ // Content uses the same visibility menu and restores the linked selection.
+ const content=fresh.page.getByRole('group',{name:'Content',exact:true});
+ const prompts=content.getByRole('button',{name:'Prompts',exact:true});
+ await prompts.focus();await prompts.press('ArrowDown');
+ await fresh.page.getByRole('menu',{name:'Filter Prompts',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await fresh.page.locator('.speaker-row.human').first().waitFor({state:'hidden'});
+ assert.equal(await prompts.evaluate(el=>el===document.activeElement),true);
+ const filtered=await open(t,{url:path(fresh.page),ready:'.transcript-content-key'});
+ assert.equal(await filtered.page.getByRole('group',{name:'Content',exact:true}).getByRole('button',{name:'Prompts',exact:true}).getAttribute('aria-pressed'),'false');
+ const toggle=content.getByRole('button',{name:'Content',exact:true});
+ await toggle.click();await fresh.page.waitForFunction(()=>document.querySelector('.transcript-content-key .conversation-key-toggle')?.getAttribute('aria-pressed')==='false');
+ await toggle.click();await fresh.page.locator('.speaker-row.human').first().waitFor();
+ assert.equal(await toggle.getAttribute('aria-pressed'),'true');
+ await fresh.page.setViewportSize({width:320,height:900});await prompts.click();
+ const menu=fresh.page.getByRole('menu',{name:'Filter Prompts',exact:true});
+ assert.equal(await menu.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight}),true);
+ await fresh.page.keyboard.press('Escape');
 });
 
 test('sub-agent assignments and recorded output restore their disclosures', {skip},async t=>{
@@ -2046,6 +2087,8 @@ test('message card labels and sentence events restore independently in the reade
  for(const field of ['reader_writing','reader_events','reader_labels'])assert.equal(new URL(writingOnly.page.url()).searchParams.get(field),'1',`${field} turns back on`);
  const timelineKey=page.getByRole('region',{name:'Conversation key',exact:true}).getByRole('group',{name:'Timeline key',exact:true});
  const navigator=page.locator('.reader-navigator'),timelineRange=await navigator.getAttribute('data-range');
+ const legacyNavigator=await open(t,{api,url:`${url}&reader_navigator=%5B%5D`,ready:'.transcript-timeline-key .lt-timeline-legend'});
+ await legacyNavigator.page.locator('.reader-navigator-timeline').waitFor();
  await timelineKey.getByRole('button',{name:'Plan',exact:true}).waitFor();
  for(const name of ['Friction','Read / search'])assert.ok(await timelineKey.getByRole('button',{name,exact:true}).isVisible(),`${name} is in the Conversation key`);
  const timelineChoose=async(name,action)=>{await timelineKey.getByRole('button',{name,exact:true}).click();await page.getByRole('menuitem',{name:action,exact:true}).click();await app.settled();};
@@ -2053,10 +2096,17 @@ test('message card labels and sentence events restore independently in the reade
  assert.equal(await page.getByRole('menuitem',{name:'Hide',exact:true}).evaluate(element=>element===document.activeElement),true);
  await page.keyboard.press('Escape');assert.equal(await plan.evaluate(element=>element===document.activeElement),true);
  await timelineChoose('Plan','Hide');assert.equal(await plan.getAttribute('aria-pressed'),'false');
+ assert.equal(await navigator.locator('.reader-navigator-timeline').count(),1,'partially disabled key keeps the timeline');
  const timelineToggle=timelineKey.getByRole('button',{name:'Timeline',exact:true});assert.equal(await timelineToggle.getAttribute('aria-pressed'),'mixed');
  await timelineToggle.click();assert.equal(await timelineToggle.getAttribute('aria-pressed'),'false');
+ assert.equal(await navigator.locator('.reader-navigator-timeline').count(),0,'fully disabled key hides the timeline');
+ const hiddenTimelineCopy=await open(t,{api,url:path(page),ready:'.transcript-timeline-key .lt-timeline-legend'});
+ assert.equal(await hiddenTimelineCopy.page.locator('.reader-navigator-timeline').count(),0,'copied URLs restore the hidden timeline');
  assert.equal(await navigator.locator('[data-agent-event="e-tint"],[data-tool-id="read-csv"]').count(),0);
  assert.ok(await page.locator('.thinking-card mark.agent-event:not(.reader-event-hidden)').count(),'timeline visibility leaves text highlights on');
+ await timelineChoose('Plan','Show');assert.equal(await navigator.locator('.reader-navigator-timeline').count(),1,'showing an individual key item restores the timeline');
+ assert.equal(await timelineToggle.getAttribute('aria-pressed'),'mixed');
+ await timelineToggle.click();assert.equal(await timelineToggle.getAttribute('aria-pressed'),'false');
  await timelineToggle.click();assert.equal(await timelineToggle.getAttribute('aria-pressed'),'true');
  await plan.click();assert.ok(await page.getByRole('menuitem',{name:'Hide',exact:true}).isVisible());await page.keyboard.press('Escape');
  await navigator.locator('[data-agent-event="e-tint"]').first().waitFor({state:'attached'});await navigator.locator('[data-tool-id="read-csv"]').first().waitFor({state:'attached'});
@@ -2068,6 +2118,14 @@ test('message card labels and sentence events restore independently in the reade
  for(const name of ['Friction','Read / search'])assert.equal(await timelineCopy.page.getByRole('group',{name:'Timeline key',exact:true}).getByRole('button',{name,exact:true}).getAttribute('aria-pressed'),'false');
  await timelineChoose('Friction','Show');await timelineChoose('Read / search','Show');
  await navigator.locator('[data-agent-event="e-tint"]').first().waitFor({state:'attached'});await navigator.locator('[data-tool-id="read-csv"]').first().waitFor({state:'attached'});
+ // When there is enough space, hierarchy controls share a line instead of
+ // forcing a separate row for each subgroup.
+ await page.setViewportSize({width:1920,height:1000});await app.settled();
+ const modeControls=await Promise.all(['Message modes category','Sender category','Receiver category'].map(name=>timelineKey.getByRole('button',{name,exact:true}).boundingBox()));
+ assert.ok(modeControls.every(Boolean));
+ assert.ok(Math.max(...modeControls.map(box=>box.y))<Math.min(...modeControls.map(box=>box.y+box.height)),'Message modes, Sender and Receiver share a row when they fit');
+ await assertKeyButtonsFit();await app.shot('conversation-key-wide');
+ await page.setViewportSize({width:1440,height:900});await app.settled();
  await assertKeyButtonsFit();
  await app.shot('conversation-timeline-key');
  assert.equal(await page.getByText(sentence,{exact:false}).count()>0,true);
@@ -2143,6 +2201,7 @@ test('message card labels and sentence events restore independently in the reade
  await key.scrollIntoViewIfNeeded();
  await assertKeyButtonsFit();
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await report.scrollIntoViewIfNeeded();await app.settled();
  await report.click();
  const menu=page.getByRole('menu',{name:'Filter Report',exact:true});
  await menu.waitFor();
@@ -2152,6 +2211,17 @@ test('message card labels and sentence events restore independently in the reade
  await page.getByRole('menu',{name:'Key defaults',exact:true}).waitFor();
  await app.shot('reader-key-defaults-phone');
  await page.keyboard.press('Escape');
+ // Long menus scroll their focused option into view without losing the menu.
+ await page.setViewportSize({width:390,height:320});
+ await key.scrollIntoViewIfNeeded();await app.settled();await key.press('ArrowDown');
+ await page.getByRole('menu',{name:'Key defaults',exact:true}).waitFor();
+ await page.keyboard.press('End');
+ const lastPreset=page.getByRole('menuitemradio',{name:/^Plain transcript/});
+ assert.equal(await lastPreset.evaluate(el=>{
+  const bounds=el.closest('[role="menu"]').getBoundingClientRect(),item=el.getBoundingClientRect();
+  return el===document.activeElement&&item.top>=bounds.top&&item.bottom<=bounds.bottom;
+ }),true,'keyboard navigation keeps the focused preset visible in a short viewport');
+ await page.keyboard.press('Escape');await page.setViewportSize({width:390,height:844});
  await page.locator('.thinking-card').scrollIntoViewIfNeeded();
  await app.shot('message-card-tints-phone');
 });
@@ -2176,6 +2246,7 @@ test('conversation line tags filter matching activity without opening the line',
  const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages}),'GET /api/messages/:id':()=>({text:JSON.stringify({content:[{type:'text',text:'{\"verdict\":\"allow\"}'}]})})};
  const app=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all`,ready:'.action-row'}),{page}=app;
  const line=id=>page.locator(`.timeline-entry[data-message-id="${id}"]`),initial=path(page);
+ const openFilter=async button=>{await button.scrollIntoViewIfNeeded();await app.settled();await button.click();};
  const browse=line('browse'),details=browse.locator('details.tool-event');
  const tag=browse.getByRole('button',{name:'Browse',exact:true});
  await tag.focus();await tag.press('ArrowDown');
@@ -2183,45 +2254,58 @@ test('conversation line tags filter matching activity without opening the line',
  assert.equal(await details.evaluate(el=>el.open),false,'the tag does not open the line');
  await page.getByRole('menu',{name:'Filter Browse',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
  await browse.waitFor({state:'hidden'});assert.equal(await line('todo').isVisible(),true,'other tools remain visible');
- const key=page.locator('.transcript-tag-key');await key.getByRole('button',{name:'Browse',exact:true}).click();
+ const key=page.locator('.transcript-tag-key');await openFilter(key.getByRole('button',{name:'Browse',exact:true}));
  await page.getByRole('menu',{name:'Filter Browse',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();await browse.waitFor();
  await details.locator('summary .activity-target').click();assert.equal(await details.evaluate(el=>el.open),true,'the line still opens details');
- await line('write').getByRole('button',{name:'Write category',exact:true}).click();
- await page.getByRole('menu',{name:'Filter Write category',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await openFilter(line('write').getByRole('button',{name:'Write',exact:true}));
+ await page.getByRole('menu',{name:'Filter Write',exact:true}).getByRole('group',{name:'Category: Write',exact:true}).getByRole('menuitem',{name:'Show only the Write category',exact:true}).click();
+ await line('read').waitFor({state:'hidden'});assert.equal(await line('edit').isVisible(),true,'isolating a category keeps its other actions');
+ await openFilter(key.getByRole('button',{name:'Read',exact:true}));await page.getByRole('menu',{name:'Filter Read',exact:true}).getByRole('menuitem',{name:'Show All',exact:true}).click();await line('read').waitFor();
+ await openFilter(line('edit').getByRole('button',{name:'Edit',exact:true}));
+ await page.getByRole('menu',{name:'Filter Edit',exact:true}).getByRole('group',{name:'Specific activity',exact:true}).getByRole('menuitem',{name:'Hide this activity',exact:true}).click();await line('edit').waitFor({state:'hidden'});
+ await openFilter(line('write').getByRole('button',{name:'Write',exact:true}));
+ await page.getByRole('menu',{name:'Filter Write',exact:true}).getByRole('group',{name:'Category: Write',exact:true}).getByRole('menuitem',{name:'Show 1 hidden label in the Write category',exact:true}).click();await line('edit').waitFor();
+ await openFilter(line('edit').getByRole('button',{name:'Edit',exact:true}));
+ await page.getByRole('menu',{name:'Filter Edit',exact:true}).getByRole('group',{name:'Specific activity',exact:true}).getByRole('menuitem',{name:'Hide this activity',exact:true}).click();await line('edit').waitFor({state:'hidden'});
+ await openFilter(line('write').getByRole('button',{name:'Write',exact:true}));
+ await page.getByRole('menu',{name:'Filter Write',exact:true}).getByRole('menuitem',{name:'Show All',exact:true}).click();await line('edit').waitFor();
+ assert.equal(await line('write').getByRole('button',{name:'Write category',exact:true}).count(),0,'the category has no separate dropdown');
+ await openFilter(line('write').getByRole('button',{name:'Write',exact:true}));
+ await page.getByRole('menu',{name:'Filter Write',exact:true}).getByRole('group',{name:'Category: Write',exact:true}).getByRole('menuitem',{name:'Hide the Write category',exact:true}).click();
  await line('write').waitFor({state:'hidden'});await line('edit').waitFor({state:'hidden'});assert.equal(await line('poll').isVisible(),true,'the Poll activity remains visible despite its Write label');
- await key.getByRole('button',{name:'Write · Write',exact:true}).click();await page.getByRole('menu',{name:'Filter Write · Write',exact:true}).getByRole('menuitem',{name:'Show All',exact:true}).click();await line('write').waitFor();
- await line('poll').getByRole('button',{name:'Poll',exact:true}).click();await page.getByRole('menu',{name:'Filter Poll',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await openFilter(key.getByRole('button',{name:'Write · Write',exact:true}));await page.getByRole('menu',{name:'Filter Write · Write',exact:true}).getByRole('menuitem',{name:'Show All',exact:true}).click();await line('write').waitFor();
+ await openFilter(line('poll').getByRole('button',{name:'Write',exact:true}));await page.getByRole('menu',{name:'Filter Write',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
  await line('poll').waitFor({state:'hidden'});assert.equal(await line('write').isVisible(),true,'hiding Poll leaves file writes visible');
- await key.getByRole('button',{name:'Write · Poll',exact:true}).click();await page.getByRole('menu',{name:'Filter Write · Poll',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();await line('poll').waitFor();
+ await openFilter(key.getByRole('button',{name:'Write · Poll',exact:true}));await page.getByRole('menu',{name:'Filter Write · Poll',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();await line('poll').waitFor();
  const legacy=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all&reader_hidden_tags=${encodeURIComponent(JSON.stringify(['Write']))}`,ready:'.transcript-tag-key'});
  assert.equal(await legacy.page.locator('.timeline-entry[data-message-id="write"]').isVisible(),false);assert.equal(await legacy.page.locator('.timeline-entry[data-message-id="poll"]').isVisible(),false,'legacy label links hide both categories');
  await legacy.page.locator('.transcript-tag-key').getByRole('button',{name:'Write · Poll',exact:true}).click();await legacy.page.getByRole('menu',{name:'Filter Write · Poll',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();
  assert.equal(await legacy.page.locator('.timeline-entry[data-message-id="poll"]').isVisible(),true);assert.equal(await legacy.page.locator('.timeline-entry[data-message-id="write"]').isVisible(),false);
  const legacyCopy=await open(t,{api,url:path(legacy.page),ready:'.transcript-tag-key'});
  assert.equal(await legacyCopy.page.locator('.timeline-entry[data-message-id="poll"]').isVisible(),true,'legacy label overrides survive copied URLs');
- await line('read').getByRole('button',{name:'Read category',exact:true}).click();
- await page.getByRole('menu',{name:'Filter Read category',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await openFilter(line('read').getByRole('button',{name:'Read',exact:true}));
+ await page.getByRole('menu',{name:'Filter Read',exact:true}).getByRole('group',{name:'Category: Read',exact:true}).getByRole('menuitem',{name:'Hide the Read category',exact:true}).click();
  await line('read').waitFor({state:'hidden'});await line('list').waitFor({state:'hidden'});assert.equal(await line('write').isVisible(),true);
- await key.getByRole('button',{name:'List',exact:true}).click();await page.getByRole('menu',{name:'Filter List',exact:true}).getByRole('menuitem',{name:'Show All',exact:true}).click();await line('read').waitFor();
- await line('read').getByRole('button',{name:'Read',exact:true}).first().click();
- await page.getByRole('menu',{name:'Filter Read',exact:true}).getByRole('menuitem',{name:'Hide others',exact:true}).click();
+ await openFilter(key.getByRole('button',{name:'List',exact:true}));await page.getByRole('menu',{name:'Filter List',exact:true}).getByRole('menuitem',{name:'Show All',exact:true}).click();await line('read').waitFor();
+ await openFilter(line('read').getByRole('button',{name:'Read',exact:true}).first());
+ await page.getByRole('menu',{name:'Filter Read',exact:true}).getByRole('group',{name:'Specific activity',exact:true}).getByRole('menuitem',{name:'Show only this activity',exact:true}).click();
  await line('write').waitFor({state:'hidden'});assert.equal(await line('read').isVisible(),true);
  const saved=path(page),copy=await open(t,{api,url:saved,ready:'.transcript-tag-key'});
  assert.equal(await copy.page.locator('.timeline-entry[data-message-id="write"]').isVisible(),false,'the URL restores hidden tags');
  await page.evaluate(url=>window.pharosNavigate(url),initial);await line('write').waitFor();
  await page.evaluate(url=>window.pharosNavigate(url),saved);await line('write').waitFor({state:'hidden'});
- await key.getByRole('button',{name:'Write · Write',exact:true}).click();
+ await openFilter(key.getByRole('button',{name:'Write · Write',exact:true}));
  await page.getByRole('menu',{name:'Filter Write · Write',exact:true}).getByRole('menuitem',{name:'Show All',exact:true}).click();
  await line('write').waitFor();
  const target=line('read').getByRole('button',{name:'Show output for /repo/example.txt',exact:true});await target.click();
  assert.equal(await target.getAttribute('aria-expanded'),'true','file previews still open');
  const pending=line('doc-pending'),created=line('doc-created');
  await pending.getByRole('button',{name:'Requested document creation',exact:true}).click();await page.keyboard.press('Escape');
- await created.scrollIntoViewIfNeeded();await app.settled();await created.getByRole('button',{name:'Created document',exact:true}).click();await page.getByRole('menu',{name:'Filter Created document',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();await created.waitFor({state:'hidden'});
+ await created.scrollIntoViewIfNeeded();await app.settled();await created.getByRole('button',{name:'Created document',exact:true}).click();await page.getByRole('menu',{name:'Filter Created document',exact:true}).getByRole('group',{name:'Specific activity',exact:true}).getByRole('menuitem',{name:'Hide this activity',exact:true}).click();await created.waitFor({state:'hidden'});
  assert.equal(await pending.isVisible(),true,'the still-requested creation remains visible');
  await pending.getByText('Details',{exact:true}).click();await pending.waitFor({state:'hidden'});
  await key.scrollIntoViewIfNeeded();await app.settled();await key.getByRole('button',{name:'Created document',exact:true}).click();await page.getByRole('menu',{name:'Filter Created document',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();await pending.waitFor();await created.waitFor();
- await pending.scrollIntoViewIfNeeded();await app.settled();await pending.getByRole('button',{name:'Created document',exact:true}).click();await page.getByRole('menu',{name:'Filter Created document',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await pending.scrollIntoViewIfNeeded();await app.settled();await pending.getByRole('button',{name:'Created document',exact:true}).click();await page.getByRole('menu',{name:'Filter Created document',exact:true}).getByRole('group',{name:'Specific activity',exact:true}).getByRole('menuitem',{name:'Hide this activity',exact:true}).click();
  await pending.waitFor({state:'hidden'});await created.waitFor({state:'hidden'});
  await key.scrollIntoViewIfNeeded();await app.settled();await key.getByRole('button',{name:'Created document',exact:true}).click();await page.getByRole('menu',{name:'Filter Created document',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();await pending.waitFor();await created.waitFor();
  await page.evaluate(()=>window.pharosView.write('reader_filter_level','thought'));await app.settled();

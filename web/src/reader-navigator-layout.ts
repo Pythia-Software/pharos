@@ -1,14 +1,14 @@
 import {readerGeometry,readerVisibleWindow,type ReaderNavigatorData,type ReaderSpan} from './reader-navigator-model';
 import type {TimeRange} from './timeline-label-model';
+import type {TimeScale} from './timeline-idle-model';
 
 /** One reader owns all geometry. No transcript queries or marker writes on
  * scroll; the scroll path reads the offset and moves one shared indicator.
  * Resize/toggle/filter/materialization invalidate the cached layout. */
-export function trackReaderViewport(panel:HTMLElement,host:HTMLElement,data:ReaderNavigatorData,byID:Map<string,TimeRange>){
+export function trackReaderViewport(panel:HTMLElement,host:HTMLElement,data:ReaderNavigatorData,byID:Map<string,TimeRange>,scale:TimeScale){
   const list=panel.querySelector<HTMLElement>('.turn-list')!,scroller=panel.closest<HTMLElement>('.workspace-reader-content')!;
   const band=host.querySelector<HTMLElement>('.reader-navigator-window')!,edges=[...host.querySelectorAll<HTMLElement>('.reader-navigator-boundary')];
   let frame=0,stale=true,disposed=false,geometry=readerGeometry([]),origin=0,viewTop=0,viewBottom=0,trackWidth=1,last='';
-  const full=host.dataset.range!.split(',').map(Number),span=full[1]-full[0];
   const measure=(scroll:number)=>{
     const root=scroller.getBoundingClientRect(),sticky=host.getBoundingClientRect();
     origin=root.top;
@@ -56,7 +56,7 @@ export function trackReaderViewport(panel:HTMLElement,host:HTMLElement,data:Read
     if(relaid)scroller.style.setProperty('--reader-navigator-height',`${viewTop}px`);
     band.hidden=!range;for(const edge of edges)edge.hidden=!range;
     if(range){
-      const left=Math.max(0,Math.min(1,(range[0]-full[0])/span)),right=Math.max(left,Math.min(1,(range[1]-full[0])/span));
+      const left=Math.max(0,Math.min(1,scale.fraction(range[0]))),right=Math.max(left,Math.min(1,scale.fraction(range[1])));
       band.dataset.position=String((left+right)/2);
       const width=Math.min(1,Math.max(3/trackWidth,right-left)),start=Math.min(left,1-width);
       band.style.transform=`translateX(${start*100}%) scaleX(${width})`;
