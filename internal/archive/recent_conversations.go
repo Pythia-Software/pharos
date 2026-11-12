@@ -37,6 +37,7 @@ type recentConversation struct {
 	Tokens        *int64 `json:"tokens,omitempty"`
 	CostUSD       any    `json:"cost_usd,omitempty"`
 	PriceStatus   string `json:"price_status,omitempty"`
+	IsEstimate    bool   `json:"is_estimate"`
 }
 
 func (c *Catalog) recentConversations(ctx context.Context, labels, events bool) ([]recentConversation, error) {
@@ -157,7 +158,8 @@ func (c *Catalog) recentConversations(ctx context.Context, labels, events bool) 
 		if hour, ok := parseTime(firstString(entry["usage_hour"])); ok {
 			day = localMidnight(hour, time.Local).Format("2006-01-02")
 		}
-		priced := book.cost(ledgerModel(entry), day, tokens)
+		item.IsEstimate = item.IsEstimate || estimateFlag(entry["is_estimate"])
+		priced := book.ledgerCost(entry, ledgerModel(entry), day, tokens)
 		item.CostUSD = addCost(item.CostUSD, priced.cost)
 		item.PriceStatus = worsePriceStatus(item.PriceStatus, priced.status)
 	}

@@ -11,6 +11,40 @@ const { conversationTokenReports, contextTokenReports, contextWindow, contextDel
 const raw = events => events.map(value => ({ text: JSON.stringify(value) }));
 const samples = events => [...events].map(message => message.tokenReport?.contextSample).filter(Boolean);
 
+test("usage sensitivity diagnostics scope to owned messages; canonical estimates use token reports", () => {
+  const report = {range_kind:"sensitivity_not_confidence",manifest_revision:"fixture.1",responses:[
+    {message_id:"a",output_tokens:{expected:1200,lower:400,upper:3000},local_weight:0},
+    {message_id:"b",model:"claude-opus-fixture",effort:"high",output_tokens:{expected:800,lower:200,upper:2000},local_weight:.5},
+  ]};
+  const conversation = {usage_estimates:report};
+  const all = reader.usageEstimatePresentation(conversation);
+  assert.equal(all.expected,2000);
+  assert.equal(all.lower,600);
+  assert.equal(all.upper,5000);
+  assert.match(all.detail,/Local coding calibration/);
+  assert.match(all.detail,/unreported/);
+  assert.equal(reader.usageEstimatePresentation(conversation,[{id:"a"}]).expected,1200);
+  assert.equal(reader.usageEstimatePresentation(conversation,[{id:"different"}]),null);
+  assert.equal(reader.usageEstimatePresentation({}),null);
+  assert.equal(reader.usageEstimatePresentation({usage_estimates:{...report,range_kind:"confidence"}}),null);
+  const messages = [event("answer","message","Hello",0,{id:"a",duration_estimate:{status:"estimated",seconds:{expected:3,lower:1,upper:10}}})];
+  assert.equal(spend(render(messages).events),null,"estimates must not enter token accounting");
+  const estimatedMessages = [{...messages[0],usage_is_estimate:true,usage:{output_tokens:1200,reasoning_output_tokens:200,total_tokens:1200}}];
+  const estimates = conversationTokenReports(estimatedMessages);
+  assert.equal(estimates[0].total,1200);
+  assert.equal(estimates[0].isEstimate,true);
+  assert.equal(contextTokenReports(estimatedMessages,estimates)[0].contextSample,undefined,"estimated output is not measured input context");
+  assert.match(reader.toolDurationEstimatePresentation(messages[0]).label,/Estimated/);
+  assert.match(reader.toolDurationEstimatePresentation({duration_estimate:{status:"observed",seconds:{expected:0,lower:0,upper:0}}}).label,/Recorded/);
+  assert.equal(reader.toolDurationEstimatePresentation({duration_estimate:{status:"unavailable"}}),null);
+  const split = reader.toolDurationEstimatePresentation({duration_estimate:{status:"estimated",seconds:{expected:6,lower:5,upper:10},argument_generation_seconds:{expected:5,lower:5,upper:5},argument_generation_status:"observed",execution_seconds:{expected:1,lower:0,upper:5},execution_status:"estimated"}});
+  assert.match(split.label,/Estimated execution/);
+  assert.match(split.detail,/Argument generation: recorded 5 s/);
+  assert.match(split.detail,/Full call-to-result span: 6 s/);
+  const zero = reader.toolDurationEstimatePresentation({duration_estimate:{status:"observed",seconds:{expected:5,lower:5,upper:5},execution_seconds:{expected:0,lower:0,upper:0},execution_status:"observed"}});
+  assert.match(zero.label,/Recorded execution: 0 s/);
+});
+
 test("all source accounting formats reconcile against shared fixtures", () => {
   assert.ok(tokenCases.length > 0);
   for (const item of tokenCases) {

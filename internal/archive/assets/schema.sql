@@ -427,6 +427,9 @@ CREATE TABLE IF NOT EXISTS message_fts_rows (
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_trigram USING fts5(text, content='', contentless_delete=1, tokenize='trigram');
 
 CREATE TABLE IF NOT EXISTS agent_sessions (
+  is_estimate INTEGER NOT NULL DEFAULT 0,
+  input_tokens_available INTEGER NOT NULL DEFAULT 1,
+  usage_estimate_json TEXT,
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -493,6 +496,9 @@ CREATE TABLE IF NOT EXISTS agent_session_usage (
   reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
   unclassified_tokens INTEGER NOT NULL DEFAULT 0,
   total_tokens INTEGER NOT NULL DEFAULT 0,
+  is_estimate INTEGER NOT NULL DEFAULT 0,
+  input_tokens_available INTEGER NOT NULL DEFAULT 1,
+  usage_estimate_json TEXT,
   PRIMARY KEY(agent_session_id, usage_hour, model, effort, attribution)
 );
 CREATE INDEX IF NOT EXISTS agent_session_usage_hour_idx ON agent_session_usage(usage_hour);
@@ -578,6 +584,9 @@ FROM model_aliases WHERE status='confirmed';
 -- retained messages (see internal/archive/tool_ledger.go). Rebuilt with the
 -- conversation on ingest; tool_ledger_state records which derivation built it.
 CREATE TABLE IF NOT EXISTS model_requests (
+  is_estimate INTEGER NOT NULL DEFAULT 0,
+  input_tokens_available INTEGER NOT NULL DEFAULT 1,
+  usage_estimate_json TEXT,
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   agent_session_id TEXT,
@@ -608,6 +617,8 @@ CREATE TABLE IF NOT EXISTS model_requests (
 CREATE INDEX IF NOT EXISTS model_requests_conversation_idx ON model_requests(conversation_id, sequence);
 
 CREATE TABLE IF NOT EXISTS tool_calls (
+  duration_is_estimate INTEGER NOT NULL DEFAULT 0,
+  duration_estimate_json TEXT,
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -813,6 +824,7 @@ CREATE TABLE IF NOT EXISTS tool_usage_daily (
   nonzero_exit_count INTEGER NOT NULL DEFAULT 0,
   hook_blocked_count INTEGER NOT NULL DEFAULT 0,
   truncated_count INTEGER NOT NULL DEFAULT 0,
+  duration_is_estimate INTEGER NOT NULL DEFAULT 0,
   timed_count INTEGER NOT NULL DEFAULT 0,
   total_duration_ms INTEGER NOT NULL DEFAULT 0,
   avg_duration_ms REAL,

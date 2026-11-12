@@ -85,7 +85,7 @@ func repairModelSummaries(tx *sql.Tx, workspace string, conversations []Conversa
 			summary := summaries[native]
 			sessionID := firstString(session["id"])
 			// The persisted ledger also covers legacy facts preserved by replay.
-			usage, err := queryMaps(tx, `SELECT model,SUM(total_tokens) total_tokens FROM agent_session_usage WHERE agent_session_id=? GROUP BY model`, sessionID)
+			usage, err := queryMaps(tx, `SELECT model,SUM(total_tokens) total_tokens FROM agent_session_usage WHERE agent_session_id=? AND is_estimate=0 GROUP BY model`, sessionID)
 			if err != nil {
 				return err
 			}
@@ -133,12 +133,12 @@ func preserveSummaryUsageModel(tx *sql.Tx, sessionID, model string) error {
 	fields := strings.Join(usageTokenFields, ",")
 	_, err := tx.Exec(`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,effort,attribution,`+fields+`)
 		SELECT agent_session_id,usage_hour,?,effort,attribution,`+fields+` FROM agent_session_usage
-		WHERE agent_session_id=? AND TRIM(model)='' AND total_tokens>0
+		WHERE agent_session_id=? AND TRIM(model)='' AND total_tokens>0 AND is_estimate=0
 		ON CONFLICT(agent_session_id,usage_hour,model,effort,attribution) DO UPDATE SET `+strings.Join(updates, ","), model, sessionID)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`DELETE FROM agent_session_usage WHERE agent_session_id=? AND TRIM(model)='' AND total_tokens>0`, sessionID)
+	_, err = tx.Exec(`DELETE FROM agent_session_usage WHERE agent_session_id=? AND TRIM(model)='' AND total_tokens>0 AND is_estimate=0`, sessionID)
 	return err
 }
 
@@ -155,7 +155,7 @@ func preserveReplayedUsageModels(tx *sql.Tx, sessionID string, usage map[usageBu
 		return usage, nil
 	}
 	rows, err := queryMaps(tx, `SELECT u.*,u.model AS usage_model,a.model AS session_model FROM agent_session_usage u
-		JOIN agent_sessions a ON a.id=u.agent_session_id WHERE a.id=? AND u.total_tokens>0`, sessionID)
+		JOIN agent_sessions a ON a.id=u.agent_session_id WHERE a.id=? AND u.total_tokens>0 AND u.is_estimate=0`, sessionID)
 	if err != nil {
 		return nil, err
 	}

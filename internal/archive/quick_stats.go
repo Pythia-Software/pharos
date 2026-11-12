@@ -27,17 +27,18 @@ func usageSummaryBounds(key string, span time.Duration, now time.Time) (time.Tim
 }
 
 type quickStatsCounts struct {
-	Conversations int64    `json:"active_conversations"`
-	Messages      int64    `json:"message_count"`
-	UserMessages  int64    `json:"user_messages"`
-	Replies       int64    `json:"assistant_messages"`
-	ToolCalls     int64    `json:"tool_calls"`
-	FailedCalls   int64    `json:"failed_tool_calls"`
-	FailureRate   *float64 `json:"tool_failure_rate"`
-	ToolTime      *int64   `json:"tool_time_ms"`
-	TimedCalls    int64    `json:"timed_tool_calls"`
-	DelegatedRuns int64    `json:"delegated_runs"`
-	Repositories  int64    `json:"active_repositories"`
+	Conversations      int64    `json:"active_conversations"`
+	Messages           int64    `json:"message_count"`
+	UserMessages       int64    `json:"user_messages"`
+	Replies            int64    `json:"assistant_messages"`
+	ToolCalls          int64    `json:"tool_calls"`
+	FailedCalls        int64    `json:"failed_tool_calls"`
+	FailureRate        *float64 `json:"tool_failure_rate"`
+	ToolTimeIsEstimate bool     `json:"tool_time_is_estimate"`
+	ToolTime           *int64   `json:"tool_time_ms"`
+	TimedCalls         int64    `json:"timed_tool_calls"`
+	DelegatedRuns      int64    `json:"delegated_runs"`
+	Repositories       int64    `json:"active_repositories"`
 	// Retained observations, including copies of history a transcript
 	// inherited; the counts above include each physical occurrence once.
 	MessageObservations  int64 `json:"message_observations"`
@@ -239,14 +240,15 @@ func (c *Catalog) addQuickStatsCounts(ctx context.Context, summary map[string]an
 	if err != nil {
 		return err
 	}
-	calls, err := c.reader().QueryContext(ctx, `SELECT conversation_id,COALESCE(started_at,''),COALESCE(agent_session_id,''),status,duration_ms,COALESCE(call_message_id,'') FROM tool_calls`)
+	calls, err := c.reader().QueryContext(ctx, `SELECT conversation_id,COALESCE(started_at,''),COALESCE(agent_session_id,''),status,duration_ms,COALESCE(call_message_id,''),duration_is_estimate FROM tool_calls`)
 	if err != nil {
 		return err
 	}
 	for calls.Next() {
 		var cv, at, session, status, message string
 		var duration *int64
-		if err := calls.Scan(&cv, &at, &session, &status, &duration, &message); err != nil {
+		var durationEstimated bool
+		if err := calls.Scan(&cv, &at, &session, &status, &duration, &message, &durationEstimated); err != nil {
 			calls.Close()
 			return err
 		}
@@ -274,6 +276,7 @@ func (c *Catalog) addQuickStatsCounts(ctx context.Context, summary map[string]an
 					w.ToolTime = new(int64)
 				}
 				*w.ToolTime += *duration
+				w.ToolTimeIsEstimate = w.ToolTimeIsEstimate || durationEstimated
 				w.TimedCalls++
 			}
 		})

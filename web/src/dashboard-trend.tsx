@@ -1,3 +1,4 @@
+import { UsageEstimateNote } from "./usage-estimate-note";
 import { DataReadinessIndicator, DataReadinessEmpty } from "./data-readiness";
 import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
@@ -115,7 +116,8 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
       <DataReadinessEmpty id={`chart:${dataset}`} title={title} dataset={dataset} query={trend.query} empty={outputEmpty}><TrendHeatmap title={title} controls={controls} action={action} titleSlot={links && titled ? headline : undefined} heatmap={trendHeatmap(built.buckets, built.series, axis.bins.scheme, view.percentiles)}
         period={view.period} noun={axis.unit ? catalog.units[axis.unit].plural.toLowerCase() : axis.counted ? catalog.records.plural.toLowerCase() : weight.unit} label={axis.bins.label} format={value} amount={axis.counted || weight.op === "count" ? undefined : amount => format(amount, weight)}
         rollingPeriods={view.rollingPeriods} guides={guides} loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} /></DataReadinessEmpty>
-      {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
+      <UsageEstimateNote results={result.results} dataset={dataset} />
+    {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
       {children}
       {links ? <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} context={{ catalog, state: view, where, supporting: trend.supporting }} /> : null}
     </section>;
@@ -129,6 +131,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
       loading={result.loading} error={result.error || (result.loading ? "" : built.error ?? "")} legend={built.series.length > 0} percent={share}
       selected={built.selected} excluded={built.excluded} allHidden={built.allHidden} onSelect={select} onSelectGroup={selectGroup} onExpand={catalog.trend.allSeries ? undefined : () => set({ seriesLimit: Math.min(1000, view.seriesLimit + 5) })}
       onRange={pickRange(onTimeFilter, catalog.time, view.period, count, period => set({ period }))} seriesHref={href} titleSlot={links && titled ? headline : undefined} />
+    <UsageEstimateNote results={result.results} dataset={dataset} />
     {adjustments.length ? <p className="usage-dashboard-note" role="status">{adjustments.join(" ")}</p> : null}
     {measure.populationShare && measure.note ? <p className="usage-dashboard-note">{measure.note}</p> : null}
     </DataReadinessEmpty>

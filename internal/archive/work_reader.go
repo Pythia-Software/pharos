@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/gbdubs/pharos/estimation"
 )
 
 // The transcript reader loads a workspace in pieces: an overview without
@@ -36,7 +38,7 @@ const (
 // (edit diffs) while collapsed.
 var readerClippedKinds = map[string]bool{"tool_result": true, "metadata": true, "result": true, "context": true, "attachment": true, "error": true}
 
-const readerMessageColumns = "id,native_id,role,kind,model,effort,text,raw_text,created_at,parent_native_id,call_id,reasoning_format"
+const readerMessageColumns = "id,native_id,role,kind,model,effort,text,raw_text,created_at,parent_native_id,call_id,reasoning_format,selected"
 
 // WorkOverview is the workspace detail page's first request: everything but
 // the messages, plus what the page used to derive by scanning all of them.
@@ -157,6 +159,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		return nil, err
 	}
 	conversation := rows[0]
+	estimates := newUsageEstimationBuilder(firstString(conversation["harness"]))
 	if firstString(conversation["harness"]) == "claude-ai-export" {
 		observations, err := c.claudeConversationSettings(ctx, firstString(conversation["account"]), firstString(conversation["native_id"]))
 		if err != nil {
@@ -197,6 +200,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		return nil, err
 	}
 	prepare := func(message map[string]any) {
+		estimates.observe(message)
 		if conversation["provider"] == "chatgpt" {
 			message["source_provider"] = "chatgpt"
 		}
@@ -248,12 +252,20 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		conversation["agent_events"] = events
 	}
 	usage := tokenCounts{}
+	isEstimate := false
 	for _, session := range sessions {
 		if status := firstString(session["usage_status"]); status == "" || status == "unavailable" {
 			continue
 		}
+		isEstimate = isEstimate || estimateFlag(session["is_estimate"])
 		for _, key := range []string{"input_tokens", "uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_5m_input_tokens", "cache_creation_1h_input_tokens", "output_tokens", "reasoning_output_tokens", "unclassified_tokens", "total_tokens"} {
 			usage[key] += float64(integer(session[key]))
+		}
+	}
+	conversation["token_usage_is_estimate"] = isEstimate
+	if isEstimate {
+		for _, field := range usageInputFields {
+			delete(usage, field)
 		}
 	}
 	if len(usage) > 0 {
@@ -276,7 +288,54 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 			clipReaderMessage(message)
 		}
 	}
+
+	// Join canonical usage onto messages without rewriting retained source bodies.
+	estimated, err := queryMapsContext(ctx, c.reader(), `SELECT source_message_id,output_tokens,reasoning_output_tokens,total_tokens FROM model_requests WHERE conversation_id=? AND is_estimate=1`, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	byID := map[string]map[string]any{}
+	for _, row := range estimated {
+		byID[firstString(row["source_message_id"])] = row
+	}
+	for _, message := range messages {
+		if row := byID[firstString(message["id"])]; row != nil {
+			message["usage"] = map[string]any{"output_tokens": row["output_tokens"], "reasoning_output_tokens": row["reasoning_output_tokens"], "total_tokens": row["total_tokens"]}
+			message["usage_is_estimate"] = true
+		}
+	}
 	conversation["messages"] = messages
+	if estimates != nil {
+		manifest, err := bundledEstimation()
+		if err != nil {
+			return nil, err
+		}
+		calibration, err := c.loadEstimationCalibration(ctx)
+		if err != nil {
+			return nil, err
+		}
+		report := estimates.estimate(manifest, calibration, hashBytes(estimation.Assumptions))
+		authoritative, err := authoritativeUsageExists(ctx, c.reader(), conversationID)
+		if err != nil {
+			return nil, err
+		}
+		if authoritative || report.ReportedResponses > 0 {
+			report.Responses = []usageResponseEstimate{}
+			report.Output = nil
+		}
+		conversation["usage_estimates"] = report
+		byMessage := map[string]usageToolEstimate{}
+		for _, response := range report.Responses {
+			for _, tool := range response.Tools {
+				byMessage[tool.MessageID] = tool
+			}
+		}
+		for _, message := range messages {
+			if tool, ok := byMessage[firstString(message["id"])]; ok {
+				message["duration_estimate"] = tool
+			}
+		}
+	}
 	// The files its calls edited and read, each linked to its history page.
 	links, err := c.conversationFileLinks(context.Background(), workspaceID, conversationID)
 	if err != nil {

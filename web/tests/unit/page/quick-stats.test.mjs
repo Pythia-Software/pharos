@@ -250,3 +250,14 @@ test('Quick Stats coalesce calendar and usage notifications before loading the i
   await Promise.resolve(); await loading;
   assert.equal(requests, 2, 'a later update still fetches new totals');
 });
+
+
+test('Quick Stats provenance follows the metric and selected window',()=>{
+ const stats=loadClassicScript('quick-stats.js');
+ const mixed={is_estimate:true,cost_is_estimate:true,price_status:'partial',tool_time_is_estimate:true};
+ for(const field of ['tokens','cost_usd','co2e_g','tool_time_ms']) assert.equal(stats.quickStatsMetricCaveat(field,mixed).suffix,'*');
+ assert.equal(stats.quickStatsMetricCaveat('human_words',mixed),null);
+ assert.equal(stats.quickStatsMetricCaveat('tokens',{is_estimate:false}),null);
+ assert.equal(stats.quickStatsMetricCaveat('cost_usd',{is_estimate:true,cost_is_estimate:false,price_status:'unpriced'}).suffix,'+');
+ assert.match(stats.quickStatsMetricCaveat('cost_usd',mixed).note,/output cost only/);
+});

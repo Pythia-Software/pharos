@@ -245,6 +245,11 @@ func TestClaudeSettingsJoinExportInEitherOrder(t *testing.T) {
 			if countRows(t, c, "SELECT COUNT(*) FROM model_requests WHERE model IS NOT NULL") != 0 {
 				t.Fatal("settings fabricated execution usage")
 			}
+			for _, response := range conversation["usage_estimates"].(*conversationUsageEstimates).Responses {
+				if response.Model != "" || response.Effort != "" || response.ResponseModel != "" {
+					t.Fatal("cached later selection supplied historical estimation settings", response)
+				}
+			}
 		})
 	}
 }

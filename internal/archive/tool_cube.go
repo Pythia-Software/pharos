@@ -29,7 +29,7 @@ var toolCubeGroups = func() []struct{ column, expr string } {
 	}
 	for _, column := range []string{"provider", "model", "effort", "kind", "tool_name", "tool_category", "mcp_server", "program", "subcommand",
 		"command_category", "status", "error_type", "test_failure", "path_repository", "path_scope", "exit_code", "interrupted", "truncated", "has_pipe", "has_redirect", "has_heredoc",
-		"backgrounded", "host", "duration_source", "result_tokens_source"} {
+		"backgrounded", "host", "duration_source", "duration_is_estimate", "result_tokens_source"} {
 		groups = append(groups, struct{ column, expr string }{column, "t." + column})
 	}
 	// Fields with too many values to group by are kept as present or absent.
@@ -83,7 +83,7 @@ const toolRollupFromCube = `SELECT day,repository_name,project_name,source_kind,
 		SUM(CASE WHEN error_type='timeout' THEN call_count ELSE 0 END) timeout_count,
 		SUM(CASE WHEN error_type='nonzero_exit' THEN call_count ELSE 0 END) nonzero_exit_count,
 		SUM(CASE WHEN error_type='hook_blocked' THEN call_count ELSE 0 END) hook_blocked_count,SUM(truncated*call_count) truncated_count,
-		SUM(duration_ms_n) timed_count,COALESCE(SUM(duration_ms_sum),0) total_duration_ms,MAX(duration_ms_max) max_duration_ms,
+		MAX(duration_is_estimate) duration_is_estimate,SUM(duration_ms_n) timed_count,COALESCE(SUM(duration_ms_sum),0) total_duration_ms,MAX(duration_ms_max) max_duration_ms,
 		SUM(input_bytes_sum) input_bytes,SUM(result_bytes_sum) result_bytes,SUM(result_tokens_sum) result_tokens,
 		SUM(CASE WHEN result_tokens_source='measured' THEN call_count ELSE 0 END) measured_count,
 		SUM(carried_tokens_sum) carried_tokens,SUM(output_tokens_sum) output_tokens,

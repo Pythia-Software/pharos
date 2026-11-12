@@ -545,7 +545,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		reporting := 0
 		for _, row := range rows {
 			usage := firstString(row["usage_status"])
-			if usage == "" || usage == "unavailable" || usage == "in-child-conversation" || row["id"] != lead["id"] && integer(row["total_tokens"]) == 0 {
+			if estimateFlag(row["is_estimate"]) || usage == "" || usage == "unavailable" || usage == "in-child-conversation" || row["id"] != lead["id"] && integer(row["total_tokens"]) == 0 {
 				continue
 			}
 			reporting++
@@ -915,7 +915,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	if err != nil {
 		return nil, err
 	}
-	requests, err := tx.QueryContext(ctx, `SELECT r.id,r.agent_session_id,r.conversation_id,r.requested_at,r.total_tokens FROM conversations c JOIN model_requests r ON r.conversation_id=c.id WHERE c.workspace_id=?`, workspace)
+	requests, err := tx.QueryContext(ctx, `SELECT r.id,r.agent_session_id,r.conversation_id,r.requested_at,r.total_tokens FROM conversations c JOIN model_requests r ON r.conversation_id=c.id WHERE r.is_estimate=0 AND c.workspace_id=?`, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -1056,7 +1056,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	if err != nil {
 		return nil, err
 	}
-	ledger, err := queryMapsContext(ctx, tx, `SELECT u.*,u.model usage_model,a.model session_model FROM agent_sessions a JOIN agent_session_usage u ON u.agent_session_id=a.id WHERE a.workspace_id=?`, workspace)
+	ledger, err := queryMapsContext(ctx, tx, `SELECT u.*,u.model usage_model,a.model session_model FROM agent_sessions a JOIN agent_session_usage u ON u.agent_session_id=a.id WHERE u.is_estimate=0 AND a.workspace_id=?`, workspace)
 	if err != nil {
 		return nil, err
 	}

@@ -1,0 +1,995 @@
+{
+  "version": 1,
+  "date": "2026-11-12",
+  "estimator_version": "claude-output-v2",
+  "manifest_revision": "2026-11-12.2",
+  "scope": "Aggregate-only final selection report. Real chat token truth is unavailable. Coding-to-chat transfer remains an explicit assumption. Source transcripts and entity IDs are excluded.",
+  "protocol": {
+    "version": 1,
+    "date": "2026-11-12",
+    "objective": "Select and ship a bounded arithmetic estimator for missing Claude chat thinking clocks/traces, retaining stronger direct evidence and runtime-specific tool priors.",
+    "selection": "Use existing-family training/calibration and fixed forward validation only. Previous study test sets have been examined; do not call them pristine. Reserve independent same-account API-duplicate-connected root/helper families, excluded from every previous study, for a single external evaluation after configuration is frozen.",
+    "candidates": [
+      "existing published missing-trace assumptions",
+      "nonnegative arithmetic structural regression",
+      "nonnegative regression plus result-volume and response-position proxies",
+      "nonnegative regression plus native elapsed",
+      "nonnegative regression plus native elapsed and tool-start positions",
+      "nonnegative regression plus native observed or runtime-prior tool residual"
+    ],
+    "fitting": "Family-equal arithmetic target; ridge-regularized nonnegative coefficients; optional exact model/effort/speed and effort-group shrinkage with support gates. Select feature set and regularization by calibration WAPE and signed aggregate bias across family and forward splits, never independent test labels. Never exponentiate a log fit into expected totals.",
+    "visibility": "Turn-level native coding targets; omit true input counts, hidden request count, true tool token attributions, thinking token labels and unobserved tool ends from predictors. Native tool-end variants apply only with full native end coverage. Start-only priors fit only training families. Source-semantic clock gates apply before modeling.",
+    "shipping_guards": [
+      "native thinking clocks take precedence",
+      "partial thinking-clock coverage retains independent native and explicit block/summary estimates without a whole-turn overlay",
+      "unknown settings use explicit published provider fallback",
+      "no local coding history is required",
+      "only closed tool-bearing responses use fitted whole-response fallback unless separately validated",
+      "unavailable or out-of-domain features fall back",
+      "no model inference or helper usage is derived from a late model-selection observation",
+      "tool durations remain runtime-specific and async/user acknowledgments remain unobservable",
+      "estimated metrics remain separate from recorded tokens and API cost"
+    ],
+    "additional_tests": [
+      "model/effort/speed groups",
+      "root/helper separation",
+      "zero-thinking and unknown-label separation",
+      "missing clocks and native partial clocks",
+      "overlapping tools",
+      "Unicode/body clipping",
+      "unreported settings",
+      "OOD domain fallback",
+      "manifest and calibration invalidation",
+      "Python coefficient export and Go inference parity",
+      "chat summary-duration holdouts and native chat tool-prior holdouts"
+    ]
+  },
+  "reserve": {
+    "family_selection": "At least 3 requests and 2 positive-thinking labels; smallest 800 stable SHA256 family hashes; full root/helper and same-account duplicate-response components; exclude every component overlapping any previous study conversation. No target values used to rank candidates.",
+    "available_independent_families": 1407,
+    "reserved_conversations": 1424,
+    "reserved_requests": 67598,
+    "cutoff": "2026-11-11T16:02:32.718Z"
+  },
+  "independent_evaluation": {
+    "scope": "Independent, previously unused API-duplicate-connected root/helper families. Frozen coefficients are never refit on these labels. Thinking labels include reported zero; hidden request counts and true usage are targets only. Native code clocks are an export-shaped proxy, not real chat token ground truth.",
+    "frozen_sha256": "855a998dafae494833eb87691a9c2ec7de6f0b57ba850187199f9af7f7327c11",
+    "n": 1531,
+    "families": 783,
+    "model_counts": {
+      "claude-opus-5-5": 574,
+      "claude-fable-5-1": 55,
+      "claude-opus-5": 309,
+      "claude-opus-4-8": 393,
+      "claude-sonnet-5": 156,
+      "claude-haiku-4-5-20251001": 9,
+      "claude-sonnet-5-5": 34,
+      "claude-fable-5": 1
+    },
+    "baseline": {
+      "wape": 0.9387302555180799,
+      "bias": -0.9259876293208673
+    },
+    "models": {
+      "body": {
+        "wape": 0.8613514970340821,
+        "bias": -0.68619547434822,
+        "uses": {
+          "body:tokens": 536,
+          "published_prior": 995
+        },
+        "paired": {
+          "delta_wape": -0.07737875848399767,
+          "family_bootstrap_95": [
+            -0.10121130655575222,
+            -0.05348240803828709
+          ]
+        },
+        "subgroups": {
+          "roots": {
+            "n": 1412,
+            "wape": 0.8763047592764818,
+            "bias": -0.7002640953914668,
+            "baseline": {
+              "wape": 0.9362080951366545,
+              "bias": -0.9214684793163894
+            }
+          },
+          "helpers": {
+            "n": 119,
+            "wape": 0.7724853028029555,
+            "bias": -0.6025866410430526,
+            "baseline": {
+              "wape": 0.9537192786960637,
+              "bias": -0.9528446225005085
+            }
+          },
+          "known_body_settings": {
+            "n": 536,
+            "wape": 0.6230187201760624,
+            "bias": 0.08346109078724652,
+            "baseline": {
+              "wape": 0.949732860186971,
+              "bias": -0.9290065324746709
+            }
+          },
+          "unknown_body_settings": {
+            "n": 995,
+            "wape": 0.9353157064711083,
+            "bias": -0.9250507427202004,
+            "baseline": {
+              "wape": 0.9353157064711083,
+              "bias": -0.9250507427202004
+            }
+          }
+        }
+      },
+      "window": {
+        "wape": 0.7006591242223902,
+        "bias": -0.6035058797940516,
+        "uses": {
+          "window:seconds": 1432,
+          "body:tokens": 33,
+          "published_prior": 66
+        },
+        "paired": {
+          "delta_wape": -0.23807113129568894,
+          "family_bootstrap_95": [
+            -0.2541856729635217,
+            -0.2212822955158676
+          ]
+        },
+        "subgroups": {
+          "roots": {
+            "n": 1412,
+            "wape": 0.6928288151478379,
+            "bias": -0.5927017022854607,
+            "baseline": {
+              "wape": 0.9362080951366545,
+              "bias": -0.9214684793163894
+            }
+          },
+          "helpers": {
+            "n": 119,
+            "wape": 0.7471941047389391,
+            "bias": -0.6677143529299995,
+            "baseline": {
+              "wape": 0.9537192786960637,
+              "bias": -0.9528446225005085
+            }
+          },
+          "known_body_settings": {
+            "n": 536,
+            "wape": 0.6699787533290884,
+            "bias": -0.39711197260769876,
+            "baseline": {
+              "wape": 0.949732860186971,
+              "bias": -0.9290065324746709
+            }
+          },
+          "unknown_body_settings": {
+            "n": 995,
+            "wape": 0.7101804725164595,
+            "bias": -0.6675581783444574,
+            "baseline": {
+              "wape": 0.9353157064711083,
+              "bias": -0.9250507427202004
+            }
+          }
+        }
+      },
+      "observed_window": {
+        "wape": 0.4475445176361383,
+        "bias": 0.11566973228848018,
+        "uses": {
+          "observed_window:seconds": 1433,
+          "body:tokens": 32,
+          "published_prior": 66
+        },
+        "paired": {
+          "delta_wape": -0.491185737881941,
+          "family_bootstrap_95": [
+            -0.5261879948940081,
+            -0.45051741713129867
+          ]
+        },
+        "subgroups": {
+          "roots": {
+            "n": 1412,
+            "wape": 0.45035419888195244,
+            "bias": 0.1384194934032043,
+            "baseline": {
+              "wape": 0.9362080951366545,
+              "bias": -0.9214684793163894
+            }
+          },
+          "helpers": {
+            "n": 119,
+            "wape": 0.4308467780211637,
+            "bias": -0.019530510786258115,
+            "baseline": {
+              "wape": 0.9537192786960637,
+              "bias": -0.9528446225005085
+            }
+          },
+          "known_body_settings": {
+            "n": 536,
+            "wape": 0.546634685106497,
+            "bias": 0.338137282171914,
+            "baseline": {
+              "wape": 0.949732860186971,
+              "bias": -0.9290065324746709
+            }
+          },
+          "unknown_body_settings": {
+            "n": 995,
+            "wape": 0.4167928686328048,
+            "bias": 0.04662913842034113,
+            "baseline": {
+              "wape": 0.9353157064711083,
+              "bias": -0.9250507427202004
+            }
+          }
+        }
+      }
+    },
+    "visible": {
+      "baseline": {
+        "wape": 0.45335412134876635,
+        "bias": -0.45335412134876635
+      },
+      "candidate": {
+        "wape": 0.04544160850520067,
+        "bias": -0.01140224382506573
+      },
+      "paired": {
+        "delta_wape": -0.4079125128435652,
+        "family_bootstrap_95": [
+          -0.4130042961908547,
+          -0.40249495108488603
+        ]
+      }
+    },
+    "combined_output": {
+      "body": {
+        "wape": 0.4338065178336774,
+        "bias": -0.34748564058635883,
+        "baseline": {
+          "wape": 0.6896405255254394,
+          "bias": -0.6887510808874977
+        }
+      },
+      "window": {
+        "wape": 0.3525639063848527,
+        "bias": -0.30630176594518327,
+        "baseline": {
+          "wape": 0.6896405255254394,
+          "bias": -0.6887510808874977
+        }
+      },
+      "observed_window": {
+        "wape": 0.2175247811363882,
+        "bias": 0.05188644881979175,
+        "baseline": {
+          "wape": 0.6896405255254394,
+          "bias": -0.6887510808874977
+        }
+      }
+    }
+  },
+  "native_connected_interval_calibration": {
+    "family_hash": {
+      "n": 448,
+      "total_interval_band": {
+        "wape": 0.26468514294912643,
+        "bias": -0.08963082879372457
+      },
+      "connected_interval_bands": {
+        "wape": 0.21365389027132656,
+        "bias": -0.11796864128024885
+      },
+      "paired": {
+        "delta_wape": -0.05103125267780007,
+        "family_bootstrap_95": [
+          -0.06810429448411792,
+          -0.03716794731020321
+        ]
+      }
+    },
+    "family_time": {
+      "n": 218,
+      "total_interval_band": {
+        "wape": 0.2834385666649457,
+        "bias": -0.2759838381764232
+      },
+      "connected_interval_bands": {
+        "wape": 0.23499490253973412,
+        "bias": -0.22827216575707893
+      },
+      "paired": {
+        "delta_wape": -0.04844366412521176,
+        "family_bootstrap_95": [
+          -0.05936245924923837,
+          -0.03737326218157211
+        ]
+      }
+    }
+  },
+  "visible_conversion": {
+    "coefficients": {
+      "text_tokens_per_character": 0.37963703993633924,
+      "argument_tokens_per_byte": 0.3969840873129512,
+      "tool_call_output_tokens": 86.60945695517314,
+      "pure_requests": 3180,
+      "tool_requests": 84276
+    },
+    "internal_tests": {
+      "family_hash": {
+        "all": {
+          "n": 27169,
+          "baseline": {
+            "wape": 0.4242307497379826,
+            "bias": -0.4241327641353757
+          },
+          "candidate": {
+            "wape": 0.086395396303636,
+            "bias": -0.01612417189281136
+          },
+          "paired": {
+            "delta_wape": -0.3378353534343475,
+            "family_bootstrap_95": [
+              -0.3599375956318376,
+              -0.3201282937742507
+            ]
+          }
+        },
+        "pure_text": {
+          "n": 861,
+          "baseline": {
+            "wape": 0.25267849887762195,
+            "bias": -0.25267370495056873
+          },
+          "candidate": {
+            "wape": 0.0727291932031449,
+            "bias": 0.014666678079989762
+          },
+          "paired": {
+            "delta_wape": -0.17994930567447684,
+            "family_bootstrap_95": [
+              -0.19211935171089226,
+              -0.1626082251518918
+            ]
+          }
+        },
+        "tools": {
+          "n": 26189,
+          "baseline": {
+            "wape": 0.42946496661225647,
+            "bias": -0.429361880538613
+          },
+          "candidate": {
+            "wape": 0.07846236556936702,
+            "bias": -0.008598444232831612
+          },
+          "paired": {
+            "delta_wape": -0.35100260104289094,
+            "family_bootstrap_95": [
+              -0.37458997226319146,
+              -0.3308021890737206
+            ]
+          }
+        }
+      },
+      "family_time": {
+        "all": {
+          "n": 4147,
+          "baseline": {
+            "wape": 0.4595320084724408,
+            "bias": -0.4595282053810205
+          },
+          "candidate": {
+            "wape": 0.12362312432577884,
+            "bias": -0.09011380222467812
+          },
+          "paired": {
+            "delta_wape": -0.3359088841466633,
+            "family_bootstrap_95": [
+              -0.33896022715068413,
+              -0.33236117628859696
+            ]
+          }
+        },
+        "pure_text": {
+          "n": 241,
+          "baseline": {
+            "wape": 0.23110633123159208,
+            "bias": -0.23104559864476346
+          },
+          "candidate": {
+            "wape": 0.09202433073664071,
+            "bias": 0.06263750502509219
+          },
+          "paired": {
+            "delta_wape": -0.13908200049495134,
+            "family_bootstrap_95": [
+              -0.16058215248944385,
+              -0.11614746430761892
+            ]
+          }
+        },
+        "tools": {
+          "n": 3901,
+          "baseline": {
+            "wape": 0.47479921707997713,
+            "bias": -0.47479921707997713
+          },
+          "candidate": {
+            "wape": 0.1257363207851639,
+            "bias": -0.10031968486191366
+          },
+          "paired": {
+            "delta_wape": -0.3490628962948145,
+            "family_bootstrap_95": [
+              -0.35246656696901274,
+              -0.34535195187781736
+            ]
+          }
+        }
+      }
+    }
+  },
+  "native_chat_duration": {
+    "summary": {
+      "rows": 548,
+      "families": 134,
+      "selection": {
+        "candidate": "summary_count",
+        "alpha": 0.1,
+        "adjusted": true,
+        "score": 0.9767476256149368,
+        "validation": {
+          "family_hash": {
+            "wape": 0.46401134175895997,
+            "bias": -4.83746540151824e-16,
+            "baseline": {
+              "wape": 0.49567431847414517,
+              "bias": -0.049103535922253645
+            }
+          },
+          "family_time": {
+            "wape": 0.47063630045808363,
+            "bias": 1.065385422314206e-15,
+            "baseline": {
+              "wape": 0.4818402298769679,
+              "bias": -0.038649878954945545
+            }
+          }
+        }
+      },
+      "tests": {
+        "family_hash": {
+          "n": 165,
+          "families": 24,
+          "wape": 0.4784532596232317,
+          "bias": 0.03731991858800726,
+          "baseline": {
+            "wape": 0.5143824185736463,
+            "bias": -0.01833001408117877
+          },
+          "paired": {
+            "delta_wape": -0.035929158950414854,
+            "family_bootstrap_95": [
+              -0.06640034058650758,
+              0.04255561230452097
+            ]
+          }
+        },
+        "family_time": {
+          "n": 122,
+          "families": 27,
+          "wape": 0.6831201229872899,
+          "bias": 0.4340047598877537,
+          "baseline": {
+            "wape": 0.6605322685584268,
+            "bias": 0.39577991061582296
+          },
+          "paired": {
+            "delta_wape": 0.022587854428863557,
+            "family_bootstrap_95": [
+              -0.023352437422715214,
+              0.061299095835370715
+            ]
+          }
+        }
+      }
+    },
+    "body": {
+      "rows": 162,
+      "families": 98,
+      "selection": {
+        "candidate": "linear_body",
+        "alpha": 1.0,
+        "adjusted": true,
+        "score": 0.6855199416720729,
+        "validation": {
+          "family_hash": {
+            "wape": 0.5770811985326179,
+            "bias": -1.8545251843953415e-16,
+            "baseline": {
+              "wape": 0.882158978401627,
+              "bias": -0.8425706947832843
+            }
+          },
+          "family_time": {
+            "wape": 0.611749153641578,
+            "bias": 1.9080376485981333e-16,
+            "baseline": {
+              "wape": 0.8923871013138461,
+              "bias": -0.8704224482369253
+            }
+          }
+        }
+      },
+      "tests": {
+        "family_hash": {
+          "n": 39,
+          "families": 19,
+          "wape": 0.5760789280383606,
+          "bias": -0.2757789034563503,
+          "baseline": {
+            "wape": 0.9196622471949975,
+            "bias": -0.9066392582692628
+          },
+          "paired": {
+            "delta_wape": -0.34358331915663687,
+            "family_bootstrap_95": [
+              -0.3968167509702115,
+              -0.22655689299638312
+            ]
+          }
+        },
+        "family_time": {
+          "n": 35,
+          "families": 20,
+          "wape": 0.8983384034441303,
+          "bias": 0.6610565970198389,
+          "baseline": {
+            "wape": 0.779107564707049,
+            "bias": -0.7171899712173447
+          },
+          "paired": {
+            "delta_wape": 0.1192308387370815,
+            "family_bootstrap_95": [
+              -0.1051816112999914,
+              0.4680876092206103
+            ]
+          }
+        }
+      }
+    },
+    "window": {
+      "rows": 86,
+      "families": 56,
+      "selection": {
+        "candidate": "elapsed_positions",
+        "alpha": 0.01,
+        "adjusted": true,
+        "score": 0.7115754196626214,
+        "validation": {
+          "family_hash": {
+            "wape": 0.3971737392663504,
+            "bias": -5.183873935980065e-16,
+            "baseline": {
+              "wape": 0.8922392301624502,
+              "bias": -0.8492063214902812
+            }
+          },
+          "family_time": {
+            "wape": 0.5812722142352144,
+            "bias": -2.050075813122212e-16,
+            "baseline": {
+              "wape": 0.8168806821781625,
+              "bias": -0.7261481157779267
+            }
+          }
+        }
+      },
+      "tests": {
+        "family_hash": {
+          "n": 18,
+          "families": 9,
+          "wape": 0.34157190626338807,
+          "bias": 0.002211181951321756,
+          "baseline": {
+            "wape": 0.9334274075311183,
+            "bias": -0.9144274922445033
+          },
+          "paired": {
+            "delta_wape": -0.5918555012677302,
+            "family_bootstrap_95": [
+              -0.6681202246938492,
+              2.5670300837250046
+            ]
+          }
+        },
+        "family_time": {
+          "n": 18,
+          "families": 12,
+          "wape": 0.49707978284604204,
+          "bias": -0.49707978284604204,
+          "baseline": {
+            "wape": 0.8172764166766122,
+            "bias": -0.7906791933677222
+          },
+          "paired": {
+            "delta_wape": -0.3201966338305702,
+            "family_bootstrap_95": [
+              -0.36039602304454577,
+              -0.15016496356346914
+            ]
+          }
+        }
+      }
+    },
+    "observed_window": {
+      "rows": 71,
+      "families": 50,
+      "selection": {
+        "candidate": "observed_window",
+        "alpha": 0.01,
+        "adjusted": true,
+        "score": 0.19390343499614385,
+        "validation": {
+          "family_hash": {
+            "wape": 0.15815189881857664,
+            "bias": -2.6728551842230845e-17,
+            "baseline": {
+              "wape": 0.8943229448994693,
+              "bias": -0.859020626169486
+            }
+          },
+          "family_time": {
+            "wape": 0.15958432300322173,
+            "bias": -9.998811742930866e-17,
+            "baseline": {
+              "wape": 0.8230092623495576,
+              "bias": -0.7451095575116348
+            }
+          }
+        }
+      },
+      "tests": {
+        "family_hash": {
+          "n": 8,
+          "families": 7,
+          "wape": 0.0896122459203807,
+          "bias": 0.07330546167773141,
+          "baseline": {
+            "wape": 0.6394394680460116,
+            "bias": -0.5077628231719213
+          },
+          "paired": {
+            "delta_wape": -0.5498272221256308,
+            "family_bootstrap_95": [
+              -0.7372046259456927,
+              -0.0691607788063874
+            ]
+          }
+        },
+        "family_time": {
+          "n": 16,
+          "families": 10,
+          "wape": 0.12077554378761157,
+          "bias": 0.013445026167154307,
+          "baseline": {
+            "wape": 0.8275478340818844,
+            "bias": -0.7987846059449181
+          },
+          "paired": {
+            "delta_wape": -0.7067722902942728,
+            "family_bootstrap_95": [
+              -0.7663965500716161,
+              -0.39411493977660605
+            ]
+          }
+        }
+      }
+    }
+  },
+  "native_chat_tools": {
+    "rows": 202,
+    "families": 51,
+    "methods": {
+      "family_hash": {
+        "published_generic": {
+          "wape": 1.3107193709499654,
+          "bias": 0.6861241436287,
+          "n": 18,
+          "families": 8,
+          "paired": {
+            "delta_wape": 0.0,
+            "family_bootstrap_95": [
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "operation_mean": {
+          "wape": 0.5021504499450247,
+          "bias": -0.18337502312034495,
+          "n": 18,
+          "families": 8,
+          "paired": {
+            "delta_wape": -0.8085689210049406,
+            "family_bootstrap_95": [
+              -1.5504741955469847,
+              -0.4031235439889183
+            ]
+          }
+        },
+        "shrunk_family_mean": {
+          "wape": 0.866972116465052,
+          "bias": 0.23893331376619575,
+          "n": 18,
+          "families": 8,
+          "paired": {
+            "delta_wape": -0.44374725448491326,
+            "family_bootstrap_95": [
+              -0.9046921548226263,
+              -0.2367285605934885
+            ]
+          }
+        }
+      },
+      "family_time": {
+        "published_generic": {
+          "wape": 1.1252421236636674,
+          "bias": 0.3994431135070192,
+          "n": 37,
+          "families": 11,
+          "paired": {
+            "delta_wape": 0.0,
+            "family_bootstrap_95": [
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "operation_mean": {
+          "wape": 0.5739372160474744,
+          "bias": -0.2776970166946238,
+          "n": 37,
+          "families": 11,
+          "paired": {
+            "delta_wape": -0.5513049076161929,
+            "family_bootstrap_95": [
+              -1.0877258346923946,
+              -0.21365045065563215
+            ]
+          }
+        },
+        "shrunk_family_mean": {
+          "wape": 0.7273267820605034,
+          "bias": 0.00048813487411280236,
+          "n": 37,
+          "families": 11,
+          "paired": {
+            "delta_wape": -0.3979153416031642,
+            "family_bootstrap_95": [
+              -0.757415634565198,
+              -0.13343776486127648
+            ]
+          }
+        }
+      }
+    },
+    "policy": "Training-only, native chat start-to-result observations. No coding tool durations are transferred into chat; asynchronous/user acknowledgments excluded."
+  },
+  "published_package": {
+    "version": 1,
+    "feature_contract": "claude-response-v2",
+    "policy": "Native thinking clocks first; partial/summary clocks retain explicit fallbacks. Full native-window duration models use chat clocks and coding model/effort rates. A clockless no-trace response uses a coding token model only for an exact published model/effort/speed match. Unknown/missing settings, incomplete responses and out-of-domain evidence retain published assumptions. No pure body chat-duration model or new summary coefficient is promoted because temporal tests did not improve consistently. No input or cost estimates.",
+    "window_policy": {
+      "maximum_clock_skew_seconds": 0.25,
+      "maximum_seconds": 1800,
+      "requires_native_sender_clock": true,
+      "requires_native_final_text_stop": true,
+      "reject_unobservable_calls": true
+    },
+    "response_models": [
+      {
+        "id": "body:claude-fable-5-2:medium:standard",
+        "evidence": "body",
+        "model": "claude-fable-5-2",
+        "effort": "medium",
+        "speed": "standard",
+        "intercept": 955.2936660391886,
+        "coefficients": {
+          "argument_kbytes": 228.21033700591502,
+          "tool_command": 322.2360485278866,
+          "tool_read": 1118.0294943627134,
+          "tool_web": 22.575457447318193
+        },
+        "donor_responses": 91,
+        "donor_families": 52,
+        "minimum_tools": 1,
+        "maximum_tools": 247,
+        "maximum_visible_characters": 52320,
+        "minimum_window_seconds": 0.0,
+        "maximum_window_seconds": 0.0,
+        "lower_multiplier": 0.0,
+        "upper_multiplier": 4.0,
+        "basis": "coding-study",
+        "notes": "Nonnegative arithmetic model; family-balanced fit with supported setting-group shrinkage. Thinking tokens for a completed tool-bearing self response with no thinking trace. Native clocks and explicit block/summary evidence take precedence. Sensitivity is not a chat confidence interval.",
+        "unit": "tokens",
+        "requires_reported_settings": true
+      },
+      {
+        "id": "body:claude-opus-5-5:high:standard",
+        "evidence": "body",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "speed": "standard",
+        "intercept": 1971.5266458781352,
+        "coefficients": {
+          "argument_kbytes": 136.030285466342,
+          "tool_command": 129.81759330235965,
+          "tool_read": 1569.550075904386,
+          "tool_other": 284.4430520633406
+        },
+        "donor_responses": 979,
+        "donor_families": 371,
+        "minimum_tools": 1,
+        "maximum_tools": 247,
+        "maximum_visible_characters": 52320,
+        "minimum_window_seconds": 0.0,
+        "maximum_window_seconds": 0.0,
+        "lower_multiplier": 0.0,
+        "upper_multiplier": 4.0,
+        "basis": "coding-study",
+        "notes": "Nonnegative arithmetic model; family-balanced fit with supported setting-group shrinkage. Thinking tokens for a completed tool-bearing self response with no thinking trace. Native clocks and explicit block/summary evidence take precedence. Sensitivity is not a chat confidence interval.",
+        "unit": "tokens",
+        "requires_reported_settings": true
+      },
+      {
+        "id": "body:claude-opus-5-5:medium:standard",
+        "evidence": "body",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "speed": "standard",
+        "intercept": 2156.538476655335,
+        "coefficients": {
+          "visible_kchars": 175.50082088822808,
+          "argument_kbytes": 124.6249306422198,
+          "tool_command": 123.50318635488595,
+          "tool_read": 214.6266866939809,
+          "tool_search": 239.1689152540132
+        },
+        "donor_responses": 628,
+        "donor_families": 252,
+        "minimum_tools": 1,
+        "maximum_tools": 247,
+        "maximum_visible_characters": 52320,
+        "minimum_window_seconds": 0.0,
+        "maximum_window_seconds": 0.0,
+        "lower_multiplier": 0.0,
+        "upper_multiplier": 4.0,
+        "basis": "coding-study",
+        "notes": "Nonnegative arithmetic model; family-balanced fit with supported setting-group shrinkage. Thinking tokens for a completed tool-bearing self response with no thinking trace. Native clocks and explicit block/summary evidence take precedence. Sensitivity is not a chat confidence interval.",
+        "unit": "tokens",
+        "requires_reported_settings": true
+      },
+      {
+        "id": "chat-duration-window-v2",
+        "evidence": "window",
+        "model": "*",
+        "effort": "*",
+        "speed": "*",
+        "intercept": 0.0,
+        "coefficients": {
+          "visible_kchars": 0.7469304260556396,
+          "tool_web": 1.4252822753065209,
+          "tool_other": 0.5425903200222326,
+          "elapsed_minutes": 9.237748922478076,
+          "first_call_minutes": 46.55793778618552
+        },
+        "donor_responses": 68,
+        "donor_families": 47,
+        "minimum_tools": 1,
+        "maximum_tools": 250,
+        "maximum_visible_characters": 1000000,
+        "minimum_window_seconds": 0.1,
+        "maximum_window_seconds": 1800,
+        "lower_multiplier": 0.0,
+        "upper_multiplier": 4.0,
+        "basis": "chat-duration-study",
+        "notes": "Predicts recorded thinking seconds with native thinking clocks masked. Coding model/effort rates convert seconds to token estimates. Global source-specific duration fallback, not chat token ground truth.",
+        "unit": "seconds",
+        "requires_reported_settings": false
+      },
+      {
+        "id": "chat-duration-observed_window-v2",
+        "evidence": "observed_window",
+        "model": "*",
+        "effort": "*",
+        "speed": "*",
+        "intercept": 0.0,
+        "coefficients": {
+          "argument_kbytes": 0.11634335924632407,
+          "tool_read": 0.743714150140732,
+          "tool_other": 0.21408222858541043,
+          "residual_minutes": 43.091709549620006
+        },
+        "donor_responses": 63,
+        "donor_families": 43,
+        "minimum_tools": 1,
+        "maximum_tools": 250,
+        "maximum_visible_characters": 1000000,
+        "minimum_window_seconds": 0.1,
+        "maximum_window_seconds": 1800,
+        "lower_multiplier": 0.0,
+        "upper_multiplier": 4.0,
+        "basis": "chat-duration-study",
+        "notes": "Predicts recorded thinking seconds with native thinking clocks masked. Coding model/effort rates convert seconds to token estimates. Global source-specific duration fallback, not chat token ground truth.",
+        "unit": "seconds",
+        "requires_reported_settings": false
+      }
+    ],
+    "visible_component": {
+      "text_tokens_per_character": 0.37963703993633924,
+      "argument_tokens_per_byte": 0.3969840873129512,
+      "tool_call_output_tokens": 86.60945695517314,
+      "pure_requests": 3180,
+      "tool_requests": 84276
+    },
+    "source_freezes": {
+      "coding": "4e087fb64ec3958578bbf2b2aed82fc34f13790f1126a0f4cc502496f2456b96",
+      "chat": "f349a35535c3f9a9c32e2370dc6cb74d246208e87ceae60a7ec44f01f3c98967",
+      "components": "409ef875c029bea5531f967ca20ba745fd007ffb799ea58e2ec9767167825142"
+    },
+    "native_interval_policy": "Merge overlapping thinking intervals; apply local duration bands per connected native interval rather than to the whole response; inferred-clock and native-clock contributions remain separate.",
+    "visible_component_note": "Pure-text request conversion is identified separately. Argument bytes and a per-call unrendered-output allowance fit the remaining nonthinking counters; the allowance is not claimed to be a specific provider billing item.",
+    "frozen_sha256": "855a998dafae494833eb87691a9c2ec7de6f0b57ba850187199f9af7f7327c11"
+  },
+  "runtime_guard_notes": [
+    "Exact token models also require exported speed provenance. Explicit sender attachments, stray/duplicate/reordered results and missing pairings reject fitted whole-response inference. App guards are conservative; independent coding benchmark results apply only to its eligible source regime."
+  ],
+  "rejected_predictors": [
+    "Output position/history/result-volume expansion did not win selection.",
+    "Pure body chat-duration fit and a new summary coefficient worsened forward-time tests.",
+    "An initial whole-turn two-rate visible fit confounded tool output with text conversion; discarded before independent evaluation.",
+    "Imputed tool-duration residuals did not consistently improve temporal performance."
+  ],
+  "implementation_validation": {
+    "go_focused": "passed",
+    "go_fast": "passed",
+    "go_full": "passed",
+    "web_check": {
+      "status": "passed",
+      "passed": 1779,
+      "skipped": 3
+    },
+    "web_full_matrix": {
+      "status": "passed",
+      "passed": 1779,
+      "skipped": 3
+    },
+    "claude_export_browser": {
+      "status": "passed",
+      "passed": 2
+    },
+    "fitter_unit": {
+      "status": "passed",
+      "passed": 2
+    },
+    "diff_check": "passed",
+    "python_tools": {
+      "status": "pre-existing failure",
+      "tests": 161,
+      "passed": 158,
+      "skipped": 2,
+      "errors": 1,
+      "failure": "test_risky_tools: standalone splitter build omits authorshipOutputFile and authorshipShellSyntax; helper and parser unchanged from origin/master."
+    }
+  }
+}

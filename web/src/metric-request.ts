@@ -1,10 +1,11 @@
+import { withEstimateMetrics, estimateMetricFlags } from "./usage-estimate-model";
 import { EMPTY_QUERY, toQueryRequestV3, type AggregationClause, type ComputedExecution, type FieldSchema, type QueryCapabilitiesV3, sourceExecutionSchema, type ErrorCode, type QueryRequestV3, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { queryRequest, QueryRequestError } from "./query-request";
 
 // Standalone chart and card metrics use the same V3 protocol as native tables.
 
 export type MetricBucket = { keys: unknown[]; value: unknown; count?: number; error?: string };
-export type MetricResult = { id: string; buckets: MetricBucket[]; error?: string; errorCode?: ErrorCode | (string & {}); groupCount?: number; processedRows?: number; hiddenGroups?: number; coverage?: "exact" | "partial"; other?: MetricBucket };
+export type MetricResult = { is_estimate?: boolean; id: string; buckets: MetricBucket[]; error?: string; errorCode?: ErrorCode | (string & {}); groupCount?: number; processedRows?: number; hiddenGroups?: number; coverage?: "exact" | "partial"; other?: MetricBucket };
 export type MetricResponse = { metrics?: MetricResult[] };
 
 // Keep structured resource-limit failures available to callers.
@@ -57,5 +58,7 @@ export async function postQueryStateMetrics(dataset: string, schema: FieldSchema
   if (handshake.queryCapabilities?.version !== 3) throw new MetricRequestError("This server does not support Query Table V3. Reload after updating the service.");
   const request = toQueryRequestV3(query, sourceExecutionSchema(schema, handshake.computedExecution), handshake.queryCapabilities, handshake.computedExecution, { rows: false, ...now === undefined ? {} : { now } });
   request.hostState = query.hostState;
-  return metricResults(await post<MetricResponse>(withParams(`/api/query/${dataset}/query-v3`, params), request, signal), query.aggregations ?? []);
+  const response = await post<MetricResponse>(withParams(`/api/query/${dataset}/query-v3`, params), withEstimateMetrics(dataset, request), signal);
+  const flags = estimateMetricFlags(response);
+  return metricResults(response, query.aggregations ?? []).map(metric => ({ ...metric, is_estimate: flags.has(metric.id) }));
 }

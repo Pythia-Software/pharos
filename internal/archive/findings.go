@@ -17,7 +17,7 @@ import (
 
 // findingsVersion names the detectors' keys, wording, and metrics. A new
 // version rebuilds findings the next time the pass runs, even on the same day.
-const findingsVersion = "findings-v3"
+const findingsVersion = "findings-v4-recorded-usage"
 
 // The pass observes the last findingWindowDays days: 28 for the gate and the
 // baseline, twelve weeks for sparklines, and 90 for savings after a copy.
@@ -561,7 +561,7 @@ func (env *findingEnv) loadUsage() error {
 	}
 	rows, err := queryMapsContext(env.ctx, env.db, `SELECT a.conversation_id,substr(u.usage_hour,1,10) day,COALESCE(NULLIF(u.model,''),a.model,'') model,`+strings.Join(sums, ",")+`
 		FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id
-		WHERE u.usage_hour>=? AND u.total_tokens>0 GROUP BY 1,2,3`, env.fromUTC[:13])
+		WHERE u.is_estimate=0 AND u.usage_hour>=? AND u.total_tokens>0 GROUP BY 1,2,3`, env.fromUTC[:13])
 	if err != nil {
 		return err
 	}
@@ -577,7 +577,7 @@ func (env *findingEnv) loadUsage() error {
 		}
 	}
 	requests, err := queryMapsContext(env.ctx, env.db, `SELECT m.conversation_id,COUNT(*) requests,SUM(m.compacted_before) compactions,MAX(m.input_tokens) peak
-		FROM model_requests m JOIN conversations c ON c.id=m.conversation_id WHERE c.started_at>=? GROUP BY 1`, env.fromUTC)
+		FROM model_requests m JOIN conversations c ON c.id=m.conversation_id WHERE m.is_estimate=0 AND c.started_at>=? GROUP BY 1`, env.fromUTC)
 	if err != nil {
 		return err
 	}

@@ -81,7 +81,7 @@ var toolRollupFromCalls = `SELECT date(t.started_at,'localtime') day,r.display_n
 		COUNT(*) call_count,SUM(COALESCE(t.status,'')='error') error_count,SUM(COALESCE(t.status,'')='no_result') no_result_count,
 		SUM(COALESCE(t.error_type,'')='user_rejected') rejected_count,SUM(t.interrupted) interrupted_count,SUM(COALESCE(t.error_type,'')='timeout') timeout_count,
 		SUM(COALESCE(t.error_type,'')='nonzero_exit') nonzero_exit_count,SUM(COALESCE(t.error_type,'')='hook_blocked') hook_blocked_count,SUM(t.truncated) truncated_count,
-		COUNT(t.duration_ms) timed_count,COALESCE(SUM(t.duration_ms),0) total_duration_ms,MAX(t.duration_ms) max_duration_ms,
+		MAX(t.duration_is_estimate) duration_is_estimate,COUNT(t.duration_ms) timed_count,COALESCE(SUM(t.duration_ms),0) total_duration_ms,MAX(t.duration_ms) max_duration_ms,
 		SUM(t.input_bytes) input_bytes,SUM(t.result_bytes) result_bytes,SUM(t.result_tokens) result_tokens,
 		SUM(COALESCE(t.result_tokens_source,'')='measured') measured_count,SUM(t.carried_tokens) carried_tokens,SUM(t.output_tokens) output_tokens,
 		COALESCE(SUM(t.lines_added),0) lines_added,COALESCE(SUM(t.lines_removed),0) lines_removed,COUNT(DISTINCT t.workspace_id) work_count

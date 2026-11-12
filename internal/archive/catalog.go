@@ -243,7 +243,9 @@ func (c *Catalog) Close() error {
 // 25: explicit root session envelopes and their provenance. Older writers
 // would replace these session bounds with unavailable message-only spans.
 // 26: retained Claude Chat settings observations, separate from execution data.
-const catalogSchemaVersion = 26
+// 27: estimated usage shares the canonical ledgers with explicit provenance.
+// Older writers could otherwise preserve predictions as authoritative counters.
+const catalogSchemaVersion = 27
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -325,6 +327,17 @@ func (c *Catalog) Initialize() error {
 		return err
 	}
 	for _, migration := range []struct{ table, column, statement string }{
+		{"agent_sessions", "is_estimate", "ALTER TABLE agent_sessions ADD COLUMN is_estimate INTEGER NOT NULL DEFAULT 0"},
+		{"agent_sessions", "input_tokens_available", "ALTER TABLE agent_sessions ADD COLUMN input_tokens_available INTEGER NOT NULL DEFAULT 1"},
+		{"agent_sessions", "usage_estimate_json", "ALTER TABLE agent_sessions ADD COLUMN usage_estimate_json TEXT"},
+		{"agent_session_usage", "is_estimate", "ALTER TABLE agent_session_usage ADD COLUMN is_estimate INTEGER NOT NULL DEFAULT 0"},
+		{"agent_session_usage", "input_tokens_available", "ALTER TABLE agent_session_usage ADD COLUMN input_tokens_available INTEGER NOT NULL DEFAULT 1"},
+		{"agent_session_usage", "usage_estimate_json", "ALTER TABLE agent_session_usage ADD COLUMN usage_estimate_json TEXT"},
+		{"model_requests", "is_estimate", "ALTER TABLE model_requests ADD COLUMN is_estimate INTEGER NOT NULL DEFAULT 0"},
+		{"model_requests", "input_tokens_available", "ALTER TABLE model_requests ADD COLUMN input_tokens_available INTEGER NOT NULL DEFAULT 1"},
+		{"model_requests", "usage_estimate_json", "ALTER TABLE model_requests ADD COLUMN usage_estimate_json TEXT"},
+		{"tool_calls", "duration_is_estimate", "ALTER TABLE tool_calls ADD COLUMN duration_is_estimate INTEGER NOT NULL DEFAULT 0"},
+		{"tool_calls", "duration_estimate_json", "ALTER TABLE tool_calls ADD COLUMN duration_estimate_json TEXT"},
 		{"conversations", "session_bounds_json", "ALTER TABLE conversations ADD COLUMN session_bounds_json TEXT"},
 		{"agent_sessions", "time_bounds_source", "ALTER TABLE agent_sessions ADD COLUMN time_bounds_source TEXT NOT NULL DEFAULT 'unavailable'"},
 		{"conversation_derivation_inputs", "child_usage", "ALTER TABLE conversation_derivation_inputs ADD COLUMN child_usage TEXT NOT NULL DEFAULT ''"},
@@ -352,6 +365,7 @@ func (c *Catalog) Initialize() error {
 		{"model_requests", "source_message_id", "ALTER TABLE model_requests ADD COLUMN source_message_id TEXT"},
 		{"model_requests", "final_message_id", "ALTER TABLE model_requests ADD COLUMN final_message_id TEXT"},
 		{"tool_calls", "effort", "ALTER TABLE tool_calls ADD COLUMN effort TEXT"},
+		{"tool_usage_daily", "duration_is_estimate", "ALTER TABLE tool_usage_daily ADD COLUMN duration_is_estimate INTEGER NOT NULL DEFAULT 0"},
 		{"tool_usage_daily", "effort", "ALTER TABLE tool_usage_daily ADD COLUMN effort TEXT"},
 		{"messages", "previous_native_id", "ALTER TABLE messages ADD COLUMN previous_native_id TEXT"},
 		{"messages", "sender", "ALTER TABLE messages ADD COLUMN sender TEXT"},
@@ -481,6 +495,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureRequestEvidence(); err != nil {
 		return fmt.Errorf("initialize request evidence: %w", err)
+	}
+	if err := c.ensureUsageEstimation(); err != nil {
+		return fmt.Errorf("initialize usage estimation: %w", err)
 	}
 	if err := c.ensureCompactionBoundaries(); err != nil {
 		return fmt.Errorf("initialize compaction boundaries: %w", err)
@@ -862,7 +879,7 @@ func (c *Catalog) seedSessionUsage() error {
 			a.cache_creation_input_tokens,a.cache_creation_5m_input_tokens,a.cache_creation_1h_input_tokens,
 			a.output_tokens,a.reasoning_output_tokens,a.unclassified_tokens,a.total_tokens
 		FROM agent_sessions a JOIN conversations c ON c.id=a.conversation_id
-		WHERE a.total_tokens>0 AND NOT EXISTS(SELECT 1 FROM agent_session_usage u WHERE u.agent_session_id=a.id)`)
+		WHERE a.total_tokens>0 AND a.is_estimate=0 AND NOT EXISTS(SELECT 1 FROM agent_session_usage u WHERE u.agent_session_id=a.id)`)
 	return err
 }
 

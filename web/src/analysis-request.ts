@@ -1,3 +1,4 @@
+import { hasUsageEstimates } from "./usage-estimate-model";
 import { evaluateMetrics, planMetricSeries, type AggregationResultEntry, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
 import { MetricRequestError, postQueryStateMetrics, type RequestParams } from "./metric-request";
 import { applyUsageAggregations, usageRowsForWhere } from "./usage-aggregations";
@@ -14,11 +15,21 @@ export async function runAnalysisQuery(dataset: string, schema: FieldSchema<any>
   const clauses = query.aggregations ?? [];
   if (!clauses.length) return [];
   if (local) {
-    const result = !query.grouping && dataset === "usage" ? applyUsageAggregations(local.rows, local.hourly ?? [], { where: query.where, aggregations: clauses }, schema)
-      : query.grouping && dataset === "usage" ? groupedUsage(local, query, schema) : evaluateMetrics(local.rows, query, schema, { now });
+    const evaluate = (current: QueryState) => !current.grouping && dataset === "usage" ? applyUsageAggregations(local.rows, local.hourly ?? [], { where: current.where, aggregations: current.aggregations ?? [] }, schema)
+      : current.grouping && dataset === "usage" ? groupedUsage(local, current, schema) : evaluateMetrics(local.rows, current, schema, { now });
+    const result = evaluate(query);
     const failed = result.metrics.find(metric => metric.error);
     if (failed) throw new MetricRequestError(failed.error!);
-    return result.metrics;
+    const flag = ["tool_calls", "tools"].includes(dataset) ? "duration_is_estimate" : ["usage", "library"].includes(dataset) ? "is_estimate" : "";
+    let estimated = false;
+    if (flag && [...clauses,...query.grouping?.summaries ?? []].some(metric => /token|cost|duration/.test(`${metric.field ?? ""} ${metric.expression ?? ""}`))) {
+      const grouping = query.grouping ? { ...query.grouping, summaries: [...query.grouping.summaries, {id:"__pharos_estimate",op:"formula" as const,expression:`MAX(IF([${flag}],1,0))`}] } : undefined;
+      const quality = evaluate({ ...query, grouping, aggregations: [{id:"__pharos_estimate",op:"max",expression:grouping?"MAX([__pharos_estimate])":`MAX(IF([${flag}],1,0))`,groupBy:[]}] });
+      const failure = quality.metrics.find(metric => metric.error);
+      if (failure) throw new MetricRequestError(failure.error!);
+      estimated = quality.metrics.some(metric => metric.buckets.some(bucket => Number(bucket.value)>0));
+    }
+    return result.metrics.map(metric => ({...metric,is_estimate:estimated}));
   }
   if (query.grouping) return await postQueryStateMetrics(dataset, schema, query, signal, params) as AggregationResultEntry[];
   // Per-occurrence statistics (a timestamp cycle's boxes and means) and whole
@@ -26,7 +37,10 @@ export async function runAnalysisQuery(dataset: string, schema: FieldSchema<any>
   // plans and combines: servers never receive them. The plan's queries carry
   // absolute bounds, so they run as asked whenever they arrive.
   const plan = planMetricSeries(query, schema, { now });
-  if (plan) return plan.combine((await Promise.all(plan.queries.map(part => runPlain(dataset, schema, part, signal, params)))).flat());
+  if (plan) {
+    const parts = (await Promise.all(plan.queries.map(part => runPlain(dataset, schema, part, signal, params)))).flat();
+    return plan.combine(parts).map(metric => ({ ...metric, is_estimate: hasUsageEstimates(parts) }));
+  }
   return await runPlain(dataset, schema, query, signal, params);
 }
 

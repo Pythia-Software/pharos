@@ -162,7 +162,7 @@ func planSessionModelRows(ctx context.Context, q queryer, rows []map[string]any,
 	}
 	encoded := jsonText(ids)
 	models, err := queryMapsContext(ctx, q, `SELECT agent_session_id,model,attribution FROM agent_session_usage
-		WHERE total_tokens>0 AND agent_session_id IN (SELECT value FROM json_each(?))`, encoded)
+		WHERE is_estimate=0 AND total_tokens>0 AND agent_session_id IN (SELECT value FROM json_each(?))`, encoded)
 	if err != nil {
 		return nil, SessionModelRepair{}, err
 	}
@@ -200,7 +200,7 @@ func planSessionModelRows(ctx context.Context, q queryer, rows []map[string]any,
 	// Request ownership can survive missing membership. Read the owning
 	// envelope; model_requests.model itself can be a conversation fallback.
 	modelRequests, err := queryMapsContext(ctx, q, `WITH owned AS (
-		SELECT r.* FROM model_requests r WHERE r.conversation_id IN
+		SELECT r.* FROM model_requests r WHERE r.is_estimate=0 AND r.conversation_id IN
 		(SELECT conversation_id FROM agent_sessions WHERE id IN (SELECT value FROM json_each(?)))
 		AND r.agent_session_id IN (SELECT value FROM json_each(?)))
 		SELECT r.agent_session_id,m.role,m.kind,m.text,m.raw_text FROM owned r JOIN messages m ON m.id=r.source_message_id

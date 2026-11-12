@@ -844,6 +844,35 @@ func TestRequestOccurrencesFollowUsageMessages(t *testing.T) {
 	if got := index().Lookup(request("child", "native-old"), sourceRef{}); got.Role != occurrenceUnresolved {
 		t.Fatalf("a request without its usage message: %+v", got)
 	}
+	t.Run("recorded requests and legacy ledgers", func(t *testing.T) {
+		tx := seedTx(t, c.DB)
+		// A temporary table exercises pre-estimation schemas without changing
+		// the catalog or its triggers.
+		if _, err := tx.Exec(`CREATE TEMP TABLE model_requests(id TEXT,conversation_id TEXT,source_message_id TEXT,final_message_id TEXT,is_estimate INTEGER);
+ INSERT INTO model_requests VALUES('original','root','m-original','m-original',0),('copy','fork','m-copy','m-copy',0),('prediction','fork','m-copy','m-copy',1)`); err != nil {
+			t.Fatal(err)
+		}
+		claims := []executionClaim{{Kind: claimInheritedCopy, Strength: evidenceNative, Subject: sourceRef{sourceMessage, "m-copy"}, Object: sourceRef{sourceMessage, "m-original"}, Locator: sourceRef{sourceConversation, "fork"}}}
+		check := func() {
+			t.Helper()
+			got, err := requestOccurrenceClaims(t.Context(), tx, claims)
+			if err != nil || len(got) != 1 || got[0].Subject.ID != "copy" || got[0].Object.ID != "original" {
+				t.Fatalf("request copies: %+v, %v", got, err)
+			}
+		}
+		check()
+		if _, err := tx.Exec(`DELETE FROM model_requests WHERE is_estimate=1; ALTER TABLE model_requests DROP COLUMN is_estimate`); err != nil {
+			t.Fatal(err)
+		}
+		check()
+		if _, err := tx.Exec(`ALTER TABLE model_requests DROP COLUMN source_message_id; ALTER TABLE model_requests DROP COLUMN final_message_id`); err != nil {
+			t.Fatal(err)
+		}
+		got, err := requestOccurrenceClaims(t.Context(), tx, claims)
+		if err != nil || len(got) != 1 || got[0].Kind != claimCopyCandidate {
+			t.Fatalf("unlinked legacy request: %+v, %v", got, err)
+		}
+	})
 }
 
 // A Codex fork's session note declares copied history. Its copies match the

@@ -17,6 +17,8 @@
     {"field": "cache_read_share", "width": 95}
   ],
   "fields": [
+    {"name": "is_estimate", "label": "Includes estimates", "type": "bool", "group": "Data quality", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "is_estimate", "synthetic": true}, "sqlite": {"expr": "r.\"is_estimate\""}}, "description": "Estimates fill missing source measurements. Generated output only; missing input and cache usage stays unavailable. Costs based on estimated output are partial."},
+    {"name": "input_tokens_available", "label": "Input usage available", "type": "bool", "group": "Data quality", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "input_tokens_available", "synthetic": true}, "sqlite": {"expr": "r.\"input_tokens_available\""}}, "description": "Estimates fill missing source measurements. Generated output only; missing input and cache usage stays unavailable. Costs based on estimated output are partial."},
     { "name": "id", "label": "Row ID", "type": "text", "select": {"default": false}, "bindings": {"postgres": {"expr": "id", "synthetic": true}, "sqlite": {"expr": "r.\"id\""}} },
     { "name": "day", "label": "Day", "type": "text", "group": "Time", "aliases": ["date"], "bindings": {"postgres": {"expr": "day", "synthetic": true}, "sqlite": {"expr": "r.\"day\""}} },
     { "name": "hour", "label": "Hour", "type": "text", "group": "Time", "select": {"default": false}, "bindings": {"postgres": {"expr": "hour", "synthetic": true}, "sqlite": {"expr": "r.\"hour\""}} },

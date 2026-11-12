@@ -8,6 +8,7 @@ func PharosLibrarySchema() querytable.Schema {
 		Name:    "pharos_library",
 		IDField: "id",
 		Fields: map[string]querytable.FieldSpec{
+			"is_estimate":               {Name: "is_estimate", Kind: querytable.FieldBool, Expr: "r.\"is_estimate\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"is_estimate\""},
 			"id":                        {Name: "id", Kind: querytable.FieldText, Expr: "r.\"id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"id\""},
 			"title":                     {Name: "title", Kind: querytable.FieldText, Expr: "r.\"title\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"title\""},
 			"repository_name":           {Name: "repository_name", Kind: querytable.FieldText, Expr: "r.\"repository_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"repository_name\""},

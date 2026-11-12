@@ -43,7 +43,7 @@ func (c *Catalog) ensureFastTiers() error {
 	_, err := c.DB.Exec(`UPDATE tool_ledger_state SET version='stale-fast-tiers'
  WHERE COALESCE((SELECT value FROM meta WHERE key='fast_service_tiers'),'')<>?1
  AND conversation_id IN (SELECT conversation_id FROM model_requests
-  WHERE speed_source='`+speedFromTier+`' AND (speed='`+inferenceFast+`')<>(COALESCE(service_tier,'') IN (`+tiers+`)));
+  WHERE is_estimate=0 AND speed_source='`+speedFromTier+`' AND (speed='`+inferenceFast+`')<>(COALESCE(service_tier,'') IN (`+tiers+`)));
  INSERT INTO meta(key,value) VALUES('fast_service_tiers',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, policy)
 	return err
 }

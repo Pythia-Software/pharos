@@ -55,27 +55,51 @@ func (c *Catalog) ensureBranchUsage() error {
 }
 
 // scheduleToolDerivations marks the tools stage pending when the rules of a
-// derivation it runs changed (outcomes, commit links, spend by branch), on a
-// new library or an upgraded one. Each derives everything again when its
+// derivation it runs changed (outcomes, commit links, spend by branch, usage
+// estimation), on a new library or an upgraded one. Each derives everything again when its
 // version changes, but only when the stage runs: a library that indexes
 // nothing new would otherwise wait for the next index or a manual run.
 func (c *Catalog) scheduleToolDerivations() error {
-	want := outcomesVersion + ":" + outcomeGitVersion + ":" + branchUsageVersion
+	estimator := usageEstimationStoreVersion + ":" + usageEstimationIdentity()
+	want := outcomesVersion + ":" + outcomeGitVersion + ":" + branchUsageVersion + ":" + estimator
 	stored, err := c.metaValue(context.Background(), "tool_derivations_version")
-	if err != nil || stored == want {
+	if err != nil {
 		return err
+	}
+	installedEstimator, err := c.metaValue(context.Background(), "usage_estimation_derivation_version")
+	if err != nil {
+		return err
+	}
+	if stored == want && installedEstimator == estimator {
+		return nil
+	}
+	// Migrate the old combined marker without clearing compatible predictions.
+	if installedEstimator == "" && strings.HasSuffix(stored, ":"+estimator) {
+		installedEstimator = estimator
 	}
 	tx, err := c.DB.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	// A new model may invalidate stored predictions even without source changes.
+	if installedEstimator != estimator {
+		if _, err := tx.Exec(clearUsageEstimatesSQL("")); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("UPDATE usage_estimation_inputs SET revision=revision+1"); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO meta(key,value) VALUES('usage_estimation_derivation_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, estimator); err != nil {
+		return err
+	}
 	// A library with nothing indexed derives as it indexes.
 	var indexed bool
 	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM workspaces)").Scan(&indexed); err != nil {
 		return err
 	}
-	if indexed {
+	if indexed && stored != want {
 		if err := markSyncDeferredStage(tx, "tools"); err != nil {
 			return err
 		}

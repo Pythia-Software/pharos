@@ -24,6 +24,8 @@ var queryCacheTables = []string{
 	"declared_native_aliases", "agent_sessions", "agent_session_usage", "agent_session_messages",
 	"agent_session_token_evidence", "usage_attribution_state", "agent_session_effort_summaries",
 	"model_requests", "tool_calls", "tool_ledger_state", "tool_commands", "tool_urls",
+	// Estimates publish facts and this stamp atomically, once per conversation.
+	"usage_estimation_inputs",
 	// Views read local Git's commit links (session_commit_links, git_commits)
 	// only through the counts in session_git, written when they change.
 	// Library search finds the files sessions edited in session_files.

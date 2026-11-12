@@ -635,9 +635,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             rows[key]?.isHidden = !preferences[key]
         }
         metric("words", "Words typed", (usage?["human_words"] as? NSNumber).map { NumberFormatter.localizedString(from: $0, number: .decimal) })
-        metric("tokens", "Tokens used", (usage?["tokens"] as? NSNumber).map { Self.compact($0.doubleValue) })
-        metric("carbon", "Estimated CO₂e", (usage?["co2e_g"] as? NSNumber).map { Self.mass($0.doubleValue) })
-        metric("cost", "Estimated API cost", (usage?["cost_usd"] as? NSNumber).map { Self.dollars($0.doubleValue) })
+        metric("tokens", "Tokens used", (usage?["tokens"] as? NSNumber).map { Self.compact($0.doubleValue) + ((usage?["is_estimate"] as? Bool) == true ? "*" : "") })
+        metric("carbon", "Estimated CO₂e", (usage?["co2e_g"] as? NSNumber).map { Self.mass($0.doubleValue) + ((usage?["is_estimate"] as? Bool) == true ? "*" : "") })
+        metric("cost", "Estimated API cost", (usage?["cost_usd"] as? NSNumber).map { Self.dollars($0.doubleValue) + ((usage?["cost_is_estimate"] as? Bool) == true ? "*" : ["partial", "unpriced"].contains(usage?["price_status"] as? String ?? "") ? "+" : "") })
+        rows["tokens"]?.toolTip = (usage?["is_estimate"] as? Bool) == true ? "Includes estimated generated output; input and cache usage are unavailable." : nil
+        rows["carbon"]?.toolTip = (usage?["is_estimate"] as? Bool) == true ? "Includes estimated generated output; input and cache usage are unavailable." : nil
+        rows["cost"]?.toolTip = (usage?["cost_is_estimate"] as? Bool) == true ? "Estimated output cost only; the API price equivalent is partial." : ["partial", "unpriced"].contains(usage?["price_status"] as? String ?? "") ? "Priced subtotal only; some usage cannot be priced." : nil
         let streaks = usage?["streaks"] as? [String: String]
         metric("streak", "Your streak", streaks?["you"])
         metric("agent_streak", "Agent streak", streaks?["agents"])

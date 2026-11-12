@@ -1,3 +1,4 @@
+import { estimateExplanation, durationEstimateExplanation, estimateFlag, estimatedField, withEstimateMetrics, estimateMetricFlags } from "./usage-estimate-model";
 import "./reader-key-filter";
 import scatterDocument from "../../schemas/scatter.schema.json";
 import { scatterAnalysisCatalog } from "./scatter-analysis-catalog";
@@ -185,13 +186,15 @@ function mainIntegrationLink(row: Row): React.ReactNode {
     : <span title={merge.commit}>{merge.label}</span>;
 }
 
+function estimatedValue(value: React.ReactNode, row: Row, field: string) { return estimatedField(row, field) ? <span title={/duration/.test(field) ? durationEstimateExplanation : estimateExplanation}>{value}*</span> : value; }
+
 function usdCost(value: unknown, row: Row): React.ReactNode {
   if (value === null || value === undefined || value === "") return <span className="muted" title="No confirmed API price for this model and date">—</span>;
   const amount = Number(value);
   const text = formatUSD(amount);
-  if (row.price_status === "partial") return <span title="Some tokens had no confirmed rate, so this is a lower bound">{text}+</span>;
+  if (row.price_status === "partial") return estimatedValue(<span title="Partial API price equivalent">{text}+</span>, row, "cost_usd");
   if (row.price_status === "assumed") return <span title="Priced by assumption: no published API price, so a sibling model's price is used (see pricing/cost_changes.json)">≈{text}</span>;
-  return <span>{text}</span>;
+  return estimatedValue(<span>{text}</span>, row, "cost_usd");
 }
 
 function datasetIsVisible(dataset: Dataset) {
@@ -295,7 +298,7 @@ startDayClock();
 // another's keyword search. Field statistics carry none and follow the
 // current definition.
 type HostFind = { find: (state: HostQueryState | undefined) => string; current: () => string };
-function makeTransport(dataset: Dataset, queryCapabilities: QueryCapabilitiesV3, extra = "", onFind?: (find: FindSummary | null) => void, host?: HostFind): Transport<Row> {
+function makeTransport(dataset: Dataset, queryCapabilities: QueryCapabilitiesV3, extra = "", onFind?: (find: FindSummary | null) => void, host?: HostFind, onEstimates?: (flags: Set<string>) => void): Transport<Row> {
   const endpoint = (suffix = "", params?: URLSearchParams, collection = true, request?: { hostState?: HostQueryState }) => {
     const query = new URLSearchParams(collection ? extra : "");
     if (collection && host) new URLSearchParams(request?.hostState ? host.find(request.hostState) : host.current()).forEach((value, name) => query.set(name, value));
@@ -306,8 +309,9 @@ function makeTransport(dataset: Dataset, queryCapabilities: QueryCapabilitiesV3,
     queryCapabilities,
     async fetchQueryV3(query, signal) {
       const result = await queryRequest<QueryResultV3 & { find?: FindSummary }>(endpoint("/query-v3", undefined, true, query), {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(withEstimateMetrics(dataset, query)), signal,
       });
+      if (query.metrics?.length) onEstimates?.(estimateMetricFlags(result));
       onFind?.(result.find ?? null);
       return result;
     },
@@ -326,14 +330,18 @@ const renderers: RenderRegistry<Row> = {
     return context.value ? <Icon name="check" /> : defaultRenderers.bool_check(context);
   },
   number(context: CellContext<Row>) {
+    if (context.value == null) return defaultRenderers.number(context);
     if (context.value != null && ["card_rate", "card_escalation"].includes(context.field.name)) return `${(Number(context.value) * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
     // Links saved before the percent display carry a 0–100 cache rate.
     if (context.value != null && context.field.name === "usage_cache_hit_percent") return `${Number(context.value).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
     if (context.value != null && context.field.name === "usage_price_delta") return formatUSD(Number(context.value));
     const value = Number(context.value);
     if (/(^token_count$|_tokens$)/.test(context.field.name) && Number.isFinite(value) && Math.abs(value) >= 1e6)
-      return <span title={value.toLocaleString()}>{compactNumber(value)}</span>;
-    return defaultRenderers.number(context);
+      return estimatedValue(<span title={value.toLocaleString()}>{compactNumber(value)}</span>,context.row,context.field.name);
+    const summary = context.query?.grouping?.summaries.find(summary => summary.id === context.field.name);
+    const expression = summary?.expression ?? "";
+    const field = summary?.field ?? (/duration/.test(expression) ? "duration_ms" : /token|cost/.test(expression) ? "total_tokens" : context.field.name);
+    return estimatedValue(defaultRenderers.number(context), context.row, field);
   },
   work_title({ value, row, query }: CellContext<Row>) {
     // A group row (a cell or group Detail) names a work only when the work's
@@ -533,6 +541,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   const detailSchema = useMemo(() => usageDetailsSchema(schema, dataset), [schema, dataset]);
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
+  const [estimateMetrics, setEstimateMetrics] = useState<Set<string>>(new Set());
   const [capabilities, setCapabilities] = useState<Capabilities>();
   const [capabilityError, setCapabilityError] = useState<Error>();
   const [capabilityRetry, setCapabilityRetry] = useState(0);
@@ -569,7 +578,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
   const transport = useMemo(() => {
     if (!capabilities) return undefined;
     return makeTransport(dataset, capabilities.queryCapabilities, find, value => onFindRef.current?.(value),
-      host ? { find: state => hostRef.current?.find(state) ?? "", current: () => hostFind.current } : undefined);
+      host ? { find: state => hostRef.current?.find(state) ?? "", current: () => hostFind.current } : undefined, setEstimateMetrics);
   }, [dataset, find, capabilities, Boolean(host)]);
   const [bookmarkRevision, setBookmarkRevision] = useState(0);
   useEffect(() => { const changed = () => setBookmarkRevision(value => value + 1); window.addEventListener("pharos:bookmarks", changed); return () => window.removeEventListener("pharos:bookmarks", changed); }, []);
@@ -773,6 +782,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
         {queryContent?.(api)}
       </>} /> : api.query.grouping ? <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={api} dataset={dataset} layout={<SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
     {queryContent ? controls?.(api, null) : null}
+    {estimateMetrics.size > 0 && api.aggregations.clauses.length > 0 ? <p className="usage-dashboard-note" title={dataset === "tool_calls" || dataset === "tools" ? durationEstimateExplanation : estimateExplanation}>* Metrics include estimates. Open source records to distinguish estimated values.</p> : null}
     <MetricsPanel api={api} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers} theme={chartMetricTheme(api.aggregations.clauses, api.aggregations.results)}
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }} />
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
@@ -1068,12 +1078,13 @@ function TokenSummary({ where }: { where: WhereTerm[] }) {
   const hasCost = result.metrics.find(metric => metric.id === "cost_usd:")?.buckets[0]?.value != null;
   const reads = value("cache_read_input_tokens"), output = value("output_tokens"), sessions = values.get("agent_sessions") ?? 0;
   const cacheHit = uncached + reads > 0 ? `${Math.round(reads / (uncached + reads) * 100)}%` : "—";
-  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:usage:${label}`} title={label} dataset="usage" query={{where}} {...result.readiness} /></span><strong>{amount}</strong><small>{detail}</small></div>;
+  const estimated = result.metrics.some(metric => metric.is_estimate);
+  const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:usage:${label}`} title={label} dataset="usage" query={{where}} {...result.readiness} /></span><strong title={estimated ? estimateExplanation : undefined}>{amount}{estimated && !["Loading…", "Unavailable", "Unpriced"].includes(amount) && ["Total tokens", "API price equivalent", "Output tokens"].includes(label) ? "*" : ""}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics usage-cards token-summary" aria-label="Machine token summary" aria-busy={result.loading}>
-    {card("Total tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(tokens), "all reported input and output")}
+    {card("Total tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(tokens), "available input and output; * includes estimated output")}
     {card("API price equivalent", result.loading ? "Loading…" : result.error ? "Unavailable" : tokens && !hasCost ? "Unpriced" : formatUSD(cost), "list prices · may include assumed/partial prices; unpriced usage excluded")}
     {card("Cache hit rate", result.loading ? "Loading…" : result.error ? "Unavailable" : cacheHit, `${compactNumber(reads)} cached input tokens read`)}
-    {card("Output tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(output), "including reported reasoning output")}
+    {card("Output tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(output), "including thinking output")}
     {card("Agent sessions", result.loading ? "Loading…" : result.error ? "Unavailable" : sessions.toLocaleString(), "distinct agent sessions in the current filters")}
   </div>;
 }

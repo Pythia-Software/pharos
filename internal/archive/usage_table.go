@@ -107,7 +107,7 @@ func (c *Catalog) usageRowsFromLedgerContext(ctx context.Context, location *time
 				"harness":      entry["harness"], "harness_version_first": entry["harness_version_first"], "harness_version_last": entry["harness_version_last"], "harness_version_source": entry["harness_version_source"], "model_family": modelFamily(model),
 				"session_kind": entry["session_kind"], "depth": integer(entry["depth"]), "attribution": entry["attribution"],
 				"hour": hourKey, "day": day, "week": week, "month": month, "first_usage_at": at, "last_usage_at": at,
-				"cost_usd": nil, "cost_today_usd": nil, "price_status": "", "priced_model": nil,
+				"is_estimate": false, "input_tokens_available": true, "cost_usd": nil, "cost_today_usd": nil, "price_status": "", "priced_model": nil,
 			}
 			copyOrigin(row, origins[firstString(entry["conversation_id"])])
 			row["carbon_tier"], row["carbon_tier_basis"] = carbonTierBasis(carbon, model)
@@ -117,11 +117,13 @@ func (c *Catalog) usageRowsFromLedgerContext(ctx context.Context, location *time
 			grouped[key] = row
 			order = append(order, key)
 		}
+		row["is_estimate"] = estimateFlag(row["is_estimate"]) || estimateFlag(entry["is_estimate"])
+		row["input_tokens_available"] = !estimateFlag(row["is_estimate"])
 		tokens := ledgerTokens(entry)
 		for _, field := range usageTokenFields {
 			row[field] = integer(row[field]) + tokens[field]
 		}
-		priced := book.cost(model, firstString(day), tokens)
+		priced := book.ledgerCost(entry, model, firstString(day), tokens)
 		row["cost_usd"] = addCost(row["cost_usd"], priced.cost)
 		row["cost_today_usd"] = addCost(row["cost_today_usd"], priced.costToday)
 		row["price_status"] = worsePriceStatus(firstString(row["price_status"]), priced.status)
@@ -150,6 +152,11 @@ func (c *Catalog) usageRowsFromLedgerContext(ctx context.Context, location *time
 		}
 		if !hourly {
 			delete(row, "hour")
+		}
+		if !estimateFlag(row["input_tokens_available"]) {
+			for _, field := range usageInputFields {
+				row[field] = nil
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -212,6 +219,9 @@ func usageNeedsLineage(fields libraryFields) bool {
 }
 
 func (c *Catalog) localUsageLedger(ctx context.Context) ([]map[string]any, error) {
+	if err := c.currentUsageEstimation(ctx); err != nil {
+		return nil, err
+	}
 	return cachedValue(ctx, c, "usage-ledger", c.representativeLedgerContext)
 }
 
@@ -458,7 +468,7 @@ func (c *Catalog) usageLedger(ctx context.Context, workspaceIDs []string) ([]map
 			args = append(args, id)
 		}
 	}
-	return queryMapsContext(ctx, c.reader(), `SELECT u.agent_session_id,u.usage_hour,u.model usage_model,u.effort,u.attribution,`+strings.Join(sums, ",")+`,
+	return queryMapsContext(ctx, c.reader(), `SELECT u.agent_session_id,u.usage_hour,u.model usage_model,u.effort,u.attribution,u.is_estimate,u.input_tokens_available,`+strings.Join(sums, ",")+`,
 			a.kind session_kind,a.depth,a.provider,a.model session_model,a.conversation_id,
             CASE WHEN `+currentGroupConversation("c")+` THEN 1 ELSE 0 END current_group_member,
             c.harness,c.harness_version_first,c.harness_version_last,c.harness_version_source,
@@ -513,6 +523,7 @@ func (c *Catalog) attachWorkspaceCosts(ctx context.Context, rows []map[string]an
 		row["cost_usd"], row["cost_today_usd"], row["price_status"] = nil, nil, nil
 		if value := totals[firstString(row["id"])]; value != nil {
 			row["cost_usd"], row["cost_today_usd"], row["price_status"] = value.cost, value.today, value.status
+			row["is_estimate"] = value.isEstimate
 		}
 	}
 	return nil
@@ -523,11 +534,13 @@ type workspaceUsageTotal struct {
 	tokens      int64
 	cost, today any
 	status      string
+	isEstimate  bool
 }
 
 // add folds another workspace's usage into this one.
 func (total *workspaceUsageTotal) add(other *workspaceUsageTotal) {
 	total.tokens += other.tokens
+	total.isEstimate = total.isEstimate || other.isEstimate
 	if cost, ok := other.cost.(float64); ok {
 		total.cost = addCost(total.cost, &cost)
 	}
@@ -566,13 +579,14 @@ func (c *Catalog) workspaceUsage(ctx context.Context, workspaceIDs []string) (ma
 			day = localMidnight(hour, time.Local).Format("2006-01-02")
 		}
 		tokens := ledgerTokens(entry)
-		priced := book.cost(ledgerModel(entry), day, tokens)
+		priced := book.ledgerCost(entry, ledgerModel(entry), day, tokens)
 		id := firstString(entry["workspace_id"])
 		if totals[id] == nil {
 			totals[id] = &workspaceUsageTotal{}
 		}
 		total := totals[id]
 		total.tokens += tokens["total_tokens"]
+		total.isEstimate = total.isEstimate || estimateFlag(entry["is_estimate"])
 		total.cost = addCost(total.cost, priced.cost)
 		total.today = addCost(total.today, priced.costToday)
 		total.status = worsePriceStatus(total.status, priced.status)

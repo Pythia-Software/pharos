@@ -46,17 +46,17 @@ const markdownLinkAPI = {
 };
 // Synthetic Claude export data exercises sources and non-coding attachments.
 const claudeResearchAPI = {
-  "GET /api/work/:id/conversations/:conversation": { id: rootConversation, workspace_id: workID, provider: "claude", harness: "claude-ai-export", artifact_links:{"synthetic-doc":{title:"synthetic-doc",href:`/work/${workID}/conversation/${rootConversation}?message=export-project`}}, messages: [
+  "GET /api/work/:id/conversations/:conversation": { id: rootConversation, workspace_id: workID, provider: "claude", harness: "claude-ai-export", token_usage:{total_tokens:1400,output_tokens:1400},token_usage_is_estimate:true,usage_estimates:{version:"fixture-v1",manifest_revision:"fixture.1",range_kind:"sensitivity_not_confidence",responses:[{message_id:"research-answer",output_tokens:{expected:1400,lower:400,upper:5000},local_weight:0}]}, artifact_links:{"synthetic-doc":{title:"synthetic-doc",href:`/work/${workID}/conversation/${rootConversation}?message=export-project`}}, messages: [
     {id:"research-question",native_id:"research-question",role:"user",kind:"message",text:"Compare the published company reports."},
     {id:"research-attachment",native_id:"research-attachment",role:"user",kind:"attachment",text:JSON.stringify({type:"file_attachment",file_name:"notes.pdf",file_type:"application/pdf",file_size:48,extracted_content:"Archived research notes\n<script>window.exportScriptRan=true</script>"})},
     {id:"export-project",native_id:"export-project",role:"system",kind:"attachment",text:JSON.stringify({type:"export_file",file_name:"projects/report.json",extracted_content:JSON.stringify({name:"Research",docs:[{filename:"report.md",content:"# Exported report\nA document paragraph, retained with its source metadata."}]})})},
     {id:"doc-add",native_id:"doc-add",role:"assistant",kind:"tool_call",call_id:"docs-add",text:JSON.stringify({tool:"mcp__Claude_Docs__update",input:{container:{id:"synthetic-doc"},payload:{ops:[{op:"replace",target:{ids:["pending.1"]},with:{as:"markdown",from:{kind:"inline",content:"## Added research\n\nA **readable** addition with [a source](https://example.com/report).\n\n<script>window.exportScriptRan=true</script>"}}}]}}})},
     {id:"doc-result",native_id:"doc-result",role:"tool",kind:"tool_result",call_id:"docs-add",text:JSON.stringify({content:[{type:"text",text:JSON.stringify({verdict:"allow",data:{notices:[{code:"pending_ended",as:"resolved",opIndex:0,ids:["pending.1"]}]}})}]})},
-    {id:"stat-call",native_id:"stat-call",role:"assistant",kind:"tool_call",call_id:"stats",text:JSON.stringify({tool:"mcp__pharos__query_statistics",input:{metric:"calls"}})},
+    {id:"stat-call",native_id:"stat-call",role:"assistant",kind:"tool_call",call_id:"stats",duration_estimate:{status:"estimated",seconds:{expected:3,lower:2,upper:7},argument_generation_seconds:{expected:2,lower:2,upper:2},argument_generation_status:"observed",execution_seconds:{expected:1,lower:0,upper:5},execution_status:"estimated"},text:JSON.stringify({tool:"mcp__pharos__query_statistics",input:{metric:"calls"}})},
     {id:"stat-result",native_id:"stat-result",role:"tool",kind:"tool_result",call_id:"stats",text:JSON.stringify({content:[{type:"text",text:JSON.stringify({rows:[{tool:"Docs",count:3},{tool:"Browser",count:0}]})}]})},
     {id:"github-read",native_id:"github-read",role:"assistant",kind:"tool_call",call_id:"github-read",text:JSON.stringify({tool:"mcp__codex_apps__github.fetch_file",input:{repository_full_name:"example/repo",path:"report.md"}})},
     {id:"github-result",native_id:"github-result",role:"tool",kind:"tool_result",call_id:"github-read",text:JSON.stringify({content:JSON.stringify({structuredContent:{encoding:"utf-8",content:"# Report",display_url:"https://github.com/example/repo/blob/main/report.md"}})})},
-    {id:"research-answer",native_id:"research-answer",role:"assistant",kind:"message",text:"The reports describe different assumptions. Review the sources before comparing their forecasts.",raw_text:JSON.stringify({type:"text",text:"The reports describe different assumptions.",citations:[{details:{type:"web_search_citation",url:"https://example.com/company/reports/annual-report",title:"Published company report"}},{details:{type:"document_citation",document_title:"Uploaded notes"}}]})},
+    {id:"research-answer",usage:{total_tokens:1400,output_tokens:1400},usage_is_estimate:true,native_id:"research-answer",role:"assistant",kind:"message",text:"The reports describe different assumptions. Review the sources before comparing their forecasts.",raw_text:JSON.stringify({type:"text",text:"The reports describe different assumptions.",citations:[{details:{type:"web_search_citation",url:"https://example.com/company/reports/annual-report",title:"Published company report"}},{details:{type:"document_citation",document_title:"Uploaded notes"}}]})},
   ]},
 };
 const work = `/work/${workID}`;
@@ -543,11 +543,28 @@ const ROUTES = [
     await page.locator('.tool-event > summary').filter({hasText:'Query statistics'}).click();
     await page.locator('.mcp-presentation table').waitFor();
   }, shown: ".tool-event[open] .tool-output", check: async page => {
+    await page.locator('.token-legend').filter({hasText:'*'}).waitFor();
+    assert.equal(await page.locator('.usage-estimate-note').isVisible(),true);
+    assert.equal(await page.evaluate(()=>window.exportScriptRan),undefined,'exported source is displayed as text');
+  } },
+  { name: "Claude export missing usage", url: `${work}/conversation/${rootConversation}`, ready: ".claude-export-usage-note", api: {
+    ...claudeResearchAPI,
+    "GET /api/work/:id/conversations/:conversation": () => {
+      const conversation = structuredClone(claudeResearchAPI["GET /api/work/:id/conversations/:conversation"]);
+      conversation.harness = 'claude-code-cloud-export';
+      for (const field of ['token_usage', 'token_usage_is_estimate', 'usage_estimates']) delete conversation[field];
+      for (const message of conversation.messages) {
+        delete message.usage;
+        delete message.usage_is_estimate;
+        delete message.duration_estimate;
+      }
+      return conversation;
+    },
+  }, check: async page => {
     const notice = page.getByRole('status').filter({hasText:'Token usage unavailable'});
     assert.equal(await notice.isVisible(),true);
     const [banner, heading] = await Promise.all([notice.boundingBox(), notice.locator('..').locator('.conversation-title-line h2:visible').first().boundingBox()]);
     assert.ok(banner.y + banner.height <= heading.y, 'the usage warning precedes the conversation heading');
-    assert.equal(await page.evaluate(()=>window.exportScriptRan),undefined,'exported source is displayed as text');
   } },
   { name: "Markdown links in transcript", url: `${work}/conversation/${rootConversation}`, api: markdownLinkAPI, ready: ".conversation-panel .markdown-link" },
   { name: "Markdown links in Search", url: "/library", api: {...conversationResultAPI,...markdownLinkAPI}, ready: ".conversation-result-card", open: async page => {await page.getByRole("button",{name:/^Browse turns:/}).first().click();await page.getByRole("link",{name:"Running dev server",exact:true}).waitFor();}, shown: ".result-turn-content .markdown-link" },

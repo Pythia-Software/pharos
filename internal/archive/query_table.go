@@ -458,6 +458,11 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 // (see ensureAuthorship). Compactions only start their one-time boundary
 // backfill, which runs with the tools stage.
 func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
+	if dataset == "model_requests" || dataset == "tool_calls" {
+		if err := c.currentUsageEstimation(ctx); err != nil {
+			return err
+		}
+	}
 	if dataset == "messages" {
 		return nil // canonical messages and any already-recorded authorship
 	}

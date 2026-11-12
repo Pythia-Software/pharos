@@ -1,3 +1,4 @@
+import { hasUsageEstimates, estimateExplanation, durationEstimateExplanation } from "./usage-estimate-model";
 import { EMPTY_QUERY, type AggregationResultEntry, type FieldSchema } from "@pythia-software/query-table-core";
 import factors from "../../carbon/co2_factors.json";
 import { analysisCatalogFor } from "./analysis-catalogs";
@@ -101,7 +102,14 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   const label = (field: string, value: unknown) => isOriginDimension(field) ? originLabel(field, value) : catalog.labels?.[field]?.(String(value)) ?? labels.get(field)?.get(String(value)) ?? String(value ?? "Unspecified");
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const request = { ...catalog.request?.params, ...topic === "parallelism" ? { parallelism_settings: JSON.stringify({ counting: parallelism.counting, gap: parallelism.gap }) } : {} };
-  const run = (query: Parameters<typeof runAnalysisQuery>[2]) => runAnalysisQuery(dataset, schema, query, { signal, local, params: request, now });
+  let estimated = false;
+  const run = async (query: Parameters<typeof runAnalysisQuery>[2]) => {
+    const result = await runAnalysisQuery(dataset, schema, query, { signal, local, params: request, now });
+    estimated ||= hasUsageEstimates(result);
+    return result;
+  };
+  const estimateNote = () => estimated ? ` ${["tools", "tool_calls"].includes(dataset) ? durationEstimateExplanation : estimateExplanation}` : "";
+
   if (isTrendView(state.view)) {
     const drawn = normalizeAnalysis(catalog, state), drawing = trendDrawing(catalog, drawn);
     // A heatmap is drawn as the dashboard draws it, as a grid of cells.
@@ -114,7 +122,7 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
       const grid = heatmapGrid(trendHeatmap(built.buckets, built.series, axis.bins.scheme), { period: drawn.period, noun: axis.unit ? catalog.units[axis.unit].plural.toLowerCase() : axis.counted ? catalog.records.plural.toLowerCase() : weight.unit, label: axis.bins.label,
         rollingPeriods: drawn.rollingPeriods, format: value, amount: axis.counted || weight.op === "count" ? undefined : amount => formatMetricOutput(amount, weight.format).text });
       const ready = grid.cells.some(row => row.some(cell => cell !== null));
-      return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, drawn), action: DASHBOARD_CARD_ACTION, note: analysisNote(catalog, drawn),
+      return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, drawn)+(estimated?"*":""), action: DASHBOARD_CARD_ACTION, note: analysisNote(catalog, drawn)+estimateNote(),
         ...ready ? { grid, coverHeight: gridCoverHeight(grid) } : {} };
     }
     const trend = trendQuery(catalog, drawn, where, { now, zone });
@@ -125,8 +133,8 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
     // Retain only the selected series and never smooth these amounts twice.
     const series = built.allHidden?[]:built.series.filter(item => !built.selected.length || built.selected.includes(item.key) !== built.excluded);
     const ready = built.buckets.some(bucket => series.some(item => bucket.values[item.key] !== undefined));
-    return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, drawn), action: DASHBOARD_CARD_ACTION,
-      buckets: built.buckets, series, note: analysisNote(catalog, drawn),
+    return { state: ready ? "ready" : "empty", total: built.buckets.length, summary: trendTitle(catalog, drawn)+(estimated?"*":""), action: DASHBOARD_CARD_ACTION,
+      buckets: built.buckets, series, note: analysisNote(catalog, drawn)+estimateNote(),
       dashboardTrend: { prepared: true, lines: drawing !== "trend_bar" && (built.lines || drawn.display === "cumulative"), bars: drawing === "trend_bar", grouped: drawing === "trend_bar" && (!built.additive || drawn.scale === "logarithmic" && !drawn.share), additive: built.additive, percent: drawn.share, nonzero: drawn.nonzero && !drawn.share, scale: drawn.scale, references: built.references,
         unit: percent ? "percent" : catalog.measures[drawn.metric].format.kind === "duration" ? "ms" : catalog.measures[drawn.metric].unit,
         xLabel: drawn.period, yLabel: trendTitle(catalog, drawn) } };
@@ -147,8 +155,8 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   }
   const presented = toolMetricPresentation(entry, clause.groupBy, analysisLabels(catalog, state)).metric as AggregationResultEntry;
   const ready = Boolean(analysis.components && Number(entry.other?.value) > 0) || entry.buckets.some(bucket => analysis.components ? Number(bucket.value) > 0 : bucket.distribution?.kind === "box" ? Boolean(bucket.distribution.summary) : bucket.distribution?.kind === "histogram" ? bucket.distribution.n > 0 : bucket.value !== null);
-  return { state: ready ? "ready" : "empty", total: entry.processedRows ?? entry.buckets.length, summary: clause.label ?? "Dashboard chart", action: DASHBOARD_CARD_ACTION,
-    emptyLabel: analysisEmptyLabel(catalog, state), note: analysisNote(catalog, state), metrics: [{ clause, result: presented }], coverMetricId: clause.id, preserveScale: true,
+  return { state: ready ? "ready" : "empty", total: entry.processedRows ?? entry.buckets.length, summary: (clause.label ?? "Dashboard chart")+(estimated?"*":""), action: DASHBOARD_CARD_ACTION,
+    emptyLabel: analysisEmptyLabel(catalog, state), note: analysisNote(catalog, state)+estimateNote(), metrics: [{ clause, result: presented }], coverMetricId: clause.id, preserveScale: true,
     groupLabels: state.view === "cycle" && analysis.native ? Object.fromEntries(entry.buckets.map(bucket => [JSON.stringify(bucket.keys), state.cycle === "hour" ? hoursOfDay[Number(bucket.keys[0])] : weekdays[Number(bucket.keys[0]) - 1]])) : undefined,
     fields: [...analysisFields(catalog, state, schema), { name: "hour_of_day", label: "Local hour", type: "text", source: { kind: "derived" } }, { name: "weekday", label: "Weekday", type: "text", source: { kind: "derived" } }] };
 }

@@ -696,7 +696,7 @@ func (c *Catalog) instructionLoad(ctx context.Context, q queryer, repositoryID, 
 	}
 	var stats instructionLoadStats
 	rows, err := queryMapsContext(ctx, q, `SELECT i.conversation_id,MAX(i.bytes) bytes,MIN(i.first_seen_at) first_seen,
-		(SELECT COUNT(*) FROM model_requests r WHERE r.conversation_id=i.conversation_id) requests
+		(SELECT COUNT(*) FROM model_requests r WHERE r.conversation_id=i.conversation_id AND r.is_estimate=0) requests
 		FROM conversation_instructions i JOIN conversations c ON c.id=i.conversation_id JOIN workspaces w ON w.id=c.workspace_id
 		WHERE i.repo_path=? AND w.repository_id=? AND (?='' OR i.first_seen_at>=?) AND (?='' OR i.first_seen_at<?)
 		GROUP BY i.conversation_id ORDER BY first_seen,i.conversation_id`, repoPath, repositoryID, from, from, to, to)

@@ -169,6 +169,7 @@ function conversationTokenReports(messages){
   const inherits=envelopes.some((e,i)=>messages[i].kind==='metadata'&&messages[i].role==='system'&&e.raw.type==='session_meta'&&continuesHistory(e.value)),inherited=new Map();
   const sum=(start,stream=null)=>reports.slice(start).reduce((total,r)=>total+(r&&(!stream||r.stream===stream)?r.total||0:0),0);
   messages.forEach((message,index)=>{
+    if(message.usage_is_estimate===true)return;
     const envelope=envelopes[index],{raw,value,type}=envelope,stream=canonical(envelope.stream),hasRecords=recordStreams.has(stream),info=envelope.record&&!hasRecords?{total_token_usage:envelope.record.thread_token_usage,last_token_usage:envelope.record.usage}:value.info||{};
     const compact=['compacted','compaction','context_compaction','compact_boundary'].includes(type)||raw.type==='compacted'||value.subtype==='compact_boundary'||message.kind==='compaction';
     const trigger=compact?compactionTrigger(raw,value):null;
@@ -245,6 +246,15 @@ function conversationTokenReports(messages){
     reports[evidence.index]??={total:null,scope:'observation',stream:evidence.stream,label:'Subagent token evidence'};
     reports[evidence.index].observedMinimum=evidence.total;
   }
+  // Stored predictions use the ordinary consumption pathway. They have no
+  // input measurement and cannot create an input-context sample.
+  for(let index=0;index<messages.length;index++){
+    const message=messages[index];
+    if(message.usage_is_estimate===true&&!reports[index]){
+      const usage=message.usage,total=tokenTotal(usage);
+      if(total!==null)reports[index]={total,reportedTotal:total,scope:'request',stream:'main',label:'Estimated output usage',usage,breakdown:tokenBreakdown(usage),isEstimate:true};
+    }
+  }
   return reports;
 }
 // Claude records compactMetadata.trigger; the Codex adapter infers
@@ -266,7 +276,7 @@ function contextTokenReports(messages,reports){
   const windows=new Map();
   reports.forEach((report,index)=>{if(!report)return;const {value}=tokenEnvelope(messages[index]),window=value.info?.model_context_window??value.model_context_window,stream=report.stream||'main';if(typeof window==='number'&&window>0)windows.set(stream,Math.max(window,windows.get(stream)||0))});
   reports.forEach((report,index)=>{
-    if(!report||report.superseded)return;
+    if(!report||report.superseded||report.isEstimate)return;
     const {value}=tokenEnvelope(messages[index]),stream=report.stream||'main';
     // An advisor's request has a context of its own.
     if(value.advisor_of)return;
@@ -355,6 +365,34 @@ function conversationGraph(messages){
   if(user){const metadata=top.filter(message=>{if(message.kind!=='metadata')return false;const value=messageJSON(message);return value?.type==='claude_ai_conversation'||value?.source==='chatgpt_export'});for(const message of metadata)top.splice(top.indexOf(message),1);top.splice(top.indexOf(user)+1,0,...metadata)}
   let current=null;for(const message of top){if(message.role==='user'&&message.kind==='message'){if(current)turns.push(current);current={human:message,events:[]}}else{if(!current)current={human:null,events:[]};current.events.push(message)}}if(current)turns.push(current);
   return{childrenByParent,delegationResultsByCall,toolResultsByCall,consumed,turns};
+}
+// Diagnostic sensitivity ranges accompany canonical usage. The input context rail continues to
+// describe reported consumption. Sum uncertainty bounds as sensitivity, never
+// relabel the sum as a calibrated confidence interval.
+function usageEstimateNumber(value){return Number.isFinite(value)&&value>=0?Number(value.toPrecision(2)).toLocaleString():null}
+function usageEstimatePresentation(conversation,owned=null){
+  const report=conversation?.usage_estimates;
+  if(report?.range_kind!=='sensitivity_not_confidence'||!Array.isArray(report.responses))return null;
+  const ids=owned?new Set(owned.map(message=>message.id).filter(Boolean)):null;
+  const responses=report.responses.filter(response=>(!ids||ids.has(response.message_id))&&['expected','lower','upper'].every(key=>Number.isFinite(response.output_tokens?.[key])&&response.output_tokens[key]>=0));
+  if(!responses.length)return null;
+  const sum=responses.reduce((total,response)=>{for(const key of ['expected','lower','upper'])total[key]+=response.output_tokens[key];return total},{expected:0,lower:0,upper:0});
+  const local=responses.some(response=>response.local_weight>0),unknown=responses.some(response=>!response.model||!response.effort);
+  return{...sum,label:`~${usageEstimateNumber(sum.expected)} estimated output tokens`,
+    detail:`${usageEstimateNumber(sum.lower)}–${usageEstimateNumber(sum.upper)} sensitivity range. ${local?'Local coding calibration with published assumptions':'Published estimation assumptions'} (${report.manifest_revision}).${unknown?' Model or effort unreported; fallback assumptions apply.':''} Output only, for selected-branch responses in conversations without reported usage. Input and cache usage are unavailable; API cost, when priced, covers estimated output only.`,
+    assumptions:'/api/estimation/assumptions'};
+}
+function toolDurationEstimatePresentation(message){
+  const estimate=message?.duration_estimate,value=estimate?.seconds;
+  if(!value||!['expected','lower','upper'].every(key=>Number.isFinite(value[key])&&value[key]>=0))return null;
+  const execution=estimate.execution_seconds,argument=estimate.argument_generation_seconds;
+  if(execution&&['observed','estimated'].includes(estimate.execution_status)&&['expected','lower','upper'].every(key=>Number.isFinite(execution[key])&&execution[key]>=0)){
+    const recorded=estimate.execution_status==='observed';
+    return{label:`${recorded?'Recorded execution:':'Estimated execution: ~'}${recorded?' ':''}${usageEstimateNumber(execution.expected)} s${recorded?'':'*'}`,detail:`${usageEstimateNumber(execution.lower)}–${usageEstimateNumber(execution.upper)} s ${recorded?'native argument-stop to result-observation span':'execution sensitivity range'}. ${argument&&Number.isFinite(argument.expected)?`Argument generation: ${estimate.argument_generation_status==='observed'?'recorded':'estimated'} ${usageEstimateNumber(argument.expected)} s. `:''}Full call-to-result span: ${usageEstimateNumber(value.expected)} s. Execution can include transport and harness time; parallel calls can overlap.`};
+  }
+  if(estimate.status==='observed')return{label:`Recorded tool span: ${usageEstimateNumber(value.expected)} s`,detail:'Native call start to result observation; this can include transport and harness time.'};
+  if(estimate.status!=='estimated')return null;
+  return{label:`Estimated call-to-result span: ~${usageEstimateNumber(value.expected)} s*`,detail:`${usageEstimateNumber(value.lower)}–${usageEstimateNumber(value.upper)} s sensitivity range, including argument generation. Published tool assumptions; parallel calls can overlap. Following model work is separate.`};
 }
 function turnSummaryData(conversation){
   return conversationGraph(conversationMessages(conversation)).turns.map(turn=>({

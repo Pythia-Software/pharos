@@ -18,6 +18,7 @@
     { "field": "pr_numbers", "width": 300 }
   ],
   "fields": [
+    {"name": "is_estimate", "label": "Includes estimates", "type": "bool", "group": "Data quality", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "is_estimate", "synthetic": true}, "sqlite": {"expr": "r.\"is_estimate\""}}, "description": "Estimates fill missing source measurements. Generated output only; missing input and cache usage stays unavailable. Costs based on estimated output are partial."},
     { "name": "id", "label": "ID", "type": "text", "select": {"default": false}, "bindings": {"postgres": {"expr": "w.id"}, "sqlite": {"expr": "r.\"id\""}} },
     { "name": "title", "label": "Workspace", "type": "text", "group": "Work", "render": "work_title", "bindings": {"postgres": {"expr": "w.title"}, "sqlite": {"expr": "r.\"title\""}} },
     { "name": "repository_name", "label": "Repository", "type": "text", "group": "Context", "description": "The Git repository, empty for a project that is a folder or none.", "aliases": ["repo"], "bindings": {"postgres": {"expr": "repository_name"}, "sqlite": {"expr": "r.\"repository_name\""}} },

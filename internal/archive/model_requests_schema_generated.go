@@ -8,6 +8,8 @@ func PharosModelRequestsSchema() querytable.Schema {
 		Name:    "pharos_model_requests",
 		IDField: "id",
 		Fields: map[string]querytable.FieldSpec{
+			"is_estimate":             {Name: "is_estimate", Kind: querytable.FieldBool, Expr: "r.\"is_estimate\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"is_estimate\""},
+			"input_tokens_available":  {Name: "input_tokens_available", Kind: querytable.FieldBool, Expr: "r.\"input_tokens_available\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"input_tokens_available\""},
 			"id":                      {Name: "id", Kind: querytable.FieldText, Expr: "r.\"id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"id\""},
 			"conversation_id":         {Name: "conversation_id", Kind: querytable.FieldText, Expr: "r.\"conversation_id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"conversation_id\""},
 			"agent_session_id":        {Name: "agent_session_id", Kind: querytable.FieldText, Expr: "r.\"agent_session_id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"agent_session_id\""},

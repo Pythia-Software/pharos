@@ -318,6 +318,7 @@ func (s *Server) menuBarUsage(ctx context.Context, requestedPeriod ...string) (m
 			}
 			result := map[string]any{"period": period, "from": window.From, "until": window.Until, "timezone": summary["timezone"], "local_day": summary["local_day"], "links": links, "generated_at": summary["generated_at"], "human_words": window.HumanWords,
 				"tokens": window.Tokens, "cost_usd": window.CostUSD,
+				"is_estimate": window.IsEstimate, "cost_is_estimate": window.CostIsEstimate, "price_status": window.PriceStatus, "input_tokens_available": window.InputTokensAvailable,
 				"co2e_g": menuBarCarbon(summary["carbon_factors"].(carbonDocument), window.CarbonTokens, prefs)}
 			// Streaks are read only when shown: the first read of a day
 			// builds the day's rhythm records.

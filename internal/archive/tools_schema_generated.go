@@ -8,6 +8,7 @@ func PharosToolsSchema() querytable.Schema {
 		Name:    "pharos_tools",
 		IDField: "id",
 		Fields: map[string]querytable.FieldSpec{
+			"duration_is_estimate":   {Name: "duration_is_estimate", Kind: querytable.FieldBool, Expr: "r.\"duration_is_estimate\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"duration_is_estimate\""},
 			"id":                     {Name: "id", Kind: querytable.FieldText, Expr: "r.\"id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"id\""},
 			"day":                    {Name: "day", Kind: querytable.FieldText, Expr: "r.\"day\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"day\""},
 			"week":                   {Name: "week", Kind: querytable.FieldText, Expr: "r.\"week\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"week\""},

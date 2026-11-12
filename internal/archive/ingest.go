@@ -1911,7 +1911,7 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 	for i := range summaries {
 		applySessionEnvelope(&summaries[i], conversation)
 	}
-	priorSessions, err := queryMaps(tx, "SELECT id,native_id,total_tokens FROM agent_sessions WHERE conversation_id=?", conversationID)
+	priorSessions, err := queryMaps(tx, "SELECT id,native_id,total_tokens,is_estimate FROM agent_sessions WHERE conversation_id=?", conversationID)
 	if err != nil {
 		return err
 	}
@@ -1936,7 +1936,11 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 			reconstructable["main"] = true
 		}
 		for _, prior := range priorSessions {
-			if integer(prior["total_tokens"]) > 0 && !reconstructable[firstString(prior["native_id"])] {
+			if integer(prior["is_estimate"]) != 0 && !reconstructable[firstString(prior["native_id"])] {
+				preserved[firstString(prior["id"])] = true // retain as a prediction, never as reported evidence
+				continue
+			}
+			if integer(prior["is_estimate"]) == 0 && integer(prior["total_tokens"]) > 0 && !reconstructable[firstString(prior["native_id"])] {
 				preserved[firstString(prior["id"])] = true
 			}
 		}
@@ -2027,8 +2031,8 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 			id,workspace_id,conversation_id,native_id,parent_id,delegation_message_id,kind,provider,model,effort,depth,
 			started_at,ended_at,input_tokens,uncached_input_tokens,cache_read_input_tokens,
 			cache_creation_input_tokens,cache_creation_5m_input_tokens,cache_creation_1h_input_tokens,
-			output_tokens,reasoning_output_tokens,unclassified_tokens,total_tokens,usage_status,time_bounds_source,child_conversation_id)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)`, "id"),
+			output_tokens,reasoning_output_tokens,unclassified_tokens,total_tokens,usage_status,time_bounds_source,child_conversation_id,is_estimate,input_tokens_available,usage_estimate_json)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,1,NULL)`, "id"),
 			ids[summary.nativeID], workspaceID, conversationID, summary.nativeID, parentID, delegationMessageID,
 			kind, conversation.Provider, nilIfEmpty(model), nilIfEmpty(sessionMessageEffort(summary.messageIndexes, conversation.Messages)), depth, nilIfEmpty(summary.startedAt), nilIfEmpty(summary.endedAt),
 			integer(summary.counts["input_tokens"]), integer(summary.counts["uncached_input_tokens"]),
