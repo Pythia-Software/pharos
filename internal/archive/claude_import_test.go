@@ -766,6 +766,194 @@ func TestClaudeImportFullThenOverlappingPartialExports(t *testing.T) {
 }
 
 func TestClaudeImportSourceUnitsShareMessagesAndIndexChanges(t *testing.T) {
+	for _, scenario := range []struct {
+		name                     string
+		repeat, batched, delayed bool
+	}{
+		{name: "repeat after native fallback", repeat: true},
+		{name: "changed after native fallback"},
+		{name: "batched repeat after native fallback", repeat: true, batched: true},
+		{name: "delayed native fallback", repeat: true, delayed: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			config := claudeImportConfig(t)
+			catalog, _ := testCatalog(t)
+			collect := func(day int, payload, memory string, index bool) {
+				t.Helper()
+				dir := t.TempDir()
+				chatGPTZip(t, filepath.Join(dir, "conversations-000.zip"), map[string]string{"conversations.json": payload, "memories/m.json": jsonText(map[string]any{"memory": memory})})
+				manifest := filepath.Join(dir, "manifest.json")
+				probePut(t, manifest, jsonText(claudeManifest{Version: "1.0", CreatedAt: time.Date(2026, 10, day, 0, 0, 0, 0, time.UTC).Format(time.RFC3339), DataFiles: []claudeManifestPart{{Filename: "conversations-000.zip", Category: "conversations"}}}))
+				job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+				if err != nil || job.State != "collected" || (job.Parts[0].UnitsError != "") != (day == 2) {
+					t.Fatal(job, err)
+				}
+				config, err = LoadConfig(config.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if index {
+					ingestSource(t, catalog, config.Sources[0])
+				}
+			}
+			collect(1, claudeAIExport, "current memory", true)
+			fallback := strings.Replace(claudeAIExport, `"name":"Trip"`, `"name":"Trip","name":"Fallback title"`, 1)
+			if !scenario.delayed {
+				collect(2, fallback, "fallback memory", !scenario.batched)
+				if !scenario.batched && countRows(t, catalog, `SELECT COUNT(*) FROM workspaces WHERE title='Fallback title'`) != 1 {
+					t.Fatal("native fallback did not apply")
+				}
+			}
+			reopened := reopenCatalog(t, catalog.Path)
+			defer reopened.Close()
+			catalog = reopened
+			latest, title := claudeAIExport, "Trip"
+			if !scenario.repeat {
+				latest, title = strings.Replace(latest, "Trip", "Latest title", 1), "Latest title"
+			}
+			collect(3, latest, "current memory", true)
+			if scenario.delayed {
+				collect(2, fallback, "fallback memory", true)
+			}
+			if countRows(t, catalog, `SELECT COUNT(*) FROM workspaces WHERE title=?`, title) != 1 || countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE text LIKE '%fallback memory%'`) != 0 {
+				t.Fatal("latest transformed observation was displaced by native fallback")
+			}
+			want := catalogEvidence(t, catalog)
+			check := func(c *Catalog) {
+				t.Helper()
+				if catalogEvidence(t, c) != want {
+					t.Fatal("replay selected different evidence")
+				}
+			}
+			adapter, err := MakeAdapter(config.Sources[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result := catalog.IngestContext(withIngestMode(t.Context(), ingestMode{force: true}), adapter, nil); result.Error != nil {
+				t.Fatal(result)
+			}
+			check(catalog)
+			fresh, _ := testCatalog(t)
+			ingestSource(t, fresh, config.Sources[0])
+			check(fresh)
+			if result := runCapture(t, config); !result.OK {
+				t.Fatal(result)
+			}
+			if err := os.RemoveAll(claudeImportRoot(config, config.Sources[0].Name)); err != nil {
+				t.Fatal(err)
+			}
+			rebuilt, _ := testCatalog(t)
+			indexCaptures(t, rebuilt, config.CaptureRoot, "host-a")
+			check(rebuilt)
+		})
+	}
+	for _, transactional := range []bool{false, true} {
+		t.Run(fmt.Sprintf("complete cloud payload evidence transactional=%t", transactional), func(t *testing.T) {
+			config := claudeImportConfig(t)
+			catalog, _ := testCatalog(t)
+			cloud := `{"claude_code_cloud":[{"session_id":"cloud-one","role":"user","content":[{"type":"text","text":"original cloud"}]},{"session_id":"cloud-two","role":"user","content":[{"type":"text","text":"other cloud"}]}]}`
+			collect := func(day int, members map[string]string) {
+				t.Helper()
+				dir := t.TempDir()
+				chatGPTZip(t, filepath.Join(dir, "conversations-000.zip"), members)
+				manifest := filepath.Join(dir, "manifest.json")
+				probePut(t, manifest, jsonText(claudeManifest{Version: "1.0", CreatedAt: time.Date(2026, 10, day, 0, 0, 0, 0, time.UTC).Format(time.RFC3339), DataFiles: []claudeManifestPart{{Filename: "conversations-000.zip", Category: "conversations"}}}))
+				job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+				if err != nil || job.State != "collected" {
+					t.Fatal(job, err)
+				}
+				config, err = LoadConfig(config.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			members := map[string]string{"conversations.json": "[]", "claude_code_cloud/channel_session_transcripts.json": cloud}
+			collect(1, members)
+			ingestSource(t, catalog, config.Sources[0])
+			if !transactional {
+				// Another source can replace one session without replacing the
+				// document's other outputs or its historical parsing checkpoint.
+				adapter, err := MakeAdapter(config.Sources[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				var value any
+				if err := json.Unmarshal([]byte(cloud), &value); err != nil {
+					t.Fatal(err)
+				}
+				err = adapter.(*claudeAIAdapter).cloudExportSessions(value, "other-source", time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC).UnixNano(), func(record WorkspaceRecord) error {
+					if record.SourceID != "cloud-one" {
+						return nil
+					}
+					record.Title = "Fallback cloud"
+					record.Conversations[0].Messages[0].Text = "fallback cloud"
+					record.EvidenceIdentity = hashBytes([]byte("other source payload"))
+					tx, err := catalog.beginWrite(t.Context())
+					if err != nil {
+						return err
+					}
+					defer tx.Rollback()
+					if _, _, err := ingestCopy(tx, record, false, "host-a", "other-source", false); err != nil {
+						return err
+					}
+					return tx.Commit()
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if countRows(t, catalog, `SELECT COUNT(*) FROM workspaces WHERE title='Fallback cloud'`) != 1 {
+					t.Fatal("other source did not displace cloud session")
+				}
+			}
+			collect(3, members)
+			adapter, err := MakeAdapter(config.Sources[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			mode := ingestMode{}
+			changed := false
+			if transactional {
+				mode.planned = func(plan *sourceWorkPlan, _ string) {
+					for index, group := range plan.groups {
+						read := group.read
+						plan.groups[index].read = func(emit partEmitter) error {
+							return read(func(record *WorkspaceRecord, parts []sourcePart) error {
+								for _, part := range parts {
+									if changed || !part.evidenceObservation {
+										continue
+									}
+									// Change authority between the adapter's read check
+									// and ingestion's marker transaction.
+									_, err := catalog.DB.Exec(`UPDATE copy_evidence SET identity=? WHERE conversation_id IN (SELECT id FROM conversations WHERE native_id='cloud-one')`, hashBytes([]byte("different source evidence")))
+									if err != nil {
+										return err
+									}
+									changed = true
+								}
+								return emit(record, parts)
+							})
+						}
+					}
+				}
+			}
+			if result := catalog.IngestContext(withIngestMode(t.Context(), mode), adapter, nil); result.Error != nil || result.Parsed != 1 {
+				t.Fatal(result)
+			}
+			if transactional && !changed {
+				t.Fatal("authority change was not exercised")
+			}
+			latest := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC).UnixNano()
+			if countRows(t, catalog, `SELECT COUNT(*) FROM copy_evidence WHERE conversation_id<>'' AND version=?`, latest) != 3 || countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE text LIKE '%fallback cloud%'`) != 0 {
+				t.Fatal("partial group remained selected or its time did not advance")
+			}
+			collect(4, members)
+			reads := 0
+			override(t, &claudeObjectReadHook, func(string) { reads++ })
+			if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 0 || reads != 0 {
+				t.Fatal("current cloud repeat reread payload", result, reads)
+			}
+		})
+	}
 	t.Run("latest repeated observation protects source order", func(t *testing.T) {
 		config := claudeImportConfig(t)
 		catalog, _ := testCatalog(t)

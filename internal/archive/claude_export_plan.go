@@ -3,6 +3,7 @@ package archive
 import (
 	"errors"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -38,7 +39,12 @@ func (a *claudeAIAdapter) planParts() (*sourceWorkPlan, error) {
 		return nil, errors.New("no Claude conversation inputs found")
 	}
 	plan := &sourceWorkPlan{}
-	checks := []func() error{}
+	type checkedGroup struct {
+		plannedPartGroup
+		check    func() error
+		observed int64
+	}
+	groups := []checkedGroup{}
 	observations := map[string]string{}
 	checkContent := func(key, content, kind string) error {
 		if old, ok := observations[key]; ok && old != content {
@@ -50,27 +56,72 @@ func (a *claudeAIAdapter) planParts() (*sourceWorkPlan, error) {
 	checkSupplement := func(snapshot, name, digest string) error {
 		return checkContent(snapshot+"\x00supplement\x00"+name, digest, "supplementary")
 	}
-	add := func(parts []sourcePart, check func() error, read func(partEmitter) error) {
-		plan.groups = append(plan.groups, plannedPartGroup{parts: parts, read: read})
-		checks = append(checks, check)
+	add := func(parts []sourcePart, observed int64, check func() error, read func(partEmitter) error) {
+		groups = append(groups, checkedGroup{plannedPartGroup{parts: parts, read: read}, check, observed})
 	}
-	// Content checkpoints and observation watermarks are separate. An unchanged
-	// body accepts a newer source time without decompressing it. The marker is
-	// still planned/checkpointed, so background indexing cannot skip that work.
-	addObservation := func(part sourcePart, observed int64, check func() error, read func(partEmitter, []sourcePart) error) {
-		marker := sourcePart{item: "group:claude-observation:" + part.item, version: observed, signal: part.signal, metadata: true, evidenceObservation: true}
+	// Parsing history alone does not prove that this payload is still selected.
+	// Reuse it only while every previously emitted evidence claim is current;
+	// the marker transaction checks that again before advancing source time.
+	addObservation := func(part sourcePart, observed int64, check func() error, read func(partEmitter) error) {
+		marker := sourcePart{item: "group:claude-observation:" + part.item, version: observed, signal: part.signal, metadata: true}
 		parts := []sourcePart{part, marker}
-		payloadCurrent := func() bool { return plan.tracker != nil && plan.tracker.unchanged([]sourcePart{part}) }
-		add(parts, func() error {
-			if payloadCurrent() {
+		validated := false
+		validate := func() error {
+			if validated {
 				return nil
 			}
-			return check()
-		}, func(emit partEmitter) error {
-			if payloadCurrent() {
-				return emit(nil, []sourcePart{marker})
+			if err := check(); err != nil {
+				return err
 			}
-			return read(emit, parts)
+			validated = true
+			return nil
+		}
+		payloadCurrent := func() (bool, error) {
+			if plan.tracker == nil || plan.tracker.evidenceCurrent == nil || !plan.tracker.unchanged([]sourcePart{part}) {
+				return false, nil
+			}
+			return plan.tracker.evidenceCurrent(marker)
+		}
+		add(parts, observed, func() error {
+			current, err := payloadCurrent()
+			if err != nil || current {
+				return err
+			}
+			return validate()
+		}, func(emit partEmitter) error {
+			current, err := payloadCurrent()
+			if err != nil {
+				return err
+			}
+			if current {
+				repeat := marker
+				repeat.evidenceObservation = true
+				err := emit(nil, []sourcePart{repeat})
+				if !errors.Is(err, errObservationNeedsPayload) {
+					return err
+				}
+				// Another publication displaced a claim after the check above.
+			}
+			// An immutable payload whose authority changed still needs validation
+			// before it can be republished, even if preflight reused its history.
+			if err := validate(); err != nil {
+				return err
+			}
+			claims := int64(0)
+			if err := read(func(record *WorkspaceRecord, _ []sourcePart) error {
+				if record == nil {
+					return nil
+				}
+				claims += 1 + int64(len(record.Conversations))
+				return emit(record, nil)
+			}); err != nil {
+				return err
+			}
+			// This derived count belongs to the complete payload, including cloud
+			// documents which can emit several records. Missing or partial proof
+			// requires replay; it cannot certify just the surviving claims.
+			proof := sourcePart{item: observationProofItem(marker), size: claims, signal: part.signal, metadata: true}
+			return emit(nil, append(parts, proof))
 		})
 	}
 	identity := func(kind, occurrence, content string) string {
@@ -164,12 +215,12 @@ func (a *claudeAIAdapter) planParts() (*sourceWorkPlan, error) {
 			}
 			return record, nil
 		}
-		addObservation(part, observed, func() error { _, err := load(); return err }, func(emit partEmitter, parts []sourcePart) error {
+		addObservation(part, observed, func() error { _, err := load(); return err }, func(emit partEmitter) error {
 			record, err := load()
 			if err != nil {
 				return err
 			}
-			return emit(&record, parts)
+			return emit(&record, nil)
 		})
 	}
 	// Native fallbacks have no verified per-conversation/member metadata. Plan
@@ -178,7 +229,9 @@ func (a *claudeAIAdapter) planParts() (*sourceWorkPlan, error) {
 	for _, snapshot := range nativeOrder {
 		reads := native[snapshot]
 		parts := []sourcePart{}
+		observed := int64(0)
 		for _, input := range reads {
+			observed = max(observed, input.version)
 			size := int64(0)
 			signal := input.sha256
 			if input.units != nil {
@@ -221,12 +274,20 @@ func (a *claudeAIAdapter) planParts() (*sourceWorkPlan, error) {
 			}
 			return nil
 		}
-		add(parts, check, func(emit partEmitter) error {
+		nativeIdentity := identity("native", partsSignature(parts), "")
+		add(parts, observed, check, func(emit partEmitter) error {
+			publish := func(record *WorkspaceRecord) error {
+				record.EvidenceIdentity = nativeIdentity
+				if a.view != nil {
+					record.EvidenceRevision = a.view.evidenceRevision
+				}
+				return emit(record, nil)
+			}
 			records := map[string]*WorkspaceRecord{}
 			order := []string{}
 			for _, input := range reads {
 				if input.conversations && input.units == nil {
-					if err := a.readExport(input, func(record WorkspaceRecord) error { return emit(&record, nil) }, nil); err != nil {
+					if err := a.readExport(input, func(record WorkspaceRecord) error { return publish(&record) }, nil); err != nil {
 						return err
 					}
 				}
@@ -243,7 +304,7 @@ func (a *claudeAIAdapter) planParts() (*sourceWorkPlan, error) {
 				}
 			}
 			for _, id := range order {
-				if err := emit(records[id], nil); err != nil {
+				if err := publish(records[id]); err != nil {
 					return err
 				}
 			}
@@ -316,7 +377,7 @@ func (a *claudeAIAdapter) planParts() (*sourceWorkPlan, error) {
 			}
 			return nil
 		}
-		addObservation(part, observed, check, func(emit partEmitter, parts []sourcePart) error {
+		addObservation(part, observed, check, func(emit partEmitter) error {
 			records := map[string]*WorkspaceRecord{}
 			order := []string{}
 			for _, read := range reads {
@@ -342,18 +403,24 @@ func (a *claudeAIAdapter) planParts() (*sourceWorkPlan, error) {
 					return err
 				}
 			}
-			return emit(nil, parts)
+			return nil
 		})
 	}
+	// Native fallbacks, retained conversations and supplementary groups share
+	// one source-time order. Keep validation attached while sorting readers.
+	sort.SliceStable(groups, func(i, j int) bool { return groups[i].observed < groups[j].observed })
+	for _, group := range groups {
+		plan.groups = append(plan.groups, group.plannedPartGroup)
+	}
 	plan.preflight = func(unchanged func([]sourcePart) bool) error {
-		for index, group := range plan.groups {
+		for _, group := range groups {
 			if err := a.context().Err(); err != nil {
 				return err
 			}
 			if unchanged != nil && unchanged(group.parts) {
 				continue
 			}
-			if err := checks[index](); err != nil {
+			if err := group.check(); err != nil {
 				return err
 			}
 		}

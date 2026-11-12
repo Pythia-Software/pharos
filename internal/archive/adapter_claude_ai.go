@@ -19,7 +19,7 @@ import (
 type claudeAIAdapter struct{ baseAdapter }
 
 // claudeAIExtractor versions the parser; bump it when parsing changes.
-const claudeAIExtractor = "claude-ai-v6"
+const claudeAIExtractor = "claude-ai-v7"
 
 // claudeAIRoot is the parent a conversation's first message names.
 const claudeAIRoot = "00000000-0000-4000-8000-000000000000"

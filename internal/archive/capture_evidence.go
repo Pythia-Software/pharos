@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 )
 
@@ -46,6 +47,34 @@ func (c *Catalog) acceptUnchangedEvidence(ctx context.Context, adapter Adapter, 
 	if err != nil {
 		return false, err
 	}
+	// The source's parsing digest can survive another source replacing these
+	// rows. Advancing metadata is safe only while the digest's evidence still
+	// owns every claim; otherwise the ordinary writer must restore the payload.
+	prior := strings.TrimPrefix(current, version+":")
+	if len(prior) <= 65 || prior[64] != ':' || !validRecordHash(prior[:64]) {
+		return false, nil
+	}
+	matches := func(conversation, origin string) (bool, error) {
+		var identity string
+		err := tx.QueryRow(`SELECT e.identity FROM copy_evidence e JOIN copy_versions v
+			USING(host_id,workspace_id,conversation_id,origin)
+			WHERE e.host_id=? AND e.workspace_id=? AND e.conversation_id=? AND e.origin=? AND e.version=v.version`, host, workspace, conversation, origin).Scan(&identity)
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return identity == prior[:64], err
+	}
+	if current, err := matches("", ""); err != nil || !current {
+		return false, err
+	}
+	for index, claim := range authority.conversations {
+		if claim.id == "" {
+			return false, nil
+		}
+		if current, err := matches(claim.id, record.Conversations[index].Origin); err != nil || !current {
+			return false, err
+		}
+	}
 	if err = guardCapture(tx, record, workspace, host, &authority); err != nil {
 		return false, err
 	}
@@ -73,6 +102,26 @@ func (c *Catalog) acceptUnchangedEvidence(ctx context.Context, adapter Adapter, 
 	return true, nil
 }
 
+// The proof count is a derived parser checkpoint, not retained source evidence.
+// It records every workspace/conversation claim emitted by a complete payload.
+func observationProofItem(part sourcePart) string {
+	return "group:claude-evidence:" + strings.TrimPrefix(part.item, "group:claude-observation:")
+}
+
+var errObservationNeedsPayload = errors.New("source observation needs payload publication")
+
+func repeatedObservationCurrent(db interface{ QueryRow(string, ...any) *sql.Row }, tracker *partTracker, part sourcePart) (bool, error) {
+	proof, ok := tracker.states[observationProofItem(part)]
+	if !ok || proof.extractor != tracker.extractor || proof.signal != part.signal || proof.size <= 0 {
+		return false, nil
+	}
+	var claims int64
+	err := db.QueryRow(`SELECT COUNT(*) FROM copy_evidence e JOIN copy_versions v
+		USING(host_id,workspace_id,conversation_id,origin)
+		WHERE e.host_id=? AND e.identity=? AND e.version=v.version`, tracker.host, part.signal).Scan(&claims)
+	return claims == proof.size, err
+}
+
 // A repeated immutable payload can advance source ordering without reparsing
 // it. Match the currently associated identity and version in the transaction;
 // another payload/writer's authority must never be advanced by this receipt.
@@ -88,6 +137,13 @@ func (c *Catalog) acceptRepeatedObservation(ctx context.Context, adapter Adapter
 		for _, part := range parts {
 			if !part.evidenceObservation || part.version <= 0 {
 				continue
+			}
+			current, err := repeatedObservationCurrent(tx, tracker, part)
+			if err != nil {
+				return err
+			}
+			if !current {
+				return errObservationNeedsPayload
 			}
 			rows, err := queryMaps(tx, `SELECT workspace_id,conversation_id,origin,version FROM copy_evidence WHERE host_id=? AND identity=? AND version<?`, host, part.signal, part.version)
 			if err != nil {

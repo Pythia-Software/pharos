@@ -62,12 +62,13 @@ type partTracker struct {
 	host, source, extractor string
 	// capture is set when the parts are a capture's copies, which may be
 	// older than what this host already indexed from the live source.
-	capture       bool
-	immutablePart func(sourcePart) bool
-	states        map[string]partState
-	pending       []sourcePart
-	writer        string
-	terminal      map[string]bool
+	capture         bool
+	immutablePart   func(sourcePart) bool
+	states          map[string]partState
+	pending         []sourcePart
+	writer          string
+	terminal        map[string]bool
+	evidenceCurrent func(sourcePart) (bool, error)
 	// ctx carries the operation the parts are recorded for, whose priority
 	// class the WAL checkpoint after a flush follows.
 	ctx context.Context
@@ -81,6 +82,9 @@ func (c *Catalog) newPartTracker(ctx context.Context, host, source string, adapt
 		return nil, err
 	}
 	tracker := &partTracker{host: host, source: source, extractor: extractor, capture: view != nil, states: map[string]partState{}, terminal: map[string]bool{}, ctx: ctx}
+	tracker.evidenceCurrent = func(part sourcePart) (bool, error) {
+		return repeatedObservationCurrent(c.DB, tracker, part)
+	}
 	if immutable, ok := adapter.(immutablePartialAdapter); ok {
 		tracker.immutablePart = immutable.immutablePart
 	}
