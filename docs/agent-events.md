@@ -5,7 +5,7 @@ docs, surprises, confusion, discoveries, their own mistakes, workarounds, unchec
 getting around an instruction or safeguard, and more. Each event is one sentence in an agent's visible reply or its
 thinking, with what it was about and what the agent did about it, linked to the message in the reader.
 
-It is a preview. Settings → Background Processing → **Agent events (preview)**, beside message labels, turns it on for a library: it lists the
+It is a preview, on by default. Settings → Background Processing → **Agent events (preview)**, beside message labels, turns it off or back on for a library: when on, it lists the
 pages in Analyze and starts the pass that finds events on this Mac (below). `agent_events_enabled = true` in the
 library's configuration does both too, and locks the switch on; `/assets/preferences.js` tells the page so
 (`window.pharosConfiguredFlags`), since no preference records it. Direct links work either way. The **Agent Events**

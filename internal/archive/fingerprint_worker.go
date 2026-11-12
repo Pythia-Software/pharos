@@ -77,7 +77,12 @@ type fingerprintAnalysisPolicy struct{ labels, events bool }
 type fingerprintAnalysisPolicyKey struct{}
 
 func (s *Server) fingerprintContext(ctx context.Context) context.Context {
-	return context.WithValue(ctx, fingerprintAnalysisPolicyKey{}, fingerprintAnalysisPolicy{s.Config().Labels.Enabled, s.agentEventsEnabled(ctx)})
+	config := s.Config()
+	// An absent worker or explicitly configured runtime cannot be fixed by a
+	// model download. Keep their stages pending, but do not hold fingerprints
+	// indefinitely while inference is unavailable on this Mac.
+	available := config.Labels.withAssets().labelerProblem() == ""
+	return context.WithValue(ctx, fingerprintAnalysisPolicyKey{}, fingerprintAnalysisPolicy{config.Labels.Enabled && available, s.agentEventsEnabled(ctx) && available})
 }
 
 func fingerprintPolicy(ctx context.Context) fingerprintAnalysisPolicy {

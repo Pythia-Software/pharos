@@ -44,7 +44,7 @@ func TestPreferencesChangingAgentAnalysisEndsOldDemand(t *testing.T) {
 		t.Fatal("an unrelated preference ended agent analysis demand")
 	default:
 	}
-	if err := c.SetUIPreferences(t.Context(), map[string]any{"delete": []any{agentEventsFlag}}); err != nil {
+	if err := c.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{agentEventsFlag: false}}); err != nil {
 		t.Fatal(err)
 	}
 	select {

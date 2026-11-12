@@ -263,6 +263,9 @@ func Run(arguments []string) error {
 			return err
 		}
 		defer catalog.Close()
+		if err := catalog.scheduleDefaultModelBackfill(context.Background()); err != nil {
+			return err
+		}
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
 		catalog.ReworkDays = config.OutcomeReworkDays
