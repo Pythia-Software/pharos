@@ -1735,6 +1735,8 @@ CREATE TABLE IF NOT EXISTS copy_evidence (
  PRIMARY KEY(host_id,workspace_id,conversation_id,origin)
 );
 
+CREATE INDEX IF NOT EXISTS copy_evidence_identity_idx ON copy_evidence(host_id,identity);
+
 CREATE TABLE IF NOT EXISTS source_evidence (
  host_id TEXT NOT NULL,
  source_kind TEXT NOT NULL,

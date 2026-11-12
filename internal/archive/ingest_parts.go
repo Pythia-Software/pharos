@@ -16,8 +16,11 @@ import (
 
 // sourcePart is one part of a source in the version an adapter read.
 type sourcePart struct {
-	item string // original path, or sqlite:<original path>:sessions:<id>
-	size int64  // bytes, or a session's message count
+	// evidenceObservation accepts only a source-time watermark for an already
+	// parsed immutable payload; it never promotes a different payload identity.
+	evidenceObservation bool
+	item                string // original path, or sqlite:<original path>:sessions:<id>
+	size                int64  // bytes, or a session's message count
 	// Measurement metadata only; empty means bytes. SQLite dependencies can
 	// be files or session aggregates, so their paths cannot identify the unit.
 	sizeUnit string
@@ -42,6 +45,12 @@ type partialAdapter interface {
 	discoverParts(unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error
 }
 
+// Immutable observation keys can safely reuse terminal rejection checkpoints
+// when read live too; ordinary mutable source paths retain capture-only rules.
+type immutablePartialAdapter interface {
+	immutablePart(sourcePart) bool
+}
+
 type partState struct {
 	extractor     string
 	size, version int64
@@ -53,11 +62,13 @@ type partTracker struct {
 	host, source, extractor string
 	// capture is set when the parts are a capture's copies, which may be
 	// older than what this host already indexed from the live source.
-	capture  bool
-	states   map[string]partState
-	pending  []sourcePart
-	writer   string
-	terminal map[string]bool
+	capture         bool
+	immutablePart   func(sourcePart) bool
+	states          map[string]partState
+	pending         []sourcePart
+	writer          string
+	terminal        map[string]bool
+	evidenceCurrent func(sourcePart) (bool, error)
 	// ctx carries the operation the parts are recorded for, whose priority
 	// class the WAL checkpoint after a flush follows.
 	ctx context.Context
@@ -71,7 +82,13 @@ func (c *Catalog) newPartTracker(ctx context.Context, host, source string, adapt
 		return nil, err
 	}
 	tracker := &partTracker{host: host, source: source, extractor: extractor, capture: view != nil, states: map[string]partState{}, terminal: map[string]bool{}, ctx: ctx}
-	if view != nil {
+	tracker.evidenceCurrent = func(part sourcePart) (bool, error) {
+		return repeatedObservationCurrent(c.DB, tracker, part)
+	}
+	if immutable, ok := adapter.(immutablePartialAdapter); ok {
+		tracker.immutablePart = immutable.immutablePart
+	}
+	if (view != nil || tracker.immutablePart != nil) && !(tracker.immutablePart != nil && modeOf(ctx).force) {
 		rows, err := queryMaps(c.DB, "SELECT item,size,version,signal FROM source_terminal_states WHERE host_id=? AND source_name=? AND extractor=?", host, source, extractor)
 		if err != nil {
 			return nil, err
@@ -102,7 +119,7 @@ func (c *Catalog) newPartTracker(ctx context.Context, host, source string, adapt
 // since the host and origin match and it would be the writer.
 func (t *partTracker) unchanged(parts []sourcePart) bool {
 	for _, part := range parts {
-		if t.capture && t.terminal[partsSignature([]sourcePart{part})] {
+		if (t.capture || t.immutablePart != nil && t.immutablePart(part)) && t.terminal[partsSignature([]sourcePart{part})] {
 			continue
 		}
 		state, ok := t.states[part.item]

@@ -64,6 +64,9 @@ func (f *capturedFile) storedSize() int64 { return f.version().storedSize() }
 // encoded entries stay readable by older builds.
 func (m *captureManifest) writerVersion() int {
 	version := capturePlainManifestVersion
+	if m.ClaudeExportObjects {
+		version = captureClaudeObjectsVersion
+	}
 	for _, file := range m.Files {
 		if file.Encoding != "" {
 			version = max(version, captureFilesVersion)

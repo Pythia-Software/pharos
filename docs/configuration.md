@@ -554,8 +554,8 @@ single-ZIP exports do, the collected copy leaves it out; a ZIP with nothing
 else is not kept.
 
 **Capture and index conversations** uses the existing capture/index workflow.
-Projects, memory, artifact files and unknown ZIP categories are retained as raw
-export evidence; this importer currently indexes conversations. It preserves the
+Projects, memory, artifacts, reflections and cloud transcripts are indexed as
+source documents/conversations; unknown ZIP categories remain retained evidence. It preserves the
 existing account identity configuration and records native account UUIDs as
 metadata. It does not infer missing project associations or token usage. A set
 without a manifest has unknown completeness; an incomplete manifest remains
@@ -580,9 +580,27 @@ Claude account (the UUID in the export's links), the profile whose download
 actually arrived. That account's later exports open there, even if the general
 choice differs, so two Claude accounts in two profiles each keep their own.
 
-Request the export yourself: in Claude, open Settings → Privacy → Export data.
-When Claude emails you, download the manifest from its link into Downloads.
-While Pharos is running it then:
+**Request a daily Claude export** appears in the Claude.ai import screen and
+the Downloads import section. **Copy daily export prompt** supplies a starter
+prompt for Claude Desktop to set up a daily 9 AM task using browser access.
+It asks for the rolling last 30 days, recalculated on each run; if Claude's
+export screen has no date filter, it asks for a full export instead. The prompt
+asks Claude to test an export request, verify scheduled browser access, and
+explain any requirements to keep apps open or stay signed in. Scheduling and
+browser access depend on the user's Claude account and setup; copying the
+prompt does not create a task in Pharos or Claude. For a complete starting
+archive, request all history before using a rolling window.
+
+This follows Anthropic's [export instructions](https://support.claude.com/en/articles/9450526-export-your-claude-data)
+and [scheduled-task guidance](https://support.claude.com/en/articles/13854387-schedule-recurring-tasks-in-claude-cowork).
+The export instructions do not document a date filter, so the prompt checks
+the options available rather than promising a 30-day export.
+
+You can also request the export yourself: in Claude, open Settings → Privacy
+→ Export data. Each day an export email arrives, use its link to download the
+manifest into Downloads within 24 hours. Keep the Downloads import switch on,
+Pharos running, and the selected browser profile signed in to Claude. Pharos
+then:
 
 1. lists the top level of `~/Downloads` every 15 minutes, 30 seconds after it
    starts, and when you choose **Check Downloads now**. It opens only files
@@ -646,6 +664,8 @@ pharos --config /path/to/library.toml claude-import collect /path/to/manifest.js
 pharos --config /path/to/library.toml claude-import status
 pharos --config /path/to/library.toml claude-import collect --job JOB_ID /path/to/downloaded/file.zip
 pharos --config /path/to/library.toml claude-import watch /path/to/claude-export-inbox
+pharos --config /path/to/library.toml claude-import compact --prepare
+pharos --config /path/to/library.toml claude-import compact --apply PLAN_ID
 ```
 
 `collect` also accepts a folder or several ZIP/JSON paths. Put flags before paths;
@@ -660,6 +680,15 @@ The authenticated local API exposes the same jobs through `POST /api/claude-impo
 `GET /api/claude-imports?id=JOB_ID&name=NAME`. POST returns acceptance; poll the GET
 response's `run` and the saved job for completion. Closing the UI does not stop
 collection. `POST /api/claude-imports/cancel` requests cancellation.
+
+The explicit `compact` command plans and verifies source-unit replacements;
+`--prepare` also migrates legacy parts additively. Review its returned plan, then
+apply its ID with services using that library closed. Apply removes only verified
+managed native parts; Downloads, captured native copies, pins and backups remain.
+Incomplete jobs stay protected. Graph-only retirement requires newer Pharos
+readers (library descriptor 2, capture manifest 9). See [source units and
+compaction](claude-export-storage.md) for the format, recovery and remaining
+metadata-scan limits. Automatic cleanup is not enabled.
 
 Collected snapshots and credential-free receipts live in
 `<capture_root>/.claude-imports/<host-id>/<source-name>/snapshots/`. Expiring download
@@ -733,16 +762,13 @@ needs indexing. The API can still target one host or source with `POST
 `"auto_upgrade": true` continues with pending library upgrade work after a
 successful index, even if the browser closes.
 
-### Claude Chat settings and recording
+### Claude Chat settings and missing model selections
 
-Add **Claude Chat settings** using **Look for sources** in Settings → Sources.
-It is a separate source from Claude.ai exports. The Claude import modal also offers
-**Enable and continue** once conversation files have been collected. It reuses a
-paused settings source or creates a companion source with the export’s account
-label, then includes it when you capture and index the import. If a matching
-source is enabled, the prompt is skipped. **Continue without settings** leaves
-settings capture unchanged and lets the import proceed. If Claude Desktop is
-unavailable, you can choose its folder or continue without it.
+**Claude Chat settings** is a separate source from Claude.ai exports. Imports
+include a matching settings source if it is already enabled. Otherwise, the
+import proceeds with the export alone and checks for missing model information
+after indexing. You can also add this source using **Look for sources** in
+Settings → Sources and enable it for automatic updates.
 
 A manually configured source is:
 
@@ -765,13 +791,27 @@ schedule and source selection. Every acquisition preserves only the allowed sett
 projection before indexing it. Previously captured observations survive cache eviction
 and can be indexed on another Mac without Claude installed.
 
-In Settings → Sources, **Record me for 30 minutes** checks about every five seconds
-while you page through Claude’s conversation history/sidebar and open old chats.
-It shows the number of conversations collected and newly discovered during the
-session. **Stop recording**, the time limit, or pausing/removing the source ends
-recording. Another index takes precedence; recording retries on the next check.
-Recording ends when Pharos stops and is not resumed automatically after a restart.
-It does not operate Claude or fetch conversations from the network.
+When imported Claude Chat conversations have no recorded model or current model
+selection, Pharos offers **Add missing Claude model settings** in Settings →
+Sources, in an affected conversation, and after indexing an import. The prompt
+shows how many imported conversations need model information for that account:
+
+1. Open the Claude desktop app and select the **Chat** tab.
+2. Click **View all** at the bottom of the **Recents** list.
+3. Scroll down until you reach your oldest conversation, letting older chats
+   load as you go.
+4. Return to Pharos and click **Capture settings**.
+
+That button captures the available settings and indexes them in one action, then
+reports how many conversations still lack model information. It creates a paused
+settings source if needed and preserves the enabled/paused state of an existing
+source. No recording session or ongoing source acquisition is required. Loading
+the history list makes settings available without opening each conversation.
+
+The prompt is absent when there are no affected imported chats. Explicitly
+reported assistant models and current observed model selections both resolve the
+prompt. A newer unknown or conflicting selection does not inherit an older model.
+Missing effort or thinking mode alone does not trigger another backfill prompt.
 
 Only settings present in Claude’s cache can be collected. Opening a chat does not
 guarantee Claude writes another supported cache entry. The current parser supports

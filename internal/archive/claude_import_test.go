@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -762,4 +763,1230 @@ func TestClaudeImportFullThenOverlappingPartialExports(t *testing.T) {
 	rebuilt, _ := testCatalog(t)
 	indexCaptures(t, rebuilt, config.CaptureRoot, "host-a")
 	check(rebuilt, 3, 22)
+}
+
+func TestClaudeImportSourceUnitsShareMessagesAndIndexChanges(t *testing.T) {
+	for _, scenario := range []struct {
+		name                     string
+		repeat, batched, delayed bool
+	}{
+		{name: "repeat after native fallback", repeat: true},
+		{name: "changed after native fallback"},
+		{name: "batched repeat after native fallback", repeat: true, batched: true},
+		{name: "delayed native fallback", repeat: true, delayed: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			config := claudeImportConfig(t)
+			catalog, _ := testCatalog(t)
+			collect := func(day int, payload, memory string, index bool) {
+				t.Helper()
+				dir := t.TempDir()
+				chatGPTZip(t, filepath.Join(dir, "conversations-000.zip"), map[string]string{"conversations.json": payload, "memories/m.json": jsonText(map[string]any{"memory": memory})})
+				manifest := filepath.Join(dir, "manifest.json")
+				probePut(t, manifest, jsonText(claudeManifest{Version: "1.0", CreatedAt: time.Date(2026, 10, day, 0, 0, 0, 0, time.UTC).Format(time.RFC3339), DataFiles: []claudeManifestPart{{Filename: "conversations-000.zip", Category: "conversations"}}}))
+				job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+				if err != nil || job.State != "collected" || (job.Parts[0].UnitsError != "") != (day == 2) {
+					t.Fatal(job, err)
+				}
+				config, err = LoadConfig(config.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if index {
+					ingestSource(t, catalog, config.Sources[0])
+				}
+			}
+			collect(1, claudeAIExport, "current memory", true)
+			fallback := strings.Replace(claudeAIExport, `"name":"Trip"`, `"name":"Trip","name":"Fallback title"`, 1)
+			if !scenario.delayed {
+				collect(2, fallback, "fallback memory", !scenario.batched)
+				if !scenario.batched && countRows(t, catalog, `SELECT COUNT(*) FROM workspaces WHERE title='Fallback title'`) != 1 {
+					t.Fatal("native fallback did not apply")
+				}
+			}
+			reopened := reopenCatalog(t, catalog.Path)
+			defer reopened.Close()
+			catalog = reopened
+			latest, title := claudeAIExport, "Trip"
+			if !scenario.repeat {
+				latest, title = strings.Replace(latest, "Trip", "Latest title", 1), "Latest title"
+			}
+			collect(3, latest, "current memory", true)
+			if scenario.delayed {
+				collect(2, fallback, "fallback memory", true)
+			}
+			if countRows(t, catalog, `SELECT COUNT(*) FROM workspaces WHERE title=?`, title) != 1 || countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE text LIKE '%fallback memory%'`) != 0 {
+				t.Fatal("latest transformed observation was displaced by native fallback")
+			}
+			want := catalogEvidence(t, catalog)
+			check := func(c *Catalog) {
+				t.Helper()
+				if catalogEvidence(t, c) != want {
+					t.Fatal("replay selected different evidence")
+				}
+			}
+			adapter, err := MakeAdapter(config.Sources[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result := catalog.IngestContext(withIngestMode(t.Context(), ingestMode{force: true}), adapter, nil); result.Error != nil {
+				t.Fatal(result)
+			}
+			check(catalog)
+			fresh, _ := testCatalog(t)
+			ingestSource(t, fresh, config.Sources[0])
+			check(fresh)
+			if result := runCapture(t, config); !result.OK {
+				t.Fatal(result)
+			}
+			if err := os.RemoveAll(claudeImportRoot(config, config.Sources[0].Name)); err != nil {
+				t.Fatal(err)
+			}
+			rebuilt, _ := testCatalog(t)
+			indexCaptures(t, rebuilt, config.CaptureRoot, "host-a")
+			check(rebuilt)
+		})
+	}
+	for _, transactional := range []bool{false, true} {
+		t.Run(fmt.Sprintf("complete cloud payload evidence transactional=%t", transactional), func(t *testing.T) {
+			config := claudeImportConfig(t)
+			catalog, _ := testCatalog(t)
+			cloud := `{"claude_code_cloud":[{"session_id":"cloud-one","role":"user","content":[{"type":"text","text":"original cloud"}]},{"session_id":"cloud-two","role":"user","content":[{"type":"text","text":"other cloud"}]}]}`
+			collect := func(day int, members map[string]string) {
+				t.Helper()
+				dir := t.TempDir()
+				chatGPTZip(t, filepath.Join(dir, "conversations-000.zip"), members)
+				manifest := filepath.Join(dir, "manifest.json")
+				probePut(t, manifest, jsonText(claudeManifest{Version: "1.0", CreatedAt: time.Date(2026, 10, day, 0, 0, 0, 0, time.UTC).Format(time.RFC3339), DataFiles: []claudeManifestPart{{Filename: "conversations-000.zip", Category: "conversations"}}}))
+				job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+				if err != nil || job.State != "collected" {
+					t.Fatal(job, err)
+				}
+				config, err = LoadConfig(config.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			members := map[string]string{"conversations.json": "[]", "claude_code_cloud/channel_session_transcripts.json": cloud}
+			collect(1, members)
+			ingestSource(t, catalog, config.Sources[0])
+			want := catalogEvidence(t, catalog)
+			if !transactional {
+				// Another source can replace one session without replacing the
+				// document's other outputs or its historical parsing checkpoint.
+				adapter, err := MakeAdapter(config.Sources[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				var value any
+				if err := json.Unmarshal([]byte(cloud), &value); err != nil {
+					t.Fatal(err)
+				}
+				err = adapter.(*claudeAIAdapter).cloudExportSessions(value, "other-source", time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC).UnixNano(), func(record WorkspaceRecord) error {
+					if record.SourceID != "cloud-one" {
+						return nil
+					}
+					record.Title = "Fallback cloud"
+					record.Conversations[0].Messages[0].Text = "fallback cloud"
+					record.EvidenceIdentity = hashBytes([]byte("other source payload"))
+					tx, err := catalog.beginWrite(t.Context())
+					if err != nil {
+						return err
+					}
+					defer tx.Rollback()
+					if _, _, err := ingestCopy(tx, record, false, "host-a", "other-source", false); err != nil {
+						return err
+					}
+					return tx.Commit()
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if countRows(t, catalog, `SELECT COUNT(*) FROM workspaces WHERE title='Fallback cloud'`) != 1 {
+					t.Fatal("other source did not displace cloud session")
+				}
+			}
+			collect(3, members)
+			adapter, err := MakeAdapter(config.Sources[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			mode := ingestMode{}
+			changed := false
+			if transactional {
+				mode.planned = func(plan *sourceWorkPlan, _ string) {
+					for index, group := range plan.groups {
+						read := group.read
+						plan.groups[index].read = func(emit partEmitter) error {
+							return read(func(record *WorkspaceRecord, parts []sourcePart) error {
+								for _, part := range parts {
+									if changed || !part.evidenceObservation {
+										continue
+									}
+									// Change authority between the adapter's read check
+									// and ingestion's marker transaction.
+									_, err := catalog.DB.Exec(`UPDATE copy_evidence SET identity=? WHERE conversation_id IN (SELECT id FROM conversations WHERE native_id='cloud-one')`, hashBytes([]byte("different source evidence")))
+									if err != nil {
+										return err
+									}
+									changed = true
+								}
+								return emit(record, parts)
+							})
+						}
+					}
+				}
+			}
+			if result := catalog.IngestContext(withIngestMode(t.Context(), mode), adapter, nil); result.Error != nil || result.Parsed != 1 {
+				t.Fatal(result)
+			}
+			if transactional && !changed {
+				t.Fatal("authority change was not exercised")
+			}
+			latest := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC).UnixNano()
+			if countRows(t, catalog, `SELECT COUNT(*) FROM copy_evidence WHERE conversation_id<>'' AND version=?`, latest) != 3 || countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE text LIKE '%fallback cloud%'`) != 0 {
+				t.Fatal("partial group remained selected or its time did not advance")
+			}
+			if catalogEvidence(t, catalog) != want {
+				t.Fatal("repeat advanced evidence without restoring the original cloud title and messages")
+			}
+			collect(4, members)
+			reads := 0
+			override(t, &claudeObjectReadHook, func(string) { reads++ })
+			if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 0 || reads != 0 {
+				t.Fatal("current cloud repeat reread payload", result, reads)
+			}
+		})
+	}
+	t.Run("latest repeated observation protects source order", func(t *testing.T) {
+		config := claudeImportConfig(t)
+		catalog, _ := testCatalog(t)
+		reads := 0
+		override(t, &claudeObjectReadHook, func(string) { reads++ })
+		collect := func(day int, payload string) IngestResult {
+			t.Helper()
+			memory := "current memory"
+			if day == 2 {
+				memory = "stale delayed memory"
+			}
+			dir := t.TempDir()
+			chatGPTZip(t, filepath.Join(dir, "conversations-000.zip"), map[string]string{"conversations.json": payload, "memories/m.json": jsonText(map[string]any{"memory": memory})})
+			manifest := filepath.Join(dir, "manifest.json")
+			probePut(t, manifest, jsonText(claudeManifest{Version: "1.0", CreatedAt: time.Date(2026, 10, day, 0, 0, 0, 0, time.UTC).Format(time.RFC3339), DataFiles: []claudeManifestPart{{Filename: "conversations-000.zip", Category: "conversations"}}}))
+			job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+			if err != nil || job.State != "collected" {
+				t.Fatal(job, err)
+			}
+			config, err = LoadConfig(config.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reads = 0
+			return ingestSource(t, catalog, config.Sources[0])
+		}
+		collect(1, claudeAIExport)
+		reopened := reopenCatalog(t, catalog.Path)
+		defer reopened.Close()
+		catalog = reopened
+		if result := collect(3, claudeAIExport); result.Parsed != 0 || reads != 0 {
+			t.Fatal("repeat reread payloads", result, reads)
+		}
+		want := catalogEvidence(t, catalog)
+		latest := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC).UnixNano()
+		if countRows(t, catalog, `SELECT COUNT(*) FROM copy_versions WHERE conversation_id<>'' AND version=?`, latest) != 3 {
+			t.Fatal("repeat did not advance every conversation and supplement")
+		}
+		if result := collect(2, strings.Replace(claudeAIExport, "Trip", "Stale delayed title", 1)); result.Older != 2 {
+			t.Fatal("late conflicting observations were promoted", result)
+		}
+		if catalogEvidence(t, catalog) != want {
+			t.Fatal("delayed older export replaced latest repeated observation")
+		}
+		if result := runCapture(t, config); !result.OK {
+			t.Fatal(result)
+		}
+		if err := os.RemoveAll(claudeImportRoot(config, config.Sources[0].Name)); err != nil {
+			t.Fatal(err)
+		}
+		rebuilt, _ := testCatalog(t)
+		indexCaptures(t, rebuilt, config.CaptureRoot, "host-a")
+		if catalogEvidence(t, rebuilt) != want {
+			t.Fatal("latest repeated observation was lost during offline replay")
+		}
+	})
+
+	config := claudeImportConfig(t)
+	catalog, _ := testCatalog(t)
+	var source []map[string]any
+	if err := json.Unmarshal([]byte(claudeAIExport), &source); err != nil {
+		t.Fatal(err)
+	}
+	collect := func(day int, conversations []map[string]any) *claudeImportJob {
+		t.Helper()
+		dir := t.TempDir()
+		members := map[string]string{"conversations.json": jsonText(conversations)}
+		if day%2 == 0 && len(conversations) > 1 {
+			// Different ZIP members and conversation ordering must not become
+			// different logical observations or require reparsing old payloads.
+			members = map[string]string{"a/conversations-000.json": jsonText(conversations[1:]), "b/conversations-001.json": jsonText(conversations[:1])}
+		}
+		chatGPTZip(t, filepath.Join(dir, "conversations-000.zip"), members)
+		manifest := filepath.Join(dir, "manifest.json")
+		probePut(t, manifest, jsonText(claudeManifest{Version: "1.0", CreatedAt: time.Date(2026, 10, day, 0, 0, 0, 0, time.UTC).Format(time.RFC3339), DataFiles: []claudeManifestPart{{Filename: "conversations-000.zip", Category: "conversations"}}}))
+		job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+		if err != nil || job.State != "collected" || job.Parts[0].Units == "" || job.Parts[0].UnitsError != "" {
+			t.Fatal(job, err)
+		}
+		config, err = LoadConfig(config.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return job
+	}
+	units := func(job *claudeImportJob) *claudeSourceUnits {
+		t.Helper()
+		part := job.Parts[0]
+		value, err := readClaudeSourceUnits(sourceFiles{}, filepath.Join(claudeImportJobDir(config, job.Name, job.ID), part.Units), part.SHA256, part.UnitsSHA256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	first := collect(3, source)
+	firstUnits := units(first)
+	reads := 0
+	override(t, &claudeObjectReadHook, func(string) { reads++ })
+	if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 2 {
+		t.Fatal(result)
+	}
+	if reads == 0 {
+		t.Fatal("initial import did not read retained source objects")
+	}
+	reads = 0
+	repeated := collect(4, source)
+	repeatedUnits := units(repeated)
+	if jsonText(firstUnits.Objects) != jsonText(repeatedUnits.Objects) {
+		t.Fatal("identical export multiplied source payloads")
+	}
+	if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 0 || reads != 0 {
+		t.Fatal("identical export reread historical payload", result, reads)
+	}
+	collect(5, source)
+	if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 0 || reads != 0 {
+		t.Fatal("third identical export reparsed source", result, reads)
+	}
+	source[0]["name"] = "Changed then reverted"
+	collect(6, source[:1])
+	if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 1 {
+		t.Fatal(result)
+	}
+	source[0]["name"] = "Trip"
+	collect(7, source[:1])
+	if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 1 {
+		t.Fatal("reappearance was mistaken for an applied older observation", result)
+	}
+	if countRows(t, catalog, "SELECT COUNT(*) FROM workspaces WHERE title='Trip'") != 1 {
+		t.Fatal("reversion did not apply latest source observation")
+	}
+	source[0]["chat_messages"] = append(source[0]["chat_messages"].([]any), map[string]any{"uuid": "units-new", "sender": "assistant", "text": "new source material", "parent_message_uuid": "m4", "created_at": "2026-10-05T00:00:00Z"})
+	source[0]["updated_at"], source[0]["current_leaf_message_uuid"] = "2026-10-05T00:00:00Z", "units-new"
+	changed := collect(8, source[:1])
+	changedUnits := units(changed)
+	for hash, ref := range firstUnits.Objects {
+		if other, ok := changedUnits.Objects[hash]; ok && jsonText(other) != jsonText(ref) {
+			t.Fatal("old source message was copied into a new pack")
+		}
+	}
+	reads = 0
+	if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 1 {
+		t.Fatal(result)
+	}
+	if reads == 0 || countRows(t, catalog, "SELECT COUNT(*) FROM conversations") != 2 || countRows(t, catalog, "SELECT COUNT(*) FROM messages WHERE native_id='units-new'") != 1 {
+		t.Fatal("changed partial import lost history")
+	}
+	// A delayed observation with the same IDs but stale text/leaf metadata
+	// remains source evidence without promoting it over the newer observation.
+	source[0]["name"] = "Stale late title"
+	messages := source[0]["chat_messages"].([]any)
+	messages[0].(map[string]any)["text"] = "stale source edit"
+	collect(2, source[:1])
+	if result := ingestSource(t, catalog, config.Sources[0]); result.Older != 1 {
+		t.Fatal("late changed observation was promoted", result)
+	}
+	if countRows(t, catalog, "SELECT COUNT(*) FROM workspaces WHERE title='Trip'") != 1 {
+		t.Fatal("late title rolled back newer evidence")
+	}
+	// A new handle must use durable item states, not an adapter-local cache.
+	other := reopenCatalog(t, catalog.Path)
+	defer other.Close()
+	reads = 0
+	if result := ingestSource(t, other, config.Sources[0]); result.Parsed != 0 || reads != 0 {
+		t.Fatal(result, reads)
+	}
+	adapter, err := MakeAdapter(config.Sources[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	forced := catalog.IngestContext(withIngestMode(t.Context(), ingestMode{force: true}), adapter, nil)
+	if forced.Error != nil || forced.Parsed == 0 || reads == 0 {
+		t.Fatal("force did not replay retained source", forced, reads)
+	}
+	if result := runCapture(t, config); !result.OK {
+		t.Fatal(result)
+	}
+	if err := os.RemoveAll(claudeImportRoot(config, first.Name)); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, _ := testCatalog(t)
+	indexCaptures(t, rebuilt, config.CaptureRoot, "host-a")
+	if countRows(t, rebuilt, "SELECT COUNT(*) FROM conversations") != 2 || countRows(t, rebuilt, "SELECT COUNT(*) FROM messages WHERE native_id='units-new'") != 1 {
+		t.Fatal("offline source-unit replay lost history")
+	}
+}
+
+func TestClaudeImportSourceUnitEligibilityAndRecovery(t *testing.T) {
+	t.Run("source values", func(t *testing.T) {
+		for _, data := range []string{`{"a":1,"a":2}`, `{"nested":{"a":1,"a":2}}`, `{"value":"\ud800"}`, `{"value":"\udc00"}`} {
+			if _, err := claudeSourceJSON([]byte(data)); err == nil {
+				t.Fatalf("lossy JSON accepted: %s", data)
+			}
+		}
+		value, err := claudeSourceJSON([]byte(`{"number":9007199254740993,"nil":null,"empty":[],"unicode":"\ud83d\ude00"}`))
+		if err != nil || jsonText(value) != `{"empty":[],"nil":null,"number":9007199254740993,"unicode":"😀"}` {
+			t.Fatal(value, err)
+		}
+	})
+	for _, phase := range []string{"claude-source-pack", "claude-source-receipt"} {
+		t.Run(phase, func(t *testing.T) {
+			config := claudeImportConfig(t)
+			dir := t.TempDir()
+			file := filepath.Join(dir, "conversations-000.zip")
+			writeClaudeAIZip(t, file)
+			fail := true
+			override(t, &captureFault, func(at, name string) error {
+				if fail && at == phase {
+					return errors.New("interrupted source publication")
+				}
+				return nil
+			})
+			job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{file}})
+			if err != nil || job.State != "collected" || job.Parts[0].UnitsError == "" {
+				t.Fatal(job, err)
+			}
+			if _, err := os.Stat(filepath.Join(claudeImportJobDir(config, job.Name, job.ID), job.Parts[0].Storage)); err != nil {
+				t.Fatal("native evidence lost", err)
+			}
+			fail = false
+			job, err = collectClaudeExport(t.Context(), config, claudeImportRequest{ID: job.ID})
+			if err != nil || job.Parts[0].UnitsError != "" || job.Parts[0].Units == "" {
+				t.Fatal(job, err)
+			}
+			config, err = LoadConfig(config.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog, _ := testCatalog(t)
+			ingestSource(t, catalog, config.Sources[0])
+			part := job.Parts[0]
+			name := filepath.Join(claudeImportJobDir(config, job.Name, job.ID), part.Units)
+			units, err := readClaudeSourceUnits(sourceFiles{}, name, part.SHA256, part.UnitsSHA256)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref := units.Objects[units.Conversations[0].Envelope]
+			pack := filepath.Join(claudeImportRoot(config, job.Name), ref.Pack)
+			data, err := os.ReadFile(pack)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data[ref.Offset+ref.Length/2] ^= 1
+			if err := os.WriteFile(pack, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			adapter, err := MakeAdapter(config.Sources[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := countRows(t, catalog, "SELECT COUNT(*) FROM messages")
+			result := catalog.IngestContext(withIngestMode(t.Context(), ingestMode{force: true}), adapter, nil)
+			if result.Error == nil || countRows(t, catalog, "SELECT COUNT(*) FROM messages") != before {
+				t.Fatal("corrupt source object was acknowledged", result)
+			}
+		})
+	}
+}
+
+func TestClaudeImportChunkedSourceValues(t *testing.T) {
+	root := t.TempDir()
+	writer := func() *claudeObjectWriter {
+		return &claudeObjectWriter{ctx: t.Context(), root: root, refs: map[string]claudeObjectRef{}, pending: map[string]claudeObjectRef{}, remaining: 16 << 20}
+	}
+	var text strings.Builder
+	for i := 0; i < 16000; i++ {
+		text.WriteString(hashBytes([]byte(fmt.Sprintf("source-value-%d", i))))
+	}
+	original := []byte(text.String())
+	w := writer()
+	hash, err := w.put(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.flush(); err != nil {
+		t.Fatal(err)
+	}
+	ref := w.refs[hash]
+	if len(ref.Pieces) < 2 {
+		t.Fatal("large source value was not chunked")
+	}
+	units := claudeSourceUnits{Objects: w.refs}
+	data, err := units.value(sourceFiles{}, root, hash, ref, 0)
+	if err != nil || !bytes.Equal(data, original) {
+		t.Fatal("chunked source did not round trip", err)
+	}
+	// Reopening the writer must load the transitive references from metadata,
+	// rather than relying on the previous writer's in-memory map.
+	second := writer()
+	again, err := second.put(original)
+	if err != nil || again != hash {
+		t.Fatal(again, err)
+	}
+	if len(second.pending) != 0 || len(second.refs) != len(w.refs) {
+		t.Fatal("cached chunk references were incomplete")
+	}
+	updated := append(append(append([]byte{}, original[:len(original)/2]...), []byte("new material")...), original[len(original)/2:]...)
+	third := writer()
+	changed, err := third.put(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := third.flush(); err != nil {
+		t.Fatal(err)
+	}
+	reused := 0
+	for _, piece := range third.refs[changed].Pieces {
+		if _, ok := w.refs[piece]; ok {
+			reused++
+		}
+	}
+	if reused == 0 {
+		t.Fatal("an insertion duplicated every retained chunk")
+	}
+	units.Objects = third.refs
+	data, err = units.value(sourceFiles{}, root, changed, third.refs[changed], 0)
+	if err != nil || !bytes.Equal(data, updated) {
+		t.Fatal("edited source did not round trip", err)
+	}
+	cycle := strings.Repeat("a", 64)
+	units.Objects[cycle] = claudeObjectRef{Size: 1 << 20, Pieces: []string{cycle}}
+	if _, err := units.value(sourceFiles{}, root, cycle, units.Objects[cycle], 0); err == nil {
+		t.Fatal("cyclic source reference accepted")
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := claudeOwnedPath(root, "escape/payload"); err == nil {
+		t.Fatal("source path escaped through a symlink")
+	}
+}
+
+func TestClaudeImportNativePartCancellationAndValidation(t *testing.T) {
+	t.Run("mixed native and retired supplementary members", func(t *testing.T) {
+		config := claudeImportConfig(t)
+		catalog, _ := testCatalog(t)
+		collect := func(day int, first string) *claudeImportJob {
+			t.Helper()
+			root := t.TempDir()
+			chatGPTZip(t, filepath.Join(root, "conversations-000.zip"), map[string]string{
+				"conversations.json":    `[{"uuid":"mixed","future":1,"future":2,"chat_messages":[]}]`,
+				"artifacts/a/first.txt": first,
+			})
+			chatGPTZip(t, filepath.Join(root, "frames-000.zip"), map[string]string{"artifacts/a/second.txt": "second source"})
+			manifest := filepath.Join(root, "manifest.json")
+			probePut(t, manifest, jsonText(claudeManifest{Version: "1.0", CreatedAt: time.Date(2026, 10, day, 0, 0, 0, 0, time.UTC).Format(time.RFC3339), DataFiles: []claudeManifestPart{{Filename: "conversations-000.zip", Category: "conversations"}, {Filename: "frames-000.zip", Category: "frames"}}}))
+			job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+			if err != nil || job.State != "collected" || job.Parts[0].UnitsError == "" || job.Parts[1].Units == "" {
+				t.Fatal(job, err)
+			}
+			config, err = LoadConfig(config.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return job
+		}
+		first := collect(1, "first source")
+		plan, err := planClaudeCompaction(t.Context(), config, first.Name, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := applyClaudeCompaction(t.Context(), config, first.Name, plan.ID)
+		if err != nil || run.State != "partial" || run.BlockedItems != 1 {
+			t.Fatal(run, err)
+		}
+		ingestSource(t, catalog, config.Sources[0])
+		collect(2, "updated first source")
+		ingestSource(t, catalog, config.Sources[0])
+		if countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE native_id='artifacts/a/first.txt' AND text LIKE '%updated first source%'`) != 1 || countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE native_id='artifacts/a/second.txt'`) != 1 {
+			t.Fatal("mixed source group did not replace its changed member")
+		}
+		want := catalogEvidence(t, catalog)
+		if result := runCapture(t, config); !result.OK {
+			t.Fatal(result)
+		}
+		if err := os.RemoveAll(claudeImportRoot(config, first.Name)); err != nil {
+			t.Fatal(err)
+		}
+		rebuilt, _ := testCatalog(t)
+		indexCaptures(t, rebuilt, config.CaptureRoot, "host-a")
+		if catalogEvidence(t, rebuilt) != want {
+			t.Fatal("mixed native/group replay changed evidence")
+		}
+	})
+
+	t.Run("changed shard conflicts with unchanged copy", func(t *testing.T) {
+		root := t.TempDir()
+		first := filepath.Join(root, "conversations-000.json")
+		second := filepath.Join(root, "conversations-001.json")
+		probePut(t, first, claudeAIExport)
+		probePut(t, second, claudeAIExport)
+		catalog, _ := testCatalog(t)
+		source := SourceConfig{Name: "native-conflict", Kind: "claude-ai", Path: root, Account: "test", Enabled: true}
+		ingestSource(t, catalog, source)
+		want := catalogEvidence(t, catalog)
+		probePut(t, second, strings.Replace(claudeAIExport, "Trip", "Conflicting title", 1))
+		adapter, err := MakeAdapter(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := adapter.Discover(func(WorkspaceRecord) error { return nil }); err == nil {
+			t.Fatal("fixture did not contain conflicting native copies")
+		}
+		result := catalog.Ingest(adapter, nil)
+		if result.Error == nil {
+			t.Fatal("conflicting native shard was accepted after unchanged shard skipped validation")
+		}
+		if catalogEvidence(t, catalog) != want {
+			t.Fatal("conflicting shard changed accepted catalog records")
+		}
+		fresh, _ := testCatalog(t)
+		if result := fresh.Ingest(adapter, nil); result.Error == nil || countRows(t, fresh, "SELECT COUNT(*) FROM conversations") != 0 {
+			t.Fatal("fresh and incremental validation disagree", result)
+		}
+
+	})
+
+	t.Run("native artifact edits publish complete groups", func(t *testing.T) {
+		root := t.TempDir()
+		probePut(t, filepath.Join(root, "conversations.json"), claudeAIExport)
+		probePut(t, filepath.Join(root, "artifacts/a/first.txt"), "first source")
+		probePut(t, filepath.Join(root, "artifacts/a/second.txt"), "second source")
+		catalog, _ := testCatalog(t)
+		source := SourceConfig{Name: "native-artifacts", Kind: "claude-ai", Path: root, Account: "test", Enabled: true}
+		ingestSource(t, catalog, source)
+		adapter, err := MakeAdapter(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		discovered := 0
+		if err := adapter.Discover(func(r WorkspaceRecord) error {
+			if strings.HasPrefix(r.SourceID, "claude-export:artifacts/") {
+				discovered++
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if discovered != 1 {
+			t.Fatal("native supplementary group was split", discovered)
+		}
+		n := countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE native_id IN ('artifacts/a/first.txt','artifacts/a/second.txt')`)
+		if n != 2 {
+			t.Fatalf("artifact group retained %d of 2 members", n)
+		}
+		if countRows(t, catalog, `SELECT COUNT(*) FROM conversations WHERE native_id='claude-export:artifacts/a'`) != 1 {
+			t.Fatal("native artifact was split into separate conversations")
+		}
+		probePut(t, filepath.Join(root, "artifacts/a/first.txt"), "updated first source")
+		ingestSource(t, catalog, source)
+		if countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE native_id='artifacts/a/first.txt' AND text LIKE '%updated first source%'`) != 1 {
+			t.Fatal("changed artifact member retained its old text")
+		}
+
+	})
+
+	t.Run("checkpoint after all records", func(t *testing.T) {
+		file := writeSourceFileAt(t, claudeAIExport)
+		source := SourceConfig{Name: "native-claude", Kind: "claude-ai", Path: file, Account: "test", Enabled: true}
+		catalog, _ := testCatalog(t)
+		adapter, err := MakeAdapter(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		result := catalog.IngestContext(ctx, adapter, func(phase string, workspaces, conversations, messages, skipped, processed int) {
+			if workspaces == 1 {
+				cancel()
+			}
+		})
+		if result.Error == nil || countRows(t, catalog, "SELECT COUNT(*) FROM conversations") != 1 {
+			t.Fatal(result)
+		}
+		if countRows(t, catalog, "SELECT COUNT(*) FROM source_item_states WHERE source_name='native-claude'") != 0 {
+			t.Fatal("unfinished native part was checkpointed")
+		}
+		ingestSource(t, catalog, source)
+		if countRows(t, catalog, "SELECT COUNT(*) FROM conversations") != 2 {
+			t.Fatal("resume skipped unfinished source records")
+		}
+	})
+	t.Run("validate changed shards before writing", func(t *testing.T) {
+		root := t.TempDir()
+		probePut(t, filepath.Join(root, "conversations-000.json"), claudeAIExport)
+		probePut(t, filepath.Join(root, "conversations-001.json"), `[{"uuid":"broken"`)
+		catalog, _ := testCatalog(t)
+		adapter, err := MakeAdapter(SourceConfig{Name: "shards", Kind: "claude-ai", Path: root, Account: "test", Enabled: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result := catalog.Ingest(adapter, nil); result.Error == nil {
+			t.Fatal("invalid late shard accepted")
+		}
+		if countRows(t, catalog, "SELECT COUNT(*) FROM conversations") != 0 {
+			t.Fatal("invalid source partially replaced the catalog")
+		}
+	})
+}
+
+func TestClaudeImportRetainsOpaqueMembersAndPlansSupplementChanges(t *testing.T) {
+	config := claudeImportConfig(t)
+	catalog, _ := testCatalog(t)
+	unknown := string([]byte{0, 1, 255, 0, 17})
+	collect := func(day int, memory string) *claudeImportJob {
+		t.Helper()
+		root := t.TempDir()
+		chatGPTZip(t, filepath.Join(root, "conversations-000.zip"), map[string]string{
+			"conversations.json": claudeAIExport, "memories/m.json": `{"memory":"` + memory + `"}`,
+			"artifacts/a/source.txt": "artifact source", "future-category/data.bin": unknown,
+		})
+		manifest := filepath.Join(root, "manifest.json")
+		probePut(t, manifest, jsonText(claudeManifest{Version: "1.0", CreatedAt: time.Date(2026, 8, day, 0, 0, 0, 0, time.UTC).Format(time.RFC3339), DataFiles: []claudeManifestPart{{Filename: "conversations-000.zip", Category: "conversations"}}}))
+		job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+		if err != nil || job.State != "collected" || job.Parts[0].UnitsError != "" {
+			t.Fatal(job, err)
+		}
+		config, err = LoadConfig(config.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return job
+	}
+	first := collect(1, "first memory")
+	if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 4 {
+		t.Fatal(result)
+	}
+	collect(2, "first memory")
+	reads := 0
+	override(t, &claudeObjectReadHook, func(string) { reads++ })
+	if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 0 || reads != 0 {
+		t.Fatal("unchanged supplements were decoded", result, reads)
+	}
+	collect(3, "updated memory")
+	if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 1 {
+		t.Fatal("supplement change reparsed unrelated units", result)
+	}
+	part := first.Parts[0]
+	units, err := readClaudeSourceUnits(sourceFiles{}, filepath.Join(claudeImportJobDir(config, first.Name, first.ID), part.Units), part.SHA256, part.UnitsSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, member := range units.Members {
+		if member.Name == "future-category/data.bin" {
+			data, err := units.member(sourceFiles{}, claudeImportRoot(config, first.Name), member)
+			if err != nil || string(data) != unknown {
+				t.Fatal("unknown source member lost", err)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("unknown nonexcluded category was not retained")
+	}
+}
+
+func TestClaudeImportSupplementGroupSpansParts(t *testing.T) {
+	t.Run("unchanged multipart group after restart", func(t *testing.T) {
+		config := claudeImportConfig(t)
+		catalog, _ := testCatalog(t)
+		collect := func(day int, first string, merged bool) {
+			t.Helper()
+			root := t.TempDir()
+			writeClaudeAIZip(t, filepath.Join(root, "conversations-000.zip"))
+			parts := []claudeManifestPart{{Filename: "conversations-000.zip", Category: "conversations"}, {Filename: "frames-000.zip", Category: "frames"}}
+			if merged {
+				chatGPTZip(t, filepath.Join(root, "frames-000.zip"), map[string]string{"artifacts/a/first.txt": first, "artifacts/a/second.txt": "second source"})
+			} else {
+				chatGPTZip(t, filepath.Join(root, "frames-000.zip"), map[string]string{"artifacts/a/first.txt": first})
+				chatGPTZip(t, filepath.Join(root, "frames-001.zip"), map[string]string{"artifacts/a/second.txt": "second source"})
+				parts = append(parts, claudeManifestPart{Filename: "frames-001.zip", Category: "frames", Part: 1})
+			}
+			manifest := filepath.Join(root, "manifest.json")
+			probePut(t, manifest, jsonText(claudeManifest{Version: "1.0", CreatedAt: time.Date(2026, 10, day, 0, 0, 0, 0, time.UTC).Format(time.RFC3339), DataFiles: parts}))
+			job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+			if err != nil || job.State != "collected" {
+				t.Fatal(job, err)
+			}
+			config, err = LoadConfig(config.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		collect(1, "first source", false)
+		ingestSource(t, catalog, config.Sources[0])
+		collect(3, "first source", false)
+		reopened := reopenCatalog(t, catalog.Path)
+		defer reopened.Close()
+		catalog = reopened
+		reads := 0
+		override(t, &claudeObjectReadHook, func(string) { reads++ })
+		if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 0 || reads != 0 {
+			t.Fatal("unchanged multipart supplement was reparsed", result, reads)
+		}
+		collect(2, "stale first source", false)
+		if result := ingestSource(t, catalog, config.Sources[0]); result.Older != 1 {
+			t.Fatal("delayed supplementary group was promoted", result)
+		}
+		if countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE native_id='artifacts/a/first.txt' AND text LIKE '%stale first source%'`) != 0 {
+			t.Fatal("late supplement overwrote current content")
+		}
+		collect(4, "updated first source", false)
+		if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 1 {
+			t.Fatal("changed group did not parse once", result)
+		}
+		if countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE native_id='artifacts/a/first.txt' AND text LIKE '%updated first source%'`) != 1 {
+			t.Fatal("complete group did not replace edited member")
+		}
+		collect(5, "updated first source", true)
+		reads = 0
+		if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 0 || reads != 0 {
+			t.Fatal("repackaged complete group was reparsed", result, reads)
+		}
+		collect(6, "first source", false)
+		if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 1 {
+			t.Fatal("group reappearance was mistaken for an old checkpoint", result)
+		}
+		if countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE native_id='artifacts/a/first.txt' AND text LIKE '%updated first source%'`) != 0 {
+			t.Fatal("reappearing supplementary content did not replace latest")
+		}
+		want := catalogEvidence(t, catalog)
+		if result := runCapture(t, config); !result.OK {
+			t.Fatal(result)
+		}
+		if err := os.RemoveAll(claudeImportRoot(config, config.Sources[0].Name)); err != nil {
+			t.Fatal(err)
+		}
+		rebuilt, _ := testCatalog(t)
+		indexCaptures(t, rebuilt, config.CaptureRoot, "host-a")
+		if catalogEvidence(t, rebuilt) != want {
+			t.Fatal("multipart observation history differs on offline replay")
+		}
+	})
+
+	config := claudeImportConfig(t)
+	root := t.TempDir()
+	writeClaudeAIZip(t, filepath.Join(root, "conversations-000.zip"))
+	chatGPTZip(t, filepath.Join(root, "frames-000.zip"), map[string]string{"artifacts/a/first.txt": "first source"})
+	chatGPTZip(t, filepath.Join(root, "frames-001.zip"), map[string]string{"artifacts/a/second.txt": "second source"})
+	manifest := claudeImportManifest(t, root, claudeManifestPart{Filename: "conversations-000.zip", Category: "conversations"}, claudeManifestPart{Filename: "frames-000.zip", Category: "frames"}, claudeManifestPart{Filename: "frames-001.zip", Category: "frames", Part: 1})
+	job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+	if err != nil || job.State != "collected" {
+		t.Fatal(job, err)
+	}
+	config, err = LoadConfig(config.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, _ := testCatalog(t)
+	if result := ingestSource(t, catalog, config.Sources[0]); result.Parsed != 3 {
+		t.Fatal(result)
+	}
+	if countRows(t, catalog, `SELECT COUNT(*) FROM messages WHERE native_id IN ('artifacts/a/first.txt','artifacts/a/second.txt')`) != 2 {
+		t.Fatal("multipart source group lost a member")
+	}
+}
+
+// Every mutation here is under a disposable library. The selected download is
+// deliberately outside the managed tree and must survive every retirement.
+func claudeCompactionFixture(t *testing.T) (Config, *claudeImportJob, string) {
+	t.Helper()
+	config := claudeImportConfig(t)
+	download := filepath.Join(t.TempDir(), "conversations-000.zip")
+	chatGPTZip(t, download, map[string]string{"conversations.json": claudeAIExport, "future/blob.bin": "\x00exact opaque source\xff", "empty/": "", "projects/empty/": ""})
+	job, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{download}})
+	if err != nil || job.State != "collected" || job.Parts[0].UnitsError != "" {
+		t.Fatal(job, err)
+	}
+	config, err = LoadConfig(config.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return config, job, download
+}
+
+func TestClaudeImportCompactionLifecycle(t *testing.T) {
+	config, job, download := claudeCompactionFixture(t)
+	before, err := os.ReadFile(download)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := filepath.Join(claudeImportJobDir(config, job.Name, job.ID), job.Parts[0].Storage)
+	catalog, _ := testCatalog(t)
+	ingestSource(t, catalog, config.Sources[0])
+	want := catalogEvidence(t, catalog)
+	plan, err := planClaudeCompaction(t.Context(), config, job.Name, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Items) != 1 || plan.Items[0].Blocked != "" {
+		t.Fatal(jsonText(plan))
+	}
+	if _, err := os.Stat(native); err != nil {
+		t.Fatal("plan removed native input", err)
+	}
+	lease, err := fileLease(libraryUseLock(config), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = applyClaudeCompaction(t.Context(), config, job.Name, plan.ID)
+	lease.Close()
+	if err == nil {
+		t.Fatal("retirement ran with a live library reader")
+	}
+	descriptor, err := readLibraryDescriptor(config)
+	if err != nil || descriptor.Version != libraryFormatVersion {
+		t.Fatal(descriptor, err)
+	}
+	run, err := applyClaudeCompaction(t.Context(), config, job.Name, plan.ID)
+	if err != nil || run.State != "complete" || run.RetiredBytes != job.Parts[0].Size {
+		t.Fatal(run, err)
+	}
+	if _, err := os.Stat(native); !os.IsNotExist(err) {
+		t.Fatal("managed native input remains", err)
+	}
+	if after, err := os.ReadFile(download); err != nil || !bytes.Equal(before, after) {
+		t.Fatal("download changed", err)
+	}
+	job, err = loadClaudeJob(config, job.Name, job.ID)
+	if err != nil || !job.Parts[0].Retired {
+		t.Fatal(job, err)
+	}
+	if err := verifyClaudeStoredPart(t.Context(), claudeImportJobDir(config, job.Name, job.ID), job.Parts[0]); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := MakeAdapter(config.Sources[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := catalog.IngestContext(withIngestMode(t.Context(), ingestMode{force: true}), adapter, nil)
+	if result.Error != nil || result.Parsed != 2 {
+		t.Fatal(result)
+	}
+	if got := catalogEvidence(t, catalog); got != want {
+		t.Fatal("retirement changed catalog evidence")
+	}
+	if result := runCapture(t, config); !result.OK {
+		t.Fatal(result)
+	}
+	manifest := readCaptureManifest(t, config, job.Name)
+	if manifest.Version != captureClaudeObjectsVersion || !manifest.ClaudeExportObjects {
+		t.Fatal("missing old-reader refusal gate", manifest.Version)
+	}
+	shared := 0
+	for _, file := range manifest.Files {
+		if !strings.HasSuffix(file.Path, ".pack") {
+			continue
+		}
+		original, err := os.Stat(file.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		captured, err := os.Stat(filepath.Join(config.CaptureRoot, "host-a", job.Name, file.Captured))
+		if err != nil || !os.SameFile(original, captured) {
+			t.Fatal("pack not shared with capture", err)
+		}
+		shared++
+	}
+	if shared == 0 {
+		t.Fatal("no captured source packs")
+	}
+	evidence, err := leaseCapturedEvidence(t.Context(), captureTarget{Host: currentHost(), Source: job.Name, Dir: filepath.Join(config.CaptureRoot, "host-a", job.Name)}, native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer evidence.Close()
+	if evidence.Transformation != claudeSourceTransformation || evidence.NativeSHA256 != job.Parts[0].SHA256 {
+		t.Fatal("reconstruction claimed original bytes", evidence)
+	}
+	reconstructed, err := zip.OpenReader(evidence.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, member := range reconstructed.File {
+		found[member.Name] = true
+	}
+	reconstructed.Close()
+	if !found["empty/"] || !found["future/blob.bin"] || !found["conversations.json"] {
+		t.Fatal("reconstructed membership differs", found)
+	}
+
+	override(t, &captureManifestUnderstood, captureClaudeObjectsVersion-1)
+	if _, err := loadCaptureManifest(filepath.Join(config.CaptureRoot, "host-a", job.Name)); err == nil {
+		t.Fatal("old reader accepted graph-only evidence")
+	}
+	captureManifestUnderstood = captureClaudeObjectsVersion
+	// Reapplying the same plan must verify rather than count bytes twice.
+	again, err := applyClaudeCompaction(t.Context(), config, job.Name, plan.ID)
+	if err != nil || again.RetiredBytes != run.RetiredBytes {
+		t.Fatal(again, err)
+	}
+	if err := os.RemoveAll(claudeImportRoot(config, job.Name)); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, _ := testCatalog(t)
+	indexCaptures(t, rebuilt, config.CaptureRoot, "host-a")
+	if got := catalogEvidence(t, rebuilt); got != want {
+		t.Fatal("graph-only offline replay changed evidence")
+	}
+	if _, err := os.Stat(evidence.Path); err != nil {
+		t.Fatal("reader lease lost reconstruction during managed cleanup", err)
+	}
+
+}
+
+func catalogEvidence(t *testing.T, catalog *Catalog) string {
+	t.Helper()
+	rows, err := queryMaps(catalog.DB, `SELECT c.id,c.native_id,w.title,m.native_id AS message_id,m.text,m.raw_text,m.parent_native_id,m.evidence_locator,m.selected FROM conversations c JOIN workspaces w ON w.id=c.workspace_id JOIN messages m ON m.conversation_id=c.id ORDER BY c.id,m.source_order,m.native_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jsonText(rows)
+}
+
+func TestClaudeImportCompactionResumesPublicationBoundaries(t *testing.T) {
+	for _, phase := range []string{"claude-retirement-proof", "claude-retirement-inventory", "claude-retirement-unlink"} {
+		t.Run(phase, func(t *testing.T) {
+			config, job, download := claudeCompactionFixture(t)
+			plan, err := planClaudeCompaction(t.Context(), config, job.Name, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			override(t, &captureFault, func(point, _ string) error {
+				if point == phase {
+					return errors.New("interrupted boundary")
+				}
+				return nil
+			})
+			run, err := applyClaudeCompaction(t.Context(), config, job.Name, plan.ID)
+			if err == nil || run == nil || run.State != "interrupted" {
+				t.Fatal(run, err)
+			}
+			if _, err := os.Stat(download); err != nil {
+				t.Fatal(err)
+			}
+			stored, err := loadClaudeJob(config, job.Name, job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyClaudeStoredPart(t.Context(), claudeImportJobDir(config, job.Name, job.ID), stored.Parts[0]); err != nil {
+				t.Fatal("lost readable evidence", err)
+			}
+			captureFault = nil
+			run, err = applyClaudeCompaction(t.Context(), config, job.Name, plan.ID)
+			if err != nil || run.State != "complete" {
+				t.Fatal(run, err)
+			}
+			if result := runCapture(t, config); !result.OK {
+				t.Fatal(result)
+			}
+		})
+	}
+}
+
+func TestClaudeImportCompactionRefusesChangedDependencies(t *testing.T) {
+	for _, damage := range []string{"native", "receipt", "pack", "library", "proof", "prepare-native", "snapshot-link", "pack-tail"} {
+		t.Run(damage, func(t *testing.T) {
+			config, job, _ := claudeCompactionFixture(t)
+			plan, err := planClaudeCompaction(t.Context(), config, job.Name, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			part := job.Parts[0]
+			dir := claudeImportJobDir(config, job.Name, job.ID)
+			native := filepath.Join(dir, part.Storage)
+			switch damage {
+			case "snapshot-link":
+				moved := filepath.Join(t.TempDir(), "outside-snapshot")
+				if err := os.Rename(dir, moved); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(moved, dir); err != nil {
+					t.Fatal(err)
+				}
+			case "native":
+				probePut(t, native, "changed")
+			case "prepare-native":
+				job.Parts[0].Units, job.Parts[0].UnitsSHA256 = "", ""
+				if err := saveClaudeJob(config, job); err != nil {
+					t.Fatal(err)
+				}
+				probePut(t, native, "changed")
+				blocked, err := planClaudeCompaction(t.Context(), config, job.Name, true)
+				if err != nil || blocked.Items[0].Blocked == "" {
+					t.Fatal("migration accepted changed native bytes", blocked, err)
+				}
+				stored, err := loadClaudeJob(config, job.Name, job.ID)
+				if err != nil || stored.Parts[0].Units != "" {
+					t.Fatal("published replacement under a stale digest", stored, err)
+				}
+			case "receipt":
+				probePut(t, filepath.Join(dir, part.Units), "{}")
+			case "pack-tail":
+				units, err := readClaudeSourceUnits(sourceFiles{}, filepath.Join(dir, part.Units), part.SHA256, part.UnitsSHA256)
+				if err != nil {
+					t.Fatal(err)
+				}
+				file := filepath.Join(claudeImportRoot(config, job.Name), units.packs()[0])
+				data, err := os.ReadFile(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				probePut(t, file, string(append(data, 'x')))
+			case "pack":
+				units, err := readClaudeSourceUnits(sourceFiles{}, filepath.Join(dir, part.Units), part.SHA256, part.UnitsSHA256)
+				if err != nil {
+					t.Fatal(err)
+				}
+				probePut(t, filepath.Join(claudeImportRoot(config, job.Name), units.packs()[0]), "corrupt")
+			case "library":
+				d, err := readLibraryDescriptor(config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				d.Instance = "replaced"
+				if err := durableJSON(descriptorPath(config), d); err != nil {
+					t.Fatal(err)
+				}
+			case "proof":
+				override(t, &captureFault, func(phase, _ string) error {
+					if phase == "claude-retirement-inventory" {
+						return errors.New("stop before unlink")
+					}
+					return nil
+				})
+				if _, err := applyClaudeCompaction(t.Context(), config, job.Name, plan.ID); err == nil {
+					t.Fatal("missing fault")
+				}
+				captureFault = nil
+				stored, err := loadClaudeJob(config, job.Name, job.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				probePut(t, filepath.Join(claudeImportRoot(config, job.Name), ".compaction/proofs", stored.Parts[0].Retirement+".json"), "{}")
+			}
+			if _, err := applyClaudeCompaction(t.Context(), config, job.Name, plan.ID); err == nil {
+				t.Fatal("retired damaged evidence", damage)
+			}
+			if _, err := os.Stat(native); err != nil {
+				t.Fatal("deleted protected input", err)
+			}
+		})
+	}
+}
+
+func TestClaudeImportCompactionPreparesLegacyAndProtectsIncomplete(t *testing.T) {
+	config, job, _ := claudeCompactionFixture(t)
+	// A legacy receipt has its verified native part and no source units.
+	job.Parts[0].Units, job.Parts[0].UnitsSHA256 = "", ""
+	if err := saveClaudeJob(config, job); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishClaudeInventory(config, job); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planClaudeCompaction(t.Context(), config, job.Name, false)
+	if err != nil || plan.Items[0].Blocked == "" {
+		t.Fatal(plan, err)
+	}
+	plan, err = planClaudeCompaction(t.Context(), config, job.Name, true)
+	if err != nil || plan.Items[0].Blocked != "" {
+		t.Fatal(plan, err)
+	}
+	incompleteDir := t.TempDir()
+	writeClaudeAIZip(t, filepath.Join(incompleteDir, "conversations-000.zip"))
+	manifest := claudeImportManifest(t, incompleteDir,
+		claudeManifestPart{Filename: "conversations-000.zip", Category: "conversations"},
+		claudeManifestPart{Filename: "conversations-001.zip", Category: "conversations", Part: 1})
+	incomplete, err := collectClaudeExport(t.Context(), config, claudeImportRequest{Paths: []string{manifest}})
+	if err != nil || incomplete.State != "incomplete" {
+		t.Fatal(incomplete, err)
+	}
+	protected := filepath.Join(claudeImportJobDir(config, incomplete.Name, incomplete.ID), incomplete.Parts[0].Storage)
+	plan, err = planClaudeCompaction(t.Context(), config, job.Name, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := applyClaudeCompaction(t.Context(), config, job.Name, plan.ID)
+	if err != nil || run.State != "partial" || run.BlockedItems != 2 {
+		t.Fatal(run, err)
+	}
+	if _, err := os.Stat(protected); err != nil {
+		t.Fatal("retired incomplete job's available part", err)
+	}
+	if err := verifyClaudeStoredPart(t.Context(), claudeImportJobDir(config, incomplete.Name, incomplete.ID), incomplete.Parts[0]); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClaudeImportCompactionLinkFallback(t *testing.T) {
+	config, job, _ := claudeCompactionFixture(t)
+	plan, err := planClaudeCompaction(t.Context(), config, job.Name, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := applyClaudeCompaction(t.Context(), config, job.Name, plan.ID); err != nil {
+		t.Fatal(err)
+	}
+	override(t, &pinLinkFile, func(string, string) error { return errors.New("links unavailable") })
+	if result := runCapture(t, config); !result.OK {
+		t.Fatal(result)
+	}
+	manifest := readCaptureManifest(t, config, job.Name)
+	packs := 0
+	for _, file := range manifest.Files {
+		if !strings.HasSuffix(file.Path, ".pack") {
+			continue
+		}
+		a, err := os.ReadFile(file.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(config.CaptureRoot, "host-a", job.Name, file.Captured))
+		if err != nil || !bytes.Equal(a, b) {
+			t.Fatal("fallback changed source pack", err)
+		}
+		packs++
+	}
+	if packs == 0 {
+		t.Fatal("no fallback packs captured")
+	}
+	if err := os.RemoveAll(claudeImportRoot(config, job.Name)); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, _ := testCatalog(t)
+	indexCaptures(t, rebuilt, config.CaptureRoot, "host-a")
+	if countRows(t, rebuilt, "SELECT COUNT(*) FROM conversations") != 2 {
+		t.Fatal("fallback lost offline source")
+	}
 }

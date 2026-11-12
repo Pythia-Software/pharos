@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
-import { claudeImportFixture, claudeSettingsSourceFixture, defaultApi, workID, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
+import { claudeImportFixture, claudeSettingsSourceFixture, claudeSettingsCoverageFixture, defaultApi, workID, rootConversation, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 test('the Lighthouse menu action shares its saved setting with App preferences', {skip}, async t => {
@@ -3469,6 +3469,38 @@ test('Browser clipboard denial displays copy failure and leaves focus on the cop
   assert.ok(await page.locator('#navigatorCopy').evaluate(element => element === document.activeElement));
 });
 
+for(const surface of ['import','Downloads'])test(`Claude daily export prompt copying keeps focus through failure and retry in ${surface}`,{skip},async t=>{
+  const {page,shot}=await open(t,{url:'/settings/sources',ready:'#pharosImportSource'});
+  let parent=page.locator('#claudeDownloadsWatchSection');
+  if(surface==='import'){
+    await page.locator('#pharosImportSource').click();
+    parent=page.locator('#pharosOnboarding');
+    await parent.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+  }
+  const routine=parent.locator('.pharos-claude-routine'),copy=routine.getByRole('button',{name:'Copy daily export prompt',exact:true});
+  await copy.waitFor();
+  await page.evaluate(()=>{
+    window.exportPromptCopies=[];
+    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:text=>{
+      window.exportPromptCopies.push(text);window.exportPromptClipboard=Promise.withResolvers();return window.exportPromptClipboard.promise;
+    }}});
+  });
+  await copy.click();
+  await page.waitForFunction(()=>!!window.exportPromptClipboard);
+  assert.ok(await copy.evaluate(el=>el===document.activeElement),'copying keeps keyboard focus');
+  await page.evaluate(()=>window.exportPromptClipboard.reject(Error('Clipboard permission denied')));
+  await routine.getByRole('status').filter({hasText:'Could not copy'}).waitFor();
+  assert.ok(await copy.evaluate(el=>el===document.activeElement),'failure keeps focus for retry');
+  await copy.click();
+  await page.waitForFunction(()=>window.exportPromptCopies.length===2);
+  await page.evaluate(()=>window.exportPromptClipboard.resolve());
+  await routine.getByRole('status').filter({hasText:'Copied.'}).waitFor();
+  assert.ok(await copy.evaluate(el=>el===document.activeElement),'success keeps focus');
+  const prompt=await routine.locator('pre').innerText();
+  assert.deepEqual(await page.evaluate(()=>window.exportPromptCopies),[prompt,prompt],'each attempt copies the visible starter prompt');
+  await shot('daily-export-prompt');
+});
+
 test('Ask fullscreen inbox keeps concurrent chats running and reads only visible answers', {skip,timeout:60000}, async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'},sessions=new Map(),finish=new Map(),attempts=new Map();
   let recordFirst,releaseReceipt,receiptStarted,secondAttempt;
@@ -3616,61 +3648,93 @@ test('Claude export inspection preserves the replacement form when an older requ
 });
 
 
-test('Claude settings recording keeps focus on its action and restores active status after reload', {skip}, async t => {
-  const {page}=await open(t,{url:'/settings/sources',api:{
-    'GET /api/sources':{configured:1,enabled:1,items:[claudeSettingsSourceFixture]},
-  }});
-  const start=page.getByRole('button',{name:'Record me for 30 minutes',exact:true});
-  await start.click();
-  const stop=page.getByRole('button',{name:'Stop recording',exact:true});
-  await stop.waitFor();
-  assert.equal(await stop.evaluate(el=>document.activeElement===el),true,'updating progress leaves focus on the action');
-  await page.reload();
-  await page.getByRole('button',{name:'Stop recording',exact:true}).waitFor();
-  await page.getByRole('button',{name:'Stop recording',exact:true}).click();
-  await page.getByRole('button',{name:'Record me for 30 minutes',exact:true}).waitFor();
+test('Claude settings capture preserves focus through failures, progress and completion', {skip}, async t => {
+  for(const reader of [false,true])await t.test(reader?'conversation reader':'Sources',async t=>{
+    let captured=false,failOnce=true;
+    const refresh=Promise.withResolvers();
+    let selectedSettings={observations:[{organization_uuid:'example-org',observed_at:'2026-11-12T12:00:00Z',time_basis:'capture',model:'claude-opus-4-6',effort_level:'high',thinking_mode:'enabled'}]};
+    const captureRun={id:'settings-capture',kind:'capture',state:'complete',sources:['claude-chat-settings'],results:[]};
+    const indexRun={id:'settings-index',kind:'index',state:'complete',sources:['claude-chat-settings'],results:[]};
+    const {page}=await open(t,{url:reader?`/work/${workID}/conversation/${rootConversation}`:'/settings/sources',api:{
+      'GET /api/sources':{configured:1,enabled:0,items:[{...claudeSettingsSourceFixture,enabled:false}]},
+      'GET /api/work/:id/conversations/:conversation':async()=>{
+        if(captured)await refresh.promise;
+        return {id:rootConversation,workspace_id:workID,provider:'claude',harness:'claude-ai-export',selected_settings:captured?selectedSettings:undefined,messages:[
+          {id:'backfill-question',role:'user',kind:'message',text:'Compare these reports.'},
+          {id:'backfill-answer',role:'assistant',kind:'message',text:'The reports use different assumptions.'},
+        ]};
+      },
+      'GET /api/claude-chat-settings/coverage':()=>({accounts:[{...claudeSettingsCoverageFixture,missing_models:captured?0:2}]}),
+      'POST /api/claude-chat-settings/setup':claudeSettingsCoverageFixture.setup,
+      'POST /api/capture':()=>({run:{...captureRun,state:failOnce?'failed':'complete'}}),
+      'GET /api/capture':()=>({active:false,runs:[{...captureRun,state:failOnce?'failed':'complete'}]}),
+      'POST /api/index':()=>{captured=true;return {run:indexRun}},
+      'GET /api/activity':{active:0,runs:[indexRun]},
+    }});
+    const notice=page.locator(reader?'.conversation-panel .claude-settings-backfill':'#claudeSettingsBackfill');
+    const button=notice.getByRole('button');
+    await button.waitFor();
+    let source,turn;
+    if(reader){
+      await page.locator('.source-details > summary').click();
+      await page.locator('.turn > summary').click();
+      source=await page.locator('.source-details').elementHandle();
+      turn=await page.locator('.turn').elementHandle();
+      assert.ok(await source.evaluate(el=>el.open));
+      assert.ok(await turn.evaluate(el=>!el.open));
+    }
+    await button.click();
+    await notice.getByRole('status').filter({hasText:'Settings capture did not complete'}).waitFor();
+    assert.ok(await button.evaluate(el=>document.activeElement===el),'a failed capture keeps its action focused');
+    failOnce=false;
+    await button.click();
+    if(reader){
+      await notice.getByRole('status').filter({hasText:'Refreshing Source details'}).waitFor();
+      assert.ok(await button.evaluate(el=>document.activeElement===el),'refreshing metadata keeps the action focused');
+      refresh.resolve();
+      await page.locator('.source-details dd').filter({hasText:'claude-opus-4-6'}).waitFor();
+    }
+    await notice.getByRole('status').filter({hasText:'Settings captured.'}).waitFor();
+    assert.ok(await button.evaluate(el=>document.activeElement===el),'completion leaves focus on the same action');
+    if(reader){
+      assert.ok(await source.evaluate(el=>el.isConnected&&el.open),'refresh keeps the existing Source details open');
+      assert.ok(await turn.evaluate(el=>el.isConnected&&!el.open),'refresh keeps the existing turn closed');
+      // A later capture can remove a selection; old facts must not linger.
+      selectedSettings=undefined;
+      await button.click();
+      await page.locator('.source-details dd').filter({hasText:'claude-opus-4-6'}).waitFor({state:'detached'});
+      await notice.getByRole('status').filter({hasText:'Settings captured.'}).waitFor();
+      assert.ok(await button.evaluate(el=>document.activeElement===el));
+    }
+  });
 });
 
-test('Claude import offers settings in its modal, allows skipping and retrying, then keeps enabled setup out of the way', {skip},async t=>{
-  const job={...claudeImportFixture,source:{added:['claude-ai-imports'],enabled:[],declined:[],skipped:[]}},setup={source:'',path:'/Users/example/Library/Application Support/Claude',account:'local',configured:false,enabled:false,scope:'host'};
-  let failOnce=true;
-  const {page,calls,shot}=await open(t,{url:'/settings/sources',api:{
+test('Claude import offers one-time model backfill after indexing without moving focus', {skip},async t=>{
+  const job={...claudeImportFixture,source:{added:['claude-ai-imports'],enabled:[],declined:[],skipped:[]}};
+  let indexed=false;
+  const captureRun={id:'import-capture',kind:'capture',state:'complete',sources:['claude-ai-imports'],results:[]};
+  const indexRun={id:'import-index',kind:'index',state:'complete',sources:['claude-ai-imports'],results:[]};
+  const {page}=await open(t,{url:'/settings/sources',api:{
     'GET /api/claude-imports':({query})=>query.get('id')?job:{jobs:[job],run:{running:false,id:job.id,name:job.name}},
     'POST /api/claude-imports':{started:true},
-    'GET /api/claude-chat-settings/setup':()=>setup,
-    'POST /api/claude-chat-settings/setup':()=>{if(failOnce){failOnce=false;return {enabled:false}}Object.assign(setup,{source:'claude-chat-settings',configured:true,enabled:true});return setup},
-    'POST /api/capture':({body})=>({run:{id:'claude-import-capture',state:'complete',sources:body.sources,bytes_copied:2000,results:[]}}),
+    'GET /api/claude-chat-settings/setup':{enabled:false},
+    'GET /api/claude-chat-settings/coverage':()=>({accounts:indexed?[claudeSettingsCoverageFixture]:[]}),
+    'POST /api/capture':{run:captureRun},
+    'GET /api/capture':{active:false,runs:[captureRun]},
+    'POST /api/index':()=>{indexed=true;return {run:indexRun}},
+    'GET /api/activity':{active:0,runs:[indexRun]},
   }});
   const guide=page.locator('#pharosOnboarding');
-  const start=async()=>{
-    await page.evaluate(()=>window.pharosOnboarding.open({mode:'import'}));
-    await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
-    await guide.getByRole('textbox',{name:'Export',exact:true}).fill('/example/claude-export.json');
-    await guide.getByRole('button',{name:'Import',exact:true}).click();
-  };
-  await start();
-  await guide.getByRole('heading',{name:'Add model and thinking settings?',exact:true}).waitFor();
-  assert.ok(await guide.evaluate(el=>el.matches(':modal')),'settings setup remains inside the import modal');
-  assert.equal(await page.locator('dialog:modal').count(),1,'setup does not stack another modal');
-  assert.ok(await guide.getByRole('heading',{name:'Add model and thinking settings?',exact:true}).evaluate(el=>el===document.activeElement));
-  await shot('claude-import-settings');
-  await guide.getByRole('button',{name:'Continue without settings',exact:true}).click();
-  await guide.getByRole('button',{name:'Capture and index conversations',exact:true}).waitFor();
-  assert.ok(!calls.some(call=>call.method==='POST'&&call.path==='/api/claude-chat-settings/setup'),'skipping leaves the source disabled');
-  await guide.getByRole('button',{name:'Done',exact:true}).click();
-  await start();
-  await guide.getByRole('button',{name:'Enable and continue',exact:true}).click();
-  await guide.getByRole('status').filter({hasText:'Settings capture was not enabled'}).waitFor();
-  assert.ok(await guide.getByRole('button',{name:'Continue without settings',exact:true}).isEnabled(),'an enable error leaves importing available');
-  await guide.getByRole('button',{name:'Enable and continue',exact:true}).click();
-  await guide.getByRole('button',{name:'Capture and index conversations',exact:true}).waitFor();
-  await guide.getByRole('button',{name:'Done',exact:true}).click();
-  await start();
-  await guide.getByRole('button',{name:'Capture and index conversations',exact:true}).waitFor();
-  assert.equal(await guide.getByRole('heading',{name:'Add model and thinking settings?',exact:true}).count(),0,'an enabled source needs no prompt');
+  await page.evaluate(()=>window.pharosOnboarding.open({mode:'import'}));
+  await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+  await guide.getByRole('textbox',{name:'Export',exact:true}).fill('/example/claude-export.json');
+  await guide.getByRole('button',{name:'Import',exact:true}).click();
   await guide.getByRole('button',{name:'Capture and index conversations',exact:true}).click();
   await guide.getByRole('button',{name:'Index now',exact:true}).waitFor();
   assert.ok(await guide.getByRole('button',{name:'Index now',exact:true}).evaluate(el=>el===document.activeElement),'capture continues in the same modal');
+  await guide.getByRole('button',{name:'Index now',exact:true}).click();
+  await guide.getByRole('button',{name:'Capture settings',exact:true}).waitFor();
+  assert.ok(await guide.getByRole('button',{name:'Done',exact:true}).evaluate(el=>el===document.activeElement),'missing-model guidance does not take focus after indexing');
 });
 
 test('a late Claude settings check leaves a replacement import form and its focus alone', {skip},async t=>{
@@ -3690,5 +3754,4 @@ test('a late Claude settings check leaves a replacement import form and its focu
   pending.resolve({enabled:false,path:'/example/Claude',account:'local'});await completed;
   assert.equal(await field.inputValue(),'/replacement-import');
   assert.ok(await field.evaluate(el=>el===document.activeElement));
-  assert.equal(await guide.getByRole('heading',{name:'Add model and thinking settings?',exact:true}).count(),0);
 });

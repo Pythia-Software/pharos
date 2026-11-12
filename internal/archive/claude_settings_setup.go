@@ -37,6 +37,10 @@ func claudeSettingsForImport(config Config, importName string) (claudeSettingsSe
 		return claudeSettingsSetup{}, probeRequestError{errors.New("choose a configured Claude.ai export source")}
 	}
 	account := defaultString(export.Account, "local")
+	return claudeSettingsForAccount(config, account)
+}
+
+func claudeSettingsForAccount(config Config, account string) (claudeSettingsSetup, error) {
 	var matches []SourceConfig
 	for _, source := range config.Sources {
 		if source.Kind == claudeSettingsKind && defaultString(source.Account, "local") == account {
@@ -70,6 +74,15 @@ func claudeSettingsForImport(config Config, importName string) (claudeSettingsSe
 }
 
 func enableClaudeSettingsForImport(config Config, importName, path string) (claudeSettingsSetup, error) {
+	export, ok := sourceNamed(config.Sources, importName)
+	if !ok || export.Kind != "claude-ai" {
+		return claudeSettingsSetup{}, probeRequestError{errors.New("choose a configured Claude.ai export source")}
+	}
+	return configureClaudeSettings(config, defaultString(export.Account, "local"), path, true)
+}
+
+// One-time capture reuses paused sources without enabling automatic acquisition.
+func configureClaudeSettings(config Config, account, path string, enable bool) (claudeSettingsSetup, error) {
 	if !config.Library || hostConfigPath(config) == "" {
 		return claudeSettingsSetup{}, errNotLibrary(config)
 	}
@@ -94,11 +107,11 @@ func enableClaudeSettingsForImport(config Config, importName, path string) (clau
 		}
 	}
 	config.Sources = combined
-	setup, err := claudeSettingsForImport(config, importName)
+	setup, err := claudeSettingsForAccount(config, account)
 	if err != nil {
 		return setup, err
 	}
-	if setup.Enabled {
+	if setup.Enabled || (setup.Configured && !enable) {
 		return setup, nil
 	}
 	path = strings.TrimSpace(path)
@@ -129,7 +142,7 @@ func enableClaudeSettingsForImport(config Config, importName, path string) (clau
 		setup.Enabled = true
 		return setup, nil
 	}
-	source := SourceConfig{Kind: claudeSettingsKind, Path: path, Account: setup.Account, Enabled: true, Name: claudeSettingsKind}
+	source := SourceConfig{Kind: claudeSettingsKind, Path: path, Account: setup.Account, Enabled: enable, Name: claudeSettingsKind}
 	for n := 2; ; n++ {
 		if _, exists := sourceNamed(config.Sources, source.Name); !exists {
 			break
@@ -139,7 +152,7 @@ func enableClaudeSettingsForImport(config Config, importName, path string) (clau
 	if err := appendHostSources(file, currentHost(), []SourceConfig{source}); err != nil {
 		return setup, err
 	}
-	return claudeSettingsSetup{Source: source.Name, Path: source.Path, Account: source.Account, Configured: true, Enabled: true, Scope: "host"}, nil
+	return claudeSettingsSetup{Source: source.Name, Path: source.Path, Account: source.Account, Configured: true, Enabled: enable, Scope: "host"}, nil
 }
 
 func (s *Server) getClaudeSettingsSetup(w http.ResponseWriter, r *http.Request) {
@@ -154,15 +167,30 @@ func (s *Server) getClaudeSettingsSetup(w http.ResponseWriter, r *http.Request) 
 func (s *Server) postClaudeSettingsSetup(w http.ResponseWriter, body map[string]any) {
 	w.Header().Set("Cache-Control", "no-store")
 	var request struct {
-		Name string `json:"name"`
-		Path string `json:"path"`
+		Name        string `json:"name"`
+		Path        string `json:"path"`
+		Account     string `json:"account"`
+		CaptureOnly bool   `json:"capture_only"`
 	}
 	data, _ := json.Marshal(body)
 	if err := json.Unmarshal(data, &request); err != nil {
 		writeError(w, err, 400)
 		return
 	}
-	setup, err := enableClaudeSettingsForImport(s.Config(), request.Name, request.Path)
+	var setup claudeSettingsSetup
+	var err error
+	if request.CaptureOnly {
+		coverage, readErr := s.Catalog.claudeSettingsCoverage(s.life.ctx, request.Account, "")
+		if readErr != nil {
+			err = readErr
+		} else if request.Account == "" || len(coverage) != 1 || coverage[0].Account != request.Account {
+			err = probeRequestError{errors.New("choose an account with imported Claude Chat conversations")}
+		} else {
+			setup, err = configureClaudeSettings(s.Config(), request.Account, request.Path, false)
+		}
+	} else {
+		setup, err = enableClaudeSettingsForImport(s.Config(), request.Name, request.Path)
+	}
 	if err == nil {
 		err = s.reloadSources()
 	}
