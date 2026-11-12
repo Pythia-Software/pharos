@@ -57,6 +57,26 @@ func checkExport(spec *providerSpec, path string) (int64, error) {
 			return size, nil
 		}
 	}
+	if spec.Kind == "chatgpt" && info.IsDir() {
+		if data, err := os.ReadFile(filepath.Join(path, chatGPTInventoryName)); err == nil {
+			var inventory chatGPTInventory
+			if json.Unmarshal(data, &inventory) != nil || inventory.Format != chatGPTInventoryFormat || len(inventory.Files) == 0 {
+				return 0, usage
+			}
+			var size int64
+			for _, name := range inventory.Files {
+				if !claudeExportPath(name) {
+					return 0, usage
+				}
+				fi, err := os.Stat(filepath.Join(path, name))
+				if err != nil {
+					return 0, err
+				}
+				size += fi.Size()
+			}
+			return size, nil
+		}
+	}
 	conversations := func(names []string) bool {
 		if spec.Kind == "chatgpt" {
 			return len(chatGPTConversationFiles(names)) > 0

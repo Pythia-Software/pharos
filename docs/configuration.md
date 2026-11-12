@@ -522,12 +522,27 @@ same-named one in `library.toml` (`replaces` in `GET /api/sources`), removing
 it brings that one back, as `library.toml` sets it up, and the confirmation
 says so. Sources in `library.toml` are removed there.
 
-**Import an export** checks that the ZIP, folder or file holds the export's
+The generic source-import API checks that the ZIP, folder or file holds the export's
 conversations (a ZIP's listing or a folder's names; nothing is parsed) and adds
 it to this Mac's host file as an enabled source named for its kind
 (`POST /api/sources/import` with `{"kind":"chatgpt","path":"~/Downloads/….zip"}`),
 then captures it like any source. Importing the same file again adds nothing.
 An export in Downloads may make macOS ask to let Pharos read that folder.
+
+For **ChatGPT**, selecting a ZIP in **Import an export…** uses a managed collection
+(`POST /api/chatgpt-imports` with `{"path":"~/Downloads/….zip"}`). Settings → Sources
+also offers **Import ChatGPT exports from Downloads**, off by default. It checks
+completed ZIPs with ChatGPT's export filename pattern every 15 minutes while
+Pharos runs; **Check Downloads now** starts an earlier check. Renamed ZIPs need
+manual selection. Allow about 24 hours for the export email; timing may vary.
+The collector verifies every ZIP member and conversation shard, excludes account
+profile/settings/advertising files, and keeps hashed snapshots in one stable
+`chatgpt-imports` source. Stop keeps verified snapshots; Try again can resume
+indexing after the download has gone. The reader exposes exported settings,
+references, voice transcriptions and local media, with source limitations.
+Folder/JSON imports and manually configured sources retain their existing generic
+source flow. See [remaining ChatGPT gaps](chatgpt-export-gaps.md) and
+[data outside the normalized model](chatgpt-export-unmodeled-data.md).
 
 For **Claude.ai**, choose Claude.ai in **Import an export…** and supply the
 manifest JSON, a folder containing the downloaded category ZIPs, a legacy ZIP,
@@ -1080,7 +1095,7 @@ upload permissions keep their existing behavior.
 | `conductor` | a snapshot of each SQLite database that has session and message tables (not, for example, `cache.db`) |
 | `tl1` | the registry, then for each installation the adapter reads a snapshot of its database (`files/installations/<id>/`), its `transcripts/**/*.jsonl`, and procedural attempts' script logs (`<attempt>-script.log`, `-script.stderr.log`, `-script.stdout.log`) |
 | `canonical`, `tl1-export` | the export file, or the directory's `*.json` |
-| `chatgpt`, `chatgpt-export` | the export's ZIP whole, or its conversation files: the numbered `conversations-NNN.json` newer exports are split into, else `conversations.json`. Not the account files or images beside them |
+| `chatgpt`, `chatgpt-export` | A selected ZIP, or managed hashed ZIP snapshots and their receipt; folder inputs retain producer-declared evidence (or recognized conversation/sidecar/media files for legacy folders), excluding account records. Conversation shards take precedence over `conversations.json`. |
 | `claude-ai` | a chosen ZIP or conversations file, a folder's top-level conversations files (never its other ZIPs), or every verified part and the credential-free inventories of a managed export collection, whole |
 | `claude-ai-settings` | filtered, immutable JSON projections of supported Claude Desktop HTTP conversation-list cache entries; original cache files are never copied |
 | `copilot` | each session's `events.jsonl` and `workspace.yaml` under `session-state` (or an older release's flat `<id>.jsonl`); not `session-store.db`, Copilot's own index, nor its config, logs or file snapshots |

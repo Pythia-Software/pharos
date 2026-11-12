@@ -239,3 +239,11 @@ test('one-time settings capture keeps failures retryable and never indexes a fai
     assert.deepEqual(jobs,failed==='capture'?['capture']:['capture','index']);
   }
 });
+
+test('ChatGPT collection and indexing progress describe a verified snapshot separately',()=>{
+  const watchLine=vm.runInNewContext(source+';pharosChatGPTWatchLine');
+  assert.match(watchLine({state:'fetching',phase:'collecting'}).text,/verifying/);
+  const indexing=watchLine({state:'fetching',phase:'indexing',collected:1,expected:1,ingestion:{stage:'indexing',processed:2,conversations:2,messages:10}});
+  assert.match(indexing.files,/verified/);assert.match(indexing.progress,/2 conversations/);assert.deepEqual(plain(indexing.actions),['stop']);
+  assert.deepEqual(plain(watchLine({state:'paused'}).actions),['retry','stop']);
+});
