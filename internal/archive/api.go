@@ -993,13 +993,33 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/preferences":
 		s.postPreferences(w, r, body)
 	case path == "/api/model-colors":
-		id, idOK := body["id"].(string)
-		color, colorOK := body["color"].(string)
-		if !idOK || !colorOK {
-			writeError(w, fmt.Errorf("id and color are required"), http.StatusBadRequest)
-			return
+		changes := map[string]string{}
+		if raw, batch := body["changes"]; batch {
+			values, ok := raw.(map[string]any)
+			_, hasID := body["id"]
+			_, hasColor := body["color"]
+			if !ok || len(values) == 0 || hasID || hasColor {
+				writeError(w, fmt.Errorf("changes must be a nonempty object of color choices"), http.StatusBadRequest)
+				return
+			}
+			for id, value := range values {
+				color, ok := value.(string)
+				if !ok {
+					writeError(w, fmt.Errorf("each color must be a string"), http.StatusBadRequest)
+					return
+				}
+				changes[id] = color
+			}
+		} else {
+			id, idOK := body["id"].(string)
+			color, colorOK := body["color"].(string)
+			if !idOK || !colorOK {
+				writeError(w, fmt.Errorf("id and color are required"), http.StatusBadRequest)
+				return
+			}
+			changes[id] = color
 		}
-		if err := s.Catalog.setModelColor(r.Context(), id, color); err != nil {
+		if err := s.Catalog.setModelColors(r.Context(), changes); err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}

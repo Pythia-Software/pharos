@@ -869,7 +869,7 @@ const ROUTES = [
   { name: "Quick Stats settings", url: "/settings/layout", ready: "#quickStatsExpand", open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsEditor button' },
   { name: "Quick Stats toolbox", url: "/settings/layout", ready: "#quickStatsExpand", preferences: { "pharos-quick-stats-v1": { metrics: ['human_words', 'tokens'], windows: ['today', '24h'] } }, open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsPreview td' },
   { name: "App preferences", url: "/settings/preferences", ready: "#lighthouseSpinOnClick" },
-  { name: "Model colors", url: "/settings/models", ready: ".model-provider-card", open: async page => { await page.locator(".model-provider-card summary").first().click(); }, shown: ".model-provider-card details[open] .model-color-model" },
+  { name: "Model colors", url: "/settings/models", ready: ".model-provider-card", open: async page => { await page.getByRole("button", {name: "Edit color for haiku-4-5", exact: true}).click(); }, shown: ".model-inline-editor" },
   { name: "Project colors", url: "/settings/projects", ready: ".project-color-row" },
   { name: "Mac menu disabled", url: "/settings/layout", ready: "#showMacMenuBar", preferences: { 'pharos-menu-bar': { enabled: false } } },
   { name: "Mac menu expanded", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button' },
@@ -2027,40 +2027,70 @@ test('Scatter card opens the standalone dashboard with its selected axes and sou
 });
 
 
-test("model color editors save inherited palettes, retain focus, and restore provider disclosures", { skip }, async t => {
+test("model color editors preview and save inline while retaining focus", { skip }, async t => {
   let inventoryReads = 0;
-  const { page, shot } = await open(t, { url: "/settings/projects", ready: ".project-color-settings", api: {
+  const { page, shot } = await open(t, { url: "/settings/projects", viewport: {width:1920,height:963}, ready: ".project-color-settings", api: {
     "GET /api/model-colors": call => { if (call.query.get("inventory") === "1") inventoryReads++; return defaultApi["GET /api/model-colors"](call); },
   } });
   assert.equal(inventoryReads, 0, "other settings pages leave model discovery idle");
   await page.evaluate(() => window.pharosNavigate("/settings/models"));
-  await page.getByLabel("Color for gpt-local", { exact: true }).waitFor({ state: "attached" });
+  await page.getByRole("button", {name: "Edit color for gpt-local", exact: true}).waitFor();
   const provider = page.getByLabel("Color for OpenAI", { exact: true });
+  const card = page.getByRole("region", {name: "OpenAI colors", exact:true});
+  await card.scrollIntoViewIfNeeded();
+  await shot("model-colors-saved-only");
   await provider.focus();
   await page.evaluate(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
   assert.equal(await provider.evaluate(element => element === document.activeElement), true);
   await provider.fill("#7547b3");
-  await page.getByRole("button", { name: "Save color for OpenAI", exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('[aria-label="Color for Codex"]')?.value === "#7547b3");
-  const card = page.getByRole("region", { name: "OpenAI colors", exact: true });
-  await card.locator("summary").first().click();
+  await page.getByRole("group", {name: "OpenAI preview model palette", exact: true}).waitFor();
+  assert.equal(await provider.evaluate(element => element === document.activeElement), true, "live preview retains picker focus");
+  await card.scrollIntoViewIfNeeded();
+  await shot("model-colors-live-preview");
+  const preview = page.getByRole("group", {name:"OpenAI preview model palette",exact:true});
+  await preview.getByRole("button", {name:"Edit preview color for gpt-6-sol",exact:true}).click();
   const model = page.getByLabel("Color for gpt-6-sol", { exact: true });
-  await model.waitFor({ state: "visible" });
+  await model.waitFor();
   await model.focus();
   await model.fill("#ee1122");
   assert.equal(await model.evaluate(element => element === document.activeElement), true);
-  await page.getByRole("button", { name: "Save color for gpt-6-sol", exact: true }).click();
+  await card.scrollIntoViewIfNeeded();
+  await shot("model-colors-inline-editor");
+  await page.getByRole("button", { name: "Save palette for OpenAI", exact: true }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="Restore recommended shade for gpt-6-sol"]')?.disabled === false);
   await page.reload();
-  await model.waitFor({ state: "visible" });
-  await page.waitForFunction(() => document.querySelector('[aria-label="Color for gpt-6-sol"]')?.value === "#ee1122");
+  assert.equal(await provider.inputValue(), "#7547b3");
+  await page.getByRole("button", {name: "Edit color for gpt-6-sol", exact: true}).click();
+  await model.waitFor();
   assert.equal(await model.inputValue(), "#ee1122");
   await page.getByRole("button", { name: "Restore brand color for OpenAI", exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('[aria-label="Color for Codex"]')?.value === "#10a37f");
+  await page.waitForFunction(() => document.querySelector('[aria-label="Color for OpenAI"]')?.value === "#10a37f");
   assert.equal(await model.inputValue(), "#ee1122", "provider reset preserves the model choice");
   await page.getByRole("button", { name: "Restore recommended shade for gpt-6-sol", exact: true }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="Color for gpt-6-sol"]')?.value !== "#ee1122");
-  await card.locator("summary").first().click();
+  await page.getByRole("button", {name: "Edit preview color for gpt-6-sol", exact: true}).click();
+  await model.waitFor({state: "detached"});
+  assert.equal(await page.getByRole("button", {name: "Edit preview color for gpt-6-sol", exact:true}).evaluate(element => element === document.activeElement), true, "toggling the inline editor keeps focus on its preview swatch");
+  await page.getByRole("button", {name: "Edit preview color for gpt-6-sol", exact:true}).press("Enter");
+  await model.waitFor();
+  await page.locator("label").filter({hasText:/^gpt-6-sol$/}).click();
+  await model.waitFor({state:"detached"});
+  await page.getByRole("button", {name:"Save palette for OpenAI",exact:true}).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Restore brand color for OpenAI"]')?.disabled === true);
+  await provider.fill("#ffffff");
+  await page.getByRole("status", {name: "OpenAI color warnings", exact: true}).waitFor();
+  await card.scrollIntoViewIfNeeded();
+  await shot("model-colors-warning");
+  await provider.fill("#000000");
+  await card.scrollIntoViewIfNeeded();
+  await shot("model-colors-dark-warning");
+  await page.getByRole("region", {name: "OpenAI colors", exact: true}).getByRole("button", {name: "Discard changes", exact: true}).click();
   await page.evaluate(() => window.scrollTo({ top: 0 }));
   await shot("model-provider-colors");
+  await page.getByRole("button", {name: "Edit color for sonnet", exact: true}).click();
+  await page.getByLabel("Color for sonnet", {exact: true}).waitFor();
+  await page.getByRole("region", {name: "Anthropic colors", exact: true}).scrollIntoViewIfNeeded();
+  await shot("legacy-label-lineage");
+  await page.getByRole("region", {name: "Reflection colors", exact: true}).scrollIntoViewIfNeeded();
+  await shot("independent-provider-palettes");
 });
