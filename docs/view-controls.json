@@ -2212,6 +2212,15 @@
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
+      "key": "a1a17837e66eb1f2:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "claudeExportRoutine",
+      "tag": "button",
+      "control": "'button', '', 'Copy daily export prompt'",
+      "contract": "action",
+      "reason": "Copies the visible daily export starter prompt to the clipboard; task creation happens later in Claude Desktop and does not change the Pharos view."
+    },
+    {
       "key": "6d145e032336655c:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "exportsLink",

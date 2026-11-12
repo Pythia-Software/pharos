@@ -3420,6 +3420,38 @@ test('Browser clipboard denial displays copy failure and leaves focus on the cop
   assert.ok(await page.locator('#navigatorCopy').evaluate(element => element === document.activeElement));
 });
 
+for(const surface of ['import','Downloads'])test(`Claude daily export prompt copying keeps focus through failure and retry in ${surface}`,{skip},async t=>{
+  const {page,shot}=await open(t,{url:'/settings/sources',ready:'#pharosImportSource'});
+  let parent=page.locator('#claudeDownloadsWatchSection');
+  if(surface==='import'){
+    await page.locator('#pharosImportSource').click();
+    parent=page.locator('#pharosOnboarding');
+    await parent.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+  }
+  const routine=parent.locator('.pharos-claude-routine'),copy=routine.getByRole('button',{name:'Copy daily export prompt',exact:true});
+  await copy.waitFor();
+  await page.evaluate(()=>{
+    window.exportPromptCopies=[];
+    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:text=>{
+      window.exportPromptCopies.push(text);window.exportPromptClipboard=Promise.withResolvers();return window.exportPromptClipboard.promise;
+    }}});
+  });
+  await copy.click();
+  await page.waitForFunction(()=>!!window.exportPromptClipboard);
+  assert.ok(await copy.evaluate(el=>el===document.activeElement),'copying keeps keyboard focus');
+  await page.evaluate(()=>window.exportPromptClipboard.reject(Error('Clipboard permission denied')));
+  await routine.getByRole('status').filter({hasText:'Could not copy'}).waitFor();
+  assert.ok(await copy.evaluate(el=>el===document.activeElement),'failure keeps focus for retry');
+  await copy.click();
+  await page.waitForFunction(()=>window.exportPromptCopies.length===2);
+  await page.evaluate(()=>window.exportPromptClipboard.resolve());
+  await routine.getByRole('status').filter({hasText:'Copied.'}).waitFor();
+  assert.ok(await copy.evaluate(el=>el===document.activeElement),'success keeps focus');
+  const prompt=await routine.locator('pre').innerText();
+  assert.deepEqual(await page.evaluate(()=>window.exportPromptCopies),[prompt,prompt],'each attempt copies the visible starter prompt');
+  await shot('daily-export-prompt');
+});
+
 test('Ask fullscreen inbox keeps concurrent chats running and reads only visible answers', {skip,timeout:60000}, async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'},sessions=new Map(),finish=new Map(),attempts=new Map();
   let recordFirst,releaseReceipt,receiptStarted,secondAttempt;

@@ -580,9 +580,27 @@ Claude account (the UUID in the export's links), the profile whose download
 actually arrived. That account's later exports open there, even if the general
 choice differs, so two Claude accounts in two profiles each keep their own.
 
-Request the export yourself: in Claude, open Settings → Privacy → Export data.
-When Claude emails you, download the manifest from its link into Downloads.
-While Pharos is running it then:
+**Request a daily Claude export** appears in the Claude.ai import screen and
+the Downloads import section. **Copy daily export prompt** supplies a starter
+prompt for Claude Desktop to set up a daily 9 AM task using browser access.
+It asks for the rolling last 30 days, recalculated on each run; if Claude's
+export screen has no date filter, it asks for a full export instead. The prompt
+asks Claude to test an export request, verify scheduled browser access, and
+explain any requirements to keep apps open or stay signed in. Scheduling and
+browser access depend on the user's Claude account and setup; copying the
+prompt does not create a task in Pharos or Claude. For a complete starting
+archive, request all history before using a rolling window.
+
+This follows Anthropic's [export instructions](https://support.claude.com/en/articles/9450526-export-your-claude-data)
+and [scheduled-task guidance](https://support.claude.com/en/articles/13854387-schedule-recurring-tasks-in-claude-cowork).
+The export instructions do not document a date filter, so the prompt checks
+the options available rather than promising a 30-day export.
+
+You can also request the export yourself: in Claude, open Settings → Privacy
+→ Export data. Each day an export email arrives, use its link to download the
+manifest into Downloads within 24 hours. Keep the Downloads import switch on,
+Pharos running, and the selected browser profile signed in to Claude. Pharos
+then:
 
 1. lists the top level of `~/Downloads` every 15 minutes, 30 seconds after it
    starts, and when you choose **Check Downloads now**. It opens only files
