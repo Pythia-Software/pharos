@@ -273,7 +273,7 @@ func TestAssumedPricesAndRefreshPrompt(t *testing.T) {
 		}
 	}
 	prompt := status["prompt"].(string)
-	for _, want := range []string{"| `gpt-7-preview` | codex |", "\"status\": \"proposed\"", "\"assumption\": true", "pricing/cost_changes.json", "pricing/model_colors.json", "For each newly priced model", "npm --prefix web test -- chart-colors", "Never fill in a value from memory"} {
+	for _, want := range []string{"| `gpt-7-preview` | codex |", "\"status\": \"proposed\"", "\"assumption\": true", "pricing/cost_changes.json", "pricing/model_colors.json", "pricing/model_color_rules.json", "generate-model-colors -- --preview", "Existing default colors may change", "For each newly priced model", "npm --prefix web test -- chart-colors", "Never fill in a value from memory"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("refresh prompt is missing %q:\n%s", want, prompt)
 		}

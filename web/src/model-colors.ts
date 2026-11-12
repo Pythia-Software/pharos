@@ -1,31 +1,38 @@
 import { useSyncExternalStore } from "react";
 import catalog from "../../pricing/model_colors.json";
 import prices from "../../pricing/cost_changes.json";
+import rules from "../../pricing/model_color_rules.json";
+import { inferModelProvider, inferModelClass, matchModelClass, modelCatalogDates, modelColorKey } from "./model-color-identity";
+export { modelColorKey } from "./model-color-identity";
 
 export type ModelProvider = keyof typeof catalog.providers;
 export type ColorKind = "provider" | "source" | "model";
 export type ModelPalette = { overrides: Record<string, string>; models: string[]; sources: string[] };
 export const modelProviders = Object.keys(catalog.providers) as ModelProvider[];
 export const providerBrands = catalog.providers;
+export const rankedModelClasses = (provider: ModelProvider): readonly string[] => rules.providers[provider].ranked_classes;
 const models = catalog.models as Record<string, { provider: ModelProvider; class: string; color: string }>;
 const sources = catalog.sources as Record<string, { provider: ModelProvider; color: string }>;
-export const modelColorKey = (name: string) => name.trim().toLowerCase().replace(/^claude-/, "").replace(/(-1m|\[1m\])$/, "").replace(/-\d{8}$/, "");
 export function modelProvider(name: string): ModelProvider {
   const key = modelColorKey(name);
-  if (Object.hasOwn(models, key)) return models[key].provider;
-  if (/^(opus|sonnet|haiku|fable|mythos)(-|$)|^\d-\d-haiku/.test(key)) return "anthropic";
-  if (/^(gemini|gemma)(-|$)/.test(key)) return "google";
-  if (/^(gpt|chatgpt|codex|o[134])(-|$)/.test(key)) return "openai";
-  return "other";
+  return Object.hasOwn(models, key) ? models[key].provider : (matchModelClass(key, rules.providers)?.provider ?? inferModelProvider(key)) as ModelProvider;
+}
+export function modelClass(name: string): string | undefined {
+  const key = modelColorKey(name);
+  return Object.hasOwn(models, key) ? models[key].class : matchModelClass(key, rules.providers)?.class ?? inferModelClass(key);
 }
 export const sourceProvider = (name: string): ModelProvider => Object.hasOwn(sources, name) ? sources[name].provider : Object.hasOwn(providerBrands, name) ? name as ModelProvider : "other";
 export const sourceLabel = (name: string) => ({ claude: "Claude", codex: "Codex", antigravity: "Antigravity", chatgpt: "ChatGPT", tl1: "TL1", canonical: "Canonical export" }[name] ?? name);
-const dates = new Map<string, string>();
-for (const price of prices.changes) {
-  const key = modelColorKey(price.model), previous = dates.get(key);
-  if (!previous || price.effective_from < previous) dates.set(key, price.effective_from);
-}
+const dates = modelCatalogDates(prices.changes);
 export const modelCatalogDate = (name: string) => dates.get(modelColorKey(name));
+// One catalog order drives settings, chart stacks and legends. Unknown
+// classes follow the reviewed classes without changing recorded model keys.
+export function modelColorOrder(name: string): string {
+  const key = modelColorKey(name), provider = modelProvider(key), family = modelClass(key) ?? key.split(/[-.]/)[0];
+  const classes: readonly string[] = catalog.class_order[provider], index = classes.indexOf(family);
+  return `${modelProviders.indexOf(provider)}:${index < 0 ? classes.length : index}:${family}:${modelCatalogDate(key) ?? "9999"}:${key}`;
+}
+export const compareModelColors = (a: string, b: string) => modelColorOrder(a).localeCompare(modelColorOrder(b), undefined, { numeric: true });
 function hash(name: string) { let h = 2166136261; for (const c of name) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
 export function colorHSL(color: string): [number, number, number] {
   const [r, g, b] = [1, 3, 5].map(at => parseInt(color.slice(at, at + 2), 16) / 255);
@@ -36,8 +43,13 @@ function hex(h: number, s: number, l: number) {
   const a = s * Math.min(l, 1 - l);
   return "#" + [0, 8, 4].map(offset => { const k = (offset + h / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, "0"); }).join("");
 }
+function colorLuminance(color: string): number {
+  return [1, 3, 5].map(at => parseInt(color.slice(at, at + 2), 16) / 255)
+    .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4)
+    .reduce((total, value, index) => total + value * [.2126, .7152, .0722][index], 0);
+}
 // Set relative luminance while retaining a shade's hue. Choose the nearest
-// RGB rounding so small hue variations do not reverse chronological darkness.
+// RGB rounding to keep fallback shades inside their reviewed class range.
 function withLuminance(color: string, target: number): string {
   const linear = (value: number) => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
   const channels = [1, 3, 5].map(at => linear(parseInt(color.slice(at, at + 2), 16) / 255));
@@ -54,17 +66,46 @@ function withLuminance(color: string, target: number): string {
   }
   return "#" + best.map(value => value.toString(16).padStart(2, "0")).join("");
 }
-// Fixed date scale, never today's date or the visible/ranked set. Adding a
-// model cannot recolor an existing one. These are first pricing-catalog dates,
-// not asserted launch dates. Undated models get a deterministic middle shade.
+// Catalog defaults are generated together when releases/rules change. Runtime
+// fallbacks for unreviewed inventory are deterministic and independent of the
+// visible/ranked set; dates come from pricing, never a guessed launch date.
 function calculateRecommendedColor(name: string, base: string): string {
-  const key = modelColorKey(name), date = dates.get(key), [h, s] = colorHSL(base), seed = hash(key);
-  if (!date) return hex((h + (seed % 16001) / 1000 - 8 + 360) % 360, Math.min(1, s * (.7 + (seed % 401) / 1000)), .3 + ((seed >>> 8) % 1001) / 2500);
-  const age = (Date.parse(date) - Date.UTC(2024, 0, 1)) / 86400000;
-  const target = Math.max(.13, Math.min(.46, .46 - age * .00025));
-  const shade = hex((h + seed % 7 - 3 + 360) % 360, Math.min(1, s * (.8 + ((seed >>> 8) % 301) / 1000)), .5);
-  return withLuminance(shade, target);
+  const key = modelColorKey(name), provider = modelProvider(key), brand = providerBrands[provider].color;
+  const model = Object.hasOwn(models, key) ? models[key] : undefined;
+  const family = modelClass(key);
+  const relatives = family ? Object.values(models).filter(item => item.provider === provider && item.class === family) : [];
+  const reference = model?.color ?? relatives[0]?.color;
+  const [baseHue, baseSaturation, baseLightness] = colorHSL(base);
+  const [brandHue, brandSaturation, brandLightness] = colorHSL(brand);
+  // A provider edit rotates the entire palette together, retaining the
+  // distinctions between classes and the individual version shades.
+  const rebase = (color: string) => {
+    if (base.toLowerCase() === brand.toLowerCase()) return color;
+    const [h, s, l] = colorHSL(color);
+    return hex((h + baseHue - brandHue + 360) % 360, Math.min(1, s * baseSaturation / brandSaturation), Math.max(.15, Math.min(.85, l + (baseLightness - brandLightness) * .35)));
+  };
+  if (model) return rebase(model.color);
+  const [h, s] = colorHSL(reference ? rebase(reference) : base), seed = hash(key);
+  // Keep recognizable classes in a tight hue range, including unlisted
+  // older versions. Stay within the catalog class's overall luminance
+  // range; historical class ranges can overlap.
+  const hueRange = reference ? 3 : 16;
+  const relativeColors = relatives.map(item => rebase(item.color)), tones = relativeColors.map(colorHSL);
+  const lights = tones.map(tone => tone[2]), saturations = tones.map(tone => tone[1]);
+  const low = lights.length ? Math.min(...lights) : .3, high = lights.length ? Math.max(...lights) : .7;
+  const lightness = low + ((seed >>> 8) % 1001) / 1000 * (high - low);
+  const lowSaturation = saturations.length ? Math.min(...saturations) * .9 : s * .9;
+  const highSaturation = saturations.length ? Math.max(...saturations) * 1.1 : s * 1.1;
+  const saturation = Math.min(1, lowSaturation + (seed % 1001) / 1000 * (highSaturation - lowSaturation));
+  const shade = hex((h + (seed % 16001) / 16000 * hueRange - hueRange / 2 + 360) % 360, saturation, lightness);
+  if (!reference) return shade;
+  // HSL lightness alone cannot bound perceived depth when versions vary
+  // in saturation. Clamp luminance to retain the reviewed class range.
+  const levels = relativeColors.map(colorLuminance), level = colorLuminance(shade);
+  const target = Math.max(Math.min(...levels), Math.min(Math.max(...levels), level));
+  return target === level ? shade : withLuminance(shade, target);
 }
+
 const recommendations = new Map<string, string>();
 export function recommendedModelColor(name: string, base: string): string {
   const key = `${base}:${modelColorKey(name)}`;

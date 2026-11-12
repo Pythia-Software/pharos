@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "lightness_bounds": [
+    0.25,
+    0.97
+  ],
+  "minimum_version_step": 0.055,
+  "contemporary_step": 0.04,
+  "providers": {
+    "anthropic": {
+      "hue": 24,
+      "saturation": 0.45,
+      "ranked_classes": [
+        "Haiku",
+        "Sonnet",
+        "Opus",
+        "Fable / Mythos"
+      ],
+      "classes": {
+        "Haiku": {
+          "luminance": [
+            0.88,
+            0.57
+          ]
+        },
+        "Sonnet": {
+          "luminance": [
+            0.78,
+            0.23
+          ]
+        },
+        "Opus": {
+          "luminance": [
+            0.5,
+            0.085
+          ]
+        },
+        "Fable / Mythos": {
+          "luminance": [
+            0.095,
+            0.018
+          ]
+        }
+      }
+    },
+    "google": {
+      "hue": 217,
+      "saturation": 0.4,
+      "ranked_classes": [
+        "Flash",
+        "Gemini"
+      ],
+      "classes": {
+        "Flash": {
+          "luminance": [
+            0.62,
+            0.28
+          ]
+        },
+        "Gemini": {
+          "luminance": [
+            0.17,
+            0.09
+          ]
+        },
+        "Nano Banana": {
+          "luminance": [
+            0.4,
+            0.12
+          ],
+          "single_luminance": 0.2299
+        }
+      }
+    },
+    "openai": {
+      "hue": 154,
+      "saturation": 0.38,
+      "ranked_classes": [
+        "Luna",
+        "Terra",
+        "Sol",
+        "Astra"
+      ],
+      "classes": {
+        "Luna": {
+          "luminance": [
+            0.62,
+            0.5
+          ]
+        },
+        "Terra": {
+          "luminance": [
+            0.4,
+            0.32
+          ]
+        },
+        "Sol": {
+          "luminance": [
+            0.24,
+            0.1
+          ]
+        },
+        "Astra": {
+          "luminance": [
+            0.1,
+            0.04
+          ],
+          "single_luminance": 0.0597
+        },
+        "GPT": {
+          "luminance": [
+            0.7908,
+            0.2966
+          ],
+          "hue": 141.8,
+          "saturation": 0.379,
+          "single_luminance": 0.4943
+        },
+        "Codex": {
+          "luminance": [
+            0.6269,
+            0.1524
+          ],
+          "hue": 165.4,
+          "saturation": 0.378
+        },
+        "Rosalind": {
+          "luminance": [
+            0.6154,
+            0.1463
+          ],
+          "hue": 131.6,
+          "saturation": 0.379
+        },
+        "Image": {
+          "luminance": [
+            0.6556,
+            0.6227
+          ],
+          "hue": 152.7,
+          "saturation": 0.379
+        },
+        "Cyber": {
+          "luminance": [
+            0.6297,
+            0.2361
+          ],
+          "hue": 173.9,
+          "saturation": 0.379,
+          "single_luminance": 0.3936
+        }
+      }
+    },
+    "other": {
+      "hue": 270,
+      "saturation": 0.45,
+      "ranked_classes": [],
+      "classes": {
+        "Beam": {
+          "luminance": [
+            0.2432,
+            0.0912
+          ],
+          "hue": 275.2,
+          "saturation": 0.647,
+          "single_luminance": 0.152
+        },
+        "DeepSeek": {
+          "luminance": [
+            0.1837,
+            0.0689
+          ],
+          "hue": 254.2,
+          "saturation": 0.621,
+          "single_luminance": 0.1148
+        },
+        "Big Pickle": {
+          "luminance": [
+            0.3059,
+            0.1147
+          ],
+          "hue": 288.1,
+          "saturation": 0.457,
+          "single_luminance": 0.1912
+        },
+        "MAI Code": {
+          "luminance": [
+            0.2496,
+            0.0936
+          ],
+          "hue": 265.9,
+          "saturation": 0.44,
+          "single_luminance": 0.156
+        }
+      }
+    }
+  }
+}

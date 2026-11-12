@@ -1,68 +1,328 @@
 {
   "version": 1,
   "providers": {
-    "anthropic": { "label": "Anthropic", "color": "#d97732", "hue": 28 },
-    "google": { "label": "Google", "color": "#4285f4", "hue": 217 },
-    "openai": { "label": "OpenAI", "color": "#10a37f", "hue": 158 },
-    "other": { "label": "Other providers", "color": "#8775b5", "hue": 270 }
+    "anthropic": {
+      "label": "Anthropic",
+      "color": "#d97732",
+      "hue": 28
+    },
+    "google": {
+      "label": "Google",
+      "color": "#4285f4",
+      "hue": 217
+    },
+    "openai": {
+      "label": "OpenAI",
+      "color": "#10a37f",
+      "hue": 158
+    },
+    "other": {
+      "label": "Other providers",
+      "color": "#8775b5",
+      "hue": 270
+    }
+  },
+  "class_order": {
+    "anthropic": [
+      "Haiku",
+      "Sonnet",
+      "Opus",
+      "Fable / Mythos"
+    ],
+    "google": [
+      "Flash",
+      "Gemini",
+      "Nano Banana"
+    ],
+    "openai": [
+      "Luna",
+      "Terra",
+      "Sol",
+      "Astra",
+      "GPT",
+      "Codex",
+      "Rosalind",
+      "Image",
+      "Cyber"
+    ],
+    "other": [
+      "Beam",
+      "DeepSeek",
+      "Big Pickle",
+      "MAI Code"
+    ]
   },
   "models": {
-    "opus": { "provider": "anthropic", "class": "Opus", "color": "#b96524" },
-    "opus-4-1": { "provider": "anthropic", "class": "Opus", "color": "#f4a664" },
-    "opus-4-5": { "provider": "anthropic", "class": "Opus", "color": "#ee9148" },
-    "opus-4-6": { "provider": "anthropic", "class": "Opus", "color": "#e67a30" },
-    "opus-4-7": { "provider": "anthropic", "class": "Opus", "color": "#d46a24" },
-    "opus-4-8": { "provider": "anthropic", "class": "Opus", "color": "#bd5b1c" },
-    "opus-5": { "provider": "anthropic", "class": "Opus", "color": "#a34d18" },
-    "opus-5-5": { "provider": "anthropic", "class": "Opus", "color": "#884016" },
-    "sonnet": { "provider": "anthropic", "class": "Sonnet", "color": "#cc8c38" },
-    "sonnet-4": { "provider": "anthropic", "class": "Sonnet", "color": "#efb65c" },
-    "sonnet-4-5": { "provider": "anthropic", "class": "Sonnet", "color": "#e5a342" },
-    "sonnet-4-6": { "provider": "anthropic", "class": "Sonnet", "color": "#cf8e2f" },
-    "sonnet-5": { "provider": "anthropic", "class": "Sonnet", "color": "#b57925" },
-    "sonnet-5-5": { "provider": "anthropic", "class": "Sonnet", "color": "#9b651e" },
-    "haiku": { "provider": "anthropic", "class": "Haiku", "color": "#e09270" },
-    "3-5-haiku": { "provider": "anthropic", "class": "Haiku", "color": "#f0b292" },
-    "haiku-4-5": { "provider": "anthropic", "class": "Haiku", "color": "#bf633e" },
-    "haiku-5-5": { "provider": "anthropic", "class": "Haiku", "color": "#ad6129" },
-    "fable-5": { "provider": "anthropic", "class": "Fable", "color": "#e2a07a" },
-    "fable-5-1": { "provider": "anthropic", "class": "Fable", "color": "#c67a50" },
-    "fable-5-2": { "provider": "anthropic", "class": "Fable", "color": "#a55e35" },
-    "mythos-5-2": { "provider": "anthropic", "class": "Mythos", "color": "#b26d45" },
-    "gemini-3.5-flash-lite": { "provider": "google", "class": "Flash", "color": "#86b1f8" },
-    "gemini-3.8-flash": { "provider": "google", "class": "Flash", "color": "#669cf6" },
-    "gemini-omni-1.2-flash": { "provider": "google", "class": "Flash", "color": "#3d7ce5" },
-    "gemini-4-argon": { "provider": "google", "class": "Gemini", "color": "#174ea6" },
-    "gemini-4-argon-d": { "provider": "google", "class": "Gemini", "color": "#1d5db5" },
-    "gemini-nano-banana-2.1": { "provider": "google", "class": "Nano Banana", "color": "#2f6ad0" },
-    "gpt-5.3-codex": { "provider": "openai", "class": "Codex", "color": "#087e62" },
-    "gpt-5.3-codex-spark": { "provider": "openai", "class": "Codex", "color": "#35b397" },
-    "gpt-5.5": { "provider": "openai", "class": "GPT", "color": "#72c59c" },
-    "gpt-5.6-luna": { "provider": "openai", "class": "GPT", "color": "#58bf8b" },
-    "gpt-5.6-sol": { "provider": "openai", "class": "GPT", "color": "#35af70" },
-    "gpt-5.6-terra": { "provider": "openai", "class": "GPT", "color": "#439c72" },
-    "gpt-6-astra": { "provider": "openai", "class": "GPT", "color": "#209a5d" },
-    "gpt-6-luna": { "provider": "openai", "class": "GPT", "color": "#15844c" },
-    "gpt-6-sol": { "provider": "openai", "class": "GPT", "color": "#087743" },
-    "gpt-6.1-sol": { "provider": "openai", "class": "GPT", "color": "#066638" },
-    "gpt-6.1-terra": { "provider": "openai", "class": "GPT", "color": "#0c7146" },
-    "gpt-6-rosalind": { "provider": "openai", "class": "Rosalind", "color": "#1c786d" },
-    "gpt-image-2.6-sunburst": { "provider": "openai", "class": "Image", "color": "#7bd2ba" },
-    "gpt-image-2.6-flare": { "provider": "openai", "class": "Image", "color": "#4ebd9b" },
-    "gpt-6-cyber": { "provider": "openai", "class": "Cyber", "color": "#0d654f" },
-    "gpt-rosalind-research": { "provider": "openai", "class": "Rosalind", "color": "#5fb8a8" },
-    "gpt-rosalind-discovery": { "provider": "openai", "class": "Rosalind", "color": "#2c8f7f" },
-    "reflection/beam-free": { "provider": "other", "class": "Beam", "color": "#8064ad" },
-    "deepseek-v4.1-flash-free": { "provider": "other", "class": "DeepSeek", "color": "#6f57a0" },
-    "big-pickle": { "provider": "other", "class": "Big Pickle", "color": "#9c81c6" },
-    "mai-code-1.1-flash": { "provider": "other", "class": "MAI Code", "color": "#5e468d" }
+    "opus": {
+      "provider": "anthropic",
+      "class": "Opus",
+      "color": "#ba7548"
+    },
+    "opus-4-1": {
+      "provider": "anthropic",
+      "class": "Opus",
+      "color": "#d9b49c"
+    },
+    "opus-4-5": {
+      "provider": "anthropic",
+      "class": "Opus",
+      "color": "#c7a188"
+    },
+    "opus-4-6": {
+      "provider": "anthropic",
+      "class": "Opus",
+      "color": "#b68e75"
+    },
+    "opus-4-7": {
+      "provider": "anthropic",
+      "class": "Opus",
+      "color": "#a57c62"
+    },
+    "opus-4-8": {
+      "provider": "anthropic",
+      "class": "Opus",
+      "color": "#946a50"
+    },
+    "opus-5": {
+      "provider": "anthropic",
+      "class": "Opus",
+      "color": "#83593e"
+    },
+    "opus-5-5": {
+      "provider": "anthropic",
+      "class": "Opus",
+      "color": "#73482c"
+    },
+    "sonnet": {
+      "provider": "anthropic",
+      "class": "Sonnet",
+      "color": "#d5ab90"
+    },
+    "sonnet-4": {
+      "provider": "anthropic",
+      "class": "Sonnet",
+      "color": "#f0e2d8"
+    },
+    "sonnet-4-5": {
+      "provider": "anthropic",
+      "class": "Sonnet",
+      "color": "#e3c6b3"
+    },
+    "sonnet-4-6": {
+      "provider": "anthropic",
+      "class": "Sonnet",
+      "color": "#d5aa8f"
+    },
+    "sonnet-5": {
+      "provider": "anthropic",
+      "class": "Sonnet",
+      "color": "#c78f6b"
+    },
+    "sonnet-5-5": {
+      "provider": "anthropic",
+      "class": "Sonnet",
+      "color": "#b87346"
+    },
+    "haiku": {
+      "provider": "anthropic",
+      "class": "Haiku",
+      "color": "#ecd9cd"
+    },
+    "3-5-haiku": {
+      "provider": "anthropic",
+      "class": "Haiku",
+      "color": "#f8f0eb"
+    },
+    "haiku-4-5": {
+      "provider": "anthropic",
+      "class": "Haiku",
+      "color": "#ecd8cc"
+    },
+    "haiku-5-5": {
+      "provider": "anthropic",
+      "class": "Haiku",
+      "color": "#e0c1ad"
+    },
+    "fable-5": {
+      "provider": "anthropic",
+      "class": "Fable / Mythos",
+      "color": "#794c2e"
+    },
+    "fable-5-1": {
+      "provider": "anthropic",
+      "class": "Fable / Mythos",
+      "color": "#553520"
+    },
+    "fable-5-2": {
+      "provider": "anthropic",
+      "class": "Fable / Mythos",
+      "color": "#332013"
+    },
+    "mythos-5-2": {
+      "provider": "anthropic",
+      "class": "Fable / Mythos",
+      "color": "#342114"
+    },
+    "gemini-3.5-flash-lite": {
+      "provider": "google",
+      "class": "Flash",
+      "color": "#c2cfe5"
+    },
+    "gemini-3.8-flash": {
+      "provider": "google",
+      "class": "Flash",
+      "color": "#9ab0d4"
+    },
+    "gemini-omni-1.2-flash": {
+      "provider": "google",
+      "class": "Flash",
+      "color": "#7392c3"
+    },
+    "gemini-4-argon": {
+      "provider": "google",
+      "class": "Gemini",
+      "color": "#4c73b2"
+    },
+    "gemini-4-argon-d": {
+      "provider": "google",
+      "class": "Gemini",
+      "color": "#385583"
+    },
+    "gemini-nano-banana-2.1": {
+      "provider": "google",
+      "class": "Nano Banana",
+      "color": "#6385bc"
+    },
+    "gpt-5.3-codex": {
+      "provider": "openai",
+      "class": "Codex",
+      "color": "#367868"
+    },
+    "gpt-5.3-codex-spark": {
+      "provider": "openai",
+      "class": "Codex",
+      "color": "#abd9ce"
+    },
+    "gpt-5.5": {
+      "provider": "openai",
+      "class": "GPT",
+      "color": "#87c99f"
+    },
+    "gpt-5.6-luna": {
+      "provider": "openai",
+      "class": "Luna",
+      "color": "#aad9c4"
+    },
+    "gpt-5.6-sol": {
+      "provider": "openai",
+      "class": "Sol",
+      "color": "#439572"
+    },
+    "gpt-5.6-terra": {
+      "provider": "openai",
+      "class": "Terra",
+      "color": "#66ba96"
+    },
+    "gpt-6-astra": {
+      "provider": "openai",
+      "class": "Astra",
+      "color": "#234d3b"
+    },
+    "gpt-6-luna": {
+      "provider": "openai",
+      "class": "Luna",
+      "color": "#87c9ad"
+    },
+    "gpt-6-sol": {
+      "provider": "openai",
+      "class": "Sol",
+      "color": "#387c5e"
+    },
+    "gpt-6.1-sol": {
+      "provider": "openai",
+      "class": "Sol",
+      "color": "#2d634b"
+    },
+    "gpt-6.1-terra": {
+      "provider": "openai",
+      "class": "Terra",
+      "color": "#4caa81"
+    },
+    "gpt-6-rosalind": {
+      "provider": "openai",
+      "class": "Rosalind",
+      "color": "#367843"
+    },
+    "gpt-image-2.6-sunburst": {
+      "provider": "openai",
+      "class": "Image",
+      "color": "#b0dcc8"
+    },
+    "gpt-image-2.6-flare": {
+      "provider": "openai",
+      "class": "Image",
+      "color": "#afdbc7"
+    },
+    "gpt-6-cyber": {
+      "provider": "openai",
+      "class": "Cyber",
+      "color": "#5fb7ae"
+    },
+    "gpt-rosalind-research": {
+      "provider": "openai",
+      "class": "Rosalind",
+      "color": "#abd9b4"
+    },
+    "gpt-rosalind-discovery": {
+      "provider": "openai",
+      "class": "Rosalind",
+      "color": "#70a77a"
+    },
+    "reflection/beam-free": {
+      "provider": "other",
+      "class": "Beam",
+      "color": "#9840d6"
+    },
+    "deepseek-v4.1-flash-free": {
+      "provider": "other",
+      "class": "DeepSeek",
+      "color": "#6543d3"
+    },
+    "big-pickle": {
+      "provider": "other",
+      "class": "Big Pickle",
+      "color": "#ab56c0"
+    },
+    "mai-code-1.1-flash": {
+      "provider": "other",
+      "class": "MAI Code",
+      "color": "#8458be"
+    }
   },
   "sources": {
-    "claude": { "provider": "anthropic", "color": "#d97732" },
-    "antigravity": { "provider": "google", "color": "#4285f4" },
-    "codex": { "provider": "openai", "color": "#10a37f" },
-    "chatgpt": { "provider": "openai", "color": "#65bfa7" },
-    "tl1": { "provider": "other", "color": "#8775b5" },
-    "canonical": { "provider": "other", "color": "#64558c" }
+    "claude": {
+      "provider": "anthropic",
+      "color": "#d97732"
+    },
+    "antigravity": {
+      "provider": "google",
+      "color": "#4285f4"
+    },
+    "codex": {
+      "provider": "openai",
+      "color": "#10a37f"
+    },
+    "chatgpt": {
+      "provider": "openai",
+      "color": "#65bfa7"
+    },
+    "tl1": {
+      "provider": "other",
+      "color": "#8775b5"
+    },
+    "canonical": {
+      "provider": "other",
+      "color": "#64558c"
+    }
   }
 }
