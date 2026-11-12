@@ -122,7 +122,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   // which drops its modal backdrop and focus trap while leaving it open.
   function mount(host){closeHistory();host.append(root);}
   mount(homeHost);
-  listen(window,'pharos:ask-home',event=>{homeHost=event.detail||mountHost;restoreHome();});
+  listen(window,'pharos:ask-home',event=>{homeHost=event.detail||mountHost;restoreHome();syncFloatingHome();});
   const overlay=document.createElement('dialog');
   overlay.id='askPharosDialog';overlay.className='pharos-ask-dialog';overlay.setAttribute('aria-label','Ask Pharos');
   let overlayLayoutFrame=null,overlayViewportHeight=0;
@@ -155,7 +155,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   overlay.addEventListener('transitionend',event=>{if(event.target===overlay)sizePicker();});
   const floating=document.createElement('aside');
   floating.className='pharos-floating';floating.hidden=true;floating.setAttribute('aria-label','Ask Pharos progress');
-  floating.innerHTML='<button type="button" class="pharos-floating-drag" aria-label="Move Ask Pharos progress" title="Drag to move; use arrow keys to reposition">⠿</button><button type="button" class="pharos-floating-open" title="Reopen Ask Pharos"><div class="pharos-floating-copy"><strong>Ask Pharos</strong><span></span></div><svg class="pharos-floating-expand" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M3 3l6 6m12-6-6 6M3 21l6-6m12 6-6-6"/></svg></button><button type="button" class="pharos-floating-dismiss" aria-label="Dismiss Ask Pharos progress">×</button>';
+  floating.innerHTML='<button type="button" class="pharos-floating-drag" aria-label="Move Ask Pharos progress" title="Drag to move; use arrow keys to reposition">⠿</button><button type="button" class="pharos-floating-open" title="Reopen Ask Pharos"><div class="pharos-floating-copy"><strong>Ask Pharos</strong><span></span></div><svg class="pharos-floating-return" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="12" width="6" height="5" rx=".7" fill="currentColor" stroke="none"/><path d="M12 12 8 8m0 3V8h3"/></svg></button><button type="button" class="pharos-floating-dismiss" aria-label="Dismiss Ask Pharos progress">×</button>';
   const announcement=document.createElement('span');announcement.className='pharos-floating-announcement';announcement.setAttribute('role','status');
   document.body.append(overlay,floating,announcement);
   const headerButton=document.getElementById('askPharosToggle');
@@ -164,9 +164,21 @@ window.initPharosAsk = function(root, {previews} = {}) {
   const glows=[composerGlow,createPharosGlow(floating,{radius:13})],pageTrace=createPharosEdgeTrace(find('.pharos-page-trace'));
   if(headerButton)glows.push(createPharosGlow(headerButton.querySelector('.ask-pharos-icon'),{outline:document.querySelector('#ph-icon-chat path').getAttribute('d')}));
   const browseButton=find('.pharos-browse'),browseHint=find('.pharos-browse-hint'),windowClose=find('.pharos-window-close'),composerHeader=find('.pharos-composer-header');
+  const floatingIndicator=document.createElement('div');floatingIndicator.className='pharos-home-floating-indicator';floatingIndicator.setAttribute('aria-hidden','true');
+  floatingIndicator.append(browseButton.querySelector('svg').cloneNode(true));find('.pharos-ai-frame').append(floatingIndicator);
+  cleanup.push(()=>{floatingIndicator.remove();product.inert=false;root.classList.remove('pharos-home-floating');});
   const fullscreenButton=find('.pharos-fullscreen'),pageHost=document.getElementById('askPage');
   let presentation='home',returnFocus=null,contextURI='',floatPosition=null,drag=null,suppressReopen=false,navigatedTurn=null,popOutMotion=null,fullscreenReturn=null,holdFloating=false;
+  function syncFloatingHome() {
+    const onHome=presentation==='floating'&&homeHost!==mountHost&&homeHost.isConnected&&['/','/home'].includes(location.pathname);
+    if(presentation==='floating'){
+      const host=onHome?homeHost:overlay;
+      if(root.parentElement!==host)mount(host);
+    }
+    product.inert=onHome;root.classList.toggle('pharos-home-floating',onHome);
+  }
   function updateSurface() {
+    syncFloatingHome();
     syncHistorySurface();
     const turn=turns.at(-1),state=askFloatingState(turn,{navigated:!!turn&&turn.id===navigatedTurn});
     glows.forEach(glow=>glow.setWorking(!!pending));pageTrace.setWorking(!!pending);
@@ -238,7 +250,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
     closePicker();closeHistory();
     presentation='floating';
     if(overlay.open)overlay.close();
-    // A closed dialog retains the composer while the separate progress panel is visible.
+    // Keep the composer in its closed dialog unless Home can show it disabled.
     mount(overlay);updateSurface();
     // The window may have changed size while this panel was hidden.
     const rect=floating.getBoundingClientRect();positionFloating(rect.left,rect.top);
@@ -345,7 +357,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   // Nested model/history menus consume Escape before closing the whole search.
   root.addEventListener('keydown',event=>{if(event.key==='Escape'&&event.defaultPrevented)event.stopPropagation();});
   floating.querySelector('.pharos-floating-open').addEventListener('click',()=>openOverlay());
-  floating.querySelector('.pharos-floating-dismiss').addEventListener('click',()=>{if(elementPicking){elementPicking.cancel?.();return;}surfaceRestorePending=false;presentation='dismissed';updateSurface();});
+  floating.querySelector('.pharos-floating-dismiss').addEventListener('click',()=>{if(elementPicking){elementPicking.cancel?.();return;}surfaceRestorePending=false;presentation='dismissed';restoreHome();updateSurface();});
   const handle=floating.querySelector('.pharos-floating-drag');
   // Like picture in picture: drag the panel itself, or tap to reopen it.
   floating.addEventListener('pointerdown',event=>{
@@ -1372,7 +1384,7 @@ window.initPharosAsk = function(root, {previews} = {}) {
   const routeChanged=()=>{if(elementPicking){if(!elementPicking.navigating)elementPicking.cancel?.();return;}surfaceRestorePending=false;sessionLoads.invalidate();openingSession=null;flushDraft();if(presentation==='modal')closeOverlay();syncFullscreen();restoreHome();if(!['home','page'].includes(presentation))return;if(!askChatPage(location.pathname)){if(pending)browse();}else if(accessEnabled){const id=new URL(location.href).searchParams.get('ask_chat');if(id&&id!==activeSessionId)void openSession(id);else if(!id&&activeSessionId)clearChat(false);else{if(id)regularOverride=false;render();}}};
   listen(window,'pharos:route',routeChanged);
   // Header tabs switch views with pharos:view alone, so full screen ends here too.
-  listen(window,'pharos:view',()=>{syncFullscreen();restoreHome();if(presentation==='home'&&pending&&!['/','/home'].includes(location.pathname))browse();});
+  listen(window,'pharos:view',()=>{syncFullscreen();restoreHome();syncFloatingHome();if(presentation==='home'&&pending&&!['/','/home'].includes(location.pathname))browse();});
   listen(window,'pagehide',()=>{
     // A second reload during startup must not replace the state still loading.
     if(!surfaceRestorePending)try{sessionStorage.setItem(surfaceKey,JSON.stringify({page:askPageURI(location.href),id:activeSessionId||sessionStorage.getItem(activeKey),presentation,contextURI,floatPosition,fullscreenReturn,prompt:promptEditor.document()}));}catch{}

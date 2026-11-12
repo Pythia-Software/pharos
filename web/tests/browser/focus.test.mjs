@@ -2782,8 +2782,12 @@ test('Ask Pharos full screen moves the chat to its own page and back @ 390', {sk
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/');
   await panel.waitFor();
-  assert.equal(await page.locator('#homeAskSearch .pharos-ai').count(),0,'the chat floats rather than returning inline');
+  assert.equal(await page.locator('#homeAskSearch .pharos-product').evaluate(element=>element.inert),true,'Home is disabled while the chat floats');
+  await page.locator('#homeAskSearch .pharos-home-floating-indicator').waitFor();
   assert.ok(await panel.locator('.pharos-floating-open').evaluate(element=>element===document.activeElement),'focus moves to the floating panel');
+  await panel.getByRole('button',{name:'Dismiss Ask Pharos progress'}).click();
+  assert.equal(await page.locator('#homeAskSearch .pharos-product').evaluate(element=>element.inert),false,'dismissing restores Home');
+  await page.locator('#homeAskSearch').getByRole('textbox',{name:'Ask a question',exact:true}).waitFor();
 });
 
 test('Ask Pharos full screen keeps a chat that is still loading', {skip}, async t => {
@@ -2894,7 +2898,13 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   await page.getByRole('textbox',{name:'Ask a question',exact:true}).fill('Break it down');
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();
   const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});await panel.waitFor();
+  const homeProduct=page.locator('#homeAskSearch .pharos-product');
+  assert.equal(await homeProduct.evaluate(element=>element.inert),true);
+  await page.locator('#homeAskSearch .pharos-home-floating-indicator').waitFor();
+  await shot('ask-home-floating');
+  assert.equal(await page.locator('#homeAskSearch #pharos-question').evaluate(element=>{element.focus();return element===document.activeElement;}),false,'the disabled composer cannot receive focus');
   await panel.locator('.pharos-floating-open').click();
+  assert.equal(await page.locator('#askPharosDialog .pharos-product').evaluate(element=>element.inert),false,'reopening enables the composer');
   assert.equal(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(element=>element.value),'Break it down');
   // Keep the server's deferred answer, and deliver activity through the real
   // NDJSON reader so the floating surface is exercised before completion.
