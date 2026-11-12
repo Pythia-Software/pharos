@@ -45,6 +45,10 @@
 #pharos-ask .pharos-keyword-row{display:flex;gap:8px;flex-wrap:wrap}
 #pharos-ask .pharos-keyword-row input{flex:1;min-width:130px;width:0;background:var(--pharos-bg);border:1px solid var(--pharos-line);padding:8px;border-radius:6px}
 #pharos-ask .pharos-ai-frame{position:relative;isolation:isolate;padding:1px;border-radius:18px}
+#pharos-ask .pharos-home-floating-indicator{display:none}
+#pharos-ask.pharos-home-floating .pharos-ai-frame>:not(.pharos-home-floating-indicator),#pharos-ask.pharos-home-floating .pharos-product>:not(.pharos-ai){filter:grayscale(1);opacity:.45}
+#pharos-ask.pharos-home-floating .pharos-home-floating-indicator{position:absolute;inset:0;z-index:15;display:grid;place-items:center;pointer-events:none}
+#pharos-ask.pharos-home-floating .pharos-home-floating-indicator svg{box-sizing:content-box;width:24px;height:24px;padding:12px;border:1px solid var(--line);border-radius:50%;background:var(--panel);color:var(--muted);box-shadow:0 3px 14px #0002}
 #pharos-ask .pharos-ai-inner{--pharos-composer-inset:17px;position:relative;padding:14px var(--pharos-composer-inset) 12px}
 #pharos-ask .pharos-composer-header{position:absolute;inset:8px 8px auto;z-index:12;height:0;margin:0;padding:0;background:transparent;pointer-events:none}
 #pharos-ask .pharos-question-field{min-width:0}
@@ -111,7 +115,7 @@
 #pharos-ask .pharos-context-details pre{max-height:45vh;overflow:auto;margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,SFMono-Regular,monospace}
 .pharos-floating.pharos-selecting-element{flex-wrap:wrap;border-color:#7c3aed}
 .pharos-selecting-element .pharos-floating-open{cursor:default!important}
-.pharos-selecting-element .pharos-floating-expand{display:none}
+.pharos-selecting-element .pharos-floating-return{display:none}
 .pharos-selecting-element .pharos-floating-open span{white-space:normal}
 .pharos-floating-selection{flex:1 0 100%;display:grid;gap:6px;padding:4px 8px 6px;font-size:12px}
 .pharos-floating-selection[hidden]{display:none}
@@ -416,8 +420,8 @@ main>#ask.active{box-sizing:border-box;max-width:none;height:100%;padding:0}
 .pharos-floating-drag:active{cursor:grabbing}
 .pharos-floating-open{display:flex;align-items:center;gap:12px;min-width:0;flex:1;text-align:left;cursor:pointer;touch-action:none}
 .pharos-floating-copy{flex:1;min-width:0}
-.pharos-floating-expand{flex:none;opacity:.65}
-.pharos-floating-open:hover .pharos-floating-expand{opacity:1}
+.pharos-floating-return{flex:none;opacity:.65}
+.pharos-floating-open:hover .pharos-floating-return{opacity:1}
 .pharos-floating-open strong,.pharos-floating-open span{display:block}
 .pharos-floating-open span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.8}
 .pharos-floating-dismiss{font-size:20px;cursor:pointer}
