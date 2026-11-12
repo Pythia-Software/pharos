@@ -17,11 +17,13 @@ import (
 
 func runClaudeImportCLI(ctx context.Context, config Config, args []string, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: pharos claude-import {collect,status,watch} [--name NAME] [--job ID] [PATH ...]")
+		return errors.New("usage: pharos claude-import {collect,status,watch,compact} [--name NAME] [--job ID] [PATH ...]")
 	}
 	flags := flag.NewFlagSet("claude-import "+args[0], flag.ContinueOnError)
 	name := flags.String("name", "claude-ai-imports", "stable Claude collection/source name")
 	id := flags.String("job", "", "existing import job to repair")
+	prepare := flags.Bool("prepare", false, "prepare additive retained units before planning compaction")
+	apply := flags.String("apply", "", "apply a previously reviewed compaction plan ID")
 	interval := flags.Duration("interval", 5*time.Second, "folder check interval for watch")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -34,6 +36,28 @@ func runClaudeImportCLI(ctx context.Context, config Config, args []string, outpu
 		return err
 	}
 	encoder := json.NewEncoder(output)
+	if args[0] == "compact" {
+		if flags.NArg() != 0 || *id != "" || *prepare && *apply != "" {
+			return errors.New("compact accepts --prepare or --apply PLAN_ID and --name")
+		}
+		if *apply != "" {
+			run, err := applyClaudeCompaction(ctx, config, collection, *apply)
+			if run != nil {
+				if outputErr := encoder.Encode(run); err == nil {
+					err = outputErr
+				}
+			}
+			return err
+		}
+		plan, err := planClaudeCompaction(ctx, config, collection, *prepare)
+		if err != nil {
+			return err
+		}
+		return encoder.Encode(plan)
+	}
+	if *prepare || *apply != "" {
+		return errors.New("--prepare and --apply require the compact command")
+	}
 	if args[0] == "status" {
 		if flags.NArg() != 0 {
 			return errors.New("use --job to select an import job")
@@ -171,7 +195,7 @@ func runClaudeImportCLI(ctx context.Context, config Config, args []string, outpu
 func runClaudeImportCommand(config Config, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if len(args) > 0 && (args[0] == "status" || args[0] == "watch") {
+	if len(args) > 0 && (args[0] == "status" || args[0] == "watch" || args[0] == "compact") {
 		return runClaudeImportCLI(ctx, config, args, os.Stdout)
 	}
 	return runCLIOperation(config, "claude-import", OperationSpec{Kind: "capture.import", Variant: "claude-ai"}, func(context.Context, *Op) error { return runClaudeImportCLI(ctx, config, args, os.Stdout) })

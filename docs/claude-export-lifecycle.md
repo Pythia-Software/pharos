@@ -1,6 +1,10 @@
 # Claude export storage and incremental import design
 
-Status: proposed, 2026-11-11. This document is the design/measurement phase of
+Status: design recorded 2026-11-11. The implemented first rollout is documented
+in [Claude export source units and compaction](claude-export-storage.md), including
+its actual format, authorized sample measurements and outstanding frontier work.
+
+The rest of this document preserves the original proposal. Status at proposal: This document is the design/measurement phase of
 the Claude export compaction handoff. It does not enable a new source format,
 migrate a library, delete downloads, or implement incremental Claude.ai parsing.
 Implementation is split into the PRs below. The measurements use synthetic
