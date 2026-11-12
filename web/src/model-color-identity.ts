@@ -6,6 +6,12 @@ export function inferModelProvider(name: string): string {
   if (/^(opus|sonnet|haiku|fable|mythos)(-|$)|^\d+(?:[-.]\d+)*-(opus|sonnet|haiku)(-|$)/.test(key)) return "anthropic";
   if (/^(gemini|gemma)(-|$)/.test(key)) return "google";
   if (/^(gpt|chatgpt|codex|o[134])(-|$)/.test(key)) return "openai";
+  if (/^reflection\//.test(key)) return "reflection";
+  if (/^deepseek(?:-|$)/.test(key)) return "deepseek";
+  if (/^big-pickle(?:-|$)/.test(key)) return "opencode";
+  if (/^mai-code(?:-|$)/.test(key)) return "microsoft";
+  if (/^(?:cursor-)?grok(?:-|$)/.test(key)) return "xai";
+  if (/^composer(?:-|$)/.test(key)) return "cursor";
   return "other";
 }
 export function inferModelClass(name: string): string | undefined {
@@ -29,13 +35,13 @@ export function inferModelClass(name: string): string | undefined {
   if (/^(?:deepseek|reflection\/beam|big-pickle|mai-code)/.test(key)) return /^deepseek/.test(key) ? "DeepSeek" : /^reflection/.test(key) ? "Beam" : /^big-pickle/.test(key) ? "Big Pickle" : "MAI Code";
   return undefined;
 }
-type ClassMatchers = Record<string, { classes: Record<string, { luminance: number[]; match?: string }> }>;
+type ClassMatchers = Record<string, { pricing_provider?: string; classes: Record<string, { luminance: number[]; match?: string }> }>;
 // New classes can add a normalized-name matcher in data rather than editing
 // the built-in recognizers. Ambiguous matches require an explicit correction.
 export function matchModelClass(name: string, providers: ClassMatchers, provider?: string): { provider: string; class: string } | undefined {
   const key = modelColorKey(name), matches: {provider: string; class: string}[] = [];
   for (const [owner, rule] of Object.entries(providers)) {
-    if (provider && provider !== owner) continue;
+    if (provider && provider !== owner && provider !== rule.pricing_provider) continue;
     for (const [family, definition] of Object.entries(rule.classes)) {
       if (definition.match && new RegExp(definition.match).test(key)) matches.push({provider: owner, class: family});
     }
@@ -50,6 +56,16 @@ export function modelCatalogDates(changes: readonly ColorPrice[]): Map<string, s
     if (price.status === "rejected") continue;
     const key = modelColorKey(price.model), previous = dates.get(key);
     if (!previous || price.effective_from < previous) dates.set(key, price.effective_from);
+  }
+  return dates;
+}
+// Reviewed observations position unpriced labels without turning them into
+// pricing aliases or claiming that the label identifies a fixed version.
+export function modelTimelineDates(changes: readonly ColorPrice[], observed: Record<string, string> = {}): Map<string, string> {
+  const dates = modelCatalogDates(changes);
+  for (const [name, date] of Object.entries(observed)) {
+    if (name !== modelColorKey(name) || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) throw new Error(`Invalid observed model date: ${name}`);
+    if (!dates.has(name)) dates.set(name, date);
   }
   return dates;
 }

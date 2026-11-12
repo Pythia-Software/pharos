@@ -2007,4 +2007,10 @@ test("model color editors preview and save inline while retaining focus", { skip
   await page.getByRole("region", {name: "OpenAI colors", exact: true}).getByRole("button", {name: "Discard changes", exact: true}).click();
   await page.evaluate(() => window.scrollTo({ top: 0 }));
   await shot("model-provider-colors");
+  await page.getByRole("button", {name: "Edit color for sonnet", exact: true}).click();
+  await page.getByLabel("Color for sonnet", {exact: true}).waitFor();
+  await page.getByRole("region", {name: "Anthropic colors", exact: true}).scrollIntoViewIfNeeded();
+  await shot("legacy-label-lineage");
+  await page.getByRole("region", {name: "Reflection colors", exact: true}).scrollIntoViewIfNeeded();
+  await shot("independent-provider-palettes");
 });

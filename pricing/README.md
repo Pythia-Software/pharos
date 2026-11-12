@@ -23,8 +23,8 @@ at the expense of the palette. `--preview` writes the complete catalog to
 without writing. Normal builds regenerate colors; the web check also rejects stale
 catalogs. Rejected price rows do not introduce models or dates.
 
-Provider families remain Anthropic orange, Google blue, OpenAI green, and Other
-providers purple. Class rules give preferred `[oldest, newest]` relative luminance,
+Provider families remain Anthropic orange, Google blue, mainline OpenAI green. Specialist OpenAI classes use distinct
+hue bands; smaller developers have separate provider palettes. Class rules give preferred `[oldest, newest]` relative luminance,
 optional `single_luminance`, and optional hue/saturation overrides. Defaults keep
 versions related while using a broad range for distinguishable adjacent releases.
 The generator interpolates in OKLab, fits roughly even perceptual steps, and keeps
@@ -50,9 +50,16 @@ before any file is written and identify the missing rule.
 
 Chronology is based on the first non-rejected `effective_from` date, not today's
 date or the current usage view. Same-day siblings remain distinct but nearby;
-undated aliases occupy a midpoint without consuming a release step. Saved user
+`observed_dates` supplies reviewed first-use dates for unpriced labels;
+other undated names occupy a midpoint without consuming a release step.
+Keep observation provenance in [Model colors](../docs/model-colors.md). Saved user
 choices remain exact even when generated defaults change. See
 [Model colors](../docs/model-colors.md) for the full behavior and implementation.
+
+A provider rule may set `pricing_provider` and class matchers to split a broad
+price-ledger category into developer color palettes without changing price rows.
+New color providers also require a catalog brand entry; API validation reads
+that same catalog.
 
 The `sources` entries map the usage dataset's provider/source values (Claude,
 Codex, ChatGPT, Antigravity, etc.) into provider groups without changing table

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useLocationRevision } from "./nested-pages";
-import { customModelColor, effectiveModelColor, knownModels, loadModelColors, modelCatalogDate, modelClass, modelPaletteComparison, modelPaletteGroups, modelProvider, modelProviders, previewModelColor, providerBrands, providerColorWarnings, rankedModelClasses, saveModelColor, shadeChoices, useModelColorRevision, type ColorKind, type ModelPaletteEntry, type ModelProvider } from "./model-colors";
+import { customModelColor, effectiveModelColor, knownModels, loadModelColors, modelDateLabel, modelClass, modelPaletteComparison, modelPaletteGroups, modelProvider, modelProviders, previewModelColor, providerBrands, providerColorWarnings, rankedModelClasses, saveModelColor, shadeChoices, useModelColorRevision, type ColorKind, type ModelPaletteEntry, type ModelProvider } from "./model-colors";
 import "./project-colors.css";
 import "./model-colors.css";
 
@@ -25,12 +25,12 @@ function PaletteBanner({ provider, groups, entries, changed, selected, select }:
   return <div className="model-palette-chart" data-density={entries.length > 8 ? "dense" : entries.length > 4 ? "medium" : "sparse"} role="group" aria-label={`${providerBrands[provider].label} model palette`}>
     <div className="model-palette-row model-palette-headings"><span /><div className="model-palette-cells" style={columns}>{groups.map(group => <div className="model-palette-group" key={group.name} style={{gridColumn: `span ${group.models.length}`}}><span>{group.name}</span></div>)}</div></div>
     <div className="model-palette-row" role="group" aria-label={`${providerBrands[provider].label} saved model palette`}>
-      <span className="model-palette-row-name">Saved</span><div className="model-palette-cells" style={columns}>{entries.map(entry => <button type="button" className="model-palette-swatch" id={controlID(entry.name)} key={entry.name} aria-label={`Edit color for ${entry.name}`} aria-pressed={selected === entry.name} onClick={() => select(entry.name)} style={{background: entry.saved}} title={`${entry.name} · ${modelCatalogDate(entry.name) ?? "Catalog date unavailable"} · ${entry.saved}`} />)}</div>
+      <span className="model-palette-row-name">Saved</span><div className="model-palette-cells" style={columns}>{entries.map(entry => <button type="button" className="model-palette-swatch" id={controlID(entry.name)} key={entry.name} aria-label={`Edit color for ${entry.name}`} aria-pressed={selected === entry.name} onClick={() => select(entry.name)} style={{background: entry.saved}} title={`${entry.name} · ${modelDateLabel(entry.name)} · ${entry.saved}`} />)}</div>
     </div>
     {changed ? <div className="model-palette-row" role="group" aria-label={`${providerBrands[provider].label} preview model palette`}>
       <span className="model-palette-row-name">Preview</span><div className="model-palette-cells" style={columns}>{entries.map(entry => <span className="model-palette-swatch" key={entry.name} style={{background: entry.preview}} title={`${entry.name} · ${entry.preview}`} />)}</div>
     </div> : null}
-    <div className="model-palette-row model-palette-axis"><span /><div className="model-palette-cells" style={columns}>{entries.map(entry => <label className="model-palette-label" key={entry.name} htmlFor={controlID(entry.name)} title={`${entry.name} · ${modelCatalogDate(entry.name) ?? "Catalog date unavailable"}`}>{entry.name}</label>)}</div></div>
+    <div className="model-palette-row model-palette-axis"><span /><div className="model-palette-cells" style={columns}>{entries.map(entry => <label className="model-palette-label" key={entry.name} htmlFor={controlID(entry.name)} title={`${entry.name} · ${modelDateLabel(entry.name)}`}>{entry.name}</label>)}</div></div>
   </div>;
 }
 
@@ -57,10 +57,10 @@ function ProviderColorCard({ provider, busy, save }: { provider: ModelProvider; 
     <ColorEditor kind="provider" name={provider} label={brand.label} detail={`${models.length} models`} base={base} draft={proposedBase} setDraft={color => edit("provider", provider, color)} busy={busy} save={saveDraft} />
     {warnings.length ? <ul className="model-palette-warnings" role="status" aria-label={`${brand.label} color warnings`}>{warnings.map(warning => <li key={warning}>{warning}</li>)}</ul> : null}
     <p className="model-palette-hint">Select a model’s swatch or name to customize it. Proposed colors appear below the saved colors until you save.</p>
-    <PaletteBanner provider={provider} groups={groups} entries={comparison.entries} changed={comparison.changed} selected={selected} select={setSelected} />
+    {models.length ? <PaletteBanner provider={provider} groups={groups} entries={comparison.entries} changed={comparison.changed} selected={selected} select={setSelected} /> : null}
     {Object.keys(drafts).length ? <div className="model-palette-actions"><button type="button" disabled={busy} onClick={() => setDrafts({})}>Discard changes</button></div> : null}
     {selected ? <div className="model-inline-editor" role="group" aria-label={`Customize ${selected}`}>
-      <ColorEditor kind="model" name={selected} label={selected} detail={[modelClass(selected), modelCatalogDate(selected) ? `Catalog date ${modelCatalogDate(selected)}` : "Catalog date unavailable"].filter(Boolean).join(" · ")} base={previewModelColor(selected, proposedBase, drafts[`model:${selected}`])} draft={draft("model", selected)} setDraft={color => edit("model", selected, color)} busy={busy} save={saveDraft} />
+      <ColorEditor kind="model" name={selected} label={selected} detail={[modelClass(selected), modelDateLabel(selected)].filter(Boolean).join(" · ")} base={previewModelColor(selected, proposedBase, drafts[`model:${selected}`])} draft={draft("model", selected)} setDraft={color => edit("model", selected, color)} busy={busy} save={saveDraft} />
       <button className="model-inline-close" type="button" onClick={() => { document.getElementById(`model-color-${provider}-${encodeURIComponent(selected)}`)?.focus(); setSelected(null); }} aria-label={`Close editor for ${selected}`}>Close editor</button>
     </div> : null}
   </section>;
@@ -84,9 +84,9 @@ export function ModelColorSettings() {
   }
   return <div className="model-color-settings">
     <p className="muted">Each provider has a color family, with distinct shades for model classes and smaller variations for their versions. Your palette stays consistent across charts, cards, and dashboards and saves with your library.</p>
-    <p className="model-color-note">For contemporary releases, core classes deepen in order: {hierarchy}. Older versions are lighter within each class, using the first date in Pharos’s pricing catalog. Defaults can rebalance as models arrive. Changing a provider color shifts its automatic palette; your individual choices stay yours.</p>
+    <p className="model-color-note">For contemporary releases, core classes deepen in order: {hierarchy}. Older versions are lighter within each class. Dates use the pricing catalog or the first recorded use of an unnumbered label. Defaults can rebalance as models arrive. Changing a provider color shifts its automatic palette; your individual choices stay yours.</p>
     <div role="status" aria-live="polite">{message}</div>
     {error ? <p role="alert">{error}</p> : null}
-    <div className="model-provider-list">{modelProviders.map(provider => <ProviderColorCard key={provider} provider={provider} busy={busy} save={save} />)}</div>
+    <div className="model-provider-list">{modelProviders.filter(provider => knownModels().some(model => modelProvider(model) === provider) || customModelColor("provider", provider)).map(provider => <ProviderColorCard key={provider} provider={provider} busy={busy} save={save} />)}</div>
   </div>;
 }

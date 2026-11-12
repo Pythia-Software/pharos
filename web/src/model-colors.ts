@@ -3,7 +3,7 @@ import { useSyncExternalStore } from "react";
 import catalog from "../../pricing/model_colors.json";
 import prices from "../../pricing/cost_changes.json";
 import rules from "../../pricing/model_color_rules.json";
-import { inferModelProvider, inferModelClass, matchModelClass, modelCatalogDates, modelColorKey } from "./model-color-identity";
+import { inferModelProvider, inferModelClass, matchModelClass, modelCatalogDates, modelTimelineDates, modelColorKey } from "./model-color-identity";
 export { modelColorKey } from "./model-color-identity";
 
 export type ModelProvider = keyof typeof catalog.providers;
@@ -24,14 +24,18 @@ export function modelClass(name: string): string | undefined {
 }
 export const sourceProvider = (name: string): ModelProvider => Object.hasOwn(sources, name) ? sources[name].provider : Object.hasOwn(providerBrands, name) ? name as ModelProvider : "other";
 export const sourceLabel = (name: string) => ({ claude: "Claude", codex: "Codex", antigravity: "Antigravity", chatgpt: "ChatGPT", tl1: "TL1", canonical: "Canonical export" }[name] ?? name);
-const dates = modelCatalogDates(prices.changes);
-export const modelCatalogDate = (name: string) => dates.get(modelColorKey(name));
+const catalogDates = modelCatalogDates(prices.changes), dates = modelTimelineDates(prices.changes, rules.observed_dates);
+export const modelTimelineDate = (name: string) => dates.get(modelColorKey(name));
+export const modelDateLabel = (name: string) => {
+  const key = modelColorKey(name), date = dates.get(key);
+  return date ? `${!catalogDates.has(key) && Object.hasOwn(rules.observed_dates, key) ? "First observed" : "Catalog date"} ${date}` : "Date unavailable";
+};
 // One catalog order drives settings, chart stacks and legends. Unknown
 // classes follow the reviewed classes without changing recorded model keys.
 export function modelColorOrder(name: string): string {
   const key = modelColorKey(name), provider = modelProvider(key), family = modelClass(key) ?? key.split(/[-.]/)[0];
   const classes: readonly string[] = catalog.class_order[provider], index = classes.indexOf(family);
-  return `${modelProviders.indexOf(provider)}:${index < 0 ? classes.length : index}:${family}:${modelCatalogDate(key) ?? "9999"}:${key}`;
+  return `${modelProviders.indexOf(provider)}:${index < 0 ? classes.length : index}:${family}:${modelTimelineDate(key) ?? "9999"}:${key}`;
 }
 export const compareModelColors = (a: string, b: string) => modelColorOrder(a).localeCompare(modelColorOrder(b), undefined, { numeric: true });
 // Presentation can split shared color classes without changing their policy.
@@ -149,7 +153,7 @@ export function providerColorWarnings(provider: ModelProvider, base: string, ent
   if (brightness < .015) warnings.push("This base color is very dark. Some model shades may blend into dark backgrounds.");
   const families = new Map<string, Map<string, ModelPaletteEntry>>();
   for (const entry of [...entries].sort((a, b) => compareModelColors(a.name, b.name))) {
-    const date = modelCatalogDate(entry.name), family = modelClass(entry.name);
+    const date = modelTimelineDate(entry.name), family = modelClass(entry.name);
     if (!date || !family) continue;
     if (!families.has(family)) families.set(family, new Map());
     // Undated aliases and same-date siblings deliberately share nearby tones.

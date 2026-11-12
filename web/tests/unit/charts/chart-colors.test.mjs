@@ -4,7 +4,7 @@ import catalog from '../../../../pricing/model_colors.json';
 import prices from '../../../../pricing/cost_changes.json';
 import rules from '../../../../pricing/model_color_rules.json';
 import { generateModelColors } from '../../../src/model-color-generation';
-import { colorHSL, modelCatalogDate, modelClass, recommendedModelColor } from '../../../src/model-colors';
+import { colorHSL, modelTimelineDate, modelClass, recommendedModelColor } from '../../../src/model-colors';
 import { chartSeriesStyle, colorFields, hourOfDayColors, keyColorTheme, metricSeriesColor, modelColorKey, otherSeriesColor } from '../../../src/chart-colors';
 import { orderedValues } from '../../../src/session-shape-bands';
 import { foldSeries } from '../../../src/chart-series';
@@ -29,8 +29,9 @@ test('catalog covers priced models, with coordinated default colors for model ve
   for (const price of prices.changes) {
     if (price.status === 'rejected') continue;
     const key = modelColorKey(price.model);
-    assert.equal(catalog.models[key]?.provider, price.provider, price.model);
-    assert.equal(chartSeriesStyle('model_family', key).color, recommendedModelColor(key, catalog.providers[price.provider].color));
+    const provider = catalog.models[key]?.provider;
+    assert.ok(provider === price.provider || rules.providers[provider]?.pricing_provider === price.provider, price.model);
+    assert.equal(chartSeriesStyle('model_family', key).color, recommendedModelColor(key, catalog.providers[provider].color));
   }
   for (const entries of [Object.values(catalog.models), Object.values(catalog.sources)]) {
     assert.equal(new Set(entries.map(entry => entry.color)).size, entries.length);
@@ -48,11 +49,11 @@ test('catalog versions progress distinctly and contemporary core tiers stay orde
     .reduce((total, channel, index) => total + channel * [0.2126, 0.7152, 0.0722][index], 0);
   const families = Map.groupBy(Object.keys(catalog.models), name => `${catalog.models[name].provider}:${catalog.models[name].class}`);
   for (const versions of families.values()) {
-    versions.sort((a, b) => (modelCatalogDate(a) ?? '').localeCompare(modelCatalogDate(b) ?? ''));
+    versions.sort((a, b) => (modelTimelineDate(a) ?? '').localeCompare(modelTimelineDate(b) ?? ''));
     // Brightness alone misses alternating muted/saturated shades. A
     // chronological ramp should also take a direct path through color space.
-    const dated = versions.filter((name, index) => modelCatalogDate(name)
-      && modelCatalogDate(name) !== modelCatalogDate(versions[index - 1] ?? ''));
+    const dated = versions.filter((name, index) => modelTimelineDate(name)
+      && modelTimelineDate(name) !== modelTimelineDate(versions[index - 1] ?? ''));
     if (dated.length > 2) {
       const colors = dated.map(name => chartSeriesStyle('model_family', name).color);
       const distance = colorDistance(colors[0], colors.at(-1));
@@ -60,7 +61,7 @@ test('catalog versions progress distinctly and contemporary core tiers stay orde
       assert.ok(travel <= distance * 1.05, `${dated.join(' → ')} should progress smoothly without hue or saturation zigzags`);
     }
     for (let index = 1; index < versions.length; index++) {
-      if (!modelCatalogDate(versions[index - 1]) || modelCatalogDate(versions[index]) === modelCatalogDate(versions[index - 1])) continue;
+      if (!modelTimelineDate(versions[index - 1]) || modelTimelineDate(versions[index]) === modelTimelineDate(versions[index - 1])) continue;
       const older = chartSeriesStyle('model_family', versions[index - 1]);
       const newer = chartSeriesStyle('model_family', versions[index]);
       assert.ok(luminance(newer.color) < luminance(older.color), `${versions[index]} should be darker than ${versions[index - 1]}`);
@@ -92,12 +93,12 @@ test('catalog versions progress distinctly and contemporary core tiers stay orde
     // Compare the latest releases available at each catalog date. Historical
     // class ranges may overlap so versions can use a wider, clearer ramp.
     const names = Object.keys(catalog.models).filter(name => catalog.models[name].provider === provider
-      && tiers.includes(catalog.models[name].class) && modelCatalogDate(name));
-    for (const date of [...new Set(names.map(modelCatalogDate))].sort()) {
+      && tiers.includes(catalog.models[name].class) && modelTimelineDate(name));
+    for (const date of [...new Set(names.map(modelTimelineDate))].sort()) {
       const contemporaries = tiers.map(tier => {
-        const available = names.filter(name => catalog.models[name].class === tier && modelCatalogDate(name) <= date);
-        const latestDate = available.map(modelCatalogDate).sort().at(-1);
-        return available.filter(name => modelCatalogDate(name) === latestDate);
+        const available = names.filter(name => catalog.models[name].class === tier && modelTimelineDate(name) <= date);
+        const latestDate = available.map(modelTimelineDate).sort().at(-1);
+        return available.filter(name => modelTimelineDate(name) === latestDate);
       }).filter(versions => versions.length);
       for (let index = 1; index < contemporaries.length; index++) {
         for (const weaker of contemporaries[index - 1]) for (const stronger of contemporaries[index]) {
@@ -150,7 +151,7 @@ test('Other retains totals and selected models stay visible, even without usage'
 
 test('sources share provider families without sharing colors', () => {
   const { series } = fold(['codex', 'tl1', 'chatgpt', 'claude', 'antigravity', 'canonical', 'new-source'], 10, [], 'provider');
-  assert.deepEqual(series.map(item => item.group), ['Anthropic', 'Google', 'OpenAI', 'OpenAI', 'Other providers', 'Other providers', 'Other providers']);
+  assert.deepEqual(series.map(item => item.group), ['Anthropic', 'Google', 'OpenAI', 'OpenAI', 'Unidentified', 'Unidentified', 'Unidentified']);
   assert.equal(series.find(item => item.value === 'antigravity').color, '#4285f4');
   assert.equal(series.find(item => item.value === 'codex').color, '#10a37f');
   assert.equal(new Set(series.map(item => item.color)).size, series.length);

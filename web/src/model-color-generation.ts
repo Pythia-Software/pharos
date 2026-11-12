@@ -1,7 +1,7 @@
 import { linear, perceptualColor } from "./model-color-math";
 export { colorLuminance as generatedColorLuminance } from "./model-color-math";
-import { inferModelClass, matchModelClass, modelCatalogDates, modelColorKey, type ColorPrice } from "./model-color-identity";
-export { modelCatalogDates } from "./model-color-identity";
+import { inferModelClass, matchModelClass, modelTimelineDates, modelColorKey, type ColorPrice } from "./model-color-identity";
+export { modelTimelineDates } from "./model-color-identity";
 
 export type ColorCatalog = {
   version: number;
@@ -16,7 +16,8 @@ export type ColorRules = {
   lightness_bounds: number[];
   minimum_version_step: number;
   contemporary_step: number;
-  providers: Record<string, { hue: number; saturation: number; ranked_classes: string[]; classes: Record<string, ClassRule> }>;
+  observed_dates?: Record<string, string>;
+  providers: Record<string, { hue: number; saturation: number; pricing_provider?: string; ranked_classes: string[]; classes: Record<string, ClassRule> }>;
 };
 function colorAtLevel(hue: number, saturation: number, level: number): string {
   const channels = (lightness: number) => {
@@ -70,7 +71,7 @@ export function generateModelColors(input: ColorCatalog, changes: readonly Color
   if (rules.version !== 1 || input.version !== 1) throw new Error("Unsupported model color rules/catalog version");
   const [floor, ceiling] = rules.lightness_bounds;
   if (!(floor > 0 && ceiling < 1 && floor < ceiling && rules.lightness_bounds.length === 2 && Number.isFinite(rules.minimum_version_step) && rules.minimum_version_step > 0 && Number.isFinite(rules.contemporary_step) && rules.contemporary_step > 0)) throw new Error("Invalid model color spacing/bounds");
-  const catalog: ColorCatalog = JSON.parse(JSON.stringify(input)), dates = modelCatalogDates(changes), warnings: string[] = [], versionSteps: Record<string, number> = {};
+  const catalog: ColorCatalog = JSON.parse(JSON.stringify(input)), dates = modelTimelineDates(changes, rules.observed_dates), warnings: string[] = [], versionSteps: Record<string, number> = {};
   // Research supplies dates/provider identities; generation never invents a
   // release date or guesses where a genuinely new capability class belongs.
   for (const price of changes) {
@@ -78,10 +79,11 @@ export function generateModelColors(input: ColorCatalog, changes: readonly Color
     const key = modelColorKey(price.model);
     if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(price.effective_from) || !Number.isFinite(Date.parse(price.effective_from)) || new Date(price.effective_from).toISOString().slice(0, 10) !== price.effective_from) throw new Error(`Invalid catalog date/model: ${price.model}`);
     if (!Object.hasOwn(catalog.models, key)) {
-      const family = matchModelClass(key, rules.providers, price.provider)?.class ?? inferModelClass(key);
-      if (!family || !Object.hasOwn(rules.providers, price.provider) || !Object.hasOwn(rules.providers[price.provider].classes, family)) throw new Error(`Define a model color class/rule for ${price.provider}: ${price.model}`);
-      catalog.models[key] = { provider: price.provider, class: family, color: "" };
-    } else if (catalog.models[key].provider !== price.provider) throw new Error(`Conflicting provider for ${key}`);
+      const match = matchModelClass(key, rules.providers, price.provider), provider = match?.provider ?? price.provider;
+      const family = match?.class ?? inferModelClass(key);
+      if (!family || !Object.hasOwn(rules.providers, provider) || !Object.hasOwn(rules.providers[provider].classes, family)) throw new Error(`Define a model color class/rule for ${price.provider}: ${price.model}`);
+      catalog.models[key] = { provider, class: family, color: "" };
+    } else if (catalog.models[key].provider !== price.provider && rules.providers[catalog.models[key].provider]?.pricing_provider !== price.provider) throw new Error(`Conflicting provider for ${key}`);
   }
   for (const [key, model] of Object.entries(catalog.models)) {
     if (key !== modelColorKey(key) || !Object.hasOwn(catalog.providers, model.provider) || !Object.hasOwn(rules.providers, model.provider) || !Object.hasOwn(rules.providers[model.provider].classes, model.class)) throw new Error(`Define a normalized model color class/rule for ${key}`);

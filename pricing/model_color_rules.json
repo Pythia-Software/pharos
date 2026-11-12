@@ -112,8 +112,8 @@
             0.7908,
             0.2966
           ],
-          "hue": 141.8,
-          "saturation": 0.379,
+          "hue": 110,
+          "saturation": 0.6,
           "single_luminance": 0.4943
         },
         "Codex": {
@@ -121,39 +121,40 @@
             0.6269,
             0.1524
           ],
-          "hue": 165.4,
-          "saturation": 0.378
+          "hue": 82,
+          "saturation": 0.62
         },
         "Rosalind": {
           "luminance": [
             0.6154,
             0.1463
           ],
-          "hue": 131.6,
-          "saturation": 0.379
+          "hue": 178,
+          "saturation": 0.7
         },
         "Image": {
           "luminance": [
             0.6556,
             0.6227
           ],
-          "hue": 152.7,
-          "saturation": 0.379
+          "hue": 48,
+          "saturation": 0.75
         },
         "Cyber": {
           "luminance": [
             0.6297,
             0.2361
           ],
-          "hue": 173.9,
-          "saturation": 0.379,
+          "hue": 198,
+          "saturation": 0.75,
           "single_luminance": 0.3936
         }
       }
     },
-    "other": {
-      "hue": 270,
-      "saturation": 0.45,
+    "reflection": {
+      "hue": 282,
+      "saturation": 0.56,
+      "pricing_provider": "other",
       "ranked_classes": [],
       "classes": {
         "Beam": {
@@ -161,38 +162,111 @@
             0.2432,
             0.0912
           ],
-          "hue": 275.2,
-          "saturation": 0.647,
-          "single_luminance": 0.152
-        },
+          "hue": 282,
+          "saturation": 0.56,
+          "single_luminance": 0.152,
+          "match": "^reflection/beam(?:-|$)"
+        }
+      }
+    },
+    "deepseek": {
+      "hue": 247,
+      "saturation": 0.6,
+      "pricing_provider": "other",
+      "ranked_classes": [],
+      "classes": {
         "DeepSeek": {
           "luminance": [
             0.1837,
             0.0689
           ],
-          "hue": 254.2,
-          "saturation": 0.621,
-          "single_luminance": 0.1148
-        },
+          "hue": 247,
+          "saturation": 0.6,
+          "single_luminance": 0.1148,
+          "match": "^deepseek(?:-|$)"
+        }
+      }
+    },
+    "opencode": {
+      "hue": 326,
+      "saturation": 0.5,
+      "pricing_provider": "other",
+      "ranked_classes": [],
+      "classes": {
         "Big Pickle": {
           "luminance": [
             0.3059,
             0.1147
           ],
-          "hue": 288.1,
-          "saturation": 0.457,
-          "single_luminance": 0.1912
-        },
+          "hue": 326,
+          "saturation": 0.5,
+          "single_luminance": 0.1912,
+          "match": "^big-pickle(?:-|$)"
+        }
+      }
+    },
+    "microsoft": {
+      "hue": 5,
+      "saturation": 0.6,
+      "pricing_provider": "other",
+      "ranked_classes": [],
+      "classes": {
         "MAI Code": {
           "luminance": [
             0.2496,
             0.0936
           ],
-          "hue": 265.9,
-          "saturation": 0.44,
-          "single_luminance": 0.156
+          "hue": 5,
+          "saturation": 0.6,
+          "single_luminance": 0.156,
+          "match": "^mai-code(?:-|$)"
         }
       }
+    },
+    "xai": {
+      "hue": 210,
+      "saturation": 0.07,
+      "pricing_provider": "other",
+      "ranked_classes": [],
+      "classes": {
+        "Grok": {
+          "luminance": [
+            0.4,
+            0.14
+          ],
+          "hue": 210,
+          "saturation": 0.07,
+          "match": "^(?:cursor-)?grok(?:-|$)"
+        }
+      }
+    },
+    "cursor": {
+      "hue": 38,
+      "saturation": 0.58,
+      "pricing_provider": "other",
+      "ranked_classes": [],
+      "classes": {
+        "Composer": {
+          "luminance": [
+            0.4,
+            0.14
+          ],
+          "hue": 38,
+          "saturation": 0.58,
+          "match": "^composer(?:-|$)"
+        }
+      }
+    },
+    "other": {
+      "hue": 215,
+      "saturation": 0.07,
+      "ranked_classes": [],
+      "classes": {}
     }
+  },
+  "observed_dates": {
+    "haiku": "2025-11-27",
+    "sonnet": "2025-08-09",
+    "opus": "2025-08-09"
   }
 }

@@ -23,9 +23,10 @@ export function colorPreview(catalog, dates, warnings) {
 
 export async function updateModelColors({check = false, preview = false} = {}) {
   const bundle = await build({ absWorkingDir: fileURLToPath(new URL('./', import.meta.url)), entryPoints: ['src/model-color-generation.ts'], bundle: true, write: false, platform: 'node', format: 'esm', logLevel: 'warning' });
-  const { generateModelColors, modelCatalogDates } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+  const { generateModelColors, modelTimelineDates } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
   const prices = readJSON('pricing/cost_changes.json');
-  const {catalog, warnings} = generateModelColors(readJSON('pricing/model_colors.json'), prices.changes, readJSON('pricing/model_color_rules.json'));
+  const rules = readJSON('pricing/model_color_rules.json');
+  const {catalog, warnings} = generateModelColors(readJSON('pricing/model_colors.json'), prices.changes, rules);
   const current = readFileSync(catalogPath, 'utf8'), next = `${JSON.stringify(catalog, null, 2)}\n`;
   if (check && current !== next) throw new Error('Model colors are stale; run `npm --prefix web run generate-model-colors`.');
   if (!check && current !== next) {
@@ -37,7 +38,7 @@ export async function updateModelColors({check = false, preview = false} = {}) {
   if (preview) {
     const target = fileURLToPath(new URL('.context/model-colors.html', root));
     mkdirSync(dirname(target), {recursive: true});
-    writeFileSync(target, colorPreview(catalog, modelCatalogDates(prices.changes), warnings));
+    writeFileSync(target, colorPreview(catalog, modelTimelineDates(prices.changes, rules.observed_dates), warnings));
     console.log(`Palette preview: ${target}`);
   }
   return Object.keys(catalog.models).length;

@@ -16,10 +16,40 @@
       "color": "#10a37f",
       "hue": 158
     },
+    "reflection": {
+      "label": "Reflection",
+      "color": "#a34dcc",
+      "hue": 282
+    },
+    "deepseek": {
+      "label": "DeepSeek",
+      "color": "#6455db",
+      "hue": 247
+    },
+    "opencode": {
+      "label": "OpenCode",
+      "color": "#c24b90",
+      "hue": 326
+    },
+    "microsoft": {
+      "label": "Microsoft",
+      "color": "#d45b50",
+      "hue": 5
+    },
+    "xai": {
+      "label": "xAI",
+      "color": "#71777c",
+      "hue": 210
+    },
+    "cursor": {
+      "label": "Cursor",
+      "color": "#be8b32",
+      "hue": 38
+    },
     "other": {
-      "label": "Other providers",
-      "color": "#8775b5",
-      "hue": 270
+      "label": "Unidentified",
+      "color": "#777d87",
+      "hue": 215
     }
   },
   "class_order": {
@@ -45,113 +75,126 @@
       "Image",
       "Cyber"
     ],
-    "other": [
-      "Beam",
-      "DeepSeek",
-      "Big Pickle",
+    "reflection": [
+      "Beam"
+    ],
+    "deepseek": [
+      "DeepSeek"
+    ],
+    "opencode": [
+      "Big Pickle"
+    ],
+    "microsoft": [
       "MAI Code"
-    ]
+    ],
+    "xai": [
+      "Grok"
+    ],
+    "cursor": [
+      "Composer"
+    ],
+    "other": []
   },
   "models": {
     "opus": {
       "provider": "anthropic",
       "class": "Opus",
-      "color": "#ba7548"
+      "color": "#cdaa92"
     },
     "opus-4-1": {
       "provider": "anthropic",
       "class": "Opus",
-      "color": "#d9b49c"
+      "color": "#ddbca5"
     },
     "opus-4-5": {
       "provider": "anthropic",
       "class": "Opus",
-      "color": "#c7a188"
+      "color": "#bd9980"
     },
     "opus-4-6": {
       "provider": "anthropic",
       "class": "Opus",
-      "color": "#b68e75"
+      "color": "#ad876e"
     },
     "opus-4-7": {
       "provider": "anthropic",
       "class": "Opus",
-      "color": "#a57c62"
+      "color": "#9d775d"
     },
     "opus-4-8": {
       "provider": "anthropic",
       "class": "Opus",
-      "color": "#946a50"
+      "color": "#8d664c"
     },
     "opus-5": {
       "provider": "anthropic",
       "class": "Opus",
-      "color": "#83593e"
+      "color": "#7e563b"
     },
     "opus-5-5": {
       "provider": "anthropic",
       "class": "Opus",
-      "color": "#73482c"
+      "color": "#6f462a"
     },
     "sonnet": {
       "provider": "anthropic",
       "class": "Sonnet",
-      "color": "#d5ab90"
+      "color": "#e6ccbb"
     },
     "sonnet-4": {
       "provider": "anthropic",
       "class": "Sonnet",
-      "color": "#f0e2d8"
+      "color": "#f1e3d9"
     },
     "sonnet-4-5": {
       "provider": "anthropic",
       "class": "Sonnet",
-      "color": "#e3c6b3"
+      "color": "#dbb69e"
     },
     "sonnet-4-6": {
       "provider": "anthropic",
       "class": "Sonnet",
-      "color": "#d5aa8f"
+      "color": "#d0a081"
     },
     "sonnet-5": {
       "provider": "anthropic",
       "class": "Sonnet",
-      "color": "#c78f6b"
+      "color": "#c48a64"
     },
     "sonnet-5-5": {
       "provider": "anthropic",
       "class": "Sonnet",
-      "color": "#b87346"
+      "color": "#b87446"
     },
     "haiku": {
       "provider": "anthropic",
       "class": "Haiku",
-      "color": "#ecd9cd"
+      "color": "#e5ccbb"
     },
     "3-5-haiku": {
       "provider": "anthropic",
       "class": "Haiku",
-      "color": "#f8f0eb"
+      "color": "#f9f4f0"
     },
     "haiku-4-5": {
       "provider": "anthropic",
       "class": "Haiku",
-      "color": "#ecd8cc"
+      "color": "#efe0d5"
     },
     "haiku-5-5": {
       "provider": "anthropic",
       "class": "Haiku",
-      "color": "#e0c1ad"
+      "color": "#dbb8a1"
     },
     "fable-5": {
       "provider": "anthropic",
       "class": "Fable / Mythos",
-      "color": "#794c2e"
+      "color": "#75492c"
     },
     "fable-5-1": {
       "provider": "anthropic",
       "class": "Fable / Mythos",
-      "color": "#553520"
+      "color": "#53341f"
     },
     "fable-5-2": {
       "provider": "anthropic",
@@ -196,17 +239,17 @@
     "gpt-5.3-codex": {
       "provider": "openai",
       "class": "Codex",
-      "color": "#367868"
+      "color": "#56771c"
     },
     "gpt-5.3-codex-spark": {
       "provider": "openai",
       "class": "Codex",
-      "color": "#abd9ce"
+      "color": "#b5dd6f"
     },
     "gpt-5.5": {
       "provider": "openai",
       "class": "GPT",
-      "color": "#87c99f"
+      "color": "#63d24c"
     },
     "gpt-5.6-luna": {
       "provider": "openai",
@@ -251,52 +294,52 @@
     "gpt-6-rosalind": {
       "provider": "openai",
       "class": "Rosalind",
-      "color": "#367843"
+      "color": "#157774"
     },
     "gpt-image-2.6-sunburst": {
       "provider": "openai",
       "class": "Image",
-      "color": "#b0dcc8"
+      "color": "#ead16d"
     },
     "gpt-image-2.6-flare": {
       "provider": "openai",
       "class": "Image",
-      "color": "#afdbc7"
+      "color": "#ead16b"
     },
     "gpt-6-cyber": {
       "provider": "openai",
       "class": "Cyber",
-      "color": "#5fb7ae"
+      "color": "#43b4e4"
     },
     "gpt-rosalind-research": {
       "provider": "openai",
       "class": "Rosalind",
-      "color": "#abd9b4"
+      "color": "#59e2dd"
     },
     "gpt-rosalind-discovery": {
       "provider": "openai",
       "class": "Rosalind",
-      "color": "#70a77a"
+      "color": "#38aba7"
     },
     "reflection/beam-free": {
-      "provider": "other",
+      "provider": "reflection",
       "class": "Beam",
-      "color": "#9840d6"
+      "color": "#a03fc9"
     },
     "deepseek-v4.1-flash-free": {
-      "provider": "other",
+      "provider": "deepseek",
       "class": "DeepSeek",
-      "color": "#6543d3"
+      "color": "#5949d1"
     },
     "big-pickle": {
-      "provider": "other",
+      "provider": "opencode",
       "class": "Big Pickle",
-      "color": "#ab56c0"
+      "color": "#c44d91"
     },
     "mai-code-1.1-flash": {
-      "provider": "other",
+      "provider": "microsoft",
       "class": "MAI Code",
-      "color": "#8458be"
+      "color": "#c63e31"
     }
   },
   "sources": {
@@ -318,11 +361,11 @@
     },
     "tl1": {
       "provider": "other",
-      "color": "#8775b5"
+      "color": "#777d87"
     },
     "canonical": {
       "provider": "other",
-      "color": "#64558c"
+      "color": "#626a77"
     }
   }
 }

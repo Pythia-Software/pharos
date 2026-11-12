@@ -13,7 +13,11 @@ func TestModelColorsPersistIndependentChoicesAndDiscoverUnpricedModels(t *testin
 	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('colors','canonical','local','colors','Colors','2026-01-01');
  INSERT INTO conversations(id,workspace_id,provider,account,native_id,model) VALUES('colors','colors','codex','local','colors','gpt-local');
  INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,model) VALUES('colors-helper','colors','colors','helper','subagent','claude','claude-opus-custom-20261110[1m]')`)
-	for id, color := range map[string]string{"provider:openai": "#ABCDEF", "model:gpt-local": "#123456", "source:codex": "#654321"} {
+	choicesToSave := map[string]string{"provider:openai": "#ABCDEF", "model:gpt-local": "#123456", "source:codex": "#654321"}
+	for _, provider := range []string{"reflection", "deepseek", "opencode", "microsoft", "xai", "cursor"} {
+		choicesToSave["provider:"+provider] = "#557799"
+	}
+	for id, color := range choicesToSave {
 		response := preferencesCall(t, server, http.MethodPost, "/api/model-colors", jsonText(map[string]string{"id": id, "color": color}))
 		if response.Code != http.StatusOK {
 			t.Fatalf("save %s: %d %s", id, response.Code, response.Body.String())
@@ -26,13 +30,18 @@ func TestModelColorsPersistIndependentChoicesAndDiscoverUnpricedModels(t *testin
 	}
 	response := preferencesCall(t, server, http.MethodGet, "/api/model-colors", "")
 	var choices modelColorPalette
-	if err := json.Unmarshal(response.Body.Bytes(), &choices); err != nil || response.Code != http.StatusOK || len(choices.Models) != 0 || len(choices.Overrides) != 3 {
+	if err := json.Unmarshal(response.Body.Bytes(), &choices); err != nil || response.Code != http.StatusOK || len(choices.Models) != 0 || len(choices.Overrides) != len(choicesToSave) {
 		t.Fatalf("choices-only refresh: %d %+v %v", response.Code, choices, err)
 	}
 	reopened := reopenCatalog(t, c.Path)
 	palette, err := reopened.modelColors(t.Context(), true)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for id, color := range choicesToSave {
+		if palette.Overrides[id] != strings.ToLower(color) {
+			t.Fatalf("lost %s: %+v", id, palette)
+		}
 	}
 	if palette.Overrides["provider:openai"] != "#abcdef" || palette.Overrides["model:gpt-local"] != "#123456" || palette.Overrides["source:codex"] != "#654321" {
 		t.Fatalf("lost overrides: %+v", palette)

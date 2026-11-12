@@ -1,10 +1,14 @@
 # Model and provider colors
 
 Settings → Model & provider colors saves a base color for each model provider
-(Anthropic, Google, OpenAI, or the Other providers group). The existing brand
-palette supplies defaults. Recorded provider labels such as Claude, Codex,
-ChatGPT and Antigravity follow that palette. Models stay in their provider's color family: oranges for Anthropic,
-blues for Google, greens for OpenAI, and purples for Other providers. Classes
+(Anthropic, Google, OpenAI, Reflection, DeepSeek, OpenCode, Microsoft, xAI,
+and Cursor). Models with an unknown developer use an Unidentified fallback;
+empty categories are hidden. The existing brand palette supplies defaults. Recorded provider labels such as Claude, Codex,
+ChatGPT and Antigravity follow that palette. Mainline models stay in their
+provider color families: oranges for Anthropic, blues for Google, and greens for
+OpenAI. Specialized OpenAI classes use separate hues: yellow for Image, cyan for
+Cyber, turquoise for Rosalind, chartreuse for Codex, and lime for general GPT.
+Other developers have independently customizable palettes. Classes
 use different parts of that range, with versions following a smooth light-to-dark progression. Each model
 editor offers five suggested shades, a free color picker, light/dark previews,
 Save color, and Use recommended. Provider editors offer Restore brand.
@@ -27,7 +31,7 @@ and same-date siblings do not create false variety warnings. Warnings do not
 prevent saving a deliberate choice.
 
 `pricing/model_color_rules.json` owns the palette policy. Provider hues keep
-Anthropic orange, Google blue and OpenAI green. `ranked_classes` records the
+Anthropic orange, Google blue and mainline OpenAI green. `ranked_classes` records the
 capability hierarchy: Haiku → Sonnet → Opus → Fable / Mythos, Flash → Gemini/Argon,
 and Luna → Terra → Sol → Astra. Fable and Mythos share a class; specialized
 classes such as Nano Banana are not ranked against the core tiers.
@@ -69,8 +73,11 @@ release dates are never invented to choose a color.
 
 Chronology uses the earliest non-rejected `effective_from` in the pricing
 catalog, not a claimed launch date. Same-date siblings receive nearby distinct
-shades without an invented ordering. Undated aliases get a class midpoint and
-an explicit date-unavailable label; they do not consume a release step. Unpriced
+shades without an invented ordering. `observed_dates` in the rules can position unpriced labels using reviewed first-use
+evidence. Those labels participate in chronology and display First observed
+instead of Catalog date. Other undated names get a midpoint without consuming a
+release step. Observations never change price history or resolve a floating alias
+to a permanent version. Unpriced
 models discovered only in usage retain a deterministic provider/class fallback
 until they have catalog metadata. Merely discovering such names does not rebalance
 the global catalog.
@@ -101,7 +108,7 @@ published Query Table color-length limit. Model/effort combinations derive
 from the same model color, with a distinct ordered shade for each supported
 effort level. Query Table's public theme supplies overrides for catalog and actual
 result keys, including root scopes, unpriced models and raw snapshot names.
-The page uses `ViewDisclosure` for provider sections; pickers are persistent
+Provider cards offer transient inline model editors; pickers are persistent
 settings with unapplied drafts. No dependency is patched.
 
 The published Query Table 1.0.5 compound pie/donut limitation also applies to
@@ -109,3 +116,25 @@ models and providers: whole-tuple slices cannot yet honor the host's `colorBy`.
 This remains an upstream blocker; see the [handoff](handoffs/query-table-pie-color-by.md).
 Single-field pies use the palette. Names, legends and tooltips remain necessary
 when many models have close shades or the user chooses low-contrast colors.
+
+## Reviewed legacy label chronology
+
+A read-only audit of production metadata on 2026-11-12 found:
+
+| Label | Message records | First message | Last message | Palette placement |
+| --- | ---: | --- | --- | --- |
+| `sonnet` | 973 | 2025-08-09 | 2026-07-14 | Between Sonnet 4 and 4.5 |
+| `opus` | 10,999 | 2025-08-09 | 2026-09-15 | Between Opus 4.1 and 4.5 |
+| `haiku` | 712 | 2025-11-27 | 2026-07-29 | Between Haiku 4.5 and 5.5 |
+
+These are earliest recorded uses, not release dates. Conversation summary labels
+start later (Sonnet 2025-11-09, Opus 2025-11-27, Haiku 2026-03-02), so the
+message timestamps provide the earlier evidence. The labels span multiple
+releases; the color placement does not assert a fixed underlying version.
+
+Color rules may set `pricing_provider` when the price ledger uses a broader
+identity. Reflection, DeepSeek, OpenCode and Microsoft retain their existing
+`other` price rows while receiving independent developer palettes. A normalized
+model matcher selects the color provider; no source-recorded provider, pricing
+row or query identity is rewritten. The API validates provider preference keys
+against the same embedded color catalog as the frontend.

@@ -6,9 +6,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/gbdubs/pharos/pricing"
 )
 
 const modelColorPrefix = "pharos-model-color:"
+
+var modelColorProviders = func() map[string]json.RawMessage {
+	var catalog struct {
+		Providers map[string]json.RawMessage `json:"providers"`
+	}
+	if err := json.Unmarshal(pricing.ModelColors, &catalog); err != nil {
+		panic(fmt.Sprintf("invalid model color catalog: %v", err))
+	}
+	return catalog.Providers
+}()
 
 type modelColorPalette struct {
 	Overrides map[string]string `json:"overrides"`
@@ -60,8 +72,10 @@ func (c *Catalog) setModelColor(ctx context.Context, id, color string) error {
 	if !ok || key == "" || len(key) > 256 || strings.ContainsAny(key, "\x00\r\n") || (kind != "provider" && kind != "model" && kind != "source") {
 		return fmt.Errorf("choose a provider or model color")
 	}
-	if kind == "provider" && key != "anthropic" && key != "google" && key != "openai" && key != "other" {
-		return fmt.Errorf("unknown model provider")
+	if kind == "provider" {
+		if _, known := modelColorProviders[key]; !known {
+			return fmt.Errorf("unknown model provider")
+		}
 	}
 	if kind == "model" && modelFamily(key) != key {
 		return fmt.Errorf("use the model family identity")
