@@ -1507,7 +1507,7 @@ function showLabelTip(view,event){
 }
 function placeLabelTip(event){const box=labelTip.getBoundingClientRect(),gap=14;let left=event.clientX+gap,top=event.clientY+gap;if(left+box.width>innerWidth-8)left=Math.max(8,event.clientX-gap-box.width);if(top+box.height>innerHeight-8)top=Math.max(8,event.clientY-gap-box.height);labelTip.style.left=left+'px';labelTip.style.top=top+'px'}
 function hideLabelTip(force=false){if(labelTip&&!labelTipPinned||force===true){if(labelTip)labelTip.hidden=true;labelTipPinned=false;labelTipMark=null;labelTipActions=[]}}
-function startLabelTipClick(event){if(event.button===0)labelTipDown={x:event.clientX,y:event.clientY,mark:labelTipMark,dragged:false}}
+function startLabelTipClick(event){if(event.button===0){if(!labelTipMark)hideLabelTip();labelTipDown={x:event.clientX,y:event.clientY,mark:labelTipMark,dragged:false}}}
 function moveLabelTip(event){if(labelTipDown&&event.buttons&&Math.hypot(event.clientX-labelTipDown.x,event.clientY-labelTipDown.y)>4){labelTipDown.dragged=true;hideLabelTip()}if(!labelTipPinned&&labelTip&&!labelTip.hidden&&!event.buttons)placeLabelTip(event)}
 function pinLabelTip(event){const down=labelTipDown;labelTipDown=null;if(!down||down.dragged||!down.mark||down.mark!==labelTipMark||!down.mark.contains(event.target)||event.target.closest?.('a,button')||labelTip?.hidden||!getSelection()?.isCollapsed)return;
   if(labelTipPinned){hideLabelTip(true);event.stopPropagation();return}
