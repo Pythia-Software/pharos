@@ -1,4 +1,4 @@
-import { colorDistance, colorLuminance } from "./model-color-math";
+import { colorDistance, colorLuminance, effortShade } from "./model-color-math";
 import { modelColorPositions, policyColor } from "./model-color-policy";
 import { useSyncExternalStore } from "react";
 import catalog from "../../pricing/model_colors.json";
@@ -168,7 +168,7 @@ export const knownSources = () => [...new Set([...Object.keys(sources), ...palet
 // Bound both var() references and nested color-mix() values for Query Table.
 // Hash every UTF-16 code unit in both directions; do not truncate long names or
 // lose the low surrogate of a model name containing an astral character.
-function property(kind: ColorKind, key: string): string {
+function property(kind: ColorKind | "effort", key: string): string {
   let forward = 0xcbf29ce484222325n, backward = forward;
   for (let i = 0; i < key.length; i++) {
     forward = BigInt.asUintN(64, (forward ^ BigInt(key.charCodeAt(i))) * 0x100000001b3n);
@@ -176,20 +176,30 @@ function property(kind: ColorKind, key: string): string {
   }
   return `--model-color-${kind}-${forward.toString(16).padStart(16, "0")}${backward.toString(16).padStart(16, "0")}`;
 }
-const marks = new Map<string, [ColorKind, string]>();
-export function modelSeriesColor(kind: ColorKind, name: string): string {
-  const key = kind === "model" ? modelColorKey(name) : name, color = effectiveModelColor(kind, key);
+const marks = new Map<string, () => string>();
+function markColor(token: string, resolve: () => string): string {
+  const color = resolve();
   if (typeof document === "undefined") return color;
-  const token = property(kind, key);
-  marks.set(token, [kind, key]);
+  marks.set(token, resolve);
   document.documentElement.style.setProperty(token, color);
   return `var(${token}, ${color})`;
+}
+export function modelSeriesColor(kind: ColorKind, name: string): string {
+  const key = kind === "model" ? modelColorKey(name) : name;
+  return markColor(property(kind, key), () => effectiveModelColor(kind, key));
+}
+// A model's shade at an effort step (effortShade), repainted with the model's
+// own color when the palette changes. Step 0 is the model's color itself.
+export function modelEffortSeriesColor(name: string, step: number): string {
+  if (!step) return modelSeriesColor("model", name);
+  const key = modelColorKey(name);
+  return markColor(property("effort", `${step}:${key}`), () => effortShade(effectiveModelColor("model", key), step));
 }
 export function installModelColors(next: { overrides: Record<string, string>; models?: string[] | null; sources?: string[] | null }) {
   const cleaned = { overrides: Object.fromEntries(Object.entries(next.overrides ?? {}).filter(([key, color]) => /^(provider|source|model):.+/.test(key) && /^#[0-9a-f]{6}$/i.test(color))), models: (next.models ?? palette.models).filter(value => typeof value === "string").map(modelColorKey), sources: (next.sources ?? palette.sources).filter(value => typeof value === "string") };
   if (JSON.stringify(cleaned) === JSON.stringify(palette)) return;
   palette = cleaned;
-  if (typeof document !== "undefined") for (const [token, [kind, key]] of marks) document.documentElement.style.setProperty(token, effectiveModelColor(kind, key));
+  if (typeof document !== "undefined") for (const [token, resolve] of marks) document.documentElement.style.setProperty(token, resolve());
   revision++;
   for (const listener of listeners) listener();
 }
