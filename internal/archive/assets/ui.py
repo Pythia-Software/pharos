@@ -2090,7 +2090,7 @@ let usageSummaryLinks=pharosPrefs.get(USAGE_SUMMARY_LINKS_KEY,true)===true;
 const USAGE_SUMMARY_ESTIMATES_KEY='pharos-usage-summary-estimates';
 let usageSummaryEstimates=pharosPrefs.get(USAGE_SUMMARY_ESTIMATES_KEY,true)!==false;
 function setUsageSummaryEstimates(on,save=true){usageSummaryEstimates=on;const toggle=$('#usageSummaryEstimates');toggle.classList.toggle('on',on);toggle.setAttribute('aria-checked',String(on));if(save){pharosPrefs.set(USAGE_SUMMARY_ESTIMATES_KEY,on);quickStatsEditor.refresh();renderUsageSummary()}}
-function setUsageSummaryLinks(on,save=true){usageSummaryLinks=on;const toggle=$('#usageSummaryLinks');toggle.classList.toggle('on',on);toggle.setAttribute('aria-checked',String(on));if(save)pharosPrefs.set(USAGE_SUMMARY_LINKS_KEY,on);renderUsageSummary()}
+function setUsageSummaryLinks(on,save=true){usageSummaryLinks=on;const toggle=$('#usageSummaryLinks');toggle.classList.toggle('on',on);toggle.setAttribute('aria-checked',String(on));if(save){pharosPrefs.set(USAGE_SUMMARY_LINKS_KEY,on);quickStatsEditor.refresh()}renderUsageSummary()}
 // Auto update refetches the open summary every 30 seconds; the choice is remembered.
 const USAGE_SUMMARY_AUTO_KEY='pharos-usage-summary-auto',USAGE_SUMMARY_AUTO_MS=30000;
 let usageSummaryAuto=pharosPrefs.get(USAGE_SUMMARY_AUTO_KEY,false)===true;
