@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Merge origin/master, rebuild the frontend, check, and commit; never push.
 
-Resolve and stage source conflicts, then rerun with --continue. Legacy tracked
-bundles are discarded only after every source conflict has been resolved.
+Resolve and stage source conflicts, then rerun with --continue. Generated files
+an older branch still tracks are discarded only after every source conflict has
+been resolved.
 """
 import argparse
 import os
@@ -11,9 +12,14 @@ import subprocess
 import sys
 
 
-BUNDLES = (
+# Build outputs that branches used to track: the frontend bundles, and the
+# site map, its cases and the Ask suggestions (web/generate-site-map.mjs).
+GENERATED = (
     "internal/archive/assets/query-tables.js",
     "internal/archive/assets/query-tables.css",
+    "internal/archive/assets/site-map.json",
+    "internal/archive/assets/ask-suggestions.json",
+    "testdata/site-map-cases.json",
 )
 
 
@@ -64,17 +70,17 @@ def update(continuing):
             return
 
     conflicts = set(git("diff", "--name-only", "--diff-filter=U", "-z", capture=True).stdout.split("\0")) - {""}
-    sources = conflicts - set(BUNDLES)
+    sources = conflicts - set(GENERATED)
     if sources:
         raise RuntimeError("Resolve and stage these source conflicts, then run tools/update-branch.py --continue:\n  "
                            + "\n  ".join(sorted(sources)))
 
-    # During migration, master or an older branch may still modify the retired
-    # bundles. Keep their deletion, then rebuild from the merged source. Never
-    # choose one branch's compiled code as the final asset.
-    tracked = git("ls-files", "-z", "--", *BUNDLES, capture=True).stdout
+    # An older branch may still track or modify generated files. Keep their
+    # deletion, then rebuild from the merged source. Never choose one branch's
+    # generated output as the final file.
+    tracked = git("ls-files", "-z", "--", *GENERATED, capture=True).stdout
     if tracked:
-        git("rm", "-f", "--ignore-unmatch", "--", *BUNDLES)
+        git("rm", "-f", "--ignore-unmatch", "--", *GENERATED)
     if git("diff", "--quiet", check=False).returncode:
         raise RuntimeError("Stage your source resolutions before running --continue.")
     require_tracked_inputs()

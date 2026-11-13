@@ -3,8 +3,8 @@
 The site map lists every page Pharos serves, the options each page takes, and,
 for the Analyze dashboards, which combinations of options the page draws as
 given. Go reads it to browse the site and to build and check links, with no
-TypeScript. It is `internal/archive/assets/site-map.json`, embedded with the
-other assets.
+TypeScript. It is `internal/archive/assets/site-map.json`, a build output
+embedded with the other assets.
 
 ## Goal
 
@@ -27,9 +27,9 @@ under `example`.
 ## Pieces
 
 1. **The site map (this document).** `web/generate-site-map.mjs` bundles
-   `web/src/site-map.ts` with esbuild and writes the file.
-   `npm --prefix web run check-site-map` fails when the file is stale, and
-   `npm run check` runs it. The map is data, not an algorithm. It lists what
+   `web/src/site-map.ts` with esbuild and writes the file;
+   `npm --prefix web run build` runs it ([Rendering](#rendering)). The map is
+   data, not an algorithm. It lists what
    exists and which combinations are valid, so Go never re-derives
    TypeScript rules.
 2. **The link codec.** The published Query Table release supplies `EncodeQueryLink` and
@@ -85,18 +85,31 @@ the reader's parameters in `updateConversationURL`, and the MCP
 tools behind each ID source. `web/tests/unit/site-map/site-map.test.mjs`
 compares each of them with the map.
 
-## Regenerating
+## Rendering
 
-Run `npm --prefix web run generate-site-map` after changing any of these:
-- pages or routes;
-- an analysis catalog or dashboard defaults;
-- a schema;
-- card recipes or their destinations;
-- a page's parameters;
-- the Ask suggestion catalog (`web/src/ask-suggestions.ts`).
+`internal/archive/assets/site-map.json`, `testdata/site-map-cases.json` and
+`internal/archive/assets/ask-suggestions.json` are build outputs, gitignored
+like the frontend bundles: generated text that every branch rewrote used to
+conflict on almost every merge. `npm --prefix web run build` renders them,
+and the unit test runner does too before it bundles the tests, whenever an
+input changed since the last render. The inputs are every file the bundle
+read (esbuild's metafile: pages, routes, catalogs, schemas, card recipes,
+`docs/view-controls.json` and the packages they import) and the files the
+generator reads itself (`ui.py`, `managed-library.html`, the Query Table
+declarations); `web/node_modules/.cache/pharos-site-map.json` records their
+hashes and the outputs'. An unchanged build checks them in about a tenth of
+a second. `npm --prefix web run generate-site-map` renders regardless, and
+`npm --prefix web run check-bundle` fails when a file is stale. Go embeds
+both assets by name, so a checkout without them does not compile; run
+`tools/setup.sh`.
 
-It rewrites `internal/archive/assets/site-map.json`,
-`testdata/site-map-cases.json` and `internal/archive/assets/ask-suggestions.json`.
+A render checks every combination of every dashboard view's options against
+the page (`viewFacts`), several million charts in all. Views are independent,
+so worker threads take them heaviest first: up to eight, or
+`PHAROS_SITE_MAP_WORKERS` (1 renders in one thread). A render takes about
+ten seconds on eight cores; the output does not depend on the number of
+workers.
+
 A new page fails generation until an Ask suggestion area covers it or the
 catalog excludes it with a reason ([Ask suggestions](ask-suggestions.md)). The generator runs in UTC, so cards that group
 by the local calendar carry the UTC time zone.
@@ -676,7 +689,7 @@ Tests (`site_map_test.go`, `site_tools_test.go`):
 ## Cases
 
 `testdata/site-map-cases.json` holds the cross-language cases. The same
-generator writes it.
+generator writes it, from the combinations it enumerated for each view.
 
 | Key | Contents |
 |---|---|

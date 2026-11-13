@@ -3,8 +3,8 @@ import {peopleMessageLabelCatalog} from "../../../src/people-message-labels";
 // (testdata/site-map-cases.json): that its routes are the ones the server and
 // the page shell serve, that its tables decide every case as the page does,
 // and that every link it builds reads back, through the page's own readers,
-// as exactly the state that produced it. npm run check-site-map catches a
-// stale file; these check what the file says.
+// as exactly the state that produced it. The test runner renders the files
+// from current sources first; these check what they say.
 import { readFilePageRoute } from "../../../src/file-history-model";
 import test from "node:test";
 import assert from "node:assert/strict";

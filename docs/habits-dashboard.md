@@ -286,7 +286,7 @@ provisional; existing ideas are reused where they fit.
 - **URL state**: `view: "calendar"`, `cycle: "week_hour"`, `actor`, `threshold`,
   `day_start`, `engaged_gap` are view inputs in `web/src/view-contract.ts`; the
   automatic activity link groups by initiator and automation. Run
-  `generate-view-controls` and `generate-site-map`.
+  `generate-view-controls`; the build renders the site map.
 
 ## 10. Dependencies and decisions
 
