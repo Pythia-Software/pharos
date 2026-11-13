@@ -677,6 +677,7 @@ test("parallel hours by day headline is the share of active hours with several a
 // Card covers can be shown from a prior visit while canonical queries refresh.
 import { batchPreviewArrivals, cardPreviewKey, invalidateCardPreviews, loadCardPreviews } from "../../../src/card-previews";
 import { createCardPreviewCache } from "../../../src/card-preview-cache";
+import { staleRetryDelays } from "../../../src/result-cache";
 
 test("cached card covers revalidate and remain visible after refresh failure", async t => {
   const priorWindow = global.window;
@@ -716,6 +717,163 @@ test("cached card covers revalidate and remain visible after refresh failure", a
   assert.equal(updates.at(-1).refreshing, false);
   assert.match(updates.at(-1).refreshError, /Offline/);
   assert.equal(updates.at(-1).metrics[0].result.buckets[0].value, 5500);
+});
+
+test("partial rebuilds retain a recent baseline but cannot freeze a card", async t => {
+  const priorWindow = global.window;
+  global.window = { pharosPreviewScope: t.name };
+  t.after(() => { global.window = priorWindow; });
+  const now = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now });
+  let mode = "complete";
+  fixture(t, (path, request) => {
+    if (!path.endsWith("/session_shape/query-v3")) return;
+    if (mode === "failure") return response({ error: "Offline" }, 503);
+    const population = mode === "complete" ? rows : mode === "no-missing" ? rows.slice(0, 5) : [];
+    const coverage = mode === "pending" ? { state: "pending", missing_sessions: 20 } : mode === "unknown" ? { state: "pending" } : mode === "no-missing" ? { state: "pending", stale_sessions: 2, missing_sessions: 0 } : { state: "current" };
+    return response({ ...serverQuery(request, population, schemas.session_shape), coverage });
+  });
+  const item = { id: "shape", dataset: "session_shape", schema: schemas.session_shape, query: query([{ id: "sessions", op: "count", groupBy: [] }]) };
+  const read = async () => { const updates = []; await loadCardPreviews([item], (_id, value, error) => { assert.ifError(error); updates.push(value); }); return updates.at(-1); };
+  const complete = await read();
+  assert.equal(complete.total, 10);
+  t.mock.timers.setTime(now + 1000);
+  mode = "pending"; clearPreviewCache(); invalidateCardPreviews();
+  const saved = await read();
+  assert.equal(saved.total, 10);
+  assert.equal(saved.updatedAt, complete.updatedAt);
+  assert.equal(saved.refreshing, false);
+  assert.match(saved.savedReason, /20 agent sessions are not included/);
+  assert.equal(saved.refreshError, undefined);
+  clearPreviewCache(); invalidateCardPreviews();
+  assert.equal((await read()).total, 10, "a partial answer does not overwrite the saved baseline");
+  mode = "unknown"; clearPreviewCache(); invalidateCardPreviews();
+  assert.equal((await read()).total, 10, "an absent missing count is not zero");
+  mode = "no-missing"; clearPreviewCache(); invalidateCardPreviews();
+  const available = await read();
+  assert.equal(available.total, 5, "new available statistics replace the saved cover");
+  assert.equal(available.incompleteWithoutMissing, true);
+  assert.match(available.summary, /^≈/);
+  assert.match(available.note, /older statistics/);
+  mode = "pending"; clearPreviewCache(); invalidateCardPreviews();
+  assert.equal((await read()).total, 5, "the available statistics become the next baseline");
+  t.mock.timers.setTime(now + 3601001);
+  clearPreviewCache(); invalidateCardPreviews();
+  const partial = await read();
+  assert.equal(partial.total, 0, "new partial data eventually replaces an old baseline");
+  assert.ok(partial.incompleteReason);
+  assert.equal(partial.savedReason, undefined);
+  mode = "empty"; clearPreviewCache(); invalidateCardPreviews();
+  const empty = await read();
+  assert.equal(empty.state, "empty", "a complete empty answer replaces the saved chart");
+  assert.equal(empty.savedReason, undefined);
+});
+
+test("unknown agent-event coverage eventually replaces an old baseline", async t => {
+  const priorWindow = global.window;
+  global.window = { pharosPreviewScope: t.name };
+  t.after(() => { global.window = priorWindow; });
+  const now = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now });
+  let pending = false;
+  fixture(t, (path, request) => path.endsWith("/agent_events/query-v3") ? response({ ...serverQuery(request, pending ? [] : rows, schemas.agent_events), coverage: { state: pending ? "unknown" : "current" } }) : undefined);
+  const item = { id: "events", dataset: "agent_events", schema: schemas.agent_events, query: query([{ id: "events", op: "count", groupBy: [] }]) };
+  const read = async () => { let result; await loadCardPreviews([item], (_id, value, error) => { assert.ifError(error); result = value; }); return result; };
+  assert.equal((await read()).total, 10);
+  pending = true; t.mock.timers.setTime(now + 1000); clearPreviewCache(); invalidateCardPreviews();
+  assert.ok((await read()).savedReason);
+  t.mock.timers.setTime(now + 3600001); clearPreviewCache(); invalidateCardPreviews();
+  const partial = await read();
+  assert.equal(partial.total, 0);
+  assert.match(partial.incompleteReason, /Conversations changed/);
+  assert.equal(partial.savedReason, undefined);
+});
+
+test("a failed follow-up reports the error after showing a saved cover", async t => {
+  const priorWindow = global.window, delay = staleRetryDelays[0];
+  global.window = { pharosPreviewScope: t.name }; staleRetryDelays[0] = 0;
+  t.after(() => { global.window = priorWindow; staleRetryDelays[0] = delay; });
+  let mode = "complete";
+  fixture(t, (path, request) => {
+    if (!path.endsWith("/session_shape/query-v3")) return;
+    if (mode === "failure") return response({ error: "Offline" }, 503);
+    return response({ ...serverQuery(request, mode === "complete" ? rows : [], schemas.session_shape), coverage: mode === "complete" ? { state: "current" } : { state: "pending", missing_sessions: 20 } });
+  });
+  const fetch = global.fetch;
+  global.fetch = async (url, init) => {
+    const result = await fetch(url, init);
+    if (mode !== "pending" || !String(url).endsWith("/session_shape/query-v3")) return result;
+    return new Response(await result.text(), { headers: { "Content-Type": "application/json", "X-Pharos-Cache": "stale", "X-Pharos-Cache-Built": new Date().toISOString() } });
+  };
+  const item = { id: "shape", dataset: "session_shape", schema: schemas.session_shape, query: query([{ id: "sessions", op: "count", groupBy: [] }]) };
+  await loadCardPreviews([item], (_id, _value, error) => assert.ifError(error));
+  mode = "pending"; clearPreviewCache(); invalidateCardPreviews();
+  const controller = new AbortController();
+  let finish;
+  const failed = new Promise(resolve => { finish = resolve; });
+  await loadCardPreviews([item], (_id, preview, error) => {
+    assert.ifError(error);
+    if (preview?.savedReason) mode = "failure";
+    if (preview?.refreshError) { controller.abort(); finish(preview); }
+  }, controller.signal);
+  const result = await failed;
+  assert.equal(result.total, 10);
+  assert.match(result.refreshError, /Offline/);
+  assert.equal(result.savedReason, undefined);
+});
+
+test("a delayed partial answer cannot overwrite a concurrently completed card", async t => {
+  const priorWindow = global.window;
+  global.window = { pharosPreviewScope: t.name };
+  t.after(() => { global.window = priorWindow; });
+  let mode = "pending", release, started;
+  const gate = new Promise(resolve => { release = resolve; }), waiting = new Promise(resolve => { started = resolve; });
+  fixture(t, async (path, request) => {
+    if (!path.endsWith("/session_shape/query-v3")) return;
+    const partial = mode === "pending";
+    if (partial) { started(); await gate; }
+    return response({ ...serverQuery(request, partial ? [] : rows, schemas.session_shape), coverage: partial ? { state: "pending", missing_sessions: 20 } : { state: "current" } });
+  });
+  const item = { id: "shape", dataset: "session_shape", schema: schemas.session_shape, query: query([{ id: "sessions", op: "count", groupBy: [] }]) };
+  let delayed;
+  const first = loadCardPreviews([item], (_id, preview, error) => { assert.ifError(error); delayed = preview; });
+  await waiting;
+  mode = "complete";
+  await loadCardPreviews([item], (_id, _preview, error) => assert.ifError(error));
+  release(); await first;
+  assert.equal(delayed.total, 10);
+  assert.ok(delayed.savedReason);
+  const last = [];
+  await loadCardPreviews([item], (_id, preview) => last.push(preview));
+  assert.equal(last.at(-1).total, 10);
+});
+
+test("an older server snapshot cannot replace a newer complete card", async t => {
+  const priorWindow = global.window;
+  global.window = { pharosPreviewScope: t.name };
+  t.after(() => { global.window = priorWindow; });
+  const now = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now });
+  fixture(t);
+  const fetch = global.fetch;
+  let stale = false;
+  global.fetch = async (url, init) => {
+    const result = await fetch(url, init);
+    if (!stale || !String(url).endsWith("/query-v3")) return result;
+    const request = JSON.parse(init.body);
+    return new Response(JSON.stringify(serverQuery(request, [])), { headers: { "Content-Type": "application/json", "X-Pharos-Cache": "stale", "X-Pharos-Cache-Built": new Date(now - 600_000).toISOString() } });
+  };
+  const item = job("saved", [{ id: "total", op: "sum", field: "duration_ms", groupBy: [] }]);
+  let complete;
+  await loadCardPreviews([item], (_id, preview) => { complete = preview; });
+  stale = true; t.mock.timers.setTime(now + 3_600_001); clearPreviewCache(); invalidateCardPreviews();
+  const controller = new AbortController();
+  let saved;
+  await loadCardPreviews([item], (_id, preview) => { saved = preview; }, controller.signal);
+  controller.abort();
+  assert.equal(saved.total, complete.total);
+  assert.equal(saved.updatedAt, complete.updatedAt);
+  assert.ok(saved.savedReason);
 });
 
 test("card preview identity separates query, cover, template, schema and search changes", async () => {
@@ -781,7 +939,7 @@ test("grouped card requests do not wait for every sibling in their metrics batch
 });
 
 
-test("card snapshot retention is bounded and expired or malformed entries are ignored", async () => {
+test("card snapshot retention is bounded and malformed entries are ignored", async () => {
   const now = Date.now();
   let saved = [
     { key: "expired", at: now - 8 * 86400000, preview: { state: "ready" } },
@@ -792,7 +950,8 @@ test("card snapshot retention is bounded and expired or malformed entries are ig
   ];
   const store = createCardPreviewCache({ read: async () => saved, write: async entries => { saved = entries; } }, { entries: 2, bytes: 1000 });
   await store.ready;
-  for (const key of ["expired", "future", "bad"]) assert.equal(store.get(key), undefined);
+  assert.equal(store.get("expired").fresh, false, "an old snapshot remains available with its age");
+  for (const key of ["future", "bad"]) assert.equal(store.get(key), undefined);
   store.put("three", { state: "ready", total: 1, summary: "Three" });
   store.put("huge", { state: "ready", total: 1, summary: "x".repeat(1000) });
   await store.save();

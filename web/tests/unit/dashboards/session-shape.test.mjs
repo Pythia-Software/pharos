@@ -367,6 +367,34 @@ test("session shape reads disclose older and missing statistics, and clear once 
   const marked = withSessionShapeFreshness(preview, "session_shape", { coverage });
   assert.equal(marked.summary, "≈4 sessions");
   assert.match(marked.note, /older statistics.*Available evidence/);
+  const empty = { state: "empty", summary: "0 rows", emptyLabel: "No matches" };
+  assert.equal(withSessionShapeFreshness(empty, "session_shape", { coverage }).emptyLabel, "Session statistics are still being indexed");
+  assert.equal(withSessionShapeFreshness(empty, "session_shape", { coverage: { state: "pending", stale_sessions: 1 } }).emptyLabel, "No matches");
+  assert.equal(withSessionShapeFreshness(preview, "session_shape", { coverage: { state: "pending", stale_sessions: 1, missing_sessions: 0 } }).incompleteWithoutMissing, true);
+  assert.equal(withSessionShapeFreshness(preview, "session_shape", { coverage: { state: "pending", stale_sessions: 1 } }).incompleteWithoutMissing, false);
+  assert.equal(withSessionShapeFreshness(empty, "session_shape", { coverage: { state: "current" } }).emptyLabel, "No matches");
   assert.equal(withSessionShapeFreshness(preview, "session_shape", { coverage: { state: "current" } }), preview);
   assert.equal(withSessionShapeFreshness(preview, "usage", { coverage }), preview);
+});
+
+test("session trend previews retain coverage from their component queries", async t => {
+  const prior = { fetch: global.fetch, location: global.location };
+  global.location = { origin: "http://parity.test" };
+  t.mock.timers.enable({ apis: ["Date"], now: cardNow });
+  let requested = 0, coverages = [{ state: "pending", missing_sessions: 0 }, { state: "pending", missing_sessions: 4 }];
+  global.fetch = async (url, init = {}) => {
+    const path = String(url);
+    if (path.includes("computed-columns")) return Response.json([]);
+    const answer = answerQuery(path.split("/").at(-1), init.body ? JSON.parse(init.body) : undefined, ledger, schemas.session_shape, { now: cardNow });
+    return Response.json(path.endsWith("query-v3") ? { ...answer, coverage: coverages[requested++ % coverages.length] } : answer);
+  };
+  t.after(() => { Object.assign(global, prior); clearPreviewCache(); });
+  const { item } = cardItem("session-count-trend");
+  const preview = await loadQueryPreview("session_shape", item.query, schemas.session_shape, { recipe: item, cover: item.cover, window: item.window, url: item.url });
+  assert.ok(requested >= 2, "the trend is assembled from multiple queries");
+  assert.match(preview.incompleteReason, /4 agent sessions are not included/);
+  assert.equal(preview.incompleteWithoutMissing, false, "one incomplete component still has missing sessions");
+  clearPreviewCache(); requested = 0; coverages = [{ state: "pending", missing_sessions: 0 }];
+  const available = await loadQueryPreview("session_shape", item.query, schemas.session_shape, { recipe: item, cover: item.cover, window: item.window, url: item.url });
+  assert.equal(available.incompleteWithoutMissing, true, "all incomplete components have no missing sessions");
 });

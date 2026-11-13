@@ -3,12 +3,16 @@ import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { updateModelColors } from "./generate-model-colors.mjs";
+import { generateSiteMap } from "./generate-site-map.mjs";
 const check = process.argv.includes("--check"), watch = process.argv.includes("--watch"), temporary = check ? mkdtempSync(join(tmpdir(), "pharos-bundles-")) : null;
 const bundles = [["src/index.tsx", "../internal/archive/assets/query-tables.js"], ["src/data-guide-entry.tsx", "../internal/archive/assets/data-guide.js"], ["src/uifeedback/inbox.tsx", "../internal/uifeedback/assets/inbox.js"]];
 // Remove the retired VM bundle before Go embeds the asset directory.
 if (!check) rmSync(new URL("../internal/archive/assets/fingerprint-renderer.js", import.meta.url), {force: true});
 try {
   await updateModelColors({check});
+  // The site map, its cases and the Ask suggestions: rendered when an input
+  // changed since the last build (generate-site-map.mjs).
+  await generateSiteMap({check});
   for (const [entry, target] of bundles) {
     const output = temporary ? join(temporary, target.split("/").at(-1)) : target;
     const options = { entryPoints: [entry], bundle: true, preserveSymlinks: true, minify: true, format: "iife", target: "safari17", outfile: output };

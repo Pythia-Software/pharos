@@ -603,6 +603,38 @@ func TestSessionShapeIncremental(t *testing.T) {
 			t.Fatal("deleted conversation still counted")
 		}
 	})
+	t.Run("backfill advances recent sessions and the rest of the queue", func(t *testing.T) {
+		c, _ := parallelismTestCatalog(t)
+		override(t, &sessionShapeRecentCandidates, 2)
+		execTx(t, c.DB, `UPDATE conversations SET ended_at='2026-12-31T00:00:00.000Z' WHERE id='cv-n1'`,
+			`UPDATE conversations SET ended_at='2026-12-30T00:00:00.000Z' WHERE id='cv-b1'`,
+			`UPDATE conversations SET ended_at='2026-12-29T00:00:00.000Z' WHERE id='cv-a3'`,
+			`INSERT INTO session_shape_dirty(conversation_id,revision) VALUES('cv-0-absent','orphan')`)
+		selectRows := func(held string, limit int) []string {
+			t.Helper()
+			rows, err := queryMapsContext(t.Context(), c.reader(), sessionShapeSelectionSQL(), held, limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids := []string{}
+			for _, row := range rows {
+				ids = append(ids, firstString(row["id"]))
+			}
+			return ids
+		}
+		ids := selectRows(`[]`, 4)
+		if len(ids) != 4 || ids[0] != "cv-n1" || ids[1] != "cv-b1" || !slices.Contains(ids, "cv-0-absent") {
+			t.Fatalf("recent and historical work did not both advance: %v", ids)
+		}
+		ids = selectRows(`["cv-n1","cv-0-absent"]`, 4)
+		if len(ids) != 4 || slices.Contains(ids, "cv-n1") || slices.Contains(ids, "cv-0-absent") {
+			t.Fatalf("held work was selected: %v", ids)
+		}
+		execTx(t, c.DB, `DELETE FROM session_shape_dirty WHERE conversation_id IN ('cv-n1','cv-b1')`)
+		if ids = selectRows(`[]`, 2); !slices.Equal(ids, []string{"cv-0-absent", "cv-a1"}) {
+			t.Fatalf("selection searched beyond its recent candidates: %v", ids)
+		}
+	})
 
 	// Pages derive dirty conversations without storing them; maintenance does.
 	if len(shapeRows(t, c)) == 0 || countRows(t, c, "SELECT COUNT(*) FROM session_shape_dirty") != all {

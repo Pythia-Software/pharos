@@ -1,6 +1,6 @@
 # Project colors
 
-Every project has a saved default color and an optional user override. Settings
+Projects with more than 3 conversations have a saved default color and an optional user override. Smaller projects use fallback colors. Settings
 → Project colors offers a picker, previews on both backgrounds, Save color, and
 Restore default. Restore returns to the original saved default; it does not
 reinspect the checkout or reshuffle other projects. Deliberate overrides are
@@ -8,14 +8,13 @@ preserved exactly, including duplicate colors.
 
 ## Assignment
 
-`internal/archive/project_colors.go` assigns defaults during project resolution
-(ingestion and startup migration). Requests that read colors never allocate
+`internal/archive/project_colors.go` assigns defaults after ingestion and during project resolution and startup migration, once a project has more than 3 conversations across its workspaces. Requests that read colors never allocate
 them. Each preference is keyed by a SHA-256 of the existing stable project ID
 (`repository:<id>` or `folder:<folder key>`), not its display name, ranking,
 checkout location, visible neighbors, or theme. Defaults and overrides live in
 the catalog's `ui_preferences`, so they travel with the library. Separate keys
 prevent an edit to one project from overwriting another project's settings.
-Assignments for temporarily absent projects remain reserved.
+Assignments for temporarily absent projects remain reserved. Existing choices for projects below the threshold are retained but hidden until the project qualifies again.
 
 New projects look for a chromatic `theme_color` in conventional web manifests,
 then favicon/icon SVG or PNG files (including PNG frames inside ICO files).
@@ -67,8 +66,7 @@ workspace still colors whole tuples. The [upstream handoff](handoffs/query-table
 records the required dependency capability. The integration does not patch or
 replace that renderer locally.
 
-Newly seen/unregistered values use a consistent provisional color with the
-same contrast target. Empty/no-project groups remain neutral. Two projects
+Values without an eligible saved color use the chart or Query Table fallback palette. Chart fallback colors have the same contrast target. Empty/no-project groups remain neutral. Two projects
 with the same name retain separate persisted identities and editable colors.
 Legacy results grouped only by that ambiguous name render neutrally: such a
 result has already combined the identities, so it cannot truthfully select

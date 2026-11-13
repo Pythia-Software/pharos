@@ -15,6 +15,17 @@ function currentCache() {
 }
 export function invalidateCardPreviews() { cache?.invalidate(); }
 
+// Covers saved by older versions carried their partial-data warning only in
+// the note. Do not mistake one of those for a complete baseline.
+function incompletePreview(preview: QueryPreview): boolean {
+  if (preview.incompleteWithoutMissing) return false;
+  return Boolean(preview.incompleteReason || preview.note?.includes("Session statistics are updating across the library.") ||
+    preview.note?.includes("Some events are waiting to be rebuilt.") || preview.note?.includes("Conversations changed since the last events run.") ||
+    /Events for \d[\d,]* conversations? are left out until they are rebuilt/.test(preview.note ?? "") ||
+    /\d[\d,]* conversations? (?:is|are) waiting for events to be rebuilt/.test(preview.note ?? ""));
+}
+const savedBaselineMaxAge = 60 * 60 * 1000;
+
 // Each save writes every cached cover to the browser's store. A catalog
 // loading in batches asks for one per batch, so they are combined: at most
 // one write every few seconds, and one when the page is left.
@@ -77,13 +88,30 @@ export async function loadCardPreviews(jobs: PreviewJob[], publish: (id: string,
     if (preview) {
       const waiting = preview.served?.state === "stale", at = preview.served?.built ?? Date.now();
       if (waiting) stale.set(id, byID.get(id)!); else stale.delete(id);
+      const current = store.get(keys.get(id)!);
+      const prior = previous.get(id);
+      // Another load may have finished since this one started (for example,
+      // catalog prewarming). Prefer its newer complete snapshot.
+      const saved = current && !incompletePreview(current.preview) && (!prior || incompletePreview(prior) || current.at > (prior.updatedAt ?? 0))
+        ? { ...current.preview, updatedAt: current.at } : prior;
+      const older = saved?.updatedAt !== undefined && at < saved.updatedAt;
+      const recentBaseline = saved?.updatedAt !== undefined && Date.now() - saved.updatedAt < savedBaselineMaxAge;
+      const preservePartial = preview.incompleteReason && !preview.incompleteWithoutMissing && recentBaseline;
+      if ((preservePartial || older) && saved && !incompletePreview(saved)) {
+        // Retain a recent baseline during a rebuild, or any newer baseline
+        // against an older server snapshot. Its age remains the data's age.
+        const shown = { ...saved, refreshing: false, refreshError: undefined, savedReason: preview.incompleteReason ?? "A newer result is not available yet." };
+        previous.set(id, shown); publish(id, shown);
+        return;
+      }
       store.put(keys.get(id)!, preview, generation, at);
       const shown = { ...preview, updatedAt: at, refreshing: waiting && !final };
       previous.set(id, shown); publish(id, shown);
       // Keep completed work even if a large catalog load is interrupted.
       saveSoon(store);
     } else if (previous.has(id)) {
-      publish(id, { ...previous.get(id)!, refreshing: false, refreshError: String(error) });
+      const shown = { ...previous.get(id)!, refreshing: false, savedReason: undefined, refreshError: String(error) };
+      previous.set(id, shown); publish(id, shown);
     } else publish(id, undefined, error);
   };
   await loadQueryPreviews(pending, receive(options.follow === false), signal, policy);

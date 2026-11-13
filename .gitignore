@@ -18,3 +18,7 @@ internal/archive/assets/data-guide.js
 internal/archive/assets/data-guide.css
 internal/uifeedback/assets/inbox.js
 internal/uifeedback/assets/inbox.css
+# Rendered by npm --prefix web run build (web/generate-site-map.mjs).
+internal/archive/assets/site-map.json
+internal/archive/assets/ask-suggestions.json
+testdata/site-map-cases.json

@@ -14,7 +14,8 @@ import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
 import { claudeImportFixture, claudeSettingsCoverageFixture, defaultApi, projectColorFixture, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
-import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, encodeQuery, loadSchema, withGroupingKeys } from "@pythia-software/query-table-core";
+import { answerQuery } from "../support/query-server.mjs";
 
 const missingPrices = { ...defaultApi['GET /api/pricing'], unpriced_tokens: 5000,
   unpriced_models: [{ model: 'unpriced-preview-model-with-a-long-reported-name', tokens: 5000 }],
@@ -1480,6 +1481,36 @@ test("dashboard collection wraps after four bookmarked cards", { skip }, async t
   }
 });
 
+test("session card keeps a visible saved cover during backfill", { skip }, async t => {
+  const schema = loadSchema(JSON.parse(readFileSync(new URL("../../../schemas/session_shape.schema.json", import.meta.url), "utf8")));
+  const recipes = JSON.parse(readFileSync(new URL("../../../docs/homepage-query-cards.json", import.meta.url), "utf8")).implemented_recipes;
+  const recipe = recipes.find(item => item.id === "session-archetype-mix");
+  const query = { ...EMPTY_QUERY, where: recipe.where, aggregations: recipe.measures };
+  const params = new URLSearchParams({ analyze_data: "session_shape", card_query: "session_shape", q_session_shape: encodeQuery(query), window_mode: "relative", window_days: "30", window_field: "started_at", window_dataset: "session_shape" });
+  let pending = false;
+  const at = new Date(Date.now() - 3 * 86400000), day = at.toISOString().slice(0, 10);
+  const rows = [{ id: "session-1", started_at: at.toISOString(), day, archetype: "quick", typed_messages_bin: 2 }];
+  const api = { "* /api/query/:dataset/:operation": call => {
+    if (call.params.dataset !== "session_shape") return defaultApi["* /api/query/:dataset/:operation"](call);
+    const answer = answerQuery(call.params.operation, call.body, pending ? [] : rows, schema, { id: call.query.get("id") });
+    return call.params.operation === "query-v3" ? { ...answer, coverage: pending ? { state: "pending", missing_sessions: 20 } : { state: "current" } } : answer;
+  } };
+  const { page, shot } = await open(t, { url: "/", viewport: { width: 1495, height: 756 }, api,
+    preferences: { "pharos-bookmarks-v1": [{ id: "session-card", title: recipe.title, description: recipe.description.replace("{days}", "30"), url: `/analyze?${params}`, query, cover: recipe.cover, templateId: `${recipe.id}:30` }] },
+    ready: '[data-card-id="session-card"]' });
+  const card = page.locator('[data-card-id="session-card"]');
+  const chart = card.getByRole("img", { name: /\d+ by \d+ grid/ });
+  await chart.waitFor({ state: "visible" });
+  pending = true;
+  await page.evaluate(() => window.dispatchEvent(new Event("pharos:data-refresh")));
+  const saved = card.getByRole("status", { name: /^Showing saved preview/ });
+  await saved.waitFor({ state: "visible" });
+  assert.ok(await chart.isVisible());
+  assert.deepEqual(await layoutProblems(page), []);
+  await card.scrollIntoViewIfNeeded();
+  await shot("session-card-saved");
+});
+
 test("dashboard catalog stays readable while a preview is pending", { skip }, async t => {
   const { page, settled, shot } = await open(t, { url: '/', ready: '.home-belt-row .query-card', viewport: { width: 1875, height: 1075 } });
   let release, requested;
@@ -1772,6 +1803,10 @@ test("project color settings show indexed projects while mounted and retain edit
   let projects = [];
   const { page } = await open(t, { url: "/settings/projects", projectColors: [], ready: ".project-color-settings", api: {
     "GET /api/project-colors": () => projects,
+    "POST /api/project-colors": ({ body }) => {
+      projects = projects.map(project => project.id === body.id ? { ...project, custom_color: body.color || undefined } : project);
+      return projects;
+    },
   } });
   const refresh = () => page.evaluate(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
   projects = projectColorFixture.slice(0, 1);
@@ -1783,6 +1818,17 @@ test("project color settings show indexed projects while mounted and retain edit
   await refresh();
   await page.getByLabel(`Color for ${projects[1].name}`, { exact: true }).waitFor({ state: "visible" });
   assert.equal(await first.evaluate(element => element === document.activeElement), true, "registry refresh leaves the existing editor focused");
+  const save = page.getByRole("button", { name: `Save color for ${projects[0].name}` });
+  const restore = page.getByRole("button", { name: `Restore default color for ${projects[0].name}` });
+  assert.equal(await save.count(), 0);
+  assert.equal(await restore.count(), 0);
+  await first.fill("#bb6622");
+  await save.click();
+  await restore.waitFor({ state: "visible" });
+  assert.equal(await save.count(), 0);
+  await restore.click();
+  await restore.waitFor({ state: "detached" });
+  await page.waitForFunction(() => !document.querySelector('.project-color-picker input')?.disabled);
 
   await page.evaluate(() => window.pharosNavigate("/settings/preferences"));
   projects = [...projects, { ...projectColorFixture[0], id: "repository:new", name: "New project", key: "c".repeat(64) }];

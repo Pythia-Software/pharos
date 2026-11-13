@@ -78,8 +78,8 @@ drafts and transient menus require an explicit reviewed classification.
 
 `npm --prefix web run generate-view-controls` updates the source-discovered
 review ledger and fails on unclassified controls. Review each new/changed
-entry in `docs/view-controls.json`, then regenerate the site map. Agent help
-comes from the same contract. Keep browser restoration and cross-language
+entry in `docs/view-controls.json`; the build renders the site map from it.
+Agent help comes from the same contract. Keep browser restoration and cross-language
 round trips covered. Record unavailable dependency capabilities as blockers,
 not opt-outs. See `docs/url-view-state.md` and the JSON-inspector handoff.
 
@@ -159,7 +159,7 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 | Frontend bundle | `npm --prefix web run build` after any `web/src` or `pricing/*.json` change; outputs are gitignored |
 | Provider golden records | `PHAROS_UPDATE_GOLDEN=1 go test -vet=off -run TestProviderConformance ./internal/archive` after changing what an adapter reads; it rewrites `testdata/ingestion/<kind>.json`, and refuses a change without a new index version (`same-version` overrides) |
 | Recipe snapshot | `npm --prefix web run generate-recipes` after changing card recipes; it rewrites `implemented_recipes` in `docs/homepage-query-cards.json`, which Go's `TestHomeQueryRecipesV2` executes |
-| Site map | `npm --prefix web run generate-site-map` after changing pages, routes, analysis catalogs, dashboard defaults, schemas or card recipes; it rewrites `internal/archive/assets/site-map.json`, `testdata/site-map-cases.json` and the Ask suggestion catalog `internal/archive/assets/ask-suggestions.json` ([docs/site-map.md](docs/site-map.md), [docs/ask-suggestions.md](docs/ask-suggestions.md)) |
+| Site map | Rendered by `npm --prefix web run build` (and before unit tests) when one of its inputs changed: `internal/archive/assets/site-map.json`, `testdata/site-map-cases.json` and the Ask suggestion catalog `internal/archive/assets/ask-suggestions.json`. They are gitignored build outputs, like the bundles; never commit them. `npm --prefix web run generate-site-map` forces a render ([docs/site-map.md](docs/site-map.md), [docs/ask-suggestions.md](docs/ask-suggestions.md)) |
 
 - **JS unit tests** live in `web/tests/unit/**` and import `web/src` and
   schema JSON directly. `web/tests/run.mjs` bundles them once with esbuild

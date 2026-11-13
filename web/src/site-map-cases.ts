@@ -2,6 +2,7 @@ import { fileHistoryURL, filePageURL } from "./file-history-model";
 import { decodeQueryStrict, encodeQuery, EMPTY_QUERY, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { analysisCatalogs } from "./analysis-catalogs";
 import { topicChartKeys, chartVerdict, canonicalChart, judgeChart, readChart, viewChart, cardURL, compact, dashboardURL, dashboardWindows, datasetURL, enumerateView, siteSchemas, type SiteMap, type Verdict } from "./site-map";
+import type { ViewState } from "./site-map";
 import { analysisVersion, isTrendView, normalizeAnalysis, switchView, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { analyzeQueryDatasets, usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { rollingWindowDays, type QueryDataset } from "./query-links";
@@ -11,7 +12,7 @@ import { freshSearch, searchURL } from "./search-composer-state";
 import { findingDetailURL } from "./findings-route";
 import { conversationRowURL } from "./usage-row-model";
 import { delegationRouteValues } from "./delegation-route";
-export { buildSiteMap, formatJSON, settingsPages, viewTitles } from "./site-map";
+export { buildSiteMap, formatJSON, settingsPages, siteMapViews, viewFacts, viewTitles } from "./site-map";
 export { buildAskSuggestions } from "./ask-suggestions";
 
 // The cross-language cases for the site map (testdata/site-map-cases.json):
@@ -50,30 +51,44 @@ type ChartCase = { topic: UsageTopic; view: string; partial?: true; written?: st
 // Up to count items spread evenly over a list.
 const spread = <T,>(items: T[], count: number) => items.length <= count ? items : Array.from({ length: count }, (_, index) => items[Math.floor(index * items.length / count)]);
 
-function chartCases(map: SiteMap): ChartCase[] {
+// The enumerated combinations a view's cases come from: a spread of the
+// valid and of the coercible ones that set every key of the view, and one
+// valid chart whose %ile levels draw only for a selected group. The
+// generator picks them where it enumerates (viewFacts), so a view is
+// enumerated once.
+export type CasePicks = { valid: Array<Record<string, unknown>>; coercible: Array<Record<string, unknown>>; levelled?: Record<string, unknown> };
+export function viewCasePicks(topic: UsageTopic, view: string, states: Array<Pick<ViewState, "chart" | "verdict">>): CasePicks {
+  const judged = states.filter(item => topicChartKeys(topic, view as AnalysisView).every(name => name in item.chart));
+  const pick = (verdict: Verdict) => spread(judged.filter(item => item.verdict === verdict), 2).map(item => item.chart);
+  // %ile levels of a measure without a total across groups.
+  const levelled = judged.filter(item => item.verdict === "valid" && item.chart.split !== "none" && item.chart.share !== true && Array.isArray(item.chart.percentiles)).find(item => {
+    const measure = analysisCatalogs[topic]!.measures[String(item.chart.metric)];
+    return measure && !measure.additive;
+  });
+  return { valid: pick("valid"), coercible: pick("coercible"), ...levelled ? { levelled: levelled.chart } : {} };
+}
+
+function chartCases(map: SiteMap, picked: Record<string, CasePicks> = {}): ChartCase[] {
   const cases: ChartCase[] = [];
   let turn = 0;
   for (const topic of Object.keys(analysisCatalogs) as UsageTopic[]) {
     const facts = map.analyze.dashboards[topic], sets = filterSets(facts.dataset as UsageDataset), windows = [...dashboardWindows, null];
     for (const [view, info] of Object.entries(facts.views)) {
       // A spread of every enumerated combination, valid and coercible.
-      const judged = enumerateView(topic, view as AnalysisView, info.defaults, info.domains).filter(item => topicChartKeys(topic, view as AnalysisView).every(name => name in item.chart));
+      const picks = picked[`${topic}/${view}`] ?? viewCasePicks(topic, view, enumerateView(topic, view as AnalysisView, info.defaults, info.domains));
       const linked = (item: ChartCase) => {
         const filters = sets[turn % sets.length], days = windows[turn % windows.length];
           turn++;
           item.filters = filters; item.days = days; item.url = dashboardURL(topic, item.chart, filters, days); item.decoded = decoded(item.url);
           return item;
       };
-      for (const verdict of ["valid", "coercible"] as Verdict[]) for (const { chart } of spread(judged.filter(item => item.verdict === verdict), verdict === "valid" ? 2 : 2)) {
+      for (const verdict of ["valid", "coercible"] as const) for (const chart of picks[verdict]) {
         const item: ChartCase = { topic, view, chart, verdict };
         cases.push(verdict === "valid" ? linked(item) : item);
       }
       // %ile levels of a measure without a total across groups, drawn only
       // for one group the legend selects, and the same levels for several.
-      const levelled = judged.filter(item => item.verdict === "valid" && item.chart.split !== "none" && item.chart.share !== true && Array.isArray(item.chart.percentiles)).find(item => {
-        const measure = analysisCatalogs[topic]!.measures[String(item.chart.metric)];
-        return measure && !measure.additive;
-      });
+      const levelled = picks.levelled ? { chart: picks.levelled } : undefined;
       if (levelled) for (const selection of [{ values: ["(one group)"], excluded: false }, { values: ["(one group)"], excluded: true }, { values: ["a", "b"], excluded: false }]) {
         const chart = { ...levelled.chart, selection, percentiles: ["mean", "p50", "p90"] };
         cases.push({ topic, view, chart, verdict: chartVerdict(topic, chart) });
@@ -244,9 +259,10 @@ function nodeCases(map: SiteMap) {
   return cases;
 }
 
-export function buildSiteMapCases(map: SiteMap) {
-
-  const charts = chartCases(map);
+// picked: each view's case picks by "topic/view", where the generator
+// already enumerated it (viewCasePicks).
+export function buildSiteMapCases(map: SiteMap, picked: Record<string, CasePicks> = {}) {
+  const charts = chartCases(map, picked);
   for (const item of charts) {
     const facts = map.analyze.dashboards[item.topic];
     if (judgeChart(facts, map.analyze.version, item.chart) !== item.verdict) throw new Error(`site map cases: the rules misjudge ${item.topic} ${json(item.chart)}`);

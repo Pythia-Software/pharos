@@ -16,8 +16,9 @@ import (
 
 // The site map (assets/site-map.json, docs/site-map.md) lists every page the
 // UI serves, the options each takes, and for the Analyze dashboards which
-// charts the page draws as given. web/generate-site-map.mjs writes it from the
-// TypeScript that defines the pages; Go reads it as data and never re-derives
+// charts the page draws as given. web/generate-site-map.mjs renders it from the
+// TypeScript that defines the pages when the frontend builds (it is not
+// committed); Go reads it as data and never re-derives
 // a page rule. This file loads it, judges dashboard charts by its rules, and
 // builds and parses site links (siteLinkFromURL). site_tools.go serves it to
 // agents as browse_site and site_link.

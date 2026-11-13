@@ -38,10 +38,10 @@ import { schemaDocuments } from "./schema-documents";
 
 // The site map: every page the site serves, the options each one takes,
 // and, for the Analyze dashboards, which combinations of options the page
-// draws as given. web/generate-site-map.mjs writes it to
+// draws as given. web/generate-site-map.mjs renders it to
 // internal/archive/assets/site-map.json, and a fixture of cases to
-// testdata/site-map-cases.json, so Go can browse the site and build links
-// with no TypeScript. docs/site-map.md describes the format.
+// testdata/site-map-cases.json, when the frontend builds, so Go can browse
+// the site and build links with no TypeScript. docs/site-map.md describes the format.
 //
 // Every fact is read from the module that defines it. Where a page's rules
 // decide validity (validAnalysisState, normalizeAnalysis), the generator runs
@@ -52,6 +52,23 @@ import { schemaDocuments } from "./schema-documents";
 export const siteMapVersion = 1;
 const origin = "http://localhost";
 const json = (value: unknown) => JSON.stringify(value);
+// json(a) === json(b) without writing either out: the generator compares
+// states millions of times. Plain objects and arrays are compared as
+// JSON.stringify writes them (key order, undefined keys left out, undefined
+// list items as null); anything else is written out and compared.
+const plain = (value: object) => Array.isArray(value) || [Object.prototype, null].includes(Object.getPrototypeOf(value));
+const written = (value: unknown) => value !== undefined && typeof value !== "function" && typeof value !== "symbol";
+export function sameJSON(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null || !plain(a) || !plain(b) || "toJSON" in a || "toJSON" in b) return json(a) === json(b);
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, index) => sameJSON(written(item) ? item : null, written(b[index]) ? b[index] : null));
+  }
+  const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
+  const keys = Object.keys(left).filter(name => written(left[name])), other = Object.keys(right).filter(name => written(right[name]));
+  return keys.length === other.length && keys.every((name, index) => name === other[index] && sameJSON(left[name], right[name]));
+}
 const fail = (message: string): never => { throw new Error(`site map: ${message}`); };
 
 // ----- Datasets ----------------------------------------------------------------
@@ -90,13 +107,19 @@ export type Verdict = "valid" | "invalid" | "coercible";
 // draws another. Keys the view does not draw (a Compare chart's period, as a
 // view switch writes them) are checked for validity but draw nothing.
 export function chartVerdict(topic: UsageTopic, chart: Record<string, unknown>): Verdict {
+  return pageChart(topic, chart).verdict;
+}
+// The verdict with what the page draws (normalizeAnalysis of the merge),
+// which the generator reuses rather than drawing each chart twice. An
+// invalid chart draws nothing.
+export function pageChart(topic: UsageTopic, chart: Record<string, unknown>): { verdict: Verdict; drawn?: Record<string, unknown> } {
   const catalog = analysisCatalogs[topic] ?? fail(`no catalog for ${topic}`);
   const merged = { ...dashboardDefaults[topic], ...chart } as AnalysisState;
-  if (!validAnalysisState(catalog, merged)) return "invalid";
-  if (merged.v !== analysisVersion || json(canonicalState(catalog, merged)) !== json(merged)) return "coercible";
+  if (!validAnalysisState(catalog, merged)) return { verdict: "invalid" };
   const drawn = normalizeAnalysis(peopleMessageLabelCatalog(catalog,merged), merged) as Record<string, unknown>;
+  if (merged.v !== analysisVersion || !sameJSON(canonicalState(catalog, merged), merged)) return { verdict: "coercible", drawn };
   const keys = topicChartKeys(topic, (merged.view ?? "trend") as AnalysisView);
-  return Object.keys(chart).filter(key => keys.includes(key)).every(key => json(drawn[key]) === json(chart[key])) ? "valid" : "coercible";
+  return { verdict: Object.keys(chart).filter(key => keys.includes(key)).every(key => sameJSON(drawn[key], chart[key])) ? "valid" : "coercible", drawn };
 }
 // What Go writes for a chart: its older names read as current ones (as
 // readChart reads them), then only the keys its view draws (with the view
@@ -107,7 +130,7 @@ const legacyByTopic = new Map<UsageTopic, LegacyName[]>();
 export function viewChart(topic: UsageTopic, chart: Record<string, unknown>): Record<string, unknown> {
   if (!legacyByTopic.has(topic)) legacyByTopic.set(topic, legacyNames(topic).legacy ?? []);
   const merged = { ...dashboardDefaults[topic], ...chart } as Record<string, unknown>;
-  const current = Object.assign({}, chart, ...legacyByTopic.get(topic)!.filter(entry => json(merged[entry.key]) === json(entry.value)).map(entry => entry.set)) as Record<string, unknown>;
+  const current = Object.assign({}, chart, ...legacyByTopic.get(topic)!.filter(entry => sameJSON(merged[entry.key], entry.value)).map(entry => entry.set)) as Record<string, unknown>;
   const view = (current.view ?? dashboardDefaults[topic].view ?? "trend") as AnalysisView, selection = current.selection as { values?: unknown[] } | undefined;
   return Object.fromEntries(Object.entries(current).filter(([key]) => chartKeys[view].includes(key) || key === "selection" && Boolean(selection?.values?.length)));
 }
@@ -249,7 +272,7 @@ type ChartFacts = { merge_defaults: Record<string, unknown>; legacy?: LegacyName
 // A chart as the page reads it: over merge_defaults, with an older name read
 // as the current one (canonicalState).
 export function readChart(facts: ChartFacts, chart: Record<string, unknown>) {
-  const original = { ...facts.merge_defaults, ...chart }, renamed = (facts.legacy ?? []).filter(entry => json(original[entry.key]) === json(entry.value));
+  const original = { ...facts.merge_defaults, ...chart }, renamed = (facts.legacy ?? []).filter(entry => sameJSON(original[entry.key], entry.value));
   return { merged: Object.assign({}, original, ...renamed.map(entry => entry.set)) as Record<string, unknown>, renamed: renamed.length > 0 };
 }
 export function judgeChart(facts: ChartFacts, version: number, chart: Record<string, unknown>): Verdict {
@@ -275,7 +298,7 @@ export function judgeChart(facts: ChartFacts, version: number, chart: Record<str
   }
   if (merged.v !== version || renamed) return "coercible";
   const drawn = drawChart(view, merged);
-  return Object.keys(chart).every(name => !view.keys.includes(name) || !(name in drawn) || json(drawn[name]) === json(chart[name])) ? "valid" : "coercible";
+  return Object.keys(chart).every(name => !view.keys.includes(name) || !(name in drawn) || sameJSON(drawn[name], chart[name])) ? "valid" : "coercible";
 }
 
 // Every combination of a view's drawn options over its defaults, each
@@ -285,7 +308,7 @@ export function enumerateView(topic: UsageTopic, view: AnalysisView, defaults: R
   const base = Object.fromEntries(Object.entries(defaults).filter(([name]) => !options.includes(name)));
   const choices: Array<[string, Array<Scalar | undefined>]> = options.map(option => [option, [...domains[option], ...option in merge ? [] : [undefined]]]);
   if (isTrendView(view)) choices.push(["multiple_periods", [false, true]]);
-  const states: Array<{ chart: Record<string, unknown>; verdict: Verdict }> = [];
+  const states: Array<{ chart: Record<string, unknown>; verdict: Verdict; drawn?: Record<string, unknown> }> = [];
   const walk = (index: number, chart: Record<string, unknown>) => {
     if (index === choices.length) {
       const { multiple_periods: several, ...rest } = chart, state = { ...rest };
@@ -295,7 +318,7 @@ export function enumerateView(topic: UsageTopic, view: AnalysisView, defaults: R
         if (period === "hours") state.hours = several ? Math.max(2, Number(base.hours) || 2) : 1;
         if (period === "days") state.days = several ? Math.max(2, Number(base.days) || 2) : 1;
       }
-      states.push({ chart: state, verdict: chartVerdict(topic, state) });
+      states.push({ chart: state, ...pageChart(topic, state) });
       return;
     }
     const [option, values] = choices[index];
@@ -310,8 +333,11 @@ export function enumerateView(topic: UsageTopic, view: AnalysisView, defaults: R
 // so a reader can describe the chart.
 // kept: view settings a chart may hold, as the reader chose them, that the
 // rules neither check nor fill (topicChartKeys); Go keeps them where it writes.
-type ViewFacts = ViewRules & { label: string; defaults: Record<string, unknown>; kept?: string[]; chosen_display?: { given: string[]; values: Record<string, unknown> } };
-function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFacts {
+export type ViewFacts = ViewRules & { label: string; defaults: Record<string, unknown>; kept?: string[]; chosen_display?: { given: string[]; values: Record<string, unknown> } };
+// The generator's unit of work: one view's facts, and the combinations it
+// enumerated to find them (site-map-cases.ts picks its cases from them).
+export type ViewState = { chart: Record<string, unknown>; verdict: Verdict; merged: Record<string, unknown>; drawn: Record<string, unknown> };
+export function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): { facts: ViewFacts; states: ViewState[] } {
   const catalog = analysisCatalogs[topic]!, merge = dashboardDefaults[topic] as Record<string, unknown>;
   const start = { ...merge, v: analysisVersion } as AnalysisState;
   const moved = normalizeAnalysis(catalog, switchView(catalog, normalizeAnalysis(catalog, start), view)) as Record<string, unknown>;
@@ -325,8 +351,7 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
   const checked = (name: string) => !accepts(name, numericKeys.includes(name) ? "not a number" : "(no such value)");
   const domains: Record<string, Scalar[]> = Object.fromEntries(allChartKeys.filter(name => !numericKeys.includes(name) && (keys.includes(name) || checked(name))).map(option => [option, domainOf(topic, defaults, option)]));
   const numeric = numericOptions(topic, view, defaults);
-  const states = enumerateView(topic, view, defaults, domains).map(item => ({ ...item, merged: { ...merge, ...item.chart } as Record<string, unknown> }))
-    .map(item => ({ ...item, drawn: item.verdict === "invalid" ? {} : normalizeAnalysis(peopleMessageLabelCatalog(catalog,item.merged as AnalysisState), item.merged as AnalysisState) as Record<string, unknown> }));
+  const states = enumerateView(topic, view, defaults, domains).map(item => ({ ...item, merged: { ...merge, ...item.chart } as Record<string, unknown>, drawn: item.drawn ?? {} }));
   const drawing = states.filter(item => item.verdict !== "invalid");
   // Each rule from the drawings: what stays, what replaces it, and the fill.
   const rules: Rule[] = [];
@@ -352,7 +377,7 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
     // The fill: a value that, put in place of a missing one, draws as the page does.
     const missing = drawing.filter(item => item.merged[option] === undefined);
     if (missing.length) {
-      const draws = (fill: Scalar) => missing.every(item => json(drawChart({ keys, domains, numeric, rules: [...rules.slice(0, -1), { ...rule, fill }] }, item.merged)[option]) === json(item.drawn[option]));
+      const draws = (fill: Scalar) => missing.every(item => sameJSON(drawChart({ keys, domains, numeric, rules: [...rules.slice(0, -1), { ...rule, fill }] }, item.merged)[option], item.drawn[option]));
       rule.fill = [...domains[option], viaFallback].find(draws) ?? fail(`${topic} ${view}: no fill draws a missing ${option} as the page does`);
     }
   }
@@ -382,18 +407,19 @@ function viewFacts(topic: UsageTopic, view: AnalysisView, label: string): ViewFa
     for (const { option, list } of rules) {
       if (list && item.merged[option] === undefined) continue;
       const value = option in drawn ? drawn[option] : item.merged[option];
-      if (json(value) !== json(item.drawn[option])) fail(`${topic} ${view}: the rules draw ${option} of ${json(item.chart)} as ${json(value)}, the page as ${json(item.drawn[option])}`);
+      if (!sameJSON(value, item.drawn[option])) fail(`${topic} ${view}: the rules draw ${option} of ${json(item.chart)} as ${json(value)}, the page as ${json(item.drawn[option])}`);
     }
   }
-  for (const item of drawing) for (const variant of levelVariants(item)) for (const probe of levelProbes) {
+  if (keys.includes("percentiles")) for (const item of drawing) for (const variant of levelVariants(item)) for (const probe of levelProbes) {
     const chart = { ...item.chart, ...variant.extra, percentiles: probe }, merged = { ...variant.merged, percentiles: probe };
-    if (!keys.includes("percentiles")) break;
-    const page = (normalizeAnalysis(peopleMessageLabelCatalog(catalog, merged as AnalysisState), merged as AnalysisState) as Record<string, unknown>).percentiles, drawn = drawChart(facts, merged).percentiles;
-    if (json(page) !== json(drawn)) fail(`${topic} ${view}: the rules draw percentiles ${json(probe)} of ${json(chart)} as ${json(drawn)}, the page as ${json(page)}`);
+    // chart over the topic's defaults is merged, so one page drawing gives both.
+    const opened = pageChart(topic, chart);
+    const page = (opened.drawn ?? normalizeAnalysis(peopleMessageLabelCatalog(catalog, merged as AnalysisState), merged as AnalysisState) as Record<string, unknown>).percentiles, drawn = drawChart(facts, merged).percentiles;
+    if (!sameJSON(page, drawn)) fail(`${topic} ${view}: the rules draw percentiles ${json(probe)} of ${json(chart)} as ${json(drawn)}, the page as ${json(page)}`);
     const verdict = judgeChart({ merge_defaults: merge, views: { [view]: facts } }, analysisVersion, chart);
-    if (verdict !== chartVerdict(topic, chart)) fail(`${topic} ${view}: the rules judge ${json(chart)} ${verdict}, the page ${chartVerdict(topic, chart)}`);
+    if (verdict !== opened.verdict) fail(`${topic} ${view}: the rules judge ${json(chart)} ${verdict}, the page ${opened.verdict}`);
   }
-  return facts;
+  return { facts, states };
 }
 
 // Keys whose value is a list of their domain's values.
@@ -428,14 +454,19 @@ function levelRule(topic: UsageTopic, drawing: Array<{ merged: Record<string, un
 }
 
 // The integer range validAnalysisState accepts for one setting.
-// A probe stops at ceiling, which then stands for no maximum.
+// A probe stops at ceiling, which then stands for no maximum. The search
+// doubles up from the minimum before it halves, so a small maximum (a legend
+// selection's 1,000 values) never probes values near the ceiling.
 function integerRange(accepts: (value: number) => boolean, ceiling = Number.MAX_SAFE_INTEGER) {
   const max = ceiling;
   const min = [-1, 0, 1, 2].find(accepts);
   if (min === undefined) return fail("no accepted integer");
+  let low = min, top = max, step = 1;
+  while (min + step < max && accepts(min + step)) { low = min + step; step *= 2; }
+  if (min + step < max) top = min + step;
   let high = min;
-  if (accepts(max)) high = max;
-  else { let low = min, top = max; while (top - low > 1) { const middle = Math.floor((low + top) / 2); if (accepts(middle)) low = middle; else top = middle; } high = low; }
+  if (top === max && accepts(max)) high = max;
+  else { while (top - low > 1) { const middle = Math.floor((low + top) / 2); if (accepts(middle)) low = middle; else top = middle; } high = low; }
   if (!accepts(Math.floor((min + high) / 2)) || accepts(high + 1) && high < max) fail("an integer range is not contiguous");
   return { min, ...high === max ? {} : { max: high }, integer: !accepts(min + 0.5) };
 }
@@ -470,10 +501,23 @@ function legacyNames(topic: UsageTopic): { legacy?: LegacyName[] } {
   }
   return names.length ? { legacy: names } : {};
 }
-function dashboardFacts(topic: UsageTopic) {
+// The views the map describes for a topic, with their labels.
+export const dashboardViews = (topic: UsageTopic) => availableViews(analysisCatalogs[topic] ?? fail(`no catalog for ${topic}`)).filter(([view]) => view !== "scatter" || topic === "scatter");
+export type ComputedViews = Partial<Record<UsageTopic, Record<string, ViewFacts>>>;
+// Every view the map describes, heaviest first by a rough count of the
+// combinations viewFacts checks (the %ile levels multiply a view's), so the
+// generator can start the longest ones first.
+export function siteMapViews() {
+  const views = (Object.keys(usageTopics) as UsageTopic[]).filter(topic => analysisCatalogs[topic]).flatMap(topic => dashboardViews(topic).map(([view, label]) => {
+    const catalog = analysisCatalogs[topic]!, levels = topicChartKeys(topic, view).includes("percentiles") ? 40 : 1;
+    return { topic, view, label, weight: levels * drawShapes(topic, view).reduce((product, { option }) => product * (candidates(catalog, option).length + 1), 1) };
+  }));
+  return views.sort((a, b) => b.weight - a.weight);
+}
+function dashboardFacts(topic: UsageTopic, computed?: Record<string, ViewFacts>) {
   const catalog = analysisCatalogs[topic] ?? fail(`no catalog for ${topic}`);
   if (catalog.dataset !== usageTopicDatasets[topic]) fail(`${topic} draws ${catalog.dataset} but opens ${usageTopicDatasets[topic]}`);
-  const views = Object.fromEntries(availableViews(catalog).filter(([view]) => view !== "scatter" || topic === "scatter").map(([view, label]) => [view, viewFacts(topic, view, label)]));
+  const views = Object.fromEntries(dashboardViews(topic).map(([view, label]) => [view, computed?.[view] ?? viewFacts(topic, view, label).facts]));
   const unavailable = Object.fromEntries(allAnalysisViews.flatMap(([view]) => viewUnavailable(catalog, view) ? [[view, viewUnavailable(catalog, view)!]] : []));
   return {
     dataset: catalog.dataset, time: catalog.time, merge_defaults: dashboardDefaults[topic], ...legacyNames(topic),
@@ -719,7 +763,9 @@ export function viewTitles(uiPy: string): Record<string, string> {
   return Object.fromEntries([...literal.matchAll(/(?:'([^']*)'|([\w]+)):'([^']*)'/g)].map(match => [match[1] ?? match[2], match[3]]));
 }
 export type SiteInputs = { settings: ReturnType<typeof settingsPages>; titles: Record<string, string>; clock?: Date };
-export function buildSiteMap(inputs: SiteInputs) {
+// computed holds views worked out already (viewFacts), by topic; the rest
+// are worked out here.
+export function buildSiteMap(inputs: SiteInputs, computed: ComputedViews = {}) {
   const clock = inputs.clock ?? new Date("2026-01-01T12:00:00Z");
   const sections = appSections([], new URLSearchParams());
   const sectionTitle = (id: string) => sections.find(section => section.id === id)?.label;
@@ -740,7 +786,7 @@ export function buildSiteMap(inputs: SiteInputs) {
   for (const dataset of Object.values(datasets)) for (const field of dataset.fields) field.ops = opKey(field.ops);
   const cards = queryRecipes.filter(recipe => !recipe.retired).map(recipe => siteCard(recipe, clock));
   const topics = Object.keys(usageTopics) as UsageTopic[];
-  const dashboards = Object.fromEntries(topics.filter(topic=>analysisCatalogs[topic]).map(topic => [topic, dashboardFacts(topic)]));
+  const dashboards = Object.fromEntries(topics.filter(topic=>analysisCatalogs[topic]).map(topic => [topic, dashboardFacts(topic, computed[topic])]));
   // host_params: the parameters the page's table keeps as host query state
   // (host-query-state.ts). The app's query tokens carry that state, mirrored
   // in these parameters; a link's token may carry it only as they say it.
@@ -873,7 +919,7 @@ export function buildSiteMap(inputs: SiteInputs) {
   }
   return {
     version: siteMapVersion,
-    view_contract: { ...viewContract, control_audit: {file:"docs/view-controls.json",version:controlAudit.version,controls:controlAudit.controls.length} },
+    view_contract: { ...viewContract, control_audit: {file:"docs/view-controls.json",version:controlAudit.version} },
     generated_by: "web/generate-site-map.mjs from web/src/site-map.ts",
     paths: "Nodes are addressed by path. An option is <node>/<option name>; a filter field is <node>/filters/<field>, taken from the node's dataset. A card is cards/<id>.",
     nodes: Object.fromEntries(nodes.map(node => [node.path, node])),
