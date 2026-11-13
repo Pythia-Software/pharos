@@ -4,13 +4,8 @@ import WebKit
 
 struct MenuBarPreferences {
     static let key = "pharos-menu-bar"
-    static let defaults: [String: Bool] = [
-        "enabled": true, "indexed": true, "words": true, "tokens": true, "carbon": true,
-        "cost": false, "streak": false, "agent_streak": false, "backup": false, "space": false, "index": false, "eject": false,
-        "open": true, "status": true, "settings": true, "quit": true,
-        "search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false, "logs": false,
-    ]
     static let defaultOrder = ["open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "streak", "agent_streak", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "logs", "settings", "eject", "quit"]
+    static let defaults = Dictionary(uniqueKeysWithValues: (["enabled"] + defaultOrder).map { ($0, true) })
     static let required = ["open", "status", "settings", "quit"]
     static func isSeparator(_ id: String) -> Bool {
         id.range(of: "^separator:[1-9][0-9]*$", options: .regularExpression) != nil
@@ -288,6 +283,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var metricText: [String: (label: String, value: String)] = [:]
     private var rowTitles: [String: String] = [:]
     private lazy var titleInsets = Self.menuTitleInsets(font: menu.font ?? NSFont.menuFont(ofSize: 13))
+    private lazy var submenuTitleInsets = Self.menuTitleInsets(font: menu.font ?? NSFont.menuFont(ofSize: 13), submenu: true)
     private var preferences: MenuBarPreferences
     private var snapshot: [String: Any] = [:]
     private var usage: [String: Any]?
@@ -687,12 +683,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // Measure AppKit's own title margins instead of assuming a particular OS
     // menu gutter. The metrics retain native highlighting, actions and VoiceOver.
-    static func menuTitleInsets(font: NSFont) -> CGFloat {
+    static func menuTitleInsets(font: NSFont, submenu: Bool = false) -> CGFloat {
         let probe = NSMenu()
         probe.font = font
         let title = NSAttributedString(string: String(repeating: "M", count: 24), attributes: [.font: font])
         let row = NSMenuItem()
         row.attributedTitle = title
+        if submenu { row.submenu = NSMenu() }
         probe.addItem(row)
         return probe.size.width - ceil(title.size().width)
     }
@@ -718,6 +715,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func layoutMenuText() {
         let font = menu.font ?? NSFont.menuFont(ofSize: 13)
+        // A visible submenu reserves an arrow gutter for the whole menu.
+        let titleInsets = menu.items.contains { !$0.isHidden && $0.hasSubmenu } ? submenuTitleInsets : titleInsets
         let attributes: [NSAttributedString.Key: Any] = [.font: font]
         let visible = metricText.filter { rows[$0.key]?.menu === menu && rows[$0.key]?.isHidden == false }.map(\.value)
         let labelWidth = visible.map { ($0.label as NSString).size(withAttributes: attributes).width }.max() ?? 0

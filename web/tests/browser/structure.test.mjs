@@ -688,7 +688,11 @@ const ROUTES = [
     assert.ok(await message.locator('mark.human-written:not(.reader-writing-hidden)').count(),'other human-writing marks remain visible');
     await page.getByRole('button',{name:'Show hidden annotations'}).click();
   } },
-  { name: "Transcript expanded sub-agent", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".subagent-run", open: async page => { await page.locator(".subagent-run > summary").first().click(); }, shown: ".subagent-body" },
+  { name: "Transcript expanded sub-agent", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".subagent-run", open: async page => {
+    // The summary also contains a category filter, which can occupy its center
+    // at phone widths. Activate the disclosure itself with the keyboard.
+    await page.locator(".subagent-run > summary").first().press("Enter");
+  }, shown: ".subagent-body" },
   { name: "Transcript agent event link", url: `${work}/conversation/${rootConversation}?reader_events=1&reader_event_link=e-review`, api: authoredTurnAPI, ready: ".conversation-panel.show-events mark.event-target.link-selected" },
   { name: "Search conversations", url: "/library", ready: ".conversation-result-card" },
   ...["turn", "sub-agent", "accordion", "summary", "preview"].map(selection => ({

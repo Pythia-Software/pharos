@@ -192,7 +192,8 @@ final class MenuFixture: URLProtocol {
         let words = menu.items.first { $0.title.hasPrefix("Words typed") }!
         let baselineWidth = menu.size.width
         let baselineValueEdge = words.attributedTitle!.size().width
-        precondition(baselineWidth - baselineValueEdge < 40, "Values must reach the menu's trailing text edge")
+        let titleInsets = MenuBarController.menuTitleInsets(font: menu.font!, submenu: true)
+        precondition(baselineWidth - baselineValueEdge <= titleInsets + 2, "Values must reach the menu's trailing text edge before the submenu gutter")
         // A wider native item changes the menu's width without changing usage.
         let wideAction = NSMenuItem(title: String(repeating: "W", count: 40), action: nil, keyEquivalent: "")
         menu.addItem(wideAction)
@@ -315,7 +316,7 @@ final class MenuFixture: URLProtocol {
         let shortcuts = [("search", "Search conversations…", "/library"), ("analyze", "Analyze usage…", "/analyze"),
                          ("optimize", "Optimize…", "/findings"), ("capture", "Capture & index…", "/settings/sync"),
                          ("health", "Library health & backups…", "/settings"), ("sources", "Manage sources…", "/settings/sources")]
-        precondition(shortcuts.allSatisfy { !MenuBarPreferences()[$0.0] } && !MenuBarPreferences()["finder"], "Shortcuts must not change the default menu")
+        precondition(shortcuts.allSatisfy { MenuBarPreferences()[$0.0] } && MenuBarPreferences()["finder"], "Shortcuts default on and remain customizable")
         controller.applyPreferences(["layoutVersion": 2, "order": ["open"] + shortcuts.map { $0.0 } + ["finder", "status", "settings", "quit"]])
         var shortcutOpened = false
         controller.openWindow = { shortcutOpened = true }
@@ -340,8 +341,8 @@ final class MenuFixture: URLProtocol {
         NSApp.sendAction(finder.action!, to: finder.target, from: finder)
         precondition(revealed == nil)
         service.ejecting = false
-        // Logs is off by default; it opens Settings → Logs at each source.
-        precondition(!MenuBarPreferences()["logs"], "Logs must not change the default menu")
+        // Logs defaults on; it opens Settings → Logs at each source.
+        precondition(MenuBarPreferences()["logs"], "Logs defaults on")
         controller.applyPreferences(["layoutVersion": 2, "order": ["open", "logs", "status", "settings", "quit"]])
         let logs = menu.items.first { $0.title.hasPrefix("Logs & crash reports") && !$0.isHidden }!
         let logSources = logs.submenu!.items.filter { !$0.isSeparatorItem }

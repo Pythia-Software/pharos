@@ -6,6 +6,7 @@ import (
 	qt "github.com/Pythia-Software/query-table/backends/go"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -15,6 +16,77 @@ const menuBarPreferenceKey = "pharos-menu-bar"
 var menuBarDefaultOrder = []string{"open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "streak", "agent_streak", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "logs", "settings", "eject", "quit"}
 var menuBarRequired = []string{"open", "status", "settings", "quit"}
 var menuBarSeparatorPattern = regexp.MustCompile(`^separator:[1-9][0-9]*$`)
+
+// The launch enables the previously optional items once. Existing native menu
+// order, disabled menu-bar visibility, usage period and other customizations
+// are retained; the app toolbar has its own separate six-item reset.
+func launchMenuBarPreferences(raw json.RawMessage) map[string]any {
+	values := map[string]json.RawMessage{menuBarPreferenceKey: raw}
+	saved := map[string]any{}
+	_ = json.Unmarshal(raw, &saved)
+	if saved == nil {
+		saved = map[string]any{}
+	}
+	period := menuBarUsagePeriod(values)
+	order := menuBarOrder(values, menuBarSettings(values))
+	separator := 0
+	newSeparator := func() string {
+		for {
+			separator++
+			id := "separator:" + strconv.Itoa(separator)
+			if !slices.Contains(order, id) {
+				return id
+			}
+		}
+	}
+	for _, id := range []string{"index", "cost", "streak", "agent_streak", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "logs", "eject"} {
+		saved[id] = true
+		if slices.Contains(order, id) {
+			continue
+		}
+		group, usual := menuBarGroup(id), slices.Index(menuBarDefaultOrder, id)
+		groupExists := slices.ContainsFunc(order, func(item string) bool { return menuBarGroup(item) == group })
+		// Stay on the same side of existing separators as this item's group.
+		// Prefer its nearest earlier member; Eject, for example, goes before
+		// Quit when no earlier member of that group is present.
+		at := -1
+		for i := usual - 1; i >= 0; i-- {
+			previous := menuBarDefaultOrder[i]
+			if groupExists && menuBarGroup(previous) != group {
+				continue
+			}
+			if index := slices.Index(order, previous); index >= 0 {
+				at = index + 1
+				break
+			}
+		}
+		if at < 0 && groupExists {
+			for _, next := range menuBarDefaultOrder[usual+1:] {
+				if index := slices.Index(order, next); menuBarGroup(next) == group && index >= 0 {
+					at = index
+					break
+				}
+			}
+		}
+		if at < 0 {
+			at = 0
+		}
+		items := []string{id}
+		if !groupExists {
+			// A new group follows the nearest earlier usual item. Reuse its
+			// surrounding separators, adding unique IDs only where needed.
+			if at > 0 && !menuBarSeparatorPattern.MatchString(order[at-1]) {
+				items = append([]string{newSeparator()}, items...)
+			}
+			if at < len(order) && !menuBarSeparatorPattern.MatchString(order[at]) {
+				items = append(items, newSeparator())
+			}
+		}
+		order = slices.Insert(order, at, items...)
+	}
+	saved["order"], saved["layoutVersion"], saved["usagePeriod"] = order, 2, period
+	return saved
+}
 
 func menuBarGroup(id string) string {
 	switch id {
@@ -96,10 +168,10 @@ func menuBarOrder(values map[string]json.RawMessage, settings map[string]bool) [
 }
 
 func menuBarSettings(values map[string]json.RawMessage) map[string]bool {
-	settings := map[string]bool{"enabled": true, "indexed": true, "words": true, "tokens": true, "carbon": true,
-		"cost": false, "streak": false, "agent_streak": false, "backup": false, "space": false, "index": false, "eject": false,
-		"open": true, "status": true, "settings": true, "quit": true,
-		"search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false, "logs": false}
+	settings := map[string]bool{"enabled": true}
+	for _, id := range menuBarDefaultOrder {
+		settings[id] = true
+	}
 	var saved map[string]any
 	_ = json.Unmarshal(values[menuBarPreferenceKey], &saved)
 	for key := range settings {

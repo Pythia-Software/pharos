@@ -81,7 +81,10 @@ with the library and has its own **Reset to default** action.
 
 The **macOS menu bar** card controls whether the Mac app appears in your menu bar,
 which items its menu contains, and their order. Expand the card to arrange items
-and separators using its preview and toolbox.
+and separators using its preview and toolbox. All offered items default on;
+remove any optional item to the toolbox to keep a smaller menu. The launch
+update enables the previously optional items once, preserving the menu's
+visibility, usage period, and existing item order. Later customizations persist.
 
 The **Quick Stats** card previews the actual header menu with live library values.
 Drag metric rows up or down and time-period columns left or right in the table.
@@ -89,8 +92,9 @@ Drop a row or column in its toolbox to hide it; drag it back or click its name
 to add it again. The toolbox shows the same rows and columns, including their
 values. Click a handle for move and Remove actions. Alt+Up/Down moves rows,
 Alt+Left/Right moves columns, and Delete returns an item to the toolbox.
-Keep at least one metric and one time period. **Clickable Quick Stats** lets each
-value open its analysis for the selected period.
+Keep at least one metric and one time period. **Clickable Quick Stats** defaults
+on and lets each supported value open its analysis for the selected period.
+The separate **Auto** refresh option defaults off.
 
 Additional rows are available in the toolbox: active conversations, messages,
 your messages, agent replies, tool calls, delegated runs, failed calls, failure
@@ -117,20 +121,27 @@ toolbox button to add it, or click a handle for move and Remove actions. With
 a handle focused, Alt+Left/Right moves its control and Delete returns it to the
 toolbox. Settings stays available in every layout.
 
-Back/forward arrows appear first by default, followed by drive and sync status,
-search, Quick Stats, Settings, and theme. Navigation bar and agent annotations
-can be added from the toolbox. **Back only** replaces the back/forward combo,
+The default header is **Back only**, **Drive & sync status**, **Quick Stats**,
+**Ask Pharos**, **Send feedback**, and **Settings**, in that order. Back/forward,
+Search, Data updates, Data Guide, theme, navigation bar, and agent annotations
+remain available in the toolbox. **Back only** replaces the back/forward combo,
 and **Sync only** replaces the drive and sync group with just Index changes.
 Clicking either variant keeps the existing position; dragging chooses its new
 position. **Reset to default** restores the default arrangement.
 Changes apply immediately and are saved with the library, including when it
-moves between Macs. Earlier button visibility preferences are kept until you
-change or reset the layout.
+moves between Macs. The launch update resets every library's header to this
+arrangement once; customizations made afterward survive restarts and Mac changes.
+
+The same update enables clickable Quick Stats, agent-event and message-label
+reader highlights, and uncertain related work once for existing libraries.
+These remain configurable; reader URLs retain their explicit highlight choices.
+Uncertain relationships remain marked as lower confidence. **Pause indexing
+during queries** continues to default off.
 
 ## Logs and crash reports
 
-When a page stays blank, or Pharos stops, open **Settings → Logs** (or add
-**Logs & crash reports** to the menu bar; it is off by default). Its sidebar
+When a page stays blank, or Pharos stops, open **Settings → Logs** (or
+**Logs & crash reports** in the menu bar). Its sidebar
 lists one page per source and marks with an error or warning icon each source
 that recorded something in the last day (crash reports: the last week):
 

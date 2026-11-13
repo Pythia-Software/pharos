@@ -2685,15 +2685,6 @@
       "reason": "Copies the integrity issue's diagnostics to the clipboard; this action has no durable view state."
     },
     {
-      "key": "html:0135b6ac2c05c3f9:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:settings>",
-      "tag": "button",
-      "control": "<button id=\"usageSummaryLinks\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"usageSummaryLinksTitle\" aria-describedby=\"usageSummaryLinksDescription\" aria-checked=\"false\">",
-      "contract": "settings",
-      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
-    },
-    {
       "key": "html:0bab6dfe661d5b94:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -2710,6 +2701,15 @@
       "control": "<button id=\"lighthouseSpinOnClick\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"lighthouseSpinOnClickTitle\" aria-describedby=\"lighthouseSpinOnClickDescription\" aria-checked=\"false\">",
       "contract": "settings",
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
+      "key": "html:3d1449343b6ed5c5:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"uncertainRelatedWork\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"uncertainRelatedWorkTitle\" aria-describedby=\"uncertainRelatedWorkDescription\" aria-checked=\"true\">",
+      "contract": "settings",
+      "reason": "Library-wide preference for including uncertain related work in workspace sessions, timelines and conversations; defaults on and applies independently of URL view state."
     },
     {
       "key": "html:6c593b43c068b90b:0",
@@ -2794,13 +2794,13 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "html:a3e65b59f377fd62:0",
+      "key": "html:b89db2d1648675ec:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
       "tag": "button",
-      "control": "<button id=\"uncertainRelatedWork\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"uncertainRelatedWorkTitle\" aria-describedby=\"uncertainRelatedWorkDescription\" aria-checked=\"false\">",
+      "control": "<button id=\"usageSummaryLinks\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"usageSummaryLinksTitle\" aria-describedby=\"usageSummaryLinksDescription\" aria-checked=\"true\">",
       "contract": "settings",
-      "reason": "Library-wide preference for including uncertain related work in workspace sessions, timelines and conversations; defaults off and applies independently of URL view state."
+      "reason": "Library-wide preference for clickable Quick Stats values; defaults on and is independent of the current content view URL."
     },
     {
       "key": "html:c93fda6c25a2c2d9:0",

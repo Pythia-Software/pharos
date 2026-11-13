@@ -476,7 +476,7 @@ Message labels on every conversation:
 - **Hovering the card** shows its most specific accepted labels, their
   probabilities and taxonomy definitions. Hovering an agent-event mark takes
   precedence and shows that event instead.
-- **The setting** is view state, `reader_labels` in the URL (beside
+- **The setting** defaults on and is view state, `reader_labels` in the URL (beside
   `reader_writing` and `reader_events`), so a copied link keeps it; the last
   choice is saved as the fallback for links without it. A checkbox only
   shows or hides the highlight; nothing re-renders.

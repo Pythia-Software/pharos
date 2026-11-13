@@ -703,6 +703,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.scheduleToolDerivations(); err != nil {
 		return fmt.Errorf("schedule derivations: %w", err)
 	}
+	if err := c.migrateLaunchPreferences(); err != nil {
+		return fmt.Errorf("initialize launch preferences: %w", err)
+	}
 	// Last, so a query open skips Initialize only after all of it succeeded.
 	return c.recordInitializedBuild()
 }
