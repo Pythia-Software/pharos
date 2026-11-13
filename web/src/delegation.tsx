@@ -966,7 +966,18 @@ export function DelegationExplorer({
     };
   }, [contextHost, data, conversation]);
   const headingHost = contextHost?.closest(".conversation-head")?.querySelector(".conversation-title-line");
-  const workspaceTitle = statsHost?.closest(".work-heading")?.querySelector("h1")?.textContent?.trim();
+  // Keep the same totals host and its portal as the session layout changes.
+  const statsHeading = useMemo(() => statsHost?.closest(".work-heading"), [statsHost]);
+  const singleStatsSlot = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!single || !statsHost || !singleStatsSlot.current) return;
+    const parent = statsHost.parentNode, next = statsHost.nextSibling;
+    singleStatsSlot.current.append(statsHost);
+    return () => {
+      if (parent) parent.insertBefore(statsHost, next?.parentNode === parent ? next : null);
+    };
+  }, [single, statsHost]);
+  const workspaceTitle = statsHeading?.querySelector("h1")?.textContent?.trim();
   const repeatsWorkspaceTitle = !!workspaceTitle && shownSession?.label.trim() === workspaceTitle;
   const unresolvedNote = selection.unresolved && (
     <small className="delegation-truncation" role="note">
@@ -980,7 +991,6 @@ export function DelegationExplorer({
     >
       <h2>{shownSession.label}</h2>
       <small>
-        {shownSession.subtitle ? `${shownSession.subtitle} · ` : ""}
         {shownSession.provider} ·{" "}
         {shownSession.model || "model unknown"} ·{" "}
         {shownSession.effort || "unknown"}
@@ -1031,11 +1041,13 @@ export function DelegationExplorer({
       </span>
       {["tokens", "cost", "calls", "clock", "total"].map((key) => {
         const spec = data.metrics.find((m) => m.id === key)!;
+        const estimate = (key === "tokens" || key === "cost") && data.totals[key].value != null && data.totals[key].is_estimate;
+        const total = workspaceTotalText(data.totals[key], spec.unit);
         return (
           <span key={key} title={cellTitle(data.totals[key], spec)}>
-            <small>{spec.label}{key === "tokens" && (data.totals.tokens.is_estimate || data.totals.cost.is_estimate) && <EstimateInfoButton readerHost={readerHost} />}</small>
+            <small>{spec.label}</small>
             <strong>
-              {workspaceTotalText(data.totals[key], spec.unit)}
+              {estimate ? total.slice(0, -1) : total}{estimate && <EstimateInfoButton readerHost={readerHost} marker label={`About ${key === "tokens" ? "token" : "API cost"} estimates`} />}
             </strong>
           </span>
         );
@@ -1090,6 +1102,7 @@ export function DelegationExplorer({
               </button>
             ))}
           </div>
+          {single && <div className="delegation-single-stats-slot" ref={singleStatsSlot} />}
           {!single && data && tab === "table" && !compact && (
             <>
               <span className="delegation-controls-spacer" />

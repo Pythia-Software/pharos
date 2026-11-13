@@ -18,6 +18,9 @@ function relativeAge(value,now=Date.now()){
   return time>now?`in ${age}`:`${age} ago`;
 }
 
+// Chat exports have no repository context unless one was identified separately.
+function isChatImportSource(kind){return ['claude-ai','chatgpt','chatgpt-export'].includes(kind)}
+
 // Message bodies
 function parsedJSON(text){if(typeof text!=='string')return null;const trimmed=text.trim();if(!trimmed||(!trimmed.startsWith('{')&&!trimmed.startsWith('[')))return null;try{return JSON.parse(trimmed)}catch{return null}}
 // Keep parsed bodies with their message, rather than repeatedly decoding them
@@ -689,9 +692,9 @@ function transcriptActivityPresentation(message){
 }
 function transcriptTagIndex(messages,structure,describe){
   const entries=new WeakMap(),tags=new Map();
-  const add=info=>{let existing=tags.get(info.id);if(!existing){existing={...info,count:0,presentations:new Map()};tags.set(info.id,existing)}existing.count++;const style=existing.presentations.get(info.presentationKey);if(style)style.count++;else existing.presentations.set(info.presentationKey,{keyPath:info.keyPath||[],icon:info.icon||'tool',count:1})};
+  const add=info=>{let existing=tags.get(info.id);if(!existing){existing={...info,count:0,presentations:new Map()};tags.set(info.id,existing)}existing.count++;const style=existing.presentations.get(info.presentationKey);if(style)style.count++;else existing.presentations.set(info.presentationKey,{keyPath:info.keyPath||[],icon:info.icon||'tool',contentKind:info.contentKind,count:1})};
   const remove=info=>{const existing=tags.get(info.id);if(!existing)return;if(!--existing.count){tags.delete(info.id);return}const style=existing.presentations.get(info.presentationKey);if(style&&!--style.count)existing.presentations.delete(info.presentationKey)};
-  const refresh=message=>{const before=entries.get(message),description=describe(message),after=description?.label?{...description,id:transcriptTagId(description.category,description.label),presentationKey:JSON.stringify([description.keyPath,description.icon])}:null;if(before?.id===after?.id&&before?.presentationKey===after?.presentationKey)return false;if(before)remove(before);if(after){add(after);entries.set(message,after)}else entries.delete(message);return true};
+  const refresh=message=>{const before=entries.get(message),description=describe(message),after=description?.label?{...description,id:transcriptTagId(description.category,description.label),contentKind:structure.pathOf(message)[0],presentationKey:JSON.stringify([structure.pathOf(message)[0],description.keyPath,description.icon])}:null;if(before?.id===after?.id&&before?.presentationKey===after?.presentationKey)return false;if(before)remove(before);if(after){add(after);entries.set(message,after)}else entries.delete(message);return true};
   messages.forEach(message=>{if(!structure.consumed.has(message))refresh(message)});
   return{refresh,tagOf:message=>entries.get(message)?.id||null,info:id=>tags.get(id)||null,all:()=>[...tags.keys()],group:category=>[...tags.values()].filter(tag=>tag.category===category).map(tag=>tag.id)};
 }
@@ -701,10 +704,10 @@ function transcriptActivityIcon(info){
   const styles=[...(info?.presentations.values()||[])],first=styles[0];
   return first&&styles.every(style=>style.icon===first.icon)?first.icon:info?.category==='run'?'command':'tool';
 }
-function transcriptActivityKeys(index,labelOf=id=>index.info(id).label){
+function transcriptActivityKeys(index,labelOf=id=>index.info(id).label,contentKind=null){
   const items=[],groups=new Map();
   for(const id of index.all()){
-    const info=index.info(id),styles=[...info.presentations.values()],first=styles[0];
+    const info=index.info(id),styles=[...info.presentations.values()].filter(style=>contentKind===null||style.contentKind===contentKind),first=styles[0];if(!first)continue;
     // One saved tag can cover equal labels from several services. Put it at
     // their common ancestor once, rather than duplicating a filter control.
     const keyPath=[];
@@ -717,6 +720,49 @@ function transcriptActivityKeys(index,labelOf=id=>index.info(id).label){
   items.sort((a,b)=>{const rank=item=>{const position=order.indexOf(item.id.split('/')[1]);return position<0?order.length:position};return rank(a)-rank(b)});
   for(const item of groups.values())item.children.sort((a,b)=>a.label.localeCompare(b.label));
   return items;
+}
+// Content has one category control, with its recorded activities beneath it.
+// Entry IDs are presentation identities only; saved category and tag IDs stay unchanged.
+function transcriptContentKeys(index,present,labelOf=id=>index.info(id).label){
+  const items=[],entries=[],nodes=new Map(),icons={prompts:'human',response:'chat',replies:'chat',thinking:'thought',edits:'edit',commands:'command',reads:'read',tools:'tool',agents:'agent',events:'event',usage:'summary'};
+  const roots={thinking:'thinking',edits:'edits',commands:'commands',reads:'reads',tools:'tools',agents:'delegation',events:'events'};
+  for(const [kind,label,title]of TRANSCRIPT_CATEGORIES){
+    if(!present.has(kind))continue;
+    const activity=transcriptActivityKeys(index,labelOf,kind).flatMap(item=>item.id==='activity:/'+roots[kind]?item.children:[item]);
+    const tags=[...new Set(activity.flatMap(item=>item.values))],entry=tag=>'content:'+JSON.stringify([kind,tag]);
+    for(const tag of tags.length?tags:[null])entries.push({id:entry(tag),kind,tag});
+    const decorate=item=>{const result={...item,id:'content:'+JSON.stringify([kind,item.id]),kind,tags:item.values,values:item.values.map(entry),...(item.children?{children:item.children.map(decorate)}:{})};nodes.set(result.id,result);return result;};
+    const item={id:'kind:'+kind,kind,category:true,label,title,icon:icons[kind],tags,values:(tags.length?tags:[null]).map(entry),...(activity.length?{children:activity.map(decorate)}:{})};
+    nodes.set(item.id,item);items.push(item);
+  }
+  return{items,entries,nodes,all:entries.map(entry=>entry.id),tags:index.all()};
+}
+function transcriptContentShown(model,kinds,hidden){
+  return model.entries.filter(entry=>kinds.has(entry.kind)&&(!entry.tag||!transcriptTagHidden(hidden,entry.tag))).map(entry=>entry.id);
+}
+// Category actions retain dormant child choices when hidden. Showing a category
+// restores all of its current children; showing a child also enables its category.
+function transcriptContentSelection(model,kinds,hidden,node,action){
+  const allKinds=TRANSCRIPT_CATEGORIES.map(([kind])=>kind),next=new Set(kinds);
+  const tagsFor=kind=>model.items.find(item=>item.kind===kind)?.tags||[];
+  let exclusions=new Set(hidden);
+  if(!node||action==='clear')return{categories:action==='hide'?[]:allKinds,hidden:action==='hide'?[...exclusions]:[...transcriptTagSelection(exclusions,model.tags,model.tags)]};
+  const shown=new Set(transcriptContentShown(model,kinds,hidden));
+  if(action==='toggle')action=node.values.every(value=>shown.has(value))?'hide':'show';
+  if(action==='only'){
+    next.clear();next.add(node.kind);
+    exclusions=transcriptTagSelection(exclusions,tagsFor(node.kind),node.tags);
+  }else if(action==='exclude'){
+    allKinds.forEach(kind=>next.add(kind));
+    if(node.category)next.delete(node.kind);
+    else exclusions=transcriptTagSelection(exclusions,model.tags,model.tags.filter(tag=>!node.tags.includes(tag)));
+  }else if(action==='show'){
+    next.add(node.kind);exclusions=transcriptTagSelection(exclusions,node.tags,node.tags);
+  }else if(action==='hide'){
+    if(node.category)next.delete(node.kind);
+    else exclusions=transcriptTagSelection(exclusions,node.tags,[]);
+  }
+  return{categories:allKinds.filter(kind=>next.has(kind)),hidden:[...exclusions]};
 }
 // Unscoped label strings were emitted by earlier readers. A scoped show
 // override lets a user show one category while retaining that legacy hide for
@@ -771,7 +817,7 @@ function readerDisclosureToggle(id,open,expanded,collapsed){
 function readerContentShown(state,key,fallback){return state&&Object.hasOwn(state,key)?state[key]===true:fallback}
 
 // Transcript filter and find
-const TRANSCRIPT_CATEGORIES=[['prompts','Prompts','Messages you, or a parent agent, sent'],['response','Final responses','The last reply of each turn'],['replies','Interim replies','Agent messages before the final reply of a turn'],['thinking','Thinking','Reasoning the agent recorded'],['edits','File edits','Edits and writes'],['commands','Commands','Shell commands'],['reads','Reads & searches','File reads, listings, and searches'],['tools','Other tools','Browser, todo, MCP, and other tool calls'],['agents','Sub-agents','Delegated agent runs'],['events','System events','Injected context, attachments, run events, and errors'],['usage','Token usage','Token usage events']];
+const TRANSCRIPT_CATEGORIES=[['prompts','Prompts','Messages you, or a parent agent, sent'],['response','Final responses','The last reply of each turn'],['replies','Interim replies','Agent messages before the final reply of a turn'],['thinking','Thinking','Reasoning the agent recorded'],['edits','File edits','Edits and writes'],['commands','Commands','Shell commands'],['reads','Reads & searches','File reads, listings, and searches'],['tools','Other tools','Browser, todo, MCP, and other tool calls'],['agents','Sub-agents','Delegated agent runs'],['events','System events','Injected context, attachments, run events, and errors'],['usage','Usage & quota','Token and quota checkpoints and cost bookkeeping']];
 const TRANSCRIPT_LEVELS=[['all','All','Every event',TRANSCRIPT_CATEGORIES.map(([key])=>key)],['all-minus-usage','All minus usage','Every event except token usage',TRANSCRIPT_CATEGORIES.map(([key])=>key).filter(key=>key!=='usage')],['thought','Chain of thought','Prompts, replies, and thinking; no tool activity',['prompts','response','replies','thinking']],['primary','Primary only','Prompts and each turn’s final response',['prompts','response']],['custom','Custom','Choose each kind of event',null]];
 // Named URL presets stand alone. A category list is required only for Custom;
 // older links with just a category list still select Custom.
@@ -789,7 +835,8 @@ function transcriptShown(state){return new Set(state.level==='custom'?state.cust
 function transcriptCategory(message,context){
   if(message.kind==='delegation')return'agents';if(message.kind==='reasoning')return'thinking';
   if(message.kind==='message')return['user','agent'].includes(message.role)?'prompts':context.finalReplies?.has(message)?'response':'replies';
-  const value=messageJSON(message);if((value?.payload||value)?.type==='token_usage')return'usage';
+  const value=messageJSON(message),payload=value?.payload||value;
+  if(payload?.type==='token_usage'||message.kind==='metadata'&&(['token_count','token_usage_record','cost-state'].includes(value?.type)||['token_count','token_usage_record','cost-state'].includes(payload?.type)||payload?.type==='system'&&payload?.subtype==='thinking_tokens'))return'usage';
   return{edit:'edits',command:'commands',read:'reads',search:'reads',error:'events',run:'events',context:'events'}[toolCategory(message)]||'tools'
 }
 // The reader's grouping of normalized events: results paired to their calls,
@@ -1091,26 +1138,41 @@ function readerHighlightOptions(conversation,messages,taxonomy=[]){
   }
   return options;
 }
-// Whole-key defaults apply content visibility and all highlight kinds together.
-// Existing visibility and highlight fields remain the canonical linked state.
+// Whole-key defaults use the existing linked fields for every key section.
 const READER_KEY_PRESETS=[
-  {id:'default',label:'Default',note:'All content. Highlight human writing, agent events and message labels.',level:'all',highlights:['writing','events','labels']},
-  {id:'reading',label:'Read replies',note:'Prompts and final responses. Highlight human writing.',level:'primary',highlights:['writing']},
-  {id:'reasoning',label:'Follow reasoning',note:'Prompts, replies and thinking. Highlight agent events and message labels.',level:'thought',highlights:['events','labels']},
-  {id:'review',label:'Review',note:'Everything except token usage. Highlight human writing, agent events and message labels.',level:'all-minus-usage',highlights:['writing','events','labels']},
-  {id:'plain',label:'Plain transcript',note:'All content with highlights off.',level:'all',highlights:[]}
+  {id:'last',label:'Last',note:'Restore your last selection of content, timeline and highlights.'},
+  {id:'all',label:'All',note:'Show all content, the full timeline and all text highlighting.',level:'all',highlights:true,timeline:true},
+  {id:'content',label:'Content only',note:'Show all content. Hide the timeline and all text highlighting.',level:'all',highlights:false,timeline:false},
+  {id:'quiet',label:'Quiet',note:'Show the timeline, text highlighting and all content except usage and quota checkpoints.',level:'all-minus-usage',highlights:true,timeline:true}
 ];
 function readerKeyPresetValues(id){
-  const preset=READER_KEY_PRESETS.find(preset=>preset.id===id);if(!preset)return null;
-  return{reader_filter_level:preset.level,reader_filter:[...transcriptShown({level:preset.level})],
-    ...Object.fromEntries(READER_HIGHLIGHTS.map(option=>[option.field,preset.highlights.includes(option.id)])),reader_highlight_hidden:[]};
+  const preset=READER_KEY_PRESETS.find(preset=>preset.id===id);if(!preset||id==='last')return null;
+  const shown=[...transcriptShown({level:preset.level})];
+  return{reader_filter_level:preset.level,reader_filter:shown,reader_hidden_tags:[],
+    ...Object.fromEntries(READER_HIGHLIGHTS.map(option=>[option.field,preset.highlights])),reader_highlight_hidden:[],
+    timeline_visibility:preset.timeline?{}:{sections:{values:[],excluded:false,allHidden:true}}};
 }
-function readerKeyPresetID(state,highlights,hidden=[]){
-  if(hidden.length)return null;const shown=transcriptShown(state);
+function readerKeyLastNote(values){
+  const shown=new Set(values.reader_filter||[]),visible=TRANSCRIPT_CATEGORIES.filter(([id])=>shown.has(id)).map(([,label])=>label),hidden=TRANSCRIPT_CATEGORIES.filter(([id])=>!shown.has(id)).map(([,label])=>label);
+  const on=READER_HIGHLIGHTS.filter(option=>values[option.field]).map(option=>option.label),off=READER_HIGHLIGHTS.filter(option=>!values[option.field]).map(option=>option.label);
+  const parts=[hidden.length?`Content shown: ${visible.join(', ')||'none'}. Hidden: ${hidden.join(', ')}.`:'All content shown.',`Text highlighting shown: ${on.join(', ')||'none'}; hidden: ${off.join(', ')||'none'}.`];
+  const tags=values.reader_hidden_tags||[],marks=values.reader_highlight_hidden||[];
+  if(tags.length)parts.push(`Activity filters: ${tags.map(id=>{const show=id.startsWith('show:'),tag=show?id.slice(5):id;return (show?'show ':'hide ')+(transcriptTagParts(tag)?.[1]||tag)}).join(', ')}.`);
+  if(marks.length){const annotations=marks.filter(id=>id.startsWith('annotation:')).length,keys=marks.filter(id=>!id.startsWith('annotation:'));parts.push(`Highlight exclusions: ${[...keys,...annotations?[annotations+' individual annotation'+(annotations===1?'':'s')]:[]].join(', ')}.`)}
+  const timeline=values.timeline_visibility||{},entries=Object.entries(timeline);
+  if(!entries.length)parts.push('All timeline elements shown.');
+  else if(entries.length===1&&timeline.sections?.allHidden)parts.push('Timeline elements hidden.');
+  else parts.push('Timeline filters: '+entries.map(([section,selection])=>`${section}: ${selection.allHidden?'all hidden':selection.excluded?'hidden '+selection.values.join(', '):'only '+selection.values.join(', ')}`).join('; ')+'.');
+  return parts.join(' ');
+}
+function readerKeyPresetID(state,highlights,hidden=[],tags=[],timeline={}){
+  if(hidden.length||tags.length)return null;const shown=transcriptShown(state);
   return READER_KEY_PRESETS.find(preset=>{
-    const expected=transcriptShown({level:preset.level});
+    const values=readerKeyPresetValues(preset.id);if(!values)return false;
+    const expected=new Set(values.reader_filter);
     return shown.size===expected.size&&[...shown].every(key=>expected.has(key))
-      &&READER_HIGHLIGHTS.every(option=>Boolean(highlights[option.field])===preset.highlights.includes(option.id));
+      &&READER_HIGHLIGHTS.every(option=>Boolean(highlights[option.field])===values[option.field])
+      &&JSON.stringify(timeline)===JSON.stringify(values.timeline_visibility);
   })?.id||null;
 }
 // The ids of the highlights shown: a linked value (true or false) wins, then

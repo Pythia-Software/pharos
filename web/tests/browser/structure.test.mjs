@@ -47,7 +47,7 @@ const markdownLinkAPI = {
 };
 // Synthetic Claude export data exercises sources and non-coding attachments.
 const claudeResearchAPI = {
-  "GET /api/work/:id": request => ({...defaultApi["GET /api/work/:id"](request), conversations: [{id:rootConversation,provider:"claude",title:"Daily Claude data export"}], title:"Daily Claude data export"}),
+  "GET /api/work/:id": request => ({...defaultApi["GET /api/work/:id"](request), source_kind:"claude-ai", repository_name:null, branch:null, conversations: [{id:rootConversation,provider:"claude",title:"Daily Claude data export"}], title:"Daily Claude data export"}),
   "GET /api/work/:id/delegation": request => {
     const data = defaultApi["GET /api/work/:id/delegation"](request);
     const tokens = {value:1400,quality:"estimated",known:1,total:1,is_estimate:true};
@@ -60,12 +60,12 @@ const claudeResearchAPI = {
     {id:"research-attachment",native_id:"research-attachment",role:"user",kind:"attachment",text:JSON.stringify({type:"file_attachment",file_name:"notes.pdf",file_type:"application/pdf",file_size:48,extracted_content:"Archived research notes\n<script>window.exportScriptRan=true</script>"})},
     {id:"export-project",native_id:"export-project",role:"system",kind:"attachment",text:JSON.stringify({type:"export_file",file_name:"projects/report.json",extracted_content:JSON.stringify({name:"Research",docs:[{filename:"report.md",content:"# Exported report\nA document paragraph, retained with its source metadata."}]})})},
     {id:"doc-add",native_id:"doc-add",role:"assistant",kind:"tool_call",call_id:"docs-add",text:JSON.stringify({tool:"mcp__Claude_Docs__update",input:{container:{id:"synthetic-doc"},payload:{ops:[{op:"replace",target:{ids:["pending.1"]},with:{as:"markdown",from:{kind:"inline",content:"## Added research\n\nA **readable** addition with [a source](https://example.com/report).\n\n<script>window.exportScriptRan=true</script>"}}}]}}})},
-    {id:"doc-result",native_id:"doc-result",role:"tool",kind:"tool_result",call_id:"docs-add",text:JSON.stringify({content:[{type:"text",text:JSON.stringify({verdict:"allow",data:{notices:[{code:"pending_ended",as:"resolved",opIndex:0,ids:["pending.1"]}]}})}]})},
+    {id:"doc-result",native_id:"doc-result",role:"tool",kind:"tool_result",call_id:"docs-add",text:JSON.stringify({content:[{type:"text",text:JSON.stringify({verdict:"allow",data:{notices:[{code:"pending_ended",as:"resolved",opIndex:0,ids:["pending.1"]}]}})}]}),raw_text:JSON.stringify({citations:[{details:{url:"https://example.com/tool-source",title:"Tool source"}}]})},
     {id:"stat-call",native_id:"stat-call",role:"assistant",kind:"tool_call",call_id:"stats",duration_estimate:{status:"estimated",seconds:{expected:3,lower:2,upper:7},argument_generation_seconds:{expected:2,lower:2,upper:2},argument_generation_status:"observed",execution_seconds:{expected:1,lower:0,upper:5},execution_status:"estimated"},text:JSON.stringify({tool:"mcp__pharos__query_statistics",input:{metric:"calls"}})},
     {id:"stat-result",native_id:"stat-result",role:"tool",kind:"tool_result",call_id:"stats",text:JSON.stringify({content:[{type:"text",text:JSON.stringify({rows:[{tool:"Docs",count:3},{tool:"Browser",count:0}]})}]})},
     {id:"github-read",native_id:"github-read",role:"assistant",kind:"tool_call",call_id:"github-read",text:JSON.stringify({tool:"mcp__codex_apps__github.fetch_file",input:{repository_full_name:"example/repo",path:"report.md"}})},
     {id:"github-result",native_id:"github-result",role:"tool",kind:"tool_result",call_id:"github-read",text:JSON.stringify({content:JSON.stringify({structuredContent:{encoding:"utf-8",content:"# Report",display_url:"https://github.com/example/repo/blob/main/report.md"}})})},
-    {id:"research-answer",usage:{total_tokens:1400,output_tokens:1400},usage_is_estimate:true,native_id:"research-answer",role:"assistant",kind:"message",text:"The reports describe different assumptions. Review the sources before comparing their forecasts.",raw_text:JSON.stringify({type:"text",text:"The reports describe different assumptions.",citations:[{details:{type:"web_search_citation",url:"https://example.com/company/reports/annual-report",title:"Published company report"}},{details:{type:"document_citation",document_title:"Uploaded notes"}}]})},
+    {id:"research-answer",usage:{total_tokens:1400,output_tokens:1400},usage_is_estimate:true,native_id:"research-answer",role:"assistant",kind:"message",text:"The reports describe different assumptions. Review the [published report](https://example.com/company/reports/annual-report) before comparing their forecasts.",raw_text:JSON.stringify({type:"text",text:"The reports describe different assumptions.",citations:[{details:{type:"web_search_citation",url:"https://example.com/company/reports/annual-report",title:"Published company report",cited_text:"Source excerpt"}},{details:{type:"web_search_citation",url:"https://example.com/a-long-source-url-without-a-title"}},{details:{type:"web_search_citation",url:"http://localhost:59999/",title:"Local source"}},{details:{type:"web_search_citation",url:"https://user:password@example.com/",title:"Unsafe source"}},{details:{type:"document_citation",document_title:"Uploaded notes"}}]})},
   ]},
 };
 const work = `/work/${workID}`;
@@ -553,27 +553,60 @@ const ROUTES = [
     await page.locator('.tool-event > summary').filter({hasText:'Query statistics'}).click();
     await page.locator('.mcp-presentation table').waitFor();
   }, shown: ".tool-event[open] .tool-output", check: async (page,app) => {
+    const headingContext=page.locator('#detail .work-heading > .meta').first();
+    assert.match(await headingContext.innerText(),/^Chat · /);
+    await headingContext.scrollIntoViewIfNeeded();await app.shot('claude-chat-heading');
+    const citation=page.getByRole('link',{name:'Published company report',exact:true});
+    const explicit=page.getByRole('link',{name:'published report',exact:true});
+    assert.equal(await citation.getAttribute('href'),await explicit.getAttribute('href'));
+    assert.equal(await citation.getAttribute('aria-description'),await explicit.getAttribute('aria-description'));
+    assert.equal(await citation.getAttribute('target'),await explicit.getAttribute('target'));
+    assert.ok(await citation.locator('.markdown-link-icon :is(img,svg)').count());
+    const toolSource=page.getByRole('link',{name:'Tool source',exact:true});
+    assert.equal(await toolSource.getAttribute('aria-description'),await citation.getAttribute('aria-description'));
+    assert.ok(await toolSource.locator('.markdown-link-icon :is(img,svg)').count());
+    assert.ok(await page.getByRole('link',{name:'https://example.com/a-long-source-url-without-a-title',exact:true}).isVisible());
+    assert.ok(await page.getByText('Source excerpt',{exact:true}).isVisible());
+    assert.equal(await page.getByRole('link',{name:'Unsafe source',exact:true}).count(),0);
+    assert.equal(await page.getByRole('link',{name:'Uploaded notes',exact:true}).count(),0);
+    const local=page.getByRole('link',{name:'Local source',exact:true});
+    assert.equal(await local.getAttribute('aria-disabled'),'true');
+    assert.ok(app.calls.some(call=>call.path==='/api/markdown-link'&&call.query.get('href')==='http://localhost:59999/'&&call.query.get('workspace')===workID));
+    await citation.scrollIntoViewIfNeeded();await app.shot('citation-links');
     await page.locator('.token-legend').filter({hasText:'*'}).waitFor();
     assert.equal(await page.locator('.usage-estimate-note').count(),0);
     const stats=page.locator('.delegation-workspace-stats');
-    await stats.getByRole('button',{name:'About estimates'}).waitFor();
     const tokens=stats.locator('span').filter({has:page.locator('small', {hasText:'Tokens'})});
     assert.match(await tokens.locator('strong').innerText(),/\d.*\*$/);
     const cost=stats.locator('span').filter({has:page.locator('small', {hasText:'API cost'})});
     assert.match(await cost.locator('strong').innerText(),/^\$.*\*$/);
     assert.match(await cost.getAttribute('title'),/estimated output only/i);
     await stats.scrollIntoViewIfNeeded();await app.shot('estimated-workspace-totals');
-    const info=stats.getByRole('button',{name:'About estimates'});await info.click();
+    const info=tokens.getByRole('button',{name:'About token estimates'});await info.click();
     const dialog=page.getByRole('dialog',{name:'How estimates work'});await dialog.waitFor();
     const text=await dialog.innerText();
     assert.match(text,/Selected conversation.*1,400 estimated output tokens.*400–5,000 sensitivity range/s);
     assert.match(text,/estimation and API pricing assume claude-opus-5-5 from saved conversation settings/i);
-    assert.match(text,/input and cache tokens are unavailable/i);
     assert.match(text,/Tool timing.*Writing/s);
     assert.equal(await dialog.getByRole('link',{name:'View published assumptions'}).getAttribute('href'),'/api/estimation/assumptions');
     await app.shot('estimate-information');
     await page.keyboard.press('Escape');await dialog.waitFor({state:'detached'});
     assert.equal(await info.evaluate(el=>document.activeElement===el),true);
+    const costInfo=cost.getByRole('button',{name:'About API cost estimates'});await costInfo.click();
+    await dialog.waitFor();await page.keyboard.press('Escape');await dialog.waitFor({state:'detached'});
+    assert.equal(await costInfo.evaluate(el=>document.activeElement===el),true);
+
+    const turn=page.locator('.turn-list > .turn').first();
+    const turnMarker=turn.locator(':scope > summary .overview-spend').getByRole('button',{name:'About selected turn token estimates'});
+    await turnMarker.scrollIntoViewIfNeeded();await app.shot('turn-estimate-marker');
+    const wasOpen=await turn.evaluate(el=>el.open);await turnMarker.click();await dialog.waitFor();
+    assert.equal(await turn.evaluate(el=>el.open),wasOpen,'the estimate marker does not toggle its turn');
+    assert.match(await dialog.innerText(),/Selected turn.*1,400 estimated output tokens.*400–5,000 sensitivity range/s);
+    await page.keyboard.press('Escape');await dialog.waitFor({state:'detached'});
+    assert.equal(await turnMarker.evaluate(el=>document.activeElement===el),true);
+    await page.keyboard.press('Enter');await dialog.waitFor();
+    assert.equal(await turn.evaluate(el=>el.open),wasOpen,'keyboard activation does not toggle its turn');
+    await page.keyboard.press('Escape');await dialog.waitFor({state:'detached'});
 
     assert.equal(await page.evaluate(()=>window.exportScriptRan),undefined,'exported source is displayed as text');
   } },
@@ -596,7 +629,7 @@ const ROUTES = [
       return conversation;
     },
   }, check: async page => {
-    assert.equal(await page.locator('.delegation-workspace-stats').getByRole('button',{name:'About estimates'}).count(),0);
+    assert.equal(await page.locator('.delegation-workspace-stats').getByRole('button',{name:/About .* estimates/}).count(),0);
     const notice = page.getByRole('status').filter({hasText:'Token usage unavailable'});
     assert.equal(await notice.isVisible(),true);
     const [banner, heading] = await Promise.all([notice.boundingBox(), notice.locator('..').locator('.conversation-title-line h2:visible').first().boundingBox()]);
@@ -616,15 +649,21 @@ const ROUTES = [
     } },
   { name: "Transcript human writing", url: `${work}/conversation/${rootConversation}?reader_events=1`, api: authoredTurnAPI, ready: ".conversation-panel .human-written", check:async(page,app)=>{
     const message=page.locator('.timeline-entry[data-message-id="human-mixed"]'), estimate=message.locator('.timeline-time .writing-estimate-trigger');
+    await app.shot('human-writing-key');
+    await page.evaluate(()=>document.documentElement.dataset.theme='light');await app.shot('human-writing-key-light');
+    await page.evaluate(()=>document.documentElement.dataset.theme='dark');
     assert.match(await estimate.getAttribute('title'),/typed or dictated.*provisional/);
     assert.equal(await message.locator('.usage-dashboard-note').count(),0);
     await estimate.hover();await app.shot('writing-estimate-indicator');await estimate.click();
     const dialog=page.getByRole('dialog',{name:'How estimates work'});await dialog.waitFor();
-    assert.match(await dialog.innerText(),/provisional.*refined/s);await app.shot('writing-estimate-dialog');
+    await app.shot('writing-estimate-dialog');
     await page.keyboard.press('Escape');await dialog.waitFor({state:'detached'});assert.equal(await estimate.evaluate(el=>document.activeElement===el),true);
     const refined=page.locator('.timeline-entry[data-message-id="human-next"] .writing-estimate-trigger');await refined.click();
-    assert.match(await page.getByRole('dialog',{name:'How estimates work'}).innerText(),/has been refined.*still an estimate/s);await page.keyboard.press('Escape');
+    await dialog.waitFor();await page.keyboard.press('Escape');
     const writing=message.locator('mark.human-written:not(.event-target)').first(),context=page.locator('mark.event-context').first();
+    await writing.scrollIntoViewIfNeeded();await app.shot('human-writing-highlight');
+    await page.evaluate(()=>document.documentElement.dataset.theme='light');await app.shot('human-writing-highlight-light');
+    await page.evaluate(()=>document.documentElement.dataset.theme='dark');
     await writing.hover();assert.match(await page.getByRole('tooltip').innerText(),/Human writing.*typed or dictated/s);
     const box=await writing.boundingBox();await page.mouse.move(box.x+3,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+Math.min(box.width-3,35),box.y+box.height/2,{steps:4});await page.mouse.up();
     assert.equal(await page.getByRole('dialog',{name:'Text annotation'}).count(),0,'dragging to select does not pin an annotation');
@@ -1001,6 +1040,7 @@ const ROUTES = [
   { name: "Workspace Timeline with pending events", url: `${work}?explorer=timeline`, api: pendingEvidenceApi, ready: ".lt-recursive-lane .lt-session-notice", check: page => page.locator("[role=status].delegation-truncation").first().waitFor() },
   { name: "Workspace sessions sidebar with pending evidence", url: `${work}/conversation/${rootConversation}`, api: pendingEvidenceApi, ready: ".delegation-inbox-heading" },
   {name:'ChatGPT export context',url:`${work}/conversation/${rootConversation}`,ready:'.chatgpt-references',api:{
+    'GET /api/work/:id':request=>({...defaultApi['GET /api/work/:id'](request),source_kind:'chatgpt',repository_name:null,branch:null}),
     'GET /api/work/:id/conversations/:conversation':{id:rootConversation,workspace_id:workID,provider:'chatgpt',messages:[
       {id:'chat-settings',role:'system',kind:'metadata',text:JSON.stringify({source:'chatgpt_export',settings:{default_model_slug:'bidi',voice:'saved-voice',memory_scope:'global_enabled',is_starred:true}})},
       {id:'chat-ask',role:'user',kind:'message',text:'A spoken question',raw_text:JSON.stringify({author:{role:'user'},content:{content_type:'multimodal_text',parts:[{content_type:'audio_transcription',text:'A spoken question',direction:'in'}]}})},
@@ -1010,6 +1050,9 @@ const ROUTES = [
       {id:'chat-missing',role:'system',kind:'attachment',text:JSON.stringify({type:'chatgpt_asset',name:'missing-file.gif',available:false})},
     ]},
   },open:async page=>{await page.locator('.chatgpt-references > summary').click();await page.locator('.action-row').filter({hasText:'question.wav'}).locator(':scope > details > summary').click();await page.locator('audio[controls]').waitFor();},shown:'.chatgpt-references[open]',check:async(page,app)=>{
+    const headingContext=page.locator('#detail .work-heading > .meta').first();
+    assert.match(await headingContext.innerText(),/^Chat · /);
+    await headingContext.scrollIntoViewIfNeeded();await app.shot('chatgpt-chat-heading');
     for(const id of ['chat-ask','chat-spoken-reply']){const entry=page.locator(`.timeline-entry[data-message-id="${id}"]`);assert.ok(await entry.locator('.message-prose').isVisible());assert.equal(await entry.locator('.chatgpt-message-context').count(),0);}
     await app.shot('voice-transcription');
     const key=await page.locator('.chatgpt-references').getAttribute('data-view-key');await page.waitForFunction(()=>new URLSearchParams(location.search).has('disclosures'));

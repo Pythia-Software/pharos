@@ -81,21 +81,21 @@ export function TimelineLegend({messages,origins,taxonomy,tools,error,unknownToo
   const hasHidden=Object.entries(domains).some(([section,values])=>timelineGroupCounts(visibility,section as TimelineVisibilitySection,values).hiddenCount>0);
   const populated=Object.entries(domains).filter(([,values])=>values.length>0) as [TimelineVisibilitySection,string[]][];
   const {visible,hidden}=timelineLegendCounts(visibility,domains);
+  const unknownToolKey=unknownTools.some(id=>timelineSectionVisible(visibility,'tools')&&timelineValueVisible(visibility,'tools',id))?<UnknownToolKey/>:null;
   const content=<>
     {modes.length||uncategorized?section('modes','Message modes',[...modes.flatMap(modeKeys),...(uncategorized?['?']:[])],<div className="lt-mode-groups">{['P','C'].map(root=>{const families=modes.filter(family=>family.id===root||family.id.startsWith(root+'.'));return families.length?<div className="lt-ontology-role" role="group" aria-label={root==='P'?'Sender':'Receiver'} key={root}>
       {chip('modes',root,root==='P'?'Sender':'Receiver',null,families.flatMap(modeKeys),true)}
       <div className="lt-ontology-families">{families.map(family=><span className="lt-mode-group" role="group" aria-label={family.name} key={family.id}>
         {family.id!==root||family.direct?chip('modes',family.id,family.name,family.direct?<i className="lt-label-swatch" style={{background:stateColor(family.id)}}/>:null,modeKeys(family),family.labels.length>0):null}
         {family.labels.map(id=>chip('modes',id,shortLabel(id,taxonomy),<i className="lt-label-swatch" style={{background:stateColor(id)}}/>))}
-      </span>)}</div></div>:null;})}{uncategorized?<span className="lt-ontology-role lt-mode-label" role="group" aria-label="Coverage">{expanded?<strong>Coverage</strong>:null}{chip('modes','?','Uncategorized',<i className="lt-label-swatch" style={{background:stateColor('?')}}/>)}</span>:null}</div>):null}
+      </span>)}</div></div>:null;})}{uncategorized?chip('modes','?','Uncategorized',<i className="lt-label-swatch" style={{background:stateColor('?')}}/>):null}</div>):null}
     {/* The rows' order: message modes, agent events, tool actions. */}
     {events.length?section('events','Agent events',eventKeys,<EventLinkLegend events={events} heading={null} renderHint={expanded?undefined:(icon,label)=>heading('events','Agent events',eventKeys,icon,label)} renderGroup={group=>chip('events',group.key,group.short,<EventGlyph group={group.name}/>)}/>):null}
-    {Object.keys(tools).length||error?section('tools','Tool actions',[...Object.keys(tools),...(error?['error']:[])],<div className="lt-legend-line">{Object.entries(tools).map(([id,name])=>chip('tools',id,name,<i className="lt-tool-swatch" style={{color:`var(--activity-${id})`}}/>))}{error?chip('tools','error','Error',<i className="lt-tool-swatch" style={{color:'var(--activity-error)'}}/>):null}</div>):null}
+    {Object.keys(tools).length||error?section('tools','Tool actions',[...Object.keys(tools),...(error?['error']:[])],<div className="lt-legend-line">{Object.entries(tools).map(([id,name])=>chip('tools',id,name,<i className="lt-tool-swatch" style={{color:`var(--activity-${id})`}}/>))}{error?chip('tools','error','Error',<i className="lt-tool-swatch" style={{color:'var(--activity-error)'}}/>):null}{unknownToolKey}</div>):null}
     {sources.length?section('origins','Caller text',sources.map(source=>source.id),<div className="lt-legend-line">{sources.map(source=><span key={source.id} title={expanded?source.hint:undefined}>{chip('origins',source.id,source.id==='typed'?'Human typed':source.name,<i className={`lt-source-swatch is-${source.pattern}`}/>,[source.id],false,source.hint)}</span>)}</div>):null}
   </>;
   return <ChartTooltip><div className={`lt-timeline-legend${expanded?'':' is-compact'}${previewOnly?' is-readonly':''}${embedded?' is-embedded conversation-key-group':''}`} data-view-field="timeline_visibility">
     {embedded?<><button type="button" className="usage-legend-item usage-legend-category conversation-key-toggle" data-view-field="timeline_visibility" aria-pressed={visible===0?false:hidden===0?true:'mixed'} disabled={!populated.length} title={visible?'Hide timeline elements':'Show timeline elements'} onClick={()=>onSelect('sections',populated.map(([section])=>section),visible?'hide':'show')}>Timeline</button><div className="timeline-key-sections">{content}</div></>:previewOnly?<button type="button" className="lt-key-open" aria-label="Edit key in full Timeline" data-chart-tooltip={previewHint} onClick={onOpenTimeline}>Key</button>:<ViewDisclosure viewKey="timeline-key" className="lt-key-disclosure" defaultOpen summary="Key">{expanded?content:null}</ViewDisclosure>}
     {!expanded?content:null}
-    {unknownTools.some(id=>timelineSectionVisible(visibility,'tools')&&timelineValueVisible(visibility,'tools',id))?<UnknownToolKey/>:null}
   </div></ChartTooltip>;
 }

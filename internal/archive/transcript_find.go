@@ -580,12 +580,23 @@ func transcriptCategory(event transcriptEvent, finalReply bool) string {
 		}
 		return "replies"
 	}
-	value := jsonObject(event.value)
-	if payload := jsonObject(value["payload"]); payload != nil {
+	root := jsonObject(event.value)
+	value := root
+	if payload := jsonObject(root["payload"]); payload != nil {
 		value = payload
 	}
 	if value["type"] == "token_usage" {
 		return "usage"
+	}
+	if event.kind == "metadata" {
+		for _, kind := range []any{root["type"], value["type"]} {
+			if kind == "token_count" || kind == "token_usage_record" || kind == "cost-state" {
+				return "usage"
+			}
+		}
+		if value["type"] == "system" && value["subtype"] == "thinking_tokens" {
+			return "usage"
+		}
 	}
 	switch event.toolCategory() {
 	case "edit":

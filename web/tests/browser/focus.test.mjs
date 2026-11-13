@@ -1467,16 +1467,12 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
       return { ...data, rows: data.rows.slice(0, 1), focus: data.focus.slice(0, 1), session_count: 1, total: 1 };
     },
   } : {};
-  const { page, settled, shot } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", api, preferences: { "pharos-show-nav-button": true } });
+  const { page, settled, shot } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", viewport:{width:1218,height:1050}, api, preferences: { "pharos-show-nav-button": true } });
   await activateHeaderTool(page, "navigatorToggle");
   await page.locator("#navigator.open").waitFor();
   await page.evaluate(() => document.querySelector("main").scrollTo(0, 1200));
   await page.locator('.reader-navigator').waitFor();
-  for(const name of ['Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).isChecked(),true,'available navigators are shown by default');
-  assert.equal(await page.getByRole('checkbox',{name:'Timeline',exact:true}).count(),0);
   const timelineKey=()=>page.getByRole('group',{name:'Timeline key',exact:true}).getByRole('button',{name:'Timeline',exact:true});
-  await page.getByRole('checkbox', {name:'Turns',exact:true}).check();
-  await page.getByRole('checkbox', {name:'Context',exact:true}).check();
   await page.locator('.turn').nth(6).evaluate(turn=>turn.scrollIntoView({block:'center',behavior:'instant'}));
   await settled();
   const tops = await page.evaluate(() => {
@@ -1490,50 +1486,36 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
   const navigator = page.locator('.reader-navigator');
   await timelineKey().click();
   assert.equal(await navigator.locator('.reader-navigator-timeline').count(),0);
-  await page.getByRole('checkbox', {name:'Context',exact:true}).uncheck();
-  await page.getByRole('checkbox', {name:'Turns',exact:true}).uncheck();
-  assert.equal(await navigator.locator('.reader-navigator-track').count(),0);
-  await page.waitForFunction(()=>!document.querySelector('.workspace-reader-content').style.getPropertyValue('--reader-navigator-height'));
   await page.reload();
   await navigator.waitFor();
-  for(const name of ['Context','Turns'])assert.equal(await navigator.getByRole('checkbox',{name,exact:true}).isChecked(),false,'hidden navigators stay hidden after reload');
   assert.equal(await timelineKey().getAttribute('aria-pressed'),'false');
-  assert.equal(await navigator.locator('.reader-navigator-timeline').count(),0);
-  await navigator.scrollIntoViewIfNeeded();
-  await shot('all-navigators-hidden');
-  const hiddenRail=await navigator.evaluate(element=>{
+  await navigator.locator('.reader-navigator-turn').first().scrollIntoViewIfNeeded();
+  const stickyRail=await navigator.evaluate(element=>{
     const rail=element.closest('.reader-navigator-host'),scroller=element.closest('.workspace-reader-content');
     scroller.scrollTop=scroller.scrollHeight;
-    return {bottom:rail.getBoundingClientRect().bottom,top:scroller.getBoundingClientRect().top};
-  });
-  assert.ok(hiddenRail.bottom<=hiddenRail.top,'the hidden navigator scrolls away with the transcript');
-  await shot('hidden-navigators-scrolled');
-  await timelineKey().click();
-  const shownRail=await navigator.evaluate(element=>{
-    const rail=element.closest('.reader-navigator-host'),scroller=element.closest('.workspace-reader-content');
-    scroller.scrollTop+=rail.getBoundingClientRect().top-scroller.getBoundingClientRect().top+100;
     return {top:rail.getBoundingClientRect().top,viewportTop:scroller.getBoundingClientRect().top};
   });
-  assert.ok(Math.abs(shownRail.top-shownRail.viewportTop)<2,'showing a navigator restores the sticky rail');
-  await page.getByRole('checkbox', {name:'Turns',exact:true}).check();
+  assert.ok(Math.abs(stickyRail.top-stickyRail.viewportTop)<2,'the combined navigator stays sticky when Timeline is hidden');
+  await shot('turns-context-with-timeline-hidden');
+  await timelineKey().click();
   await navigator.getByRole('button', {name:'Browse session timeline'}).focus();
   await page.keyboard.press('End');
   await settled();
   assert.ok(await navigator.getByRole('button', {name:'Browse session timeline'}).evaluate(button=>button===document.activeElement),'revealing a message keeps keyboard focus in the navigator');
-  const saved = page.url();
   await page.reload();
   await page.locator('.reader-navigator-timeline').waitFor();
   await settled();
-  assert.equal(await page.getByRole('checkbox', {name:'Turns',exact:true}).isChecked(),true);
-  assert.equal(await page.getByRole('checkbox', {name:'Context',exact:true}).isChecked(),false);
-  assert.equal(new URL(page.url()).searchParams.get('reader_navigator'),new URL(saved).searchParams.get('reader_navigator'));
+  assert.equal(await timelineKey().getAttribute('aria-pressed'),'true');
 
   if (merged) {
     assert.match(await page.locator('.work-heading > .meta').innerText(), /Source: claude/);
     // The overview grows without resizing the transcript or its scrollport.
     // The selected turn and the progress band must still describe the viewport.
     for (const expanded of [true, false]) {
-      await page.getByText("Archive details", { exact: true }).click();
+      if(expanded){
+        await page.getByRole('button',{name:'Conversation actions',exact:true}).click();
+        await page.getByRole('menuitem',{name:'Archive details',exact:true}).click();
+      }else await page.getByRole('button',{name:'Close Archive details',exact:true}).click();
       assert.equal(await page.locator(".archive-details").evaluate(details => details.open), expanded);
       if(expanded){
         const details=page.locator('.archive-body');
@@ -1552,33 +1534,28 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
     sourceOnly=true;
     await page.reload();
     await page.locator('.reader-navigator').waitFor();
-    const context=await page.locator('.work-heading > .meta').innerText();
-    assert.match(context,/Repository not identified/);
-    assert.match(context,/Source: chatgpt/);
     assert.equal(await page.locator('.archive-details').isVisible(),false,'source alone does not need Archive details');
     assert.doesNotMatch(await page.locator('.coverage-warning').innerText(),/See Archive details/);
     await shot('source-only-heading');
   } else {
     // The child fixture is a single exchange without context measurements.
-    // Keep unavailable choices in the URL so they return on another session.
+    // Legacy hidden choices must not hide measured context or turns.
     const all = encodeURIComponent(JSON.stringify(['timeline','context','turns']));
     await page.evaluate(url=>window.pharosNavigate(url), `/work/${workID}/conversation/conv-child?reader_navigator=${all}`);
     await page.getByRole('article',{name:'User message',exact:true}).getByText('Review the change (conv-child)',{exact:true}).waitFor();
     await page.locator('.reader-navigator-timeline').waitFor();
-    for(const name of ['Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).count(),0,`${name} is unavailable`);
     await shot('session-navigator-unmeasured');
     await timelineKey().click();
     assert.equal(await page.locator('.reader-navigator-timeline').count(),0);
-    const state=JSON.stringify(['timeline','context','turns']);
+    const state=JSON.stringify([]);
     await page.evaluate(url=>window.pharosNavigate(url), `/work/${workID}/conversation/conv-root?reader_navigator=${encodeURIComponent(state)}`);
     await page.locator('.reader-navigator-context .token-marker').first().waitFor();
-    for(const name of ['Context','Turns'])assert.equal(await page.getByRole('checkbox',{name,exact:true}).isChecked(),true,`${name} returns when available`);
     await shot('session-navigator-measured');
   }
 });
 
-test('overlapping context profiles reveal the stream actually clicked', {skip}, async t=>{
-  const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-context .token-marker'});
+test('overlapping context profiles and turn labels reveal their sources', {skip}, async t=>{
+  const {page,settled,shot}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-context .token-marker'});
   const entries=await page.evaluate(()=>document.querySelector('.conversation-panel').navigatorData.contexts.map(entry=>({id:entry.message.id,size:entry.sample.size,title:entry.title})));
   const parent=entries.find(entry=>entry.size===150200),child=entries.find(entry=>entry.id==='m-17');
   assert.ok(parent&&child,'the fixture has overlapping main and subagent profiles');
@@ -1594,6 +1571,13 @@ test('overlapping context profiles reveal the stream actually clicked', {skip}, 
   // Keyboard activation still reaches the small profile.
   await childButton.focus();await page.keyboard.press('Enter');
   await page.waitForFunction(id=>[...document.querySelectorAll('.token-highlight')].some(target=>target.closest('[data-message-id]')?.dataset.messageId===id),child.id);
+  const turn=page.locator('.reader-navigator-turn').nth(2),label=turn.locator('span');
+  const message=await page.evaluate(()=>document.querySelector('.conversation-panel').navigatorData.turns[2].messages[0]);
+  await label.click();
+  await page.waitForFunction(id=>document.querySelector(`[data-message-id="${id}"].authorship-target`),message);
+  await turn.focus();await page.keyboard.press('Enter');
+  assert.ok(await turn.evaluate(element=>element===document.activeElement),'revealing a turn keeps keyboard focus on its marker');
+  await shot('combined-context-and-turns');
 });
 
 test('untimed session navigator draws calls and failures and reveals by message order', {skip}, async t=>{
@@ -1606,7 +1590,7 @@ test('untimed session navigator draws calls and failures and reveals by message 
       const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
       if(call.params.conversation!=='conv-root')return body;
       let tick=0;
-      const event=(id,kind,text,extra={})=>({id,native_id:id,kind,role:'assistant',created_at:timed||partial&&id==='prompt'?new Date(Date.UTC(2026,10,1)+tick++*10000).toISOString():null,text:typeof text==='string'?text:JSON.stringify(text),...extra});
+      const event=(id,kind,text,extra={})=>({id,native_id:id,kind,role:'assistant',created_at:timed||partial&&['prompt','reply'].includes(id)?new Date(Date.UTC(2026,10,1)+tick++*10000).toISOString():null,text:typeof text==='string'?text:JSON.stringify(text),...extra});
       return {...body,messages:[event('prompt','message','Check the files',{role:'user',labels:{ids:['P.request.work.implement'],probs:{'P.request.work.implement':.95}},authorship:{provisional:true,typed_words:3,spans:[{start:0,end:15,category:'typed',words:3}]}}),
         event('command','tool_call',{name:'Bash',input:{command:'check'}},{call_id:'cmd'}),
         event('result','tool_result',{exit_code:1,content:'Process exited with code 1'},{call_id:'cmd'}),
@@ -1641,6 +1625,16 @@ test('untimed session navigator draws calls and failures and reveals by message 
     assert.ok(star.x>=0,'the estimate remains within the viewport');
   };
   const actionRow=page.locator('.timeline-entry[data-message-id="search"]');
+  const checkTimestampPlacement=async()=>{
+    for(const id of ['prompt','reply']){
+      const row=page.locator(`.timeline-entry[data-message-id="${id}"]`);
+      const stamp=await row.locator('.timeline-time').boundingBox(),content=await row.locator('.timeline-content').boundingBox();
+      assert.ok(stamp&&content&&stamp.x+stamp.width<=content.x,`${id}: text stays to the right of its timestamp`);
+      assert.ok(stamp.y<content.y+content.height&&content.y<stamp.y+stamp.height,`${id}: timestamp and text share a row`);
+    }
+    const promptContent=await prompt.locator('.timeline-content').boundingBox(),replyContent=await page.locator('.timeline-entry[data-message-id="reply"] .timeline-content').boundingBox(),actionContent=await actionRow.locator('.timeline-content').boundingBox();
+    assert.ok(Math.abs(promptContent.x-replyContent.x)<1&&Math.abs(promptContent.x-actionContent.x)<1,'timed messages and untimed actions share the same left edge');
+  };
   const contentInset=async()=>actionRow.evaluate(row=>row.querySelector('.timeline-content').getBoundingClientRect().left-row.getBoundingClientRect().left);
   assert.ok(Math.abs(await contentInset())<1,'untimed actions use the full row width');
   const sections=navigator.locator('.reader-section-node').first();
@@ -1708,9 +1702,11 @@ test('untimed session navigator draws calls and failures and reveals by message 
   await key.getByText('End time unknown',{exact:true}).waitFor();
   assert.match(await page.locator('.timeline-entry[data-message-id="search"] .timeline-time').innerText(),/^\+\d/,'available timestamps remain visible');
   await checkEstimatePlacement();
+  await checkTimestampPlacement();
   await shot('writing-estimate-timestamp');
   await page.setViewportSize({width:320,height:900});
   await checkEstimatePlacement();
+  await checkTimestampPlacement();
   await page.setViewportSize({width:1920,height:1050});
   assert.ok(await marker.isVisible());await marker.click();await page.getByRole('dialog',{name:'How estimates work'}).waitFor();await page.keyboard.press('Escape');
   assert.ok(await contentInset()>0,'timed actions retain their time column');
@@ -1722,9 +1718,16 @@ test('untimed session navigator draws calls and failures and reveals by message 
   timed=false;partial=true;
   await page.reload();await marker.waitFor();
   await checkEstimatePlacement();
+  await page.locator('.timeline-entry[data-message-id="reply"]').scrollIntoViewIfNeeded();
+  await shot('partial-message-timestamps-desktop');
+  await checkTimestampPlacement();
+  assert.ok(await contentInset()>0,'untimed actions keep the shared gutter when messages have timestamps');
   await page.setViewportSize({width:320,height:900});
   await settled();
   await checkEstimatePlacement();
+  await checkTimestampPlacement();
+  await page.locator('.timeline-entry[data-message-id="reply"]').scrollIntoViewIfNeeded();
+  await shot('partial-message-timestamps-phone');
   singleSession=true;timed=true;partial=false;
   await page.setViewportSize({width:1920,height:929});
   await page.reload();
@@ -1836,7 +1839,8 @@ test('session navigator scrolling reuses transcript geometry on a long session',
     },
   }});
   assert.equal(await page.locator('.token-marker').count(),960,'the fixture exercises hundreds of context profiles');
-  await page.getByRole('button',{name:/^Close (All )?Turns$/i}).click();
+  await page.getByRole('button',{name:'Conversation actions',exact:true}).click();
+  await page.getByRole('menuitem',{name:'Close All Turns',exact:true}).click();
   await settled();
   // Warm the sticky transition before instrumenting the scroll path.
   await page.locator('.turn').nth(2).evaluate(turn=>turn.scrollIntoView({block:'start',behavior:'instant'}));
@@ -1853,22 +1857,17 @@ test('session navigator scrolling reuses transcript geometry on a long session',
   const measurements=await measureScroll();
   assert.equal(measurements.transcriptReads,0,'scrolling must not remeasure transcript targets');
   t.diagnostic(JSON.stringify({fixture:'160 turns / 1,920 messages / 960 context samples, collapsed',...measurements}));
-  await page.getByRole('button',{name:/^Open (All )?Turns$/i}).click();
+  await page.getByRole('button',{name:'Conversation actions',exact:true}).click();
+  await page.getByRole('menuitem',{name:'Open All Turns',exact:true}).click();
   await settled();
   const expanded=await measureScroll();
   assert.equal(expanded.transcriptReads,0,'expanded history also reuses cached geometry');
   t.diagnostic(JSON.stringify({fixture:'160 turns / 1,920 messages / 960 context samples, expanded',...expanded}));
   t.diagnostic(JSON.stringify({fixture:'same expanded transcript, all navigators, repeat traversal',...await measureScroll()}));
-  await page.getByRole('checkbox',{name:'Context',exact:true}).uncheck();
-  await settled();
-  t.diagnostic(JSON.stringify({fixture:'same expanded transcript, timeline and turns',...await measureScroll()}));
-  await page.getByRole('checkbox',{name:'Turns',exact:true}).uncheck();
-  await settled();
-  t.diagnostic(JSON.stringify({fixture:'same expanded transcript, timeline only',...await measureScroll()}));
   const timelineToggle=page.getByRole('group',{name:'Timeline key',exact:true}).getByRole('button',{name:'Timeline',exact:true});
   await timelineToggle.click();
   await settled();
-  t.diagnostic(JSON.stringify({fixture:'same expanded transcript, all navigators hidden',...await measureScroll()}));
+  t.diagnostic(JSON.stringify({fixture:'same expanded transcript, turns and context only',...await measureScroll()}));
   await timelineToggle.click();
   await settled();
   await page.locator('.turn').nth(80).evaluate(turn=>turn.scrollIntoView({block:'center',behavior:'instant'}));
@@ -3959,7 +3958,8 @@ test('Claude settings capture preserves focus through failures, progress and com
     await button.waitFor();
     let source,turn;
     if(reader){
-      await page.locator('.source-details > summary').click();
+      await page.getByRole('button',{name:'Conversation actions',exact:true}).click();
+      await page.getByRole('menuitem',{name:'Source details',exact:true}).click();
       await page.locator('.turn > summary').click();
       source=await page.locator('.source-details').elementHandle();
       turn=await page.locator('.turn').elementHandle();
