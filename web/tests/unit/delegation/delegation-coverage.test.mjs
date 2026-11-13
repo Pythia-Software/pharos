@@ -55,7 +55,7 @@ test("metric marks keep partial and unverified quality apart from observed value
 
 test("conversation-level copy uncertainty and omitted segments are explained", () => {
   assert.equal(occurrenceNote(), "");
-  for (const reason of ["untyped-ancestry/v1", "retained-history-undeclared/v1", "history-undeclared/v1", "declared-copy-source-missing/v1", "unresolved-observations"]) assert.match(occurrenceNote(reason), /^Copied history may be counted: \S/);
+  for (const reason of ["untyped-ancestry/v1", "retained-history-undeclared/v1", "declared-copy-source-missing/v1", "unresolved-observations"]) assert.match(occurrenceNote(reason), /^Copied history may be counted: \S/);
   assert.match(occurrenceNote("future-reason/v9"), /^Copied history may be counted/, "an unknown reason still says the count may include copies");
   assert.equal(omittedSegmentsNote([]), "");
   assert.match(omittedSegmentsNote([{ workspace_id: "w" }]), /^1 segment /);

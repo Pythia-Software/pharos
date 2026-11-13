@@ -874,7 +874,7 @@ func TestDelegationConversationOccurrenceCoverage(t *testing.T) {
  INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule) VALUES('child','copy','record','history_copy','conversation','native:codex|local|gone','native','codex-session-meta/v1')`)
 	check("declared source not retained", "declared-copy-source-missing/v1")
 	execTx(t, c.DB, `DELETE FROM execution_claims WHERE conversation_id='child'`)
-	check("provider read declares no copy", "history-undeclared/v1")
+	check("provider read without a history declaration", "")
 	// A lane that keeps no rows from a partial transcript (all copies, or
 	// none read) still says it is partial, as the Self metrics do.
 	execTx(t, c.DB, `DELETE FROM execution_evidence_state WHERE conversation_id='child';

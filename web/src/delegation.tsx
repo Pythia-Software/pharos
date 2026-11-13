@@ -574,6 +574,11 @@ export function DelegationExplorer({
     [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0),
     [selected, setSelected] = useState(initial.selected);
+  useEffect(() => {
+    const refresh = () => { livePages.current.reset(); setRevision(value => value + 1); };
+    window.addEventListener("pharos:claude-settings-changed", refresh);
+    return () => window.removeEventListener("pharos:claude-settings-changed", refresh);
+  }, []);
   // Saved IDs the server could not resolve to a session; never replaced by a guess.
   const [unresolvedSelection, setUnresolvedSelection] = useState<ReadonlySet<string>>(new Set());
   const [range, setRange] = useState<Range | null>(null);

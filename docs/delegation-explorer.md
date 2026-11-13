@@ -243,12 +243,12 @@ own the originals), `repeated_messages` (copies of the execution's own earlier
 segment), and `occurrence_partial` with `occurrence_reasons` when copies could
 not be told apart. A whole conversation is partial when it was indexed before
 its provenance was typed (`untyped-ancestry/v1`), when its retained history
-declaration was not read again (`retained-history-undeclared/v1`), when its
-provider read does not declare whether it copied history (`history-undeclared/v1`),
-or when the conversation it declares it copied is not retained
+declaration was not read again (`retained-history-undeclared/v1`), or when
+the conversation it declares it copied is not retained
 (`declared-copy-source-missing/v1`). The row then carries the same reason as
 `occurrence_partial`, and its own message, event, count and clock metrics are
-partial, matching quick stats. A lane reads each segment of the execution in
+partial, matching quick stats. A provider read without a history declaration
+is counted as recorded and is not partial solely for that reason. A lane reads each segment of the execution in
 this work, with the agent events of each, and lists segments retained in other
 work as `omitted_segments`. Copies are excluded before the 2,400-message cap:
 the lane scans in bounded batches and sets `messages_truncated` whenever its

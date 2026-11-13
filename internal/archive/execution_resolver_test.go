@@ -1018,12 +1018,10 @@ func TestExecutionOccurrencesWithoutNativeIDs(t *testing.T) {
 }
 
 // Occurrence coverage through ingestion: a launched agent's coincident first
-// lines stay its own, and its coverage stays partial (history-undeclared)
-// until its provider declares its history; declared copies keep their
-// candidates; a declared copy whose source is not retained, and a child
-// without typed evidence or with evidence re-derived from retained rows
-// alone, stay partial in every consumer. Only an explicit declaration that
-// the child starts without copied history makes it complete.
+// lines stay its own without a partial warning solely for an absent history
+// declaration. Declared copies keep their candidates; a declared copy whose
+// source is not retained, and a child without typed evidence or with evidence
+// re-derived from retained rows alone, stay partial in every consumer.
 func TestExecutionOccurrenceCoverageThroughIngestion(t *testing.T) {
 	c, _ := testCatalog(t)
 	meta := func(from string) MessageRecord {
@@ -1037,9 +1035,8 @@ func TestExecutionOccurrenceCoverageThroughIngestion(t *testing.T) {
 	records := []ConversationRecord{
 		{NativeID: "thread-parent", Provider: "codex", Account: "local", Messages: []MessageRecord{
 			message("line-2", "user", "Explore the repo", 1), message("line-3", "assistant", "ok", 2)}},
-		// A spawned agent whose record makes no history assertion (the
-		// provider format's default is not verified, core-requests E4): its
-		// first lines coincide with the parent's.
+		// A spawned agent whose record makes no history assertion: its first
+		// lines coincide with the parent's but stay separate observations.
 		{NativeID: "thread-spawn", ParentNativeID: "thread-parent", AgentDepth: 1, Provider: "codex", Account: "local", Messages: []MessageRecord{
 			message("line-2", "user", "Explore the repo", 3), message("line-3", "assistant", "ok", 4)}},
 		{NativeID: "thread-fork", ParentNativeID: "thread-parent", AgentDepth: 1, Provider: "codex", Account: "local", Messages: []MessageRecord{
@@ -1055,10 +1052,12 @@ func TestExecutionOccurrenceCoverageThroughIngestion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Typed evidence read at ingestion without a history assertion is not
-	// proof of independence: partial, and its coincident lines stay its own.
-	if reason := o.Partial(id("thread-spawn")); reason != "history-undeclared/v1" {
+	// No history assertion alone does not make the provider-read child partial.
+	if reason := o.Partial(id("thread-spawn")); reason != "" {
 		t.Fatalf("a launched agent without a history declaration: %q", reason)
+	}
+	if counts := fixtureCounts(t, c); counts.PartialConversations != 2 {
+		t.Fatalf("quick stats should not mark the undeclared child partial: %+v", counts)
 	}
 	if reason := o.Partial(id("thread-parent")); reason != "" {
 		t.Fatalf("a root without ancestry is complete, got %q", reason)
@@ -1085,9 +1084,8 @@ func TestExecutionOccurrenceCoverageThroughIngestion(t *testing.T) {
 	if q.OccurrenceCoverage != "partial" || q.PartialConversations != 3 {
 		t.Fatalf("quick stats: %+v", q)
 	}
-	// A provider declaration that the child starts without copied history
-	// (the E4 form: a history_copy claim with mapping "none") is what makes
-	// it complete. No adapter emits one yet; this checks the contract.
+	// An explicit declaration that the child starts without copied history
+	// also makes a child derived from retained rows complete.
 	fixtureExec(t, c, `INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,origin,rule,detail_json)
 	 VALUES(?,'history-none','test',?,?,'provider','test-declared-no-history/v1','{"mapping":"none"}')`, id("thread-spawn"), evidenceHistoryCopy, "conversation:"+id("thread-spawn"))
 	if _, o, err = c.usageConversationRootsAndOccurrences(t.Context(), nil); err != nil || o.Partial(id("thread-spawn")) != "" {

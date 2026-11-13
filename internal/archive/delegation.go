@@ -353,6 +353,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		return nil, err
 	}
 	conversations, err := queryMapsContext(ctx, tx, `SELECT id,provider,account,model,effort,native_id,parent_id,agent_path,agent_nickname,coverage,started_at,ended_at,
+ `+claudeSelectionValue("c", "model")+` selected_model,`+claudeSelectionValue("c", "effort_level")+` selected_effort,
  (SELECT substr(d.initiation,1,180) FROM conversation_documents d WHERE d.conversation_id=c.id) prompt
  FROM conversations c WHERE workspace_id=? ORDER BY started_at,id LIMIT ?`, workspace, delegationAnalysisLimit+1)
 	if err != nil {
@@ -507,7 +508,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		}
 		model := firstString(lead["model"])
 		if main && model == "" {
-			model = firstString(cv["model"])
+			model = firstString(cv["model"], cv["selected_model"])
 		}
 		n := &delegationNode{ID: nid, WorkspaceID: workspace, ConversationID: cid, Provider: firstString(lead["provider"], cv["provider"]), Model: model, Label: label, Coverage: firstString(cv["coverage"]), TimeBoundsSource: firstString(lead["time_bounds_source"]), Usage: "unavailable", envelopeStart: delegationTime(lead["started_at"]), envelopeEnd: delegationTime(lead["ended_at"]), MessageID: firstString(lead["delegation_message_id"]), Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
 		// Embedded executions must not inherit the parent agent's effort.
@@ -515,6 +516,9 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		n.EffortSummary = readSessionEffortSummary(lead["effort_summary"])
 		if main && n.Effort == "" {
 			n.Effort = firstString(cv["effort"])
+			if n.Effort == "" && (model == "" || model == firstString(cv["selected_model"])) {
+				n.Effort = firstString(cv["selected_effort"])
+			}
 		}
 		if x != nil {
 			n.execution = x.ID

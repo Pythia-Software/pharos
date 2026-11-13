@@ -4,15 +4,16 @@ import catalog from "../../../pricing/model_colors.json";
 import rules from "../../../pricing/model_color_rules.json";
 import prices from "../../../pricing/cost_changes.json";
 import { modelTimelineDates } from "../../src/model-color-identity";
-import { perceptualColor } from "../../src/model-color-math";
+import { policyColor } from "../../src/model-color-policy";
+export { lch, fromLCH } from "../../src/model-color-math";
 import { recommendedModelColor } from "../../src/model-colors";
 
 export type Provider = keyof typeof catalog.providers;
 export type Algorithm = "current" | "chroma" | "fan" | "fresh";
 export type Options = { algorithm: Algorithm; vividness: number; tierWeight: number; spread: number; lightness: number; specialistHues: boolean; specialistMode: "catalog" | "expanded"; specialistSpread: number };
-export const defaults: Options = { algorithm: "fan", vividness: 1, tierWeight: .5, spread: 30, lightness: .67, specialistHues: true, specialistMode: "expanded", specialistSpread: 75 };
+export const defaults: Options = { algorithm: "fan", ...rules.palette, specialistHues: true, specialistMode: "expanded" };
 export const algorithms: { id: Algorithm; name: string; description: string }[] = [
-  { id: "current", name: "Current palette", description: "The exact production resolver. Newer and stronger models get deeper shades." },
+  { id: "current", name: "Current palette", description: "The exact production resolver, using the selected Hue fan preset." },
   { id: "chroma", name: "Chroma ladder", description: "Keep the provider hue. Give stronger tiers and newer releases more color, at a useful middle lightness." },
   { id: "fan", name: "Hue fan", description: "Spread tiers over nearby hues, while newer releases become more vivid. More separation, less uniformity." },
   { id: "fresh", name: "Freshness first", description: "Make the latest release in every class vivid. Use nearby hues to separate tiers, without ranking their saturation." },
@@ -51,34 +52,6 @@ export function specialistHueOffset(model: Model, options: Options): number {
   return names.length < 2 ? options.specialistSpread / 2 : 180 + (names.indexOf(model.class) / (names.length - 1) - .5) * options.specialistSpread;
 }
 
-export function lch(color: string): [number, number, number] {
-  const [l, a, b] = perceptualColor(color);
-  return [l, Math.hypot(a, b), (Math.atan2(b, a) * 180 / Math.PI + 360) % 360];
-}
-function rgb(l: number, c: number, h: number): number[] {
-  const a = c * Math.cos(h * Math.PI / 180), b = c * Math.sin(h * Math.PI / 180);
-  const x = (l + .3963377774 * a + .2158037573 * b) ** 3;
-  const y = (l - .1055613458 * a - .0638541728 * b) ** 3;
-  const z = (l - .0894841775 * a - 1.2914855480 * b) ** 3;
-  return [4.0767416621 * x - 3.3077115913 * y + .2309699292 * z, -1.2684380046 * x + 2.6097574011 * y - .3413193965 * z, -.0041960863 * x - .7034186147 * y + 1.7076147010 * z];
-}
-// Reduce chroma at fixed lightness/hue until the color is inside sRGB, rather
-// than clipping RGB channels and silently changing the requested hue.
-export function gamutChroma(l: number, h: number): number {
-  let low = 0, high = .4;
-  for (let i = 0; i < 24; i++) {
-    const middle = (low + high) / 2;
-    if (rgb(l, middle, h).every(value => value >= 0 && value <= 1)) low = middle;
-    else high = middle;
-  }
-  return low;
-}
-export function fromLCH(l: number, c: number, h: number): string {
-  return "#" + rgb(l, Math.min(c, gamutChroma(l, h)), h).map(value => {
-    const encoded = value <= .0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - .055;
-    return Math.round(255 * clamp(encoded)).toString(16).padStart(2, "0");
-  }).join("");
-}
 export function position(model: Model) {
   const order = rules.providers[model.provider].ranked_classes as string[];
   const index = order.indexOf(model.class);
@@ -91,26 +64,12 @@ export function position(model: Model) {
 }
 export function experimentColor(model: Model, base: string, options: Options): string {
   if (options.algorithm === "current") return recommendedModelColor(model.name, base);
-  const [baseL, baseC, baseH] = lch(base), { tier, recency, ranked } = position(model);
-  // An achromatic root has no meaningful hue. Preserve its neutral intent.
-  const neutral = baseC < .008;
-  const hue = neutral ? brands[model.provider].hue : baseH;
-  const specialistOffset = specialistHueOffset(model, options);
-  const fan = options.algorithm === "fan" || options.algorithm === "fresh";
+  const cohort = position(model);
   const siblings = providerModels(model.provider).filter(item => item.class === model.class && item.date === model.date).map(item => item.name).sort();
-  // A symmetric, identity-stable hue offset separates same-date siblings
-  // without inventing a capability or release ordering between them.
   const siblingOffset = siblings.length < 2 ? 0 : (siblings.indexOf(model.name) / (siblings.length - 1) - .5) * 8;
-  const h = hue + specialistOffset + siblingOffset + (fan && ranked ? (tier - .5) * options.spread : 0);
-  const score = options.algorithm === "fresh" || !ranked ? recency : options.tierWeight * tier + (1 - options.tierWeight) * recency;
-  const anchorL = clamp(options.lightness + (baseL - .65) * .28, .46, .79);
-  const l = clamp(anchorL + (1 - score) * .16, .44, .89);
-  const anchorC = neutral ? 0 : clamp(baseC / .16, .18, 1.2) * .22 * options.vividness;
-  // Budget at the frontier lightness; don't let the small gamut of a pale
-  // historical tint desaturate the entire class. Each output is gamut-mapped
-  // separately, and the inspector exposes any resulting crowded neighbors.
-  const c = Math.min(anchorC, gamutChroma(anchorL, h) * .98) * (.2 + .8 * score);
-  return fromLCH(l, c, h);
+  return policyColor(base, brands[model.provider].hue, {
+    ...cohort, hueOffset: specialistHueOffset(model, options), siblingOffset,
+  }, { ...options, spread: options.algorithm === "chroma" ? 0 : options.spread, tierWeight: options.algorithm === "fresh" ? 0 : options.tierWeight });
 }
 export function palette(base: Record<Provider, string>, options: Options): Map<string, string> {
   return new Map(models.map(model => [model.name, experimentColor(model, base[model.provider], options)]));

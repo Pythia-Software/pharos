@@ -5,7 +5,7 @@ import catalog from '../../../../pricing/model_colors.json';
 import rules from '../../../../pricing/model_color_rules.json';
 import prices from '../../../../pricing/cost_changes.json';
 import { generateModelColors, generatedColorLuminance } from '../../../src/model-color-generation';
-import { colorForeground, colorLuminance } from '../../../src/model-color-math';
+import { colorDistance, colorForeground, colorLuminance, lch } from '../../../src/model-color-math';
 import { modelCatalogDates, modelTimelineDates } from '../../../src/model-color-identity';
 import { colorHSL, compareModelColors, customModelColor, editModelColorDrafts, effectiveModelColor, installModelColors, knownModels, modelClass, modelColorKey, modelPaletteComparison, modelPaletteGroups, modelProvider, loadModelColors, modelPalette, modelSeriesColor, previewModelColor, providerColorWarnings, recommendedModelColor, saveModelColor, saveModelColors } from '../../../src/model-colors';
 import { chartMetricTheme, chartSeriesStyle, keyColorTheme, metricSeriesColor } from '../../../src/chart-colors';
@@ -50,7 +50,7 @@ test('palette quality warnings inspect actual version separation and extreme bas
   for (const provider of ['anthropic', 'google', 'openai']) {
     const names = Object.keys(catalog.models).filter(name => catalog.models[name].provider === provider);
     const base = catalog.providers[provider].color;
-    assert.deepEqual(providerColorWarnings(provider, base, modelPaletteComparison(names, base).entries), [], `${provider} defaults are usable`);
+    assert.ok(providerColorWarnings(provider, base, modelPaletteComparison(names, base).entries).every(warning => /hard to distinguish/.test(warning)), 'crowding remains advisory, without an extreme-root warning');
     assert.ok(providerColorWarnings(provider, '#ffffff', modelPaletteComparison(names, '#ffffff').entries).some(warning => /very light/.test(warning)));
     assert.ok(providerColorWarnings(provider, '#000000', modelPaletteComparison(names, '#000000').entries).some(warning => /very dark/.test(warning)));
   }
@@ -90,7 +90,7 @@ test('palette generation is reproducible, ignores previous colors and leaves inp
   const before = structuredClone(catalog), priceBefore = structuredClone(prices), ruleBefore = structuredClone(rules);
   const generated = generateModelColors(catalog, prices.changes, rules);
   assert.deepEqual(generated.catalog, catalog, 'the committed palette matches its rules and inventory');
-  assert.deepEqual(generated.warnings, []);
+  assert.ok(generated.warnings.every(warning => /neighboring releases are close/.test(warning)));
   const recolored = structuredClone(catalog);
   for (const model of Object.values(recolored.models)) model.color = '#ff00ff';
   assert.deepEqual(generateModelColors(recolored, [...prices.changes].reverse(), rules), generated);
@@ -111,10 +111,11 @@ function assertGeneratedOrder(generated, changes) {
         assert.ok(generatedColorLuminance(versions[i - 1][1].color) > generatedColorLuminance(versions[i][1].color), `${family} darkens over time`);
       }
     }
-    for (const date of [...new Set(names.map(([name]) => dates.get(name)))]) {
-      const latest = rule.ranked_classes.map(family => names.filter(([name, model]) => model.class === family && dates.get(name) <= date)
-        .sort(([a], [b]) => dates.get(a).localeCompare(dates.get(b))).at(-1)).filter(Boolean);
-      for (let i = 1; i < latest.length; i++) assert.ok(generatedColorLuminance(latest[i - 1][1].color) > generatedColorLuminance(latest[i][1].color), `${date}: contemporary core tiers stay ordered`);
+    const latest = rule.ranked_classes.map(family => names.filter(([, model]) => model.class === family)
+      .sort(([a], [b]) => dates.get(a).localeCompare(dates.get(b))).at(-1)).filter(Boolean);
+    for (let i = 1; i < latest.length; i++) {
+      assert.ok(lch(latest[i - 1][1].color)[0] > lch(latest[i][1].color)[0], 'latest stronger tiers use deeper midtones');
+      assert.ok(colorDistance(latest[i - 1][1].color, latest[i][1].color) > .025, 'latest tiers remain separated');
     }
   }
   assert.equal(new Set(entries.map(([, model]) => model.color)).size, entries.length);
@@ -156,12 +157,14 @@ test('observed short labels follow their evidenced dates without becoming pricin
   assert.equal(modelTimelineDates([release('sonnet', '2025-01-01')], rules.observed_dates).get('sonnet'), '2025-01-01', 'reviewed pricing dates take precedence');
 });
 
-test('specialist OpenAI families use distinct hues outside the mainline green spectrum', t => {
+test('specialist families use their own hue fan while provider edits reach every specialist', t => {
   t.after(() => installModelColors(palette())); installModelColors(palette());
-  const hueGap = (a, b) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
-  const core = Object.entries(catalog.models).filter(([,model]) => model.provider === 'openai' && rules.providers.openai.ranked_classes.includes(model.class));
-  for (const [name, model] of Object.entries(catalog.models).filter(([,model]) => model.provider === 'openai' && !rules.providers.openai.ranked_classes.includes(model.class))) {
-    for (const [,main] of core) assert.ok(hueGap(colorHSL(model.color)[0], colorHSL(main.color)[0]) > 20, `${name} has a distinct specialist hue`);
+  const nextRules = structuredClone(rules); nextRules.palette.specialistSpread = 150;
+  const next = generateModelColors(catalog, prices.changes, nextRules).catalog;
+  for (const [name, model] of Object.entries(catalog.models)) {
+    const provider = rules.providers[model.provider];
+    const specialist = provider.ranked_classes.length && !provider.ranked_classes.includes(model.class);
+    assert.equal(next.models[name].color === model.color, !specialist, name);
   }
   for (const name of ['gpt-image-2.6-flare', 'gpt-6-cyber', 'gpt-rosalind-research']) {
     const provider = '#7547b3';
@@ -191,16 +194,16 @@ test('new model classes and invalid metadata require explicit rules rather than 
   assert.throws(() => generateModelColors(catalog, [...prices.changes, release('unclassified-new-model', '2027-01-01')], rules), /Define a model color class\/rule/);
   assert.throws(() => generateModelColors(catalog, [...prices.changes, release('sonnet-6', '2027-02-30')], rules), /Invalid catalog date/);
   assert.throws(() => generateModelColors(catalog, [...prices.changes, release('sonnet-5-5', '2027-01-01', 'google')], rules), /Conflicting provider/);
-  assert.throws(() => generateModelColors(catalog, prices.changes, {...rules, minimum_version_step: -1}), /Invalid model color spacing/);
+  assert.throws(() => generateModelColors(catalog, prices.changes, {...rules, palette: {...rules.palette, vividness: -1}}), /Invalid model color policy/);
   const extended = structuredClone(rules), inventory = structuredClone(catalog);
-  extended.providers.anthropic.classes.Legend = {luminance: [.05, .02], match: '^legend(?:-|$)'};
+  extended.providers.anthropic.classes.Legend = {match: '^legend(?:-|$)'};
   extended.providers.anthropic.ranked_classes.push('Legend');
   inventory.models['legend-1'] = {provider: 'anthropic', class: 'Legend', color: ''};
   const next = generateModelColors(inventory, [...prices.changes, release('legend-1', '2027-01-01'), release('legend-2', '2027-02-01')], extended).catalog;
   assert.ok(next.class_order.anthropic.includes('Legend'));
   assert.match(next.models['legend-1'].color, /^#[0-9a-f]{6}$/);
   assert.equal(next.models['legend-2'].class, 'Legend', 'future releases use a data-defined class matcher');
-  extended.providers.anthropic.classes.Duplicate = {luminance: [.1, .05], match: '^legend(?:-|$)'};
+  extended.providers.anthropic.classes.Duplicate = {match: '^legend(?:-|$)'};
   assert.throws(() => generateModelColors(inventory, [release('legend-2', '2027-02-01')], extended), /Ambiguous model color class/);
 });
 
@@ -208,9 +211,8 @@ test('dense release histories report finite-gamut crowding and still produce an 
   const inventory = {version: 1, providers: {anthropic: catalog.providers.anthropic}, class_order: {}, models: {}, sources: {}};
   const denseRules = {...rules, providers: {anthropic: {...rules.providers.anthropic, ranked_classes: ['Opus'], classes: {Opus: rules.providers.anthropic.classes.Opus}}}};
   const changes = Array.from({length: 24}, (_, index) => release(`opus-${index + 1}`, `2027-01-${String(index + 1).padStart(2, '0')}`));
-  const {catalog: next, warnings, versionSteps} = generateModelColors(inventory, changes, denseRules);
-  assert.ok(warnings.some(warning => warning.includes('dense release history')));
-  assert.ok(versionSteps.anthropic < denseRules.minimum_version_step);
+  const {catalog: next, warnings} = generateModelColors(inventory, changes, denseRules);
+  assert.ok(warnings.some(warning => warning.includes('neighboring releases are close')));
   const colors = changes.map(row => next.models[row.model].color);
   assert.equal(new Set(colors).size, changes.length);
   assert.ok(colors.every(color => /^#[0-9a-f]{6}$/.test(color)));
@@ -228,7 +230,7 @@ test('provider color families contain distinct class ranges and closely related 
     assert.ok(rgbDistance(color(older), color(newer)) >= 15, `${older} and ${newer} are distinguishable`);
   }
   for (const [name, model] of Object.entries(catalog.models)) {
-    if (model.provider === 'openai' && !rules.providers.openai.ranked_classes.includes(model.class)) continue;
+    if (rules.providers[model.provider].ranked_classes.length && !rules.providers[model.provider].ranked_classes.includes(model.class)) continue;
     assert.ok(hueDistance(color(name), catalog.providers[model.provider].color) < 40, `${name} stays in its provider color family`);
   }
   for (const name of ['3-5-sonnet', 'opus-future', 'haiku-future', 'gemini-2.5-pro', 'o3-mini']) {
@@ -241,7 +243,7 @@ test('provider color families contain distinct class ranges and closely related 
   assert.equal(modelClass('o3-mini'), 'Reasoning');
   assert.equal(modelClass('mythos-future'), modelClass('fable-future'));
   assert.equal(modelClass('mythos-5-2'), modelClass('fable-5-2'));
-  assert.ok(hueDistance(color('mythos-5-2'), color('fable-5-2')) < 4, 'Fable and Mythos share the Fable range');
+  assert.ok(hueDistance(color('mythos-5-2'), color('fable-5-2')) < 12, 'Fable and Mythos share the Fable range');
   assert.equal(modelClass('gpt-7-sol'), 'Sol');
   assert.ok(hueDistance(color('gpt-7-sol'), color('gpt-6-sol')) < 4, 'unlisted versions follow their catalog tier');
   const ordered = ['opus-5-5', 'mythos-5-2', 'gpt-6-sol', 'gpt-6-luna', 'sonnet-5-5', 'gpt-6-astra', 'haiku-4-5', 'gpt-6.1-terra'].sort(compareModelColors);

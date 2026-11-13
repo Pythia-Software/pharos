@@ -122,6 +122,22 @@ test('compact variants replace the paired control in place or at a chosen drop b
   assert.ok(!header.defaultHeaderTools().includes('sync'));
 });
 
+test('bookmarks and page history can be configured independently of the navigation bar', () => {
+  const header = loadClassicScript('header.js');
+  const add = (tools, id) => plain(header.editHeaderTools(tools, id, header.headerToolAddPosition(tools, id)));
+  for (const id of ['bookmarks', 'visits']) {
+    const tools = add(['settings'], id);
+    assert.deepEqual(tools, ['settings', id]);
+    assert.deepEqual(plain(header.normalizeHeaderTools(tools)), tools);
+    assert.ok(!header.defaultHeaderTools().includes(id));
+    assert.deepEqual(plain(header.editHeaderTools(tools, id, null)), ['settings']);
+  }
+  const combined = add(add(['navigator', 'settings'], 'bookmarks'), 'visits');
+  assert.deepEqual(combined, ['navigator', 'settings', 'bookmarks', 'visits']);
+  assert.deepEqual(plain(header.editHeaderTools(combined, 'navigator', null)), ['settings', 'bookmarks', 'visits']);
+  assert.deepEqual(add(['history', 'settings'], 'visits'), ['history', 'settings', 'visits'], 'page history can coexist with back / forward');
+});
+
 function historyHarness() {
   const entries = [null], values = new Map(), buttons = { navBack: {}, navForward: {}, headerBackOnly: {} };
   let index = 0, changed = 0;

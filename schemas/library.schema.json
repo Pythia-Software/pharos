@@ -77,7 +77,7 @@
     {"name": "execution_machines", "label": "Execution machines", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machines", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machines\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
     { "name": "harnesses", "label": "Agent apps", "type": "text", "group": "Context", "select": {"default": false}, "bindings": {"postgres": {"expr": "harnesses", "synthetic": true}, "sqlite": {"expr": "r.\"harnesses\""}} },
     { "name": "harness_versions", "label": "Agent app versions", "type": "text", "group": "Context", "select": {"default": false}, "bindings": {"postgres": {"expr": "harness_versions", "synthetic": true}, "sqlite": {"expr": "r.\"harness_versions\""}} },
-    { "name": "models", "label": "Models", "type": "text", "group": "Context", "bindings": {"postgres": {"expr": "models", "synthetic": true}, "sqlite": {"expr": "r.\"models\""}} },
+    { "name": "models", "label": "Models", "type": "text", "group": "Context", "description": "Models recorded in the workspace, including saved Claude conversation selections.", "bindings": {"postgres": {"expr": "models", "synthetic": true}, "sqlite": {"expr": "r.\"models\""}} },
     {
       "name": "model_efforts",
       "label": "Model + effort",
@@ -103,7 +103,7 @@
           "expr": "r.\"model_efforts\""
         }
       },
-      "description": "Recorded model and effort pairs; missing effort is labeled Unknown effort."
+      "description": "Recorded model and effort pairs, including saved Claude conversation selections; missing effort is labeled Unknown effort."
     },
     {
       "name": "efforts",
@@ -119,7 +119,7 @@
           "expr": "r.\"efforts\""
         }
       },
-      "description": "Recorded agent effort level; unavailable when the source does not report it.",
+      "description": "Recorded effort levels, including saved Claude conversation selections; missing effort is unknown.",
       "select": {
         "default": true
       }

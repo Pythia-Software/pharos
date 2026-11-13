@@ -115,7 +115,6 @@ export function qualityMark(quality: string): string {
 const occurrenceNotes: Record<string, string> = {
   "untyped-ancestry/v1": "indexed before session provenance was recorded",
   "retained-history-undeclared/v1": "its history declaration was not read again",
-  "history-undeclared/v1": "its provider does not say whether it copied history",
   "declared-copy-source-missing/v1": "the conversation it copied is not retained",
   "unresolved-observations": "some messages could not be told apart from copies",
 };

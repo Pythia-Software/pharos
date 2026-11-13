@@ -15,3 +15,32 @@ export function colorDistance(first: string, second: string): number {
   const a = perceptualColor(first), b = perceptualColor(second);
   return Math.hypot(...a.map((value, index) => value - b[index]));
 }
+
+export function lch(color: string): [number, number, number] {
+  const [l, a, b] = perceptualColor(color);
+  return [l, Math.hypot(a, b), (Math.atan2(b, a) * 180 / Math.PI + 360) % 360];
+}
+function rgb(l: number, c: number, h: number): number[] {
+  const a = c * Math.cos(h * Math.PI / 180), b = c * Math.sin(h * Math.PI / 180);
+  const x = (l + .3963377774 * a + .2158037573 * b) ** 3;
+  const y = (l - .1055613458 * a - .0638541728 * b) ** 3;
+  const z = (l - .0894841775 * a - 1.2914855480 * b) ** 3;
+  return [4.0767416621 * x - 3.3077115913 * y + .2309699292 * z, -1.2684380046 * x + 2.6097574011 * y - .3413193965 * z, -.0041960863 * x - .7034186147 * y + 1.7076147010 * z];
+}
+// Reduce chroma at fixed lightness/hue until the color is inside sRGB, rather
+// than clipping RGB channels and silently changing the requested hue.
+export function gamutChroma(l: number, h: number): number {
+  let low = 0, high = .4;
+  for (let i = 0; i < 24; i++) {
+    const middle = (low + high) / 2;
+    if (rgb(l, middle, h).every(value => value >= 0 && value <= 1)) low = middle;
+    else high = middle;
+  }
+  return low;
+}
+export function fromLCH(l: number, c: number, h: number): string {
+  return "#" + rgb(l, Math.min(c, gamutChroma(l, h)), h).map(value => {
+    const encoded = value <= .0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - .055;
+    return Math.round(255 * Math.max(0, Math.min(1, encoded))).toString(16).padStart(2, "0");
+  }).join("");
+}
