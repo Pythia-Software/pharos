@@ -1087,6 +1087,7 @@ final class ArchiveService: ObservableObject {
 // to: the message arrives from the web process after the event has passed.
 final class ArchiveWKWebView: WKWebView {
     private(set) var lastMouseDown: NSEvent?
+    private var zoomedAtLastSingleClick: Bool?
     var onMoveToWindow: ((NSWindow) -> Void)?
     var onPageZoom: (() -> Void)?
 
@@ -1101,7 +1102,21 @@ final class ArchiveWKWebView: WKWebView {
 
     override func mouseDown(with event: NSEvent) {
         lastMouseDown = event
+        if event.clickCount == 1 { zoomedAtLastSingleClick = window?.isZoomed }
         super.mouseDown(with: event)
+    }
+
+    func performHeaderDoubleClick(defaults: UserDefaults = .standard) {
+        guard let window, let wasZoomed = zoomedAtLastSingleClick else { return }
+        zoomedAtLastSingleClick = nil
+        // macOS 27 can zoom the transparent title bar itself before mouse-up
+        // reaches WebKit. Toggling again would restore the previous width.
+        guard window.isZoomed == wasZoomed, !window.isMiniaturized else { return }
+        switch defaults.string(forKey: "AppleActionOnDoubleClick") {
+        case "Minimize": window.performMiniaturize(nil)
+        case "None": break
+        default: window.performZoom(nil)
+        }
     }
 
     // View → Zoom In shows ⌘+, which needs Shift on most layouts; take ⌘=
@@ -1446,13 +1461,20 @@ struct ArchiveWebView: NSViewRepresentable {
         if (event.target instanceof HTMLDialogElement) return !inside(box, x, y);
         return box.left <= bar.left && box.right >= bar.right && box.top <= bar.top && box.bottom >= bar.bottom;
       };
-      document.addEventListener('mousedown', event => {
+      const headerMouseEvent = event => {
         if (event.button !== 0 || !(event.target instanceof Element)) return;
         const onHeader = event.target.closest('body > header') && !event.target.closest(interactive);
         if (!onHeader && !backdropOverHeader(event)) return;
         event.preventDefault();
-        window.webkit.messageHandlers.\(windowMessageName).postMessage(event.detail === 2 ? 'doubleClick' : 'drag');
-      });
+        // Let AppKit finish its native title-bar action before the fallback.
+        if (event.type === 'mouseup') {
+          if (event.detail === 2) window.webkit.messageHandlers.\(windowMessageName).postMessage('doubleClick');
+        } else if (event.detail !== 2) {
+          window.webkit.messageHandlers.\(windowMessageName).postMessage('drag');
+        }
+      };
+      document.addEventListener('mousedown', headerMouseEvent);
+      document.addEventListener('mouseup', headerMouseEvent);
       const header = document.querySelector('body > header');
       if (header) {
         const reportHeaderCenter = () => {
@@ -1767,11 +1789,7 @@ struct ArchiveWebView: NSViewRepresentable {
                 case "drag":
                     if let event = webView.lastMouseDown { window.performDrag(with: event) }
                 case "doubleClick":
-                    switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
-                    case "Minimize": window.performMiniaturize(nil)
-                    case "None": break
-                    default: window.performZoom(nil)
-                    }
+                    webView.performHeaderDoubleClick()
                 default: break
                 }
             }
