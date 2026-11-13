@@ -66,24 +66,28 @@ test("missing or invalid timestamps omit the age instead of inventing one", () =
 
 test("action relative times omit missing or invalid timestamps", () => {
   const source=readFileSync(join(assets,'ui.py'),'utf8');
-  const relativeTime=vm.runInNewContext('('+source.slice(source.indexOf('function relativeTime('),source.indexOf('\nfunction transcriptHasActionTimes('))+')');
+  const relativeTime=vm.runInNewContext('('+source.slice(source.indexOf('function relativeTime('),source.indexOf('\nfunction transcriptHasTimes('))+')');
   const start='2026-10-20T15:20:00Z';
   for(const value of [undefined,null,'','invalid'])assert.equal(relativeTime(value,start),'');
   for(const origin of [undefined,null,'','invalid'])assert.equal(relativeTime(start,origin),'');
   assert.equal(relativeTime('2026-10-20T15:21:05Z',start),'+1m05s');
 });
 
-test("action timestamp column accounts for all turns and nested actions", () => {
+test("timestamp column accounts for messages, all turns and nested actions", () => {
   const source=readFileSync(join(assets,'ui.py'),'utf8');
   const helperSource=source.slice(source.indexOf('function relativeTime('),source.indexOf('\nfunction timelineEntry('));
-  const hasActionTimes=vm.runInNewContext(helperSource+';transcriptHasActionTimes',{window:{}});
+  const hasTimes=vm.runInNewContext(helperSource+';transcriptHasTimes',{window:{}});
   const start='2026-10-20T15:20:00Z',human={kind:'message',created_at:start},call={kind:'tool_call',native_id:'call',created_at:null},result={kind:'tool_result',native_id:'result',created_at:start};
   const turn={human,events:[call],owned:[human,call,result]},consumed=new Set(['result']);
-  assert.equal(hasActionTimes([turn],consumed),false,'message and paired result times do not reserve an empty action column');
-  assert.equal(hasActionTimes([{...turn,owned:[human,{...call,created_at:'invalid'}]}],consumed),false);
+  assert.equal(hasTimes([turn],consumed),true,'a prompt timestamp reserves the column even when actions have no times');
+  const reply={kind:'message',native_id:'reply',created_at:'2026-10-20T15:20:20Z'};
+  assert.equal(hasTimes([{...turn,owned:[call,reply]}],consumed),true,'a reply timestamp also reserves the column');
+  assert.equal(hasTimes([{...turn,owned:[call,result]}],consumed),false,'paired result times alone do not reserve a column');
+  assert.equal(hasTimes([{...turn,owned:[{...human,created_at:null},call]}],consumed),false,'entirely untimed rows can use the full width');
+  assert.equal(hasTimes([{...turn,owned:[{...call,created_at:'invalid'}]}],consumed),false);
   const nested={...call,native_id:'nested',created_at:'2026-10-20T15:20:10Z'};
-  assert.equal(hasActionTimes([turn,{...turn,owned:[human,call,nested]}],consumed),true,'a timed nested action in a later turn retains the column');
-  assert.equal(hasActionTimes([{...turn,human:{...human,created_at:null},events:[call],owned:[nested]}],consumed),false,'relative time needs a usable turn start');
+  assert.equal(hasTimes([{...turn,owned:[call]},{...turn,owned:[call,nested]}],consumed),true,'a timed nested action in a later turn retains the column');
+  assert.equal(hasTimes([{...turn,human:{...human,created_at:null},events:[call],owned:[nested]}],consumed),false,'relative time needs a usable turn start');
 });
 
 test("JSON-string command arguments show the command and associate failures with it", () => {

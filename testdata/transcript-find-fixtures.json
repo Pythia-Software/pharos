@@ -222,5 +222,32 @@
       }
     }
   ]
-}
+},
+  {"name": "Usage bookkeeping is separate from agent activity and errors",
+   "messages": [
+    {"native_id": "a", "role": "user", "kind": "message", "text": "Please inspect the project"},
+    {"native_id": "read", "role": "assistant", "kind": "tool_call", "text": {"tool": "Read", "input": {"path": "file.txt"}}},
+    {"native_id": "token-count", "role": "system", "kind": "metadata", "text": {"type": "event_msg", "payload": {"type": "token_count", "rate_limits": {}, "note": "usage-checkpoint"}}},
+    {"native_id": "token-record", "role": "system", "kind": "metadata", "text": {"type": "token_usage_record", "payload": {"usage": {}, "note": "usage-checkpoint"}}},
+    {"native_id": "usage", "role": "system", "kind": "metadata", "text": {"type": "token_usage", "note": "usage-checkpoint"}},
+    {"native_id": "thinking-tokens", "role": "system", "kind": "metadata", "text": {"type": "system", "subtype": "thinking_tokens", "note": "usage-checkpoint"}},
+    {"native_id": "cost", "role": "system", "kind": "metadata", "text": {"type": "cost-state", "note": "usage-checkpoint"}},
+    {"native_id": "status", "role": "system", "kind": "metadata", "text": {"type": "system", "subtype": "task_started", "note": "activity-marker"}},
+    {"native_id": "error", "role": "system", "kind": "error", "text": {"type": "error", "content": "activity-marker"}}
+   ],
+   "events": [
+    {"kind": "message", "path": ["prompts"]},
+    {"kind": "tool_call", "path": ["reads"]},
+    {"kind": "metadata", "path": ["usage"]},
+    {"kind": "metadata", "path": ["usage"]},
+    {"kind": "metadata", "path": ["usage"]},
+    {"kind": "metadata", "path": ["usage"]},
+    {"kind": "metadata", "path": ["usage"]},
+    {"kind": "metadata", "path": ["events"]},
+    {"kind": "error", "path": ["events"]}
+   ],
+   "queries": [
+    {"term": "usage-checkpoint", "show": ["prompts", "reads", "events"], "want": {"shown": 0, "hidden": 5, "hidden_kinds": ["usage"]}},
+    {"term": "activity-marker", "show": ["prompts", "reads", "events"], "want": {"shown": 2, "hidden": 0, "hidden_kinds": []}}
+   ]}
 ]

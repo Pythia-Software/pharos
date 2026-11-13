@@ -134,7 +134,7 @@ test('elapsed lookbacks renew on a later execution while fixed custom dates stay
  assert.deepEqual(read(reopened).where.map(term=>term.value),['-7d','+0s']);
 });
 
-test('the same contract is exported to agents, and each field has a runtime owner',async()=>{
+test('the same contract is exported to agents, and each active field has a runtime owner',async()=>{
  const {readFileSync}=await import('node:fs');
  const {join}=await import('node:path');
  const {assets}=await import('../helpers/classic-script.mjs');
@@ -153,8 +153,9 @@ test('the same contract is exported to agents, and each field has a runtime owne
  assert.ok(readFileSync(join(root,'go.mod'),'utf8').includes('github.com/Pythia-Software/query-table/backends/go v'+map.query_types.version));
  for(const name of ['JsonInspectionState','JsonInspectionScope','JsonMatchIdentity','ScopedJsonInspectionState'])assert.ok(map.query_types.types[name],`${name} is discoverable`);
  const runtimeBindings=new Set(ledger.bindings.map(binding=>binding.field));
- for(const [name] of Object.entries(viewFields)){
-  if(delegatedViewFields[name]){const owner=delegatedViewFields[name];assert.ok(readFileSync(join(root,owner.file),'utf8').includes(owner.symbol),name);}
+ for(const [name,field] of Object.entries(viewFields)){
+  if(field.details?.status==='retired'){assert.ok(field.details.reason,name);assert.ok(!runtimeBindings.has(name),`${name} still has a runtime binding`);assert.ok(!ledger.controls.some(control=>control.binding===name),`${name} still has a control`);}
+  else if(delegatedViewFields[name]){const owner=delegatedViewFields[name];assert.ok(readFileSync(join(root,owner.file),'utf8').includes(owner.symbol),name);}
   else assert.ok(runtimeBindings.has(name),`${name} has no discovered runtime binding`);
  }
  for(const control of ledger.controls){if(['details','summary'].includes(control.tag)||control.disclosure)assert.notEqual(control.contract,'settings',`Unbound accordion: ${control.file} ${control.owner}`);assert.notEqual(control.contract,'unclassified',control.key);assert.ok(control.reason,control.key);if(control.contract.startsWith('view.'))assert.ok(viewFields[control.contract.slice(5)],control.contract);}

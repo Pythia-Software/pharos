@@ -360,10 +360,6 @@
       "field": "reader_labels"
     },
     {
-      "file": "web/src/reader-navigator.tsx",
-      "field": "reader_navigator"
-    },
-    {
       "file": "web/src/delegation.tsx",
       "field": "reader_view"
     },
@@ -438,6 +434,10 @@
     {
       "file": "web/src/reader-navigator.tsx",
       "field": "timeline_idle"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
+      "field": "timeline_visibility"
     },
     {
       "file": "web/src/delegation.tsx",
@@ -3442,6 +3442,16 @@
       "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
+      "key": "838dd41920350d87:2",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "apply",
+      "tag": "aria-expanded",
+      "control": "toggle",
+      "disclosure": true,
+      "contract": "reader",
+      "reason": "Source expansion is bound by stable message identity through reader_content using bindViewContent and saveViewContent."
+    },
+    {
       "key": "9136fa352d564e4a:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "apply",
@@ -3491,6 +3501,15 @@
       "reason": "Raw message disclosure is bound by stable message identity through reader_content using bindViewContent and saveViewContent, shared by prose and reasoning cards."
     },
     {
+      "key": "7a95e974107e6b87:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "attachMessageRaw",
+      "tag": "button",
+      "control": "'button', 'copy-value'",
+      "contract": "reader",
+      "reason": "Event details use the stable message identity in reader_content through bindViewContent and saveViewContent."
+    },
+    {
       "key": "b47c85f8099cfd6e:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "button",
@@ -3528,6 +3547,15 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Shared classic disclosure binding uses the stable message identity in data-view-key; opening only materializes preserved references."
+    },
+    {
+      "key": "f4a6580476a560ff:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "citationView",
+      "tag": "button",
+      "control": "'button', 'sources-toggle', 'Show more'",
+      "contract": "reader",
+      "reason": "Source expansion is bound by stable message identity through reader_content using bindViewContent and saveViewContent."
     },
     {
       "key": "f632dd36fb28ffec:0",
@@ -3574,6 +3602,15 @@
       "control": "'details', 'raw-event'",
       "contract": "reader",
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
+    },
+    {
+      "key": "923930fb80b1fb2e:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "copyAction",
+      "tag": "button",
+      "control": "'button', 'conversation-actions-copy', `Copy ${label}`",
+      "contract": "action",
+      "reason": "Copies the selected conversation identity or current URL to the clipboard; this action does not change the view."
     },
     {
       "key": "e7a61eb7b201ccc7:0",
@@ -3713,6 +3750,15 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
+      "key": "cfa96afe98cedfaf:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "messageCopyButton",
+      "tag": "button",
+      "control": "'button', 'copy-value'",
+      "contract": "editing",
+      "reason": "Clipboard actions are transient; Highlight Link writes the canonical reveal attention target before copying the URL."
+    },
+    {
       "key": "3f6f4aa5f5684795:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "mount",
@@ -3758,6 +3804,33 @@
       "reason": "Content expansion uses keyed reader_content, reader_expanded/reader_collapsed or disclosures; deliberate paging stores loaded message IDs. Automatic viewport paging is transient."
     },
     {
+      "key": "a4104435df0c8596:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "readerDetailCard",
+      "tag": "details",
+      "control": "'details', `reader-detail-card ${className}`",
+      "contract": "reader",
+      "reason": "Dismissible card reuses the existing disclosure owner: conversation source uses reader_expanded/reader_collapsed; workspace archive binds its stable work ID with data-view-key. Its summary is hidden and menu actions open it."
+    },
+    {
+      "key": "c85db30f09a6ac95:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "readerDetailCard",
+      "tag": "button",
+      "control": "'button', 'reader-detail-card-close'",
+      "contract": "reader",
+      "reason": "Dismissible card reuses the existing disclosure owner: conversation source uses reader_expanded/reader_collapsed; workspace archive binds its stable work ID with data-view-key. Its summary is hidden and menu actions open it."
+    },
+    {
+      "key": "f628ed3eabc5426e:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "readerDetailCard",
+      "tag": "summary",
+      "control": "'summary', '', label",
+      "contract": "reader",
+      "reason": "Dismissible card reuses the existing disclosure owner: conversation source uses reader_expanded/reader_collapsed; workspace archive binds its stable work ID with data-view-key. Its summary is hidden and menu actions open it."
+    },
+    {
       "key": "a65df4c0bf7b66d9:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renameBookmark",
@@ -3785,13 +3858,40 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "277d68a954f8dcda:0",
+      "key": "1b4521b34ffa2048:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
       "tag": "button",
-      "control": "'button', 'button-with-icon', 'Find'",
+      "control": "'button', 'conversation-actions-reading', 'Close All Turns'",
       "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
+      "reason": "Opens or closes each turn; the reader stores each turn disclosure by stable message identity in the URL."
+    },
+    {
+      "key": "1c58f491bab4fa20:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderConversation",
+      "tag": "button",
+      "control": "'button', 'conversation-actions-trigger'",
+      "contract": "transient",
+      "reason": "Conversation actions menu openness is transient; its actions use their existing reader and Find view state."
+    },
+    {
+      "key": "362d216ca13c8bb7:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderConversation",
+      "tag": "button",
+      "control": "'button', 'conversation-actions-reading', 'Open All Turns'",
+      "contract": "reader",
+      "reason": "Opens or closes each turn; the reader stores each turn disclosure by stable message identity in the URL."
+    },
+    {
+      "key": "635c47252d4846ad:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderConversation",
+      "tag": "button",
+      "control": "'button', 'conversation-actions-details', 'Archive details'",
+      "contract": "reader",
+      "reason": "Opens the existing source or archive disclosure; the card uses the reader disclosure identity or shared workspace disclosure key."
     },
     {
       "key": "74fa28f1d8b00997:0",
@@ -3813,31 +3913,13 @@
       "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
-      "key": "8a991071267cd86c:0",
+      "key": "a21267dfe49c0d48:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
       "tag": "button",
-      "control": "'button', 'button-with-icon', 'Close All Turns'",
+      "control": "'button', 'conversation-actions-reading conversation-actions-details', 'Source details'",
       "contract": "reader",
-      "reason": "Opens or closes each turn; the reader stores each turn disclosure by stable message identity in the URL."
-    },
-    {
-      "key": "91fac2acbf38cf4f:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderConversation",
-      "tag": "details",
-      "control": "'details', 'source-details'",
-      "contract": "reader",
-      "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
-    },
-    {
-      "key": "a411f1fa02129dc8:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderConversation",
-      "tag": "button",
-      "control": "'button', 'button-with-icon', 'Open All Turns'",
-      "contract": "reader",
-      "reason": "Opens or closes each turn; the reader stores each turn disclosure by stable message identity in the URL."
+      "reason": "Opens the existing source or archive disclosure; the card uses the reader disclosure identity or shared workspace disclosure key."
     },
     {
       "key": "ae4e84b69857b628:0",
@@ -3859,6 +3941,15 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
+      "key": "be197a4e40ae6186:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderConversation",
+      "tag": "button",
+      "control": "'button', 'conversation-actions-reading', 'Find'",
+      "contract": "reader",
+      "reason": "Opens page Find, whose search controls own the find view state."
+    },
+    {
       "key": "e22fe96ffa687282:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
@@ -3877,13 +3968,24 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "f4a796207df296b8:0",
+      "key": "fe144833d4c6ab55:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
-      "tag": "summary",
-      "control": "'summary', '', 'Source details'",
-      "contract": "reader",
-      "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
+      "tag": "aria-expanded",
+      "control": "trigger",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Conversation actions menu openness is transient; its actions use their existing reader and Find view state."
+    },
+    {
+      "key": "fe144833d4c6ab55:1",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderConversation",
+      "tag": "aria-expanded",
+      "control": "trigger",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Conversation actions menu openness is transient; its actions use their existing reader and Find view state."
     },
     {
       "key": "a58b094fb4327fd7:0",
@@ -4127,6 +4229,15 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
+      "key": "54ef9e358824c592:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "spendBadge",
+      "tag": "button",
+      "control": "'button', 'estimate-marker-button', '*'",
+      "contract": "transient",
+      "reason": "Opens the temporary estimate explanation for this turn or agent session."
+    },
+    {
       "key": "c4d3d7a454a331d4:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "timelineEntry",
@@ -4208,6 +4319,44 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Summary of a keyed work heading section; a deliberate click also remembers the section open or closed as an interface preference for other work pages."
+    },
+    {
+      "key": "9549c66227a1086b:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "workspaceArchiveActions",
+      "tag": "aria-expanded",
+      "control": "trigger",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Workspace actions menu openness is transient; its archive action uses the shared disclosure state."
+    },
+    {
+      "key": "9549c66227a1086b:1",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "workspaceArchiveActions",
+      "tag": "aria-expanded",
+      "control": "trigger",
+      "disclosure": true,
+      "contract": "transient",
+      "reason": "Workspace actions menu openness is transient; its archive action uses the shared disclosure state."
+    },
+    {
+      "key": "9cccb1f8850606a4:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "workspaceArchiveActions",
+      "tag": "button",
+      "control": "'button', 'conversation-actions-details', 'Archive details'",
+      "contract": "reader",
+      "reason": "Opens the archive card, which uses the shared disclosure runtime and the stable workspace archive key."
+    },
+    {
+      "key": "ac3c3554d21cd89e:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "workspaceArchiveActions",
+      "tag": "button",
+      "control": "'button', 'conversation-actions-trigger'",
+      "contract": "transient",
+      "reason": "Workspace actions menu openness is transient; its archive action uses the shared disclosure state."
     },
     {
       "key": "0e18c887173fcc9b:0",
@@ -5908,11 +6057,11 @@
       "reason": "Dictation microphone: types into a draft text box (Ask prompt, annotation note or feedback comment); the recording is a transient native session, not view state."
     },
     {
-      "key": "ee5c39d0f6f17866:0",
+      "key": "1df208a4f60ffc83:0",
       "file": "web/src/estimate-info.tsx",
       "owner": "EstimateInfoButton",
       "tag": "button",
-      "control": "aria-label=\"About estimates\" onClick={event => { const panel = readerHost?.querySelector<HTMLElement & {usageEstimate?: UsageEstimate | null}>(\".conversation-panel:not(.conversation-loading)\"); window.pharosOpenEstimateDialog?.(event.currentTarget, { usage: panel?.usageEstimate }); }}",
+      "control": "aria-label={label} onClick={event => { const panel = readerHost?.querySelector<HTMLElement & {usageEstimate?: UsageEstimate | null}>(\".conversation-panel:not(.conversation-loading)\"); window.pharosOpenEstimateDialog?.(event.currentTarget, { usage: panel?.usageEstimate }); }}",
       "contract": "transient",
       "reason": "Opens the temporary shared estimate explanation without changing view or query state."
     },
@@ -8042,24 +8191,14 @@
       "reason": "Show All writes reader_hidden_tags through the classic transcript tag filter."
     },
     {
-      "key": "a8c13f42ec7e071b:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "choice",
-      "tag": "input",
-      "control": "data-view-field=\"reader_navigator\" checked={shown.includes(name)} onChange={event=>{const checked=event.currentTarget.checked;setShown(previous=>checked?[...previous.filter(item=>item!==name),name]:previous.filter(item=>item!==name));}}",
-      "binding": "reader_navigator",
-      "contract": "view.reader_navigator",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "4c7e0bb9e5848e3c:0",
+      "key": "442d5f3a17af7e2c:0",
       "file": "web/src/reader-navigator.tsx",
       "owner": "ReaderNavigator",
       "tag": "TimelineLegend",
-      "control": "data-view-field=\"timeline_visibility\" onSelect={(section,values,action)=>setVisibility(previous=>updateTimelineVisibility(previous,section,values,action))}",
+      "control": "data-view-field=\"timeline_visibility\" onSelect={(section,values,action)=>{setVisibility(previous=>updateTimelineVisibility(previous,section,values,action));panel.dispatchEvent(new Event('pharos:reader-key-edit'));}}",
       "binding": "timeline_visibility",
       "contract": "view.timeline_visibility",
-      "reason": "The embedded timeline key writes timeline_visibility through the shared view state and filters the reader's ribbon."
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "5c536168277a2959:0",
@@ -8068,7 +8207,7 @@
       "tag": "button",
       "control": "aria-label=\"Browse session timeline\" onFocus={event=>{const band=host.current?.querySelector<HTMLElement>('.reader-navigator-window');event.currentTarget.dataset.position=band?.dataset.position||'0';}} onClick={event=>{event.stopPropagation();jump(Number(event.currentTarget.dataset.position??0));}} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const button=event.currentTarget,previous=Number(button.dataset.position??0),next=event.key==='Home'?0:event.key==='End'?1:Math.max(0,Math.min(1,previous+(event.key==='ArrowLeft'?-.02:.02)));button.dataset.position=String(next);jump(next);}}",
       "contract": "transient",
-      "reason": "Source navigation scrolls and highlights through the existing reader materialization handlers without taking keyboard focus. Keyboard browsing and the automatic window are transient scroll state; navigator choices bind reader_navigator."
+      "reason": "Source navigation scrolls and highlights through the existing reader materialization handlers without taking keyboard focus. Keyboard browsing and the automatic window are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
     },
     {
       "key": "79fbf467b09870f1:0",
@@ -8077,7 +8216,7 @@
       "tag": "button",
       "control": "onClick={()=>{const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}",
       "contract": "transient",
-      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
     },
     {
       "key": "801ecdacaf583a50:0",
@@ -8097,7 +8236,7 @@
       "tag": "div",
       "control": "aria-label=\"Session timeline. Click to reveal a message.\" onClick={event=>{if(expandable){event.preventDefault();event.stopPropagation();}const track=event.currentTarget,rect=track.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width,{track,x:event.clientX,y:event.clientY});}}",
       "contract": "transient",
-      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
     },
     {
       "key": "e4dc3a33e88064d4:0",
@@ -8106,7 +8245,7 @@
       "tag": "button",
       "control": "onClick={()=>data.jumpContext(entry)}",
       "contract": "transient",
-      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
     },
     {
       "key": "5c3f71ba014e64e4:0",

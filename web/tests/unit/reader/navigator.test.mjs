@@ -5,7 +5,7 @@ import {reader,event,human,render} from '../helpers/transcript.mjs';
 import {plain} from '../helpers/classic-script.mjs';
 import {sessionRibbonTree,activityCategory} from '../../../src/label-session-ribbon-model';
 
-test('navigator choices reflect drawable measurements and meaningful turn boundaries',()=>{
+test('navigator layers reflect drawable measurements and meaningful turn boundaries',()=>{
   const byID=new Map([['a',[0,1]],['b',[1,2]]]);
   const data={contexts:[],turns:[{messages:['a']}]};
   assert.deepEqual(availableReaderNavigators(data,byID),['timeline']);
@@ -14,9 +14,12 @@ test('navigator choices reflect drawable measurements and meaningful turn bounda
   data.contexts.push({message:{id:'missing'},sample:{size:100}});
   data.turns.push({messages:['missing']});
   assert.deepEqual(availableReaderNavigators(data,byID),['timeline'],'undrawable data does not offer a bar');
-  data.contexts.push({message:{id:'b'},sample:{size:0}});
   data.turns.push({messages:['b']});
+  assert.deepEqual(availableReaderNavigators(data,byID),['timeline','turns'],'multiple turns remain navigable without context');
+  data.contexts.push({message:{id:'b'},sample:{size:0}});
   assert.deepEqual(availableReaderNavigators(data,byID),['timeline','context','turns'],'zero is a known context measurement');
+  data.turns=[{messages:['a','b']}];
+  assert.deepEqual(availableReaderNavigators(data,byID),['timeline','context'],'context remains available for a single turn');
 });
 
 test('viewport bounds interpolate expanded rows and include collapsed groups',()=>{

@@ -160,10 +160,12 @@ Analysis source-query links also retain the dashboard chart/population and opene
 
 `<page>/query` also publishes `schema_name`, an inspection template, and a `properties_path` to the paginated property catalogue. Use that schema name (for example `pharos_mcp_calls`) in each inspection scope. `JsonInspectionState`, `JsonMatchIdentity` and related types are generated from the installed core declarations. Returning a native `JsonValueView` directly from a property renderer lets Query Table bind its controlled state and semantic registry; wrapping that element in a host div hides it from the supported integration.
 
-The session reader's `reader_navigator` controls the `context` and `turns` bars.
-The legacy `timeline` value is still accepted, but the Timeline key controls that
-bar: it is hidden when every populated key item is disabled. All bars
-share the session clock and one visible-window indicator. Scroll progress and
+The session reader always combines turns and measured context into one bar,
+with a shorter turns-only bar when context is unavailable. Legacy
+`reader_navigator` values (`timeline`, `context`, `turns`) remain accepted for
+URL compatibility but no longer control visibility. The Timeline key controls
+the timeline bar: it is hidden when every populated key item is disabled.
+Both bars share the session clock and one visible-window indicator. Scroll progress and
 keyboard browsing positions are transient. Clicking a bar materializes, scrolls
 to and highlights its source without moving keyboard focus. Entirely untimed
 sessions explicitly use message order. Expanding/collapsing content refreshes
@@ -235,31 +237,38 @@ Bookmark identity and saved bookmark URLs exclude `overlay`, `history_search`, `
 
 `npm --prefix web run check` includes the source-control review gate, manifest freshness, type checks and unit tests. Do not run a frontend bundle build concurrently with Go compilation: Go embeds the generated bundles.
 
-The **Key** label opens whole-key defaults. Each choice sets content visibility
-and all three highlight switches together, clears individual hue exclusions,
-clears hidden activity tags present in the conversation, and saves the same
-choices as the fallback for unlinked readers. Default shows
-all content with human writing highlighted; Read replies shows prompts and final
-responses with human writing; Follow reasoning shows prompts, replies and thinking
-with agent events and message labels; Review shows everything except token usage
-with every highlight enabled; Plain transcript shows all content without marks.
-Individual highlight keys still use Timeline's grouped legend menus. Changing a
-key can produce a Custom setup; applying a default resets the whole key again.
-Ordinary key edits preserve exclusions for highlights absent from the current
-conversation. Opening an explicit `reader_event_link` enables agent events and
-clears only that pair's event-group and target exclusions in the URL, leaving
-saved preferences intact. Later manual hides are respected until another event
-link is opened. Hover explains visible annotations; clicking pins their actions, while the numbered ends navigate between event pairs. Individual hidden annotations are recorded by conversation, message and span in `reader_highlight_hidden`; Show hidden annotations in the Key restores them.
+The **Key** label opens whole-key defaults. Last restores the most recent manual
+selection; the last applied selection supplies the fallback for an unlinked reader.
+All shows all content,
+timeline elements and text highlighting. Content only shows all content and hides
+the timeline elements and text highlighting. Quiet shows everything except usage and quota checkpoints, including token counts,
+thinking-token estimates and cost bookkeeping. Reads and searches remain visible.
+Applying a preset clears hidden activity tags and individual highlight exclusions.
+Individual changes update Last; links override the saved selection. These choices
+write `reader_filter_level`, `reader_filter`, `reader_hidden_tags`,
+`reader_writing`, `reader_events`, `reader_labels`, `reader_highlight_hidden`, and
+`timeline_visibility` together. Individual highlight keys still use Timeline's
+grouped legend menus. Ordinary key edits preserve exclusions for highlights absent
+from the current conversation. Opening an explicit `reader_event_link` enables
+agent events and clears only that pair's event-group and target exclusions in the
+URL, leaving saved preferences intact. Later manual hides are respected until
+another event link is opened. Hover explains visible annotations; clicking pins
+their actions, while the numbered ends navigate between event pairs. Individual
+hidden annotations are recorded by conversation, message and span in
+`reader_highlight_hidden`; Show hidden annotations in the Key restores them.
 
-These choices write existing canonical fields together: `reader_filter_level`,
-`reader_filter`, `reader_writing`, `reader_events`, `reader_labels`, and
-`reader_highlight_hidden`. The displayed default is derived from those fields,
-so old visibility links, custom categories, copied links and history still restore
-without a separate preset-name field. Activity line tags open the same visibility
+Content keys form one hierarchy: each content category owns its recorded activity
+labels and any service groups. Their state combines `reader_filter` with
+`reader_hidden_tags`: a hidden category dims its children, showing a child enables
+its category, and showing a category restores its current children. Hiding a
+category retains dormant child exclusions. The combined hierarchy's entry IDs are
+presentation identities only and are never stored in the URL.
+
+Activity line tags open the same visibility
 menu as the key. Their hidden
 labels live in `reader_hidden_tags` as `tag:[category,label]` strings; hidden
-labels appear in the key so they can be shown again. Labels shared by categories
-are distinct. Older unscoped labels still hide every matching category; a
+labels appear in the key so they can be shown again. Equal labels in different
+timeline action categories keep distinct saved tags. Older unscoped labels still hide every matching category; a
 `show:tag:[category,label]` entry overrides one such legacy hide. A tag can
 represent several activity labels, such as Read. Choices preserve labels absent
 from the conversation. Page Find can reveal hidden content through its existing
