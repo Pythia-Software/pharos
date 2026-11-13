@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -235,7 +236,7 @@ func TestClaudeSettingsEstimatedModelSelection(t *testing.T) {
 func TestClaudeSettingsJoinExportInEitherOrder(t *testing.T) {
 	for _, settingsFirst := range []bool{true, false} {
 		t.Run(map[bool]string{true: "settings-first", false: "export-first"}[settingsFirst], func(t *testing.T) {
-			c, _ := testCatalog(t)
+			c, config := testCatalog(t)
 			settings := claudeSettingsFixture(t)
 			writeSettingsCache(t, settings.Path, settingsCacheEntry, strings.ReplaceAll(settingsBody, "claude-opus-fixture", "claude-opus-5-5"), "Mon, 02 Nov 2026 12:00:00 GMT", true)
 			export := SourceConfig{Name: "chat-export", Kind: "claude-ai", Account: settings.Account, Enabled: true, Path: writeSourceFileAt(t, strings.ReplaceAll(claudeAIExport, "conv-1", settingsConversation))}
@@ -299,6 +300,24 @@ func TestClaudeSettingsJoinExportInEitherOrder(t *testing.T) {
 			if err != nil || snapshot.Totals["cost"].Value == nil || *snapshot.Totals["cost"].Value <= 0 || !snapshot.Totals["cost"].IsEstimate {
 				t.Fatal("assumed-model output cost was not published", snapshot, err)
 			}
+			var session string
+			if err := c.DB.QueryRow("SELECT id FROM agent_sessions WHERE conversation_id=? AND native_id='main'", id).Scan(&session); err != nil {
+				t.Fatal(err)
+			}
+			if node := snapshot.ByID[session]; node == nil || node.Model != "claude-opus-5-5" || node.Effort != "high" {
+				t.Fatalf("conversation header lost saved selection: %+v", node)
+			}
+			server := testServer(t, config, c)
+			schema, err := sqliteQuerySchema("library")
+			if err != nil {
+				t.Fatal(err)
+			}
+			query := queryFixtureRows{WireQuery: qt.WireQuery{Select: []string{"id", "models", "efforts", "model_efforts"},
+				Where: []qt.WhereTerm{{Field: "model_efforts", Op: "contains", Value: "claude-opus-5-5 · high"}}, Limit: 50}, Version: 2, Profile: qt.SQLiteExpressionProfile}
+			result, err := server.executeQueryFixture(t.Context(), "library", nil, schema, &query, nil)
+			if err != nil || len(result.Rows.Rows) != 1 || result.Rows.Rows[0]["id"] != workspace || result.Rows.Rows[0]["models"] != "claude-opus-5-5" || result.Rows.Rows[0]["efforts"] != "high" {
+				t.Fatalf("Library query lost saved selection: %+v, %v", result, err)
+			}
 			requests := queryRows(t, c, "SELECT model,usage_estimate_json FROM model_requests WHERE conversation_id="+sqlQuote(id)+" AND is_estimate=1")
 			if len(requests) == 0 || firstString(requests[0]["model"]) != "claude-opus-5-5" || !strings.Contains(firstString(requests[0]["usage_estimate_json"]), `"model_source":"observed_conversation_selection"`) {
 				t.Fatal("estimated requests lost model provenance", requests)
@@ -314,8 +333,110 @@ func TestClaudeSettingsJoinExportInEitherOrder(t *testing.T) {
 			if err != nil || refreshed.Totals["tokens"].Value == nil || refreshed.Totals["cost"].Value != nil {
 				t.Fatal("removed model remained in estimated prices", refreshed, err)
 			}
+			if node := refreshed.ByID[session]; node == nil || node.Model != "" || node.Effort != "" {
+				t.Fatalf("removed selection remained in conversation header: %+v", node)
+			}
+			result, err = server.executeQueryFixture(t.Context(), "library", nil, schema, &query, nil)
+			if err != nil || len(result.Rows.Rows) != 0 {
+				t.Fatalf("removed selection remained in Library query: %+v, %v", result, err)
+			}
 		})
 	}
+}
+
+func TestClaudeSettingsRefreshDisplayedSelection(t *testing.T) {
+	c, config := testCatalog(t)
+	seedDelegation(t, c)
+	execTx(t, c.DB, `UPDATE conversations SET harness='claude-ai-export' WHERE id='root'`)
+	server := testServer(t, config, c)
+	schema, err := sqliteQuerySchema("library")
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := queryFixtureRows{WireQuery: qt.WireQuery{Select: []string{"id", "models", "efforts", "model_efforts"},
+		Where: []qt.WhereTerm{{Field: "id", Op: "=", Value: "delegation-work"}}, Limit: 1}, Version: 2, Profile: qt.SQLiteExpressionProfile}
+	checkLibrary := func(model, effort, pair string) {
+		t.Helper()
+		result, err := server.executeQueryFixture(t.Context(), "library", nil, schema, &query, nil)
+		if err != nil || len(result.Rows.Rows) != 1 {
+			t.Fatalf("Library query: %+v, %v", result, err)
+		}
+		row := result.Rows.Rows[0]
+		if firstString(row["models"]) != model || firstString(row["efforts"]) != effort || firstString(row["model_efforts"]) != pair {
+			t.Fatalf("Library selection = %+v, want %q / %q / %q", row, model, effort, pair)
+		}
+	}
+	check := func(model, effort, pair, headerEffort string) {
+		t.Helper()
+		checkLibrary(model, effort, pair)
+		snapshot, err := c.delegationSnapshot(t.Context(), "delegation-work")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if root := snapshot.ByID["root-session"]; root.Model != model || root.Effort != headerEffort {
+			t.Fatalf("header selection = %+v, want %q / %q", root, model, headerEffort)
+		}
+		if child := snapshot.ByID["embedded"]; child.Model != "" || child.Effort != "" {
+			t.Fatalf("parent selection leaked to embedded session: %+v", child)
+		}
+	}
+	insert := func(snapshot, account, org, observed string, model, effort any) {
+		t.Helper()
+		_, err := c.DB.Exec(`INSERT INTO claude_chat_settings_observations
+		 (host_id,source_name,account,organization_uuid,conversation_uuid,observed_at,time_basis,cache_entry,snapshot_id,model,effort_level)
+		 VALUES('host','settings',?,?, 'root-native',?,'http_date','cache',?,?,?)`, account, org, observed, snapshot, model, effort)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := c.RefreshLibrary(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	check("", "", "", "") // Warm both caches before a settings capture.
+	insert("one", "local", "org", "2026-09-01T00:00:00Z", "claude-opus-5", nil)
+	check("claude-opus-5", "Unknown effort", "claude-opus-5 · Unknown effort", "")
+	if _, err := c.RefreshLibrary(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `UPDATE claude_chat_settings_observations SET effort_level='high' WHERE snapshot_id='one'`)
+	check("claude-opus-5", "high", "claude-opus-5 · high", "high")
+	checkNoSelectionMatches := func() {
+		t.Helper()
+		for _, filter := range []struct{ field, value string }{{"models", "claude-opus-5"}, {"model_efforts", "claude-opus-5"}, {"efforts", "high"}} {
+			filtered := query
+			filtered.Where = append(append([]qt.WhereTerm(nil), query.Where...), qt.WhereTerm{Field: filter.field, Op: "contains", Value: filter.value})
+			result, err := server.executeQueryFixture(t.Context(), "library", nil, schema, &filtered, nil)
+			if err != nil || len(result.Rows.Rows) != 0 {
+				t.Fatalf("recorded model matched saved selection through %s: %+v, %v", filter.field, result, err)
+			}
+		}
+	}
+	// A transcript model takes precedence, whether stored on the conversation
+	// or only on an assistant message. Previously saved selections must not
+	// remain in clean or dirty Library projections or their filters.
+	execTx(t, c.DB, `UPDATE conversations SET model='recorded-model' WHERE id='root'`)
+	check("recorded-model", "", "recorded-model · Unknown effort", "")
+	checkNoSelectionMatches()
+	if _, err := c.RefreshLibrary(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	checkNoSelectionMatches()
+	execTx(t, c.DB, `UPDATE conversations SET model=NULL WHERE id='root'`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,model,effort) VALUES('assistant-model','root','assistant-model','assistant','message','response','assistant-model','recorded-reply-model','low')`)
+	checkLibrary("recorded-reply-model", "low", "recorded-reply-model · low")
+	checkNoSelectionMatches()
+	execTx(t, c.DB, `DELETE FROM messages WHERE id='assistant-model'`)
+	check("claude-opus-5", "high", "claude-opus-5 · high", "high")
+	insert("other-account", "other", "org", "2026-09-02T00:00:00Z", "wrong", "low")
+	check("claude-opus-5", "high", "claude-opus-5 · high", "high")
+	insert("newer", "local", "org", "2026-09-03T00:00:00Z", nil, nil)
+	check("", "", "", "") // A newer unknown must not revive the old selection.
+	execTx(t, c.DB, `DELETE FROM claude_chat_settings_observations WHERE snapshot_id='newer'`)
+	insert("conflict", "local", "org", "2026-09-01T00:00:00Z", "other-model", "high")
+	check("", "high", "Unknown model · high", "high")
+	execTx(t, c.DB, `DELETE FROM claude_chat_settings_observations WHERE snapshot_id='conflict'`)
+	insert("other-org", "local", "other-org", "2026-08-01T00:00:00Z", "wrong", "low")
+	check("", "", "", "") // Account labels do not merge organizations.
 }
 
 func TestClaudeSettingsRecording(t *testing.T) {
