@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,75 @@ func TestMenuBarPreferenceLayouts(t *testing.T) {
 			}
 		})
 	}
+	t.Run("launch preserves groups and saved separator identities", func(t *testing.T) {
+		oldOrder := []string{"open", "separator:1", "status", "indexed", "separator:2", "words", "tokens", "carbon", "separator:3", "settings", "separator:4", "quit"}
+		oldItems := slices.DeleteFunc(slices.Clone(oldOrder), menuBarSeparatorPattern.MatchString)
+		oldVisibility := map[string]any{}
+		for _, id := range menuBarDefaultOrder {
+			oldVisibility[id] = slices.Contains(oldItems, id)
+		}
+		groups := [][]string{
+			{"open"}, {"status", "indexed", "index"}, {"words", "tokens", "cost", "carbon"},
+			{"streak", "agent_streak"}, {"backup", "space"}, {"search", "analyze", "optimize"},
+			{"capture", "health", "sources", "finder", "logs"}, {"settings"}, {"eject", "quit"},
+		}
+		for _, tc := range []struct {
+			name   string
+			saved  map[string]any
+			groups [][]string
+		}{
+			{"fresh", map[string]any{}, groups},
+			{"saved old default order", map[string]any{"layoutVersion": 2, "order": oldOrder}, groups},
+			{"saved off values", oldVisibility, groups},
+			{"legacy order", map[string]any{"order": oldItems}, groups},
+			{"reordered groups and nonsequential separators", map[string]any{"layoutVersion": 2, "order": []string{
+				"settings", "separator:9", "words", "tokens", "carbon", "separator:2", "open", "separator:7", "status", "indexed", "separator:4", "quit",
+			}}, [][]string{groups[7], groups[2], groups[3], groups[4], groups[5], groups[6], groups[0], groups[1], groups[8]}},
+			{"existing groups deliberately have no separators", map[string]any{"layoutVersion": 2, "order": oldItems}, [][]string{
+				{"open", "status", "indexed", "index", "words", "tokens", "cost", "carbon"},
+				groups[3], groups[4], groups[5], groups[6], {"settings", "eject", "quit"},
+			}},
+			{"missing usage group", map[string]any{"layoutVersion": 2, "order": []string{
+				"open", "separator:10", "status", "indexed", "separator:3", "settings", "separator:9", "quit",
+			}}, [][]string{groups[0], groups[1], {"cost"}, groups[3], groups[4], groups[5], groups[6], groups[7], groups[8]}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				raw := json.RawMessage(jsonText(tc.saved))
+				values := map[string]json.RawMessage{menuBarPreferenceKey: raw}
+				before := menuBarOrder(values, menuBarSettings(values))
+				order := launchMenuBarPreferences(raw)["order"].([]string)
+				var actual [][]string
+				var group, retained []string
+				seen := map[string]bool{}
+				for _, id := range order {
+					if seen[id] {
+						t.Fatalf("duplicate item or separator %s: %v", id, order)
+					}
+					seen[id] = true
+					if slices.Contains(before, id) {
+						retained = append(retained, id)
+					}
+					if menuBarSeparatorPattern.MatchString(id) {
+						if len(group) > 0 {
+							actual = append(actual, group)
+							group = nil
+						}
+					} else {
+						group = append(group, id)
+					}
+				}
+				if len(group) > 0 {
+					actual = append(actual, group)
+				}
+				if !reflect.DeepEqual(actual, tc.groups) {
+					t.Fatalf("launch groups: %v; want %v (order %v)", actual, tc.groups, order)
+				}
+				if !reflect.DeepEqual(retained, before) {
+					t.Fatalf("launch moved existing items or renumbered separators: %v; want %v", retained, before)
+				}
+			})
+		}
+	})
 }
 
 func TestMenuBarSourceFailureClearsAfterNewerSuccessfulIndex(t *testing.T) {

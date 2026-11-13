@@ -29,21 +29,60 @@ func launchMenuBarPreferences(raw json.RawMessage) map[string]any {
 	}
 	period := menuBarUsagePeriod(values)
 	order := menuBarOrder(values, menuBarSettings(values))
+	separator := 0
+	newSeparator := func() string {
+		for {
+			separator++
+			id := "separator:" + strconv.Itoa(separator)
+			if !slices.Contains(order, id) {
+				return id
+			}
+		}
+	}
 	for _, id := range []string{"index", "cost", "streak", "agent_streak", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "logs", "eject"} {
 		saved[id] = true
 		if slices.Contains(order, id) {
 			continue
 		}
-		// Place each addition before its next usual neighbor without moving
-		// any saved item or changing the identities of editable separators.
-		at := len(order)
-		for _, next := range menuBarDefaultOrder[slices.Index(menuBarDefaultOrder, id)+1:] {
-			if index := slices.Index(order, next); index >= 0 {
-				at = index
+		group, usual := menuBarGroup(id), slices.Index(menuBarDefaultOrder, id)
+		groupExists := slices.ContainsFunc(order, func(item string) bool { return menuBarGroup(item) == group })
+		// Stay on the same side of existing separators as this item's group.
+		// Prefer its nearest earlier member; Eject, for example, goes before
+		// Quit when no earlier member of that group is present.
+		at := -1
+		for i := usual - 1; i >= 0; i-- {
+			previous := menuBarDefaultOrder[i]
+			if groupExists && menuBarGroup(previous) != group {
+				continue
+			}
+			if index := slices.Index(order, previous); index >= 0 {
+				at = index + 1
 				break
 			}
 		}
-		order = slices.Insert(order, at, id)
+		if at < 0 && groupExists {
+			for _, next := range menuBarDefaultOrder[usual+1:] {
+				if index := slices.Index(order, next); menuBarGroup(next) == group && index >= 0 {
+					at = index
+					break
+				}
+			}
+		}
+		if at < 0 {
+			at = 0
+		}
+		items := []string{id}
+		if !groupExists {
+			// A new group follows the nearest earlier usual item. Reuse its
+			// surrounding separators, adding unique IDs only where needed.
+			if at > 0 && !menuBarSeparatorPattern.MatchString(order[at-1]) {
+				items = append([]string{newSeparator()}, items...)
+			}
+			if at < len(order) && !menuBarSeparatorPattern.MatchString(order[at]) {
+				items = append(items, newSeparator())
+			}
+		}
+		order = slices.Insert(order, at, items...)
 	}
 	saved["order"], saved["layoutVersion"], saved["usagePeriod"] = order, 2, period
 	return saved
