@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS fingerprint_blobs (hash TEXT PRIMARY KEY, png BLOB NO
 CREATE TABLE IF NOT EXISTS fingerprint_images (
  entity TEXT NOT NULL, entity_id TEXT NOT NULL, profile TEXT NOT NULL,
  theme TEXT NOT NULL, events INTEGER NOT NULL, revision TEXT NOT NULL,
- renderer TEXT NOT NULL, hash TEXT NOT NULL REFERENCES fingerprint_blobs(hash),
+ renderer TEXT NOT NULL, input_hash TEXT NOT NULL DEFAULT '', input_revision TEXT NOT NULL DEFAULT '',
+ hash TEXT NOT NULL REFERENCES fingerprint_blobs(hash),
  PRIMARY KEY(entity,entity_id,profile,theme,events),
  FOREIGN KEY(entity,entity_id) REFERENCES fingerprint_entities(entity,id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS fingerprint_image_hash ON fingerprint_images(hash);
@@ -37,6 +38,12 @@ END;`
 func (c *Catalog) ensureFingerprintImages(ctx context.Context) error {
 	return c.writeTransaction(ctx, "initialize fingerprint images", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, fingerprintCacheDDL); err != nil {
+			return err
+		}
+		if err := addColumnIfMissing(ctx, tx, "fingerprint_images", "input_hash", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+		if err := addColumnIfMissing(ctx, tx, "fingerprint_images", "input_revision", "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
 		}
 		if err := fingerprintSourceTriggers(ctx, tx); err != nil {
@@ -118,16 +125,17 @@ func fingerprintSourceTriggers(ctx context.Context, tx *sql.Tx) error {
 		{"agent_sessions", "conversation_id", nil},
 		{"agent_session_messages", "(SELECT conversation_id FROM messages WHERE id=%s.message_id)", nil},
 		{"agent_events", "conversation_id", nil},
-		{"agent_event_messages", "conversation_id", nil},
+		{"agent_event_messages", "conversation_id", []string{"message_id", "conversation_id", "source", "occurred_at", "day", "candidates", "events", "model", "lexicon", "input_hash"}},
 		// Marking a conversation's events stale, the run that clears the
 		// mark, and its events build stamp (whose execution digest decides
 		// whether they are withheld) change what its ribbon may draw
 		// (fingerprintExecutionPending); message_labels_conversations is the
 		// labels' stamp.
 		{"agent_events_execution_stale", "conversation_id", nil},
-		{"agent_events_conversations", "conversation_id", nil},
-		{"message_labels", "conversation_id", nil},
-		{"message_labels_conversations", "conversation_id", nil},
+		// Completion timestamps alone do not change the drawing or freshness.
+		{"agent_events_conversations", "conversation_id", []string{"conversation_id", "structure", "since", "execution_digest"}},
+		{"message_labels", "conversation_id", []string{"message_id", "conversation_id", "segment", "labels", "probs", "chunks", "tokens", "input_hash", "model", "contract"}},
+		{"message_labels_conversations", "conversation_id", []string{"conversation_id", "structure", "units", "execution_digest"}},
 		{"message_labels_dirty", "conversation_id", nil},
 		{"message_labels_models", "*", nil},
 	}

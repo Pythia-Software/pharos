@@ -34,7 +34,7 @@ All state lives in the library's SQLite catalog:
 - `fingerprint_entities`: durable work queue, random source generation, requested
   event appearances, visible-row priority and retry state.
 - `fingerprint_images`: profile/theme/event metadata, source and renderer versions,
-  and the current PNG hash.
+  the renderer-input hash and the current PNG hash.
 - `fingerprint_blobs`: deduplicated PNG bytes.
 - `fingerprint_orphans`: superseded hashes awaiting garbage collection.
 
@@ -55,6 +55,21 @@ conversation invalidates both workspaces. Deletion removes image ownership; a
 fresh random generation prevents a render for a deleted ID from publishing onto
 an entity later recreated with that same ID. Rolled-back source writes have no
 cache effect.
+
+Analysis completion timestamps alone do not enqueue fingerprints. Other source
+changes still enqueue them conservatively, but the worker compares a persisted
+hash of the renderer's input projection before rendering. If a complete requested
+appearance has the same inputs and renderer version, it keeps the existing PNGs
+and acknowledges the new source revision. This reuse survives restart and still
+checks the source generation atomically at publication. Input stamps also name
+the image revision, so images replaced by an older app cannot inherit an unrelated
+hash. Event-hidden appearances exclude events from their input hash. Manual progress counts fingerprints checked,
+including reused appearances, rather than calling them rendering batches.
+
+Adding input hashes does not enqueue a backfill or change the renderer version.
+Older cached images acquire a hash when their next source change requires work;
+until then their last good images remain current. Without a stored input hash,
+the next dirty appearance renders once before it can be reused across revisions.
 
 Rendering waits while the analysis chain is running or its tools, writing,
 related-conversation, message-label or agent-event stages have pending generations.
