@@ -3910,6 +3910,12 @@ test('Claude settings capture preserves focus through failures, progress and com
           {id:'backfill-answer',role:'assistant',kind:'message',text:'The reports use different assumptions.'},
         ]};
       },
+      'GET /api/work/:id/delegation':request=>{
+        const data=defaultApi['GET /api/work/:id/delegation'](request);
+        const updated=row=>row.conversation_id===rootConversation&&row.depth===0
+          ? {...row,model:captured?selectedSettings?.observations[0].model:null,effort:captured?selectedSettings?.observations[0].effort_level:null} : row;
+        return {...data,rows:data.rows.map(updated),focus:data.focus.map(updated)};
+      },
       'GET /api/claude-chat-settings/coverage':()=>({accounts:[{...claudeSettingsCoverageFixture,missing_models:captured?0:2}]}),
       'POST /api/claude-chat-settings/setup':claudeSettingsCoverageFixture.setup,
       'POST /api/capture':()=>({run:{...captureRun,state:failOnce?'failed':'complete'}}),
@@ -3939,6 +3945,7 @@ test('Claude settings capture preserves focus through failures, progress and com
       assert.ok(await button.evaluate(el=>document.activeElement===el),'refreshing metadata keeps the action focused');
       refresh.resolve();
       await page.locator('.source-details dd').filter({hasText:'claude-opus-4-6'}).waitFor();
+      await page.locator('.delegation-session-heading').filter({hasText:'claude-opus-4-6'}).waitFor();
     }
     await notice.getByRole('status').filter({hasText:'Settings captured.'}).waitFor();
     assert.ok(await button.evaluate(el=>document.activeElement===el),'completion leaves focus on the same action');
@@ -3949,6 +3956,7 @@ test('Claude settings capture preserves focus through failures, progress and com
       selectedSettings=undefined;
       await button.click();
       await page.locator('.source-details dd').filter({hasText:'claude-opus-4-6'}).waitFor({state:'detached'});
+      await page.locator('.delegation-session-heading').filter({hasText:'claude-opus-4-6'}).waitFor({state:'detached'});
       await notice.getByRole('status').filter({hasText:'Settings captured.'}).waitFor();
       assert.ok(await button.evaluate(el=>document.activeElement===el));
     }

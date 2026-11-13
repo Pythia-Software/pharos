@@ -17,7 +17,7 @@ import (
 // so readers of the previous projection must be invalidated when it is saved.
 var queryCacheTables = []string{
 	"hosts", "machines", "host_machines", "origin_observations", "conversation_sightings", "conversation_origins",
-	"repositories", "workspaces", "workspace_names", "work_items", "conversations",
+	"repositories", "workspaces", "workspace_names", "work_items", "conversations", "claude_chat_settings_observations",
 	"messages", "message_authorship", "message_authorship_spans", "conversation_launches", "work_peer_links",
 	"conversation_documents", "conversation_identity_links", "conversation_group_membership",
 	"conversation_name_candidates", "authorship_message_state",

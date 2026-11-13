@@ -76,8 +76,18 @@ var libraryColumns = []libraryColumn{
 	{"pr_numbers", "(SELECT GROUP_CONCAT(prx.number) FROM work_pr_links lx JOIN pull_requests prx ON prx.id=lx.pr_id WHERE lx.workspace_id=w.id)"},
 	{"pr_details", "(SELECT json_group_array(json_object('number',prx.number,'title',prx.title,'url',prx.url,'host',prx.host)) FROM work_pr_links lx JOIN pull_requests prx ON prx.id=lx.pr_id WHERE lx.workspace_id=w.id)"},
 	{"providers", "(SELECT GROUP_CONCAT(DISTINCT cx.provider) FROM conversations cx WHERE cx.workspace_id=w.id)"},
-	{"models", "(SELECT GROUP_CONCAT(DISTINCT cx.model) FROM conversations cx WHERE cx.workspace_id=w.id AND cx.model IS NOT NULL)"},
-	{"efforts", "(SELECT GROUP_CONCAT(DISTINCT effort) FROM (SELECT cx.effort FROM conversations cx WHERE cx.workspace_id=w.id AND cx.effort IS NOT NULL UNION SELECT mx.effort FROM messages mx JOIN conversations cx ON cx.id=mx.conversation_id WHERE cx.workspace_id=w.id AND mx.effort IS NOT NULL))"},
+	{"models", `(SELECT GROUP_CONCAT(DISTINCT model) FROM (
+		SELECT cx.model FROM conversations cx WHERE cx.workspace_id=w.id AND cx.model IS NOT NULL
+		UNION SELECT mx.model FROM conversations cx JOIN messages mx ON mx.conversation_id=cx.id
+		WHERE cx.workspace_id=w.id AND cx.harness='claude-ai-export' AND mx.model IS NOT NULL AND mx.role='assistant' AND NULLIF(TRIM(mx.model),'') IS NOT NULL
+		UNION SELECT ` + claudeSelectionValue("cx", "model") + ` FROM conversations cx WHERE cx.workspace_id=w.id AND cx.harness='claude-ai-export' AND ` + claudeNoRecordedModel("cx") + `))`},
+	{"efforts", `(SELECT GROUP_CONCAT(DISTINCT effort) FROM (
+		SELECT cx.effort FROM conversations cx WHERE cx.workspace_id=w.id AND cx.effort IS NOT NULL
+		UNION SELECT mx.effort FROM messages mx JOIN conversations cx ON cx.id=mx.conversation_id WHERE cx.workspace_id=w.id AND mx.effort IS NOT NULL
+		UNION SELECT CASE WHEN ` + claudeSelectionValue("cx", "model") + ` IS NOT NULL
+			THEN COALESCE(` + claudeSelectionValue("cx", "effort_level") + `,'Unknown effort')
+			ELSE ` + claudeSelectionValue("cx", "effort_level") + ` END
+		FROM conversations cx WHERE cx.workspace_id=w.id AND cx.harness='claude-ai-export' AND ` + claudeNoRecordedModel("cx") + `))`},
 	// De-duplicate raw pairs before crossing into the Go formatting function.
 	// Most messages repeat a configuration; formatting each one costs far more
 	// than scanning their pairs in the covering index.
@@ -85,7 +95,9 @@ var libraryColumns = []libraryColumn{
 		SELECT DISTINCT model_effort(model,effort) configuration FROM (
 			SELECT cx.model,cx.effort FROM conversations cx WHERE cx.workspace_id=w.id AND (cx.model IS NOT NULL OR cx.effort IS NOT NULL)
 			UNION SELECT COALESCE(mx.model,cx.model),mx.effort FROM messages mx JOIN conversations cx ON cx.id=mx.conversation_id
-			WHERE cx.workspace_id=w.id AND (mx.model IS NOT NULL OR mx.effort IS NOT NULL)) ORDER BY configuration))`},
+			WHERE cx.workspace_id=w.id AND (mx.model IS NOT NULL OR mx.effort IS NOT NULL)
+			UNION SELECT ` + claudeSelectionValue("cx", "model") + `,` + claudeSelectionValue("cx", "effort_level") + ` FROM conversations cx
+			WHERE cx.workspace_id=w.id AND cx.harness='claude-ai-export' AND ` + claudeNoRecordedModel("cx") + `) WHERE model IS NOT NULL OR effort IS NOT NULL ORDER BY configuration))`},
 	{"harnesses", "(SELECT GROUP_CONCAT(DISTINCT cx.harness) FROM conversations cx WHERE cx.workspace_id=w.id AND cx.harness IS NOT NULL)"},
 	{"harness_versions", "(SELECT GROUP_CONCAT(DISTINCT cx.harness_version_last) FROM conversations cx WHERE cx.workspace_id=w.id AND cx.harness_version_last IS NOT NULL)"},
 	{"changed_files", "(SELECT GROUP_CONCAT(DISTINCT cfx.path) FROM change_sets csx JOIN change_files cfx ON cfx.change_set_id=csx.id WHERE csx.workspace_id=w.id)"},
@@ -108,6 +120,9 @@ var libraryDependencies = []libraryDependency{
 	// Workspace columns are read live; a new workspace only needs a stored row.
 	{table: "workspaces", workspaces: func(row string) string { return "SELECT " + row + ".id AS id" }, insertOnly: true},
 	{table: "conversations", workspaces: workspaceColumn},
+	{table: "claude_chat_settings_observations", workspaces: func(row string) string {
+		return "SELECT workspace_id AS id FROM conversations WHERE harness='claude-ai-export' AND account=" + row + ".account AND native_id=" + row + ".conversation_uuid"
+	}},
 	{table: "conversation_group_membership", workspaces: workspaceColumn},
 	{table: "messages", workspaces: func(row string) string {
 		return "SELECT workspace_id AS id FROM conversations WHERE id=" + row + ".conversation_id"
