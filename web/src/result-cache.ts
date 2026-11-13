@@ -10,6 +10,9 @@
 //   - A person asking a page to refresh asks "fresh": stored answers are
 //     used only while current, and the rest are computed now.
 //   - A person asking for one thing again asks "live": always computed.
+import type { AgentEventsCoverage } from "./agent-events-freshness";
+import type { SessionShapeCoverage } from "./session-shape-freshness";
+
 export type ResultPolicy = "cached" | "fresh" | "live";
 export type ResultServed = { state: "fresh" | "stale" | "live"; built: number };
 
@@ -53,14 +56,15 @@ export function servedOf(body: unknown): ResultServed | undefined {
 // signal down (a dashboard card's chart) join the cache this way, without
 // each layer knowing about it. A layer that makes its own signal drops out
 // of the scope, and its requests are simply computed as before.
-type Scope = { policy: ResultPolicy; served: ResultServed[] };
+type CoverageRead = { dataset: string; coverage?: AgentEventsCoverage & SessionShapeCoverage };
+type Scope = { policy: ResultPolicy; served: ResultServed[]; coverage: CoverageRead[] };
 const scopes = new WeakMap<AbortSignal, Scope>();
 export function resultScope(parent: AbortSignal | undefined, policy: ResultPolicy) {
-  const controller = new AbortController(), scope: Scope = { policy, served: [] };
+  const controller = new AbortController(), scope: Scope = { policy, served: [], coverage: [] };
   if (parent?.aborted) controller.abort(parent.reason);
   else parent?.addEventListener("abort", () => controller.abort(parent.reason), { once: true });
   scopes.set(controller.signal, scope);
-  return { signal: controller.signal, served: () => combineServed(...scope.served) };
+  return { signal: controller.signal, served: () => combineServed(...scope.served), coverage: () => scope.coverage };
 }
 
 // liveScope is a signal whose query requests are computed now, whatever the
@@ -73,18 +77,22 @@ export function liveScope(parent: AbortSignal | undefined): AbortSignal | undefi
   const controller = new AbortController();
   if (parent.aborted) controller.abort(parent.reason);
   else parent.addEventListener("abort", () => controller.abort(parent.reason), { once: true });
-  scopes.set(controller.signal, { policy: "live", served: outer.served });
+  scopes.set(controller.signal, { policy: "live", served: outer.served, coverage: outer.coverage });
   return controller.signal;
 }
 
 // scopedRequest names the scope's policy on a query request; its note
 // records what the response says was served.
-export function scopedRequest(url: string, init: RequestInit): { init: RequestInit; note: (headers: { get(name: string): string | null }) => void } {
+export function scopedRequest(url: string, init: RequestInit): { init: RequestInit; note: (headers: { get(name: string): string | null }) => void; noteBody: (body: unknown) => void } {
   const scope = init.signal ? scopes.get(init.signal) : undefined;
-  if (!scope || init.method !== "POST" || !url.split("?")[0].endsWith("/query-v3")) return { init, note: () => {} };
+  if (!scope || init.method !== "POST" || !url.split("?")[0].endsWith("/query-v3")) return { init, note: () => {}, noteBody: () => {} };
   const headers = new Headers(init.headers);
   headers.set(resultCacheHeader, scope.policy);
-  return { init: { ...init, headers }, note: response => { const info = resultServed(response); if (info) scope.served.push(info); } };
+  return { init: { ...init, headers }, note: response => { const info = resultServed(response); if (info) scope.served.push(info); }, noteBody: body => {
+    const dataset = /\/api\/query\/([^/]+)\/query-v3(?:\?|$)/.exec(url)?.[1];
+    const coverage = body && typeof body === "object" ? (body as { coverage?: CoverageRead["coverage"] }).coverage : undefined;
+    if (dataset && coverage && typeof coverage.state === "string") scope.coverage.push({ dataset, coverage });
+  } };
 }
 
 // Calls ask(delay index) after each delay until it reports nothing is stale

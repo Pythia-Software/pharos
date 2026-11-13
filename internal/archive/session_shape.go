@@ -30,6 +30,10 @@ import (
 // Tests lower this limit instead of constructing a large catalog.
 var sessionShapeInlineLimit = 32
 
+// Limit the recent index prefix inspected per selection, even if it contains
+// no dirty rows. Tests lower this instead of building a large catalog.
+var sessionShapeRecentCandidates = 512
+
 const (
 	// sessionShapeVersion names the derivation stored in session_shape_facts.
 	// Changing it marks every conversation for recomputation.
@@ -773,6 +777,26 @@ func (c *Catalog) publishSessionShape(ctx context.Context, batch []sessionShapeD
 	})
 }
 
+// Inspect only a bounded prefix of recent roots before matching dirty rows.
+// Reserve up to half the batch for those matches, then advance the ordinary
+// queue, including older, delegated, untimed and deleted conversations.
+func sessionShapeSelectionSQL() string {
+	return `WITH candidates AS MATERIALIZED (
+ SELECT c.id,COALESCE(c.ended_at,c.started_at) recent_at FROM conversations c INDEXED BY conversations_recent_idx
+ WHERE c.parent_id IS NULL AND c.agent_depth=0
+ ORDER BY COALESCE(c.ended_at,c.started_at) DESC,c.id LIMIT min(?2*4+64,` + strconv.Itoa(sessionShapeRecentCandidates) + `)
+), recent AS MATERIALIZED (
+ SELECT d.conversation_id id,d.revision FROM candidates c JOIN session_shape_dirty d ON d.conversation_id=c.id
+ WHERE d.conversation_id NOT IN (SELECT value FROM json_each(?1))
+ ORDER BY c.recent_at DESC,c.id LIMIT (?2+1)/2
+), remaining AS (
+ SELECT conversation_id id,revision FROM session_shape_dirty
+ WHERE conversation_id NOT IN (SELECT value FROM json_each(?1)) AND conversation_id NOT IN (SELECT id FROM recent)
+ ORDER BY conversation_id LIMIT ?2
+)
+SELECT id,revision FROM recent UNION ALL SELECT id,revision FROM remaining LIMIT ?2`
+}
+
 // refreshSessionShape stores up to limit dirty conversations' facts, in short
 // read snapshots and write transactions, and reports how many. Unless asked to
 // wait, it leaves the work to a caller already doing it.
@@ -789,7 +813,10 @@ func (c *Catalog) refreshSessionShape(ctx context.Context, limit int, wait bool)
 		if err != nil {
 			return done, err
 		}
-		dirty, err := queryMapsContext(ctx, tx, "SELECT conversation_id,revision FROM session_shape_dirty LIMIT ?", min(limit-done, sessionShapeBatch))
+		dirty, err := queryMapsContext(ctx, tx, sessionShapeSelectionSQL(), "[]", min(limit-done, sessionShapeBatch))
+		for _, row := range dirty {
+			row["conversation_id"] = row["id"]
+		}
 		completed := maintenanceBatch(ctx, tx, "Measuring session shape", "conversation", len(dirty),
 			"SELECT count(*) FROM session_shape_dirty")
 		var batch []sessionShapeDerived
