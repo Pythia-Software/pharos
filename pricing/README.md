@@ -23,19 +23,20 @@ at the expense of the palette. `--preview` writes the complete catalog to
 without writing. Normal builds regenerate colors; the web check also rejects stale
 catalogs. Rejected price rows do not introduce models or dates.
 
-Provider families remain Anthropic orange, Google blue, mainline OpenAI green. Specialist OpenAI classes use distinct
-hue bands; smaller developers have separate provider palettes. Class rules give preferred `[oldest, newest]` relative luminance,
-optional `single_luminance`, and optional hue/saturation overrides. Defaults keep
-versions related while using a broad range for distinguishable adjacent releases.
-The generator interpolates in OKLab, fits roughly even perceptual steps, and keeps
-the latest contemporary core models ordered from lighter/weaker to darker/stronger.
-Historical class ranges may overlap. Finite-gamut crowding is reported if version
-spacing must be reduced; the generator still preserves chronological direction
-and capability order.
+Provider families remain Anthropic orange, Google blue and mainline OpenAI green.
+The version 2 rules' `palette` object holds the reviewed Hue fan preset:
+`vividness: 1`, `tierWeight: 0.5`, `lightness: 0.67`, `spread: 30`, and
+`specialistSpread: 75`. Higher capability and release scores gain chroma at a
+useful middle lightness. Core tiers use neighboring hues; specialist categories
+use a separate wider fan of their authored hue relationships. Independent
+developers have their own roots. Optional class `hue` values place specialists;
+class rules no longer prescribe luminance endpoints or saturation.
 
-`lightness_bounds`, `minimum_version_step` and `contemporary_step` use cube-root
-relative luminance, a perceptual depth approximation used to fit the endpoints.
-The resulting colors are interpolated in OKLab and rounded to sRGB hex values.
+The shared OKLCH formula drives both generation and provider-root previews.
+Gamut mapping reduces chroma at fixed hue/lightness. Neutral roots stay neutral.
+Dense release histories report close neighbors rather than pushing frontier
+models toward black to force a minimum version spacing. Historical cross-class
+lightness order is not guaranteed.
 
 `ranked_classes` defines both the capability hierarchy and presentation order:
 Haiku → Sonnet → Opus → Fable / Mythos; Flash → Gemini/Argon; and

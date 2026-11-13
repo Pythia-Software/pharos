@@ -6,10 +6,10 @@ and Cursor). Models with an unknown developer use an Unidentified fallback;
 empty categories are hidden. The existing brand palette supplies defaults. Recorded provider labels such as Claude, Codex,
 ChatGPT and Antigravity follow that palette. Mainline models stay in their
 provider color families: oranges for Anthropic, blues for Google, and greens for
-OpenAI. Specialized OpenAI classes use separate hues: yellow for Image, cyan for
-Cyber, turquoise for Rosalind, chartreuse for Codex, and lime for general GPT.
-Other developers have independently customizable palettes. Classes
-use different parts of that range, with versions following a smooth light-to-dark progression. Each model
+OpenAI. Specialized classes use a separate 75° hue fan, preserving the relative
+relationships of the authored class hues around the provider root.
+Other developers have independently customizable palettes. Core classes use neighboring hues, with newer and stronger models gaining
+chroma at a useful middle lightness rather than becoming nearly black. Each model
 editor offers a prominent color-picker button with its hex value, light/dark previews,
 and Use recommended. Provider headers offer Save, Discard changes and Restore
 brand; a model editor is a compact single row without an individual Save button.
@@ -47,15 +47,22 @@ capability hierarchy: Haiku → Sonnet → Opus → Fable / Mythos, Flash → Ge
 and Luna → Terra → Sol → Astra. Fable and Mythos share a class; specialized
 classes such as Nano Banana are not ranked against the core tiers.
 
-Each class supplies preferred oldest/newest relative luminance, with optional
-hue/saturation and singleton preferences. Generation spaces catalog dates along
-a straight OKLab ramp. Older versions are lighter; newer versions are deeper,
-with clear perceptual steps and no alternating hue or saturation. Wide historical
-class ranges can overlap. A constrained fit adjusts the class endpoints together
-so the latest releases available at each catalog date keep stronger core tiers
-darker. Bounds avoid white/black extremes. If a very dense history cannot fit the
-requested version spacing, the generator reduces that spacing and reports the
-crowding explicitly; capability order and chronological direction remain required.
+The production **Hue fan** policy uses the preset selected in the November 12
+color playground: vividness 100%, tier emphasis 50%, frontier lightness 67%, core
+hue spread 30°, and specialist spread 75°. These inputs live in the rules'
+`palette` object. The generator, custom provider roots and playground share the
+same OKLCH formula. The former endpoint-luminance fit is removed.
+
+A model's score combines its reviewed tier position and ordinal release position
+within its class. Higher scores increase chroma and approach the frontier
+lightness. Core tiers fan over adjacent hues; specialist categories have their
+own wider fan and no capability rank. Standalone developers retain their own
+provider root. A neutral root stays neutral. Each output is mapped into sRGB by
+reducing chroma at fixed lightness and hue, rather than clipping RGB channels.
+New releases progress consistently within a class. Historical cross-class
+lightness ordering is no longer a constraint: it could drive frontier shades
+back toward black. Dense histories may still have close neighbors; generation
+and settings report these instead of promising a minimum perceptual separation.
 
 The complete inventory, model class assignments, generated swatches and generated
 `class_order` live in `pricing/model_colors.json`, which settings, chart stacks
@@ -86,11 +93,12 @@ Chronology uses the earliest non-rejected `effective_from` in the pricing
 catalog, not a claimed launch date. Same-date siblings receive nearby distinct
 shades without an invented ordering. `observed_dates` in the rules can position unpriced labels using reviewed first-use
 evidence. Those labels participate in chronology and display First observed
-instead of Catalog date. Other undated names get a midpoint without consuming a
+instead of Catalog date. Other undated catalog names get a midpoint without consuming a
 release step. Observations never change price history or resolve a floating alias
 to a permanent version. Unpriced
 models discovered only in usage retain a deterministic provider/class fallback
-until they have catalog metadata. Merely discovering such names does not rebalance
+within their class until they have catalog metadata; the identity selects a
+deterministic shade without asserting a release date. Merely discovering such names does not rebalance
 the global catalog.
 
 A provider edit shifts automatic model colors together and updates recorded provider colors.
@@ -189,11 +197,11 @@ and the workload summary reports weighted chroma and closest pair separation.
 
 All experiment controls and root colors are preserved in its URL. Export palette
 downloads JSON with the inputs, metadata, current colors and experimental colors.
-There are no library writes, no saved user overrides are loaded, and no production
-recommendations change. The prototype exposes close colors rather than claiming
-to satisfy the production generator's full spacing constraints; unknown-model
-fallbacks and catalog rebalance policy remain production integration work after
-choosing an approach. Sources live in `web/experiments/model-color-lab/` and the
+There are no library writes and no saved user overrides are loaded. Current
+palette reads production recommendations; Hue fan at the default settings now
+matches production, including custom roots. The playground still lets you compare
+other settings, Chroma ladder and Freshness first. Close neighbors remain visible
+in the inspector and the production advisory warnings. Sources live in `web/experiments/model-color-lab/` and the
 launcher is `tools/model-color-lab.mjs`. The standard web typecheck includes the
 experiment; to check just the experiment:
 

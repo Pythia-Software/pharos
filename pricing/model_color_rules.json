@@ -1,15 +1,15 @@
 {
-  "version": 1,
-  "lightness_bounds": [
-    0.25,
-    0.97
-  ],
-  "minimum_version_step": 0.055,
-  "contemporary_step": 0.04,
+  "version": 2,
+  "palette": {
+    "vividness": 1,
+    "tierWeight": 0.5,
+    "lightness": 0.67,
+    "spread": 30,
+    "specialistSpread": 75
+  },
   "providers": {
     "anthropic": {
       "hue": 24,
-      "saturation": 0.45,
       "ranked_classes": [
         "Haiku",
         "Sonnet",
@@ -17,64 +17,26 @@
         "Fable / Mythos"
       ],
       "classes": {
-        "Haiku": {
-          "luminance": [
-            0.88,
-            0.57
-          ]
-        },
-        "Sonnet": {
-          "luminance": [
-            0.78,
-            0.23
-          ]
-        },
-        "Opus": {
-          "luminance": [
-            0.5,
-            0.085
-          ]
-        },
-        "Fable / Mythos": {
-          "luminance": [
-            0.095,
-            0.018
-          ]
-        }
+        "Haiku": {},
+        "Sonnet": {},
+        "Opus": {},
+        "Fable / Mythos": {}
       }
     },
     "google": {
       "hue": 217,
-      "saturation": 0.4,
       "ranked_classes": [
         "Flash",
         "Gemini"
       ],
       "classes": {
-        "Flash": {
-          "luminance": [
-            0.62,
-            0.28
-          ]
-        },
-        "Gemini": {
-          "luminance": [
-            0.17,
-            0.09
-          ]
-        },
-        "Nano Banana": {
-          "luminance": [
-            0.4,
-            0.12
-          ],
-          "single_luminance": 0.2299
-        }
+        "Flash": {},
+        "Gemini": {},
+        "Nano Banana": {}
       }
     },
     "openai": {
       "hue": 154,
-      "saturation": 0.38,
       "ranked_classes": [
         "Luna",
         "Terra",
@@ -82,184 +44,95 @@
         "Astra"
       ],
       "classes": {
-        "Luna": {
-          "luminance": [
-            0.62,
-            0.5
-          ]
-        },
-        "Terra": {
-          "luminance": [
-            0.4,
-            0.32
-          ]
-        },
-        "Sol": {
-          "luminance": [
-            0.24,
-            0.1
-          ]
-        },
-        "Astra": {
-          "luminance": [
-            0.1,
-            0.04
-          ],
-          "single_luminance": 0.0597
-        },
+        "Luna": {},
+        "Terra": {},
+        "Sol": {},
+        "Astra": {},
         "GPT": {
-          "luminance": [
-            0.7908,
-            0.2966
-          ],
-          "hue": 110,
-          "saturation": 0.6,
-          "single_luminance": 0.4943
+          "hue": 110
         },
         "Codex": {
-          "luminance": [
-            0.6269,
-            0.1524
-          ],
-          "hue": 82,
-          "saturation": 0.62
+          "hue": 82
         },
         "Rosalind": {
-          "luminance": [
-            0.6154,
-            0.1463
-          ],
-          "hue": 178,
-          "saturation": 0.7
+          "hue": 178
         },
         "Image": {
-          "luminance": [
-            0.6556,
-            0.6227
-          ],
-          "hue": 48,
-          "saturation": 0.75
+          "hue": 48
         },
         "Cyber": {
-          "luminance": [
-            0.6297,
-            0.2361
-          ],
-          "hue": 198,
-          "saturation": 0.75,
-          "single_luminance": 0.3936
+          "hue": 198
         }
       }
     },
     "reflection": {
       "hue": 282,
-      "saturation": 0.56,
       "pricing_provider": "other",
       "ranked_classes": [],
       "classes": {
         "Beam": {
-          "luminance": [
-            0.2432,
-            0.0912
-          ],
           "hue": 282,
-          "saturation": 0.56,
-          "single_luminance": 0.152,
           "match": "^reflection/beam(?:-|$)"
         }
       }
     },
     "deepseek": {
       "hue": 247,
-      "saturation": 0.6,
       "pricing_provider": "other",
       "ranked_classes": [],
       "classes": {
         "DeepSeek": {
-          "luminance": [
-            0.1837,
-            0.0689
-          ],
           "hue": 247,
-          "saturation": 0.6,
-          "single_luminance": 0.1148,
           "match": "^deepseek(?:-|$)"
         }
       }
     },
     "opencode": {
       "hue": 326,
-      "saturation": 0.5,
       "pricing_provider": "other",
       "ranked_classes": [],
       "classes": {
         "Big Pickle": {
-          "luminance": [
-            0.3059,
-            0.1147
-          ],
           "hue": 326,
-          "saturation": 0.5,
-          "single_luminance": 0.1912,
           "match": "^big-pickle(?:-|$)"
         }
       }
     },
     "microsoft": {
       "hue": 5,
-      "saturation": 0.6,
       "pricing_provider": "other",
       "ranked_classes": [],
       "classes": {
         "MAI Code": {
-          "luminance": [
-            0.2496,
-            0.0936
-          ],
           "hue": 5,
-          "saturation": 0.6,
-          "single_luminance": 0.156,
           "match": "^mai-code(?:-|$)"
         }
       }
     },
     "xai": {
       "hue": 210,
-      "saturation": 0.07,
       "pricing_provider": "other",
       "ranked_classes": [],
       "classes": {
         "Grok": {
-          "luminance": [
-            0.4,
-            0.14
-          ],
           "hue": 210,
-          "saturation": 0.07,
           "match": "^(?:cursor-)?grok(?:-|$)"
         }
       }
     },
     "cursor": {
       "hue": 38,
-      "saturation": 0.58,
       "pricing_provider": "other",
       "ranked_classes": [],
       "classes": {
         "Composer": {
-          "luminance": [
-            0.4,
-            0.14
-          ],
           "hue": 38,
-          "saturation": 0.58,
           "match": "^composer(?:-|$)"
         }
       }
     },
     "other": {
       "hue": 215,
-      "saturation": 0.07,
       "ranked_classes": [],
       "classes": {}
     }
