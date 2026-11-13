@@ -13,10 +13,14 @@ import (
 
 // Every Library table request (rows, distinct values, metrics) starts
 // from the full unfiltered row set, which takes most of a second to build on a
-// large catalog. libraryCache keeps the last set until a cached-view input
-// changes, by this process or another (ingest runs as a separate CLI).
-// Transactional triggers advance query_cache_generation; publishing equivalent
-// projections and writing progress do not invalidate it.
+// large catalog. libraryCache keeps the last set until anything it depends on
+// may have changed:
+//
+//   - A change to cached-view inputs, by this process or another (ingest runs
+//     as a separate CLI). Transactional triggers advance query_cache_generation;
+//     publishing equivalent projections and writing progress do not invalidate it.
+//   - The local date, since outcome_label reads the current time: a session's
+//     changed_recent label ends when its rework window closes, with no commit.
 //
 // Cached row maps are shared between requests and must never be modified.
 // Code that adds fields to rows copies them first (see libraryPage). The rows
@@ -30,6 +34,7 @@ type libraryCache struct {
 	build    chan struct{}
 	versions dataVersionMonitor
 	version  int64
+	day      string
 	fields   libraryFields
 	rows     []map[string]any
 	// usedAt is the last request's time, which keeps the rows warm.
@@ -76,7 +81,8 @@ func (c *Catalog) cachedLibraryRows(ctx context.Context, fields libraryFields) (
 	// Read the version before building: source changes during the build leave the
 	// rows tagged older than they are, which only costs an extra rebuild.
 	version, versionErr := cache.dataVersion(ctx, c)
-	current := versionErr == nil && cache.rows != nil && version == cache.version
+	day := c.clock().Format("2006-01-02")
+	current := versionErr == nil && cache.rows != nil && version == cache.version && day == cache.day
 	if current && cache.fields.covers(fields) {
 		rows := slices.Clone(cache.rows)
 		cache.mu.Unlock()
@@ -99,7 +105,7 @@ func (c *Catalog) cachedLibraryRows(ctx context.Context, fields libraryFields) (
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	if versionErr == nil {
-		cache.rows, cache.version, cache.fields = rows, version, fields
+		cache.rows, cache.version, cache.day, cache.fields = rows, version, day, fields
 	}
 	return slices.Clone(rows), nil
 }

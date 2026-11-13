@@ -133,7 +133,7 @@ func TestLibraryCacheSeesCommitsFromAnotherConnection(t *testing.T) {
 	}
 }
 
-func TestLibraryCacheRepricesOnPriceBookChanges(t *testing.T) {
+func TestLibraryCacheRepricesOnPriceBookAndRebuildsDaily(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	today := time.Date(2026, 9, 24, 12, 0, 0, 0, time.Local)
 	catalog.now = func() time.Time { return today }
@@ -162,10 +162,35 @@ func TestLibraryCacheRepricesOnPriceBookChanges(t *testing.T) {
 	if total := cost(); !near(ptr(total), want) {
 		t.Fatalf("after price-book change: cost %v, want %v", total, want)
 	}
+	// Outcome labels follow each session's rework window, which closes with
+	// time rather than a commit, so the Library and Outcomes rows are rebuilt
+	// on a new day. Cached rows share their maps; rebuilt rows do not.
+	cached := func() (library, outcome map[string]any) {
+		t.Helper()
+		rows, err := catalog.cachedLibraryRows(context.Background(), libraryFieldsFor("outcome_label"))
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("library rows: %v %v", rows, err)
+		}
+		outcomes, err := catalog.outcomeRows(context.Background())
+		if err != nil || len(outcomes) != 1 {
+			t.Fatalf("outcome rows: %v %v", outcomes, err)
+		}
+		return rows[0], outcomes[0]
+	}
+	same := func(left, right map[string]any) bool {
+		return reflect.ValueOf(left).UnsafePointer() == reflect.ValueOf(right).UnsafePointer()
+	}
+	library, outcome := cached()
+	if nextLibrary, nextOutcome := cached(); !same(library, nextLibrary) || !same(outcome, nextOutcome) {
+		t.Fatal("rows were rebuilt without a commit or a new day")
+	}
 	// Usage keeps the price of the day it happened after a later price change.
 	today = time.Date(2026, 10, 2, 12, 0, 0, 0, time.Local)
 	if total := cost(); !near(ptr(total), want) {
 		t.Fatalf("after date change: cost %v, want %v", total, want)
+	}
+	if nextLibrary, nextOutcome := cached(); same(library, nextLibrary) || same(outcome, nextOutcome) {
+		t.Fatalf("a new day reused rows: library %v, outcomes %v", same(library, nextLibrary), same(outcome, nextOutcome))
 	}
 }
 
