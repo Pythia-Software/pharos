@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chartSeriesStyle } from '../../../src/chart-colors';
+import { lch } from '../../../src/model-color-math';
 import { chartCellColor, chartFacetPalette, usageTableRenderers } from '../../../src/usage-chart-colors';
 const series = [
   { key: 's:opus-5-5', label: 'opus-5-5', value: 'opus-5-5', color: '#f4a664' },
@@ -22,20 +23,27 @@ test('reported model variants match their graph family without changing their va
   assert.equal(chartCellColor(palette, 'model', 'reported-alias', 'opus-5-5'), '#f4a664');
 });
 
-test('combined model-effort facet keeps distinct chart and table colors for each pair', () => {
-  const efforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'];
+test('combined model-effort facet shades the model color by effort step, in chart and table alike', () => {
+  const efforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max', 'Unspecified'];
   const pairs = efforts.map(effort => {
     const value = `claude-opus-5-5 · ${effort}`;
     return { key: effort, value, color: chartSeriesStyle('model_effort', value).color };
   });
-  assert.equal(new Set(pairs.map(pair => pair.color)).size, efforts.length);
+  const color = effort => pairs.find(pair => pair.key === effort).color;
+  // Medium is the model's own color; providers offer one of each shared pair.
+  assert.equal(color('medium'), chartSeriesStyle('model_family', 'opus-5-5').color);
+  for (const [a, b] of [['none', 'medium'], ['minimal', 'low'], ['Unspecified', 'low'], ['ultra', 'max']]) assert.equal(color(a), color(b), `${a} shares ${b}'s shade`);
+  const steps = ['low', 'medium', 'high', 'xhigh', 'max'].map(color);
+  assert.equal(new Set(steps).size, steps.length);
+  const lightness = steps.map(step => lch(step)[0]);
+  for (let i = 1; i < lightness.length; i++) assert.ok(lightness[i] < lightness[i - 1], 'higher effort is darker');
+  for (const step of steps) assert.ok(Math.abs(lch(step)[2] - lch(color('medium'))[2]) < 3, 'every step keeps the model hue');
   const palette = chartFacetPalette('model_effort', pairs);
   for (const pair of pairs) {
     assert.equal(chartCellColor(palette, 'model_effort', pair.value), pair.color);
     assert.equal(chartSeriesStyle('root_model_effort', pair.value).color, pair.color);
   }
-  assert.equal(chartSeriesStyle('model_effort', 'claude-opus-5-5 · HIGH').color, pairs.find(pair => pair.key === 'high').color);
-  assert.ok(!pairs.some(pair => pair.color === chartSeriesStyle('model_effort', 'claude-opus-5-5 · Unspecified').color));
+  assert.equal(chartSeriesStyle('model_effort', 'claude-opus-5-5 · HIGH').color, color('high'));
   assert.equal(chartCellColor(palette, 'model', 'claude-opus-5-5'), undefined);
 });
 
