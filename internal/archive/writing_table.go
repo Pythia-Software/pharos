@@ -61,8 +61,7 @@ type writingTable struct {
 }
 
 // writingData returns the writing rows and, per row ID, its daily text. They
-// are kept until the next commit or local day (costs at today's prices follow
-// the date), and must not be modified.
+// are kept until the next commit, and must not be modified.
 func (c *Catalog) writingData(ctx context.Context) ([]map[string]any, map[string]map[string]*writingDay, error) {
 	c.ensureAuthorship()
 	return c.cachedWritingData(ctx)
@@ -70,7 +69,7 @@ func (c *Catalog) writingData(ctx context.Context) ([]map[string]any, map[string
 
 // cachedWritingData is writingData without bringing authorship up to date.
 func (c *Catalog) cachedWritingData(ctx context.Context) ([]map[string]any, map[string]map[string]*writingDay, error) {
-	table, err := cachedValue(ctx, c, "writing:"+c.clock().Format("2006-01-02"), c.computeWritingData)
+	table, err := cachedValue(ctx, c, "writing", c.computeWritingData)
 	return table.rows, table.daily, err
 }
 
@@ -205,7 +204,7 @@ func writingRow(work map[string]any, total *writingDay, spent *workspaceUsageTot
 		"source_kind": work["source_kind"], "providers": work["providers"],
 		"first_message_at": nilIfEmpty(total.firstSent), "last_message_at": nilIfEmpty(total.lastSent),
 		"user_turns": total.messages, "typed_turns": total.typedMessages, "longest_typed_words": total.longestTyped,
-		"total_tokens": spent.tokens, "cost_usd": spent.cost, "cost_today_usd": spent.today, "price_status": nilIfEmpty(spent.status),
+		"total_tokens": spent.tokens, "cost_usd": spent.cost, "price_status": nilIfEmpty(spent.status),
 		"subagent_works": int64(subagents), "launched_works": int64(launched),
 	}
 	words := int64(0)
@@ -331,7 +330,7 @@ func (c *Catalog) writingSeries(ctx context.Context, request writingSeriesReques
 			return nil, err
 		}
 	} else if request.Hourly {
-		table, hourlyErr := cachedValue(ctx, c, "writing-hourly:"+c.clock().Format("2006-01-02"), func(ctx context.Context) (writingTable, error) {
+		table, hourlyErr := cachedValue(ctx, c, "writing-hourly", func(ctx context.Context) (writingTable, error) {
 			return c.computeWritingDataByPeriod(ctx, true)
 		})
 		if hourlyErr != nil {

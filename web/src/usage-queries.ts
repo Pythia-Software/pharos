@@ -41,12 +41,6 @@ export const usageComparisonPresets: UsageTablePreset[] = [
   { ...grouped("Cache efficiency", "Compare weighted cache hit rates and cached, uncached and written input by model", ["provider", "model_family"], [
     ...totals, sum("uncached_input_tokens", "Uncached input"), sum("cache_read_input_tokens", "Cache reads"), sum("cache_creation_input_tokens", "Cache writes"),
   ]), orderBy: [{ field: cacheRate.id, dir: "asc", nulls: "last" }] },
-  grouped("Price changes", "Compare historical and today's API prices for the same usage, per month", ["month"], [
-    sum("cost_usd", "Historical API cost"), sum("cost_today_usd", "At today's prices"),
-    // Compare only rows with both prices so missing prices cannot create a false difference.
-    { id: "usage_price_delta", op: "formula", expression: "SUM([cost_today_usd]-[cost_usd])", label: "Price difference" },
-    sum("total_tokens", "Total tokens"), { id: "usage_price_pairs", op: "formula", expression: "COUNT([cost_today_usd]-[cost_usd])", label: "Rows with both prices" },
-  ]),
   grouped("Price coverage", "Keep priced, assumed, partial and unpriced usage visible alongside cost and tokens", ["price_status"]),
 ];
 

@@ -252,12 +252,21 @@ test('Quick Stats coalesce calendar and usage notifications before loading the i
 });
 
 
-test('Quick Stats provenance follows the metric and selected window',()=>{
+test('Quick Stats keeps reported totals separate from estimates and preserves other caveats',()=>{
  const stats=loadClassicScript('quick-stats.js');
- const mixed={is_estimate:true,cost_is_estimate:true,price_status:'partial',tool_time_is_estimate:true};
- for(const field of ['tokens','cost_usd','co2e_g','tool_time_ms']) assert.equal(stats.quickStatsMetricCaveat(field,mixed).suffix,'*');
- assert.equal(stats.quickStatsMetricCaveat('human_words',mixed),null);
- assert.equal(stats.quickStatsMetricCaveat('tokens',{is_estimate:false}),null);
- assert.equal(stats.quickStatsMetricCaveat('cost_usd',{is_estimate:true,cost_is_estimate:false,price_status:'unpriced'}).suffix,'+');
- assert.match(stats.quickStatsMetricCaveat('cost_usd',mixed).note,/estimated usage.*partial/);
+ const mixed={tokens:150, cost_usd:3, is_estimate:true, cost_is_estimate:true, price_status:'partial', tool_time_is_estimate:true, reported:{tokens:100,cost_usd:2,price_status:'priced',carbon_tokens:{small:{output:100}}}};
+ assert.equal(stats.quickStatsUsageBucket(mixed,true).tokens,150);
+ const reported=stats.quickStatsUsageBucket(mixed,false);
+ assert.equal(reported.tokens,100);assert.equal(reported.cost_usd,2);assert.equal(reported.price_status,'priced');
+ assert.equal(reported.is_estimate,false);assert.equal(reported.tool_time_is_estimate,true);
+ assert.equal(stats.quickStatsUsageBucket({tokens:150},false).tokens,null,'stale data never becomes a reported total');
+ for(const field of ['tokens','cost_usd','co2e_g']) assert.equal(stats.quickStatsMetricCaveat(field,mixed),null);
+ assert.equal(stats.quickStatsMetricCaveat('tool_time_ms',mixed).suffix,'*');
+ assert.equal(stats.quickStatsMetricCaveat('cost_usd',{price_status:'unpriced'}).suffix,'+');
+ assert.equal(stats.quickStatsMetricCaveat('cost_usd',{price_status:'partial'}).suffix,'+');
+ assert.equal(stats.quickStatsHasUsageEstimates({metrics:['tokens']},[mixed],true),true);
+ assert.equal(stats.quickStatsHasUsageEstimates({metrics:['tokens']},[mixed],false),false);
+ assert.equal(stats.quickStatsHasUsageEstimates({metrics:['human_words']},[mixed],true),false);
+ assert.equal(stats.quickStatsHasUsageEstimates({metrics:['cost_usd']},[{...mixed,cost_is_estimate:false}],true),false,'unpriced estimates do not mark reported costs');
+ assert.equal(stats.quickStatsHasUsageEstimates({metrics:['tokens']},[{is_estimate:false}],true),false);
 });

@@ -602,9 +602,15 @@ test('Feedback inbox report copying keeps keyboard focus through delayed success
 });
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
-  const { page, settled, shot } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
+  const { page, settled, shot } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens", "active_conversations", "message_count", "user_messages", "assistant_messages", "delegated_runs", "active_repositories"], windows: ["today", "6h"]} } });
   await activateHeaderTool(page, "usageSummaryToggle");
   await settled();
+  for (const metric of ['active_conversations', 'message_count', 'user_messages', 'assistant_messages', 'delegated_runs', 'active_repositories']) {
+    const value = page.locator(`#usageSummary [data-summary-metric="${metric}"][data-summary-window="6h"]`);
+    await value.waitFor();
+    assert.ok(await value.getAttribute('href'), `${metric} has a destination`);
+    assert.ok(await value.getAttribute('title'), `${metric} describes its destination`);
+  }
   const link = page.getByRole("link", { name: /^Tokens, 6h:/ });
   await link.focus();
   await page.evaluate(() => window.dispatchEvent(new Event("pharos:carbon-settings")));
@@ -624,6 +630,9 @@ test("summary value links retain keyboard focus when the summary rerenders", { s
   await shot('quick-stats-cached-refresh');
   finish(); await settled();
   await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label')?.startsWith('Tokens, 6h:'));
+  await page.locator('#usageSummary [data-summary-metric="message_count"][data-summary-window="6h"]').click();
+  await page.waitForFunction(() => new URLSearchParams(location.search).get('analyze_data') === 'messages');
+  await page.locator('#usageSummary').waitFor({state: 'hidden'});
 });
 
 // Focus is in `surface`, or with the browser itself (a native modal dialog
@@ -3280,6 +3289,47 @@ test('Quick Stats disclosure and editing keep keyboard focus on the control bein
   await focused(handle);
   await page.evaluate(() => dispatchEvent(new Event('pharos:carbon-settings')));
   await focused(handle);
+  const estimates = page.getByRole('switch', {name: 'Include estimated tokens'});
+  const links = page.getByRole('switch', {name: 'Clickable Quick Stats'});
+  const preview = page.locator('#quickStatsPreview');
+  const previewMarker = preview.locator('.estimate-marker-button');
+  const tokenValue = preview.locator('td[data-quick-stats-metric="tokens"][data-quick-stats-window="1h"]');
+  assert.equal(await estimates.getAttribute('aria-checked'), 'true');
+  assert.equal(await previewMarker.isVisible(), true);
+  const included = await tokenValue.innerText();
+  assert.equal(await tokenValue.locator('a[data-summary-metric="tokens"]').count(), 1);
+  await press(links);
+  await focused(links);
+  assert.equal(await tokenValue.locator('a[data-summary-metric="tokens"]').count(), 0);
+  await press(links);
+  await focused(links);
+  assert.equal(await tokenValue.locator('a[data-summary-metric="tokens"]').count(), 1);
+  await press(estimates);
+  await focused(estimates);
+  assert.equal(await previewMarker.isVisible(), false);
+  assert.notEqual(await tokenValue.innerText(), included);
+  await press(estimates);
+  await focused(estimates);
+  assert.equal(await previewMarker.isVisible(), true);
+  assert.equal(await tokenValue.innerText(), included);
+  await activateHeaderTool(page, 'usageSummaryToggle');
+  const marker = page.getByRole('button', {name: 'Quick Stats includes estimated values'});
+  await press(marker);
+  const dialog = page.getByRole('dialog', {name:'How estimates work'});
+  await dialog.waitFor();
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({state:'detached'});
+  await focused(marker);
+  assert.equal(await page.locator('#usageSummary').isVisible(),true);
+  await page.keyboard.press('Escape');
+  await press(estimates);
+  assert.equal(await estimates.getAttribute('aria-checked'), 'false');
+  await activateHeaderTool(page, 'usageSummaryToggle');
+  assert.equal(await marker.isVisible(),false);
+  await page.reload();
+  await page.locator('#quickStatsExpand').waitFor();
+  if (await disclosure.getAttribute('aria-expanded') !== 'true') await press(disclosure);
+  assert.equal(await estimates.getAttribute('aria-checked'), 'false');
   await shot('quick-stats-editor');
 });
 

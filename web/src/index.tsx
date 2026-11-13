@@ -335,7 +335,6 @@ const renderers: RenderRegistry<Row> = {
     if (context.value != null && ["card_rate", "card_escalation"].includes(context.field.name)) return `${(Number(context.value) * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
     // Links saved before the percent display carry a 0–100 cache rate.
     if (context.value != null && context.field.name === "usage_cache_hit_percent") return `${Number(context.value).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
-    if (context.value != null && context.field.name === "usage_price_delta") return formatUSD(Number(context.value));
     const value = Number(context.value);
     if (/(^token_count$|_tokens$)/.test(context.field.name) && Number.isFinite(value) && Math.abs(value) >= 1e6)
       return estimatedValue(<span title={value.toLocaleString()}>{compactNumber(value)}</span>,context.row,context.field.name);
@@ -518,7 +517,7 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
     const column = summaries.get(field.name);
     // A summary's own display (Query Table 0.8) replaces these render fallbacks.
     return column ? { ...field, ...(column.label ? { label: column.label } : {}),
-      ...(!field.render && !column.display && field.type === "number" ? { render: column.expression === "MEDIAN([duration_ms])" ? "duration_ms" : column.id === "card_price_delta" ? "usd" : "number" } : {}) } : field;
+      ...(!field.render && !column.display && field.type === "number" ? { render: column.expression === "MEDIAN([duration_ms])" ? "duration_ms" : "number" } : {}) } : field;
   });
 }
 
@@ -1852,7 +1851,7 @@ window.addEventListener("pharos:preferences-saved", event => {
 });
 window.pharosQueryTables = {
   sourceWorkspacesURL: kind => sourceWorkspacesURL(kind, schemas.library),
-  summaryURL: (metric, window, generatedAt, _concurrency, from) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings(), from),
+  summaryURL: (metric, window, generatedAt, _concurrency, from, includeEstimates) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings(), from, includeEstimates),
   sourceConversationsURL: source => sourceConversationsURL(schemas.library, source),
   async createLink() {
     const entry = [...tableApis.entries()].find(([dataset]) => datasetIsVisible(dataset));

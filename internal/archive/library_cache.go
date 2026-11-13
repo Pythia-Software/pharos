@@ -19,7 +19,8 @@ import (
 //   - A change to cached-view inputs, by this process or another (ingest runs
 //     as a separate CLI). Transactional triggers advance query_cache_generation;
 //     publishing equivalent projections and writing progress do not invalidate it.
-//   - The local date, since cost_today_usd prices usage at today's rates.
+//   - The local date, since outcome_label reads the current time: a session's
+//     changed_recent label ends when its rework window closes, with no commit.
 //
 // Cached row maps are shared between requests and must never be modified.
 // Code that adds fields to rows copies them first (see libraryPage). The rows

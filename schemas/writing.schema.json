@@ -694,30 +694,6 @@
       }
     },
     {
-      "name": "cost_today_usd",
-      "label": "Cost at today's prices",
-      "type": "number",
-      "group": "Cost",
-      "render": "usd",
-      "select": {
-        "default": false,
-        "align": "right"
-      },
-      "bindings": {
-        "postgres": {
-          "expr": "cost_today_usd",
-          "synthetic": true
-        },
-        "sqlite": {
-          "expr": "r.\"cost_today_usd\"",
-          "expressionNumeric": true
-        }
-      },
-      "aggregate": {
-        "groupable": true
-      }
-    },
-    {
       "name": "price_status",
       "label": "Price status",
       "type": "enum",

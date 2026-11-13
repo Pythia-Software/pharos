@@ -324,7 +324,7 @@ func TestLibraryRequestsReadingFewerFieldsMatchFullRows(t *testing.T) {
 			`{"select":["title"],"where":[{"field":"purpose","op":"contains","value":"summarized"}],"limit":10,"offset":0}`,
 			`{"select":["title"],"where":[{"field":"outcome","op":"is_not_null","value":""}],"orderBy":[{"field":"cost_usd","dir":"desc"}],"limit":10,"offset":0}`,
 			`{"select":["title"],"where":[{"any":[{"field":"changed_files","op":"contains","value":"parser"},{"field":"title","op":"=","value":"Bravo"}]}],"orderBy":[{"field":"purpose","dir":"asc"}],"limit":10,"offset":0}`,
-			`{"select":["cost_usd"],"where":[{"field":"price_status","op":"=","value":"priced"}],"orderBy":[{"field":"cost_today_usd","dir":"asc"}],"limit":5,"offset":0}`,
+			`{"select":["cost_usd"],"where":[{"field":"price_status","op":"=","value":"priced"}],"orderBy":[{"field":"cost_usd","dir":"asc"}],"limit":5,"offset":0}`,
 			`{"select":["pr_numbers"],"orderBy":[{"field":"pr_numbers","dir":"desc","extract":{"regex":"(\\d+)"}}],"limit":1,"offset":1}`,
 		} {
 			var query querytable.Query

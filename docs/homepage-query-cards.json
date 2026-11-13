@@ -2081,23 +2081,21 @@
       "eligibility": "Compatible token classes and known rates; this changes prices, not model behavior.",
       "destination": "Recorded workload and both price calculations.",
       "exploration_value": "Lets users distinguish changes in usage from changes in prices.",
-      "implementation_status": "Partial implementation",
-      "implemented_recipes": [
-        "price-comparison"
-      ],
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
       "current_preview": "",
       "blocked_on_query_table": [
         "M06",
         "L04"
       ],
-      "blocked_on_pharos": "Publish compatible versioned rate/scenario fields for arbitrary schedules; retain pricing coverage.",
-      "calculation_gap": "Two retained schedules are executable; arbitrary selected schedules need extra scenario facts.",
-      "performance_note": "Existing historical/today sums can ship now; arbitrary scenarios should reuse workload facts rather than reread and reprice every transcript.",
-      "after_metric_work": "partially_available_with_v3",
+      "blocked_on_pharos": "Publish versioned rate/scenario fields with their own pricing coverage. The single today's-prices field (cost_today_usd) was removed: it had no price status and reset the derived caches every day.",
+      "calculation_gap": "Only the historical schedule is retained; any repricing scenario needs scenario facts with coverage.",
+      "performance_note": "Scenarios should reuse workload facts rather than reread and reprice every transcript, and must not tie cached views to the current date.",
+      "after_metric_work": "needs_scenario_dataset",
       "capacity_audit": {
         "date": "2026-10-14",
-        "status": "observed_variant_shipped",
-        "reason": "Two retained schedules are executable; arbitrary selected schedules need extra scenario facts."
+        "status": "requires_new_facts_or_adapter",
+        "reason": "Only the historical schedule is retained; any repricing scenario needs scenario facts with coverage."
       }
     },
     {
@@ -6189,148 +6187,6 @@
       },
       "action": "Compare TL1 attempt groups",
       "retired": true
-    },
-    {
-      "id": "price-comparison",
-      "idea": "cost-04",
-      "category": "cost",
-      "title": "Recorded repricing comparison",
-      "description": "Historical API equivalent versus retained current-price estimates over the last {days} days; current-price completeness is unverified.",
-      "dataset": "usage",
-      "field": "first_usage_at",
-      "unit": "USD",
-      "where": [
-        {
-          "field": "total_tokens",
-          "op": ">",
-          "value": "0"
-        },
-        {
-          "field": "price_status",
-          "op": "=",
-          "value": "priced"
-        },
-        {
-          "field": "cost_usd",
-          "op": ">=",
-          "value": "0"
-        },
-        {
-          "field": "cost_today_usd",
-          "op": ">=",
-          "value": "0"
-        }
-      ],
-      "measures": [
-        {
-          "id": "price-pair",
-          "expression": "SUM([cost_usd])",
-          "op": "count",
-          "groupBy": [
-            "project_name"
-          ],
-          "label": "Historical versus current pricing",
-          "display": {
-            "kind": "scatter",
-            "xLabel": "Historical API $",
-            "yLabel": "Today's API $",
-            "xFormat": {
-              "kind": "number",
-              "decimals": 2
-            },
-            "yFormat": {
-              "kind": "number",
-              "decimals": 2
-            },
-            "xScale": {
-              "mode": "log"
-            },
-            "yScale": {
-              "mode": "log"
-            }
-          },
-          "groupLimit": 200,
-          "expressionY": "SUM([cost_today_usd])"
-        },
-        {
-          "id": "price-difference",
-          "expression": "SUM([cost_today_usd])-SUM([cost_usd])",
-          "op": "count",
-          "groupBy": [
-            "project_name"
-          ],
-          "label": "Today's minus historical API $",
-          "display": {
-            "kind": "list"
-          },
-          "groupLimit": 8
-        },
-        {
-          "id": "historical-cost",
-          "op": "sum",
-          "field": "cost_usd",
-          "groupBy": [
-            "project_name"
-          ],
-          "label": "Historical API $"
-        },
-        {
-          "id": "current-cost",
-          "op": "sum",
-          "field": "cost_today_usd",
-          "groupBy": [
-            "project_name"
-          ],
-          "label": "Today's API $"
-        }
-      ],
-      "note": "Compare matched usage records with complete historical pricing and nonnegative historical/current-price cost fields, grouped by project. Apply the retained current price schedule to the same historical token quantities; this is a scenario, not money paid, realizable savings, or a live market-price lookup. The existing cost_today_usd field does not expose a separate completeness/assumption status for today’s schedule, so its estimate may be partial or assumed even when historical price_status=priced. Do not interpret it as a fully verified current-price quote. Both axes are logarithmic; zero coordinates remain inspectable and are omitted with a count. Show up to 200 project pairs.",
-      "exploration": {
-        "keys": [
-          "project_name"
-        ],
-        "summaries": [
-          {
-            "id": "card_cost_usd",
-            "op": "sum",
-            "field": "cost_usd",
-            "label": "Historical API equivalent"
-          },
-          {
-            "id": "card_cost_today_usd",
-            "op": "sum",
-            "field": "cost_today_usd",
-            "label": "At current prices"
-          },
-          {
-            "id": "card_price_delta",
-            "op": "formula",
-            "expression": "SUM([cost_today_usd]-[cost_usd])",
-            "label": "Current minus historical"
-          },
-          {
-            "id": "card_count",
-            "op": "count",
-            "label": "Priced usage records"
-          }
-        ],
-        "valueField": "card_cost_usd",
-        "subjects": "projects",
-        "action": "Inspect retained price comparisons",
-        "unit": "USD"
-      },
-      "retired": true,
-      "days": [
-        7,
-        30
-      ],
-      "action": "Inspect retained price comparisons",
-      "cover": {
-        "mode": "source",
-        "metricId": "price-pair",
-        "kind": "scatter",
-        "maxGroups": 200
-      }
     },
     {
       "id": "expensive-work",

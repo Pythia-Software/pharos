@@ -49,7 +49,7 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   if (dataset === "session_shape") return "sessions";
   if ((dataset === "model_requests" || dataset === "compactions")) return "thinking";
   if (has("co2e_g", "co2e_kg", "energy_wh", "energy_kwh", "carbon_tier")) return "carbon";
-  if (has("cost_usd", "cost_today_usd")) return "cost";
+  if (has("cost_usd")) return "cost";
   if (has("error_count", "error_signature", "tool_error_count", "error_types", "test_failure") || predicates.some(term => term.field === "status" && term.op === "=" && term.value === "error")) return "errors";
   if (has("carried_tokens", "result_tokens", "truncated", "compaction_count", "cache_read_input_tokens") || predicates.some(term => term.field === "tool_category" && term.op === "=" && term.value === "read")) return "context";
   if (has("subagent_count", "subagent_depth") || predicates.some(term => term.field === "session_kind" && term.op === "=" && term.value === "subagent")) return "delegation";

@@ -13,7 +13,7 @@ const baseRow = (schema, index) => ({
   repository_name: index === 2 ? null : "répo & one", project_name: index === 2 ? null : "répo & one", conversation_id: "conversation / one", work_id: "work one",
   duration_ms: index === 0 ? null : index === 1 ? 0 : 600, error_count: index === 0 ? 1 : 0,
   typed_words: index === 0 ? 0 : index * 10, typed_turns: index, words: 100, user_words: 100,
-  cost_usd: index === 2 ? null : 2, cost_today_usd: index === 2 ? null : 3,
+  cost_usd: index === 2 ? null : 2,
   call_count: index === 1 ? 9 : 1, timed_count: index === 0 ? 0 : 1,
   total_duration_ms: index === 0 ? 0 : 100, call_message_id: `call message ${index}`,
   call_id: `call ${index}`, evidence_message_id: `evidence ${index}`,

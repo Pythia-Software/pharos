@@ -12,7 +12,7 @@ export const durationEstimateExplanation = "* Includes estimated tool duration. 
 export const estimateFlag = (value: unknown) => value === true || value === 1;
 export function estimatedField(row: Record<string, unknown>, field: string): boolean {
   return /duration/.test(field) ? estimateFlag(row.duration_is_estimate)
-    : /(^token_count$|_tokens$|cost.*usd|^usage_price_delta$)/.test(field) && estimateFlag(row.is_estimate);
+    : /(^token_count$|_tokens$|cost.*usd)/.test(field) && estimateFlag(row.is_estimate);
 }
 export const estimateMetricPrefix = "__pharos_estimate_metric:";
 // Host metadata travels through ordinary public aggregate expressions. A

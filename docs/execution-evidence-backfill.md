@@ -470,6 +470,13 @@ the digest. The occurrence version is part of the recorded versions
 were in the digest compares every derivative on its next mark and reads
 pending until then.
 
+A change to the occurrence rules (`occurrenceDependencyVersion`) is not part
+of the digest. The next mark compares every derivative with its
+conversation's facts under the new rules, and only conversations whose facts
+changed are rebuilt. `occurrenceDependencyEncoding`, the resolver version and
+the evidence version are part of the digest: changing one of them rebuilds
+the labels and agent events of every conversation.
+
 `TestUnmarkedSetFollowsEventLedgerWrites` checks the ledger stamp on its own.
 An events-only publication by another executable, with no labels write and
 an unchanged source generation, turns a warmed unmarked set pending and

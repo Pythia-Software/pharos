@@ -107,7 +107,7 @@ func (c *Catalog) usageRowsFromLedgerContext(ctx context.Context, location *time
 				"harness":      entry["harness"], "harness_version_first": entry["harness_version_first"], "harness_version_last": entry["harness_version_last"], "harness_version_source": entry["harness_version_source"], "model_family": modelFamily(model),
 				"session_kind": entry["session_kind"], "depth": integer(entry["depth"]), "attribution": entry["attribution"],
 				"hour": hourKey, "day": day, "week": week, "month": month, "first_usage_at": at, "last_usage_at": at,
-				"is_estimate": false, "input_tokens_available": true, "cost_usd": nil, "cost_today_usd": nil, "price_status": "", "priced_model": nil,
+				"is_estimate": false, "input_tokens_available": true, "cost_usd": nil, "price_status": "", "priced_model": nil,
 			}
 			copyOrigin(row, origins[firstString(entry["conversation_id"])])
 			row["carbon_tier"], row["carbon_tier_basis"] = carbonTierBasis(carbon, model)
@@ -127,7 +127,6 @@ func (c *Catalog) usageRowsFromLedgerContext(ctx context.Context, location *time
 		}
 		priced := book.ledgerCost(entry, model, firstString(day), tokens)
 		row["cost_usd"] = addCost(row["cost_usd"], priced.cost)
-		row["cost_today_usd"] = addCost(row["cost_today_usd"], priced.costToday)
 		row["price_status"] = worsePriceStatus(firstString(row["price_status"]), priced.status)
 		if priced.pricedModel != "" {
 			row["priced_model"] = priced.pricedModel
@@ -244,7 +243,7 @@ func (c *Catalog) localUsageBaseRows(ctx context.Context, hourly bool) ([]map[st
 }
 
 func (c *Catalog) usageBaseRows(ctx context.Context, hourly bool, carbon carbonAssumptions) ([]map[string]any, error) {
-	key := time.Local.String() + ":" + c.clock().Format("2006-01-02")
+	key := time.Local.String()
 	if hourly {
 		key += ":hourly"
 	}
@@ -263,16 +262,15 @@ func (c *Catalog) usageBaseRows(ctx context.Context, hourly bool, carbon carbonA
 	})
 }
 
-// localUsageRows returns usageRows in local time, kept until the next commit
-// or local day, since costs at today's prices follow the date.
+// localUsageRows returns usageRows in local time, kept until the next commit.
 func (c *Catalog) localUsageRows(ctx context.Context) ([]map[string]any, error) {
-	key := "usage:" + time.Local.String() + ":" + c.clock().Format("2006-01-02")
+	key := "usage:" + time.Local.String()
 	return c.cachedUsageLineage(ctx, key, false)
 }
 
 // Hourly chart data keeps the ledger's time precision without changing table rows.
 func (c *Catalog) localUsageHourlyRows(ctx context.Context) ([]map[string]any, error) {
-	key := "usage-hourly:" + time.Local.String() + ":" + c.clock().Format("2006-01-02")
+	key := "usage-hourly:" + time.Local.String()
 	return c.cachedUsageLineage(ctx, key, true)
 }
 
@@ -294,7 +292,7 @@ func (c *Catalog) cachedUsageLineage(ctx context.Context, key string, hourly boo
 	})
 }
 
-// The lineage graph depends on neither carbon settings nor the local day.
+// The lineage graph does not depend on carbon settings.
 func (c *Catalog) localUsageRoots(ctx context.Context) (*usageConversationAttribution, error) {
 	return cachedValue(ctx, c, "usage-roots", func(ctx context.Context) (*usageConversationAttribution, error) {
 		ledger, err := c.localUsageLedger(ctx)
@@ -523,9 +521,9 @@ func (c *Catalog) attachWorkspaceCosts(ctx context.Context, rows []map[string]an
 		return err
 	}
 	for _, row := range rows {
-		row["cost_usd"], row["cost_today_usd"], row["price_status"] = nil, nil, nil
+		row["cost_usd"], row["price_status"] = nil, nil
 		if value := totals[firstString(row["id"])]; value != nil {
-			row["cost_usd"], row["cost_today_usd"], row["price_status"] = value.cost, value.today, value.status
+			row["cost_usd"], row["price_status"] = value.cost, value.status
 			row["is_estimate"] = value.isEstimate
 		}
 	}
@@ -534,10 +532,10 @@ func (c *Catalog) attachWorkspaceCosts(ctx context.Context, rows []map[string]an
 
 // workspaceUsageTotal is one workspace's reconciled tokens and priced cost.
 type workspaceUsageTotal struct {
-	tokens      int64
-	cost, today any
-	status      string
-	isEstimate  bool
+	tokens     int64
+	cost       any
+	status     string
+	isEstimate bool
 }
 
 // add folds another workspace's usage into this one.
@@ -547,16 +545,13 @@ func (total *workspaceUsageTotal) add(other *workspaceUsageTotal) {
 	if cost, ok := other.cost.(float64); ok {
 		total.cost = addCost(total.cost, &cost)
 	}
-	if today, ok := other.today.(float64); ok {
-		total.today = addCost(total.today, &today)
-	}
 	total.status = worsePriceStatus(total.status, other.status)
 }
 
 // allWorkspaceUsage returns workspaceUsage for every workspace, kept until the
-// next commit or local day. The totals are shared and must not be modified.
+// next commit. The totals are shared and must not be modified.
 func (c *Catalog) allWorkspaceUsage(ctx context.Context) (map[string]*workspaceUsageTotal, error) {
-	return cachedValue(ctx, c, "workspace-usage:"+c.clock().Format("2006-01-02"), func(ctx context.Context) (map[string]*workspaceUsageTotal, error) {
+	return cachedValue(ctx, c, "workspace-usage", func(ctx context.Context) (map[string]*workspaceUsageTotal, error) {
 		return c.workspaceUsage(ctx, nil)
 	})
 }
@@ -591,7 +586,6 @@ func (c *Catalog) workspaceUsage(ctx context.Context, workspaceIDs []string) (ma
 		total.tokens += tokens["total_tokens"]
 		total.isEstimate = total.isEstimate || estimateFlag(entry["is_estimate"])
 		total.cost = addCost(total.cost, priced.cost)
-		total.today = addCost(total.today, priced.costToday)
 		total.status = worsePriceStatus(total.status, priced.status)
 	}
 	return totals, nil
