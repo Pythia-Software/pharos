@@ -118,7 +118,9 @@ func (c *Catalog) usageRowsFromLedgerContext(ctx context.Context, location *time
 			order = append(order, key)
 		}
 		row["is_estimate"] = estimateFlag(row["is_estimate"]) || estimateFlag(entry["is_estimate"])
-		row["input_tokens_available"] = !estimateFlag(row["is_estimate"])
+		// Estimated rows carry their own flag: input is absent from an
+		// output-only estimate and present in an input-and-output one.
+		row["input_tokens_available"] = estimateFlag(row["input_tokens_available"]) && (estimateFlag(entry["input_tokens_available"]) || entry["input_tokens_available"] == nil && !estimateFlag(entry["is_estimate"]))
 		tokens := ledgerTokens(entry)
 		for _, field := range usageTokenFields {
 			row[field] = integer(row[field]) + tokens[field]
@@ -147,7 +149,8 @@ func (c *Catalog) usageRowsFromLedgerContext(ctx context.Context, location *time
 	rows := make([]map[string]any, 0, len(order))
 	for _, key := range order {
 		row := grouped[key]
-		if input := integer(row["input_tokens"]); input > 0 {
+		// An estimate's cache division is assumed, so it has no cache-read share.
+		if input := integer(row["input_tokens"]); input > 0 && !estimateFlag(row["is_estimate"]) {
 			row["cache_read_share"] = float64(integer(row["cache_read_input_tokens"])) / float64(input) * 100
 		}
 		if !hourly {

@@ -1075,16 +1075,17 @@ function TokenSummary({ where }: { where: WhereTerm[] }) {
   const result = useMetrics("usage", where, tokenSummaryMetrics);
   const values = new Map(result.metrics.map(metric => [metric.id, Number(metric.buckets[0]?.value) || 0]));
   const value = (field: string) => values.get(`${field}:`) ?? 0;
-  const tokens = value("total_tokens"), cost = value("cost_usd"), uncached = value("uncached_input_tokens");
+  const tokens = value("total_tokens"), cost = value("cost_usd");
   const hasCost = result.metrics.find(metric => metric.id === "cost_usd:")?.buckets[0]?.value != null;
-  const reads = value("cache_read_input_tokens"), output = value("output_tokens"), sessions = values.get("agent_sessions") ?? 0;
-  const cacheHit = uncached + reads > 0 ? `${Math.round(reads / (uncached + reads) * 100)}%` : "—";
+  const output = value("output_tokens"), sessions = values.get("agent_sessions") ?? 0;
+  const recordedReads = values.get("recorded_cache_reads") ?? 0, lookups = values.get("recorded_cache_lookups") ?? 0;
+  const cacheHit = lookups > 0 ? `${Math.round(recordedReads / lookups * 100)}%` : "—";
   const estimated = result.metrics.some(metric => metric.is_estimate);
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:usage:${label}`} title={label} dataset="usage" query={{where}} {...result.readiness} /></span><strong title={estimated ? estimateExplanation : undefined}>{amount}{estimated && !["Loading…", "Unavailable", "Unpriced"].includes(amount) && ["Total tokens", "API price equivalent", "Output tokens"].includes(label) ? "*" : ""}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics usage-cards token-summary" aria-label="Machine token summary" aria-busy={result.loading}>
-    {card("Total tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(tokens), "available input and output; * includes estimated output")}
+    {card("Total tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(tokens), "available input and output; * includes estimated usage")}
     {card("API price equivalent", result.loading ? "Loading…" : result.error ? "Unavailable" : tokens && !hasCost ? "Unpriced" : formatUSD(cost), "list prices · may include assumed/partial prices; unpriced usage excluded")}
-    {card("Cache hit rate", result.loading ? "Loading…" : result.error ? "Unavailable" : cacheHit, `${compactNumber(reads)} cached input tokens read`)}
+    {card("Cache hit rate", result.loading ? "Loading…" : result.error ? "Unavailable" : cacheHit, `${compactNumber(recordedReads)} cached input tokens read · recorded usage only`)}
     {card("Output tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(output), "including thinking output")}
     {card("Agent sessions", result.loading ? "Loading…" : result.error ? "Unavailable" : sessions.toLocaleString(), "distinct agent sessions in the current filters")}
   </div>;

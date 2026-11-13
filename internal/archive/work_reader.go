@@ -253,18 +253,20 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		conversation["agent_events"] = events
 	}
 	usage := tokenCounts{}
-	isEstimate := false
+	isEstimate, inputMissing := false, false
 	for _, session := range sessions {
 		if status := firstString(session["usage_status"]); status == "" || status == "unavailable" {
 			continue
 		}
 		isEstimate = isEstimate || estimateFlag(session["is_estimate"])
+		inputMissing = inputMissing || estimateFlag(session["is_estimate"]) && !estimateFlag(session["input_tokens_available"])
 		for _, key := range []string{"input_tokens", "uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_5m_input_tokens", "cache_creation_1h_input_tokens", "output_tokens", "reasoning_output_tokens", "unclassified_tokens", "total_tokens"} {
 			usage[key] += float64(integer(session[key]))
 		}
 	}
 	conversation["token_usage_is_estimate"] = isEstimate
-	if isEstimate {
+	conversation["token_usage_input_estimated"] = isEstimate && !inputMissing
+	if inputMissing {
 		for _, field := range usageInputFields {
 			delete(usage, field)
 		}
@@ -291,7 +293,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 	}
 
 	// Join canonical usage onto messages without rewriting retained source bodies.
-	estimated, err := queryMapsContext(ctx, c.reader(), `SELECT source_message_id,output_tokens,reasoning_output_tokens,total_tokens FROM model_requests WHERE conversation_id=? AND is_estimate=1`, conversationID)
+	estimated, err := queryMapsContext(ctx, c.reader(), `SELECT source_message_id,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,input_tokens_available,output_tokens,reasoning_output_tokens,total_tokens FROM model_requests WHERE conversation_id=? AND is_estimate=1`, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +303,13 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 	}
 	for _, message := range messages {
 		if row := byID[firstString(message["id"])]; row != nil {
-			message["usage"] = map[string]any{"output_tokens": row["output_tokens"], "reasoning_output_tokens": row["reasoning_output_tokens"], "total_tokens": row["total_tokens"]}
+			usage := map[string]any{"output_tokens": row["output_tokens"], "reasoning_output_tokens": row["reasoning_output_tokens"], "total_tokens": row["total_tokens"]}
+			if estimateFlag(row["input_tokens_available"]) {
+				for _, field := range []string{"input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"} {
+					usage[field] = row[field]
+				}
+			}
+			message["usage"] = usage
 			message["usage_is_estimate"] = true
 		}
 	}
@@ -323,6 +331,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		if authoritative || report.ReportedResponses > 0 {
 			report.Responses = []usageResponseEstimate{}
 			report.Output = nil
+			report.Input, report.InputRequests = nil, 0
 		}
 		conversation["usage_estimates"] = report
 		byMessage := map[string]usageToolEstimate{}

@@ -1,4 +1,5 @@
 import { EMPTY_QUERY, applyPatch, groupKeyFields, matchPatch, type GroupingDefinition, type QueryPatch, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
+import { cacheHitRateExpression } from "./usage-estimate-model";
 
 export type UsageTablePreset = {
   label: string;
@@ -9,7 +10,7 @@ export type UsageTablePreset = {
 };
 
 const sum = (field: string, label: string): SummaryColumn => ({ id: `usage_${field}`, op: "sum", field, label });
-const cacheRate: SummaryColumn = { id: "usage_cache_hit_percent", op: "formula", expression: "SUM([cache_read_input_tokens])/NULLIF(SUM([cache_read_input_tokens])+SUM([uncached_input_tokens]),0)", label: "Cache hit %", display: { kind: "percent", decimals: 1 } };
+const cacheRate: SummaryColumn = { id: "usage_cache_hit_percent", op: "formula", expression: cacheHitRateExpression, label: "Cache hit %", display: { kind: "percent", decimals: 1 } };
 const totals: SummaryColumn[] = [
   sum("cost_usd", "API cost"), sum("total_tokens", "Total tokens"), sum("output_tokens", "Output tokens"),
   { id: "usage_sessions", op: "count_distinct", field: "agent_session_id", label: "Agent sessions" }, cacheRate,

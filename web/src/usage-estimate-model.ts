@@ -1,6 +1,13 @@
 import type { QueryRequestV3 } from "@pythia-software/query-table-core";
 
-export const estimateExplanation = "* Includes estimated generated output. Input and cache usage are unavailable; output cost is partial and may assume a saved conversation model selection.";
+export const estimateExplanation = "* Includes estimated usage for conversations without reported counts: generated output, and processed input where the visible conversation supports it. Hidden system prompts are not counted and the cache division is assumed, so cost is partial and may assume a saved conversation model selection.";
+// An estimated row's cache reads and writes are an assumed pricing scenario,
+// so cache rates read recorded usage only. Sums of these tokens still include it.
+export const recordedCacheReads = "IF([is_estimate],0,[cache_read_input_tokens])";
+export const recordedCacheLookups = "IF([is_estimate],0,[cache_read_input_tokens]+[uncached_input_tokens])";
+export const recordedInput = "IF([is_estimate],0,[input_tokens])";
+export const cacheHitRateExpression = `SUM(${recordedCacheReads})/NULLIF(SUM(${recordedCacheLookups}),0)`;
+export const cacheReadShareExpression = `SUM(${recordedCacheReads})/NULLIF(SUM(${recordedInput}),0)`;
 export const durationEstimateExplanation = "* Includes estimated tool duration. Parallel calls can overlap.";
 export const estimateFlag = (value: unknown) => value === true || value === 1;
 export function estimatedField(row: Record<string, unknown>, field: string): boolean {

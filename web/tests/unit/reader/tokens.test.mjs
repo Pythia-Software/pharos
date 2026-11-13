@@ -36,6 +36,19 @@ test("usage sensitivity diagnostics scope to owned messages; canonical estimates
   assert.equal(estimates[0].total,1200);
   assert.equal(estimates[0].isEstimate,true);
   assert.equal(contextTokenReports(estimatedMessages,estimates)[0].contextSample,undefined,"estimated output is not measured input context");
+  // Processed input is a separate estimate, summed only when every response has one.
+  const withInput = {usage_estimates:{...report,responses:report.responses.map((response,index)=>({...response,input:{requests:index+2,input_tokens:{expected:50000,lower:30000,upper:90000},cache_read_input_tokens:20000}}))}};
+  const both = reader.usageEstimatePresentation(withInput);
+  assert.deepEqual([both.input.expected,both.input.requests,both.expected],[100000,5,2000],"input and output keep separate sums");
+  assert.match(both.label,/100,000 estimated input.*2,000 estimated output/);
+  assert.match(both.detail,/5 inferred model requests.*hidden system prompts/s);
+  const mixed = {usage_estimates:{...report,responses:[withInput.usage_estimates.responses[0],report.responses[1]]}};
+  assert.equal(reader.usageEstimatePresentation(mixed).input,undefined,"a missing input estimate is not a zero");
+  const inputMessages = [{...messages[0],usage_is_estimate:true,usage:{input_tokens:50000,cache_read_input_tokens:20000,cache_creation_input_tokens:30000,output_tokens:1200,total_tokens:51200}}];
+  const inputReports = conversationTokenReports(inputMessages);
+  assert.equal(inputReports[0].total,51200);
+  assert.match(inputReports[0].label,/input and output/);
+  assert.equal(contextTokenReports(inputMessages,inputReports)[0].contextSample,undefined,"estimated input is not a measured context sample");
   assert.match(reader.toolDurationEstimatePresentation(messages[0]).label,/Estimated/);
   assert.match(reader.toolDurationEstimatePresentation({duration_estimate:{status:"observed",seconds:{expected:0,lower:0,upper:0}}}).label,/Recorded/);
   assert.equal(reader.toolDurationEstimatePresentation({duration_estimate:{status:"unavailable"}}),null);

@@ -1,4 +1,5 @@
 import type { AggregationClause, SummaryColumn, WhereTerm } from "@pythia-software/query-table-core";
+import { cacheHitRateExpression } from "./usage-estimate-model";
 import type { QueryRecipe } from "./curiosity-data";
 
 const keys = ["provider", "model_family"];
@@ -9,7 +10,7 @@ const cost: SummaryColumn = { id: "mc_cost", op: "sum", field: "cost_usd", label
 const positive: WhereTerm[] = [{ field: "total_tokens", op: ">", value: "0" }];
 const priced: WhereTerm[] = [...positive, { field: "price_status", op: "=", value: "priced" }];
 const effectiveCost = "1000000*SUM([cost_usd])/NULLIF(SUM([total_tokens]),0)";
-const cacheShare = "SUM([cache_read_input_tokens])/NULLIF(SUM([cache_read_input_tokens])+SUM([uncached_input_tokens]),0)";
+const cacheShare = cacheHitRateExpression;
 const sessionSize = "SUM([total_tokens])/NULLIF(COUNT_DISTINCT([agent_session_id]),0)";
 const formula = (id: string, expression: string, label: string): SummaryColumn => ({ id, op: "formula", expression, label });
 const population = "Uses recorded usage records, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares.";

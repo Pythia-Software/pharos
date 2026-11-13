@@ -374,9 +374,9 @@ function quickStatsMetricCaveat(field, bucket) {
   if (['tool_time_ms','timed_tool_calls'].includes(field) && flagged(bucket?.tool_time_is_estimate))
     return {suffix:'*',note:'Includes estimated tool durations. Spans can overlap and are not wall-clock time.'};
   if (['tokens','co2e_g'].includes(field) && flagged(bucket?.is_estimate))
-    return {suffix:'*',note:'Includes estimated generated output. Missing input and cache usage are not included.'};
+    return {suffix:'*',note:'Includes estimated usage for conversations without reported counts: generated output, and processed input where the visible conversation supports it. Hidden system prompts are not counted.'};
   if (field==='cost_usd' && flagged(bucket?.cost_is_estimate ?? bucket?.is_estimate))
-    return {suffix:'*',note:'Includes estimated output cost only; input and cache usage are unavailable. This API price equivalent is partial.'};
+    return {suffix:'*',note:'Includes cost of estimated usage. Estimated input counts only the visible conversation and its cache division is assumed, so this API price equivalent is partial.'};
   if (field==='cost_usd' && ['partial','unpriced'].includes(bucket?.price_status))
     return {suffix:'+',note:'Known-priced subtotal only; some usage is unpriced or incomplete.'};
   return null;

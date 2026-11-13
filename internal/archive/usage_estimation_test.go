@@ -883,9 +883,14 @@ func TestUsageEstimationBackfillResumesAndWithholdsSupersededRows(t *testing.T) 
 	var total int64
 	for _, row := range queryRows(t, c, "SELECT * FROM model_requests WHERE is_estimate=1") {
 		total += integer(row["output_tokens"])
-		if integer(row["input_tokens_available"]) != 0 || integer(row["total_tokens"]) != integer(row["output_tokens"]) {
-			t.Fatal("invented input usage", row)
+		// Input is a separate estimate: flagged available, divided wholly into
+		// assumed cache reads and writes, and never mixed into output.
+		input := integer(row["input_tokens"])
+		if integer(row["input_tokens_available"]) != 1 || input <= 0 || integer(row["uncached_input_tokens"]) != 0 ||
+			integer(row["cache_read_input_tokens"])+integer(row["cache_creation_input_tokens"]) != input || integer(row["total_tokens"]) != input+integer(row["output_tokens"]) {
+			t.Fatal("estimated input usage", row)
 		}
+		total += input
 	}
 	if countRows(t, c, "SELECT SUM(total_tokens) FROM agent_session_usage WHERE is_estimate=1") != int(total) || countRows(t, c, "SELECT SUM(total_tokens) FROM agent_sessions WHERE is_estimate=1") != int(total) {
 		t.Fatal("canonical totals disagree")
@@ -895,8 +900,8 @@ func TestUsageEstimationBackfillResumesAndWithholdsSupersededRows(t *testing.T) 
 		t.Fatal(rows, err)
 	}
 	for _, row := range rows {
-		if !estimateFlag(row["is_estimate"]) || row["input_tokens"] != nil || row["cost_usd"] != nil {
-			t.Fatal("unknown usage not preserved", row)
+		if !estimateFlag(row["is_estimate"]) || !estimateFlag(row["input_tokens_available"]) || integer(row["input_tokens"]) <= 0 || row["cost_usd"] != nil {
+			t.Fatal("estimated input stays flagged and an unknown model unpriced", row)
 		}
 	}
 	if err := c.ensureToolRollup(t.Context()); err != nil {
@@ -1024,8 +1029,8 @@ func TestUsageEstimationBackfillResumesAndWithholdsSupersededRows(t *testing.T) 
 		t.Fatal("stale publication", err)
 	}
 
-	// A known model uses ordinary historical pricing for its output. No missing
-	// input is converted into a measured zero or silently included in full cost.
+	// A known model uses ordinary historical pricing. Estimated input is priced
+	// under its assumed cache division, and the cost stays flagged partial.
 	execTx(t, c.DB, "UPDATE messages SET model='claude-sonnet-4-20250514'")
 	if err := c.backfillUsageEstimation(t.Context()); err != nil {
 		t.Fatal(err)
@@ -1035,8 +1040,8 @@ func TestUsageEstimationBackfillResumesAndWithholdsSupersededRows(t *testing.T) 
 		t.Fatal(err)
 	}
 	for _, row := range pricedRows {
-		if row["cost_usd"] == nil || row["price_status"] != "partial" || row["input_tokens"] != nil {
-			t.Fatal("estimated output pricing", row)
+		if row["cost_usd"] == nil || row["price_status"] != "partial" || integer(row["input_tokens"]) <= 0 || !estimateFlag(row["is_estimate"]) {
+			t.Fatal("estimated usage pricing", row)
 		}
 	}
 	// Shared totals expose provenance and partial output pricing by window.
@@ -1045,7 +1050,7 @@ func TestUsageEstimationBackfillResumesAndWithholdsSupersededRows(t *testing.T) 
 		t.Fatal(err)
 	}
 	for _, window := range summary["windows"].([]*usageSummaryWindow) {
-		if window.Key == "all" && (!window.IsEstimate || !window.CostIsEstimate || window.InputTokensAvailable || window.PriceStatus != "partial") {
+		if window.Key == "all" && (!window.IsEstimate || !window.CostIsEstimate || !window.InputTokensAvailable || window.PriceStatus != "partial") {
 			t.Fatal("unflagged Home totals", window)
 		}
 		if window.Key == "1h" && window.IsEstimate {
@@ -1062,7 +1067,7 @@ func TestUsageEstimationBackfillResumesAndWithholdsSupersededRows(t *testing.T) 
 	}
 	values := map[string]statMetricValue{}
 	usageMetrics(values, ledger, book)
-	if !values["total_tokens"].IsEstimate || values["total_tokens"].Status != "partial" || values["input_tokens"].Value != nil || !values["cost_usd"].IsEstimate || values["cost_usd"].PriceStatus != "partial" {
+	if !values["total_tokens"].IsEstimate || values["total_tokens"].Status != "partial" || values["input_tokens"].Value == nil || !values["input_tokens"].IsEstimate || values["input_tokens"].Status != "partial" || !values["cost_usd"].IsEstimate || values["cost_usd"].PriceStatus != "partial" {
 		t.Fatal("MCP presented estimates as measurements", values)
 	}
 	evidence := statisticsMetricEvidence(statisticsRow{ID: "estimate", Metrics: values}, statisticsRequest{Metrics: []string{"total_tokens", "cost_usd"}, Quality: "available"})
@@ -1117,7 +1122,7 @@ func TestUsageEstimationBackfillResumesAndWithholdsSupersededRows(t *testing.T) 
 		}
 	}
 
-	if snapshot.Totals["input"].Value != nil || snapshot.Totals["cacheRead"].Value != nil || *snapshot.Totals["requests"].Value != 0 {
+	if input := snapshot.Totals["input"]; input.Value == nil || *input.Value <= 0 || !input.IsEstimate || *snapshot.Totals["requests"].Value != 0 {
 		t.Fatal("estimated input or requests treated as recorded", snapshot.Totals)
 	}
 	if remainder := snapshot.Totals["remainder"]; remainder.Value == nil || *remainder.Value != 0 {
@@ -1222,7 +1227,7 @@ func TestUsageEstimationBackfillResumesAndWithholdsSupersededRows(t *testing.T) 
 				if err := catalog.backfillUsageEstimation(t.Context()); err != nil {
 					t.Fatal(err)
 				}
-				request := queryRows(t, catalog, `SELECT r.requested_at,r.output_tokens,m.created_at anchor_at FROM model_requests r JOIN messages m ON m.id=r.source_message_id WHERE r.native_id='m2' AND r.is_estimate=1`)[0]
+				request := queryRows(t, catalog, `SELECT r.requested_at,r.total_tokens,m.created_at anchor_at FROM model_requests r JOIN messages m ON m.id=r.source_message_id WHERE r.native_id='m2' AND r.is_estimate=1`)[0]
 				at, valid := parseTime(firstString(request["requested_at"]))
 				want, _ := parseTime("2026-10-03T14:01:00Z")
 				if !valid || !at.Equal(want) || request["anchor_at"] != nil {
@@ -1231,8 +1236,8 @@ func TestUsageEstimationBackfillResumesAndWithholdsSupersededRows(t *testing.T) 
 				q := groupRequest("provider", qt.SummaryColumn{ID: "tokens", Op: "sum", Field: "total_tokens"})
 				q.Source.Where = []qt.WhereTerm{{Field: "first_usage_at", Op: ">=", Value: "2026-10-03T00:00:00Z"}, {Field: "first_usage_at", Op: "<", Value: "2026-10-04T00:00:00Z"}}
 				result, _, err := testServer(t, cfg, catalog).executeQueryV3(t.Context(), "usage", nil, PharosUsageSchema(), q)
-				if err != nil || len(result.Rows) != 1 || integer(result.Rows[0]["tokens"]) != integer(request["output_tokens"]) {
-					t.Fatal("dated totals lost response output", result, err)
+				if err != nil || len(result.Rows) != 1 || integer(result.Rows[0]["tokens"]) != integer(request["total_tokens"]) {
+					t.Fatal("dated totals lost response usage", result, err)
 				}
 				tool := queryRows(t, catalog, `SELECT started_at,ended_at FROM tool_calls WHERE call_id='tu1'`)[0]
 				if tool["started_at"] != nil || tool["ended_at"] != nil {
@@ -1304,5 +1309,64 @@ func TestUsageEstimationNativeClocksFloorsAndStableAnchors(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Each inferred request re-reads the conversation so far. Tool results are
+// input to the requests after them and never generated output.
+func TestUsageEstimationProcessedInput(t *testing.T) {
+	manifest, _ := bundledEstimation()
+	rate, order := manifest.Input.ContextRate.Expected, 0
+	row := func(message, role, kind, at string, block map[string]any) map[string]any {
+		order++
+		if order == 1 || block["sender"] != nil {
+			block["claude_ai_message"] = map[string]any{"sender": block["sender"], "created_at": at}
+			delete(block, "sender")
+		}
+		return map[string]any{"id": fmt.Sprintf("row-%d", order), "native_id": fmt.Sprintf("%s:block:%d", message, order), "role": role, "kind": kind, "raw_text": jsonText(block), "source_order": int64(order), "created_at": at}
+	}
+	build := func(result int) *conversationUsageEstimates {
+		order = 0
+		b := newUsageEstimationBuilder("claude-ai-export")
+		for _, m := range []map[string]any{
+			row("m1", "user", "message", "2026-11-11T10:00:00Z", map[string]any{"type": "text", "text": strings.Repeat("q", 1000), "sender": "human"}),
+			row("m2", "assistant", "tool_call", "2026-11-11T10:00:05Z", map[string]any{"type": "tool_use", "id": "call", "name": "web_search", "input": map[string]any{"query": "pipelines"}, "sender": "assistant"}),
+			row("m2", "tool", "tool_result", "2026-11-11T10:00:06Z", map[string]any{"type": "tool_result", "tool_use_id": "call", "content": []any{map[string]any{"type": "knowledge", "text": strings.Repeat("r", result)}}}),
+			row("m2", "assistant", "message", "2026-11-11T10:00:09Z", map[string]any{"type": "text", "text": strings.Repeat("a", 100)}),
+			row("m3", "user", "message", "2026-11-11T10:02:00Z", map[string]any{"type": "text", "text": "More", "sender": "human"}),
+			row("m4", "assistant", "message", "2026-11-11T10:02:01Z", map[string]any{"type": "text", "text": "Yes", "sender": "assistant"}),
+			row("m5", "user", "message", "2026-11-11T12:00:00Z", map[string]any{"type": "text", "text": "Later", "sender": "human"}),
+			row("m6", "assistant", "message", "2026-11-11T12:00:01Z", map[string]any{"type": "text", "text": "Still", "sender": "assistant"}),
+		} {
+			b.observe(m)
+		}
+		return b.estimate(manifest, estimationCalibration{}, "digest")
+	}
+	report, small := build(10000), build(10)
+	if len(report.Responses) != 3 || report.Input == nil || report.InputRequests != 4 {
+		t.Fatal(report.Responses, report.Input, report.InputRequests)
+	}
+	first, second, third := report.Responses[0].Input, report.Responses[1].Input, report.Responses[2].Input
+	// The question is read twice; the result and the thinking estimated for the
+	// first request are read once, by the request after them.
+	visible := rate*12000 + report.Responses[0].Thinking.Expected
+	if first.Requests != 2 || first.Tokens.Expected < visible || first.Tokens.Expected > visible+500 || first.Tokens.Lower > rate*12000 {
+		t.Fatal("tool round input", first)
+	}
+	if report.Responses[0].Output != small.Responses[0].Output || first.Tokens.Expected-small.Responses[0].Input.Tokens.Expected < rate*9000 {
+		t.Fatal("result size must move input only", report.Responses[0].Output, small.Responses[0].Output)
+	}
+	// Later turns re-read the retained result.
+	if second.Requests != 1 || second.Tokens.Expected < rate*11000 || third.Tokens.Expected < second.Tokens.Expected {
+		t.Fatal("history is re-read", second, third)
+	}
+	for _, input := range []*usageInputEstimate{first, second, third} {
+		if !input.Tokens.valid() || input.Tokens.Upper-input.Tokens.Expected < manifest.Input.RequestOverhead.Upper*float64(input.Requests) || math.Abs(input.CacheRead+input.CacheCreation-input.Tokens.Expected) > 1e-6 {
+			t.Fatal("range or cache division", input)
+		}
+	}
+	// A prompt read again within the cache lifetime is a read; after it, a write.
+	if first.CacheRead <= 0 || second.CacheRead < second.CacheCreation || third.CacheRead != 0 {
+		t.Fatal("cache scenario", first, second, third)
 	}
 }

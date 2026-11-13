@@ -259,5 +259,5 @@ test('Quick Stats provenance follows the metric and selected window',()=>{
  assert.equal(stats.quickStatsMetricCaveat('human_words',mixed),null);
  assert.equal(stats.quickStatsMetricCaveat('tokens',{is_estimate:false}),null);
  assert.equal(stats.quickStatsMetricCaveat('cost_usd',{is_estimate:true,cost_is_estimate:false,price_status:'unpriced'}).suffix,'+');
- assert.match(stats.quickStatsMetricCaveat('cost_usd',mixed).note,/output cost only/);
+ assert.match(stats.quickStatsMetricCaveat('cost_usd',mixed).note,/estimated usage.*partial/);
 });
