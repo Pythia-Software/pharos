@@ -1124,6 +1124,11 @@ func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord
 		}
 		replayed = append(replayed, conversationID)
 	}
+	// Project resolution runs before conversations are written. Recheck after
+	// indexing so a project receives its color when its fourth conversation arrives.
+	if err := ensureProjectColors(ctx, tx, "w.id=?", workspaceID); err != nil {
+		return 0, 0, err
+	}
 	if err := applyClaudeGroupUsage(tx, workspaceID, record.Conversations, conversationIDs, authority.conversations); err != nil {
 		return 0, 0, err
 	}

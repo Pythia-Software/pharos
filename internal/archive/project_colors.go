@@ -65,9 +65,13 @@ func projectColorChoices(ctx context.Context, q queryer) (map[string]projectColo
 }
 
 func projectColorRows(ctx context.Context, q queryer, predicate string, args ...any) ([]map[string]any, error) {
+	// Select affected project identities first, then count conversations across
+	// all of each project's workspaces, not just those in the input predicate.
 	return queryMapsContext(ctx, q, `SELECT `+projectIDSQL("w")+` id,`+projectNameSQL("w")+` name,`+projectKindSQL("w")+` kind,
 		MAX(pj.local_locations_json) locations FROM workspaces w`+projectJoin("w")+`
-		WHERE (`+predicate+`) AND `+projectIDSQL("w")+` IS NOT NULL GROUP BY 1 ORDER BY 1`, args...)
+		JOIN conversations cv ON cv.workspace_id=w.id
+		WHERE `+projectIDSQL("w")+` IN (SELECT `+projectIDSQL("w")+` FROM workspaces w`+projectJoin("w")+` WHERE (`+predicate+`))
+		GROUP BY 1 HAVING COUNT(cv.id)>3 ORDER BY 1`, args...)
 }
 
 // Called by project resolution, inside ingest/migration's transaction. Only new
@@ -161,6 +165,13 @@ func (c *Catalog) setProjectColor(ctx context.Context, id, color string) error {
 		return fmt.Errorf("choose a six-digit hex color")
 	}
 	return c.writeTransaction(ctx, "project color", func(tx *sql.Tx) error {
+		rows, err := projectColorRows(ctx, tx, projectIDSQL("w")+`=?`, id)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return fmt.Errorf("project color unavailable")
+		}
 		key := projectColorKey(id)
 		var raw string
 		if err := tx.QueryRowContext(ctx, `SELECT value FROM ui_preferences WHERE key=?`, key).Scan(&raw); err != nil {
@@ -171,7 +182,7 @@ func (c *Catalog) setProjectColor(ctx context.Context, id, color string) error {
 			return fmt.Errorf("project color unavailable")
 		}
 		choice.Custom = strings.ToLower(color)
-		_, err := tx.ExecContext(ctx, `UPDATE ui_preferences SET value=? WHERE key=?`, jsonText(choice), key)
+		_, err = tx.ExecContext(ctx, `UPDATE ui_preferences SET value=? WHERE key=?`, jsonText(choice), key)
 		return err
 	})
 }

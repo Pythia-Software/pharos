@@ -1699,6 +1699,10 @@ test("project color settings show indexed projects while mounted and retain edit
   let projects = [];
   const { page } = await open(t, { url: "/settings/projects", projectColors: [], ready: ".project-color-settings", api: {
     "GET /api/project-colors": () => projects,
+    "POST /api/project-colors": ({ body }) => {
+      projects = projects.map(project => project.id === body.id ? { ...project, custom_color: body.color || undefined } : project);
+      return projects;
+    },
   } });
   const refresh = () => page.evaluate(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
   projects = projectColorFixture.slice(0, 1);
@@ -1710,6 +1714,17 @@ test("project color settings show indexed projects while mounted and retain edit
   await refresh();
   await page.getByLabel(`Color for ${projects[1].name}`, { exact: true }).waitFor({ state: "visible" });
   assert.equal(await first.evaluate(element => element === document.activeElement), true, "registry refresh leaves the existing editor focused");
+  const save = page.getByRole("button", { name: `Save color for ${projects[0].name}` });
+  const restore = page.getByRole("button", { name: `Restore default color for ${projects[0].name}` });
+  assert.equal(await save.count(), 0);
+  assert.equal(await restore.count(), 0);
+  await first.fill("#bb6622");
+  await save.click();
+  await restore.waitFor({ state: "visible" });
+  assert.equal(await save.count(), 0);
+  await restore.click();
+  await restore.waitFor({ state: "detached" });
+  await page.waitForFunction(() => !document.querySelector('.project-color-picker input')?.disabled);
 
   await page.evaluate(() => window.pharosNavigate("/settings/preferences"));
   projects = [...projects, { ...projectColorFixture[0], id: "repository:new", name: "New project", key: "c".repeat(64) }];

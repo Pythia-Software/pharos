@@ -22,6 +22,15 @@ test('project scopes share one saved identity, with an explicit user choice taki
   assert.equal(metricSeriesColor(['repository_name', 'model_family'], ['app', 'opus-5-5']), chartSeriesStyle('model_family', 'opus-5-5').color);
 });
 
+test('projects without a saved assignment use the chart and metric fallbacks', t => {
+  installProjectColors([project()]); t.after(() => installProjectColors([]));
+  assert.equal(savedProjectColor('small-project'), undefined);
+  assert.match(projectSeriesColor('small-project', '#123456'), /, #123456\)$/);
+  for (const field of ['project_name', 'project_id', 'repository_name']) {
+    assert.equal(projectMetricTheme().dimensions[field].overrides.some(item => item.value === 'small-project'), false);
+  }
+});
+
 test('ambiguous labels stay neutral while stable IDs remain resolvable after renaming', t => {
   const projects = [project(), project('other', 'app', '#ab34cd')];
   const aliases = projectColorAliases(projects);

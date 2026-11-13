@@ -27,6 +27,12 @@ func TestProjectColorsKeepDefaultsAndEditsWithIdentity(t *testing.T) {
 		if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,repository_id,title,indexed_at) VALUES(?, 'canonical','local',?,?,'Workspace','2026-01-01')`, id, id, id); err != nil {
 			t.Fatal(err)
 		}
+		for n := range 4 {
+			conversation := fmt.Sprintf("%s-%d", id, n)
+			if _, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES(?,?,'codex','local',?)`, conversation, id, conversation); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	if err := resolveProjects(t.Context(), tx, "1"); err != nil {
 		t.Fatal(err)
@@ -61,6 +67,12 @@ func TestProjectColorsKeepDefaultsAndEditsWithIdentity(t *testing.T) {
 	}
 	if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,location,indexed_at) VALUES('new','canonical','local','new','New project','/home/person/notes','2026-01-01')`); err != nil {
 		t.Fatal(err)
+	}
+	for n := range 4 {
+		conversation := fmt.Sprintf("new-%d", n)
+		if _, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES(?,'new','codex','local',?)`, conversation, conversation); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := resolveProjects(t.Context(), tx, "1"); err != nil {
 		t.Fatal(err)
@@ -102,12 +114,104 @@ func TestProjectColorsKeepDefaultsAndEditsWithIdentity(t *testing.T) {
 	// A previous build can add already-resolved project columns, so there
 	// need not be a project-column repair to trigger color assignment.
 	execTx(t, reopened.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,location,project_folder,indexed_at) VALUES('legacy','canonical','local','legacy','Legacy project','/home/person/legacy','~/legacy','2026-01-01')`)
+	for n := range 4 {
+		conversation := fmt.Sprintf("legacy-%d", n)
+		if _, err := reopened.DB.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES(?,'legacy','codex','local',?)`, conversation, conversation); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := reopened.repairProjects(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	repaired, err := reopened.projectColors(t.Context())
 	if err != nil || len(repaired) != 4 {
 		t.Fatalf("missing legacy assignment: %+v %v", repaired, err)
+	}
+}
+
+func TestProjectColorsRequireFourConversationsAcrossWorkspaces(t *testing.T) {
+	c, _ := testCatalog(t)
+	tx := seedTx(t, c.DB)
+	if _, err := tx.Exec(`INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('small','small','2026-01-01','2026-01-01')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"one", "two"} {
+		if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,repository_id,title,indexed_at) VALUES(?,'canonical','local',?,'small','Workspace','2026-01-01')`, id, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for n := range 3 {
+		id := fmt.Sprintf("cv-%d", n)
+		if _, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES(?,'one','codex','local',?)`, id, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := resolveProjects(t.Context(), tx, "w.id=?", "one"); err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, tx)
+	choices, err := projectColorChoices(t.Context(), c.reader())
+	if err != nil || len(choices) != 0 {
+		t.Fatalf("three conversations allocated a color: %+v %v", choices, err)
+	}
+	// A choice saved by an older build is neither exposed nor editable while below the threshold.
+	legacy := projectColorChoice{Default: "#123456", Source: "Automatic palette", Custom: "#abcdef"}
+	if _, err := c.DB.Exec(`INSERT INTO ui_preferences(key,value) VALUES(?,?)`, projectColorKey("repository:small"), jsonText(legacy)); err != nil {
+		t.Fatal(err)
+	}
+	colors, err := c.projectColors(t.Context())
+	if err != nil || len(colors) != 0 {
+		t.Fatalf("three conversations exposed a color: %+v %v", colors, err)
+	}
+	if err := c.setProjectColor(t.Context(), "repository:small", "#fedcba"); err == nil {
+		t.Fatal("edited ineligible color")
+	}
+	tx = seedTx(t, c.DB)
+	if _, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('four','two','codex','local','four')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureProjectColors(t.Context(), tx, "w.id=?", "two"); err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, tx)
+	colors, err = c.projectColors(t.Context())
+	if err != nil || len(colors) != 1 || colors[0].Custom != legacy.Custom {
+		t.Fatalf("four conversations did not restore saved choice: %+v %v", colors, err)
+	}
+	// A project without an older assignment gets a default at the same boundary.
+	if _, err := c.DB.Exec(`DELETE FROM ui_preferences WHERE key=?`, projectColorKey("repository:small")); err != nil {
+		t.Fatal(err)
+	}
+	tx = seedTx(t, c.DB)
+	if err := ensureProjectColors(t.Context(), tx, "w.id=?", "two"); err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, tx)
+	colors, err = c.projectColors(t.Context())
+	if err != nil || len(colors) != 1 || !validProjectColor(colors[0].Default) {
+		t.Fatalf("four conversations did not allocate a default: %+v %v", colors, err)
+	}
+	// Falling below the threshold hides the choice without destroying it.
+	execTx(t, c.DB, `DELETE FROM conversations WHERE id='four'`)
+	colors, err = c.projectColors(t.Context())
+	if err != nil || len(colors) != 0 {
+		t.Fatalf("ineligible choice remained visible: %+v %v", colors, err)
+	}
+}
+
+func TestProjectColorAssignedDuringIngestAtThreshold(t *testing.T) {
+	c, _ := testCatalog(t)
+	record := namingRecord("codex", "color-threshold", "Project", "Work")
+	record.Location = "/home/person/color-threshold"
+	for n := 1; n <= 4; n++ {
+		if n > 1 {
+			record.Conversations = append(record.Conversations, ConversationRecord{NativeID: fmt.Sprintf("color-%d", n), Provider: "codex", Account: "local"})
+		}
+		ingestRecords(t, c, record)
+		colors, err := c.projectColors(t.Context())
+		if err != nil || len(colors) != n/4 {
+			t.Fatalf("%d conversations: %+v %v", n, colors, err)
+		}
 	}
 }
 
