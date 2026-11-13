@@ -77,7 +77,7 @@ export async function queryRequest<T>(url: string, init: RequestInit = {}, timeo
       return {};
     });
     signal.throwIfAborted();
-    if (response.ok) { reportQueryCoverage(url, body); reportSessionShapeCoverage(url, body); }
+    if (response.ok) { scoped.noteBody(body); reportQueryCoverage(url, body); reportSessionShapeCoverage(url, body); }
     if (!response.ok) {
       const issue = queryErrorFromBody(body, response.status) ?? new QueryError(errorCodeForStatus(response.status), (typeof body.error === "string" ? body.error : body.error?.message) || `Request failed with HTTP ${response.status}`, { status: response.status });
       throw new QueryRequestError(issue.message, response.status, issue.code, issue);

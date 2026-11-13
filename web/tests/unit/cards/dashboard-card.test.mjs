@@ -387,6 +387,21 @@ test('dashboard cards use the existing Home preview loader alongside ordinary sa
   for (const id of ['counted','counted-query']) assert.equal(results.get(id).metrics[0].clause.display.maxGroups,2,`${id} carries its card's count`);
 });
 
+test('dashboard card previews retain session coverage reported by their query', async t => {
+  fixture(t);
+  const fetch = global.fetch;
+  global.fetch = async (url, init) => {
+    const result = await fetch(url, init);
+    if (!String(url).includes('/session_shape/query-v3')) return result;
+    return Response.json({ ...await result.json(), coverage: { state: 'pending', missing_sessions: 4 } });
+  };
+  const { loadQueryPreviews } = await import('../../../src/query-previews');
+  const address = dashboardCardURL('/analyze?analyze_topic=session_shape', analysisCatalogs.session_shape, dashboardDefaults.session_shape, []);
+  let preview;
+  await loadQueryPreviews([{ id: 'shape-dashboard', dataset: 'session_shape', schema: schemas.session_shape, query: EMPTY_QUERY, options: { dashboard: address } }], (_id, result, error) => { assert.ifError(error); preview = result; }, undefined, 'cached');
+  assert.match(preview.incompleteReason, /4 agent sessions are not included/);
+});
+
 test('Carbon cards retain independent assumptions when refreshed from Home', async t => {
   fixture(t);
   const {loadClassicScript} = await import('../helpers/classic-script.mjs');

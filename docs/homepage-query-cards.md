@@ -61,6 +61,16 @@ The existing 0.8-second spinner and 1.5-second pulse cadence are retained, and
 reduced-motion preferences stop all animation. Result-dependent scalar collapse
 still happens once the returned groups are known.
 
+Completed covers are cached in the browser per library and card definition.
+They remain visible during refreshes and failures. If session statistics or
+agent events are being rebuilt, a partial answer keeps a recent complete
+saved cover for up to an hour: the card marks it **Saved** and reports its age
+and the reason. A newer session-statistics answer with no missing sessions can
+replace it immediately, with its freshness warning. Older server snapshots do
+not replace newer saved covers. Otherwise the card shows the available partial result. The
+browser cache is bounded by size and entry count, so a cover may be absent on
+another browser or after eviction; it is not a backup of the underlying data.
+
 A template separates its question, compact cover and saved source query. Analysis cards follow **Card → Full dashboard → Supporting query**. Dashboard links select a measure, breakdown, view and source filters through `analyze_chart` and `analyze_filters`; they open the standard exploration controls immediately. The expanded-card page is removed. Card covers can use specialized calculations and presentation that differ from the dashboard; known differences are documented in the [destination audit](homepage-card-destinations.md).
 
 Collected cards retain their exact source query, cover and time-window metadata for Home previews and editing. Their clickable links use the public dashboard state, without the card's private preview metadata. Existing collections migrate to the current mappings while keeping their source queries, IDs, titles, covers and durable snapshot references. `cardCoverQuery` still builds a transient preview query from the saved source, including grouped HAVING and source distributions.

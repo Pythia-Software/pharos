@@ -17,7 +17,9 @@
 .query-category { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; color:var(--query-tone); }
 .query-window { margin-left:auto; color:var(--ink); background:color-mix(in srgb,var(--bg) 70%,transparent); padding:1px 5px; border-radius:3px; font-size:10px; }
 .query-preview-refresh { display:inline-flex; flex:none; margin-left:auto; color:var(--muted); }
+.query-preview-saved { flex:none; margin-left:auto; color:var(--gold); }
 .query-preview-refresh + .query-window { margin-left:0; }
+.query-preview-saved + .query-window { margin-left:0; }
 .query-preview-refresh.is-refreshing svg { animation:query-preview-refresh 1.3s linear infinite; }
 @keyframes query-preview-refresh { to { transform:rotate(360deg); } }
 @media(prefers-reduced-motion:reduce) { .query-preview-refresh.is-refreshing svg { animation:none; } }

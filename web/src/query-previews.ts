@@ -32,6 +32,9 @@ import type { CompactTimelineOptions } from "./column-marks";
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
   refreshing?: boolean; refreshError?: string; updatedAt?: number;
+  // A partial dataset is usable when there is no complete saved preview. A
+  // saved preview's reason is transient and retains the saved result's age.
+  incompleteReason?: string; incompleteWithoutMissing?: boolean; savedReason?: string;
   // What the server's result cache answered with (result-cache.ts).
   served?: ResultServed;
   state: "ready" | "empty"; emptyLabel?: string; density?: "compact"; stackBy?: string; coverHeight?: number; legendColumns?: 1 | 2; total: number; summary: string; note?: string;
@@ -196,12 +199,24 @@ export function withAgentEventsFreshness(preview: QueryPreview, dataset: string,
   if (!agentEventDatasetOf(`/api/query/${dataset}/query-v3`)) return preview;
   const note = agentEventsFreshnessNote(payload.coverage);
   if (!note) return preview;
-  return { ...preview, summary: `${agentEventsFreshnessMark(payload.coverage)}${preview.summary}`, note: [note, preview.note].filter(Boolean).join(" · ") };
+  return { ...preview, incompleteReason: note, summary: `${agentEventsFreshnessMark(payload.coverage)}${preview.summary}`, note: [note, preview.note].filter(Boolean).join(" · ") };
 }
 
 export function withSessionShapeFreshness(preview: QueryPreview, dataset: string, payload: { coverage?: SessionShapeCoverage }): QueryPreview {
   const note = dataset === "session_shape" ? sessionShapeFreshnessNote(payload.coverage) : "";
-  return note ? { ...preview, summary: `≈${preview.summary}`, note: [note, preview.note].filter(Boolean).join(" · ") } : preview;
+  return note ? { ...preview, incompleteReason: note, incompleteWithoutMissing: payload.coverage?.state === "pending" && payload.coverage.missing_sessions === 0, summary: `≈${preview.summary}`, ...(preview.state === "empty" && payload.coverage?.missing_sessions ? { emptyLabel: "Session statistics are still being indexed" } : {}), note: [note, preview.note].filter(Boolean).join(" · ") } : preview;
+}
+
+function withCoverage(preview: QueryPreview, datasets: { dataset: string; coverage?: AgentEventsCoverage & SessionShapeCoverage }[]): QueryPreview {
+  // A chart assembled from several queries is incomplete if any part is.
+  const incomplete = datasets.filter(part => (part.dataset === "session_shape" || agentEventDatasetOf(`/api/query/${part.dataset}/query-v3`)) && part.coverage && part.coverage.state !== "current");
+  if (!incomplete.length) return preview;
+  const noMissing = (part: typeof incomplete[number]) => part.dataset === "session_shape" && part.coverage?.state === "pending" && part.coverage.missing_sessions === 0;
+  // Prefer a warning that describes missing or unknown data if one component
+  // has it, even when another component only has older statistics.
+  const first = incomplete.find(part => !noMissing(part)) ?? incomplete[0];
+  const marked = withSessionShapeFreshness(withAgentEventsFreshness(preview, first.dataset, first), first.dataset, first);
+  return { ...marked, incompleteWithoutMissing: incomplete.every(noMissing) };
 }
 
 function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema: FieldSchema, history?: SmoothingHistory): QueryPreview {
@@ -440,8 +455,8 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
         const scope = policy ? resultScope(signal, policy) : undefined;
         try {
           const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, scope?.signal ?? signal, undefined, undefined, job.options!.dashboardTarget, undefined, undefined, undefined, job.options!.groups);
-          const served = scope?.served();
-          if (!signal?.aborted) publish(job.id, served ? { ...preview, served } : preview);
+          const served = scope?.served(), drawn = withCoverage(preview, scope?.coverage() ?? []);
+          if (!signal?.aborted) publish(job.id, served ? { ...drawn, served } : drawn);
         }
         catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
       }
@@ -520,15 +535,16 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     try {
       const recipe = job.options!.recipe!, trend = recipe.trend!, lookback = trend.lookback ?? job.options!.window!.days;
       const source = trend.dataset ? { ...job, dataset: trend.dataset, schema: trendSchemas[trend.dataset] } : job, ctx = await context(source);
-      const answers: (ResultServed | undefined)[] = [];
+      const answers: (ResultServed | undefined)[] = [], coverage: { dataset: string; coverage?: AgentEventsCoverage & SessionShapeCoverage }[] = [];
       const results = await Promise.all(cardTrendQueries(recipe.where ?? [], trend, cardTrendDays(lookback, Boolean(trend.completeDays), clock.getTime()).days).map(async query => {
         const request = toQueryRequestV3(query, sourceExecutionSchema(ctx.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { rows: false });
-        const body = await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/query-v3`, signal, request, policy);
+        const body = await fetchPreview<AggregationResult & { coverage?: AgentEventsCoverage & SessionShapeCoverage }>(`/api/query/${source.dataset}/query-v3`, signal, request, policy);
         answers.push(servedOf(body));
+        coverage.push({ dataset: source.dataset, coverage: body.coverage });
         return body.metrics;
       }));
       const { study, observations } = buildCardTrend(trend, lookback, results, clock.getTime()), ready = observations > 0 && Boolean(study.points?.some(point => point !== null));
-      if (!signal?.aborted) publish(job.id, { served: combineServed(...answers), coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study });
+      if (!signal?.aborted) publish(job.id, withCoverage({ served: combineServed(...answers), coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study }, coverage));
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const resolved: { job: PreviewJob; query: QueryState; search: string }[] = [];
@@ -568,7 +584,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       if (done || signal?.aborted || !visible || historyQuery && !history) return;
       try {
         const drawn = previewOf(item.job, item.query, visible.payload, visible.schema, historyQuery && history ? { query: historyQuery, payload: history.payload } : undefined);
-        const preview = withSessionShapeFreshness(withAgentEventsFreshness(drawn, item.job.dataset, visible.payload), item.job.dataset, visible.payload);
+        const preview = withCoverage(drawn, [{ dataset: item.job.dataset, coverage: visible.payload.coverage }, ...history ? [{ dataset: item.job.dataset, coverage: history.payload.coverage }] : []]);
         const served = combineServed(visible.payload.served, history?.payload.served);
         done = true; publish(item.job.id, served ? { ...preview, served } : preview);
       } catch (error) { fail(error); }

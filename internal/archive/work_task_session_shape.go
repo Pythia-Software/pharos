@@ -16,7 +16,7 @@ import (
 func (s *Server) sessionShapeWorkDefinition() workDefinition {
 	c := s.Catalog
 	task := &conversationWorkTask{server: s, kind: kindSessionShape, cpus: 1, pending: c.sessionShapePendingFor, filterFailures: true,
-		selectSQL: `SELECT conversation_id id,revision FROM session_shape_dirty WHERE conversation_id NOT IN (SELECT value FROM json_each(?)) ORDER BY conversation_id LIMIT ?`,
+		selectSQL: sessionShapeSelectionSQL(),
 		step: func(ctx context.Context, ids []string, _ workAllocation) (workDomainStep, error) {
 			return c.refreshSessionShapeFor(ctx, ids)
 		}}

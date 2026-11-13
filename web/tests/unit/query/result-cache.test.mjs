@@ -40,6 +40,9 @@ test("a scope carries its policy to query requests made with its signal and coll
   query.note({ get: name => ({ "X-Pharos-Cache": "stale", "X-Pharos-Cache-Built": "2026-11-10T10:00:00Z" })[name] ?? null });
   query.note({ get: () => null });
   assert.deepEqual(scope.served(), { state: "stale", built: Date.parse("2026-11-10T10:00:00Z") });
+  const shape = scopedRequest("/api/query/session_shape/query-v3", post);
+  shape.noteBody({ coverage: { state: "pending", missing_sessions: 10 } });
+  assert.deepEqual(scope.coverage(), [{ dataset: "session_shape", coverage: { state: "pending", missing_sessions: 10 } }]);
   for (const [url, init] of [["/api/query/usage/capabilities", { signal: scope.signal }], ["/api/thinking", post], ["/api/query/usage/query-v3", { ...post, signal: parent.signal }], ["/api/query/usage/query-v3", { method: "POST" }]])
     assert.equal(scopedRequest(url, init).init, init, `${url} is outside the scope`);
   parent.abort(new Error("left the page"));
@@ -70,7 +73,9 @@ test("a live scope computes its requests now and reports them to its parent's sc
   const query = scopedRequest("/api/query/model_requests/query-v3", { method: "POST", signal: live });
   assert.equal(new Headers(query.init.headers).get("X-Pharos-Cache"), "live");
   query.note({ get: name => ({ "X-Pharos-Cache": "live", "X-Pharos-Cache-Built": "2026-11-10T10:00:00Z" })[name] ?? null });
+  query.noteBody({ coverage: { state: "pending", missing_sessions: 1 } });
   assert.deepEqual(scope.served(), { state: "live", built: Date.parse("2026-11-10T10:00:00Z") });
+  assert.deepEqual(scope.coverage(), [{ dataset: "model_requests", coverage: { state: "pending", missing_sessions: 1 } }]);
   parent.abort();
   assert.ok(live.aborted, "aborting the page aborts the live read");
   const plain = new AbortController().signal;

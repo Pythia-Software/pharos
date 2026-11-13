@@ -8,7 +8,7 @@
 :is(.data-readiness-indicator:not(.query-card-readiness),#dataReadinessToggle):is([data-tone=minutes],[data-tone=recent],[data-tone=unknown]){color:var(--muted)}
 :is(.data-readiness-indicator:not(.query-card-readiness),#dataReadinessToggle)[data-tone=hours]{color:var(--gold)}
 :is(.data-readiness-indicator:not(.query-card-readiness),#dataReadinessToggle)[data-tone=days]{color:var(--bad)}
-.query-card:has(.query-card-readiness) .query-preview-refresh{display:none}
+.query-card:has(.query-card-readiness) .query-preview-refresh:not(.is-error){display:none}
 .data-readiness-chart-controls{display:flex;align-items:flex-start;gap:8px}.data-readiness-chart-controls>.usage-tools-controls{flex:1;min-width:0}
 .data-guide.data-readiness-dialog{width:min(530px,calc(100vw - 24px));height:fit-content;max-height:calc(100dvh - 32px);overflow:hidden}
 .data-readiness-dialog[open]{display:flex;flex-direction:column}
