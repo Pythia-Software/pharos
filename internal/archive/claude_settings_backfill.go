@@ -5,11 +5,32 @@ import (
 	"net/http"
 )
 
-// A cached selection fills a metadata gap, never a historical execution claim.
+// claudeSelectionValue joins the latest saved conversation selection to an
+// export without rewriting its transcript. Do not choose across organizations
+// or conflicting observations, or resurrect a field a newer snapshot omitted.
+// The alias is an internal SQL identifier and field is model or effort_level.
+func claudeSelectionValue(alias, field string) string {
+	return `(SELECT CASE WHEN COUNT(DISTINCT COALESCE(TRIM(o.` + field + `),''))=1
+ THEN MAX(NULLIF(TRIM(o.` + field + `),'')) END
+ FROM claude_chat_settings_observations o
+ WHERE ` + alias + `.harness='claude-ai-export' AND o.account=` + alias + `.account
+ AND o.conversation_uuid=` + alias + `.native_id
+ AND julianday(o.observed_at)=(SELECT MAX(julianday(latest.observed_at)) FROM claude_chat_settings_observations latest
+   WHERE latest.account=o.account AND latest.conversation_uuid=o.conversation_uuid)
+ AND NOT EXISTS (SELECT 1 FROM claude_chat_settings_observations other
+   WHERE other.account=o.account AND other.conversation_uuid=o.conversation_uuid AND other.organization_uuid<>o.organization_uuid))`
+}
+
+// A saved selection fills a conversation's model gap only when neither the
+// conversation nor any assistant message recorded a model.
+func claudeNoRecordedModel(alias string) string {
+	return `NULLIF(TRIM(` + alias + `.model),'') IS NULL
+ AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=` + alias + `.id
+   AND m.model IS NOT NULL AND m.role='assistant' AND NULLIF(TRIM(m.model),'') IS NOT NULL)`
+}
+
 // A newer unknown or conflicting observation must not revive an older model.
-const claudeMissingModelSelection = `NULLIF(TRIM(c.model),'') IS NULL
- AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=c.id
-   AND m.role='assistant' AND NULLIF(TRIM(m.model),'') IS NOT NULL)
+var claudeMissingModelSelection = claudeNoRecordedModel("c") + `
  AND NOT EXISTS (SELECT 1 FROM claude_chat_settings_observations o
    WHERE o.account=c.account AND o.conversation_uuid=c.native_id
    AND NULLIF(TRIM(o.model),'') IS NOT NULL

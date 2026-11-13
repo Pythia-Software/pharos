@@ -849,7 +849,8 @@ Incomplete or unsupported entries are skipped with capture warnings so valid
 observations can still be saved. The source never claims complete chat-history
 coverage.
 
-Imported conversations expose these observations in **Source details** and in the
+Imported conversations show these selections in the session header and Library
+model and effort columns, with their evidence in **Source details** and in the
 conversation API’s `selected_settings` object. These are saved selections at the
 response’s HTTP Date (or explicitly labelled cache-file modification time), not
 proof of the settings used for each message. Missing fields stay unknown, and a

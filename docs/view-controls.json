@@ -2875,6 +2875,17 @@
       "reason": "Feedback/annotation/bookmark draft or mutation, explicitly excluded."
     },
     {
+      "key": "html:164f213a4109b8e1:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"headerHistoryToggle\" data-view-field=\"overlay\" class=\"header-icon history-toggle\" type=\"button\" hidden aria-label=\"History\" title=\"History\" aria-expanded=\"false\" aria-controls=\"historyDrawer\">",
+      "binding": "overlay",
+      "disclosure": true,
+      "contract": "view.overlay",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "html:16e3798a3ffa2bc8:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
@@ -2919,6 +2930,17 @@
       "control": "<button data-view=\"analyze\">",
       "contract": "action",
       "reason": "Navigation, clipboard, refresh or bookmark/history mutation action; no applied content view state."
+    },
+    {
+      "key": "html:28847116a8e94ec0:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"headerBookmarksToggle\" data-view-field=\"overlay\" class=\"header-icon bookmarks-toggle\" type=\"button\" hidden aria-label=\"Bookmarks\" title=\"Bookmarks\" aria-expanded=\"false\" aria-controls=\"bookmarksDrawer\">",
+      "binding": "overlay",
+      "disclosure": true,
+      "contract": "view.overlay",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "html:302c09e984c88945:0",
@@ -4000,14 +4022,14 @@
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
     },
     {
-      "key": "34ee83a2e65ae313:0",
+      "key": "d53609a85d7d9c64:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "setDrawer",
       "tag": "aria-expanded",
-      "control": "$(toggle)",
+      "control": "toggle",
       "disclosure": true,
       "contract": "view.overlay",
-      "reason": "Header content overlay is bound to the shared overlay enum."
+      "reason": "Both navigation-bar and standalone drawer buttons share the overlay URL enum through setDrawer."
     },
     {
       "key": "dad5ac61da46493e:0",
