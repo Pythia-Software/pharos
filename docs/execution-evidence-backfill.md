@@ -313,7 +313,7 @@ agent events read to decide which of its messages are its own (core's
     coverage partial. Better results need message-level proof of `line-N`
     copies, not request matching;
 - the transcript's partial coverage reason, for example
-  `history-undeclared/v1`, `retained-history-undeclared/v1` or
+  `retained-history-undeclared/v1` or
   `declared-copy-source-missing/v1`.
 
 Owners are left out, since which execution a stream binds to is already in
@@ -321,7 +321,7 @@ the evidence digest. The facts depend on the copy's ancestors' event IDs and
 memberships. So a parent's original arriving or being deleted, or a
 correction of its event ID, changes the copy's digest. An unrelated append
 to the parent (an event ID no copy shares) leaves it equal. The digest's
-version lines include `occurrence-dependency/v2`, as they include the
+version lines include `occurrence-dependency/v4-undeclared-history`, as they include the
 resolver and evidence versions.
 
 The digest is part of each ledger's structure fingerprint, so a late
@@ -650,10 +650,10 @@ inverse index read), with a 2.96 GB peak RSS for both probes together.
 
 - No adapter emits an explicit "no copied history" declaration
   (`historyDeclaresNoCopies`: `mapping: "none"`). Claude sidechains and Codex
-  `thread_spawn` children without `forked_from_id` therefore stay partial:
-  `history-undeclared/v1` with typed evidence, or
-  `retained-history-undeclared/v1` from retained rows. That format default
-  is not verified from provider input here, so completeness is not claimed.
+  `thread_spawn` children without `forked_from_id` are counted as recorded when
+  read from the provider. That does not establish whether history was copied.
+  Evidence derived only from retained rows still reports
+  `retained-history-undeclared/v1` until the provider is read again.
 - A Codex ordinal names rollout items, which stored messages follow only
   approximately, so a copy whose original is missing stays unresolved rather
   than inherited.

@@ -38,8 +38,8 @@ func (r *executionResolution) Occurrences(ctx context.Context, q queryer, conver
 // occurrenceDependencyVersion names the facts occurrenceDependencyLines
 // returns and how they are written; a derivative's dependency digest that
 // includes them records it, so a change to either supersedes every digest.
-// v2: an event ID shared on cyclic ancestry is an unresolved candidate.
-const occurrenceDependencyVersion = "occurrence-dependency/v3-recorded-requests"
+// v4: a provider read without a history declaration is not partial by itself.
+const occurrenceDependencyVersion = "occurrence-dependency/v4-undeclared-history"
 
 // occurrenceDependencyLines returns, per conversation (the copy's
 // transcript), the occurrence facts Lookup and Partial decide its
@@ -566,17 +566,13 @@ SELECT m.id copy_id,m.conversation_id,m.native_id,o.id original_id,o.conversatio
 }
 
 // occurrenceCoverageClaims names transcripts whose copied history the
-// evidence cannot account for. A transcript with recorded ancestry is
-// complete only when its provider declared its history: a history_copy claim
-// naming the copied source, or one whose mapping is "none" (the provider
-// format establishes that the child starts without copied history). Without
-// current typed evidence (untyped-ancestry), with typed evidence re-derived
-// from retained rows (retained-history-undeclared), or with typed evidence
-// read from the provider that makes no history assertion (history-undeclared:
-// an ingest capability is not proof of independence), its rows cannot show
-// copies whose originals are gone. So does one whose typed evidence declares
-// copied history from a source that is not retained, or not uniquely. Each is
-// a copy_candidate whose subject is the conversation: its own observations
+// evidence cannot account for. Without current typed evidence
+// (untyped-ancestry), or with typed evidence re-derived from retained rows
+// (retained-history-undeclared), the history declaration was not read. A
+// provider read without a declaration is counted as recorded, without marking
+// coverage partial solely for that absence. A declared copy whose source is
+// not retained, or not uniquely retained, is also partial. Each partial case
+// is a copy_candidate whose subject is the conversation: its own observations
 // stay counted, and consumers report coverage as partial.
 func occurrenceCoverageClaims(ctx context.Context, q queryer, conversations []string) ([]executionClaim, error) {
 	typed, err := executionEvidenceTablesPresent(ctx, q)
@@ -598,12 +594,10 @@ func occurrenceCoverageClaims(ctx context.Context, q queryer, conversations []st
 	for _, row := range rows {
 		id, rule := firstString(row["id"]), ""
 		switch firstString(row["state"]) {
-		case "declared":
+		case "declared", "undeclared":
 			continue
 		case "retained":
 			rule = "retained-history-undeclared/v1"
-		case "undeclared":
-			rule = "history-undeclared/v1"
 		default:
 			rule = "untyped-ancestry/v1"
 		}
