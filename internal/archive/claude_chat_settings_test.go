@@ -201,11 +201,43 @@ func TestClaudeSettingsCaptureRetainsHistory(t *testing.T) {
 	}
 }
 
+func TestClaudeSettingsEstimatedModelSelection(t *testing.T) {
+	row := func(at, org, model string) map[string]any {
+		return map[string]any{"observed_at": at, "organization_uuid": org, "model": model}
+	}
+	first := row("2026-10-01T10:00:00Z", settingsOrg, "claude-opus-5-5")
+	second := row("2026-10-02T10:00:00Z", settingsOrg, "claude-sonnet-4-20250514")
+	unknown := row("2026-10-03T10:00:00Z", settingsOrg, "")
+	for _, tc := range []struct {
+		name, response, model, observed string
+		rows                            []map[string]any
+	}{
+		{"earlier response", "2026-09-30T10:00:00Z", "claude-opus-5-5", "2026-10-01T10:00:00Z", []map[string]any{second, first}},
+		{"between observations", "2026-10-01T11:00:00Z", "claude-opus-5-5", "2026-10-01T10:00:00Z", []map[string]any{second, first}},
+		{"later response", "2026-10-02T11:00:00Z", "claude-sonnet-4-20250514", "2026-10-02T10:00:00Z", []map[string]any{first, second}},
+		{"unknown does not revive old model", "2026-10-04T10:00:00Z", "", "", []map[string]any{first, unknown}},
+		{"same-time conflict", "2026-10-01T11:00:00Z", "", "", []map[string]any{first, row("2026-10-01T10:00:00Z", settingsOrg, "other")}},
+		{"different organizations", "2026-10-01T11:00:00Z", "", "", []map[string]any{first, row("2026-10-02T10:00:00Z", "another-org", "claude-opus-5-5")}},
+		{"untimed response", "", "claude-sonnet-4-20250514", "2026-10-02T10:00:00Z", []map[string]any{first, second}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model, observed := assumedClaudeModel(tc.rows, tc.response)
+			if model != tc.model || observed != tc.observed {
+				t.Fatalf("got %q at %q, want %q at %q", model, observed, tc.model, tc.observed)
+			}
+		})
+	}
+	if model, _ := assumedClaudeModel(make([]map[string]any, 501), ""); model != "" {
+		t.Fatal("truncated selection history was used")
+	}
+}
+
 func TestClaudeSettingsJoinExportInEitherOrder(t *testing.T) {
 	for _, settingsFirst := range []bool{true, false} {
 		t.Run(map[bool]string{true: "settings-first", false: "export-first"}[settingsFirst], func(t *testing.T) {
 			c, _ := testCatalog(t)
 			settings := claudeSettingsFixture(t)
+			writeSettingsCache(t, settings.Path, settingsCacheEntry, strings.ReplaceAll(settingsBody, "claude-opus-fixture", "claude-opus-5-5"), "Mon, 02 Nov 2026 12:00:00 GMT", true)
 			export := SourceConfig{Name: "chat-export", Kind: "claude-ai", Account: settings.Account, Enabled: true, Path: writeSourceFileAt(t, strings.ReplaceAll(claudeAIExport, "conv-1", settingsConversation))}
 			addSettings := func() {
 				config := captureTestConfig(t, settings)
@@ -225,7 +257,13 @@ func TestClaudeSettingsJoinExportInEitherOrder(t *testing.T) {
 			}
 			ingestSource(t, c, export)
 			if !settingsFirst {
+				if err := c.backfillUsageEstimation(t.Context()); err != nil || countRows(t, c, "SELECT COUNT(*) FROM model_requests WHERE is_estimate=1 AND conversation_id IN (SELECT id FROM conversations WHERE native_id="+sqlQuote(settingsConversation)+")") == 0 {
+					t.Fatal("initial estimates unavailable", err)
+				}
 				addSettings()
+				if countRows(t, c, "SELECT COUNT(*) FROM model_requests WHERE is_estimate=1 AND conversation_id IN (SELECT id FROM conversations WHERE native_id="+sqlQuote(settingsConversation)+")") != 0 {
+					t.Fatal("new selection left stale estimated prices visible")
+				}
 			}
 			var id, workspace string
 			if err := c.DB.QueryRow("SELECT id,workspace_id FROM conversations WHERE native_id=?", settingsConversation).Scan(&id, &workspace); err != nil {
@@ -245,10 +283,36 @@ func TestClaudeSettingsJoinExportInEitherOrder(t *testing.T) {
 			if countRows(t, c, "SELECT COUNT(*) FROM model_requests WHERE model IS NOT NULL") != 0 {
 				t.Fatal("settings fabricated execution usage")
 			}
-			for _, response := range conversation["usage_estimates"].(*conversationUsageEstimates).Responses {
-				if response.Model != "" || response.Effort != "" || response.ResponseModel != "" {
-					t.Fatal("cached later selection supplied historical estimation settings", response)
+			responses := conversation["usage_estimates"].(*conversationUsageEstimates).Responses
+			if len(responses) == 0 {
+				t.Fatal("missing response estimates")
+			}
+			for _, response := range responses {
+				if response.Model != "claude-opus-5-5" || response.ModelSource != "observed_conversation_selection" || response.ModelObservedAt != "2026-11-02T12:00:00Z" || response.Effort != "" {
+					t.Fatal("saved selection was not recorded as a pricing assumption", response)
 				}
+			}
+			if err := c.backfillUsageEstimation(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := c.delegationSnapshot(t.Context(), workspace)
+			if err != nil || snapshot.Totals["cost"].Value == nil || *snapshot.Totals["cost"].Value <= 0 || !snapshot.Totals["cost"].IsEstimate {
+				t.Fatal("assumed-model output cost was not published", snapshot, err)
+			}
+			requests := queryRows(t, c, "SELECT model,usage_estimate_json FROM model_requests WHERE conversation_id="+sqlQuote(id)+" AND is_estimate=1")
+			if len(requests) == 0 || firstString(requests[0]["model"]) != "claude-opus-5-5" || !strings.Contains(firstString(requests[0]["usage_estimate_json"]), `"model_source":"observed_conversation_selection"`) {
+				t.Fatal("estimated requests lost model provenance", requests)
+			}
+			execTx(t, c.DB, "DELETE FROM claude_chat_settings_observations WHERE conversation_uuid="+sqlQuote(settingsConversation))
+			if countRows(t, c, "SELECT COUNT(*) FROM model_requests WHERE is_estimate=1 AND conversation_id IN (SELECT id FROM conversations WHERE native_id="+sqlQuote(settingsConversation)+")") != 0 {
+				t.Fatal("removed selection left stale prices visible")
+			}
+			if err := c.backfillUsageEstimation(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			refreshed, err := c.delegationSnapshot(t.Context(), workspace)
+			if err != nil || refreshed.Totals["tokens"].Value == nil || refreshed.Totals["cost"].Value != nil {
+				t.Fatal("removed model remained in estimated prices", refreshed, err)
 			}
 		})
 	}

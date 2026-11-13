@@ -14,7 +14,7 @@ const samples = events => [...events].map(message => message.tokenReport?.contex
 test("usage sensitivity diagnostics scope to owned messages; canonical estimates use token reports", () => {
   const report = {range_kind:"sensitivity_not_confidence",manifest_revision:"fixture.1",responses:[
     {message_id:"a",output_tokens:{expected:1200,lower:400,upper:3000},local_weight:0},
-    {message_id:"b",model:"claude-opus-fixture",effort:"high",output_tokens:{expected:800,lower:200,upper:2000},local_weight:.5},
+    {message_id:"b",model:"claude-opus-fixture",model_source:"observed_conversation_selection",effort:"high",output_tokens:{expected:800,lower:200,upper:2000},local_weight:.5},
   ]};
   const conversation = {usage_estimates:report};
   const all = reader.usageEstimatePresentation(conversation);
@@ -23,7 +23,9 @@ test("usage sensitivity diagnostics scope to owned messages; canonical estimates
   assert.equal(all.upper,5000);
   assert.match(all.detail,/Local coding calibration/);
   assert.match(all.detail,/unreported/);
+  assert.match(all.detail,/estimation and API pricing assume claude-opus-fixture.*not recorded/i);
   assert.equal(reader.usageEstimatePresentation(conversation,[{id:"a"}]).expected,1200);
+  assert.doesNotMatch(reader.usageEstimatePresentation(conversation,[{id:"a"}]).detail,/API pricing assume/i);
   assert.equal(reader.usageEstimatePresentation(conversation,[{id:"different"}]),null);
   assert.equal(reader.usageEstimatePresentation({}),null);
   assert.equal(reader.usageEstimatePresentation({usage_estimates:{...report,range_kind:"confidence"}}),null);

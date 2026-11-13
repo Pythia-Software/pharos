@@ -118,6 +118,56 @@ test("activity tag identities separate categories and follow changed labels", ()
   assert.deepEqual(plain(docs.group(reader.readerTimelineCategory(pending))), [completedID]);
 });
 
+test("activity keys group recorded MCP services, context and built-in tools without changing saved tags", () => {
+  const cases = [
+    ["mcp__remote-devices__Claude_Browser__find", ["MCP", "Browser (remote devices)"], "web"],
+    ["mcp__Claude_Browser__navigate", ["MCP", "Browser"], "web"],
+    ["mcp__Gmail__search_threads", ["MCP", "Gmail"], "search"],
+    ["mcp__remote-devices__device_bash", ["MCP", "Remote devices"], "command"],
+    ["mcp__codex_apps__github.fetch_file", ["MCP", "GitHub"], "read"],
+    ["mcp__codex_apps__github_fetch_file", ["MCP", "GitHub"], "read"],
+    ["mcp__codex_apps__search_service.web_run", ["MCP", "Search service"], "search"],
+    ["mcp__codex_apps__search_service_web_run", ["MCP", "Search service"], "search"],
+    ["mcp__custom-server__unfamiliar", ["MCP", "custom-server"], "tool"],
+    ["mcp__custom-server.read_item", ["MCP", "custom-server"], "read"],
+    ["ToolSearch", ["Tool discovery"], "search"], ["Skill", ["Skills"], "read"],
+    ["Read", ["Reads & searches"], "read"], ["Edit", ["File edits"], "edit"],
+    ["Bash", ["Commands"], "command"], ["TodoWrite", ["Planning"], "todo"],
+  ];
+  for (const [name, groups, icon] of cases) {
+    const style = reader.transcriptActivityPresentation(event(name, "tool_call", { name }));
+    assert.deepEqual(plain(style.keyPath.map(part => part.label)), groups, name);
+    assert.equal(style.icon, icon, name);
+  }
+  for (const [kind, payload, icon] of [["metadata", {type:"claude_ai_conversation"}, "chat"], ["context", {source:"date_note"}, "history"], ["context", {source:"agent_listing"}, "agent"], ["context", {source:"mcp_instructions_delta"}, "tool"]]) {
+    const style = reader.transcriptActivityPresentation(event(kind, kind, payload));
+    assert.deepEqual(plain(style.keyPath.map(part => part.label)), ["Context"]);
+    assert.equal(style.icon, icon);
+  }
+  const calls = [event("a", "tool_call", {name:"mcp__Gmail__search_threads"}), event("b", "tool_call", {name:"mcp__custom-server__search"}), event("c", "tool_call", {name:"Skill"})];
+  const describe = message => ({...reader.transcriptActivityPresentation(message), category:reader.readerTimelineCategory(message), label:message === calls[2] ? "Skill" : "Search"});
+  const index = reader.transcriptTagIndex(calls, transcriptStructure(calls), describe), saved = index.tagOf(calls[0]);
+  assert.equal(saved, reader.transcriptTagId(reader.readerTimelineCategory(calls[0]), "Search"));
+  assert.equal(index.tagOf(calls[1]), saved, "equal labels retain their existing shared filter identity");
+  const keys = reader.transcriptActivityKeys(index), mcp = keys.find(item => item.label === "MCP");
+  assert.deepEqual(plain(mcp.values), [saved]);
+  assert.equal(mcp.children[0].id, saved, "shared labels live once at their common MCP ancestor");
+  const leaves = items => items.flatMap(item => item.children ? leaves(item.children) : item.values);
+  assert.equal(leaves(keys).length, index.all().length, "shared tags are not duplicated between service groups");
+  assert.deepEqual(new Set(leaves(keys)), new Set(index.all()), "every recorded activity has one leaf");
+  calls[1].text = JSON.stringify({name:"Skill"});
+  assert.equal(index.refresh(calls[1]), true);
+  const refreshed = reader.transcriptActivityKeys(index).find(item => item.label === "MCP");
+  assert.equal(refreshed.children[0].label, "Gmail", "removing a member restores the surviving service group");
+  assert.deepEqual(plain(refreshed.values), [saved]);
+  const commands = [event("git", "tool_call", {name:"Bash",input:{command:"git status"}}),event("tests", "tool_call", {name:"Bash",input:{command:"go test ./..."}})];
+  assert.equal(reader.transcriptActivityPresentation(commands[0]).icon, "git", "a single command keeps its specialized icon");
+  const commandIndex = reader.transcriptTagIndex(commands, transcriptStructure(commands), message => ({...reader.transcriptActivityPresentation(message),category:reader.readerTimelineCategory(message),label:"Run"}));
+  const commandID = commandIndex.tagOf(commands[0]);
+  assert.equal(reader.transcriptActivityIcon(commandIndex.info(commandID)), "command", "different commands sharing a label use the common command icon");
+  assert.equal(reader.transcriptActivityKeys(commandIndex)[0].children[0].icon, reader.transcriptActivityIcon(commandIndex.info(commandID)));
+});
+
 test("find patterns escape plain terms and respect case", () => {
   assert.equal(transcriptFindPattern("a.b(c)", false, false).test("A.B(C)"), true);
   assert.equal(transcriptFindPattern("a.b(c)", false, false).test("axb(c)"), false);

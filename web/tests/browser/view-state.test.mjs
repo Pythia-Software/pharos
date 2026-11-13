@@ -1272,6 +1272,9 @@ test('agent event links restore both ends from the URL, opening folded prose wit
  assert.equal(await page.locator('mark.link-selected.reader-event-hidden').count(),0,'explicit links override the relevant saved hue and target exclusions');
  assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')),['events:event-friction','labels:C.report'],'unrelated exclusions survive link restoration');
  assert.deepEqual(await page.evaluate(()=>pharosPrefs.get('pharos-reader-highlight-hidden',[])),hidden,'opening a link leaves saved preferences intact');
+ const target=page.locator('mark.event-target.link-selected');await target.evaluate(el=>el.scrollIntoView({block:'center'}));await target.hover();
+ assert.doesNotMatch(await page.getByRole('tooltip').innerText(),/human writing/i);await target.click();
+ const annotation=page.getByRole('dialog',{name:'Text annotation'});await annotation.waitFor();assert.equal(await annotation.getByRole('button',{name:'Hide human-writing annotation'}).count(),0);await page.keyboard.press('Escape');
  await opened.shot('linked-highlights-restored');
  // The first event on this sentence is hidden and points somewhere else.
  await page.evaluate(()=>window.pharosView.write('reader_highlight_hidden',[
@@ -1281,8 +1284,8 @@ test('agent event links restore both ends from the URL, opening folded prose wit
  const observation=page.locator('mark.agent-event');await observation.hover();
  await page.locator('.event-link-n.is-observation.link-focus:not(.reader-event-hidden)').waitFor();
  assert.deepEqual(await page.locator('.event-link-n.is-observation.link-focus').evaluateAll(nodes=>nodes.map(node=>node.dataset.eventLink)),['e-link']);
- await observation.click();await opened.settled();
- assert.equal(new URL(page.url()).searchParams.get('reader_event_link'),'e-link','click selects the remaining visible pair, including its merged alias');
+ await page.locator('.event-link-n.is-observation.link-focus:not(.reader-event-hidden)').click();await opened.settled();
+ assert.equal(new URL(page.url()).searchParams.get('reader_event_link'),'e-link','the number selects the remaining visible pair, including its merged alias');
  assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')).includes('events:event-choices'),'clicking a visible pair preserves its hidden sibling group');
  // Follow the canonical visibility binding while the linked reveal may still be scrolling.
  await page.evaluate(()=>window.pharosView.write('reader_events',false));await opened.settled();
@@ -2242,17 +2245,45 @@ test('conversation line tags filter matching activity without opening the line',
   item('doc-short','tool_result','{\"content\":',{call_id:'doc-pending',text_clipped:true,text_bytes:200}),
   item('doc-created','tool_call',{name:'mcp__Claude_Docs__batch',input:{container:{create:{name:'Complete',doc:{markdown:'# Complete'}}},batch:[]}},{call_id:'doc-created'}),
   item('doc-result','tool_result',{content:[{type:'text',text:'{\"verdict\":\"allow\"}'}]},{call_id:'doc-created'}),
+  item('date','context',{source:'date_note',type:'injected_context',text:'Today’s date'}),
+  item('memory','context',{source:'memory_block_head',type:'injected_context',text:'Retained context'}),
+  item('mcp-context','context',{source:'mcp_instructions_delta',type:'injected_context',text:'Available integrations'}),
+  item('summary','metadata',{type:'claude_ai_conversation',text:'Retained conversation summary'}),
+  item('agents-list','context',{source:'agent_listing',type:'injected_context',text:'Available agents'}),
+  item('git','tool_call',{name:'Bash',input:{command:'git status'}},{call_id:'git'}),
+  item('test','tool_call',{name:'Bash',input:{command:'go test ./...'}},{call_id:'test'}),
+  ...['mcp__remote-devices__Claude_Browser__preview_start','mcp__remote-devices__Claude_Browser__find','mcp__remote-devices__Claude_Browser__tabs_context','mcp__remote-devices__Claude_Browser__navigate','mcp__remote-devices__Claude_Browser__computer','mcp__remote-devices__Claude_Browser__get_page_text','mcp__Gmail__search_threads','mcp__remote-devices__Claude_Browser__browser_batch','mcp__remote-devices__device_bash','Skill','ToolSearch'].map((name,index)=>item('activity-'+index,'tool_call',{name,input:{}},{call_id:'activity-'+index})),
   item('answer','message','All done')];
  const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages}),'GET /api/messages/:id':()=>({text:JSON.stringify({content:[{type:'text',text:'{\"verdict\":\"allow\"}'}]})})};
  const app=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all`,ready:'.action-row'}),{page}=app;
  const line=id=>page.locator(`.timeline-entry[data-message-id="${id}"]`),initial=path(page);
  const openFilter=async button=>{await button.scrollIntoViewIfNeeded();await app.settled();await button.click();};
+ await page.locator('.transcript-content-key').scrollIntoViewIfNeeded();await app.settled();await app.shot('activity-key-desktop');
+ const activityKey=page.locator('.transcript-tag-key');
+ assert.deepEqual(await activityKey.locator('svg use').evaluateAll(uses=>uses.filter(use=>!document.querySelector(use.getAttribute('href'))).map(use=>use.getAttribute('href'))),[],'activity icons resolve in the served shell');
+ for(const [id,label]of [['date','Date note'],['memory','Memory block head'],['mcp-context','Mcp instructions delta'],['summary','Conversation summary'],['agents-list','Agent listing'],['activity-9','Skill'],['activity-6','Search email threads'],['thought','Reasoning summary'],['git','Run'],['test','Run']]){
+  const rowIcon=await line(id).locator('.kind-icon use').first().getAttribute('href'),keyIcon=await activityKey.getByRole('button',{name:label,exact:true}).locator('svg use').first().getAttribute('href');
+  assert.equal(rowIcon,keyIcon,`${label} uses the same icon in its conversation row and key`);
+ }
+ await openFilter(activityKey.getByRole('button',{name:'MCP category',exact:true}));await page.getByRole('menu',{name:'Filter MCP category',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await line('activity-0').waitFor({state:'hidden'});await line('activity-6').waitFor({state:'hidden'});await line('doc-created').waitFor({state:'hidden'});
+ assert.equal(await line('browse').isVisible(),true,'hiding MCP keeps built-in browser activity visible');
+ const mcpHidden=path(page),restoredMCP=await open(t,{api,url:mcpHidden,ready:'.transcript-tag-key'});
+ assert.equal(await restoredMCP.page.locator('.timeline-entry[data-message-id="activity-6"]').isVisible(),false,'group filtering restores from the saved URL');
+ await openFilter(activityKey.getByRole('button',{name:'Browser (remote devices) category',exact:true}));await page.getByRole('menu',{name:'Filter Browser (remote devices) category',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();
+ await line('activity-0').waitFor();assert.equal(await line('activity-6').isVisible(),false,'showing one MCP service leaves the others hidden');
+ await openFilter(activityKey.getByRole('button',{name:'MCP category',exact:true}));await page.getByRole('menu',{name:'Filter MCP category',exact:true}).getByRole('menuitem',{name:'Show All',exact:true}).click();await line('activity-6').waitFor();
+ await page.locator('.transcript-content-key').scrollIntoViewIfNeeded();await page.evaluate(()=>document.documentElement.dataset.theme='light');await app.settled();await app.shot('activity-key-light');
+ await page.setViewportSize({width:320,height:844});await page.locator('.transcript-content-key').scrollIntoViewIfNeeded();await app.settled();
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'grouped activity keys fit on a narrow screen');await app.shot('activity-key-phone');
+ await page.setViewportSize({width:1440,height:900});await page.evaluate(()=>document.documentElement.dataset.theme='dark');
  const browse=line('browse'),details=browse.locator('details.tool-event');
  const tag=browse.getByRole('button',{name:'Browse',exact:true});
+ await tag.evaluate(el=>el.scrollIntoView({block:'center'}));await app.settled();
  await tag.focus();await tag.press('ArrowDown');
- assert.equal(await page.getByRole('menuitem',{name:'Hide',exact:true}).evaluate(el=>el===document.activeElement),true,'the menu supports keyboard navigation');
+ assert.equal(await page.getByRole('menuitem',{name:'Hide this activity',exact:true}).evaluate(el=>el===document.activeElement),true,'the menu supports keyboard navigation');
  assert.equal(await details.evaluate(el=>el.open),false,'the tag does not open the line');
- await page.getByRole('menu',{name:'Filter Browse',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).click();
+ await page.getByRole('menu',{name:'Filter Browse',exact:true}).getByRole('menuitem',{name:'Hide this activity',exact:true}).click();
  await browse.waitFor({state:'hidden'});assert.equal(await line('todo').isVisible(),true,'other tools remain visible');
  const key=page.locator('.transcript-tag-key');await openFilter(key.getByRole('button',{name:'Browse',exact:true}));
  await page.getByRole('menu',{name:'Filter Browse',exact:true}).getByRole('menuitem',{name:'Show',exact:true}).click();await browse.waitFor();

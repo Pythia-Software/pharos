@@ -7,12 +7,15 @@ priors, not provider-reported consumption. The authenticated
 `GET /api/estimation/assumptions` endpoint exposes this exact manifest, its
 digest and the estimator version. It needs no network service or local model.
 
-Estimator `claude-output-v4.1` (manifest schema 4) estimates generated output for Claude.ai exported
+Estimator `claude-output-v4.2` (manifest schema 4) estimates generated output for Claude.ai exported
 responses without reported usage, and durations of completed tool calls whose
 native completion clocks are missing. The reader aggregates response estimates
 within its existing turns. Input/cache tokens and total turn latency remain unavailable.
-For a recorded, priced model, estimated output also contributes a partial API
-price equivalent; it is not a full-request cost or subscription charge.
+For a priced model, estimated output also contributes a partial API price
+equivalent; it is not a full-request cost or subscription charge. When the
+response model was not recorded, the estimator can assume a saved Claude Chat
+conversation selection, retaining its observation time and marking the model
+as an assumption. It never promotes the selection to a reported request model.
 
 ## Shipping and backfilling existing imports
 

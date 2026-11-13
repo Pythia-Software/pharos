@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 // delegation.tsx builds its date formatters when it loads, so the zone is set
 // first. Each test file runs in its own process.
 process.env.TZ = "America/Denver";
-const { addSessionColumns, sessionTimelineState, cellTitle, metricText, tableMetricText, tokenAttributionText, clampRange, refreshedTimelineRange, formatted, localTime, timelineTickLabels, timelinePointerTime, timelineDragRange } = await import("../../../src/delegation");
+const { addSessionColumns, sessionTimelineState, cellTitle, metricText, workspaceTotalText, tableMetricText, tokenAttributionText, clampRange, refreshedTimelineRange, formatted, localTime, timelineTickLabels, timelinePointerTime, timelineDragRange } = await import("../../../src/delegation");
 const { DelegationRequestError, DelegationSnapshotRecovery, snapshotChanged } = await import("../../../src/delegation-loading");
 const { readDelegationRoute, delegationRouteValues } = await import("../../../src/delegation-route");
 const { timelineSessionBranches } = await import("../../../src/timeline-label-model");
@@ -13,6 +13,18 @@ const start = Date.parse("2026-09-24T12:00:00Z"), winter = Date.parse("2026-01-2
 const metric = (value, quality = "observed") => ({ value, quality, known: value === null ? 0 : 1, total: 1 });
 const spec = (id, unit) => ({ id, label: id, unit, definition: `Definition for ${id}` });
 const session = (id, depth, child_count = 0) => ({ id, depth, child_count });
+
+test("estimated output stays distinct from a measured lower bound", () => {
+  const estimate = { ...metric(10200, "partial"), is_estimate: true };
+  assert.equal(metricText(estimate, "tokens"), "~10.2K");
+  assert.equal(workspaceTotalText(estimate, "tokens"), "10.2K*");
+  assert.match(workspaceTotalText({...estimate, value: .021}, "usd"), /^\$.*\*$/);
+  assert.equal(workspaceTotalText(metric(10200, "partial"), "tokens"), "10.2K+");
+  assert.equal(workspaceTotalText({...estimate, value: null}, "usd"), workspaceTotalText(metric(null), "usd"));
+  assert.match(cellTitle(estimate, spec("tokens", "tokens")), /estimated output.*input and cache usage are unavailable/i);
+  assert.match(cellTitle(estimate, spec("cost", "usd")), /cost.*estimated output only/i);
+  assert.equal(metricText(metric(10200, "partial"), "tokens"), "10.2K+");
+});
 
 test('snapshot recovery coalesces lane conflicts, stops repeated races and rearms after success', () => {
   assert.equal(snapshotChanged(new DelegationRequestError('changed', 409, 'snapshot_changed')), true);

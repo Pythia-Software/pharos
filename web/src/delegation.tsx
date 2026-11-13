@@ -1,3 +1,4 @@
+import { EstimateInfoButton } from "./estimate-info";
 import { formatUSD } from "./currency";
 import { CursorPagination } from "./cursor-pagination";
 import { DelegationRequestError, DelegationSnapshotRecovery, snapshotChanged } from "./delegation-loading";
@@ -39,6 +40,7 @@ type Metric = {
   quality: string;
   known: number;
   total: number;
+  is_estimate?: boolean;
 };
 type Spec = { id: string; label: string; unit: string; definition: string };
 type Reference = {
@@ -193,7 +195,7 @@ type Props = {
   openConversation: (id: string, message?: string, session?: string) => Promise<void>;
   // Reports whether the workspace's sessions form a hierarchy: more than one
   // session, or one linked to a parent or child elsewhere.
-  onHierarchy?: (hierarchical: boolean) => void;
+  onHierarchy?: (hierarchical: boolean, singleSession: boolean) => void;
 };
 type Tint = "all" | "off" | "sort";
 type Range = [number, number];
@@ -348,7 +350,10 @@ export function metricText(metric: Metric | undefined, unit = "tokens") {
     const minimum = Math.floor(metric.value / scale * 10) / 10;
     return `≥${minimum.toLocaleString("en-US", {maximumFractionDigits: 1})}${scale === 1e9 ? "B" : scale === 1e6 ? "M" : scale === 1e3 ? "K" : ""}`;
   }
-  return metric?.value != null ? `${value}${qualityMark(metric.quality)}` : value;
+  return metric?.value != null ? metric.is_estimate ? `~${value}` : `${value}${qualityMark(metric.quality)}` : value;
+}
+export function workspaceTotalText(metric: Metric | undefined, unit = "tokens") {
+  return metric?.value != null && metric.is_estimate ? `${formatted(metric.value, unit)}*` : metricText(metric, unit);
 }
 export function tableMetricText(metric: Metric | undefined, unit = "tokens") {
   return metricText(metric, unit) + (metric?.value != null && metric.quality === "reported-minimum" ? "*" : "");
@@ -370,7 +375,9 @@ export function cellTitle(metric: Metric, spec: Spec) {
       : spec.unit === "date"
         ? `${localTime(metric.value)}\n`
         : `${raw} ${spec.unit}\n`;
-  return `${exact}${spec.definition}${metric.quality === "reported-minimum" ? "\n* Reported minimum; may cover only the last request. Full session usage and token breakdown were not recorded." : ""}\n${metric.quality} · ${metric.known}/${metric.total} retained coverage. ${metric.value === null ? "No sufficient retained evidence." : "Source coverage may be incomplete."}`;
+  const definition = metric.is_estimate && spec.id === "cost" ? "API-rate estimate, not billing." : spec.definition;
+  const estimate = metric.is_estimate ? "\nIncludes estimated output tokens only for conversations without reported usage; input and cache usage are unavailable. API cost for those conversations covers estimated output only and may assume a saved conversation model selection." : "";
+  return `${exact}${definition}${estimate}${metric.quality === "reported-minimum" ? "\n* Reported minimum; may cover only the last request. Full session usage and token breakdown were not recorded." : ""}\n${metric.quality} · ${metric.known}/${metric.total} retained coverage. ${metric.value === null ? "No sufficient retained evidence." : "Source coverage may be incomplete."}`;
 }
 
 function ColumnPicker({
@@ -726,7 +733,7 @@ export function DelegationExplorer({
   }, [data, mode, sort, scope, direction, collapsed, selected, range]);
   useEffect(() => {
     if (data && onHierarchy)
-      onHierarchy(data.session_count > 1 || data.rows.some((n) => n.context_only || n.parent_id || n.external_parent || n.external_child));
+      onHierarchy(data.session_count > 1 || data.rows.some((n) => n.context_only || n.parent_id || n.external_parent || n.external_child), single && !data.session_count_uncertain);
   }, [data]);
   function restoreAliases(aliases: DelegationAliases) {
     setUnresolvedSelection(new Set(unresolvedAliases(aliases)));
@@ -1021,10 +1028,9 @@ export function DelegationExplorer({
         const spec = data.metrics.find((m) => m.id === key)!;
         return (
           <span key={key} title={cellTitle(data.totals[key], spec)}>
-            <small>{spec.label}</small>
+            <small>{spec.label}{key === "tokens" && (data.totals.tokens.is_estimate || data.totals.cost.is_estimate) && <EstimateInfoButton readerHost={readerHost} />}</small>
             <strong>
-              {formatted(data.totals[key].value, spec.unit)}
-              {qualityMark(data.totals[key].quality)}
+              {workspaceTotalText(data.totals[key], spec.unit)}
             </strong>
           </span>
         );
@@ -1034,7 +1040,7 @@ export function DelegationExplorer({
         const group = data.group_totals.cost;
         return group && <span className="delegation-group-total" title={`This workspace and the related work shown among its agent sessions.\n${cellTitle(group, spec)}`}>
           <small>With related work</small>
-          <strong>{formatted(group.value, spec.unit)}{group.quality === "partial" ? "+" : ""}</strong>
+          <strong>{workspaceTotalText(group, spec.unit)}</strong>
         </span>;
       })()}
     </div>

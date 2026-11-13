@@ -1,8 +1,8 @@
 import React,{useEffect,useId,useMemo,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import {createRoot} from 'react-dom/client';
-import {SessionRibbon} from './label-session-ribbon';
-import {sessionRibbonTree,agentEventClock,type RibbonNode} from './label-session-ribbon-model';
+import {RibbonNodeDetails,SessionRibbon} from './label-session-ribbon';
+import {sessionRibbonTree,agentEventClock,ribbonEventCount,type RibbonNode} from './label-session-ribbon-model';
 import {useRibbonInspector} from './label-ribbon-inspector';
 import {timeScale,type IdleGap} from './timeline-idle-model';
 import {mergeAgentEvents} from './event-merge';
@@ -18,14 +18,16 @@ const choices=['context','turns'] as const;
 const defaultShown=['timeline',...choices];
 type Choice=typeof choices[number];
 const choiceNames:Record<Choice,string>={context:'Context',turns:'Turns'};
-type ReaderRibbonProps={node:RibbonNode;sessionID:string;range:ReturnType<typeof readerNavigatorClock>['range'];scale:ReturnType<typeof timeScale>;eventLayer:NonNullable<React.ComponentProps<typeof SessionRibbon>['eventLayer']>;visibility:TimelineVisibility;jump:(fraction:number)=>void;timed:boolean;depth?:number};
+type ReaderHit={track:Element;x:number;y:number};
+type ReaderRibbonProps={node:RibbonNode;sessionID:string;range:ReturnType<typeof readerNavigatorClock>['range'];scale:ReturnType<typeof timeScale>;eventLayer:NonNullable<React.ComponentProps<typeof SessionRibbon>['eventLayer']>;visibility:TimelineVisibility;jump:(fraction:number,hit?:ReaderHit)=>void;timed:boolean;depth?:number};
+const chevron=<svg className="reader-section-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="m4 2 4 4-4 4"/></svg>;
 function ReaderRibbonSection({node,sessionID,range,scale,eventLayer,visibility,jump,timed,depth=0}:ReaderRibbonProps){
   const viewKey=`reader-timeline:${sessionID}:${node.id}`,[open]=useViewEntry('disclosures',viewKey,false);
   const inspector=useRibbonInspector({interactive:false});
   const ownEvents=new Set(node.items.flatMap(item=>item.event?[item.event.id]:[]));
   const layer=node.id==='session'?{...eventLayer,events:mergeAgentEvents(eventLayer.events)}:node.id==='events'||node.id.startsWith('events:')?{...eventLayer,events:eventLayer.events.filter(event=>ownEvents.has(event.id))}:undefined;
-  const ribbon=<span className="reader-section-track" onClick={event=>{event.preventDefault();event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width);}}><SessionRibbon node={node} visibility={visibility} range={range} clock={scale} brushHandlers={{}} preview={null} inspector={inspector} disabled showUnknownTail={timed} eventLayer={layer}/></span>;
-  const label=<span className="reader-section-label" style={{paddingLeft:Math.min(depth,6)*10}}>{node.children.length?<span className="reader-section-chevron" aria-hidden="true">›</span>:<span className="reader-section-chevron" aria-hidden="true">·</span>}<span>{node.title}</span></span>;
+  const ribbon=<span className="reader-section-track" onClick={event=>{event.preventDefault();event.stopPropagation();const track=event.currentTarget,rect=track.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width,{track,x:event.clientX,y:event.clientY});}}><SessionRibbon node={node} visibility={visibility} range={range} clock={scale} brushHandlers={{}} preview={null} inspector={inspector} disabled showUnknownTail={timed} eventLayer={layer}/></span>;
+  const label=<span className="reader-section-label" style={{paddingLeft:Math.min(depth,6)*10}}>{node.id==='session'?<><strong>{node.title}</strong><small>{ribbonEventCount(node.items)}</small></>:<RibbonNodeDetails node={node}/>} {node.children.length?chevron:null}</span>;
   if(!node.children.length)return <div className="reader-section-leaf">{label}{ribbon}</div>;
   return <ViewDisclosure viewKey={viewKey} className="reader-section-node" summary={<>{label}{ribbon}</>}>{open?node.children.map(child=><ReaderRibbonSection key={child.id} node={child} sessionID={sessionID} range={range} scale={scale} eventLayer={eventLayer} visibility={visibility} jump={jump} timed={timed} depth={depth+1}/>):null}</ViewDisclosure>;
 }
@@ -34,6 +36,8 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
   const [shown,setShown]=useViewState<string[]>('reader_navigator',defaultShown);
   const [visibility,setVisibility]=useViewState<TimelineVisibility>('timeline_visibility',{});
   const [skipIdle]=useViewState<boolean>('timeline_idle',true);
+  const [singleSession,setSingleSession]=useState(()=>panel.parentElement?.dataset.readerSingleSession==='true');
+  useEffect(()=>{const reader=panel.parentElement;if(!reader)return;const update=()=>setSingleSession(reader.dataset.readerSingleSession==='true');reader.addEventListener('pharos:reader-sessions',update);update();return()=>reader.removeEventListener('pharos:reader-sessions',update);},[panel]);
   const [workspaceGaps,setWorkspaceGaps]=useState<IdleGap[]|undefined>(()=>(panel as HTMLElement&{pharosReaderIdleGaps?:IdleGap[]}).pharosReaderIdleGaps);
   useEffect(()=>{const update=()=>setWorkspaceGaps((panel as HTMLElement&{pharosReaderIdleGaps?:IdleGap[]}).pharosReaderIdleGaps);panel.addEventListener('pharos:reader-idle',update);update();return()=>panel.removeEventListener('pharos:reader-idle',update);},[panel]);
   const host=useRef<HTMLElement>(null),inspector=useRibbonInspector({interactive:false});
@@ -51,23 +55,41 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
   const unknownTools=clock.timed?[...new Set(clock.marks.filter(mark=>!mark.end_known).map(mark=>mark.error?'error':mark.category))]:[];
   const at=(id:string)=>clock.byID.get(id);
   const position=(start:number,end:number)=>({left:`min(${scale.fraction(start)*100}%,calc(100% - 3px))`,width:`${Math.max(0,scale.fraction(end)-scale.fraction(start))*100}%`});
-  const jump=(fraction:number)=>{const id=nearestReaderMessage(clock.byID,scale.time(Math.max(0,Math.min(1,fraction))));if(id)data.jumpMessage(id);};
+  const jump=(fraction:number,hit?:ReaderHit)=>{
+    // A dot can straddle its timestamp by several screen pixels. Prefer the
+    // actual mark under the pointer before falling back to the timeline time.
+    let selected:string|undefined,distance=5;
+    if(hit)for(const mark of hit.track.querySelectorAll('[data-tool-id] > path,[data-agent-event]')){
+      const rect=mark.getBoundingClientRect(),dx=Math.max(rect.left-hit.x,0,hit.x-rect.right),dy=Math.max(rect.top-hit.y,0,hit.y-rect.bottom),next=Math.hypot(dx,dy);
+      if(next>=distance)continue;
+      const tool=mark.parentElement?.getAttribute('data-tool-id'),event=mark.getAttribute('data-agent-event');
+      const id=tool?clock.marks.find(item=>item.tool_id===tool)?.message_id:data.events.find(item=>item.id===event)?.message_id;
+      if(id){selected=id;distance=next;}
+    }
+    const id=selected??nearestReaderMessage(clock.byID,scale.time(Math.max(0,Math.min(1,fraction))));if(id)data.jumpMessage(id);
+  };
   const available=availableReaderNavigators(data,clock.byID),active=available.filter(choice=>choice==='timeline'?timelineVisible:shown.includes(choice)),hidden=choices.filter(choice=>available.includes(choice)&&!shown.includes(choice)),contextNote=useId();
+  const sessionKey=`reader-timeline:${data.sessionID}:session`,[sessionOpen]=useViewEntry('disclosures',sessionKey,false);
   // Context and turns can be switched off by their labels; hidden choices
   // wait at the end of the key without taking a row of their own.
   const choice=(name:Choice)=><label key={name} className="reader-navigator-choice" title={shown.includes(name)?`Hide the ${name} bar`:`Show the ${name} bar`}><input type="checkbox" data-view-field="reader_navigator" checked={shown.includes(name)} onChange={event=>{const checked=event.currentTarget.checked;setShown(previous=>checked?[...previous.filter(item=>item!==name),name]:previous.filter(item=>item!==name));}}/>{choiceNames[name]}</label>;
   const hiddenChoices=hidden.length?<span className="reader-navigator-hidden" role="group" aria-label="Hidden session navigators">{hidden.map(choice)}</span>:null;
+  const expandable=singleSession&&!!visibleTree?.children.length;
+  const timelineLabel=expandable?<span className="reader-section-label"><strong>Timeline</strong><small>{ribbonEventCount(visibleTree!.items)}</small>{chevron}</span>:<span className="reader-navigator-label">Timeline</span>;
+  const timelineTrack=<div className="reader-navigator-track reader-navigator-timeline" role="group" aria-label="Session timeline. Click to reveal a message." onClick={event=>{if(expandable){event.preventDefault();event.stopPropagation();}const track=event.currentTarget,rect=track.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width,{track,x:event.clientX,y:event.clientY});}}>
+    <SessionRibbon node={visibleTree!} visibility={visibility} range={clock.range} clock={scale} brushHandlers={{}} preview={null} inspector={inspector} disabled showUnknownTail={clock.timed} eventLayer={{...eventLayer,events:mergeAgentEvents(eventLayer.events)}}/>
+    <button type="button" className="reader-navigator-keyboard" aria-label="Browse session timeline" title="Left / right: move through the session · Home / End: first / last message" onFocus={event=>{const band=host.current?.querySelector<HTMLElement>('.reader-navigator-window');event.currentTarget.dataset.position=band?.dataset.position||'0';}} onClick={event=>{event.stopPropagation();jump(Number(event.currentTarget.dataset.position??0));}} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const button=event.currentTarget,previous=Number(button.dataset.position??0),next=event.key==='Home'?0:event.key==='End'?1:Math.max(0,Math.min(1,previous+(event.key==='ArrowLeft'?-.02:.02)));button.dataset.position=String(next);jump(next);}}/>
+  </div>;
   useEffect(()=>{if(host.current&&active.length)return trackReaderViewport(panel,host.current,data,clock.byID,scale);},[panel,data,clock,scale,active.join(',')]);
   return <><aside ref={host} className="reader-navigator" aria-label="Session navigator" data-range={clock.range.join(',')}>
     {active.length?<>
       <div className="reader-navigator-bars">
-        {timelineVisible?<div className="reader-navigator-row"><span className="reader-navigator-label">Timeline</span><div className="reader-navigator-track reader-navigator-timeline" role="group" aria-label="Session timeline. Click to reveal a message." onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width);}}>
-          <SessionRibbon node={visibleTree!} visibility={visibility} range={clock.range} clock={scale} brushHandlers={{}} preview={null} inspector={inspector} disabled showUnknownTail={clock.timed} eventLayer={{...eventLayer,events:mergeAgentEvents(eventLayer.events)}}/>
-          <button type="button" className="reader-navigator-keyboard" aria-label="Browse session timeline" title="Left / right: move through the session · Home / End: first / last message" onFocus={event=>{const band=host.current?.querySelector<HTMLElement>('.reader-navigator-window');event.currentTarget.dataset.position=band?.dataset.position||'0';}} onClick={event=>{event.stopPropagation();jump(Number(event.currentTarget.dataset.position??0));}} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const button=event.currentTarget,previous=Number(button.dataset.position??0),next=event.key==='Home'?0:event.key==='End'?1:Math.max(0,Math.min(1,previous+(event.key==='ArrowLeft'?-.02:.02)));button.dataset.position=String(next);jump(next);}}/>
-        </div></div>:null}
-        {timelineVisible&&visibleTree?.children.length?<ReaderRibbonSection node={visibleTree} sessionID={data.sessionID} range={clock.range} scale={scale} eventLayer={eventLayer} visibility={visibility} jump={jump} timed={clock.timed}/>:null}
+        {timelineVisible?(expandable?<ViewDisclosure className="reader-navigator-timeline-disclosure" viewKey={sessionKey} summary={<>{timelineLabel}{timelineTrack}</>}>
+          {sessionOpen?visibleTree!.children.map(child=><ReaderRibbonSection key={child.id} node={child} sessionID={data.sessionID} range={clock.range} scale={scale} eventLayer={eventLayer} visibility={visibility} jump={jump} timed={clock.timed}/>):null}
+        </ViewDisclosure>:<div className="reader-navigator-row">{timelineLabel}{timelineTrack}</div>):null}
+        {timelineVisible&&!singleSession&&visibleTree?.children.length?<ReaderRibbonSection node={visibleTree} sessionID={data.sessionID} range={clock.range} scale={scale} eventLayer={eventLayer} visibility={visibility} jump={jump} timed={clock.timed}/>:null}
         {active.includes('context')?<div className="reader-navigator-row">{choice('context')}<div className="reader-navigator-track reader-navigator-context" aria-label="Context growth" aria-describedby={contextNote}>{contexts.map(entry=>{const time=at(entry.message.id);if(!time)return null;return <button key={JSON.stringify([entry.message.id,entry.sample.stream])} type="button" className={`token-marker${entry.sample.compact?' compaction-marker':''}`} style={{...position(time[0],entry.end),'--context-profile':entry.sample.compact?'none':`polygon(0 ${100-entry.from}%,100% ${100-entry.width}%,100% 100%,0 100%)`,'--token-color':entry.color} as React.CSSProperties} title={entry.title} onClick={()=>data.jumpContext(entry)}/>;})}</div></div>:null}
-        {active.includes('turns')?<div className="reader-navigator-row">{choice('turns')}<div className="reader-navigator-track" aria-label="Conversation turns">{data.turns.map((turn,index)=>{const spans=turn.messages.flatMap(id=>{const span=at(id);return span?[span]:[];});if(!spans.length)return null;const start=Math.min(...spans.map(span=>span[0])),end=Math.max(...spans.map(span=>span[1]));return <button type="button" className="reader-navigator-turn" key={turn.messages[0]??index} style={position(start,end)} title={`Turn ${index+1} · ${turn.label}`} onClick={()=>{const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}><span>{index+1}</span></button>;})}</div></div>:null}
+        {active.includes('turns')?<div className="reader-navigator-row is-turns">{choice('turns')}<div className="reader-navigator-track reader-navigator-turns" aria-label="Conversation turns">{data.turns.map((turn,index)=>{const spans=turn.messages.flatMap(id=>{const span=at(id);return span?[span]:[];});if(!spans.length)return null;const start=Math.min(...spans.map(span=>span[0])),end=Math.max(...spans.map(span=>span[1]));return <button type="button" className="reader-navigator-turn" key={turn.messages[0]??index} style={position(start,end)} title={`Turn ${index+1} · ${turn.label}`} onClick={()=>{const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}><span>{index+1}</span></button>;})}</div></div>:null}
         <div className="reader-navigator-window-track" aria-hidden="true"><span className="reader-navigator-window" hidden/><i className="reader-navigator-boundary" hidden/><i className="reader-navigator-boundary" hidden/></div>
       </div>
       {hiddenChoices?<div className="reader-navigator-key">{hiddenChoices}</div>:null}

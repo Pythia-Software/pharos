@@ -47,7 +47,15 @@ const markdownLinkAPI = {
 };
 // Synthetic Claude export data exercises sources and non-coding attachments.
 const claudeResearchAPI = {
-  "GET /api/work/:id/conversations/:conversation": { id: rootConversation, workspace_id: workID, provider: "claude", harness: "claude-ai-export", token_usage:{total_tokens:1400,output_tokens:1400},token_usage_is_estimate:true,usage_estimates:{version:"fixture-v1",manifest_revision:"fixture.1",range_kind:"sensitivity_not_confidence",responses:[{message_id:"research-answer",output_tokens:{expected:1400,lower:400,upper:5000},local_weight:0}]}, artifact_links:{"synthetic-doc":{title:"synthetic-doc",href:`/work/${workID}/conversation/${rootConversation}?message=export-project`}}, messages: [
+  "GET /api/work/:id": request => ({...defaultApi["GET /api/work/:id"](request), conversations: [{id:rootConversation,provider:"claude",title:"Daily Claude data export"}], title:"Daily Claude data export"}),
+  "GET /api/work/:id/delegation": request => {
+    const data = defaultApi["GET /api/work/:id/delegation"](request);
+    const tokens = {value:1400,quality:"estimated",known:1,total:1,is_estimate:true};
+    const cost = {value:0.021,quality:"partial",known:1,total:1,is_estimate:true};
+    const row = {...data.rows[0],self:{...data.rows[0].self,tokens,cost},all:{...data.rows[0].all,tokens,cost},child_count:0};
+    return {...data,rows:[row],focus:[row],session_count:1,total:1,totals:{...data.totals,tokens,cost}};
+  },
+  "GET /api/work/:id/conversations/:conversation": { id: rootConversation, workspace_id: workID, provider: "claude", harness: "claude-ai-export", token_usage:{total_tokens:1400,output_tokens:1400},token_usage_is_estimate:true,usage_estimates:{version:"fixture-v1",manifest_revision:"fixture.1",range_kind:"sensitivity_not_confidence",responses:[{message_id:"research-answer",model:"claude-opus-5-5",model_source:"observed_conversation_selection",output_tokens:{expected:1400,lower:400,upper:5000},local_weight:0}]}, artifact_links:{"synthetic-doc":{title:"synthetic-doc",href:`/work/${workID}/conversation/${rootConversation}?message=export-project`}}, messages: [
     {id:"research-question",native_id:"research-question",role:"user",kind:"message",text:"Compare the published company reports."},
     {id:"research-attachment",native_id:"research-attachment",role:"user",kind:"attachment",text:JSON.stringify({type:"file_attachment",file_name:"notes.pdf",file_type:"application/pdf",file_size:48,extracted_content:"Archived research notes\n<script>window.exportScriptRan=true</script>"})},
     {id:"export-project",native_id:"export-project",role:"system",kind:"attachment",text:JSON.stringify({type:"export_file",file_name:"projects/report.json",extracted_content:JSON.stringify({name:"Research",docs:[{filename:"report.md",content:"# Exported report\nA document paragraph, retained with its source metadata."}]})})},
@@ -114,9 +122,9 @@ const humanPromptParts = [
   ["Here is the output from the previous run:\n\n```text\n5 review workers started\n1 worker is checking the conversation reader\n```\n\n", "pasted"],
   ["Make the relationship clear, and keep my written instructions easy to spot. The café example should still render correctly.", "typed"],
 ];
-function classifiedPrompt(id, parts) {
+function classifiedPrompt(id, parts, provisional=true) {
   let end=0;
-  return {id,native_id:id,role:"user",kind:"message",text:parts.map(([text])=>text).join(""),authorship:{typed_words:48,provisional:true,spans:parts.map(([text,category])=>{const start=end;end+=Buffer.byteLength(text);return {start,end,category,words:text.split(/\s+/).length};})}};
+  return {id,native_id:id,role:"user",kind:"message",text:parts.map(([text])=>text).join(""),authorship:{typed_words:48,provisional,spans:parts.map(([text,category])=>{const start=end;end+=Buffer.byteLength(text);return {start,end,category,words:text.split(/\s+/).length};})}};
 }
 const authoredPrompt = classifiedPrompt("human-mixed",humanPromptParts);
 const authoredTurnMessages = [authoredPrompt,
@@ -128,9 +136,9 @@ const authoredTurnMessages = [authoredPrompt,
   {id:"nested-review-reply",native_id:"nested-review-reply",role:"assistant",kind:"message",parent_native_id:"nested-reviewer",text:"The nested review stays under Reviewer 1."},
   {id:"parent-reply",native_id:"parent-reply",role:"assistant",kind:"message",text:"All five reviews are complete. The outline keeps each review inside the turn that requested it, including the nested review under Reviewer 1.",
     labels:{segment:"AR",ids:["C","C.report","C.report.completion"],probs:{"C.report.completion":0.93}},
-    agent_events:[{id:"e-review",kind:"workaround",label:"Workaround",group:"Choices you may not see",probability:0.81,sentence:[31,141],subject:[],response:[],
+    agent_events:[{id:"e-review",kind:"workaround",label:"Workaround",group:"Choices you may not see",probability:0.81,sentence:[31,141],subject:[[0,30]],response:[],
       target:{method:"overlap",message_id:"human-mixed",role:"user",kind:"message",start:authoredPrompt.text.indexOf("keep my written"),end:authoredPrompt.text.indexOf("keep my written")+"keep my written instructions easy to spot".length,text:"keep my written instructions easy to spot",shared:["written","instructions"],score:5.1}}]},
-  classifiedPrompt("human-next",[["Now show me the next turn separately.","typed"]]),
+  classifiedPrompt("human-next",[["Now show me the next turn separately.","typed"]],false),
   {id:"next-reply",native_id:"next-reply",role:"assistant",kind:"message",text:"This turn has no sub-agents."},
 ];
 const authoredTurnAPI = {
@@ -544,13 +552,38 @@ const ROUTES = [
     await page.locator('.mcp-presentation a.markdown-link').waitFor();
     await page.locator('.tool-event > summary').filter({hasText:'Query statistics'}).click();
     await page.locator('.mcp-presentation table').waitFor();
-  }, shown: ".tool-event[open] .tool-output", check: async page => {
+  }, shown: ".tool-event[open] .tool-output", check: async (page,app) => {
     await page.locator('.token-legend').filter({hasText:'*'}).waitFor();
-    assert.equal(await page.locator('.usage-estimate-note').isVisible(),true);
+    assert.equal(await page.locator('.usage-estimate-note').count(),0);
+    const stats=page.locator('.delegation-workspace-stats');
+    await stats.getByRole('button',{name:'About estimates'}).waitFor();
+    const tokens=stats.locator('span').filter({has:page.locator('small', {hasText:'Tokens'})});
+    assert.match(await tokens.locator('strong').innerText(),/\d.*\*$/);
+    const cost=stats.locator('span').filter({has:page.locator('small', {hasText:'API cost'})});
+    assert.match(await cost.locator('strong').innerText(),/^\$.*\*$/);
+    assert.match(await cost.getAttribute('title'),/estimated output only/i);
+    await stats.scrollIntoViewIfNeeded();await app.shot('estimated-workspace-totals');
+    const info=stats.getByRole('button',{name:'About estimates'});await info.click();
+    const dialog=page.getByRole('dialog',{name:'How estimates work'});await dialog.waitFor();
+    const text=await dialog.innerText();
+    assert.match(text,/Selected conversation.*1,400 estimated output tokens.*400–5,000 sensitivity range/s);
+    assert.match(text,/estimation and API pricing assume claude-opus-5-5 from saved conversation settings/i);
+    assert.match(text,/input and cache tokens are unavailable/i);
+    assert.match(text,/Tool timing.*Writing/s);
+    assert.equal(await dialog.getByRole('link',{name:'View published assumptions'}).getAttribute('href'),'/api/estimation/assumptions');
+    await app.shot('estimate-information');
+    await page.keyboard.press('Escape');await dialog.waitFor({state:'detached'});
+    assert.equal(await info.evaluate(el=>document.activeElement===el),true);
+
     assert.equal(await page.evaluate(()=>window.exportScriptRan),undefined,'exported source is displayed as text');
   } },
   { name: "Claude export missing usage", url: `${work}/conversation/${rootConversation}`, ready: ".claude-export-usage-note", api: {
     ...claudeResearchAPI,
+    "GET /api/work/:id/delegation": request => {
+      const data = claudeResearchAPI["GET /api/work/:id/delegation"](request);
+      const unavailable = {value:null,quality:"unknown",known:0,total:1};
+      return {...data, totals:{...data.totals,tokens:unavailable,cost:unavailable}};
+    },
     "GET /api/work/:id/conversations/:conversation": () => {
       const conversation = structuredClone(claudeResearchAPI["GET /api/work/:id/conversations/:conversation"]);
       conversation.harness = 'claude-code-cloud-export';
@@ -563,6 +596,7 @@ const ROUTES = [
       return conversation;
     },
   }, check: async page => {
+    assert.equal(await page.locator('.delegation-workspace-stats').getByRole('button',{name:'About estimates'}).count(),0);
     const notice = page.getByRole('status').filter({hasText:'Token usage unavailable'});
     assert.equal(await notice.isVisible(),true);
     const [banner, heading] = await Promise.all([notice.boundingBox(), notice.locator('..').locator('.conversation-title-line h2:visible').first().boundingBox()]);
@@ -575,10 +609,46 @@ const ROUTES = [
       const mark = page.locator(".result-turn-content .human-written").first();
       await mark.hover();const tip=page.getByRole("tooltip");await tip.waitFor();
       assert.match(await tip.textContent(), /Human writing.*typed or dictated/s);
+      await mark.click();const pinned=page.getByRole('dialog',{name:'Text annotation'});await pinned.waitFor();
+      await pinned.getByRole('button',{name:'Hide this annotation'}).click();assert.equal(await mark.evaluate(el=>el.classList.contains('reader-writing-hidden')),true);
       await page.locator(".result-turn-content .result-message-label").first().hover();
       assert.equal(await tip.isVisible(),false);
     } },
-  { name: "Transcript human writing", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".conversation-panel .human-written" },
+  { name: "Transcript human writing", url: `${work}/conversation/${rootConversation}?reader_events=1`, api: authoredTurnAPI, ready: ".conversation-panel .human-written", check:async(page,app)=>{
+    const message=page.locator('.timeline-entry[data-message-id="human-mixed"]'), estimate=message.locator('.timeline-time .writing-estimate-trigger');
+    assert.match(await estimate.getAttribute('title'),/typed or dictated.*provisional/);
+    assert.equal(await message.locator('.usage-dashboard-note').count(),0);
+    await estimate.hover();await app.shot('writing-estimate-indicator');await estimate.click();
+    const dialog=page.getByRole('dialog',{name:'How estimates work'});await dialog.waitFor();
+    assert.match(await dialog.innerText(),/provisional.*refined/s);await app.shot('writing-estimate-dialog');
+    await page.keyboard.press('Escape');await dialog.waitFor({state:'detached'});assert.equal(await estimate.evaluate(el=>document.activeElement===el),true);
+    const refined=page.locator('.timeline-entry[data-message-id="human-next"] .writing-estimate-trigger');await refined.click();
+    assert.match(await page.getByRole('dialog',{name:'How estimates work'}).innerText(),/has been refined.*still an estimate/s);await page.keyboard.press('Escape');
+    const writing=message.locator('mark.human-written:not(.event-target)').first(),context=page.locator('mark.event-context').first();
+    await writing.hover();assert.match(await page.getByRole('tooltip').innerText(),/Human writing.*typed or dictated/s);
+    const box=await writing.boundingBox();await page.mouse.move(box.x+3,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+Math.min(box.width-3,35),box.y+box.height/2,{steps:4});await page.mouse.up();
+    assert.equal(await page.getByRole('dialog',{name:'Text annotation'}).count(),0,'dragging to select does not pin an annotation');
+    await page.evaluate(()=>getSelection().removeAllRanges());await writing.hover();await writing.click();
+    const tip=page.getByRole('dialog',{name:'Text annotation'});await tip.waitFor();await app.shot('pinned-human-writing');
+    await page.evaluate(()=>{window.pharosHost.clipboard.writeText=async text=>{window.copiedAnnotation=text}});
+    const text=await writing.textContent();await tip.getByRole('button',{name:'Copy this text'}).click();assert.equal(await page.evaluate(()=>window.copiedAnnotation),text);
+    if(page.viewportSize().width<500)return;
+    await context.evaluate(el=>el.scrollIntoView({block:'center'}));await context.hover();assert.match(await page.getByRole('tooltip').innerText(),/Workaround.*Said/s);await context.click();await tip.waitFor();await app.shot('pinned-event-context');
+    await tip.getByRole('button',{name:'Hide this annotation'}).click();assert.equal(await context.evaluate(el=>el.classList.contains('reader-event-hidden')),true);
+    assert.equal(await page.locator('mark.agent-event').first().evaluate(el=>el.classList.contains('reader-event-hidden')),false,'hiding context keeps the event sentence visible');
+    assert.ok(JSON.parse(new URL(page.url()).searchParams.get('reader_highlight_hidden')).some(key=>key.startsWith('annotation:')));
+    await page.reload();await context.waitFor();assert.equal(await context.evaluate(el=>el.classList.contains('reader-event-hidden')),true,'hidden annotation survives reload');
+    await page.getByRole('button',{name:'Show hidden annotations'}).click();assert.equal(await context.evaluate(el=>el.classList.contains('reader-event-hidden')),false);
+    const target=message.locator('mark.event-target').first();await target.evaluate(el=>el.scrollIntoView({block:'center'}));await target.hover();assert.match(await page.getByRole('tooltip').innerText(),/Earlier text linked to an event.*Workaround/s);await target.click();await tip.waitFor();
+    assert.equal(await tip.getByRole('button',{name:'Hide human-writing annotation'}).count(),1);await tip.getByRole('button',{name:'Hide linked-text annotation'}).click();
+    assert.equal(await target.evaluate(el=>el.classList.contains('reader-event-hidden')&&!el.classList.contains('reader-writing-hidden')),true,'hiding a link keeps the human-writing annotation');
+    await page.evaluate(()=>window.pharosView.write('reader_event_link','e-review'));await target.evaluate(el=>el.scrollIntoView({block:'center'}));
+    await page.waitForFunction(()=>!document.querySelector('mark.event-target')?.classList.contains('reader-event-hidden'));
+    await writing.evaluate(el=>el.scrollIntoView({block:'center'}));await writing.hover();await writing.click();await tip.getByRole('button',{name:'Hide this annotation'}).click();
+    assert.equal(await writing.evaluate(el=>el.classList.contains('reader-writing-hidden')),true);
+    assert.ok(await message.locator('mark.human-written:not(.reader-writing-hidden)').count(),'other human-writing marks remain visible');
+    await page.getByRole('button',{name:'Show hidden annotations'}).click();
+  } },
   { name: "Transcript expanded sub-agent", url: `${work}/conversation/${rootConversation}`, api: authoredTurnAPI, ready: ".subagent-run", open: async page => { await page.locator(".subagent-run > summary").first().click(); }, shown: ".subagent-body" },
   { name: "Transcript agent event link", url: `${work}/conversation/${rootConversation}?reader_events=1&reader_event_link=e-review`, api: authoredTurnAPI, ready: ".conversation-panel.show-events mark.event-target.link-selected" },
   { name: "Search conversations", url: "/library", ready: ".conversation-result-card" },
@@ -930,11 +1000,14 @@ const ROUTES = [
     'GET /api/work/:id/conversations/:conversation':{id:rootConversation,workspace_id:workID,provider:'chatgpt',messages:[
       {id:'chat-settings',role:'system',kind:'metadata',text:JSON.stringify({source:'chatgpt_export',settings:{default_model_slug:'bidi',voice:'saved-voice',memory_scope:'global_enabled',is_starred:true}})},
       {id:'chat-ask',role:'user',kind:'message',text:'A spoken question',raw_text:JSON.stringify({author:{role:'user'},content:{content_type:'multimodal_text',parts:[{content_type:'audio_transcription',text:'A spoken question',direction:'in'}]}})},
+      {id:'chat-spoken-reply',role:'assistant',kind:'message',text:'A spoken answer',raw_text:JSON.stringify({author:{role:'assistant'},content:{content_type:'multimodal_text',parts:[{content_type:'audio_transcription',text:'A spoken answer',direction:'out'}]}})},
       {id:'chat-reply',role:'assistant',kind:'message',text:'A cited answer',raw_text:JSON.stringify({author:{role:'assistant'},content:{content_type:'text',parts:['A cited answer']},metadata:{content_references:[{type:'webpage',url:'https://example.com',title:'A reference with a long title that should wrap within the conversation reader'}],search_result_groups:[{entries:[{url:'https://another.example',title:'Search result',snippet:'A source-provided snippet.'}]}]}})},
       {id:'chat-audio',role:'user',kind:'attachment',text:JSON.stringify({type:'chatgpt_asset',name:'question.wav',mime_type:'audio/wav',available:true})},
       {id:'chat-missing',role:'system',kind:'attachment',text:JSON.stringify({type:'chatgpt_asset',name:'missing-file.gif',available:false})},
     ]},
   },open:async page=>{await page.locator('.chatgpt-references > summary').click();await page.locator('.action-row').filter({hasText:'question.wav'}).locator(':scope > details > summary').click();await page.locator('audio[controls]').waitFor();},shown:'.chatgpt-references[open]',check:async(page,app)=>{
+    for(const id of ['chat-ask','chat-spoken-reply']){const entry=page.locator(`.timeline-entry[data-message-id="${id}"]`);assert.ok(await entry.locator('.message-prose').isVisible());assert.equal(await entry.locator('.chatgpt-message-context').count(),0);}
+    await app.shot('voice-transcription');
     const key=await page.locator('.chatgpt-references').getAttribute('data-view-key');await page.waitForFunction(()=>new URLSearchParams(location.search).has('disclosures'));
     await page.reload();await page.locator('.chatgpt-references[open]').waitFor();await page.locator('.chatgpt-references a').first().waitFor();
     assert.equal(await page.locator('.chatgpt-references').getAttribute('data-view-key'),key);

@@ -185,6 +185,10 @@ func TestUsageEstimationResponseModelsAndWindowGuards(t *testing.T) {
 			t.Fatal("unsupported settings borrowed an exact token-model fit", tc)
 		}
 	}
+	assumed := &usageEstimationResponse{model: "claude-opus-5-5", modelAssumed: true, effort: "high", speed: "standard", speedSource: "export", blocks: []usageEstimationBlock{{kind: "tool_use", call: "a", name: "web_search", orderKnown: true}, {kind: "tool_result", call: "a", orderKnown: true}, {kind: "text", characters: 4, orderKnown: true}}}
+	if _, ok := newUsageEstimationBuilder("claude-ai-export").estimateMissingResponse(assumed, manifest, []usageToolEstimate{{CallID: "a", Status: "estimated"}}); ok {
+		t.Fatal("an assumed model entered a fit requiring reported settings")
+	}
 	for _, blocks := range [][]usageEstimationBlock{
 		{{kind: "tool_use", call: "a", orderKnown: true}, {kind: "tool_result", call: "a", orderKnown: true}, {kind: "tool_result", call: "a", orderKnown: true}, {kind: "text", characters: 4, orderKnown: true}},
 		{{kind: "tool_result", call: "a", orderKnown: true}, {kind: "tool_use", call: "a", orderKnown: true}, {kind: "text", characters: 4, orderKnown: true}},
@@ -383,6 +387,7 @@ func TestUsageEstimationUsesNativeClocksAndKeepsReportedUsageSeparate(t *testing
 	}
 	rows := estimationFixtureRows(t, blocks, nil)
 	b := newUsageEstimationBuilder("claude-ai-export")
+	b.selections = []map[string]any{{"organization_uuid": settingsOrg, "observed_at": "2026-11-12T10:00:00Z", "model": "claude-sonnet-4-20250514"}}
 	for _, m := range rows {
 		b.observe(m)
 	}
@@ -391,6 +396,9 @@ func TestUsageEstimationUsesNativeClocksAndKeepsReportedUsageSeparate(t *testing
 		t.Fatalf("missing estimates: %+v", report)
 	}
 	r := report.Responses[0]
+	if r.Model != "claude-opus-5-5" || r.ModelSource != "" {
+		t.Fatal("saved selection replaced a reported response model", r)
+	}
 	if r.ThinkingSeconds.Expected != 15 || r.ClockedBlocks != 2 || r.MissingBlocks != 0 {
 		t.Fatalf("overlapping intervals must be unioned, summaries not added again: %+v", r)
 	}
@@ -910,6 +918,17 @@ func TestUsageEstimationBackfillResumesAndWithholdsSupersededRows(t *testing.T) 
 		}
 	})
 	s := testServer(t, config, c)
+	unknownConversation := queryRows(t, c, "SELECT workspace_id FROM conversations WHERE native_id='conv-1'")[0]
+	unknownWorkspace := firstString(unknownConversation["workspace_id"])
+	statusCode, unknownSummary := delegationGET(t, s, "/api/work/"+unknownWorkspace+"/delegation")
+	if statusCode != 200 {
+		t.Fatal(statusCode, unknownSummary)
+	}
+	unknownTotals := unknownSummary["totals"].(map[string]any)
+	unknownTokens := unknownTotals["tokens"].(map[string]any)
+	if unknownTokens["value"] == nil || !estimateFlag(unknownTokens["is_estimate"]) || unknownTotals["cost"].(map[string]any)["value"] != nil {
+		t.Fatal("unpriced estimated output in workspace summary", unknownTotals)
+	}
 	q := groupRequest("provider", qt.SummaryColumn{ID: "tokens", Op: "sum", Field: "total_tokens"})
 	got, _, err := s.executeQueryV3(t.Context(), "usage", nil, PharosUsageSchema(), q)
 	if err != nil || len(got.Rows) != 1 || integer(got.Rows[0]["tokens"]) != total || !estimateFlag(got.Rows[0]["is_estimate"]) {
@@ -1072,6 +1091,38 @@ func TestUsageEstimationBackfillResumesAndWithholdsSupersededRows(t *testing.T) 
 	if !found {
 		t.Fatal("reader omitted canonical usage")
 	}
+	// The workspace heading uses delegation totals from the same stored ledger.
+	workspace := firstString(conversation["workspace_id"])
+	snapshot, err := c.delegationSnapshot(t.Context(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens, cost := snapshot.Totals["tokens"], snapshot.Totals["cost"]
+	readerTokens := read["token_usage"].(tokenCounts)["total_tokens"]
+	if tokens.Value == nil || *tokens.Value != readerTokens || !tokens.IsEstimate {
+		t.Fatal("delegation and reader estimates disagree", tokens, readerTokens)
+	}
+	if cost.Value == nil || *cost.Value <= 0 || !cost.IsEstimate || cost.Quality != "partial" {
+		t.Fatal("output-only pricing missing estimate provenance", cost)
+	}
+	statusCode, response := delegationGET(t, s, "/api/work/"+workspace+"/delegation")
+	if statusCode != 200 {
+		t.Fatal(statusCode, response)
+	}
+	apiTotals := response["totals"].(map[string]any)
+	for key, expected := range map[string]delegationMetric{"tokens": tokens, "cost": cost} {
+		metric := apiTotals[key].(map[string]any)
+		if metric["value"] != *expected.Value || !estimateFlag(metric["is_estimate"]) {
+			t.Fatal("estimated workspace total missing from API", key, metric, expected)
+		}
+	}
+
+	if snapshot.Totals["input"].Value != nil || snapshot.Totals["cacheRead"].Value != nil || *snapshot.Totals["requests"].Value != 0 {
+		t.Fatal("estimated input or requests treated as recorded", snapshot.Totals)
+	}
+	if remainder := snapshot.Totals["remainder"]; remainder.Value == nil || *remainder.Value != 0 {
+		t.Fatal("direct estimated output was marked unallocated", remainder)
+	}
 	// Replaying a native ledger must retain current predictions when it still
 	// has no measured usage or tool completion clock.
 	if err := c.writeTransaction(t.Context(), "test native replay", func(tx *sql.Tx) error { return rebuildStoredToolLedger(t.Context(), tx, first) }); err != nil {
@@ -1095,6 +1146,10 @@ func TestUsageEstimationBackfillResumesAndWithholdsSupersededRows(t *testing.T) 
 	}
 	if err := c.backfillUsageEstimation(t.Context()); err != nil || predicted() != 1 {
 		t.Fatal("backfill replaced real zero", err)
+	}
+	updatedSnapshot, err := c.delegationSnapshot(t.Context(), workspace)
+	if err != nil || updatedSnapshot.Totals["tokens"].IsEstimate || updatedSnapshot.Totals["tokens"].Value != nil {
+		t.Fatal("removed estimate remained in the workspace summary", updatedSnapshot, err)
 	}
 	if countRows(t, c, "SELECT COUNT(*) FROM model_requests WHERE id='actual' AND is_estimate=0 AND total_tokens=0") != 1 {
 		t.Fatal("actual zero was mutated")

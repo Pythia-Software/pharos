@@ -76,7 +76,7 @@ test("action relative times omit missing or invalid timestamps", () => {
 test("action timestamp column accounts for all turns and nested actions", () => {
   const source=readFileSync(join(assets,'ui.py'),'utf8');
   const helperSource=source.slice(source.indexOf('function relativeTime('),source.indexOf('\nfunction timelineEntry('));
-  const hasActionTimes=vm.runInNewContext(helperSource+';transcriptHasActionTimes');
+  const hasActionTimes=vm.runInNewContext(helperSource+';transcriptHasActionTimes',{window:{}});
   const start='2026-10-20T15:20:00Z',human={kind:'message',created_at:start},call={kind:'tool_call',native_id:'call',created_at:null},result={kind:'tool_result',native_id:'result',created_at:start};
   const turn={human,events:[call],owned:[human,call,result]},consumed=new Set(['result']);
   assert.equal(hasActionTimes([turn],consumed),false,'message and paired result times do not reserve an empty action column');

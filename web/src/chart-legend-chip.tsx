@@ -3,6 +3,15 @@ import type { ChartSeries } from "./chart-series";
 import { legendMenuItems, type LegendAction } from "./chart-selection";
 import { Icon } from "./icons";
 
+function focusMenuEntry(panel: HTMLElement, entry: HTMLButtonElement | undefined) {
+  if (!entry) return;
+  entry.focus({ preventScroll: true });
+  const bounds = panel.getBoundingClientRect(), item = entry.getBoundingClientRect();
+  const top = bounds.top + panel.clientTop, bottom = top + panel.clientHeight;
+  if (item.top < top) panel.scrollTop -= top - item.top;
+  else if (item.bottom > bottom) panel.scrollTop += item.bottom - bottom;
+}
+
 // Shared positioning, dismissal and keyboard navigation for value and preset menus.
 export function LegendMenu({ name, label, menuLabel, title, heading, marker, suffix, active, dimmed = false, mixed = false, category = false, iconOnly = false, description, readOnly = false, onActivate, children }: {
   name: string; label: React.ReactNode; menuLabel: string; title: string; heading: React.ReactNode;
@@ -28,7 +37,7 @@ export function LegendMenu({ name, label, menuLabel, title, heading, marker, suf
     panel.style.left = `${left - anchor.left}px`;
     panel.style.top = `${top - anchor.top}px`;
     const entries = panel.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)');
-    entries[firstFocus.current === -1 ? entries.length - 1 : 0]?.focus();
+    focusMenuEntry(panel, entries[firstFocus.current === -1 ? entries.length - 1 : 0]);
   }, [open]);
   useEffect(() => {
     if (!open) return;
@@ -84,7 +93,7 @@ export function LegendMenu({ name, label, menuLabel, title, heading, marker, suf
       if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
       event.preventDefault();
       const next = event.key === "Home" ? 0 : event.key === "End" ? entries.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + entries.length) % entries.length;
-      entries[next]?.focus();
+      if (menu.current) focusMenuEntry(menu.current, entries[next]);
     }}>
       <div className="usage-legend-menu-heading" data-overflow-title="">{heading}</div>
       {children(choose)}

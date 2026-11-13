@@ -1,6 +1,6 @@
 import type { QueryRequestV3 } from "@pythia-software/query-table-core";
 
-export const estimateExplanation = "* Includes estimated generated output. Input and cache usage are unavailable; any output cost is partial.";
+export const estimateExplanation = "* Includes estimated generated output. Input and cache usage are unavailable; output cost is partial and may assume a saved conversation model selection.";
 export const durationEstimateExplanation = "* Includes estimated tool duration. Parallel calls can overlap.";
 export const estimateFlag = (value: unknown) => value === true || value === 1;
 export function estimatedField(row: Record<string, unknown>, field: string): boolean {

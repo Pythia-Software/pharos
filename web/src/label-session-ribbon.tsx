@@ -154,11 +154,18 @@ export function SessionRibbon({node,range,clock,brushHandlers,preview,caller,ins
   <EventFocusBand node={node} x={x}/>
  </svg>{eventLayer?.events.length?<EventLinkOverlay placed={placedEvents} layout={layout} width={width} height={height} label={`${placedEvents.reduce((n,p)=>n+(p.event.members?.length??1),0)} agent events`}/>:null}{inspector.portal}</div>;
 }
+const ribbonIcons:Record<string,IconName>={activity:'settings',read:'read',write:'edit',run:'command',git:'tree',network:'web',delegate:'tree',wait:'more',poll:'refresh',other:'settings'};
+/** The standalone timeline and reader use the same row symbols and counts. */
+export function RibbonNodeDetails({node}:{node:RibbonNode}){
+ const counts=ribbonCounts(node.items),ownEvents=node.id==='events'||node.id.startsWith('events:');
+ const eventGlyph=ownEvents&&node.id!=='events'?node.items[0]?.event:undefined;
+ const icon=(node.id==='events'||node.id==='labels:thinking')?'thought':node.id==='activity'?'settings':node.id.startsWith('activity:')?ribbonIcons[node.items[0]?.mark?.category??'other']:node.id==='labels'?'read':node.id==='authorship'?'human':undefined;
+ return <>{eventGlyph?<EventGlyph group={eventGlyph.group}/>:icon?<Icon name={icon}/>:node.items[0]?.label?<i style={{background:node.items[0].color}}/>:null}<strong>{node.title}</strong><small>{ownEvents?counts.events:counts.messages||counts.activity||counts.inferred}</small></>;
+}
 function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;level?:number}){
- const viewKey=`delegation-labels:${props.sessionID}:${node.id}`,[open]=useViewEntry('disclosures',viewKey,false),counts=ribbonCounts(node.items),root=level===0;
+ const viewKey=`delegation-labels:${props.sessionID}:${node.id}`,[open]=useViewEntry('disclosures',viewKey,false),root=level===0;
  const inspector=useRibbonInspector();
  const identity=root?<SessionIdentity name={props.name} metadata={props.metadata} notes={props.notes} depth={props.depth} branch={props.branch} folded={!!props.foldControl} current={props.current} openSession={props.openSession}/>:<span className="lt-session-gutter" aria-hidden="true"><SessionBranches depth={props.depth} branch={props.branch} root={false}/></span>;
- const icons:Record<string,IconName>={activity:'settings',read:'read',write:'edit',run:'command',git:'tree',network:'web',delegate:'tree',wait:'more',poll:'refresh',other:'settings'};
  // An Agent events row draws only its own events (with their arcs).
  const ownEvents=node.id==='events'||node.id.startsWith('events:')?new Set(node.items.flatMap(item=>item.event?[item.event.id]:[])):null;
  // The session row and the Agent events row merge events on near-identical
@@ -169,10 +176,8 @@ function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;le
   const layer=root?props.eventLayer:ownEvents&&props.eventLayer?{...props.eventLayer,events:props.eventLayer.events.filter(e=>ownEvents.has(e.id))}:undefined;
   return layer&&merge?{...layer,events:mergeAgentEvents(layer.events,props.eventCounts??eventKindCounts(props.eventLayer!.events))}:layer;
  },[props.eventLayer,props.eventCounts,root,merge,ownKey]);
- const eventGlyph=ownEvents&&node.id!=='events'?node.items[0]?.event:undefined;
- const icon=(node.id==='events'||node.id==='labels:thinking')?'thought':node.id==='activity'?'settings':node.id.startsWith('activity:')?icons[node.items[0]?.mark?.category??'other']:node.id==='labels'?'read':node.id==='authorship'?'human':undefined;
  const count=ribbonEventCount(node.items,ownEvents?'events':'session');
- const label=<span className={`lt-session-row-label${root?' is-root':''}`} style={{paddingLeft:root?8:8+Math.min(level-1,8)*9}} aria-label={root?`${count} events`:undefined}>{root?<strong className="lt-event-count">{count}</strong>:<>{eventGlyph?<EventGlyph group={eventGlyph.group}/>:icon?<Icon name={icon}/>:node.items[0]?.label?<i style={{background:node.items[0].color}}/>:null}<strong>{node.title}</strong><small>{ownEvents?counts.events:counts.messages||counts.activity||counts.inferred}</small></>}{node.children.length?<Icon name="chevron-right" className="lt-session-caret"/>:<span className="lt-session-caret" aria-hidden="true">·</span>}</span>;
+ const label=<span className={`lt-session-row-label${root?' is-root':''}`} style={{paddingLeft:root?8:8+Math.min(level-1,8)*9}} aria-label={root?`${count} events`:undefined}>{root?<strong className="lt-event-count">{count}</strong>:<RibbonNodeDetails node={node}/>} {node.children.length?<Icon name="chevron-right" className="lt-session-caret"/>:<span className="lt-session-caret" aria-hidden="true">·</span>}</span>;
  const content=<>{identity}{!props.hideEvents && label}<SessionRibbon visibility={props.visibility} node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller&&timelineSectionVisible(props.visibility??{},'origins')} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></>;
  if(props.collapsed)return <div className="lt-session-row lt-session-preview">{content}</div>;
  if(!node.items.length)return <div className={`lt-session-row lt-session-empty ${root?'lt-session-empty-root':''}`}>{identity}{!props.hideEvents && label}<SessionRibbon visibility={props.visibility} node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller&&timelineSectionVisible(props.visibility??{},'origins')} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></div>;

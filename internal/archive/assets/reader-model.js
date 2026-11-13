@@ -378,8 +378,9 @@ function usageEstimatePresentation(conversation,owned=null){
   if(!responses.length)return null;
   const sum=responses.reduce((total,response)=>{for(const key of ['expected','lower','upper'])total[key]+=response.output_tokens[key];return total},{expected:0,lower:0,upper:0});
   const local=responses.some(response=>response.local_weight>0),unknown=responses.some(response=>!response.model||!response.effort);
+  const assumedModels=[...new Set(responses.filter(response=>response.model_source==='observed_conversation_selection').map(response=>response.model).filter(Boolean))];
   return{...sum,label:`~${usageEstimateNumber(sum.expected)} estimated output tokens`,
-    detail:`${usageEstimateNumber(sum.lower)}–${usageEstimateNumber(sum.upper)} sensitivity range. ${local?'Local coding calibration with published assumptions':'Published estimation assumptions'} (${report.manifest_revision}).${unknown?' Model or effort unreported; fallback assumptions apply.':''} Output only, for selected-branch responses in conversations without reported usage. Input and cache usage are unavailable; API cost, when priced, covers estimated output only.`,
+    detail:`${usageEstimateNumber(sum.lower)}–${usageEstimateNumber(sum.upper)} sensitivity range. ${local?'Local coding calibration with published assumptions':'Published estimation assumptions'} (${report.manifest_revision}).${unknown?' Model or effort unreported; fallback assumptions apply.':''}${assumedModels.length?` Estimation and API pricing assume ${assumedModels.join(', ')} from saved conversation settings; the model used for each response was not recorded.`:''} Output only, for selected-branch responses in conversations without reported usage. Input and cache usage are unavailable; API cost, when priced, covers estimated output only.`,
     assumptions:'/api/estimation/assumptions'};
 }
 function toolDurationEstimatePresentation(message){
@@ -652,13 +653,70 @@ function readerTimelineCategory(message){
 // identities distinct and rebuild the index when a fuller result changes a label.
 function transcriptTagId(category,label){return 'tag:'+JSON.stringify([category,label])}
 function transcriptTagParts(id){if(typeof id!=='string'||!id.startsWith('tag:'))return null;try{const value=JSON.parse(id.slice(4));return Array.isArray(value)&&value.length===2&&value.every(item=>typeof item==='string')?value:null}catch{return null}}
+// Presentation groups refine the activity key without changing its saved tag
+// identities or the timeline's action categories. Unknown MCP servers belong
+// here too, even when they have no specialized rich tool presentation.
+function transcriptActivityPresentation(message){
+  const {name,raw}=toolPayload(message),category=toolCategory(message);
+  const group=(id,label,icon)=>({id,label,icon});
+  const icons={read:'read',search:'search',edit:'edit',command:'command',git:'git',python:'code',typecheck:'typecheck',test:'check',lint:'lint',web:'web',agent:'agent',todo:'todo',reasoning:'thought',context:'context',run:'event',error:'error',tool:'tool'};
+  let icon=icons[commandKind(message)]||'tool',keyPath=[];
+  const mcp=message.kind==='tool_call'&&name.match(/^mcp__(.+)(?:__|\.)([^.]+)$/i);
+  if(mcp){
+    let server=mcp[1];const method=mcp[2];
+    // Codex Apps records both service.method and service_method names.
+    if(server.toLowerCase()==='codex_apps'){
+      const service=method.match(/^(github|search_service|plugin_management|chatgpt_space|sites|pets|safety_settings|hotline)_(.+)$/i);
+      if(service)server+='__'+service[1];
+    }
+    const names={'remote-devices':'Remote devices','claude_browser':'Browser','remote-devices__claude_browser':'Browser (remote devices)','claude-in-chrome':'Browser (Chrome)','remote_claude-in-chrome':'Browser (Chrome)','chrome':'Browser (Chrome)','claude_docs':'Docs','gmail':'Gmail','google_sheets':'Google Sheets','google_drive':'Google Drive','codex_apps':'Codex apps','codex_apps__github':'GitHub','codex_apps__search_service':'Search service','codex_apps__plugin_management':'Plugin management','codex_apps__chatgpt_space':'Pages','codex_apps__sites':'Sites','conductor':'Conductor','pharos':'Pharos','memory':'Memory','cua_repl':'Computer','node_repl':'JavaScript'};
+    const id=server.toLowerCase(),label=names[id]||server;
+    const serverIcon=/browser|chrome/.test(id)?'web':id.endsWith('github')?'git':id==='remote-devices'?'command':/docs|sheets|drive|chatgpt_space/.test(id)?'read':/gmail|search_service/.test(id)?'search':id==='memory'?'context':'tool';
+    keyPath=[group('mcp','MCP','tool'),group('mcp:'+id,label,serverIcon)];
+  }else if(message.kind==='reasoning')keyPath=[group('thinking','Thinking','thought')];
+  else if(message.kind==='attachment'){keyPath=[group('attachments','Attachments','read')];icon='read'}
+  else if(message.kind==='context'||raw?.type==='claude_ai_conversation'){
+    keyPath=[group('context','Context','context')];
+    icon=raw?.type==='claude_ai_conversation'?'chat':/agent_listing/.test(raw?.source||'')?'agent':/tools|mcp/.test(raw?.source||'')?'tool':raw?.source==='date_note'?'history':'context';
+  }else if(message.kind!=='tool_call'&&message.kind!=='delegation')keyPath=[group('events','System events','event')];
+  else if(/^(toolsearch|tool_search|search_tools|list_tools)$/i.test(name)){keyPath=[group('discovery','Tool discovery','search')];icon='search'}
+  else if(/^skill$/i.test(name)){keyPath=[group('skills','Skills','read')];icon='read'}
+  else{
+    const groups={read:['reads','Reads & searches','read'],search:['reads','Reads & searches','read'],edit:['edits','File edits','edit'],command:['commands','Commands','command'],web:['browser','Browser','web'],todo:['planning','Planning','todo'],agent:['delegation','Delegation','agent'],tool:['tools','Other tools','tool']};
+    keyPath=[group(...(groups[category]||['events','System events','event']))];
+  }
+  return{keyPath,icon};
+}
 function transcriptTagIndex(messages,structure,describe){
   const entries=new WeakMap(),tags=new Map();
-  const add=info=>{const existing=tags.get(info.id);if(existing)existing.count++;else tags.set(info.id,{...info,count:1})};
-  const remove=info=>{const existing=tags.get(info.id);if(existing&&!--existing.count)tags.delete(info.id)};
-  const refresh=message=>{const before=entries.get(message),description=describe(message),after=description?.label?{...description,id:transcriptTagId(description.category,description.label)}:null;if(before?.id===after?.id)return false;if(before)remove(before);if(after){add(after);entries.set(message,after)}else entries.delete(message);return true};
+  const add=info=>{let existing=tags.get(info.id);if(!existing){existing={...info,count:0,presentations:new Map()};tags.set(info.id,existing)}existing.count++;const style=existing.presentations.get(info.presentationKey);if(style)style.count++;else existing.presentations.set(info.presentationKey,{keyPath:info.keyPath||[],icon:info.icon||'tool',count:1})};
+  const remove=info=>{const existing=tags.get(info.id);if(!existing)return;if(!--existing.count){tags.delete(info.id);return}const style=existing.presentations.get(info.presentationKey);if(style&&!--style.count)existing.presentations.delete(info.presentationKey)};
+  const refresh=message=>{const before=entries.get(message),description=describe(message),after=description?.label?{...description,id:transcriptTagId(description.category,description.label),presentationKey:JSON.stringify([description.keyPath,description.icon])}:null;if(before?.id===after?.id&&before?.presentationKey===after?.presentationKey)return false;if(before)remove(before);if(after){add(after);entries.set(message,after)}else entries.delete(message);return true};
   messages.forEach(message=>{if(!structure.consumed.has(message))refresh(message)});
   return{refresh,tagOf:message=>entries.get(message)?.id||null,info:id=>tags.get(id)||null,all:()=>[...tags.keys()],group:category=>[...tags.values()].filter(tag=>tag.category===category).map(tag=>tag.id)};
+}
+// Rows and key leaves share the icon for the complete saved activity tag.
+// Equal labels can cover different tools; neither surface picks just one.
+function transcriptActivityIcon(info){
+  const styles=[...(info?.presentations.values()||[])],first=styles[0];
+  return first&&styles.every(style=>style.icon===first.icon)?first.icon:info?.category==='run'?'command':'tool';
+}
+function transcriptActivityKeys(index,labelOf=id=>index.info(id).label){
+  const items=[],groups=new Map();
+  for(const id of index.all()){
+    const info=index.info(id),styles=[...info.presentations.values()],first=styles[0];
+    // One saved tag can cover equal labels from several services. Put it at
+    // their common ancestor once, rather than duplicating a filter control.
+    const keyPath=[];
+    for(const [depth,part]of first.keyPath.entries()){if(!styles.every(style=>style.keyPath[depth]?.id===part.id))break;keyPath.push(part)}
+    let children=items,path='';
+    for(const part of keyPath){path+='/'+part.id;let parent=groups.get(path);if(!parent){parent={...part,id:'activity:'+path,values:[],children:[]};groups.set(path,parent);children.push(parent)}parent.values.push(id);children=parent.children}
+    children.push({id,label:labelOf(id),values:[id],icon:transcriptActivityIcon(info)});
+  }
+  const order=['context','thinking','attachments','skills','discovery','mcp','reads','edits','commands','browser','planning','delegation','events','tools'];
+  items.sort((a,b)=>{const rank=item=>{const position=order.indexOf(item.id.split('/')[1]);return position<0?order.length:position};return rank(a)-rank(b)});
+  for(const item of groups.values())item.children.sort((a,b)=>a.label.localeCompare(b.label));
+  return items;
 }
 // Unscoped label strings were emitted by earlier readers. A scoped show
 // override lets a user show one category while retaining that legacy hide for
@@ -1066,6 +1124,15 @@ function readerHighlightExclusions(hidden,all,selected){
   const available=new Set(all),shown=new Set(selected);
   return [...hidden.filter(key=>!available.has(key)),...all.filter(key=>!shown.has(key))];
 }
+// An individual annotation keeps its conversation, message, kind and span
+// identity in the same URL field as the reader's highlight exclusions.
+function readerAnnotationPrefix(conversation){return 'annotation:'+JSON.stringify([conversation]).slice(0,-1)+','}
+function readerAnnotationSpan(kind,className,writingIndex){
+  if(kind==='writing')return writingIndex;
+  const classes=String(className).split(/\s+/),at=classes.find(name=>/^event-(?:target-)?at-\d+$/.test(name));
+  return (classes.includes('event-context')?'context:':classes.includes('agent-event')?'sentence:':'target:')+at;
+}
+function readerAnnotationKey(conversation,message,kind,span){return 'annotation:'+JSON.stringify([conversation,message,kind,span])}
 // A sentence can carry several event groups. Its hue and tooltip follow the
 // likeliest remaining event when a group is hidden, without changing its text.
 function readerEventHighlights(events,shown){

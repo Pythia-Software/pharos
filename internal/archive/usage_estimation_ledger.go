@@ -63,13 +63,18 @@ func publishCanonicalUsageEstimates(ctx context.Context, tx *sql.Tx, conversatio
 			output, thinking, output, response.MessageID, response.MessageID, jsonText(payload)); err != nil {
 			return err
 		}
-		// Unknown model stays unknown; a later conversation selection must not
-		// acquire an historical API price for this response.
+		// The estimated row can carry a saved selection as an explicit pricing
+		// assumption; source messages and measured requests remain unchanged.
 		model := defaultString(response.Model, "Unknown model")
+		usageMetadata := map[string]any{"estimator_key": key, "scope": "output_only"}
+		if response.ModelSource != "" {
+			usageMetadata["model_source"] = response.ModelSource
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,effort,attribution,output_tokens,reasoning_output_tokens,total_tokens,is_estimate,input_tokens_available,usage_estimate_json)
  VALUES(?,?,?,?,'estimated-output',?,?,?,1,0,?)
  ON CONFLICT(agent_session_id,usage_hour,model,effort,attribution) DO UPDATE SET output_tokens=output_tokens+excluded.output_tokens,
- reasoning_output_tokens=reasoning_output_tokens+excluded.reasoning_output_tokens,total_tokens=total_tokens+excluded.total_tokens`, session, usageHour(stamp), model, response.Effort, output, thinking, output, jsonText(map[string]any{"estimator_key": key, "scope": "output_only"})); err != nil {
+ reasoning_output_tokens=reasoning_output_tokens+excluded.reasoning_output_tokens,total_tokens=total_tokens+excluded.total_tokens,
+ usage_estimate_json=CASE WHEN json_extract(excluded.usage_estimate_json,'$.model_source') IS NOT NULL THEN excluded.usage_estimate_json ELSE usage_estimate_json END`, session, usageHour(stamp), model, response.Effort, output, thinking, output, jsonText(usageMetadata)); err != nil {
 			return err
 		}
 		for _, tool := range response.Tools {

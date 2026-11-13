@@ -3327,6 +3327,15 @@
       "reason": "Opens temporary source ingestion information without changing the saved view."
     },
     {
+      "key": "564581034a484353:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<module>",
+      "tag": "button",
+      "control": "'button', 'estimate-dialog-close', '×'",
+      "contract": "transient",
+      "reason": "Closes the temporary explanation of estimates; it does not change view or query state."
+    },
+    {
       "key": "e91ec901e257f7ab:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<module>",
@@ -3689,6 +3698,24 @@
       "control": "'select', 'conversation-selector'",
       "contract": "action",
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
+    },
+    {
+      "key": "3943396b6748787d:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "pinLabelTip",
+      "tag": "button",
+      "control": "'button', '', 'Copy this text'",
+      "contract": "action",
+      "reason": "Copies the selected annotation text; the pinned tooltip is transient."
+    },
+    {
+      "key": "88b764f3621483cd:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "pinLabelTip",
+      "tag": "button",
+      "control": "'button', '', name",
+      "contract": "reader",
+      "reason": "Annotation tooltip actions can hide individual marks using reader_highlight_hidden or reveal linked text; the tooltip itself is transient."
     },
     {
       "key": "089cfe80425bbb90:0",
@@ -4078,6 +4105,15 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
+      "key": "c4d3d7a454a331d4:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "timelineEntry",
+      "tag": "button",
+      "control": "'button', 'writing-estimate-trigger', '*'",
+      "contract": "transient",
+      "reason": "Opens or closes a temporary explanation of this message’s existing writing estimate; it changes no view or query state."
+    },
+    {
       "key": "246ed090316debe1:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "toolEvent",
@@ -4121,6 +4157,15 @@
       "control": "'button', '', `Load full output · ${formatBytes(clippedBytes(clipped))}`",
       "contract": "reader",
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
+    },
+    {
+      "key": "6d3c4485b9f0cec6:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "transcriptHighlightControl",
+      "tag": "button",
+      "control": "'button', '', 'Show hidden annotations'",
+      "contract": "view.reader_highlight_hidden",
+      "reason": "Restores hidden annotations for this conversation through the registered reader_highlight_hidden field."
     },
     {
       "key": "33619209c2062df5:0",
@@ -4602,11 +4647,11 @@
       "reason": "Shared Show, Hide, Hide others and Show All actions delegate visibility to the canonical dashboard, Timeline or reader key owner, including mixed category counts."
     },
     {
-      "key": "8a2a6260ebee6269:0",
+      "key": "363f86ab0268887b:0",
       "file": "web/src/chart-legend-chip.tsx",
       "owner": "LegendMenu",
       "tag": "div",
-      "control": "id={menuId} aria-label={menuLabel} onKeyDown={event => { const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role^=\"menuitem\"]:not(:disabled)') ?? [])]; const index = entries.indexOf(document.activeElement as HTMLButtonElement); if (event.key === \"Tab\") { close(true); return; } if (![\"ArrowDown\", \"ArrowUp\", \"Home\", \"End\"].includes(event.key)) return; event.preventDefault(); const next = event.key === \"Home\" ? 0 : event.key === \"End\" ? entries.length - 1 : (index + (event.key === \"ArrowDown\" ? 1 : -1) + entries.length) % entries.length; entries[next]?.focus(); }}",
+      "control": "id={menuId} aria-label={menuLabel} onKeyDown={event => { const entries = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role^=\"menuitem\"]:not(:disabled)') ?? [])]; const index = entries.indexOf(document.activeElement as HTMLButtonElement); if (event.key === \"Tab\") { close(true); return; } if (![\"ArrowDown\", \"ArrowUp\", \"Home\", \"End\"].includes(event.key)) return; event.preventDefault(); const next = event.key === \"Home\" ? 0 : event.key === \"End\" ? entries.length - 1 : (index + (event.key === \"ArrowDown\" ? 1 : -1) + entries.length) % entries.length; if (menu.current) focusMenuEntry(menu.current, entries[next]); }}",
       "contract": "transient",
       "reason": "Shared legend and whole-key menus keep only transient openness and keyboard focus. Value actions delegate to canonical dashboard, timeline or reader fields; menu navigation does not create a durable disclosure."
     },
@@ -5839,6 +5884,15 @@
       "control": "aria-label=\"Dictate\"",
       "contract": "editing",
       "reason": "Dictation microphone: types into a draft text box (Ask prompt, annotation note or feedback comment); the recording is a transient native session, not view state."
+    },
+    {
+      "key": "ee5c39d0f6f17866:0",
+      "file": "web/src/estimate-info.tsx",
+      "owner": "EstimateInfoButton",
+      "tag": "button",
+      "control": "aria-label=\"About estimates\" onClick={event => { const panel = readerHost?.querySelector<HTMLElement & {usageEstimate?: UsageEstimate | null}>(\".conversation-panel:not(.conversation-loading)\"); window.pharosOpenEstimateDialog?.(event.currentTarget, { usage: panel?.usageEstimate }); }}",
+      "contract": "transient",
+      "reason": "Opens the temporary shared estimate explanation without changing view or query state."
     },
     {
       "key": "5be3bc0bf7116573:0",
@@ -7995,20 +8049,31 @@
       "reason": "Source navigation scrolls and highlights through the existing reader materialization handlers without taking keyboard focus. Keyboard browsing and the automatic window are transient scroll state; navigator choices bind reader_navigator."
     },
     {
-      "key": "7465388f7cf601a9:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "ReaderNavigator",
-      "tag": "div",
-      "control": "aria-label=\"Session timeline. Click to reveal a message.\" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width);}}",
-      "contract": "transient",
-      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
-    },
-    {
       "key": "79fbf467b09870f1:0",
       "file": "web/src/reader-navigator.tsx",
       "owner": "ReaderNavigator",
       "tag": "button",
       "control": "onClick={()=>{const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}",
+      "contract": "transient",
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
+    },
+    {
+      "key": "801ecdacaf583a50:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={sessionKey}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "9fe41ec88adacc4c:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "div",
+      "control": "aria-label=\"Session timeline. Click to reveal a message.\" onClick={event=>{if(expandable){event.preventDefault();event.stopPropagation();}const track=event.currentTarget,rect=track.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width,{track,x:event.clientX,y:event.clientY});}}",
       "contract": "transient",
       "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
     },
@@ -8022,11 +8087,11 @@
       "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; navigator choices bind reader_navigator."
     },
     {
-      "key": "29cfe359713cf44e:0",
+      "key": "5c3f71ba014e64e4:0",
       "file": "web/src/reader-navigator.tsx",
       "owner": "ReaderRibbonSection",
       "tag": "span",
-      "control": "onClick={event=>{event.preventDefault();event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width);}}",
+      "control": "onClick={event=>{event.preventDefault();event.stopPropagation();const track=event.currentTarget,rect=track.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width,{track,x:event.clientX,y:event.clientY});}}",
       "contract": "transient",
       "reason": "Clicking a ribbon scrolls and highlights its source message; scroll position is transient and the accordion uses ViewDisclosure."
     },
