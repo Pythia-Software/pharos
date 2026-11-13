@@ -21,8 +21,8 @@ test("estimated output stays distinct from a measured lower bound", () => {
   assert.match(workspaceTotalText({...estimate, value: .021}, "usd"), /^\$.*\*$/);
   assert.equal(workspaceTotalText(metric(10200, "partial"), "tokens"), "10.2K+");
   assert.equal(workspaceTotalText({...estimate, value: null}, "usd"), workspaceTotalText(metric(null), "usd"));
-  assert.match(cellTitle(estimate, spec("tokens", "tokens")), /estimated output.*input and cache usage are unavailable/i);
-  assert.match(cellTitle(estimate, spec("cost", "usd")), /cost.*estimated output only/i);
+  assert.match(cellTitle(estimate, spec("tokens", "tokens")), /estimated usage.*hidden system prompts are not counted/i);
+  assert.match(cellTitle(estimate, spec("cost", "usd")), /cost.*is partial/i);
   assert.equal(metricText(metric(10200, "partial"), "tokens"), "10.2K+");
 });
 

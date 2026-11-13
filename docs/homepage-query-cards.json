@@ -5055,7 +5055,7 @@
         7
       ],
       "action": "Explore daily cached input",
-      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens), weighted by tokens rather than averaging row percentages. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.",
+      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens) over recorded usage, weighted by tokens rather than averaging row percentages. Estimated usage is left out, because its cache division is assumed. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.",
       "cover": {
         "mode": "result",
         "metricId": "card_cache_read_input_tokens",
@@ -6829,7 +6829,7 @@
           {
             "id": "cc_share",
             "op": "formula",
-            "expression": "SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)",
+            "expression": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[input_tokens])),0)",
             "label": "Cache-read share of all input"
           },
           {
@@ -6881,7 +6881,7 @@
         "showOther": false
       },
       "action": "Explore Tokens and Cost",
-      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens), weighted by tokens rather than averaging row percentages. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.",
+      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens) over recorded usage, weighted by tokens rather than averaging row percentages. Estimated usage is left out, because its cache division is assumed. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.",
       "where": [
         {
           "field": "input_tokens",
@@ -12202,7 +12202,7 @@
         {
           "id": "mc_cache_scatter",
           "op": "count",
-          "expression": "SUM([cache_read_input_tokens])/NULLIF(SUM([cache_read_input_tokens])+SUM([uncached_input_tokens]),0)",
+          "expression": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[cache_read_input_tokens]+[uncached_input_tokens])),0)",
           "expressionY": "1000000*SUM([cost_usd])/NULLIF(SUM([total_tokens]),0)",
           "groupBy": [
             "provider",
@@ -12238,7 +12238,7 @@
           {
             "id": "mc_cache_share",
             "op": "formula",
-            "expression": "SUM([cache_read_input_tokens])/NULLIF(SUM([cache_read_input_tokens])+SUM([uncached_input_tokens]),0)",
+            "expression": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[cache_read_input_tokens]+[uncached_input_tokens])),0)",
             "label": "Cached input share"
           },
           {
@@ -12312,7 +12312,7 @@
           {
             "id": "cc_share",
             "op": "formula",
-            "expression": "SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)",
+            "expression": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[input_tokens])),0)",
             "label": "Cache-read share of all input"
           },
           {
@@ -12363,7 +12363,7 @@
         "showOther": false
       },
       "action": "Explore Tokens and Cost",
-      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens), weighted by tokens rather than averaging row percentages. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.",
+      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens) over recorded usage, weighted by tokens rather than averaging row percentages. Estimated usage is left out, because its cache division is assumed. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.",
       "where": [
         {
           "field": "input_tokens",
@@ -12412,7 +12412,7 @@
           "id": "cc_cache_workload",
           "op": "sum",
           "expression": "SUM([input_tokens])",
-          "expressionY": "SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)",
+          "expressionY": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[input_tokens])),0)",
           "groupBy": [
             "root_provider",
             "root_model_family",
@@ -12465,7 +12465,7 @@
           {
             "id": "cc_share",
             "op": "formula",
-            "expression": "SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)",
+            "expression": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[input_tokens])),0)",
             "label": "Cache-read share of all input"
           },
           {
@@ -12514,7 +12514,7 @@
         "height": 300
       },
       "action": "Explore conversation input reuse",
-      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens), weighted by tokens rather than averaging row percentages. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality. Each point sums a whole top-level conversation, including recorded delegated work, linked launches, and continuations, and uses its top-level recorded model color. Missing/cyclic parent links is excluded. Up to 2,000 conversations ranked by input are drawn; all remain in the destination. Only X is logarithmic: the linear percentage axis preserves zero-cache conversations. Large total input does not mean a large individual context window.",
+      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens) over recorded usage, weighted by tokens rather than averaging row percentages. Estimated usage is left out, because its cache division is assumed. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality. Each point sums a whole top-level conversation, including recorded delegated work, linked launches, and continuations, and uses its top-level recorded model color. Missing/cyclic parent links is excluded. Up to 2,000 conversations ranked by input are drawn; all remain in the destination. Only X is logarithmic: the linear percentage axis preserves zero-cache conversations. Large total input does not mean a large individual context window.",
       "where": [
         {
           "field": "input_tokens",

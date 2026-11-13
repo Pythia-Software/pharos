@@ -80,7 +80,7 @@ test("the Tokens trend sums by its period's field and split; cost by type is by 
   }
   assert.deepEqual(clauses("week", "type", "cost").map(metric => [metric.field, metric.groupBy]), [["cost_usd", ["week", "provider"]]]);
   assert.deepEqual(clauses("week", "type", "percent").map(metric => metric.field), tokenTypes.map(type => type.key));
-  assert.deepEqual(tokenSummaryMetrics.map(metric => metric.id), ["total_tokens:", "cost_usd:", "uncached_input_tokens:", "cache_read_input_tokens:", "output_tokens:", "agent_sessions"]);
+  assert.deepEqual(tokenSummaryMetrics.map(metric => metric.id), ["total_tokens:", "cost_usd:", "uncached_input_tokens:", "cache_read_input_tokens:", "recorded_cache_reads", "recorded_cache_lookups", "output_tokens:", "agent_sessions"]);
   for (const aggregations of [tokenSummaryMetrics, clauses("hour", "project_name"), clauses("day", "provider_model", "cache_read_share"), clauses("week", "model_family", "conversations")]) assert.doesNotThrow(() => core.toQueryRequestV3({ ...core.EMPTY_QUERY, aggregations }, schemas.usage, queryCapabilities,undefined,{rows:false}));
 });
 

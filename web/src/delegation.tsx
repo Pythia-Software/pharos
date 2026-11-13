@@ -376,7 +376,7 @@ export function cellTitle(metric: Metric, spec: Spec) {
         ? `${localTime(metric.value)}\n`
         : `${raw} ${spec.unit}\n`;
   const definition = metric.is_estimate && spec.id === "cost" ? "API-rate estimate, not billing." : spec.definition;
-  const estimate = metric.is_estimate ? "\nIncludes estimated output tokens only for conversations without reported usage; input and cache usage are unavailable. API cost for those conversations covers estimated output only and may assume a saved conversation model selection." : "";
+  const estimate = metric.is_estimate ? "\nIncludes estimated usage for conversations without reported counts: generated output, and processed input where the visible conversation supports it. Hidden system prompts are not counted and the cache division is assumed, so API cost for those conversations is partial and may assume a saved conversation model selection." : "";
   return `${exact}${definition}${estimate}${metric.quality === "reported-minimum" ? "\n* Reported minimum; may cover only the last request. Full session usage and token breakdown were not recorded." : ""}\n${metric.quality} · ${metric.known}/${metric.total} retained coverage. ${metric.value === null ? "No sufficient retained evidence." : "Source coverage may be incomplete."}`;
 }
 

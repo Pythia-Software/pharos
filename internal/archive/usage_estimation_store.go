@@ -287,6 +287,6 @@ func (c *Catalog) UsageEstimationStatus(ctx context.Context) (map[string]any, er
 	c.tools.mu.Lock()
 	status["calibration_error"] = nilIfEmpty(c.tools.estimationError)
 	c.tools.mu.Unlock()
-	status["scope"] = "selected_branch_output_in_conversations_without_reported_usage"
+	status["scope"] = "selected_branch_usage_in_conversations_without_reported_usage"
 	return status, nil
 }

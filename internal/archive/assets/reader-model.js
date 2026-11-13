@@ -249,13 +249,13 @@ function conversationTokenReports(messages){
     reports[evidence.index]??={total:null,scope:'observation',stream:evidence.stream,label:'Subagent token evidence'};
     reports[evidence.index].observedMinimum=evidence.total;
   }
-  // Stored predictions use the ordinary consumption pathway. They have no
-  // input measurement and cannot create an input-context sample.
+  // Stored predictions use the ordinary consumption pathway. Their input,
+  // when present, is itself predicted and cannot create an input-context sample.
   for(let index=0;index<messages.length;index++){
     const message=messages[index];
     if(message.usage_is_estimate===true&&!reports[index]){
       const usage=message.usage,total=tokenTotal(usage);
-      if(total!==null)reports[index]={total,reportedTotal:total,scope:'request',stream:'main',label:'Estimated output usage',usage,breakdown:tokenBreakdown(usage),isEstimate:true};
+      if(total!==null)reports[index]={total,reportedTotal:total,scope:'request',stream:'main',label:Number.isFinite(usage?.input_tokens)?'Estimated input and output usage':'Estimated output usage',usage,breakdown:tokenBreakdown(usage),isEstimate:true};
     }
   }
   return reports;
@@ -382,6 +382,13 @@ function usageEstimatePresentation(conversation,owned=null){
   const sum=responses.reduce((total,response)=>{for(const key of ['expected','lower','upper'])total[key]+=response.output_tokens[key];return total},{expected:0,lower:0,upper:0});
   const local=responses.some(response=>response.local_weight>0),unknown=responses.some(response=>!response.model||!response.effort);
   const assumedModels=[...new Set(responses.filter(response=>response.model_source==='observed_conversation_selection').map(response=>response.model).filter(Boolean))];
+  // Processed input is a separate estimate with its own range. It appears only
+  // when every listed response has one, so a sum never mixes counted and missing input.
+  const valid=value=>['expected','lower','upper'].every(key=>Number.isFinite(value?.[key])&&value[key]>=0);
+  const input=responses.every(response=>valid(response.input?.input_tokens)&&Number.isFinite(response.input.requests))?responses.reduce((total,response)=>{for(const key of ['expected','lower','upper'])total[key]+=response.input.input_tokens[key];total.requests+=response.input.requests;total.read+=response.input.cache_read_input_tokens||0;total.nontext=total.nontext||response.input.nontext_excluded===true;return total},{expected:0,lower:0,upper:0,requests:0,read:0,nontext:false}):null;
+  if(input)return{...sum,input,label:`~${usageEstimateNumber(input.expected)} estimated input + ~${usageEstimateNumber(sum.expected)} estimated output tokens`,
+    detail:`Input: ${usageEstimateNumber(input.lower)}–${usageEstimateNumber(input.upper)} sensitivity range across ${input.requests.toLocaleString()} inferred model request${input.requests===1?'':'s'}; each request re-reads the conversation so far, including tool results. It counts visible text only: the expected value leaves out hidden system prompts and tool definitions${input.nontext?', and images or files without extracted text':''}. About ${usageEstimateNumber(input.read)} of it is priced as cache reads under an assumed standard prompt cache. Output: ${usageEstimateNumber(sum.lower)}–${usageEstimateNumber(sum.upper)} sensitivity range. ${local?'Local coding calibration with published assumptions':'Published estimation assumptions'} (${report.manifest_revision}).${unknown?' Model or effort unreported; fallback assumptions apply.':''}${assumedModels.length?` Estimation and API pricing assume ${assumedModels.join(', ')} from saved conversation settings; the model used for each response was not recorded.`:''} For selected-branch responses in conversations without reported usage.`,
+    assumptions:'/api/estimation/assumptions'};
   return{...sum,label:`~${usageEstimateNumber(sum.expected)} estimated output tokens`,
     detail:`${usageEstimateNumber(sum.lower)}–${usageEstimateNumber(sum.upper)} sensitivity range. ${local?'Local coding calibration with published assumptions':'Published estimation assumptions'} (${report.manifest_revision}).${unknown?' Model or effort unreported; fallback assumptions apply.':''}${assumedModels.length?` Estimation and API pricing assume ${assumedModels.join(', ')} from saved conversation settings; the model used for each response was not recorded.`:''} Output only, for selected-branch responses in conversations without reported usage. Input and cache usage are unavailable; API cost, when priced, covers estimated output only.`,
     assumptions:'/api/estimation/assumptions'};

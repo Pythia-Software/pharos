@@ -146,6 +146,11 @@ test("means and rates use the whole denominator including zero durations and abs
   const summary = applyQuery(rollups, applyQueryIdea(EMPTY_QUERY, usageQueryIdeas.tools[0]), schemas.tools).rows[0];
   assert.equal(summary.idea_failure_rate, .1);
   assert.equal(summary.idea_mean_duration, 100);
+  // An estimate's cache division is assumed, so it moves no cache ratio.
+  const usage = [{ cache_creation_input_tokens: 50, cache_read_input_tokens: 200 }, { is_estimate: true, cache_creation_input_tokens: 9000, cache_read_input_tokens: 100 }]
+    .map((extra, index) => ({ ...baseRow(schemas.usage, index), provider: "one", model_family: "alpha", is_estimate: false, ...extra }));
+  const churn = usageQueryIdeas.usage.find(idea => idea.id === "usage:cache-churn");
+  assert.equal(applyQuery(usage, applyQueryIdea(EMPTY_QUERY, churn), schemas.usage).rows[0].idea_write_per_read, 50 / 200);
 });
 
 test("nullable message authorship stays outside classified workspace writing", () => {

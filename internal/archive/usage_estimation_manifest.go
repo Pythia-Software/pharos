@@ -13,7 +13,7 @@ import (
 	"github.com/gbdubs/pharos/estimation"
 )
 
-const usageEstimatorVersion = "claude-output-v4.2"
+const usageEstimatorVersion = "claude-usage-v5"
 
 // Changes to either inference code policy or published coefficients invalidate
 // the saved calibration and schedule the existing Tools maintenance stage on
@@ -95,6 +95,7 @@ type estimationManifest struct {
 	Provider                string                           `json:"provider"`
 	Methodology             string                           `json:"methodology"`
 	Notes                   string                           `json:"notes"`
+	Input                   estimationInputPolicy            `json:"input"`
 	Profiles                map[string]estimationProfile     `json:"profiles"`
 	Models                  []estimationModel                `json:"models"`
 	DefaultToolSeconds      estimationRange                  `json:"default_tool_seconds"`
@@ -156,6 +157,9 @@ func parseEstimationManifest(data []byte) (estimationManifest, error) {
 			return doc, fmt.Errorf("invalid tool estimation prior %s", key)
 		}
 		seen[key] = true
+	}
+	if err := doc.validateInput(); err != nil {
+		return doc, err
 	}
 	if err := doc.validateToolTiming(); err != nil {
 		return doc, err
