@@ -1566,15 +1566,17 @@ test('overlapping context profiles reveal the stream actually clicked', {skip}, 
 });
 
 test('untimed session navigator draws calls and failures and reveals by message order', {skip}, async t=>{
-  let timed=false;
+  let timed=false,partial=false,singleSession=false;
   const longQuery='select:'+Array.from({length:40},(_,index)=>`mcp__service__search_resource_${index}`).join(',');
   const {page,settled,shot}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-timeline',viewport:{width:1920,height:1050},api:{
+    'GET /api/work/:id':call=>{const work=defaultApi['GET /api/work/:id'](call);return singleSession?{...work,conversations:work.conversations.slice(0,1)}:work;},
+    'GET /api/work/:id/delegation':call=>{const data=defaultApi['GET /api/work/:id/delegation'](call);return singleSession?{...data,rows:data.rows.slice(0,1),focus:data.focus.slice(0,1),session_count:1,total:1}:data;},
     'GET /api/work/:id/conversations/:conversation':call=>{
       const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
       if(call.params.conversation!=='conv-root')return body;
       let tick=0;
-      const event=(id,kind,text,extra={})=>({id,native_id:id,kind,role:'assistant',created_at:timed?new Date(Date.UTC(2026,10,1)+tick++*10000).toISOString():null,text:typeof text==='string'?text:JSON.stringify(text),...extra});
-      return {...body,messages:[event('prompt','message','Check the files',{role:'user'}),
+      const event=(id,kind,text,extra={})=>({id,native_id:id,kind,role:'assistant',created_at:timed||partial&&id==='prompt'?new Date(Date.UTC(2026,10,1)+tick++*10000).toISOString():null,text:typeof text==='string'?text:JSON.stringify(text),...extra});
+      return {...body,messages:[event('prompt','message','Check the files',{role:'user',labels:{ids:['P.request.work.implement'],probs:{'P.request.work.implement':.95}},authorship:{provisional:true,typed_words:3,spans:[{start:0,end:15,category:'typed',words:3}]}}),
         event('command','tool_call',{name:'Bash',input:{command:'check'}},{call_id:'cmd'}),
         event('result','tool_result',{exit_code:1,content:'Process exited with code 1'},{call_id:'cmd'}),
         event('delegate','delegation',{name:'Task',input:{description:'Review files'}},{call_id:'agent'}),
@@ -1594,10 +1596,29 @@ test('untimed session navigator draws calls and failures and reveals by message 
   assert.equal(await key.getByText('End time unknown',{exact:true}).count(),0,'ordinal timelines have no seconds-based guide');
   assert.equal(await navigator.locator('.reader-navigator-timeline [data-tool-id="web-call"] line').count(),0);
   assert.equal(await page.locator('.timeline-entry[data-message-id="search"] .timeline-time').innerText(),'');
+  const eventMark=navigator.locator('.reader-navigator-timeline [data-agent-event="obstacle"]');
+  const eventBounds=await eventMark.boundingBox(),timelineBounds=await navigator.locator('.reader-navigator-timeline').boundingBox();
+  await page.mouse.click(Math.min(eventBounds.x+eventBounds.width/2,timelineBounds.x+timelineBounds.width-1),eventBounds.y+eventBounds.height/2);
+  await page.locator('[data-message-id="reply"].authorship-target').waitFor({state:'visible'});
+  const prompt=page.locator('.timeline-entry[data-message-id="prompt"]'),marker=prompt.locator('.writing-estimate-trigger');
+  const checkEstimatePlacement=async()=>{
+    const time=prompt.locator('.timeline-time > span');
+    assert.match(await prompt.locator('.timeline-time').innerText(),/^\*\s*\+0s/);
+    const star=await marker.boundingBox(),stamp=await time.boundingBox();
+    assert.ok(star&&stamp&&star.x+star.width<=stamp.x,'the estimate precedes the timestamp');
+    assert.ok(star.y<stamp.y+stamp.height&&stamp.y<star.y+star.height,'the estimate and timestamp share a line');
+    assert.ok(star.x>=0,'the estimate remains within the viewport');
+  };
   const actionRow=page.locator('.timeline-entry[data-message-id="search"]');
   const contentInset=async()=>actionRow.evaluate(row=>row.querySelector('.timeline-content').getBoundingClientRect().left-row.getBoundingClientRect().left);
   assert.ok(Math.abs(await contentInset())<1,'untimed actions use the full row width');
   const sections=navigator.locator('.reader-section-node').first();
+  const assertCaretFits=async(label)=>{
+    const placement=await label.evaluate(element=>{const text=element.querySelector('strong').getBoundingClientRect(),caret=element.querySelector('.reader-section-chevron').getBoundingClientRect(),bounds=element.getBoundingClientRect();return {right:caret.left>=text.right,inside:caret.left>=bounds.left&&caret.right<=bounds.right&&caret.top>=bounds.top&&caret.bottom<=bounds.bottom};});
+    assert.ok(placement.right&&placement.inside,'the caret stays to the right of its label and inside the row');
+  };
+  await assertCaretFits(sections.locator(':scope > summary .reader-section-label'));
+  await shot('multi-session-caret');
   await sections.locator(':scope > summary .reader-section-label').click();
   await navigator.getByText('Message modes',{exact:true}).waitFor();
   await navigator.getByText('Agent events',{exact:true}).waitFor();
@@ -1636,6 +1657,7 @@ test('untimed session navigator draws calls and failures and reveals by message 
   await page.keyboard.press('Escape');
   await shot('reader-timeline-sections');
   await page.setViewportSize({width:320,height:900});
+  await assertCaretFits(sections.locator(':scope > summary .reader-section-label'));
   await checkLongSearch();
   assert.ok(Math.abs(await contentInset())<1,'untimed actions use the full row width on a narrow screen');
   assert.ok(await navigator.evaluate(element=>element.scrollWidth<=element.clientWidth),'expanded timeline fits on a narrow screen');
@@ -1654,23 +1676,67 @@ test('untimed session navigator draws calls and failures and reveals by message 
   await page.reload();await navigator.locator('.reader-navigator-timeline').waitFor();
   await key.getByText('End time unknown',{exact:true}).waitFor();
   assert.match(await page.locator('.timeline-entry[data-message-id="search"] .timeline-time').innerText(),/^\+\d/,'available timestamps remain visible');
+  await checkEstimatePlacement();
+  await shot('writing-estimate-timestamp');
+  await page.setViewportSize({width:320,height:900});
+  await checkEstimatePlacement();
+  await page.setViewportSize({width:1920,height:1050});
+  assert.ok(await marker.isVisible());await marker.click();await page.getByRole('dialog',{name:'How estimates work'}).waitFor();await page.keyboard.press('Escape');
   assert.ok(await contentInset()>0,'timed actions retain their time column');
   assert.ok(await navigator.locator('.reader-navigator-timeline [data-tool-id="web-call"] line').count(),'timed calls with an unknown end show a guide');
   await key.getByRole('button',{name:'Network',exact:true}).click();
   await page.getByRole('menuitem',{name:'Hide',exact:true}).click();
   await key.getByText('End time unknown',{exact:true}).waitFor({state:'detached'});
   assert.equal(await navigator.locator('[data-tool-id="web-call"]').count(),0);
+  timed=false;partial=true;
+  await page.reload();await marker.waitFor();
+  await checkEstimatePlacement();
+  await page.setViewportSize({width:320,height:900});
+  await settled();
+  await checkEstimatePlacement();
+  singleSession=true;timed=true;partial=false;
+  await page.setViewportSize({width:1920,height:929});
+  await page.reload();
+  await page.waitForFunction(()=>document.querySelector('.conversation-host')?.dataset.readerSingleSession==='true');
+  const timelineDisclosure=navigator.locator('.reader-navigator-timeline-disclosure');
+  await timelineDisclosure.waitFor();
+  assert.equal(await navigator.locator('.reader-section-label').getByText('Session',{exact:true}).count(),0,'a single session has no duplicate Session row');
+  assert.equal(await timelineDisclosure.evaluate(details=>details.open),true,'the original session disclosure state is preserved');
+  await navigator.getByText('Message modes',{exact:true}).waitFor();
+  await assertCaretFits(timelineDisclosure.locator(':scope > summary .reader-section-label'));
+  await shot('single-session-timeline');
+  await timelineDisclosure.locator(':scope > summary .reader-section-label').click();
+  assert.equal(await timelineDisclosure.evaluate(details=>details.open),false);
+  await page.waitForFunction(()=>window.pharosView.read('disclosures',{})['reader-timeline:conv-root:session']===false);
+  await page.reload();await timelineDisclosure.waitFor();
+  assert.equal(await timelineDisclosure.evaluate(details=>details.open),false,'the timeline disclosure restores after reload');
+  await timelineDisclosure.locator(':scope > summary .reader-section-label').click();
+  await navigator.getByText('Message modes',{exact:true}).waitFor();
+  const modes=timelineDisclosure.locator('.reader-section-node').filter({has:page.getByText('Message modes',{exact:true})}).first();
+  await modes.locator(':scope > summary .reader-section-label').click();
+  const sender=timelineDisclosure.locator('.reader-section-node').filter({has:page.getByText('Sender',{exact:true})}).last();
+  await sender.waitFor();
+  await assertCaretFits(sender.locator(':scope > summary .reader-section-label'));
+  await shot('reader-timeline-counts-icons');
+  const singleTrack=timelineDisclosure.locator('.reader-navigator-timeline'),singleBounds=await singleTrack.boundingBox();
+  await page.mouse.click(singleBounds.x+singleBounds.width/2,singleBounds.y+singleBounds.height/2);
+  assert.equal(await timelineDisclosure.evaluate(details=>details.open),true,'clicking the timeline still reveals without toggling its disclosure');
+  const browseTimeline=navigator.getByRole('button',{name:'Browse session timeline'});
+  await browseTimeline.focus();await page.keyboard.press('End');
+  assert.equal(await timelineDisclosure.evaluate(details=>details.open),true,'keyboard browsing leaves the disclosure open');
+  assert.ok(await browseTimeline.evaluate(button=>button===document.activeElement),'keyboard browsing keeps focus');
 });
 
 test('session navigator skips idle time and keeps scrolling and navigation aligned', {skip}, async t=>{
   const base=Date.UTC(2026,9,1);let anotherActive=false;
-  const {page,settled}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-turn',api:{
+  const {page,settled,shot}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-turn',viewport:{width:1920,height:929},api:{
     'GET /api/work/:id/conversations/:conversation':call=>{
       const body=defaultApi['GET /api/work/:id/conversations/:conversation'](call);
       if(call.params.conversation!=='conv-root')return body;
-      return {...body,messages:[['first','user',0],['first-reply','assistant',1],['resume','user',60],['last','assistant',61]].map(([id,role,minute])=>({
-        id,native_id:id,role,kind:'message',text:`Message ${id}`,created_at:new Date(base+minute*60000).toISOString(),
-      }))};
+      const message=(id,role,at)=>({id,native_id:id,role,kind:'message',text:`Message ${id}. `+'Retained conversation text. '.repeat(30),created_at:new Date(base+at).toISOString()});
+      return {...body,messages:[message('first','user',0),...Array.from({length:18},(_,i)=>message(`before-${i}`,'assistant',(i+1)*3000)),
+        message('resume','user',60*60000),{id:'timeline-tool',native_id:'timeline-tool',role:'assistant',kind:'tool_call',call_id:'timeline-tool-call',text:JSON.stringify({name:'Bash',input:{command:'inspect'}}),created_at:new Date(base+60*60000+15000).toISOString()},
+        message('last','assistant',61*60000),...Array.from({length:18},(_,i)=>message(`after-${i}`,'assistant',61*60000+(i+1)*1000))]};
     },
     'GET /api/work/:id/delegation':call=>({...defaultApi['GET /api/work/:id/delegation'](call),start:base,end:base+61*60000}),
     'GET /api/work/:id/parallel':call=>{
@@ -1684,6 +1750,28 @@ test('session navigator skips idle time and keeps scrolling and navigation align
   const turn=navigator.locator('.reader-navigator-turn').nth(1);
   const relativeLeft=()=>turn.evaluate(element=>{const track=element.parentElement.getBoundingClientRect(),mark=element.getBoundingClientRect();return (mark.left-track.left)/track.width;});
   assert.ok(await relativeLeft()<.6,'the resumed turn follows the compressed gap');
+  await navigator.locator('[data-tool-id="timeline-tool-call"]').first().waitFor({state:'attached'});
+  const toolX=await navigator.locator('[data-tool-id="timeline-tool-call"]').first().evaluate(mark=>mark.getBoundingClientRect().x);
+  const trackBounds=await track.boundingBox();
+  await page.mouse.click(toolX,trackBounds.y+trackBounds.height/2);
+  const target=page.locator('.event-body.authorship-target[data-message-id="timeline-tool"]');
+  await target.waitFor({state:'visible'});
+  await page.waitForFunction(()=>{
+    const target=document.querySelector('.event-body.authorship-target[data-message-id="timeline-tool"]'),scroller=document.querySelector('.workspace-reader-content'),rail=document.querySelector('.reader-navigator-host');
+    if(!target)return false;
+    const box=target.getBoundingClientRect(),view=scroller.getBoundingClientRect(),top=Math.max(view.top,rail.getBoundingClientRect().bottom);
+    return Math.abs((box.top+box.bottom)/2-(top+view.bottom)/2)<20;
+  });
+  assert.notEqual(await target.evaluate(element=>getComputedStyle(element).outlineStyle),'none','the selected tool event has a visible highlight');
+  await page.waitForFunction(()=>!document.querySelector('.reader-navigator-window').hidden);
+  const indicator=await navigator.evaluate(element=>{
+    const timeline=element.querySelector('.reader-navigator-timeline').getBoundingClientRect(),turn=element.querySelectorAll('.reader-navigator-turn')[1],last=turn.parentElement.getBoundingClientRect(),band=element.querySelector('.reader-navigator-window').getBoundingClientRect(),text=document.createRange();
+    text.selectNodeContents(turn.querySelector('span'));
+    return {extendsAbove:band.top<timeline.top,extendsBelow:band.bottom>last.bottom,labelClear:text.getBoundingClientRect().left>turn.getBoundingClientRect().left+2};
+  });
+  assert.ok(indicator.extendsAbove&&indicator.extendsBelow,'the viewport outline surrounds the navigator bars');
+  assert.ok(indicator.labelClear,'the turn label clears its indicator');
+  await shot('timeline-event-reveal');
   const bounds=await track.boundingBox();
   await page.mouse.click(bounds.x+bounds.width*.75,bounds.y+bounds.height/2);
   await page.waitForFunction(()=>document.querySelector('[data-message-id="resume"].authorship-target, [data-message-id="last"].authorship-target'));
@@ -1746,10 +1834,11 @@ test('session navigator scrolling reuses transcript geometry on a long session',
   await page.getByRole('checkbox',{name:'Turns',exact:true}).uncheck();
   await settled();
   t.diagnostic(JSON.stringify({fixture:'same expanded transcript, timeline only',...await measureScroll()}));
-  for(const name of ['Timeline','Context','Turns'])await page.getByRole('checkbox',{name,exact:true}).uncheck();
+  const timelineToggle=page.getByRole('group',{name:'Timeline key',exact:true}).getByRole('button',{name:'Timeline',exact:true});
+  await timelineToggle.click();
   await settled();
   t.diagnostic(JSON.stringify({fixture:'same expanded transcript, all navigators hidden',...await measureScroll()}));
-  await page.getByRole('checkbox',{name:'Timeline',exact:true}).check();
+  await timelineToggle.click();
   await settled();
   await page.locator('.turn').nth(80).evaluate(turn=>turn.scrollIntoView({block:'center',behavior:'instant'}));
   await page.waitForFunction(()=>!document.querySelector('.reader-navigator-window').hidden);

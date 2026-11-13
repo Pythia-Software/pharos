@@ -166,6 +166,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 			return nil, err
 		}
 		if len(observations) > 0 {
+			estimates.selections = observations
 			conversation["selected_settings"] = map[string]any{"scope": "observed_conversation_selection", "observations": observations[:min(500, len(observations))], "truncated": len(observations) > 500}
 		}
 	}

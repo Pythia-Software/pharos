@@ -13,7 +13,7 @@ import (
 	"github.com/gbdubs/pharos/estimation"
 )
 
-const usageEstimatorVersion = "claude-output-v4.1"
+const usageEstimatorVersion = "claude-output-v4.2"
 
 // Changes to either inference code policy or published coefficients invalidate
 // the saved calibration and schedule the existing Tools maintenance stage on

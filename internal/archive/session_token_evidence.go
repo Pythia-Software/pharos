@@ -147,7 +147,7 @@ func delegationTokenTotal(nodes []*delegationNode) delegationMetric {
 		included[n.ID] = n
 		children[n.ParentID] = append(children[n.ParentID], n)
 	}
-	known, partial := 0, false
+	known, partial, estimated := 0, false, false
 	var walk func(*delegationNode) (float64, float64)
 	walk = func(n *delegationNode) (accounted, uncovered float64) {
 		m := n.Self["tokens"]
@@ -174,6 +174,7 @@ func delegationTokenTotal(nodes []*delegationNode) delegationMetric {
 		} else {
 			partial = true
 		}
+		estimated = estimated || m.IsEstimate
 		if m.Quality == "partial" || m.Quality == "reported-minimum" {
 			partial = true
 		}
@@ -198,8 +199,13 @@ func delegationTokenTotal(nodes []*delegationNode) delegationMetric {
 		return delegationUnknown()
 	}
 	quality := "reported"
+	if estimated {
+		quality = "estimated"
+	}
 	if partial {
 		quality = "partial"
 	}
-	return delegationNumber(total, quality, known, len(nodes))
+	result := delegationNumber(total, quality, known, len(nodes))
+	result.IsEstimate = estimated
+	return result
 }

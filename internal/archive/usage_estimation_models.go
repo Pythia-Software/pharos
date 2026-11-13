@@ -375,7 +375,7 @@ func (b *usageEstimationBuilder) estimateMissingResponse(r *usageEstimationRespo
 		for _, pair := range [][2]string{{model, effort}, {model, "*"}, {"*", effort}, {"*", "*"}} {
 			for _, speed := range []string{r.speed, "*"} {
 				for _, m := range manifest.ResponseModels {
-					if m.Evidence != evidence || m.Model != pair[0] || m.Effort != pair[1] || m.Speed != speed || m.RequiresSettings && (model == "" || effort == "" || r.speedSource != "export" || m.Model != model || m.Effort != effort || m.Speed != r.speed) {
+					if m.Evidence != evidence || m.Model != pair[0] || m.Effort != pair[1] || m.Speed != speed || m.RequiresSettings && (r.modelAssumed || model == "" || effort == "" || r.speedSource != "export" || m.Model != model || m.Effort != effort || m.Speed != r.speed) {
 						continue
 					}
 					if value, valid := predictEstimationResponseModel(m, features); valid {

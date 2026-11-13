@@ -190,7 +190,11 @@ func (s *Server) stopClaudeSettingsRecording(source string, generation uint64, r
 // Account aliases must match. Keep organizations separate: neither a matching
 // alias nor a latest cache selection proves a historical request's model.
 func (c *Catalog) claudeConversationSettings(ctx context.Context, account, conversation string) ([]map[string]any, error) {
-	return queryMapsContext(ctx, c.reader(), `SELECT organization_uuid,observed_at,time_basis,model,effort_level,thinking_mode,host_id,source_name,cache_entry,snapshot_id
+	return claudeConversationSettingsFrom(ctx, c.reader(), account, conversation)
+}
+
+func claudeConversationSettingsFrom(ctx context.Context, q queryer, account, conversation string) ([]map[string]any, error) {
+	return queryMapsContext(ctx, q, `SELECT organization_uuid,observed_at,time_basis,model,effort_level,thinking_mode,host_id,source_name,cache_entry,snapshot_id
  FROM claude_chat_settings_observations WHERE account=? AND conversation_uuid=?
  ORDER BY julianday(observed_at) DESC,organization_uuid,snapshot_id LIMIT 501`, account, conversation)
 }

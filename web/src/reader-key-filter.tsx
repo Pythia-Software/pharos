@@ -4,9 +4,10 @@ import { flushSync } from "react-dom";
 import { ChartLegendChip, LegendMenu } from "./chart-legend-chip";
 import { legendMenuItems, type LegendAction } from "./chart-selection";
 import { readerKeyState, readerLineOptionLabel, readerLineScopes, updateReaderKeys } from "./reader-key-model";
+import { Icon, type IconName } from "./icons";
 
 export type ReaderKey = { id: string; label: string; values: string[]; title?: string; className?: string;
-  family?: string; count?: number; children?: ReaderKey[]; available?: boolean; note?: string };
+  family?: string; count?: number; children?: ReaderKey[]; available?: boolean; note?: string; icon?: IconName };
 export type ReaderKeys = { items: ReaderKey[]; all: string[]; shown: string[]; groupToggle?: boolean; groupLabel?: string; groupField?: "reader_filter" | "reader_highlight_hidden"; groupMixed?: boolean; activityKeys?: ReaderKeys; onChange: (shown: string[], allKinds?: boolean, action?: LegendAction) => void };
 function ReaderKeyFilter({ items, all, shown, groupToggle = false, groupLabel = "Text highlighting", groupField = "reader_highlight_hidden", groupMixed = false, activityKeys, onChange }: ReaderKeys) {
   const visible = all.filter(value => shown.includes(value)).length;
@@ -14,7 +15,7 @@ function ReaderKeyFilter({ items, all, shown, groupToggle = false, groupLabel = 
     {item.available === false ? <span className="reader-key-unavailable">{item.label}{item.note ? ` · ${item.note}` : ""}</span> : <ChartLegendChip
       item={{ key: item.id, label: item.label, color: "" }} {...readerKeyState(all, shown, item.values)}
       groupSize={item.children ? item.values.length : undefined}
-      swatch={item.className === "event-target-legend" ? <span className="reader-event-link-example" aria-hidden="true"><span /><span /></span> : item.className || item.family !== undefined ? <i className="reader-key-swatch" /> : null}
+      swatch={item.icon ? <Icon name={item.icon} className="reader-key-icon" /> : item.className === "event-target-legend" ? <span className="reader-event-link-example" aria-hidden="true"><span /><span /></span> : item.className || item.family !== undefined ? <i className="reader-key-swatch" /> : null}
       suffix={item.count !== undefined ? <span className="transcript-filter-count">{item.count.toLocaleString()}</span> : null}
       onAction={action => onChange(updateReaderKeys(all, shown, item.values, action), false, action)} />}
     {item.children ? <span className="reader-key-children">{item.children.map(chip)}</span> : null}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -25,6 +26,8 @@ type usageResponseEstimate struct {
 	UsageAt                   string               `json:"usage_at,omitempty"`
 	PromptID                  string               `json:"prompt_native_id,omitempty"`
 	Model                     string               `json:"model,omitempty"`
+	ModelSource               string               `json:"model_source,omitempty"`
+	ModelObservedAt           string               `json:"model_observed_at,omitempty"`
 	Effort                    string               `json:"effort,omitempty"`
 	Speed                     string               `json:"speed"`
 	SpeedSource               string               `json:"speed_source"`
@@ -81,12 +84,52 @@ type usageEstimationResponse struct {
 	anchorOrder                                           int64
 	anchorOrderKnown                                      bool
 	assistant, reported, envelope                         bool
+	modelAssumed                                          bool
 	sender, nativeCreated, usageAt                        string
 	nontext                                               bool
 	blocks                                                []usageEstimationBlock
 }
 type usageEstimationBuilder struct {
-	responses map[string]*usageEstimationResponse
+	responses  map[string]*usageEstimationResponse
+	selections []map[string]any
+}
+
+// A saved selection is an estimation assumption, not evidence of which model ran.
+// Prefer the latest selection before the response, or the first after it when
+// none exists. Conflicting organizations, timestamps, and unknown selections
+// do not support an assumption. Truncated history cannot safely be ordered.
+func assumedClaudeModel(rows []map[string]any, responseAt string) (string, string) {
+	if len(rows) == 0 || len(rows) > 500 {
+		return "", ""
+	}
+	var organization, model, observed string
+	var chosen time.Time
+	responseTime, dated := parseTime(responseAt)
+	before := false
+	conflict := false
+	for _, row := range rows {
+		org := firstString(row["organization_uuid"])
+		if org == "" || organization != "" && org != organization {
+			return "", ""
+		}
+		organization = org
+		at, ok := parseTime(firstString(row["observed_at"]))
+		if !ok {
+			return "", ""
+		}
+		prior := dated && !at.After(responseTime)
+		better := chosen.IsZero() || prior && !before || prior == before && (prior && at.After(chosen) || !prior && dated && at.Before(chosen) || !dated && at.After(chosen))
+		value := strings.TrimSpace(firstString(row["model"]))
+		if better {
+			chosen, model, observed, before, conflict = at, value, firstString(row["observed_at"]), prior, false
+		} else if at.Equal(chosen) && value != model {
+			conflict = true
+		}
+	}
+	if conflict || model == "" {
+		return "", ""
+	}
+	return model, observed
 }
 
 func newUsageEstimationBuilder(harness string) *usageEstimationBuilder {
@@ -324,6 +367,18 @@ func (b *usageEstimationBuilder) estimate(manifest estimationManifest, calibrati
 			report.ReportedResponses++
 			continue
 		}
+		usageAt := r.usageAt
+		if _, valid := parseTime(r.nativeCreated); valid {
+			usageAt = r.nativeCreated // the response's own date outranks its block dates
+		}
+		modelSource, modelObservedAt := "", ""
+		if r.model == "" {
+			if model, observed := assumedClaudeModel(b.selections, usageAt); model != "" {
+				assumed := *r
+				assumed.model, assumed.modelAssumed = model, true
+				r, modelSource, modelObservedAt = &assumed, "observed_conversation_selection", observed
+			}
+		}
 		row, p, fallback := manifest.resolve(r.model, r.effort, r.speed)
 		seconds, clocked, missing := estimationThinkingSeconds(r.blocks, p)
 		thought, local, weight := estimateThinkingContributions(r, seconds, manifest, calibration, p)
@@ -336,11 +391,7 @@ func (b *usageEstimationBuilder) estimate(manifest estimationManifest, calibrati
 			basis = "published_" + row.Basis + ":missing_thinking_trace"
 			local, weight = estimationRateGroup{}, 0
 		}
-		usageAt := r.usageAt
-		if _, valid := parseTime(r.nativeCreated); valid {
-			usageAt = r.nativeCreated // the response's own date outranks its block dates
-		}
-		out := usageResponseEstimate{MessageID: r.anchor, NativeID: r.id, UsageAt: usageAt, PromptID: r.prompt, Model: r.model, Effort: r.effort,
+		out := usageResponseEstimate{MessageID: r.anchor, NativeID: r.id, UsageAt: usageAt, PromptID: r.prompt, Model: r.model, ModelSource: modelSource, ModelObservedAt: modelObservedAt, Effort: r.effort,
 			Speed: r.speed, SpeedSource: r.speedSource, Profile: row.Profile, Fallback: fallback, Basis: basis,
 			Thinking: thought, ThinkingSeconds: seconds,
 			ClockedBlocks: clocked, MissingBlocks: missing, LocalFamilies: local.Families, LocalRequests: local.Requests, LocalWeight: weight,

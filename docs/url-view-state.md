@@ -249,7 +249,7 @@ Ordinary key edits preserve exclusions for highlights absent from the current
 conversation. Opening an explicit `reader_event_link` enables agent events and
 clears only that pair's event-group and target exclusions in the URL, leaving
 saved preferences intact. Later manual hides are respected until another event
-link is opened. Sentence hover and click use only currently visible event pairs.
+link is opened. Hover explains visible annotations; clicking pins their actions, while the numbered ends navigate between event pairs. Individual hidden annotations are recorded by conversation, message and span in `reader_highlight_hidden`; Show hidden annotations in the Key restores them.
 
 These choices write existing canonical fields together: `reader_filter_level`,
 `reader_filter`, `reader_writing`, `reader_events`, `reader_labels`, and

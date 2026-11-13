@@ -673,7 +673,7 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .transcript-key-line { display: grid; grid-template-columns: 5em minmax(0, 1fr); align-items: start; gap: 8px; }
 .transcript-key-line > .transcript-filter-label { padding-top: 7px; font-weight: 500; }
 .reader-highlight-keys { width: fit-content; min-width: 0; max-width: 100%; }
-.reader-key.conversation-key-group, .transcript-timeline-key .lt-timeline-legend.is-embedded { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 3px; box-sizing: border-box; width: fit-content; flex: 0 1 auto; max-width: 100%; padding: 3px 4px; border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent); border-radius: 5px; font-size: inherit; line-height: normal; }
+.reader-key.conversation-key-group, .transcript-timeline-key .lt-timeline-legend.is-embedded { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 3px; box-sizing: border-box; width: fit-content; flex: 0 1 auto; max-width: 100%; padding: 0; border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent); border-radius: 5px; font-size: inherit; line-height: normal; }
 .conversation-key-group > .reader-key-children { display: contents; }
 .transcript-timeline-key .timeline-key-sections { display: contents; }
 /* All three conversation keys use Timeline's control and dropdown styling. */
@@ -684,12 +684,15 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .conversation-key-toggle[aria-pressed="true"] { border-color: transparent; background: transparent; color: inherit; }
 .conversation-key-toggle[aria-pressed="false"] { opacity: .5; }
 .conversation-key-toggle:disabled { opacity: .5; cursor: default; }
-.transcript-timeline-key :is(.lt-legend-section, .lt-ontology-role, .lt-ontology-families > .lt-mode-group) { display: inline-flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 4px; box-sizing: border-box; width: fit-content; max-width: 100%; min-width: 0; padding: 2px 4px; margin: 0; }
+.transcript-timeline-key :is(.lt-legend-section, .lt-ontology-role, .lt-ontology-families > .lt-mode-group) { display: inline-flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 4px; box-sizing: border-box; width: fit-content; max-width: 100%; min-width: 0; padding: 0; margin: 2px 4px; }
 .reader-key { display: inline-flex; flex: 0 1 auto; width: fit-content; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 3px; min-width: 0; max-width: 100%; }
 .reader-key-children { display: inline-flex; flex: 0 1 auto; width: fit-content; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 3px; min-width: 0; max-width: 100%; }
-.reader-key:not(.conversation-key-group):has(> .reader-key-children) { gap: 4px; padding: 2px 4px; border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 5px; }
-.reader-key:not(.conversation-key-group) > .reader-key-children > .reader-key:has(> .reader-key-children) { padding: 2px 4px; border-color: color-mix(in srgb, var(--ink) 14%, transparent); border-radius: 4px; }
+/* Keep nested perimeters apart while controls supply their own inner spacing. */
+.reader-key:not(.conversation-key-group):has(> .reader-key-children) { gap: 4px; padding: 0; margin: 2px 4px; border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 5px; }
+.reader-key:not(.conversation-key-group) > .reader-key-children > .reader-key:has(> .reader-key-children) { border-color: color-mix(in srgb, var(--ink) 14%, transparent); border-radius: 4px; }
 .reader-key-swatch { display: inline-block; flex: none; box-sizing: border-box; width: 11px; height: 11px; border-radius: 2px; background: color-mix(in srgb, var(--event-hue, var(--label-hue)) 24%, transparent); border: 1px solid var(--event-hue, var(--label-hue)); }
+.reader-key .reader-key-icon { flex: none; width: 14px; height: 14px; }
+.conversation-key-group > .reader-key-children > .transcript-tag-key { flex-basis: 100%; }
 .reader-key[data-label-family] > .usage-legend-chip .reader-key-swatch { border: 0; border-left: 2px solid color-mix(in srgb,var(--label-hue) 65%,var(--line)); }
 .reader-key .usage-legend-chip { min-width: 0; max-width: 100%; }
 .reader-key .usage-legend-item { gap: 6px; padding: 2px 6px; max-width: 100%; white-space: normal; text-align: left; }

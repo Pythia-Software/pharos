@@ -1,3 +1,4 @@
+import { EstimateInfoButton } from "./estimate-info";
 import { estimateExplanation, durationEstimateExplanation, estimateFlag, estimatedField, withEstimateMetrics, estimateMetricFlags } from "./usage-estimate-model";
 import "./reader-key-filter";
 import scatterDocument from "../../schemas/scatter.schema.json";
@@ -782,7 +783,7 @@ function QuerySurface({ dataset, host, usageActions = false, find = "", onFind, 
         {queryContent?.(api)}
       </>} /> : api.query.grouping ? <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={api} dataset={dataset} layout={<SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <SourceQueryBuilder dataset={dataset} compact api={api} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
     {queryContent ? controls?.(api, null) : null}
-    {estimateMetrics.size > 0 && api.aggregations.clauses.length > 0 ? <p className="usage-dashboard-note" title={dataset === "tool_calls" || dataset === "tools" ? durationEstimateExplanation : estimateExplanation}>* Metrics include estimates. Open source records to distinguish estimated values.</p> : null}
+    {estimateMetrics.size > 0 && api.aggregations.clauses.length > 0 ? <p className="usage-dashboard-note" title={dataset === "tool_calls" || dataset === "tools" ? durationEstimateExplanation : estimateExplanation}>* Metrics include estimates. Open source records to distinguish estimated values.<EstimateInfoButton /></p> : null}
     <MetricsPanel api={api} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers} theme={chartMetricTheme(api.aggregations.clauses, api.aggregations.results)}
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, usageActions ? fitQueryToScreen({ ...records, orderBy: [] }) : { ...records, orderBy: [] }) : records); }} />
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}

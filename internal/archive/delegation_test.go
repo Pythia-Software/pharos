@@ -1618,6 +1618,28 @@ func TestDelegationScopedTokenTotals(t *testing.T) {
 		})
 	}
 
+	// An estimate combined with reported usage keeps its provenance through the
+	// same aggregation used for workspace and subtree totals.
+	estimated := delegationNumber(10200, "estimated", 1, 1)
+	estimated.IsEstimate = true
+	estimatedCost := delegationNumber(.2, "partial", 1, 1)
+	estimatedCost.IsEstimate = true
+	reported := &delegationNode{ID: "reported", Self: map[string]delegationMetric{
+		"tokens": delegationNumber(100, "reported", 1, 1), "cost": delegationNumber(.1, "estimated", 1, 1),
+		"input": delegationNumber(20, "reported", 1, 1),
+	}}
+	prediction := &delegationNode{ID: "prediction", Self: map[string]delegationMetric{"tokens": estimated, "cost": estimatedCost}}
+	mixed := delegationAggregate([]*delegationNode{reported, prediction})
+	if m := mixed["tokens"]; m.Value == nil || *m.Value != 10300 || !m.IsEstimate || m.Quality != "estimated" {
+		t.Fatal("mixed token provenance lost", m)
+	}
+	if m := mixed["cost"]; m.Value == nil || !m.IsEstimate || m.Quality != "partial" {
+		t.Fatal("mixed cost provenance lost", m)
+	}
+	if m := mixed["input"]; m.Value == nil || *m.Value != 20 || m.Quality != "partial" {
+		t.Fatal("unknown input was treated as zero", m)
+	}
+
 	pooled := makeNode("pooled", "", 10, 100, 0)
 	pooled.Self["tokens"] = delegationNumber(10, "partial", 1, 1)
 	pooled.accountedTokens = map[string]delegationMetric{"tokens": delegationNumber(110, "reported", 1, 1)}

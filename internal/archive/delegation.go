@@ -23,10 +23,11 @@ import (
 )
 
 type delegationMetric struct {
-	Value   *float64 `json:"value"`
-	Quality string   `json:"quality"`
-	Known   int      `json:"known"`
-	Total   int      `json:"total"`
+	Value      *float64 `json:"value"`
+	Quality    string   `json:"quality"`
+	Known      int      `json:"known"`
+	Total      int      `json:"total"`
+	IsEstimate bool     `json:"is_estimate,omitempty"`
 }
 type delegationMetricSpec struct {
 	ID         string `json:"id"`
@@ -238,7 +239,7 @@ func delegationTime(value any) *float64 {
 	return nil
 }
 func delegationNumber(value float64, quality string, known, total int) delegationMetric {
-	return delegationMetric{&value, quality, known, total}
+	return delegationMetric{Value: &value, Quality: quality, Known: known, Total: total}
 }
 func delegationUnknown() delegationMetric { return delegationMetric{Quality: "unknown"} }
 func delegationUnion(spans []delegationSpan) float64 {
@@ -543,27 +544,47 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		// Accounting stays per stream. Resolving two streams to one execution
 		// does not decide whether their reported usage overlaps.
 		reporting := 0
+		missingInput := false
 		for _, row := range rows {
 			usage := firstString(row["usage_status"])
-			if estimateFlag(row["is_estimate"]) || usage == "" || usage == "unavailable" || usage == "in-child-conversation" || row["id"] != lead["id"] && integer(row["total_tokens"]) == 0 {
+			if usage == "" || usage == "unavailable" || usage == "in-child-conversation" || row["id"] != lead["id"] && integer(row["total_tokens"]) == 0 {
 				continue
 			}
 			reporting++
+			estimated := estimateFlag(row["is_estimate"])
+			missingInput = missingInput || estimated
 			if n.Usage == "unavailable" || usage == "reported-partial" {
 				n.Usage = usage
 			}
 			for key, field := range tokenFields {
-				v := float64(integer(row[field]))
-				if prior := n.Self[key].Value; prior != nil {
-					v += *prior
+				if estimated && key != "tokens" && key != "output" && key != "reasoning" {
+					continue // Estimated output says nothing about input or cache usage.
 				}
-				n.Self[key] = delegationNumber(v, "reported", 1, 1)
+				v := float64(integer(row[field]))
+				prior := n.Self[key]
+				if prior.Value != nil {
+					v += *prior.Value
+				}
+				m := delegationNumber(v, "reported", 1, 1)
+				m.IsEstimate = estimated || prior.IsEstimate
+				if m.IsEstimate {
+					m.Quality = "estimated"
+				}
+				n.Self[key] = m
 			}
 			if t := delegationTime(row["started_at"]); t != nil && (n.envelopeStart == nil || *t < *n.envelopeStart) {
 				n.envelopeStart = t
 			}
 			if t := delegationTime(row["ended_at"]); t != nil && (n.envelopeEnd == nil || *t > *n.envelopeEnd) {
 				n.envelopeEnd = t
+			}
+		}
+		if missingInput {
+			for _, key := range []string{"input", "uncached", "cacheRead", "cacheWrite"} {
+				if m := n.Self[key]; m.Value != nil {
+					m.Quality = "partial"
+					n.Self[key] = m
+				}
 			}
 		}
 		if reporting > 1 {
@@ -915,7 +936,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	if err != nil {
 		return nil, err
 	}
-	requests, err := tx.QueryContext(ctx, `SELECT r.id,r.agent_session_id,r.conversation_id,r.requested_at,r.total_tokens FROM conversations c JOIN model_requests r ON r.conversation_id=c.id WHERE r.is_estimate=0 AND c.workspace_id=?`, workspace)
+	requests, err := tx.QueryContext(ctx, `SELECT r.id,r.agent_session_id,r.conversation_id,r.requested_at,r.total_tokens,r.is_estimate FROM conversations c JOIN model_requests r ON r.conversation_id=c.id WHERE c.workspace_id=?`, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -929,15 +950,22 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		var sid, at sql.NullString
 		var id, cid string
 		var tokens float64
-		if err = requests.Scan(&id, &sid, &cid, &at, &tokens); err != nil {
+		var estimated bool
+		if err = requests.Scan(&id, &sid, &cid, &at, &tokens, &estimated); err != nil {
 			requests.Close()
 			return nil, err
 		}
 		n := owner(sid.String, cid)
-		seen(n, delegationTime(at.String))
 		if n == nil {
 			continue
 		}
+		if estimated {
+			// Predictions have direct session ownership, but are not observed
+			// request occurrences or activity points.
+			requestTokens[n.ID] += tokens
+			continue
+		}
+		seen(n, delegationTime(at.String))
 		// Token facts stay per stream row, copies included: the session total
 		// they reconcile against counts them. Only the occurrence (the request
 		// count and its activity point) follows ownership.
@@ -1056,7 +1084,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	if err != nil {
 		return nil, err
 	}
-	ledger, err := queryMapsContext(ctx, tx, `SELECT u.*,u.model usage_model,a.model session_model FROM agent_sessions a JOIN agent_session_usage u ON u.agent_session_id=a.id WHERE u.is_estimate=0 AND a.workspace_id=?`, workspace)
+	ledger, err := queryMapsContext(ctx, tx, `SELECT u.*,u.model usage_model,a.model session_model FROM agent_sessions a JOIN agent_session_usage u ON u.agent_session_id=a.id WHERE a.workspace_id=?`, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -1102,7 +1130,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			continue
 		}
 		remainder := strings.HasSuffix(firstString(row["attribution"]), "-remainder")
-		if scopedLedger || remainder {
+		if !estimateFlag(row["is_estimate"]) && (scopedLedger || remainder) {
 			scopedNodes[n.ID] = true
 			if n.TokenAttribution == nil {
 				n.TokenAttribution = &sessionTokenAttribution{}
@@ -1121,10 +1149,15 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		if len(day) > 10 {
 			day = day[:10]
 		}
-		cost := book.cost(ledgerModel(row), day, ledgerTokens(row))
+		cost := book.ledgerCost(row, ledgerModel(row), day, ledgerTokens(row))
 		priceStatus[n.ID] = worsePriceStatus(priceStatus[n.ID], cost.status)
 		if cost.cost != nil {
 			bump(n, "cost", *cost.cost)
+			if estimateFlag(row["is_estimate"]) {
+				m := n.Self["cost"]
+				m.IsEstimate = true
+				n.Self["cost"] = m
+			}
 			if sharedRemainder {
 				n.unallocatedCost += *cost.cost
 			}
@@ -1148,7 +1181,9 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 				m := n.Self[key]
 				n.accountedTokens[key] = m
 				if m.Value != nil {
-					n.Self[key] = delegationNumber(max(0, *m.Value-n.unallocatedTokens[key]), m.Quality, m.Known, m.Total)
+					m.Value = new(float64)
+					*m.Value = max(0, *n.accountedTokens[key].Value-n.unallocatedTokens[key])
+					n.Self[key] = m
 				}
 			}
 			if m := n.accountedTokens["tokens"]; m.Value != nil {
@@ -1160,7 +1195,9 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			if m := n.Self["cost"]; m.Value != nil {
 				n.accountedTokens["cost"] = m
 				if a.Direct > 0 {
-					n.Self["cost"] = delegationNumber(max(0, *m.Value-n.unallocatedCost), m.Quality, m.Known, m.Total)
+					m.Value = new(float64)
+					*m.Value = max(0, *n.accountedTokens["cost"].Value-n.unallocatedCost)
+					n.Self["cost"] = m
 				} else {
 					n.Self["cost"] = delegationUnknown()
 				}
@@ -1548,6 +1585,7 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 	result := map[string]delegationMetric{}
 	for _, spec := range delegationMetrics {
 		value, known := 0.0, 0
+		isEstimate := false
 		quality := "observed"
 		for _, n := range nodes {
 			m := n.Self[spec.ID]
@@ -1558,6 +1596,7 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 				continue
 			}
 			known++
+			isEstimate = isEstimate || m.IsEstimate
 			switch spec.ID {
 			case "start":
 				if known == 1 || *m.Value < value {
@@ -1621,6 +1660,9 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 			value = float64(max(0, len(nodes)-1))
 		}
 		result[spec.ID] = delegationNumber(value, quality, known, len(nodes))
+		metric := result[spec.ID]
+		metric.IsEstimate = isEstimate
+		result[spec.ID] = metric
 	}
 	result["tokens"] = delegationTokenTotal(nodes)
 	return result

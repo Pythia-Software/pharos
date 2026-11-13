@@ -9,7 +9,7 @@ import (
 	"github.com/gbdubs/pharos/estimation"
 )
 
-const usageEstimationStoreVersion = "chat-estimates-v4-response-dates"
+const usageEstimationStoreVersion = "chat-estimates-v5-observed-model"
 
 var usageEstimationBatch = 10
 
@@ -53,6 +53,16 @@ func (c *Catalog) ensureUsageEstimationStore() error {
 	markExisting := func(ref string) string {
 		return clearUsageEstimatesSQL(ref) + "UPDATE usage_estimation_inputs SET revision=revision+1 WHERE conversation_id=" + ref + ";"
 	}
+	markSelection := func(ref string) string {
+		ids := `(SELECT id FROM conversations WHERE harness='claude-ai-export' AND account=` + ref + `.account AND native_id=` + ref + `.conversation_uuid)`
+		return `DELETE FROM model_requests WHERE is_estimate=1 AND conversation_id IN ` + ids + `;
+ DELETE FROM agent_session_usage WHERE is_estimate=1 AND agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id IN ` + ids + `);
+ UPDATE agent_sessions SET input_tokens=0,uncached_input_tokens=0,cache_read_input_tokens=0,cache_creation_input_tokens=0,
+ cache_creation_5m_input_tokens=0,cache_creation_1h_input_tokens=0,output_tokens=0,reasoning_output_tokens=0,unclassified_tokens=0,total_tokens=0,
+ is_estimate=0,input_tokens_available=1,usage_estimate_json=NULL,usage_status='unavailable' WHERE is_estimate=1 AND conversation_id IN ` + ids + `;
+ UPDATE tool_calls SET duration_ms=NULL,duration_source=NULL,duration_is_estimate=0,duration_estimate_json=NULL WHERE duration_is_estimate=1 AND conversation_id IN ` + ids + `;
+ UPDATE usage_estimation_inputs SET revision=revision+1 WHERE conversation_id IN ` + ids + `;`
+	}
 	// Conversation triggers enroll eligible imports first. Message triggers
 	// then touch that indexed row only, keeping native coding ingestion cheap.
 	columns := []string{"conversation_id", "native_id", "role", "kind", "model", "effort", "text", "raw_text", "created_at", "parent_native_id", "call_id", "source_order", "selected"}
@@ -69,7 +79,10 @@ func (c *Catalog) ensureUsageEstimationStore() error {
 		{"reported_usage_insert", "AFTER INSERT ON agent_session_usage WHEN NEW.is_estimate=0 AND EXISTS(SELECT 1 FROM usage_estimation_inputs WHERE conversation_id=(SELECT conversation_id FROM agent_sessions WHERE id=NEW.agent_session_id))", clearUsageEstimatesSQL("(SELECT conversation_id FROM agent_sessions WHERE id=NEW.agent_session_id)") + mark("(SELECT conversation_id FROM agent_sessions WHERE id=NEW.agent_session_id)")},
 		{"reported_session_update", "AFTER UPDATE OF total_tokens,usage_status,is_estimate ON agent_sessions WHEN NEW.is_estimate=0 AND (NEW.total_tokens>0 OR NEW.usage_status LIKE 'reported%') AND EXISTS(SELECT 1 FROM usage_estimation_inputs WHERE conversation_id=NEW.conversation_id)", markExisting("NEW.conversation_id")},
 		{"conversation_insert", "AFTER INSERT ON conversations", mark("NEW.id")},
-		{"conversation_update", "AFTER UPDATE OF harness,provider ON conversations WHEN OLD.harness IS NOT NEW.harness OR OLD.provider IS NOT NEW.provider", clearUsageEstimatesSQL("NEW.id") + mark("NEW.id")},
+		{"conversation_update", "AFTER UPDATE OF harness,provider,account,native_id ON conversations WHEN OLD.harness IS NOT NEW.harness OR OLD.provider IS NOT NEW.provider OR OLD.account IS NOT NEW.account OR OLD.native_id IS NOT NEW.native_id", clearUsageEstimatesSQL("NEW.id") + mark("NEW.id")},
+		{"selection_insert", "AFTER INSERT ON claude_chat_settings_observations", markSelection("NEW")},
+		{"selection_delete", "AFTER DELETE ON claude_chat_settings_observations", markSelection("OLD")},
+		{"selection_update", "AFTER UPDATE OF account,organization_uuid,conversation_uuid,observed_at,model ON claude_chat_settings_observations WHEN OLD.account IS NOT NEW.account OR OLD.organization_uuid IS NOT NEW.organization_uuid OR OLD.conversation_uuid IS NOT NEW.conversation_uuid OR OLD.observed_at IS NOT NEW.observed_at OR OLD.model IS NOT NEW.model", markSelection("OLD") + markSelection("NEW")},
 	} {
 		if _, err := tx.Exec("DROP TRIGGER IF EXISTS usage_estimation_store_" + t.name + "; CREATE TRIGGER usage_estimation_store_" + t.name + " " + t.event + " BEGIN " + t.body + " END"); err != nil {
 			return err
@@ -151,8 +164,8 @@ func (c *Catalog) rebuildUsageEstimationConversation(ctx context.Context, id str
 	}
 	defer tx.Rollback()
 	var revision int64
-	var harness string
-	err = tx.QueryRowContext(ctx, `SELECT i.revision,c.harness FROM usage_estimation_inputs i JOIN conversations c ON c.id=i.conversation_id WHERE i.conversation_id=?`, id).Scan(&revision, &harness)
+	var harness, account, nativeID string
+	err = tx.QueryRowContext(ctx, `SELECT i.revision,c.harness,c.account,c.native_id FROM usage_estimation_inputs i JOIN conversations c ON c.id=i.conversation_id WHERE i.conversation_id=?`, id).Scan(&revision, &harness, &account, &nativeID)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -171,6 +184,10 @@ func (c *Catalog) rebuildUsageEstimationConversation(ctx context.Context, id str
 	builder := newUsageEstimationBuilder(harness)
 	report := &conversationUsageEstimates{Responses: []usageResponseEstimate{}}
 	if builder != nil {
+		builder.selections, err = claudeConversationSettingsFrom(ctx, tx, account, nativeID)
+		if err != nil {
+			return err
+		}
 		// Stream the same columns the reader observes, without retaining raw
 		// bodies or a second array of messages. Source order is sorted by the
 		// shared builder; SQLite need not sort large transcript bodies.

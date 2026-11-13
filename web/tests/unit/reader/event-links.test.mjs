@@ -96,3 +96,13 @@ test("events on one sentence pointing at the same text are one pair, found by ei
   assert.equal(reader.eventLinkVisible(merged, shown), true, 'a visible alias keeps its merged pair available');
   assert.equal(reader.eventLinkVisible(merged, new Set()), false);
 });
+
+
+test("hidden annotation identities distinguish conversations, messages, kinds and spans", () => {
+  const key = reader.readerAnnotationKey('c,\"1', 'm:1', 'event', 'event-at-0');
+  assert.deepEqual(JSON.parse(key.slice('annotation:'.length)), ['c,\"1', 'm:1', 'event', 'event-at-0']);
+  assert.ok(key.startsWith(reader.readerAnnotationPrefix('c,\"1')));
+  for (const other of [reader.readerAnnotationKey('c,\"2', 'm:1', 'event', 'event-at-0'), reader.readerAnnotationKey('c,\"1', 'm:2', 'event', 'event-at-0'), reader.readerAnnotationKey('c,\"1', 'm:1', 'target', 'event-at-0'), reader.readerAnnotationKey('c,\"1', 'm:1', 'event', 'event-at-1')]) assert.notEqual(other, key);
+  assert.equal(key.startsWith(reader.readerAnnotationPrefix('c,\"')), false, 'a conversation prefix does not match a different ID');
+  assert.notEqual(reader.readerAnnotationSpan('event','event-context event-at-0'), reader.readerAnnotationSpan('event','agent-event event-at-0'), 'context and sentence with the same span number remain distinct');
+});
