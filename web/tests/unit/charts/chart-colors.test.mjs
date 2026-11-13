@@ -166,6 +166,15 @@ test('concurrency bands stack with the busiest at the bottom and warm toward red
   assert.ok(red(series[0].color) > red(series[3].color));
 });
 
+test('writing estimates stack refined under provisional in the Human Words green, keyed by label or value', () => {
+  // Provisional is the larger series here; the stack still puts refined first.
+  const { series } = fold(['Provisional', 'Refined'], 5, [], 'estimate');
+  assert.deepEqual(series.map(item => item.label), ['Refined', 'Provisional']);
+  assert.equal(series[0].color, 'var(--query-human-tone)');
+  assert.match(series[1].color, /color-mix\(in srgb, var\(--query-human-tone\) \d+%, white\)/, 'provisional is a lighter tint of the same green');
+  for (const name of ['refined', 'provisional']) assert.equal(chartSeriesStyle('estimate', name).color, chartSeriesStyle('estimate', name[0].toUpperCase() + name.slice(1)).color);
+});
+
 test('hours of the day take a distinct sky colour, whatever form their key takes', () => {
   assert.equal(new Set(hourOfDayColors).size, 24);
   for (const [hour, key] of [[7, '07:00'], [7, '7'], [21, '21']]) assert.equal(chartSeriesStyle('hour_of_day', key).color, hourOfDayColors[hour]);

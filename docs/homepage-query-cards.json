@@ -4467,7 +4467,7 @@
       "category": "human",
       "idea": "human-01",
       "title": "{lastDays} of writing",
-      "description": "Human-written words sent during the last {days} days, grouped by the day they were sent.",
+      "description": "Human-written words sent during the last {days} days, by the day they were sent; provisional estimates are shaded lighter until the daily refinement.",
       "dataset": "writing_messages",
       "field": "sent_at",
       "unit": "words",
@@ -4480,18 +4480,20 @@
       ],
       "measures": [
         {
-          "id": "sum:typed_words:day",
+          "id": "sum:typed_words:day,estimate",
           "op": "sum",
           "field": "typed_words",
           "groupBy": [
-            "day"
+            "day",
+            "estimate"
           ],
           "label": "Your words per day"
         }
       ],
       "exploration": {
         "keys": [
-          "day"
+          "day",
+          "estimate"
         ],
         "summaries": [
           {
@@ -4511,11 +4513,12 @@
         "action": "Explore daily word counts",
         "unit": "words",
         "coverMetric": {
-          "id": "sum:typed_words:day",
+          "id": "sum:typed_words:day,estimate",
           "op": "sum",
           "field": "card_typed_words",
           "groupBy": [
-            "day"
+            "day",
+            "estimate"
           ],
           "label": "Your words per day"
         }
@@ -4527,7 +4530,7 @@
           "v": 3,
           "view": "trend",
           "metric": "typed",
-          "split": "none",
+          "split": "estimate",
           "period": "day",
           "scale": "linear",
           "nonzero": false
