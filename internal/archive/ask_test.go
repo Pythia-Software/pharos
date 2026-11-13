@@ -605,6 +605,10 @@ func TestAskRejectsUnknownDestinations(t *testing.T) {
 func TestAskPrivateVisitsAndChats(t *testing.T) {
 	s := askTestServer(t)
 	askEnable(t, s)
+	initialPreferences, err := s.Catalog.UIPreferences(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 	override(t, &askVisitLimit, 2)
 	now := time.Now().UnixMilli()
 	older := askVisit{URL: "/analyze", Title: "Earlier visit", At: now - 4000}
@@ -651,7 +655,7 @@ func TestAskPrivateVisitsAndChats(t *testing.T) {
 		t.Fatalf("visits in archive: %d %v", count, err)
 	}
 	prefs, err := s.Catalog.UIPreferences(t.Context())
-	if err != nil || len(prefs) != 0 {
+	if err != nil || !reflect.DeepEqual(prefs, initialPreferences) {
 		t.Fatalf("private state in UI preferences: %v %v", prefs, err)
 	}
 	// The agent asks for visits through its private response protocol, then gets

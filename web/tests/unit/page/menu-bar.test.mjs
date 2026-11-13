@@ -18,7 +18,7 @@ for (const fixture of fixtures) test(`Mac menu preferences: ${fixture.name}`, ()
 test('Mac menu edits move either way, add once, remove, and preserve essential actions', () => {
   const menu = loadClassicScript('menu-bar.js');
   const edit = (settings, id, position) => plain(menu.editMenuBarSettings(settings, id, position));
-  const start = plain(menu.normalizeMenuBarSettings({layoutVersion: 2}));
+  const start = plain(menu.normalizeMenuBarSettings({layoutVersion: 2, order: ['open', 'status', 'indexed', 'words', 'tokens', 'carbon', 'settings', 'quit']}));
   const up = edit(start, 'tokens', 2);
   assert.deepEqual(up.order, ['open', 'status', 'tokens', 'indexed', 'words', 'carbon', 'settings', 'quit']);
   const down = edit(up, 'tokens', 5);
@@ -59,18 +59,17 @@ test('Mac menu separators can be added repeatedly, moved independently, and remo
 });
 
 
-test('new Mac menu shortcuts remain opt in and leave default dividers unchanged', () => {
+test('all Mac menu tools default on and can be returned to the toolbox', () => {
   const menu = loadClassicScript('menu-bar.js');
   const defaults = plain(menu.normalizeMenuBarSettings());
-  const shortcuts = ['search', 'analyze', 'optimize', 'capture', 'health', 'sources', 'finder'];
-  for (const id of shortcuts) {
-    assert.equal(defaults[id], false);
-    assert.ok(!defaults.order.includes(id));
-    const added = plain(menu.editMenuBarSettings(defaults, id, 1));
-    assert.equal(added[id], true);
-    assert.equal(added.order[1], id);
-    assert.deepEqual(plain(menu.normalizeMenuBarSettings(added)), added);
-    assert.deepEqual(plain(menu.editMenuBarSettings(added, id, null)), defaults);
+  for (const tool of menu.MENU_BAR_TOOLS) {
+    assert.equal(defaults[tool.id], true);
+    if (tool.required) continue;
+    const removed = plain(menu.editMenuBarSettings(defaults, tool.id, null));
+    assert.equal(removed[tool.id], false);
+    assert.deepEqual(plain(menu.normalizeMenuBarSettings(removed)), removed, 'custom omissions survive reload');
+    const added = plain(menu.editMenuBarSettings(removed, tool.id, defaults.order.indexOf(tool.id)));
+    assert.deepEqual(added, defaults);
   }
 });
 

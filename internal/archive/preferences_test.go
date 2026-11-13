@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +22,106 @@ func preferencesCall(t *testing.T, server *Server, method, path, body string) *h
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	return response
+}
+
+func TestLaunchPreferencesOncePerLibrary(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			catalog, config := freshCatalog(t)
+			if legacy {
+				execTx(t, catalog.DB, "DELETE FROM meta WHERE key='"+launchPreferencesReceipt+"'")
+				if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{
+					"pharos-header-tools-v1":     []string{"guide", "history", "theme", "settings"},
+					"pharos-usage-summary-links": false, "pharos-reader-events": false, "pharos-reader-labels": false,
+					"pharos-uncertain-related-work": false, "pharos-usage-summary-auto": true,
+					"pharos-reader-highlight-hidden": []string{"events:event-friction", "labels:C.report", "writing", "annotation:kept"},
+					menuBarPreferenceKey: map[string]any{"enabled": false, "layoutVersion": 2, "usagePeriod": "24h", "words": false,
+						"order": []string{"open", "separator:7", "status", "settings", "quit"}},
+				}}); err != nil {
+					t.Fatal(err)
+				}
+				if err := catalog.Initialize(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			values, err := catalog.UIPreferences(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"pharos-usage-summary-links", "pharos-reader-events", "pharos-reader-labels", "pharos-uncertain-related-work"} {
+				if string(values[key]) != "true" {
+					t.Fatalf("launch did not enable %s: %s", key, values[key])
+				}
+			}
+			if string(values["pharos-header-tools-v1"]) != `["back","library","summary","ask","feedback","settings"]` {
+				t.Fatalf("launch toolbar: %s", values["pharos-header-tools-v1"])
+			}
+			menu := menuBarSettings(values)
+			order := menuBarOrder(values, menu)
+			for _, id := range menuBarDefaultOrder {
+				if legacy && slices.Contains([]string{"indexed", "words", "tokens", "carbon"}, id) {
+					continue
+				}
+				if !menu[id] || !slices.Contains(order, id) {
+					t.Fatalf("native menu did not enable %s: %v", id, order)
+				}
+			}
+			if legacy {
+				if menu["enabled"] || menu["words"] || menuBarUsagePeriod(values) != "24h" || !slices.Contains(order, "separator:7") {
+					t.Fatalf("native menu lost unrelated customization: %s", values[menuBarPreferenceKey])
+				}
+				if string(values["pharos-reader-highlight-hidden"]) != `["writing","annotation:kept"]` || string(values["pharos-usage-summary-auto"]) != "true" {
+					t.Fatalf("launch changed unrelated preferences: %v", values)
+				}
+			}
+			// Customize after the rollout, then reopen from another Mac. The
+			// library receipt must preserve later omissions, off choices and deletes.
+			if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{
+				"pharos-header-tools-v1": []string{"guide", "settings"}, "pharos-reader-events": false,
+				"pharos-reader-labels": false, "pharos-uncertain-related-work": false,
+				menuBarPreferenceKey: map[string]any{"layoutVersion": 2, "order": []string{"open", "status", "settings", "quit"}},
+			}, "delete": []any{"pharos-usage-summary-links"}}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := catalog.UIPreferences(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			useHost(t, "another-mac")
+			reopened, err := OpenCatalog(config.CatalogPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			closeAtEnd(t, reopened)
+			after, err := reopened.UIPreferences(t.Context())
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatalf("reopening reset later choices: %v (%v)", after, err)
+			}
+		})
+	}
+}
+
+func TestLaunchPreferencesReceiptRollsBackWithFailedWrite(t *testing.T) {
+	catalog, _ := freshCatalog(t)
+	execTx(t, catalog.DB, "DELETE FROM meta WHERE key='"+launchPreferencesReceipt+"'")
+	execTx(t, catalog.DB, `DELETE FROM ui_preferences`)
+	execTx(t, catalog.DB, `CREATE TRIGGER reject_launch_preference BEFORE INSERT ON ui_preferences
+ WHEN NEW.key='pharos-reader-events' BEGIN SELECT RAISE(ABORT,'test preference failure'); END`)
+	if err := catalog.migrateLaunchPreferences(); err == nil {
+		t.Fatal("failed preference write was accepted")
+	}
+	var count int
+	if err := catalog.DB.QueryRow("SELECT (SELECT COUNT(*) FROM ui_preferences)+(SELECT COUNT(*) FROM meta WHERE key=?)", launchPreferencesReceipt).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("failed rollout left preferences or a receipt: %d (%v)", count, err)
+	}
+	execTx(t, catalog.DB, `DROP TRIGGER reject_launch_preference`)
+	if err := catalog.migrateLaunchPreferences(); err != nil {
+		t.Fatal(err)
+	}
+	var value string
+	if err := catalog.DB.QueryRow("SELECT value FROM meta WHERE key=?", launchPreferencesReceipt).Scan(&value); err != nil || value != "1" {
+		t.Fatalf("retry did not commit receipt: %s (%v)", value, err)
+	}
 }
 
 func TestPreferencesChangingAgentAnalysisEndsOldDemand(t *testing.T) {
@@ -61,9 +163,13 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 	useHost(t, "host-a")
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
+	initial, err := catalog.UIPreferences(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if response := preferencesCall(t, server, http.MethodGet, "/assets/preferences.js", ""); response.Code != http.StatusOK || !strings.HasPrefix(response.Body.String(), "window.pharosPreferenceValues={};window.pharosPreviewScope=\"") {
-		t.Fatalf("empty library: %d %q", response.Code, response.Body.String())
+	if response := preferencesCall(t, server, http.MethodGet, "/assets/preferences.js", ""); response.Code != http.StatusOK || !strings.HasPrefix(response.Body.String(), "window.pharosPreferenceValues={") {
+		t.Fatalf("new library: %d %q", response.Code, response.Body.String())
 	}
 	body := `{"set":{"pharos-theme":"light","pharos-show-nav-button":true,"pharos-fingerprint-events":false,"pharos-bookmarks-v1":[{"id":"a","url":"/x</script>","title":"T"}]}}`
 	if response := preferencesCall(t, server, http.MethodPost, "/api/preferences", body); response.Code != http.StatusOK {
@@ -115,7 +221,7 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 		t.Fatal("different libraries share preview snapshots")
 	}
 	values := libraryStatusCall(t, server, "/api/preferences")["values"].(map[string]any)
-	if values["pharos-theme"] != "dark" || values["pharos-fingerprint-events"] != false || len(values) != 3 {
+	if values["pharos-theme"] != "dark" || values["pharos-fingerprint-events"] != false || len(values) != len(initial)+3 {
 		t.Fatalf("values: %#v", values)
 	}
 }
@@ -124,6 +230,10 @@ func TestPreferencesRefuseBadNamesAndOversizedValues(t *testing.T) {
 	useHost(t, "host-a")
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
+	before, err := catalog.UIPreferences(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, body := range []string{
 		`{"set":{"":1}}`,
 		`{"set":{"has space":1}}`,
@@ -135,7 +245,7 @@ func TestPreferencesRefuseBadNamesAndOversizedValues(t *testing.T) {
 			t.Errorf("%.60s: %d, want 400", body, response.Code)
 		}
 	}
-	if values, err := catalog.UIPreferences(t.Context()); err != nil || len(values) != 0 {
+	if values, err := catalog.UIPreferences(t.Context()); err != nil || !reflect.DeepEqual(values, before) {
 		t.Fatalf("refused writes stored %v (%v)", values, err)
 	}
 }
@@ -234,6 +344,10 @@ func TestDisposableSessionPreferencesUnderWritePressure(t *testing.T) {
 func TestDisposableSessionPreferencesRejectImportantAndUnboundedData(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
+	before, err := catalog.UIPreferences(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 	prefix := "pharos-session:0123456789abcdef0123456789abcdef:"
 	for _, body := range []string{
 		`{"set":{"` + prefix + `pharos-ui-feedback-draft-v1":"draft"}}`,
@@ -246,7 +360,7 @@ func TestDisposableSessionPreferencesRejectImportantAndUnboundedData(t *testing.
 		}
 	}
 	values, err := catalog.UIPreferences(t.Context())
-	if err != nil || len(values) != 0 {
+	if err != nil || !reflect.DeepEqual(values, before) {
 		t.Fatalf("invalid batch changed values: %v (%v)", values, err)
 	}
 	set := make(map[string]any)
@@ -257,7 +371,7 @@ func TestDisposableSessionPreferencesRejectImportantAndUnboundedData(t *testing.
 		t.Fatal("overfull batch was accepted")
 	}
 	values, err = catalog.UIPreferences(t.Context())
-	if err != nil || len(values) != 0 {
+	if err != nil || !reflect.DeepEqual(values, before) {
 		t.Fatalf("overfull batch changed values: %v (%v)", values, err)
 	}
 }

@@ -44,15 +44,14 @@ test('navigation switches only after all actions collect, then restores actions 
   assert.deepEqual(place(256, { widths: { ...dimensions.widths, theme: 120 } }), { phone: true, inline: [], overflow: tools }, 'wider action labels change what fits');
 });
 
-test('header defaults start with navigation and preserve previous visibility choices', () => {
+test('launch header has six tools and leaves alternatives available for customization', () => {
   const header = loadClassicScript('header.js');
   const defaults = plain(header.defaultHeaderTools());
-  assert.equal(defaults[0], 'history');
-  assert.equal(defaults[1], 'library');
-  assert.ok(defaults.includes('theme'));
-  assert.ok(defaults.includes('summary'));
-  assert.ok(!defaults.includes('navigator'));
-  assert.ok(!defaults.includes('guide'));
+  assert.deepEqual(defaults, ['back', 'library', 'summary', 'ask', 'feedback', 'settings']);
+  for (const id of ['history', 'sync', 'guide', 'annotations', 'navigator', 'search', 'readiness', 'theme']) {
+    assert.ok(header.HEADER_TOOLS.some(tool => tool.id === id), `${id} stays available in the toolbox`);
+    assert.ok(!defaults.includes(id));
+  }
   const legacy = new Map([
     ['pharos-show-nav-button', true], ['pharos-show-agent-annotation-button', true],
     ['pharos-show-theme-button', false], ['pharos-show-usage-summary-button', false],
@@ -118,7 +117,8 @@ test('compact variants replace the paired control in place or at a chosen drop b
   assert.deepEqual(plain(header.editHeaderTools(start, 'back', null)), start, 'removing an unused alternative leaves the active control alone');
   assert.deepEqual(plain(header.normalizeHeaderTools(['sync', 'library', 'back', 'history', 'settings'])), ['sync', 'back', 'settings']);
   assert.deepEqual(add(['settings'], 'sync'), ['settings', 'sync']);
-  assert.ok(!header.defaultHeaderTools().includes('back'));
+  assert.ok(header.defaultHeaderTools().includes('back'));
+  assert.ok(!header.defaultHeaderTools().includes('history'));
   assert.ok(!header.defaultHeaderTools().includes('sync'));
 });
 

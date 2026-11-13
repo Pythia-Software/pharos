@@ -6,6 +6,7 @@ import (
 	qt "github.com/Pythia-Software/query-table/backends/go"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -15,6 +16,38 @@ const menuBarPreferenceKey = "pharos-menu-bar"
 var menuBarDefaultOrder = []string{"open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "streak", "agent_streak", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "logs", "settings", "eject", "quit"}
 var menuBarRequired = []string{"open", "status", "settings", "quit"}
 var menuBarSeparatorPattern = regexp.MustCompile(`^separator:[1-9][0-9]*$`)
+
+// The launch enables the previously optional items once. Existing native menu
+// order, disabled menu-bar visibility, usage period and other customizations
+// are retained; the app toolbar has its own separate six-item reset.
+func launchMenuBarPreferences(raw json.RawMessage) map[string]any {
+	values := map[string]json.RawMessage{menuBarPreferenceKey: raw}
+	saved := map[string]any{}
+	_ = json.Unmarshal(raw, &saved)
+	if saved == nil {
+		saved = map[string]any{}
+	}
+	period := menuBarUsagePeriod(values)
+	order := menuBarOrder(values, menuBarSettings(values))
+	for _, id := range []string{"index", "cost", "streak", "agent_streak", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "logs", "eject"} {
+		saved[id] = true
+		if slices.Contains(order, id) {
+			continue
+		}
+		// Place each addition before its next usual neighbor without moving
+		// any saved item or changing the identities of editable separators.
+		at := len(order)
+		for _, next := range menuBarDefaultOrder[slices.Index(menuBarDefaultOrder, id)+1:] {
+			if index := slices.Index(order, next); index >= 0 {
+				at = index
+				break
+			}
+		}
+		order = slices.Insert(order, at, id)
+	}
+	saved["order"], saved["layoutVersion"], saved["usagePeriod"] = order, 2, period
+	return saved
+}
 
 func menuBarGroup(id string) string {
 	switch id {
@@ -96,10 +129,10 @@ func menuBarOrder(values map[string]json.RawMessage, settings map[string]bool) [
 }
 
 func menuBarSettings(values map[string]json.RawMessage) map[string]bool {
-	settings := map[string]bool{"enabled": true, "indexed": true, "words": true, "tokens": true, "carbon": true,
-		"cost": false, "streak": false, "agent_streak": false, "backup": false, "space": false, "index": false, "eject": false,
-		"open": true, "status": true, "settings": true, "quit": true,
-		"search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false, "logs": false}
+	settings := map[string]bool{"enabled": true}
+	for _, id := range menuBarDefaultOrder {
+		settings[id] = true
+	}
 	var saved map[string]any
 	_ = json.Unmarshal(values[menuBarPreferenceKey], &saved)
 	for key := range settings {

@@ -602,7 +602,7 @@ test('Feedback inbox report copying keeps keyboard focus through delayed success
 });
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
-  const { page, settled, shot } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true, "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
+  const { page, settled, shot } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-quick-stats-v1": {metrics: ["cost_usd", "tokens"], windows: ["today", "6h"]} } });
   await activateHeaderTool(page, "usageSummaryToggle");
   await settled();
   const link = page.getByRole("link", { name: /^Tokens, 6h:/ });
@@ -926,7 +926,7 @@ async function useSearchMenus(page, dialog) {
 }
 
 test("quick search takes focus from the header button and from the keyboard shortcut, and returns it", { skip }, async t => {
-  const { page } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row" });
+  const { page } = await open(t, { url: "/library?view=table", ready: "#queryTableLibrary .qt-row", preferences: { 'pharos-header-tools-v1': ['search', 'settings'] } });
   const dialog = page.locator("#searchDialog"), button = page.locator("#searchToggle");
   await press(button);
   await useSearchMenus(page, dialog);
@@ -975,7 +975,7 @@ test("quick search takes focus from the header button and from the keyboard shor
 }
 
 test('navigation and header focus stay reachable when resizing between layouts', { skip }, async t => {
-  const { page, settled } = await open(t, { url: '/analyze', viewport: { width: 1280, height: 720 }, ready: '.usage-dashboard .usage-chart' });
+  const { page, settled } = await open(t, { url: '/analyze', viewport: { width: 1280, height: 720 }, ready: '.usage-dashboard .usage-chart', preferences: { 'pharos-header-tools-v1': ['history', 'library', 'search', 'readiness', 'summary', 'ask', 'feedback', 'settings', 'theme'] } });
   // The section sidebar hands focus to the phone switcher and back.
   const sidebar = page.getByRole('complementary', { name: 'Analyze navigation', exact: true });
   await sidebar.getByRole('link', { name: 'Tokens and Cost', exact: true }).focus();
@@ -1218,6 +1218,7 @@ test('header editing keeps keyboard focus on the handle being changed', { skip }
   await settled();
   await page.reload();
   await guideHandle.waitFor();
+  await settled();
   await activateHeaderTool(page,'dataGuideToggle');
   await holdsFocus(page,page.getByRole('dialog',{name:'Data Guide',exact:true}),guideButton);
   await shot('data-guide-shortcut');

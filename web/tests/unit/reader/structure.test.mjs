@@ -331,6 +331,8 @@ test("reader legend keys isolate values and categories, combine choices, and all
 
 
 test("whole-key defaults set visibility and every highlight together, clearing stale hue exclusions", () => {
+ const defaults=plain(reader.readerKeyPresetValues('default'));
+ assert.deepEqual([defaults.reader_writing,defaults.reader_events,defaults.reader_labels],[true,true,true]);
  const reading=plain(reader.readerKeyPresetValues('reading'));
  assert.deepEqual(reading,{reader_filter_level:'primary',reader_filter:['prompts','response'],reader_writing:true,reader_events:false,reader_labels:false,reader_highlight_hidden:[]});
  const reasoning=plain(reader.readerKeyPresetValues('reasoning'));

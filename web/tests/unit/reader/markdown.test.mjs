@@ -211,12 +211,12 @@ test("the reader offers each highlight the conversation has marks for, each show
   const rebuilding = reader.readerHighlightOptions({ ...conversation, agent_events: { messages_read: 1, pending: true } }, [human, agent]);
   assert.match(rebuilding[1].note, /^Waiting to be rebuilt .* may change$/);
   assert.deepEqual(plain(options[2].legend), [{ name: 'Report', family: 'C.report' }]);
-  // Human writing is on by default and the classifiers are opt-in; a link
+  // Writing and classifier marks are on by default; a link
   // wins over the saved choice, which wins over the default.
   const shown = (linked, saved) => [...reader.readerHighlightsShown(options, linked, saved)].sort();
-  assert.deepEqual(shown(), ['writing']);
+  assert.deepEqual(shown(), ['events', 'labels', 'writing']);
   assert.deepEqual(shown(() => null, pref => pref === 'pharos-reader-events'), ['events']);
-  assert.deepEqual(shown(field => field === 'reader_labels' ? true : field === 'reader_writing' ? false : null), ['labels']);
+  assert.deepEqual(shown(field => field === 'reader_labels' ? true : field === 'reader_writing' ? false : null), ['events', 'labels']);
   // Human writing is offered only where there is some, and a classifier only
   // once it has run; one with nothing here is offered but off.
   const plainOptions = reader.readerHighlightOptions({ labels: { labeled: false, pending: true }, agent_events: { messages_read: 3 } }, [{ role: 'assistant', kind: 'message', text: 'Done.' }]);

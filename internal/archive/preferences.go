@@ -27,6 +27,59 @@ var preferenceKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.-]{0,199}$`)
 
 var maxPreferenceBytes = 512 << 10
 
+const launchPreferencesReceipt = "launch_preferences_2026_11_v1"
+
+// migrateLaunchPreferences applies the launch choices before any page or native
+// menu reads them. The receipt commits with the preferences, so subsequent
+// customization (including turning a launched behavior off) survives reopening
+// the library on this or another Mac.
+func (c *Catalog) migrateLaunchPreferences() error {
+	tx, err := c.DB.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec("INSERT OR IGNORE INTO meta(key,value) VALUES(?,'1')", launchPreferencesReceipt)
+	if err != nil {
+		return err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil || inserted == 0 {
+		return err
+	}
+	updates := map[string]any{
+		"pharos-header-tools-v1":        []string{"back", "library", "summary", "ask", "feedback", "settings"},
+		"pharos-usage-summary-links":    true,
+		"pharos-reader-events":          true,
+		"pharos-reader-labels":          true,
+		"pharos-uncertain-related-work": true,
+	}
+	var menu string
+	if err := tx.QueryRow("SELECT value FROM ui_preferences WHERE key=?", menuBarPreferenceKey).Scan(&menu); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	updates[menuBarPreferenceKey] = launchMenuBarPreferences(json.RawMessage(menu))
+	// A prior hide-all selection must not conceal the newly enabled classifier
+	// marks. Keep unrelated writing and individual annotation exclusions.
+	var hidden string
+	err = tx.QueryRow("SELECT value FROM ui_preferences WHERE key='pharos-reader-highlight-hidden'").Scan(&hidden)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	var exclusions []string
+	if err == nil && json.Unmarshal([]byte(hidden), &exclusions) == nil {
+		updates["pharos-reader-highlight-hidden"] = slices.DeleteFunc(exclusions, func(key string) bool {
+			return strings.HasPrefix(key, "events:") || strings.HasPrefix(key, "labels:")
+		})
+	}
+	for key, value := range updates {
+		if _, err := tx.Exec("INSERT INTO ui_preferences(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, jsonText(value)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // UIPreferences returns every stored preference, keyed by name.
 func (c *Catalog) UIPreferences(ctx context.Context) (map[string]json.RawMessage, error) {
 	// Keep a pending value visible until this read has taken its SQLite

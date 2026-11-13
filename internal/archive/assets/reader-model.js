@@ -1062,14 +1062,14 @@ function eventLinkEnd(links,id,from){
 // Highlights: the kinds of marks the reader can show, each switched on or
 // off on its own. Each is a boolean view field, so a link keeps the choice,
 // with the last choice saved as the fallback for links without it. Human
-// writing is shown unless turned off; the classifiers' marks are opt-in.
+// writing and the classifiers' marks are shown unless turned off.
 // Showing a highlight only toggles a class on the panel (show-<id>); the
 // marks are always rendered. Where a message's labels and its human writing
 // cover the same text, the label's hue wins.
 const READER_HIGHLIGHTS=[
   {id:'writing',field:'reader_writing',pref:'pharos-reader-writing',fallback:true,label:'Human writing',title:'Text a person typed or dictated. Pasted, quoted, templated and re-sent text stays plain.'},
-  {id:'events',field:'reader_events',pref:'pharos-reader-events',fallback:false,label:'Agent events',title:'Sentences where an agent hit friction, learned something or made a choice you may not see (sentence classifier). Hover a highlighted sentence for its events.'},
-  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:false,label:'Message labels',title:'Tint each message card by what it does (message classifier). Hover the card for its labels.'}];
+  {id:'events',field:'reader_events',pref:'pharos-reader-events',fallback:true,label:'Agent events',title:'Sentences where an agent hit friction, learned something or made a choice you may not see (sentence classifier). Hover a highlighted sentence for its events.'},
+  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:true,label:'Message labels',title:'Tint each message card by what it does (message classifier). Hover the card for its labels.'}];
 // The highlights a conversation offers, in READER_HIGHLIGHTS order: whether
 // each has anything to show (available, else why not in title), a status
 // note when needed, and a legend of the hues it uses here (label families or
@@ -1094,7 +1094,7 @@ function readerHighlightOptions(conversation,messages,taxonomy=[]){
 // Whole-key defaults apply content visibility and all highlight kinds together.
 // Existing visibility and highlight fields remain the canonical linked state.
 const READER_KEY_PRESETS=[
-  {id:'default',label:'Default',note:'All content. Highlight human writing.',level:'all',highlights:['writing']},
+  {id:'default',label:'Default',note:'All content. Highlight human writing, agent events and message labels.',level:'all',highlights:['writing','events','labels']},
   {id:'reading',label:'Read replies',note:'Prompts and final responses. Highlight human writing.',level:'primary',highlights:['writing']},
   {id:'reasoning',label:'Follow reasoning',note:'Prompts, replies and thinking. Highlight agent events and message labels.',level:'thought',highlights:['events','labels']},
   {id:'review',label:'Review',note:'Everything except token usage. Highlight human writing, agent events and message labels.',level:'all-minus-usage',highlights:['writing','events','labels']},

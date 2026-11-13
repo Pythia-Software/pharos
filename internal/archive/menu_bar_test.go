@@ -292,6 +292,7 @@ func TestMenuBarTodaySnapshotAndPreference(t *testing.T) {
 		}
 	}
 	// Streaks are read only when one is in the menu.
+	preferencesCall(t, server, http.MethodPost, "/api/preferences", `{"set":{"pharos-menu-bar":{"enabled":true,"streak":false,"agent_streak":false}}}`)
 	if got := libraryStatusCall(t, server, "/api/menu-bar/usage"); got["streaks"] != nil {
 		t.Fatalf("streaks without a streak item: %v", got["streaks"])
 	}

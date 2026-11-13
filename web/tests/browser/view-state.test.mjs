@@ -83,8 +83,7 @@ test('uncertain related work setting includes sessions and opens their conversat
  };
  const app=await open(t,{api,url:'/settings/preferences',ready:'#uncertainRelatedWork'}),{page}=app;
  const toggle=page.getByRole('switch',{name:'Show uncertain related work',exact:true});
- assert.equal(await toggle.getAttribute('aria-checked'),'false');
- await toggle.click();await page.evaluate(()=>window.pharosPrefs.flush());
+ assert.equal(await toggle.getAttribute('aria-checked'),'true');
  await page.goto(new URL(`/work/${workID}?explorer=timeline`,page.url()).href);
  const lane=page.locator('[data-session-id="s-maybe"]').first();await lane.waitFor();
  await page.waitForFunction(()=>document.querySelector('[data-session-id="s-maybe"]')?.textContent.includes('uncertain'));
