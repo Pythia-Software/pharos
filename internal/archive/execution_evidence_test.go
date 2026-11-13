@@ -715,8 +715,8 @@ func TestCursorForkRetainsCopyEvidence(t *testing.T) {
 // child copied with its parent's message is inherited from the parent's
 // request, its own request is original, and one streamed across the copy
 // boundary is unresolved. Request IDs are never matched: a provider without
-// event IDs proves nothing, and a copy whose original is gone stays the
-// child's own with partial coverage. Accounting rows are unchanged.
+// event IDs proves nothing, and a message with no matching original or copy
+// declaration stays the child's own. Accounting rows are unchanged.
 func TestRequestOccurrencesFollowUsageMessages(t *testing.T) {
 	ctx := t.Context()
 	c, _ := testCatalog(t)
@@ -732,7 +732,7 @@ func TestRequestOccurrencesFollowUsageMessages(t *testing.T) {
 			{NativeID: child, Provider: provider, Account: "local", ParentNativeID: root, AgentDepth: 1, Messages: childMessages}}}
 	}
 	ingestRecordTx(t, c, family("codex", "codex", "root", "child", []MessageRecord{old, streamed}, old, streamed, streamedOn, own))
-	// The original of the child's first message is not retained.
+	// The child's message has no matching original or copy declaration.
 	ingestRecordTx(t, c, family("missing", "codex", "root-gone", "child-gone", []MessageRecord{own}, old))
 	// A provider whose message IDs are not event IDs.
 	ingestRecordTx(t, c, family("opencode", "opencode", "oc-root", "oc-child", []MessageRecord{old}, old))
@@ -774,8 +774,8 @@ func TestRequestOccurrencesFollowUsageMessages(t *testing.T) {
 	if got := o.Lookup(request("root", "native-old"), sourceRef{}); got.Role != occurrenceOriginal {
 		t.Fatalf("the parent's request: %+v", got)
 	}
-	if got := o.Lookup(request("child-gone", "native-old"), sourceRef{}); got.Role != occurrenceOriginal || o.Partial(conversation("child-gone")) == "" {
-		t.Fatalf("a copy whose original is gone: %+v, partial %q", got, o.Partial(conversation("child-gone")))
+	if got := o.Lookup(request("child-gone", "native-old"), sourceRef{}); got.Role != occurrenceOriginal || o.Partial(conversation("child-gone")) != "" {
+		t.Fatalf("an unmatched message without a copy declaration: %+v, partial %q", got, o.Partial(conversation("child-gone")))
 	}
 	if got := o.Lookup(request("oc-child", "native-old"), sourceRef{}); got.Role != occurrenceOriginal {
 		t.Fatalf("an equal request ID proved a copy: %+v", got)

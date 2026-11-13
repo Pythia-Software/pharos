@@ -455,6 +455,29 @@ func TestPartialOccurrenceCoverageReachesActivityAndParallelism(t *testing.T) {
 	if partial["fork"] != "partial" || partial["root"] != "" || data.Coverage.Occurrences != "partial" || data.Coverage.OccurrencePartial != 1 {
 		t.Fatalf("parallelism coverage: %v %+v", partial, data.Coverage)
 	}
+	// A provider read with no history declaration no longer makes these same
+	// observations partial. They still count as separate messages.
+	fixtureExec(t, c, `INSERT INTO execution_evidence_state(conversation_id,version,input,id_policy) VALUES('fork',?,'ingest','line-locator/v1')`, executionEvidenceVersion)
+	counts := fixtureCounts(t, c)
+	if counts.Messages != 2 || counts.PartialConversations != 0 || counts.OccurrenceCoverage != "complete" {
+		t.Fatalf("quick stats after provider read: %+v", counts)
+	}
+	rows, err = c.conversationActivityRows(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row["event_kind"] == "human" && row["occurrence_coverage"] != "complete" {
+			t.Fatalf("activity after provider read: %v", row)
+		}
+	}
+	data, err = c.parallelismThreads(t.Context(), now, map[string]parallelismActivity{"root": span, "fork": span})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Coverage.Occurrences != "complete" || data.Coverage.OccurrencePartial != 0 {
+		t.Fatalf("parallelism after provider read: %+v", data.Coverage)
+	}
 }
 
 // Typed evidence written alone (a backfill, or one claim) reaches every
