@@ -8,19 +8,19 @@ import { Icon, type IconName } from "./icons";
 
 export type ReaderKey = { id: string; label: string; values: string[]; title?: string; className?: string;
   family?: string; count?: number; children?: ReaderKey[]; available?: boolean; note?: string; icon?: IconName };
-export type ReaderKeys = { items: ReaderKey[]; all: string[]; shown: string[]; groupToggle?: boolean; groupLabel?: string; groupField?: "reader_filter" | "reader_highlight_hidden"; groupMixed?: boolean; activityKeys?: ReaderKeys; onChange: (shown: string[], allKinds?: boolean, action?: LegendAction) => void };
-function ReaderKeyFilter({ items, all, shown, groupToggle = false, groupLabel = "Text highlighting", groupField = "reader_highlight_hidden", groupMixed = false, activityKeys, onChange }: ReaderKeys) {
+export type ReaderKeys = { items: ReaderKey[]; all: string[]; shown: string[]; groupToggle?: boolean; groupLabel?: string; groupField?: "reader_filter" | "reader_highlight_hidden"; groupMixed?: boolean; onSelect?: (id: string, action: LegendAction) => void; onChange: (shown: string[], allKinds?: boolean, action?: LegendAction) => void };
+function ReaderKeyFilter({ items, all, shown, groupToggle = false, groupLabel = "Highlights", groupField = "reader_highlight_hidden", groupMixed = false, onSelect, onChange }: ReaderKeys) {
   const visible = all.filter(value => shown.includes(value)).length;
   const chip = (item: ReaderKey): React.ReactNode => <span key={item.id} className={`reader-key ${item.className ?? ""}`} data-label-family={item.family} title={item.title} role={item.children ? "group" : undefined} aria-label={item.children ? item.label : undefined}>
     {item.available === false ? <span className="reader-key-unavailable">{item.label}{item.note ? ` · ${item.note}` : ""}</span> : <ChartLegendChip
       item={{ key: item.id, label: item.label, color: "" }} {...readerKeyState(all, shown, item.values)}
       groupSize={item.children ? item.values.length : undefined}
-      swatch={item.icon ? <Icon name={item.icon} className="reader-key-icon" /> : item.className === "event-target-legend" ? <span className="reader-event-link-example" aria-hidden="true"><span /><span /></span> : item.className || item.family !== undefined ? <i className="reader-key-swatch" /> : null}
+      swatch={item.icon ? <Icon name={item.icon} className="reader-key-icon" /> : item.className === "event-target-legend" ? <span className="reader-event-link-example" aria-hidden="true"><span /><span /></span> : item.className || item.family !== undefined ? <i className="reader-key-swatch" aria-hidden="true" /> : null}
       suffix={item.count !== undefined ? <span className="transcript-filter-count">{item.count.toLocaleString()}</span> : null}
-      onAction={action => onChange(updateReaderKeys(all, shown, item.values, action), false, action)} />}
+      onAction={action => onSelect ? onSelect(item.id, action) : onChange(updateReaderKeys(all, shown, item.values, action), false, action)} />}
     {item.children ? <span className="reader-key-children">{item.children.map(chip)}</span> : null}
   </span>;
-  const children = <span className="reader-key-children">{items.map(chip)}{activityKeys ? <span className="transcript-tag-key"><ReaderKeyFilter {...activityKeys} /></span> : null}</span>;
+  const children = <span className="reader-key-children">{items.map(chip)}</span>;
   return groupToggle ? <div className="reader-key conversation-key-group" role="group" aria-label={groupLabel}><button type="button" className="usage-legend-item usage-legend-category conversation-key-toggle" data-view-field={groupField} aria-pressed={visible === 0 ? false : visible === all.length && !groupMixed ? true : "mixed"} disabled={!all.length} title={`${visible ? "Hide" : "Show"} ${groupLabel.toLowerCase()}`} onClick={() => onChange(visible ? [] : all, true)}>{groupLabel}</button>{children}</div> : children;
 }
 type KeyPreset = { id: string; label: string; note: string };
@@ -28,7 +28,7 @@ type KeyDefaults = { presets: KeyPreset[]; selected: string | null; onChoose: (i
 function ReaderKeyDefaults({ presets, selected, onChoose }: KeyDefaults) {
   const current = presets.find(preset => preset.id === selected)?.label ?? "Custom";
   return <LegendMenu name="Key" label="Key" menuLabel="Key defaults" title="Choose key defaults" category
-    heading="Key defaults" suffix={<span className="reader-key-current">{current}</span>}>
+    heading="Key defaults" suffix={<><span className="reader-key-separator" aria-hidden="true">·</span><span className="reader-key-current">{current}</span></>}>
     {choose => <>{presets.map(preset => <button key={preset.id} type="button" role="menuitemradio" tabIndex={-1}
       aria-checked={preset.id === selected} onClick={() => choose(() => onChoose(preset.id))}>
       <span>{preset.label}</span><small>{preset.note}</small>

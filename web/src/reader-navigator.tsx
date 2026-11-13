@@ -14,10 +14,6 @@ import {availableReaderNavigators,readerNavigatorClock,readerNavigatorScale,near
 import {trackReaderViewport} from './reader-navigator-layout';
 import './reader-navigator.css';
 
-const choices=['context','turns'] as const;
-const defaultShown=['timeline',...choices];
-type Choice=typeof choices[number];
-const choiceNames:Record<Choice,string>={context:'Context',turns:'Turns'};
 type ReaderHit={track:Element;x:number;y:number};
 type ReaderRibbonProps={node:RibbonNode;sessionID:string;range:ReturnType<typeof readerNavigatorClock>['range'];scale:ReturnType<typeof timeScale>;eventLayer:NonNullable<React.ComponentProps<typeof SessionRibbon>['eventLayer']>;visibility:TimelineVisibility;jump:(fraction:number,hit?:ReaderHit)=>void;timed:boolean;depth?:number};
 const chevron=<svg className="reader-section-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="m4 2 4 4-4 4"/></svg>;
@@ -33,7 +29,6 @@ function ReaderRibbonSection({node,sessionID,range,scale,eventLayer,visibility,j
 }
 
 function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavigatorData;keyHost:HTMLElement}){
-  const [shown,setShown]=useViewState<string[]>('reader_navigator',defaultShown);
   const [visibility,setVisibility]=useViewState<TimelineVisibility>('timeline_visibility',{});
   const [skipIdle]=useViewState<boolean>('timeline_idle',true);
   const [singleSession,setSingleSession]=useState(()=>panel.parentElement?.dataset.readerSingleSession==='true');
@@ -68,36 +63,36 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
     }
     const id=selected??nearestReaderMessage(clock.byID,scale.time(Math.max(0,Math.min(1,fraction))));if(id)data.jumpMessage(id);
   };
-  const available=availableReaderNavigators(data,clock.byID),active=available.filter(choice=>choice==='timeline'?timelineVisible:shown.includes(choice)),hidden=choices.filter(choice=>available.includes(choice)&&!shown.includes(choice)),contextNote=useId();
+  const available=availableReaderNavigators(data,clock.byID),hasContext=available.includes('context'),hasTurns=available.includes('turns'),hasBars=timelineVisible||hasContext||hasTurns,contextNote=useId();
   const sessionKey=`reader-timeline:${data.sessionID}:session`,[sessionOpen]=useViewEntry('disclosures',sessionKey,false);
-  // Context and turns can be switched off by their labels; hidden choices
-  // wait at the end of the key without taking a row of their own.
-  const choice=(name:Choice)=><label key={name} className="reader-navigator-choice" title={shown.includes(name)?`Hide the ${name} bar`:`Show the ${name} bar`}><input type="checkbox" data-view-field="reader_navigator" checked={shown.includes(name)} onChange={event=>{const checked=event.currentTarget.checked;setShown(previous=>checked?[...previous.filter(item=>item!==name),name]:previous.filter(item=>item!==name));}}/>{choiceNames[name]}</label>;
-  const hiddenChoices=hidden.length?<span className="reader-navigator-hidden" role="group" aria-label="Hidden session navigators">{hidden.map(choice)}</span>:null;
   const expandable=singleSession&&!!visibleTree?.children.length;
   const timelineLabel=expandable?<span className="reader-section-label"><strong>Timeline</strong><small>{ribbonEventCount(visibleTree!.items)}</small>{chevron}</span>:<span className="reader-navigator-label">Timeline</span>;
   const timelineTrack=<div className="reader-navigator-track reader-navigator-timeline" role="group" aria-label="Session timeline. Click to reveal a message." onClick={event=>{if(expandable){event.preventDefault();event.stopPropagation();}const track=event.currentTarget,rect=track.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width,{track,x:event.clientX,y:event.clientY});}}>
     <SessionRibbon node={visibleTree!} visibility={visibility} range={clock.range} clock={scale} brushHandlers={{}} preview={null} inspector={inspector} disabled showUnknownTail={clock.timed} eventLayer={{...eventLayer,events:mergeAgentEvents(eventLayer.events)}}/>
     <button type="button" className="reader-navigator-keyboard" aria-label="Browse session timeline" title="Left / right: move through the session · Home / End: first / last message" onFocus={event=>{const band=host.current?.querySelector<HTMLElement>('.reader-navigator-window');event.currentTarget.dataset.position=band?.dataset.position||'0';}} onClick={event=>{event.stopPropagation();jump(Number(event.currentTarget.dataset.position??0));}} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const button=event.currentTarget,previous=Number(button.dataset.position??0),next=event.key==='Home'?0:event.key==='End'?1:Math.max(0,Math.min(1,previous+(event.key==='ArrowLeft'?-.02:.02)));button.dataset.position=String(next);jump(next);}}/>
   </div>;
-  useEffect(()=>{if(host.current&&active.length)return trackReaderViewport(panel,host.current,data,clock.byID,scale);},[panel,data,clock,scale,active.join(',')]);
+  useEffect(()=>{if(host.current&&hasBars)return trackReaderViewport(panel,host.current,data,clock.byID,scale);},[panel,data,clock,scale,hasBars]);
   return <><aside ref={host} className="reader-navigator" aria-label="Session navigator" data-range={clock.range.join(',')}>
-    {active.length?<>
+    {hasBars?<>
       <div className="reader-navigator-bars">
         {timelineVisible?(expandable?<ViewDisclosure className="reader-navigator-timeline-disclosure" viewKey={sessionKey} summary={<>{timelineLabel}{timelineTrack}</>}>
           {sessionOpen?visibleTree!.children.map(child=><ReaderRibbonSection key={child.id} node={child} sessionID={data.sessionID} range={clock.range} scale={scale} eventLayer={eventLayer} visibility={visibility} jump={jump} timed={clock.timed}/>):null}
         </ViewDisclosure>:<div className="reader-navigator-row">{timelineLabel}{timelineTrack}</div>):null}
         {timelineVisible&&!singleSession&&visibleTree?.children.length?<ReaderRibbonSection node={visibleTree} sessionID={data.sessionID} range={clock.range} scale={scale} eventLayer={eventLayer} visibility={visibility} jump={jump} timed={clock.timed}/>:null}
-        {active.includes('context')?<div className="reader-navigator-row">{choice('context')}<div className="reader-navigator-track reader-navigator-context" aria-label="Context growth" aria-describedby={contextNote}>{contexts.map(entry=>{const time=at(entry.message.id);if(!time)return null;return <button key={JSON.stringify([entry.message.id,entry.sample.stream])} type="button" className={`token-marker${entry.sample.compact?' compaction-marker':''}`} style={{...position(time[0],entry.end),'--context-profile':entry.sample.compact?'none':`polygon(0 ${100-entry.from}%,100% ${100-entry.width}%,100% 100%,0 100%)`,'--token-color':entry.color} as React.CSSProperties} title={entry.title} onClick={()=>data.jumpContext(entry)}/>;})}</div></div>:null}
-        {active.includes('turns')?<div className="reader-navigator-row is-turns">{choice('turns')}<div className="reader-navigator-track reader-navigator-turns" aria-label="Conversation turns">{data.turns.map((turn,index)=>{const spans=turn.messages.flatMap(id=>{const span=at(id);return span?[span]:[];});if(!spans.length)return null;const start=Math.min(...spans.map(span=>span[0])),end=Math.max(...spans.map(span=>span[1]));return <button type="button" className="reader-navigator-turn" key={turn.messages[0]??index} style={position(start,end)} title={`Turn ${index+1} · ${turn.label}`} onClick={()=>{const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}><span>{index+1}</span></button>;})}</div></div>:null}
+        {hasContext||hasTurns?<div className={`reader-navigator-row${hasContext?'':' is-turns'}`}>
+          <span className="reader-navigator-label">{hasContext?'Turns · context':'Turns'}</span>
+          <div className={`reader-navigator-track reader-navigator-turns${hasContext?' reader-navigator-context':''}`} role="group" aria-label={hasContext?'Conversation turns and context growth':'Conversation turns'} aria-describedby={hasContext?contextNote:undefined}>
+            {hasContext?contexts.map(entry=>{const time=at(entry.message.id);if(!time)return null;return <button key={JSON.stringify([entry.message.id,entry.sample.stream])} type="button" className={`token-marker${entry.sample.compact?' compaction-marker':''}`} style={{...position(time[0],entry.end),'--context-profile':entry.sample.compact?'none':`polygon(0 ${100-entry.from}%,100% ${100-entry.width}%,100% 100%,0 100%)`,'--token-color':entry.color} as React.CSSProperties} title={entry.title} onClick={()=>data.jumpContext(entry)}/>;}):null}
+            {data.turns.map((turn,index)=>{const spans=turn.messages.flatMap(id=>{const span=at(id);return span?[span]:[];});if(!spans.length)return null;const start=Math.min(...spans.map(span=>span[0])),end=Math.max(...spans.map(span=>span[1]));return <button type="button" className="reader-navigator-turn" key={turn.messages[0]??index} style={position(start,end)} title={`Turn ${index+1} · ${turn.label}`} onClick={()=>{const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}><span>{index+1}</span></button>;})}
+          </div>
+        </div>:null}
         <div className="reader-navigator-window-track" aria-hidden="true"><span className="reader-navigator-window" hidden/><i className="reader-navigator-boundary" hidden/><i className="reader-navigator-boundary" hidden/></div>
       </div>
-      {hiddenChoices?<div className="reader-navigator-key">{hiddenChoices}</div>:null}
       {/* Shown over the transcript while the context bar is hovered. */}
-      {active.includes('context')?<small id={contextNote} className="reader-navigator-context-note">Height = context window in use (largest observed context when unknown) · vertical line = compaction</small>:null}
+      {hasContext?<small id={contextNote} className="reader-navigator-context-note">Height = context window in use (largest observed context when unknown) · context-colored line = compaction · blue line and number = turn</small>:null}
       {!clock.timed?<small className="reader-navigator-note">Message order · timestamps unavailable</small>:null}
-    </>:<><div className="reader-navigator-key is-bare">{hiddenChoices}</div><span className="reader-navigator-window" hidden/></>}
-  </aside>{createPortal(<div role="group" aria-label="Timeline key"><TimelineLegend embedded data-view-field="timeline_visibility" messages={ribbonMessages} origins={[]} taxonomy={data.taxonomy} tools={tools} error={clock.marks.some(mark=>mark.error)} unknownTools={unknownTools} events={timelineEvents} visibility={visibility} onSelect={(section,values,action)=>setVisibility(previous=>updateTimelineVisibility(previous,section,values,action))}/></div>,keyHost)}</>;
+    </>:<span className="reader-navigator-window" hidden/>}
+  </aside>{createPortal(<div role="group" aria-label="Timeline key"><TimelineLegend embedded data-view-field="timeline_visibility" messages={ribbonMessages} origins={[]} taxonomy={data.taxonomy} tools={tools} error={clock.marks.some(mark=>mark.error)} unknownTools={unknownTools} events={timelineEvents} visibility={visibility} onSelect={(section,values,action)=>{setVisibility(previous=>updateTimelineVisibility(previous,section,values,action));panel.dispatchEvent(new Event('pharos:reader-key-edit'));}}/></div>,keyHost)}</>;
 }
 
 declare global{interface Window{pharosReaderNavigator?:{mount:(panel:HTMLElement,data:ReaderNavigatorData)=>()=>void}}}

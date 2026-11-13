@@ -129,6 +129,9 @@
     grid-row: 4;
   }
 }
+.conversation-timeline-active .work-heading .conversation-actions-reading { display: none; }
+.conversation-timeline-active .work-heading .conversation-actions-copy { border-top: 0; margin-top: 0; padding-top: 6px; }
+
 .delegation-controls {
   display: flex;
   flex-wrap: wrap;
@@ -535,6 +538,25 @@
 .conversation-title-line:has(.delegation-session-heading) > h2 {
   display: none;
 }
+
+/* A session's identity and conversation facts form one wrapping byline. */
+.workspace-inbox:not(.merged) .conversation-title-content:has(.delegation-session-heading) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 0;
+}
+.workspace-inbox:not(.merged) .conversation-title-content:has(.delegation-session-heading) > :is(.conversation-title-line, .chips),
+.workspace-inbox:not(.merged) .delegation-session-heading { display: contents; }
+.workspace-inbox:not(.merged) .delegation-session-heading > h2 { flex-basis: 100%; margin: 0; }
+.workspace-inbox:not(.merged) .delegation-session-heading > small { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.workspace-inbox:not(.merged) .conversation-title-content:has(.delegation-session-heading) > .chips > :is(.chip, .token-legend) { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.workspace-inbox:not(.merged) .delegation-session-heading > small:not(.delegation-truncation),
+.workspace-inbox:not(.merged) .conversation-title-content:has(.delegation-session-heading) > .chips > :is(.chip, .token-legend) { font-family: inherit; font-size: var(--fs-xs); font-weight: 400; line-height: inherit; color: var(--muted); }
+.workspace-inbox:not(.merged) .conversation-title-content:has(.delegation-session-heading > small:not(.delegation-truncation)) > .chips > :is(.chip, .token-legend)::before { content: "·"; padding: 0 6px; }
+.workspace-inbox:not(.merged) .conversation-title-content:has(.delegation-session-heading) > .chips > .token-legend { gap: 0; }
+.workspace-inbox:not(.merged) .delegation-session-heading > .delegation-truncation,
+.workspace-inbox:not(.merged) .conversation-title-content:has(.delegation-session-heading) > :not(.conversation-title-line, .chips) { flex-basis: 100%; min-width: 0; }
 .delegation-context > button,
 .delegation-transcript-link {
   color: var(--accent);
@@ -1057,8 +1079,10 @@
 .lt-timeline-legend .event-link-glyph{width:9px;height:9px}
 .lt-timeline-legend .lt-legend-line>span{vertical-align:middle;margin-right:3px;line-height:18px}
 .lt-timeline-legend .lt-legend-line>span>svg:not(.event-link-glyph){width:20px;height:10px;flex:none}
-.lt-unknown-tail-key{display:inline-flex;align-items:center;gap:4px;margin:0 5px;color:var(--muted);font-size:var(--fs-2xs)}.lt-tool-swatch.lt-unknown-tail{height:0;border-top:1.5px dotted currentColor;background:none}
-.lt-tool-swatch{display:inline-block;width:14px;height:1px;background:currentColor;position:relative;margin:4px 1px}.lt-tool-swatch:before{content:'';position:absolute;top:-2px;left:0;width:5px;height:5px;border-radius:50%;background:currentColor}
+/* Plain event hints need the same inner clearance as the neighboring buttons. */
+.lt-timeline-legend .event-link-legend>span:not(.usage-legend-chip){min-width:0;max-width:100%;padding:0 3px;overflow-wrap:anywhere}
+.lt-unknown-tail-key{display:inline-flex;align-items:center;gap:4px;margin:0 5px;color:var(--muted);font-size:var(--fs-2xs)}.lt-tool-swatch.lt-unknown-tail{background:repeating-linear-gradient(to right,currentColor 0 1px,transparent 1px 3px)}
+.lt-tool-swatch{display:inline-block;width:14px;height:1px;background:currentColor;position:relative;margin:4px 1px}.lt-tool-swatch:before{content:'';position:absolute;top:50%;left:0;width:5px;height:5px;border-radius:50%;background:currentColor;transform:translateY(-50%)}
 .lt-source-swatch.is-diagonal{background-image:repeating-linear-gradient(135deg,transparent 0 2px,color-mix(in srgb,var(--ink) 65%,transparent) 2px 2.8px,transparent 2.8px 4px)}.lt-source-swatch.is-dots{background-image:radial-gradient(color-mix(in srgb,var(--ink) 65%,transparent) .65px,transparent .65px);background-size:3px 3px}
 
 .lt-caller-row{background:color-mix(in srgb,var(--sea) 6%,transparent);margin-bottom:0;border-bottom:2px solid var(--line)}.lt-caller-row .lt-session-fold>.app-icon{width:17px;height:22px;color:var(--sea)}

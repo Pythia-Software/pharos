@@ -20,6 +20,11 @@ function filterPaths(messages) {
 }
 const visible = (paths, shown) => paths.filter(path => path.every(key => shown.has(key))).length;
 
+test("workspace heading recognizes chat import sources", () => {
+  for (const kind of ["claude-ai", "chatgpt", "chatgpt-export"]) assert.equal(reader.isChatImportSource(kind), true);
+  for (const kind of ["claude", "codex", "", null, undefined]) assert.equal(reader.isChatImportSource(kind), false);
+});
+
 test("reader classification and find counts match the shared fixtures the service checks", () => {
   assert.ok(findCases.length > 0);
   for (const item of findCases) {
@@ -166,6 +171,59 @@ test("activity keys group recorded MCP services, context and built-in tools with
   const commandID = commandIndex.tagOf(commands[0]);
   assert.equal(reader.transcriptActivityIcon(commandIndex.info(commandID)), "command", "different commands sharing a label use the common command icon");
   assert.equal(reader.transcriptActivityKeys(commandIndex)[0].children[0].icon, reader.transcriptActivityIcon(commandIndex.info(commandID)));
+});
+
+test("content keys join categories and activities while preserving saved filter identities", () => {
+  const messages=conversationMessages({messages:[human(),event("thought","reasoning","Consider the evidence"),
+    event("read","tool_call",{name:"Read"}),event("search","tool_call",{name:"Grep"}),
+    event("mcp","tool_call",{name:"mcp__custom__do_work"}),event("context","context",{source:"date_note"}),event("answer","message","Done")]});
+  const structure=transcriptStructure(messages),index=reader.transcriptTagIndex(messages,structure,message=>message.kind==="message"?null:{...reader.transcriptActivityPresentation(message),category:reader.readerTimelineCategory(message),label:message.native_id});
+  const model=reader.transcriptContentKeys(index,new Set(messages.map(message=>structure.pathOf(message)[0])));
+  const reads=model.items.find(item=>item.kind==="reads"),thinking=model.items.find(item=>item.kind==="thinking"),tools=model.items.find(item=>item.kind==="tools"),events=model.items.find(item=>item.kind==="events");
+  assert.deepEqual(plain(reads.children.map(item=>item.label)),["read","search"],"Read and Search refine the single content category");
+  assert.deepEqual(plain(thinking.children.map(item=>item.label)),["thought"]);
+  assert.deepEqual(plain(tools.children.map(item=>item.label)),["MCP"],"MCP services belong under Other tools");
+  assert.deepEqual(plain(events.children.map(item=>item.label)),["Context"]);
+  assert.equal(index.tagOf(messages[2]),reader.transcriptTagId("read","read"));
+  const leaves=items=>items.flatMap(item=>item.children?leaves(item.children):item.values);
+  assert.deepEqual(new Set(leaves(model.items)),new Set(model.all),"each selectable content entry has one leaf");
+
+  const all=new Set(allKinds()),read=reads.children.find(item=>item.label==="read"),search=reads.children.find(item=>item.label==="search");
+  const unrelated=reader.transcriptTagId("write","not in this conversation"),hidden=new Set(["search",unrelated]);
+  const shown=(kinds,tags)=>new Set(reader.transcriptContentShown(model,new Set(kinds),new Set(tags)));
+  assert.equal(shown(all,hidden).has(read.values[0]),true);
+  assert.equal(shown(all,hidden).has(search.values[0]),false,"legacy label exclusions still apply");
+  const hide=reader.transcriptContentSelection(model,all,hidden,reads,"hide");
+  assert.equal(hide.categories.includes("reads"),false);
+  assert.deepEqual(plain(hide.hidden),[...hidden],"hiding a category retains dormant child choices");
+  assert.ok(reads.values.every(id=>!shown(hide.categories,hide.hidden).has(id)),"a disabled parent dims every child");
+  const showChild=reader.transcriptContentSelection(model,new Set(hide.categories),new Set(hide.hidden),search,"show");
+  assert.equal(showChild.categories.includes("reads"),true,"a child restores its category");
+  assert.ok(showChild.hidden.includes("show:"+search.tags[0]),"showing a child overrides its legacy exclusion without removing that exclusion elsewhere");
+  assert.ok(showChild.hidden.includes(unrelated));
+  assert.equal(shown(showChild.categories,showChild.hidden).has(search.values[0]),true);
+  const isolated=reader.transcriptContentSelection(model,all,new Set(),read,"only");
+  assert.deepEqual(plain(isolated.categories),["reads"]);
+  assert.deepEqual([...shown(isolated.categories,isolated.hidden)],[read.values[0]],"isolation keeps only the chosen leaf");
+  const restored=reader.transcriptContentSelection(model,new Set(isolated.categories),new Set(isolated.hidden),reads,"show");
+  assert.ok(reads.values.every(id=>shown(restored.categories,restored.hidden).has(id)),"showing a category restores all of its children");
+  const clear=reader.transcriptContentSelection(model,new Set(isolated.categories),new Set([...isolated.hidden,unrelated]),read,"clear");
+  assert.deepEqual(plain(clear.categories),allKinds());
+  assert.ok(clear.hidden.includes(unrelated));
+  assert.equal(reader.transcriptContentShown(model,new Set(clear.categories),new Set(clear.hidden)).length,model.all.length);
+});
+
+test("shared activity tags retain their content-category membership", () => {
+  const messages=conversationMessages({messages:[human(),event("read","tool_call",{name:"Read"}),event("mcp","tool_call",{name:"mcp__custom__do_work"})]});
+  const structure=transcriptStructure(messages),index=reader.transcriptTagIndex(messages,structure,message=>message.kind==="tool_call"?{...reader.transcriptActivityPresentation(message),category:"read",label:"Read"}:null);
+  assert.equal(index.tagOf(messages[1]),index.tagOf(messages[2]));
+  const model=reader.transcriptContentKeys(index,new Set(messages.map(message=>structure.pathOf(message)[0])));
+  const read=model.items.find(item=>item.kind==="reads"),tools=model.items.find(item=>item.kind==="tools");
+  assert.equal(read.children[0].label,"Read");assert.equal(tools.children[0].label,"MCP");
+  assert.deepEqual(plain(read.tags),plain(tools.tags),"stored shared tags stay shared");
+  const hidden=reader.transcriptContentSelection(model,new Set(allKinds()),new Set(),read,"hide");
+  const shown=new Set(reader.transcriptContentShown(model,new Set(hidden.categories),new Set(hidden.hidden)));
+  assert.ok(read.values.every(value=>!shown.has(value)));assert.ok(tools.values.every(value=>shown.has(value)),"a category hide does not hide the same recorded label in another category");
 });
 
 test("find patterns escape plain terms and respect case", () => {
@@ -330,24 +388,25 @@ test("reader legend keys isolate values and categories, combine choices, and all
 });
 
 
-test("whole-key defaults set visibility and every highlight together, clearing stale hue exclusions", () => {
- const reading=plain(reader.readerKeyPresetValues('reading'));
- assert.deepEqual(reading,{reader_filter_level:'primary',reader_filter:['prompts','response'],reader_writing:true,reader_events:false,reader_labels:false,reader_highlight_hidden:[]});
- const reasoning=plain(reader.readerKeyPresetValues('reasoning'));
- assert.deepEqual(reasoning.reader_filter,['prompts','response','replies','thinking']);
- assert.deepEqual([reasoning.reader_writing,reasoning.reader_events,reasoning.reader_labels],[false,true,true]);
- const previous={reader_writing:false,reader_events:false,reader_labels:false,reader_highlight_hidden:['labels:C.report','events:event-friction']};
- const review={...previous,...plain(reader.readerKeyPresetValues('review'))};
- assert.equal(review.reader_filter.includes('usage'),false);
- assert.deepEqual([review.reader_writing,review.reader_events,review.reader_labels,review.reader_highlight_hidden],[true,true,true,[]]);
- assert.deepEqual(previous.reader_highlight_hidden,['labels:C.report','events:event-friction'],'applying defaults never mutates the prior state');
- for(const preset of reader.READER_KEY_PRESETS){
-  const values=reader.readerKeyPresetValues(preset.id);
-  const state={level:values.reader_filter_level};
-  assert.equal(reader.readerKeyPresetID(state,values,values.reader_highlight_hidden),preset.id);
+test("whole-key presets cover content, highlights, activity and timeline",()=>{
+ const all=plain(reader.readerKeyPresetValues('all'));
+ const content=plain(reader.readerKeyPresetValues('content'));
+ const quiet=plain(reader.readerKeyPresetValues('quiet'));
+ assert.deepEqual(all.reader_filter,allKinds());
+ assert.deepEqual(quiet.reader_filter,allKinds().filter(id=>id!=='usage'));
+ assert.deepEqual([all.reader_writing,all.reader_events,all.reader_labels],[true,true,true]);
+ assert.deepEqual([content.reader_writing,content.reader_events,content.reader_labels],[false,false,false]);
+ assert.deepEqual(content.timeline_visibility,{sections:{values:[],excluded:false,allHidden:true}});
+ for(const values of [all,content,quiet]){
+  assert.deepEqual(values.reader_hidden_tags,[]);assert.deepEqual(values.reader_highlight_hidden,[]);
+  const state={level:values.reader_filter_level,custom:values.reader_filter};
+  assert.equal(reader.readerKeyPresetID(state,values,[],[],values.timeline_visibility),values===all?'all':values===content?'content':'quiet');
+  assert.equal(reader.readerKeyPresetID(state,values,[],['hidden'],values.timeline_visibility),null);
  }
- assert.equal(reader.readerKeyPresetID({level:'custom',custom:['response','prompts']},reading,[]),'reading','preset identity follows effective content, not category order or a second stored label');
- assert.equal(reader.readerKeyPresetID({level:'all-minus-usage'}, {...review,reader_events:false}, []),null);
- assert.equal(reader.readerKeyPresetID({level:'all-minus-usage'}, review, ['labels:C.report']),null);
+ assert.equal(reader.readerKeyPresetID({level:'all'},all,[],[],content.timeline_visibility),null);
+ assert.equal(reader.readerKeyPresetID({level:'all'},all,['labels:C.report'],[],{}),null);
+ assert.match(reader.readerKeyLastNote(content),/All content shown.*Text highlighting shown: none.*Timeline elements hidden/);
+ assert.match(reader.readerKeyLastNote(quiet),/Hidden: Usage & quota/);
+ assert.equal(reader.readerKeyPresetValues('last'),null);
  assert.equal(reader.readerKeyPresetValues('unknown'),null);
 });

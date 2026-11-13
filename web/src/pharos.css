@@ -663,56 +663,74 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .usage-legend-category.dimmed { color: var(--muted); }
 .usage-legend-category[aria-pressed="mixed"] { color: var(--accent); border-color: color-mix(in srgb,var(--accent) 45%,transparent); background: color-mix(in srgb,var(--accent) 6%,transparent); }
 
-/* Keep the keys stacked and left aligned; labels share a row until space requires wrapping. */
-.transcript-key { display: grid; justify-items: start; text-align: left; gap: 8px; margin-top: 10px; padding: 10px 0; border-block: 1px solid var(--line); font-size: var(--fs-xs); color: var(--muted); }
+/* Shared compact rhythm for the conversation keys; only bordered groups need separation. */
+.transcript-key { display: grid; justify-items: start; text-align: left; gap: 4px; margin-top: 6px; padding: 0 0 6px; border-bottom: 1px solid var(--line); font-size: var(--fs-2xs); color: var(--muted); overflow-wrap: anywhere; }
 .transcript-filter { display: contents; }
 .transcript-content-key, .transcript-highlights, .transcript-timeline-key { width: fit-content; min-width: 0; max-width: 100%; }
-.transcript-highlights { display: grid; justify-items: start; gap: 8px; }
-.transcript-key-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.transcript-highlights { display: grid; justify-items: start; gap: 4px; }
+/* The preset control interrupts the divider itself, without a separate title row. */
+.transcript-key-heading { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; }
+.transcript-key-heading::before, .transcript-key-heading::after { content: ""; border-top: 1px solid var(--line); }
+.transcript-key-heading::before { flex: 0 0 8px; }
+.transcript-key-heading::after { flex: 1 1 0; min-width: 8px; }
 .transcript-key-heading h3 { margin: 0; color: var(--ink); font: inherit; font-weight: 600; }
 .transcript-key-line { display: grid; grid-template-columns: 5em minmax(0, 1fr); align-items: start; gap: 8px; }
 .transcript-key-line > .transcript-filter-label { padding-top: 7px; font-weight: 500; }
 .reader-highlight-keys { width: fit-content; min-width: 0; max-width: 100%; }
-.reader-key.conversation-key-group, .transcript-timeline-key .lt-timeline-legend.is-embedded { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 3px; box-sizing: border-box; width: fit-content; flex: 0 1 auto; max-width: 100%; padding: 0; border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent); border-radius: 5px; font-size: inherit; line-height: normal; }
+.reader-key.conversation-key-group, .transcript-timeline-key .lt-timeline-legend.is-embedded { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 0; box-sizing: border-box; width: fit-content; flex: 0 1 auto; max-width: 100%; padding: 0 2px; border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent); border-radius: 5px; font-size: inherit; line-height: normal; }
 .conversation-key-group > .reader-key-children { display: contents; }
-.transcript-timeline-key .timeline-key-sections { display: contents; }
+/* A flexible child surface lets the Timeline toggle share the first row,
+   even when a whole taxonomy branch needs to wrap inside that surface. */
+.transcript-timeline-key .lt-timeline-legend.is-embedded { align-items: flex-start; }
+.transcript-timeline-key .lt-timeline-legend > .conversation-key-toggle { flex: none; margin-top: 2px; }
+.transcript-timeline-key .timeline-key-sections { display: flex; flex: 1 1 0; flex-wrap: wrap; align-items: center; min-width: 0; max-width: 100%; gap: 0; }
+/* The navigator supplies the separator below the key. */
+.conversation-panel > .conversation-head:has(.transcript-key) { padding-bottom: 0; border-bottom: 0; }
+.conversation-panel:has(> .reader-navigator-host) .transcript-key { border-bottom: 0; }
+.transcript-timeline-key .lt-timeline-legend .lt-legend-line > span { margin: 0; line-height: 16px; }
+.transcript-timeline-key .lt-unknown-tail-key { gap: 2px; margin: 0 3px; line-height: 16px; }
 /* All three conversation keys use Timeline's control and dropdown styling. */
 .transcript-key :is(.conversation-key-group, .transcript-key-defaults) .usage-legend-chip { min-width: 0; max-width: 100%; margin-right: 0; vertical-align: middle; }
-.transcript-key :is(.conversation-key-group, .transcript-key-defaults) .usage-legend-item { gap: 6px; padding: 2px 6px; max-width: 100%; font-size: inherit; line-height: 18px; white-space: normal; text-align: left; }
-.transcript-key :is(.conversation-key-group, .transcript-key-defaults) .usage-legend-caret { flex: none; width: 12px; height: 12px; margin: 0; }
-.conversation-key-toggle, .transcript-timeline-key .lt-timeline-legend .conversation-key-toggle { padding: 2px 6px; font: inherit; font-weight: 600; line-height: 18px; white-space: nowrap; }
+.transcript-key :is(.conversation-key-group, .transcript-key-defaults) .usage-legend-item { gap: 2px; padding: 0 3px; max-width: 100%; font-size: inherit; line-height: 16px; white-space: normal; text-align: left; }
+.transcript-key :is(.conversation-key-group, .transcript-key-defaults) .usage-legend-caret { flex: none; width: 8px; height: 8px; margin: 0; }
+.conversation-key-toggle, .transcript-timeline-key .lt-timeline-legend .conversation-key-toggle { padding: 0 4px; font: inherit; font-weight: 600; line-height: 16px; white-space: nowrap; }
 .conversation-key-toggle[aria-pressed="true"] { border-color: transparent; background: transparent; color: inherit; }
 .conversation-key-toggle[aria-pressed="false"] { opacity: .5; }
 .conversation-key-toggle:disabled { opacity: .5; cursor: default; }
-.transcript-timeline-key :is(.lt-legend-section, .lt-ontology-role, .lt-ontology-families > .lt-mode-group) { display: inline-flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 4px; box-sizing: border-box; width: fit-content; max-width: 100%; min-width: 0; padding: 0; margin: 2px 4px; }
-.reader-key { display: inline-flex; flex: 0 1 auto; width: fit-content; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 3px; min-width: 0; max-width: 100%; }
-.reader-key-children { display: inline-flex; flex: 0 1 auto; width: fit-content; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 3px; min-width: 0; max-width: 100%; }
-/* Keep nested perimeters apart while controls supply their own inner spacing. */
-.reader-key:not(.conversation-key-group):has(> .reader-key-children) { gap: 4px; padding: 0; margin: 2px 4px; border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 5px; }
+.transcript-timeline-key :is(.lt-legend-section, .lt-ontology-role, .lt-ontology-families > .lt-mode-group) { display: inline-flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 0; box-sizing: border-box; width: fit-content; max-width: 100%; min-width: 0; padding: 0 2px; margin: 1px 2px; }
+.reader-key { display: inline-flex; flex: 0 1 auto; width: fit-content; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 0; min-width: 0; max-width: 100%; }
+.reader-key-children { display: inline-flex; flex: 0 1 auto; width: fit-content; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 0; min-width: 0; max-width: 100%; }
+/* Every perimeter owns an inset, including when a plain hint or wrapped label comes last. */
+.reader-key:not(.conversation-key-group):has(> .reader-key-children) { gap: 0; padding: 0 2px; margin: 1px 2px; border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 5px; }
 .reader-key:not(.conversation-key-group) > .reader-key-children > .reader-key:has(> .reader-key-children) { border-color: color-mix(in srgb, var(--ink) 14%, transparent); border-radius: 4px; }
-.reader-key-swatch { display: inline-block; flex: none; box-sizing: border-box; width: 11px; height: 11px; border-radius: 2px; background: color-mix(in srgb, var(--event-hue, var(--label-hue)) 24%, transparent); border: 1px solid var(--event-hue, var(--label-hue)); }
-.reader-key .reader-key-icon { flex: none; width: 14px; height: 14px; }
-.conversation-key-group > .reader-key-children > .transcript-tag-key { flex-basis: 100%; }
+.reader-key-swatch { display: inline-block; flex: none; box-sizing: border-box; width: 10px; height: 10px; border-radius: 2px; background: color-mix(in srgb, var(--event-hue, var(--label-hue)) 24%, transparent); border: 1px solid var(--event-hue, var(--label-hue)); }
+.reader-key .reader-key-icon { flex: none; width: 12px; height: 12px; }
 .reader-key[data-label-family] > .usage-legend-chip .reader-key-swatch { border: 0; border-left: 2px solid color-mix(in srgb,var(--label-hue) 65%,var(--line)); }
 .reader-key .usage-legend-chip { min-width: 0; max-width: 100%; }
-.reader-key .usage-legend-item { gap: 6px; padding: 2px 6px; max-width: 100%; white-space: normal; text-align: left; }
+.reader-key .usage-legend-item { gap: 2px; padding: 0 3px; max-width: 100%; white-space: normal; text-align: left; }
 .reader-key .usage-legend-caret { margin: 0; }
 .reader-key .transcript-filter-count { flex: none; }
 .reader-key .usage-legend-menu-heading .reader-key-swatch { margin-right: 6px; vertical-align: -1px; }
 .reader-key-unavailable { color: var(--muted); }
 .transcript-key-notes { display: grid; gap: 3px; }
-.reader-key.human-writing-legend .reader-key-swatch { background: transparent; border-color: light-dark(#000,#fff); }
+.reader-key.human-writing-legend .reader-key-swatch { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 0; background: var(--ink); color: var(--panel); font: 600 10px/1 var(--sans); }
+.reader-key.human-writing-legend .reader-key-swatch::before { content: "a"; }
 .reader-event-link-example { display: inline-flex; align-items: center; flex: none; }
 .reader-event-link-example > span:first-child { width: 18px; border-bottom: 2px dotted var(--event-link); }
-.reader-event-link-example > span:last-child { box-sizing: border-box; width: 15px; height: 15px; border: 1.5px solid var(--event-link); border-radius: 50%; }
+.reader-event-link-example > span:last-child { box-sizing: border-box; width: 10px; height: 10px; border: 1.5px solid var(--event-link); border-radius: 50%; }
 .show-events :is(.event-link-n,.event-badge).reader-event-hidden { display: none; }
 @media (max-width: 600px) {
+  .transcript-timeline-key .timeline-key-sections { flex-basis: 100%; }
   .transcript-key-line { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .transcript-key-line > .transcript-filter-label { padding-top: 0; }
   .transcript-key-notes { margin-left: 0; }
 }
 
-.transcript-key-defaults { min-width: 0; }
+.transcript-key-defaults { flex: 0 1 auto; min-width: 0; max-width: calc(100% - 28px); }
+.transcript-key .transcript-key-defaults .usage-legend-item { gap: 5px; padding: 0 4px; color: var(--ink); font-size: var(--fs-sm); line-height: 20px; }
+.transcript-key .transcript-key-defaults .usage-legend-caret { width: 10px; height: 10px; }
+.reader-key-separator { flex: none; color: var(--muted); font-weight: 400; }
+.transcript-key-defaults .reader-key-current { min-width: 0; font-size: var(--fs-xs); }
 .transcript-key-defaults .usage-legend-menu { width: 256px; }
 .reader-key-current { color: var(--muted); font-weight: 400; }
 .usage-legend-menu [role="menuitemradio"][aria-checked="true"] { background: color-mix(in srgb, var(--accent) 10%, transparent); }
