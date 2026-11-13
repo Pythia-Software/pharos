@@ -305,7 +305,7 @@ The real-library audit also checked the new recipes at 30 and 90 days. Primary-U
 | mcp-methods | Recorded MCP methods. Agent-side call counts with server/method keys kept separate. | tool_calls | Grouped rows by mcp_server, mcp_method | skills-06 |
 | skill-evidence | Skills across conversations. Distinct recorded conversations with successful named-skill evidence; repeated loads do not inflate reach. | skill_usages | Grouped rows by skill_name | skills-01 |
 | skill-load-failures | **Retired after review 1.** Failed skill calls. Distinct parent calls with error-marked skill evidence during the last 7 days, grouped by skill and provider. | skill_usages | Grouped rows by skill_name, provider | skills-04 |
-| human-words | Last seven days of writing Human-written words sent during the last 7 days, grouped by the day they were sent. | writing_messages | Grouped rows by day | human-01 |
+| human-words | Last seven days of writing Human-written words sent during the last 7 days, by the day they were sent; provisional estimates are shaded lighter until the daily refinement. | writing_messages | Grouped rows by day, estimate | human-01 |
 | explaining-repos | Words written per repository Human-written words over the last 7 days, ranked by repository. | writing_messages | Grouped rows by repository_name | human-02 |
 | usage-models | Which models do the work? Token use by model, day by day. | usage | Grouped rows by day, model_family | models-01 |
 | usage-repos | Daily token volume. Recorded tokens by day and repository, including cached and unpriced usage. | usage | Grouped rows by day, repository_name | cost-01 |

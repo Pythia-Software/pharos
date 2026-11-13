@@ -70,7 +70,7 @@ export function refineHumanRecipe(recipe: QueryRecipe): QueryRecipe {
 
 const humanCardCopy: Record<string, { title: string; description: string; action: string }> = {
   "human-word-total": { title: "{period} writing volume over time", description: "Human-written words over each trailing {days}-day period, with 30 days of history for comparison.", action: "Explore daily writing trends" },
-  "human-words": { title: "{lastDays} of writing", description: "Human-written words sent during the last {days} days, grouped by the day they were sent.", action: "Explore daily word counts" },
+  "human-words": { title: "{lastDays} of writing", description: "Human-written words sent during the last {days} days, by the day they were sent; provisional estimates are shaded lighter until the daily refinement.", action: "Explore daily word counts" },
   "explaining-repos": { title: "Words written per project", description: "Human-written words over the last {days} days, grouped by project.", action: "See breakdown by project" },
   "human-words-per-message": { title: "Words per message", description: "Average human-written words per message over each trailing {days}-day period; excludes messages without human writing.", action: "Inspect message lengths" },
   "human-words-per-conversation": { title: "Words per conversation", description: "Average human-written words per conversation over each trailing {days}-day period, including conversations started earlier.", action: "Explore conversation writing" },

@@ -65,6 +65,8 @@ export const humanAnalysisCatalog: AnalysisCatalog = {
     ...peopleLabelBreakdowns("writing_messages"),
     project_name: projectBreakdown(),
     ...single([["source_kind", "Source"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["main_category", "Mostly"]]),
+    estimate: { label: "Estimate", fields: ["estimate"], order: ["refined", "provisional"], values: { refined: "Refined", provisional: "Provisional" },
+      note: "Provisional words come from the frequent Update writing estimates pass and can change when the daily Refine writing history pass resolves copied text, templates and launches. Refined words have had the complete rules applied." },
   },
   components: { kind: { label: "Text source", measures: ["words"], fallback: "none", parts: writingGroups.map(group => ({ key: group.key, label: group.label, field: group.field, color: group.color })) },
     category: { label: "Text category", measures: ["words"], fallback: "none", parts: authorshipCategories.map(category => ({ key: category.key, label: category.label, field: `${category.key}_words`, color: category.color })) } },

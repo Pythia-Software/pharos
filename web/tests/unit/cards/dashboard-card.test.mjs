@@ -185,6 +185,10 @@ test('catalog default copy follows chart semantics, selections, time windows and
     { ...dashboardDefaults.branches, view: 'trend', metric: 'cost', split }, [{ field: 'channel', op: '=', value: 'conductor' }]), 'chart', schemas.branch_usage);
   assert.match(branchCopy('source_kind').title, /by source/i);
   assert.match(branchCopy('channel').title, /by channel/i);
+  const humanCopy = state => dashboardCardMetadata(dashboardCardURL('/analyze?analyze_topic=human', analysisCatalogs.human,
+    { ...dashboardDefaults.human, view: 'trend', metric: 'typed', split: 'estimate', ...state }, []), 'chart', schemas.writing_messages);
+  assert.match(humanCopy({}).title, /by estimate/i);
+  assert.match(humanCopy({ selection: { values: ['provisional'], excluded: false } }).title, /Only estimate: Provisional/i, 'a chosen estimate is named by its label');
   for (const excluded of [false, true]) {
     const selected = { ...dashboardDefaults.tokens, metric: 'tokens', split: 'provider', selection: { values: ['codex'], excluded } };
     for (const cycle of ['hour', 'weekday']) {

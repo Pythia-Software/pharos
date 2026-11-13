@@ -16,6 +16,7 @@ func PharosWritingMessagesSchema() querytable.Schema {
 			"month":                    {Name: "month", Kind: querytable.FieldText, Expr: "r.\"month\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"month\""},
 			"text":                     {Name: "text", Kind: querytable.FieldText, Expr: "r.\"text\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"text\""},
 			"main_category":            {Name: "main_category", Kind: querytable.FieldEnum, Expr: "r.\"main_category\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"main_category\""},
+			"estimate":                 {Name: "estimate", Kind: querytable.FieldEnum, Expr: "r.\"estimate\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"estimate\""},
 			"categories":               {Name: "categories", Kind: querytable.FieldTextArray, Expr: "r.\"categories\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"categories\""},
 			"rules":                    {Name: "rules", Kind: querytable.FieldTextArray, Expr: "r.\"rules\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"rules\""},
 			"has_source":               {Name: "has_source", Kind: querytable.FieldBool, Expr: "r.\"has_source\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"has_source\""},

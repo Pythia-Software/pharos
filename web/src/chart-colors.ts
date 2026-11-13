@@ -91,9 +91,13 @@ export const hourOfDayColors = [
 ];
 export const hourOfDayColor = (hour: number) => Number.isInteger(hour) && hour >= 0 && hour < 24 ? hourOfDayColors[hour] : otherSeriesColor;
 
+// queryCategories.human.tone (query-card.css), named here to keep this module's imports light.
+const humanTone = "var(--query-human-tone)";
+const estimateOrder = ["refined", "provisional"], estimateColors = [humanTone, `color-mix(in srgb, ${humanTone} 50%, white)`];
+
 // Scopes whose series follow their palette's order rather than their size:
 // legends, stacks and slices then read lowest to highest.
-const sortedScopes = new Set(["level_band", "model_family", "provider", "effort", "model_effort", ...Object.keys(orderedValues)]);
+const sortedScopes = new Set(["level_band", "model_family", "provider", "effort", "model_effort", "estimate", ...Object.keys(orderedValues)]);
 export const orderedScope = (scope: string) => sortedScopes.has(scope.startsWith("root_") ? scope.slice(5) : scope);
 // Scopes whose values are steps of one scale (a ramp, low to high), so
 // slices and bars keep that order too, unlike models or providers.
@@ -106,6 +110,13 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
       groupPath:[group,...scope==='label'?parts.slice(1,-1).map((_,index)=>shortLabel(parts.slice(0,index+2).join('.'))):[]]};
   }
   if (scope.startsWith("root_")) scope = scope.slice(5);
+  // Writing estimates keep Human Words' green: refined words in its tone at
+  // the bottom of each stack, provisional words above in a lighter tint.
+  // Cards key series by label (Refined), dashboards by value (refined).
+  if (scope === "estimate") {
+    const index = estimateOrder.indexOf(name.toLowerCase());
+    return index < 0 ? { color: otherSeriesColor, order: `9:${name}` } : { color: estimateColors[index], order: String(index) };
+  }
   if (projectColorFields.includes(scope)) return { color: projectSeriesColor(name, generatedColor(`project:${name}`)) };
   if (scope === "family_group" && Object.hasOwn(eventGroupHues, name)) return { color: eventGroupHues[name], order: String(agentEventKinds.groups.indexOf(name)) };
   if (scope === "family" && eventKindStyles.has(name)) return eventKindStyles.get(name)!;

@@ -115,7 +115,7 @@ test("All time saved preview copy follows its source query window", t => {
     assert.equal(job.options.window, undefined);
     assert.equal(job.options.recipe.window, undefined);
     assert.equal(job.options.recipe.title, "All-time writing");
-    assert.equal(job.options.recipe.description, "Human-written words sent across all time, grouped by the day they were sent.");
+    assert.equal(job.options.recipe.description, "Human-written words sent across all time, by the day they were sent; provisional estimates are shaded lighter until the daily refinement.");
     assert.equal(queryHasTimeFilter(job.query, recipe.field), false);
     const restored = savedCardPreviewJob(updateQueryWindowURL(job.options.url, days), schemas[recipe.dataset]);
     assert.equal(restored.options.recipe.title, item.title);
