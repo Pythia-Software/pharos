@@ -66,6 +66,18 @@ function quickStatsOccurrenceCoverage(field, bucket) {
 // when some are counted under a root reached only through an inferred or
 // unverified link. Never present either as an exact count.
 const QUICK_STATS_ANCESTRY_FIELDS = ['active_conversations', 'delegated_runs'];
+// These tables are useful entry points, but their recorded populations do not
+// exactly reproduce the summary's occurrence and ancestry accounting.
+function quickStatsLinkNote(field) {
+  return {
+    message_count: 'The Messages table may include copied history that the count excludes.',
+    user_messages: 'The Messages table may include copied history and embedded delegated prompts, and may exclude linked root continuations.',
+    assistant_messages: 'The Messages table may include copied history that the count excludes.',
+    active_conversations: 'Conversation activity includes human messages and recorded output; tool-only activity and run starts are not included.',
+    delegated_runs: 'Token usage includes delegated runs with usage; tokenless activity and run starts are not included.',
+    active_repositories: 'Conversation activity groups the repository on each event and excludes tool-only activity and run starts.',
+  }[field] || '';
+}
 function quickStatsAncestryCoverage(field, bucket) {
   const coverage = bucket?.ancestry_coverage;
   if (!QUICK_STATS_ANCESTRY_FIELDS.includes(field) || (coverage !== 'partial' && coverage !== 'qualified')) return null;
@@ -85,7 +97,7 @@ function createQuickStatsCache({scope = '', storage, now = () => Date.now(), con
   const date = new Date(now());
   return JSON.stringify([Intl.DateTimeFormat().resolvedOptions().timeZone, date.getFullYear(), date.getMonth(), date.getDate()]);
 }} = {}) {
-  const entries = new Map(), pending = new Map(), lifetime = 7 * 86400000, key = 'pharos-quick-stats-cache-v2:' + scope;
+  const entries = new Map(), pending = new Map(), lifetime = 7 * 86400000, key = 'pharos-quick-stats-cache-v3:' + scope;
   let generation = 1;
   if (storage === undefined) { try { storage = globalThis.localStorage; } catch {} }
   const valid = entry => entry && typeof entry.details === 'boolean' && typeof entry.context === 'string'
@@ -345,6 +357,8 @@ function initQuickStatsEditor(metrics, initial, changed, buildTable) {
     previewNote.textContent = error || ('Live library values. Arrange rows and columns just as they will appear in your card.' + (layout.windows.some(key => ['5m', '15m'].includes(key)) ? ' Token, cost and CO₂e totals are estimated from hourly usage.' : ''));
     for (const {table, selection} of frames) {
       const fresh = buildTable(selection);
+      const marker = table.querySelector('.estimate-marker-button'), freshMarker = fresh.querySelector('.estimate-marker-button');
+      if (marker && freshMarker) marker.hidden = freshMarker.hidden;
       for (const cell of table.querySelectorAll('td[data-quick-stats-metric]')) {
         const source = [...fresh.querySelectorAll('td')].find(other => other.dataset.quickStatsMetric === cell.dataset.quickStatsMetric && other.dataset.quickStatsWindow === cell.dataset.quickStatsWindow);
         cell.replaceChildren(...source.childNodes); cell.title = source.title;
@@ -373,11 +387,20 @@ function quickStatsMetricCaveat(field, bucket) {
   const flagged = value => value === true || value === 1;
   if (['tool_time_ms','timed_tool_calls'].includes(field) && flagged(bucket?.tool_time_is_estimate))
     return {suffix:'*',note:'Includes estimated tool durations. Spans can overlap and are not wall-clock time.'};
-  if (['tokens','co2e_g'].includes(field) && flagged(bucket?.is_estimate))
-    return {suffix:'*',note:'Includes estimated generated output. Missing input and cache usage are not included.'};
-  if (field==='cost_usd' && flagged(bucket?.cost_is_estimate ?? bucket?.is_estimate))
-    return {suffix:'*',note:'Includes estimated output cost only; input and cache usage are unavailable. This API price equivalent is partial.'};
-  if (field==='cost_usd' && ['partial','unpriced'].includes(bucket?.price_status))
+  if (field==='cost_usd' && (bucket?.price_status === 'unpriced' || bucket?.price_status === 'partial' && !flagged(bucket?.cost_is_estimate)))
     return {suffix:'+',note:'Known-priced subtotal only; some usage is unpriced or incomplete.'};
   return null;
+}
+
+// Reported-only figures are calculated from ledger entries before aggregation.
+function quickStatsUsageBucket(bucket, includeEstimates) {
+  if (includeEstimates) return bucket;
+  if (!bucket.reported) return {...bucket, tokens: null, cost_usd: null, carbon_tokens: null, price_status: '', is_estimate: false, cost_is_estimate: false};
+  return {...bucket, ...bucket.reported, is_estimate: false, cost_is_estimate: false};
+}
+function quickStatsHasUsageEstimates(layout, windows, includeEstimates) {
+  const flagged = value => value === true || value === 1;
+  return includeEstimates && windows.some(bucket =>
+    (layout.metrics.some(field => ['tokens', 'co2e_g'].includes(field)) && flagged(bucket.is_estimate)) ||
+    (layout.metrics.includes('cost_usd') && flagged(bucket.cost_is_estimate)));
 }
