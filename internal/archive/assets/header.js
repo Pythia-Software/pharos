@@ -15,6 +15,8 @@ const HEADER_TOOLS = [
   { id: 'settings', element: 'settingsToggle', label: 'Settings', description: 'Keep app settings within reach.', on: true, required: true },
   { id: 'theme', element: 'themeToggle', label: 'Color theme', description: 'Switch between system, light, and dark themes.', on: true, legacy: 'pharos-show-theme-button' },
   { id: 'navigator', element: 'navigatorToggle', label: 'Navigation bar', description: 'Navigate by URL, save bookmarks, and view page history.', on: false, legacy: 'pharos-show-nav-button' },
+  { id: 'bookmarks', element: 'headerBookmarksToggle', label: 'Bookmarks', description: 'Open saved pages and bookmark the current page.', on: false },
+  { id: 'visits', element: 'headerHistoryToggle', label: 'History', description: 'Browse and search previously visited pages.', on: false },
 ];
 const HEADER_LAYOUT_KEY = 'pharos-header-tools-v1';
 

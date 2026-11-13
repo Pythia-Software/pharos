@@ -1224,14 +1224,34 @@ test('header editing keeps keyboard focus on the handle being changed', { skip }
   await press(guideHandle,'Delete');
   await page.getByRole('button',{name:'Add Data Guide',exact:true}).waitFor();
   assert.equal(await guideButton.isVisible(),false,'removing the shortcut returns it to the toolbox');
+  for (const label of ['History', 'Bookmarks']) {
+    await press(page.getByRole('button', {name: `Add ${label}`, exact: true}));
+    const handle = page.getByRole('button', {name: `Arrange ${label}`, exact: true});
+    await page.waitForFunction(element => document.activeElement === element, await handle.elementHandle());
+    const toggle = label === 'History' ? 'headerHistoryToggle' : 'headerBookmarksToggle';
+    const drawer = label === 'History' ? 'historyDrawer' : 'bookmarksDrawer';
+    await activateHeaderTool(page, toggle);
+    await page.locator(`#${drawer}.open`).waitFor();
+    await press(handle, 'Alt+ArrowLeft');
+    assert.ok(await page.locator(`#${drawer}.open`).isVisible(), 'reordering a standalone shortcut keeps its drawer open');
+    await press(handle, 'Delete');
+    await page.getByRole('button', {name: `Add ${label}`, exact: true}).waitFor();
+    assert.equal(await page.locator(`#${drawer}`).isVisible(), false, 'removing the opener closes its drawer');
+  }
+
 });
 
-// Both drawers share setDrawer; History stands for them, inline and in More.
-const [toggle, close] = ["historyToggle", "historyClose"];
-for (const width of [1440, 390]) test(`History close restores reachable focus at ${width}px`, { skip }, async t => {
-  const { page } = await open(t, { url: "/library?view=table", viewport: { width, height: 900 }, ready: "#queryTableLibrary .qt-row", preferences: { "pharos-header-tools-v1": ["navigator", "settings"] } });
-  await activateHeaderTool(page, "navigatorToggle");
-  await press(page.locator(`#${toggle}`));
+// Cover the full navigation bar and each independent drawer shortcut.
+for (const {tool, toggle, drawer, close, label} of [
+  {tool: 'navigator', toggle: 'historyToggle', drawer: 'historyDrawer', close: 'historyClose', label: 'Navigation bar history'},
+  {tool: 'visits', toggle: 'headerHistoryToggle', drawer: 'historyDrawer', close: 'historyClose', label: 'Standalone history'},
+  {tool: 'bookmarks', toggle: 'headerBookmarksToggle', drawer: 'bookmarksDrawer', close: 'bookmarksClose', label: 'Standalone bookmarks'},
+]) for (const width of [1440, 390]) test(`${label} close restores reachable focus at ${width}px`, { skip }, async t => {
+  const tools = width === 390 ? [tool, 'history', 'library', 'search', 'summary', 'theme', 'settings'] : [tool, 'settings'];
+  const { page, settled, shot } = await open(t, { url: "/library?view=table", viewport: { width, height: 900 }, ready: "#queryTableLibrary .qt-row", preferences: { "pharos-header-tools-v1": tools } });
+  if (tool === 'navigator') await activateHeaderTool(page, "navigatorToggle");
+  await activateHeaderTool(page, toggle);
+  await page.locator(`#${drawer}.open`).waitFor();
   await press(page.locator(`#${close}`));
   const target = await page.evaluate(id => {
     const opener = document.getElementById(id);
@@ -1239,12 +1259,22 @@ for (const width of [1440, 390]) test(`History close restores reachable focus at
     return anchor === document.activeElement && !!anchor.getClientRects().length;
   }, toggle);
   assert.ok(target, "closing the drawer returns focus to its visible opener");
-  await press(page.locator(`#${toggle}`));
-  const other = page.locator("#navigatorURI");
+  await activateHeaderTool(page, toggle);
+  const other = page.locator('body>header .brand');
   await other.focus();
   await page.keyboard.press("Escape");
   assert.equal(await page.locator(`#${close}`).isVisible(), false);
   assert.ok(await other.evaluate(element => element === document.activeElement), "dismissing a drawer should preserve focus chosen outside it");
+  if (tool !== 'navigator') {
+    await activateHeaderTool(page, toggle);
+    await settled();
+    await page.reload();
+    await page.locator(`#${drawer}.open`).waitFor();
+    assert.equal(await page.locator('#navigator').isVisible(), false, 'the drawer restores without opening the navigation bar');
+    await shot(`${tool}-shortcut`);
+    await press(page.locator(`#${close}`));
+    await page.waitForFunction(id => document.getElementById(id).getAttribute('aria-expanded') === 'false', toggle);
+  }
 });
 
 test("Home search button focuses its input", { skip }, async t => {
