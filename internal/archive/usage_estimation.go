@@ -90,6 +90,7 @@ type usageEstimationResponse struct {
 	modelAssumed                                          bool
 	sender, nativeCreated, usageAt                        string
 	nontext                                               bool
+	inputUncounted                                        bool // an image or file whose content the input estimate could not count
 	contextCharacters                                     int // injected prompts and extracted attachment text
 	blocks                                                []usageEstimationBlock
 }
@@ -183,7 +184,11 @@ func (b *usageEstimationBuilder) observe(m map[string]any) {
 	r.order = min(r.order, integer(m["source_order"]))
 	r.nontext = r.nontext || attachment
 	if attachment {
-		r.contextCharacters += utf8.RuneCountInString(firstString(raw["extracted_content"]))
+		// Pasted text arrives as an attachment with its text extracted, and is
+		// counted. Only an attachment without text is left out of input.
+		extracted := utf8.RuneCountInString(firstString(raw["extracted_content"]))
+		r.contextCharacters += extracted
+		r.inputUncounted = r.inputUncounted || extracted == 0
 	}
 	if firstString(raw["type"]) == "token_usage" && firstString(m["kind"]) == "metadata" && firstString(m["role"]) == "system" && strings.HasSuffix(firstString(m["native_id"]), ":usage") && normalizeTokenCounts(mapValue(raw["usage"])) != nil {
 		r.reported = true
@@ -263,8 +268,10 @@ func (b *usageEstimationBuilder) observe(m map[string]any) {
 		text, images := toolResultText(raw["content"])
 		v.characters = utf8.RuneCountInString(text)
 		r.nontext = r.nontext || images > 0
+		r.inputUncounted = r.inputUncounted || images > 0
 	default:
 		r.nontext = r.nontext || v.kind == "image" || v.kind == "document" || v.kind == "file"
+		r.inputUncounted = r.inputUncounted || v.kind == "image" || v.kind == "document" || v.kind == "file"
 		return
 	}
 	r.blocks = append(r.blocks, v)

@@ -7,6 +7,8 @@ export const recordedCacheReads = "IF([is_estimate],0,[cache_read_input_tokens])
 export const recordedCacheLookups = "IF([is_estimate],0,[cache_read_input_tokens]+[uncached_input_tokens])";
 export const recordedInput = "IF([is_estimate],0,[input_tokens])";
 export const cacheHitRateExpression = `SUM(${recordedCacheReads})/NULLIF(SUM(${recordedCacheLookups}),0)`;
+export const recordedCacheWrites = "IF([is_estimate],0,[cache_creation_input_tokens])";
+export const cacheWritesPerReadExpression = `SUM(${recordedCacheWrites})/NULLIF(SUM(${recordedCacheReads}),0)`;
 export const cacheReadShareExpression = `SUM(${recordedCacheReads})/NULLIF(SUM(${recordedInput}),0)`;
 export const durationEstimateExplanation = "* Includes estimated tool duration. Parallel calls can overlap.";
 export const estimateFlag = (value: unknown) => value === true || value === 1;

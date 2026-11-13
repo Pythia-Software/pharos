@@ -1365,6 +1365,21 @@ func TestUsageEstimationProcessedInput(t *testing.T) {
 			t.Fatal("range or cache division", input)
 		}
 	}
+	// Pasted text is an attachment whose extracted text is counted; only an
+	// attachment without text is reported as left out.
+	for _, tc := range []struct {
+		attachment map[string]any
+		excluded   bool
+	}{{map[string]any{"file_name": "paste.txt", "extracted_content": strings.Repeat("p", 5000)}, false}, {map[string]any{"file_name": "scan.pdf"}, true}} {
+		b := newUsageEstimationBuilder("claude-ai-export")
+		b.observe(map[string]any{"id": "u", "native_id": "m1", "role": "user", "kind": "message", "raw_text": jsonText(map[string]any{"type": "text", "text": "Read this", "claude_ai_message": map[string]any{"sender": "human"}}), "source_order": int64(1)})
+		b.observe(map[string]any{"id": "f", "native_id": "m1:attachment:0", "role": "user", "kind": "attachment", "raw_text": jsonText(tc.attachment), "source_order": int64(2)})
+		b.observe(map[string]any{"id": "a", "native_id": "m2", "role": "assistant", "kind": "message", "raw_text": jsonText(map[string]any{"type": "text", "text": "Done", "claude_ai_message": map[string]any{"sender": "assistant"}}), "source_order": int64(3)})
+		input := b.estimate(manifest, estimationCalibration{}, "digest").Responses[0].Input
+		if input.NontextExcluded != tc.excluded || (input.Tokens.Expected >= rate*5000) == tc.excluded {
+			t.Fatal("attachment text and the left-out note", tc.attachment["file_name"], input)
+		}
+	}
 	// A prompt read again within the cache lifetime is a read; after it, a write.
 	if first.CacheRead <= 0 || second.CacheRead < second.CacheCreation || third.CacheRead != 0 {
 		t.Fatal("cache scenario", first, second, third)

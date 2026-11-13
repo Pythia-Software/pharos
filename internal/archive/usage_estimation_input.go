@@ -93,7 +93,7 @@ func (b *usageEstimationBuilder) estimateInputs(manifest estimationManifest, thi
 			}
 			return blocks[i].message < blocks[j].message
 		})
-		nontext = nontext || r.nontext
+		nontext = nontext || r.inputUncounted
 		context = context.plus(rate.times(float64(r.contextCharacters)))
 		if !r.assistant {
 			for _, block := range blocks {
