@@ -10,11 +10,11 @@ const fact = (id, extra = {}) => ({
   id, agent_session_id: "session-a", workspace_id: "work-a", title: "Same title", project_name: "one", provider: "codex",
   model_family: "gpt-6", effort: "high", session_kind: "root", day: "2026-10-12", week: "2026-10-12", month: "2026-10",
   first_usage_at: "2026-10-12T12:00:00Z", last_usage_at: "2026-10-12T12:00:00Z", price_status: "priced",
-  cost_usd: 2, cost_today_usd: 3, total_tokens: 100, output_tokens: 10, input_tokens: 90,
+  cost_usd: 2, total_tokens: 100, output_tokens: 10, input_tokens: 90,
   uncached_input_tokens: 80, cache_read_input_tokens: 10, cache_creation_input_tokens: 0, ...extra,
 });
 const rows = [fact("a"), fact("b", { day: "2026-10-13", total_tokens: 1010, output_tokens: 20, input_tokens: 990, uncached_input_tokens: 90, cache_read_input_tokens: 900 }),
-  fact("c", { workspace_id: "work-b", agent_session_id: "session-b", effort: null, project_name: "two", price_status: "unpriced", cost_usd: null, cost_today_usd: null, total_tokens: 0, input_tokens: 0, uncached_input_tokens: 0, cache_read_input_tokens: 0 })];
+  fact("c", { workspace_id: "work-b", agent_session_id: "session-b", effort: null, project_name: "two", price_status: "unpriced", cost_usd: null, total_tokens: 0, input_tokens: 0, uncached_input_tokens: 0, cache_read_input_tokens: 0 })];
 const run = (label, query = EMPTY_QUERY, data = rows) => applyQuery(data, applyUsageTablePreset(query, preset(label)), schema);
 
 test("repository summaries count sessions once across days and compute a weighted cache rate", () => {
@@ -65,14 +65,6 @@ test("work identity and unknown effort remain separate", () => {
   assert.ok(run("Model + effort").rows.some(row => row.effort === null));
   assert.equal(run("Workspace").rows[0].usage_work_title,"Same title");
   assert.equal(preset("Workspace").grouping.representative,null,"A workspace title is constant across its facts; no representative scan is needed");
-});
-
-test("price differences use matched price pairs and preserve unpriced usage", () => {
-  const data = [fact("both"), fact("historical-only", { cost_usd: 100, cost_today_usd: null }), fact("today-only", { cost_usd: null, cost_today_usd: 200 })];
-  const row = run("Price changes", EMPTY_QUERY, data).rows[0];
-  assert.equal(row.usage_price_delta, 1);
-  assert.equal(row.usage_price_pairs, 1);
-  assert.equal(row.usage_total_tokens, 300);
 });
 
 test("preset highlighting follows manual edits but ignores result presentation and source filters", () => {

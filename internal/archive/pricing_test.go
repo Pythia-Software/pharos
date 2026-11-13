@@ -28,7 +28,7 @@ func testPricing() pricingDocument {
 
 func near(got *float64, want float64) bool { return got != nil && math.Abs(*got-want) < 1e-9 }
 
-func TestPriceBookUsesPriceOnDateAliasesAndTodaysPrice(t *testing.T) {
+func TestPriceBookUsesPriceOnDateAndAliases(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	if err := catalog.replacePricing(testPricing(), "test"); err != nil {
 		t.Fatal(err)
@@ -41,13 +41,12 @@ func TestPriceBookUsesPriceOnDateAliasesAndTodaysPrice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	book.today = "2026-09-24"
 	tokens := map[string]int64{"uncached_input_tokens": 1_000_000, "cache_read_input_tokens": 2_000_000,
 		"cache_creation_input_tokens": 3_000_000, "cache_creation_1h_input_tokens": 1_000_000, "output_tokens": 100_000}
 	// 1M uncached x10 + 2M reads x1 + 2M 5m-writes x12.5 + 1M 1h-writes x20 + 0.1M output x50.
 	march := book.cost("opus-4-8-1m", "2026-03-10", tokens)
-	if march.status != "priced" || !near(march.cost, 10+2+25+20+5) || !near(march.costToday, 5+1+12.5+10+2.5) || march.pricedModel != "claude-opus-4-8" {
-		t.Fatalf("price before the cut: %+v cost=%v today=%v", march, deref(march.cost), deref(march.costToday))
+	if march.status != "priced" || !near(march.cost, 10+2+25+20+5) || march.pricedModel != "claude-opus-4-8" {
+		t.Fatalf("price before the cut: %+v cost=%v", march, deref(march.cost))
 	}
 	if july := book.cost("opus", "2026-07-10", tokens); !near(july.cost, 5+1+12.5+10+2.5) {
 		t.Fatalf("bare alias should resolve to the model current on that day: %+v", july)
@@ -56,7 +55,7 @@ func TestPriceBookUsesPriceOnDateAliasesAndTodaysPrice(t *testing.T) {
 	if august := book.cost("opus", "2026-08-10", tokens); august.status != "unpriced" || august.cost != nil {
 		t.Fatalf("proposed prices must not be used: %+v", august)
 	}
-	if early := book.cost("claude-opus-4-8", "2025-12-01", tokens); early.status != "unpriced" || early.cost != nil || !near(early.costToday, 5+1+12.5+10+2.5) {
+	if early := book.cost("claude-opus-4-8", "2025-12-01", tokens); early.status != "unpriced" || early.cost != nil {
 		t.Fatalf("usage before the first known price: %+v", early)
 	}
 	// OpenAI has no cache-write rate, so a stray cache write makes cost a lower bound.
@@ -65,7 +64,7 @@ func TestPriceBookUsesPriceOnDateAliasesAndTodaysPrice(t *testing.T) {
 		t.Fatalf("missing rate should be partial: %+v", openai)
 	}
 	for _, model := range []string{"<synthetic>", "Unknown model", "codex-auto-review"} {
-		if unknown := book.cost(model, "2026-06-01", tokens); unknown.status != "unpriced" || unknown.cost != nil || unknown.costToday != nil {
+		if unknown := book.cost(model, "2026-06-01", tokens); unknown.status != "unpriced" || unknown.cost != nil {
 			t.Fatalf("unmapped model %q must stay unpriced: %+v", model, unknown)
 		}
 	}

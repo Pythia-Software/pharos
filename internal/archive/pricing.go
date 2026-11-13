@@ -290,7 +290,6 @@ type aliasInterval struct{ from, to, modelKey string }
 type priceBook struct {
 	prices  map[string][]priceInterval
 	aliases map[string][]aliasInterval
-	today   string
 }
 
 func (c *Catalog) loadPriceBook() (priceBook, error) {
@@ -298,7 +297,7 @@ func (c *Catalog) loadPriceBook() (priceBook, error) {
 }
 
 func (c *Catalog) loadPriceBookFrom(ctx context.Context, db queryer) (priceBook, error) {
-	book := priceBook{prices: map[string][]priceInterval{}, aliases: map[string][]aliasInterval{}, today: c.clock().Format("2006-01-02")}
+	book := priceBook{prices: map[string][]priceInterval{}, aliases: map[string][]aliasInterval{}}
 	prices, err := queryMapsContext(ctx, db, `SELECT * FROM cost_on_date`)
 	if err != nil {
 		return book, err
@@ -357,9 +356,9 @@ func (b priceBook) price(key, day string) *priceInterval {
 }
 
 type usageCost struct {
-	cost, costToday *float64
-	status          string // priced, assumed, partial, or unpriced
-	pricedModel     string
+	cost        *float64
+	status      string // priced, assumed, partial, or unpriced
+	pricedModel string
 }
 
 // cost prices one ledger entry. tokens holds the ledger's token categories.
@@ -390,9 +389,6 @@ func (b priceBook) cost(model, day string, tokens map[string]int64) usageCost {
 			total += float64(quantity) * *interval.rates[index] / 1_000_000
 		}
 		return &total, complete
-	}
-	if today := b.price(key, b.today); today != nil {
-		result.costToday, _ = price(today)
 	}
 	at := b.price(key, day)
 	if at == nil {

@@ -7,7 +7,7 @@ import "context"
 // Human text uses the existing authorship classification; no transcript text
 // is returned, and missing classification is not invented as human input.
 func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]any, error) {
-	return cachedValue(ctx, c, "conversation-activity:"+c.clock().Format("2006-01-02"), func(ctx context.Context) ([]map[string]any, error) {
+	return cachedValue(ctx, c, "conversation-activity", func(ctx context.Context) ([]map[string]any, error) {
 		usage, err := c.localUsageRows(ctx)
 		if err != nil {
 			return nil, err

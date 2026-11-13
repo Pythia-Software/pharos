@@ -20,7 +20,7 @@ import (
 // (see dataVersionMonitor). Projection, audit and progress writes do not evict it:
 //
 //   - A key names the value and whatever else it depends on, such as the local
-//     date for costs at today's prices.
+//     date for views windowed relative to now.
 //   - Concurrent requests for a missing value wait for one computation. Every
 //     caller can cancel its wait, including the one that started it. A build
 //     that no request waits for stops after derivedIdleGrace, so a reload can

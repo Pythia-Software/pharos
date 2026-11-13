@@ -133,21 +133,21 @@ func TestLibraryCacheSeesCommitsFromAnotherConnection(t *testing.T) {
 	}
 }
 
-func TestLibraryCacheRepricesOnPriceBookAndDateChanges(t *testing.T) {
+func TestLibraryCacheRepricesOnPriceBookAndRebuildsDaily(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	today := time.Date(2026, 9, 24, 12, 0, 0, 0, time.Local)
 	catalog.now = func() time.Time { return today }
 	ingestUsageFixture(t, catalog)
 	execTx(t, catalog.DB, `UPDATE agent_sessions SET model='cache-probe-1'`, `UPDATE agent_session_usage SET model='cache-probe-1'`)
-	cost := func() (any, any) {
+	cost := func() any {
 		t.Helper()
 		rows, err := catalog.searchRows(SearchOptions{}, nil)
 		if err != nil || len(rows) != 1 {
 			t.Fatalf("%v %v", rows, err)
 		}
-		return rows[0]["cost_usd"], rows[0]["cost_today_usd"]
+		return rows[0]["cost_usd"]
 	}
-	if total, _ := cost(); total != nil {
+	if total := cost(); total != nil {
 		t.Fatalf("unpriced model has cost %v", total)
 	}
 	doc := testPricing()
@@ -159,13 +159,38 @@ func TestLibraryCacheRepricesOnPriceBookAndDateChanges(t *testing.T) {
 	}
 	// Uncached 700 x $10, cache reads 2,300 x $1, output 50 x $100, per million.
 	want := (700*10 + 2300*1 + 50*100) / 1e6
-	total, beforeCut := cost()
-	if !near(ptr(total), want) || !near(ptr(beforeCut), want) {
-		t.Fatalf("after price-book change: cost %v today %v, want %v", total, beforeCut, want)
+	if total := cost(); !near(ptr(total), want) {
+		t.Fatalf("after price-book change: cost %v, want %v", total, want)
 	}
+	// Outcome labels follow each session's rework window, which closes with
+	// time rather than a commit, so the Library and Outcomes rows are rebuilt
+	// on a new day. Cached rows share their maps; rebuilt rows do not.
+	cached := func() (library, outcome map[string]any) {
+		t.Helper()
+		rows, err := catalog.cachedLibraryRows(context.Background(), libraryFieldsFor("outcome_label"))
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("library rows: %v %v", rows, err)
+		}
+		outcomes, err := catalog.outcomeRows(context.Background())
+		if err != nil || len(outcomes) != 1 {
+			t.Fatalf("outcome rows: %v %v", outcomes, err)
+		}
+		return rows[0], outcomes[0]
+	}
+	same := func(left, right map[string]any) bool {
+		return reflect.ValueOf(left).UnsafePointer() == reflect.ValueOf(right).UnsafePointer()
+	}
+	library, outcome := cached()
+	if nextLibrary, nextOutcome := cached(); !same(library, nextLibrary) || !same(outcome, nextOutcome) {
+		t.Fatal("rows were rebuilt without a commit or a new day")
+	}
+	// Usage keeps the price of the day it happened after a later price change.
 	today = time.Date(2026, 10, 2, 12, 0, 0, 0, time.Local)
-	if total, afterCut := cost(); !near(ptr(total), want) || !near(ptr(afterCut), 2*want) {
-		t.Fatalf("after date change: cost %v today %v, want %v and %v", total, afterCut, want, 2*want)
+	if total := cost(); !near(ptr(total), want) {
+		t.Fatalf("after date change: cost %v, want %v", total, want)
+	}
+	if nextLibrary, nextOutcome := cached(); same(library, nextLibrary) || same(outcome, nextOutcome) {
+		t.Fatalf("a new day reused rows: library %v, outcomes %v", same(library, nextLibrary), same(outcome, nextOutcome))
 	}
 }
 
@@ -264,7 +289,7 @@ func TestWarmCachesRebuildsWhatPagesUse(t *testing.T) {
 		if want := catalog.derived.versions.generations.of(derivedKeyGeneration(key)); strings.HasPrefix(key, "usage:") && (entry.version != want || want > version) {
 			t.Fatalf("usage rows were not rewarmed: version %d, want %d of %d", entry.version, want, version)
 		}
-		if strings.HasPrefix(key, "writing:") {
+		if derivedKeyFamily(key) == "writing" {
 			t.Fatal("warmed a value no page asked for")
 		}
 	}
