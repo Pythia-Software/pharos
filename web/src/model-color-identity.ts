@@ -35,7 +35,7 @@ export function inferModelClass(name: string): string | undefined {
   if (/^(?:deepseek|reflection\/beam|big-pickle|mai-code)/.test(key)) return /^deepseek/.test(key) ? "DeepSeek" : /^reflection/.test(key) ? "Beam" : /^big-pickle/.test(key) ? "Big Pickle" : "MAI Code";
   return undefined;
 }
-type ClassMatchers = Record<string, { pricing_provider?: string; classes: Record<string, { luminance: number[]; match?: string }> }>;
+type ClassMatchers = Record<string, { pricing_provider?: string; classes: Record<string, { hue?: number; match?: string }> }>;
 // New classes can add a normalized-name matcher in data rather than editing
 // the built-in recognizers. Ambiguous matches require an explicit correction.
 export function matchModelClass(name: string, providers: ClassMatchers, provider?: string): { provider: string; class: string } | undefined {

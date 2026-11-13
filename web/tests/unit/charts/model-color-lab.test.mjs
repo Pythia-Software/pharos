@@ -31,9 +31,7 @@ test('chroma ladder rewards newer releases within a class and the strongest cont
   assert.ok(chroma('gpt-6.1-sol', ladder) > chroma('gpt-5.6-sol', ladder));
   assert.ok(chroma('fable-5-2', ladder) > chroma('haiku-5-5', ladder));
   assert.ok(chroma('gpt-6-astra', ladder) > chroma('gpt-6-luna', ladder));
-  for (const name of ['fable-5-2', 'gemini-4-argon-d', 'gpt-6-astra']) {
-    assert.ok(chroma(name, ladder) > chroma(name, { ...defaults, algorithm: 'current' }), name);
-  }
+
 });
 
 test('freshness policy ignores tier emphasis and hue fan responds to spread', () => {
@@ -101,4 +99,11 @@ test('specialist spread changes specialist categories without changing core tier
   const entries = workload('specialists', 'openai');
   assert.equal(new Set(entries.map(entry => entry.model.class)).size, entries.length);
   assert.deepEqual(new Set(entries.map(entry => entry.model.class)), new Set(specialistModels('openai').map(item => item.class)));
+});
+
+
+test('production generation and custom roots match the chosen Hue fan preset across the complete catalog', () => {
+  for (const item of models) for (const base of [brands[item.provider].color, '#8951c8', '#777777', '#000000', '#ffffff']) {
+    assert.equal(recommendedModelColor(item.name, base), experimentColor(item, base, defaults), `${item.name}: ${base}`);
+  }
 });

@@ -1,4 +1,5 @@
 import { colorDistance, colorLuminance } from "./model-color-math";
+import { modelColorPositions, policyColor } from "./model-color-policy";
 import { useSyncExternalStore } from "react";
 import catalog from "../../pricing/model_colors.json";
 import prices from "../../pricing/cost_changes.json";
@@ -51,7 +52,14 @@ export function modelPaletteGroups(names: readonly string[]): { name: string; mo
   return [...groups.values()].sort((a, b) => modelProvider(a.models[0]) === modelProvider(b.models[0]) && modelClass(a.models[0]) === modelClass(b.models[0])
     ? a.name.localeCompare(b.name) : compareModelColors(a.models[0], b.models[0]));
 }
-function hash(name: string) { let h = 2166136261; for (const c of name) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
+function hash(name: string) {
+  let h = 2166136261;
+  for (const c of name) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  // Avalanche similar names before using separate bits for shade, chroma and hue.
+  h = Math.imul(h ^ h >>> 16, 0x85ebca6b);
+  h = Math.imul(h ^ h >>> 13, 0xc2b2ae35);
+  return (h ^ h >>> 16) >>> 0;
+}
 export function colorHSL(color: string): [number, number, number] {
   const [r, g, b] = [1, 3, 5].map(at => parseInt(color.slice(at, at + 2), 16) / 255);
   const max = Math.max(r, g, b), min = Math.min(r, g, b), delta = max - min, l = (max + min) / 2;
@@ -61,62 +69,25 @@ function hex(h: number, s: number, l: number) {
   const a = s * Math.min(l, 1 - l);
   return "#" + [0, 8, 4].map(offset => { const k = (offset + h / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, "0"); }).join("");
 }
-// Set relative luminance while retaining a shade's hue. Choose the nearest
-// RGB rounding to keep fallback shades inside their reviewed class range.
-function withLuminance(color: string, target: number): string {
-  const linear = (value: number) => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
-  const channels = [1, 3, 5].map(at => linear(parseInt(color.slice(at, at + 2), 16) / 255));
-  const weights = [.2126, .7152, .0722], luminance = channels.reduce((sum, value, i) => sum + value * weights[i], 0);
-  const encoded = channels.map(value => {
-    const next = luminance > target ? value * target / luminance : value + (1 - value) * (target - luminance) / (1 - luminance);
-    return Math.round(255 * (next <= .0031308 ? next * 12.92 : 1.055 * next ** (1 / 2.4) - .055));
-  });
-  let best = encoded, distance = Infinity;
-  for (const r of [-1, 0, 1]) for (const g of [-1, 0, 1]) for (const b of [-1, 0, 1]) {
-    const candidate = encoded.map((value, i) => Math.max(0, Math.min(255, value + [r, g, b][i])));
-    const delta = Math.abs(candidate.reduce((sum, value, i) => sum + linear(value / 255) * weights[i], 0) - target);
-    if (delta < distance) { best = candidate; distance = delta; }
-  }
-  return "#" + best.map(value => value.toString(16).padStart(2, "0")).join("");
-}
-// Catalog defaults are generated together when releases/rules change. Runtime
-// fallbacks for unreviewed inventory are deterministic and independent of the
-// visible/ranked set; dates come from pricing, never a guessed launch date.
+// Catalog defaults and provider edits use the same Hue fan policy. Unreviewed
+// models get a deterministic shade in their class without changing the catalog.
+const positions = modelColorPositions(catalog, dates, rules);
 function calculateRecommendedColor(name: string, base: string): string {
-  const key = modelColorKey(name), provider = modelProvider(key), brand = providerBrands[provider].color;
+  const key = modelColorKey(name), provider = modelProvider(key), brand = providerBrands[provider];
   const model = Object.hasOwn(models, key) ? models[key] : undefined;
+  if (model && base.toLowerCase() === brand.color.toLowerCase()) return model.color;
+  const known = positions.get(key);
+  if (known) return policyColor(base, brand.hue, known, rules.palette);
   const family = modelClass(key);
-  const relatives = family ? Object.values(models).filter(item => item.provider === provider && item.class === family) : [];
-  const reference = model?.color ?? relatives[0]?.color;
-  const [baseHue, baseSaturation, baseLightness] = colorHSL(base);
-  const [brandHue, brandSaturation, brandLightness] = colorHSL(brand);
-  // A provider edit rotates the entire palette together, retaining the
-  // distinctions between classes and the individual version shades.
-  const rebase = (color: string) => {
-    if (base.toLowerCase() === brand.toLowerCase()) return color;
-    const [h, s, l] = colorHSL(color);
-    return hex((h + baseHue - brandHue + 360) % 360, Math.min(1, s * baseSaturation / brandSaturation), Math.max(.15, Math.min(.85, l + (baseLightness - brandLightness) * .35)));
-  };
-  if (model) return rebase(model.color);
-  const [h, s] = colorHSL(reference ? rebase(reference) : base), seed = hash(key);
-  // Keep recognizable classes in a tight hue range, including unlisted
-  // older versions. Stay within the catalog class's overall luminance
-  // range; historical class ranges can overlap.
-  const hueRange = reference ? 3 : 16;
-  const relativeColors = relatives.map(item => rebase(item.color)), tones = relativeColors.map(colorHSL);
-  const lights = tones.map(tone => tone[2]), saturations = tones.map(tone => tone[1]);
-  const low = lights.length ? Math.min(...lights) : .3, high = lights.length ? Math.max(...lights) : .7;
-  const lightness = low + ((seed >>> 8) % 1001) / 1000 * (high - low);
-  const lowSaturation = saturations.length ? Math.min(...saturations) * .9 : s * .9;
-  const highSaturation = saturations.length ? Math.max(...saturations) * 1.1 : s * 1.1;
-  const saturation = Math.min(1, lowSaturation + (seed % 1001) / 1000 * (highSaturation - lowSaturation));
-  const shade = hex((h + (seed % 16001) / 16000 * hueRange - hueRange / 2 + 360) % 360, saturation, lightness);
-  if (!reference) return shade;
-  // HSL lightness alone cannot bound perceived depth when versions vary
-  // in saturation. Clamp luminance to retain the reviewed class range.
-  const levels = relativeColors.map(colorLuminance), level = colorLuminance(shade);
-  const target = Math.max(Math.min(...levels), Math.min(Math.max(...levels), level));
-  return target === level ? shade : withLuminance(shade, target);
+  const relative = Object.keys(models).find(name => models[name].provider === provider && models[name].class === family);
+  const seed = hash(key);
+  const position = relative ? positions.get(relative)! : { tier: .5, ranked: false, hueOffset: 0, siblingOffset: 0, recency: .5 };
+  return policyColor(base, brand.hue, {
+    ...position,
+    recency: .05 + ((seed >>> 8) / 0xffffff) * .9,
+    chromaScale: .85 + ((seed >>> 16) & 255) / 255 * .3,
+    siblingOffset: ((seed & 255) / 255 - .5) * (relative ? 6 : 16),
+  }, rules.palette);
 }
 
 const recommendations = new Map<string, string>();
