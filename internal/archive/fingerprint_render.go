@@ -126,26 +126,50 @@ type fingerprintRenderedImage struct {
 	Hash    string `json:"-"`
 }
 type fingerprintRendered struct {
-	Images   []fingerprintRenderedImage `json:"images"`
-	Messages int                        `json:"messages"`
-	Events   int                        `json:"events"`
-	Tools    int                        `json:"tools"`
-	Branches int                        `json:"branches"`
+	Images    []fingerprintRenderedImage `json:"images"`
+	InputHash string                     `json:"-"`
+	Messages  int                        `json:"messages"`
+	Events    int                        `json:"events"`
+	Tools     int                        `json:"tools"`
+	Branches  int                        `json:"branches"`
 }
 
 func newFingerprintRenderer() (*fingerprintRenderer, error) { return &fingerprintRenderer{}, nil }
+
+// Hash exactly the renderer's input projection, not API metadata or analysis
+// bookkeeping. Event-hidden images do not depend on the event appearance.
+func fingerprintInputHash(input any, eventsMask int) (string, error) {
+	source, err := decodeFingerprintInput(input)
+	if err != nil {
+		return "", err
+	}
+	if eventsMask&1 == 0 {
+		source.Events = nil
+	}
+	data, err := json.Marshal(source)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func decodeFingerprintInput(input any) (fingerprintInput, error) {
+	var source fingerprintInput
+	data, err := json.Marshal(input)
+	if err == nil {
+		err = json.Unmarshal(data, &source)
+	}
+	return source, err
+}
 
 func renderFingerprintSVG(ctx context.Context, input any, eventsMask int) (fingerprintRendered, error) {
 	var result fingerprintRendered
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	data, err := json.Marshal(input)
+	source, err := decodeFingerprintInput(input)
 	if err != nil {
-		return result, err
-	}
-	var source fingerprintInput
-	if err := json.Unmarshal(data, &source); err != nil {
 		return result, err
 	}
 	prepared, err := prepareFingerprint(ctx, &source)

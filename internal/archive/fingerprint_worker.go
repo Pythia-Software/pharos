@@ -216,9 +216,17 @@ func (s *Server) runFingerprintPass(ctx context.Context) error {
 	if s.work.declares(kindFingerprints) {
 		err = s.work.runLibraryMode(ctx, []string{kindFingerprints}, backgroundExplicit(ctx), triggerChained, workModePass)
 	} else {
+		checked := 0
 		err = c.runSearchBatches(ctx, []searchBatch{
 			{"maintenance.fingerprints", c.pruneFingerprintBlobs},
-			{"maintenance.fingerprints", c.refreshFingerprintImages},
+			{"maintenance.fingerprints", func(ctx context.Context) (bool, error) {
+				did, err := c.refreshFingerprintImages(ctx)
+				if did && err == nil {
+					checked++
+					reportWork(ctx, "Checking fingerprints", "fingerprint", checked, -1)
+				}
+				return did, err
+			}},
 		})
 	}
 	if err != nil {
@@ -349,6 +357,9 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (more bool, err 
 	if superseded {
 		return false, nil
 	}
+	if needed == 0 {
+		return true, c.publishFingerprintImages(ctx, entity, id, revision, fingerprintRendered{})
+	}
 	renderCtx, cancel := context.WithTimeout(ctx, fingerprintRenderTimeout)
 	defer cancel()
 	stage = "load input"
@@ -372,14 +383,25 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (more bool, err 
 			})
 		}
 	}
-	if err == nil && renderer == nil {
-		renderer, err = newFingerprintRenderer()
-	}
 	var result fingerprintRendered
 	if err == nil {
-		stage = "render images"
 		input["events"] = input["agent_events"]
-		result, err = renderer.Render(renderCtx, input, needed)
+		stage = "check input changes"
+		var inputHash string
+		inputHash, err = fingerprintInputHash(input, needed)
+		if err == nil {
+			result, err = c.reuseFingerprintImages(renderCtx, entity, id, inputHash, needed)
+		}
+		if err == nil && len(result.Images) == 0 {
+			if renderer == nil {
+				renderer, err = newFingerprintRenderer()
+			}
+			if err == nil {
+				stage = "render images"
+				result, err = renderer.Render(renderCtx, input, needed)
+			}
+		}
+		result.InputHash = inputHash
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -408,6 +430,22 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (more bool, err 
 	return true, err
 }
 
+// Reuse a complete appearance across source revisions, including after restart.
+// Publication still checks the selected revision before acknowledging it.
+// Older writers leave the input stamp alone: require its revision to match the
+// image's so their replacement PNGs cannot inherit an unrelated input hash.
+func (c *Catalog) reuseFingerprintImages(ctx context.Context, entity, id, inputHash string, mask int) (fingerprintRendered, error) {
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT profile,theme,events,hash FROM fingerprint_images WHERE entity=? AND entity_id=? AND renderer=? AND input_hash=? AND input_revision=revision AND events=?`, entity, id, fingerprintRendererVersion(), inputHash, mask == 1)
+	result := fingerprintRendered{}
+	if err != nil || int64(len(rows)) != fingerprintImagesPerAppearance() {
+		return result, err
+	}
+	for _, row := range rows {
+		result.Images = append(result.Images, fingerprintRenderedImage{Profile: firstString(row["profile"]), Theme: firstString(row["theme"]), Events: integer(row["events"]) != 0, Hash: firstString(row["hash"])})
+	}
+	return result, nil
+}
+
 func (c *Catalog) publishFingerprintImages(ctx context.Context, entity, id, revision string, result fingerprintRendered) error {
 	return c.writeTransaction(ctx, "publish fingerprint images", func(tx *sql.Tx) error {
 		var current string
@@ -420,10 +458,12 @@ func (c *Catalog) publishFingerprintImages(ctx context.Context, entity, id, revi
 			return nil
 		}
 		for _, image := range result.Images {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO fingerprint_blobs(hash,png) VALUES(?,?) ON CONFLICT(hash) DO NOTHING`, image.Hash, image.PNG); err != nil {
-				return err
+			if image.PNG != nil {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO fingerprint_blobs(hash,png) VALUES(?,?) ON CONFLICT(hash) DO NOTHING`, image.Hash, image.PNG); err != nil {
+					return err
+				}
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO fingerprint_images(entity,entity_id,profile,theme,events,revision,renderer,hash) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(entity,entity_id,profile,theme,events) DO UPDATE SET revision=excluded.revision,renderer=excluded.renderer,hash=excluded.hash`, entity, id, image.Profile, image.Theme, image.Events, revision, fingerprintRendererVersion(), image.Hash); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO fingerprint_images(entity,entity_id,profile,theme,events,revision,renderer,input_hash,input_revision,hash) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(entity,entity_id,profile,theme,events) DO UPDATE SET revision=excluded.revision,renderer=excluded.renderer,input_hash=excluded.input_hash,input_revision=excluded.input_revision,hash=excluded.hash`, entity, id, image.Profile, image.Theme, image.Events, revision, fingerprintRendererVersion(), result.InputHash, revision, image.Hash); err != nil {
 				return err
 			}
 		}

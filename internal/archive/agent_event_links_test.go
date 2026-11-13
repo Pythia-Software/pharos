@@ -328,7 +328,7 @@ func TestRibbonEventsFollowAgentEventsFreshness(t *testing.T) {
 		t.Fatalf("current drawings %v, want %v with labels; queued %d", drawn, want, queued())
 	}
 	// An execution change made and undone while a unit reads its input,
-	// before any mark, is not drawn: the unit is retried and then draws the
+	// before any mark, is not drawn: the unit is retried and then reuses the
 	// unchanged labels and events.
 	var parent sql.NullString
 	var depth int
@@ -356,8 +356,8 @@ func TestRibbonEventsFollowAgentEventsFreshness(t *testing.T) {
 	renderFingerprintTestEntity(t, c, "conversation", "c-events")
 	renderFingerprintTestEntity(t, c, "conversation", "c-events")
 	ready("after the undone change", true, true)
-	if want := []drawing{{2, built, labeled}, {1, built, labeled}}; !slices.Equal(drawn[2:], want) {
-		t.Fatalf("after the undone change: %v, want %v", drawn[2:], want)
+	if len(drawn) != 2 || queued() != 0 {
+		t.Fatalf("the undone change rendered unchanged inputs: %v; queued %d", drawn[2:], queued())
 	}
 	drawn = nil
 	// A writer that marks nothing moves c-child under c-events.
@@ -403,30 +403,30 @@ func TestRibbonEventsFollowAgentEventsFreshness(t *testing.T) {
 			t.Fatalf("%s republished: events=%d (want %d) events_pending=%v labels pending=%v", path, events, built, pending, labelsPending)
 		}
 	}
-	// The run that clears the mark requeues the image, drawn with them again.
+	// Clearing the mark requeues the image. Unchanged evidence can reuse it.
 	if dirty := countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE entity='conversation' AND id='c-events' AND dirty=1 AND attempts=0`); dirty != 1 {
 		t.Fatal("clearing the mark did not requeue the image")
 	}
 	renderFingerprintTestEntity(t, c, "conversation", "c-events")
 	renderFingerprintTestEntity(t, c, "conversation", "c-events")
 	ready("republished", true, true)
-	if want := []drawing{{2, built, labeled}, {1, built, labeled}}; !slices.Equal(drawn, want) || queued() != 0 {
-		t.Fatalf("republished: %v, want %v; queued %d", drawn, want, queued())
+	if len(drawn) != 0 || queued() != 0 {
+		t.Fatalf("republished unchanged evidence rendered: %v; queued %d", drawn, queued())
 	}
 	// Ordinary labeling backlog also waits rather than drawing an interim
 	// unlabelled image and rendering it again when labeling finishes.
 	execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('c-events','backlog')`)
 	renderFingerprintTestEntity(t, c, "conversation", "c-events", false)
 	ready("labeling backlog", false, false)
-	if len(drawn) != 2 || queued() != 1 {
+	if len(drawn) != 0 || queued() != 1 {
 		t.Fatalf("labeling backlog was drawn: %v; queued %d", drawn, queued())
 	}
 	run()
 	renderFingerprintTestEntity(t, c, "conversation", "c-events")
 	renderFingerprintTestEntity(t, c, "conversation", "c-events")
 	ready("labeling complete", true, true)
-	if want := []drawing{{2, built, labeled}, {1, built, labeled}}; !slices.Equal(drawn[2:], want) || queued() != 0 {
-		t.Fatalf("labeling complete: %v, want %v; queued %d", drawn[2:], want, queued())
+	if len(drawn) != 0 || queued() != 0 {
+		t.Fatalf("labeling unchanged evidence rendered: %v; queued %d", drawn, queued())
 	}
 	// The ledger created during this session already requeues images: a
 	// write to its build stamp alone (an executable that records no digest)

@@ -295,6 +295,17 @@ INSERT INTO sync_deferred(name,generation,changed_at) VALUES('tools',1,'2026-01-
 					deferred, _ := c.freshnessDeferred(t.Context())
 					t.Fatalf("pass succeeded without rendering after analysis: calls=%d dirty=%d deferred=%v runs=%v", calls.Load(), countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`), deferred, c.backgroundRuns(t.Context()))
 				}
+				if config.WorkEngine == "classic" {
+					measured := false
+					for _, op := range c.ops.views() {
+						if op.Spec.Kind == kindFingerprints && op.Step.Done > 0 {
+							measured = op.Step.Unit == "fingerprint"
+						}
+					}
+					if !measured {
+						t.Fatal("fingerprint checks reported generic batches")
+					}
+				}
 				last := c.backgroundRuns(t.Context())["fingerprints"].succeeded
 				execTx(t, c.DB, `UPDATE sync_deferred SET generation=generation+1 WHERE name='tools';
 UPDATE fingerprint_entities SET dirty=1,next_attempt=0`)
@@ -730,6 +741,139 @@ INSERT INTO fingerprint_orphans(hash,not_before) VALUES('expired-idle',0)`)
 }
 
 func TestFingerprintInvalidationAndRecovery(t *testing.T) {
+	t.Run("unchanged input", func(t *testing.T) {
+		c, _ := seedFingerprintLibrary(t)
+		renderer, err := newFingerprintRenderer()
+		if err != nil {
+			t.Fatal(err)
+		}
+		calls := 0
+		counted := fingerprintRenderFunc(func(ctx context.Context, input any, mask int) (fingerprintRendered, error) {
+			calls++
+			return renderer.Render(ctx, input, mask)
+		})
+		c.fingerprints.renderer = counted
+		for _, entity := range []string{"conversation", "workspace"} {
+			id := "fp-a"
+			if entity == "workspace" {
+				id = "fp-w"
+			}
+			renderFingerprintTestEntity(t, c, entity, id)
+			// A redundant dirty mark needs only acknowledgement.
+			renderFingerprintTestEntity(t, c, entity, id)
+		}
+		if calls != 2 {
+			t.Fatalf("redundant dirty marks rendered again: %d calls", calls)
+		}
+		images, err := queryMapsContext(t.Context(), c.reader(), `SELECT entity,entity_id,profile,theme,hash FROM fingerprint_images ORDER BY entity,entity_id,profile,theme`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Text changes without labels or events change the source revision but
+		// not the renderer's evidence. Reuse must survive process restarts.
+		execTx(t, c.DB, `UPDATE messages SET text='new text without a drawing change' WHERE id='fp-m1'`)
+		reopened, err := OpenCatalog(c.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reopened.Close()
+		reopened.fingerprints.renderer = counted
+		for _, item := range []fingerprintRequest{{"conversation", "fp-a", "wide"}, {"workspace", "fp-w", "wide"}} {
+			renderFingerprintTestEntity(t, reopened, item.Entity, item.ID)
+			if m, err := reopened.fingerprintMetadata(t.Context(), item, true); err != nil || m.State != "ready" {
+				t.Fatalf("unchanged input not acknowledged: %+v %v", m, err)
+			}
+		}
+		if calls != 2 {
+			t.Fatalf("unchanged input rendered after restart: %d calls", calls)
+		}
+		// Reuse must obey the same publication guard as a fresh render.
+		execTx(t, reopened.DB, `UPDATE conversations SET agent_nickname='before reuse' WHERE id='fp-a'`)
+		func() {
+			override(t, &fingerprintInputReadHook, func() {
+				execTx(t, reopened.DB, `UPDATE conversations SET agent_nickname='during reuse' WHERE id='fp-a'`)
+			})
+			defer func() { fingerprintInputReadHook = nil }()
+			renderFingerprintTestEntity(t, reopened, "conversation", "fp-a")
+		}()
+		if pending := countRows(t, reopened, `SELECT COUNT(*) FROM fingerprint_entities WHERE entity='conversation' AND id='fp-a' AND dirty=1`); pending != 1 {
+			t.Fatal("reuse acknowledged a concurrently changed source")
+		}
+		renderFingerprintTestEntity(t, reopened, "conversation", "fp-a")
+		if calls != 2 {
+			t.Fatalf("reuse race unnecessarily rendered unchanged inputs: %d calls", calls)
+		}
+		after, err := queryMapsContext(t.Context(), reopened.reader(), `SELECT entity,entity_id,profile,theme,hash FROM fingerprint_images ORDER BY entity,entity_id,profile,theme`)
+		if err != nil || jsonText(after) != jsonText(images) || countRows(t, reopened, `SELECT COUNT(*) FROM fingerprint_orphans`) != 0 {
+			t.Fatalf("reuse replaced images or orphaned their PNGs: %v", err)
+		}
+		// A newly requested appearance and a genuine input change each render.
+		execTx(t, reopened.DB, `UPDATE fingerprint_entities SET events_mask=3 WHERE entity='conversation' AND id='fp-a'`)
+		renderFingerprintTestEntity(t, reopened, "conversation", "fp-a")
+		if calls != 3 {
+			t.Fatalf("missing appearance not rendered: %d calls", calls)
+		}
+		execTx(t, reopened.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('fp-new','fp-a','new','assistant','message','another message','new','2026-01-01T12:02:00Z')`)
+		renderFingerprintTestEntity(t, reopened, "conversation", "fp-a")
+		renderFingerprintTestEntity(t, reopened, "conversation", "fp-a")
+		if calls != 5 {
+			t.Fatalf("changed inputs did not render both appearances: %d calls", calls)
+		}
+		// An older executable does not know to replace input stamps when it
+		// publishes a different revision. Never trust its inherited hash.
+		execTx(t, reopened.DB, `UPDATE fingerprint_images SET revision='older-writer' WHERE entity='conversation' AND entity_id='fp-a';
+UPDATE fingerprint_entities SET revision='after-older-writer' WHERE entity='conversation' AND id='fp-a'`)
+		renderFingerprintTestEntity(t, reopened, "conversation", "fp-a")
+		if calls != 6 {
+			t.Fatalf("older writer's unrelated input stamp was reused: %d calls", calls)
+		}
+		// Older images acquire hashes only when next dirtied. Opening/upgrading
+		// a catalog must not queue a full backfill just to populate the column.
+		execTx(t, reopened.DB, `UPDATE fingerprint_entities SET dirty=0;
+ALTER TABLE fingerprint_images DROP COLUMN input_hash;
+ALTER TABLE fingerprint_images DROP COLUMN input_revision`)
+		if err := reopened.ensureFingerprintImages(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if pending := countRows(t, reopened, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`); pending != 0 {
+			t.Fatalf("cache migration queued %d unchanged entities", pending)
+		}
+		execTx(t, reopened.DB, `UPDATE fingerprint_entities SET revision='legacy' WHERE entity='conversation' AND id='fp-a'`)
+		renderFingerprintTestEntity(t, reopened, "conversation", "fp-a")
+		if calls != 7 {
+			t.Fatalf("legacy image trusted without an input hash: %d calls", calls)
+		}
+	})
+	t.Run("analysis timestamps", func(t *testing.T) {
+		c, _ := seedFingerprintLibrary(t)
+		if err := c.ensureLabelsSchema(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.ensureAgentEventsSchema(); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.ensureAgentEventsLedger(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		execTx(t, c.DB, `INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at) VALUES('fp-m1','fp-a','P',0,X'00',1,1,'hash','model','contract','before');
+INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('fp-a','structure',1,'before');
+INSERT INTO agent_events_conversations(conversation_id,structure,built_at) VALUES('fp-a','structure','before');
+INSERT INTO agent_event_messages(message_id,conversation_id,source,candidates,events,model,lexicon,imported_at) VALUES('fp-m1','fp-a','reply',0,0,'model','lexicon','before');
+UPDATE fingerprint_entities SET dirty=0`)
+		conversation := fingerprintTestRevision(t, c, "conversation", "fp-a")
+		workspace := fingerprintTestRevision(t, c, "workspace", "fp-w")
+		execTx(t, c.DB, `UPDATE message_labels SET labeled_at='after';
+UPDATE message_labels_conversations SET built_at='after';
+UPDATE agent_events_conversations SET built_at='after';
+UPDATE agent_event_messages SET imported_at='after'`)
+		if fingerprintTestRevision(t, c, "conversation", "fp-a") != conversation || fingerprintTestRevision(t, c, "workspace", "fp-w") != workspace || countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`) != 0 {
+			t.Fatal("analysis bookkeeping queued unchanged images")
+		}
+		execTx(t, c.DB, `UPDATE message_labels SET chunks=2 WHERE message_id='fp-m1'`)
+		if fingerprintTestRevision(t, c, "conversation", "fp-a") == conversation || fingerprintTestRevision(t, c, "workspace", "fp-w") == workspace {
+			t.Fatal("changed label evidence did not invalidate both images")
+		}
+	})
 	c, _ := seedFingerprintLibrary(t)
 	before := fingerprintTestRevision(t, c, "conversation", "fp-a")
 	tx, err := c.DB.Begin()
@@ -1058,6 +1202,32 @@ func fingerprintTestInput() map[string]any {
 }
 
 func TestFingerprintRenderer(t *testing.T) {
+	t.Run("input hash", func(t *testing.T) {
+		input := fingerprintTestInput()
+		hash := func(mask int) string {
+			t.Helper()
+			value, err := fingerprintInputHash(input, mask)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return value
+		}
+		shown, hidden := hash(1), hash(2)
+		input["pending"], input["events_pending"] = true, 5
+		input["conversation"].(map[string]any)["title"] = "new title"
+		if hash(1) != shown || hash(2) != hidden {
+			t.Fatal("non-renderer metadata changed the input hash")
+		}
+		input["events"] = []any{map[string]any{"id": "event", "message_id": "m1", "kind": "obstacle", "group": "Friction", "probability": .9}}
+		if hash(1) == shown || hash(2) != hidden {
+			t.Fatal("event change did not affect only the event appearance")
+		}
+		shown = hash(1)
+		input["conversation"].(map[string]any)["messages"].([]map[string]any)[0]["chunks"] = 0
+		if hash(1) == shown || hash(2) == hidden {
+			t.Fatal("changed label evidence kept the old input hash")
+		}
+	})
 	renderer, err := newFingerprintRenderer()
 	if err != nil {
 		t.Fatal(err)
@@ -1369,7 +1539,6 @@ func BenchmarkFingerprintRender(b *testing.B) {
 // busy when its grant has two CPUs, renders one image at a time with one,
 // and drains every eligible entity without a gap between images.
 func TestFingerprintBatchUsesItsAllocation(t *testing.T) {
-	c, _ := seedFingerprintLibrary(t)
 	renderer, err := newFingerprintRenderer()
 	if err != nil {
 		t.Fatal(err)
@@ -1379,6 +1548,7 @@ func TestFingerprintBatchUsesItsAllocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, cpus := range []int{2, 1} {
+		c, _ := seedFingerprintLibrary(t)
 		execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=0;
 UPDATE fingerprint_entities SET dirty=1,priority=100,next_attempt=0 WHERE entity='conversation'`)
 		var mu sync.Mutex
