@@ -374,10 +374,12 @@ test("cache efficiency is weighted by input tokens and preserves provider cohort
     { ...row, id: "a", input_tokens: 120, cache_creation_input_tokens: 20, cache_read_input_tokens: 90, uncached_input_tokens: 10, agent_session_id: "same" },
     { ...row, id: "b", input_tokens: 900, cache_read_input_tokens: 0, uncached_input_tokens: 900, agent_session_id: "same" },
     { ...row, id: "c", provider: "two", input_tokens: 100, cache_read_input_tokens: 100, uncached_input_tokens: 0, agent_session_id: "other" },
+    // An estimate's cache division is assumed: its tokens are summed, but it moves no rate.
+    { ...row, id: "d", is_estimate: true, input_tokens: 5000, cache_read_input_tokens: 4000, cache_creation_input_tokens: 1000, uncached_input_tokens: 0, agent_session_id: "estimated" },
   ], query, schemas.usage, { now: clock.getTime() });
   assert.equal(result.total, 2);
   assert.equal(result.rows.find(r => r.provider === "one").cc_share, 90 / 1020);
-  assert.equal(result.rows.find(r => r.provider === "one").cc_input, 1020);
+  assert.equal(result.rows.find(r => r.provider === "one").cc_input, 6020);
 });
 
 test("work comparisons preserve workspace identity and take titles from the latest usage row", () => {

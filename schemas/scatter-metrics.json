@@ -266,7 +266,7 @@
     "summary": {
       "id": "value",
       "op": "formula",
-      "expression": "SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)"
+      "expression": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[input_tokens])),0)"
     }
   },
   "tokens_output_share": {

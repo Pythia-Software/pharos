@@ -580,7 +580,7 @@ const ROUTES = [
     assert.match(await tokens.locator('strong').innerText(),/\d.*\*$/);
     const cost=stats.locator('span').filter({has:page.locator('small', {hasText:'API cost'})});
     assert.match(await cost.locator('strong').innerText(),/^\$.*\*$/);
-    assert.match(await cost.getAttribute('title'),/estimated output only/i);
+    assert.match(await cost.getAttribute('title'),/cost.*is partial/i);
     await stats.scrollIntoViewIfNeeded();await app.shot('estimated-workspace-totals');
     const info=tokens.getByRole('button',{name:'About token estimates'});await info.click();
     const dialog=page.getByRole('dialog',{name:'How estimates work'});await dialog.waitFor();
