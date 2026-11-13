@@ -65,6 +65,7 @@ func refuses(_ work: () throws -> Void, _ message: String) {
     var results: [Bool: [String: String]] = [:]
     var senders: [(String, URL?, Bool)] = []
     var replies: [Bool: Int] = [:]
+    var windowActions: [String] = []
 
     init(_ coordinator: ArchiveWebView.Coordinator) { self.coordinator = coordinator }
 
@@ -74,6 +75,9 @@ func refuses(_ work: () throws -> Void, _ message: String) {
             return
         }
         senders.append((message.name, message.frameInfo.request.url, message.frameInfo.isMainFrame))
+        if message.name == ArchiveWebView.windowMessageName, let action = message.body as? String {
+            windowActions.append(action)
+        }
         coordinator.userContentController(controller, didReceive: message)
     }
 
@@ -105,7 +109,59 @@ final class FakeFolderPicker: ArchiveFolderPicker {
     }
 }
 
+/// Records header actions without moving or minimizing a real window.
+final class HeaderTestWindow: NSWindow {
+    var simulatedZoomed = false
+    var minimized = false
+    var zooms = 0
+    var minimizes = 0
+    override var isZoomed: Bool { simulatedZoomed }
+    override var isMiniaturized: Bool { minimized }
+    override func performZoom(_ sender: Any?) { zooms += 1; simulatedZoomed.toggle() }
+    override func performMiniaturize(_ sender: Any?) { minimizes += 1; minimized = true }
+}
+
 @main struct UpdateCheckHarness {
+    @MainActor static func nativeWindowChromeTests() {
+        _ = NSApplication.shared
+        let suite = "PharosHeaderTest-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let window = HeaderTestWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 480), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        let page = ArchiveWKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        window.contentView = page
+        func mouseDown(_ count: Int) {
+            let event = NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 300, y: 450), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: count, clickCount: count, pressure: 1)!
+            page.mouseDown(with: event)
+        }
+        for wasZoomed in [false, true] {
+            for systemHandlesZoom in [false, true] {
+                defaults.set("Maximize", forKey: "AppleActionOnDoubleClick")
+                window.simulatedZoomed = wasZoomed
+                window.zooms = 0
+                mouseDown(1)
+                // Native title-bar handling can precede even the second down.
+                if systemHandlesZoom { window.simulatedZoomed.toggle() }
+                mouseDown(2)
+                page.performHeaderDoubleClick(defaults: defaults)
+                page.performHeaderDoubleClick(defaults: defaults)
+                expect(window.isZoomed != wasZoomed, "a header double-click changes the zoom state exactly once in either direction")
+                expect(window.zooms == (systemHandlesZoom ? 0 : 1), "only an unhandled double-click needs the app's fallback")
+            }
+        }
+        for action in ["Minimize", "None"] {
+            defaults.set(action, forKey: "AppleActionOnDoubleClick")
+            window.minimized = false
+            window.minimizes = 0
+            window.zooms = 0
+            mouseDown(1)
+            mouseDown(2)
+            page.performHeaderDoubleClick(defaults: defaults)
+            expect(window.minimizes == (action == "Minimize" ? 1 : 0) && window.zooms == 0, "header double-clicks preserve the system preference")
+        }
+        print("Native header double-click checks passed")
+    }
+
     static func nativeSenderTests() {
         let origin = URL(string: "http://localhost:18765/")!
         let cases: [(String, URL?, Bool, Bool)] = [
@@ -369,6 +425,20 @@ final class FakeFolderPicker: ArchiveFolderPicker {
             evaluate("document.querySelector('\(selector)').dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, button:2}))")
             until("context menu target was not reported") { recorder.senders.count > count }
         }
+        func headerMouse(_ type: String, _ count: Int, target: String = "header") {
+            evaluate("document.querySelector('\(target)').dispatchEvent(new MouseEvent('\(type)', {bubbles:true, cancelable:true, button:0, detail:\(count)}))")
+        }
+        recorder.windowActions = []
+        headerMouse("mousedown", 1)
+        until("a header press did not start a native drag") { recorder.windowActions == ["drag"] }
+        headerMouse("mouseup", 1)
+        headerMouse("mousedown", 2)
+        expect(recorder.windowActions == ["drag"], "the double-click fallback waits for native mouse-up handling")
+        headerMouse("mouseup", 2)
+        until("releasing the second header click did not request one fallback") { recorder.windowActions == ["drag", "doubleClick"] }
+        headerMouse("mousedown", 2, target: "#other")
+        headerMouse("mouseup", 2, target: "#other")
+        expect(recorder.windowActions == ["drag", "doubleClick"], "header controls keep their own double-clicks")
         let event = NSEvent.mouseEvent(with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!
         for selector in ["#mark", "#home"] {
             rightClick(selector)
@@ -755,6 +825,7 @@ final class FakeFolderPicker: ArchiveFolderPicker {
         defer { try? FileManager.default.removeItem(at: root) }
         setenv("PHAROS_SUPPORT_DIR", root.appendingPathComponent("support").path, 1)
         nativeSenderTests()
+        nativeWindowChromeTests()
         nativeFolderPickerTests()
         try nativeWebKitSenderTests(root: root)
         try applicationLifecycleTests(root: root)
