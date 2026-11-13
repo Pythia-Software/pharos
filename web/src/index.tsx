@@ -1850,7 +1850,7 @@ window.addEventListener("pharos:preferences-saved", event => {
 });
 window.pharosQueryTables = {
   sourceWorkspacesURL: kind => sourceWorkspacesURL(kind, schemas.library),
-  summaryURL: (metric, window, generatedAt, _concurrency, from) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings(), from),
+  summaryURL: (metric, window, generatedAt, _concurrency, from, includeEstimates) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings(), from, includeEstimates),
   sourceConversationsURL: source => sourceConversationsURL(schemas.library, source),
   async createLink() {
     const entry = [...tableApis.entries()].find(([dataset]) => datasetIsVisible(dataset));

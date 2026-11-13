@@ -416,3 +416,36 @@ func TestQuickStatsShortUsageUsesObservedHour(t *testing.T) {
 		}
 	}
 }
+
+func TestUsageSummaryReportedTotalsExcludeEstimates(t *testing.T) {
+	c, _ := testCatalog(t)
+	c.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
+	ingestUsageFixture(t, c)
+	c.now = func() time.Time { return time.Date(2026, 9, 21, 2, 15, 0, 0, time.UTC) }
+	execTx(t, c.DB,
+		`UPDATE agent_session_usage SET model='claude-sonnet-4-20250514'`,
+		`UPDATE agent_session_usage SET is_estimate=1, input_tokens_available=0 WHERE usage_hour='2026-09-20T23:00:00Z'`)
+	summary, err := c.UsageSummary(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	windows := map[string]*usageSummaryWindow{}
+	for _, w := range summary["windows"].([]*usageSummaryWindow) {
+		windows[w.Key] = w
+	}
+	mixed, reported, empty := windows["6h"], windows["1h"], windows["5m"]
+	if !mixed.IsEstimate || mixed.Tokens != 3050 || mixed.Reported.Tokens != 2030 || reported.Tokens != 1523 || reported.Reported.Tokens != 1523 {
+		t.Fatalf("mixed and reported counts: mixed=%+v reported=%+v", mixed, reported)
+	}
+	allCost, ok := mixed.CostUSD.(float64)
+	knownCost, known := mixed.Reported.CostUSD.(float64)
+	if !ok || !known || knownCost <= 0 || allCost <= knownCost || mixed.Reported.PriceStatus == "partial" {
+		t.Fatalf("mixed and reported costs: %+v", mixed)
+	}
+	if reflect.DeepEqual(mixed.CarbonTokens, mixed.Reported.CarbonTokens) || !reflect.DeepEqual(reported.CarbonTokens, reported.Reported.CarbonTokens) {
+		t.Fatalf("carbon components mixed=%v reported=%v", mixed.CarbonTokens, mixed.Reported.CarbonTokens)
+	}
+	if empty.Reported.Tokens != 0 || empty.Reported.CostUSD != nil || len(empty.Reported.CarbonTokens) != 0 {
+		t.Fatalf("empty reported usage: %+v", empty.Reported)
+	}
+}

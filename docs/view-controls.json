@@ -2685,6 +2685,15 @@
       "reason": "Copies the integrity issue's diagnostics to the clipboard; this action has no durable view state."
     },
     {
+      "key": "html:067eca5863417bbc:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:settings>",
+      "tag": "button",
+      "control": "<button id=\"usageSummaryEstimates\" class=\"toggle\" type=\"button\" role=\"switch\" aria-labelledby=\"usageSummaryEstimatesTitle\" aria-describedby=\"usageSummaryEstimatesDescription\" aria-checked=\"true\">",
+      "contract": "settings",
+      "reason": "Library-wide Quick Stats preference for including estimated token usage; defaults on independently of page URL state."
+    },
+    {
       "key": "html:0bab6dfe661d5b94:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:settings>",
@@ -3356,6 +3365,15 @@
       "control": "'button', 'estimate-dialog-close', '×'",
       "contract": "transient",
       "reason": "Closes the temporary explanation of estimates; it does not change view or query state."
+    },
+    {
+      "key": "baba6335b1abcbd9:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<module>",
+      "tag": "button",
+      "control": "'button', 'estimate-marker-button', '*'",
+      "contract": "transient",
+      "reason": "Opens the shared temporary explanation of estimates shown in Quick Stats."
     },
     {
       "key": "e91ec901e257f7ab:0",

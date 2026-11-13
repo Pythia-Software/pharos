@@ -8,6 +8,9 @@ import { timeBounds, usageTime, writingTime } from "../../../src/usage-chart";
 import { defaultConcurrencySettings, normalizeConcurrencySettings } from "../../../src/concurrency-settings";
 import usage from "../../../../schemas/usage.schema.json";
 import writingMessages from "../../../../schemas/writing_messages.schema.json";
+import messages from "../../../../schemas/messages.schema.json";
+import conversationActivity from "../../../../schemas/conversation_activity.schema.json";
+import { loadClassicScript } from "../helpers/classic-script.mjs";
 
 const generatedAt = "2026-11-01T08:30:12.345Z"; // Crosses the US daylight saving change.
 const windows = [["1h", 1], ["6h", 6], ["24h", 24], ["7d", 168], ["30d", 720], ["all", 0]];
@@ -107,5 +110,61 @@ test("calendar and short summary links freeze the service's exact interval", () 
     assert.equal(where.find(term=>term.op==='>=').value,from);
     assert.equal(where.some(term=>term.field==='status'),metric==='failed_tool_calls');
   }
-  for(const metric of ['message_count','active_conversations','delegated_runs']) assert.equal(usageSummaryURL(metric,'1h',until),undefined);
+});
+
+test('count links open the closest searchable records for every snapshot window', () => {
+  const specs = [
+    ['message_count', 'messages', messages, 'sent_at', null],
+    ['user_messages', 'messages', messages, 'sent_at', null],
+    ['assistant_messages', 'messages', messages, 'sent_at', null],
+    ['active_conversations', 'conversation_activity', conversationActivity, 'event_at', 'root_conversation_id'],
+    ['active_repositories', 'conversation_activity', conversationActivity, 'event_at', 'repository_name'],
+    ['delegated_runs', 'usage', usage, 'last_usage_at', 'delegated_session_id'],
+  ];
+  const from = '2026-10-31T06:00:00.000Z';
+  for (const [metric, dataset, schemaDoc, timeField, group] of specs) {
+    for (const [window, expected] of [['1h', '2026-11-01T07:30:12.345Z'], ['yesterday', from], ['all', null]]) {
+      const url = urlFor(metric, window, generatedAt, defaultConcurrencySettings, from);
+      const state = readUsageWorkspace(url.searchParams);
+      assert.equal(state.mode, 'query');
+      assert.equal(state.dataset, dataset);
+      const query = decodeQueryStrict(url.searchParams.get(`q_${dataset}`));
+      assert.deepEqual(query.grouping?.keys ?? null, group ? [group] : null);
+      const where = (query.grouping?.source ?? query).where;
+      assert.equal(where.find(term => term.field === timeField && term.op === '>=')?.value ?? null, expected);
+      assert.equal(where.find(term => term.op === '<')?.value ?? null, expected && generatedAt);
+      if (metric === 'delegated_runs' && expected) assert.ok(where.some(term => term.field === 'first_usage_at' && term.op === '<'));
+      if (dataset === 'messages') {
+        assert.ok(where.some(term => term.field === 'selected' && term.value === 'true'));
+        assert.ok(where.some(term => term.field === 'kind' && term.value === 'message'));
+        if (metric === 'message_count') assert.deepEqual(where.find(term => term.any)?.any.map(term => term.value), ['user', 'assistant']);
+        else assert.ok(where.some(term => term.field === 'role' && term.value === (metric === 'user_messages' ? 'user' : 'assistant')));
+        if (metric === 'user_messages') assert.ok(where.some(term => term.field === 'subagent' && term.value === 'false'));
+      }
+      if (metric === 'active_repositories') assert.ok(where.some(term => term.field === 'repository_name' && term.op === '!='));
+      if (metric === 'delegated_runs') assert.ok(where.some(term => term.field === 'delegated_run_depth' && term.op === '>'));
+      assert.doesNotThrow(() => toQueryRequestV3(query, loadSchema(schemaDoc), {version: 3, profile: 'qt-sqlite-v1', groupedRows: true}));
+    }
+  }
+});
+
+test('every available Quick Stats metric has a destination for every period', () => {
+  const stats = loadClassicScript('quick-stats.js');
+  const layout = stats.normalizeQuickStatsLayout({windows: ['1h', '6h', 'today', '24h', '7d', '30d', 'all', '5m', '15m', 'yesterday', 'week', 'month']}, stats.quickStatsMetrics(true));
+  for (const [, metric] of stats.quickStatsMetrics(true)) for (const window of layout.windows) {
+    assert.ok(usageSummaryURL(metric, window, generatedAt, defaultConcurrencySettings, '2026-10-01T06:00:00.000Z'), `${metric}/${window}`);
+  }
+});
+
+
+test('reported-only Quick Stats links preserve the estimate filter', () => {
+  for (const metric of ['tokens', 'cost_usd', 'co2e_g']) {
+    const url = urlFor(metric, '1h', generatedAt, defaultConcurrencySettings, undefined, false);
+    const query = decodeQueryStrict(url.searchParams.get('analyze_filters'));
+    assert.ok(query.where.some(term => term.field === 'is_estimate' && term.op === '=' && term.value === 'false'));
+    const included = urlFor(metric, '1h', generatedAt);
+    assert.ok(!decodeQueryStrict(included.searchParams.get('analyze_filters')).where.some(term => term.field === 'is_estimate'));
+  }
+  const human = urlFor('human_words', 'all', generatedAt, defaultConcurrencySettings, undefined, false);
+  assert.ok(!decodeQueryStrict(human.searchParams.get('analyze_filters')).where.some(term => term.field === 'is_estimate'));
 });

@@ -19,7 +19,15 @@ var usageSummaryWindows = []struct {
 }
 
 // usageSummaryWindow is one window's topline totals.
+type usageSummaryReported struct {
+	Tokens       int64                         `json:"tokens"`
+	CostUSD      any                           `json:"cost_usd"`
+	PriceStatus  string                        `json:"price_status"`
+	CarbonTokens map[string]map[string]float64 `json:"carbon_tokens"`
+}
+
 type usageSummaryWindow struct {
+	Reported             usageSummaryReported          `json:"reported"`
 	IsEstimate           bool                          `json:"is_estimate"`
 	CostIsEstimate       bool                          `json:"cost_is_estimate"`
 	PriceStatus          string                        `json:"price_status"`
@@ -92,7 +100,7 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 	cutoffs := make([]time.Time, len(usageSummaryWindows))
 	ends := make([]time.Time, len(usageSummaryWindows))
 	for index, window := range usageSummaryWindows {
-		windows[index] = &usageSummaryWindow{InputTokensAvailable: true, Key: window.key, Until: now.UTC().Format(time.RFC3339Nano)}
+		windows[index] = &usageSummaryWindow{InputTokensAvailable: true, Key: window.key, Until: now.UTC().Format(time.RFC3339Nano), Reported: usageSummaryReported{CarbonTokens: map[string]map[string]float64{}}}
 		cutoffs[index], ends[index] = usageSummaryBounds(window.key, window.span, now)
 		windows[index].Until = ends[index].UTC().Format(time.RFC3339Nano)
 		if !cutoffs[index].IsZero() {
@@ -194,6 +202,23 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 			window.PriceStatus = worsePriceStatus(window.PriceStatus, priced.status)
 			window.CostIsEstimate = window.CostIsEstimate || entry.isEstimate && priced.cost != nil
 			window.Tokens += int64(float64(entry.tokens["total_tokens"])*share + .5)
+			if !entry.isEstimate {
+				window.Reported.Tokens += int64(float64(entry.tokens["total_tokens"])*share + .5)
+				window.Reported.PriceStatus = worsePriceStatus(window.Reported.PriceStatus, priced.status)
+				if priced.cost != nil {
+					cost := *priced.cost * share
+					window.Reported.CostUSD = addCost(window.Reported.CostUSD, &cost)
+				}
+				if window.Reported.CarbonTokens == nil {
+					window.Reported.CarbonTokens = map[string]map[string]float64{}
+				}
+				if window.Reported.CarbonTokens[tier] == nil {
+					window.Reported.CarbonTokens[tier] = map[string]float64{}
+				}
+				for category, count := range carbonParts {
+					window.Reported.CarbonTokens[tier][category] += float64(count) * share
+				}
+			}
 			if window.CarbonTokens == nil {
 				window.CarbonTokens = map[string]map[string]float64{}
 			}
