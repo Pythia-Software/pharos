@@ -133,21 +133,21 @@ func TestLibraryCacheSeesCommitsFromAnotherConnection(t *testing.T) {
 	}
 }
 
-func TestLibraryCacheRepricesOnPriceBookAndDateChanges(t *testing.T) {
+func TestLibraryCacheRepricesOnPriceBookChanges(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	today := time.Date(2026, 9, 24, 12, 0, 0, 0, time.Local)
 	catalog.now = func() time.Time { return today }
 	ingestUsageFixture(t, catalog)
 	execTx(t, catalog.DB, `UPDATE agent_sessions SET model='cache-probe-1'`, `UPDATE agent_session_usage SET model='cache-probe-1'`)
-	cost := func() (any, any) {
+	cost := func() any {
 		t.Helper()
 		rows, err := catalog.searchRows(SearchOptions{}, nil)
 		if err != nil || len(rows) != 1 {
 			t.Fatalf("%v %v", rows, err)
 		}
-		return rows[0]["cost_usd"], rows[0]["cost_today_usd"]
+		return rows[0]["cost_usd"]
 	}
-	if total, _ := cost(); total != nil {
+	if total := cost(); total != nil {
 		t.Fatalf("unpriced model has cost %v", total)
 	}
 	doc := testPricing()
@@ -159,13 +159,13 @@ func TestLibraryCacheRepricesOnPriceBookAndDateChanges(t *testing.T) {
 	}
 	// Uncached 700 x $10, cache reads 2,300 x $1, output 50 x $100, per million.
 	want := (700*10 + 2300*1 + 50*100) / 1e6
-	total, beforeCut := cost()
-	if !near(ptr(total), want) || !near(ptr(beforeCut), want) {
-		t.Fatalf("after price-book change: cost %v today %v, want %v", total, beforeCut, want)
+	if total := cost(); !near(ptr(total), want) {
+		t.Fatalf("after price-book change: cost %v, want %v", total, want)
 	}
+	// Usage keeps the price of the day it happened after a later price change.
 	today = time.Date(2026, 10, 2, 12, 0, 0, 0, time.Local)
-	if total, afterCut := cost(); !near(ptr(total), want) || !near(ptr(afterCut), 2*want) {
-		t.Fatalf("after date change: cost %v today %v, want %v and %v", total, afterCut, want, 2*want)
+	if total := cost(); !near(ptr(total), want) {
+		t.Fatalf("after date change: cost %v, want %v", total, want)
 	}
 }
 
@@ -264,7 +264,7 @@ func TestWarmCachesRebuildsWhatPagesUse(t *testing.T) {
 		if want := catalog.derived.versions.generations.of(derivedKeyGeneration(key)); strings.HasPrefix(key, "usage:") && (entry.version != want || want > version) {
 			t.Fatalf("usage rows were not rewarmed: version %d, want %d of %d", entry.version, want, version)
 		}
-		if strings.HasPrefix(key, "writing:") {
+		if derivedKeyFamily(key) == "writing" {
 			t.Fatal("warmed a value no page asked for")
 		}
 	}

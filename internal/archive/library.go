@@ -696,8 +696,8 @@ var (
 	// libraryGoFields are added in Go after the read: relevance, mirror
 	// suppression, and costs.
 	libraryGoFields = []string{"channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind", "channels", "machines", "execution_machines", "score", "match_types", "source_aliases", "mirrored_workspace_ids",
-		"cost_usd", "cost_today_usd", "price_status"}
-	libraryCostFields = []string{"cost_usd", "cost_today_usd", "price_status"}
+		"cost_usd", "price_status"}
+	libraryCostFields = []string{"cost_usd", "price_status"}
 	// libraryLargeFields hold long text, so only requests that use them read them.
 	libraryLargeFields = []string{"purpose", "outcome", "changed_files", "pr_details", "summary_initiation", "summary_outcome"}
 	// libraryCompactFields is every field except long text and costs, which

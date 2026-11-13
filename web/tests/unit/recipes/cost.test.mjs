@@ -7,7 +7,7 @@ import {compactPieSlices} from '../../../src/compact-pie-model';
 import {compactMetricPresentation} from '../../../src/card-presentation';
 import {apiCostTrendQuery,apiCostTrendFacts,buildApiCostTrend,usesApiCostTrend} from '../../../src/api-cost-trend';
 const now=Date.parse('2026-10-15T12:00:00Z'),{card,table,metric}=recipeHarness(now);
-const usage=(id,extra={})=>({id,first_usage_at:now-1000,last_usage_at:new Date(now-1000).toISOString(),day:'2026-10-15',workspace_id:'work',project_name:'repo',title:'Fixture work',root_conversation_id:'root',root_project_name:'repo',root_title:'Root task',total_tokens:100,cost_usd:5,cost_today_usd:4,price_status:'priced',...extra});
+const usage=(id,extra={})=>({id,first_usage_at:now-1000,last_usage_at:new Date(now-1000).toISOString(),day:'2026-10-15',workspace_id:'work',project_name:'repo',title:'Fixture work',root_conversation_id:'root',root_project_name:'repo',root_title:'Root task',total_tokens:100,cost_usd:5,price_status:'priced',...extra});
 function trendFacts(rows,source,days){const q=apiCostTrendQuery(source,now-Math.max(37,days)*86400000,now);return apiCostTrendFacts(core.evaluateMetrics(rows,q,schemas.usage,{now}).metrics[0]);}
 
 test('period totals and exact repository shares retain confirmed zeros and exclude incomplete or out-of-window facts',()=>{

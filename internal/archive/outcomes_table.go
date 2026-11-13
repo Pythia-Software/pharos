@@ -35,7 +35,7 @@ const outcomeJudgedLabels = `('landed','committed','changed_kept','reworked')`
 const outcomeReworkOpenSQL = `julianday(so.last_edit_at)>julianday('now')-so.rework_days`
 
 func (c *Catalog) outcomeRows(ctx context.Context) ([]map[string]any, error) {
-	return cachedValue(ctx, c, "outcome-rows:"+c.clock().Format("2006-01-02"), func(ctx context.Context) ([]map[string]any, error) {
+	return cachedValue(ctx, c, "outcome-rows", func(ctx context.Context) ([]map[string]any, error) {
 		rows, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,w.id workspace_id,w.title,w.source_kind,w.activity_at,
 			`+projectNameSQL("w")+` project_name,`+projectKindSQL("w")+` project_kind,
 			CASE WHEN `+projectKindSQL("w")+`='repository' THEN NULLIF(TRIM(COALESCE(w.branch,'')),'') END branch,
@@ -134,7 +134,6 @@ func (c *Catalog) sessionModelUsage(ctx context.Context) (map[string]*sessionUsa
 		}
 		session.tokens += tokens["total_tokens"]
 		session.cost = addCost(session.cost, priced.cost)
-		session.today = addCost(session.today, priced.costToday)
 		session.status = worsePriceStatus(session.status, priced.status)
 		if hour != "" && (session.first == "" || hour < session.first) {
 			session.first = hour

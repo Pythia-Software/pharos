@@ -28,7 +28,7 @@ const (
 )
 
 func (c *Catalog) branchUsageRows(ctx context.Context) ([]map[string]any, error) {
-	return cachedValue(ctx, c, "branch-usage-rows:"+c.clock().Format("2006-01-02"), func(ctx context.Context) ([]map[string]any, error) {
+	return cachedValue(ctx, c, "branch-usage-rows", func(ctx context.Context) ([]map[string]any, error) {
 		workspaces, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,NULLIF(TRIM(COALESCE(w.branch,'')),'') branch
 			FROM workspaces w`+projectJoin("w")+` WHERE pj.id IS NOT NULL`)
 		if err != nil {
