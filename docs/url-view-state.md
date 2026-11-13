@@ -230,7 +230,7 @@ Bookmark identity and saved bookmark URLs exclude `overlay`, `history_search`, `
 2. Bind React state with `useViewState` or repeated content with `useViewEntry` keyed by a stable entity. Classic scripts use `window.pharosView.read/write`. Use `ViewDisclosure` for content; classic content can use `data-view-key`.
 3. Bind a semantic attention identity. Parameterized targets should use stable record IDs; arbitrary CSS selectors are never a public URL language.
 4. Run `npm --prefix web run generate-view-controls`. Review/classify every unknown entry; never label a view input a setting merely to pass the check.
-5. Run `npm --prefix web run generate-site-map`; help/parameter documentation changes travel with the generated manifest.
+5. Run `npm --prefix web run build`, which renders the site map; help/parameter documentation changes travel with the generated manifest.
 6. Cover parsing/building/time transitions in node/Go. Use browser tests for real restoration, materialization, scrolling/focus and a fresh context without a local snapshot cache.
 
 `npm --prefix web run check` includes the source-control review gate, manifest freshness, type checks and unit tests. Do not run a frontend bundle build concurrently with Go compilation: Go embeds the generated bundles.

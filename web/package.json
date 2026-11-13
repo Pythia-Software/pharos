@@ -19,7 +19,7 @@
     "check-model-colors": "node generate-model-colors.mjs --check",
     "demo:model-colors": "node ../tools/model-color-lab.mjs",
     "typecheck": "tsc --noEmit && tsc --project experiments/model-color-lab/tsconfig.json --noEmit",
-    "check": "npm run check-host-boundaries && npm run typecheck && npm run check-schemas && npm run check-recipes && npm run check-model-colors && npm run check-view-controls && npm run check-site-map && npm run build && npm run check-bundle && npm test",
+    "check": "npm run check-host-boundaries && npm run typecheck && npm run check-schemas && npm run check-recipes && npm run check-model-colors && npm run check-view-controls && npm run build && npm run check-bundle && npm test",
     "check-host-boundaries": "node host-boundaries.mjs",
     "test": "node tests/run.mjs unit",
     "test:unit": "node tests/run.mjs unit",
@@ -35,7 +35,6 @@
     "link:local": "node ../tools/link-query-table.mjs",
     "watch:local": "node ../tools/watch-query-table.mjs",
     "generate-site-map": "node generate-site-map.mjs",
-    "check-site-map": "node generate-site-map.mjs --check",
     "generate-view-controls": "node view-controls.mjs --write",
     "check-view-controls": "node view-controls.mjs"
   },

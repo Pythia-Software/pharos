@@ -29,9 +29,10 @@ questions of different forms.
   and, optionally, the subset of its area's signals it needs;
 - the pages that no question is about, each with a reason.
 
-`npm --prefix web run generate-site-map` writes the catalog to
-`internal/archive/assets/ask-suggestions.json`, which Go embeds.
-`npm run check-site-map` fails when that file is stale. Generation fails when:
+The site map's generator writes the catalog to
+`internal/archive/assets/ask-suggestions.json`, a build output Go embeds;
+`npm --prefix web run build` renders it ([Site map](site-map.md#rendering)).
+Generation fails when:
 - a site map page is neither covered by an area nor excluded with a reason;
 - an area has no question;
 - a family names a signal outside its area;

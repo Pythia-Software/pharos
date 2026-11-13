@@ -190,7 +190,7 @@ The accepted scope above resolves disclosure, overrides, drafts/editing, relativ
 
 ## What the current completeness checks miss
 
-`check-site-map` catches stale generated output. Site-map tests check served routes, declared reader params, chart domains/rules, recipe templates and generated round trips; Go tests check the corresponding parser/builder. These are useful and should remain.
+The build renders the site map from current sources (`check-bundle` catches a stale one). Site-map tests check served routes, declared reader params, chart domains/rules, recipe templates and generated round trips; Go tests check the corresponding parser/builder. These are useful and should remain.
 
 They do not enumerate all control owners or demand a URL contract for each semantic control. For example, the reader test checks each declared parameter has a reader/writer, not that every reader control appears in the declaration. The route test accepts the work prefix without checking the conversation subroute the reader actually emits. TL1's declared empty dashboard options pass without testing dashboard scope controls.
 
