@@ -128,8 +128,9 @@ func claudeDownloadsState(config Config) string {
 }
 
 type claudeWatchSetting struct {
-	Enabled   bool   `json:"enabled"`
-	ChangedAt string `json:"changed_at,omitempty"`
+	Enabled       bool   `json:"enabled"`
+	ChangedAt     string `json:"changed_at,omitempty"`
+	RoutineDoneAt string `json:"routine_done_at,omitempty"`
 	// Browser is the profile key new exports open in; Accounts remembers,
 	// per Claude account, the profile whose download actually arrived.
 	Browser  string            `json:"browser"`

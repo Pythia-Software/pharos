@@ -513,9 +513,11 @@ service restarts; accepting in the panel reloads sources immediately.
 **Set up later** saves an empty host choice without discovering or capturing
 sources, so the guide does not interrupt the next launch. Settings → Sources
 lists each source with its tool and whether it is this Mac's or every Mac's,
-and offers **Look for sources…** (the usual places), **Add a folder…** (only
+and offers **Look for sources…** (the usual places and Downloads for ChatGPT and
+Claude.ai exports), **Add a folder…** (only
 folders you name) and **Import an export…**. Settings does not look in the
-usual places on its own. A source in this Mac's host file has **Remove…**,
+usual places or Downloads on its own. A possible export can be reviewed and
+imported separately; macOS may ask for access to Downloads. A source in this Mac's host file has **Remove…**,
 which deletes its block (`POST /api/sources/<name>/remove`); what was captured
 and indexed from it stays in the library. When the host source replaces a
 same-named one in `library.toml` (`replaces` in `GET /api/sources`), removing

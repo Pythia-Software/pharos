@@ -23,6 +23,7 @@ type ProbeSelection struct {
 	// OnlyLocations checks just Locations: not the tools' usual places, nor
 	// the variables that move them.
 	OnlyLocations bool `json:"only_locations,omitempty"`
+	Downloads     bool `json:"downloads,omitempty"`
 }
 
 // Keep omitted selections backward compatible with the CLI and older clients.
@@ -64,6 +65,11 @@ func (s *Server) probeSelected(w http.ResponseWriter, body map[string]any) {
 	if err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
+	}
+	if selection.Downloads && !selection.OnlyLocations {
+		home, _ := os.UserHomeDir()
+		result := scanDownloadExports(home)
+		report.Downloads = &result
 	}
 	writeJSON(w, report, http.StatusOK)
 }

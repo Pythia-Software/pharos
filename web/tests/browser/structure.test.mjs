@@ -315,6 +315,7 @@ const ROUTES = [
     'GET /api/claude-imports':{jobs:[],run:{running:false},watch:{enabled:true,available:true,browser:'',browsers:[],exports:[
       {id:'queued-export',state:'fetching',phase:'queued',exported_at:'2026-11-10T20:15:05Z',collected:0,expected:6,message:'Waiting for another capture or index to finish. Collection resumes automatically when the library is free.'},
       {id:'indexing-export',state:'fetching',phase:'indexing',exported_at:'2026-11-10T19:15:05Z',collected:6,expected:6,ingestion:{stage:'indexing',processed:25,workspaces:20,conversations:20,messages:150,skipped_current:5}},
+      {id:'finished-export',state:'imported',exported_at:'2026-11-09T19:15:05Z',collected:6,expected:6},
     ],library:{workspaces:25,conversations:25,recent:[{id:workID,title:'Plan a project with a long workspace title that wraps at narrow window widths',url:`/work/${workID}`}]}}},
   },check:async(page,app)=>{
     await page.locator('#claudeDownloadsWatchSection .claude-watch-exports').scrollIntoViewIfNeeded();

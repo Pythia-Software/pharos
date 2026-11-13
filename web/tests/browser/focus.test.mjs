@@ -411,6 +411,41 @@ test('Source setup keeps tool choices and focus while reviewing folders before a
   assert.ok(libraryScopes.length>0&&libraryScopes.every(scope=>scope==='source-review-library'),'source setup requests lost their library binding');
 });
 
+test('Look for sources finds Downloads exports without installed tools and opens import for review', {skip}, async t => {
+  const {page,calls,shot}=await open(t,{url:'/settings/sources',ready:'#pharosFindSources',api:{
+    'GET /api/probe/tools':{tools:[]},
+    'POST /api/probe':({body})=>({candidates:[],checked:[],downloads:body.downloads?{exports:[
+      {kind:'chatgpt',path:'~/Downloads/chat.zip'},
+      {kind:'claude-ai',path:'~/Downloads/manifest.json'},
+      {path:'~/Downloads/unknown.zip'},
+    ]}:undefined}),
+  }});
+  await page.locator('#pharosFindSources').click();
+  const guide=page.locator('#pharosOnboarding');
+  await guide.getByRole('heading',{name:'Exports in Downloads'}).waitFor();
+  assert.equal(calls.find(call=>call.path==='/api/probe').body.downloads,true);
+  assert.equal(await guide.getByRole('button',{name:'Review export'}).count(),3);
+  assert.ok(!calls.some(call=>['/api/probe/accept','/api/chatgpt-imports','/api/claude-imports'].includes(call.path)&&call.method==='POST'));
+  await shot('sources-downloads');
+  await page.setViewportSize({width:390,height:900});
+  assert.ok(await guide.evaluate(el=>el.scrollWidth<=el.clientWidth),'download results overflow on a narrow screen');
+  for(const row of await guide.locator('.pharos-download-export').all())assert.ok(await row.evaluate(el=>{const info=el.querySelector('.pharos-download-export-info').getBoundingClientRect(),button=el.querySelector('button').getBoundingClientRect();return info.right<=button.left&&button.right<=el.getBoundingClientRect().right+1}),'export details overlap their action');
+  await shot('sources-downloads-narrow');
+  await page.setViewportSize({width:1440,height:900});
+  await guide.locator('.pharos-download-export').filter({hasText:'~/Downloads/chat.zip'}).getByRole('button',{name:'Review export'}).click();
+  assert.equal(await guide.getByLabel('Export',{exact:true}).inputValue(),'~/Downloads/chat.zip');
+  assert.ok(await guide.getByRole('radio',{name:'ChatGPT',exact:true}).isChecked());
+  await guide.getByRole('button',{name:'Back',exact:true}).click();
+  await guide.locator('.pharos-download-export').filter({hasText:'~/Downloads/manifest.json'}).getByRole('button',{name:'Review export'}).click();
+  assert.equal(await guide.getByLabel('Export',{exact:true}).inputValue(),'~/Downloads/manifest.json');
+  assert.ok(await guide.getByRole('radio',{name:'Claude.ai',exact:true}).isChecked());
+  await guide.getByRole('button',{name:'Back',exact:true}).click();
+  await guide.locator('.pharos-download-export').filter({hasText:'~/Downloads/unknown.zip'}).getByRole('button',{name:'Review export'}).click();
+  assert.ok(await guide.getByRole('button',{name:'Import',exact:true}).isDisabled());
+  await guide.getByRole('radio',{name:'Claude.ai',exact:true}).check();
+  assert.ok(await guide.getByRole('button',{name:'Import',exact:true}).isEnabled());
+});
+
 // Work Hours uses the shared chart; exercise inspection at both widths.
 for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 'cumulative', 1440], ['work_hours', 'interval', 1440], ['work_hours', 'interval', 390]]) test(`Dashboard ${topic} ${display} inspection at ${width}px focuses its links and dismisses on Escape or outside click${display === 'interval' ? '; pointer capture snaps to columns' : ''}`, { skip }, async t => {
   const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }), highlight: 'page' })}`, viewport: { width, height: 900 }, ready: '.usage-chart-bars:not(.loading) > button' });
@@ -3600,6 +3635,29 @@ for(const surface of ['import','Downloads'])test(`Claude daily export prompt cop
   await shot('daily-export-prompt');
 });
 
+test('Claude export reminder can be acknowledged and completed history stays usable', {skip}, async t=>{
+  const watch={enabled:true,available:true,browser:'',browsers:[],import_history_available:true,last_import_at:'2026-01-01T00:00:00Z',exports:[
+    {id:'completed',state:'imported',exported_at:'2026-01-01T00:00:00Z',collected:6,expected:6},
+  ],library:{workspaces:1,conversations:1,recent:[{id:workID,title:'Imported conversation',url:`/work/${workID}`}]}};
+  const {page,settled,shot}=await open(t,{url:'/settings/sources',viewport:{width:1920,height:1050},ready:'#claudeDownloadsWatchSection .claude-watch-history tbody tr',api:{
+    'GET /api/claude-imports':()=>({jobs:[],run:{running:false},watch}),
+    'POST /api/claude-imports/watch':({body})=>{if(body.action==='routine_done')watch.routine_done_at=new Date().toISOString();return watch},
+  }});
+  const root=page.locator('#claudeDownloadsWatchSection'),routine=root.locator('.pharos-claude-routine');
+  await routine.waitFor();
+  await root.locator('.claude-watch-history').scrollIntoViewIfNeeded();
+  await shot('claude-completed-exports');
+  assert.equal(await root.getByRole('link',{name:'View conversations',exact:true}).count(),1);
+  await routine.getByRole('button',{name:'I’ve set this up',exact:true}).click();
+  await routine.waitFor({state:'hidden'});
+  assert.ok(await root.locator('#claudeDownloadsWatch').evaluate(element=>element===document.activeElement),'dismissal keeps focus on a visible control');
+  await page.reload();await root.locator('.claude-watch-history tbody tr').waitFor();await settled();
+  assert.equal(await routine.isVisible(),false,'acknowledgement survives reload');
+  watch.routine_done_at='2026-01-01T00:00:00Z';watch.last_import_at=new Date().toISOString();
+  await page.evaluate(()=>window.pharosClaudeDownloads.render(document.getElementById('claudeDownloadsWatchSection')));
+  await settled();assert.equal(await routine.isVisible(),false,'a recent import hides the reminder');
+});
+
 test('Ask fullscreen inbox keeps concurrent chats running and reads only visible answers', {skip,timeout:60000}, async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'},sessions=new Map(),finish=new Map(),attempts=new Map();
   let recordFirst,releaseReceipt,receiptStarted,secondAttempt;
@@ -3853,4 +3911,27 @@ test('a late Claude settings check leaves a replacement import form and its focu
   pending.resolve({enabled:false,path:'/example/Claude',account:'local'});await completed;
   assert.equal(await field.inputValue(),'/replacement-import');
   assert.ok(await field.evaluate(el=>el===document.activeElement));
+});
+
+
+test('source limitations dialog returns focus and stays usable on a narrow screen', {skip}, async t=>{
+  const index=structuredClone(defaultApi['GET /api/index']);index.hosts[0].sources[0].kind='claude';
+  const {page,settled,shot}=await open(t,{url:'/settings/sources',viewport:{width:1920,height:1050},ready:'#sourceGrid .source-card',api:{'GET /api/index':index}});
+  await settled();
+  const info=page.getByRole('button',{name:'Ingestion limitations for claude',exact:true});
+  await info.scrollIntoViewIfNeeded();await shot('source-cards');
+  await info.click();
+  const dialog=page.getByRole('dialog',{name:'claude · ingestion limitations'});
+  await dialog.waitFor();
+  assert.ok(await dialog.getByRole('button',{name:'Close',exact:true}).evaluate(el=>document.activeElement===el));
+  await shot('source-limitations-desktop');
+  await page.setViewportSize({width:390,height:844});await shot('source-limitations-mobile');
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({state:'hidden'});
+  await page.waitForFunction(element=>document.activeElement===element,await info.elementHandle());
+  const remote=page.getByRole('button',{name:'Ingestion limitations for Claude',exact:true});
+  await remote.click();
+  await page.getByRole('dialog',{name:'Claude · ingestion limitations'}).waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(element=>document.activeElement===element,await remote.elementHandle());
 });
