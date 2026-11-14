@@ -295,25 +295,11 @@ func checkChatGPTZIP(ctx context.Context, z *zip.Reader, readAll bool) error {
 	return nil
 }
 
-// The URL names a stored attachment, never a user-supplied filesystem path.
-// Captured evidence is preferred so playback works after the download is gone.
-func (s *Server) chatGPTAsset(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/chatgpt-assets/")
-	rows, err := queryMaps(s.Catalog.reader(), `SELECT m.text,c.workspace_id FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=? AND m.kind='attachment'`, id)
-	if err != nil || len(rows) != 1 {
-		http.NotFound(w, r)
-		return
-	}
-	var asset map[string]any
-	if json.Unmarshal([]byte(firstString(rows[0]["text"])), &asset) != nil || asset["type"] != "chatgpt_asset" || asset["available"] != true {
-		http.NotFound(w, r)
-		return
-	}
-	original, member := firstString(asset["source_file"]), firstString(asset["member"])
-	if original == "" || member != "" && !claudeExportPath(member) {
-		http.NotFound(w, r)
-		return
-	}
+// exportMemberBytes reads one file an export holds: original names the
+// export (a ZIP, or with an empty member the file itself) as its source
+// recorded it, never a path a request supplied. Captured evidence is
+// preferred, so the file is readable after the download is gone.
+func (s *Server) exportMemberBytes(ctx context.Context, workspaceID string, kinds []string, original, member string) ([]byte, error) {
 	read := func(open func(string) (*sourceFile, error), file string) ([]byte, error) {
 		in, err := open(file)
 		if err != nil {
@@ -321,7 +307,7 @@ func (s *Server) chatGPTAsset(w http.ResponseWriter, r *http.Request) {
 		}
 		defer in.Close()
 		if member == "" {
-			return io.ReadAll(claudeContextReader{r.Context(), io.LimitReader(in, (64<<20)+1)})
+			return io.ReadAll(claudeContextReader{ctx, io.LimitReader(in, (64<<20)+1)})
 		}
 		info, err := in.Stat()
 		if err != nil {
@@ -341,13 +327,14 @@ func (s *Server) chatGPTAsset(w http.ResponseWriter, r *http.Request) {
 					return nil, err
 				}
 				defer v.Close()
-				return io.ReadAll(claudeContextReader{r.Context(), io.LimitReader(v, (64<<20)+1)})
+				return io.ReadAll(claudeContextReader{ctx, io.LimitReader(v, (64<<20)+1)})
 			}
 		}
 		return nil, os.ErrNotExist
 	}
 	var data []byte
-	sightings, _ := queryMaps(s.Catalog.reader(), `SELECT host_id,source_name FROM workspace_sightings WHERE workspace_id=?`, rows[0]["workspace_id"])
+	var err error
+	sightings, _ := queryMaps(s.Catalog.reader(), `SELECT host_id,source_name FROM workspace_sightings WHERE workspace_id=?`, workspaceID)
 	for _, row := range sightings {
 		host, name := firstString(row["host_id"]), firstString(row["source_name"])
 		if !validCaptureName(host) || !validCaptureName(name) {
@@ -358,17 +345,17 @@ func (s *Server) chatGPTAsset(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		manifest := view.manifest
-		if manifest.Host.ID != host || manifest.Source.Name != name || manifest.Source.Kind != "chatgpt" && manifest.Source.Kind != "chatgpt-export" {
+		if manifest.Host.ID != host || manifest.Source.Name != name || !slices.Contains(kinds, manifest.Source.Kind) {
 			continue
 		}
-		data, err = read(sourceFiles{view: view, ctx: r.Context()}.Open, file)
+		data, err = read(sourceFiles{view: view, ctx: ctx}.Open, file)
 		if err == nil {
 			break
 		}
 	}
 	if data == nil || err != nil {
 		for _, source := range s.Config().Sources {
-			if source.Kind != "chatgpt" && source.Kind != "chatgpt-export" {
+			if !slices.Contains(kinds, source.Kind) {
 				continue
 			}
 			if source.Path == original || capturePathIsWithin(original, source.Path) {
@@ -409,6 +396,32 @@ func (s *Server) chatGPTAsset(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if err == nil && data == nil {
+		err = os.ErrNotExist
+	}
+	return data, err
+}
+
+// The URL names a stored attachment, never a user-supplied filesystem path.
+// Captured evidence is preferred so playback works after the download is gone.
+func (s *Server) chatGPTAsset(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/chatgpt-assets/")
+	rows, err := queryMaps(s.Catalog.reader(), `SELECT m.text,c.workspace_id FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=? AND m.kind='attachment'`, id)
+	if err != nil || len(rows) != 1 {
+		http.NotFound(w, r)
+		return
+	}
+	var asset map[string]any
+	if json.Unmarshal([]byte(firstString(rows[0]["text"])), &asset) != nil || asset["type"] != "chatgpt_asset" || asset["available"] != true {
+		http.NotFound(w, r)
+		return
+	}
+	original, member := firstString(asset["source_file"]), firstString(asset["member"])
+	if original == "" || member != "" && !claudeExportPath(member) {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := s.exportMemberBytes(r.Context(), firstString(rows[0]["workspace_id"]), []string{"chatgpt", "chatgpt-export"}, original, member)
 	if data == nil || err != nil || len(data) > 64<<20 {
 		http.NotFound(w, r)
 		return

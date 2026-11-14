@@ -1820,3 +1820,92 @@ CREATE TABLE IF NOT EXISTS claude_chat_settings_observations (
  PRIMARY KEY(host_id,source_name,account,snapshot_id,conversation_uuid)
 );
 CREATE INDEX IF NOT EXISTS claude_chat_settings_conversation_idx ON claude_chat_settings_observations(account,conversation_uuid,observed_at);
+
+-- Files and other objects a message refers to, as its source recorded them
+-- (message_assets.go). asset_key is the source's identity for the object,
+-- the same wherever it is referred to. availability is 'stored' (source_file
+-- and member locate the bytes in the captured source), 'text_only' or
+-- 'reconstructed' (content holds the text) or 'not_exported'.
+-- attachment_message_id is the attachment message that carries the same
+-- file's source descriptor, when one does.
+CREATE TABLE IF NOT EXISTS message_assets (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL,
+  attachment_message_id TEXT,
+  asset_key TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  relation TEXT NOT NULL,
+  agent_authored INTEGER NOT NULL DEFAULT 0,
+  availability TEXT NOT NULL,
+  mime_type TEXT,
+  size_bytes INTEGER,
+  width INTEGER,
+  height INTEGER,
+  duration_ms INTEGER,
+  offset_ms INTEGER,
+  version TEXT,
+  versions TEXT,
+  source_file TEXT,
+  member TEXT,
+  details TEXT,
+  -- Last, so reading the columns before it never walks a picture's bytes.
+  content BLOB
+);
+CREATE INDEX IF NOT EXISTS message_assets_conversation_idx ON message_assets(conversation_id, message_id, ordinal);
+CREATE INDEX IF NOT EXISTS message_assets_message_idx ON message_assets(message_id);
+CREATE INDEX IF NOT EXISTS message_assets_key_idx ON message_assets(asset_key);
+-- The few calls that published an artifact, among millions of tool calls:
+-- they tie an exported artifact to the conversation that made it.
+CREATE INDEX IF NOT EXISTS tool_calls_artifact_idx ON tool_calls(conversation_id) WHERE tool_name='Artifact';
+
+-- Web pages and other references a message drew on; cited is 0 for one the
+-- agent read without citing.
+CREATE TABLE IF NOT EXISTS message_sources (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  site TEXT NOT NULL DEFAULT '',
+  snippet TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'web',
+  cited INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(message_id, ordinal)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS message_sources_conversation_idx ON message_sources(conversation_id);
+
+-- What a source records about a message beside its text (message_assets.go):
+-- where in the text each citation stands, how much of a reply was spoken
+-- aloud, whether its thinking was cut off. details is a JSON object.
+CREATE TABLE IF NOT EXISTS message_notes (
+  message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  details TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS message_notes_conversation_idx ON message_notes(conversation_id);
+
+-- What a conversation holds beside its words, a row a kind with how many
+-- (conversation_content.go): derived from the three tables above and the
+-- calls that published an artifact, so a search can ask for conversations
+-- with voice, uploads or artifacts.
+CREATE TABLE IF NOT EXISTS conversation_content (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  feature TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  PRIMARY KEY(conversation_id, feature)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS conversation_content_feature_idx ON conversation_content(feature, conversation_id);
+
+-- Web images a source shows by address, fetched once after import and kept
+-- by that address: reindexing a conversation keeps what was fetched.
+CREATE TABLE IF NOT EXISTS remote_assets (
+  url TEXT PRIMARY KEY,
+  mime_type TEXT,
+  content BLOB,
+  fetched_at TEXT NOT NULL,
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 1
+);

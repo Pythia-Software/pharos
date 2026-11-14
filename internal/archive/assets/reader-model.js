@@ -37,6 +37,107 @@ function messageJSON(message,raw=false){
 }
 function commonEventText(value){if(!value||typeof value!=='object'||Array.isArray(value))return'';const message=value.message,blocks=Array.isArray(message?.content)?message.content:Array.isArray(value.content)?value.content:[],texts=blocks.filter(block=>block&&['text','input_text','output_text'].includes(block.type)&&typeof block.text==='string').map(block=>block.text);if(texts.length)return texts.join('\n\n');if(typeof message==='string')return message;if(typeof message?.content==='string')return message.content;if(typeof value.text==='string')return value.text;if(typeof value.output_text==='string')return value.output_text;if(['agent_message','user_message','message'].includes(value.type)&&typeof value.content==='string')return value.content;return''}
 function shortText(value,limit=150){const text=String(value??'').replace(/\s+/g,' ').trim();return text.length>limit?text.slice(0,limit-1)+'…':text}
+// voiceSchedule lays a voice conversation's lines end to end, in
+// milliseconds from the start: each line plays after the one before it,
+// for its recorded or read-aloud length, or an estimate until that is known.
+// Lines are never placed by their timestamps: a line read aloud by the
+// system voice takes a different time than the reply the person heard, so
+// the source's overlaps cannot be reproduced.
+function voiceSchedule(lines){
+  let total=0;
+  const spans=lines.map((line,index)=>{const length=Math.max(1,line.duration||line.estimate||0),start=total;total+=length;return{line,index,start,length}});
+  return{total,spans};
+}
+// highlightCode cuts source text into runs for display: comments, strings,
+// numbers and keywords by the file's extension, and everything else plain.
+// It reads the text once with one pattern per family of languages and is
+// not a parser: it is for reading a file, a diff or a preview, not for
+// judging the code. An extension it does not know, or a very long text, is
+// one plain run.
+const CODE_WORDS={
+  c:'abstract as async await bool boolean break case catch chan char class const continue default defer delete do double else enum export extends false final finally float fn for from func function go if implements import in instanceof int interface let long map match mut new nil null package private protected pub public range return select self static string struct super switch this throw true try type typeof undefined use var void while yield',
+  hash:'False None True alias and as assert async await begin break case class continue def del do done echo elif else end esac except export false fi finally for from function global if import in is lambda local module nil not null or pass raise require rescue return self then true try unless until when while with yield',
+  sql:'add all alter and as asc begin between by case commit create default delete desc distinct drop else end exists from group having in index insert into is join key left limit not null on or order primary references right select set table then union unique update values view when where with',
+};
+const CODE_FAMILIES={c:'c cc cpp cs css go h hpp java js json jsonc jsx kt mjs cjs php rs scss swift ts tsx',hash:'bash py r rb sh toml yaml yml zsh pl',sql:'sql',markup:'htm html svg xml vue'};
+const CODE_PATTERNS={
+  c:/(\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|("(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?|`(?:\\[\s\S]|[^`\\])*`?)|(\b\d[\w.]*)|([A-Za-z_$][\w$]*)/g,
+  hash:/(#[^\n]*)|("""[\s\S]*?(?:"""|$)|'{3}[\s\S]*?(?:'{3}|$)|"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)|(\b\d[\w.]*)|([A-Za-z_][\w]*)/g,
+  sql:/(--[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|('(?:''|[^'])*'?|"(?:[^"])*"?)|(\b\d[\w.]*)|([A-Za-z_][\w]*)/g,
+  markup:/(<!--[\s\S]*?(?:-->|$))|("[^"\n]*"?|'[^'\n]*'?)|()(<\/?[A-Za-z][\w:-]*|\/?>)/g,
+};
+const codeFamilyByExtension=(()=>{const found={};for(const [family,names]of Object.entries(CODE_FAMILIES))for(const name of names.split(' '))found[name]=family;return found})();
+const codeWordSets={};
+function codeFamily(name){const match=/\.([A-Za-z0-9]+)$/.exec(String(name||''));return match?codeFamilyByExtension[match[1].toLowerCase()]||'':''}
+function highlightCode(text,name){
+  text=String(text??'');const family=codeFamily(name);if(!family||text.length>400000)return[{kind:'',text}];
+  const words=family==='markup'?null:codeWordSets[family]||(codeWordSets[family]=new Set(CODE_WORDS[family].split(' '))),insensitive=family==='sql',runs=[];let at=0;
+  const push=(kind,value)=>{if(!value)return;const last=runs[runs.length-1];if(last&&last.kind===kind)last.text+=value;else runs.push({kind,text:value})};
+  for(const match of text.matchAll(CODE_PATTERNS[family])){
+    const kind=match[1]!==undefined?'comment':match[2]!==undefined?'string':match[3]?'number':family==='markup'||words.has(insensitive?match[0].toLowerCase():match[0])?'keyword':'';
+    if(!match[0])continue;push('',text.slice(at,match.index));push(kind,match[0]);at=match.index+match[0].length;
+  }
+  push('',text.slice(at));return runs;
+}
+// ChatGPT's export writes what its app drew inside a reply (a citation, a
+// named place, a widget) as private-use runs: U+E200 type U+E202 payload
+// U+E201. The reader shows the words: a named thing by its name, a widget
+// by what it was, and nothing for citations and image groups, which the
+// message's sources and attachments present. The mask (one flag per
+// character, or empty) is cut the same way, so highlights stay on their words.
+const EXPORT_MARKER=/([^-]*)(?:([^]*))?/g;
+function exportMarkerWords(type,payload){
+  if(type==='cite'||type==='filecite'||type==='imagegroup'||type==='image_group'||type==='visualize')return '';
+  let value=null;try{value=JSON.parse(payload)}catch{}
+  if(type==='entity')return Array.isArray(value)?String(value[1]??''):'';
+  const name=value&&typeof value==='object'&&!Array.isArray(value)?Object.keys(value)[0]:'';
+  return '['+String(name||type||'widget').replace(/_/g,' ')+']';
+}
+function exportMarkerText(text,mask='',mark=null){
+  text=String(text??'');if(!text.includes(''))return{text,mask};
+  let shown='',flags='',at=0;const keep=(from,to)=>{shown+=text.slice(from,to);if(mask)flags+=mask.slice(from,to).padEnd(to-from,'0')};
+  let count=0;
+  for(const match of text.matchAll(EXPORT_MARKER)){
+    keep(at,match.index);const words=mark?.(count++)??exportMarkerWords(match[1],match[2]??'');shown+=words;if(mask)flags+=(mask[match.index]||'0').repeat(words.length);at=match.index+match[0].length;
+  }
+  keep(at,text.length);return{text:shown,mask:flags};
+}
+// Where a reply cites a page, the reader sets a chip naming the site.
+// citedText puts each into the text as U+E000, a number, U+E001: the number
+// is the address's place in cites. A Claude export gives, beside the text,
+// the characters each citation covers (notes.citations), and the chip goes
+// after them; a ChatGPT export's text holds a marker where each thing was
+// drawn, and notes.marks gives, for each marker in turn, the addresses
+// cited there. The mask is cut the same way.
+function citedText(text,mask='',notes=null){
+  text=String(text??'');const cites=[],token=url=>{let at=cites.indexOf(url);if(at<0)at=cites.push(url)-1;return ''+at+''},web=url=>/^https?:\/\//.test(url||'');
+  const ends=new Map();
+  for(const span of Array.isArray(notes?.citations)?notes.citations:[]){const end=Number(span?.end),url=String(span?.url||'');if(!Number.isInteger(end)||end<=0||!web(url))continue;const list=ends.get(end)||[];if(!list.includes(url))list.push(url);ends.set(end,list)}
+  if(ends.size){
+    // The export counts characters; a string here counts UTF-16 units.
+    let shown='',flags='',from=0,points=0;const keep=to=>{shown+=text.slice(from,to);if(mask)flags+=mask.slice(from,to).padEnd(to-from,'0');from=to};
+    for(let at=0;;points++){
+      if(ends.has(points)){keep(at);const chips=ends.get(points).map(token).join('');shown+=chips;if(mask)flags+='0'.repeat(chips.length)}
+      if(at>=text.length)break;at+=text.codePointAt(at)>0xffff?2:1;
+    }
+    keep(text.length);text=shown;mask=flags;
+  }
+  const marks=Array.isArray(notes?.marks)?notes.marks:null;
+  const shown=exportMarkerText(text,mask,marks?at=>Array.isArray(marks[at])?[...new Set(marks[at].filter(web))].map(token).join(''):null:null);
+  return{text:shown.text,mask:shown.mask,cites};
+}
+// What a source says of a message beside its words (message.notes), as
+// lines to set under it.
+function messageNoteLines(message){
+  const notes=message?.notes,lines=[];if(!notes||typeof notes!=='object')return lines;
+  if(Number.isFinite(notes.spoken_chars)){
+    const length=[...String(message.text??'')].length,spoken=notes.spoken_chars;
+    lines.push(spoken<=0?'Voice reply, not read aloud':length&&spoken<length*.9?`Read aloud in part: about ${Math.max(1,Math.round(spoken/length*100))}% was spoken`:'Read aloud');
+  }
+  if(notes.cut_off)lines.push('Thinking was cut off');
+  if(notes.truncated)lines.push('Thinking is shortened in the export');
+  return lines;
+}
 function displayText(message){const value=messageJSON(message);return commonEventText(value)||(value?eventDescription(value):String(message?.text??''))}
 function eventDescription(value){if(Array.isArray(value))return `${value.length} recorded items`;if(!value||typeof value!=='object')return String(value??'');return shortText([value.type||value.kind||'Recorded event',value.subtype,value.description||value.summary||value.status].filter(Boolean).join(' · '),180)}
 
@@ -97,6 +198,22 @@ function chatGPTMessageContext(message){
   const referenceKinds=[...new Set((Array.isArray(metadata.content_references)?metadata.content_references:[]).map(value=>value?.type).filter(value=>typeof value==='string'))];
   return {references,directions,referenceKinds,model:typeof metadata.model_slug==='string'?metadata.model_slug:'',clipped:!!message.raw_clipped};
 }
+// Where a conversation an export gave is on the web, for the kinds whose
+// address is its ID there: a chat, a cloud session, an artifact or a
+// project. The page needs the person's own sign-in, and may be gone.
+const webID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function conversationWebLink(conversation){
+  const id=String(conversation?.native_id||''),claude=(path,value)=>webID.test(value)?{url:'https://claude.ai/'+path+'/'+value,site:'claude.ai'}:null;
+  switch(conversation?.harness){
+    case 'claude-ai-export':return claude('chat',id);
+    case 'chatgpt-export':return webID.test(id)?{url:'https://chatgpt.com/c/'+id,site:'chatgpt.com'}:null;
+    case 'claude-code-cloud-export':return /^cse_[0-9A-Za-z]+$/.test(id)?{url:'https://claude.ai/code/'+id,site:'claude.ai'}:null;
+    case 'claude-export-document':{const [,kind,name]=/^claude-export:(artifacts|projects)\/([^/]+?)(?:\.json)?$/.exec(id)||[];return kind?claude(kind==='artifacts'?'artifact':'project',name):null}
+  }
+  return null;
+}
+// An artifact a conversation refers to by its ID has the same page.
+function artifactWebLink(asset){const id=String(asset?.asset_key||'').replace(/^claude-artifact:/,'');return asset?.kind==='artifact'&&webID.test(id)?{url:'https://claude.ai/artifact/'+id,site:'claude.ai'}:null}
 function chatGPTConversationContext(conversation){
   if(conversation.provider!=='chatgpt')return null;
   const evidence=(conversation.messages||[]).map(message=>messageJSON(message)).find(value=>value?.source==='chatgpt_export');
@@ -919,7 +1036,7 @@ function proseSummary(text){const segments=xmlSegments(text),prose=segments.filt
 function messageSummary(message){return proseSummary(displayText(message))}
 function compactMessageSummary(message){
   const inline=new Set(['a','span','strong','em','del','code']),text=item=>typeof item==='string'?item:(item.children||[]).map(text).join('')+(inline.has(item.tag)?'':' ');
-  return shortText(text(markdownTree(messageSummary(message))),640);
+  return shortText(text(markdownTree(exportMarkerText(messageSummary(message)).text)),640);
 }
 
 // Authorship offsets refer to UTF-8 bytes in the stored body. Keep that body

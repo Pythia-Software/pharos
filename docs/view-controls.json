@@ -3504,6 +3504,15 @@
       "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
+      "key": "b6d06cb0239d735d:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "assetWidget",
+      "tag": "button",
+      "control": "'button', 'asset-widget-open', 'Open'",
+      "contract": "transient",
+      "reason": "Opens the temporary attachment viewer on a widget already shown in the reply; it does not change view or query state."
+    },
+    {
       "key": "60980fd60c4b63b2:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "attachMessageRaw",
@@ -3745,6 +3754,26 @@
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
     },
     {
+      "key": "8bfa05a0358ec457:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "messageAssetsView",
+      "tag": "summary",
+      "control": "'summary', '', `${spares.length} more image${spares.length===1?'':'s'} found, not shown in the reply`",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Summary of the spare images disclosure; the shared classic disclosure runtime owns its open state through data-view-key."
+    },
+    {
+      "key": "f433208de4bab81f:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "messageAssetsView",
+      "tag": "details",
+      "control": "'details', 'asset-spares'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Shared classic disclosure binding uses the stable message identity in data-view-key; opening shows the images a search found that the reply did not show."
+    },
+    {
       "key": "1ac1d20bf5578b50:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "messageBody",
@@ -3781,6 +3810,26 @@
       "reason": "Clipboard actions are transient; Highlight Link writes the canonical reveal attention target before copying the URL."
     },
     {
+      "key": "96a822324255483c:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "messageSourcesView",
+      "tag": "details",
+      "control": "'details', 'message-sources'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Shared classic disclosure binding uses the stable message identity in data-view-key; opening lists the sources the message already carries."
+    },
+    {
+      "key": "e38c391cb38960f4:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "messageSourcesView",
+      "tag": "summary",
+      "control": "'summary', ''",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Summary of the message sources disclosure; the shared classic disclosure runtime owns its open state through data-view-key."
+    },
+    {
       "key": "3f6f4aa5f5684795:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "mount",
@@ -3788,6 +3837,51 @@
       "control": "'select', 'conversation-selector'",
       "contract": "action",
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
+    },
+    {
+      "key": "4f179deebd5cf692:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "openAssetDialog",
+      "tag": "button",
+      "control": "'button', 'asset-dialog-button', 'Show this page'",
+      "contract": "action",
+      "reason": "Consent to render one exported page a person or website wrote, for this opening of the viewer only; nothing is remembered."
+    },
+    {
+      "key": "85cd8451b963d6fd:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "openAssetDialog",
+      "tag": "button",
+      "control": "'button', 'asset-dialog-button', label",
+      "contract": "transient",
+      "reason": "Zoom controls of the temporary attachment viewer; zoom and pan are not view or query state."
+    },
+    {
+      "key": "db7d7e47307abbea:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "openAssetDialog",
+      "tag": "button",
+      "control": "'button', 'asset-dialog-button', 'Comments'",
+      "contract": "transient",
+      "reason": "Shows or hides the comments beside an artifact in the temporary attachment viewer; nothing outside this opening of the viewer changes."
+    },
+    {
+      "key": "e9fa6606430bcce8:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "openAssetDialog",
+      "tag": "button",
+      "control": "'button', 'asset-dialog-close', '×'",
+      "contract": "transient",
+      "reason": "Closes the temporary attachment viewer; it does not change view or query state."
+    },
+    {
+      "key": "81ba1be63f5cd631:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "picker",
+      "tag": "select",
+      "control": "'select', 'asset-dialog-button asset-dialog-select'",
+      "contract": "transient",
+      "reason": "Chooses which version or page of an artifact the temporary attachment viewer shows; the viewer is not view or query state and opens on the current version."
     },
     {
       "key": "3943396b6748787d:0",
@@ -4321,6 +4415,15 @@
       "control": "'button', '', 'Show hidden annotations'",
       "contract": "view.reader_highlight_hidden",
       "reason": "Restores hidden annotations for this conversation through the registered reader_highlight_hidden field."
+    },
+    {
+      "key": "5d68c5a5a964104a:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "voiceLineButton",
+      "tag": "button",
+      "control": "'button', 'voice-line-play'",
+      "contract": "transient",
+      "reason": "Starts or pauses audio playback from one line; playback position is transient media state, like scroll."
     },
     {
       "key": "33619209c2062df5:0",
@@ -8273,6 +8376,24 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "0e16829cc0b46e54:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderVoiceRow",
+      "tag": "button",
+      "control": "aria-label={`Play from line ${span.index+1}`} onClick={()=>voice.playFrom(line.id)}",
+      "contract": "transient",
+      "reason": "Starts audio playback from one line of the conversation; playback position is transient media state, like scroll."
+    },
+    {
+      "key": "9fbce86d5d39b924:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderVoiceRow",
+      "tag": "button",
+      "control": "onClick={voice.toggle}",
+      "contract": "transient",
+      "reason": "Starts or pauses audio playback of the conversation; playback is transient media state, like scroll."
     },
     {
       "key": "110c067b8fa806e8:0",

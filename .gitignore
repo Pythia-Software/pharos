@@ -16,6 +16,7 @@ internal/archive/assets/query-tables.js
 internal/archive/assets/query-tables.css
 internal/archive/assets/data-guide.js
 internal/archive/assets/data-guide.css
+internal/archive/assets/widget-chart.js
 internal/uifeedback/assets/inbox.js
 internal/uifeedback/assets/inbox.css
 # Rendered by npm --prefix web run build (web/generate-site-map.mjs).

@@ -1,5 +1,5 @@
 {
-  "index_version": "chatgpt-v3",
+  "index_version": "chatgpt-v4",
   "records": [
     {
       "SourceID": "c0000000-0000-4000-8000-000000000001",
@@ -254,6 +254,26 @@
               "RawText": "{\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"2, 3, 5 and 7.\"]},\"create_time\":1793720014,\"id\":\"answer\",\"metadata\":{\"model_slug\":\"gpt-5\",\"reasoning_effort\":\"high\",\"service_tier\":\"priority\"},\"recipient\":\"all\"}",
               "SourceOrder": 0,
               "Selected": true
+            }
+          ],
+          "Assets": [
+            {
+              "MessageNativeID": "ask",
+              "AttachmentNativeID": "ask:part:0",
+              "Ref": "image_asset_pointer",
+              "Kind": "file",
+              "Name": "image_asset_pointer",
+              "Relation": "uploaded",
+              "Availability": "not_exported"
+            },
+            {
+              "MessageNativeID": "ask",
+              "AttachmentNativeID": "ask:part:1",
+              "Ref": "real_time_user_audio_video_asset_pointer",
+              "Kind": "file",
+              "Name": "real_time_user_audio_video_asset_pointer",
+              "Relation": "uploaded",
+              "Availability": "not_exported"
             }
           ]
         }

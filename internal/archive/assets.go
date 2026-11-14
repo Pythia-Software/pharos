@@ -15,7 +15,7 @@ import (
 // cannot compile a service without its frontend. Run tools/setup.sh before
 // Go builds or tests.
 //
-//go:embed assets assets/query-tables.js assets/query-tables.css assets/data-guide.js assets/data-guide.css assets/site-map.json assets/ask-suggestions.json
+//go:embed assets assets/query-tables.js assets/query-tables.css assets/data-guide.js assets/data-guide.css assets/widget-chart.js assets/site-map.json assets/ask-suggestions.json
 var assets embed.FS
 
 func schemaSQL() string {

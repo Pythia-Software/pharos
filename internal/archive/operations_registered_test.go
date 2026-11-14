@@ -57,6 +57,7 @@ var unregisteredWorkAllowed = map[string]allowedWork{
 	"agent_events_run.go:chainAgentEvents":           {1, "the power watch inside a backlog agent events run (the analysis.agent_events operation), which stops it when this Mac goes onto battery"},
 	"worker.go:serve":                                {1, "the labeler worker binary's frame reader (cmd/pharos-labeler-ort): a separate process that never opens a catalog"},
 	"worker.go:start":                                {1, "the labeler worker binary's model runner (cmd/pharos-labeler-ort): a separate process that never opens a catalog"},
+	"speech.go:speechConversation":                   {2, "reads a conversation's lines aloud for playback, a few at a time: bounded by its line count, cancelled and joined with the service, and writes only disposable audio files beside the support directory, never the catalog"},
 	"labeling_run.go:loop":                           {1, "the offline `pharos labeling run` command's bounded worker pool; it runs outside the service and journals its work in the dataset's own ledger"},
 	"thinking.go:handleThinking":                     {2, "request handling: the Overview's compaction pairs and traces computed in parallel over the request's records; writes nothing"},
 	"thinking_models.go:thinkingModels":              {1, "a bounded worker per model inside a Thinking fit, which the request or cache build waits for; writes nothing"},

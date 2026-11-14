@@ -1,4 +1,4 @@
-import React,{useEffect,useId,useMemo,useRef,useState} from 'react';
+import React,{useEffect,useId,useMemo,useRef,useState,useSyncExternalStore} from 'react';
 import {createPortal} from 'react-dom';
 import {createRoot} from 'react-dom/client';
 import {RibbonNodeDetails,SessionRibbon} from './label-session-ribbon';
@@ -10,6 +10,7 @@ import {TimelineLegend,timelineLegendCounts,timelineLegendDomains,timelineToolCa
 import {timelineEventVisible,updateTimelineVisibility,visibleTimelineTree,type TimelineVisibility} from './timeline-visibility';
 import {useViewEntry,useViewState} from './view-state';
 import {ViewDisclosure} from './view-disclosure';
+import {voiceClock,type ReaderVoice} from './reader-navigator-model';
 import {availableReaderNavigators,readerNavigatorClock,readerNavigatorScale,nearestReaderMessage,type ReaderNavigatorData} from './reader-navigator-model';
 import {trackReaderViewport} from './reader-navigator-layout';
 import './reader-navigator.css';
@@ -28,6 +29,18 @@ function ReaderRibbonSection({node,sessionID,range,scale,eventLayer,visibility,j
   return <ViewDisclosure viewKey={viewKey} className="reader-section-node" summary={<>{label}{ribbon}</>}>{open?node.children.map(child=><ReaderRibbonSection key={child.id} node={child} sessionID={sessionID} range={range} scale={scale} eventLayer={eventLayer} visibility={visibility} jump={jump} timed={timed} depth={depth+1}/>):null}</ViewDisclosure>;
 }
 
+/** The tape of a voice conversation: each line over its message on the session's axis, your lines above and the replies below. */
+function ReaderVoiceRow({voice,at,position}:{voice:ReaderVoice;at:(id:string)=>[number,number]|undefined;position:(start:number,end:number)=>React.CSSProperties}){
+  const state=useSyncExternalStore(voice.subscribe,voice.snapshot),plan=state.plan,spans=plan.spans.filter(span=>state.speech||span.line.recorded);
+  const read=spans.length-voice.recorded,sounding=new Set(state.playing?state.active:[]);
+  const status=!state.speech?'recordings only':state.pending?`reading ${state.measured}/${read}`:read?`${read} read aloud`:'';
+  return <div className="reader-navigator-row is-voice">
+    <span className="reader-navigator-label reader-voice-control"><button type="button" className="reader-voice-play" aria-pressed={state.playing} onClick={voice.toggle} title={state.speech?'Plays your recordings; the system voice reads the lines the export kept no recording of. Lines play one after another.':'Plays your recordings. Reading the other lines aloud is not available on this computer.'}>{state.playing?'❚❚ Pause':'▶ Play'}</button><small>{voiceClock(plan.total)}{status?' · '+status:''}</small></span>
+    <div className="reader-navigator-track reader-navigator-voice" role="group" aria-label="Voice conversation. Choose a line to play from it.">
+      {spans.map(span=>{const line=span.line,range=at(line.id);if(!range)return null;return <button key={line.id} type="button" className={`reader-voice-line is-${line.role}${line.recorded?' is-recorded':''}${line.duration?'':' is-estimated'}${sounding.has(line.id)?' is-sounding':''}${state.current===line.id?' is-current':''}`} style={position(range[0],range[1])} title={`${line.role==='user'?'You':'Reply'} · ${line.recorded?'recording':'read aloud'} · ${line.duration?'':'about '}${voiceClock(span.length)}`} aria-label={`Play from line ${span.index+1}`} onClick={()=>voice.playFrom(line.id)}/>;})}
+    </div>
+  </div>;
+}
 function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavigatorData;keyHost:HTMLElement}){
   const [visibility,setVisibility]=useViewState<TimelineVisibility>('timeline_visibility',{});
   const [skipIdle]=useViewState<boolean>('timeline_idle',true);
@@ -63,7 +76,7 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
     }
     const id=selected??nearestReaderMessage(clock.byID,scale.time(Math.max(0,Math.min(1,fraction))));if(id)data.jumpMessage(id);
   };
-  const available=availableReaderNavigators(data,clock.byID),hasContext=available.includes('context'),hasTurns=available.includes('turns'),hasBars=timelineVisible||hasContext||hasTurns,contextNote=useId();
+  const available=availableReaderNavigators(data,clock.byID),hasContext=available.includes('context'),hasTurns=available.includes('turns'),hasVoice=!!data.voice,hasBars=timelineVisible||hasContext||hasTurns||hasVoice,contextNote=useId();
   const sessionKey=`reader-timeline:${data.sessionID}:session`,[sessionOpen]=useViewEntry('disclosures',sessionKey,false);
   const expandable=singleSession&&!!visibleTree?.children.length;
   const timelineLabel=expandable?<span className="reader-section-label"><strong>Timeline</strong><small>{ribbonEventCount(visibleTree!.items)}</small>{chevron}</span>:<span className="reader-navigator-label">Timeline</span>;
@@ -86,6 +99,7 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
             {data.turns.map((turn,index)=>{const spans=turn.messages.flatMap(id=>{const span=at(id);return span?[span]:[];});if(!spans.length)return null;const start=Math.min(...spans.map(span=>span[0])),end=Math.max(...spans.map(span=>span[1]));return <button type="button" className="reader-navigator-turn" key={turn.messages[0]??index} style={position(start,end)} title={`Turn ${index+1} · ${turn.label}`} onClick={()=>{const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}><span>{index+1}</span></button>;})}
           </div>
         </div>:null}
+        {data.voice?<ReaderVoiceRow voice={data.voice} at={at} position={position}/>:null}
         <div className="reader-navigator-window-track" aria-hidden="true"><span className="reader-navigator-window" hidden/><i className="reader-navigator-boundary" hidden/><i className="reader-navigator-boundary" hidden/></div>
       </div>
       {/* Shown over the transcript while the context bar is hovered. */}
