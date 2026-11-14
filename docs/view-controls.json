@@ -8251,6 +8251,15 @@
       "reason": "Show All writes reader_hidden_tags through the classic transcript tag filter."
     },
     {
+      "key": "42699c5a07610bb1:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "HumanEventsRows",
+      "tag": "span",
+      "control": "aria-label=\"Human events. Click a marker to reveal its text.\" onClick={reveal}",
+      "contract": "transient",
+      "reason": "Clicking empty space on a Human events track scrolls to and highlights the nearest message; scroll position is transient and the row's fold uses ViewDisclosure."
+    },
+    {
       "key": "c99c793200b1315c:0",
       "file": "web/src/reader-navigator.tsx",
       "owner": "HumanEventsRows",
@@ -8260,6 +8269,15 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "eb6d693c1018c74f:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "HumanEventsRows",
+      "tag": "span",
+      "control": "aria-label={`Human events · ${dimension.name}`} onClick={reveal}",
+      "contract": "transient",
+      "reason": "Clicking empty space on a Human events track scrolls to and highlights the nearest message; scroll position is transient and the row's fold uses ViewDisclosure."
     },
     {
       "key": "442d5f3a17af7e2c:0",

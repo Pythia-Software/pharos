@@ -717,6 +717,9 @@ const ROUTES = [
     assert.equal(await short.locator('.message-toggle').isVisible(),false,'and offers nothing more to show');
     await stacked.hover();assert.match(await page.getByRole('tooltip').innerText(),/Intent.*Bounds|Bounds.*Intent/s);
     assert.ok(await message.locator('mark.eng-tint').count()>1,'hovering lights the whole of each annotation');
+    // Moving on to typed text without an annotation takes the tint away with the popover's subject.
+    const plainTyped=message.locator('mark.human-written:not(.engagement)').first();
+    await plainTyped.hover();await message.locator('mark.eng-tint').first().waitFor({state:'detached'});
     await page.mouse.move(2,2);
     // Human events fold out of the timeline, then by dimension: markers stay inside the row without covering one another, and hovering one opens its card.
     const navigator=page.locator('.reader-navigator'),inspector=page.locator('.lt-ribbon-inspector');
@@ -725,7 +728,10 @@ const ROUTES = [
     await human.locator('> summary .reader-human-event').first().waitFor();
     const markers=await human.locator('> summary .reader-human-track').evaluate(track=>{const bounds=track.getBoundingClientRect();return [...track.querySelectorAll('button')].map(button=>{const box=button.getBoundingClientRect();return {left:box.left-bounds.left,right:box.right-bounds.left,top:box.top-bounds.top,bottom:box.bottom-bounds.top,width:bounds.width,height:bounds.height};});});
     assert.ok(markers.every((marker,index)=>marker.left>=-.5&&marker.right<=marker.width+.5&&marker.top>=-.5&&marker.bottom<=marker.height+.5&&markers.every((other,at)=>at<=index||other.left>=marker.right-2.5||other.right<=marker.left+2.5||other.top>=marker.bottom-2.5||other.bottom<=marker.top+2.5)),`human event markers stay apart inside their row: ${JSON.stringify(markers)}`);
+    // Empty track between markers reveals a message like the rows above; it does not fold the row.
+    await human.locator('> summary .reader-human-track').click({position:{x:1,y:1}});
     await human.locator('> summary .reader-section-label').click();
+    assert.equal(await human.evaluate(row=>row.open),true,'only the label folds the Human events row');
     await human.locator('.reader-human-dimension .reader-human-event').first().hover();
     await inspector.locator('.human-event-card blockquote').waitFor();await app.shot('human-events');
     // The other expanded rows answer a hover with a card too: a message on Message modes, a turn on Turns.
@@ -1085,7 +1091,10 @@ const ROUTES = [
     check: async page => { const marker = page.locator(".lt-human-dimension .reader-human-event").first();
       assert.equal(await page.locator(".lt-human-events").count(), 0);
       await page.evaluate(() => window.pharosView.write("timeline_visibility", {}));
-      await marker.waitFor({ state: "attached" }); await marker.focus(); await page.locator(".lt-ribbon-inspector .human-event-card").waitFor(); await marker.blur(); } },
+      await marker.waitFor({ state: "attached" }); await marker.focus(); await page.locator(".lt-ribbon-inspector .human-event-card").waitFor(); await marker.blur();
+      // Alone in the Key, they are still there: the lane keeps its fold with nothing else to draw.
+      await page.evaluate(() => window.pharosView.write("timeline_visibility", { sections: { values: ["human"], excluded: false } }));
+      await page.locator(".lt-session-node .lt-session-row-label svg.event-link-glyph").first().waitFor({ state: "detached" }); await marker.waitFor({ state: "attached" }); } },
   // Unsettled evidence: an ≈ session count, "+N more" relatives and pending events.
   { name: "Workspace overview with pending evidence", url: work, api: pendingEvidenceApi, ready: ".delegation-table .delegation-relatives" },
   { name: "Workspace Timeline with pending events", url: `${work}?explorer=timeline`, api: pendingEvidenceApi, ready: ".lt-recursive-lane .lt-session-notice", check: page => page.locator("[role=status].delegation-truncation").first().waitFor() },

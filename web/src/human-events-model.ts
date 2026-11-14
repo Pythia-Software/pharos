@@ -37,6 +37,11 @@ export function humanEventDimensions(events:HumanEvent[]):HumanEventDimension[]{
   return [...dimensions.values()].sort((a,b)=>a.slot-b.slot||a.id.localeCompare(b.id));
 }
 
+/** Whether a Timeline row folds out: it has rows of its own kinds, or Human
+ * events to show under it. A row left with only Human events (every other
+ * section hidden in the Key) still opens onto them. */
+export function timelineRowExpands(children:number,humanGroups:number){return children>0||humanGroups>0;}
+
 /** Each message's markers in timeline order. `visible` is the Timeline key's
  * choice by dimension ID; a message off the clock or left without a marker has no
  * group. */

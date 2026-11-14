@@ -12,7 +12,7 @@ import {useViewEntry,useViewState} from './view-state';
 import {ViewDisclosure} from './view-disclosure';
 import {availableReaderNavigators,readerNavigatorClock,readerNavigatorScale,nearestReaderMessage,type ReaderNavigatorData} from './reader-navigator-model';
 import {trackReaderViewport} from './reader-navigator-layout';
-import {humanEventDimensions,humanEventGroups,humanEventLayout,humanEventLetter,type HumanEvent,type HumanEventGroup,type HumanEventSlot} from './human-events-model';
+import {humanEventDimensions,humanEventGroups,humanEventLayout,humanEventLetter,timelineRowExpands,type HumanEvent,type HumanEventGroup,type HumanEventSlot} from './human-events-model';
 import {HumanEventMarkers} from './human-events-rows';
 import {Icon} from './icons';
 import './reader-navigator.css';
@@ -36,18 +36,20 @@ const HUMAN_ROW_HEIGHT=28;
  * messages, placed in that message's slot by where the annotation starts.
  * Like Agent events, the row folds out into one row per kind (here,
  * dimension); a marker keeps its x on both. */
-function HumanEventsRows({sessionID,groups,slots,trackPx,jump,depth=0}:{sessionID:string;groups:HumanEventGroup[];slots:Map<string,HumanEventSlot>;trackPx:number;jump:(event:HumanEvent)=>void;depth?:number}){
+function HumanEventsRows({sessionID,groups,slots,trackPx,jump,jumpAt,depth=0}:{sessionID:string;groups:HumanEventGroup[];slots:Map<string,HumanEventSlot>;trackPx:number;jump:(event:HumanEvent)=>void;jumpAt:(fraction:number)=>void;depth?:number}){
   const viewKey=`reader-timeline:${sessionID}:human`,[open]=useViewEntry('disclosures',viewKey,false);
   const inspector=useRibbonInspector({interactive:false});
   const events=groups.flatMap(group=>group.events),dimensions=humanEventDimensions(events);
   const markers=(row:HumanEvent[])=><HumanEventMarkers events={row} slots={slots} trackPx={trackPx} height={HUMAN_ROW_HEIGHT} inspector={inspector} jump={jump}/>;
+  // Between markers a track answers as the rows above it do: reveal the message nearest that time, and leave the row's fold alone.
+  const reveal=(event:React.MouseEvent<HTMLElement>)=>{event.preventDefault();event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();if(rect.width)jumpAt((event.clientX-rect.left)/rect.width);};
   const label=(content:React.ReactNode,level:number)=><span className="reader-section-label" style={{paddingLeft:Math.min(level,6)*10}}>{content}</span>;
   const summary=<>{label(<><Icon name="human"/><strong>Human events</strong><small>{events.length}</small>{chevron}</>,depth)}
-    <span className="reader-section-track reader-human-track" role="group" aria-label="Human events. Click a marker to reveal its text.">{markers(events)}</span></>;
+    <span className="reader-section-track reader-human-track" role="group" aria-label="Human events. Click a marker to reveal its text." onClick={reveal}>{markers(events)}</span></>;
   return <><ViewDisclosure viewKey={viewKey} className="reader-section-node reader-human-events" summary={summary}>
     {open?dimensions.map(dimension=><div key={dimension.id} className="reader-section-leaf reader-human-dimension">
       {label(<><i className={`eng-glyph ${dimension.className}`}>{humanEventLetter(dimension.name)}</i><strong>{dimension.name}</strong><small>{dimension.events.length}</small></>,depth+1)}
-      <span className="reader-section-track reader-human-track" role="group" aria-label={`Human events · ${dimension.name}`}>{markers(dimension.events)}</span>
+      <span className="reader-section-track reader-human-track" role="group" aria-label={`Human events · ${dimension.name}`} onClick={reveal}>{markers(dimension.events)}</span>
     </div>):null}
   </ViewDisclosure>{inspector.portal}</>;
 }
@@ -102,8 +104,8 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
   };
   const available=availableReaderNavigators(data,clock.byID),hasContext=available.includes('context'),hasTurns=available.includes('turns'),hasBars=timelineVisible||hasContext||hasTurns,contextNote=useId();
   const sessionKey=`reader-timeline:${data.sessionID}:session`,[sessionOpen]=useViewEntry('disclosures',sessionKey,false);
-  const expandable=singleSession&&!!(visibleTree?.children.length||humanGroups.length);
-  const humanRow=humanGroups.length?<HumanEventsRows sessionID={data.sessionID} groups={humanGroups} slots={humanLayout.slots} trackPx={trackPx} jump={event=>data.jumpHumanEvent?data.jumpHumanEvent(event):data.jumpMessage(event.message_id)} depth={singleSession?0:1}/>:null;
+  const expandable=singleSession&&timelineRowExpands(visibleTree?.children.length??0,humanGroups.length);
+  const humanRow=humanGroups.length?<HumanEventsRows sessionID={data.sessionID} groups={humanGroups} slots={humanLayout.slots} trackPx={trackPx} jump={event=>data.jumpHumanEvent?data.jumpHumanEvent(event):data.jumpMessage(event.message_id)} jumpAt={fraction=>jump(fraction)} depth={singleSession?0:1}/>:null;
   const timelineLabel=expandable?<span className="reader-section-label"><strong>Timeline</strong><small>{ribbonEventCount(visibleTree!.items)}</small>{chevron}</span>:<span className="reader-navigator-label">Timeline</span>;
   const timelineTrack=<div className="reader-navigator-track reader-navigator-timeline" role="group" aria-label="Session timeline. Click to reveal a message." onClick={event=>{if(expandable){event.preventDefault();event.stopPropagation();}const track=event.currentTarget,rect=track.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width,{track,x:event.clientX,y:event.clientY});}}>
     <SessionRibbon node={visibleTree!} visibility={visibility} range={clock.range} clock={scale} brushHandlers={{}} preview={null} inspector={inspector} disabled showUnknownTail={clock.timed} eventLayer={{...eventLayer,events:mergeAgentEvents(eventLayer.events)}}/>

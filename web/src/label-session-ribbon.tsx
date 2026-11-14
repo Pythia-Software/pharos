@@ -15,7 +15,7 @@ import {EventGlyph,EventLinkCard,EventLinkOverlay,eventHitTargets,eventLayout,ev
 import {linkedTarget,type AgentEventLink} from './event-link-layout';
 import {timeScale,type TimeScale} from './timeline-idle-model';
 import {timelineEventVisible,timelineSectionVisible,timelineValueVisible,visibleTimelineTree,type TimelineVisibility} from './timeline-visibility';
-import {humanEventDimensions,humanEventGroups,humanEventLetter,humanEventPointSlots,type HumanEvent} from './human-events-model';
+import {humanEventDimensions,humanEventGroups,humanEventLetter,humanEventPointSlots,timelineRowExpands,type HumanEvent,type HumanEventGroup} from './human-events-model';
 import {HumanEventMarkers} from './human-events-rows';
 
 // Agent events draw in each session's summary row, the way they draw in the
@@ -180,28 +180,35 @@ function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;le
   return layer&&merge?{...layer,events:mergeAgentEvents(layer.events,props.eventCounts??eventKindCounts(props.eventLayer!.events))}:layer;
  },[props.eventLayer,props.eventCounts,root,merge,ownKey]);
  const count=ribbonEventCount(node.items,ownEvents?'events':'session');
- const label=<span className={`lt-session-row-label${root?' is-root':''}`} style={{paddingLeft:root?8:8+Math.min(level-1,8)*9}} aria-label={root?`${count} events`:undefined}>{root?<strong className="lt-event-count">{count}</strong>:<RibbonNodeDetails node={node}/>} {node.children.length?<Icon name="chevron-right" className="lt-session-caret"/>:<span className="lt-session-caret" aria-hidden="true">·</span>}</span>;
+ // The lane's Human events hang off its root row, which therefore stays a disclosure while it has any to show, even with every other section hidden in the Key.
+ const humanGroups=useMemo(()=>root?laneHumanGroups(props):[],[root,props.human,props.boundaryMessages,props.messages,props.range[0],props.range[1],props.visibility]);
+ const expands=timelineRowExpands(node.children.length,humanGroups.length);
+ const label=<span className={`lt-session-row-label${root?' is-root':''}`} style={{paddingLeft:root?8:8+Math.min(level-1,8)*9}} aria-label={root?`${count} events`:undefined}>{root?<strong className="lt-event-count">{count}</strong>:<RibbonNodeDetails node={node}/>} {node.children.length||humanGroups.length?<Icon name="chevron-right" className="lt-session-caret"/>:<span className="lt-session-caret" aria-hidden="true">·</span>}</span>;
  const content=<>{identity}{!props.hideEvents && label}<SessionRibbon visibility={props.visibility} node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller&&timelineSectionVisible(props.visibility??{},'origins')} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></>;
  if(props.collapsed)return <div className="lt-session-row lt-session-preview">{content}</div>;
- if(!node.items.length)return <div className={`lt-session-row lt-session-empty ${root?'lt-session-empty-root':''}`}>{identity}{!props.hideEvents && label}<SessionRibbon visibility={props.visibility} node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller&&timelineSectionVisible(props.visibility??{},'origins')} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></div>;
- if(!node.children.length)return <div className="lt-session-leaf"><button type="button" data-ribbon-event={node.items[0]?.id} data-view-field="delegation_event" className="lt-session-row" ref={anchor=>{if(anchor)props.restore(node.items[0],anchor);}} style={{'--row-depth':level} as React.CSSProperties} onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} eventHref={props.eventHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}>{content}</button></div>;
- return <ViewDisclosure viewKey={viewKey} className={`lt-session-node ${root?'lt-session-root':''}`} summary={content}>{open?node.children.map(child=><RecursiveRibbonRow key={child.id} node={child} props={props} level={level+1}/>):null}{open&&root&&props.human?.length?<LaneHumanEvents props={props}/>:null}</ViewDisclosure>;
+ if(!node.items.length&&!humanGroups.length)return <div className={`lt-session-row lt-session-empty ${root?'lt-session-empty-root':''}`}>{identity}{!props.hideEvents && label}<SessionRibbon visibility={props.visibility} node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller&&timelineSectionVisible(props.visibility??{},'origins')} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></div>;
+ if(!expands)return <div className="lt-session-leaf"><button type="button" data-ribbon-event={node.items[0]?.id} data-view-field="delegation_event" className="lt-session-row" ref={anchor=>{if(anchor)props.restore(node.items[0],anchor);}} style={{'--row-depth':level} as React.CSSProperties} onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} eventHref={props.eventHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}>{content}</button></div>;
+ return <ViewDisclosure viewKey={viewKey} className={`lt-session-node ${root?'lt-session-root':''}`} summary={content}>{open?node.children.map(child=><RecursiveRibbonRow key={child.id} node={child} props={props} level={level+1}/>):null}{open&&humanGroups.length?<LaneHumanEvents props={props} groups={humanGroups}/>:null}</ViewDisclosure>;
 }
 const LANE_HUMAN_ROW_HEIGHT=28;
+/** A lane's Human events inside the window, as the Key leaves them. */
+function laneHumanGroups(props:Props):HumanEventGroup[]{
+ if(!props.human?.length)return [];
+ const visibility=props.visibility??{},times=new Map((props.boundaryMessages??props.messages).flatMap(message=>{const at=message.at?Date.parse(message.at):NaN;return Number.isFinite(at)?[[message.id,at] as [string,number]]:[];}));
+ return humanEventGroups(props.human,id=>{const at=times.get(id);return at===undefined||at<props.range[0]||at>props.range[1]?undefined:at;},dimension=>timelineSectionVisible(visibility,'human')&&timelineValueVisible(visibility,'human',dimension));
+}
 /** Human events of one session lane, after its Agent events and Tool actions
  * rows: a marker per engagement annotation of the person's messages, folding
  * out by dimension as the reader's row does (HumanEventsRows). This clock is
  * shared by every lane, so a message's slot is laid over what follows its
  * instant instead of widening the clock (humanEventPointSlots). */
-function LaneHumanEvents({props}:{props:Props}){
+function LaneHumanEvents({props,groups}:{props:Props;groups:HumanEventGroup[]}){
  const viewKey=`delegation-labels:${props.sessionID}:human`,[open]=useViewEntry('disclosures',viewKey,false);
  const inspector=useRibbonInspector({interactive:false});
  // The track exists only while there are markers to show (hidden in the Key, or none in the window, and the row is gone), so it is measured whenever it appears.
  const [track,setTrack]=useState<HTMLSpanElement|null>(null),[trackPx,setTrackPx]=useState(0);
  useEffect(()=>{if(!track||typeof ResizeObserver==='undefined')return;const measure=()=>setTrackPx(Math.round(track.clientWidth));const observer=new ResizeObserver(measure);observer.observe(track);measure();return()=>observer.disconnect();},[track]);
- const visibility=props.visibility??{},clock=props.scale??timeScale(props.range);
- const times=useMemo(()=>new Map((props.boundaryMessages??props.messages).flatMap(message=>{const at=message.at?Date.parse(message.at):NaN;return Number.isFinite(at)?[[message.id,at] as [string,number]]:[];})),[props.boundaryMessages,props.messages]);
- const groups=humanEventGroups(props.human??[],id=>{const at=times.get(id);return at===undefined||at<props.range[0]||at>props.range[1]?undefined:at;},dimension=>timelineSectionVisible(visibility,'human')&&timelineValueVisible(visibility,'human',dimension));
+ const clock=props.scale??timeScale(props.range);
  const events=groups.flatMap(group=>group.events);
  if(!events.length)return null;
  const slots=humanEventPointSlots(clock,groups,trackPx),dimensions=humanEventDimensions(events);

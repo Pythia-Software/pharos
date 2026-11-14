@@ -1593,7 +1593,8 @@ function transcriptHighlightControl(panel,conversation,messages){
 function eventFollowUp(item){const text=(item.responseText||'').trim(),said=item.sentenceText||'',about=item.subjectText||'';if(text.split(/\s+/).length<3||said.includes(text)&&text.length<said.length*.6||about.includes(text)||text.includes(said))return '';return text}
 let labelTip=null,labelTipPinned=false,labelTipMark=null,labelTipActions=[],labelTipCopies=[],labelTipDown=null;
 function ensureLabelTip(){if(!labelTip){labelTip=node('div','label-tip');labelTip.setAttribute('role','tooltip');document.body.append(labelTip)}return labelTip}
-function prepareLabelTip(mark,actions){ensureLabelTip();labelTip.replaceChildren();labelTipMark=mark;labelTipActions=actions;labelTipCopies=[];labelTipPinned=false;labelTip.classList.remove('is-pinned');labelTip.setAttribute('role','tooltip')}
+// A new popover describes other text, so the last annotation's tint goes first; the engagement popovers put their own on after.
+function prepareLabelTip(mark,actions){tintEngagement();ensureLabelTip();labelTip.replaceChildren();labelTipMark=mark;labelTipActions=actions;labelTipCopies=[];labelTipPinned=false;labelTip.classList.remove('is-pinned');labelTip.setAttribute('role','tooltip')}
 function showEventTip(events,event,mark,hide){if(!events.length){hideLabelTip();return}
   prepareLabelTip(mark,[['Hide this annotation',hide]]);
   const view=eventTipView(events,eventFollowUp),details=node('dl','event-tip-details');

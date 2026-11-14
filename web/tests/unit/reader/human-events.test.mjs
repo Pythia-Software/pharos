@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reader } from "../helpers/transcript.mjs";
 import { plain } from "../helpers/classic-script.mjs";
-import { humanEventPointSlots, laneHumanEvents, humanEventDimensions, humanEventGroups, humanEventLayout, humanEventLetter, humanEventPlacement, humanEventTitle, humanEventX, HUMAN_EVENT_RADIUS, HUMAN_EVENT_SLOT_SYMBOLS, HUMAN_EVENT_SYMBOL_PX } from "../../../src/human-events-model";
+import { timelineRowExpands, humanEventPointSlots, laneHumanEvents, humanEventDimensions, humanEventGroups, humanEventLayout, humanEventLetter, humanEventPlacement, humanEventTitle, humanEventX, HUMAN_EVENT_RADIUS, HUMAN_EVENT_SLOT_SYMBOLS, HUMAN_EVENT_SYMBOL_PX } from "../../../src/human-events-model";
 import { timeScale } from "../../../src/timeline-idle-model";
 import { overlapping } from "../../../src/ribbon-marks";
 import { timelineSectionVisible, timelineValueVisible, updateTimelineVisibility, validTimelineVisibility } from "../../../src/timeline-visibility";
@@ -24,6 +24,10 @@ test("markers group by message in time order and by place in the message, withou
   assert.deepEqual(groups.map(group => [group.message_id, group.at, group.events.map(item => item.position)]), [["a", 0, [0]], ["b", 500, [0.2, 0.5, 0.9]]]);
   assert.deepEqual(humanEventGroups(events, at, dimension => dimension !== "d1").map(group => group.events.map(item => item.label)), [["d2.label"], ["d4.label"]]);
   assert.deepEqual(humanEventGroups(events, at, () => false), []);
+  // A Timeline row left with nothing but Human events (every other section hidden in the Key) still folds out onto them.
+  assert.equal(timelineRowExpands(0, humanEventGroups(events, at, dimension => dimension === "d4").length), true);
+  assert.equal(timelineRowExpands(0, humanEventGroups(events, at, () => false).length), false);
+  assert.equal(timelineRowExpands(2, 0), true);
   assert.equal(humanEventTitle(events[0]), "Human event · Dimension 4 · label 91%: do it");
   // The rows Human events folds out into, and the Timeline key's chips: a dimension each, in slot order.
   assert.deepEqual(humanEventDimensions(groups.flatMap(group => group.events)).map(dimension => [dimension.id, dimension.name, dimension.className, dimension.events.length]),
