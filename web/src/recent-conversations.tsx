@@ -40,13 +40,13 @@ export function RecentConversations({ active, generation }: { active: boolean; g
       {items.map(item => {
         const href = `/work/${encodeURIComponent(item.workspace_id)}/conversation/${encodeURIComponent(item.id)}`;
         const cost = item.cost_usd == null ? null : item.cost_usd < 0.01 && item.cost_usd > 0 ? "< $0.01" : item.cost_usd.toLocaleString(undefined, { style: "currency", currency: "USD" });
+        // The fingerprint and the exchange are full-width bands at the card's
+        // top and bottom edges; only the header between them is inset.
         return <article className="home-recent-card" key={item.id}>
+          {item.labels_ready ? <div className="home-recent-fingerprint"><FingerprintImage id={item.id} /></div> : null}
           <div className="home-recent-card-header">
-            <div className="home-recent-identity">
-              <h3><PageLink className="home-recent-title" href={href}>{item.title || "Untitled conversation"}<Icon name="arrow-right" /></PageLink></h3>
-              <div className="home-recent-meta">{[item.repository, item.provider, item.model, item.effort].filter(Boolean).join(" · ")}</div>
-            </div>
-            {item.labels_ready ? <div className="home-recent-fingerprint"><FingerprintImage id={item.id} /></div> : null}
+            <h3><PageLink className="home-recent-title" href={href}>{item.title || "Untitled conversation"}<Icon name="arrow-right" /></PageLink></h3>
+            <div className="home-recent-meta">{[item.repository, item.provider, item.model, item.effort].filter(Boolean).join(" · ")}</div>
             <div className="home-recent-facts">
               {item.activity_at && Number.isFinite(Date.parse(item.activity_at)) ? <time dateTime={item.activity_at}>{new Date(item.activity_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</time> : null}
               {item.subagent_depth > 0 ? <span>Sub-agents · Depth {item.subagent_depth}</span> : null}
