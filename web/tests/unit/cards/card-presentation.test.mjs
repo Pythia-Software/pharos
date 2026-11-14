@@ -156,6 +156,15 @@ test("model lists opt into group colors and compound pies/scatters retain displa
   }
   input.metrics[0].clause.display = { kind: "bar-horizontal", list: { useGroupColors: false } };
   assert.equal(compactMetricPresentation(input).listOptions.useGroupColors, false);
+  // Repositories, providers, bands and agent event kinds have their own
+  // colours too; a key with only hashed colours keeps the card's one tone.
+  for (const [groupBy, colored] of [[["repository_name"], true], [["root_project_name"], true], [["provider"], true], [["archetype"], true],
+    [["repository_name", "family"], true], [["harness"], false], [["harness", "channel"], false]]) {
+    input.metrics[0].clause.groupBy = groupBy;
+    input.metrics[0].result.buckets = [{ keys: groupBy.map(() => "one"), value: 10, count: 1 }, { keys: groupBy.map(() => "two"), value: 20, count: 1 }];
+    input.metrics[0].clause.display = { kind: "bar-horizontal" };
+    assert.equal(compactMetricPresentation(input).listOptions.useGroupColors, colored || undefined, groupBy.join(" · "));
+  }
 });
 
 

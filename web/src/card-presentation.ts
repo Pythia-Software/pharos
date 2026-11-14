@@ -1,5 +1,5 @@
 import type { MetricDisplay, MetricValue, MetricValueFormat } from "@pythia-software/query-table-core";
-import { chartSeriesStyle } from "./chart-colors";
+import { chartSeriesStyle, colorFields, hasAssignedPalette, seriesColorField } from "./chart-colors";
 import { orderedValues } from "./session-shape-bands";
 import { denseBoxGroups, fittedCoverHeight } from "./card-loading-model";
 import type { QueryPreview } from "./query-previews";
@@ -45,7 +45,9 @@ export function compactMetricPresentation(preview: QueryPreview) {
   const ranked = !preview.buckets && !scalar && (["auto", "list", "table", "bar-horizontal"].includes(kind) || Boolean(preview.groupSummary));
   const longLabels = result.buckets.slice(0, budget).some(bucket => (preview.groupLabels?.[JSON.stringify(bucket.keys)] ?? bucket.keys.map(key => String(key ?? "Unspecified")).join(" · ")).length > 20);
   const listOptions: MetricDisplay["list"] = ranked && ["auto", "list"].includes(kind) ? { ...clause.display?.list, barPosition: clause.display?.list?.barPosition ?? (longLabels ? "below" : "inline") } : clause.display?.list;
-  if (listOptions && clause.groupBy.some(field => field === "model_family" || field === "root_model_family") && listOptions.useGroupColors === undefined) listOptions.useGroupColors = true;
+  // A list keyed by a repository, model, provider, effort, band or agent
+  // event kind draws each row in that key's colour, as dashboards do.
+  if (listOptions && hasAssignedPalette(seriesColorField(colorFields(clause))) && listOptions.useGroupColors === undefined) listOptions.useGroupColors = true;
   if (ranked && ["auto", "list"].includes(kind) && listOptions?.barPosition === "below" && listOptions.maxLabelLines === undefined) listOptions.maxLabelLines = 2;
   let summary = scalar || ranked ? undefined : preview.summary;
   const headlineMetric = scalar || ranked ? undefined : preview.headlineMetric;
