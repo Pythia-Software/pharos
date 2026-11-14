@@ -3,6 +3,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import assert from "node:assert/strict";
 import { compactMetricPresentation } from "../../../src/card-presentation";
+import { tokenMetricFormat } from "../../../src/token-count";
 import { compactTimelineBuckets, compactTimelineScale, CompactColumns } from "../../../src/column-marks";
 
 test("cumulative card covers start at the selected range, fill idle days and normalize only accumulated amounts", () => {
@@ -55,8 +56,10 @@ test("compact scatter ticks remove excessive precision and retain declared units
   clause.display = { kind: "scatter", xFormat: { kind: "duration", sourceUnit: "milliseconds" } };
   result.buckets = [{ keys: ["Read"], value: 2500, y: 11, count: 2 }, { keys: ["Bash"], value: 5000, y: 7742.5942, count: 3 }];
   const before = structuredClone(input);
-  assert.deepEqual(compactMetricPresentation(input).axisFormats, { xFormat: clause.display.xFormat, yFormat: { kind: "number", decimals: 0 } });
+  assert.deepEqual(compactMetricPresentation(input).axisFormats, { xFormat: clause.display.xFormat, yFormat: tokenMetricFormat }, "a token mean reads in token units");
   assert.deepEqual(input, before);
+  clause.expressionY = "AVG([result_bytes])";
+  assert.deepEqual(compactMetricPresentation(input).axisFormats.yFormat, { kind: "number", decimals: 0 });
   result.buckets[0].y = .0123; result.buckets[1].y = .0246;
   assert.equal(compactMetricPresentation(input).axisFormats.yFormat.decimals, 4, "small ranges keep distinct ticks");
   clause.display.yFormat = { kind: "percent", decimals: 1 };

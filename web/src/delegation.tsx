@@ -1,5 +1,6 @@
 import { EstimateInfoButton } from "./estimate-info";
 import { formatUSD } from "./currency";
+import { formatTokens } from "./token-count";
 import { CursorPagination } from "./cursor-pagination";
 import { DelegationRequestError, DelegationSnapshotRecovery, snapshotChanged } from "./delegation-loading";
 import { ViewDisclosure } from "./view-disclosure";
@@ -253,6 +254,8 @@ export function formatted(value: number | null | undefined, unit = "count") {
     return localMetricDateTime.format(new Date(value));
   if (unit === "usd")
     return formatUSD(value);
+  if (unit === "tokens")
+    return formatTokens(value);
   if (Math.abs(value) >= 1000)
     return value.toLocaleString("en-US", {
       notation: "compact",
@@ -345,10 +348,10 @@ async function readJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
 export function metricText(metric: Metric | undefined, unit = "tokens") {
   const value = formatted(metric?.value, unit);
   if (metric?.value != null && metric.quality === "reported-minimum") {
-    // Do not round a lower bound upward (116,837 is not at least 117,000).
-    const scale = metric.value >= 1e9 ? 1e9 : metric.value >= 1e6 ? 1e6 : metric.value >= 1e3 ? 1e3 : 1;
-    const minimum = Math.floor(metric.value / scale * 10) / 10;
-    return `≥${minimum.toLocaleString("en-US", {maximumFractionDigits: 1})}${scale === 1e9 ? "B" : scale === 1e6 ? "M" : scale === 1e3 ? "K" : ""}`;
+    // Do not round a lower bound upward (116,837 is not at least 117,000):
+    // floor it to the three significant figures the display shows.
+    const step = metric.value >= 100 ? 10 ** (Math.floor(Math.log10(metric.value)) - 2) : 1;
+    return `≥${formatted(Math.floor(metric.value / step) * step, unit)}`;
   }
   return metric?.value != null ? metric.is_estimate ? `~${value}` : `${value}${qualityMark(metric.quality)}` : value;
 }
@@ -363,7 +366,7 @@ export function tokenAttributionText(session: Session) {
   if (!a) return "";
   const parts: string[] = [];
   if (a.observed_minimum_tokens > a.direct_tokens) parts.push(`${metricText(session.self.tokens)} tokens · Reported minimum; may cover only the last request. Full session usage unknown. Input/cache/output breakdown not recorded for this observation; API cost unavailable.`);
-  if (a.unallocated_tokens > 0) parts.push(`${formatted(a.unallocated_tokens)} tokens unallocated within this branch. Included in Self + children; child observations may overlap this amount. API cost for this remainder is included in the branch total.`);
+  if (a.unallocated_tokens > 0) parts.push(`${formatted(a.unallocated_tokens, "tokens")} tokens unallocated within this branch. Included in Self + children; child observations may overlap this amount. API cost for this remainder is included in the branch total.`);
   return parts.join(" ");
 }
 export function cellTitle(metric: Metric, spec: Spec) {

@@ -1,6 +1,7 @@
 import { localeNumber } from "./locale-format";
 import { formatUSD } from "./currency";
 import type { AggregationBucket, AggregationResultEntry, MetricBoxSummary } from "@pythia-software/query-table-core";
+import { formatTokens } from "./token-count";
 
 export function filterBoxSamples(result: AggregationResultEntry, minimum?: number): AggregationResultEntry {
   if (!minimum) return result;
@@ -60,7 +61,7 @@ export function boxWhiskerExtent(summary: MetricBoxSummary) {
   return { low: Math.min(summary.low, summary.q1), high: Math.max(summary.high, summary.q3) };
 }
 export function boxDetails(label: string, summary: MetricBoxSummary, unit = "USD", formatter?: (value: number) => string): string {
-  const format = formatter ?? (unit === "USD" ? boxCost : unit === "bytes" ? (value: number) => value >= 1024 ? `${boxBytes(value)} (${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} bytes)` : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} bytes` : unit === "ms" ? (value: number) => value >= 1000 ? `${boxDuration(value)} (${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ms)` : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ms` : boxNumber);
+  const format = formatter ?? (unit === "USD" ? boxCost : unit === "tokens" ? formatTokens : unit === "bytes" ? (value: number) => value >= 1024 ? `${boxBytes(value)} (${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} bytes)` : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} bytes` : unit === "ms" ? (value: number) => value >= 1000 ? `${boxDuration(value)} (${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ms)` : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ms` : boxNumber);
   return [label, ...(unit && unit !== "USD" ? [unit] : []), `Median: ${format(summary.median)} · Mean: ${format(summary.mean)}`, `Q1: ${format(summary.q1)} · Q3: ${format(summary.q3)}`, `Observed whisker range: ${format(summary.low)} – ${format(summary.high)}`, `Min: ${format(summary.min)} · Max: ${format(summary.max)}`, ...(summary.low > summary.q1 || summary.high < summary.q3 ? ["Interpolated quartile extends beyond observed inliers; whisker meets the box edge."] : []), `${summary.n.toLocaleString()} observations · ${summary.outlierCount.toLocaleString()} outliers (${boxOutliers(summary).length.toLocaleString()} retained markers)`].join("\n");
 }
 

@@ -1,4 +1,5 @@
 import { formatUSD } from "./currency";
+import { formatTokens } from "./token-count";
 import { combineServed, noteServed, resultPolicyHeaders, resultScope, resultServed, servedOf, type ResultPolicy, type ResultServed } from "./result-cache";
 import { reportSessionShapeCoverage, sessionShapeFreshnessNote, type SessionShapeCoverage } from "./session-shape-freshness";
 import { agentEventDatasetOf, agentEventsFreshnessMark, agentEventsFreshnessNote, reportQueryCoverage, type AgentEventsCoverage } from "./agent-events-freshness";
@@ -78,6 +79,7 @@ export function formatPreviewValue(value: number, unit: string): string {
   if (unit === "bytes") return value >= 1048576 ? `${(value / 1048576).toFixed(1)} MiB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value} B`;
   if (unit === "percent") return `${(value * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
   if (unit === "USD") return formatUSD(value);
+  if (unit === "tokens") return formatTokens(value);
   if (unit === "ms") return value >= 3_600_000 ? `${(value / 3_600_000).toFixed(1)}h` : value >= 60_000 ? `${(value / 60_000).toFixed(1)}m` : value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}ms`;
   return Intl.NumberFormat(undefined, { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
 }

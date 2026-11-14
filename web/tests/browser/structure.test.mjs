@@ -586,7 +586,7 @@ const ROUTES = [
     const info=tokens.getByRole('button',{name:'About token estimates'});await info.click();
     const dialog=page.getByRole('dialog',{name:'How estimates work'});await dialog.waitFor();
     const text=await dialog.innerText();
-    assert.match(text,/Selected conversation.*1,400 estimated output tokens.*400–5,000 sensitivity range/s);
+    assert.match(text,/Selected conversation.*1.4K estimated output tokens.*400–5K sensitivity range/s);
     assert.match(text,/estimation and API pricing assume claude-opus-5-5 from saved conversation settings/i);
     assert.match(text,/Tool timing.*Writing/s);
     assert.equal(await dialog.getByRole('link',{name:'View published assumptions'}).getAttribute('href'),'/api/estimation/assumptions');
@@ -602,7 +602,7 @@ const ROUTES = [
     await turnMarker.scrollIntoViewIfNeeded();await app.shot('turn-estimate-marker');
     const wasOpen=await turn.evaluate(el=>el.open);await turnMarker.click();await dialog.waitFor();
     assert.equal(await turn.evaluate(el=>el.open),wasOpen,'the estimate marker does not toggle its turn');
-    assert.match(await dialog.innerText(),/Selected turn.*1,400 estimated output tokens.*400–5,000 sensitivity range/s);
+    assert.match(await dialog.innerText(),/Selected turn.*1.4K estimated output tokens.*400–5K sensitivity range/s);
     await page.keyboard.press('Escape');await dialog.waitFor({state:'detached'});
     assert.equal(await turnMarker.evaluate(el=>document.activeElement===el),true);
     await page.keyboard.press('Enter');await dialog.waitFor();

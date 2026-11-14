@@ -10,11 +10,12 @@ import { withSlice } from "./chart-selection";
 import { parallelismAnalysisCatalog } from "./parallelism-analysis-catalog";
 import { parallelismSelectionQuery } from "./usage-dashboard-model";
 import type { ConcurrencySelection } from "./concurrency";
+import { tokenMetricFormat } from "./token-count";
 
 const wait: AnalysisMeasure = { label: "Median observed wait (seconds)", unit: "seconds", format: { kind: "number", decimals: 1 }, op: "count", expression: "MEDIAN([gap_seconds])", value: "gap_seconds", additive: false, note: "Observed post-tool gaps, not pure inference time. Missing timing stays missing." };
 const thinkingCatalog: AnalysisCatalog = {
   dataset: "model_requests", time: { first: "requested_at", last: "requested_at" }, timestamp: "requested_at",
-  measures: { wait, reasoning: { label: "Reported reasoning tokens", unit: "tokens", format: { kind: "number", decimals: 0 }, op: "sum", field: "reasoning_output_tokens", value: "reasoning_output_tokens", additive: true, note: "Reported reasoning output; missing values are not zero." } },
+  measures: { wait, reasoning: { label: "Reported reasoning tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "reasoning_output_tokens", value: "reasoning_output_tokens", additive: true, note: "Reported reasoning output; missing values are not zero." } },
   breakdowns: Object.fromEntries([
     ["model", "Model"], ["effort", "Effort"], ["model_effort", "Model + effort"], ["speed", "Speed"], ["model_speed", "Model + speed"], ["model_effort_speed", "Model + effort + speed"],
     ["provider", "Provider"], ["harness", "Agent app"], ["repository", "Repository", "repository_name"], ["machine", "Machine"], ["preceding_tool", "Preceding tool"], ["agent_depth", "Agent depth"],

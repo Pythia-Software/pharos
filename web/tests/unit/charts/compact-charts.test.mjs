@@ -86,7 +86,7 @@ test("sparse skewed box whiskers meet interpolated quartiles without passing the
   const summary=core.boxSummary([28798,729273,3177124,1728195886],"tukey");
   assert.equal(summary.high,3177124);assert.equal(summary.q3,434431814.5);assert.deepEqual(summary.outliers,[1728195886]);
   const tooltip=boxDetails("Codex GPT 6.1 Sol Ultra",summary,"tokens");
-  assert.match(tooltip,/Observed whisker range: 28,798 – 3,177,124/);assert.match(tooltip,/Max: 1,728,195,886/);assert.match(tooltip,/Interpolated quartile/);
+  assert.match(tooltip,/Observed whisker range: 28.8K – 3.18M/);assert.match(tooltip,/Max: 1.73B/);assert.match(tooltip,/Interpolated quartile/);
 });
 
 test("duration and byte boxes show readable units with exact values in hover, without changing count or currency formats", () => {

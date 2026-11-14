@@ -2,6 +2,7 @@ import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure, AnalysisState } from "./dashboard-analysis-model";
 import { activityPresentation } from "./machine-activity-data";
 import { projectBreakdown, projectLegacy, projectsReached } from "./project-analysis";
+import { tokenMetricFormat } from "./token-count";
 
 // Tool Time and Skills read individual records (tool calls, skill evidence),
 // so each record is one observation, and records of one agent conversation
@@ -32,8 +33,8 @@ const timeMeasures: Record<string, AnalysisMeasure> = {
   truncation_rate: { label: "Truncation rate", unit: "percent", format: percent, op: "sum", ratio: [{ op: "sum", expression: "IF([truncated],1,0)", label: "truncated calls" }, { op: "count", field: "id" }], additive: false, note: "Calls with truncated results divided by all matching calls." },
   conversations: { label: "Conversations reached", unit: "conversations", format: count, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct agent conversations with matching calls; a conversation can appear in several groups." },
   projects: projectsReached("reached"),
-  carried_tokens: { label: "Context carried", unit: "tokens", format: count, op: "sum", field: "carried_tokens", value: "carried_tokens", additive: true, note: "Attributed tool-result tokens carried into later requests." },
-  result_tokens: { label: "Result tokens", unit: "tokens", format: count, op: "sum", field: "result_tokens", value: "result_tokens", additive: true, note: "Tokens a call's result added to the context, measured or estimated from retained result text." },
+  carried_tokens: { label: "Context carried", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "carried_tokens", value: "carried_tokens", additive: true, note: "Attributed tool-result tokens carried into later requests." },
+  result_tokens: { label: "Result tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "result_tokens", value: "result_tokens", additive: true, note: "Tokens a call's result added to the context, measured or estimated from retained result text." },
 };
 const conversationSplits = { project_name: ["project_name"], provider: ["provider"], ...origin };
 export const toolTimeAnalysisCatalog: AnalysisCatalog = {

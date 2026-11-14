@@ -13,6 +13,7 @@ import {
   type ThinkingTrace,
   type ThinkingCompaction,
 } from "./thinking-model";
+import { formatTokens } from "./token-count";
 const clipLabel = (s: string, width: number) =>
   s.length * 5.8 > width
     ? s.slice(0, Math.max(4, Math.floor(width / 5.8) - 1)) + "…"
@@ -558,7 +559,7 @@ export function ThinkingBoxes({
                   xTicks={[0, 0.5, 1].map((v) => ({
                     value: x + v * w,
                     label: reasoning
-                      ? fmt(Math.expm1(v * Math.log1p(max)))
+                      ? formatTokens(Math.expm1(v * Math.log1p(max)))
                       : thinkingDuration(v * max),
                   }))}
                 />
@@ -587,7 +588,7 @@ export function ThinkingBoxes({
                           <title>
                             {g.label} · median{" "}
                             {reasoning
-                              ? fmt(st.median) + " tokens"
+                              ? formatTokens(st.median) + " tokens"
                               : thinkingDuration(st.median)}{" "}
                             · {st.n} observations / {g.Retained} retained
                           </title>
@@ -1011,7 +1012,7 @@ export function ThinkingConversation({
                   y={Number(offset)}
                   yTicks={[0, Number(max)].map((v) => ({
                     value: ys(v, Number(max), Number(offset)),
-                    label: fmt(v),
+                    label: title === "Observed gap (seconds)" ? fmt(v) : formatTokens(v),
                   }))}
                   xTicks={[]}
                 />
