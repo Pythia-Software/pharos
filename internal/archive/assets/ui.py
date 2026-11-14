@@ -1991,14 +1991,16 @@ function sourceCard(source,providers){
   const path=node('div','source-path',source.path||'No path configured'),facts=node('dl','source-facts');
   sourceFact(facts,'Last indexed',sourceTime(source.last_success_at));
   sourceFact(facts,'Last index attempt',sourceTime(source.last_attempt_at));
-  sourceFact(facts,'Coverage',source.coverage);
-  sourceFact(facts,'Account',source.account);
-  card.append(head,path,facts);
+  // The account closes the capture line, which library.js fills in. Coverage
+  // is not repeated there: the line's index state already reflects it.
+  card.dataset.account=source.account||'';
+  card.append(head,path,facts,node('div','pharos-card-capture',source.account?`Account: ${source.account}`:''));
   if(source.error)card.append(node('div','sync-note badtext',source.error));
   else if(source.path_status==='missing')card.append(node('div','sync-note badtext','The configured path is unavailable.'));
   const read=source.sqlite_reads?.[0];
   if(read)card.append(node('div',read.via==='failed'?'sync-note badtext':'sync-note',sqliteReadNote(read)));
-  if(source.scope==='host')card.append(sourceRemoval(source));
+  // Only a paused source can be removed: pause it first, then remove it.
+  if(source.scope==='host'&&!source.enabled)card.append(sourceRemoval(source));
   return card;
 }
 // Missing metadata is checked against imported chats, not the Desktop cache's size.

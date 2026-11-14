@@ -2393,11 +2393,11 @@
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
-      "key": "aa053c6ea5d6f456:0",
+      "key": "9a06636fa9fcff23:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "renderChatGPTWatch",
       "tag": "button",
-      "control": "'button', '', 'Check Downloads now'",
+      "control": "'button', 'claude-watch-button', 'Check Downloads now'",
       "contract": "action",
       "reason": "Per-Mac opt-in Downloads setting, or explicit immediate check; saved outside library content view URLs."
     },
@@ -2420,6 +2420,15 @@
       "reason": "Per-Mac browser profile that opens Claude export download links; saved outside the library and independent of URL view state."
     },
     {
+      "key": "79518f97bf8cdd75:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderClaudeWatch",
+      "tag": "button",
+      "control": "'button', 'claude-watch-button', 'Check Downloads now'",
+      "contract": "action",
+      "reason": "Asks the service to check Downloads for a Claude export now; an immediate command with no view state."
+    },
+    {
       "key": "8d9ed6b2fb0f0f79:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "renderClaudeWatch",
@@ -2427,15 +2436,6 @@
       "control": "'button', 'toggle'",
       "contract": "settings",
       "reason": "Per-Mac opt-in to watch Downloads for Claude export manifests; saved outside the library and independent of URL view state."
-    },
-    {
-      "key": "fdbb6f776b362556:0",
-      "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderClaudeWatch",
-      "tag": "button",
-      "control": "'button', '', 'Check Downloads now'",
-      "contract": "action",
-      "reason": "Asks the service to check Downloads for a Claude export now; an immediate command with no view state."
     },
     {
       "key": "8165dad42aa683a0:0",
@@ -2510,20 +2510,20 @@
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
-      "key": "5634aeb0adbdf213:0",
+      "key": "6f9742ae10c071e2:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "showChatGPTWatch",
       "tag": "button",
-      "control": "'button', '', action==='retry'?'Try again':'Stop'",
+      "control": "'button', 'claude-watch-button', action==='retry'?'Try again':'Stop'",
       "contract": "action",
       "reason": "Retry or stop a managed import job; operational action without content view state."
     },
     {
-      "key": "7390be4d645bfa9a:0",
+      "key": "5de8066b5da3743f:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "showClaudeWatch",
       "tag": "button",
-      "control": "'button', '', action==='retry'?'Try again':'Stop'",
+      "control": "'button', 'claude-watch-button', action==='retry'?'Try again':'Stop'",
       "contract": "action",
       "reason": "Retries or stops one watched Claude export's downloads; an immediate command with no view state."
     },
