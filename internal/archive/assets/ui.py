@@ -1881,7 +1881,9 @@ window.pharosOpenHandoff=marker=>{const index=conversations.findIndex(c=>c.id===
 const paths=new Map(),pathEntry=path=>{if(!paths.has(path))paths.set(path,{changes:[],conversation:''});return paths.get(path)};
 for(const change of w.changes.filter(c=>c.path))pathEntry(change.path).changes.push(change);
 for(const file of w.files||[]){const entry=pathEntry(file.path);entry.conversation||=file.conversation_id}
-if(paths.size||w.linked_commits){const files=disclosure('Files and commits','work-disclosure file-index');files.dataset.viewKey='work:'+id+':files';
+// It holds edited files and linked commits (work-files.tsx); a workspace
+// that only read files has neither, and no Files and commits section.
+if(w.edited_files||w.linked_commits){const files=disclosure('Files and commits','work-disclosure file-index');files.dataset.viewKey='work:'+id+':files';
 // The session's files, each edit's call and each file's page, and its
 // commits (work-files.tsx); before the bundle, its recorded file actions.
 const filesHost=node('div','work-files-host'),mountFiles=()=>{if(workFilesSection||!files.open||!files.isConnected||!window.pharosWorkFiles)return;filesHost.replaceChildren();workFilesSection=window.pharosWorkFiles.mount(filesHost,{workspace:id})};files.append(filesHost);files.addEventListener('toggle',mountFiles);if(!window.pharosWorkFiles)addEventListener('pharos:delegation-ready',mountFiles,{once:true});

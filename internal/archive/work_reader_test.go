@@ -285,6 +285,10 @@ func TestWorkOverviewOmitsMessagesAndCarriesWhatThePageScannedFor(t *testing.T) 
 	if jsonText(overview["files"]) != `[{"conversation_id":"agent","path":"/repo/Config.toml"}]` {
 		t.Fatalf("files: %s", jsonText(overview["files"]))
 	}
+	// A read is a file target but not an edit: nothing for Files and commits.
+	if integer(overview["edited_files"]) != 0 || integer(overview["linked_commits"]) != 0 {
+		t.Fatalf("a reading session's edited files %v, linked commits %v", overview["edited_files"], overview["linked_commits"])
+	}
 	for _, key := range []string{"metric_ledger", "agent_sessions", "sightings"} {
 		if _, ok := overview[key]; ok {
 			t.Fatalf("overview carries unused %s", key)

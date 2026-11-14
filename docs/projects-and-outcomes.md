@@ -887,8 +887,11 @@ edited: every edit as a link to its call in the transcript, the file's page,
 how many other sessions edited it, and the rework between them (whose lines
 it removed, and who removed its own). Then its linked commits, each with the
 commit's page and, where the session printed or made it, a link to that
-call. The section shows when the session acted on a file or is linked to
-a commit, so a session that only committed through a shell has it too. In
+call. The section shows when the session edited a file or is linked to
+a commit (the overview's `edited_files` and `linked_commits`), so a session
+that only committed through a shell has it too, and one that only read files
+does not; *Code activity* shows only when it holds this section or a pull
+request or mainline link. In
 the reader, each file chip of an edit or read call carries a
 history link to the file's page (`file_links` on the conversation, from
 `session_file_edits` and a read's repository path).
