@@ -452,7 +452,8 @@ const ROUTES = [
     nativeHost:"window.webkit={messageHandlers:{pharosDictation:{postMessage:async body=>body.action==='status'?{available:true}:true}}};"},
   {name:"Ask Pharos clarification",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-clarification:not([hidden])",api:{...askAPI,"GET /api/ask/session":askClarificationSession}},
   {name:"Ask Pharos opt-in",url:"/",ready:"#pharos-ask .pharos-invitation:not([hidden])",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:true},providers:askProviders}},open:page=>page.locator("#pharos-ask .pharos-try").click(),shown:"#pharos-ask .pharos-consent[open]"},
-  {name:"Ask Pharos settings",url:"/settings/ask",ready:"#askSettingsPage .ask-settings select",api:askAPI},
+  // The old Ask Pharos page redirects to its card in App preferences.
+  {name:"Ask Pharos settings",url:"/settings/ask",ready:"#askSettingsPage .ask-preferences-disclosure",api:askAPI,open:page=>page.locator("#askSettingsPage .ask-preferences-disclosure>summary").click(),shown:"#askSettingsPage .ask-preferences-body button"},
 
   ].map(route=>({...route,preferences:{"pharos-theme":"dark"}})),
   { name: "Messages dataset query", url: "/analyze?analyze_mode=query&analyze_data=messages", ready: ".usage-workspace-table .qt-row" },

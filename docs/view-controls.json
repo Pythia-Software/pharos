@@ -4510,38 +4510,20 @@
       "reason": "Canonical destination URLs; sidebar presentation uses nav_collapsed/nav_expanded. Navigation menu openness is transient."
     },
     {
-      "key": "0c419029d3ec5074:0",
-      "file": "web/src/ask-pharos.tsx",
-      "owner": "AskPharosSettings",
-      "tag": "input",
-      "control": "checked={status.settings.showInvitation} onChange={event => void save({ showInvitation: event.target.checked })}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "4fcf1e47ebac374f:0",
-      "file": "web/src/ask-pharos.tsx",
-      "owner": "AskPharosSettings",
-      "tag": "select",
-      "control": "aria-label=\"Default AI CLI\" value={selection.provider} onChange={event => setSelection({ provider: event.target.value, model: \"\", effort: \"Default\" })}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "520a65860d7ba9d2:0",
-      "file": "web/src/ask-pharos.tsx",
-      "owner": "AskPharosSettings",
-      "tag": "button",
-      "control": "onClick={() => { void refresh(); setModelGeneration(value => value + 1); }}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
       "key": "93f96a0d1bd49d78:0",
       "file": "web/src/ask-pharos.tsx",
       "owner": "AskPharosSettings",
       "tag": "button",
       "control": "onClick={() => consent.current?.close()}",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
+      "key": "9734238f092e57d4:0",
+      "file": "web/src/ask-pharos.tsx",
+      "owner": "AskPharosSettings",
+      "tag": "button",
+      "control": "onClick={() => enabled ? void save({ enabled: false }) : consent.current?.showModal()}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -4555,13 +4537,15 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "b0c69306456e8575:0",
+      "key": "a97f0235e6da80b7:0",
       "file": "web/src/ask-pharos.tsx",
       "owner": "AskPharosSettings",
-      "tag": "select",
-      "control": "aria-label=\"Default AI effort\" value={selection.effort} onChange={event => setSelection(current => ({ ...current, effort: event.target.value }))}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"askPharosSettings\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "b899d5cfdf4f17f7:0",
@@ -4573,29 +4557,20 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "cdfaf734a56e89d7:0",
+      "key": "bf70573576227d4d:0",
       "file": "web/src/ask-pharos.tsx",
       "owner": "AskPharosSettings",
       "tag": "button",
-      "control": "onClick={() => void save({ selection })}",
+      "control": "onClick={() => void save({ showInvitation: !status?.settings.showInvitation })}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "edaa0c9060202214:0",
+      "key": "d08369b3929ce467:0",
       "file": "web/src/ask-pharos.tsx",
       "owner": "AskPharosSettings",
-      "tag": "select",
-      "control": "aria-label=\"Default AI model\" value={selection.model} onChange={event => setSelection(current => ({ ...current, model: event.target.value, effort: \"Default\" }))}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "fafb900519cbc2b5:0",
-      "file": "web/src/ask-pharos.tsx",
-      "owner": "AskPharosSettings",
-      "tag": "input",
-      "control": "checked={status.settings.enabled} onChange={event => event.target.checked ? consent.current?.showModal() : void save({ enabled: false })}",
+      "tag": "button",
+      "control": "onClick={() => void refreshCLIs()}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
