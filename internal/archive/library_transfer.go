@@ -36,7 +36,7 @@ var transferHistoryTables = []string{
 	// What a conversation's messages attached, drew and cited is read when
 	// it is parsed, and it is not parsed again on the host that receives
 	// it. A web image fetched once may no longer be at its address.
-	"message_assets", "message_sources", "remote_assets",
+	"message_assets", "message_sources", "message_notes", "remote_assets", "conversation_content",
 }
 
 type transferFile struct {
@@ -683,7 +683,9 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	// is parsed, so an accepted copy's replace this library's: a row only
 	// this side's parse made would otherwise stay as a stale or second card.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM message_assets WHERE conversation_id IN (SELECT id FROM delivered_conversations);
- DELETE FROM message_sources WHERE conversation_id IN (SELECT id FROM delivered_conversations);`); err != nil {
+ DELETE FROM message_sources WHERE conversation_id IN (SELECT id FROM delivered_conversations);
+ DELETE FROM message_notes WHERE conversation_id IN (SELECT id FROM delivered_conversations);
+ DELETE FROM conversation_content WHERE conversation_id IN (SELECT id FROM delivered_conversations);`); err != nil {
 		return err
 	}
 	// Integer row IDs are destination-local. Replace per-workspace metrics only

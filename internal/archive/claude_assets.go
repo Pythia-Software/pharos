@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -24,7 +25,13 @@ type claudeAssetReader struct {
 	// published is, by file name, the card of the artifact a file was
 	// published as.
 	published map[string]int
+	// delivered is, by file name, the card of each file the message being
+	// read handed the person with a tool.
+	delivered map[string]int
+	notes     []NoteRecord
 }
+
+var claudeDeliveredFile = regexp.MustCompile(`(\S+) → file_uuid: ([0-9a-f]{8}-[0-9a-f-]{27})`)
 
 // written is the text of the one file the conversation wrote under a name.
 func (c *claudeAssetReader) written(name string) (string, string, bool) {
@@ -102,6 +109,7 @@ func (c *claudeAssetReader) message(message map[string]any, id, role string, rec
 	owner, lastText := "", ""
 	var waiting []int
 	names, used, paired, placed := map[string]string{}, map[string]bool{}, map[string]int{}, map[string]int{}
+	c.delivered = map[string]int{}
 	// A file placed where the conversation shows it, as a screenshot is on
 	// its tool result, is not placed again from the message's list of files.
 	place := func(asset AssetRecord) {
@@ -181,8 +189,36 @@ func (c *claudeAssetReader) message(message map[string]any, id, role string, rec
 				c.assets[at].MessageNativeID = owner
 			}
 			waiting = nil
+			note := map[string]any{}
+			var spans []any
 			for _, rawCitation := range reasoningList(block["citations"]) {
-				source(firstString(mapValue(mapValue(rawCitation)["details"])["url"]), "", "", "", true)
+				citation := mapValue(rawCitation)
+				link := firstString(mapValue(citation["details"])["url"])
+				source(link, "", "", "", true)
+				// Where in the text the cited words stand, counted in characters.
+				if _, ok := index[link]; ok && citation["start_index"] != nil && integer(citation["end_index"]) > integer(citation["start_index"]) {
+					spans = append(spans, map[string]any{"start": integer(citation["start_index"]), "end": integer(citation["end_index"]), "url": link})
+				}
+			}
+			if len(spans) > 0 {
+				note["citations"] = spans
+			}
+			if block["voice_spoken_chars"] != nil {
+				// A reply read aloud, and how far the reading got.
+				note["spoken_chars"] = integer(block["voice_spoken_chars"])
+			}
+			if len(note) > 0 {
+				c.notes = append(c.notes, NoteRecord{MessageNativeID: native, Details: note})
+			}
+		case "thinking":
+			note := map[string]any{}
+			for _, flag := range []string{"cut_off", "truncated"} {
+				if block[flag] == true {
+					note[flag] = true
+				}
+			}
+			if own := fmt.Sprintf("%s:block:%d", id, blockIndex); len(note) > 0 && stored[own] {
+				c.notes = append(c.notes, NoteRecord{MessageNativeID: own, Details: note})
 			}
 		case "image", "document":
 			uuid := firstString(block["file_uuid"])
@@ -213,6 +249,13 @@ func (c *claudeAssetReader) message(message map[string]any, id, role string, rec
 			// Its card stands for its line in the list of files too.
 			c.assets[at].Also = append(c.assets[at].Also, id+":files")
 		}
+		if at, ok := c.delivered[firstString(file["file_name"])]; ok && (!used[uuid] || c.assets[at].Ref == uuid) {
+			// The card of the call that handed the file over stands for it.
+			used[uuid] = true
+			if !slices.Contains(c.assets[at].Also, id+":files") {
+				c.assets[at].Also = append(c.assets[at].Also, id+":files")
+			}
+		}
 		if !used[uuid] {
 			used[uuid] = true
 			name := defaultString(file["file_name"], "File")
@@ -225,7 +268,7 @@ func (c *claudeAssetReader) message(message map[string]any, id, role string, rec
 			if file, text, ok := c.written(name); ok && role != "user" {
 				// The export does not hold the file, but holds every call that wrote it.
 				record.Content, record.SizeBytes, record.MimeType, record.Availability, record.AgentAuthored = text, int64(len(text)), claudeFileType(file), assetReconstructed, true
-				record.Details["edits"] = c.edits[file]
+				record.Details["edits"], record.Details["path"] = c.edits[file], file
 			}
 			place(record)
 		}
@@ -252,6 +295,31 @@ func (c *claudeAssetReader) tool(block, result map[string]any, native string, pl
 		place(AssetRecord{AttachmentNativeID: native, Ref: ref, Name: title, Kind: assetKind(mimeType, title), MimeType: mimeType, SizeBytes: int64(len(content)),
 			Relation: "generated", AgentAuthored: true, Availability: availability, Content: content})
 	}
+	// The files a call handed over, as its result describes them.
+	resources := map[string]map[string]any{}
+	for _, raw := range reasoningList(result["content"]) {
+		if item := mapValue(raw); firstString(item["type"]) == "local_resource" && firstString(item["file_path"]) != "" {
+			resources[firstString(item["file_path"])] = item
+		}
+	}
+	// handed places the card of a file a call gave the person: as the
+	// conversation's calls wrote it, when they did, and by where it was.
+	handed := func(file, ref, caption string) {
+		details := map[string]any{"path": file}
+		if caption != "" {
+			details["description"] = caption
+		}
+		mimeType := firstString(resources[file]["mime_type"], claudeFileType(file))
+		c.delivered[path.Base(file)] = len(c.assets)
+		text, ok := c.files[file]
+		if !ok {
+			place(AssetRecord{AttachmentNativeID: native, Ref: ref, Name: path.Base(file), Kind: assetKind(mimeType, file), MimeType: mimeType, Relation: "generated", AgentAuthored: true, Availability: assetNotExported, Details: details})
+			return
+		}
+		details["edits"] = c.edits[file]
+		generated(ref, path.Base(file), mimeType, text, assetReconstructed)
+		c.assets[len(c.assets)-1].Details = details
+	}
 	for _, raw := range reasoningList(result["content"]) {
 		item := mapValue(raw)
 		switch firstString(item["type"]) {
@@ -264,20 +332,32 @@ func (c *claudeAssetReader) tool(block, result map[string]any, native string, pl
 			}
 		case "image_gallery":
 			// Web images a search showed: the export holds their addresses.
-			for _, rawImage := range reasoningList(item["images"]) {
-				image := mapValue(rawImage)
-				address := firstString(image["url"], image["thumbnail_url"])
-				if address == "" {
-					continue
-				}
-				details := map[string]any{"url": address}
-				for key, field := range map[string]string{"thumbnail_url": "thumbnail_url", "page_url": "page_url", "site": "source"} {
-					if value := firstString(image[field]); value != "" {
-						details[key] = value
+			// Spare ones are those the search found and the reply did not show.
+			shown := 0
+			for _, list := range []string{"images", "spare_images"} {
+				for _, rawImage := range reasoningList(item[list]) {
+					image := mapValue(rawImage)
+					address := firstString(image["url"], image["thumbnail_url"])
+					if address == "" {
+						continue
 					}
+					shown++
+					details := map[string]any{"url": address}
+					for key, field := range map[string]string{"thumbnail_url": "thumbnail_url", "page_url": "page_url", "site": "source"} {
+						if value := firstString(image[field]); value != "" {
+							details[key] = value
+						}
+					}
+					if list == "spare_images" {
+						details["spare"] = true
+					}
+					place(AssetRecord{AttachmentNativeID: native, Ref: address, Name: defaultString(image["title"], "Image"), Kind: "image", Relation: "web", Availability: assetRemote,
+						Width: integer(image["width"]), Height: integer(image["height"]), Details: details})
 				}
-				place(AssetRecord{AttachmentNativeID: native, Ref: address, Name: defaultString(image["title"], "Image"), Kind: "image", Relation: "web", Availability: assetRemote,
-					Width: integer(image["width"]), Height: integer(image["height"]), Details: details})
+			}
+			if shown == 0 && item["is_expired"] == true {
+				// Claude.ai keeps a search's images for a time only.
+				place(AssetRecord{AttachmentNativeID: native, Ref: native + ":gallery", Name: "Image results", Kind: "image", Relation: "web", Availability: assetNotExported, Details: map[string]any{"expired": true}})
 			}
 		}
 	}
@@ -324,18 +404,23 @@ func (c *claudeAssetReader) tool(block, result map[string]any, native string, pl
 		}
 	case name == "present_files":
 		for _, raw := range reasoningList(input["filepaths"]) {
-			file := firstString(raw)
-			text, ok := c.files[file]
-			if !ok {
-				place(AssetRecord{AttachmentNativeID: native, Ref: file, Name: path.Base(file), Kind: assetKind("", file), Relation: "generated", AgentAuthored: true, Availability: assetNotExported})
-				continue
+			if file := firstString(raw); file != "" {
+				handed(file, file, "")
 			}
-			mimeType := ""
-			if extension := strings.ToLower(path.Ext(file)); extension == ".html" || extension == ".htm" {
-				mimeType = "text/html"
+		}
+	case name == "SendUserFile":
+		// The result names each file it delivered and the identity the
+		// message's list of files gives it.
+		sent := map[string]string{}
+		for _, raw := range reasoningList(result["content"]) {
+			for _, match := range claudeDeliveredFile.FindAllStringSubmatch(firstString(mapValue(raw)["text"]), -1) {
+				sent[match[1]] = match[2]
 			}
-			generated(file, path.Base(file), mimeType, text, assetReconstructed)
-			c.assets[len(c.assets)-1].Details = map[string]any{"edits": c.edits[file]}
+		}
+		for _, raw := range reasoningList(input["files"]) {
+			if file := firstString(raw); file != "" {
+				handed(file, firstString(sent[path.Base(file)], file), firstString(input["caption"]))
+			}
 		}
 	case name == "visualize:show_widget" && firstString(input["widget_code"]) != "":
 		generated(firstString(block["id"]), strings.ReplaceAll(defaultString(input["title"], "widget"), "_", " ")+".html", "text/html", firstString(input["widget_code"]), assetStored)
@@ -434,8 +519,9 @@ func (c *claudeAssetReader) tool(block, result map[string]any, native string, pl
 }
 
 // claudeArtifactAsset is an exported artifact as its own document holds
-// it: meta is its artifact.json, and members the files beside it.
-func claudeArtifactAsset(group string, meta map[string]any, members map[string]bool) (AssetRecord, bool) {
+// it: meta is its artifact.json, members the files beside it, and comments
+// its comments.json when the export has one.
+func claudeArtifactAsset(group string, meta map[string]any, members map[string]bool, comments any) (AssetRecord, bool) {
 	id := firstString(meta["id"], path.Base(group))
 	current := firstString(meta["active_version"])
 	record := AssetRecord{Ref: claudeArtifactRef(id), Kind: "artifact", Name: "Artifact", Relation: "generated", AgentAuthored: true, Availability: assetNotExported, Version: current,
@@ -443,6 +529,7 @@ func claudeArtifactAsset(group string, meta map[string]any, members map[string]b
 	for _, raw := range reasoningList(meta["versions"]) {
 		version := mapValue(raw)
 		item := AssetVersion{ID: firstString(version["id"]), Title: firstString(version["title"]), Description: firstString(version["description"]), CreatedAt: iso(version["created_at"])}
+		item.Stored = item.ID != "" && claudeArtifactPage(group, item.ID, "", members) != ""
 		record.Versions = append(record.Versions, item)
 		if item.ID == current || current == "" && record.Name == "Artifact" {
 			record.Name = defaultString(item.Title, record.Name)
@@ -451,18 +538,70 @@ func claudeArtifactAsset(group string, meta map[string]any, members map[string]b
 	if !members[record.MessageNativeID] {
 		return record, false
 	}
-	files := 0
-	for name := range members {
-		if strings.HasPrefix(name, group+"/versions/"+current+"/") {
-			files++
+	// What people said about it, each thread on the words it quotes.
+	var threads []any
+	for _, raw := range reasoningList(comments) {
+		thread := mapValue(raw)
+		var said []any
+		for _, rawComment := range reasoningList(thread["comments"]) {
+			comment := mapValue(rawComment)
+			if body := firstString(comment["body"]); body != "" {
+				said = append(said, map[string]any{"body": body, "created_at": iso(comment["created_at"])})
+			}
+		}
+		if len(said) > 0 {
+			threads = append(threads, map[string]any{"quoted_text": firstString(thread["quoted_text"]), "tab": firstString(thread["tab"]), "resolved": thread["resolved"] == true, "comments": said})
 		}
 	}
-	for _, index := range []string{group + "/versions/" + current + "/index.html", group + "/versions/" + current + ".html"} {
-		if current != "" && members[index] {
-			record.MessageNativeID, record.AttachmentNativeID, record.Availability, record.MimeType = index, index, assetStored, "text/html"
-			record.Details["files"] = max(files, 1)
-			break
+	if len(threads) > 0 {
+		record.Details["comments"] = threads
+	}
+	if index := claudeArtifactPage(group, current, "", members); current != "" && index != "" {
+		record.MessageNativeID, record.AttachmentNativeID, record.Availability, record.MimeType = index, index, assetStored, "text/html"
+		// A version is one page, or a directory of them the first opens.
+		root := group + "/versions/" + current + "/"
+		files, pages := 0, []string{}
+		for name := range members {
+			if file, ok := strings.CutPrefix(name, root); ok {
+				files++
+				if extension := strings.ToLower(path.Ext(file)); (extension == ".html" || extension == ".htm") && !strings.HasPrefix(file, "artifact-type/") && !strings.HasPrefix(file, "project/") {
+					pages = append(pages, file)
+				}
+			}
+		}
+		record.Details["files"] = max(files, 1)
+		if members[root+"project/deck.json"] {
+			record.Details["deck"] = true
+		} else if len(pages) > 1 && len(pages) <= 400 {
+			slices.Sort(pages)
+			record.Details["pages"] = pages
+		}
+	} else if page := group + "/page.md"; members[page] {
+		// A living document: the export holds it as it last stood.
+		record.MessageNativeID, record.AttachmentNativeID, record.Availability, record.MimeType = page, page, assetStored, "text/markdown"
+		if path.Ext(record.Name) == "" {
+			record.Name += ".md"
 		}
 	}
 	return record, true
+}
+
+// claudeArtifactPage is the export member that holds one file of an
+// artifact's version, or its opening page when file is empty; empty when
+// the export holds none.
+func claudeArtifactPage(group, version, file string, members map[string]bool) string {
+	if version == "" || strings.Contains(version, "/") {
+		return ""
+	}
+	root := group + "/versions/" + version
+	candidates := []string{root + "/index.html", root + ".html"}
+	if file != "" {
+		candidates = []string{root + "/" + file}
+	}
+	for _, name := range candidates {
+		if members[name] {
+			return name
+		}
+	}
+	return ""
 }

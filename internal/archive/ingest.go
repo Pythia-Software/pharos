@@ -1051,7 +1051,10 @@ func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord
 		if err := recordReasoningState(tx, conversationID, conversation.Messages); err != nil {
 			return 0, 0, err
 		}
-		if err := replaceConversationAssets(tx, conversationID, conversation.Assets, conversation.Sources); err != nil {
+		if err := replaceConversationAssets(tx, conversationID, conversation.Assets, conversation.Sources, conversation.Notes); err != nil {
+			return 0, 0, err
+		}
+		if err := refreshConversationContent(tx, conversationID); err != nil {
 			return 0, 0, err
 		}
 		if force {
@@ -1116,6 +1119,10 @@ func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord
 			return 0, 0, err
 		}
 		if err := replaceToolLedger(tx, workspaceID, conversationID, conversation); err != nil {
+			return 0, 0, err
+		}
+		// The calls that published an artifact are among those just written.
+		if err := refreshConversationContent(tx, conversationID); err != nil {
 			return 0, 0, err
 		}
 		if err := replaceConversationInstructions(tx, workspaceID, conversationID, conversation.Instructions, nil, "transcript"); err != nil {

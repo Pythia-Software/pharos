@@ -336,6 +336,58 @@ test("an export's inline markers read as words, and highlights stay on theirs", 
   assert.deepEqual(plain(exportMarkerText("No markers", "0100000000")), { text: "No markers", mask: "0100000000" });
 });
 
+test("an exported conversation links to its page on the web only where its ID is the address", () => {
+  const { conversationWebLink, artifactWebLink } = reader;
+  const id = "36f90712-7386-4005-b3de-c5020d8e1acd", url = (harness, native_id) => conversationWebLink({ harness, native_id })?.url;
+  assert.equal(url("claude-ai-export", id), "https://claude.ai/chat/" + id);
+  assert.equal(url("chatgpt-export", id), "https://chatgpt.com/c/" + id);
+  assert.equal(url("claude-code-cloud-export", "cse_01EHkcy5"), "https://claude.ai/code/cse_01EHkcy5");
+  assert.equal(url("claude-export-document", "claude-export:artifacts/" + id), "https://claude.ai/artifact/" + id);
+  assert.equal(url("claude-export-document", "claude-export:projects/" + id + ".json"), "https://claude.ai/project/" + id);
+  assert.equal(conversationWebLink({ harness: "chatgpt-export", native_id: id }).site, "chatgpt.com");
+  // Memories and reflections have no page; a session on this machine has none; an ID that is not one makes no address.
+  for (const [harness, native] of [["claude-export-document", "claude-export:memories/" + id + ".json"], ["claude-export-document", "claude-export:reflections/" + id + ".json"],
+    ["claude-export-document", "claude-export:projects/p.json"], ["claude-code/sdk-cli", id], ["claude-ai-export", "../settings?x=" + id], ["claude-code-cloud-export", "cse_1/../x"], ["", ""]]) {
+    assert.equal(url(harness, native), undefined, harness + " " + native);
+  }
+  assert.equal(artifactWebLink({ kind: "artifact", asset_key: "claude-artifact:" + id }).url, "https://claude.ai/artifact/" + id);
+  assert.equal(artifactWebLink({ kind: "artifact", asset_key: "claude-artifact-title:a deck" }), null);
+  assert.equal(artifactWebLink({ kind: "image", asset_key: "claude-artifact:" + id }), null);
+});
+
+test("a citation is marked in the words where the export says it stands", () => {
+  const { citedText, messageNoteLines } = reader;
+  const open = "\ue000", close = "\ue001", E = "\ue200", P = "\ue202", X = "\ue201";
+  // A Claude export counts the cited words in characters: the chip follows
+  // them, an astral character counts once, and two pages cited at one place
+  // stand together. A span past the text, or one that is no web address, is left out.
+  const claude = citedText("Caf\u00e9 \ud83c\udf0a is open. Go.", "", { citations: [
+    { start: 0, end: 15, url: "https://cafe.example/hours" }, { start: 5, end: 15, url: "https://sea.example/" }, { start: 0, end: 15, url: "https://cafe.example/hours" },
+    { start: 16, end: 19, url: "https://cafe.example/hours" }, { start: 0, end: 99, url: "https://far.example/" }, { start: 0, end: 4, url: "javascript:alert(1)" }] });
+  assert.equal(claude.text, `Caf\u00e9 \ud83c\udf0a is open.${open}0${close}${open}1${close} Go.${open}0${close}`);
+  assert.deepEqual(plain(claude.cites), ["https://cafe.example/hours", "https://sea.example/"]);
+  // A highlight stays on its words either side of a chip.
+  const text = "One. Two.", marked = citedText(text, "000001110", { citations: [{ start: 0, end: 4, url: "https://a.example/" }] });
+  assert.equal(marked.mask.length, marked.text.length);
+  assert.equal(marked.mask.indexOf("111"), marked.text.indexOf("Two"));
+  // A ChatGPT export's text holds a marker where each thing was drawn: the
+  // addresses cited at each are given beside the text, in the markers'
+  // order. A marker with none there reads as its words, and one whose
+  // drawing the export does not hold as nothing.
+  const chatgpt = citedText(`Swim at ${E}entity${P}["turn0business0","Heron Lake"]${X}.${E}cite${P}turn9search2${P}turn9news1${X} Then rest.${E}genui${P}{"citation":{"ref":"turn9search9"}}${X}${E}genui${P}eGi3${X}`, "",
+    { marks: [null, ["https://lakes.example/a", "https://parks.example/b", "https://lakes.example/a"], ["https://parks.example/b"], []] });
+  assert.equal(chatgpt.text, `Swim at Heron Lake.${open}0${close}${open}1${close} Then rest.${open}1${close}`);
+  assert.deepEqual(plain(chatgpt.cites), ["https://lakes.example/a", "https://parks.example/b"]);
+  // Without notes the words are as before, markers read as words.
+  assert.deepEqual(plain(citedText(`Lake${E}cite${P}turn0search2${X}`)), { text: "Lake", mask: "", cites: [] });
+  // What else the export says of a message is set under it in words.
+  assert.deepEqual(plain(messageNoteLines({ text: "x".repeat(100), notes: { spoken_chars: 96 } })), ["Read aloud"]);
+  assert.deepEqual(plain(messageNoteLines({ text: "x".repeat(200), notes: { spoken_chars: 22 } })), ["Read aloud in part: about 11% was spoken"]);
+  assert.deepEqual(plain(messageNoteLines({ text: "Never said", notes: { spoken_chars: 0 } })), ["Voice reply, not read aloud"]);
+  assert.deepEqual(plain(messageNoteLines({ text: "Thinking", notes: { cut_off: true, truncated: true } })), ["Thinking was cut off", "Thinking is shortened in the export"]);
+  assert.deepEqual(plain(messageNoteLines({ text: "Plain" })), []);
+});
+
 test("source text is cut into comments, strings, numbers and keywords by its extension", () => {
   const { highlightCode } = reader, runs = (text, name) => plain(highlightCode(text, name)).filter(run => run.kind).map(run => [run.kind, run.text]);
   const script = "// total\nconst sum = add(1, 'a//b'); /* done */";

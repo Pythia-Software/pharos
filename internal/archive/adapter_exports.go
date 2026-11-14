@@ -316,6 +316,7 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 	selected := chatGPTSelected(conversation, children)
 	messages := []MessageRecord{}
 	assets, sources := []AssetRecord{}, []SourceRecord{}
+	var notes []NoteRecord
 	// read is the message each node, or the nearest node above it, was
 	// read as; calls and tools are the call each call or reply node
 	// belongs to, and its tool; replies marks the replies.
@@ -503,8 +504,12 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 			assets = append(assets, chatGPTAssetRecord(attachment, role, read[nodeID], attached.NativeID))
 		}
 		if role == "assistant" {
-			cited, images := chatGPTSources(metadata, read[nodeID])
+			cited, images, marks := chatGPTSources(metadata, read[nodeID], messageText(content["parts"]))
 			sources, assets = append(sources, cited...), append(assets, images...)
+			assets = append(assets, chatGPTWidgets(messageText(content["parts"]), read[nodeID])...)
+			if len(marks) > 0 {
+				notes = append(notes, NoteRecord{MessageNativeID: read[nodeID], Details: map[string]any{"marks": marks}})
+			}
 		}
 	}
 	active, model := []MessageRecord{}, ""
@@ -614,6 +619,7 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 	if len(sources) > 0 {
 		record.Conversations[0].Sources = sources
 	}
+	record.Conversations[0].Notes = notes
 	return record
 }
 

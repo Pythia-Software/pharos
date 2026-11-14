@@ -87,19 +87,56 @@ function highlightCode(text,name){
 // character, or empty) is cut the same way, so highlights stay on their words.
 const EXPORT_MARKER=/([^-]*)(?:([^]*))?/g;
 function exportMarkerWords(type,payload){
-  if(type==='cite'||type==='filecite'||type==='imagegroup'||type==='image_group')return '';
+  if(type==='cite'||type==='filecite'||type==='imagegroup'||type==='image_group'||type==='visualize')return '';
   let value=null;try{value=JSON.parse(payload)}catch{}
   if(type==='entity')return Array.isArray(value)?String(value[1]??''):'';
   const name=value&&typeof value==='object'&&!Array.isArray(value)?Object.keys(value)[0]:'';
   return '['+String(name||type||'widget').replace(/_/g,' ')+']';
 }
-function exportMarkerText(text,mask=''){
+function exportMarkerText(text,mask='',mark=null){
   text=String(text??'');if(!text.includes(''))return{text,mask};
   let shown='',flags='',at=0;const keep=(from,to)=>{shown+=text.slice(from,to);if(mask)flags+=mask.slice(from,to).padEnd(to-from,'0')};
+  let count=0;
   for(const match of text.matchAll(EXPORT_MARKER)){
-    keep(at,match.index);const words=exportMarkerWords(match[1],match[2]??'');shown+=words;if(mask)flags+=(mask[match.index]||'0').repeat(words.length);at=match.index+match[0].length;
+    keep(at,match.index);const words=mark?.(count++)??exportMarkerWords(match[1],match[2]??'');shown+=words;if(mask)flags+=(mask[match.index]||'0').repeat(words.length);at=match.index+match[0].length;
   }
   keep(at,text.length);return{text:shown,mask:flags};
+}
+// Where a reply cites a page, the reader sets a chip naming the site.
+// citedText puts each into the text as U+E000, a number, U+E001: the number
+// is the address's place in cites. A Claude export gives, beside the text,
+// the characters each citation covers (notes.citations), and the chip goes
+// after them; a ChatGPT export's text holds a marker where each thing was
+// drawn, and notes.marks gives, for each marker in turn, the addresses
+// cited there. The mask is cut the same way.
+function citedText(text,mask='',notes=null){
+  text=String(text??'');const cites=[],token=url=>{let at=cites.indexOf(url);if(at<0)at=cites.push(url)-1;return ''+at+''},web=url=>/^https?:\/\//.test(url||'');
+  const ends=new Map();
+  for(const span of Array.isArray(notes?.citations)?notes.citations:[]){const end=Number(span?.end),url=String(span?.url||'');if(!Number.isInteger(end)||end<=0||!web(url))continue;const list=ends.get(end)||[];if(!list.includes(url))list.push(url);ends.set(end,list)}
+  if(ends.size){
+    // The export counts characters; a string here counts UTF-16 units.
+    let shown='',flags='',from=0,points=0;const keep=to=>{shown+=text.slice(from,to);if(mask)flags+=mask.slice(from,to).padEnd(to-from,'0');from=to};
+    for(let at=0;;points++){
+      if(ends.has(points)){keep(at);const chips=ends.get(points).map(token).join('');shown+=chips;if(mask)flags+='0'.repeat(chips.length)}
+      if(at>=text.length)break;at+=text.codePointAt(at)>0xffff?2:1;
+    }
+    keep(text.length);text=shown;mask=flags;
+  }
+  const marks=Array.isArray(notes?.marks)?notes.marks:null;
+  const shown=exportMarkerText(text,mask,marks?at=>Array.isArray(marks[at])?[...new Set(marks[at].filter(web))].map(token).join(''):null:null);
+  return{text:shown.text,mask:shown.mask,cites};
+}
+// What a source says of a message beside its words (message.notes), as
+// lines to set under it.
+function messageNoteLines(message){
+  const notes=message?.notes,lines=[];if(!notes||typeof notes!=='object')return lines;
+  if(Number.isFinite(notes.spoken_chars)){
+    const length=[...String(message.text??'')].length,spoken=notes.spoken_chars;
+    lines.push(spoken<=0?'Voice reply, not read aloud':length&&spoken<length*.9?`Read aloud in part: about ${Math.max(1,Math.round(spoken/length*100))}% was spoken`:'Read aloud');
+  }
+  if(notes.cut_off)lines.push('Thinking was cut off');
+  if(notes.truncated)lines.push('Thinking is shortened in the export');
+  return lines;
 }
 function displayText(message){const value=messageJSON(message);return commonEventText(value)||(value?eventDescription(value):String(message?.text??''))}
 function eventDescription(value){if(Array.isArray(value))return `${value.length} recorded items`;if(!value||typeof value!=='object')return String(value??'');return shortText([value.type||value.kind||'Recorded event',value.subtype,value.description||value.summary||value.status].filter(Boolean).join(' · '),180)}
@@ -161,6 +198,22 @@ function chatGPTMessageContext(message){
   const referenceKinds=[...new Set((Array.isArray(metadata.content_references)?metadata.content_references:[]).map(value=>value?.type).filter(value=>typeof value==='string'))];
   return {references,directions,referenceKinds,model:typeof metadata.model_slug==='string'?metadata.model_slug:'',clipped:!!message.raw_clipped};
 }
+// Where a conversation an export gave is on the web, for the kinds whose
+// address is its ID there: a chat, a cloud session, an artifact or a
+// project. The page needs the person's own sign-in, and may be gone.
+const webID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function conversationWebLink(conversation){
+  const id=String(conversation?.native_id||''),claude=(path,value)=>webID.test(value)?{url:'https://claude.ai/'+path+'/'+value,site:'claude.ai'}:null;
+  switch(conversation?.harness){
+    case 'claude-ai-export':return claude('chat',id);
+    case 'chatgpt-export':return webID.test(id)?{url:'https://chatgpt.com/c/'+id,site:'chatgpt.com'}:null;
+    case 'claude-code-cloud-export':return /^cse_[0-9A-Za-z]+$/.test(id)?{url:'https://claude.ai/code/'+id,site:'claude.ai'}:null;
+    case 'claude-export-document':{const [,kind,name]=/^claude-export:(artifacts|projects)\/([^/]+?)(?:\.json)?$/.exec(id)||[];return kind?claude(kind==='artifacts'?'artifact':'project',name):null}
+  }
+  return null;
+}
+// An artifact a conversation refers to by its ID has the same page.
+function artifactWebLink(asset){const id=String(asset?.asset_key||'').replace(/^claude-artifact:/,'');return asset?.kind==='artifact'&&webID.test(id)?{url:'https://claude.ai/artifact/'+id,site:'claude.ai'}:null}
 function chatGPTConversationContext(conversation){
   if(conversation.provider!=='chatgpt')return null;
   const evidence=(conversation.messages||[]).map(message=>messageJSON(message)).find(value=>value?.source==='chatgpt_export');

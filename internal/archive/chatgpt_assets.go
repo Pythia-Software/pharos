@@ -1,8 +1,11 @@
 package archive
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -97,9 +100,13 @@ func chatGPTSourceURL(raw string) string {
 }
 
 // chatGPTSources reads the pages a message cites, then the search results
-// it was given without citing, each once.
-func chatGPTSources(metadata map[string]any, owner string) (sources []SourceRecord, images []AssetRecord) {
+// it was given without citing, each once. The text holds a marker where
+// its app drew each reference, in the references' order: marks is, for each
+// marker, the addresses cited there, an empty list for a thing drawn there
+// that the export does not hold, or nil for a marker that reads as words.
+func chatGPTSources(metadata map[string]any, owner, text string) (sources []SourceRecord, images []AssetRecord, marks []any) {
 	index := map[string]int{}
+	var drawn []any
 	add := func(raw, title, site, snippet, kind string, cited bool) {
 		link := chatGPTSourceURL(raw)
 		if kind == "past_chat" {
@@ -121,12 +128,29 @@ func chatGPTSources(metadata map[string]any, owner string) (sources []SourceReco
 	}
 	for _, raw := range reasoningList(metadata["content_references"]) {
 		reference := mapValue(raw)
+		var here any
 		switch firstString(reference["type"]) {
 		case "grouped_webpages":
+			cited := []any{}
 			for _, item := range reasoningList(reference["items"]) {
 				page := mapValue(item)
 				add(firstString(page["url"]), firstString(page["title"]), firstString(page["attribution"]), firstString(page["snippet"]), "web", true)
+				if link := chatGPTSourceURL(firstString(page["url"])); link != "" && !slices.Contains(cited, any(link)) {
+					cited = append(cited, link)
+				}
 			}
+			here = cited
+		case "dil":
+			// Something its app drew live, such as the weather: the export
+			// holds only that it was there.
+			here = []any{}
+		case "sources_footnote":
+			// The list of sources ChatGPT set under the reply.
+			for _, item := range reasoningList(reference["sources"]) {
+				page := mapValue(item)
+				add(firstString(page["url"]), firstString(page["title"]), firstString(page["attribution"]), "", "web", true)
+			}
+			continue
 		case "image_group":
 			// Images ChatGPT showed from the web: the export holds their
 			// addresses only.
@@ -142,6 +166,12 @@ func chatGPTSources(metadata map[string]any, owner string) (sources []SourceReco
 					Details: map[string]any{"url": remote, "thumbnail_url": firstString(image["thumbnail_url"]), "page_url": chatGPTSourceURL(firstString(image["url"])), "original_url": firstString(image["original_content_url"])}})
 			}
 		}
+		drawn = append(drawn, here)
+	}
+	// An export from before the markers has none: its references then have
+	// no place in the text.
+	if slices.ContainsFunc(drawn, func(here any) bool { return here != nil }) && len(speechExportMarker.FindAllStringIndex(text, -1)) == len(drawn) {
+		marks = drawn
 	}
 	for _, raw := range reasoningList(metadata["conversation_context_citation_metadata"]) {
 		citation := mapValue(mapValue(raw)["citation"])
@@ -155,5 +185,50 @@ func chatGPTSources(metadata map[string]any, owner string) (sources []SourceReco
 			add(firstString(entry["url"]), firstString(entry["title"]), firstString(entry["attribution"]), firstString(entry["snippet"]), "web", false)
 		}
 	}
-	return sources, images
+	return sources, images, marks
+}
+
+// chatGPTWidgets reads what ChatGPT drew inside a reply from data the text
+// itself holds: a map of places, as the list of them; a page it made, by
+// the path it was made at.
+func chatGPTWidgets(text, owner string) (widgets []AssetRecord) {
+	for index, match := range speechExportMarker.FindAllStringSubmatch(text, -1) {
+		var value map[string]any
+		if match[1] != "genui" && match[1] != "visualize" || json.Unmarshal([]byte(match[2]), &value) != nil {
+			continue
+		}
+		ref := fmt.Sprintf("%s:widget:%d", owner, index)
+		if file := firstString(value["path"]); match[1] == "visualize" && file != "" {
+			widgets = append(widgets, AssetRecord{MessageNativeID: owner, Ref: ref, Name: path.Base(file), Kind: assetKind("", file), Relation: "generated", AgentAuthored: true,
+				Availability: assetNotExported, Details: map[string]any{"path": file, "widget": "page"}})
+			continue
+		}
+		for name, raw := range value {
+			widget := mapValue(raw)
+			points := reasoningList(widget["points"])
+			if widget == nil || len(points) == 0 && firstString(widget["answer"]) == "" {
+				continue
+			}
+			var list strings.Builder
+			if answer := firstString(widget["answer"]); answer != "" {
+				list.WriteString(answer + "\n\n")
+			}
+			for _, rawPoint := range points {
+				point := mapValue(rawPoint)
+				if place := firstString(point["name"], point["address"]); place != "" {
+					list.WriteString("- **" + place + "**")
+					for _, more := range []string{firstString(point["category"]), firstString(point["address"])} {
+						if more != "" && more != place {
+							list.WriteString(" · " + more)
+						}
+					}
+					list.WriteString("\n")
+				}
+			}
+			title := strings.TrimSuffix(strings.ReplaceAll(name, "_", " "), " widget")
+			widgets = append(widgets, AssetRecord{MessageNativeID: owner, Ref: ref, Name: strings.ToUpper(title[:1]) + title[1:] + ".md", Kind: "document", MimeType: "text/markdown", Relation: "generated", AgentAuthored: true,
+				Availability: assetStored, Content: list.String(), SizeBytes: int64(list.Len()), Details: map[string]any{"widget": name, "places": len(points)}})
+		}
+	}
+	return widgets
 }

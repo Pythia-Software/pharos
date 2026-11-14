@@ -111,7 +111,21 @@ func TestWidgetIsServedInsideAHostPage(t *testing.T) {
 	ingestRecords(t, c, WorkspaceRecord{SourceKind: "claude-ai", SourceID: "plots", Account: "local", Title: "Plots", ActivityAt: "2026-10-04T12:00:00Z",
 		Conversations: []ConversationRecord{{NativeID: "plots", Provider: "claude", Messages: []MessageRecord{{NativeID: "reply", Role: "assistant", Kind: "message", Text: "Plots", Selected: true}},
 			Assets: []AssetRecord{{MessageNativeID: "reply", Ref: "w", Kind: "document", Name: "plots.html", MimeType: "text/html", Relation: "generated", AgentAuthored: true, Availability: assetStored,
-				Content: widgetFixture, Details: map[string]any{"fragment": true}}}}}})
+				Content: widgetFixture, Details: map[string]any{"fragment": true}}},
+			Notes: []NoteRecord{{MessageNativeID: "reply", Details: map[string]any{"spoken_chars": 4}}, {MessageNativeID: "no such message", Details: map[string]any{"cut_off": true}}}}}})
+	// What the source noted of the reply reaches the reader with it.
+	var conversation, noted string
+	if err := c.reader().QueryRow("SELECT (SELECT id FROM conversations),(SELECT COUNT(*)||details FROM message_notes)").Scan(&conversation, &noted); err != nil || noted != `1{"spoken_chars":4}` {
+		t.Fatal(noted, err)
+	}
+	attach, err := c.messageAssetsAttacher(context.Background(), conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := map[string]any{"id": stableID("message", conversation, "reply")}
+	if attach(reply); integer(mapValue(reply["notes"])["spoken_chars"]) != 4 {
+		t.Fatalf("notes = %v", reply["notes"])
+	}
 	var id string
 	if err := c.reader().QueryRow("SELECT id FROM message_assets").Scan(&id); err != nil {
 		t.Fatal(err)

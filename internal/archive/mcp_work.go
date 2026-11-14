@@ -7,7 +7,7 @@ import "context"
 func (c *Catalog) searchWorkContext(ctx context.Context, args map[string]any) (map[string]any, error) {
 	limit := clamp(int(integer(valueOr(args["limit"], 50))), 1, 100)
 	offset := max(0, int(integer(args["offset"])))
-	options := SearchOptions{Query: firstString(args["query"]), Repository: firstString(args["repository"]), Project: firstString(args["project"]), Source: firstString(args["source"]), File: firstString(args["file"]), Owner: firstString(args["owner"]), Provider: firstString(args["provider"]), Model: firstString(args["model"]), Effort: firstString(args["effort"]), From: firstString(args["from"]), To: firstString(args["to"]), Flavor: firstString(args["flavor"]), Version: firstString(args["version"]), Outcome: firstString(args["outcome"]), Error: firstString(args["error"]), Metric: firstString(args["metric"]), Limit: limit, Offset: offset, ctx: ctx}
+	options := SearchOptions{Has: contentFilterText(args["has"]), Query: firstString(args["query"]), Repository: firstString(args["repository"]), Project: firstString(args["project"]), Source: firstString(args["source"]), File: firstString(args["file"]), Owner: firstString(args["owner"]), Provider: firstString(args["provider"]), Model: firstString(args["model"]), Effort: firstString(args["effort"]), From: firstString(args["from"]), To: firstString(args["to"]), Flavor: firstString(args["flavor"]), Version: firstString(args["version"]), Outcome: firstString(args["outcome"]), Error: firstString(args["error"]), Metric: firstString(args["metric"]), Limit: limit, Offset: offset, ctx: ctx}
 	if args["pr"] != nil {
 		value := int(integer(args["pr"]))
 		options.PR = &value

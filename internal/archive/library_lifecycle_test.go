@@ -462,7 +462,8 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	attached := WorkspaceRecord{SourceKind: "chatgpt", SourceID: "attached", Account: "local", Title: "Attached", ActivityAt: "2026-10-04T12:00:00Z",
 		Conversations: []ConversationRecord{{NativeID: "attached", Provider: "openai", Messages: []MessageRecord{{NativeID: "reply", Role: "assistant", Kind: "message", Text: "Lakes", Selected: true}},
 			Assets:  []AssetRecord{{MessageNativeID: "reply", Ref: "lake", Kind: "image", Name: "Lake", Relation: "web", Availability: assetRemote, Details: map[string]any{"url": "https://img.example/lake.png"}}},
-			Sources: []SourceRecord{{MessageNativeID: "reply", URL: "https://lakes.example/a", Title: "Lakes", Cited: true}}}}}
+			Sources: []SourceRecord{{MessageNativeID: "reply", URL: "https://lakes.example/a", Title: "Lakes", Cited: true}},
+			Notes:   []NoteRecord{{MessageNativeID: "reply", Details: map[string]any{"spoken_chars": 3}}}}}}
 	ingestRecords(t, c, attached)
 	tx := seedTx(t, c.DB)
 	if _, err := tx.Exec(`INSERT INTO remote_assets(url,mime_type,content,fetched_at,attempts) VALUES('https://img.example/lake.png','image/png',x'89504e47','2026-10-04T12:00:00Z',1)`); err != nil {
@@ -477,6 +478,7 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 		conversation := record.Conversations[0]
 		conversation.Assets = append(slices.Clone(conversation.Assets), AssetRecord{MessageNativeID: "reply", Ref: "stale", Kind: "document", Name: "Stale", Relation: "generated", Availability: assetNotExported})
 		conversation.Sources = append(slices.Clone(conversation.Sources), SourceRecord{MessageNativeID: "reply", URL: "https://stale.example/b"})
+		conversation.Notes = []NoteRecord{{MessageNativeID: "reply", Details: map[string]any{"spoken_chars": 1, "cut_off": true}}}
 		record.Conversations = []ConversationRecord{conversation}
 		ingestRecords(t, receiving, record)
 		if _, err := receiving.DB.Exec(`INSERT INTO remote_assets(url,fetched_at,error,attempts) VALUES('https://img.example/lake.png','2026-10-03T12:00:00Z','HTTP 503',3)`); err != nil {
@@ -520,9 +522,9 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 			t.Fatalf("settings observations changed in %s: got %s, want %s (%v)", path, jsonText(rows), jsonText(settingsRows), err)
 		}
 		var attached string
-		if err := db.QueryRow(`SELECT (SELECT COUNT(*) FROM message_assets)||' '||(SELECT COUNT(*) FROM message_sources)||' '||(SELECT name||':'||json_extract(details,'$.url') FROM message_assets)||' '||(SELECT url||':'||cited FROM message_sources)||' '||(SELECT hex(content) FROM remote_assets)`).Scan(&attached); err != nil ||
-			attached != "1 1 Lake:https://img.example/lake.png https://lakes.example/a:1 89504E47" {
-			t.Fatalf("attachments, sources and fetched images in %s: %q (%v)", path, attached, err)
+		if err := db.QueryRow(`SELECT (SELECT COUNT(*) FROM message_assets)||' '||(SELECT COUNT(*) FROM message_sources)||' '||(SELECT name||':'||json_extract(details,'$.url') FROM message_assets)||' '||(SELECT url||':'||cited FROM message_sources)||' '||(SELECT hex(content) FROM remote_assets)||' '||(SELECT COUNT(*)||details FROM message_notes)`).Scan(&attached); err != nil ||
+			attached != `1 1 Lake:https://img.example/lake.png https://lakes.example/a:1 89504E47 1{"spoken_chars":3}` {
+			t.Fatalf("attachments, sources, notes and fetched images in %s: %q (%v)", path, attached, err)
 		}
 	}
 	for id, expression := range map[string]string{"seconds": "[duration_ms]/1000", "double_seconds": "[@computed/seconds]*2"} {

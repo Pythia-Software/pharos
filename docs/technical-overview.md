@@ -455,6 +455,19 @@ response budget (defaulting to 700–1,200 depending on the tool). Search cards
 include coverage and index freshness; conversation documents are generated
 locally and existing catalogs are backfilled on opening.
 
+`search_conversations`, `search_work`, `GET /api/search` and `pharos search`
+take `has`: kinds of content a conversation must hold beside its words
+(`voice`, `voice_recordings`, `uploads`, `uploaded_images`,
+`generated_images`, `generated_files`, `artifacts`, `widgets`, `web_sources`,
+`citations`, `missing_files`). All named kinds must be held; a workspace
+matches when one of its conversations holds them all. Conversation cards and
+overviews list what a conversation holds as `has`, a kind to how many. The
+kinds are stored a row each in `conversation_content`, rewritten with the
+conversation at ingestion from its attachments, sources and notes and from
+the calls that published an artifact (`conversation_content.go`); an
+existing catalog derives them on opening without reading a source again.
+Most kinds are recorded only for ChatGPT and Claude.ai exports.
+
 `list_repositories` comes before them: the repositories with sessions, most
 recently active first, each with its conversation count, latest message
 (`last_message_at`, the latest conversation end or start), and latest capture

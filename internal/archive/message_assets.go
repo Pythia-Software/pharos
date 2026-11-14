@@ -5,12 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -41,6 +43,8 @@ type AssetVersion struct {
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
 	CreatedAt   string `json:"created_at,omitempty"`
+	// Stored says the source holds this version's content.
+	Stored bool `json:"stored,omitempty"`
 }
 
 // AssetRecord is an asset as one message refers to it.
@@ -96,16 +100,27 @@ type SourceRecord struct {
 	Cited           bool   `json:",omitempty"`
 }
 
+// NoteRecord is what a source records about one message beside its text.
+// Details holds, as the source gives them: citations, each a start and end
+// in the text's characters and the address cited there; marks, for each
+// marker the text itself holds, the addresses cited there; spoken_chars,
+// how much of a reply was read aloud; cut_off and truncated, for thinking
+// the source did not keep whole.
+type NoteRecord struct {
+	MessageNativeID string
+	Details         map[string]any
+}
+
 // replaceConversationAssets stores what a read of a conversation recorded,
 // in the transaction that wrote its messages. A reference to a message the
 // read does not hold is dropped.
-func replaceConversationAssets(tx *sql.Tx, conversationID string, assets []AssetRecord, sources []SourceRecord) error {
-	for _, table := range []string{"message_assets", "message_sources"} {
+func replaceConversationAssets(tx *sql.Tx, conversationID string, assets []AssetRecord, sources []SourceRecord, notes []NoteRecord) error {
+	for _, table := range []string{"message_assets", "message_sources", "message_notes"} {
 		if _, err := tx.Exec("DELETE FROM "+table+" WHERE conversation_id=?", conversationID); err != nil {
 			return err
 		}
 	}
-	if len(assets) == 0 && len(sources) == 0 {
+	if len(assets) == 0 && len(sources) == 0 && len(notes) == 0 {
 		return nil
 	}
 	known := map[string]bool{}
@@ -184,6 +199,15 @@ func replaceConversationAssets(tx *sql.Tx, conversationID string, assets []Asset
 			return err
 		}
 	}
+	for _, note := range notes {
+		messageID := stableID("message", conversationID, note.MessageNativeID)
+		if !known[messageID] || len(note.Details) == 0 {
+			continue
+		}
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO message_notes(message_id,conversation_id,details) VALUES(?,?,?)`, messageID, conversationID, jsonText(note.Details)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -206,10 +230,24 @@ func (c *Catalog) messageAssetsAttacher(ctx context.Context, conversationID stri
 	if err != nil {
 		return nil, err
 	}
-	if len(assets) == 0 && len(sources) == 0 {
+	notes, err := queryMapsContext(ctx, c.reader(), `SELECT message_id,details FROM message_notes WHERE conversation_id=?`, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	published, err := c.publishedArtifactCalls(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	if len(assets) == 0 && len(sources) == 0 && len(notes) == 0 && len(published) == 0 {
 		return func(map[string]any) {}, nil
 	}
-	byMessage, sourcesByMessage := map[string][]map[string]any{}, map[string][]map[string]any{}
+	byMessage, sourcesByMessage, notesByMessage := map[string][]map[string]any{}, map[string][]map[string]any{}, map[string]any{}
+	for _, note := range notes {
+		var details map[string]any
+		if json.Unmarshal([]byte(firstString(note["details"])), &details) == nil && len(details) > 0 {
+			notesByMessage[firstString(note["message_id"])] = details
+		}
+	}
 	var fetched map[string]bool
 	for _, asset := range assets {
 		if asset["availability"] == assetRemote {
@@ -260,6 +298,9 @@ func (c *Catalog) messageAssetsAttacher(ctx context.Context, conversationID stri
 	if err := c.resolveArtifactReferences(ctx, conversationID, assets); err != nil {
 		return nil, err
 	}
+	if err := c.attachPublishedArtifacts(ctx, conversationID, published, assets, byMessage); err != nil {
+		return nil, err
+	}
 	return func(message map[string]any) {
 		id := firstString(message["id"])
 		if list := byMessage[id]; list != nil {
@@ -267,6 +308,9 @@ func (c *Catalog) messageAssetsAttacher(ctx context.Context, conversationID stri
 		}
 		if list := sourcesByMessage[id]; list != nil {
 			message["sources"] = list
+		}
+		if note := notesByMessage[id]; note != nil {
+			message["notes"] = note
 		}
 	}, nil
 }
@@ -299,7 +343,7 @@ func assetContentType(declared, name string, data []byte) string {
 // person consented to opening it.
 func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	id, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/api/assets/"), "/")
-	rows, err := queryMapsContext(r.Context(), s.Catalog.reader(), `SELECT a.name,a.kind,COALESCE(r.mime_type,a.mime_type) AS mime_type,a.availability,a.agent_authored,a.source_file,a.member,COALESCE(a.content,r.content) AS content,a.attachment_message_id,a.details,c.workspace_id
+	rows, err := queryMapsContext(r.Context(), s.Catalog.reader(), `SELECT a.name,a.kind,COALESCE(r.mime_type,a.mime_type) AS mime_type,a.availability,a.agent_authored,a.source_file,a.member,COALESCE(a.content,r.content) AS content,a.attachment_message_id,a.details,a.conversation_id,c.workspace_id
 		FROM message_assets a JOIN conversations c ON c.id=a.conversation_id
 		LEFT JOIN remote_assets r ON a.availability='remote' AND r.url=json_extract(a.details,'$.url') WHERE a.id=?`, id)
 	if err != nil || len(rows) != 1 {
@@ -313,6 +357,23 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		data = content
 	case string:
 		data = []byte(content)
+	}
+	name, declared := firstString(row["name"]), firstString(row["mime_type"])
+	if row["kind"] == "artifact" && data == nil && row["availability"] == assetStored {
+		// An exported artifact: the version and file asked for, or its
+		// opening page, with what the page loads from beside it.
+		file := r.URL.Query().Get("file")
+		page, served, held, found := s.artifactRequest(r.Context(), firstString(row["conversation_id"]), firstString(row["attachment_message_id"]), r.URL.Query().Get("version"), file)
+		if held && !found {
+			http.NotFound(w, r)
+			return
+		}
+		if held {
+			data = page
+			if file != "" {
+				name, declared = served, ""
+			}
+		}
 	}
 	if attachment := firstString(row["attachment_message_id"]); data == nil && row["availability"] != assetNotExported && firstString(row["source_file"]) == "" && attachment != "" {
 		// A text file an export document's message already holds whole.
@@ -336,8 +397,7 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	name := firstString(row["name"])
-	contentType := assetContentType(firstString(row["mime_type"]), name, data)
+	contentType := assetContentType(declared, name, data)
 	disposition := "attachment"
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
@@ -374,6 +434,64 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
 }
 
+// exportArtifactDocuments are the artifacts the export holds as documents
+// of their own, other than the conversation's.
+func (c *Catalog) exportArtifactDocuments(ctx context.Context, conversationID string) ([]map[string]any, error) {
+	return queryMapsContext(ctx, c.reader(), `SELECT a.id,a.asset_key,a.name,a.availability,a.mime_type,a.version,a.versions,a.details,a.conversation_id,c.workspace_id FROM message_assets a
+		JOIN conversations c ON c.id=a.conversation_id WHERE a.asset_key>='claude-artifact:' AND a.asset_key<'claude-artifact;' AND a.kind='artifact' AND a.conversation_id<>?
+		AND c.harness='claude-export-document'`, conversationID)
+}
+
+func artifactDocumentVersions(document map[string]any) []AssetVersion {
+	var versions []AssetVersion
+	_ = json.Unmarshal([]byte(firstString(document["versions"])), &versions)
+	return versions
+}
+
+// artifactReferenceMatches reports whether a conversation's reference to an
+// artifact, by ID or when its tool call gave none by title or description,
+// names the document with these versions.
+func artifactReferenceMatches(key, description, documentKey string, versions []AssetVersion) bool {
+	if key == documentKey {
+		return true
+	}
+	wanted := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(key, "claude-artifact-title:")))
+	description = strings.ToLower(strings.TrimSpace(description))
+	for _, version := range versions {
+		title, about := strings.ToLower(strings.TrimSpace(version.Title)), strings.ToLower(strings.TrimSpace(version.Description))
+		if wanted != strings.ToLower(key) && (title == wanted || about == wanted) || description != "" && about == description {
+			return true
+		}
+	}
+	return false
+}
+
+// completeArtifactReference fills a conversation's reference to an artifact
+// from the export's document of it.
+func completeArtifactReference(asset, document map[string]any, versions []AssetVersion) {
+	details := mapValueDefault(asset["details"])
+	var documentDetails map[string]any
+	_ = json.Unmarshal([]byte(firstString(document["details"])), &documentDetails)
+	for name, value := range documentDetails {
+		details[name] = value
+	}
+	asset["details"], asset["name"], asset["versions"] = details, document["name"], versions
+	if document["availability"] == assetStored || asset["availability"] == assetNotExported {
+		// A copy rebuilt from the conversation's calls stands until the export's own is held.
+		asset["availability"] = document["availability"]
+	}
+	if version := firstString(document["version"]); version != "" {
+		asset["version"] = version
+	}
+	asset["document"] = map[string]any{"workspace_id": document["workspace_id"], "conversation_id": document["conversation_id"]}
+	if document["availability"] == assetStored {
+		asset["url"] = "/api/assets/" + firstString(document["id"])
+		if kind := firstString(document["mime_type"]); kind != "" {
+			asset["mime_type"] = kind
+		}
+	}
+}
+
 // resolveArtifactReferences completes each artifact a conversation refers
 // to from the export's own document of it, which holds the versions and,
 // when the export included it, the content. The reference names the
@@ -388,49 +506,205 @@ func (c *Catalog) resolveArtifactReferences(ctx context.Context, conversationID 
 	if len(open) == 0 {
 		return nil
 	}
-	held, err := queryMapsContext(ctx, c.reader(), `SELECT a.id,a.asset_key,a.name,a.availability,a.version,a.versions,a.details,a.conversation_id,c.workspace_id FROM message_assets a
-		JOIN conversations c ON c.id=a.conversation_id WHERE a.asset_key>='claude-artifact:' AND a.asset_key<'claude-artifact;' AND a.kind='artifact' AND a.conversation_id<>?
-		AND c.harness='claude-export-document'`, conversationID)
+	held, err := c.exportArtifactDocuments(ctx, conversationID)
 	if err != nil {
 		return err
 	}
 	for _, asset := range open {
-		key := firstString(asset["asset_key"])
-		wanted := strings.TrimPrefix(key, "claude-artifact-title:")
-		description := strings.ToLower(strings.TrimSpace(firstString(mapValue(asset["details"])["description"])))
 		for _, document := range held {
-			var versions []AssetVersion
-			_ = json.Unmarshal([]byte(firstString(document["versions"])), &versions)
-			match := document["asset_key"] == key
-			for _, version := range versions {
-				title, about := strings.ToLower(strings.TrimSpace(version.Title)), strings.ToLower(strings.TrimSpace(version.Description))
-				match = match || wanted != key && (title == wanted || about == wanted) || description != "" && about == description
+			versions := artifactDocumentVersions(document)
+			if artifactReferenceMatches(firstString(asset["asset_key"]), firstString(mapValue(asset["details"])["description"]), firstString(document["asset_key"]), versions) {
+				completeArtifactReference(asset, document, versions)
+				break
 			}
-			if !match {
-				continue
-			}
-			details := mapValueDefault(asset["details"])
-			var documentDetails map[string]any
-			_ = json.Unmarshal([]byte(firstString(document["details"])), &documentDetails)
-			for name, value := range documentDetails {
-				details[name] = value
-			}
-			asset["details"], asset["name"], asset["versions"] = details, document["name"], versions
-			if document["availability"] == assetStored || asset["availability"] == assetNotExported {
-				// A copy rebuilt from the conversation's calls stands until the export's own is held.
-				asset["availability"] = document["availability"]
-			}
-			if version := firstString(document["version"]); version != "" {
-				asset["version"] = version
-			}
-			asset["document"] = map[string]any{"workspace_id": document["workspace_id"], "conversation_id": document["conversation_id"]}
-			if document["availability"] == assetStored {
-				asset["url"] = "/api/assets/" + firstString(document["id"])
-			}
-			break
 		}
 	}
 	return nil
+}
+
+// artifactPublished reads the version an agent's Artifact tool said it
+// published: the same ID the export gives that version of the artifact, in
+// whichever application the agent ran.
+var artifactPublished = regexp.MustCompile(`claude\.ai/artifact/[\w-]+ \((?:Version \d+, )?version(?: id)? ([\w-]+)\)`)
+
+type artifactCall struct{ conversation, workspace, message, version string }
+
+// publishedArtifactCalls are the Artifact tool calls that published a
+// version, in one conversation or, with none named, in the library.
+func (c *Catalog) publishedArtifactCalls(ctx context.Context, conversationID string) ([]artifactCall, error) {
+	query, args := `SELECT t.conversation_id,t.workspace_id,t.call_message_id,m.text FROM tool_calls t JOIN messages m ON m.id=t.result_message_id WHERE t.tool_name='Artifact'`, []any{}
+	if conversationID != "" {
+		query, args = query+" AND t.conversation_id=? ORDER BY t.sequence", []any{conversationID}
+	}
+	rows, err := queryMapsContext(ctx, c.reader(), query, args...)
+	if err != nil {
+		return nil, err
+	}
+	var calls []artifactCall
+	for _, row := range rows {
+		if match := artifactPublished.FindStringSubmatch(firstString(row["text"])); match != nil && firstString(row["call_message_id"]) != "" {
+			calls = append(calls, artifactCall{firstString(row["conversation_id"]), firstString(row["workspace_id"]), firstString(row["call_message_id"]), match[1]})
+		}
+	}
+	return calls, nil
+}
+
+// attachPublishedArtifacts shows an artifact in the conversation whose agent
+// published it, at the last call that did, when the export holds the
+// artifact and the conversation does not already refer to it: a coding
+// agent's session records the publish only as a tool call.
+func (c *Catalog) attachPublishedArtifacts(ctx context.Context, conversationID string, calls []artifactCall, assets []map[string]any, byMessage map[string][]map[string]any) error {
+	if len(calls) == 0 {
+		return nil
+	}
+	held, err := c.exportArtifactDocuments(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+	shown := map[string]bool{}
+	for _, asset := range assets {
+		if document := mapValue(asset["document"]); document != nil {
+			shown[firstString(document["conversation_id"])] = true
+		}
+	}
+	for index := len(calls) - 1; index >= 0; index-- {
+		for _, document := range held {
+			versions := artifactDocumentVersions(document)
+			if !slices.ContainsFunc(versions, func(version AssetVersion) bool { return version.ID == calls[index].version }) || shown[firstString(document["conversation_id"])] {
+				continue
+			}
+			shown[firstString(document["conversation_id"])] = true
+			asset := map[string]any{"id": document["id"], "asset_key": document["asset_key"], "kind": "artifact", "relation": "generated", "agent_authored": true, "has_content": false, "availability": assetNotExported}
+			completeArtifactReference(asset, document, versions)
+			byMessage[calls[index].message] = append(byMessage[calls[index].message], asset)
+		}
+	}
+	return nil
+}
+
+// showPublishedArtifacts moves what a tool call published to the agent's
+// next reply in the turn, where a reader sees it: the calls of a turn are
+// folded away. With no reply after it, the call keeps it.
+func showPublishedArtifacts(messages []map[string]any) {
+	for index, message := range messages {
+		published, _ := message["assets"].([]map[string]any)
+		if message["kind"] != "tool_call" || len(published) == 0 {
+			continue
+		}
+		for _, later := range messages[index+1:] {
+			if later["role"] == "user" && later["kind"] == "message" {
+				break
+			}
+			if later["role"] == "assistant" && later["kind"] == "message" {
+				held, _ := later["assets"].([]map[string]any)
+				later["assets"] = append(held, published...)
+				delete(message, "assets")
+				break
+			}
+		}
+	}
+}
+
+// artifactOriginSearch finds the conversations that made exported
+// artifacts: those whose messages refer to one, and those whose agent
+// published one of its versions.
+type artifactOriginSearch struct {
+	references []map[string]any
+	calls      []artifactCall
+}
+
+func (c *Catalog) artifactOriginSearch(ctx context.Context) (artifactOriginSearch, error) {
+	references, err := queryMapsContext(ctx, c.reader(), `SELECT a.asset_key,a.details,a.message_id,a.conversation_id,c.workspace_id FROM message_assets a JOIN conversations c ON c.id=a.conversation_id
+		WHERE a.asset_key>='claude-artifact' AND a.asset_key<'claude-artifacu' AND a.kind='artifact' AND COALESCE(c.harness,'')<>'claude-export-document' ORDER BY a.conversation_id,a.message_id,a.ordinal`)
+	if err != nil {
+		return artifactOriginSearch{}, err
+	}
+	for _, reference := range references {
+		var details map[string]any
+		_ = json.Unmarshal([]byte(firstString(reference["details"])), &details)
+		reference["description"] = firstString(details["description"])
+	}
+	calls, err := c.publishedArtifactCalls(ctx, "")
+	return artifactOriginSearch{references, calls}, err
+}
+
+// of is where the artifact with this key and these versions was made: each
+// conversation once, with the message that made it.
+func (s artifactOriginSearch) of(key string, versions []AssetVersion) []map[string]any {
+	origins := []map[string]any{}
+	seen := map[string]bool{}
+	add := func(conversation, workspace, message string) {
+		if !seen[conversation] {
+			seen[conversation] = true
+			origins = append(origins, map[string]any{"conversation_id": conversation, "workspace_id": workspace, "message_id": message})
+		}
+	}
+	for _, reference := range s.references {
+		if artifactReferenceMatches(firstString(reference["asset_key"]), firstString(reference["description"]), key, versions) {
+			add(firstString(reference["conversation_id"]), firstString(reference["workspace_id"]), firstString(reference["message_id"]))
+		}
+	}
+	for _, call := range s.calls {
+		if slices.ContainsFunc(versions, func(version AssetVersion) bool { return version.ID == call.version }) {
+			add(call.conversation, call.workspace, call.message)
+		}
+	}
+	return origins
+}
+
+// artifactOrigins are the conversations that made the artifact an export
+// document holds. It is nil for a document that is not an artifact, and
+// empty when no conversation in the library made it.
+func (c *Catalog) artifactOrigins(ctx context.Context, conversationID string) ([]map[string]any, error) {
+	own, err := queryMapsContext(ctx, c.reader(), `SELECT asset_key,versions FROM message_assets WHERE conversation_id=? AND kind='artifact' AND asset_key>='claude-artifact:' AND asset_key<'claude-artifact;'`, conversationID)
+	if err != nil || len(own) == 0 {
+		return nil, err
+	}
+	search, err := c.artifactOriginSearch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	origins := search.of(firstString(own[0]["asset_key"]), artifactDocumentVersions(own[0]))
+	for _, origin := range origins {
+		var title sql.NullString
+		if err := c.reader().QueryRowContext(ctx, "SELECT title FROM workspaces WHERE id=?", origin["workspace_id"]).Scan(&title); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		origin["title"] = title.String
+	}
+	return origins, nil
+}
+
+// placedArtifactDocuments are the workspaces of the exported artifacts a
+// conversation in the library made. Such an artifact is shown in that
+// conversation, so lists of conversations leave its own document out; the
+// document still opens, and one no conversation made stays listed.
+func (c *Catalog) placedArtifactDocuments(ctx context.Context) ([]string, error) {
+	documents, err := c.exportArtifactDocuments(ctx, "")
+	if err != nil || len(documents) == 0 {
+		return nil, err
+	}
+	search, err := c.artifactOriginSearch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var placed []string
+	for _, document := range documents {
+		if len(search.of(firstString(document["asset_key"]), artifactDocumentVersions(document))) > 0 {
+			placed = append(placed, firstString(document["workspace_id"]))
+		}
+	}
+	return placed, nil
+}
+
+// withoutPlacedArtifactDocuments is the condition that leaves those
+// workspaces out of a list, or nothing when there are none.
+func (c *Catalog) withoutPlacedArtifactDocuments(ctx context.Context, workspace string) (string, []any, error) {
+	placed, err := c.placedArtifactDocuments(ctx)
+	if err != nil || len(placed) == 0 {
+		return "", nil, err
+	}
+	return workspace + " NOT IN (SELECT value FROM json_each(?))", []any{jsonText(placed)}, nil
 }
 
 // widgetShell stands in for the chat application a widget was written to

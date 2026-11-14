@@ -22,6 +22,42 @@ func claudeSupplementDirectory(name string) bool {
 	return slices.Contains([]string{"projects", "memories", "reflections", "artifacts", "claude_code_cloud"}, name)
 }
 
+// claudeArtifactRecord gives an exported artifact's document its assets,
+// from the files read of it so far: the artifact, as an asset of the file
+// that opens it, before the pictures its pages show. An unzipped export
+// arrives a file at a time, so this is done again as each is added.
+func claudeArtifactRecord(record *WorkspaceRecord) {
+	group := strings.TrimPrefix(record.SourceID, "claude-export:")
+	conversation := &record.Conversations[0]
+	members := map[string]bool{}
+	held := func(name string) any {
+		for _, message := range conversation.Messages {
+			var payload map[string]any
+			if message.NativeID == name && json.Unmarshal([]byte(message.Text), &payload) == nil {
+				var value any
+				if json.Unmarshal([]byte(firstString(payload["extracted_content"])), &value) == nil {
+					return value
+				}
+			}
+		}
+		return nil
+	}
+	for _, message := range conversation.Messages {
+		members[message.NativeID] = true
+	}
+	pictures := slices.DeleteFunc(slices.Clone(conversation.Assets), func(asset AssetRecord) bool { return asset.Kind == "artifact" })
+	conversation.Assets = pictures
+	if meta := mapValue(held(group + "/artifact.json")); meta != nil {
+		if asset, ok := claudeArtifactAsset(group, meta, members, held(group+"/comments.json")); ok {
+			conversation.Assets = append([]AssetRecord{asset}, pictures...)
+		}
+	}
+}
+
+// claudeArtifactImageLimit is the largest picture kept beside an artifact's
+// pages for showing them.
+var claudeArtifactImageLimit = 4 << 20
+
 func claudeSupplementGroup(name string) string {
 	parts := strings.Split(name, "/")
 	if len(parts) < 2 {
@@ -96,7 +132,7 @@ func (a *claudeAIAdapter) readSupplement(input claudeExportInput, emit func(Work
 	}
 	origin := a.original(input.path)
 	records := map[string]*WorkspaceRecord{}
-	artifacts := map[string]map[string]any{}
+	artifacts := map[string]bool{}
 	// ZIP order is source order; do not sort cloud transcript fragments by
 	// timestamps, which can be equal for several parts of the same message.
 	for _, entry := range members {
@@ -163,9 +199,6 @@ func (a *claudeAIAdapter) readSupplement(input claudeExportInput, emit func(Work
 			if name := firstString(meta["name"]); name != "" {
 				record.Title = name
 			}
-			if path.Base(entry.name) == "artifact.json" && strings.HasPrefix(group, "artifacts/") {
-				artifacts[group] = meta
-			}
 			if path.Base(entry.name) == "artifact.json" {
 				for _, raw := range reasoningList(meta["versions"]) {
 					v := mapValue(raw)
@@ -188,7 +221,14 @@ func (a *claudeAIAdapter) readSupplement(input claudeExportInput, emit func(Work
 			payload["extracted_content"] = content
 		} else {
 			payload["text"] = "Binary file retained in the collected export; its contents are not a text transcript."
+			if kind := assetKind("", entry.name); kind == "image" && strings.HasPrefix(group, "artifacts/") && len(data) <= claudeArtifactImageLimit {
+				// A picture an artifact's pages show is kept with them, so
+				// the pages can be shown whole.
+				record.Conversations[0].Assets = append(record.Conversations[0].Assets, AssetRecord{MessageNativeID: entry.name, AttachmentNativeID: entry.name, Ref: "claude-export-file:" + entry.name, Kind: kind,
+					Name: path.Base(entry.name), Relation: "generated", AgentAuthored: true, Availability: assetStored, MimeType: mime.TypeByExtension(path.Ext(entry.name)), SizeBytes: int64(len(data)), Content: string(data)})
+			}
 		}
+		artifacts[group] = artifacts[group] || strings.HasPrefix(group, "artifacts/")
 		record.Conversations[0].Messages = append(record.Conversations[0].Messages, MessageRecord{
 			NativeID: entry.name, Role: "system", Kind: "attachment", Selected: true,
 			Text: jsonText(payload), EvidenceLocator: origin + ":" + entry.name})
@@ -199,15 +239,8 @@ func (a *claudeAIAdapter) readSupplement(input claudeExportInput, emit func(Work
 	}
 	slices.Sort(keys)
 	for _, key := range keys {
-		// An artifact is an asset of the file that opens it.
-		if meta := artifacts[key]; meta != nil {
-			members := map[string]bool{}
-			for _, message := range records[key].Conversations[0].Messages {
-				members[message.NativeID] = true
-			}
-			if asset, ok := claudeArtifactAsset(key, meta, members); ok {
-				records[key].Conversations[0].Assets = []AssetRecord{asset}
-			}
+		if artifacts[key] {
+			claudeArtifactRecord(records[key])
 		}
 		if err := emit(*records[key]); err != nil {
 			return err

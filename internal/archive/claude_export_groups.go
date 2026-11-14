@@ -246,6 +246,18 @@ func mergeClaudeSupplementRecord(previous *WorkspaceRecord, record WorkspaceReco
 			known[message.NativeID] = true
 		}
 	}
+	if strings.HasPrefix(previous.SourceID, "claude-export:artifacts/") {
+		kept := map[string]bool{}
+		for _, asset := range previous.Conversations[0].Assets {
+			kept[asset.Ref] = true
+		}
+		for _, asset := range record.Conversations[0].Assets {
+			if !kept[asset.Ref] {
+				previous.Conversations[0].Assets = append(previous.Conversations[0].Assets, asset)
+			}
+		}
+		claudeArtifactRecord(previous)
+	}
 	previous.Observed = max(previous.Observed, record.Observed)
 	previous.Conversations[0].Observed = previous.Observed
 	previous.ActivityAt = max(previous.ActivityAt, record.ActivityAt)

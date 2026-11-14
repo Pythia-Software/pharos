@@ -170,6 +170,16 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 			conversation["selected_settings"] = map[string]any{"scope": "observed_conversation_selection", "observations": observations[:min(500, len(observations))], "truncated": len(observations) > 500}
 		}
 	}
+	if firstString(conversation["harness"]) == "claude-export-document" {
+		// The conversations that made an exported artifact (message_assets.go).
+		origins, err := c.artifactOrigins(ctx, conversationID)
+		if err != nil {
+			return nil, err
+		}
+		if origins != nil {
+			conversation["made_in"] = origins
+		}
+	}
 	sessions, err := queryMaps(c.reader(), `SELECT * FROM agent_sessions WHERE workspace_id=? AND conversation_id=? AND usage_status<>'in-child-conversation'`, workspaceID, conversationID)
 	if err != nil {
 		return nil, err
@@ -247,6 +257,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 	for _, message := range messages {
 		delete(message, "source_order")
 	}
+	showPublishedArtifacts(messages)
 	linkEvents(messages)
 	if labels, err := labelsSummary(); err != nil {
 		return nil, err

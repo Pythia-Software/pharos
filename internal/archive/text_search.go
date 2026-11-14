@@ -649,6 +649,17 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		clauses = append(clauses, "c.workspace_id IN (SELECT value FROM json_each(?))")
 		arguments = append(arguments, jsonText(o.WorkspaceIDs))
 	}
+	if o.ConversationID == "" && o.WorkspaceID == "" && o.WorkspaceIDs == nil && o.originConversationIDs == nil {
+		// A search of the library leaves out the document of an exported
+		// artifact a conversation made, where it is shown (message_assets.go).
+		placed, held, e := c.withoutPlacedArtifactDocuments(ctx, "c.workspace_id")
+		if e != nil {
+			return result, e
+		}
+		if placed != "" {
+			clauses, arguments = append(clauses, placed), append(arguments, held...)
+		}
+	}
 	if key == "d.message_rowid" && scoped {
 		// Surface scans stream documents before joining message bodies. A scope
 		// only on m/c still walks every document in the archive. Apply the same

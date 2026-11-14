@@ -1850,12 +1850,16 @@ CREATE TABLE IF NOT EXISTS message_assets (
   versions TEXT,
   source_file TEXT,
   member TEXT,
-  content BLOB,
-  details TEXT
+  details TEXT,
+  -- Last, so reading the columns before it never walks a picture's bytes.
+  content BLOB
 );
 CREATE INDEX IF NOT EXISTS message_assets_conversation_idx ON message_assets(conversation_id, message_id, ordinal);
 CREATE INDEX IF NOT EXISTS message_assets_message_idx ON message_assets(message_id);
 CREATE INDEX IF NOT EXISTS message_assets_key_idx ON message_assets(asset_key);
+-- The few calls that published an artifact, among millions of tool calls:
+-- they tie an exported artifact to the conversation that made it.
+CREATE INDEX IF NOT EXISTS tool_calls_artifact_idx ON tool_calls(conversation_id) WHERE tool_name='Artifact';
 
 -- Web pages and other references a message drew on; cited is 0 for one the
 -- agent read without citing.
@@ -1872,6 +1876,28 @@ CREATE TABLE IF NOT EXISTS message_sources (
   PRIMARY KEY(message_id, ordinal)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS message_sources_conversation_idx ON message_sources(conversation_id);
+
+-- What a source records about a message beside its text (message_assets.go):
+-- where in the text each citation stands, how much of a reply was spoken
+-- aloud, whether its thinking was cut off. details is a JSON object.
+CREATE TABLE IF NOT EXISTS message_notes (
+  message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  details TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS message_notes_conversation_idx ON message_notes(conversation_id);
+
+-- What a conversation holds beside its words, a row a kind with how many
+-- (conversation_content.go): derived from the three tables above and the
+-- calls that published an artifact, so a search can ask for conversations
+-- with voice, uploads or artifacts.
+CREATE TABLE IF NOT EXISTS conversation_content (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  feature TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  PRIMARY KEY(conversation_id, feature)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS conversation_content_feature_idx ON conversation_content(feature, conversation_id);
 
 -- Web images a source shows by address, fetched once after import and kept
 -- by that address: reindexing a conversation keeps what was fetched.
