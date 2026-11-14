@@ -15,7 +15,8 @@ var recentConversationCandidates = 200
 // families. Never display a truncated traversal as an exact helper depth.
 var recentConversationFamilyLimit = 10000
 
-const recentConversationCount = 10
+// Twelve fills whole rows of two, three or four cards on Home.
+const recentConversationCount = 12
 
 type recentConversation struct {
 	ID            string `json:"id"`
