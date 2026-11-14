@@ -1012,7 +1012,7 @@ const ROUTES = [
   { name: "Mac menu with all items", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, api: tokenEvidenceAPI, ready: ".delegation-table tbody tr" },
   { name: "Workspace files and commits", url: `${work}?disclosures=${encodeURIComponent(JSON.stringify({ [`work:${workID}:files`]: true }))}`, ready: ".work-files .file-place",
-    api: { "GET /api/work/:id": request => ({ ...defaultApi["GET /api/work/:id"](request), files: [{ conversation_id: rootConversation, path: "internal/archive/api.go" }] }) } },
+    api: { "GET /api/work/:id": request => ({ ...defaultApi["GET /api/work/:id"](request), files: [{ conversation_id: rootConversation, path: "internal/archive/api.go" }], edited_files: 1 }) } },
   { name: "Workspace Timeline", url: `${work}?explorer=timeline`, ready: ".lt-session-root" },
   { name: "Workspace Timeline compact key", url: `${work}?explorer=timeline&disclosures=${encodeURIComponent(JSON.stringify({'timeline-key':false}))}`, ready: ".lt-session-root", api: {
     "GET /api/work/:id/parallel": request => {

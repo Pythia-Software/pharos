@@ -71,13 +71,15 @@ func (c *Catalog) workOverviewWithPeers(id string, includeUncertain bool) (map[s
 	if result["files"], err = c.workFileTargets(id); err != nil {
 		return nil, err
 	}
-	// A session that only committed, through a shell, has commits but no
-	// file targets; the page's Files and commits section shows them too.
-	var linked int
-	if err := c.reader().QueryRow(`SELECT COUNT(*) FROM session_commit_links WHERE workspace_id=?`, id).Scan(&linked); err != nil {
+	// The page shows its Files and commits section only when it has
+	// something to list (WorkFiles): an edited file or a linked commit. File
+	// targets include reads, and a session that only committed, through a
+	// shell, has commits but no file targets.
+	var edited, linked int
+	if err := c.reader().QueryRow(`SELECT (SELECT COUNT(*) FROM session_files WHERE workspace_id=?),(SELECT COUNT(*) FROM session_commit_links WHERE workspace_id=?)`, id, id).Scan(&edited, &linked); err != nil {
 		return nil, err
 	}
-	result["linked_commits"] = linked
+	result["edited_files"], result["linked_commits"] = edited, linked
 	// Related top-level work (peer_reader.go).
 	peers, err := c.workPeers(context.Background(), id)
 	if err != nil {
