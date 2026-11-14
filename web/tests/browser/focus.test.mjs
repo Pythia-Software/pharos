@@ -1973,7 +1973,7 @@ test("Ask Pharos feedback requires explicit approval of the reviewed draft", { s
   const question = page.getByRole("textbox", {name:"Ask a question",exact:true});
   await question.fill("An unrelated next question");
   assert.equal(await comment.inputValue(), feedback.comment);
-  assert.ok(!await inline.getByRole("checkbox", {name:/Include recent browser errors/}).isChecked());
+  assert.ok(!await inline.getByRole("checkbox", {name:"Include recent logs"}).isChecked());
   await comment.fill("Add Markdown export so I can share selected conversations in a review.");
   await shot("ask-feedback-inline-phone");
   await page.setViewportSize({width:1440,height:1050});await shot("ask-feedback-inline-desktop");
@@ -2068,12 +2068,18 @@ test("feedback review keeps focus, fits a phone, and returns focus to its opener
   await dialog.waitFor();
   assert.equal(await feedbackHeader.getAttribute("aria-expanded"), "true");
   await page.waitForFunction(() => document.querySelector(".uifeedback-dialog")?.contains(document.activeElement));
-  // A bug report is the default and includes recent logs; the contact email is an app preference.
-  assert.equal(await dialog.getByRole("combobox", { name: "Type" }).inputValue(), "bug");
-  await dialog.getByRole("checkbox", { name: /Include recent browser errors/ }).waitFor({ state: "attached" });
-  await page.waitForFunction(() => document.querySelector(".uifeedback-check input")?.checked);
+  // Logs are opt-in; reviewing them appears only once they are attached. The contact email is an app preference.
+  const logs = dialog.getByRole("checkbox", { name: "Include recent logs" }), review = dialog.getByRole("button", { name: "Review attached logs" });
+  assert.equal(await logs.isChecked(), false);
+  assert.equal(await review.count(), 0);
+  await dialog.getByText("Include recent logs", { exact: true }).click();
+  await review.waitFor();
+  assert.equal(await logs.isChecked(), true);
+  await review.click();
+  await dialog.getByRole("textbox", { name: "service" }).waitFor();
   await dialog.getByRole("textbox", { name: "Contact email (optional)" }).fill("person@example.com");
   assert.equal(await page.evaluate(() => window.pharosPrefs.get("pharos-feedback-contact-email", "")), "person@example.com");
+  await shot("feedback-review-desktop");
   await page.setViewportSize({ width: 360, height: 640 });
   assert.equal(await onScreen(dialog), true);
   await shot("feedback-review");
@@ -2081,6 +2087,18 @@ test("feedback review keeps focus, fits a phone, and returns focus to its opener
   await dialog.waitFor({ state: "hidden" });
   assert.equal(await feedbackHeader.getAttribute("aria-expanded"), "false");
   assert.equal(await page.evaluate(() => headerToolAnchor(document.getElementById("feedbackSubmitToggle")) === document.activeElement), true);
+  // Closing kept the draft with its logs; Discard clears it and closes.
+  const ready = () => page.waitForFunction(() => !document.querySelector(".uifeedback-actions .primary")?.disabled);
+  await activateHeaderTool(page, "feedbackSubmitToggle");
+  await dialog.waitFor(); await ready();
+  assert.equal(await logs.isChecked(), true);
+  await dialog.getByRole("button", { name: "Discard", exact: true }).click();
+  await dialog.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => headerToolAnchor(document.getElementById("feedbackSubmitToggle")) === document.activeElement), true);
+  await activateHeaderTool(page, "feedbackSubmitToggle");
+  await dialog.waitFor(); await ready();
+  assert.equal(await logs.isChecked(), false);
+  assert.equal(await dialog.getByRole("button", { name: "Discard", exact: true }).count(), 0, "an empty report offers nothing to discard");
 });
 
 test("annotated element screenshots render, the annotation surfaces stay on screen and the reviewed report sends without leaving the page", { skip }, async t => {
