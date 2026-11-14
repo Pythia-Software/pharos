@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { toJpeg } from "html-to-image";
 import { boundedLog, pendingSubmission, safeURL, type Annotation, type Diagnostics, type Screenshot, type Submission } from "./model";
@@ -139,9 +139,10 @@ window.fetch = async (input, init) => {
   try { const response = await originalFetch(input, init); if (!response.ok) record(String(response.status)); return response; } catch (e) { record("network error"); throw e; }
 };
 interface Draft { comment: string; kind: Submission["kind"] }
+// Manual reports have no type to choose; Ask proposals keep the kind they were proposed with.
 function readDraft(): Draft {
-  const empty: Draft = { comment: "", kind: "bug" };
-  try { const draft = JSON.parse(localStorage.getItem(draftKey) || "null"); return { comment: draft?.comment ?? empty.comment, kind: draft?.kind ?? empty.kind }; } catch { return empty; }
+  const empty: Draft = { comment: "", kind: "feedback" };
+  try { const draft = JSON.parse(localStorage.getItem(draftKey) || "null"); return { ...empty, comment: draft?.comment ?? empty.comment }; } catch { return empty; }
 }
 async function annotationsForSubmission(): Promise<Annotation[]> {
   return await Promise.all((window.pharosFeedback?.annotations() ?? []).map(async a => {
@@ -156,7 +157,7 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
   const key = (name: string) => proposal ? `ask:${proposal.id}:${name}` : name;
   const [draft, setDraft] = useState<Draft>(() => proposal ? { kind: proposal.kind, comment: proposal.comment } : readDraft()), [email, setEmail] = useState(() => String(preferences().get(contactKey, ""))), [annotations, setAnnotations] = useState<Annotation[]>([]), [ready, setReady] = useState(false), [error, setError] = useState("");
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null), [logs, setLogs] = useState(false), [collecting, setCollecting] = useState(false), [busy, setBusy] = useState(false), [receipt, setReceipt] = useState<FeedbackReceipt | null>(null);
-  const [sourceIDs, setSourceIDs] = useState<string[]>([]);
+  const [sourceIDs, setSourceIDs] = useState<string[]>([]), [reviewingLogs, setReviewingLogs] = useState(false), logsPanel = useId();
   const dialog = useRef<HTMLDialogElement>(null), fields = useRef<HTMLDivElement>(null);
   const comment = useRef<HTMLTextAreaElement>(null);
   const [collapsed, setCollapsed] = useState(false), [discarded, setDiscarded] = useState(false);
@@ -177,8 +178,6 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
       if (savedDraft) setDraft(savedDraft);
       if (sent) applyOutcome({ status: "sent", receipt: sent });
       if (wasDiscarded && !sent) setDiscarded(true);
-      // Bug reports include logs. Once collected, the reviewer's choice stands.
-      if (!proposal && draft.kind === "bug" && !review.diagnostics) void includeLogs(true);
       if (pending) {
         try { const outcome = await pending; if (mounted) applyOutcome(outcome); }
         catch (e) { if (mounted) setError(String(e)); }
@@ -222,6 +221,20 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
       setDraft({ kind: proposal.kind, comment: "" }); setDiagnostics(null); setLogs(false);
     } catch (e) { setError(String(e)); }
     finally { busyRef.current = false; setBusy(false); }
+  }
+  // Clears the manual report everywhere it is kept, including its annotations
+  // on the page and their screenshots, then closes without sending anything.
+  async function discardReport() {
+    if (proposal || busyRef.current || receipt) return;
+    busyRef.current = true; setBusy(true); setError("");
+    try {
+      const ids = [...new Set([...sourceIDs, ...annotations.map(a => a.id)])];
+      window.pharosFeedback?.clear(ids);
+      for (const id of ids) await stored("screenshots", id, "delete");
+      await stored("outbox", key("review"), "delete"); await stored("outbox", key("pending"), "delete");
+      localStorage.removeItem(draftKey);
+      close?.();
+    } catch (e) { busyRef.current = false; setBusy(false); setError(String(e)); }
   }
   async function keepDraft(afterClose?: () => void) {
     if (busyRef.current) return;
@@ -288,15 +301,16 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
     else if (event.key === "Enter" && !(event.target instanceof HTMLTextAreaElement) && !(event.target instanceof HTMLButtonElement)) event.preventDefault();
   } : undefined}><div className="uifeedback-heading"><Heading id={proposal ? undefined : "uifeedback-title"}>{title}</Heading>{!proposal && <button type="button" disabled={busy} onClick={() => void keepDraft()} aria-label="Close feedback"><Icon name="close" /></button>}</div>
     {receipt ? <><p role="status" tabIndex={-1} ref={receiptMessage}>Your feedback was received. Thank you.</p><p>Report: <code>{receipt.id}</code></p><p>{email ? "We can contact you at the address you provided." : "No contact email was included."}</p></> : <>
-      <label>Type<select value={draft.kind} disabled={busy} onChange={e => { const kind = e.target.value as Draft["kind"]; update({ kind }); if (!proposal && kind === "bug" && !logs) void includeLogs(true); }}><option value="bug">Bug report</option><option value="feedback">Feedback</option><option value="feature">Feature request</option><option value="prompt">Prompt to build</option></select></label>
       <label>What would you like changed?<span className="dictation-field"><textarea ref={comment} value={draft.comment} maxLength={16000} disabled={busy} onChange={e => update({ comment: e.target.value })} placeholder={annotations.length ? "Optional context for these annotations" : "Describe the issue, request, or prompt"} required={!annotations.length} /><DictationButton field={comment} onError={setError} /></span></label>
       {annotations.length > 0 && <ul className="uifeedback-annotations" aria-label="Included annotations">{annotations.map(a => <li key={a.id}>{a.screenshot && <img alt={`Screenshot of ${a.label}`} src={`data:${a.screenshot.mime};base64,${a.screenshot.data}`} />}<div><strong>{a.label}</strong>{a.comment && <span> · {a.comment}</span>}{(a.url || a.text) && <small title={[a.url, a.text].filter(Boolean).join("\n")}>{a.url || a.text}</small>}</div><button type="button" disabled={busy} onClick={() => setAnnotations(items => items.filter(item => item.id !== a.id))} aria-label={`Exclude ${a.label} from this report`} title="Exclude from this report"><Icon name="close" /></button></li>)}</ul>}
-      {!proposal && <button type="button" className="uifeedback-annotate" disabled={busy || collecting || !ready} onClick={() => void keepDraft(() => window.pharosFeedback?.annotate())}>Annotate an element</button>}
       <label>Contact email (optional)<span className="uifeedback-email"><input type="email" maxLength={254} value={email} disabled={busy} onChange={e => { setEmail(e.target.value); saveContact(e.target.value.trim()); }} autoComplete="email" /><button type="button" disabled={busy} onClick={() => void keepDraft(() => window.pharosNavigate?.("/settings/preferences"))} aria-label="Contact email settings" title="Contact email settings"><Icon name="settings" /></button></span></label>
-      <label className="uifeedback-check"><input type="checkbox" disabled={busy || collecting || !ready} checked={logs} onChange={e => void includeLogs(e.target.checked)} />Include recent browser errors, failed requests, and service logs</label>
+      <div className="uifeedback-attachments">
+        {!proposal && <button type="button" className="button-with-icon" disabled={busy || collecting || !ready} onClick={() => void keepDraft(() => window.pharosFeedback?.annotate())}><Icon name="target" />Annotate an element</button>}
+        <label className="uifeedback-toggle button-with-icon" title="Attach recent browser errors, failed requests, and service logs"><input type="checkbox" disabled={busy || collecting || !ready} checked={logs} onChange={e => void includeLogs(e.target.checked)} />Include recent logs</label>
+      </div>
       {collecting && <p role="status">Collecting recent logs…</p>}
-      {logs && diagnostics && <details><summary>Review or edit attached logs</summary>{(["browser", "requests", "service"] as const).map(kind => <label key={kind}>{kind}<textarea disabled={busy} value={diagnostics[kind] || ""} onChange={e => setDiagnostics(d => ({ ...d, [kind]: boundedLog(e.target.value) }))} /></label>)}</details>}
-      <footer><SearchHelp label="Privacy" text="Privacy">Sending shares your comments, annotations, layout details, and selected attachments with Pythia Software. Reports are private and retained for 90 days. An email address is used only to follow up on your feedback. Prompts enter a review queue.</SearchHelp><span className="uifeedback-actions">{proposal && <button type="button" disabled={!ready || busy} onClick={() => void discardDraft()}>Discard draft</button>}<button type="button" disabled={busy} onClick={() => void keepDraft()}>Keep draft</button><button className="primary" disabled={!ready || busy || collecting} type={proposal ? "button" : "submit"} onClick={proposal ? () => void send() : undefined}>{busy ? "Sending…" : proposal ? "Approve and send feedback" : "Send feedback"}</button></span></footer>
+      {logs && diagnostics && <div id={logsPanel} className="uifeedback-logs" hidden={!reviewingLogs}>{(["browser", "requests", "service"] as const).map(kind => <label key={kind}>{kind}<textarea disabled={busy} value={diagnostics[kind] || ""} onChange={e => setDiagnostics(d => ({ ...d, [kind]: boundedLog(e.target.value) }))} /></label>)}</div>}
+      <footer><span className="uifeedback-links"><SearchHelp label="Privacy" text="Privacy">Sending shares your comments, annotations, layout details, and selected attachments with Pythia Software. Reports are private and retained for 90 days. An email address is used only to follow up on your feedback. Prompts enter a review queue.</SearchHelp>{logs && diagnostics && <button type="button" className="uifeedback-link" aria-expanded={reviewingLogs} aria-controls={logsPanel} onClick={() => setReviewingLogs(open => !open)}>Review attached logs</button>}</span><span className="uifeedback-actions">{proposal ? <><button type="button" disabled={!ready || busy} onClick={() => void discardDraft()}>Discard draft</button><button type="button" disabled={busy} onClick={() => void keepDraft()}>Keep draft</button></> : (draft.comment.trim() || annotations.length > 0 || logs) && <button type="button" disabled={!ready || busy} onClick={() => void discardReport()}>Discard</button>}<button className="primary" disabled={!ready || busy || collecting} type={proposal ? "button" : "submit"} onClick={proposal ? () => void send() : undefined}>{busy ? "Sending…" : proposal ? "Approve and send feedback" : "Send feedback"}</button></span></footer>
     </>}{error && <p role="alert" className="uifeedback-error">{error}</p>}
   </div>;
   return proposal ? <section className="uifeedback-inline" aria-label={title} data-feedback-ui>{content}</section>

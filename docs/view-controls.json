@@ -9650,24 +9650,6 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "11a26aa66851a5e0:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "select",
-      "control": "value={draft.kind} onChange={e => { const kind = e.target.value as Draft[\"kind\"]; update({ kind }); if (!proposal && kind === \"bug\" && !logs) void includeLogs(true); }}",
-      "contract": "editing",
-      "reason": "Edits the type of an unsent feedback report; changing type never grants send consent."
-    },
-    {
-      "key": "21c546ddb1da3f5d:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "details",
-      "control": "",
-      "contract": "editing",
-      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
-    },
-    {
       "key": "22fa336466ad9c3b:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
@@ -9760,15 +9742,6 @@
       "reason": "Reopens an unsent feedback editor or saved receipt inside the conversation; it cannot grant submission consent."
     },
     {
-      "key": "b3dfbcb52d181747:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "summary",
-      "control": "",
-      "contract": "editing",
-      "reason": "Expands editable logs attached to an unapplied feedback submission."
-    },
-    {
       "key": "bc04d601aade6832:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
@@ -9796,6 +9769,15 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "e9dac1711efd5ac2:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => void discardReport()}",
+      "contract": "action",
+      "reason": "Explicitly discards the unsent manual feedback report (comment, review, annotations and screenshots) and closes the dialog; it never submits feedback."
+    },
+    {
       "key": "eed418951773758d:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
@@ -9812,6 +9794,16 @@
       "control": "checked={logs} onChange={e => void includeLogs(e.target.checked)}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
+      "key": "fe65e6179495ab56:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => setReviewingLogs(open => !open)}",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Shows the attached diagnostic logs for editing in an unsent feedback report; feedback editing is excluded from URL view state."
     },
     {
       "key": "57c08b857d8535fe:0",
