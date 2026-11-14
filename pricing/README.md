@@ -72,7 +72,7 @@ stable shades; recognizable classes use their class color. Other chart dimension
 get stable, collision-checked colors rather than cycling through a short palette.
 Rebuild the frontend after editing this catalog.
 
-Users can override provider and model colors in Settings → Model & provider
+Users can override provider and model colors in Settings → Colors → Model & provider
 colors. The shared resolver uses the catalog colors by default and shifts them
 together when a provider color changes. Unlisted model suggestions are
 deterministic. User choices take precedence and survive changes to provider

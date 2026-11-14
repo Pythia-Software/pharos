@@ -4,6 +4,8 @@ import { localPageNavigation, nestedPageTrail } from "../../../src/nested-pages-
 import { analyzePages, appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, navigationPageURL, optimizePages, toggleNavigationSection } from "../../../src/app-navigation-model";
 import { EMPTY_QUERY, decodeQueryStrict, encodeQuery } from "@pythia-software/query-table-core";
 import { analyzeQueryDatasets, usageTopics } from "../../../src/usage-workspace-model";
+import { settingsPages } from "../../../src/settings-pages-model";
+import { withLogSources } from "../../../src/logs-model";
 
 test("every dashboard belongs to People, Agents or Outcomes and retains its destination", () => {
   const params = new URLSearchParams('analyze_topic=human&analyze_days=7');
@@ -58,6 +60,21 @@ test("the app tree resolves global, nested, and legacy destinations without chan
     ['/tools', 'tools_view=summary', 'query:tools'],
     ['/mcp', '', 'dashboards:mcp'],
   ]) assert.equal(appLocation(path, new URLSearchParams(query)).current, current);
+});
+
+test("Settings panels sharing a group nest under one section where the first appears", () => {
+  const pages = withLogSources(settingsPages([
+    { route: '/settings', title: 'Library health' },
+    { route: '/settings/projects', title: 'Project colors', group: 'Colors' },
+    { route: '/settings/models', title: 'Model & provider colors', group: 'Colors' },
+    { route: '/settings/logs', title: 'Logs' },
+  ]));
+  assert.deepEqual(pages.map(page => page.label), ['Library health', 'Colors', 'Logs']);
+  assert.deepEqual(pages[1].children.map(page => page.href), ['/settings/projects', '/settings/models']);
+  const sections = appSections(pages, new URLSearchParams());
+  const location = appLocation('/settings/models', new URLSearchParams());
+  assert.deepEqual(nestedPageTrail(sections.find(section => section.id === 'settings').pages, location.current).map(page => page.label), ['Colors', 'Model & provider colors']);
+  assert.equal(appLocationLabel(sections, location).page.label, 'Model & provider colors');
 });
 
 test("Optimize resolves separate efficiency, safety and fixes pages", () => {

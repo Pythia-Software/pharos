@@ -328,6 +328,10 @@
       "field": "overlay"
     },
     {
+      "file": "web/src/project-color-settings.tsx",
+      "field": "project_color_sort"
+    },
+    {
       "file": "web/src/data-taxonomy.tsx",
       "field": "query_layout"
     },
@@ -1743,9 +1747,9 @@
       "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
-      "key": "a1e2705231723b7a:0",
+      "key": "7226953cc5aabf08:0",
       "file": "internal/archive/assets/data-guide.js",
-      "owner": "Vh",
+      "owner": "Qh",
       "tag": "aria-expanded",
       "control": "document.getElementById(\"dataGuideToggle\")",
       "disclosure": true,
@@ -7737,13 +7741,13 @@
       "reason": "Edits a persistent provider/model color preference. Draft input affects only the live comparison until the provider header Save action commits the palette."
     },
     {
-      "key": "faa5d716e2934161:0",
+      "key": "68a53d71b84d8664:0",
       "file": "web/src/model-color-settings.tsx",
       "owner": "ColorEditor",
       "tag": "button",
-      "control": "onClick={reset} aria-label={`Restore ${kind === \"provider\" ? \"brand color\" : \"recommended shade\"} for ${label}`}",
+      "control": "onClick={() => { reset(); input.current?.focus({ preventScroll: true }); }} aria-label={`Restore ${kind === \"provider\" ? \"brand color\" : \"recommended shade\"} for ${label}`}",
       "contract": "settings",
-      "reason": "Stages removal of a saved provider/model color override. Restore brand and Use recommended affect the preview until the provider header Save action commits the palette."
+      "reason": "Stages removal of a saved provider/model color override. Shown only when the proposed color differs from the brand or recommended shade; Restore brand and Use recommended affect the preview until the provider header Save action commits the palette."
     },
     {
       "key": "ea540ed463e58650:0",
@@ -7755,13 +7759,13 @@
       "reason": "Saved and Preview swatches toggle the same transient inline model-color editor. This local editing selection is not a shared view input."
     },
     {
-      "key": "111d4cff6702abe0:0",
+      "key": "50e54805026894bd:0",
       "file": "web/src/model-color-settings.tsx",
       "owner": "ProviderColorCard",
       "tag": "button",
-      "control": "onClick={() => setDrafts({})}",
+      "control": "onClick={discard}",
       "contract": "settings",
-      "reason": "Discards unapplied local provider/model color drafts without changing saved preferences or the current view."
+      "reason": "Discards unapplied local provider/model color drafts without changing saved preferences or the current view. Shown only while the provider's palette has pending drafts."
     },
     {
       "key": "eed1fdb113187def:0",
@@ -7981,6 +7985,16 @@
       "control": "onClick={() => void save(project, draft)} aria-label={`Save color for ${project.name}`}",
       "contract": "settings",
       "reason": "Edits or restores a persistent library project-color preference; the picker holds an unapplied draft until Save color."
+    },
+    {
+      "key": "dab03572559c7656:0",
+      "file": "web/src/project-color-settings.tsx",
+      "owner": "ProjectColorSettings",
+      "tag": "select",
+      "control": "data-view-field=\"project_color_sort\" value={sort} onChange={event => setSort(event.target.value as ProjectColorSort)}",
+      "binding": "project_color_sort",
+      "contract": "view.project_color_sort",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "502369976da84683:0",

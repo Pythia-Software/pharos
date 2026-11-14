@@ -29,7 +29,7 @@ func TestProjectColorsKeepDefaultsAndEditsWithIdentity(t *testing.T) {
 		}
 		for n := range 4 {
 			conversation := fmt.Sprintf("%s-%d", id, n)
-			if _, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES(?,?,'codex','local',?)`, conversation, id, conversation); err != nil {
+			if _, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,started_at,ended_at) VALUES(?,?,'codex','local',?,?,?)`, conversation, id, conversation, fmt.Sprintf("2026-01-0%dT00:00:00Z", n+1), map[bool]any{true: "2026-02-01T00:00:00Z"}[id == "twin" && n == 0]); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -41,6 +41,13 @@ func TestProjectColorsKeepDefaultsAndEditsWithIdentity(t *testing.T) {
 	before, err := c.projectColors(t.Context())
 	if err != nil || len(before) != 2 {
 		t.Fatalf("colors: %+v %v", before, err)
+	}
+	// Settings sorts by conversation count and the latest conversation, ended or started.
+	latest := map[string]string{"repository:app": "2026-01-04T00:00:00Z", "repository:twin": "2026-02-01T00:00:00Z"}
+	for _, project := range before {
+		if project.Conversations != 4 || project.LatestConversation != latest[project.ID] {
+			t.Fatalf("activity for %s: %d %q", project.ID, project.Conversations, project.LatestConversation)
+		}
 	}
 	if before[0].Default == before[1].Default || before[0].ID == before[1].ID {
 		t.Fatal("same names and brand must still receive separate identities and colors")

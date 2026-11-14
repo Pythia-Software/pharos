@@ -820,8 +820,8 @@ const filesDiff = ["diff --git a/internal/archive/api.go b/internal/archive/api.
   "@@ -1,4 +1,5 @@ package archive", " package archive", " ", "-// ServeHTTP answers.", "+" + filesCode[2], "+func (s *Server) ServeHTTP() {", " \treturn", ""].join("\n");
 
 export const projectColorFixture = [
-  { id: "repository:pharos", key: "a".repeat(64), name: "pharos", kind: "repository", default_color: "#2a83a4", source: "public/favicon.svg" },
-  { id: "folder:~/notes", key: "b".repeat(64), name: "~/notes", kind: "folder", default_color: "#b27430", source: "Automatic palette" },
+  { id: "repository:pharos", key: "a".repeat(64), name: "pharos", kind: "repository", default_color: "#2a83a4", source: "public/favicon.svg", conversations: 42, latest_conversation_at: "2026-10-20T12:00:00Z" },
+  { id: "folder:~/notes", key: "b".repeat(64), name: "~/notes", kind: "folder", default_color: "#b27430", source: "Automatic palette", conversations: 7, latest_conversation_at: "2026-10-21T09:00:00Z" },
 ];
 
 export const defaultApi = {

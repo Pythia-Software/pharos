@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { effectiveProjectColor, fitProjectColor, installProjectColors, loadProjectColors, noProjectColor, projectColorAliases, projectColors, projectMetricTheme, projectSeriesColor, savedProjectColor, saveProjectColor } from '../../../src/project-colors';
+import { sortProjectColors } from '../../../src/project-color-order';
 import { chartMetricTheme, chartSeriesStyle, keyColorTheme, metricSeriesColor } from '../../../src/chart-colors';
 import { ribbonCover } from '../../../src/parallelism-ribbon-card';
 import { normalizeConcurrencySettings } from '../../../src/concurrency-settings';
@@ -111,4 +112,17 @@ test('a palette read started before an edit cannot restore the old color', async
   await pending;
   assert.equal(reads, 1);
   assert.equal(effectiveProjectColor(projectColors()[0]), '#bb6622');
+});
+
+test('project color settings list the most-used projects first, or the most recent, with name ties', () => {
+  const rows = [
+    { ...project('app', 'beta'), conversations: 5, latest_conversation_at: '2026-03-01T00:00:00Z' },
+    { ...project('two', 'alpha'), id: 'repository:two', conversations: 40, latest_conversation_at: '2026-01-01T00:00:00Z' },
+    { ...project('three', 'gamma'), id: 'repository:three', conversations: 5 },
+  ];
+  const names = sort => sortProjectColors(rows, sort).map(row => row.name);
+  assert.deepEqual(names('conversations'), ['alpha', 'beta', 'gamma']);
+  assert.deepEqual(names('latest'), ['beta', 'alpha', 'gamma']);
+  assert.deepEqual(names('name'), ['alpha', 'beta', 'gamma']);
+  assert.deepEqual(rows.map(row => row.name), ['beta', 'alpha', 'gamma'], 'sorting leaves the registry order alone');
 });

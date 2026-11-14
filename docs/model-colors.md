@@ -1,6 +1,6 @@
 # Model and provider colors
 
-Settings → Model & provider colors saves a base color for each model provider
+Settings → Colors → Model & provider colors saves a base color for each model provider
 (Anthropic, Google, OpenAI, Reflection, DeepSeek, OpenCode, Microsoft, xAI,
 and Cursor). Models with an unknown developer use an Unidentified fallback;
 empty categories are hidden. The existing brand palette supplies defaults. Recorded provider labels such as Claude, Codex,
@@ -13,6 +13,11 @@ chroma at a useful middle lightness rather than becoming nearly black. Each mode
 editor offers a prominent color-picker button with its hex value, light/dark previews,
 and Use recommended. Provider headers offer Save, Discard changes and Restore
 brand; a model editor is a compact single row without an individual Save button.
+Each action appears only when it would change something: Save and Discard
+changes while the provider has pending edits, Restore brand while the proposed
+provider color is not the brand color, and Use recommended while the proposed
+model color is not its recommended shade. When an action removes itself, focus
+returns to that editor's color picker.
 
 Each provider shows one saved-color row. A proposed-color row appears beneath
 it only when a draft changes an actual model color; both rows share the same
