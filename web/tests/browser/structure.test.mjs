@@ -152,6 +152,17 @@ const authoredTurnAPI = {
     labels:{labeled:true,pending:false,taxonomy:[{id:"C.report.completion",name:"Completion",definition:"Reports finished work."}]},agent_events:{messages_read:8}},
 };
 
+// Engagement labels over the same prompt: two dimensions on one stretch of
+// typed text, and one whose range runs into the pasted block.
+const engagementSpan = (label, part, extra = 0) => { const start = authoredPrompt.text.indexOf(part); return { label, dimension: label.split(".")[0], score: 0.8, start, end: start + part.length + extra }; };
+const engagementTurnAPI = {
+  ...authoredTurnAPI,
+  "GET /api/work/:id/conversations/:conversation": {...authoredTurnAPI["GET /api/work/:id/conversations/:conversation"], engagement: {messages_read: 2, messages_with_spans: 1},
+    messages: authoredTurnMessages.map(message => message.id === "human-next" ? {...message, engagement: [{label: "intent.task", dimension: "intent", score: 0.9, start: 4, end: 26}, {label: "bounds.scope", dimension: "bounds", score: 0.9, start: 4, end: 36}]} : message.id !== "human-mixed" ? message : {...message, engagement: [
+      engagementSpan("intent.task", "keep the sub-agents nested"), engagementSpan("bounds.scope", "the sub-agents nested** inside the parent turn"),
+      engagementSpan("acceptance.evidence", "I want to see which review belongs to which request.", 40), engagementSpan("register.emphasis", "easy to spot")]})},
+};
+
 async function publishAppUpdate(page, state) {
   await page.evaluate(state => {
     window.pharosUpdateFixture = state;
@@ -182,9 +193,11 @@ const fixtureSpan = defaultApi["GET /api/work/:id/delegation"]({ query: new URLS
 const resumedAt = fixtureSpan.start + 3600000;
 const idleTimelineAPI = {
   "GET /api/work/:id/delegation": request => { const value = defaultApi["GET /api/work/:id/delegation"](request); return { ...value, end: resumedAt + 60000, rows: value.rows.map(row => row.depth === 0 ? { ...row, end: resumedAt + 60000 } : row) }; },
-  "GET /api/work/:id/parallel": request => { const value = defaultApi["GET /api/work/:id/parallel"](request); return { ...value, lanes: value.lanes.map(lane => lane.session !== "s-root" || !lane.messages || resumedAt < value.start || resumedAt > value.end ? lane : { ...lane, messages: [...lane.messages, { id: "m-back", role: "user", kind: "message", created_at: new Date(resumedAt).toISOString(), text: "Back again: carry on.", authorship: [{ category: "typed", bytes: 21 }] }] }) }; },
+  "GET /api/work/:id/parallel": request => { const value = defaultApi["GET /api/work/:id/parallel"](request); return { ...value, lanes: value.lanes.map(lane => lane.session !== "s-root" || !lane.messages || resumedAt < value.start || resumedAt > value.end ? lane : { ...lane, messages: [...lane.messages, { id: "m-back", role: "user", kind: "message", created_at: new Date(resumedAt).toISOString(), text: "Back again: carry on.", authorship: [{ category: "typed", bytes: 21 }],
+    // Human events: the lane carries the person's engagement spans with the stored text they index.
+    engagement_text: "Back again: carry on.", engagement: [{ label: "intent.task", dimension: "intent", score: 0.9, start: 12, end: 20 }, { label: "rights.go_ahead", dimension: "rights", score: 0.8, start: 0, end: 10 }] }] }) }; },
 };
-const idleTimelineDisclosures = encodeURIComponent(JSON.stringify({ "delegation-labels:s-root:session": true, "delegation-labels:s-root:events": true }));
+const idleTimelineDisclosures = encodeURIComponent(JSON.stringify({ "delegation-labels:s-root:session": true, "delegation-labels:s-root:events": true, "delegation-labels:s-root:human": true }));
 
 const askAPI = {
  "GET /api/ask/status":{settings:{enabled:true,showInvitation:true,selection:askSelection},providers:askProviders},
@@ -694,6 +707,39 @@ const ROUTES = [
     await page.locator(".subagent-run > summary").first().press("Enter");
   }, shown: ".subagent-body" },
   { name: "Transcript agent event link", url: `${work}/conversation/${rootConversation}?reader_events=1&reader_event_link=e-review`, api: authoredTurnAPI, ready: ".conversation-panel.show-events mark.event-target.link-selected" },
+  { name: "Transcript engagement underlines", url: `${work}/conversation/${rootConversation}?reader_engagement=1&reader_events=0`, api: engagementTurnAPI, ready: ".conversation-panel.show-engagement mark.engagement .eng-layer", check:async(page,app)=>{
+    const message=page.locator('.timeline-entry[data-message-id="human-mixed"]'),stacked=message.locator('mark.engagement .eng-layer .eng-layer').first();
+    await stacked.scrollIntoViewIfNeeded();await app.shot('engagement-underlines');
+    assert.equal(await message.locator('pre mark.engagement, pre .eng-layer').count(),0,'pasted text carries no engagement mark');
+    // A short message that fits is not cut: its stacked underlines do not count as overflow.
+    const short=page.locator('.timeline-entry[data-message-id="human-next"]');await short.locator('mark.engagement .eng-layer .eng-layer').first().waitFor();
+    assert.equal(await short.locator('.message-prose').evaluate(prose=>{prose.measureMessageOverflow?.();return prose.scrollHeight>prose.clientHeight}),false,'a short message with engagement underlines fits its box');
+    assert.equal(await short.locator('.message-toggle').isVisible(),false,'and offers nothing more to show');
+    await stacked.hover();assert.match(await page.getByRole('tooltip').innerText(),/Intent.*Bounds|Bounds.*Intent/s);
+    assert.ok(await message.locator('mark.eng-tint').count()>1,'hovering lights the whole of each annotation');
+    await page.mouse.move(2,2);
+    // Human events fold out of the timeline, then by dimension: markers stay inside the row without covering one another, and hovering one opens its card.
+    const navigator=page.locator('.reader-navigator'),inspector=page.locator('.lt-ribbon-inspector');
+    await navigator.locator('.reader-navigator-timeline-disclosure > summary .reader-section-label, .reader-section-node > summary .reader-section-label').first().click();
+    const human=navigator.locator('.reader-human-events');
+    await human.locator('> summary .reader-human-event').first().waitFor();
+    const markers=await human.locator('> summary .reader-human-track').evaluate(track=>{const bounds=track.getBoundingClientRect();return [...track.querySelectorAll('button')].map(button=>{const box=button.getBoundingClientRect();return {left:box.left-bounds.left,right:box.right-bounds.left,top:box.top-bounds.top,bottom:box.bottom-bounds.top,width:bounds.width,height:bounds.height};});});
+    assert.ok(markers.every((marker,index)=>marker.left>=-.5&&marker.right<=marker.width+.5&&marker.top>=-.5&&marker.bottom<=marker.height+.5&&markers.every((other,at)=>at<=index||other.left>=marker.right-2.5||other.right<=marker.left+2.5||other.top>=marker.bottom-2.5||other.bottom<=marker.top+2.5)),`human event markers stay apart inside their row: ${JSON.stringify(markers)}`);
+    await human.locator('> summary .reader-section-label').click();
+    await human.locator('.reader-human-dimension .reader-human-event').first().hover();
+    await inspector.locator('.human-event-card blockquote').waitFor();await app.shot('human-events');
+    // The other expanded rows answer a hover with a card too: a message on Message modes, a turn on Turns.
+    const sweep=async(track,card)=>{const box=await track.boundingBox();for(let step=0;step<=40&&!await card.count();step++)await page.mouse.move(box.x+2+(box.width-4)*step/40,box.y+box.height/2);await card.waitFor();};
+    await page.mouse.move(2,2);await inspector.waitFor({state:'detached'});
+    await sweep(navigator.locator('.reader-section-node, .reader-section-leaf').filter({hasText:'Message modes'}).last().locator('.reader-section-track').first(),inspector.locator('.lt-observation-tags, .lt-message-quote').first());
+    await page.mouse.move(2,2);await inspector.waitFor({state:'detached'});
+    await navigator.locator('.reader-navigator-turn').first().hover();await inspector.locator('.reader-turn-card').waitFor();await page.mouse.move(2,2);
+    // The Key as icons only: a strip that fits the page, with the Human events letters among its icons, each naming itself on hover.
+    await page.locator('.transcript-key-compact').click();
+    const letter=page.locator('.transcript-key .is-icon-only .eng-glyph').first();await letter.waitFor();
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'the icon-only key does not widen the page');
+    await letter.hover();await page.getByRole('tooltip').first().waitFor();await page.mouse.move(2,2);
+  } },
   { name: "Search conversations", url: "/library", ready: ".conversation-result-card" },
   ...["turn", "sub-agent", "accordion", "summary", "preview"].map(selection => ({
     name: `Search conversation outline ${selection}`, url: "/library", api: conversationResultAPI, ready: ".conversation-result-card",
@@ -1034,7 +1080,12 @@ const ROUTES = [
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
       assert.ok(await page.evaluate(() => !document.activeElement?.closest(".conversation-panel")), "following a hand-off moved focus into the reader");
     } },
-  { name: "Workspace Timeline skipping idle time, agent events expanded", url: `${work}?explorer=timeline&disclosures=${idleTimelineDisclosures}`, api: idleTimelineAPI, ready: ".lt-session-node .lt-session-row-label svg.event-link-glyph", open: page => page.locator(".lt-session-ribbon .lt-idle-cut-line").first().waitFor({ state: "attached" }), shown: ".lt-clock-heading .lt-idle-cut time" },
+  { name: "Workspace Timeline skipping idle time, agent events expanded", url: `${work}?explorer=timeline&disclosures=${idleTimelineDisclosures}&timeline_visibility=${encodeURIComponent(JSON.stringify({ sections: { values: ["human"], excluded: true } }))}`, api: idleTimelineAPI, ready: ".lt-session-node .lt-session-row-label svg.event-link-glyph", open: page => page.locator(".lt-session-ribbon .lt-idle-cut-line").first().waitFor({ state: "attached" }), shown: ".lt-clock-heading .lt-idle-cut time",
+    // Human events start hidden in the Key; shown, they fold out by dimension in the lane with their markers, and a marker opens its card.
+    check: async page => { const marker = page.locator(".lt-human-dimension .reader-human-event").first();
+      assert.equal(await page.locator(".lt-human-events").count(), 0);
+      await page.evaluate(() => window.pharosView.write("timeline_visibility", {}));
+      await marker.waitFor({ state: "attached" }); await marker.focus(); await page.locator(".lt-ribbon-inspector .human-event-card").waitFor(); await marker.blur(); } },
   // Unsettled evidence: an ≈ session count, "+N more" relatives and pending events.
   { name: "Workspace overview with pending evidence", url: work, api: pendingEvidenceApi, ready: ".delegation-table .delegation-relatives" },
   { name: "Workspace Timeline with pending events", url: `${work}?explorer=timeline`, api: pendingEvidenceApi, ready: ".lt-recursive-lane .lt-session-notice", check: page => page.locator("[role=status].delegation-truncation").first().waitFor() },

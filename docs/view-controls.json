@@ -341,6 +341,10 @@
     },
     {
       "file": "internal/archive/assets/ui.py",
+      "field": "reader_engagement"
+    },
+    {
+      "file": "internal/archive/assets/ui.py",
       "field": "reader_event_link"
     },
     {
@@ -4310,6 +4314,15 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
+      "key": "44498c6436803e18:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "transcriptFilterControl",
+      "tag": "button",
+      "control": "'button', 'transcript-key-compact', 'Icons only'",
+      "contract": "settings",
+      "reason": "Icons-only Key: a display preference saved with the library (pharos-reader-key-compact) that holds for every conversation. It toggles how the same Key entries are drawn (aria-pressed), hides no content, and by the owner's decision is never part of a conversation URL."
+    },
+    {
       "key": "6d3c4485b9f0cec6:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "transcriptHighlightControl",
@@ -7178,6 +7191,24 @@
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
     {
+      "key": "9837fc702f6fc246:0",
+      "file": "web/src/human-events-rows.tsx",
+      "owner": "HumanEventMarkers",
+      "tag": "PageLink",
+      "control": "onClick={click=>{click.stopPropagation();inspector.close();}}",
+      "contract": "transient",
+      "reason": "Source navigation from a Human events marker: reveals the annotated message (reader) or opens its conversation through PageLink (workspace Timeline). The hover card is transient; no view field changes."
+    },
+    {
+      "key": "b8aba880bb31d984:0",
+      "file": "web/src/human-events-rows.tsx",
+      "owner": "HumanEventMarkers",
+      "tag": "button",
+      "control": "onClick={click=>{click.preventDefault();click.stopPropagation();inspector.close();jump?.(event);}}",
+      "contract": "transient",
+      "reason": "Source navigation from a Human events marker: reveals the annotated message (reader) or opens its conversation (workspace Timeline). The hover card is transient; no view field changes."
+    },
+    {
       "key": "2973122a62468b5c:0",
       "file": "web/src/index.tsx",
       "owner": "<module>",
@@ -7581,6 +7612,17 @@
       "control": "id={id} onPointerDown={event=>event.stopPropagation()} onClick={event=>event.stopPropagation()} aria-label={card.pinned?'Ribbon segment details':undefined} onPointerEnter={keep} onPointerLeave={leave}",
       "contract": "transient",
       "reason": "The inspection popup owns only hover, focus and click-pinning. Its event boundary prevents source links from starting a brush or activating the containing row."
+    },
+    {
+      "key": "b9c25eb96156da02:0",
+      "file": "web/src/label-session-ribbon.tsx",
+      "owner": "LaneHumanEvents",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={viewKey}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "487e42bdd4ef7739:0",
@@ -8179,7 +8221,7 @@
       "tag": "button",
       "control": "onClick={() => choose(() => onChoose(preset.id))}",
       "contract": "reader",
-      "reason": "A whole-key default atomically writes reader_filter_level, reader_filter, reader_writing, reader_events, reader_labels and reader_highlight_hidden through the classic reader owner; its selected radio is derived from those fields."
+      "reason": "A whole-key default atomically writes reader_filter_level, reader_filter, reader_writing, reader_engagement, reader_events, reader_labels and reader_highlight_hidden through the classic reader owner; its selected radio is derived from those fields."
     },
     {
       "key": "a25228228588be5c:0",
@@ -8188,7 +8230,7 @@
       "tag": "button",
       "control": "data-view-field={groupField} onClick={() => onChange(visible ? [] : all, true)}",
       "contract": "reader",
-      "reason": "The shared key master receives reader_filter or reader_highlight_hidden from its classic owner. Content writes reader_filter and reader_filter_level and restores available activity labels when showing all; highlighting writes reader_writing, reader_events, reader_labels and reader_highlight_hidden."
+      "reason": "The shared key master receives reader_filter or reader_highlight_hidden from its classic owner. Content writes reader_filter and reader_filter_level and restores available activity labels when showing all; highlighting writes reader_writing, reader_engagement, reader_events, reader_labels and reader_highlight_hidden."
     },
     {
       "key": "0f264e6bb1e4b293:0",
@@ -8207,6 +8249,17 @@
       "control": "onClick={() => choose(() => onChange(updateReaderKeys(all, shown, values, \"clear\")))}",
       "contract": "view.reader_hidden_tags",
       "reason": "Show All writes reader_hidden_tags through the classic transcript tag filter."
+    },
+    {
+      "key": "c99c793200b1315c:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "HumanEventsRows",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={viewKey}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "442d5f3a17af7e2c:0",
@@ -8228,15 +8281,6 @@
       "reason": "Source navigation scrolls and highlights through the existing reader materialization handlers without taking keyboard focus. Keyboard browsing and the automatic window are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
     },
     {
-      "key": "79fbf467b09870f1:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "ReaderNavigator",
-      "tag": "button",
-      "control": "onClick={()=>{const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}",
-      "contract": "transient",
-      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
-    },
-    {
       "key": "801ecdacaf583a50:0",
       "file": "web/src/reader-navigator.tsx",
       "owner": "ReaderNavigator",
@@ -8255,6 +8299,15 @@
       "control": "aria-label=\"Session timeline. Click to reveal a message.\" onClick={event=>{if(expandable){event.preventDefault();event.stopPropagation();}const track=event.currentTarget,rect=track.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width,{track,x:event.clientX,y:event.clientY});}}",
       "contract": "transient",
       "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
+    },
+    {
+      "key": "b9b2caa37ad6a44e:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderNavigator",
+      "tag": "button",
+      "control": "aria-label={`Turn ${index+1} · ${turn.label}`} onPointerEnter={turn.card?event=>turnInspector.show(event.currentTarget,<TurnCard card={turn.card!}/>,event.clientX):undefined} onPointerLeave={turnInspector.leave} onClick={()=>{turnInspector.close();const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}",
+      "contract": "transient",
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus; hovering a turn opens the shared ribbon inspector card (transient). The automatic visible window and keyboard browsing cursor are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
     },
     {
       "key": "e4dc3a33e88064d4:0",

@@ -67,6 +67,8 @@ type Catalog struct {
 	labels sync.Mutex
 	// agentEventsRun keeps one agent events pass at a time in this process.
 	agentEventsRun sync.Mutex
+	// engagementRun keeps one engagement pass at a time in this process.
+	engagementRun  sync.Mutex
 	labelers       *labelrt.Manager
 	labelersOnce   sync.Once
 	labelerWorkers sync.Map // model path -> labelerWorkerObservation

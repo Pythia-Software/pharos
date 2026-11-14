@@ -307,6 +307,8 @@ func Run(arguments []string) error {
 			return runBuildToolsCLI(ctx, catalog, op)
 		case "agent-events":
 			return runAgentEventsCLI(ctx, config, catalog, op, args)
+		case "engagement":
+			return runEngagementCLI(ctx, config, catalog, op, args)
 		case "refine-usage":
 			refined, err := catalog.RefineUsageTimeline(func(done, total int) {
 				op.progress("Refine usage", "", "conversation", float64(done), float64(total), total > 0)
@@ -413,6 +415,11 @@ func cliCatalogOperation(command string, args []string) OperationSpec {
 			return OperationSpec{Kind: "analysis.agent_events"}
 		default:
 			return OperationSpec{Kind: "analysis.agent_events.import"}
+		}
+	case "engagement":
+		// status only reads; run scores and stores.
+		if firstOf(args) == "run" {
+			return OperationSpec{Kind: "analysis.engagement"}
 		}
 	case "refine-usage", "repair-usage-attribution", "repair-session-models", "repair-session-bounds":
 		return OperationSpec{Kind: "catalog.repair", Variant: command}
@@ -616,7 +623,7 @@ func firstOf(args []string) string {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,claude-import,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,repair-session-models,repair-session-bounds,upgrade,build-tools,agent-events,execution-evidence,conversation-names,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,claude-import,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,repair-session-models,repair-session-bounds,upgrade,build-tools,agent-events,engagement,execution-evidence,conversation-names,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
 
 }
 func urlQueryEscape(value string) string {

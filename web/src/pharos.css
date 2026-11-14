@@ -674,6 +674,18 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .transcript-key-heading::before { flex: 0 0 8px; }
 .transcript-key-heading::after { flex: 1 1 0; min-width: 8px; }
 .transcript-key-heading h3 { margin: 0; color: var(--ink); font: inherit; font-weight: 600; }
+/* Icons only (reader-key-compact.ts): the Key as one strip of swatches, each naming itself on hover and focus, like the Timeline page's folded key. */
+.transcript-key-compact { flex: none; padding: 0 5px; border: 1px solid transparent; border-radius: 4px; background: none; color: var(--muted); font: inherit; line-height: 16px; cursor: pointer; }
+.transcript-key-compact:is(:hover, :focus-visible) { color: var(--ink); border-color: var(--line); }
+.transcript-key-compact[aria-pressed="true"] { color: var(--ink); border-color: color-mix(in srgb, var(--ink) 30%, transparent); }
+.conversation-panel.key-compact .transcript-key { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 4px; }
+.conversation-panel.key-compact .transcript-key-heading { flex: 0 0 100%; }
+.conversation-panel.key-compact :is(.transcript-filter, .transcript-content-key, .transcript-highlights, .transcript-highlight-options, .reader-highlight-keys, .transcript-timeline-key, .transcript-timeline-key > div) { display: contents; }
+.conversation-panel.key-compact .transcript-key-notes { display: none; }
+.conversation-panel.key-compact .transcript-key :is(.reader-key-compact, .lt-timeline-legend.is-compact) { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 1px; width: auto; max-width: 100%; padding: 1px 2px; border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 5px; }
+.reader-key-compact :is(.reader-key, .reader-key-children) { display: contents; }
+.reader-key-compact .reader-key:not(.conversation-key-group):has(> .reader-key-children) { border: 0; padding: 0; margin: 0; }
+.transcript-key :is(.reader-key-compact, .lt-timeline-legend.is-compact) .is-icon-only > .usage-legend-item { justify-content: center; min-width: 20px; height: 18px; padding: 1px 2px; }
 .transcript-key-line { display: grid; grid-template-columns: 5em minmax(0, 1fr); align-items: start; gap: 8px; }
 .transcript-key-line > .transcript-filter-label { padding-top: 7px; font-weight: 500; }
 .reader-highlight-keys { width: fit-content; min-width: 0; max-width: 100%; }
@@ -715,6 +727,11 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .transcript-key-notes { display: grid; gap: 3px; }
 .reader-key.human-writing-legend .reader-key-swatch { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 0; background: var(--ink); color: var(--panel); font: 600 10px/1 var(--sans); }
 .reader-key.human-writing-legend .reader-key-swatch::before { content: "a"; }
+/* Engagement dimensions: the swatch is the dimension's underline (styles in ui.py). */
+.reader-key[class*="eng-slot-"] .reader-key-swatch { width: auto; height: auto; border: 0; border-radius: 0; background: none; }
+.reader-key[class*="eng-slot-"] .reader-key-swatch::before { content: ""; display: inline-block; width: 22px; height: 2px; vertical-align: middle; background: var(--eng-pattern); }
+/* A dimension's mark on the timeline's Human events rows and in the Timeline key: its name's first letter, heavy, in its hue. */
+.eng-glyph { display: inline-grid; place-items: center; flex: none; width: 10px; height: 10px; font: 800 11px/1 -apple-system, "Helvetica Neue", Arial, sans-serif; font-style: normal; color: var(--eng-hue); }
 .reader-event-link-example { display: inline-flex; align-items: center; flex: none; }
 .reader-event-link-example > span:first-child { width: 18px; border-bottom: 2px dotted var(--event-link); }
 .reader-event-link-example > span:last-child { box-sizing: border-box; width: 10px; height: 10px; border: 1.5px solid var(--event-link); border-radius: 50%; }

@@ -27,6 +27,37 @@
     "valid": true
   },
   {
+    "name": "human events hidden by dimension",
+    "state": {
+      "human": {
+        "values": [
+          "register",
+          "rights"
+        ],
+        "excluded": true
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "human events layer hidden",
+    "state": {
+      "sections": {
+        "values": [
+          "human"
+        ],
+        "excluded": true
+      },
+      "human": {
+        "values": [
+          "intent"
+        ],
+        "excluded": false
+      }
+    },
+    "valid": true
+  },
+  {
     "name": "invalid allHidden type",
     "state": {
       "events": {

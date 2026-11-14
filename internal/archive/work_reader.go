@@ -187,6 +187,11 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 	if err != nil {
 		return nil, err
 	}
+	// Engagement spans of what the person typed (engagement.go).
+	attachEngagement, engagementSummary, err := c.engagementAttacher(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
 	// Hand-offs to and from related work (peer_reader.go).
 	attachPeers, err := c.messagePeerAttacher(conversationID)
 	if err != nil {
@@ -211,6 +216,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		attach(message)
 		attachLabels(message)
 		attachEvents(message)
+		attachEngagement(message)
 		attachPeers(message)
 		if previewRows {
 			clipReaderMessage(message)
@@ -251,6 +257,11 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		return nil, err
 	} else if events != nil {
 		conversation["agent_events"] = events
+	}
+	if engagement, err := engagementSummary(); err != nil {
+		return nil, err
+	} else if engagement != nil {
+		conversation["engagement"] = engagement
 	}
 	usage := tokenCounts{}
 	isEstimate := false

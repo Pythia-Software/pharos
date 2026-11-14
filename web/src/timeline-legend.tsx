@@ -11,6 +11,7 @@ import {useViewEntry} from './view-state';
 import {sliceGroupState,type LegendAction} from './chart-selection';
 import {timelineSelection,timelineSectionVisible,timelineGroupCounts,timelineValueVisible,type TimelineVisibility,type TimelineVisibilitySection,type TimelineVisibilityKey} from './timeline-visibility';
 import {eventGroup,type AgentEventLink} from './event-link-layout';
+import {useReaderKeyCompact} from './reader-key-compact';
 
 export const timelineToolCategories:Record<string,string>={read:'Read / search',write:'Edit / write',run:'Run / build / test',git:'Git',network:'Network',delegate:'Delegate / message',wait:'Wait call',poll:'Poll / delay',other:'Other tool'};
 
@@ -43,18 +44,22 @@ export function timelineModeGroups(messages:LabelMessage[],taxonomy:Taxonomy=[])
 }
 
 /** The legend and the conversation navigator use the same populated values. */
-export function timelineLegendDomains(messages:LabelMessage[],origins:string[],taxonomy:Taxonomy,tools:Record<string,string>,error:boolean,events:AgentEventLink[]){
+/** A dimension of Human events (human-events-model.ts): its timeline_visibility value, display name and slot class. Its mark is the name's first letter. */
+export type TimelineHumanKey={id:string;name:string;className:string};
+export function timelineLegendDomains(messages:LabelMessage[],origins:string[],taxonomy:Taxonomy,tools:Record<string,string>,error:boolean,events:AgentEventLink[],human:TimelineHumanKey[]=[]){
   const modes=timelineModeGroups(messages,taxonomy);
-  return {modes:[...modes.flatMap(family=>[...(family.direct?[family.id]:[]),...family.labels]),...(messages.some(message=>!functionStates(message,'label').length)?['?']:[])],events:[...new Set(events.map(event=>eventGroup(event.group).key))],tools:[...Object.keys(tools),...(error?['error']:[])],origins:callerSources.filter(source=>origins.includes(source.id)).map(source=>source.id)};
+  return {modes:[...modes.flatMap(family=>[...(family.direct?[family.id]:[]),...family.labels]),...(messages.some(message=>!functionStates(message,'label').length)?['?']:[])],events:[...new Set(events.map(event=>eventGroup(event.group).key))],tools:[...Object.keys(tools),...(error?['error']:[])],origins:callerSources.filter(source=>origins.includes(source.id)).map(source=>source.id),human:human.map(key=>key.id)};
 }
 
 export function timelineLegendCounts(visibility:TimelineVisibility,domains:ReturnType<typeof timelineLegendDomains>){
   return Object.entries(domains).reduce((total,[section,values])=>{const counts=timelineGroupCounts(visibility,section as TimelineVisibilitySection,values);return {visible:total.visible+counts.visibleCount,hidden:total.hidden+counts.hiddenCount};},{visible:0,hidden:0});
 }
 
-export function TimelineLegend({messages,origins,taxonomy,tools,error,unknownTools=[],events=[],visibility,onSelect,previewOnly=false,onOpenTimeline,embedded=false}:{previewOnly?:boolean;onOpenTimeline?:()=>void;embedded?:boolean;messages:LabelMessage[];origins:string[];taxonomy:Taxonomy;tools:Record<string,string>;error:boolean;unknownTools?:string[];events?:AgentEventLink[];visibility:TimelineVisibility;onSelect:(section:TimelineVisibilityKey,values:string[],action:LegendAction)=>void}){
+export function TimelineLegend({messages,origins,taxonomy,tools,error,unknownTools=[],events=[],human=[],visibility,onSelect,previewOnly=false,onOpenTimeline,embedded=false}:{previewOnly?:boolean;onOpenTimeline?:()=>void;embedded?:boolean;messages:LabelMessage[];origins:string[];taxonomy:Taxonomy;tools:Record<string,string>;error:boolean;unknownTools?:string[];events?:AgentEventLink[];human?:TimelineHumanKey[];visibility:TimelineVisibility;onSelect:(section:TimelineVisibilityKey,values:string[],action:LegendAction)=>void}){
   const [fullExpanded]=useViewEntry('disclosures','timeline-key',true,!previewOnly&&!embedded);
-  const expanded=embedded||!previewOnly&&fullExpanded;
+  // In the conversation reader the key folds to icons by a saved preference (reader-key-compact.ts), not by this page's disclosure.
+  const readerCompact=useReaderKeyCompact();
+  const expanded=embedded?!readerCompact:!previewOnly&&fullExpanded;
   const previewHint='Open the full Timeline to change visibility.';
   const modes=timelineModeGroups(messages,taxonomy),uncategorized=messages.some(message=>!functionStates(message,'label').length);
   const sources=callerSources.filter(source=>origins.includes(source.id));
@@ -77,7 +82,7 @@ export function TimelineLegend({messages,origins,taxonomy,tools,error,unknownToo
     </div>;
   }
   const eventKeys=[...new Set(events.map(event=>eventGroup(event.group).key))];
-  const domains=timelineLegendDomains(messages,origins,taxonomy,tools,error,events);
+  const domains=timelineLegendDomains(messages,origins,taxonomy,tools,error,events,human);
   const hasHidden=Object.entries(domains).some(([section,values])=>timelineGroupCounts(visibility,section as TimelineVisibilitySection,values).hiddenCount>0);
   const populated=Object.entries(domains).filter(([,values])=>values.length>0) as [TimelineVisibilitySection,string[]][];
   const {visible,hidden}=timelineLegendCounts(visibility,domains);
@@ -91,11 +96,12 @@ export function TimelineLegend({messages,origins,taxonomy,tools,error,unknownToo
       </span>)}</div></div>:null;})}{uncategorized?chip('modes','?','Uncategorized',<i className="lt-label-swatch" style={{background:stateColor('?')}}/>):null}</div>):null}
     {/* The rows' order: message modes, agent events, tool actions. */}
     {events.length?section('events','Agent events',eventKeys,<EventLinkLegend events={events} heading={null} renderHint={expanded?undefined:(icon,label)=>heading('events','Agent events',eventKeys,icon,label)} renderGroup={group=>chip('events',group.key,group.short,<EventGlyph group={group.name}/>)}/>):null}
+    {human.length?section('human','Human events',human.map(key=>key.id),<div className="lt-legend-line">{human.map(key=>chip('human',key.id,key.name,<i className={`eng-glyph ${key.className}`}>{key.name.trim().charAt(0).toUpperCase()}</i>))}</div>):null}
     {Object.keys(tools).length||error?section('tools','Tool actions',[...Object.keys(tools),...(error?['error']:[])],<div className="lt-legend-line">{Object.entries(tools).map(([id,name])=>chip('tools',id,name,<i className="lt-tool-swatch" style={{color:`var(--activity-${id})`}}/>))}{error?chip('tools','error','Error',<i className="lt-tool-swatch" style={{color:'var(--activity-error)'}}/>):null}{unknownToolKey}</div>):null}
     {sources.length?section('origins','Caller text',sources.map(source=>source.id),<div className="lt-legend-line">{sources.map(source=><span key={source.id} title={expanded?source.hint:undefined}>{chip('origins',source.id,source.id==='typed'?'Human typed':source.name,<i className={`lt-source-swatch is-${source.pattern}`}/>,[source.id],false,source.hint)}</span>)}</div>):null}
   </>;
   return <ChartTooltip><div className={`lt-timeline-legend${expanded?'':' is-compact'}${previewOnly?' is-readonly':''}${embedded?' is-embedded conversation-key-group':''}`} data-view-field="timeline_visibility">
-    {embedded?<><button type="button" className="usage-legend-item usage-legend-category conversation-key-toggle" data-view-field="timeline_visibility" aria-pressed={visible===0?false:hidden===0?true:'mixed'} disabled={!populated.length} title={visible?'Hide timeline elements':'Show timeline elements'} onClick={()=>onSelect('sections',populated.map(([section])=>section),visible?'hide':'show')}>Timeline</button><div className="timeline-key-sections">{content}</div></>:previewOnly?<button type="button" className="lt-key-open" aria-label="Edit key in full Timeline" data-chart-tooltip={previewHint} onClick={onOpenTimeline}>Key</button>:<ViewDisclosure viewKey="timeline-key" className="lt-key-disclosure" defaultOpen summary="Key">{expanded?content:null}</ViewDisclosure>}
+    {embedded?!expanded?null:<><button type="button" className="usage-legend-item usage-legend-category conversation-key-toggle" data-view-field="timeline_visibility" aria-pressed={visible===0?false:hidden===0?true:'mixed'} disabled={!populated.length} title={visible?'Hide timeline elements':'Show timeline elements'} onClick={()=>onSelect('sections',populated.map(([section])=>section),visible?'hide':'show')}>Timeline</button><div className="timeline-key-sections">{content}</div></>:previewOnly?<button type="button" className="lt-key-open" aria-label="Edit key in full Timeline" data-chart-tooltip={previewHint} onClick={onOpenTimeline}>Key</button>:<ViewDisclosure viewKey="timeline-key" className="lt-key-disclosure" defaultOpen summary="Key">{expanded?content:null}</ViewDisclosure>}
     {!expanded?content:null}
   </div></ChartTooltip>;
 }

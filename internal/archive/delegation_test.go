@@ -658,6 +658,38 @@ func TestDelegationTimelineMessageLabels(t *testing.T) {
 	if aliasMessage["conversation_id"] != "child" {
 		t.Fatal("canonical lane lost its message's source transcript")
 	}
+	// Human events: a person's message carries its engagement spans with the
+	// stored text they index, only in a library that has the tables, and not
+	// for a text past the limit.
+	userMessage := func() map[string]any {
+		return read("sessions=root-session&labels=1")["lanes"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any)
+	}
+	if got := userMessage(); got["engagement"] != nil || got["engagement_text"] != nil {
+		t.Fatalf("engagement without the tables: %v", got)
+	}
+	if err := c.ensureEngagementSchema(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var userText string
+	if err := c.DB.QueryRow(`SELECT text FROM messages WHERE id='user'`).Scan(&userText); err != nil || len(userText) < 2 {
+		t.Fatalf("seed text %q: %v", userText, err)
+	}
+	execTx(t, c.DB, `INSERT INTO engagement_spans(message_id,position,label,start_byte,end_byte,score) VALUES('user',0,'intent.task',0,2,0.9),('launch',0,'intent.task',0,2,0.9)`)
+	got := userMessage()
+	spans, _ := got["engagement"].([]any)
+	if len(spans) != 1 || got["engagement_text"] != userText {
+		t.Fatalf("lane engagement: %v, text %v", got["engagement"], got["engagement_text"])
+	}
+	if span := spans[0].(map[string]any); span["label"] != "intent.task" || span["dimension"] != "intent" || span["start"] != float64(0) || span["end"] != float64(2) {
+		t.Fatalf("lane span: %v", span)
+	}
+	if launch := read("sessions=embedded&labels=1")["lanes"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any); launch["engagement"] != nil {
+		t.Fatalf("a delegation carries spans: %v", launch)
+	}
+	override(t, &engagementLaneTextLimit, 1)
+	if got := userMessage(); got["engagement"] != nil || got["engagement_text"] != nil {
+		t.Fatalf("engagement of a text past the limit: %v", got)
+	}
 	// Unwrap display content before clipping, without rewriting the retained
 	// source excerpt that authorship positions and source navigation refer to.
 	ack := strings.Repeat("Async agent launched successfully.\n", 40)

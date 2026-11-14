@@ -100,6 +100,8 @@ func (c *Catalog) delegationTimelineMessages(ctx context.Context, snapshot *dele
 	}
 	readers := map[string]labelReader{}
 	linksByConversation := map[string][]map[string]any{}
+	// Human events (engagement.go): only in a library that has the tables.
+	laneEngagement := engagementPresent(ctx, c.reader())
 	conversations := []string{}
 	for _, id := range ids {
 		if n := snapshot.ByID[id]; n != nil && !n.ContextOnly {
@@ -335,6 +337,11 @@ FROM json_each(?) p JOIN messages m ON m.id=json_extract(p.value,'$.message')`, 
 					parts[i]["text"] = text
 					parts[i]["truncated"] = len(text) < parts[i]["bytes"].(int)
 				}
+			}
+		}
+		if laneEngagement {
+			if err := c.attachLaneEngagement(ctx, tx, rows); err != nil {
+				return nil, nil, err
 			}
 		}
 		// Agent events said in this lane's messages, with their targets
