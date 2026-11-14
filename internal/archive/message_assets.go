@@ -679,7 +679,16 @@ func (c *Catalog) artifactOrigins(ctx context.Context, conversationID string) ([
 // conversation in the library made. Such an artifact is shown in that
 // conversation, so lists of conversations leave its own document out; the
 // document still opens, and one no conversation made stays listed.
+//
+// Every search of the library asks, and the answer changes only with what
+// conversations hold or which calls published, so it is kept while the
+// catalog is unchanged: a write of either rewrites conversation_content or
+// tool_calls, which the kept values follow (query_cache_generation.go).
 func (c *Catalog) placedArtifactDocuments(ctx context.Context) ([]string, error) {
+	return cachedValue(ctx, c, "placed-artifact-documents", c.findPlacedArtifactDocuments)
+}
+
+func (c *Catalog) findPlacedArtifactDocuments(ctx context.Context) ([]string, error) {
 	documents, err := c.exportArtifactDocuments(ctx, "")
 	if err != nil || len(documents) == 0 {
 		return nil, err
