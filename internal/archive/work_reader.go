@@ -192,6 +192,11 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 	if err != nil {
 		return nil, err
 	}
+	// Files and sources its messages refer to (message_assets.go).
+	attachAssets, err := c.messageAssetsAttacher(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
 	// With ledger usage, whole bodies are only needed while attaching authorship
 	// and clipping a row. Do that before retaining it, rather than keeping every
 	// original output alive until the entire conversation has been read.
@@ -212,6 +217,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		attachLabels(message)
 		attachEvents(message)
 		attachPeers(message)
+		attachAssets(message)
 		if previewRows {
 			clipReaderMessage(message)
 		}

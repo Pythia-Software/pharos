@@ -457,7 +457,33 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 		"writing":  {Cadence: cadenceHourly, ExpiresAt: expiresAt},
 		"findings": {Cadence: cadenceDaily, ExpiresAt: expiresAt},
 	}
+	// What an export's messages attached and cited is read when it is parsed,
+	// and a web image is fetched once: neither is made again after a move.
+	attached := WorkspaceRecord{SourceKind: "chatgpt", SourceID: "attached", Account: "local", Title: "Attached", ActivityAt: "2026-10-04T12:00:00Z",
+		Conversations: []ConversationRecord{{NativeID: "attached", Provider: "openai", Messages: []MessageRecord{{NativeID: "reply", Role: "assistant", Kind: "message", Text: "Lakes", Selected: true}},
+			Assets:  []AssetRecord{{MessageNativeID: "reply", Ref: "lake", Kind: "image", Name: "Lake", Relation: "web", Availability: assetRemote, Details: map[string]any{"url": "https://img.example/lake.png"}}},
+			Sources: []SourceRecord{{MessageNativeID: "reply", URL: "https://lakes.example/a", Title: "Lakes", Cited: true}}}}}
+	ingestRecords(t, c, attached)
 	tx := seedTx(t, c.DB)
+	if _, err := tx.Exec(`INSERT INTO remote_assets(url,mime_type,content,fetched_at,attempts) VALUES('https://img.example/lake.png','image/png',x'89504e47','2026-10-04T12:00:00Z',1)`); err != nil {
+		t.Fatal(err)
+	}
+	// The receiving library read the same conversation with a parser that
+	// made a card and a source more, and its own fetch of the image failed:
+	// the accepted copy's rows replace its own, and the image it lacks arrives.
+	{
+		receiving := reopenCatalog(t, b.CatalogPath)
+		record := attached
+		conversation := record.Conversations[0]
+		conversation.Assets = append(slices.Clone(conversation.Assets), AssetRecord{MessageNativeID: "reply", Ref: "stale", Kind: "document", Name: "Stale", Relation: "generated", Availability: assetNotExported})
+		conversation.Sources = append(slices.Clone(conversation.Sources), SourceRecord{MessageNativeID: "reply", URL: "https://stale.example/b"})
+		record.Conversations = []ConversationRecord{conversation}
+		ingestRecords(t, receiving, record)
+		if _, err := receiving.DB.Exec(`INSERT INTO remote_assets(url,fetched_at,error,attempts) VALUES('https://img.example/lake.png','2026-10-03T12:00:00Z','HTTP 503',3)`); err != nil {
+			t.Fatal(err)
+		}
+		receiving.Close()
+	}
 	// Observations can precede the corresponding chat export. Their native
 	// identities, provenance and unknown values must survive independently.
 	if _, err := tx.Exec(`INSERT INTO claude_chat_settings_observations
@@ -492,6 +518,11 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 		rows, err := queryMaps(db, settingsQuery)
 		if err != nil || jsonText(rows) != jsonText(settingsRows) {
 			t.Fatalf("settings observations changed in %s: got %s, want %s (%v)", path, jsonText(rows), jsonText(settingsRows), err)
+		}
+		var attached string
+		if err := db.QueryRow(`SELECT (SELECT COUNT(*) FROM message_assets)||' '||(SELECT COUNT(*) FROM message_sources)||' '||(SELECT name||':'||json_extract(details,'$.url') FROM message_assets)||' '||(SELECT url||':'||cited FROM message_sources)||' '||(SELECT hex(content) FROM remote_assets)`).Scan(&attached); err != nil ||
+			attached != "1 1 Lake:https://img.example/lake.png https://lakes.example/a:1 89504E47" {
+			t.Fatalf("attachments, sources and fetched images in %s: %q (%v)", path, attached, err)
 		}
 	}
 	for id, expression := range map[string]string{"seconds": "[duration_ms]/1000", "double_seconds": "[@computed/seconds]*2"} {
@@ -536,8 +567,8 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if catalogCount(t, b, "messages") != 2 || catalogCount(t, a, "messages") != 4 {
-		t.Fatal("copy did not retain both histories")
+	if catalogCount(t, b, "messages") != 3 || catalogCount(t, a, "messages") != 5 {
+		t.Fatal("copy did not retain both histories", catalogCount(t, b, "messages"), catalogCount(t, a, "messages"))
 	}
 	assertSettings(a.CatalogPath)
 	assertSettings(b.CatalogPath)
@@ -555,7 +586,7 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.ID != again.ID || catalogCount(t, b, "messages") != 2 {
+	if receipt.ID != again.ID || catalogCount(t, b, "messages") != 3 {
 		snapshot, _ := openReadOnlySQLite(filepath.Join(b.CaptureRoot, ".imports", receipt.ID, "history.sqlite3"))
 		defer snapshot.Close()
 		current, _ := openReadOnlySQLite(a.CatalogPath)
@@ -585,7 +616,7 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.State != "complete" || catalogCount(t, a, "messages") != 0 || catalogCount(t, b, "messages") != 2 {
+	if receipt.State != "complete" || catalogCount(t, a, "messages") != 0 || catalogCount(t, b, "messages") != 3 {
 		t.Fatal("verified move did not empty only the source")
 	}
 	assertSettings(b.CatalogPath)

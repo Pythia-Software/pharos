@@ -6,7 +6,14 @@ import {idleGaps,laneBusy,timeScale,type IdleGap} from './timeline-idle-model';
 
 export type ReaderContext={title:string;color:string;message:{id:string};sample:{stream:string;compact?:boolean;trigger?:string;size:number|null;window?:number|null};from:number;width:number;label:string};
 export type ReaderNavigatorMark=Omit<ActivityMark,'start'|'end'>&{start:number|null;end:number|null};
-export type ReaderNavigatorData={sessionID:string;messages:LabelMessage[];marks:ReaderNavigatorMark[];callerIDs:string[];events:AgentEventLink[];taxonomy:Taxonomy;turns:{target:HTMLDetailsElement;messages:string[];label:string}[];contexts:ReaderContext[];jumpContext:(entry:ReaderContext)=>void;jumpMessage:(id:string)=>void};
+export type ReaderNavigatorData={sessionID:string;messages:LabelMessage[];marks:ReaderNavigatorMark[];callerIDs:string[];events:AgentEventLink[];taxonomy:Taxonomy;turns:{target:HTMLDetailsElement;messages:string[];label:string}[];contexts:ReaderContext[];jumpContext:(entry:ReaderContext)=>void;jumpMessage:(id:string)=>void;voice?:ReaderVoice|null};
+/** A voice conversation's player, owned by the reader: the lines it can play and what is playing. */
+export type ReaderVoiceLine={id:string;role:string;recorded:boolean;ready:boolean;duration:number|null;estimate:number};
+export type ReaderVoiceSpan={line:ReaderVoiceLine;index:number;start:number;length:number};
+/** The lines end to end, as the reader's player plays them (voiceSchedule in reader-model.js). */
+export type ReaderVoicePlan={total:number;spans:ReaderVoiceSpan[]};
+export type ReaderVoice={lines:ReaderVoiceLine[];recorded:number;snapshot:()=>{playing:boolean;current:string|null;active:string[];speech:boolean;pending:number;measured:number;plan:ReaderVoicePlan};subscribe:(listener:()=>void)=>()=>void;toggle:()=>void;playFrom:(id:string)=>void};
+export function voiceClock(ms:number):string{const seconds=Math.max(0,Math.round(ms/1000));return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;}
 export type ReaderSpan={top:number;bottom:number;start:number;end:number};
 export type ReaderGeometry={spans:ReaderSpan[];ends:number[]};
 export type ReaderNavigatorChoice='timeline'|'context'|'turns';

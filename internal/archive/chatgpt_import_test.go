@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -135,8 +136,143 @@ func TestChatGPTImportPreservesMediaAndOfflineReader(t *testing.T) {
 				t.Fatal("missing media was served", response.Code)
 			}
 		}
+		// The same files as assets of the message they belong with: the
+		// recording plays, and the one the export only names says so.
+		assets, err := queryMaps(c.reader(), `SELECT a.id,a.kind,a.relation,a.availability,a.attachment_message_id,m.kind AS owner FROM message_assets a JOIN messages m ON m.id=a.message_id ORDER BY a.availability DESC`)
+		if err != nil || len(assets) != 2 || assets[0]["availability"] != assetStored || assets[1]["availability"] != assetNotExported || assets[0]["kind"] != "audio" {
+			t.Fatal(assets, err)
+		}
+		for _, asset := range assets {
+			if asset["owner"] != "message" || firstString(asset["attachment_message_id"]) == "" {
+				t.Fatal("asset is not attached to its message", asset)
+			}
+			request := httptest.NewRequest("GET", "/api/assets/"+firstString(asset["id"]), nil)
+			request.Header.Set("Range", "bytes=0-3")
+			response := httptest.NewRecorder()
+			server.asset(response, request)
+			if stored := asset["availability"] == assetStored; stored && (response.Code != 206 || response.Body.String() != "RIFF" || !strings.HasPrefix(response.Header().Get("Content-Type"), "audio/")) || !stored && response.Code != 404 {
+				t.Fatal(asset, response.Code, response.Header())
+			}
+		}
 	}
 	assertMedia(t, config)
+	// The line the export kept no recording of is read aloud once: its prose
+	// only, kept for the next play; without a synthesizer the reader is told.
+	t.Run("read aloud", func(t *testing.T) {
+		t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+		var made []string
+		override(t, &speechAvailable, true)
+		override(t, &speechSynthesize, func(_ context.Context, textFile, audioFile string) error {
+			text, err := os.ReadFile(textFile)
+			made = append(made, string(text))
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(audioFile, []byte("spoken"), 0o600)
+		})
+		var id, text string
+		if err := c.reader().QueryRow("SELECT id,text FROM messages WHERE kind='message' AND role='assistant' AND text<>'' LIMIT 1").Scan(&id, &text); err != nil {
+			t.Fatal(err)
+		}
+		server := testServer(t, config, c)
+		play := func(path string) *httptest.ResponseRecorder {
+			response := httptest.NewRecorder()
+			server.speech(response, httptest.NewRequest("GET", path, nil))
+			return response
+		}
+		for range 2 {
+			if response := play("/api/speech/" + id); response.Code != 200 || response.Body.String() != "spoken" || response.Header().Get("Content-Type") != "audio/mp4" {
+				t.Fatal(response.Code, response.Header(), response.Body.String())
+			}
+		}
+		if len(made) != 1 || made[0] != speechText(text) {
+			t.Fatalf("synthesized %q for %q", made, text)
+		}
+		if got := strings.Join(strings.Fields(speechText("See **this** [page](https://a.example/x):\n```go\ncode\n```\nand https://b.example now")), " "); got != "See this page: and now" {
+			t.Fatalf("spoken text = %q", got)
+		}
+		// What the app drew inside a reply is not read out: a citation and a
+		// widget say nothing, and a named place says its name.
+		marked := "Swim at \ue200entity\ue202[\"place\",\"Wellington Lake\",\"x1\"]\ue201 today.\ue200cite\ue202turn0search1\ue201 \ue200genui\ue202{\"map_widget\":{}}\ue201"
+		if got := strings.Join(strings.Fields(speechText(marked)), " "); got != "Swim at Wellington Lake today." {
+			t.Fatalf("spoken markers = %q", got)
+		}
+		// Pressing play has every line without a recording read, and
+		// reports which are ready and how long they run.
+		var conversation string
+		if err := c.reader().QueryRow("SELECT conversation_id FROM messages WHERE id=?", id).Scan(&conversation); err != nil {
+			t.Fatal(err)
+		}
+		prepared := func() map[string]any {
+			var state map[string]any
+			if response := play("/api/speech/conversation/" + conversation + "?from=" + id); response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &state) != nil {
+				t.Fatal(response.Code, response.Body.String())
+			}
+			return state
+		}
+		first := prepared()
+		if lines := first["lines"].([]any); len(lines) == 0 || lines[0].(map[string]any)["id"] != id || lines[0].(map[string]any)["ready"] != true {
+			t.Fatalf("prepared = %v", first)
+		}
+		if !waitFor(10*time.Second, func() {
+			for prepared()["pending"] != float64(0) {
+				time.Sleep(5 * time.Millisecond)
+			}
+		}) {
+			t.Fatal("the conversation's lines were not all read")
+		}
+		for _, line := range prepared()["lines"].([]any) {
+			if line.(map[string]any)["ready"] != true {
+				t.Fatalf("line = %v", line)
+			}
+		}
+		// A line the voice cannot read is tried once, then reported as failed
+		// and no longer as on its way, however often the reader asks.
+		t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+		var refused atomic.Int64
+		override(t, &speechSynthesize, func(context.Context, string, string) error { refused.Add(1); return errors.New("voice refused") })
+		if !waitFor(10*time.Second, func() {
+			for prepared()["pending"] != float64(0) {
+				time.Sleep(5 * time.Millisecond)
+			}
+		}) {
+			t.Fatal("lines that cannot be read stayed pending")
+		}
+		tried := refused.Load()
+		for range 3 {
+			for _, line := range prepared()["lines"].([]any) {
+				if line := line.(map[string]any); line["ready"] != false || line["failed"] != true {
+					t.Fatalf("line = %v", line)
+				}
+			}
+		}
+		if lines := len(prepared()["lines"].([]any)); tried != int64(lines) || refused.Load() != tried {
+			t.Fatalf("%d lines were tried %d times, then %d", lines, tried, refused.Load())
+		}
+		// Playing such a line says it could not be read, without trying it again.
+		if response := play("/api/speech/" + id); response.Code != 500 || refused.Load() != tried {
+			t.Fatal(response.Code, response.Body.String(), refused.Load(), tried)
+		}
+		// Once the wait is over the line is tried again, once.
+		override(t, &speechRetryAfter, 0)
+		if response := play("/api/speech/" + id); response.Code != 500 || refused.Load() != tried+1 {
+			t.Fatal(response.Code, refused.Load(), tried)
+		}
+		// A recording's length comes from its movie header.
+		movie := filepath.Join(t.TempDir(), "a.m4a")
+		header := append(make([]byte, 12), 0, 0, 0x03, 0xe8, 0, 0, 0x0b, 0xb8) // version 0: timescale 1000, 3000 units
+		os.WriteFile(movie, append([]byte("\x00\x00\x00\x6cmvhd"), header...), 0o600)
+		if got := speechDuration(movie); got != 3000 {
+			t.Fatalf("duration = %d", got)
+		}
+		if response := play("/api/speech/unknown"); response.Code != 404 {
+			t.Fatal("a message that is not stored was read", response.Code)
+		}
+		override(t, &speechAvailable, false)
+		if response := play("/api/speech/" + id); response.Code != 501 || !strings.Contains(response.Body.String(), "unsupported") {
+			t.Fatal(response.Code, response.Body.String())
+		}
+	})
 	t.Run("completed transfer with encoded evidence", func(t *testing.T) {
 		transferred := config
 		transferred.CaptureRoot = filepath.Join(t.TempDir(), "captures")

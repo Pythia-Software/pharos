@@ -33,6 +33,10 @@ var transferHistoryTables = []string{
 	// Sanitized conversation selections are retained source observations, even
 	// when the corresponding chat export has not been imported yet.
 	"claude_chat_settings_observations",
+	// What a conversation's messages attached, drew and cited is read when
+	// it is parsed, and it is not parsed again on the host that receives
+	// it. A web image fetched once may no longer be at its address.
+	"message_assets", "message_sources", "remote_assets",
 }
 
 type transferFile struct {
@@ -528,6 +532,8 @@ var transferReferences = map[string]string{
 	"final_message_id": "messages",
 	// A skill usage's evidence and the message holding its body.
 	"evidence_message_id": "messages", "body_message_id": "messages",
+	// The attachment row an asset's card stands for.
+	"attachment_message_id": "messages",
 }
 
 func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
@@ -673,6 +679,13 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	if _, err = tx.ExecContext(ctx, "DELETE FROM tool_ledger_inputs WHERE conversation_id IN (SELECT id FROM delivered_conversations)"); err != nil {
 		return err
 	}
+	// A conversation's attachments and sources are written as a whole when it
+	// is parsed, so an accepted copy's replace this library's: a row only
+	// this side's parse made would otherwise stay as a stale or second card.
+	if _, err = tx.ExecContext(ctx, `DELETE FROM message_assets WHERE conversation_id IN (SELECT id FROM delivered_conversations);
+ DELETE FROM message_sources WHERE conversation_id IN (SELECT id FROM delivered_conversations);`); err != nil {
+		return err
+	}
 	// Integer row IDs are destination-local. Replace per-workspace metrics only
 	// when the source owns that revision; union-derived totals are rebuilt below.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM metrics WHERE workspace_id IN (SELECT id FROM delivered_workspaces);
@@ -722,6 +735,11 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 			scope = "excluded.version>source_evidence.version"
 		case "origin_observations":
 			scope = "excluded.conversation_id IN (SELECT id FROM delivered_conversations)"
+		case "remote_assets":
+			// An image is kept by its address, whichever conversations show
+			// it. One this library holds stays; one it failed to fetch takes
+			// the incoming copy, which may no longer be at its address.
+			scope = "remote_assets.content IS NULL AND excluded.content IS NOT NULL"
 		}
 		if strings.HasPrefix(table, "tl1_") {
 			scope = "excluded.installation_id IN (SELECT installation_id FROM delivered_tl1_installations)"

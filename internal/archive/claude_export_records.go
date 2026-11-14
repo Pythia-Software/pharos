@@ -96,6 +96,7 @@ func (a *claudeAIAdapter) readSupplement(input claudeExportInput, emit func(Work
 	}
 	origin := a.original(input.path)
 	records := map[string]*WorkspaceRecord{}
+	artifacts := map[string]map[string]any{}
 	// ZIP order is source order; do not sort cloud transcript fragments by
 	// timestamps, which can be equal for several parts of the same message.
 	for _, entry := range members {
@@ -162,6 +163,9 @@ func (a *claudeAIAdapter) readSupplement(input claudeExportInput, emit func(Work
 			if name := firstString(meta["name"]); name != "" {
 				record.Title = name
 			}
+			if path.Base(entry.name) == "artifact.json" && strings.HasPrefix(group, "artifacts/") {
+				artifacts[group] = meta
+			}
 			if path.Base(entry.name) == "artifact.json" {
 				for _, raw := range reasoningList(meta["versions"]) {
 					v := mapValue(raw)
@@ -195,6 +199,16 @@ func (a *claudeAIAdapter) readSupplement(input claudeExportInput, emit func(Work
 	}
 	slices.Sort(keys)
 	for _, key := range keys {
+		// An artifact is an asset of the file that opens it.
+		if meta := artifacts[key]; meta != nil {
+			members := map[string]bool{}
+			for _, message := range records[key].Conversations[0].Messages {
+				members[message.NativeID] = true
+			}
+			if asset, ok := claudeArtifactAsset(key, meta, members); ok {
+				records[key].Conversations[0].Assets = []AssetRecord{asset}
+			}
+		}
 		if err := emit(*records[key]); err != nil {
 			return err
 		}

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {availableReaderNavigators,readerGeometry,readerVisibleWindow,readerNavigatorClock,readerNavigatorScale,nearestReaderMessage} from '../../../src/reader-navigator-model';
+import {voiceClock,availableReaderNavigators,readerGeometry,readerVisibleWindow,readerNavigatorClock,readerNavigatorScale,nearestReaderMessage} from '../../../src/reader-navigator-model';
 import {reader,event,human,render} from '../helpers/transcript.mjs';
 import {plain} from '../helpers/classic-script.mjs';
 import {sessionRibbonTree,activityCategory} from '../../../src/label-session-ribbon-model';
@@ -127,4 +127,12 @@ test('reader tool categories match the timeline for tool calls',()=>{
     assert.equal(mark.category,category,name);
     assert.equal(activityCategory({name,category:({run:'command',write:'edit',delegate:'agent'})[category]??category}),category,name);
   }
+});
+
+test('voice lines play one after another, each for its real length once known',()=>{
+  const said=(id,duration)=>({id,role:'user',recorded:true,ready:true,duration,estimate:0}),reply=(id,duration,estimate=1000)=>({id,role:'assistant',recorded:false,ready:!!duration,duration,estimate});
+  const plan=plain(reader.voiceSchedule([said('u1',2000),reply('a1',800),said('u2',6000),reply('a2',null,4000)]));
+  assert.deepEqual(plan.spans.map(span=>[span.line.id,span.start,span.length]),[['u1',0,2000],['a1',2000,800],['u2',2800,6000],['a2',8800,4000]]);
+  assert.equal(plan.total,12800);
+  assert.equal(voiceClock(14500),'0:15');assert.equal(voiceClock(125000),'2:05');
 });

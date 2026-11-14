@@ -531,3 +531,33 @@ func TestChatGPTExportDamageIsReported(t *testing.T) {
 		t.Fatalf("a damaged shard in a ZIP: read %v, error %v", ids, err)
 	}
 }
+
+// A file is shown with a message that has words: a Library file whose
+// originating step the export leaves out goes with the reply that stood
+// when it was made, and a photo sent as a message of its own goes with what
+// its sender said before it.
+func TestChatGPTFilesBelongWithTheMessageTheyCameWith(t *testing.T) {
+	dir := t.TempDir()
+	conversation := map[string]any{"id": "birds", "title": "Birds", "create_time": 1789670000, "update_time": 1789670400, "current_node": "a3", "mapping": map[string]any{
+		"u1":    chatGPTNodeOf("u1", "", []string{"a1"}, "user", 1789670001, chatGPTText("Draw a bird. Here's a photo"), nil),
+		"a1":    chatGPTNodeOf("a1", "u1", []string{"photo"}, "assistant", 1789670100, chatGPTText("First drawings"), nil),
+		"photo": chatGPTNodeOf("photo", "a1", []string{"a2"}, "user", 1789670150, map[string]any{"content_type": "multimodal_text", "parts": []any{map[string]any{"content_type": "image_asset_pointer", "asset_pointer": "sediment://file_photo", "width": 4, "height": 3}}}, nil),
+		"a2":    chatGPTNodeOf("a2", "photo", []string{"a3"}, "assistant", 1789670200, chatGPTText("Simpler drawings"), nil),
+		"a3":    chatGPTNodeOf("a3", "a2", nil, "assistant", 1789670300, chatGPTText("Recolored"), nil),
+	}}
+	library := []any{}
+	for file, made := range map[string]string{"file_first": "2026-09-17T18:35:05Z", "file_second": "2026-09-17T18:36:45Z", "file_third": "2026-09-17T18:38:25Z"} {
+		library = append(library, map[string]any{"file_id": file, "file_name": file + ".png", "mime_type": "image/png", "origination_thread_id": "birds", "origination_message_id": "a-step-the-export-left-out", "created_at": made})
+	}
+	for name, data := range map[string]string{"conversations.json": jsonText([]any{conversation}), "library_files.json": jsonText(library),
+		"file_first.dat": "\x89PNG1", "file_second.dat": "\x89PNG2", "file_third.dat": "\x89PNG3", "file_photo.dat": "\xff\xd8\xff"} {
+		writeSourceFile(t, filepath.Join(dir, name), data)
+	}
+	owners := map[string]string{}
+	for _, asset := range chatGPTRecords(t, dir)["birds"].Conversations[0].Assets {
+		owners[asset.Ref] = asset.MessageNativeID
+	}
+	if owners["file_first"] != "a1" || owners["file_second"] != "a2" || owners["file_third"] != "a3" || owners["file_photo"] != "u1" || len(owners) != 4 {
+		t.Fatalf("owners = %v", owners)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,101 @@ func TestClaudeAIExportKeepsTheActiveBranchAndWhatEachBlockIs(t *testing.T) {
 	if byID["m3b"].PreviousNativeID != "m2" || byID["m1"].PreviousNativeID != "" {
 		t.Fatal("parents are not kept")
 	}
+	// What the person attached points at the prompt it came with: the text the
+	// export kept, and a named file whose bytes it did not.
+	if assets := conversation.Assets; len(assets) != 2 || assets[0].MessageNativeID != "m1" || assets[0].AttachmentNativeID != "m1:attachment:0" || assets[0].Availability != assetTextOnly || assets[0].Name != "dates.txt" ||
+		assets[1].Name != "notes.pdf" || assets[1].Availability != assetNotExported || assets[1].Relation != "uploaded" {
+		t.Fatalf("assets = %+v", assets)
+	}
+	// What the reply made and drew on: a file rebuilt from the calls that wrote
+	// it, a widget, a file nothing wrote, and the pages it read and cited.
+	made := discoverClaudeAI(t, writeSourceFileAt(t, `[{"uuid":"conv-6","name":"Made","chat_messages":[
+ {"uuid":"p1","text":"Write it","sender":"human","created_at":"2026-10-03T10:00:00Z","content":[{"type":"text","text":"Write it"}]},
+ {"uuid":"p2","text":"Done","sender":"assistant","created_at":"2026-10-03T10:01:00Z","content":[
+  {"type":"tool_use","id":"t1","name":"create_file","input":{"path":"/out/plan.html","file_text":"<p>draft</p>"}},
+  {"type":"tool_use","id":"t2","name":"str_replace","input":{"path":"/out/plan.html","old_str":"draft","new_str":"final"}},
+  {"type":"tool_use","id":"t3","name":"present_files","input":{"filepaths":["/out/plan.html","/out/lost.csv"]}},
+  {"type":"tool_use","id":"t4","name":"visualize:show_widget","input":{"title":"cost_chart","widget_code":"<svg/>"}},
+  {"type":"tool_use","id":"t5","name":"web_search","input":{"query":"fares"}},
+  {"type":"tool_result","tool_use_id":"t5","content":[{"type":"knowledge","url":"https://fares.example/a","title":"Fares","text":"Cheap","metadata":{"site_name":"Fares"}},{"type":"knowledge","url":"https://other.example/b","title":"Other"}]},
+  {"type":"tool_use","id":"t6","name":"image_search","input":{"query":"lake"}},
+  {"type":"tool_result","tool_use_id":"t6","content":[{"type":"text","text":"Found 1"},{"type":"image_gallery","images":[{"url":"https://img.example/lake.jpg","thumbnail_url":"https://img.example/t.jpg","page_url":"https://img.example/p","source":"img.example","title":"Lake","width":800,"height":600}]}]},
+  {"type":"tool_use","id":"t7","name":"link_preview_display_v0","input":{"links":[{"url":"https://paper.example/x","title":"Paper","domain":"Journal","snippet":"Measured"}]}},
+  {"type":"text","text":"Done","citations":[{"details":{"url":"https://fares.example/a"}}]}]}]}]`))[0].Conversations[0]
+	found := map[string]AssetRecord{}
+	for _, asset := range made.Assets {
+		if asset.Relation == "web" {
+			// An image a search showed is an address until it is fetched.
+			if asset.Availability != assetRemote || asset.AgentAuthored || asset.Details["url"] != "https://img.example/lake.jpg" || asset.Details["page_url"] != "https://img.example/p" || asset.Width != 800 {
+				t.Fatalf("web image = %+v", asset)
+			}
+			continue
+		}
+		if asset.MessageNativeID != "p2" || !asset.AgentAuthored || asset.Relation != "generated" {
+			t.Fatalf("asset = %+v", asset)
+		}
+		found[asset.Name] = asset
+	}
+	if len(made.Assets) != 4 {
+		t.Fatalf("assets = %+v", made.Assets)
+	}
+	if plan, lost, widget := found["plan.html"], found["lost.csv"], found["cost chart.html"]; len(found) != 3 || plan.Content != "<p>final</p>" || plan.Availability != assetReconstructed || plan.MimeType != "text/html" ||
+		lost.Availability != assetNotExported || widget.Availability != assetStored || widget.Content != "<svg/>" {
+		t.Fatalf("assets = %+v", made.Assets)
+	}
+	if sources := made.Sources; len(sources) != 3 || sources[2].URL != "https://paper.example/x" || !sources[2].Cited || sources[2].Site != "Journal" || sources[0].URL != "https://fares.example/a" || !sources[0].Cited || sources[0].Site != "Fares" || sources[1].Cited || sources[0].MessageNativeID != "p2" {
+		t.Fatalf("sources = %+v", sources)
+	}
+	// A screenshot stays on the tool result that took it, and a file the
+	// reply kept rewriting is one card however often the message lists it.
+	listed := discoverClaudeAI(t, writeSourceFileAt(t, `[{"uuid":"conv-7","name":"Listed","chat_messages":[
+ {"uuid":"q1","text":"Look","sender":"human","created_at":"2026-10-04T10:00:00Z","content":[{"type":"text","text":"Look"}]},
+ {"uuid":"q2","text":"Seen","sender":"assistant","created_at":"2026-10-04T10:01:00Z",
+  "files":[{"file_uuid":"s1","file_name":"s1.jpg"},{"file_uuid":"d1","file_name":"page.html"},{"file_uuid":"d2","file_name":"page.html"},{"file_uuid":"d3","file_name":"page.html"}],"content":[
+  {"type":"tool_use","id":"t1","name":"computer","input":{"action":"screenshot"}},
+  {"type":"tool_result","tool_use_id":"t1","content":[{"type":"image","file_uuid":"s1"}]},
+  {"type":"text","text":"Seen"}]}]}]`))[0].Conversations[0].Assets
+	if len(listed) != 2 || listed[0].Relation != "tool_output" || listed[0].Ref != "s1" || !slices.Equal(listed[0].Also, []string{"q2:files"}) || listed[1].Name != "page.html" || listed[1].Details["listed"] != int64(3) {
+		t.Fatalf("listed files = %+v", listed)
+	}
+	// A file published as an artifact is the artifact: the card holds the
+	// file as the calls that wrote it left it, and stands for the file's
+	// line in the reply's list of files. Another file those calls wrote is
+	// rebuilt the same way.
+	published := discoverClaudeAI(t, writeSourceFileAt(t, `[{"uuid":"conv-8","name":"Published","chat_messages":[
+ {"uuid":"r1","text":"Publish","sender":"human","created_at":"2026-10-05T10:00:00Z","content":[{"type":"text","text":"Publish"}]},
+ {"uuid":"r2","text":"Published","sender":"assistant","created_at":"2026-10-05T10:01:00Z",
+  "files":[{"file_uuid":"h1","file_name":"page.html"},{"file_uuid":"h2","file_name":"page.html"},{"file_uuid":"n1","file_name":"notes.md"},{"file_uuid":"n2","file_name":"notes.md"}],"content":[
+  {"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/home/claude/page.html","content":"<p>a a</p>"}},
+  {"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"/home/claude/page.html","old_string":"a","new_string":"b","replace_all":true}},
+  {"type":"tool_use","id":"t3","name":"Write","input":{"file_path":"/home/claude/notes.md","content":"# Note"}},
+  {"type":"tool_use","id":"t5","name":"Edit","input":{"file_path":"/home/claude/notes.md","old_string":"Note","new_string":"Notes"}},
+  {"type":"tool_use","id":"t4","name":"Artifact","input":{"action":"publish","description":"A page","file_path":"/home/claude/page.html"}},
+  {"type":"text","text":"Published"}]}]}]`))[0].Conversations[0].Assets
+	if len(published) != 2 || published[0].Kind != "artifact" || published[0].Content != "<p>b b</p>" || published[0].Availability != assetReconstructed || published[0].MimeType != "text/html" ||
+		!slices.Contains(published[0].Also, "r2:files") || published[1].Name != "notes.md" || published[1].Content != "# Notes" || published[1].Availability != assetReconstructed || published[1].MimeType != "text/markdown" ||
+		// Listed twice, it is one card that still says how it was written.
+		published[1].Details["listed"] != int64(2) || published[1].Details["edits"] != 1 {
+		t.Fatalf("published = %+v", published)
+	}
+	// An artifact first published by its title alone, and named by its
+	// address in a later call that names no file, stays one card with what
+	// was published and its file's line.
+	identified := discoverClaudeAI(t, writeSourceFileAt(t, `[{"uuid":"conv-9","name":"Identified","chat_messages":[
+ {"uuid":"s1","text":"Publish","sender":"human","created_at":"2026-10-06T10:00:00Z","content":[{"type":"text","text":"Publish"}]},
+ {"uuid":"s2","text":"Published","sender":"assistant","created_at":"2026-10-06T10:01:00Z","files":[{"file_uuid":"k1","file_name":"deck.html"}],"content":[
+  {"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/home/claude/deck.html","content":"<p>deck</p>"}},
+  {"type":"tool_use","id":"t2","name":"Artifact","input":{"action":"publish","title":"Deck","file_path":"/home/claude/deck.html"}},
+  {"type":"text","text":"Published"}]},
+ {"uuid":"s3","text":"Rename","sender":"human","created_at":"2026-10-06T10:02:00Z","content":[{"type":"text","text":"Rename"}]},
+ {"uuid":"s4","text":"Renamed","sender":"assistant","created_at":"2026-10-06T10:03:00Z","content":[
+  {"type":"tool_use","id":"t3","name":"Artifact","input":{"action":"update","title":"Deck","url":"https://claude.ai/artifact/11111111-2222-4333-8444-555555555555"}},
+  {"type":"text","text":"Renamed"}]}]}]`))[0].Conversations[0].Assets
+	if len(identified) != 1 || identified[0].Ref != claudeArtifactRef("11111111-2222-4333-8444-555555555555") || identified[0].MessageNativeID != "s4" || identified[0].Content != "<p>deck</p>" ||
+		identified[0].Availability != assetReconstructed || identified[0].Details["file"] != "deck.html" || !slices.Contains(identified[0].Also, "s2:files") {
+		t.Fatalf("identified = %+v", identified)
+	}
+
 	// An explicit current leaf wins over the newest one.
 	second := records[1].Conversations[0].Messages
 	if len(second) != 4 || !second[2].Selected || second[3].Selected || records[1].Title != "Claude.ai conv-2" {

@@ -424,6 +424,10 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.chatGPTImportsDocument(), 200)
 	case strings.HasPrefix(path, "/api/chatgpt-assets/"):
 		s.chatGPTAsset(w, r)
+	case strings.HasPrefix(path, "/api/assets/"):
+		s.asset(w, r)
+	case strings.HasPrefix(path, "/api/speech/"):
+		s.speech(w, r)
 	case path == "/api/claude-imports":
 		s.getClaudeImports(w, r)
 	case path == "/api/markdown-link":

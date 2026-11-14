@@ -31,6 +31,7 @@ test("compact message excerpts keep prose beyond harness setup and flatten Markd
  const long = preview("Please review the parser and check its callers. ".repeat(20));
  assert.ok(long.length <= 640); assert.ok(long.endsWith("…"));
  assert.equal(preview(""), "");
+ assert.equal(preview("Swim at \uE200entity\uE202[\"t0\",\"Grand Lake\"]\uE201.\uE200cite\uE202t1\uE201"), "Swim at Grand Lake.");
 });
 
 test("agent Markdown renders structure without activating embedded HTML or unsafe links", () => {
@@ -320,4 +321,29 @@ test("a highlight crossing inline markdown is one mark", () => {
   // Adjacent different highlights stay apart.
   const both = "one `two` three", split = "1".repeat(4) + "2".repeat(11);
   assert.deepEqual(elements(markdownTree(both, 0, split)).filter(element => element.tag === "mark").map(mark => mark.className), ["human-written", "labeled-text"]);
+});
+
+test("an export's inline markers read as words, and highlights stay on theirs", () => {
+  const { exportMarkerText } = reader;
+  const E = "", P = "", X = "";
+  const text = `Go to ${E}entity${P}["turn0business0","Wellington Lake"]${X} today.${E}cite${P}turn1search2${X} ${E}genui${P}{"map_widget":{}}${X}`;
+  assert.deepEqual(plain(exportMarkerText(text)), { text: "Go to Wellington Lake today. [map widget]", mask: "" });
+  // The flag on "today" follows the word across the cut.
+  const at = text.indexOf("today"), mask = "0".repeat(at) + "11111" + "0".repeat(text.length - at - 5);
+  const shown = exportMarkerText(text, mask);
+  assert.equal(shown.mask.length, shown.text.length);
+  assert.equal(shown.mask.indexOf("11111"), shown.text.indexOf("today"));
+  assert.deepEqual(plain(exportMarkerText("No markers", "0100000000")), { text: "No markers", mask: "0100000000" });
+});
+
+test("source text is cut into comments, strings, numbers and keywords by its extension", () => {
+  const { highlightCode } = reader, runs = (text, name) => plain(highlightCode(text, name)).filter(run => run.kind).map(run => [run.kind, run.text]);
+  const script = "// total\nconst sum = add(1, 'a//b'); /* done */";
+  assert.deepEqual(runs(script, "points.js"), [["comment", "// total"], ["keyword", "const"], ["number", "1"], ["string", "'a//b'"], ["comment", "/* done */"]]);
+  assert.deepEqual(runs("# note\ndef area(r):\n    return 3.14 * r  # pi", "shape.py"), [["comment", "# note"], ["keyword", "def"], ["keyword", "return"], ["number", "3.14"], ["comment", "# pi"]]);
+  assert.deepEqual(runs("SELECT id FROM t -- all", "q.sql"), [["keyword", "SELECT"], ["keyword", "FROM"], ["comment", "-- all"]]);
+  assert.deepEqual(runs('<p class="x">hi</p><!-- end -->', "page.html"), [["keyword", "<p"], ["string", '"x"'], ["keyword", ">"], ["keyword", "</p>"], ["comment", "<!-- end -->"]]);
+  // Every character is kept, in order, whatever the language; an unknown one is left plain.
+  for (const name of ["points.js", "shape.py", "q.sql", "page.html", "notes.txt"]) assert.equal(plain(highlightCode(script, name)).map(run => run.text).join(""), script);
+  assert.deepEqual(plain(highlightCode(script, "notes.txt")), [{ kind: "", text: script }]);
 });
