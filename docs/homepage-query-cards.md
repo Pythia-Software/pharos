@@ -10,10 +10,12 @@ The [destination audit](homepage-card-destinations.md) records the direct-dashbo
 
 ## Recent conversations
 
-Below the Dashboard Catalog, Home shows up to ten recent top-level conversations
-using the Library card frame and compact message previews. Each title opens that
-specific conversation; **Search conversations** opens the Library's conversation
-view. These entries are navigation aids, with no collection or pin actions.
+Below the Dashboard Catalog, Home shows up to twelve recent top-level conversations
+in two to four columns, depending on width. A ready fingerprint runs full width
+across the top of each card and the first ask and latest response form its bottom
+bands. Each title opens that specific conversation; **Search conversations**
+opens the Library's conversation view. These entries are navigation aids, with
+no collection or pin actions.
 
 `GET /api/library/recent-conversations` takes at most 200 active top-level
 conversation records through `conversations_recent_idx`, ordered by ended/start

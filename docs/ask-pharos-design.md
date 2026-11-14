@@ -371,8 +371,10 @@ real CLI execution belong to the full build.
 The home page now mounts the approved composer using `ask-pharos.html`,
 `ask-pharos.css`, and `ask-pharos.js` under `internal/archive/assets/`. The
 existing React `HomeSearch` is retained inside it. Interaction rules which do
-not need the DOM live in `ask-model.js`. `/settings/ask` provides opt-in,
-invitation visibility, and default CLI/model/effort selection.
+not need the DOM live in `ask-model.js`. The Ask Pharos card in App
+preferences (`/settings/preferences`; `/settings/ask` redirects there) provides
+opt-in and CLI refresh, beside a separate invitation switch. The composer
+chooses the CLI, model and effort and saves the default.
 
 The Go service owns CLI discovery, consent enforcement, invocation, cancellation,
 chat storage, and destination validation. Detecting an executable checks PATH

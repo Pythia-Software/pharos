@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { HomeSearch } from "./search-composer";
+import { ViewDisclosure } from "./view-disclosure";
 import { createAskChartPreviews } from "./ask-chart-preview";
 import { createAskWorkPreviews } from "./ask-work-preview";
 import { combineAskPreviews, type AskLinkPreviews } from "./ask-link-previews";
@@ -9,8 +10,7 @@ import type { QueryDataset } from "./query-links";
 
 declare global { interface Window { initPharosAsk?: (root: HTMLElement, options?: { previews?: AskLinkPreviews }) => () => void; } }
 type Selection = { provider: string; model: string; effort: string };
-type Model = { id: string; label: string; efforts: string[]; default: boolean };
-type Provider = { id: string; models: Model[]; defaultSelection?: Selection };
+type Provider = { id: string };
 type Access = { enabled: boolean; showInvitation: boolean; selection?: Selection };
 type Status = { settings: Access; providers: Provider[] };
 async function askAPI<T>(path: string, body?: unknown): Promise<T> {
@@ -56,54 +56,59 @@ export function AskPharosSearch({ schemas }: { schemas: Record<QueryDataset, Fie
   </>;
 }
 
+// App Preferences: one switch turns Ask Pharos on; its card expands only
+// while it is on. The composer owns the CLI, model and effort choice.
 export function AskPharosSettings() {
   const [status, setStatus] = useState<Status | null>(null), [error, setError] = useState("");
-  const [models, setModels] = useState<Model[]>([]), [selection, setSelection] = useState<Selection>({ provider: "", model: "", effort: "Default" });
-  const [busy, setBusy] = useState(false), [modelGeneration, setModelGeneration] = useState(0);
+  const [busy, setBusy] = useState(false), [refreshing, setRefreshing] = useState(false), [refreshed, setRefreshed] = useState("");
   const consent = useRef<HTMLDialogElement>(null);
   const refresh = async () => {
-    try { const result = await askAPI<Status>("status"); setStatus(result); if (result.settings.selection?.provider) setSelection(result.settings.selection); else setSelection(current => ({ ...current, provider: result.providers[0]?.id || "" })); }
-    catch (error) { setError(String(error)); }
+    try { const result = await askAPI<Status>("status"); setStatus(result); return result; }
+    catch (error) { setError(String(error)); return null; }
   };
   useEffect(() => { void refresh(); const update = () => { void refresh(); }; window.addEventListener("pharos:ask-config", update); return () => window.removeEventListener("pharos:ask-config", update); }, []);
-  useEffect(() => {
-    if (!status?.settings.enabled || !selection.provider) { setModels([]); return; }
-    let canceled = false; setModels([]);
-    askAPI<Provider>(`models?provider=${encodeURIComponent(selection.provider)}${modelGeneration ? "&refresh=1" : ""}`).then(result => {
-      if (canceled) return; setModels(result.models);
-      setSelection(current => {
-        const existing = result.models.find(model => model.id === current.model);
-        if (!existing && result.defaultSelection) return result.defaultSelection;
-        const model = existing || result.models.find(model => model.default) || result.models[0];
-        return { ...current, model: model?.id || "", effort: model?.efforts.includes(current.effort) ? current.effort : "Default" };
-      });
-    }).catch(error => { if (!canceled) setError(String(error)); });
-    return () => { canceled = true; };
-  }, [selection.provider, status?.settings.enabled, modelGeneration]);
   async function save(change: Partial<Access> & { consent?: boolean }) {
     setBusy(true); setError("");
     try { await askAPI("settings", change); consent.current?.close(); window.dispatchEvent(new Event("pharos:ask-config")); await refresh(); }
     catch (error) { setError(String(error)); }
     finally { setBusy(false); }
   }
-  const model = models.find(model => model.id === selection.model);
-  return <div className="ask-settings">
-    <p>Ask questions in plain language and find useful Pharos pages using an installed, authenticated Codex, Claude, or Antigravity CLI.</p>
-    {error && <p role="alert">{error}</p>}
-    {!status ? <p role="status">Checking available CLIs…</p> : <>
-      <label><input type="checkbox" checked={status.settings.enabled} disabled={busy || (!status.providers.length && !status.settings.enabled)} onChange={event => event.target.checked ? consent.current?.showModal() : void save({ enabled: false })} />Enable Ask Pharos on this Mac</label>
-      {!status.providers.length && <p>Install and authenticate a supported CLI, then reopen this page.</p>}
-      <label><input type="checkbox" checked={status.settings.showInvitation} disabled={busy} onChange={event => void save({ showInvitation: event.target.checked })} />Show the Ask Pharos invitation</label>
-      {status.settings.enabled && <>
-        <label>CLI <select aria-label="Default AI CLI" value={selection.provider} onChange={event => setSelection({ provider: event.target.value, model: "", effort: "Default" })}>{status.providers.map(provider => <option key={provider.id}>{provider.id}</option>)}</select></label>
-        <label>Model <select aria-label="Default AI model" disabled={!models.length} value={selection.model} onChange={event => setSelection(current => ({ ...current, model: event.target.value, effort: "Default" }))}>{!models.length && <option>Loading models…</option>}{models.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label>
-        <label>Effort <select aria-label="Default AI effort" value={selection.effort} onChange={event => setSelection(current => ({ ...current, effort: event.target.value }))}>{(model?.efforts || ["Default"]).map(value => <option key={value}>{value}</option>)}</select></label>
-        <button type="button" disabled={busy || !model} onClick={() => void save({ selection })}>Save as default</button>
-      </>}
-      <p>Conversations stay in this library and are indexed alongside past work. Page visits are kept separately for this Mac, are limited to the latest 1,000 entries, and are available only to Ask Pharos’s private navigation interface.</p>
-      <p>Disabling Ask Pharos stops active questions and leaves ordinary search available.</p>
-      <button type="button" onClick={() => { void refresh(); setModelGeneration(value => value + 1); }}>Refresh available CLIs</button>
-    </>}
+  // Rediscover installed CLIs and drop each one's cached model list, so the
+  // composer offers what is installed now.
+  async function refreshCLIs() {
+    setRefreshing(true); setError(""); setRefreshed("");
+    try {
+      const result = await refresh();
+      if (!result) return;
+      await Promise.all(result.providers.map(provider => askAPI<Provider>(`models?provider=${encodeURIComponent(provider.id)}&refresh=1`).catch(() => null)));
+      window.dispatchEvent(new Event("pharos:ask-config"));
+      setRefreshed(result.providers.length ? `Found ${askList(result.providers.map(provider => provider.id))}.` : "No supported CLI found.");
+    } finally { setRefreshing(false); }
+  }
+  const enabled = Boolean(status?.settings.enabled), providers = status?.providers || [];
+  const heading = <div>
+    <h3 id="askPharosEnabledTitle">Ask Pharos</h3>
+    <p id="askPharosEnabledDescription" className="muted">Ask questions in plain language and find useful pages with your installed, authenticated Codex, Claude, or Antigravity CLI.{status && !providers.length && !enabled ? " Install and authenticate a supported CLI, then reopen this page." : ""}</p>
+  </div>;
+  return <>
+    <div className="layout-preference-card ask-preferences">
+      {enabled ? <ViewDisclosure viewKey="askPharosSettings" className="ask-preferences-disclosure" summary={<>
+        {heading}
+        <span className="menu-bar-expand" aria-hidden="true"><span className="ask-expand-closed">Expand</span><span className="ask-expand-open">Collapse</span><svg className="app-icon" viewBox="0 0 24 24"><use href="#ph-icon-chevron-down" /></svg></span>
+      </>}>
+        <div className="menu-bar-preferences-body ask-preferences-body">
+          <p className="muted">{providers.length ? `Available CLIs: ${askList(providers.map(provider => provider.id))}.` : "No supported CLI found."} Choose the CLI, model and effort for each question in the Ask Pharos composer.</p>
+          <p className="muted">Turning Ask Pharos off stops active questions; ordinary search stays available. Conversations stay in this library and are indexed alongside past work. Page visits are kept separately for this Mac, are limited to the latest 1,000 entries, and are available only to Ask Pharos’s private navigation interface.</p>
+          <p className="ask-preferences-actions"><button type="button" disabled={refreshing} onClick={() => void refreshCLIs()}>{refreshing ? "Refreshing…" : "Refresh available CLIs"}</button><span className="muted" role="status">{refreshed}</span></p>
+        </div>
+      </ViewDisclosure> : <div className="optional-behavior">{heading}</div>}
+      <button type="button" className={`toggle ask-preferences-toggle${enabled ? " on" : ""}`} role="switch" aria-checked={enabled} aria-labelledby="askPharosEnabledTitle" aria-describedby="askPharosEnabledDescription" disabled={!status || busy || (!providers.length && !enabled)} onClick={() => enabled ? void save({ enabled: false }) : consent.current?.showModal()} />
+    </div>
+    <div className="optional-behavior">
+      <div><h3 id="askPharosInvitationTitle">Show the Ask Pharos invitation</h3><p id="askPharosInvitationDescription" className="muted">While Ask Pharos is off, offer to turn it on beside search. On by default.</p></div>
+      <button type="button" className={`toggle${status?.settings.showInvitation ? " on" : ""}`} role="switch" aria-checked={Boolean(status?.settings.showInvitation)} aria-labelledby="askPharosInvitationTitle" aria-describedby="askPharosInvitationDescription" disabled={!status || busy} onClick={() => void save({ showInvitation: !status?.settings.showInvitation })} />
+    </div>
+    {error && <p className="ask-preferences-error" role="alert">{error}</p>}
     <dialog ref={consent} className="ask-consent" aria-labelledby="ask-settings-consent-title">
       <h2 id="ask-settings-consent-title">Ask in your own words</h2>
       <p>Ask Pharos navigates the app using your installed, authenticated CLI. Each question uses your agent account’s quota. These conversations will themselves be indexed by Pharos.</p>
@@ -113,5 +118,9 @@ export function AskPharosSettings() {
       <button type="button" onClick={() => consent.current?.close()}>Not right now</button>
       <button type="button" disabled={busy} onClick={() => void save({ enabled: false, showInvitation: false })}>No, and don’t show this again</button>
     </dialog>
-  </div>;
+  </>;
+}
+
+function askList(items: string[]) {
+  return items.length < 3 ? items.join(" and ") : `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
 }

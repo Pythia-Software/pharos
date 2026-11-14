@@ -313,10 +313,11 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
 .claude-downloads-watch{margin-top:16px;padding:4px 20px 16px}.layout-preference-card.claude-downloads-watch>.optional-behavior{padding:16px 0;border-bottom:0}
 .claude-watch-how{margin:0 0 12px}.claude-watch-exports{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}.claude-watch-export{min-width:0}.claude-watch-exports:empty{display:none}
 .pharos-download-export{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--line)}.pharos-download-export-info{display:grid;min-width:0;gap:4px}.pharos-download-export-info code{overflow-wrap:anywhere}.pharos-download-export button{flex-shrink:0}
-.claude-watch-history{margin:12px 0;min-width:0}.claude-watch-history h4{margin:0 0 8px}.claude-watch-table-scroll{overflow-x:auto}.claude-watch-table{width:100%;border-collapse:collapse;text-align:left}.claude-watch-table th,.claude-watch-table td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}.claude-watch-table th{font-size:var(--fs-sm);color:var(--muted)}.claude-watch-table td{white-space:nowrap}.claude-watch-history p{margin:8px 0}
+.claude-watch-history{margin:12px 0;min-width:0}.claude-watch-history h4{margin:0 0 8px}.claude-watch-table-scroll{overflow-x:auto}.claude-watch-table{width:100%;border-collapse:collapse;text-align:left}.claude-watch-table th,.claude-watch-table td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}.claude-watch-table th{font-size:var(--fs-sm);color:var(--muted)}.claude-watch-table td{white-space:nowrap}.claude-watch-table td.claude-watch-file{max-width:24em;overflow:hidden;text-overflow:ellipsis}.claude-watch-history p{margin:8px 0}
 .claude-watch-export h4{margin:0;font-size:var(--fs-base)}.claude-watch-export p{margin:4px 0 0;overflow-wrap:anywhere}
-.claude-watch-library{margin-top:12px;min-width:0;overflow-wrap:anywhere}.claude-watch-library h4{margin:0;font-size:var(--fs-base)}.claude-watch-library p{margin:6px 0}.claude-watch-library ul{margin:6px 0;padding-left:20px}
+.claude-watch-library{margin:16px 0 0;min-width:0;overflow-wrap:anywhere}.claude-watch-library h4{margin:0;font-size:var(--fs-base)}.claude-watch-library p{margin:6px 0}.claude-watch-library ul{margin:6px 0;padding-left:20px}
 .claude-watch-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
+.claude-watch-button{border:1px solid var(--line);background:var(--bg);color:var(--ink)}.claude-watch-button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
 .claude-watch-options{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:0 0 12px}.claude-watch-options>p{flex-basis:100%;margin:0}
 .claude-watch-browser{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;max-width:100%}.claude-watch-browser select{flex:1 1 12em;box-sizing:border-box;width:100%;max-width:100%;min-width:0;height:30px;padding:3px 28px 3px 8px;border:1px solid var(--line);border-radius:5px;background-color:var(--panel);color:var(--ink);font:inherit}
 @media(max-width:560px){.claude-downloads-watch>.optional-behavior{flex-wrap:wrap;gap:12px}.claude-downloads-watch>.optional-behavior>div{flex-basis:100%}}`;
@@ -1065,6 +1066,27 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
     }
     if(document.activeElement!==select)select.value=value;
   }
+  // Completed exports, Claude's and ChatGPT's, are rows of one table.
+  function exportHistory(columns,note){
+    const history=node('section','claude-watch-history'),scroll=node('div','claude-watch-table-scroll'),table=node('table','claude-watch-table'),head=node('thead'),header=node('tr');
+    for(const text of columns){const th=node('th','',text);th.scope='col';header.append(th)}
+    head.append(header);table.append(head,node('tbody'));scroll.append(table);history.append(node('h4','','Completed exports'),scroll,node('p','muted',note));history.hidden=true;
+    return history;
+  }
+  // cells gives every column but the last, which opens the imported conversations.
+  function showExportHistory(history,completed,url,cells){
+    const signature=JSON.stringify([completed,url]);
+    history.hidden=!completed.length;
+    if(history.dataset.signature===signature)return;
+    history.dataset.signature=signature;
+    const focused=history.contains(document.activeElement)?document.activeElement.dataset.focusKey:'';
+    history.querySelector('tbody').replaceChildren(...completed.map(item=>{
+      const row=node('tr');row.dataset.id=item.id;row.append(...cells(item));
+      const destination=node('td');if(url){const link=node('a','','View conversations');link.href=url;link.dataset.focusKey=`${item.id}:conversations`;destination.append(link)}else destination.textContent='Unavailable';row.append(destination);
+      return row;
+    }));
+    if(focused)history.querySelector(`[data-focus-key="${window.CSS.escape(focused)}"]`)?.focus({preventScroll:true});
+  }
   function renderClaudeWatch(root){
     if(!root)return;
     if(claudeWatch.root!==root){
@@ -1081,16 +1103,14 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
       const options=node('div','claude-watch-options'),label=node('label','claude-watch-browser','Open download links in '),select=node('select');
       select.id='claudeDownloadsBrowser';
       select.onchange=async()=>{select.disabled=true;try{showClaudeWatch(await watchPost({browser:select.value}))}catch(failure){toast(failure.message)}finally{select.disabled=false}};
-      const check=node('button','','Check Downloads now');check.type='button';check.id='claudeDownloadsCheck';
+      const check=node('button','claude-watch-button','Check Downloads now');check.type='button';check.id='claudeDownloadsCheck';
       check.onclick=async()=>{check.disabled=true;try{showClaudeWatch(await watchPost({action:'check'}));clearTimeout(claudeWatch.timer);claudeWatch.timer=setTimeout(refreshClaudeWatch,3000)}catch(failure){toast(failure.message)}finally{check.disabled=false}};
       label.append(select);
       options.append(label,check,node('p','muted','Choose the browser profile that is signed in to your Claude account. When a download arrives, Pharos remembers that profile for the account’s later exports.'));
       const how=node('p','muted claude-watch-how','To start an export, open Claude, then Settings → Privacy → Export data. When Claude emails you, download the manifest from its link into Downloads. The links work for 24 hours.');
       const problem=node('p','sync-note badtext');problem.setAttribute('role','status');
-      const list=node('div','claude-watch-exports'),history=node('section','claude-watch-history'),library=node('div','source-card claude-watch-library'),routine=claudeExportRoutine();routine.hidden=true;
-      const scroll=node('div','claude-watch-table-scroll'),table=node('table','claude-watch-table'),head=node('thead'),header=node('tr'),body=node('tbody');
-      for(const text of ['Date','Files collected','Library status','Conversations added','Open']){const th=node('th','',text);th.scope='col';header.append(th)}
-      head.append(header);table.append(head,body);scroll.append(table);history.append(node('h4','','Completed exports'),scroll,node('p','muted','The number of conversations added by each export is not available. Exports can include conversations already in your library. The link opens all imported Claude.ai conversations.'));
+      const list=node('div','claude-watch-exports'),library=node('div','claude-watch-library'),routine=claudeExportRoutine();routine.hidden=true;
+      const history=exportHistory(['Date','Files collected','Library status','Conversations added','Open'],'The number of conversations added by each export is not available. Exports can include conversations already in your library. The link opens all imported Claude.ai conversations.');
       root.replaceChildren(row,options,how,routine,problem,list,history,library);root.hidden=false;
     }
     refreshClaudeWatch();
@@ -1162,7 +1182,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
           browserOptions(profile,watch,item.browser||'');label.append(profile);actions.append(label);
         }
         for(const action of line.actions){
-          const button=node('button','',action==='retry'?'Try again':'Stop');button.type='button';button.dataset.focusKey=`${item.id}:${action}`;
+          const button=node('button','claude-watch-button',action==='retry'?'Try again':'Stop');button.type='button';button.dataset.focusKey=`${item.id}:${action}`;
           button.onclick=async()=>{button.disabled=true;try{showClaudeWatch(await watchPost({id:item.id,action,...(action==='retry'&&profile?{browser:profile.value}:{})}))}catch(failure){toast(failure.message);button.disabled=false}};
           actions.append(button);
         }
@@ -1172,21 +1192,8 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
     });
     if(rows.length!==list.children.length||rows.some((row,index)=>list.children[index]!==row))list.replaceChildren(...rows);
     if(focusKey&&!list.contains(document.activeElement))list.querySelector(`[data-focus-key="${window.CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
-    const history=root.querySelector('.claude-watch-history'),completed=(watch.exports||[]).filter(item=>item.state==='imported'),tbody=history.querySelector('tbody');
-    const historyURL=window.pharosQueryTables?.sourceConversationsURL?.('claude-ai'),historySignature=JSON.stringify([completed,historyURL]);
-    history.hidden=!completed.length;
-    if(history.dataset.signature!==historySignature){
-      history.dataset.signature=historySignature;
-      const focused=history.contains(document.activeElement)?document.activeElement.dataset.focusKey:'';
-      tbody.replaceChildren(...completed.map(item=>{
-        const row=node('tr');row.dataset.id=item.id;
-        const when=item.exported_at?new Date(item.exported_at).toLocaleString():'Unknown';
-        row.append(node('td','',when),node('td','',Number(item.collected||0).toLocaleString()),node('td','','Ready in your library'),node('td','','—'));
-        const destination=node('td');if(historyURL){const link=node('a','','View conversations');link.href=historyURL;link.dataset.focusKey=`${item.id}:conversations`;destination.append(link)}else destination.textContent='Unavailable';row.append(destination);
-        return row;
-      }));
-      if(focused)history.querySelector(`[data-focus-key="${window.CSS.escape(focused)}"]`)?.focus({preventScroll:true});
-    }
+    showExportHistory(root.querySelector('.claude-watch-history'),(watch.exports||[]).filter(item=>item.state==='imported'),window.pharosQueryTables?.sourceConversationsURL?.('claude-ai'),item=>[
+      node('td','',item.exported_at?new Date(item.exported_at).toLocaleString():'Unknown'),node('td','',Number(item.collected||0).toLocaleString()),node('td','','Ready in your library'),node('td','','—')]);
     // Follow an export in progress while its section is on screen.
     if(watch.enabled&&(watch.exports||[]).some(item=>item.state==='fetching'))claudeWatch.timer=setTimeout(()=>{if(root.isConnected&&!root.parentElement.closest('[hidden]'))refreshClaudeWatch()},3000);
   }
@@ -1202,11 +1209,12 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
       const toggle=node('button','toggle');toggle.type='button';toggle.id='chatGPTDownloadsWatch'+suffix;toggle.setAttribute('role','switch');toggle.setAttribute('aria-labelledby',title.id);toggle.setAttribute('aria-describedby',about.id);
       toggle.onclick=async()=>{toggle.disabled=true;try{showChatGPTWatch(await chatGPTPost({enabled:toggle.getAttribute('aria-checked')!=='true'}))}catch(failure){toast(failure.message);toggle.disabled=false}};
       copy.append(title,about);row.append(copy,toggle);
-      const check=node('button','','Check Downloads now');check.type='button';check.id='chatGPTDownloadsCheck'+suffix;check.dataset.chatgptCheck='true';
+      const check=node('button','claude-watch-button','Check Downloads now');check.type='button';check.id='chatGPTDownloadsCheck'+suffix;check.dataset.chatgptCheck='true';
       check.onclick=async()=>{check.disabled=true;try{showChatGPTWatch(await chatGPTPost({action:'check'}))}catch(failure){toast(failure.message)}finally{check.disabled=false}};
       const how=node('p','muted','In ChatGPT, open Settings → Data controls → Export data. Allow about 24 hours for delivery; timing may vary. Download the emailed ZIP into Downloads. Renamed ZIPs can be selected with Import an export. Account profile, account settings, and advertising records are excluded from managed snapshots.');
       const problem=node('p','sync-note badtext');problem.setAttribute('role','status');
-      root.replaceChildren(row,check,how,problem,node('div','claude-watch-exports'),node('div','source-card claude-watch-library'));root.hidden=false;
+      const history=exportHistory(['Imported','Export','Library status','Open'],'Each export updates conversations already in your library in place. The link opens all imported ChatGPT conversations.');
+      root.replaceChildren(row,check,how,problem,node('div','claude-watch-exports'),history,node('div','claude-watch-library'));root.hidden=false;
     }
     refreshChatGPTWatch();
   }
@@ -1222,7 +1230,8 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
     const problem=root.querySelector('.badtext');problem.textContent=watch.problem||'';problem.hidden=!problem.textContent;
     const list=root.querySelector('.claude-watch-exports'),existing=new Map([...list.children].map(row=>[row.dataset.id,row]));
     const focusKey=list.contains(document.activeElement)?document.activeElement.dataset.focusKey:'';
-    const rows=(watch.exports||[]).slice(0,5).map(item=>{
+    // Cards are for exports in progress or stopped; completed ones are table rows.
+    const rows=(watch.exports||[]).filter(item=>item.state!=='imported').slice(0,5).map(item=>{
       const signature=JSON.stringify(item),kept=existing.get(item.id);if(kept?.dataset.signature===signature)return kept;
       const line=pharosChatGPTWatchLine(item),row=node('div','source-card claude-watch-export'+(line.attention?' attention':''));row.dataset.id=item.id;row.dataset.signature=signature;
       row.append(node('h4','',item.filename||'ChatGPT export'),node('p','',line.text),node('p','muted',line.files));
@@ -1231,13 +1240,17 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
       if(item.excluded?.length)row.append(node('p','muted',`Excluded account files: ${item.excluded.join(', ')}`));
       const actions=node('div','claude-watch-actions');
       for(const action of line.actions){
-        const button=node('button','',action==='retry'?'Try again':'Stop');button.type='button';button.dataset.focusKey=`${item.id}:${action}`;
+        const button=node('button','claude-watch-button',action==='retry'?'Try again':'Stop');button.type='button';button.dataset.focusKey=`${item.id}:${action}`;
         button.onclick=async()=>{button.disabled=true;try{showChatGPTWatch(await chatGPTPost({id:item.id,action}))}catch(failure){toast(failure.message);button.disabled=false}};actions.append(button);
       }
       row.append(actions);return row;
     });
     if(rows.length!==list.children.length||rows.some((row,index)=>list.children[index]!==row))list.replaceChildren(...rows);
     if(focusKey&&!list.contains(document.activeElement))list.querySelector(`[data-focus-key="${window.CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
+    showExportHistory(root.querySelector('.claude-watch-history'),(watch.exports||[]).filter(item=>item.state==='imported'),window.pharosQueryTables?.sourceConversationsURL?.('chatgpt'),item=>{
+      const file=node('td','claude-watch-file',item.filename||'ChatGPT export');file.title=item.filename||'';
+      return [node('td','',item.updated_at?new Date(item.updated_at).toLocaleString():'Unknown'),file,node('td','','Ready in your library')];
+    });
     const library=root.querySelector('.claude-watch-library'),status=watch.library;
     library.hidden=!status;
     if(status){
@@ -1254,6 +1267,8 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
     if(watch.enabled||(watch.exports||[]).some(item=>item.state==='fetching'))chatGPTWatch.timer=setTimeout(()=>{if(root.isConnected&&!root.closest('[hidden]'))refreshChatGPTWatch()},3000);
   }
   window.pharosChatGPTDownloads={render:renderChatGPTWatch};
+  // Conversation links need search; an idle watch does not poll for it.
+  window.addEventListener('pharos:search-ready',()=>{if(chatGPTWatch.root?.isConnected)refreshChatGPTWatch()});
   const chatGPTSection=document.getElementById('chatGPTDownloadsWatchSection');
   if(chatGPTSection&&!chatGPTSection.parentElement.closest('[hidden]'))renderChatGPTWatch(chatGPTSection);
   window.pharosClaudeDownloads={render:renderClaudeWatch};

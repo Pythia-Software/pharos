@@ -32,18 +32,29 @@ test('projects without a saved assignment use the chart and metric fallbacks', t
   }
 });
 
-test('ambiguous labels stay neutral while stable IDs remain resolvable after renaming', t => {
+test('stable IDs stay separate for a shared name and resolve after renaming', t => {
   const projects = [project(), project('other', 'app', '#ab34cd')];
-  const aliases = projectColorAliases(projects);
-  assert.equal(aliases.get('app'), null);
   installProjectColors(projects); t.after(() => installProjectColors([]));
-  assert.equal(savedProjectColor('app'), noProjectColor);
   assert.notEqual(savedProjectColor('repository:app'), savedProjectColor('repository:other'));
   assert.equal(savedProjectColor(''), noProjectColor);
   const before = savedProjectColor('repository:app');
   installProjectColors([{ ...project(), name: 'renamed' }]);
   assert.equal(savedProjectColor('renamed'), before);
   assert.equal(savedProjectColor('app'), before, 'raw repository ID still resolves');
+});
+
+test('a shared name takes the color of the project with the most conversations, ties to the lower ID', t => {
+  const main = { ...project('main', 'app'), key: 'c'.repeat(64), conversations: 13176 };
+  const clone = { ...project('other', 'app'), conversations: 4 };
+  assert.equal(projectColorAliases([clone, main]).get('app').id, main.id);
+  assert.equal(projectColorAliases([main, { ...clone, conversations: 9000 }]).get('app').id, main.id, 'any lead decides');
+  assert.equal(projectColorAliases([{ ...main, conversations: 4 }, clone]).get('app').id, main.id, 'tie goes to the lower ID');
+  assert.equal(projectColorAliases([clone, { ...main, conversations: 4 }]).get('app').id, main.id, 'regardless of order');
+  assert.equal(projectColorAliases([{ ...main, conversations: undefined }, clone]).get('app').id, clone.id, 'unknown counts as none');
+  installProjectColors([clone, main]); t.after(() => installProjectColors([]));
+  assert.equal(savedProjectColor('app'), savedProjectColor('repository:main'));
+  assert.equal(chartSeriesStyle('project_name', 'app').color, savedProjectColor('repository:main'));
+  assert.notEqual(savedProjectColor('repository:other'), savedProjectColor('repository:main'));
 });
 
 test('saved marks keep the same CSS identity when a color is edited or reset', t => {

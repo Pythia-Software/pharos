@@ -25,12 +25,18 @@ export function fitProjectColor(color: string): string {
   }).join("");
 }
 
-// Names are an adapter for older metric results. Ambiguous names never borrow
-// an arbitrary project's identity. ID-valued results can always resolve exactly.
-export function projectColorAliases(projects: ProjectColor[]): Map<string, ProjectColor | null> {
-  const aliases = new Map<string, ProjectColor | null>();
+// Names are an adapter for name-grouped metric results. A name shared by
+// several projects takes the color of the one with the most conversations
+// (ties go to the lower ID), so the combined group keeps a saved color.
+// ID-valued results always resolve exactly.
+const conversationCount = (project: ProjectColor) => Number.isFinite(project.conversations) ? Math.max(0, project.conversations!) : 0;
+const leads = (project: ProjectColor, other: ProjectColor) => conversationCount(project) > conversationCount(other) || conversationCount(project) === conversationCount(other) && project.id < other.id;
+
+export function projectColorAliases(projects: ProjectColor[]): Map<string, ProjectColor> {
+  const aliases = new Map<string, ProjectColor>();
   for (const project of projects) for (const alias of [project.name, ...(project.kind === "repository" ? [project.id.slice("repository:".length)] : [])]) {
-    aliases.set(alias, aliases.has(alias) && aliases.get(alias)?.id !== project.id ? null : project);
+    const holder = aliases.get(alias);
+    if (!holder || leads(project, holder)) aliases.set(alias, project);
   }
   for (const project of projects) aliases.set(project.id, project);
   return aliases;
@@ -61,7 +67,6 @@ if (typeof window !== "undefined") installProjectColors(window.pharosProjectColo
 
 export function savedProjectColor(value: string): string | undefined {
   const project = aliases.get(value);
-  if (project === null) return noProjectColor;
   if (project) return `var(--project-color-${project.key})`;
   return !value || ["No project", "Unspecified"].includes(value) ? noProjectColor : undefined;
 }

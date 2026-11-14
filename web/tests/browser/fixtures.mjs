@@ -906,6 +906,8 @@ export const defaultApi = {
     ["Check background recovery", "observatory", "claude", "claude-sonnet-4", 1, "Test what happens when indexing stops halfway through a batch.", "The next pass picks up the remaining records safely."],
     ["Understand token patterns", "pharos", "codex", "gpt-5", 0, "Compare shorter conversations with the deeper delegated work.", "The comparison separates main-agent and helper activity."],
     ["Plan the next iteration", "observatory", "claude", "claude-opus-4-1", 1, "Review the open questions and choose the next small improvement.", "The next iteration starts with clearer navigation and a smaller scope."],
+    ["Tidy the settings page", "pharos", "codex", "gpt-5", 0, "Group the color settings and drop the actions nobody uses.", "Colors now sit together and only useful palette actions remain."],
+    ["Measure the cold start", "atlas", "claude", "claude-sonnet-4", 1, "Time the first page load after the service restarts.", "Most of the cold start is the first catalog read, not the bundle."],
   ].map(([title, repository, provider, model, subagent_depth, first_input, last_response], index) => ({
     id: index ? `recent-${index}` : rootConversation, workspace_id: workID, title, repository, provider, model, effort: "high", subagent_depth, first_input, last_response,
     activity_at: new Date(now - index * day).toISOString(), labels_ready: index < 7, events_ready: index < 4, duration_ms: 4980000, tool_calls: 34, tokens: 123456, cost_usd: 2.34, is_estimate: index === 1, price_status: index === 1 ? "partial" : "priced",
