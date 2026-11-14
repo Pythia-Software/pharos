@@ -72,6 +72,7 @@ replace that renderer locally.
 
 Values without an eligible saved color use the chart or Query Table fallback palette. Chart fallback colors have the same contrast target. Empty/no-project groups remain neutral. Two projects
 with the same name retain separate persisted identities and editable colors.
-Legacy results grouped only by that ambiguous name render neutrally: such a
-result has already combined the identities, so it cannot truthfully select
-one project's color. ID-valued results resolve each project separately.
+Results grouped only by that shared name have already combined the
+identities; the combined group uses the color of the project with the most
+conversations, with the lower project ID breaking ties. ID-valued results
+resolve each project separately.
