@@ -42,6 +42,7 @@ export const legacyRoutes: Record<string, string> = {
   "/mcp": "/analyze?analyze_topic=mcp",
   "/tools": "/analyze?analyze_mode=query&analyze_data=tool_calls",
   "/settings/header": "/settings/layout",
+  "/settings/ask": "/settings/preferences",
   "/settings/optimization": "/findings?view=settings",
 };
 // Settings pages a library may lack: Libraries exists only in the managed app.
