@@ -1,8 +1,12 @@
 # Project colors
 
 Projects with more than 3 conversations have a saved default color and an optional user override. Smaller projects use fallback colors. Settings
-→ Project colors offers a picker, previews on both backgrounds, Save color, and
-Restore default. Restore returns to the original saved default; it does not
+→ Colors → Project colors offers a picker, previews on both backgrounds, Save color, and
+Restore default. Each row shows the project's conversation count and its latest
+conversation (ended, or started when still open). The list sorts by most
+conversations by default, putting the projects people are most likely to
+recolor first; Sort by also offers latest conversation and name
+(`project_color_sort`). Restore returns to the original saved default; it does not
 reinspect the checkout or reshuffle other projects. Deliberate overrides are
 preserved exactly, including duplicate colors.
 

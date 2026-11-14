@@ -4,6 +4,8 @@ import { useSyncExternalStore } from "react";
 export type ProjectColor = {
   id: string; key: string; name: string; kind: string;
   default_color: string; custom_color?: string; source: string;
+  /** Conversations across the project's workspaces, and the latest one's end (or start). */
+  conversations?: number; latest_conversation_at?: string;
 };
 declare global { interface Window { pharosProjectColors?: ProjectColor[] } }
 export const projectColorFields = ["project_name", "root_project_name", "repository_name", "root_repository_name", "project_id", "root_project_id", "repository_id", "root_repository_id"];

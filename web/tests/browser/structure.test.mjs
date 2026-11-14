@@ -2261,7 +2261,8 @@ test("model color editors preview and save inline while retaining focus", { skip
   await page.locator("label").filter({hasText:/^gpt-6-sol$/}).click();
   await model.waitFor({state:"detached"});
   await page.getByRole("button", {name:"Save palette for OpenAI",exact:true}).click();
-  await page.waitForFunction(() => document.querySelector('[aria-label="Restore brand color for OpenAI"]')?.disabled === true);
+  // Saved at the brand color with nothing pending: neither reset nor Save/Discard is offered.
+  await page.waitForFunction(() => !document.querySelector('[aria-label="Restore brand color for OpenAI"]') && !document.querySelector('[aria-label="Save palette for OpenAI"]'));
   await provider.fill("#ffffff");
   await page.getByRole("status", {name: "OpenAI color warnings", exact: true}).waitFor();
   await card.scrollIntoViewIfNeeded();

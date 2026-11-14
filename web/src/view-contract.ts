@@ -5,6 +5,7 @@ import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-sea
 import { safetyRanks } from "./safety-dashboard-model";
 import { fixesKinds, fixesRanks } from "./fixes-model";
 import { logSourceIds } from "./logs-model";
+import { projectColorSorts } from "./project-color-order";
 import { sessionSignals } from "./session-shape-model";
 import {validTimelineVisibility} from "./timeline-visibility";
 import { dataGuideSelectionKeys, dataSources } from "./data-taxonomy-model";
@@ -73,6 +74,7 @@ export const viewFields: Record<string, ViewField> = {
   safety_place: field("safety_place", ["findings/safety"], "text", "Filter risky action notices by their stable repository, machine, or unresolved workspace target.", undefined, ""),
   safety_rank: field("safety_rank", ["findings/safety"], "enum", "Order the risky action check cards by danger, latest activity, call count, or notices with new execution evidence. Ties use danger, then latest activity.", safetyRanks, "danger"),
   safety_case: field("safety_case", ["findings/safety","findings/safety/table"], "text", "Open a risky action notice by stable ID; evidence and source links live inside Details.", undefined, ""),
+  project_color_sort: field("project_color_sort", ["settings/projects"], "enum", "Order Settings → Colors → Project colors by conversation count (most first), latest conversation (newest first), or name.", projectColorSorts, "conversations"),
   log_source: field("log_source", ["settings/logs"], "enum", "Settings → Logs source: overview (what to read first, and a report to copy for an agent), page (errors the page hit), requests (slow and failed requests, and those running now), service (this library's service output by run), app (the app's output by launch), background (failed or interrupted background work), crashes (macOS crash and resource reports).", logSourceIds, "overview"),
   delegation_columns: field("delegation_columns", ["work"], "strings", "Visible metric column IDs in display order."),
   delegation_scope: field("delegation_scope", ["work"], "enum", "Session metric scope in the hierarchy and ranking: self or self plus all children.", ["all", "self"], "all"),

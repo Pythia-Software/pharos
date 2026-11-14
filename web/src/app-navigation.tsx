@@ -10,6 +10,7 @@ import { preferences } from "./preferences";
 import { focusPageContent } from "./page-focus";
 import { attentionBySource, attentionLabel, withLogSources } from "./logs-model";
 import { useLogsSummary } from "./logs-summary";
+import { readSettingsPages } from "./settings-pages-model";
 import "./app-shell.css";
 import "./sidebar-toggle.css";
 
@@ -160,7 +161,7 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
 export function installAppNavigation() {
   const host = document.getElementById("appLocation");
   if (!host) return;
-  const settings = Array.from(document.querySelectorAll<HTMLElement>("[data-settings-route]"), panel => ({ id: panel.dataset.settingsRoute!, href: panel.dataset.settingsRoute!, label: panel.dataset.pageTitle!, description: panel.dataset.pageDescription }));
+  const settings = readSettingsPages(document);
   const contentNavigation = document.createElement("div");
   contentNavigation.className = "app-content-navigation";
   document.querySelector("main")!.prepend(contentNavigation);
