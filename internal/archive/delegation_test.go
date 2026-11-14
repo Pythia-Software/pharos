@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 func seedDelegation(t *testing.T, c *Catalog) {
@@ -658,38 +659,57 @@ func TestDelegationTimelineMessageLabels(t *testing.T) {
 	if aliasMessage["conversation_id"] != "child" {
 		t.Fatal("canonical lane lost its message's source transcript")
 	}
-	// Human events: a person's message carries its engagement spans with the
-	// stored text they index, only in a library that has the tables, and not
-	// for a text past the limit.
+	// Human events: a person's message carries the engagement spans the page
+	// can show with an excerpt of the stored text around them, only while
+	// the preview is on in a library that has the tables.
 	userMessage := func() map[string]any {
 		return read("sessions=root-session&labels=1")["lanes"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any)
 	}
+	c.EngagementEnabled = true
 	if got := userMessage(); got["engagement"] != nil || got["engagement_text"] != nil {
 		t.Fatalf("engagement without the tables: %v", got)
 	}
 	if err := c.ensureEngagementSchema(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	var userText string
-	if err := c.DB.QueryRow(`SELECT text FROM messages WHERE id='user'`).Scan(&userText); err != nil || len(userText) < 2 {
-		t.Fatalf("seed text %q: %v", userText, err)
-	}
-	execTx(t, c.DB, `INSERT INTO engagement_spans(message_id,position,label,start_byte,end_byte,score) VALUES('user',0,'intent.task',0,2,0.9),('launch',0,'intent.task',0,2,0.9)`)
+	// A long message with one span near its start and one near its end: the
+	// lane carries the text around each, not the megabyte between. A span
+	// below the display threshold and a label the page never shows are left out.
+	userText := "Implement it 🙂 " + strings.Repeat("pasted ", 20000) + "then ship it"
+	shipAt := strings.Index(userText, "ship")
+	execTx(t, c.DB, fmt.Sprintf(`UPDATE messages SET text=%s WHERE id='user'`, sqlQuote(userText)),
+		fmt.Sprintf(`UPDATE message_authorship SET spans_json='[{"start":0,"end":12,"category":"typed"},{"start":18,"end":%d,"category":"pasted"},{"start":%d,"end":%d,"category":"typed"}]' WHERE message_id='user'`, shipAt-5, shipAt-5, len(userText)),
+		fmt.Sprintf(`INSERT INTO engagement_spans(message_id,position,label,start_byte,end_byte,score) VALUES('user',0,'intent.task',0,9,0.9),('user',1,'intent.task',0,2,0.69),('user',2,'register.filler',0,2,0.9),('user',3,'rights.go_ahead',%d,%d,0.8),('launch',0,'intent.task',0,2,0.9)`, shipAt, shipAt+4))
 	got := userMessage()
 	spans, _ := got["engagement"].([]any)
-	if len(spans) != 1 || got["engagement_text"] != userText {
-		t.Fatalf("lane engagement: %v, text %v", got["engagement"], got["engagement_text"])
+	excerpt, _ := got["engagement_text"].(string)
+	head, tail := userText[:9+engagementLaneContextBytes], userText[shipAt-engagementLaneContextBytes:]
+	if len(spans) != 2 || excerpt != head+engagementLaneGap+tail {
+		t.Fatalf("lane engagement: %v, excerpt %q", got["engagement"], excerpt)
 	}
-	if span := spans[0].(map[string]any); span["label"] != "intent.task" || span["dimension"] != "intent" || span["start"] != float64(0) || span["end"] != float64(2) {
-		t.Fatalf("lane span: %v", span)
+	// UTF-16 units: the emoji is two, so the second part starts one unit
+	// later in the message than its bytes say, less the emoji's two extra bytes.
+	units := func(value string) int { return len(utf16.Encode([]rune(value))) }
+	first, second := spans[0].(map[string]any), spans[1].(map[string]any)
+	secondAt := units(head + engagementLaneGap)
+	if first["label"] != "intent.task" || first["dimension"] != "intent" || first["start"] != float64(0) || first["end"] != float64(9) ||
+		second["label"] != "rights.go_ahead" || second["start"] != float64(secondAt+engagementLaneContextBytes) || second["end"] != float64(secondAt+engagementLaneContextBytes+4) {
+		t.Fatalf("lane spans: %v", spans)
+	}
+	if fmt.Sprint(got["engagement_typed"]) != fmt.Sprintf("[[0 12] [%d %d]]", secondAt+engagementLaneContextBytes-5, units(excerpt)) ||
+		fmt.Sprint(got["engagement_at"]) != fmt.Sprintf("[[0 0] [%d %d]]", secondAt, units(userText[:shipAt-engagementLaneContextBytes])) || got["engagement_length"] != float64(units(userText)) {
+		t.Fatalf("lane excerpt places: typed %v, at %v, length %v", got["engagement_typed"], got["engagement_at"], got["engagement_length"])
 	}
 	if launch := read("sessions=embedded&labels=1")["lanes"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any); launch["engagement"] != nil {
 		t.Fatalf("a delegation carries spans: %v", launch)
 	}
-	override(t, &engagementLaneTextLimit, 1)
+	// The setting off: the tables and spans stay, and the lane is as it was.
+	c.EngagementEnabled = false
 	if got := userMessage(); got["engagement"] != nil || got["engagement_text"] != nil {
-		t.Fatalf("engagement of a text past the limit: %v", got)
+		t.Fatalf("engagement with the setting off: %v", got["engagement"])
 	}
+	execTx(t, c.DB, `UPDATE messages SET text='Implement it' WHERE id='user'`,
+		`UPDATE message_authorship SET spans_json='[{"start":0,"end":5,"category":"typed"},{"start":5,"end":9,"category":"pasted"},{"start":9,"end":12,"category":"typed"}]' WHERE message_id='user'`)
 	// Unwrap display content before clipping, without rewriting the retained
 	// source excerpt that authorship positions and source navigation refer to.
 	ack := strings.Repeat("Async agent launched successfully.\n", 40)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -388,6 +389,18 @@ func TestEngagementReader(t *testing.T) {
 		t.Fatalf("a library without the tables: %v (%v)", before["engagement"], err)
 	}
 	engagementRun(t, catalog, labels, settings, EngagementRunOptions{})
+	// The tables alone show nothing: the reader is as it was until the
+	// preview is on.
+	if off, err := catalog.WorkConversation("ws-e", "c-e"); err != nil || off["engagement"] != nil {
+		t.Fatalf("the setting off with the tables present: %v (%v)", off["engagement"], err)
+	} else {
+		for _, message := range off["messages"].([]map[string]any) {
+			if message["engagement"] != nil {
+				t.Fatalf("spans with the setting off: %v", message["id"])
+			}
+		}
+	}
+	catalog.EngagementEnabled = true
 	// One known span past the emoji: bytes and UTF-16 units differ there.
 	text := engagementTyped1 + engagementPaste + engagementTyped2
 	start := strings.Index(text, "failed")
@@ -429,6 +442,52 @@ func TestEngagementReader(t *testing.T) {
 		if message["id"] == "e-u1" && message["engagement"] != nil {
 			t.Fatalf("spans of text the message no longer has: %v", message["engagement"])
 		}
+	}
+}
+
+// The Timeline's copy of what the pages display (engagementDisplayMinScore,
+// engagementUndisplayed) is the one reader-model.js holds: both are compared
+// with testdata/engagement-display.json.
+func TestEngagementDisplayRules(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/engagement-display.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rules struct {
+		MinScore    float64  `json:"min_score"`
+		Undisplayed []string `json:"undisplayed"`
+	}
+	if err := json.Unmarshal(raw, &rules); err != nil {
+		t.Fatal(err)
+	}
+	if rules.MinScore != engagementDisplayMinScore || !slices.Equal(rules.Undisplayed, slices.Sorted(maps.Keys(engagementUndisplayed))) {
+		t.Fatalf("display rules %v, %v; the fixture has %+v", engagementDisplayMinScore, engagementUndisplayed, rules)
+	}
+	// An excerpt keeps each span with a little text on each side, in whole
+	// characters; parts that meet are one; a long span keeps its two ends.
+	text := "é" + strings.Repeat("a", 60) + " keep the tests green " + strings.Repeat("b", 200) + " and say so " + strings.Repeat("c", 60) + "é"
+	span := func(of, part string) labelrt.ByteRange {
+		start := strings.Index(of, part)
+		return labelrt.ByteRange{Start: start, End: start + len(part)}
+	}
+	keep, say := span(text, "keep the tests green"), span(text, "say so")
+	excerpt, pieces, ok := engagementLaneExcerpt(text, []labelrt.ByteRange{say, keep, span(text, "tests")})
+	if !ok || len(pieces) != 2 || !utf8.ValidString(excerpt) || strings.Count(excerpt, engagementLaneGap) != 1 ||
+		len(excerpt) != keep.End-keep.Start+say.End-say.Start+4*engagementLaneContextBytes+len(engagementLaneGap) ||
+		excerpt[pieces[0].at+keep.Start-pieces[0].start:][:20] != "keep the tests green" || excerpt[pieces[1].at+say.Start-pieces[1].start:][:6] != "say so" {
+		t.Fatalf("excerpt %q %v %t", excerpt, pieces, ok)
+	}
+	if excerpt, pieces, ok := engagementLaneExcerpt(text, []labelrt.ByteRange{{Start: 0, End: len(text)/2 + 1}, {Start: len(text) / 2, End: len(text)}}); !ok || len(text) > engagementLaneQuoteBytes || excerpt != text || len(pieces) != 1 {
+		t.Fatalf("an excerpt of the whole text: %q %v %t", excerpt, pieces, ok)
+	}
+	if _, _, ok := engagementLaneExcerpt(text, []labelrt.ByteRange{{Start: 1, End: 5}}); ok {
+		t.Fatal("a span that starts inside a character has an excerpt")
+	}
+	long := "x " + "start " + strings.Repeat("日本語 ", 200) + "end." + " y"
+	excerpt, pieces, ok = engagementLaneExcerpt(long, []labelrt.ByteRange{{Start: 2, End: len(long) - 2}})
+	if !ok || len(pieces) != 2 || len(excerpt) > engagementLaneQuoteBytes+len(engagementLaneGap)+2*engagementLaneContextBytes+8 || !utf8.ValidString(excerpt) ||
+		!strings.HasPrefix(excerpt, "x start 日本語") || !strings.HasSuffix(excerpt, "end. y") || strings.Count(excerpt, engagementLaneGap) != 1 {
+		t.Fatalf("a long span's excerpt %q %v %t", excerpt, pieces, ok)
 	}
 }
 

@@ -11,8 +11,8 @@ sessions down to turns, messages, tool calls, instructions, context and model
 usage. Projects and tasks come next, then apps and computers, then library and
 source locations. Work items remain optional task records, outside the
 conversation hierarchy. Generic query terminology and Pharos interpretations
-such as findings, risky-action notices, message labels and agent events are
-not guide topics.
+such as findings, risky-action notices, message labels, agent events and
+engagement labels are not guide topics.
 
 ## Relationships
 
@@ -125,9 +125,19 @@ attention stylesheet and remain separate from keyboard focus.
   prices, incomplete coverage and estimation qualifications.
 - **Skills**, **instructions** and **context compactions** are agent-history
   nouns in the guide. A load is not proof of instruction compliance.
-  **Message labels**, **agent events**, **findings** and **risky action notices**
-  are features Pharos adds to the history; explain them on their own pages.
-  A classification or notice is not proof that its interpretation is correct.
+  **Message labels**, **agent events**, **engagement labels**, **findings** and
+  **risky action notices** are features Pharos adds to the history; explain
+  them on their own pages. A classification or notice is not proof that its
+  interpretation is correct.
+- **Engagement labels** (a preview) mark stretches of the text a person typed
+  in a message. Count **annotations**: one annotation is one label on one
+  stretch of one human-typed message, so a message can have several and two
+  can overlap. On a timeline the same annotations are **Human events**, beside
+  Agent events. Name a dimension by its display name: Intent, Grounding,
+  Bounds, Verification, Delegation, Evaluation, Questions, Authorship, Tone.
+  Stored labels, URL values and the API keep the model’s IDs (`acceptance`,
+  `rights`, `inquiry` and `register` for Verification, Delegation, Questions
+  and Tone).
 
 ## Copy rules
 

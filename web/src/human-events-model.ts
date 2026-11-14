@@ -90,22 +90,23 @@ export function humanEventPointSlots(scale:Pick<TimeScale,'fraction'>,groups:Hum
 }
 
 /** A message of a workspace Timeline lane as the service sends it: its
- * engagement spans index engagement_text, the stored text (a lane otherwise
- * holds an excerpt), and authorship is the text's parts in order. */
-export type LaneHumanMessage={id:string;role:string;kind:string;engagement?:unknown[];engagement_text?:string;authorship?:{category:string;bytes:number}[]};
+ * engagement spans index engagement_text, an excerpt of the stored text
+ * around them (a lane otherwise holds a preview), with the excerpt's typed
+ * ranges and its parts' places in the message. */
+export type LaneHumanMessage={id:string;role:string;kind:string;engagement?:unknown[];engagement_text?:string;engagement_typed?:number[][];engagement_at?:number[][];engagement_length?:number};
 type EngagementTimeline=(messages:unknown[])=>HumanEvent[];
-/** A lane's Human events. The display rules are the reader's and live in one
- * place, reader-model.js (engagementTimeline: the score threshold, whole
- * words, typed text only, labels never shown, display names), a classic
- * script on every page; this hands it each message in the reader's shape. */
-export function laneHumanEvents(messages:LaneHumanMessage[],timeline:EngagementTimeline|undefined=(globalThis as {engagementTimeline?:EngagementTimeline}).engagementTimeline):HumanEvent[]{
-  if(!timeline)return [];
-  const shaped=messages.flatMap(message=>{
-    if(!message.engagement?.length||typeof message.engagement_text!=='string')return [];
-    let offset=0;const spans=(message.authorship??[]).map(part=>{const span={category:part.category,start:offset,end:offset+part.bytes};offset+=part.bytes;return span;});
-    return [{id:message.id,role:message.role,kind:message.kind,text:message.engagement_text,engagement:message.engagement,authorship:{spans}}];
-  });
-  return shaped.length?[...timeline(shaped)]:[];
+type ReaderModel={engagementLaneTimeline?:EngagementTimeline;engagementAssignSlots?:(messages:unknown[])=>unknown};
+/** The Human events of lanes shown together, a list per lane. The display
+ * rules are the reader's and live in one place, reader-model.js
+ * (engagementLaneTimeline: the score threshold, whole words, typed text only,
+ * labels never shown, display names), a classic script on every page; the
+ * lanes share one assignment of colours (engagementAssignSlots). */
+export function laneHumanEvents(lanes:LaneHumanMessage[][],model:ReaderModel=globalThis as ReaderModel):HumanEvent[][]{
+  const timeline=model.engagementLaneTimeline;
+  if(!timeline)return lanes.map(()=>[]);
+  const annotated=lanes.map(messages=>messages.filter(message=>message.engagement?.length));
+  model.engagementAssignSlots?.(annotated.flat());
+  return annotated.map(messages=>messages.length?[...timeline(messages)]:[]);
 }
 
 /** Where a marker's centre sits along the row, in CSS pixels: its

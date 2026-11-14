@@ -100,8 +100,8 @@ func (c *Catalog) delegationTimelineMessages(ctx context.Context, snapshot *dele
 	}
 	readers := map[string]labelReader{}
 	linksByConversation := map[string][]map[string]any{}
-	// Human events (engagement.go): only in a library that has the tables.
-	laneEngagement := engagementPresent(ctx, c.reader())
+	// Human events (engagement.go): only while the preview is on, in a library that has the tables.
+	laneEngagement := c.engagementShown(ctx)
 	conversations := []string{}
 	for _, id := range ids {
 		if n := snapshot.ByID[id]; n != nil && !n.ContextOnly {

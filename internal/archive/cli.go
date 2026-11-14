@@ -269,6 +269,7 @@ func Run(arguments []string) error {
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
 		catalog.ReworkDays = config.OutcomeReworkDays
+		catalog.EngagementEnabled = config.Engagement.Enabled
 		catalog.setCaptureRoot(config.CaptureRoot)
 		openBrowser := false
 		for _, arg := range args {
@@ -297,6 +298,7 @@ func Run(arguments []string) error {
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
 		catalog.ReworkDays = config.OutcomeReworkDays
+		catalog.EngagementEnabled = config.Engagement.Enabled
 		catalog.setCaptureRoot(config.CaptureRoot)
 		switch command {
 		case "ingest":

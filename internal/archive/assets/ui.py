@@ -1279,7 +1279,7 @@ function transcriptFilterControl(panel,events){
   heading.append(compact);applyCompact();queueMicrotask(applyCompact);
   const defaults=window.pharosReaderDefaults(host,true),keys=window.pharosReaderKeys(content,true),explicitKey=READER_KEY_FIELDS.some(key=>new URLSearchParams(location.search).has(key));let state=loadTranscriptFilter(),previousShown=null,initialKey=null;
   const configured=()=>Object.fromEntries(READER_HIGHLIGHTS.map(option=>[option.field,window.pharosView?.read(option.field,pharosPrefs.get(option.pref,option.fallback))??option.fallback]));
-  const snapshot=()=>({reader_filter_level:state.level,reader_filter:[...transcriptShown(state)],reader_hidden_tags:window.pharosView?.read('reader_hidden_tags',[])||[],...configured(),reader_highlight_hidden:window.pharosView?.read('reader_highlight_hidden',pharosPrefs.get('pharos-reader-highlight-hidden',[]))||[],timeline_visibility:window.pharosView?.read('timeline_visibility',{})||{}});
+  const snapshot=()=>({reader_filter_level:state.level,reader_filter:[...transcriptShown(state)],reader_hidden_tags:window.pharosView?.read('reader_hidden_tags',[])||[],...configured(),reader_highlight_hidden:readerHighlightHidden(window.pharosView?.read('reader_highlight_hidden',pharosPrefs.get('pharos-reader-highlight-hidden',[]))),timeline_visibility:window.pharosView?.read('timeline_visibility',{})||{}});
   const remember=()=>{const value=snapshot();pharosPrefs.set(READER_KEY_LAST,value);pharosPrefs.set(READER_KEY_ACTIVE,value);panel.refreshTranscriptFilter?.()};
   panel.rememberReaderKey=remember;
   panel.addEventListener('pharos:reader-key-edit',remember);
@@ -1297,7 +1297,7 @@ function transcriptFilterControl(panel,events){
     const selected=last&&JSON.stringify(current)===JSON.stringify(last)?'last':!last&&!explicitKey&&JSON.stringify(current)===initialKey?'last':matched;
     defaults.render({presets:READER_KEY_PRESETS.map(preset=>preset.id==='last'?{...preset,note:readerKeyLastNote(last||current)}:preset),selected,onChoose:id=>{
       if(!pharosPrefs.get(READER_KEY_LAST,null)||(id!=='last'&&!matched))remember();
-      const values=id==='last'?pharosPrefs.get(READER_KEY_LAST,null):readerKeyPresetValues(id);if(!values)return;
+      const saved=id==='last'?pharosPrefs.get(READER_KEY_LAST,null):readerKeyPresetValues(id);if(!saved)return;const values={...saved,reader_highlight_hidden:readerHighlightHidden(saved.reader_highlight_hidden)};
       state={...state,level:values.reader_filter_level,custom:values.reader_filter_level==='custom'?values.reader_filter:state.custom};saveTranscriptFilter(state);
       for(const option of READER_HIGHLIGHTS)pharosPrefs.set(option.pref,values[option.field]);
       pharosPrefs.set('pharos-reader-highlight-hidden',values.reader_highlight_hidden);window.pharosView?.writeAll(values);pharosPrefs.set(READER_KEY_ACTIVE,values);apply();panel.restoreHighlights?.();
@@ -1470,7 +1470,7 @@ function measureEngagementBand(panel,mark){
 function decorateEngagement(card,prose,view){
   const segments=engagementSegments(view);card.engagementView=view;card.engagementSegments=segments;card.classList.add('has-engagement');
   for(const mark of prose.querySelectorAll('mark.engagement')){
-    const layers=engagementLayers(engagementAtMark(view,segments,mark.className)).map((layer,level)=>{const span=node('span','eng-layer '+layer.className);span.dataset.engagementKey='engagement:'+layer.className;span.engagementLayer=layer;span.style.setProperty('--eng-level',String(level));return span});
+    const layers=engagementLayers(engagementAtMark(view,segments,mark.className)).map((layer,level)=>{const span=node('span','eng-layer '+layer.className);span.dataset.engagementKey=layer.key;span.engagementLayer=layer;span.style.setProperty('--eng-level',String(level));return span});
     if(!layers.length)continue;
     layers[layers.length-1].append(...mark.childNodes);for(let at=layers.length-1;at>0;at--)layers[at-1].append(layers[at]);mark.append(layers[0]);
   }
@@ -1482,7 +1482,7 @@ function transcriptHighlightControl(panel,conversation,messages){
   restoreAnnotations.type='button';restoreAnnotations.dataset.viewField='reader_highlight_hidden';restoreAnnotations.hidden=true;
   if(!panel.classList.contains('conversation-panel')){box.classList.add('transcript-key','transcript-key-preview');const heading=node('div','transcript-key-heading');heading.append(node('h3','','Key'));box.append(heading)}
   row.setAttribute('role','group');row.setAttribute('aria-label','Highlight in transcript');row.append(host);box.append(row);
-  const keyOf=(option,item)=>option.id+':'+(item.family??item.className),values=option=>option.legend.length?option.legend.map(item=>keyOf(option,item)):[option.id];
+  const keyOf=(option,item)=>option.id+':'+(item.family??item.key??item.className),values=option=>option.legend.length?option.legend.map(item=>keyOf(option,item)):[option.id];
   const items=options.map(option=>{
     const children=option.legend.map(item=>({id:keyOf(option,item),label:item.name,values:[keyOf(option,item)],className:item.className,family:item.family}));
     if(option.id==='labels')for(const [prefix,label]of [['P.','Sender'],['C.','Receiver']]){
@@ -1500,8 +1500,8 @@ function transcriptHighlightControl(panel,conversation,messages){
   const annotationKey=(mark,kind)=>readerAnnotationKey(conversation.id,mark.closest('.message-card')?.readerMessageId||'',kind,readerAnnotationSpan(kind,mark.className,mark.dataset.readerWritingIndex));
   let hiddenAnnotations=new Set();
   const saveAnnotationHidden=next=>{pharosPrefs.set('pharos-reader-highlight-hidden',next);window.pharosView?.write('reader_highlight_hidden',next);apply();panel.rememberReaderKey?.()};
-  const hideAnnotation=(mark,kind)=>()=>{const hidden=window.pharosView?.read('reader_highlight_hidden',pharosPrefs.get('pharos-reader-highlight-hidden',[]))||[];saveAnnotationHidden([...new Set([...hidden,annotationKey(mark,kind)])])};
-  restoreAnnotations.onclick=()=>{const hidden=window.pharosView?.read('reader_highlight_hidden',pharosPrefs.get('pharos-reader-highlight-hidden',[]))||[];saveAnnotationHidden(hidden.filter(key=>!key.startsWith(annotationPrefix)))};
+  const hideAnnotation=(mark,kind)=>()=>{const hidden=readerHighlightHidden(window.pharosView?.read('reader_highlight_hidden',pharosPrefs.get('pharos-reader-highlight-hidden',[])));saveAnnotationHidden([...new Set([...hidden,annotationKey(mark,kind)])])};
+  restoreAnnotations.onclick=()=>{const hidden=readerHighlightHidden(window.pharosView?.read('reader_highlight_hidden',pharosPrefs.get('pharos-reader-highlight-hidden',[])));saveAnnotationHidden(hidden.filter(key=>!key.startsWith(annotationPrefix)))};
   for(const option of options)if(option.available&&option.note)notes.append(node('span','transcript-highlight-note',option.label+': '+option.note));
   if(notes.childNodes.length)box.append(notes);box.append(restoreAnnotations);
   const all=options.filter(option=>option.available).flatMap(values),keys=window.pharosReaderKeys(host,panel.classList.contains('conversation-panel'));let visible=new Set(),lastVisibility=null;
@@ -1521,7 +1521,7 @@ function transcriptHighlightControl(panel,conversation,messages){
     for(const mark of elements('mark.engagement')){
       // At most ENGAGEMENT_STACK underlines per stretch (engagementDrawn); the popover lists the rest.
       const card=mark.closest('.message-card'),layers=[...mark.querySelectorAll('.eng-layer')],drawn=engagementDrawn(engagementLayers(engagementAtMark(card?.engagementView,card?.engagementSegments,mark.className),visible));let level=0;
-      for(const layer of layers){const hidden=!drawn.has(layer.engagementLayer?.className);layer.classList.toggle('reader-engagement-hidden',hidden);if(!hidden)layer.style.setProperty('--eng-level',String(level++))}
+      for(const layer of layers){const hidden=!drawn.has(layer.engagementLayer?.dimension);layer.classList.toggle('reader-engagement-hidden',hidden);if(!hidden)layer.style.setProperty('--eng-level',String(level++))}
       mark.classList.toggle('reader-engagement-hidden',!level);
     }
     for(const mark of elements('mark.agent-event,mark.event-context')){
@@ -1536,7 +1536,7 @@ function transcriptHighlightControl(panel,conversation,messages){
   };
   const apply=()=>{
     const shown=readerHighlightsShown(options,field=>readerHighlightLinks()[field]??null,(pref,fallback)=>pharosPrefs.get(pref,fallback));
-    const hidden=window.pharosView?.read('reader_highlight_hidden',pharosPrefs.get('pharos-reader-highlight-hidden',[]))||[];
+    const hidden=readerHighlightHidden(window.pharosView?.read('reader_highlight_hidden',pharosPrefs.get('pharos-reader-highlight-hidden',[])));
     visible=new Set(options.filter(option=>shown.has(option.id)).flatMap(values).filter(key=>!hidden.includes(key)));
     hiddenAnnotations=new Set(hidden.filter(key=>key.startsWith(annotationPrefix)));restoreAnnotations.hidden=!hiddenAnnotations.size;
     for(const option of READER_HIGHLIGHTS)panel.classList.toggle('show-'+option.id,shown.has(option.id)&&(option.id!=='writing'||visible.has('writing')));
@@ -1550,7 +1550,7 @@ function transcriptHighlightControl(panel,conversation,messages){
   };
   panel.restoreHighlights=apply;
   panel.revealEventLinkHighlights=link=>{
-    const hidden=window.pharosView?.read('reader_highlight_hidden',pharosPrefs.get('pharos-reader-highlight-hidden',[]))||[];
+    const hidden=readerHighlightHidden(window.pharosView?.read('reader_highlight_hidden',pharosPrefs.get('pharos-reader-highlight-hidden',[])));
     const required=new Set([...eventLinkHighlightKeys(link),'events:event-target-legend']);
     // A copied link must reveal its two ends even if either individual mark
     // was hidden. Materialize both messages before matching their identities.

@@ -194,8 +194,8 @@ const resumedAt = fixtureSpan.start + 3600000;
 const idleTimelineAPI = {
   "GET /api/work/:id/delegation": request => { const value = defaultApi["GET /api/work/:id/delegation"](request); return { ...value, end: resumedAt + 60000, rows: value.rows.map(row => row.depth === 0 ? { ...row, end: resumedAt + 60000 } : row) }; },
   "GET /api/work/:id/parallel": request => { const value = defaultApi["GET /api/work/:id/parallel"](request); return { ...value, lanes: value.lanes.map(lane => lane.session !== "s-root" || !lane.messages || resumedAt < value.start || resumedAt > value.end ? lane : { ...lane, messages: [...lane.messages, { id: "m-back", role: "user", kind: "message", created_at: new Date(resumedAt).toISOString(), text: "Back again: carry on.", authorship: [{ category: "typed", bytes: 21 }],
-    // Human events: the lane carries the person's engagement spans with the stored text they index.
-    engagement_text: "Back again: carry on.", engagement: [{ label: "intent.task", dimension: "intent", score: 0.9, start: 12, end: 20 }, { label: "rights.go_ahead", dimension: "rights", score: 0.8, start: 0, end: 10 }] }] }) }; },
+    // Human events: the lane carries the person's engagement spans with an excerpt of the stored text around them.
+    engagement_text: "Back again: carry on.", engagement_typed: [[0, 21]], engagement_at: [[0, 0]], engagement_length: 21, engagement: [{ label: "intent.task", dimension: "intent", score: 0.9, start: 12, end: 20 }, { label: "rights.go_ahead", dimension: "rights", score: 0.8, start: 0, end: 10 }] }] }) }; },
 };
 const idleTimelineDisclosures = encodeURIComponent(JSON.stringify({ "delegation-labels:s-root:session": true, "delegation-labels:s-root:events": true, "delegation-labels:s-root:human": true }));
 

@@ -97,19 +97,33 @@ test("the Timeline key hides Human events by dimension, apart from the Highlight
   assert.equal(timelineSectionVisible(visibility, "human"), false); assert.equal(timelineSectionVisible(visibility, "events"), true);
 });
 
-test("a workspace Timeline lane gets the reader's Human events from its spans and stored text", () => {
-  // Typed "Please open it now. " (20 bytes), then a pasted block, as the lane sends authorship: parts in order.
-  const text = "Please open it now. ERROR importer.go:42";
-  const lane = [{ id: "m1", role: "user", kind: "message", text: "Please op", engagement_text: text, authorship: [{ category: "typed", bytes: 20 }, { category: "pasted", bytes: 20 }],
-    engagement: [{ label: "intent.task", dimension: "intent", score: 0.9, start: 8, end: 13 }, { label: "rights.go_ahead", dimension: "rights", score: 0.9, start: 0, end: 6 },
-      { label: "register.filler", dimension: "register", score: 0.99, start: 0, end: 6 }, { label: "bounds.scope", dimension: "bounds", score: 0.5, start: 7, end: 14 }, { label: "grounding.evidence", dimension: "grounding", score: 0.9, start: 20, end: 25 }] },
-    { id: "m2", role: "user", kind: "message", text: "No stored text", engagement: [{ label: "intent.task", dimension: "intent", score: 0.9, start: 0, end: 2 }] },
-    { id: "m3", role: "assistant", kind: "message", text: "Done.", engagement_text: "Done.", engagement: [{ label: "intent.task", dimension: "intent", score: 0.9, start: 0, end: 4 }] }];
-  const events = plain(laneHumanEvents(lane, reader.engagementTimeline));
+test("a workspace Timeline lane gets the reader's Human events from its spans and an excerpt of the text", () => {
+  // As the lane sends it (engagement.go, attachLaneEngagement): an excerpt of the stored text around the spans, the spans' ranges in it, its typed ranges, and each part's place in the message.
+  // The message is typed "Please open it now. ", a pasted block, and typed " Is it safe?"; the excerpt leaves most of the paste out.
+  const paste = "ERROR importer.go:42 ".repeat(40), text = "Please open it now. " + paste + " Is it safe?";
+  const head = text.slice(0, 26), tail = text.slice(-18), excerpt = head + "…" + tail, tailAt = head.length + 1;
+  const span = (label, score, part, of = excerpt) => { const start = of.indexOf(part); return { label, dimension: label.split(".")[0], score, start, end: start + part.length }; };
+  const spans = [span("intent.task", 0.9, "pen it"), span("rights.go_ahead", 0.9, "Please"), span("register.filler", 0.99, "Please"), span("bounds.scope", 0.5, "open it"), span("grounding.evidence", 0.9, "ERROR"), span("inquiry.fact", 0.8, "it safe")];
+  const lane = [{ id: "m1", role: "user", kind: "message", text: "Please op", engagement: spans, engagement_text: excerpt, engagement_typed: [[0, 20], [excerpt.length - 12, excerpt.length]],
+    engagement_at: [[0, 0], [tailAt, text.length - tail.length]], engagement_length: text.length },
+    { id: "m2", role: "user", kind: "message", text: "No excerpt", engagement: [{ label: "intent.task", dimension: "intent", score: 0.9, start: 0, end: 2 }] },
+    { id: "m3", role: "assistant", kind: "message", text: "Done.", engagement_text: "Done.", engagement_typed: [[0, 5]], engagement: [{ label: "intent.task", dimension: "intent", score: 0.9, start: 0, end: 4 }] }];
+  const [events] = plain(laneHumanEvents([lane], reader));
   // The reader's rules: whole words, the display threshold, typed text only, the label never shown, display names.
-  assert.deepEqual(events.map(event => [event.message_id, event.label, event.name, event.text]), [["m1", "rights.go_ahead", "Delegation", "Please"], ["m1", "intent.task", "Intent", "open it"]]);
-  assert.deepEqual(laneHumanEvents(lane, undefined), [], "a page without the reader's model shows none");
-  assert.deepEqual(laneHumanEvents([], reader.engagementTimeline), []);
+  assert.deepEqual(events.map(event => [event.message_id, event.label, event.name, event.text]), [["m1", "rights.go_ahead", "Delegation", "Please"], ["m1", "intent.task", "Intent", "open it"], ["m1", "inquiry.fact", "Questions", "it safe"]]);
+  // The same message whole, as the reader has it, gives the same markers at the same places.
+  const bytes = value => new TextEncoder().encode(value).length;
+  const whole = { id: "m1", role: "user", kind: "message", text, engagement: [span("intent.task", 0.9, "pen it", text), span("rights.go_ahead", 0.9, "Please", text), span("register.filler", 0.99, "Please", text), span("bounds.scope", 0.5, "open it", text), span("grounding.evidence", 0.9, "ERROR", text), span("inquiry.fact", 0.8, "it safe", text)],
+    authorship: { spans: [{ category: "typed", start: 0, end: 20 }, { category: "pasted", start: 20, end: 20 + bytes(paste) }, { category: "typed", start: 20 + bytes(paste), end: bytes(text) }] } };
+  assert.deepEqual(plain(reader.engagementTimeline([whole])).map(event => [event.label, event.text, event.position]), events.map(event => [event.label, event.text, event.position]));
+  assert.ok(events[2].position > 0.9);
+  // Lanes shown together share one assignment of colours: a dimension the reader has not met takes one no lane uses.
+  const other = [{ id: "m4", role: "user", kind: "message", engagement: [{ label: "mood.playful", dimension: "mood", score: 0.9, start: 0, end: 6 }], engagement_text: "Please do", engagement_typed: [[0, 9]] }];
+  const lanes = plain(laneHumanEvents([lane, other, []], reader));
+  assert.deepEqual(lanes.map(list => list.length), [3, 1, 0]);
+  assert.equal(lanes[0].some(event => event.className === lanes[1][0].className), false);
+  assert.deepEqual(laneHumanEvents([lane], {}), [[]], "a page without the reader's model shows none");
+  assert.deepEqual(laneHumanEvents([], reader), []);
 });
 
 test("on a clock that cannot widen, a message's slot starts at its instant and stays inside the row", () => {

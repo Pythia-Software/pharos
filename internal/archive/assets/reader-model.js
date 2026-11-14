@@ -351,7 +351,7 @@ function trimTrailingConversationNoise(messages){
 }
 // Normalizing parses every message, so each conversation does it once.
 const normalizedConversations=new WeakMap();
-function conversationMessages(conversation){const source=conversation.messages||[];let value=normalizedConversations.get(source);if(!value){value=trimTrailingConversationNoise(normalizeMessages(source));normalizedConversations.set(source,value)}return value}
+function conversationMessages(conversation){const source=conversation.messages||[];let value=normalizedConversations.get(source);if(!value){value=engagementAssignSlots(trimTrailingConversationNoise(normalizeMessages(source)));normalizedConversations.set(source,value)}return value}
 function messageFailed(message){if(message.kind==='error')return true;if(!['tool_call','tool_result'].includes(message.kind))return false;const payload=toolPayload(message);return Boolean(payload.raw?.is_error||Number(payload.raw?.exit_code)>0||message.kind==='tool_result'&&/^(?:Process exited with code|Exit code:)\s*[1-9]/im.test(readableValue(payload.content)))}
 // How the reader groups normalized events: sub-agents' events by parent,
 // results paired to their calls (consumed holds the paired results'
@@ -1064,13 +1064,50 @@ function eventsAtMark(events,mark){
 // person typed, each with a label of one dimension (label "bounds.scope" is
 // dimension "bounds") and the model's score. Ranges are UTF-16 offsets of the
 // message's stored text, so they apply only where the reader shows that text
-// unchanged. The reader underlines each span in its dimension's style; a
-// dimension's style is its slot. The known dimensions keep this order, and
-// one the reader has not met takes a slot by its name.
+// unchanged. The reader underlines each span in its dimension's colour; a
+// colour is a slot of a palette of ENGAGEMENT_SLOTS. A slot is only a colour:
+// what identifies a dimension everywhere else (its Key chip, its hide key,
+// its timeline row and letter) is its id. The known dimensions keep this
+// order. One the reader has not met (a retrained model's) takes a colour by
+// its name, so it can share a known dimension's colour, never its chip or
+// its hide.
 const ENGAGEMENT_DIMENSIONS=['intent','grounding','bounds','acceptance','rights','evaluation','inquiry','authorship','register'],ENGAGEMENT_SLOTS=9;
 function engagementSlot(dimension){
   const known=ENGAGEMENT_DIMENSIONS.indexOf(dimension);if(known>=0)return known;
   let hash=0;for(const unit of String(dimension))hash=(hash*31+unit.charCodeAt(0))>>>0;return hash%ENGAGEMENT_SLOTS;
+}
+function engagementSpanDimension(span){return span?.dimension||String(span?.label??'').split('.')[0]}
+// The colours of the dimensions shown together (present, their ids): before
+// two share one, a dimension the reader has not met takes a palette slot
+// that none of them uses (the lowest, in id order); only when the palette is
+// used up does it share, by its name.
+function engagementSlots(present){
+  const ids=[...new Set((present||[]).map(String))],used=new Set(ids.map(id=>ENGAGEMENT_DIMENSIONS.indexOf(id)).filter(slot=>slot>=0)),slots=new Map();
+  for(const id of ids.sort()){
+    let slot=ENGAGEMENT_DIMENSIONS.indexOf(id);
+    if(slot<0){slot=Array.from({length:ENGAGEMENT_SLOTS},(_,at)=>at).find(at=>!used.has(at))??engagementSlot(id);used.add(slot)}
+    slots.set(id,slot);
+  }
+  return slots;
+}
+// Gives the spans of messages shown together (a conversation; a workspace's
+// lanes) their colours, as span.slot, when one of their dimensions is not a
+// known one; messageEngagementView reads it. Known dimensions need nothing.
+function engagementAssignSlots(messages){
+  const spans=(messages||[]).flatMap(message=>Array.isArray(message?.engagement)?message.engagement.filter(span=>span&&typeof span.label==='string'&&!ENGAGEMENT_UNDISPLAYED.has(span.label)):[]);
+  const present=[...new Set(spans.map(engagementSpanDimension))];
+  if(present.every(id=>ENGAGEMENT_DIMENSIONS.includes(id)))return messages;
+  const slots=engagementSlots(present);for(const span of spans)span.slot=slots.get(engagementSpanDimension(span));
+  return messages;
+}
+// A dimension's key among the hidden highlights (reader_highlight_hidden):
+// engagement:<dimension id>, as the Timeline's `human` section names it.
+function engagementKey(dimension){return 'engagement:'+dimension}
+// Hidden highlight keys as they are used now: an engagement hide saved by
+// colour slot (engagement:eng-slot-N, when the known dimensions were the
+// only ones) reads as that slot's known dimension.
+function readerHighlightHidden(keys){
+  return [...new Set((Array.isArray(keys)?keys:[]).map(key=>{const slot=/^engagement:eng-slot-(\d+)$/.exec(String(key));return slot&&ENGAGEMENT_DIMENSIONS[Number(slot[1])]?engagementKey(ENGAGEMENT_DIMENSIONS[Number(slot[1])]):key}))];
 }
 // What the page calls each dimension: one word, each with its own first
 // letter (the letter is its mark on the timeline). Display only: labels,
@@ -1120,8 +1157,8 @@ function messageEngagementView(message,text=displayText(message),writing=humanWr
     if(!(span&&typeof span.label==='string'&&span.label&&!ENGAGEMENT_UNDISPLAYED.has(span.label)&&Number.isInteger(span.start)&&Number.isInteger(span.end)&&span.start>=0&&span.start<span.end&&span.end<=text.length))continue;
     const score=typeof span.score==='number'?span.score:null;if(score!==null&&score<min)continue;
     const range=engagementSnap(text,span.start,span.end,typed);if(!range||!writing.slice(range[0],range[1]).includes('1'))continue;
-    const dimension=span.dimension||span.label.split('.')[0],rest=span.label.startsWith(dimension+'.')?span.label.slice(dimension.length+1):span.label,slot=engagementSlot(dimension);
-    view.push({label:span.label,dimension,slot,className:'eng-slot-'+slot,name:engagementName(rest),dimensionName:engagementDimensionName(dimension),score,start:range[0],end:range[1]});
+    const dimension=engagementSpanDimension(span),rest=span.label.startsWith(dimension+'.')?span.label.slice(dimension.length+1):span.label,slot=Number.isInteger(span.slot)&&span.slot>=0&&span.slot<ENGAGEMENT_SLOTS?span.slot:engagementSlot(dimension);
+    view.push({label:span.label,dimension,key:engagementKey(dimension),slot,className:'eng-slot-'+slot,name:engagementName(rest),dimensionName:engagementDimensionName(dimension),score,start:range[0],end:range[1]});
   }
   return view.length?view:null;
 }
@@ -1133,13 +1170,39 @@ function engagementTimeline(messages){
   return(messages||[]).flatMap(message=>{
     const view=messageEngagementView(message);if(!view)return[];
     const text=String(message.text??''),length=Math.max(1,text.length);
-    return view.map((span,index)=>({span,index})).sort((a,b)=>a.span.start-b.span.start||a.span.slot-b.span.slot||a.index-b.index).map(({span,index})=>({id:message.id+':'+index,message_id:message.id,slot:span.slot,className:span.className,dimension:span.dimension,name:span.dimensionName,
-      label:span.label,labelName:span.name||span.dimensionName,title:span.name&&span.name!==span.dimensionName?`${span.dimensionName} · ${span.name}`:span.dimensionName,score:span.score,start:span.start,end:span.end,position:span.start/length,text:shortText(text.slice(span.start,span.end),180)}));
+    return engagementEvents(message.id,view.map(span=>({span,position:span.start/length,text:text.slice(span.start,span.end)})));
   });
 }
-// The Key hides engagement by dimension: a key is engagement:<slot class>,
-// and shown (a set of keys; null is all) says which dimensions are on.
-function engagementShown(spans,shown=null){return(spans||[]).filter(span=>!shown||shown.has('engagement:'+span.className))}
+// One message's markers from its annotations ({span, position, text}), in
+// text order, then colour, then as given.
+function engagementEvents(messageID,annotations){
+  return annotations.map((annotation,index)=>({...annotation,index})).sort((a,b)=>a.position-b.position||a.span.slot-b.span.slot||a.index-b.index).map(({span,position,text,index})=>({id:messageID+':'+index,message_id:messageID,slot:span.slot,className:span.className,dimension:span.dimension,name:span.dimensionName,
+    label:span.label,labelName:span.name||span.dimensionName,title:span.name&&span.name!==span.dimensionName?`${span.dimensionName} · ${span.name}`:span.dimensionName,score:span.score,start:span.start,end:span.end,position,text:shortText(text,180)}));
+}
+// The same markers for a workspace Timeline lane, whose messages carry no
+// text but an excerpt of it (engagement.go, attachLaneEngagement):
+// engagement_text, the parts of the text around the spans; engagement, the
+// spans, indexing the excerpt; engagement_typed, the ranges of the excerpt
+// the person typed; and engagement_at ([excerpt offset, message offset] of
+// each part) with engagement_length, the message's, to place a span in the
+// message. The excerpt stands in for the message, so every display rule
+// above applies as it does in the reader; start and end of a marker here
+// index the excerpt.
+function engagementLaneTimeline(messages){
+  return(messages||[]).flatMap(message=>{
+    const text=message?.engagement_text;if(typeof text!=='string')return[];
+    const writing=Array.from({length:text.length},()=>'0');
+    for(const range of Array.isArray(message.engagement_typed)?message.engagement_typed:[])for(let at=Math.max(0,range?.[0]|0);at<Math.min(text.length,range?.[1]|0);at++)writing[at]='1';
+    const view=messageEngagementView({role:message.role,text,engagement:message.engagement},text,writing.join(''));if(!view)return[];
+    const parts=Array.isArray(message.engagement_at)&&message.engagement_at.length?message.engagement_at:[[0,0]],length=Math.max(1,Number(message.engagement_length)||text.length);
+    const inMessage=at=>{let part=parts[0];for(const next of parts){if(next[0]>at)break;part=next}return part[1]+at-part[0]};
+    return engagementEvents(message.id,view.map(span=>({span,position:Math.max(0,Math.min(1,inMessage(span.start)/length)),text:text.slice(span.start,span.end)})));
+  });
+}
+// The Key hides engagement by dimension: a key is engagement:<dimension id>
+// (engagementKey), and shown (a set of keys; null is all) says which
+// dimensions are on.
+function engagementShown(spans,shown=null){return(spans||[]).filter(span=>!shown||shown.has(span.key??engagementKey(span.dimension)))}
 // The marks of a card an annotation covers: the eng-at-N class of each
 // segment within [start,end).
 function engagementSpanMarks(segments,start,end){
@@ -1173,11 +1236,12 @@ function engagementAtMark(view,segments,className){
   return segment?segment.spans.map(index=>view[index]):[];
 }
 // One underline per dimension among spans whose dimensions are on, in slot
-// order, each with the best score of its spans.
+// order (then by id, for dimensions sharing a colour), each with the best
+// score of its spans.
 function engagementLayers(spans,shown=null){
   const layers=new Map();
-  for(const span of engagementShown(spans,shown)){const layer=layers.get(span.className);if(!layer)layers.set(span.className,{slot:span.slot,className:span.className,dimension:span.dimension,dimensionName:span.dimensionName,score:span.score??0});else layer.score=Math.max(layer.score,span.score??0)}
-  return [...layers.values()].sort((a,b)=>a.slot-b.slot);
+  for(const span of engagementShown(spans,shown)){const id=span.dimension??span.className,layer=layers.get(id);if(!layer)layers.set(id,{slot:span.slot,className:span.className,dimension:id,key:span.key??engagementKey(id),dimensionName:span.dimensionName,score:span.score??0});else layer.score=Math.max(layer.score,span.score??0)}
+  return [...layers.values()].sort((a,b)=>a.slot-b.slot||String(a.dimension).localeCompare(String(b.dimension)));
 }
 // A stretch of text draws at most ENGAGEMENT_STACK underlines: more run into
 // the line below and leave most sentences under a thicket. Of the layers
@@ -1186,7 +1250,7 @@ function engagementLayers(spans,shown=null){
 // every label, and hiding a dimension in the Key lets the next one show.
 const ENGAGEMENT_STACK=2;
 function engagementDrawn(layers,limit=ENGAGEMENT_STACK){
-  return new Set([...(layers||[])].sort((a,b)=>(b.score??0)-(a.score??0)||a.slot-b.slot).slice(0,limit).map(layer=>layer.className));
+  return new Set([...(layers||[])].sort((a,b)=>(b.score??0)-(a.score??0)||a.slot-b.slot).slice(0,limit).map(layer=>layer.dimension));
 }
 // The text of one annotation, from its marks in reading order: each part is
 // a mark's text and the text lying between it and the mark before (gap).
@@ -1215,7 +1279,7 @@ function engagementTipView(spans,shown=null){
 // so where two such annotations overlap the segment carries both.
 function engagementHoverTints(view,segments,className,shown=null){
   const at=String(className??'').split(/\s+/).find(name=>/^eng-at-\d+$/.test(name)),hovered=at?segments?.[Number(at.slice(7))]:null;if(!hovered)return[];
-  const lit=new Set(hovered.spans.filter(index=>!shown||shown.has('engagement:'+view[index].className)));
+  const lit=new Set(hovered.spans.filter(index=>!shown||shown.has(view[index].key??engagementKey(view[index].dimension))));
   return segments.flatMap((segment,index)=>{const slots=[...new Set(segment.spans.filter(span=>lit.has(span)).map(span=>view[span].slot))].sort((a,b)=>a-b);return slots.length?[{segment:index,slots}]:[]});
 }
 // Human-writing marks are numbered so one can be hidden on its own. Marks
@@ -1337,7 +1401,7 @@ function readerHighlightOptions(conversation,messages,taxonomy=[]){
     if(option.id==='engagement'){const summary=conversation?.engagement;if(!summary)continue;
       const layers=engagementLayers(messages.flatMap(message=>messageEngagementView(message)||[]));
       options.push({...option,available:layers.length>0,title:layers.length?option.title:'No engagement labels found in what was typed in this conversation',note:summary.pending?'Waiting to be read again after a change':'',
-        legend:layers.map(layer=>({name:layer.dimensionName,className:layer.className}))});continue}
+        legend:layers.map(layer=>({name:layer.dimensionName,className:layer.className,key:layer.dimension}))});continue}
     if(option.id==='events'){const summary=conversation?.agent_events;if(!summary)continue;
       const views=messages.map(message=>messageEventView(message)).filter(Boolean),count=views.reduce((sum,view)=>sum+view.length,0),groups=new Set(views.flat().map(event=>event.group));
       options.push({...option,available:count>0,title:count?option.title:'No agent events found in this conversation',note:summary.pending?'Waiting to be rebuilt for changed transcripts or session evidence; which messages these belong to may change':'',

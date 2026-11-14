@@ -5,6 +5,7 @@
 // person typed, underlined by dimension. The texts here are made up.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import displayRules from "../../../../testdata/engagement-display.json";
 import { reader } from "../helpers/transcript.mjs";
 import { plain } from "../helpers/classic-script.mjs";
 
@@ -35,6 +36,27 @@ test("engagement spans are read only for the stored text of a person's message, 
   // A dimension the reader does not know still gets one of the slots, the same one each time.
   assert.match(view[4].className, /^eng-slot-[0-8]$/);
   assert.equal(reader.engagementSlot("mood"), view[4].slot);
+  // A slot is only a colour. A tenth dimension shares a known one's colour, never its Key chip or its hide: each is keyed by dimension id.
+  const mate = ["intent", "grounding", "bounds", "acceptance", "rights", "evaluation", "inquiry", "authorship", "register"][view[4].slot];
+  const crowded = message([{ label: "mood.playful", dimension: "mood", score: 0.9, ...range("open it") }, { label: mate + ".kind", dimension: mate, score: 0.8, ...range("open it yet") }]);
+  const pair = reader.messageEngagementView(crowded), stretch = reader.engagementAtMark(pair, reader.engagementSegments(pair), "engagement eng-at-0");
+  assert.equal(pair[0].className, pair[1].className, "the palette has nine colours");
+  assert.deepEqual(plain(pair.map(span => span.key)), ["engagement:mood", "engagement:" + mate]);
+  assert.deepEqual(plain(reader.engagementLayers(stretch).map(layer => layer.dimension)).sort(), ["mood", mate].sort(), "two dimensions of one colour are two underlines");
+  assert.deepEqual(plain(reader.engagementLayers(stretch, new Set(["engagement:" + mate])).map(layer => layer.dimension)), [mate], "hiding the new dimension leaves its colour-mate");
+  assert.deepEqual(plain(reader.engagementTipView(stretch, new Set(["engagement:mood"])).map(row => row.label)), ["mood.playful"]);
+  const chips = plain(reader.readerHighlightOptions({ engagement: { messages_read: 1 } }, [crowded])).find(option => option.id === "engagement").legend;
+  assert.deepEqual(chips.map(chip => [chip.name, chip.key]).sort(), [["Mood", "mood"], [reader.engagementDimensionName(mate), mate]].sort(), "each has a Key chip of its own");
+  assert.deepEqual(plain(reader.engagementTimeline([crowded])).map(event => [event.dimension, event.name.charAt(0)]).sort(), [["mood", "M"], [mate, reader.engagementDimensionName(mate).charAt(0)]].sort(), "and a timeline letter from its own name");
+  // Before two visible dimensions share a colour, the new one takes a palette slot none of them uses.
+  assert.deepEqual(plain([...reader.engagementSlots(["mood", "intent", "bounds", "aside"])]), [["aside", 1], ["bounds", 2], ["intent", 0], ["mood", 3]]);
+  const roomy = [message([{ label: "mood.playful", dimension: "mood", score: 0.9, ...range("open it") }]), message([{ label: "intent.task", dimension: "intent", score: 0.9, ...range("open it") }])];
+  reader.engagementAssignSlots(roomy);
+  assert.deepEqual(plain(roomy.map(item => reader.messageEngagementView(item)[0].className)), ["eng-slot-1", "eng-slot-0"]);
+  assert.equal(new Set(reader.engagementSlots(["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]).values()).size, 9, "ten unknown dimensions use all nine colours before any two share");
+  // A hide saved by colour slot, from when the nine known dimensions were the only ones, reads as its dimension; other keys pass through.
+  assert.deepEqual(plain(reader.readerHighlightHidden(["writing", "engagement:eng-slot-2", "engagement:bounds", "engagement:mood", "events:event-friction", "engagement:eng-slot-42"])),
+    ["writing", "engagement:bounds", "engagement:mood", "events:event-friction", "engagement:eng-slot-42"]);
   assert.equal(reader.messageEngagementView({ ...message(spans), role: "assistant" }), null);
   assert.equal(reader.messageEngagementView(message(spans), "the prompt without its wrapper"), null, "offsets apply to the stored text only");
   assert.equal(reader.messageEngagementView(message([])), null);
@@ -94,7 +116,7 @@ test("text an event links back to keeps its engagement marks: both sets of bound
   assert.deepEqual(pieces(["Don't", "yet"]).filter(([className]) => className.startsWith("event-target")), [[both(0, "Don't "), "Don't"], [both(1, "yet"), "yet"]]);
   // A target that splits an annotation leaves it one annotation: hovering either piece tints every segment of it, and its marks read as its whole text.
   const prohibition = view.find(span => span.label === "bounds.prohibition"), marks = pieces(["open"]);
-  const lit = className => plain(reader.engagementHoverTints(view, segments, className, new Set(["engagement:" + prohibition.className]))).map(tint => tint.segment);
+  const lit = className => plain(reader.engagementHoverTints(view, segments, className, new Set([prohibition.key]))).map(tint => tint.segment);
   assert.deepEqual(lit(both(0, "open it")), lit(only("Don't ")));
   assert.deepEqual(lit(both(0, "open it")), [segmentOf("Don't "), segmentOf("open it"), segmentOf(" "), segmentOf("yet")]);
   const names = new Set(reader.engagementSpanMarks(segments, prohibition.start, prohibition.end));
@@ -120,6 +142,12 @@ test("a popover row copies its own annotation: typed text only, joined across wh
   assert.equal(reader.engagementCopyText([]), "");
 });
 
+test("the display threshold and the labels never shown are the ones the Timeline's payload is cut to", () => {
+  // engagement.go repeats both to leave spans the page cannot show out of a lane; TestEngagementDisplayRules compares its copy with the same file.
+  assert.equal(reader.ENGAGEMENT_MIN_SCORE, displayRules.min_score);
+  assert.deepEqual([...reader.ENGAGEMENT_UNDISPLAYED].sort(), displayRules.undisplayed);
+});
+
 test("a mark stacks one underline per dimension and names its labels, likeliest first", () => {
   const view = reader.messageEngagementView(message(spans)), segments = reader.engagementSegments(view);
   const index = segments.findIndex(segment => text.slice(segment.start, segment.end) === "open it");
@@ -130,15 +158,15 @@ test("a mark stacks one underline per dimension and names its labels, likeliest 
     { label: "intent.task", title: "Intent · Task", className: "eng-slot-0", score: 0.8 },
     { label: "bounds.timing_hold", title: "Bounds · Timing hold", className: "eng-slot-2", score: 0.72 }]);
   // At most two underlines are drawn: the best-scoring dimensions that are on.
-  const three = [{ className: "eng-slot-0", slot: 0, score: 0.6 }, { className: "eng-slot-2", slot: 2, score: 0.9 }, { className: "eng-slot-5", slot: 5, score: 0.6 }];
-  assert.deepEqual([...reader.engagementDrawn(reader.engagementLayers(under))].sort(), ["eng-slot-0", "eng-slot-2"]);
-  assert.deepEqual([...reader.engagementDrawn(three)].sort(), ["eng-slot-0", "eng-slot-2"], "a tie goes to the lower slot");
-  assert.deepEqual([...reader.engagementDrawn(three, 1)], ["eng-slot-2"]);
+  const three = [{ dimension: "intent", slot: 0, score: 0.6 }, { dimension: "bounds", slot: 2, score: 0.9 }, { dimension: "evaluation", slot: 5, score: 0.6 }];
+  assert.deepEqual([...reader.engagementDrawn(reader.engagementLayers(under))].sort(), ["bounds", "intent"]);
+  assert.deepEqual([...reader.engagementDrawn(three)].sort(), ["bounds", "intent"], "a tie goes to the lower slot");
+  assert.deepEqual([...reader.engagementDrawn(three, 1)], ["bounds"]);
   assert.deepEqual([...reader.engagementDrawn([])], []);
   // The Key hides by dimension: a hidden one leaves the layers (so the next dimension can show) and the popover.
-  assert.deepEqual(plain(reader.engagementLayers(under, new Set(["engagement:eng-slot-0"])).map(layer => layer.className)), ["eng-slot-0"]);
+  assert.deepEqual(plain(reader.engagementLayers(under, new Set(["engagement:intent"])).map(layer => layer.className)), ["eng-slot-0"]);
   assert.deepEqual(plain(reader.engagementLayers(under, new Set())), []);
-  assert.deepEqual(plain(reader.engagementTipView(under, new Set(["engagement:eng-slot-0"])).map(row => row.label)), ["intent.task"]);
+  assert.deepEqual(plain(reader.engagementTipView(under, new Set(["engagement:intent"])).map(row => row.label)), ["intent.task"]);
   assert.deepEqual(plain(reader.engagementAtMark(view, segments, "human-written")), []);
   assert.deepEqual(plain(reader.engagementAtMark(view, segments, "human-written engagement eng-at-999")), []);
   // The same label twice under one mark is listed once, with its best score.
@@ -151,7 +179,7 @@ test("the Engagement highlight is offered once the pass has read the conversatio
   assert.equal(plain(reader.readerHighlightOptions({}, [item, reply])).some(option => option.id === "engagement"), false, "a library without the pass offers nothing");
   const options = plain(reader.readerHighlightOptions({ engagement: { messages_read: 1 } }, [item, reply]));
   assert.deepEqual(options.map(option => [option.id, option.field, option.available]), [["writing", "reader_writing", true], ["engagement", "reader_engagement", true]]);
-  assert.deepEqual(options[1].legend.slice(0, 3), [{ name: "Intent", className: "eng-slot-0" }, { name: "Bounds", className: "eng-slot-2" }, { name: "Verification", className: "eng-slot-3" }]);
+  assert.deepEqual(options[1].legend.slice(0, 3), [{ name: "Intent", className: "eng-slot-0", key: "intent" }, { name: "Bounds", className: "eng-slot-2", key: "bounds" }, { name: "Verification", className: "eng-slot-3", key: "acceptance" }]);
   assert.equal(options[1].legend.length, 4);
   const shown = reader.readerHighlightsShown(reader.readerHighlightOptions({ engagement: { messages_read: 1 } }, [item, reply]), field => field === "reader_engagement" ? false : null);
   assert.deepEqual([...shown], ["writing"]);
@@ -197,7 +225,7 @@ test("the page shows a label only from the display threshold up", () => {
   assert.deepEqual(plain(reader.messageEngagementView(item)).map(span => span.label), ["bounds.prohibition"]);
   // The Key and the timeline list only what the page shows.
   const option = plain(reader.readerHighlightOptions({ engagement: { messages_read: 1 } }, [item, reply])).find(option => option.id === "engagement");
-  assert.deepEqual(option.legend, [{ name: "Bounds", className: "eng-slot-2" }]);
+  assert.deepEqual(option.legend, [{ name: "Bounds", className: "eng-slot-2", key: "bounds" }]);
   assert.deepEqual(plain(reader.engagementTimeline([item, reply])).map(event => event.title), ["Bounds · Prohibition"]);
   // Nothing at the threshold: the conversation has nothing to show.
   assert.equal(reader.messageEngagementView(message(weak.filter(span => span.score < 0.7))), null);
@@ -256,7 +284,7 @@ test("dimensions have one-word display names with their own first letters, and R
   assert.deepEqual(plain(reader.engagementTipView(reader.messageEngagementView(item))).map(row => row.title).sort(), ["Delegation · Go ahead", "Tone · Hedge"]);
   // The filler label reaches no surface: Key, timeline, or a message that has nothing else.
   const option = plain(reader.readerHighlightOptions({ engagement: { messages_read: 1 } }, [item])).find(option => option.id === "engagement");
-  assert.deepEqual(option.legend, [{ name: "Delegation", className: "eng-slot-4" }, { name: "Tone", className: "eng-slot-8" }]);
+  assert.deepEqual(option.legend, [{ name: "Delegation", className: "eng-slot-4", key: "rights" }, { name: "Tone", className: "eng-slot-8", key: "register" }]);
   assert.deepEqual(plain(reader.engagementTimeline([item])).map(event => [event.label, event.name]), [["rights.go_ahead", "Delegation"], ["register.hedge", "Tone"]]);
   assert.equal(reader.messageEngagementView(message([{ label: "register.filler", dimension: "register", score: 0.99, ...range("Don't") }])), null);
 });
@@ -276,7 +304,7 @@ test("a turn's hover card says what its header says", () => {
 test("hovering a stretch lights every annotation over it, end to end", () => {
   // Annotations A and B overlap: R1 has A only, R2 has both, R3 has B only.
   const line = "alpha beta gamma", part = value => { const start = line.indexOf(value); return { start, end: start + value.length }; };
-  const view = [{ label: "intent.task", className: "eng-slot-0", slot: 0, ...part("alpha beta") }, { label: "bounds.scope", className: "eng-slot-2", slot: 2, ...part("beta gamma") }];
+  const view = [{ label: "intent.task", dimension: "intent", className: "eng-slot-0", slot: 0, ...part("alpha beta") }, { label: "bounds.scope", dimension: "bounds", className: "eng-slot-2", slot: 2, ...part("beta gamma") }];
   const segments = reader.engagementSegments(view);
   assert.deepEqual(plain(segments.map(segment => line.slice(segment.start, segment.end))), ["alpha ", "beta", " gamma"]);
   const [R1, R2, R3] = [0, 1, 2], hover = (segment, shown = null) => plain(reader.engagementHoverTints(view, segments, `human-written engagement eng-at-${segment}`, shown));
@@ -284,8 +312,8 @@ test("hovering a stretch lights every annotation over it, end to end", () => {
   assert.deepEqual(hover(R2), [{ segment: R1, slots: [0] }, { segment: R2, slots: [0, 2] }, { segment: R3, slots: [2] }], "R2: all of A and all of B, the overlap as both");
   assert.deepEqual(hover(R3), [{ segment: R2, slots: [2] }, { segment: R3, slots: [2] }], "R3: all of B");
   // Only annotations the popover lists: a dimension switched off in the Key lights nothing.
-  assert.deepEqual(hover(R2, new Set(["engagement:eng-slot-2"])), [{ segment: R2, slots: [2] }, { segment: R3, slots: [2] }]);
-  assert.deepEqual(hover(R1, new Set(["engagement:eng-slot-2"])), []);
+  assert.deepEqual(hover(R2, new Set(["engagement:bounds"])), [{ segment: R2, slots: [2] }, { segment: R3, slots: [2] }]);
+  assert.deepEqual(hover(R1, new Set(["engagement:bounds"])), []);
   // Two annotations of one dimension stay two: hovering one does not light the other's own stretch.
   const same = [view[0], { ...view[1], className: "eng-slot-0", slot: 0 }], parts = reader.engagementSegments(same);
   assert.deepEqual(plain(reader.engagementHoverTints(same, parts, "engagement eng-at-0")), [{ segment: 0, slots: [0] }, { segment: 1, slots: [0] }]);

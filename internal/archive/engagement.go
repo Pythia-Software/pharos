@@ -112,6 +112,14 @@ func (c *Catalog) ensureEngagementSchema(ctx context.Context) error {
 	})
 }
 
+// engagementShown is whether the reader and the Timeline show engagement:
+// the preview is on (engagement_enabled) and the library has the tables.
+// With the setting off the stored spans stay where they are and the pages
+// are as they were before it was ever on.
+func (c *Catalog) engagementShown(ctx context.Context) bool {
+	return c.EngagementEnabled && engagementPresent(ctx, c.reader())
+}
+
 // engagementPresent is whether this library has the engagement tables.
 func engagementPresent(ctx context.Context, q *sql.DB) bool {
 	var tables int
@@ -395,9 +403,10 @@ func engagementSpans(model *engagementModel, source string, target engagementTar
 // range of the message's text in UTF-16 code units (JavaScript's string
 // indexes). Spans that no longer fit the text (it changed since they were
 // made) are left out. summary is nil for a conversation the pass never
-// read, so the reader shows no Engagement control.
+// read, and everywhere while engagement is not shown (engagementShown), so
+// the reader shows no Engagement control.
 func (c *Catalog) engagementAttacher(ctx context.Context, conversationID any) (attach func(map[string]any), summary func() (map[string]any, error), err error) {
-	if !engagementPresent(ctx, c.reader()) {
+	if !c.engagementShown(ctx) {
 		return func(map[string]any) {}, func() (map[string]any, error) { return nil, nil }, nil
 	}
 	rows, err := queryMapsContext(ctx, c.reader(), `SELECT s.message_id,s.label,s.start_byte,s.end_byte,s.score FROM engagement_messages e
@@ -459,20 +468,95 @@ func (c *Catalog) engagementAttacher(ctx context.Context, conversationID any) (a
 	return attach, summary, nil
 }
 
-// engagementLaneTextLimit is the longest message text a Timeline lane
-// carries for its Human events: the page applies the reader's display rules
-// (reader-model.js: threshold, whole words, typed text only), which need the
-// stored text. A longer message, nearly always a paste, shows no markers
-// there; the reader still shows its annotations.
-var engagementLaneTextLimit = 64 << 10
+// What the page shows of the stored spans, repeated here so a Timeline lane
+// is not sent spans it can never draw: reader-model.js holds the rules
+// (ENGAGEMENT_MIN_SCORE, ENGAGEMENT_UNDISPLAYED), and
+// testdata/engagement-display.json ties the two copies together (a Go test
+// and a JS test each compare theirs with it). The reader's own payload still
+// carries every stored span.
+const engagementDisplayMinScore = 0.7
+
+var engagementUndisplayed = map[string]bool{"register.filler": true}
+
+// A Timeline lane carries, for a message with spans, the parts of its text
+// around them instead of the text: each span with up to
+// engagementLaneContextBytes on each side (the page moves a span's edges to
+// whole words and needs the letters around them), and of a span longer than
+// engagementLaneQuoteBytes only its first
+// engagementLaneQuoteBytes-engagementLaneTailBytes and last
+// engagementLaneTailBytes. Parts that meet are one, so the excerpt is never
+// longer than the text, and a message of a megabyte with one span costs what
+// the span does. Cuts fall between characters.
+const (
+	engagementLaneContextBytes = 48
+	engagementLaneQuoteBytes   = 600
+	engagementLaneTailBytes    = 96
+	engagementLaneGap          = "…"
+)
+
+// engagementLanePiece is a part of a message's text kept in its excerpt:
+// excerpt bytes [at, at+end-start) are text[start:end].
+type engagementLanePiece struct{ start, end, at int }
+
+// engagementLaneExcerpt cuts the excerpt for spans (byte ranges of text): the
+// kept parts in order, with engagementLaneGap where text between two is left
+// out. ok is false when a span is not a range of whole characters of text.
+func engagementLaneExcerpt(text string, spans []labelrt.ByteRange) (excerpt string, pieces []engagementLanePiece, ok bool) {
+	boundary := func(i int) bool { return i <= 0 || i >= len(text) || utf8.RuneStart(text[i]) }
+	keep := []labelrt.ByteRange{}
+	add := func(lo, hi int) {
+		lo, hi = max(0, lo), min(len(text), hi)
+		for !boundary(lo) {
+			lo--
+		}
+		for !boundary(hi) {
+			hi++
+		}
+		keep = append(keep, labelrt.ByteRange{Start: lo, End: hi})
+	}
+	for _, span := range spans {
+		if span.Start < 0 || span.End > len(text) || span.Start >= span.End || !boundary(span.Start) || !boundary(span.End) {
+			return "", nil, false
+		}
+		if span.End-span.Start <= engagementLaneQuoteBytes {
+			add(span.Start-engagementLaneContextBytes, span.End+engagementLaneContextBytes)
+		} else {
+			add(span.Start-engagementLaneContextBytes, span.Start+engagementLaneQuoteBytes-engagementLaneTailBytes)
+			add(span.End-engagementLaneTailBytes, span.End+engagementLaneContextBytes)
+		}
+	}
+	sort.Slice(keep, func(i, j int) bool { return keep[i].Start < keep[j].Start })
+	var b strings.Builder
+	for _, part := range keep {
+		// A gap no longer than its mark is kept instead.
+		if n := len(pieces); n > 0 && part.Start <= pieces[n-1].end+len(engagementLaneGap) {
+			if part.End > pieces[n-1].end {
+				b.WriteString(text[pieces[n-1].end:part.End])
+				pieces[n-1].end = part.End
+			}
+			continue
+		}
+		if len(pieces) > 0 {
+			b.WriteString(engagementLaneGap)
+		}
+		pieces = append(pieces, engagementLanePiece{start: part.Start, end: part.End, at: b.Len()})
+		b.WriteString(text[part.Start:part.End])
+	}
+	return b.String(), pieces, true
+}
 
 // attachLaneEngagement gives the person's messages among a Timeline lane's
-// rows what the reader's payload gives them (engagementAttacher): engagement,
-// the spans in UTF-16 units, with engagement_text, the stored text those
-// index, since a lane otherwise holds only an excerpt. It reads spans by
-// message ID (the spans table's key) for the rows shown and nothing else,
-// and does nothing in a library without the engagement tables, which exist
-// only once engagement_enabled has been on.
+// rows their Human events: engagement, the spans the page can show (score at
+// least engagementDisplayMinScore, labels it displays), as in the reader's
+// payload but indexing engagement_text, the message's excerpt
+// (engagementLaneExcerpt), in UTF-16 units; engagement_typed, the ranges of
+// the excerpt the person typed; and, to place a span in the message as the
+// reader does, engagement_at (for each part of the excerpt, where it starts
+// in the excerpt and in the message) and engagement_length (the message's),
+// all in the same units. The page applies the reader's display rules to the
+// excerpt as the reader does to the text. It reads spans by message ID (the
+// spans table's key) for the rows shown and nothing else. The caller asks
+// only where engagement is shown (engagementShown).
 func (c *Catalog) attachLaneEngagement(ctx context.Context, q queryer, rows []map[string]any) error {
 	byID := map[string]map[string]any{}
 	ids := []string{}
@@ -487,39 +571,96 @@ func (c *Catalog) attachLaneEngagement(ctx context.Context, q queryer, rows []ma
 	}
 	encoded, _ := json.Marshal(ids)
 	spans, err := queryMapsContext(ctx, q, `SELECT s.message_id,s.label,s.start_byte,s.end_byte,s.score FROM json_each(?) j
-		JOIN engagement_spans s ON s.message_id=j.value ORDER BY s.message_id,s.position`, string(encoded))
-	if err != nil || len(spans) == 0 {
+		JOIN engagement_spans s ON s.message_id=j.value WHERE s.score>=? ORDER BY s.message_id,s.position`, string(encoded), engagementDisplayMinScore)
+	if err != nil {
 		return err
 	}
 	byMessage := map[string][]map[string]any{}
 	for _, span := range spans {
-		byMessage[firstString(span["message_id"])] = append(byMessage[firstString(span["message_id"])], span)
+		if !engagementUndisplayed[firstString(span["label"])] {
+			byMessage[firstString(span["message_id"])] = append(byMessage[firstString(span["message_id"])], span)
+		}
+	}
+	if len(byMessage) == 0 {
+		return nil
 	}
 	encoded, _ = json.Marshal(slices.Sorted(maps.Keys(byMessage)))
-	texts, err := queryMapsContext(ctx, q, `SELECT m.id,m.text FROM json_each(?) j JOIN messages m ON m.id=j.value
-		WHERE length(CAST(COALESCE(m.text,'') AS BLOB))<=?`, string(encoded), engagementLaneTextLimit)
+	texts, err := queryMapsContext(ctx, q, `SELECT m.id,m.text,a.spans_json FROM json_each(?) j JOIN messages m ON m.id=j.value
+		LEFT JOIN message_authorship a ON a.message_id=m.id`, string(encoded))
 	if err != nil {
 		return err
 	}
 	for _, row := range texts {
 		id := firstString(row["id"])
 		text, _ := row["text"].(string)
-		offsets := []int{}
-		for _, span := range byMessage[id] {
-			offsets = append(offsets, int(integer(span["start_byte"])), int(integer(span["end_byte"])))
+		ranges := make([]labelrt.ByteRange, len(byMessage[id]))
+		for i, span := range byMessage[id] {
+			ranges[i] = labelrt.ByteRange{Start: int(integer(span["start_byte"])), End: int(integer(span["end_byte"]))}
 		}
-		units, ok := utf16Offsets(text, offsets)
+		excerpt, pieces, ok := engagementLaneExcerpt(text, ranges)
 		if !ok {
+			// Made from text the message no longer has.
 			continue
 		}
-		out := make([]map[string]any, 0, len(byMessage[id]))
-		for _, span := range byMessage[id] {
+		// Where a byte of the text lies in the excerpt: a span's start is in
+		// the part that holds its first byte, its end in the one that holds
+		// its last.
+		inExcerpt := func(at int, end bool) int {
+			for _, piece := range pieces {
+				if (!end && at >= piece.start && at < piece.end) || (end && at > piece.start && at <= piece.end) {
+					return piece.at + at - piece.start
+				}
+			}
+			return -1
+		}
+		offsets, starts := []int{}, []int{len(text)}
+		for _, piece := range pieces {
+			offsets, starts = append(offsets, piece.at), append(starts, piece.start)
+		}
+		for _, span := range ranges {
+			offsets = append(offsets, inExcerpt(span.Start, false), inExcerpt(span.End, true))
+		}
+		// The typed stretches of each part, cut to whole characters.
+		var authored []authorSpan
+		_ = json.Unmarshal([]byte(firstString(row["spans_json"])), &authored)
+		typed := [][2]int{}
+		for _, piece := range pieces {
+			for _, part := range authored {
+				lo, hi := max(part.Start, piece.start), min(part.End, piece.end)
+				for lo < hi && !utf8.RuneStart(text[lo]) {
+					lo++
+				}
+				for hi > lo && hi < len(text) && !utf8.RuneStart(text[hi]) {
+					hi--
+				}
+				if part.Category == "typed" && lo < hi {
+					typed = append(typed, [2]int{piece.at + lo - piece.start, piece.at + hi - piece.start})
+					offsets = append(offsets, piece.at+lo-piece.start, piece.at+hi-piece.start)
+				}
+			}
+		}
+		units, ok := utf16Offsets(excerpt, offsets)
+		source, sourceOK := utf16Offsets(text, starts)
+		if !ok || !sourceOK {
+			continue
+		}
+		out := make([]map[string]any, 0, len(ranges))
+		for i, span := range byMessage[id] {
 			label := firstString(span["label"])
 			score, _ := span["score"].(float64)
 			out = append(out, map[string]any{"label": label, "dimension": engagementDimension(label), "score": math.Round(score*1000) / 1000,
-				"start": units[int(integer(span["start_byte"]))], "end": units[int(integer(span["end_byte"]))]})
+				"start": units[inExcerpt(ranges[i].Start, false)], "end": units[inExcerpt(ranges[i].End, true)]})
 		}
-		byID[id]["engagement"], byID[id]["engagement_text"] = out, text
+		for i := range typed {
+			typed[i] = [2]int{units[typed[i][0]], units[typed[i][1]]}
+		}
+		at := make([][2]int, len(pieces))
+		for i, piece := range pieces {
+			at[i] = [2]int{units[piece.at], source[piece.start]}
+		}
+		message := byID[id]
+		message["engagement"], message["engagement_text"], message["engagement_typed"] = out, excerpt, typed
+		message["engagement_at"], message["engagement_length"] = at, source[len(text)]
 	}
 	return nil
 }

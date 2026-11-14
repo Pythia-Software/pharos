@@ -65,6 +65,24 @@ A message is read again when its input hash or the model identity differs: its t
 changed, the agent message before it changed, or another model is configured. A message that is no longer typed, or
 is gone, loses its rows.
 
+### What the tables cost with the preview off
+
+Turning `engagement_enabled` off stops the pass and stops the pages showing anything (see In the reader); the
+tables, their rows and the triggers stay. `ensureEngagementSchema` creates 16 `AFTER` triggers
+(`itemDirtyTriggers`, the labeler's set under the prefix `engagement_dirty_`):
+
+| Table | Triggers |
+|---|---|
+| `messages`, `message_authorship`, `reasoning_extraction_state`, `agent_sessions` | insert, delete, update |
+| `agent_session_messages` | insert, delete |
+| `conversations` | delete, update |
+
+Each firing upserts one row of `engagement_dirty` by its primary key, the conversation ID, with a new random
+token: one upsert for an insert or delete and two for an update (old and new conversation). An update trigger that
+names columns compares them first and does nothing when none changed. `engagement_dirty` therefore holds at most
+one row per conversation, and nothing reads or empties it while the preview is off. This was reasoned from the
+trigger text, not timed.
+
 ## Running it
 
 ```toml
@@ -98,6 +116,10 @@ on the clone with `tools/dev.py --reuse-library`.
 
 ## In the reader
 
+The reader and the workspace Timeline show engagement only while `engagement_enabled` is on in a library that has
+the tables (`Catalog.engagementShown`). With the setting off neither payload carries any of it, so the Key groups,
+chips, underlines and Human events rows are gone and the pages are as they were before.
+
 `WorkConversation` attaches the spans (`engagementAttacher`): each typed message gets `engagement`, a list of
 `{label, dimension, score, start, end}` with UTF-16 offsets into its text, and the conversation gets a summary
 (`messages_read`, `messages_with_spans`, `dimensions`, `model`, and `pending` while a change waits to be read).
@@ -113,8 +135,12 @@ default on, saved like the other highlights). It draws underlines only, and only
   to the nearer end of that word, and a span that is only part of one word is not shown. Words stop where the
   typed text stops;
 - every dimension's underline is the same solid line, drawn as a background of the dimension's nested span;
-  dimensions differ by hue alone (`eng-slot-N` in `ui.py`: `--eng-hue`). The known dimensions keep a fixed order
-  and a dimension the reader has not met takes a slot by its name;
+  dimensions differ by hue alone (`eng-slot-N` in `ui.py`: `--eng-hue`), from a palette of nine. A slot is only a
+  colour: a dimension's Key chip, hide key, timeline row and letter go by its ID. The nine known dimensions keep a
+  fixed order. A dimension the reader has not met (a retrained model's) takes a palette slot none of the
+  dimensions shown with it uses (`engagementSlots`, `engagementAssignSlots`, per conversation or per set of
+  Timeline lanes); only when all nine are in use does it share one, chosen by its name. Two dimensions of one
+  colour are still two underlines, two chips and two hides;
 - the lines sit on a 3 px grid in the 6 px under the text (`--eng-line`, `--eng-first`): 2 px lines 1 px apart
   on a 1× screen, 1.5 px lines 1.5 px apart from 2×, so both are whole device pixels. Where dimensions overlap,
   the nested spans stack their lines on that grid. A stretch draws at most two, the
@@ -141,8 +167,10 @@ default on, saved like the other highlights). It draws underlines only, and only
   underline, popover row, timeline marker, Key chip or count. The pass still computes and stores it, and the
   API still returns it, so it stays available for telling typed from dictated text;
 - the Key lists the dimensions present, one chip each: a solid line in the dimension's hue and its name. Hiding
-  is by dimension: `reader_highlight_hidden` holds `engagement:eng-slot-N`. These chips control the underlines
-  only. Every key default shows every dimension;
+  is by dimension: `reader_highlight_hidden` holds `engagement:<dimension ID>` (`engagementKey`), as the
+  Timeline's `human` section does. A hide saved as `engagement:eng-slot-N` by an earlier build reads as that
+  slot's known dimension (`readerHighlightHidden`) and is written back in the new form. These chips control the
+  underlines only. Every key default shows every dimension;
 - hovering an underlined span lists all its labels and scores, drawn or not. Clicking pins the list. With two
   or more annotations each row gets a copy button (`copyValueButton`, through `pharosHost.clipboard`) for that
   annotation's whole text; with one, "Copy this text" copies it. The text is the annotation's marks in reading
@@ -282,20 +310,39 @@ folds out by dimension with counts (disclosure `delegation-labels:<session>:huma
 card and stacking (`web/src/human-events-rows.tsx` is shared with the reader), and Human events entries in that
 page's Key, folded icon mode included (`timeline_visibility`, section `human`).
 
-The lane data comes through the page's existing endpoint, `/api/work/<id>/parallel?labels=1`. In a library that
-has the engagement tables, `attachLaneEngagement` (`engagement.go`) gives each of the person's messages among the
-lane's rows `engagement` (the spans, as in the reader's payload) and `engagement_text` (the stored text they
-index, since a lane otherwise holds an excerpt). It reads spans by message ID for the rows shown only. The display
-rules stay in one place: `laneHumanEvents` (`human-events-model.ts`) hands each message to the reader's
-`engagementTimeline` in `reader-model.js`, so the threshold, whole words, typed text only, `register.filler` and
-the display names are the reader's.
+The lane data comes through the page's existing endpoint, `/api/work/<id>/parallel?labels=1`. Where engagement
+is shown, `attachLaneEngagement` (`engagement.go`) reads spans by message ID for the rows shown only and gives
+each of the person's messages:
+
+| Field | Holds |
+|---|---|
+| `engagement` | the spans the page can show: score at least 0.70 and not a label the page never displays |
+| `engagement_text` | an excerpt of the stored text: each span with up to 48 bytes on either side, parts that meet joined, "…" where text between two parts is left out |
+| `engagement_typed` | the ranges of the excerpt the person typed |
+| `engagement_at`, `engagement_length` | where each part of the excerpt starts in the excerpt and in the message, and the message's length |
+
+Offsets are UTF-16 units, and a span's `start` and `end` index the excerpt. The excerpt is never longer than the
+text, and a long message with a few spans costs what the spans do, so there is no size limit on the message. The
+display rules stay in one place: `laneHumanEvents` (`human-events-model.ts`) hands the lanes to
+`engagementLaneTimeline` in `reader-model.js`, which runs `messageEngagementView` on the excerpt as the reader
+does on the text, so the threshold, whole words, typed text only, `register.filler` and the display names are the
+reader's, and a marker's position in the message is the reader's too.
+
+The threshold and the undisplayed labels are therefore written twice, in `reader-model.js` and in `engagement.go`.
+`testdata/engagement-display.json` holds both values; a Go test and a JS test each compare their copy with it.
+
+On the development library the saving is small, because no annotated message there is over 33 KB. For the
+workspace with the most spans (3 lanes, 82 annotated messages), the response went from 959,485 to 847,050 bytes
+and from 3,109 spans to 1,901; for a 40-lane workspace from 2,928,890 to 2,856,181 bytes. The request took about
+4 s and 9.5 s before and after: the time is the rest of the endpoint's.
 
 What differs from the reader:
 
 - every lane shares one clock, so a message's slot is laid over what follows its instant
   (`humanEventPointSlots`) instead of widening the clock;
 - a marker is a link that opens the conversation at the message; it does not scroll to the span;
-- a message whose text is over 64 KiB (`engagementLaneTextLimit`) gets no markers here;
+- a span longer than 600 bytes is quoted from its first 504 and last 96, so its card can show "…" inside the
+  quote;
 - the Caller row has no Human events row; they are on the session's lane.
 
 ### The Key as icons only
