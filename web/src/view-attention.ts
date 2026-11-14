@@ -177,7 +177,7 @@ export function installViewAttention() {
     if (event.key !== "Escape") return;
     if (menu) { closeMenu(); event.preventDefault(); event.stopImmediatePropagation(); return; }
     const target = event.target instanceof Element ? event.target : null;
-    const overlays = document.querySelectorAll<HTMLElement>('dialog[open], [role="dialog"][aria-modal="true"], :popover-open, .usage-chart-tip, .drawer.open, body.feedback-targeting, #feedbackComposer.open, #usageSummary:not([hidden])');
+    const overlays = document.querySelectorAll<HTMLElement>('dialog[open], [role="dialog"][aria-modal="true"], :popover-open, .usage-chart-tip:not(.chart-tooltip), .drawer.open, body.feedback-targeting, #feedbackComposer.open, #usageSummary:not([hidden])');
     if (target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])') || [...overlays].some(element => element.checkVisibility({ visibilityProperty: true }))) handledByOverlay.add(event);
   }, true);
   document.addEventListener("keydown", event => {

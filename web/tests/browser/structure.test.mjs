@@ -1907,10 +1907,19 @@ test("clipped labels reveal hidden text and stop repeating it when they fit", { 
     const item = legend.locator("[data-chart-tooltip-label]").filter({hasText: name});
     await item.hover();
     await page.waitForFunction(name => document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])')?.textContent.includes(name), name);
-    await page.locator('[role="tooltip"] .chart-tooltip-swatch').first().waitFor({ state: "visible" });
+    await page.locator('[role="tooltip"] .usage-swatch').first().waitFor({ state: "visible" });
   }
-  await page.locator(".query-cover-columns > [data-chart-tooltip]").first().hover();
-  await page.locator('[role="tooltip"] .chart-tooltip-swatch').first().waitFor({ state: "visible" });
+  // A clipped path or id with no break opportunity wraps inside the bubble.
+  const unbroken = `repository/${"unbrokenbranchname".repeat(4)}`, first = legend.locator("[data-chart-tooltip-label]").first();
+  const relabel = label => first.evaluate((element, label) => { element.setAttribute("data-chart-tooltip-label", label); element.querySelector("[data-chart-label]").textContent = label; }, label);
+  await relabel(unbroken);
+  await first.hover();
+  await page.waitForFunction(label => document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])')?.textContent.includes(label), unbroken);
+  assert.ok(await page.locator('[role="tooltip"].chart-tooltip .usage-chart-tip-head').evaluate(head =>
+    head.scrollWidth <= head.clientWidth && head.getBoundingClientRect().right <= head.closest(".chart-tooltip").getBoundingClientRect().right), "a long unbroken label wraps inside the bubble");
+  await relabel(names[0]);
+  await page.locator(".query-cover-columns > [data-chart-popover]").first().hover();
+  await page.locator('[role="tooltip"] .usage-swatch').first().waitFor({ state: "visible" });
   await legend.evaluate(element => {element.style.width = "100%";element.style.gridTemplateColumns = "1fr";});
   await legend.locator("[data-chart-tooltip-label]").first().hover();
   await page.waitForFunction(() => !document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])'));

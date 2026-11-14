@@ -11,7 +11,8 @@ import { sliceGroupState, sliceGroupCounts, type LegendAction } from "./chart-se
 import { Icon } from "./icons";
 import { loadUsageHistory } from "./usage-history";
 import { chartGesture, chartInspectionRange, type ChartInspectionRange } from "./chart-inspection";
-import { ChartPopover, ChartPopoverRow } from "./chart-popover";
+import { ChartPopover, ChartPopoverDetails } from "./chart-popover";
+import { periodPopover, periodRows } from "./chart-popover-model";
 import { DashboardSelect } from "./dashboard-select";
 import { SearchHelp } from "./search-help";
 import { ViewDisclosure } from "./view-disclosure";
@@ -328,8 +329,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
     return `${period === "week" ? "Week of " : ""}${label(bucket.date)}${averageLabel ? ` · ${averageDuration(bucket.windowSize ?? rollingPeriods)} ${rolling}` : ""}`;
   };
   const suffix = noun ? ` ${noun}` : "";
-  // A ratio of zero is a value; an amount of zero is nothing to list.
-  const present = (bucket: ChartBucket) => drawn.filter(item => additive ? (bucket.values[item.key] ?? 0) > 0 : bucket.values[item.key] !== undefined).sort((left, right) => bucket.values[right.key] - bucket.values[left.key]);
+  const present = (bucket: ChartBucket) => periodRows(bucket, drawn, additive).rows;
   const describe = (bucket: ChartBucket) => `${heading(bucket)}: `
     + (present(bucket).map(item => `${item.label} ${format(bucket.values[item.key])}`).join(", ") || "none")
     + (stacked ? `; ${format(total(bucket))}${suffix} in all` : suffix) + references.map(item => `; ${item.label} ${format(item.value)}`).join("") + (bucket.detail ? `; ${bucket.detail}` : "");
@@ -458,20 +458,8 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
     <div className="usage-chart-axis"><span>{buckets.length ? label(buckets[0].date) : ""}</span><span>{middle && buckets.length > 4 ? label(middle.date) : ""}</span><span>{!last ? "" : last.key !== periodKey(new Date(), period, periodCount) ? label(last.date) : period === "day" ? "today" : `this ${unit}`}</span></div>
     {picked ? <div className="usage-chart-pick-status" role="status">{picked.count} {picked.count === 1 ? "period" : "periods"} · {picked.inspect ? heading(buckets[picked.first]) : `${label(buckets[picked.first].date)} – ${label(buckets[picked.last].date)}`} · Release to {picked.inspect ? "inspect" : "filter"}</div> : null}
     {tip && !drag ? <ChartPopover ref={tipRef} heading={heading(tip.bucket)} pinned={tip.pinned}>
-      {present(tip.bucket).length ? <ul>{present(tip.bucket).map(item => {
-        const parts = [...(tip.bucket.parts?.[item.key] ?? [])].sort((left, right) => right[1] - left[1]);
-        const href = tip.pinned ? seriesHref?.(chartInspectionRange(tip.bucket, period, periodCount, display, cumulativeStart ?? averagedBuckets[0]?.date), item) : undefined;
-        return <li key={item.key}>
-          <ChartPopoverRow label={item.label} value={format(tip.bucket.values[item.key])} color={item.color} href={href} />
-          {parts.length ? <ul className="usage-chart-tip-parts">
-            {parts.slice(0, 4).map(([name, value]) => <li key={name} className="usage-chart-tip-row"><span className="usage-chart-tip-label">{name}</span><span className="usage-chart-tip-value">{format(value)}</span></li>)}
-            {parts.length > 4 ? <li className="usage-chart-tip-more">+{parts.length - 4} more</li> : null}
-          </ul> : null}
-        </li>;
-      })}</ul> : <div className="usage-chart-tip-more">Nothing in this {unit}</div>}
-      {stacked && present(tip.bucket).length > 1 ? <div className="usage-chart-tip-row usage-chart-tip-total"><span className="usage-chart-tip-label">Total</span><span className="usage-chart-tip-value">{format(total(tip.bucket))}{suffix}</span></div> : null}
-      {references.map(item => <div key={item.label} className="usage-chart-tip-row usage-chart-tip-total"><span className="usage-chart-tip-label">{item.label}</span><span className="usage-chart-tip-value">{format(item.value)}{suffix}</span></div>)}
-      {tip.bucket.detail ? <div className="usage-chart-tip-more">{tip.bucket.detail}</div> : null}
+      <ChartPopoverDetails {...periodPopover(tip.bucket, drawn, { heading: heading(tip.bucket), additive, format, suffix, references, empty: `Nothing in this ${unit}`,
+        href: tip.pinned && seriesHref ? item => seriesHref(chartInspectionRange(tip.bucket, period, periodCount, display, cumulativeStart ?? averagedBuckets[0]?.date), item) : undefined })} />
     </ChartPopover> : null}
   </div>;
 }
