@@ -2,7 +2,7 @@ import {updateSliceValues,sliceValueVisible,sliceSelectionActive,sliceGroupCount
 import {eventGroup,type AgentEventLink} from './event-link-layout';
 import {ribbonOriginParts,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
 
-export const timelineVisibilitySections=['modes','events','tools','origins'] as const;
+export const timelineVisibilitySections=['modes','events','tools','origins','human'] as const;
 export type TimelineVisibilitySection=typeof timelineVisibilitySections[number];
 export type TimelineVisibilityKey=TimelineVisibilitySection|'sections';
 export type TimelineVisibility=Partial<Record<TimelineVisibilityKey,SliceSelection<string>>>;

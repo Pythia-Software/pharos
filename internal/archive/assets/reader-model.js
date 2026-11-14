@@ -405,6 +405,16 @@ function toolDurationEstimatePresentation(message){
   if(estimate.status!=='estimated')return null;
   return{label:`Estimated call-to-result span: ~${usageEstimateNumber(value.expected)} s*`,detail:`${usageEstimateNumber(value.lower)}–${usageEstimateNumber(value.upper)} s sensitivity range, including argument generation. Published tool assumptions; parallel calls can overlap. Following model work is separate.`};
 }
+// What the timeline's Turns row says about a turn on hover: the turn header's
+// own words (its number and who asked, the ask, and its counts).
+// A turn's activities, as its header and its hover card count them: every
+// event that is not a message, without the records the reader never shows.
+function turnActivities(turn){return(turn?.events||[]).filter(message=>message.kind!=='message'&&!transcriptUndisplayed(message))}
+function turnCardView(turn,index){
+  const events=turn?.events||[],count=(items,singular,plural)=>`${items.length} ${items.length===1?singular:plural}`,of=kind=>events.filter(message=>message.kind===kind);
+  return{title:`Turn ${index+1}${turn?.human?' · You':''}`,at:turn?.human?.created_at||events[0]?.created_at||null,prompt:shortText(messageSummary(turn?.human)||'Agent setup',160),
+    stats:[count(of('message'),'reply','replies'),count(turnActivities(turn),'activity','activities'),count(of('tool_call'),'tool call','tool calls'),count(of('delegation'),'sub-agent','sub-agents')]};
+}
 function turnSummaryData(conversation){
   return conversationGraph(conversationMessages(conversation)).turns.map(turn=>({
     human:turn.human,
@@ -846,6 +856,15 @@ function transcriptCategory(message,context){
   if(payload?.type==='token_usage'||message.kind==='metadata'&&(['token_count','token_usage_record','cost-state'].includes(value?.type)||['token_count','token_usage_record','cost-state'].includes(payload?.type)||payload?.type==='system'&&payload?.subtype==='thinking_tokens'))return'usage';
   return{edit:'edits',command:'commands',read:'reads',search:'reads',error:'events',run:'events',context:'events'}[toolCategory(message)]||'tools'
 }
+// Never shown in the reader: the token usage and cost records a harness
+// writes between messages, which the Key listed as Usage & quota › System
+// events › Event (token_usage payloads; metadata of type token_count,
+// token_usage_record or cost-state; Claude's system thinking_tokens). What
+// they hold is already shown, in the Turns · context bar and in each turn's
+// token summary, both of which still read them. They get no row, no Key
+// entry and no count, and Find leaves them out. Other System events, and a
+// usage record that is an error, stay.
+function transcriptUndisplayed(message){return message?.kind!=='message'&&transcriptCategory(message,{})==='usage'&&toolCategory(message)==='run'}
 // The reader's grouping of normalized events: results paired to their calls,
 // each turn's final reply, and each event's category path (its own category,
 // then those of the sub-agents holding it). A paired result takes its call's
@@ -869,7 +888,7 @@ function findableText(message){return message.findableText??=message.kind==='mes
 // count only when output is searched.
 function transcriptFind(messages,{pattern,shown,output,hiddenTagOf}){
   const structure=transcriptStructure(messages),kinds=new Set(),tags=new Set();let visible=0,hidden=0;
-  for(const message of messages){if(structure.consumed.has(message)&&!output||!pattern.test(findableText(message)))continue;const missing=structure.pathOf(message).filter(key=>!shown.has(key)),missingTags=hiddenTagOf?.(message)||[];if(missing.length||missingTags.length){hidden++;missing.forEach(key=>kinds.add(key));missingTags.forEach(tag=>tags.add(tag))}else visible++}
+  for(const message of messages){if(structure.consumed.has(message)&&!output||transcriptUndisplayed(message)||!pattern.test(findableText(message)))continue;const missing=structure.pathOf(message).filter(key=>!shown.has(key)),missingTags=hiddenTagOf?.(message)||[];if(missing.length||missingTags.length){hidden++;missing.forEach(key=>kinds.add(key));missingTags.forEach(tag=>tags.add(tag))}else visible++}
   return{shown:visible,hidden,hidden_kinds:TRANSCRIPT_CATEGORIES.map(([key])=>key).filter(key=>kinds.has(key)),...(hiddenTagOf?{hidden_tags:[...tags]}:{})};
 }
 function transcriptFindPattern(term,regex,caseSensitive){return new RegExp(regex?term:term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),caseSensitive?'u':'iu')}
@@ -1048,9 +1067,181 @@ function eventsAtMark(events,mark){
   if(classes.includes('event-context')){const range=spans.context[span];return events.filter(event=>[...event.subject,...event.response].some(item=>same(item,range)))}
   const range=spans.sentences[span];return events.filter(event=>same(event.sentence,range));
 }
+// Engagement labels (engagement.go, engagementAttacher): spans of what a
+// person typed, each with a label of one dimension (label "bounds.scope" is
+// dimension "bounds") and the model's score. Ranges are UTF-16 offsets of the
+// message's stored text, so they apply only where the reader shows that text
+// unchanged. The reader underlines each span in its dimension's style; a
+// dimension's style is its slot. The known dimensions keep this order, and
+// one the reader has not met takes a slot by its name.
+const ENGAGEMENT_DIMENSIONS=['intent','grounding','bounds','acceptance','rights','evaluation','inquiry','authorship','register'],ENGAGEMENT_SLOTS=9;
+function engagementSlot(dimension){
+  const known=ENGAGEMENT_DIMENSIONS.indexOf(dimension);if(known>=0)return known;
+  let hash=0;for(const unit of String(dimension))hash=(hash*31+unit.charCodeAt(0))>>>0;return hash%ENGAGEMENT_SLOTS;
+}
+// What the page calls each dimension: one word, each with its own first
+// letter (the letter is its mark on the timeline). Display only: labels,
+// stored keys and the API keep the model's ids (acceptance.*, rights.*, ...).
+const ENGAGEMENT_DIMENSION_NAMES={intent:'Intent',grounding:'Grounding',bounds:'Bounds',acceptance:'Verification',rights:'Delegation',evaluation:'Evaluation',inquiry:'Questions',authorship:'Authorship',register:'Tone'};
+function engagementDimensionName(dimension){return ENGAGEMENT_DIMENSION_NAMES[dimension]||engagementName(dimension)}
+// Labels the page never shows: no underline, popover row, Key chip or
+// timeline marker. The pass still computes and stores them, and the API
+// still returns them (register.filler will tell typed from dictated text).
+const ENGAGEMENT_UNDISPLAYED=new Set(['register.filler']);
+function engagementName(id){const words=String(id??'').replace(/[._-]+/g,' ').trim();return words?words[0].toUpperCase()+words.slice(1):''}
+// The page shows a label only when the model's score reaches
+// ENGAGEMENT_MIN_SCORE; the pass stores more (engagement.go keeps 0.5 and
+// up), so this one number sets what underlines, popovers, the Key and the
+// timeline all show.
+const ENGAGEMENT_MIN_SCORE=0.7;
+const ENGAGEMENT_WORD=/[\p{L}\p{N}\p{M}_'\u2019]/u;
+// The word around text[at] within typed text ([start,end), or null between
+// words): the model labels word pieces, so a span can start or stop inside a
+// word. typed(at) says whether the person typed that character.
+function engagementWordAt(text,at,typed=()=>true){
+  const word=index=>{
+    if(index<0||index>=text.length||!typed(index))return false;
+    const unit=text.charCodeAt(index),low=unit>=0xDC00&&unit<=0xDFFF&&index>0;
+    return ENGAGEMENT_WORD.test(String.fromCodePoint(text.codePointAt(low?index-1:index)));
+  };
+  if(!word(at))return null;
+  let start=at,end=at+1;while(word(start-1))start--;while(word(end))end++;
+  return[start,end];
+}
+// A span as the page draws it: without the blanks around it, each edge that
+// falls inside a word moved to the nearer end of that word (outward on a
+// tie), and null when it is only part of one word or nothing is left.
+function engagementSnap(text,start,end,typed=()=>true){
+  const trim=()=>{while(start<end&&/\s/.test(text[start]))start++;while(end>start&&/\s/.test(text[end-1]))end--;return start<end};
+  if(!trim())return null;
+  const first=engagementWordAt(text,start,typed),last=engagementWordAt(text,end-1,typed);
+  if(first&&last&&first[0]===last[0]&&(start>first[0]||end<first[1]))return null;
+  if(first&&start>first[0])start=start-first[0]<=first[1]-start?first[0]:first[1];
+  if(last&&end<last[1])end=last[1]-end<=end-last[0]?last[1]:last[0];
+  return trim()?[start,end]:null;
+}
+function messageEngagementView(message,text=displayText(message),writing=humanWritingMask(message,text),min=ENGAGEMENT_MIN_SCORE){
+  const spans=message?.engagement;if(message?.role!=='user'||!Array.isArray(spans)||!spans.length||text!==String(message.text??'')||!writing.includes('1'))return null;
+  const typed=at=>writing[at]==='1',view=[];
+  for(const span of spans){
+    if(!(span&&typeof span.label==='string'&&span.label&&!ENGAGEMENT_UNDISPLAYED.has(span.label)&&Number.isInteger(span.start)&&Number.isInteger(span.end)&&span.start>=0&&span.start<span.end&&span.end<=text.length))continue;
+    const score=typeof span.score==='number'?span.score:null;if(score!==null&&score<min)continue;
+    const range=engagementSnap(text,span.start,span.end,typed);if(!range||!writing.slice(range[0],range[1]).includes('1'))continue;
+    const dimension=span.dimension||span.label.split('.')[0],rest=span.label.startsWith(dimension+'.')?span.label.slice(dimension.length+1):span.label,slot=engagementSlot(dimension);
+    view.push({label:span.label,dimension,slot,className:'eng-slot-'+slot,name:engagementName(rest),dimensionName:engagementDimensionName(dimension),score,start:range[0],end:range[1]});
+  }
+  return view.length?view:null;
+}
+// The timeline's Human events: one marker for each annotation (a displayed
+// span) in a person's message, in text order. position is where it starts in
+// the message (0 to 1), text what it covers; className is its dimension's
+// slot, as in the Key, and title its label as the popover names it.
+function engagementTimeline(messages){
+  return(messages||[]).flatMap(message=>{
+    const view=messageEngagementView(message);if(!view)return[];
+    const text=String(message.text??''),length=Math.max(1,text.length);
+    return view.map((span,index)=>({span,index})).sort((a,b)=>a.span.start-b.span.start||a.span.slot-b.span.slot||a.index-b.index).map(({span,index})=>({id:message.id+':'+index,message_id:message.id,slot:span.slot,className:span.className,dimension:span.dimension,name:span.dimensionName,
+      label:span.label,labelName:span.name||span.dimensionName,title:span.name&&span.name!==span.dimensionName?`${span.dimensionName} · ${span.name}`:span.dimensionName,score:span.score,start:span.start,end:span.end,position:span.start/length,text:shortText(text.slice(span.start,span.end),180)}));
+  });
+}
+// The Key hides engagement by dimension: a key is engagement:<slot class>,
+// and shown (a set of keys; null is all) says which dimensions are on.
+function engagementShown(spans,shown=null){return(spans||[]).filter(span=>!shown||shown.has('engagement:'+span.className))}
+// The marks of a card an annotation covers: the eng-at-N class of each
+// segment within [start,end).
+function engagementSpanMarks(segments,start,end){
+  return(segments||[]).flatMap((segment,index)=>segment.start>=start&&segment.end<=end?['eng-at-'+index]:[]);
+}
+// The stretches of text under one set of spans, in text order: where spans
+// overlap, each stretch lists the spans (indexes into view) covering it.
+function engagementSegments(view){
+  const cuts=[...new Set((view||[]).flatMap(span=>[span.start,span.end]))].sort((a,b)=>a-b),segments=[];
+  for(let at=0;at+1<cuts.length;at++){
+    const start=cuts[at],end=cuts[at+1],spans=[];view.forEach((span,index)=>{if(span.start<=start&&span.end>=end)spans.push(index)});
+    if(spans.length)segments.push({start,end,spans});
+  }
+  return segments;
+}
+// engagementMask overlays the segments on mask (a flag per character), only
+// over human writing ('1'): text the person did not type is never marked.
+// Each segment has its own flag, so Markdown keeps it a mark of its own whose
+// class names it (eng-at-N).
+const ENGAGEMENT_FLAG_BASE=0xA000,ENGAGEMENT_FLAG_SPANS=4000;
+function engagementMask(text,view,mask=''){
+  if(!view?.length||!mask.includes('1'))return mask;
+  const flags=Array.from({length:text.length},(_,index)=>mask[index]||'0');
+  engagementSegments(view).slice(0,ENGAGEMENT_FLAG_SPANS).forEach((segment,index)=>{const flag=String.fromCharCode(ENGAGEMENT_FLAG_BASE+index);for(let at=segment.start;at<segment.end&&at<flags.length;at++)if(flags[at]==='1')flags[at]=flag});
+  return flags.join('');
+}
+function engagementFlag(flag){const code=String(flag||'').charCodeAt(0)-ENGAGEMENT_FLAG_BASE;return code>=0&&code<ENGAGEMENT_FLAG_SPANS}
+// The spans under a mark, by the segment its class names.
+function engagementAtMark(view,segments,className){
+  const at=String(className??'').split(/\s+/).find(name=>/^eng-at-\d+$/.test(name)),segment=at?segments?.[Number(at.slice(7))]:null;
+  return segment?segment.spans.map(index=>view[index]):[];
+}
+// One underline per dimension among spans whose dimensions are on, in slot
+// order, each with the best score of its spans.
+function engagementLayers(spans,shown=null){
+  const layers=new Map();
+  for(const span of engagementShown(spans,shown)){const layer=layers.get(span.className);if(!layer)layers.set(span.className,{slot:span.slot,className:span.className,dimension:span.dimension,dimensionName:span.dimensionName,score:span.score??0});else layer.score=Math.max(layer.score,span.score??0)}
+  return [...layers.values()].sort((a,b)=>a.slot-b.slot);
+}
+// A stretch of text draws at most ENGAGEMENT_STACK underlines: more run into
+// the line below and leave most sentences under a thicket. Of the layers
+// (engagementLayers, already without dimensions the Key hides), the
+// best-scoring are drawn, a lower slot winning a tie; the popover still lists
+// every label, and hiding a dimension in the Key lets the next one show.
+const ENGAGEMENT_STACK=2;
+function engagementDrawn(layers,limit=ENGAGEMENT_STACK){
+  return new Set([...(layers||[])].sort((a,b)=>(b.score??0)-(a.score??0)||a.slot-b.slot).slice(0,limit).map(layer=>layer.className));
+}
+// The text of one annotation, from its marks in reading order: each part is
+// a mark's text and the text lying between it and the mark before (gap).
+// Marks that touch join as they are; anything between them (a pasted block,
+// a chip) becomes one space, so the copy holds only what the person typed.
+function engagementCopyText(parts){
+  let text='';
+  for(const part of parts||[]){const next=String(part?.text??'');if(!next)continue;text=text&&part.gap?text.replace(/\s+$/,'')+' '+next.replace(/^\s+/,''):text+next}
+  return text.trim();
+}
+// What a mark's popover lists: each label once with its best score, the
+// likeliest first, leaving out dimensions that are switched off. A row keeps
+// the range of the annotation it stands for, which is what its copy button
+// copies (engagementSpanMarks, engagementCopyText).
+function engagementTipView(spans,shown=null){
+  const rows=new Map();
+  for(const span of engagementShown(spans,shown)){
+    const seen=rows.get(span.label);if(!seen||(span.score??0)>(seen.score??0))rows.set(span.label,{label:span.label,title:span.name&&span.name!==span.dimensionName?`${span.dimensionName} · ${span.name}`:span.dimensionName,className:span.className,score:span.score,start:span.start,end:span.end});
+  }
+  return [...rows.values()].sort((a,b)=>(b.score??0)-(a.score??0)||a.label.localeCompare(b.label));
+}
+// What lights up while the mark named by className is hovered: every
+// annotation (one span of view) over that stretch that the popover lists
+// (shown as in engagementTipView; the two-underline cap does not matter), end
+// to end. Each entry is a segment and the dimension slots to tint it with,
+// so where two such annotations overlap the segment carries both.
+function engagementHoverTints(view,segments,className,shown=null){
+  const at=String(className??'').split(/\s+/).find(name=>/^eng-at-\d+$/.test(name)),hovered=at?segments?.[Number(at.slice(7))]:null;if(!hovered)return[];
+  const lit=new Set(hovered.spans.filter(index=>!shown||shown.has('engagement:'+view[index].className)));
+  return segments.flatMap((segment,index)=>{const slots=[...new Set(segment.spans.filter(span=>lit.has(span)).map(span=>view[span].slot))].sort((a,b)=>a-b);return slots.length?[{segment:index,slots}]:[]});
+}
+// Human-writing marks are numbered so one can be hidden on its own. Marks
+// that engagement splits out of one stretch of writing keep that stretch's
+// number, so a stretch has the same number with or without engagement and a
+// saved hide (reader_highlight_hidden) stays on its text: a mark that
+// directly follows the last (joined) shares its number when either is an
+// engagement mark and both are plain writing or both are pieces of the same
+// event target.
+function writingMarkIndexes(marks){
+  const names=mark=>String(mark?.className??'').split(/\s+/),has=(mark,name)=>names(mark).includes(name),target=mark=>names(mark).find(name=>/^event-target-at-\d+$/.test(name))??null;let index=-1;
+  // Two marks side by side are one stretch when engagement alone divides them: both plain writing, or both pieces of the same target.
+  return marks.map((mark,at)=>{const last=marks[at-1];if(!(at&&mark.joined&&(has(mark,'engagement')||has(last,'engagement'))&&target(mark)===target(last)))index++;return index});
+}
 const MARK_CLASSES={'1':'human-written','2':'labeled-text'};
 function markClass(flag){
   if(MARK_CLASSES[flag])return MARK_CLASSES[flag];
+  if(engagementFlag(flag))return `human-written engagement eng-at-${flag.charCodeAt(0)-ENGAGEMENT_FLAG_BASE}`;
+  const both=flag.charCodeAt(0)-EVENT_TARGET_ENGAGEMENT_BASE;if(both>=0&&both<EVENT_TARGET_ENGAGEMENT_TARGETS*EVENT_TARGET_ENGAGEMENT_SEGMENTS)return `event-target event-target-at-${Math.floor(both/EVENT_TARGET_ENGAGEMENT_SEGMENTS)} human-written engagement eng-at-${both%EVENT_TARGET_ENGAGEMENT_SEGMENTS}`;
   const target=flag.charCodeAt(0)-EVENT_TARGET_BASE;if(target>=0&&target<EVENT_TARGET_SPANS*2)return `event-target event-target-at-${target>>1}`+(target&1?' human-written':'');
   const code=flag.charCodeAt(0)-EVENT_FLAG_BASE;if(!(code>=0&&code<EVENT_FLAG_SPANS*8))return '';
   const span=code>>3,group=code&7;return group===EVENT_CONTEXT_GROUP?`event-context event-at-${span}`:`agent-event ${eventGroupClass(EVENT_GROUPS[group]?.[0])} event-at-${span}`;
@@ -1100,12 +1291,27 @@ function eventTargetSpans(text,links){
 }
 // eventTargetMask paints target spans over mask (see eventMask): one flag per
 // span, keeping whether the text under it was the person's writing, so a
-// target in a prompt stays marked as human-written too.
+// target in a prompt stays marked as human-written too. Where a target lies
+// over an engagement segment (engagementMask) the flag names both, so the
+// text is cut at the boundaries of either and each piece is a mark carrying
+// the target's classes and the segment's (eng-at-N): an annotation a target
+// splits still tints and copies whole, by its segments. Past the first
+// EVENT_TARGET_ENGAGEMENT_TARGETS targets or SEGMENTS segments of a message
+// the target alone is marked.
 const EVENT_TARGET_BASE=0xFA00,EVENT_TARGET_SPANS=400;
+const EVENT_TARGET_ENGAGEMENT_BASE=0x4000,EVENT_TARGET_ENGAGEMENT_TARGETS=32,EVENT_TARGET_ENGAGEMENT_SEGMENTS=512;
+// The engagement segment a flag names, alone or under a target; -1 for none.
+function engagementFlagSegment(flag){
+  const code=String(flag||'').charCodeAt(0);if(engagementFlag(flag))return code-ENGAGEMENT_FLAG_BASE;
+  const both=code-EVENT_TARGET_ENGAGEMENT_BASE;return both>=0&&both<EVENT_TARGET_ENGAGEMENT_TARGETS*EVENT_TARGET_ENGAGEMENT_SEGMENTS?both%EVENT_TARGET_ENGAGEMENT_SEGMENTS:-1;
+}
 function eventTargetMask(text,spans,mask=''){
   if(!spans?.length)return mask;
   const flags=Array.from({length:text.length},(_,index)=>mask[index]||'0');
-  spans.slice(0,EVENT_TARGET_SPANS).forEach((span,index)=>{for(let at=span.range[0];at<span.range[1]&&at<flags.length;at++)flags[at]=String.fromCharCode(EVENT_TARGET_BASE+index*2+(flags[at]==='1'?1:0))});
+  spans.slice(0,EVENT_TARGET_SPANS).forEach((span,index)=>{for(let at=span.range[0];at<span.range[1]&&at<flags.length;at++){
+    const segment=engagementFlagSegment(flags[at]),written=flags[at]==='1'||segment>=0||(flags[at].charCodeAt(0)-EVENT_TARGET_BASE>=0&&flags[at].charCodeAt(0)-EVENT_TARGET_BASE<EVENT_TARGET_SPANS*2&&(flags[at].charCodeAt(0)-EVENT_TARGET_BASE)%2===1);
+    flags[at]=String.fromCharCode(segment>=0&&segment<EVENT_TARGET_ENGAGEMENT_SEGMENTS&&index<EVENT_TARGET_ENGAGEMENT_TARGETS?EVENT_TARGET_ENGAGEMENT_BASE+index*EVENT_TARGET_ENGAGEMENT_SEGMENTS+segment:EVENT_TARGET_BASE+index*2+(written?1:0));
+  }});
   return flags.join('');
 }
 // The other end of a link: from an observation to its target, and back.
@@ -1122,6 +1328,7 @@ function eventLinkEnd(links,id,from){
 // cover the same text, the label's hue wins.
 const READER_HIGHLIGHTS=[
   {id:'writing',field:'reader_writing',pref:'pharos-reader-writing',fallback:true,label:'Human writing',title:'Text a person typed or dictated. Pasted, quoted, templated and re-sent text stays plain.'},
+  {id:'engagement',field:'reader_engagement',pref:'pharos-reader-engagement',fallback:true,label:'Engagement',title:'How the person works with the agent, read from what they typed (span classifier, preview): each span is underlined in its dimension\'s style. Hover an underlined span for its labels.'},
   {id:'events',field:'reader_events',pref:'pharos-reader-events',fallback:true,label:'Agent events',title:'Sentences where an agent hit friction, learned something or made a choice you may not see (sentence classifier). Hover a highlighted sentence for its events.'},
   {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:true,label:'Message labels',title:'Tint each message card by what it does (message classifier). Hover the card for its labels.'}];
 // The highlights a conversation offers, in READER_HIGHLIGHTS order: whether
@@ -1134,6 +1341,10 @@ function readerHighlightOptions(conversation,messages,taxonomy=[]){
   const options=[];
   for(const option of READER_HIGHLIGHTS){
     if(option.id==='writing'){if(messages.some(hasHumanWriting))options.push({...option,available:true,note:'',legend:[]});continue}
+    if(option.id==='engagement'){const summary=conversation?.engagement;if(!summary)continue;
+      const layers=engagementLayers(messages.flatMap(message=>messageEngagementView(message)||[]));
+      options.push({...option,available:layers.length>0,title:layers.length?option.title:'No engagement labels found in what was typed in this conversation',note:summary.pending?'Waiting to be read again after a change':'',
+        legend:layers.map(layer=>({name:layer.dimensionName,className:layer.className}))});continue}
     if(option.id==='events'){const summary=conversation?.agent_events;if(!summary)continue;
       const views=messages.map(message=>messageEventView(message)).filter(Boolean),count=views.reduce((sum,view)=>sum+view.length,0),groups=new Set(views.flat().map(event=>event.group));
       options.push({...option,available:count>0,title:count?option.title:'No agent events found in this conversation',note:summary.pending?'Waiting to be rebuilt for changed transcripts or session evidence; which messages these belong to may change':'',
@@ -1150,7 +1361,7 @@ const READER_KEY_PRESETS=[
   {id:'last',label:'Last',note:'Restore your last selection of content, timeline and highlights.'},
   {id:'all',label:'All',note:'Show all content, the full timeline and all text highlighting.',level:'all',highlights:true,timeline:true},
   {id:'content',label:'Content only',note:'Show all content. Hide the timeline and all text highlighting.',level:'all',highlights:false,timeline:false},
-  {id:'quiet',label:'Quiet',note:'Show the timeline, text highlighting and all content except usage and quota checkpoints.',level:'all-minus-usage',highlights:true,timeline:true}
+  {id:'quiet',label:'Quiet',note:'Show the timeline, text highlighting and all content except other usage and quota entries.',level:'all-minus-usage',highlights:true,timeline:true}
 ];
 function readerKeyPresetValues(id){
   const preset=READER_KEY_PRESETS.find(preset=>preset.id===id);if(!preset||id==='last')return null;

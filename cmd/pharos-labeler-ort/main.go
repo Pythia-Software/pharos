@@ -24,7 +24,7 @@ import (
 const (
 	workerName = "pharos-labeler-ort"
 	// workerVersion changes with any change to this worker's behaviour.
-	workerVersion = "3"
+	workerVersion = "4"
 )
 
 // runtimeLibraryName is the runtime library's file name on this system.

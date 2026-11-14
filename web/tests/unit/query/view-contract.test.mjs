@@ -43,7 +43,7 @@ test('semantic detail targets preserve typed identities, reject ambiguous paths,
 });
 
 test('host view codecs preserve explicit false, empty values, ordered IDs and relative intent',()=>{
- for(const key of ['reader_writing','reader_events','reader_labels']){
+ for(const key of ['reader_writing','reader_engagement','reader_events','reader_labels']){
   assert.equal(fieldsForPage('work')[key].default,true,key);
   assert.equal(parseViewValue(viewFields[key],encodeViewValue(viewFields[key],false)),false,key);
  }

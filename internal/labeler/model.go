@@ -254,8 +254,10 @@ const (
 
 // InputContracts are the input contracts this build implements.
 var InputContracts = map[string]InputContract{
-	InputContractIDsAttention:     {Inputs: DefaultInputs, PadMultiple: PadMultiple},
-	InputContractIDsAttentionPool: {Inputs: append(slices.Clone(DefaultInputs), InputSpec{Name: "pooling_mask", Role: RolePool}), PadMultiple: PadMultiple},
+	InputContractIDsAttention: {Inputs: DefaultInputs, PadMultiple: PadMultiple},
+	// Token labels (tokenlabels.go): the same inputs; the output is per token.
+	InputContractIDsAttentionTokenLabels: {Inputs: DefaultInputs, PadMultiple: PadMultiple},
+	InputContractIDsAttentionPool:        {Inputs: append(slices.Clone(DefaultInputs), InputSpec{Name: "pooling_mask", Role: RolePool}), PadMultiple: PadMultiple},
 	InputContractIDsAttentionPoolSegments: {Inputs: append(slices.Clone(DefaultInputs), InputSpec{Name: "pooling_mask", Role: RolePool},
 		InputSpec{Name: "segment_ids", Role: RoleSegment}), PadMultiple: PadMultiple},
 }

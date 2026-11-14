@@ -551,6 +551,12 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 	} else {
 		disabled = append(disabled, "agent_events")
 	}
+	// Engagement labels (a preview, docs/engagement-labels.md) come last.
+	if settings := s.Config().Engagement; settings.Enabled {
+		stages = append(stages, deferredStage{"engagement", func(ctx context.Context) error { return s.chainEngagement(ctx, s.Config().Labels, settings) }})
+	} else {
+		disabled = append(disabled, "engagement")
+	}
 	if s.work != nil {
 		// Population execution: the chain submits demand in this order and
 		// the runner executes it (work_maintenance.go). The stages' own
