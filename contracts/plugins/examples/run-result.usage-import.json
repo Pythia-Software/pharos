@@ -1,0 +1,22 @@
+{
+  "contract": "pharos-run/1",
+  "status": "complete",
+  "message": "161,232 usage records from 2 datasets (140,113 shared)",
+  "cursor": {
+    "datasets": {
+      "full-20261027": {
+        "rowid": 145022
+      },
+      "dataset-chickadee": {
+        "rowid": 161232
+      }
+    }
+  },
+  "drops": [
+    {
+      "dir": "usage",
+      "kind": "usage-records/1",
+      "namespace": "pharos-labeling"
+    }
+  ]
+}

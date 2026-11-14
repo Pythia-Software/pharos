@@ -1,0 +1,20 @@
+{
+  "dataset": "usage/1",
+  "as_of": "2026-10-30T15:00:00Z",
+  "groups": [
+    {
+      "period": "2026-10-29T00:00:00-06:00",
+      "keys": {
+        "provider": "anthropic",
+        "model": "claude-opus-5-5",
+        "repository_name": "h_6c1e0f2d"
+      },
+      "values": {
+        "total_tokens": 1820455,
+        "cost_usd": 41.87
+      },
+      "fingerprint": "sha256:e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4"
+    }
+  ],
+  "more": false
+}

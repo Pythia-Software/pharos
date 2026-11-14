@@ -1,0 +1,385 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.pythia.software/contracts/plugins/common.schema.json",
+  "title": "Definitions shared by the Pharos plugin contracts",
+  "$defs": {
+    "timestamp": {
+      "description": "RFC 3339 date and time, UTC recommended.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "duration": {
+      "description": "A positive whole number of seconds, minutes, hours or days: 30s, 10m, 6h, 1d.",
+      "type": "string",
+      "pattern": "^[1-9][0-9]*(s|m|h|d)$"
+    },
+    "byte_size": {
+      "description": "Bytes, as an integer or with a binary unit: 52428800 or \"50MiB\".",
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(B|KiB|MiB|GiB)$"
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "plugin_id": {
+      "description": "Reverse-DNS identifier owned by the publisher, or local.<name> for a plugin made on this library.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(\\.[a-z0-9][a-z0-9-]*)+$",
+      "maxLength": 128
+    },
+    "version": {
+      "description": "Semantic version of a plugin.",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
+    },
+    "dataset": {
+      "description": "A versioned export dataset, such as usage/1. A published version never changes.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*/[1-9][0-9]*$"
+    },
+    "field_type": {
+      "description": "What a field holds. In aggregate mode, min and max take only number and time fields, sum and avg only numbers, and a text or list field may appear only as a group key the dataset allows.",
+      "enum": [
+        "text",
+        "number",
+        "time",
+        "list"
+      ]
+    },
+    "opaque_id": {
+      "description": "An identifier Pharos derives for one receiver. It names the same item every time for that receiver and matches nothing at another receiver.",
+      "type": "string",
+      "pattern": "^[a-z]+_[0-9A-Za-z_-]{6,}$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9A-Za-z_-]+$"
+    },
+    "sender_id": {
+      "type": "string",
+      "pattern": "^snd_[0-9A-Za-z]+$"
+    },
+    "plugin_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/plugin_id"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        }
+      }
+    },
+    "cursor": {
+      "description": "The plugin's own value, any JSON up to 64 KiB serialized. Pharos stores it and returns it on the next run; it never reads it."
+    },
+    "change_token": {
+      "description": "Opaque position in Pharos's change feed for one plugin.",
+      "type": "string",
+      "pattern": "^chg_[0-9A-Za-z]+$"
+    },
+    "transcript_kind": {
+      "description": "Native transcript formats an importer can drop.",
+      "enum": [
+        "claude",
+        "codex",
+        "canonical",
+        "chatgpt-export"
+      ]
+    },
+    "drop_kind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/transcript_kind"
+        },
+        {
+          "const": "usage-records/1"
+        }
+      ]
+    },
+    "namespace": {
+      "description": "Deduplication scope for usage records. A namespace belongs to the plugin that declares it: records are unique by (plugin ID, namespace, id), so no other plugin can overwrite them.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$"
+    },
+    "machine": {
+      "description": "A machine that a drop came from. key is stable for that machine and user within the plugin.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "label",
+        "os"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "os": {
+          "enum": [
+            "linux",
+            "windows",
+            "darwin",
+            "other"
+          ]
+        },
+        "machine_id": {
+          "description": "Optional hardware or OS identifier, such as /etc/machine-id, used only as a hint for the machine registry.",
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+    "drop": {
+      "description": "One folder of output_dir (or of a bundle). Transcript drops mirror the source's layout under root; a usage drop holds usage-records/1 JSON Lines files.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dir",
+        "kind"
+      ],
+      "properties": {
+        "dir": {
+          "description": "Relative, slash-separated path under output_dir. No '..' or leading '/'.",
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\\\]+$",
+          "maxLength": 512
+        },
+        "kind": {
+          "$ref": "#/$defs/drop_kind"
+        },
+        "machine": {
+          "description": "key of a machine declared beside this drop.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Capture source name; defaults to kind.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+        },
+        "root": {
+          "description": "The original absolute path on that machine, POSIX or Windows style. A file's original path is root joined with its path under dir.",
+          "type": "string",
+          "minLength": 1
+        },
+        "namespace": {
+          "$ref": "#/$defs/namespace"
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "usage-records/1"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "namespace"
+        ],
+        "not": {
+          "required": [
+            "root"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "machine",
+          "root"
+        ],
+        "not": {
+          "required": [
+            "namespace"
+          ]
+        }
+      }
+    },
+    "tokens": {
+      "description": "Token counts by category, already normalized: input that was neither read from nor written to a cache, cache reads, cache writes by lifetime, output, reasoning output, and anything the source could not classify.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "uncached_input": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_read": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_write_5m": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_write_1h": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reasoning": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unclassified": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "error": {
+      "description": "Every refusal names what was wrong, so a script's author can fix it. Grant checks run before existence checks, so not_found never distinguishes a private item from an absent one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error"
+      ],
+      "properties": {
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "enum": [
+                "unauthorized",
+                "token_expired",
+                "dataset_not_granted",
+                "field_not_granted",
+                "mode_not_granted",
+                "group_key_not_allowed",
+                "text_not_granted",
+                "export_not_granted",
+                "limit_reached",
+                "invalid_request",
+                "not_found",
+                "cursor_expired",
+                "conflict",
+                "batch_conflict",
+                "superseded",
+                "forked",
+                "busy"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "dataset": {
+              "$ref": "#/$defs/dataset"
+            },
+            "field": {
+              "type": "string"
+            },
+            "limit": {
+              "enum": [
+                "requests",
+                "rows",
+                "served_bytes",
+                "runtime",
+                "page_size",
+                "query_time"
+              ]
+            },
+            "retry_after_seconds": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "item_version": {
+      "description": "When Pharos served this state of an item: milliseconds since 1970 times 1000, plus a counter, never less than any version served before for the installation. Pharos never goes below its own stored high-water mark or the receiver's max_version from hello, so it moves only forward, including after a library is restored onto a Mac whose clock is behind, and says nothing about other items or about private activity.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "library_instance": {
+      "description": "The library's writable instance, from its library descriptor (pharos-library.json). Pharos refuses to open a copied library until Recover library gives it a new identity, and Recover library (which also restores backups) always mints a new instance, so a receiver can tell a rolled-back or duplicated sender from lost data. Opening one library from several Macs keeps its instance.",
+      "type": "string",
+      "pattern": "^[0-9A-Za-z_-]{8,64}$"
+    },
+    "takeover": {
+      "description": "Names one takeover: the full send with which a restored or copied library replaces what a receiver holds from the instance it came from. It spans as many runs as the limits require.",
+      "type": "string",
+      "pattern": "^tko_[0-9A-Za-z_-]{6,}$"
+    },
+    "as_of": {
+      "description": "The export cutoff: now minus the library's export delay. Activity after it is not exported yet.",
+      "$ref": "#/$defs/timestamp"
+    },
+    "retraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "id",
+        "version"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/dataset"
+        },
+        "id": {
+          "$ref": "#/$defs/opaque_id"
+        },
+        "version": {
+          "description": "Supersedes upserts of this item with lower versions.",
+          "$ref": "#/$defs/item_version"
+        }
+      }
+    },
+    "restatement": {
+      "description": "A time range of a dataset whose aggregates changed. Re-send every period of every series that overlaps it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "from",
+        "to"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/dataset"
+        },
+        "from": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "to": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.pythia.software/contracts/plugins/report.schema.json",
+  "title": "Report batch (pharos-report/1)",
+  "description": "One batch of a run's delivery to a receiver: row upserts, whole aggregate periods, and retractions, each keyed by dataset. A receiver applies a run's batches together at commit. Versions only move forward: an upsert or period older than what the receiver holds, or than a retraction, is ignored.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "sender_id",
+    "library_instance",
+    "plugin",
+    "permissions_hash",
+    "run_id",
+    "batch",
+    "as_of",
+    "generated_at"
+  ],
+  "properties": {
+    "contract": {
+      "const": "pharos-report/1"
+    },
+    "sender_id": {
+      "$ref": "common.schema.json#/$defs/sender_id"
+    },
+    "plugin": {
+      "$ref": "common.schema.json#/$defs/plugin_ref"
+    },
+    "permissions_hash": {
+      "$ref": "common.schema.json#/$defs/sha256"
+    },
+    "run_id": {
+      "$ref": "common.schema.json#/$defs/run_id"
+    },
+    "batch": {
+      "description": "1-based position in the run.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "generated_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "upserts": {
+      "description": "Rows, keyed by (dataset, opaque ID).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "dataset",
+          "id",
+          "version",
+          "data"
+        ],
+        "properties": {
+          "dataset": {
+            "$ref": "common.schema.json#/$defs/dataset"
+          },
+          "id": {
+            "$ref": "common.schema.json#/$defs/opaque_id"
+          },
+          "version": {
+            "$ref": "common.schema.json#/$defs/item_version"
+          },
+          "data": {
+            "description": "The row's granted fields, after redaction, named as in the dataset.",
+            "type": "object"
+          }
+        }
+      }
+    },
+    "periods": {
+      "description": "Aggregates. Each entry is the complete set of groups for one (series, period): it replaces every group the receiver holds for that key, so a group that no longer exists disappears. A restatement is the same thing sent again.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "dataset",
+          "series",
+          "period",
+          "version",
+          "groups"
+        ],
+        "properties": {
+          "dataset": {
+            "$ref": "common.schema.json#/$defs/dataset"
+          },
+          "series": {
+            "description": "The send's name in the manifest.",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$"
+          },
+          "period": {
+            "description": "Start of the period (the query's group.period), RFC 3339.",
+            "$ref": "common.schema.json#/$defs/timestamp"
+          },
+          "version": {
+            "$ref": "common.schema.json#/$defs/item_version"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "keys",
+                "fingerprint",
+                "values"
+              ],
+              "properties": {
+                "keys": {
+                  "description": "Group key values after redaction; {} for the period's total.",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "fingerprint": {
+                  "$ref": "common.schema.json#/$defs/sha256"
+                },
+                "values": {
+                  "description": "Summary values by ID.",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "retract": {
+      "description": "Items to delete, each one the receiver was given before.",
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/retraction"
+      }
+    },
+    "library_instance": {
+      "$ref": "common.schema.json#/$defs/library_instance"
+    },
+    "as_of": {
+      "$ref": "common.schema.json#/$defs/as_of"
+    }
+  }
+}
