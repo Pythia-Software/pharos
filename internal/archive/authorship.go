@@ -1291,11 +1291,25 @@ func (c *Catalog) refreshAuthorshipInContext(parent context.Context) bool {
 		if ctx == nil {
 			ctx = context.Background()
 		}
+		// The publish holds the classifier lease, so it counts as running:
+		// a pass that checked the flag and then met the lease would record
+		// a failure. While another pass runs, it publishes instead.
 		published := false
-		_ = c.withAuthorshipLease(func() (err error) {
-			_, published, err = c.publishIdleAuthorship(ctx, want)
-			return err
-		})
+		c.authorship.mu.Lock()
+		idle := !c.authorship.running
+		if idle {
+			c.authorship.running = true
+		}
+		c.authorship.mu.Unlock()
+		if idle {
+			_ = c.withAuthorshipLease(func() (err error) {
+				_, published, err = c.publishIdleAuthorship(ctx, want)
+				return err
+			})
+			c.authorship.mu.Lock()
+			c.authorship.running = false
+			c.authorship.mu.Unlock()
+		}
 		if published {
 			// As after a pass: writing that arrives while this process is
 			// still indexing gets its follow-up when the ingest ends.
