@@ -118,11 +118,12 @@ func TestResultCachePolicies(t *testing.T) {
 	for server.refreshResult(t.Context()) {
 	}
 	override(t, &resultReturnAfter, 0)
+	override(t, &resultSettle, 0)
 	if state, _ := ask(resultCached, "a", false); state != "fresh" {
 		t.Fatal(state)
 	}
 	stamp = "4"
-	server.sweepResults(t.Context())
+	server.sweepResults(t.Context(), time.Now())
 	before := builds
 	for server.refreshResult(t.Context()) {
 	}
@@ -144,7 +145,7 @@ func TestResultCachePolicies(t *testing.T) {
 	for server.refreshResult(t.Context()) {
 	}
 	before = builds
-	if server.sweepResults(t.Context()); server.refreshResult(t.Context()) || builds != before {
+	if server.sweepResults(t.Context(), time.Now()); server.refreshResult(t.Context()) || builds != before {
 		t.Fatalf("the sweep queued an entry that had only aged: %d builds", builds-before)
 	}
 	if state, build := ask(resultCached, "clock", true); state != "stale" || build != fmt.Sprint(before) {
@@ -156,6 +157,38 @@ func TestResultCachePolicies(t *testing.T) {
 	if state, build := ask(resultFresh, "clock", true); state != "live" || build != fmt.Sprint(before+2) {
 		t.Fatalf("a refresh of an aged clock entry answered %s from build %s", state, build)
 	}
+	// Data that keeps changing is not chased. The sweep queues what a change
+	// left behind only once the data has stayed the same for resultSettle,
+	// and each further change starts the wait again; an entry someone asks
+	// for meanwhile is rebuilt at once.
+	override(t, &resultSettle, time.Hour)
+	changed := time.Now()
+	swept := func(after time.Duration) int {
+		t.Helper()
+		server.sweepResults(t.Context(), changed.Add(after))
+		before := builds
+		for server.refreshResult(t.Context()) {
+		}
+		return builds - before
+	}
+	stamp = "5"
+	if n := swept(0); n != 0 {
+		t.Fatalf("the sweep rebuilt %d entries as soon as the data changed", n)
+	}
+	if state, _ := ask(resultCached, "a", false); state != "stale" || !server.refreshResult(t.Context()) {
+		t.Fatalf("an entry asked for while the data settles was %s and not rebuilt", state)
+	}
+	stamp = "6"
+	if n := swept(50*time.Minute) + swept(100*time.Minute); n != 0 {
+		t.Fatalf("the sweep rebuilt %d entries within the wait a second change started", n)
+	}
+	if n := swept(111 * time.Minute); n != 2 {
+		t.Fatalf("the sweep rebuilt %d entries once the data had settled, want the two returned to", n)
+	}
+	if n := swept(112 * time.Minute); n != 0 {
+		t.Fatalf("the sweep rebuilt %d entries that were current", n)
+	}
+	override(t, &resultSettle, 0)
 	// The file outlives the process, and another version's entries are not served.
 	_, stored := ask(resultCached, "a", false)
 	catalog.closeResults()
@@ -165,7 +198,7 @@ func TestResultCachePolicies(t *testing.T) {
 	expect("new version", resultCached, "b", "live", fmt.Sprint(builds+1))
 	// The sweep rebuilds the other version's entries, which no longer count
 	// as stale, so that they are ready before they are asked for.
-	server.sweepResults(t.Context())
+	server.sweepResults(t.Context(), time.Now())
 	for server.refreshResult(t.Context()) {
 	}
 	expect("rebuilt for the new version", resultCached, "a", "fresh", fmt.Sprint(builds))

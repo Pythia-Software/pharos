@@ -64,6 +64,16 @@ var (
 	// whose data has changed and nobody has asked for since.
 	resultRefreshPause = 250 * time.Millisecond
 	resultSweepEvery   = 2 * time.Minute
+	// resultSettle is how long the data behind an entry must have stayed the
+	// same before the sweep queues it. Every change to the catalog makes
+	// every entry stale, and rebuilding them all takes minutes of CPU, so a
+	// library that gains a few messages every few minutes would be rebuilt
+	// continuously for nobody: each round stale again before anyone saw it.
+	// The scheduled index runs every 15 minutes by default, so a wait that
+	// long holds off until an index has come and gone without writing
+	// anything, which is when a round of rebuilds will last. An entry
+	// someone asks for meanwhile does not wait (refreshSoon).
+	resultSettle = 15 * time.Minute
 	// resultBuildDeadline bounds one background refresh.
 	resultBuildDeadline = 2 * time.Minute
 	// resultChangeEvery is how often the refresher looks for a change to
@@ -154,10 +164,35 @@ type resultCache struct {
 	queued       map[resultKey]bool // true: in asked
 	wake         chan struct{}
 	stores       int
+	// settling is the stamp the sweep last read for each domain and scope,
+	// and when it first read that one (resultSettle).
+	settling map[[2]string]resultStampSeen
 	// missing holds requests whose build was abandoned before anything was
 	// stored (the browser gave up), for the refresher to build: without an
 	// entry there is nothing else to refresh from.
 	missing map[resultKey]*resultEntry
+}
+
+type resultStampSeen struct {
+	stamp string
+	since time.Time
+}
+
+// settled records that the sweep read stamp for a domain and scope at now,
+// and reports whether it has read the same one for resultSettle. A service
+// that has just started has seen nothing yet, so its first round waits too.
+func (cache *resultCache) settled(at [2]string, stamp string, now time.Time) bool {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	seen, known := cache.settling[at]
+	if !known || seen.stamp != stamp {
+		seen = resultStampSeen{stamp, now}
+		if cache.settling == nil {
+			cache.settling = map[[2]string]resultStampSeen{}
+		}
+		cache.settling[at] = seen
+	}
+	return now.Sub(seen.since) >= resultSettle
 }
 
 // resultMissingLimit bounds the abandoned requests remembered at once.
@@ -529,14 +564,15 @@ func (s *Server) refreshResult(ctx context.Context) bool {
 
 // sweepResults queues the entries asked for lately whose data has changed
 // since they were computed and that no request has queued: what a page will
-// want the next time it is opened.
-func (s *Server) sweepResults(ctx context.Context) {
+// want the next time it is opened. It waits for the data to settle first
+// (resultSettle), as of now.
+func (s *Server) sweepResults(ctx context.Context, now time.Time) {
 	cache := s.results()
 	if cache == nil {
 		return
 	}
 	rows, err := cache.db.QueryContext(ctx, `SELECT domain,key,version,scope,stamp FROM entries WHERE returned AND used_at>=? ORDER BY used_at DESC LIMIT 1000`,
-		time.Now().Add(-resultRefreshRecent).UnixMilli())
+		now.Add(-resultRefreshRecent).UnixMilli())
 	if err != nil {
 		return
 	}
@@ -548,7 +584,7 @@ func (s *Server) sweepResults(ctx context.Context) {
 		}
 	}
 	rows.Close()
-	stamps := map[[2]string]string{}
+	stamps, settled := map[[2]string]string{}, map[[2]string]bool{}
 	for _, e := range found {
 		d := resultDomains[e.domain]
 		if d == nil {
@@ -559,6 +595,10 @@ func (s *Server) sweepResults(ctx context.Context) {
 			if stamps[at], err = d.stamp(ctx, s, e.scope); err != nil {
 				return
 			}
+			settled[at] = cache.settled(at, stamps[at], now)
+		}
+		if !settled[at] {
+			continue
 		}
 		// An entry of another version is rebuilt too: its request is still
 		// good. One that has only aged (its window ends "now", and its data
@@ -680,7 +720,7 @@ func (s *Server) refreshResultsWhile(ctx context.Context, cache *resultCache, fr
 		case <-changed:
 			s.rebuildDerivedAfterChange(ctx, &follower, free)
 		case <-swept:
-			s.sweepResults(ctx)
+			s.sweepResults(ctx, time.Now())
 			sweep.Reset(resultSweepEvery)
 		}
 		for ctx.Err() == nil {

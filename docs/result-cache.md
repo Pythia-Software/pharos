@@ -78,6 +78,20 @@ again an hour or more after they were first stored). A filter tried once is
 stored, and refreshed if it is asked for again, but creates no standing
 background work.
 
+The sweep waits for the data to settle. It queues the entries of a scope only
+once that scope's stamp has been the same for 15 minutes (`resultSettle`), and
+every further change starts the wait again; a service that has just started
+waits the same time before its first round. Any write to a table behind the
+cached views makes every entry of its scope stale, and one round of rebuilds
+is minutes of CPU, nearly all of it (97% measured) to store the answer that
+was already there. Without the wait, a library gaining a few messages every
+few minutes was rebuilt continuously, each round stale before anyone saw it.
+Fifteen minutes is the default interval of the scheduled index: a round
+starts once an index has come and gone without writing anything, which is
+when its answers will last. This delays only work nobody asked for. An entry
+a request is answered with is queued at once, ahead of the sweep's, whether
+or not the data has settled.
+
 An entry that is stale only by age (a window ending now, over data that has
 not changed) is rebuilt when it is asked for and not before. Rebuilding it
 unasked only moves its window, which three times in four gives the same
@@ -239,4 +253,12 @@ Keep per-person or per-session state out of a domain unless it is part of
   them as the refresher rebuilds them.
 - The refresher does not make the work cheaper. After a change that touches
   every card, Home's entries take a few minutes to catch up, in the
-  background and only while the service is otherwise idle.
+  background, only while the service is otherwise idle, and only once the
+  data has been still for 15 minutes. A page opened before then draws the
+  stored answers as stale and has them rebuilt first.
+- A stamp is as wide as its scope: a write to any table behind the cached
+  views makes every entry of the scope stale, although most answers do not
+  read that table. Narrower stamps (per dataset, from the tables it reads)
+  would avoid most rebuilds, but a table left out of a dataset's list would
+  serve a wrong answer as fresh, so they wait for a checked declaration of
+  what each dataset reads.
