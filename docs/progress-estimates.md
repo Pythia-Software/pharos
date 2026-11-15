@@ -61,6 +61,9 @@ throughput bounds are separate from the whole-operation model:
   job type, provider, indexer version, rebuild versus update, stage, and
   measurement unit. Analysis stages share history across manual, capture,
   and background entry points. Samples outside one quarter to four times the current workload are excluded.
+  A new indexer version starts with no samples of its own, so until it has
+  three it reads the previous versions' history for the same provider, mode
+  and host, kept in a second row beside the exact one.
 - Once live speed is measurable it gets at least 75% of the weight, with the
   historical rate bounded to half to twice that speed. History loses its
   influence over the first thirty seconds of observed progress.

@@ -146,10 +146,35 @@ func TestMeasuredHistoryPersistsAndSeparatesWork(t *testing.T) {
 	if got := s.workTimings(workTimingKey("index", w)); len(got) != 0 {
 		t.Fatal("new extractor reused old timings")
 	}
+	// An index model names its extractor version between its provider and
+	// mode. A new version reads the previous one's stage history until it has
+	// its own, and never another provider's, mode's or host's data.
+	w.Model, w.Done, w.Total = "codex:codex-v1:changes", 100, 100
+	for range 3 {
+		s.recordWorkTiming("index", w, start.Add(50*time.Second))
+	}
+	w.Model = "codex:codex-v2:changes"
+	if got := s.stageTimings("index", w); len(got) != 3 || int(got[0].Seconds) != 50 {
+		t.Fatalf("a version change discarded the stage's history: %+v", got)
+	}
+	for range 3 {
+		s.recordWorkTiming("index", w, start.Add(20*time.Second))
+	}
+	if got := s.stageTimings("index", w); len(got) != 3 || int(got[0].Seconds) != 20 {
+		t.Fatalf("a version's own history did not replace the inherited one: %+v", got)
+	}
+	for _, model := range []string{"claude:codex-v2:changes", "codex:codex-v2:rebuild", "codex:codex-v2@offhost:changes"} {
+		w.Model = model
+		if got := s.stageTimings("index", w); len(got) != 0 {
+			t.Fatalf("%s borrowed another stage's history: %+v", model, got)
+		}
+	}
 	useHost(t, "another-host")
-	w.Model = "codex:v1"
-	if got := s.workTimings(workTimingKey("index", w)); len(got) != 0 {
-		t.Fatal("another Mac reused timings")
+	for _, model := range []string{"codex:v1", "codex:codex-v2:changes"} {
+		w.Model = model
+		if got := s.stageTimings("index", w); len(got) != 0 {
+			t.Fatal("another Mac reused timings")
+		}
 	}
 }
 

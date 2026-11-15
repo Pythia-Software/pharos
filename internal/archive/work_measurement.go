@@ -206,7 +206,7 @@ func (s *Server) observeWork(id, kind string, work activityWork, at time.Time) {
 	}
 	observation := s.estimator.observations[key]
 	if observation == nil {
-		observation = &progressObservation{history: s.workTimings(workTimingKey(defaultString(work.Kind, kind), work))}
+		observation = &progressObservation{history: s.stageTimings(defaultString(work.Kind, kind), work)}
 		s.estimator.observations[key] = observation
 	}
 	observation.estimate(work, at)

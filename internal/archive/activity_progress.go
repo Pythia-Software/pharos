@@ -92,6 +92,38 @@ func workTimingKey(kind string, work activityWork) string {
 	return activityTimingKey("work-v1:" + kind + ":" + work.Model + ":" + work.Phase + ":" + work.Unit)
 }
 
+// workTimingFamilyKey is the same stage without its model's version: the
+// provider and mode of an index model, as in "codex:*:changes", keeping the
+// marker of data read from another host. Other models ("analysis-v1",
+// "discovery-v1:codex") carry no version and have no family.
+func workTimingFamilyKey(kind string, work activityWork) string {
+	work = work.measured()
+	parts := strings.Split(work.Model, ":")
+	if len(parts) < 3 {
+		return ""
+	}
+	family := parts[0] + ":*"
+	if _, marker, found := strings.Cut(parts[len(parts)-2], "@"); found {
+		family += "@" + marker
+	}
+	return activityTimingKey("work-v1:" + kind + ":" + family + ":" + parts[len(parts)-1] + ":" + work.Phase + ":" + work.Unit)
+}
+
+// stageTimings is a stage's measured history. A new extractor or analysis
+// version starts with none of its own, so until it has three samples the
+// stage reads its family's, whose live pace then corrects it within seconds.
+func (s *Server) stageTimings(kind string, work activityWork) []workTiming {
+	history := s.workTimings(workTimingKey(kind, work))
+	if len(history) < 3 {
+		if family := workTimingFamilyKey(kind, work); family != "" {
+			if inherited := s.workTimings(family); len(inherited) >= 3 {
+				return inherited
+			}
+		}
+	}
+	return history
+}
+
 func activityTimingKey(kind string) string {
 	return "activity_durations:" + currentHost().ID + ":" + kind
 }
@@ -118,13 +150,19 @@ func (s *Server) recordWorkTiming(kind string, work activityWork, completed time
 	}
 	s.timingMu.Lock()
 	defer s.timingMu.Unlock()
-	key := workTimingKey(kind, work)
-	history := append(s.workTimings(key), workTiming{Units: work.Done, Seconds: seconds, Features: work.Features})
-	if len(history) > 20 {
-		history = history[len(history)-20:]
-	}
-	if data, err := json.Marshal(history); err == nil {
-		_ = setMeta(s.Catalog.DB, key, string(data))
+	// The family row is written beside the exact one, never instead of it:
+	// an older executable reads and writes only the exact key.
+	for _, key := range []string{workTimingKey(kind, work), workTimingFamilyKey(kind, work)} {
+		if key == "" {
+			continue
+		}
+		history := append(s.workTimings(key), workTiming{Units: work.Done, Seconds: seconds, Features: work.Features})
+		if len(history) > 20 {
+			history = history[len(history)-20:]
+		}
+		if data, err := json.Marshal(history); err == nil {
+			_ = setMeta(s.Catalog.DB, key, string(data))
+		}
 	}
 }
 
@@ -277,7 +315,7 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 			active[key] = true
 			o := s.estimator.observations[key]
 			if o == nil {
-				o = &progressObservation{history: s.workTimings(workTimingKey(defaultString(work.Kind, defaultString(a.timingKind, a.Kind)), work))}
+				o = &progressObservation{history: s.stageTimings(defaultString(work.Kind, defaultString(a.timingKind, a.Kind)), work)}
 				s.estimator.observations[key] = o
 			}
 			estimate := o.estimate(work, at)
