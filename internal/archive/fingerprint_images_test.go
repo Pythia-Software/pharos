@@ -1176,6 +1176,43 @@ func TestFingerprintSourceColumns(t *testing.T) {
 	}
 }
 
+// A large workspace checks its conversations' labels against the shared
+// catalog-wide execution digests, with the same input as walking each.
+func TestFingerprintWorkspaceSharesExecutionDigests(t *testing.T) {
+	c := seedFingerprintSources(t)
+	// Without built events, nothing else reads the catalog-wide digests.
+	execTx(t, c.DB, `DROP TABLE agent_events_conversations`)
+	read := func() string {
+		t.Helper()
+		input, err := c.messageLabelFingerprintInput(t.Context(), "fp-w", true, 0, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if messages := input["conversation"].(map[string]any)["messages"].([]map[string]any); len(messages) == 0 || len(messages[0]["labels"].([]any)) == 0 {
+			t.Fatal("workspace labels not drawn", messages)
+		}
+		return jsonText(input)
+	}
+	clear := func() {
+		dependencyDigestCache.Lock()
+		dependencyDigestCache.entries = nil
+		dependencyDigestCache.Unlock()
+	}
+	clear()
+	walked := read()
+	if digests, err := cachedExecutionDependencyDigests(t.Context(), c.reader()); err != nil || digests != nil {
+		t.Fatalf("a small workspace read the catalog-wide digests: %v", err)
+	}
+	override(t, &fingerprintSharedDigestsFrom, 1)
+	clear()
+	if shared := read(); shared != walked {
+		t.Fatalf("shared digests changed the input:\n%s\n%s", shared, walked)
+	}
+	if digests, err := cachedExecutionDependencyDigests(t.Context(), c.reader()); err != nil || digests == nil {
+		t.Fatalf("a large workspace walked each conversation: %v", err)
+	}
+}
+
 // A workspace with one conversation, or none, draws images already drawn: it
 // shares them without a load or a render, and they are the bytes its own
 // render would produce.
