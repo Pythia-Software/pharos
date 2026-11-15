@@ -556,6 +556,39 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	if len(started) != 3 {
 		t.Fatal("current estimates were rebuilt again")
 	}
+	// That publish holds the classifier lease, so it counts as running: a
+	// pass arriving meanwhile is turned away and records no failure.
+	if err := bumpToolLedgerGeneration(c.DB); err != nil {
+		t.Fatal(err)
+	}
+	override(t, &authorshipIdleBudget, time.Minute)
+	writer, err := c.beginWrite(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback()
+	published := make(chan struct{})
+	go func() {
+		defer close(published)
+		c.refreshAuthorship()
+	}()
+	waitUntil(t, 10*time.Second, "the publish to hold the lease", c.authorshipRunning)
+	if err := c.refineAuthorship(t.Context(), false); err == nil {
+		t.Fatal("a pass ran beside the publish")
+	}
+	c.authorship.mu.Lock()
+	failure := c.authorship.lastError
+	c.authorship.mu.Unlock()
+	if failure != "" {
+		t.Fatalf("a pass turned away by the publish recorded a failure: %s", failure)
+	}
+	if err := writer.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	<-published
+	if c.authorshipRunning() || c.ensureAuthorship() || len(started) != 3 {
+		t.Fatal("the publish did not finish as idle")
+	}
 }
 
 func TestAuthorshipManualRefreshHonorsRunCancellation(t *testing.T) {

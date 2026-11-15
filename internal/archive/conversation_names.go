@@ -246,6 +246,14 @@ func (c *Catalog) refreshConversationNames(ctx context.Context, batch int) (int,
 	return count, nil
 }
 
+// conversationNamesQueued reports whether a pass has anything to do: a
+// conversation queued, or a claim abandoned by a process that died, which
+// only the pass puts back on the queue.
+func (c *Catalog) conversationNamesQueued(ctx context.Context) (bool, error) {
+	return catalogExists(ctx, c, `SELECT 1 WHERE EXISTS(SELECT 1 FROM conversation_names_state WHERE dirty=1)
+ OR EXISTS(SELECT 1 FROM conversation_names_claims WHERE claimed_at<?)`, time.Now().Add(-conversationNamesClaimAbandoned).Unix())
+}
+
 func (c *Catalog) nameConversations(ctx context.Context, batch int) (int, error) {
 	abandoned := time.Now().Add(-conversationNamesClaimAbandoned).Unix()
 	// The queue is the partial index; conversations follow it, not lead it.

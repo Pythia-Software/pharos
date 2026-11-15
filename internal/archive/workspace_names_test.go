@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func namingRecord(kind, id, title, text string, aliases ...string) WorkspaceRecord {
@@ -371,6 +372,33 @@ func TestConversationNamesBackfillInvalidateAndResume(t *testing.T) {
 	writes := c.writers.next
 	if count, err := c.refreshConversationNames(t.Context(), 2); err != nil || count != 0 || c.writers.next != writes {
 		t.Fatalf("idle pass: named %d, took the writer %v, %v", count, c.writers.next != writes, err)
+	}
+	// A process that died after claiming left the conversation off the
+	// queue. Its claim counts as queued work once abandoned, and the next
+	// pass names the conversation.
+	queued := func() bool {
+		t.Helper()
+		found, err := c.conversationNamesQueued(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+	fixtureExec(t, c, `INSERT INTO conversation_names_claims(conversation_id,token,claimed_at) VALUES(?,'lost',?)`, cid, time.Now().Unix())
+	if queued() {
+		t.Fatal("a claim still being computed counted as queued")
+	}
+	fixtureExec(t, c, `UPDATE conversation_names_claims SET claimed_at=?`, time.Now().Add(-2*conversationNamesClaimAbandoned).Unix())
+	if !queued() {
+		t.Fatal("an abandoned claim was not queued work")
+	}
+	// One pass puts it back on the queue; the next names it.
+	if _, err := c.refreshConversationNames(t.Context(), 2); err != nil || countRows(t, c, `SELECT COUNT(*) FROM conversation_names_state WHERE dirty=1`) != 1 {
+		t.Fatalf("an abandoned claim was not queued again: %v", err)
+	}
+	drainConversationNames(t, c)
+	if queued() || countRows(t, c, `SELECT COUNT(*) FROM conversation_names_claims`) != 0 {
+		t.Fatal("an abandoned claim was not settled")
 	}
 	// An upgrade queues completed conversations once, without re-ingest.
 	fixtureExec(t, c, `UPDATE conversation_names_state SET version='older'`)
