@@ -1148,14 +1148,22 @@ type labelingOccurrences struct {
 	once  sync.Once
 	load  func(ctx context.Context) (*executionResolution, *occurrenceIndex, error)
 	index *occurrenceIndex
-	err   error
+	// resolution is the one index was read against.
+	resolution *executionResolution
+	err        error
 	// source names where the decisions came from, for the manifest.
 	source string
 }
 
 func (o *labelingOccurrences) forConversation(ctx context.Context) (*occurrenceIndex, error) {
-	o.once.Do(func() { _, o.index, o.err = o.load(ctx) })
+	o.once.Do(func() { o.resolution, o.index, o.err = o.load(ctx) })
 	return o.index, o.err
+}
+
+// resolved is forConversation with the resolution the index was read against.
+func (o *labelingOccurrences) resolved(ctx context.Context) (*executionResolution, *occurrenceIndex, error) {
+	index, err := o.forConversation(ctx)
+	return o.resolution, index, err
 }
 
 // preloadedOccurrences serves decisions already read from one snapshot.
