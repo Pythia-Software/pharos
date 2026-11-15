@@ -130,7 +130,7 @@ type askOutput struct{ bytes.Buffer }
 
 func (b *askOutput) Write(p []byte) (int, error) {
 	if b.Len()+len(p) > 2<<20 {
-		return 0, fmt.Errorf("CLI output exceeded 2 MiB")
+		return 0, fmt.Errorf("The CLI sent more than 2 MiB of output.")
 	}
 	return b.Buffer.Write(p)
 }
@@ -153,7 +153,7 @@ func askCommand(ctx context.Context, path, dir string, args ...string) (*exec.Cm
 	cmd.Dir = dir
 	cmd.Env = cliEnvironment(path)
 	if err := askProcessConfig(cmd); err != nil {
-		return nil, fmt.Errorf("cannot run %s: %w", filepath.Base(path), err)
+		return nil, fmt.Errorf("Could not run %s: %w", filepath.Base(path), err)
 	}
 	cmd.WaitDelay = 2 * time.Second
 	return cmd, nil
@@ -193,7 +193,7 @@ func askReadProtocol(ctx context.Context, path, dir string, args []string, messa
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	return nil, fmt.Errorf("CLI did not return a model catalog; update and authenticate it, then retry")
+	return nil, fmt.Errorf("The CLI did not return a model list. Update it and sign in, then try again.")
 }
 
 var askDiscoverModels = func(ctx context.Context, p askProvider) ([]askModel, error) {
@@ -254,11 +254,11 @@ var askDiscoverModels = func(ctx context.Context, p askProvider) ([]askModel, er
 		cmd.Stdout = &out
 		cmd.Stderr = io.Discard
 		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("could not list Antigravity models; authenticate agy and retry")
+			return nil, fmt.Errorf("Could not list Antigravity models. Sign in to agy, then try again.")
 		}
 		return askAGYModels(out.String()), nil
 	}
-	return nil, fmt.Errorf("unsupported CLI")
+	return nil, fmt.Errorf("Pharos does not support this CLI.")
 }
 
 func askEfforts(raw []string) []string {
@@ -285,7 +285,7 @@ func askCodexModels(raw json.RawMessage) ([]askModel, error) {
 		return nil, err
 	}
 	if catalog.NextCursor != nil {
-		return nil, fmt.Errorf("CLI model catalog is paginated; update Pharos to support this catalog")
+		return nil, fmt.Errorf("The CLI returned its model list in pages, which this version of Pharos cannot read. Update Pharos.")
 	}
 	result := []askModel{}
 	for _, m := range catalog.Data {
@@ -388,7 +388,7 @@ var askRunCLI = func(ctx context.Context, p askProvider, s askSelection, prompt 
 	}
 	readErr := scan.Err()
 	if output.N == 0 {
-		readErr = fmt.Errorf("CLI output exceeded its %d byte stream allowance", streamLimit)
+		readErr = fmt.Errorf("%s sent more output than Pharos accepts (over %s). Try again.", p.ID, humanBytes(streamLimit))
 	}
 	if readErr != nil {
 		_ = cmd.Cancel()
@@ -401,7 +401,7 @@ var askRunCLI = func(ctx context.Context, p askProvider, s askSelection, prompt 
 		return nil, readErr
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s could not complete the request. Check its CLI version, Pharos MCP connection, login and account limits in Terminal, then retry", p.ID)
+		return nil, fmt.Errorf("%s could not answer. In Terminal, check that it is up to date, that you are signed in and that your account has quota left, then try again.", p.ID)
 	}
 	if p.ID == "Codex" {
 		file, err := os.Open(filepath.Join(dir, "answer.json"))
@@ -419,10 +419,10 @@ var askRunCLI = func(ctx context.Context, p askProvider, s askSelection, prompt 
 		Status           string          `json:"status"`
 	}
 	if err = json.Unmarshal(result, &envelope); err != nil {
-		return nil, fmt.Errorf("%s returned invalid JSON", p.ID)
+		return nil, fmt.Errorf("%s returned an answer Pharos could not read. Try again.", p.ID)
 	}
 	if envelope.IsError || envelope.Status == "ERROR" {
-		return nil, fmt.Errorf("%s reported a request error. Check its login and account limits, then retry", p.ID)
+		return nil, fmt.Errorf("%s reported an error. Check that you are signed in and that your account has quota left, then try again.", p.ID)
 	}
 	for _, value := range []json.RawMessage{envelope.StructuredOutput, envelope.Response, envelope.Result} {
 		if len(value) == 0 || string(value) == "null" {
@@ -434,12 +434,12 @@ var askRunCLI = func(ctx context.Context, p askProvider, s askSelection, prompt 
 		}
 		return value, nil
 	}
-	return nil, fmt.Errorf("%s returned no response", p.ID)
+	return nil, fmt.Errorf("%s returned no answer. Try again.", p.ID)
 }
 
 func askPrepareCLI(ctx context.Context, p askProvider, s askSelection, dir string) (*exec.Cmd, error) {
 	if p.mcp.Command == "" {
-		return nil, fmt.Errorf("Pharos MCP connection is unavailable; retry from Pharos")
+		return nil, fmt.Errorf("The Pharos MCP connection is not available. Try again from Pharos.")
 	}
 	schema := filepath.Join(dir, "response.schema.json")
 	if err := os.WriteFile(schema, []byte(askResponseSchema), 0600); err != nil {
@@ -513,7 +513,7 @@ Use only the pharos-ask MCP server, for archived work and for site links (browse
 		args = []string{"--input-format", "stream-json", "--output-format", "stream-json", "--json-schema", schema, "--model", model, "--agent", "pharos-navigation", "--sandbox", "--mode", "plan", "--disable-slash-commands", "--print-timeout", "3m"}
 
 	default:
-		return nil, fmt.Errorf("unsupported CLI")
+		return nil, fmt.Errorf("Pharos does not support this CLI.")
 	}
 	if s.Effort != "Default" && p.ID != "Antigravity" {
 		if p.ID == "Codex" {
@@ -555,7 +555,7 @@ func askCheckAGYMCPPermissions() error {
 			err = json.Unmarshal(raw, value)
 		}
 		if err != nil {
-			return fmt.Errorf("read Antigravity MCP permissions in %s: %w", path, err)
+			return fmt.Errorf("Could not read Antigravity MCP permissions in %s: %w", path, err)
 		}
 		return nil
 	}
@@ -576,7 +576,7 @@ func askCheckAGYMCPPermissions() error {
 			return slices.Contains(rules, "mcp(*)") || slices.Contains(rules, "mcp(pharos-ask/*)") || slices.Contains(rules, "mcp(pharos-ask/"+firstString(tool["name"])+")")
 		}
 		if settings.ToolPermission == "strict" || matches(grants.Deny) || matches(grants.Ask) || settings.ToolPermission != "always-proceed" && !matches(grants.Allow) {
-			return fmt.Errorf("Antigravity needs permission to use Pharos MCP. Allow mcp(pharos-ask/*) using /permissions in Antigravity and resolve any conflicting ask, deny, or strict policy, then retry")
+			return fmt.Errorf("Antigravity needs permission to use Pharos MCP. Allow mcp(pharos-ask/*) using /permissions in Antigravity and resolve any conflicting ask, deny or strict policy, then try again.")
 		}
 	}
 	return nil
@@ -608,7 +608,7 @@ func askRunAGY(ctx context.Context, cmd *exec.Cmd, p askProvider, prompt string)
 	sent := false
 	for scan.Scan() {
 		if output.N == 0 {
-			return nil, fmt.Errorf("CLI output exceeded its %d byte stream allowance", streamLimit)
+			return nil, fmt.Errorf("%s sent more output than Pharos accepts (over %s). Try again.", p.ID, humanBytes(streamLimit))
 		}
 		var event struct {
 			Event          string `json:"event"`
@@ -624,7 +624,7 @@ func askRunAGY(ctx context.Context, cmd *exec.Cmd, p askProvider, prompt string)
 		}
 		if event.Event == "init" && !sent {
 			if event.ConversationID == "" || p.recordSession == nil {
-				return nil, fmt.Errorf("Antigravity did not provide a private session identity")
+				return nil, fmt.Errorf("Antigravity did not return a private session ID. Try again.")
 			}
 			if err = p.recordSession(ctx, event.ConversationID); err != nil {
 				return nil, err
@@ -641,7 +641,7 @@ func askRunAGY(ctx context.Context, cmd *exec.Cmd, p askProvider, prompt string)
 		}
 		if event.Event == "result" {
 			if event.Result.Status != "SUCCESS" {
-				return nil, fmt.Errorf("Antigravity could not complete the request. Check its CLI version, login and account limits in Terminal, then retry")
+				return nil, fmt.Errorf("Antigravity could not answer. In Terminal, check that it is up to date, that you are signed in and that your account has quota left, then try again.")
 			}
 			if len(event.Result.StructuredOutput) > 0 && string(event.Result.StructuredOutput) != "null" {
 				return event.Result.StructuredOutput, nil
@@ -653,10 +653,10 @@ func askRunAGY(ctx context.Context, cmd *exec.Cmd, p askProvider, prompt string)
 		return nil, ctx.Err()
 	}
 	if output.N == 0 {
-		return nil, fmt.Errorf("CLI output exceeded its %d byte stream allowance", streamLimit)
+		return nil, fmt.Errorf("%s sent more output than Pharos accepts (over %s). Try again.", p.ID, humanBytes(streamLimit))
 	}
 	if err := scan.Err(); err != nil {
 		return nil, err
 	}
-	return nil, fmt.Errorf("Antigravity ended without a response")
+	return nil, fmt.Errorf("Antigravity ended without an answer. Try again.")
 }

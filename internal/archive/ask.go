@@ -186,7 +186,7 @@ func (s *Server) saveAskSession(ctx context.Context, session askSession, index b
 		// Index only the actual questions and replies. Private visit/lookup context
 		// is never copied into the general archive or its MCP search responses.
 		if count, _ := result.RowsAffected(); count == 0 {
-			return fmt.Errorf("chat could not be saved")
+			return fmt.Errorf("Could not save the chat.")
 		}
 		if !index || len(session.Conversation) == 0 {
 			return nil
@@ -294,7 +294,7 @@ func (s *Server) askProvider(ctx context.Context, name string) (askProvider, err
 		return askProvider{}, err
 	}
 	if !config.Enabled {
-		return askProvider{}, fmt.Errorf("enable Ask Pharos before using a CLI")
+		return askProvider{}, fmt.Errorf("Turn on Ask Pharos before using a CLI.")
 	}
 	for _, p := range askInstalled() {
 		if p.ID != name {
@@ -325,9 +325,9 @@ func (s *Server) askProvider(ctx context.Context, name string) (askProvider, err
 		if cached, ok := s.ask.models[name]; ok {
 			return cached, nil
 		}
-		return p, fmt.Errorf("Ask Pharos was disabled")
+		return p, fmt.Errorf("Model discovery stopped because Ask Pharos was turned off or Pharos is quitting.")
 	}
-	return askProvider{}, fmt.Errorf("%s is no longer available on this Mac", name)
+	return askProvider{}, fmt.Errorf("%s is no longer available on this Mac. Choose another CLI from the model menu.", name)
 }
 
 // warmAskModels discovers the models of every installed CLI whose list is
@@ -376,10 +376,10 @@ func (s *Server) discoverAskModels(p askProvider, trigger string) *askDiscovery 
 		cached, known := s.ask.models[p.ID]
 		switch {
 		case ctx.Err() != nil:
-			d.err = fmt.Errorf("Ask Pharos was disabled")
+			d.err = fmt.Errorf("Model discovery stopped because Ask Pharos was turned off or Pharos is quitting.")
 			return nil
 		case err == nil && len(models) == 0:
-			err = fmt.Errorf("%s returned no available models; update and authenticate it", p.ID)
+			err = fmt.Errorf("%s returned no available models. Update it and sign in, then try again.", p.ID)
 		}
 		if err != nil {
 			d.err = err
@@ -475,7 +475,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if v, ok := body["enabled"].(bool); ok {
 			if v && len(askInstalled()) == 0 {
-				fail(fmt.Errorf("install and authenticate a supported CLI first"))
+				fail(fmt.Errorf("Install and sign in to a supported CLI first."))
 				return
 			}
 			settings.Enabled = v
@@ -487,7 +487,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		if settings.Enabled {
 			old, _ := s.askSettings(ctx)
 			if !old.Enabled && body["consent"] != true {
-				fail(fmt.Errorf("Ask Pharos requires explicit consent"))
+				fail(fmt.Errorf("Ask Pharos needs your explicit consent before it turns on."))
 				return
 			}
 		}
@@ -503,7 +503,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !askValidSelection(p, selection) {
-				fail(fmt.Errorf("model or effort is unavailable"))
+				fail(fmt.Errorf("That model or effort is not available."))
 				return
 			}
 			settings.Selection = selection
@@ -611,7 +611,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		draft := firstString(body["draft"])
 		if len(draft) > 12000 {
-			fail(fmt.Errorf("draft is too long"))
+			fail(fmt.Errorf("The draft is too long."))
 			return
 		}
 		if errors.Is(err, sql.ErrNoRows) {
@@ -641,7 +641,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		if raw, ok := body["clarificationDraft"]; ok {
 			text, valid := raw.(string)
 			if !valid || len(text) > 12000 {
-				fail(fmt.Errorf("clarification draft is too long or invalid"))
+				fail(fmt.Errorf("The answer draft is too long or not valid."))
 				return
 			}
 			session.ClarificationDraft = text
@@ -898,7 +898,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			turn.Status = "error"
 			turn.Reply = runErr.Error()
 			if errors.Is(runErr, context.DeadlineExceeded) {
-				turn.Reply = "The CLI took too long to respond. Your question is saved; you can retry it below."
+				turn.Reply = p.ID + " took too long to answer. Your question is saved; choose Try again below."
 			}
 			if errors.Is(runErr, context.Canceled) {
 				turn.Status = "canceled"
@@ -956,7 +956,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-const askCanceledReply = "Request canceled. Your question is still in this conversation."
+const askCanceledReply = "Question canceled. It is still in this chat."
 
 // A busy catalog can hold its writer for seconds, so a finished answer is
 // saved with a deadline and then retried in the background for a while.
@@ -1044,10 +1044,10 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 	}
 	input.Prompt = strings.TrimSpace(input.Prompt)
 	if input.Prompt == "" || len(input.Prompt) > 12000 {
-		return fail(fmt.Errorf("enter a question of at most 12,000 bytes"))
+		return fail(fmt.Errorf("Enter a question of at most 12,000 bytes (about 12,000 characters of English text)."))
 	}
 	if len(input.Draft) > 12000 {
-		return fail(fmt.Errorf("draft is too long"))
+		return fail(fmt.Errorf("The draft is too long."))
 	}
 	if input.CurrentURI != "" && !askSafeURL(input.CurrentURI) {
 		return fail(fmt.Errorf("invalid current page URI"))
@@ -1063,16 +1063,16 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 		return fail(err)
 	}
 	if !askValidSelection(p, input.Selection) {
-		return fail(fmt.Errorf("selected model or effort is no longer available"))
+		return fail(fmt.Errorf("The selected model or effort is no longer available. Choose another from the model menu."))
 	}
 	if len(s.ask.active) >= 2 {
-		return fail(fmt.Errorf("two Ask Pharos requests are already running"))
+		return fail(fmt.Errorf("Two questions are already running. Wait for an answer or stop one before asking another."))
 	}
 	if _, running := s.ask.active[input.ID]; running {
-		return fail(fmt.Errorf("this chat is already processing a question"))
+		return fail(fmt.Errorf("This chat is already answering a question."))
 	}
 	if _, saving := s.ask.saving[input.ID]; saving {
-		return fail(fmt.Errorf("this chat is still saving its last answer; try again in a moment"))
+		return fail(fmt.Errorf("This chat is still saving its last answer. Try again in a moment."))
 	}
 	session, err := s.askSession(ctx, input.ID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1081,7 +1081,7 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 		return fail(err)
 	}
 	if len(session.Conversation) > 0 && session.Selection != input.Selection {
-		return fail(fmt.Errorf("model selection is fixed for this chat; clear to start another"))
+		return fail(fmt.Errorf("Model selection is fixed for this chat. Start a new chat to choose another model."))
 	}
 	if len(session.Conversation) == 0 {
 		session.Selection = input.Selection
@@ -1089,7 +1089,7 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 	for i, turn := range session.Conversation {
 		if turn.ID == input.TurnID {
 			if !input.Retry || i != len(session.Conversation)-1 || !slices.Contains([]string{"canceled", "error", "loading"}, turn.Status) {
-				return fail(fmt.Errorf("message was already submitted; reload the chat to see its result"))
+				return fail(fmt.Errorf("This question was already sent. Reopen the chat to see its answer."))
 			}
 			input.CurrentURI = turn.CurrentURI
 			input.Attachments = turn.Attachments
@@ -1103,7 +1103,7 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 		}
 	}
 	if len(session.Conversation) >= 200 {
-		return fail(fmt.Errorf("start a fresh chat to continue; this chat has 200 questions"))
+		return fail(fmt.Errorf("This chat has reached 200 questions. Start a new chat to continue."))
 	}
 	if err := askFilesAvailable(input.Attachments); err != nil {
 		return fail(err)

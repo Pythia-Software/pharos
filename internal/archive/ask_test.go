@@ -1702,7 +1702,7 @@ func TestAskSiteLinkDestinations(t *testing.T) {
 			}
 			return invalidReply(ctx, p, selection, prompt)
 		})
-		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil || !strings.HasSuffix(err.Error(), "try again") {
+		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil || !strings.HasSuffix(err.Error(), "Try again.") {
 			t.Errorf("%s: %+v accepted: %+v %v", name, destination, answer, err)
 		}
 		if calls != 2 {
