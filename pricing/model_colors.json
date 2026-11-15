@@ -229,7 +229,7 @@
     "gemini-4-argon-d": {
       "provider": "google",
       "class": "Gemini",
-      "color": "#7686fd"
+      "color": "#8d9cf4"
     },
     "gemini-nano-banana-2.1": {
       "provider": "google",
@@ -239,7 +239,7 @@
     "gpt-5.3-codex": {
       "provider": "openai",
       "class": "Codex",
-      "color": "#67a929"
+      "color": "#93bb78"
     },
     "gpt-5.3-codex-spark": {
       "provider": "openai",
@@ -340,6 +340,21 @@
       "provider": "microsoft",
       "class": "MAI Code",
       "color": "#fa4b42"
+    },
+    "gemini-4-carbon": {
+      "provider": "google",
+      "class": "Gemini",
+      "color": "#8191f9"
+    },
+    "gemini-4-hydrogen": {
+      "provider": "google",
+      "class": "Gemini",
+      "color": "#7686fd"
+    },
+    "codex-auto-review": {
+      "provider": "openai",
+      "class": "Codex",
+      "color": "#67a929"
     }
   },
   "sources": {
