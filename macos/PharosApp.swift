@@ -177,7 +177,9 @@ final class ArchiveService: ObservableObject {
     /// failed), kept here rather than in a web view, which the recovery screen
     /// replaces. The next page that loads records them in Settings → Logs.
     var unreportedPageFailures: [[String: Any]] = []
-    @Published var status = "Starting local archive…"
+    @Published var status = "Starting Pharos…"
+    /// The error screen's heading: an error after startup is not a failed start.
+    @Published var errorTitle = "Pharos could not start"
     @Published var disconnected: Disconnection?
     /// The Eject button's release and eject are under way.
     @Published var ejecting = false
@@ -283,7 +285,10 @@ final class ArchiveService: ObservableObject {
                 guard let self, self.process === process, !self.shuttingDown else { return }
                 self.process = nil
                 self.url = nil
-                self.error = "Pharos stopped. \(log.text())"
+                let output = log.text().trimmingCharacters(in: .whitespacesAndNewlines)
+                self.errorTitle = "Pharos stopped"
+                self.error = ["Pharos stopped unexpectedly (exit status \(process.terminationStatus)).", output]
+                    .filter { !$0.isEmpty }.joined(separator: "\n\n")
             }
         }
         process = task
@@ -445,7 +450,7 @@ final class ArchiveService: ObservableObject {
         pageTarget = target
         if serviceAnswers {
             pageWaiting = false
-            pageError = "\(reason)\n\nThe Pharos service is running, but the page still did not load. Choose View → Reload (⌘R) to try again."
+            pageError = "\(reason)\n\nPharos is running, but this page did not load. Click Reload or press ⌘R to try again."
             return
         }
         pageError = nil
@@ -979,7 +984,7 @@ final class ArchiveService: ObservableObject {
             finished = true
             completion(error)
         }
-        let message = "Could not save the current UI session. Keep Pharos open and retry before quitting or ejecting."
+        let message = "Pharos could not save this window’s page history and feedback drafts to the library. Try again in a moment."
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
             finish(UpdateFailure(message: message + "\n\nThe page did not finish saving within 5 seconds."))
         }
@@ -1069,6 +1074,7 @@ final class ArchiveService: ObservableObject {
             process = nil
             serviceLog = nil
             url = nil
+            errorTitle = "Pharos stopped"
             error = "The service has stopped. Reopen Pharos to resume, or try installing the update again."
         } else if url == nil, let endpoint = lock.withLock({ self.endpoint }) {
             // Readiness callbacks stop while shutdown is pending.
@@ -1303,7 +1309,7 @@ final class ArchiveWKWebView: WKWebView {
         picker.allowedContentTypes = [.application]
         picker.allowsMultipleSelection = false
         picker.prompt = "Open"
-        picker.message = "Choose an application to open \"\(file.lastPathComponent)\"."
+        picker.message = "Choose an app to open “\(file.lastPathComponent)”."
         picker.begin { response in
             guard response == .OK, let app = picker.url else { return }
             NSWorkspace.shared.open([file], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
@@ -1410,7 +1416,7 @@ enum NativeBridgeSender {
         replying: Bool, reject: (String) -> Void = { _ in }, receive: (Handler) -> Void
     ) {
         guard allows(expectedOrigin: expectedOrigin, senderURL: senderURL, isMainFrame: isMainFrame) else {
-            reject("Native actions must come from the Pharos app's main window document.")
+            reject("This action works only in the main Pharos window.")
             return
         }
         guard let handler = Handler(rawValue: name), handler.replies == replying else {
@@ -1525,7 +1531,8 @@ struct ArchiveWebView: NSViewRepresentable {
         private let panel = NSOpenPanel()
 
         init(purpose: String) {
-            // The purposes and messages match pickerPurposes in application.go.
+            // The purposes match pickerPurposes in application.go, whose picker
+            // chooses a file for an export; this one also takes its folder.
             panel.canChooseDirectories = true
             panel.canChooseFiles = purpose == "export"
             panel.allowsMultipleSelection = false
@@ -1534,7 +1541,7 @@ struct ArchiveWebView: NSViewRepresentable {
             case "source":
                 panel.message = "Choose the folder that holds this tool’s conversations."
             case "export":
-                panel.message = "Choose the export you downloaded: its ZIP, its conversations.json, or the folder it unzips to."
+                panel.message = "Choose the export you downloaded: its ZIP, conversations.json or manifest, or the folder that holds them."
             default:
                 panel.message = "Choose a Pharos library or a parent folder for a new library."
             }
@@ -1696,7 +1703,7 @@ struct ArchiveWebView: NSViewRepresentable {
             guard lateFailures.count >= 3, let service else { return false }
             lateFailures = []
             failedLoads += 1 // drop any retry still scheduled
-            service.pageFailed("\(reason) It failed three times within a minute.", serviceAnswers: true, target: webView.url ?? origin)
+            service.pageFailed("\(reason) This page failed three times within a minute.", serviceAnswers: true, target: webView.url ?? origin)
             return true
         }
 
@@ -1872,7 +1879,7 @@ struct ArchiveWebView: NSViewRepresentable {
         func library(_ body: Any, replyHandler: @escaping (Any?, String?) -> Void) {
             if let object = body as? [String: Any], object["action"] as? String == "chooseFolder" {
                 guard pendingFolderPicker == nil else {
-                    replyHandler(nil, "A folder picker is already open. Finish or cancel it before choosing another folder.")
+                    replyHandler(nil, "A file or folder chooser is already open. Finish or cancel it first.")
                     return
                 }
                 let purpose = object["purpose"] as? String ?? "library"
@@ -2157,7 +2164,7 @@ struct PharosBeacon: View {
 
 struct ArchiveErrorView: View {
     let message: String
-    var title = "Pharos couldn’t start"
+    var title = "Pharos could not start"
     var retry: (() -> Void)? = nil
     @State private var copied = false
 
@@ -2536,13 +2543,13 @@ struct PharosWindow: View {
             else if service.pageWaiting, service.url != nil {
                 VStack(spacing: 16) {
                     PharosBeacon()
-                    Text(service.hasConnectedLibrary ? "Waiting for the library to answer… It may be busy opening a large catalog." : "Waiting for Pharos to answer…")
+                    Text(service.hasConnectedLibrary ? "Waiting for the library to answer. A large library can take a while to open; this page reloads when it is ready." : "Waiting for Pharos to answer…")
                         .opacity(0.8)
                 }
                 .harborBackdrop()
             }
             else if let pageError = service.pageError, service.url != nil {
-                ArchiveErrorView(message: pageError, title: "Pharos couldn’t load this page", retry: service.reloadPage)
+                ArchiveErrorView(message: pageError, title: "Pharos could not load this page", retry: service.reloadPage)
             }
             else if let url = service.url {
                 ArchiveWebView(url: url, service: service, updates: updates)
@@ -2563,7 +2570,7 @@ struct PharosWindow: View {
                     }
             }
             else if service.setupNeeded { FirstRunView(service: service) }
-            else if let error = service.error { ArchiveErrorView(message: error) }
+            else if let error = service.error { ArchiveErrorView(message: error, title: service.errorTitle) }
             else {
                 VStack(spacing: 16) {
                     PharosBeacon()

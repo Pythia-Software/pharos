@@ -16,7 +16,7 @@ struct DictationFailure: LocalizedError {
 
 enum DictationSupport {
     static let unsupportedSystem = "Dictation in Pharos needs macOS 26 or later."
-    static let microphoneDenied = "Pharos doesn't have microphone access. Turn on Pharos in System Settings › Privacy & Security › Microphone, then try again."
+    static let microphoneDenied = "Pharos does not have microphone access. Turn on Pharos in System Settings › Privacy & Security › Microphone, then try again."
 
     /// Whether this Mac can offer the microphone button at all. Permission is
     /// not part of this: a denied microphone is reported when dictation starts,
@@ -24,7 +24,7 @@ enum DictationSupport {
     static func status(locale: Locale = .current) async -> [String: Any] {
         guard #available(macOS 26.0, *) else { return ["available": false, "reason": unsupportedSystem] }
         guard await DictationTranscriber.supportedLocale(equivalentTo: locale) != nil else {
-            return ["available": false, "reason": "Dictation doesn't support \(languageName(locale)) on this Mac."]
+            return ["available": false, "reason": "Pharos cannot transcribe \(languageName(locale)) on this Mac."]
         }
         return ["available": true]
     }
@@ -84,7 +84,7 @@ final class DictationTranscription: @unchecked Sendable {
         text: @escaping @Sendable (String, Bool) async -> Void
     ) async throws -> DictationTranscription {
         guard let supported = await DictationTranscriber.supportedLocale(equivalentTo: locale) else {
-            throw DictationFailure("Dictation doesn't support \(DictationSupport.languageName(locale)) on this Mac.")
+            throw DictationFailure("Pharos cannot transcribe \(DictationSupport.languageName(locale)) on this Mac.")
         }
         let transcriber = DictationTranscriber(locale: supported, preset: .progressiveLongDictation)
         if let installation = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
@@ -197,7 +197,7 @@ final class MicrophoneDictation: DictationRecording {
         do {
             try engine.start()
         } catch {
-            throw DictationFailure("Pharos couldn't start the microphone: \(error.localizedDescription)")
+            throw DictationFailure("Pharos could not start the microphone: \(error.localizedDescription)")
         }
     }
 
