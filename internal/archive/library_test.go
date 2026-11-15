@@ -164,6 +164,77 @@ func TestLibraryReflectsEveryDependencyBeforeAndAfterRefresh(t *testing.T) {
 	}
 }
 
+// A refresh computes from a read snapshot, so the writer is free meanwhile.
+// What was written to a workspace while its row was computed must not be
+// lost: the workspace stays marked and nothing computed before is stored.
+func TestLibraryRefreshKeepsWorkspacesWrittenWhileComputing(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	ctx := context.Background()
+	if err := catalog.refreshAllLibrary(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Idle: nothing to do is found without the writer.
+	writes := catalog.writers.next
+	if count, err := catalog.refreshLibrary(ctx, 10, nil); err != nil || count != 0 {
+		t.Fatalf("idle refresh: %d %v", count, err)
+	}
+	if catalog.writers.next != writes {
+		t.Fatal("an idle refresh took the catalog writer")
+	}
+	turns := func(id string) (stored int) {
+		t.Helper()
+		if err := catalog.DB.QueryRow("SELECT turn_count FROM workspace_library WHERE workspace_id=?", id).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		return stored
+	}
+	for _, written := range []struct {
+		name, during string
+		want         int
+	}{
+		// A dependency written while the workspace is already marked.
+		{"a message", `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('late','cc','late','user','message','Later','h')`, 3},
+		// A repair marking it by hand, for a change no trigger saw.
+		{"a mark", `INSERT OR IGNORE INTO workspace_library_dirty(workspace_id) VALUES('c')`, 4},
+	} {
+		execSQL(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('early-`+written.name+`','cc','early-`+written.name+`','user','message','Early','h')`,
+			`UPDATE summaries SET initiation='Changed by `+written.name+`' WHERE workspace_id='b'`)
+		before := turns("c")
+		override(t, &libraryComputedHook, func() {
+			libraryComputedHook = nil
+			execSQL(t, catalog.DB, written.during)
+		})
+		attempted, stored, err := catalog.refreshLibraryBatch(ctx, 10, nil)
+		if err != nil || attempted != 2 || stored != 1 {
+			t.Fatalf("%s while computing: attempted %d, stored %d, %v", written.name, attempted, stored, err)
+		}
+		if got := turns("c"); got != before {
+			t.Fatalf("%s while computing: stored a row computed before it (%d turns, was %d)", written.name, got, before)
+		}
+		var marked string
+		if err := catalog.DB.QueryRow("SELECT group_concat(workspace_id) FROM workspace_library_dirty").Scan(&marked); err != nil || marked != "c" {
+			t.Fatalf("%s while computing: marked %q, want c: %v", written.name, marked, err)
+		}
+		if err := catalog.refreshAllLibrary(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got := turns("c"); got != written.want || dirtyCount(t, catalog) != 0 {
+			t.Fatalf("after %s: %d turns stored, want %d; %d marked", written.name, got, written.want, dirtyCount(t, catalog))
+		}
+	}
+	// A refresh that fails gives its workspaces back at once.
+	execSQL(t, catalog.DB, `UPDATE summaries SET initiation='Again' WHERE workspace_id='b'`)
+	stopped, cancel := context.WithCancel(ctx)
+	override(t, &libraryComputedHook, func() { cancel() })
+	if _, _, err := catalog.refreshLibraryBatch(stopped, 10, nil); err == nil {
+		t.Fatal("a stopped refresh stored its batch")
+	}
+	libraryComputedHook = nil
+	if count, err := catalog.refreshLibrary(ctx, 10, nil); err != nil || count != 1 || dirtyCount(t, catalog) != 0 {
+		t.Fatalf("after a stopped refresh: %d refreshed, %d marked, %v", count, dirtyCount(t, catalog), err)
+	}
+}
+
 // projectionTriggerCases are the stored projections whose UPDATE triggers
 // mark only when a column their statements read has changed.
 func projectionTriggerCases() []struct {

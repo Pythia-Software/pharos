@@ -179,8 +179,26 @@ func libraryTriggerDDL(q queryer) ([]string, error) {
 		statements = append(statements,
 			fmt.Sprintf("CREATE TRIGGER %s_update AFTER UPDATE ON %s WHEN %s BEGIN %s %s END", name, dependency.table, changed, dependency.mark("OLD"), dependency.mark("NEW")),
 			fmt.Sprintf("CREATE TRIGGER %s_delete AFTER DELETE ON %s BEGIN %s END", name, dependency.table, dependency.mark("OLD")))
+		// A write to a workspace a refresh is computing (refreshLibrary)
+		// releases its claim, so what was computed is not stored. Claims
+		// exist only while one computes, so these bodies nearly never run.
+		const claimed = "EXISTS(SELECT 1 FROM workspace_library_claims)"
+		name = "workspace_library_release_" + dependency.table
+		statements = append(statements,
+			fmt.Sprintf("CREATE TRIGGER %s_insert AFTER INSERT ON %s WHEN %s BEGIN %s END", name, dependency.table, claimed, dependency.release("NEW")),
+			fmt.Sprintf("CREATE TRIGGER %s_update AFTER UPDATE ON %s WHEN %s AND (%s) BEGIN %s %s END", name, dependency.table, claimed, changed, dependency.release("OLD"), dependency.release("NEW")),
+			fmt.Sprintf("CREATE TRIGGER %s_delete AFTER DELETE ON %s WHEN %s BEGIN %s END", name, dependency.table, claimed, dependency.release("OLD")))
 	}
+	// So does marking it by hand, as a repair does for what no trigger saw.
+	// BEFORE: an insert that is ignored because the workspace is already
+	// marked still gets here.
+	statements = append(statements, `CREATE TRIGGER workspace_library_release_marked BEFORE INSERT ON workspace_library_dirty
+		WHEN EXISTS(SELECT 1 FROM workspace_library_claims) BEGIN DELETE FROM workspace_library_claims WHERE workspace_id=NEW.workspace_id; END`)
 	return statements, nil
+}
+
+func (d libraryDependency) release(row string) string {
+	return "DELETE FROM workspace_library_claims WHERE workspace_id IN (" + d.workspaces(row) + ");"
 }
 
 // An outer INSERT OR REPLACE/ABORT would override a trigger's OR IGNORE,
@@ -236,7 +254,9 @@ func libraryProjectionDefinition() string {
 // A rebuild marks every workspace dirty; reads stay correct meanwhile.
 func (c *Catalog) ensureLibrary() error {
 	if _, err := c.DB.Exec(`CREATE TABLE IF NOT EXISTS workspace_library_dirty (
-		workspace_id TEXT PRIMARY KEY) WITHOUT ROWID`); err != nil {
+		workspace_id TEXT PRIMARY KEY) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS workspace_library_claims (
+		workspace_id TEXT PRIMARY KEY, token TEXT NOT NULL, claimed_at INTEGER NOT NULL) WITHOUT ROWID`); err != nil {
 		return err
 	}
 	triggers, err := libraryTriggerDDL(c.DB)
@@ -366,45 +386,181 @@ func (c *Catalog) refreshLibraryWorkspaces(ctx context.Context, workspaces []str
 	return nil
 }
 
+// libraryClaimAbandoned is how old a claim is before another refresh may
+// take its workspaces: longer than any batch takes to compute.
+var libraryClaimAbandoned = 10 * time.Minute
+
+// libraryComputedHook, when set (tests), runs after a refresh has computed
+// its batch and before it stores it.
+var libraryComputedHook func()
+
+// refreshLibrary stores the Search view rows and previews of up to batch
+// dirty workspaces (among workspaces, when given) and reports how many it
+// attempted.
 func (c *Catalog) refreshLibrary(ctx context.Context, batch int, workspaces []string) (int, error) {
+	attempted, _, err := c.refreshLibraryBatch(ctx, batch, workspaces)
+	return attempted, err
+}
+
+// refreshLibraryBatch is refreshLibrary, also reporting how many workspaces
+// it stored. Computing a workspace reads all its messages, seconds for a
+// large one on a busy drive, so that happens on a read snapshot. The catalog
+// writer is held twice, briefly: to claim the workspaces, and to store what
+// was computed for those still claimed. A workspace stays marked meanwhile,
+// so reads keep computing it live; a write to it releases its claim (see
+// libraryTriggerDDL), and it stays marked for the next pass.
+func (c *Catalog) refreshLibraryBatch(ctx context.Context, batch int, workspaces []string) (attempted, stored int, err error) {
+	// A workspace another refresh has claimed (the service's loop and a
+	// command's overlap) is that refresh's to store.
+	abandoned := time.Now().Add(-libraryClaimAbandoned).Unix()
+	where, args := " WHERE workspace_id NOT IN (SELECT workspace_id FROM workspace_library_claims WHERE claimed_at>=?)", []any{abandoned}
+	if workspaces != nil {
+		where += " AND workspace_id IN (SELECT value FROM json_each(?))"
+		args = append(args, jsonText(workspaces))
+	}
+	// Nothing to do: return without waiting for the writer.
+	pending, err := queryMapsContext(ctx, c.reader(), `SELECT workspace_id FROM workspace_library_dirty`+where+` LIMIT ?`, append(args, batch)...)
+	if err != nil || len(pending) == 0 {
+		return 0, 0, err
+	}
+	ids := make([]string, 0, len(pending))
+	for _, row := range pending {
+		ids = append(ids, firstString(row["workspace_id"]))
+	}
+	token := randomToken()
+	if err := c.writeTransaction(ctx, "library-refresh claim", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_library_claims WHERE claimed_at<?`, abandoned); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO workspace_library_claims(workspace_id,token,claimed_at)
+			SELECT workspace_id,?,? FROM workspace_library_dirty WHERE workspace_id IN (SELECT value FROM json_each(?))`, token, time.Now().Unix(), jsonText(ids))
+		return err
+	}); err != nil {
+		return 0, 0, err
+	}
+	released := false
+	defer func() {
+		// A batch given up (stopped, or failed) frees its workspaces for the
+		// next pass rather than leaving them to be abandoned.
+		if !released {
+			_ = c.writeTransaction(context.WithoutCancel(ctx), "library-refresh release", func(tx *sql.Tx) error {
+				_, err := tx.Exec(`DELETE FROM workspace_library_claims WHERE token=?`, token)
+				return err
+			})
+		}
+	}()
+	// Compute what the claim covers from one snapshot that includes it.
+	var claimed string
+	var rows, previews [][]any
+	completed := func(error) {}
+	if err := func() error {
+		snapshot, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return err
+		}
+		defer snapshot.Rollback()
+		held, err := queryMapsContext(ctx, snapshot, `SELECT workspace_id FROM workspace_library_claims WHERE token=?`, token)
+		if err != nil || len(held) == 0 {
+			return err
+		}
+		completed = maintenanceBatch(ctx, snapshot, "Indexing the Search view", "workspace", len(held),
+			"SELECT count(*) FROM workspace_library_dirty")
+		chosen := make([]string, 0, len(held))
+		for _, row := range held {
+			chosen = append(chosen, firstString(row["workspace_id"]))
+		}
+		claimed = jsonText(chosen)
+		// Deleted workspaces produce no row; their stored rows cascaded away.
+		if rows, err = queryValues(ctx, snapshot, libraryDerivedSelect("w.id IN (SELECT value FROM json_each(?))"), claimed); err != nil {
+			return err
+		}
+		previews, err = queryValues(ctx, snapshot, libraryPreviewSelect("w.id IN (SELECT value FROM json_each(?))"), claimed)
+		return err
+	}(); err != nil {
+		return 0, 0, err
+	}
+	if libraryComputedHook != nil {
+		libraryComputedHook()
+	}
+	if claimed == "" {
+		// Every claim was released, or taken, before the snapshot.
+		return len(ids), 0, nil
+	}
 	tx, finish, err := c.beginTrackedWrite(ctx, "library-refresh")
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	defer func() { _ = tx.Rollback(); finish() }()
-	// Write first so the transaction takes the write lock (honoring
-	// busy_timeout) instead of failing to upgrade a stale read snapshot.
-	where, arguments := "", []any{}
-	if workspaces != nil {
-		where = " WHERE workspace_id IN (" + placeholders(len(workspaces)) + ")"
-		for _, id := range workspaces {
-			arguments = append(arguments, id)
+	// Released since the claim: something the workspace's row reads was
+	// written, so what was computed may be obsolete. It is still marked.
+	held, err := queryMapsContext(ctx, tx, `SELECT workspace_id FROM workspace_library_claims WHERE token=?`, token)
+	if err != nil {
+		return 0, 0, err
+	}
+	still := make(map[string]bool, len(held))
+	for _, row := range held {
+		still[firstString(row["workspace_id"])] = true
+	}
+	names := []string{"workspace_id"}
+	for _, column := range libraryColumns {
+		names = append(names, column.name)
+	}
+	store := "INSERT OR REPLACE INTO workspace_library(" + strings.Join(names, ",") + ") VALUES(" + placeholders(len(names)) + ")"
+	for _, row := range rows {
+		if id, _ := row[0].(string); still[id] {
+			if _, err := tx.ExecContext(ctx, store, row...); err != nil {
+				return 0, 0, err
+			}
 		}
 	}
-	arguments = append(arguments, batch)
-	rows, err := queryMapsContext(ctx, tx, `DELETE FROM workspace_library_dirty WHERE workspace_id IN
-		(SELECT workspace_id FROM workspace_library_dirty`+where+` LIMIT ?) RETURNING workspace_id`, arguments...)
-	if err != nil || len(rows) == 0 {
-		return 0, err
+	if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_library_dirty WHERE workspace_id IN (SELECT workspace_id FROM workspace_library_claims WHERE token=?)`, token); err != nil {
+		return 0, 0, err
 	}
-	completed := maintenanceBatch(ctx, tx, "Indexing the Search view", "workspace", len(rows),
-		"SELECT ?+count(*) FROM workspace_library_dirty", len(rows))
-	args := make([]any, len(rows))
-	for index, row := range rows {
-		args[index] = row["workspace_id"]
+	for _, row := range previews {
+		if id, _ := row[0].(string); still[id] {
+			if _, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO workspace_previews(workspace_id,first_input_id,last_response_id) VALUES(?,?,?)", row...); err != nil {
+				return 0, 0, err
+			}
+		}
 	}
-	// Deleted workspaces produce no row; their stored rows cascaded away.
-	statement := "INSERT OR REPLACE INTO workspace_library " + libraryDerivedSelect("w.id IN ("+placeholders(len(args))+")")
-	if _, err := tx.ExecContext(ctx, statement, args...); err != nil {
-		return 0, err
-	}
-	previews := "INSERT OR REPLACE INTO workspace_previews " + libraryPreviewSelect("w.id IN ("+placeholders(len(args))+")")
-	if _, err := tx.ExecContext(ctx, previews, args...); err != nil {
-		return 0, err
+	if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_library_claims WHERE token=?`, token); err != nil {
+		return 0, 0, err
 	}
 	err = tx.Commit()
 	completed(err)
-	return len(rows), err
+	if err != nil {
+		return 0, 0, err
+	}
+	released = true
+	// Workspaces written to meanwhile stay marked and count as attempted, so
+	// the caller comes back for them.
+	return len(ids), len(still), nil
+}
+
+// queryValues reads a statement's rows as the driver returns them, in column
+// order, so that storing them again keeps each value's type.
+func queryValues(ctx context.Context, q queryer, statement string, args ...any) ([][]any, error) {
+	rows, err := q.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	out := [][]any{}
+	for rows.Next() {
+		values, pointers := make([]any, len(columns)), make([]any, len(columns))
+		for index := range values {
+			pointers[index] = &values[index]
+		}
+		if err := rows.Scan(pointers...); err != nil {
+			return nil, err
+		}
+		out = append(out, values)
+	}
+	return out, rows.Err()
 }
 
 // refreshPreviews stores the preview IDs of up to batch large workspaces
@@ -677,11 +833,11 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			fmt.Fprintf(os.Stderr, "Conversation names: %v\n", nameErr)
 		}
 		begin(&view, "maintenance.library-view")
-		var count int
+		var count, stored int
 		var err error
-		view.runIO(pass, func(ctx context.Context) { count, err = c.refreshLibrary(ctx, 10, nil) })
+		view.runIO(pass, func(ctx context.Context) { count, stored, err = c.refreshLibraryBatch(ctx, 10, nil) })
 		c.noteLibraryRefresh(count, err)
-		view.worked(count)
+		view.worked(stored)
 		settle(&view, count > 0, err)
 		// Session facts must also advance during a large Search refresh. Doing
 		// one conversation between view batches avoids waiting for every dirty
@@ -706,6 +862,10 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 				fmt.Fprintf(os.Stderr, "Library refresh: %v\n", err)
 				wait = 5 * time.Second
 			}
+		} else if count > 0 && stored == 0 {
+			// Everything it computed was written meanwhile: let that writer
+			// finish rather than recompute as fast as it writes.
+			wait = time.Second
 		} else if count == 0 {
 			// Idle: fill in previews, then keep the page caches warm.
 			begin(&previews, "maintenance.previews")
