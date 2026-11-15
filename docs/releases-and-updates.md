@@ -10,6 +10,12 @@ Pharos releases are built locally. GitHub Actions is not involved. A release
 contains a universal macOS app (arm64 and x86_64) in a Finder disk image,
 `vX.Y.Z-Pharos-macos-universal.dmg`, whose volume is named `vX.Y.Z Pharos`,
 plus a matching `.sha256` file and signed-update metadata (`update.json`).
+It also carries the command-line program for Linux machines that push their
+transcripts ([capture push](capture-push.md)): `pharos-linux-x86_64` and
+`pharos-linux-aarch64`, each with a `.sha256`. Those names have no version,
+so `https://github.com/Pythia-Software/pharos/releases/latest/download/pharos-linux-$(uname -m)`
+always fetches the newest; `macos/build-linux-cli.sh` builds them, without
+cgo, after the app build.
 The tag, GitHub release, and both bundle
 version fields use the same `X.Y.Z` version.
 
