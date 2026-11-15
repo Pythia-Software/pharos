@@ -146,8 +146,7 @@ missing/old/interrupted state,
 identity links into classified history, mirror changes among workspaces with
 history, launch overlap, historical edits/deletions or
 backfills, equal-time additions, and suffixes exceeding 2,000 user messages.
-A template crossing its threshold also takes the full path: its earlier uses
-change category. Another use of a prompt that already is a template does not.
+Another use of a prompt that already is a template changes nothing earlier.
 Its session and day counts are not stored with the span (the stored reason is
 the rule, `Repeated prompt`); the reader looks them up when it shows the
 message. Rows stored with the counts in their reason compare as the same
@@ -159,8 +158,7 @@ reconsidered mirror's messages or an old message's estimate take the full
 path. Frequent estimates defer these cases to the daily pass, and remember a
 checkpoint that could not take their suffix until a classifier pass replaces
 it; explicit exact rebuilds retain the full fallback. In the exact classifier,
-stream-local launch replay and targeted historical template replay are not
-implemented. Classification `authorship-v11` recognizes structured question
+stream-local launch replay is not implemented. Classification `authorship-v11` recognizes structured question
 replies, preserves their selected-option provenance, and recognizes scheduled
 automation heartbeats; `authorship-v12` adds that a Codex continuation is its
 root's own execution rather than a sub-agent (the rule labeling prepare
@@ -211,8 +209,33 @@ recognized when it already held a link between two conversations newer than
 its watermark, or when history changed before the upgrade; the next pass is
 then full, as it would have been without upgrading.
 
-A pass from the checkpoint is still refused when a repeated prompt crosses
-the template threshold, which happens often on a library that reuses prompts.
+A repeated prompt that crosses the template threshold in a suffix makes its
+earlier uses templates too. The suffix classifies those again instead of
+taking the full path. The checkpoint lists the sessions that sent the prompt,
+so the uses are the counted messages with that text in those sessions. Their
+new classification is the full classifier's because:
+
+- the template rule claims the whole message before any rule that compares
+  it with other messages, and a claim takes only bytes no earlier rule took;
+- the rules before it read only the message's own text and its
+  conversation's question forms, which the checkpoint keeps with their times;
+- what a message leaves for later ones (its text and lines) does not depend
+  on its category, so the rest of the checkpoint stands.
+
+A use that named its workspace has no typed words as a template. The name
+passes to the workspace's next message with typed words: an earlier one's
+stored classification is read for it, in the full classifier's order, before
+the suffix's own messages. More than 2,000 earlier uses take the full path.
+
+A copy that arrives after its original was classified is not handled, and
+cannot be by restating rows. In eight days of links (2026-11-06 to 11-13)
+every such original was a headless run (`codex_sdk_ts`, `codex_exec`,
+`sdk-ts`, `sdk-cli`): until the copy claims it, its prompts are automated and
+count toward no template. Claiming it puts typed messages into the past, and a TL1 copy also becomes the representative, moving the counted rows
+to its own messages. The checkpoint keeps only first occurrences, without
+times, so it cannot say what a later message would have matched. A checkpoint
+that lags the newest message by a fixed span, so that such copies fall inside
+the suffix, would be exact by the suffix's own rule; it is not built.
 
 Checkpoint publication is chunked too. Its version is invalidated before
 output writes and restored with the generation only after all state writes
