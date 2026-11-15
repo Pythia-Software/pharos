@@ -720,6 +720,42 @@ func TestStatisticsPendingProjectionRetainsRecordedEvidence(t *testing.T) {
 	}
 }
 
+// Tool counts are pending only for a conversation whose own ledger version
+// is behind, which a scoped revision (toolLedgerScopes) makes it and a
+// revision for other conversations does not.
+func TestStatisticsToolCountsFollowTheLedgerScope(t *testing.T) {
+	c := statisticsFixture(t)
+	status := func() string {
+		t.Helper()
+		execTx(t, c.DB, "INSERT OR IGNORE INTO mcp_metric_dirty SELECT id FROM workspaces")
+		if _, err := c.refreshMetricProjections(t.Context(), 10); err != nil {
+			t.Fatal(err)
+		}
+		r, err := parseMetricRequest("query_statistics", map[string]any{"select": []string{"tool_call_count"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := c.buildStatisticsSnapshot(t.Context(), r)
+		if err != nil || len(s.Rows) != 1 {
+			t.Fatalf("snapshot %#v, %v", s.Rows, err)
+		}
+		return s.Rows[0].Metrics["tool_call_count"].Status
+	}
+	if got := status(); got != "complete" {
+		t.Fatalf("current ledgers: tool calls are %q", got)
+	}
+	override(t, &toolLedgerScopes, []toolLedgerScope{{SourceKind: "claude-ai", Revision: "other-source"}, {Provider: "claude", Revision: "other-provider"}})
+	if got := status(); got != "complete" {
+		t.Fatalf("revisions for other conversations: tool calls are %q", got)
+	}
+	for _, scope := range []toolLedgerScope{{SourceKind: "codex", Revision: "this-source"}, {Provider: "codex", Revision: "this-provider"}} {
+		toolLedgerScopes = []toolLedgerScope{scope}
+		if got := status(); got != "pending" {
+			t.Fatalf("%+v: tool calls are %q", scope, got)
+		}
+	}
+}
+
 func TestStatisticsTransitiveMirrorsAcrossFilteredIntermediate(t *testing.T) {
 	c, _ := libraryFixture(t)
 	if _, err := c.DB.Exec("INSERT INTO conversation_identity_links VALUES('cb','cc','native-alias',1,'{}')"); err != nil {
