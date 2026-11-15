@@ -46,8 +46,9 @@ func nullableInt(value *int64) any {
 	return *value
 }
 
-// bumpToolLedgerGeneration marks the rollup stale. It runs in the writer's
-// transaction, so another process's reads see the change with the data.
+// bumpToolLedgerGeneration marks the rollup stale and demands a full rebuild,
+// for a repair whose changes no partition trigger records. It runs in the
+// writer's transaction, so another process's reads see the change with the data.
 func bumpToolLedgerGeneration(tx execer) error {
 	if err := bumpToolLedgerPartitionGeneration(tx); err != nil {
 		return err
@@ -580,6 +581,7 @@ func (c *Catalog) toolRollupStale(ctx context.Context) (generation, built, day s
 	var dirty bool
 	err = c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tool_rollup_dirty) OR
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_full_revision'),'')<>COALESCE((SELECT value FROM meta WHERE key='tool_rollup_built_full_revision'),'') OR
+ COALESCE((SELECT value FROM meta WHERE key='tool_rollup_price_revision'),'')<>COALESCE((SELECT value FROM meta WHERE key='tool_rollup_built_price_revision'),'') OR
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_timezone'),'')<>?`, toolRollupTimezone()).Scan(&dirty)
 	return generation, built, day, generation != built || dirty, err
 }

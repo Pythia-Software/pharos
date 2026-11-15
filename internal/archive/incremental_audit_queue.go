@@ -17,6 +17,22 @@ var (
 	heavyAuditBatch        = 4
 )
 
+// auditBackoffMax bounds how long an input that never fits a pass waits.
+var auditBackoffMax = 24 * time.Hour
+
+// auditBackoff is the wait before a queued input's next attempt, after the
+// given number of attempts at the same input: auditRetry after the first
+// queued one, doubling from there up to auditBackoffMax.
+func auditBackoff(attempts int) time.Duration {
+	wait := auditRetry
+	for range attempts - 2 {
+		if wait *= 2; wait >= auditBackoffMax {
+			return auditBackoffMax
+		}
+	}
+	return wait
+}
+
 type auditProgress struct {
 	attempted, next, signature string
 	heavy                      bool
@@ -39,11 +55,20 @@ func (c *Catalog) recordAuditProgress(unit syncUnit, result auditResult) error {
 		}
 		complete := result.Outcome == "passed" || result.Outcome == "mismatch"
 		heavy := result.Reason == "evidence_size" || result.Reason == "time_budget" || pending != 0 && previousSignature == signature
+		if signature != previousSignature {
+			// Changed input is a new check: earlier failures say nothing of it.
+			attempts = 0
+		}
+		attempts++
 		var next any = formatTime(at.Add(auditRetry))
 		if heavy && (pending == 0 || signature != previousSignature) {
 			next = stamp
+		} else if heavy && (result.Reason == "evidence_size" || result.Reason == "time_budget") {
+			// The same input ran out of room again: retry it ever less often,
+			// so it stops heading the queue every pass, until Verify all or a
+			// change to the input.
+			next = formatTime(at.Add(auditBackoff(attempts)))
 		}
-		attempts++
 		if complete {
 			verified, next, heavy, attempts = stamp, nil, false, 0
 		}
@@ -84,15 +109,22 @@ func (c *Catalog) verificationStatus(ctx context.Context) map[string]any {
 // ingest coordinator. It rediscovers current source units, never deserializes
 // an old adapter/configuration or certifies a stored result as fresh evidence.
 func (s *Server) verifyQueued(ctx context.Context, op *Op) error {
+	// Inputs tried least first, so one that keeps running out of time (and
+	// backs off) does not starve the rest.
 	rows, err := queryMapsContext(ctx, s.Catalog.reader(), `SELECT source_name,unit FROM sync_verification_progress
-		WHERE host_id=? AND heavy=1 AND next_at<=? ORDER BY next_at,attempted_at,source_name,unit LIMIT ?`, currentHost().ID, now(), heavyAuditBatch)
+		WHERE host_id=? AND heavy=1 AND next_at<=? ORDER BY attempts,next_at,attempted_at,source_name,unit LIMIT ?`, currentHost().ID, now(), heavyAuditBatch)
 	if err != nil {
 		return err
 	}
 	parent := ctx
 	ctx, cancel := context.WithTimeout(parent, heavyAuditWall)
 	defer cancel()
-	op.Step("Verify queued inputs", "input", int64(len(rows)))
+	// Acquisition and auditing report their own work into op, so the step is
+	// restored around them rather than advanced in place: Advance would add
+	// to whatever step they left.
+	verified := int64(0)
+	step := func() { op.progress("Verify queued inputs", "", "input", float64(verified), float64(len(rows)), true) }
+	step()
 	remaining := map[string]map[string]bool{}
 	for _, row := range rows {
 		source := firstString(row["source_name"])
@@ -168,7 +200,8 @@ func (s *Server) verifyQueued(ctx context.Context, op *Op) error {
 				return err
 			}
 			delete(selected, unit.ID)
-			op.Advance(1)
+			verified++
+			step()
 			if result.Outcome == "read_error" {
 				failure = errors.Join(failure, fmt.Errorf("%s: %s", source.Name, result.Detail))
 			}
@@ -178,6 +211,7 @@ func (s *Server) verifyQueued(ctx context.Context, op *Op) error {
 	// exhausted this pass's budget. Use the parent so the local deadline cannot
 	// prevent saving the retry or leave the same inputs blocking every batch.
 	// A service stop still cancels the pass and leaves its durable queue alone.
+	step()
 	reason := "source_unavailable"
 	if ctx.Err() == context.DeadlineExceeded && parent.Err() == nil {
 		reason = "time_budget"

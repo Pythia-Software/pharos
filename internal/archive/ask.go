@@ -195,7 +195,16 @@ func (s *Server) saveAskSession(ctx context.Context, session askSession, index b
 		if err != nil {
 			return err
 		}
-		convID, err := upsertConversation(tx, workspaceID, "", ConversationRecord{NativeID: "ask-" + session.ID, Provider: strings.ToLower(session.Selection.Provider), Model: session.Selection.Model, Effort: strings.ToLower(session.Selection.Effort), Account: "pharos:" + session.HostID, Origin: "Ask Pharos", Harness: "pharos", Coverage: "complete", StartedAt: time.UnixMilli(session.CreatedAt).UTC().Format(timeLayout), EndedAt: time.UnixMilli(session.UpdatedAt).UTC().Format(timeLayout)}, session.HostID)
+		conversation := ConversationRecord{NativeID: "ask-" + session.ID, Provider: strings.ToLower(session.Selection.Provider), Model: session.Selection.Model, Effort: strings.ToLower(session.Selection.Effort), Account: "pharos:" + session.HostID, Origin: "Ask Pharos", Harness: "pharos", Coverage: "complete", StartedAt: time.UnixMilli(session.CreatedAt).UTC().Format(timeLayout), EndedAt: time.UnixMilli(session.UpdatedAt).UTC().Format(timeLayout)}
+		convID, err := upsertConversation(tx, workspaceID, "", conversation, session.HostID)
+		if err != nil {
+			return err
+		}
+		var usageCurrent bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM usage_attribution_state WHERE workspace_id=? AND version=?)`, workspaceID, usageAttributionVersion).Scan(&usageCurrent); err != nil {
+			return err
+		}
+		searchCurrent, err := messageSearchCurrent(tx, convID)
 		if err != nil {
 			return err
 		}
@@ -221,7 +230,8 @@ func (s *Server) saveAskSession(ctx context.Context, session askSession, index b
 				if role == "assistant" {
 					order++
 				}
-				messageID, changed, err := upsertMessage(tx, convID, MessageRecord{NativeID: turn.ID + "-" + role, Role: role, Kind: "message", Text: message, Model: turn.Model, Effort: strings.ToLower(turn.Effort), SourceOrder: order, CreatedAt: time.UnixMilli(turn.StartedAt).UTC().Format(timeLayout), Selected: true})
+				record := MessageRecord{NativeID: turn.ID + "-" + role, Role: role, Kind: "message", Text: message, Model: turn.Model, Effort: strings.ToLower(turn.Effort), SourceOrder: order, CreatedAt: time.UnixMilli(turn.StartedAt).UTC().Format(timeLayout), Selected: true}
+				messageID, changed, err := upsertMessage(tx, convID, record)
 				if err != nil {
 					return err
 				}
@@ -230,7 +240,29 @@ func (s *Server) saveAskSession(ctx context.Context, session askSession, index b
 						return err
 					}
 				}
+				conversation.Messages = append(conversation.Messages, record)
 			}
+		}
+		// Record what ingest records for a conversation it writes, so a chat
+		// leaves nothing for the Library upgrade to do: its reasoning, message
+		// search, tool ledger and usage attribution are current. The chat is
+		// its workspace's only conversation, written just now.
+		if err := recordReasoningState(tx, convID, conversation.Messages); err != nil {
+			return err
+		}
+		if !searchCurrent {
+			err = repairMessageSearch(ctx, tx, convID)
+		} else {
+			err = recordMessageSearchState(ctx, tx, convID)
+		}
+		if err != nil {
+			return err
+		}
+		if err := rebuildStoredToolLedger(ctx, tx, convID); err != nil {
+			return err
+		}
+		if err := recordUsageAttribution(tx, workspaceID, usageCurrent, []ConversationRecord{conversation}, []string{convID}); err != nil {
+			return err
 		}
 		return upsertConversationDocument(tx, convID)
 	})

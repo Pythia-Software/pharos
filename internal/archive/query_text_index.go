@@ -219,7 +219,9 @@ func (c *Catalog) ensureQueryFactTriggers() error {
 	}
 	defer tx.Rollback()
 	schema := schemaSQL()
-	for _, name := range []string{"tool_query_facts_insert", "tool_query_facts_delete", "tool_query_facts_update"} {
+	for _, name := range []string{"tool_query_facts_insert", "tool_query_facts_delete", "tool_query_facts_update",
+		// Guarded search-index update triggers replace their unguarded forms.
+		"tool_command_fts_update", "tool_query_text_update", "human_query_text_body_update"} {
 		if _, err = tx.Exec("DROP TRIGGER IF EXISTS " + name); err != nil {
 			return err
 		}

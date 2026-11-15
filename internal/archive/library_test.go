@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -160,6 +161,237 @@ func TestLibraryReflectsEveryDependencyBeforeAndAfterRefresh(t *testing.T) {
 		if !reflect.DeepEqual(before, after) {
 			t.Fatalf("%s: refreshed rows differ:\nbefore %#v\nafter  %#v", change.name, before, after)
 		}
+	}
+}
+
+// A refresh computes from a read snapshot, so the writer is free meanwhile.
+// What was written to a workspace while its row was computed must not be
+// lost: the workspace stays marked and nothing computed before is stored.
+func TestLibraryRefreshKeepsWorkspacesWrittenWhileComputing(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	ctx := context.Background()
+	if err := catalog.refreshAllLibrary(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Idle: nothing to do is found without the writer.
+	writes := catalog.writers.next
+	if count, err := catalog.refreshLibrary(ctx, 10, nil); err != nil || count != 0 {
+		t.Fatalf("idle refresh: %d %v", count, err)
+	}
+	if catalog.writers.next != writes {
+		t.Fatal("an idle refresh took the catalog writer")
+	}
+	turns := func(id string) (stored int) {
+		t.Helper()
+		if err := catalog.DB.QueryRow("SELECT turn_count FROM workspace_library WHERE workspace_id=?", id).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		return stored
+	}
+	for _, written := range []struct {
+		name, during string
+		want         int
+	}{
+		// A dependency written while the workspace is already marked.
+		{"a message", `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('late','cc','late','user','message','Later','h')`, 3},
+		// A repair marking it by hand, for a change no trigger saw.
+		{"a mark", `INSERT OR IGNORE INTO workspace_library_dirty(workspace_id) VALUES('c')`, 4},
+	} {
+		execSQL(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('early-`+written.name+`','cc','early-`+written.name+`','user','message','Early','h')`,
+			`UPDATE summaries SET initiation='Changed by `+written.name+`' WHERE workspace_id='b'`)
+		before := turns("c")
+		override(t, &libraryComputedHook, func() {
+			libraryComputedHook = nil
+			execSQL(t, catalog.DB, written.during)
+		})
+		attempted, stored, err := catalog.refreshLibraryBatch(ctx, 10, nil)
+		if err != nil || attempted != 2 || stored != 1 {
+			t.Fatalf("%s while computing: attempted %d, stored %d, %v", written.name, attempted, stored, err)
+		}
+		if got := turns("c"); got != before {
+			t.Fatalf("%s while computing: stored a row computed before it (%d turns, was %d)", written.name, got, before)
+		}
+		var marked string
+		if err := catalog.DB.QueryRow("SELECT group_concat(workspace_id) FROM workspace_library_dirty").Scan(&marked); err != nil || marked != "c" {
+			t.Fatalf("%s while computing: marked %q, want c: %v", written.name, marked, err)
+		}
+		if err := catalog.refreshAllLibrary(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got := turns("c"); got != written.want || dirtyCount(t, catalog) != 0 {
+			t.Fatalf("after %s: %d turns stored, want %d; %d marked", written.name, got, written.want, dirtyCount(t, catalog))
+		}
+	}
+	// A refresh that fails gives its workspaces back at once.
+	execSQL(t, catalog.DB, `UPDATE summaries SET initiation='Again' WHERE workspace_id='b'`)
+	stopped, cancel := context.WithCancel(ctx)
+	override(t, &libraryComputedHook, func() { cancel() })
+	if _, _, err := catalog.refreshLibraryBatch(stopped, 10, nil); err == nil {
+		t.Fatal("a stopped refresh stored its batch")
+	}
+	libraryComputedHook = nil
+	if count, err := catalog.refreshLibrary(ctx, 10, nil); err != nil || count != 1 || dirtyCount(t, catalog) != 0 {
+		t.Fatalf("after a stopped refresh: %d refreshed, %d marked, %v", count, dirtyCount(t, catalog), err)
+	}
+}
+
+// projectionTriggerCases are the stored projections whose UPDATE triggers
+// mark only when a column their statements read has changed.
+func projectionTriggerCases() []struct {
+	name, trigger, dirty string
+	statements           []string
+	lookups              map[string]func(string) string
+} {
+	library := map[string]func(string) string{}
+	for _, dependency := range libraryDependencies {
+		if !dependency.insertOnly {
+			library[dependency.table] = dependency.workspaces
+		}
+	}
+	return []struct {
+		name, trigger, dirty string
+		statements           []string
+		lookups              map[string]func(string) string
+	}{
+		{"Search view", "workspace_library_", "workspace_library_dirty", libraryViewStatements(), library},
+		{"workspace metrics", "mcp_metric_", "mcp_metric_dirty", metricProjectionStatements, metricDependencies},
+	}
+}
+
+func projectionTableColumns(t *testing.T, q queryer, table string) []string {
+	t.Helper()
+	rows, err := queryMaps(q, "SELECT name FROM pragma_table_info(?)", table)
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("%s columns: %d %v", table, len(rows), err)
+	}
+	columns := []string{}
+	for _, row := range rows {
+		columns = append(columns, firstString(row["name"]))
+	}
+	return columns
+}
+
+// SQLite's own name resolution says which columns a projection reads: a
+// statement no longer compiles against a table that lacks a column it reads.
+// Every such column must be one its table's UPDATE trigger compares, or a
+// change to it would leave stored rows stale with nothing marked.
+func TestProjectionTriggersWatchEveryColumnRead(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	for _, projection := range projectionTriggerCases() {
+		for table, lookup := range projection.lookups {
+			var trigger string
+			if err := catalog.DB.QueryRow("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", projection.trigger+table+"_update").Scan(&trigger); err != nil {
+				t.Fatalf("%s: %s update trigger: %v", projection.name, table, err)
+			}
+			// The trigger's own expression reads the changed row as NEW.
+			statements := append(slices.Clone(projection.statements),
+				"SELECT EXISTS("+strings.ReplaceAll(lookup("NEW"), "NEW.", "changed_row.")+") FROM "+table+" changed_row")
+			columns := projectionTableColumns(t, catalog.DB, table)
+			indexes, err := queryMaps(catalog.DB, `SELECT l.name,i.name column_name FROM pragma_index_list(?) l JOIN pragma_index_info(l.name) i
+				WHERE l.name NOT LIKE 'sqlite_%' AND i.name IS NOT NULL ORDER BY l.name,i.seqno`, table)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Only a statement that names the table can read it, and only a
+			// column it names (none here selects a bare *).
+			reading := slices.DeleteFunc(statements, func(statement string) bool { return !strings.Contains(statement, table) })
+			// A temporary table of the same name, without the column, is the
+			// one the statements then name. Its indexes keep their names for
+			// INDEXED BY, less the column.
+			reads := func(column string) bool {
+				tx, err := catalog.DB.Begin()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				kept := slices.DeleteFunc(slices.Clone(columns), func(name string) bool { return name == column })
+				shadow := []string{`CREATE TEMP TABLE "` + table + `" AS SELECT "` + strings.Join(kept, `","`) + `" FROM main."` + table + `" WHERE 0`}
+				indexed := map[string][]string{}
+				for _, row := range indexes {
+					if name := firstString(row["column_name"]); name != column {
+						indexed[firstString(row["name"])] = append(indexed[firstString(row["name"])], name)
+					}
+				}
+				for name, on := range indexed {
+					shadow = append(shadow, `CREATE INDEX temp."`+name+`" ON "`+table+`"("`+strings.Join(on, `","`)+`")`)
+				}
+				for _, statement := range shadow {
+					if _, err := tx.Exec(statement); err != nil {
+						t.Fatalf("%s without %s: %v", table, column, err)
+					}
+				}
+				for _, statement := range reading {
+					rows, err := tx.Query("EXPLAIN "+statement, make([]any, strings.Count(statement, "?"))...)
+					if err == nil {
+						rows.Close()
+						continue
+					}
+					// A named index that held only this column is gone too.
+					if !strings.Contains(err.Error(), "no such column") && !strings.Contains(err.Error(), "no such index") {
+						t.Fatalf("%s without %s.%s: %v", projection.name, table, column, err)
+					}
+					return true
+				}
+				return false
+			}
+			watched := []string{}
+			for _, column := range columns {
+				if strings.Contains(trigger, `OLD."`+column+`" IS NOT NEW."`+column+`"`) {
+					watched = append(watched, column)
+				} else if strings.Contains(strings.Join(reading, "\n"), column) && reads(column) {
+					t.Errorf("%s reads %s.%s, which its update trigger does not compare", projection.name, table, column)
+				}
+			}
+			// The check itself must still see a read where there is one.
+			if !slices.ContainsFunc(watched, reads) {
+				t.Errorf("%s: none of the columns %s's trigger compares (%v) is seen to be read", projection.name, table, watched)
+			}
+		}
+	}
+}
+
+// A writer that stores rows again unchanged, as an upgrade's recomputation
+// and a repeated index do, leaves both projections alone.
+func TestProjectionsIgnoreRowsRewrittenUnchanged(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	execTx(t, catalog.DB, `INSERT INTO tool_ledger_state(conversation_id,version,updated_at) VALUES('cc','v','x')`,
+		`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,attribution,total_tokens) VALUES('sc','2026-09-23T02','opus','reported',5)`,
+		`INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES('sc1','m2',1)`,
+		`INSERT INTO conversation_group_membership(conversation_id,workspace_id,active) VALUES('cc','c',1)`,
+		`INSERT INTO claude_chat_settings_observations(host_id,source_name,account,organization_uuid,conversation_uuid,observed_at,time_basis,cache_entry,snapshot_id,model)
+			VALUES('h','s','local','o','cc','2026-09-23T02:00:00Z','observed','e','snap','opus')`)
+	if err := catalog.refreshAllLibrary(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rewritten := 0
+	for _, projection := range projectionTriggerCases() {
+		for table := range projection.lookups {
+			if countRows(t, catalog, "SELECT COUNT(*) FROM "+table) == 0 {
+				continue
+			}
+			rewritten++
+			assignments := []string{}
+			for _, column := range projectionTableColumns(t, catalog.DB, table) {
+				assignments = append(assignments, `"`+column+`"="`+column+`"`)
+			}
+			execSQL(t, catalog.DB, "UPDATE "+table+" SET "+strings.Join(assignments, ","))
+			if marked := countRows(t, catalog, "SELECT COUNT(*) FROM "+projection.dirty); marked != 0 {
+				t.Errorf("%s: rewriting %s unchanged marked %d workspaces", projection.name, table, marked)
+			}
+		}
+	}
+	if rewritten < 20 {
+		t.Fatalf("the fixture rewrote only %d dependency tables", rewritten)
+	}
+	// Columns neither projection reads: when a row was observed or indexed.
+	execSQL(t, catalog.DB, `UPDATE pull_requests SET observed_at='later'`, `UPDATE workspaces SET indexed_at='later',title='Renamed'`)
+	if library, metrics := dirtyCount(t, catalog), countRows(t, catalog, "SELECT COUNT(*) FROM mcp_metric_dirty"); library != 0 || metrics != 0 {
+		t.Fatalf("unread columns marked %d Search view and %d metric workspaces", library, metrics)
+	}
+	// One they read still marks, in a statement that also rewrites others.
+	execSQL(t, catalog.DB, `UPDATE messages SET kind=kind,role='assistant' WHERE id='m1'`)
+	if library, metrics := dirtyCount(t, catalog), countRows(t, catalog, "SELECT COUNT(*) FROM mcp_metric_dirty"); library != 1 || metrics != 1 {
+		t.Fatalf("a changed message marked %d Search view and %d metric workspaces, want 1 and 1", library, metrics)
 	}
 }
 
@@ -511,18 +743,36 @@ Please fix the parser' WHERE id='m1'`)
 	if _, last := preview(); last != "Shipped it" || stored() != 0 {
 		t.Fatalf("after an older build's refresh: %q, stored %d", last, stored())
 	}
-	// Large workspaces are filled in; small ones are quick to preview without.
+	// Large workspaces are filled in; small ones are quick to preview without,
+	// and leave the queue that refresh put them on.
 	if filled, err := catalog.refreshPreviews(ctx, 25); err != nil || filled != 0 {
 		t.Fatalf("filled %d small workspaces (%v)", filled, err)
 	}
-	if _, err := catalog.DB.Exec("UPDATE workspace_library SET turn_count=1000 WHERE workspace_id='c'"); err != nil {
-		t.Fatal(err)
+	if queued := countRows(t, catalog, "SELECT COUNT(*) FROM workspace_previews_pending"); queued != 0 {
+		t.Fatalf("%d small workspaces stay queued", queued)
 	}
+	// With none queued, a pass does not take the catalog writer.
+	writes := catalog.writers.next
+	if filled, err := catalog.refreshPreviews(ctx, 25); err != nil || filled != 0 || catalog.writers.next != writes {
+		t.Fatalf("idle pass: filled %d, took the writer %v (%v)", filled, catalog.writers.next != writes, err)
+	}
+	// The older build refreshes it again once it has grown.
+	execSQL(t, catalog.DB, "UPDATE workspace_library SET turn_count=1000 WHERE workspace_id='c'",
+		"INSERT INTO workspace_library_dirty(workspace_id) VALUES('c')", "DELETE FROM workspace_library_dirty")
 	if filled, err := catalog.refreshPreviews(ctx, 25); err != nil || filled != 1 || stored() != 1 {
 		t.Fatalf("filled %d, stored %d (%v)", filled, stored(), err)
 	}
 	if _, last := preview(); last != "Shipped it" {
 		t.Fatalf("filled preview %q", last)
+	}
+	// A catalog from before the queue has its large workspaces without
+	// previews queued once, when the queue is created.
+	execSQL(t, catalog.DB, "DROP TABLE workspace_previews_pending", "DELETE FROM workspace_previews")
+	if err := catalog.ensureLibrary(); err != nil {
+		t.Fatal(err)
+	}
+	if filled, err := catalog.refreshPreviews(ctx, 25); err != nil || filled != 1 || stored() != 1 || dirtyCount(t, catalog) != 0 {
+		t.Fatalf("upgrade: filled %d, stored %d, %d marked (%v)", filled, stored(), dirtyCount(t, catalog), err)
 	}
 	for _, stamp := range []struct {
 		at   string

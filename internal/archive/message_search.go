@@ -136,6 +136,16 @@ func repairMessageSearch(ctx context.Context, tx *sql.Tx, conversation string) e
 	return recordMessageSearchState(ctx, tx, conversation)
 }
 
+// messageSearchCurrent reports, before a writer replaces a conversation's
+// messages, whether the postings it keeps are this version's: those of a
+// conversation marked current, or of one with no messages yet.
+func messageSearchCurrent(tx *sql.Tx, conversation string) (bool, error) {
+	var current bool
+	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM message_search_state WHERE conversation_id=? AND version=?)
+	 OR NOT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?)`, conversation, messageSearchVersion, conversation).Scan(&current)
+	return current, err
+}
+
 func recordMessageSearchState(ctx context.Context, tx *sql.Tx, conversation string) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO message_search_state(conversation_id,version) VALUES(?,?)
 	 ON CONFLICT(conversation_id) DO UPDATE SET version=excluded.version WHERE version<>excluded.version`, conversation, messageSearchVersion)

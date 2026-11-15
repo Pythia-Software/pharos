@@ -70,19 +70,55 @@ func projectColorChoices(ctx context.Context, q queryer) (map[string]projectColo
 func projectColorRows(ctx context.Context, q queryer, predicate string, args ...any) ([]map[string]any, error) {
 	// Select affected project identities first, then count conversations across
 	// all of each project's workspaces, not just those in the input predicate.
-	return queryMapsContext(ctx, q, `SELECT `+projectIDSQL("w")+` id,`+projectNameSQL("w")+` name,`+projectKindSQL("w")+` kind,
-		MAX(pj.local_locations_json) locations, COUNT(cv.id) conversations,
+	// Group before reading a repository's locations: they can be large, and an
+	// aggregate over the joined text copies it once per conversation row. A
+	// project ID names at most one repository, so the rows are the same.
+	return queryMapsContext(ctx, q, `SELECT g.id,g.name,g.kind,r.local_locations_json locations,g.conversations,g.latest FROM (
+		SELECT `+projectIDSQL("w")+` id,`+projectNameSQL("w")+` name,`+projectKindSQL("w")+` kind,
+		MAX(pj.id) repository_id, COUNT(cv.id) conversations,
 		MAX(COALESCE(cv.ended_at,cv.started_at)) latest FROM workspaces w`+projectJoin("w")+`
 		JOIN conversations cv ON cv.workspace_id=w.id
 		WHERE `+projectIDSQL("w")+` IN (SELECT `+projectIDSQL("w")+` FROM workspaces w`+projectJoin("w")+` WHERE (`+predicate+`))
-		GROUP BY 1 HAVING COUNT(cv.id)>3 ORDER BY 1`, args...)
+		GROUP BY 1 HAVING COUNT(cv.id)>3) g LEFT JOIN repositories r ON r.id=g.repository_id ORDER BY 1`, args...)
+}
+
+// uncoloredProjectIDs lists the projects of the workspaces predicate selects
+// that have no valid color yet. It reads only workspace and preference rows,
+// so a write that touches colored projects never counts conversations.
+func uncoloredProjectIDs(ctx context.Context, tx *sql.Tx, predicate string, args ...any) ([]string, error) {
+	rows, err := queryMapsContext(ctx, tx, `SELECT DISTINCT `+projectIDSQL("w")+` id FROM workspaces w`+projectJoin("w")+` WHERE (`+predicate+`) ORDER BY 1`, args...)
+	if err != nil {
+		return nil, err
+	}
+	missing := []string{}
+	for _, row := range rows {
+		id := firstString(row["id"])
+		if id == "" {
+			continue
+		}
+		var raw string
+		if err := tx.QueryRowContext(ctx, `SELECT value FROM ui_preferences WHERE key=?`, projectColorKey(id)).Scan(&raw); err != nil && err != sql.ErrNoRows {
+			return nil, err
+		}
+		var choice projectColorChoice
+		if json.Unmarshal([]byte(raw), &choice) != nil || !validProjectColor(choice.Default) {
+			missing = append(missing, id)
+		}
+	}
+	return missing, nil
 }
 
 // Called by project resolution, inside ingest/migration's transaction. Only new
 // identities read brand hints or allocate a color. Sorting makes a first import
 // reproducible; adding or removing projects never rebalances saved colors.
 func ensureProjectColors(ctx context.Context, tx *sql.Tx, predicate string, args ...any) error {
-	rows, err := projectColorRows(ctx, tx, predicate, args...)
+	// Projects that already have a color need no conversation count; count
+	// only the uncolored ones, which are the only rows the loop below writes.
+	missing, err := uncoloredProjectIDs(ctx, tx, predicate, args...)
+	if err != nil || len(missing) == 0 {
+		return err
+	}
+	rows, err := projectColorRows(ctx, tx, projectIDSQL("w")+` IN (SELECT value FROM json_each(?))`, jsonText(missing))
 	if err != nil || len(rows) == 0 {
 		return err
 	}

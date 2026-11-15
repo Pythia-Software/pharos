@@ -60,6 +60,7 @@ type Catalog struct {
 	tools                     toolLedgerState
 	originsMu                 sync.Mutex
 	gitMainMu                 sync.Mutex
+	gitMainTips               map[string]integrationTipEntry
 	parallelismMu             sync.Mutex // serializes storing parallelism activity
 	sessionShapeMu            sync.Mutex // serializes storing session shape facts
 	// authorship tracks the human-authorship rebuild.

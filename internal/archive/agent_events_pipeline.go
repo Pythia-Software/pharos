@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -21,7 +22,48 @@ type agentEventsPipeline struct {
 	workers  int
 	build    func(context.Context, int, *agentEventsConversation) (*agentEventsConversation, error)
 	infer    func([]*agentEventsConversation) error
-	store    func(*agentEventsConversation, *AgentEventsRunStats) error
+	// store commits the conversations in one transaction: one with rows to
+	// write, or up to agentEventsStoreBatch with none.
+	store func([]*agentEventsConversation, *AgentEventsRunStats) error
+}
+
+// agentEventsStoreBatch is how many conversations with nothing to write but
+// their ledger row share one transaction. A pass over conversations whose
+// messages are unchanged (after an execution evidence or rules change, or a
+// daily re-read) then takes the catalog's write lock once per batch rather
+// than once per conversation. Only conversations already waiting for the
+// writer are batched, so a batch fills only while the writer is behind, and
+// its transaction stays well under a second (docs/agent-events.md).
+var agentEventsStoreBatch = 200
+
+// restamp reports a conversation whose stored rows all stand: only its
+// ledger row and dirty mark are written.
+func (conversation *agentEventsConversation) restamp() bool {
+	return len(conversation.messages) == 0 && len(conversation.stale) == 0 && len(conversation.retimed) == 0
+}
+
+// agentEventsStoreBatches splits conversations, in order, into the
+// transactions that store them: each one with rows to write alone, and runs
+// of the others (restamp) in batches of at most limit.
+func agentEventsStoreBatches(conversations []*agentEventsConversation, limit int) [][]*agentEventsConversation {
+	batches := [][]*agentEventsConversation{}
+	start := 0
+	for i, conversation := range conversations {
+		if !conversation.restamp() {
+			if start < i {
+				batches = append(batches, conversations[start:i])
+			}
+			batches = append(batches, conversations[i:i+1])
+			start = i + 1
+		} else if i+1-start >= max(1, limit) {
+			batches = append(batches, conversations[start:i+1])
+			start = i + 1
+		}
+	}
+	if start < len(conversations) {
+		batches = append(batches, conversations[start:])
+	}
+	return batches
 }
 
 type agentEventsPrepared struct {
@@ -45,13 +87,13 @@ func (conversation *agentEventsConversation) weight() int {
 
 // A persistence panic must reach the coordinator as an error now that saves
 // have their own goroutine. The transaction's deferred rollback runs first.
-func (p *agentEventsPipeline) save(ctx context.Context, conversation *agentEventsConversation, stats *AgentEventsRunStats) (err error) {
+func (p *agentEventsPipeline) save(ctx context.Context, conversations []*agentEventsConversation, stats *AgentEventsRunStats) (err error) {
 	defer func() {
 		if value := recover(); value != nil {
-			err = fmt.Errorf("storing agent events for %s panicked: %v", conversation.id, value)
+			err = fmt.Errorf("storing agent events for %s (%d conversations) panicked: %v", conversations[0].id, len(conversations), value)
 		}
 	}()
-	err = p.store(conversation, stats)
+	err = p.store(conversations, stats)
 	// database/sql may roll the transaction back on cancellation before
 	// Commit observes it. Preserve the stop signal rather than ErrTxDone.
 	if errors.Is(err, sql.ErrTxDone) && ctx.Err() != nil {
@@ -85,6 +127,7 @@ func (p *agentEventsPipeline) run(ctx context.Context, cancel context.CancelFunc
 		var result production
 		defer func() { close(built); produced <- result }()
 		messages := 0
+		producing := time.Now()
 		_ = prepareConversations(ctx, len(jobs), p.workers, func(ctx context.Context, worker, index int) agentEventsPrepared {
 			started := time.Now()
 			// Keep the backlog metadata-only; only the bounded preparation
@@ -116,7 +159,13 @@ func (p *agentEventsPipeline) run(ctx context.Context, cancel context.CancelFunc
 				release(ready)
 				return false
 			}
-			if p.opts.Limit > 0 && messages >= p.opts.Limit && index+1 < len(jobs) {
+			// A limited pass ends at whichever bound comes first: conversations
+			// with nothing to score count toward no message limit, and a
+			// library-wide re-read of them would otherwise run to its end.
+			cut := p.opts.Limit > 0 && messages >= p.opts.Limit ||
+				p.opts.LimitConversations > 0 && index+1 >= p.opts.LimitConversations ||
+				p.opts.LimitElapsed > 0 && time.Since(producing) >= p.opts.LimitElapsed
+			if cut && index+1 < len(jobs) {
 				result.cut = true
 				return false
 			}
@@ -133,21 +182,50 @@ func (p *agentEventsPipeline) run(ctx context.Context, cancel context.CancelFunc
 	go func() {
 		var result persistence
 		for chunk := range writes {
-			for i, job := range chunk {
-				if result.err == nil && ctx.Err() == nil {
-					started := time.Now()
-					p.status.stage("saving", true)
-					result.err = p.save(ctx, job.conversation, &result.stats)
-					result.stats.Write += time.Since(started)
-					if result.err == nil {
-						p.status.saved(job.conversation)
+			pending := make([]*agentEventsConversation, 0, len(chunk))
+			take := func(chunk []agentEventsPrepared) {
+				for i, job := range chunk {
+					pending = append(pending, job.conversation)
+					chunk[i] = agentEventsPrepared{}
+				}
+			}
+			take(chunk)
+			// With whatever already waits behind it, so conversations with
+			// nothing to write share transactions while the writer is behind.
+			// Those hold no rows; a chunk with rows ends the gathering, so the
+			// writer still retains no more scored windows than before.
+			restamps := func() bool {
+				return !slices.ContainsFunc(pending, func(conversation *agentEventsConversation) bool { return !conversation.restamp() })
+			}
+		waiting:
+			for len(pending) < agentEventsStoreBatch && restamps() {
+				select {
+				case more, open := <-writes:
+					if !open {
+						break waiting
 					}
-					p.status.stage("saving", false)
-					if result.err != nil {
-						cancel()
+					take(more)
+				default:
+					break waiting
+				}
+			}
+			for _, batch := range agentEventsStoreBatches(pending, agentEventsStoreBatch) {
+				if result.err != nil || ctx.Err() != nil {
+					break
+				}
+				started := time.Now()
+				p.status.stage("saving", true)
+				result.err = p.save(ctx, batch, &result.stats)
+				result.stats.Write += time.Since(started)
+				if result.err == nil {
+					for _, conversation := range batch {
+						p.status.saved(conversation)
 					}
 				}
-				chunk[i] = agentEventsPrepared{}
+				p.status.stage("saving", false)
+				if result.err != nil {
+					cancel()
+				}
 			}
 		}
 		written <- result

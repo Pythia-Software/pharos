@@ -749,8 +749,10 @@
     card.append(mode, renderColumns(model));
     if (model.rule) {
       const rule = node('div', 'bg-rule');
-      rule.append(node('strong', '', 'How work is placed:'), ...[`usually under ${duration(model.rule.frequent_seconds)} → Frequently`,
-        `under ${duration(model.rule.hourly_seconds)} → Hourly`, 'longer → Daily', 'Choose an item for its cost, or to change or run it; drag one to another schedule for a week.'].map(text => node('span', '', text)));
+      // A run's own length, and what a day of its runs' fixed cost adds up to.
+      const aDay = seconds => seconds ? `, and under ${duration(seconds)} a day of repeated work` : '';
+      rule.append(node('strong', '', 'How work is placed:'), ...[`runs usually under ${duration(model.rule.frequent_seconds)}${aDay(model.rule.frequent_day_seconds)} → Frequently`,
+        `under ${duration(model.rule.hourly_seconds)}${aDay(model.rule.hourly_day_seconds)} → Hourly`, 'longer → Daily', 'Choose an item for its cost, or to change or run it; drag one to another schedule for a week.'].map(text => node('span', '', text)));
       card.append(rule);
     }
     content.append(card);

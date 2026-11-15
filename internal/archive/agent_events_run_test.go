@@ -293,6 +293,62 @@ func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 	if err != nil || switched.MessagesScored != current || switched.MessagesUnchanged != 0 {
 		t.Fatalf("after a model switch: %+v %v (%d messages)", switched, err, current)
 	}
+
+	// Authorship is no input: the pass reads agent replies and thinking. A
+	// ledger the previous release made marks conversations on every
+	// classification change; upgrading it removes those triggers and marks
+	// nothing, and a message's own change still marks its conversation.
+	dirty := func() int {
+		t.Helper()
+		var n int
+		if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_events_dirty`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	reclassify := func() {
+		t.Helper()
+		result, err := catalog.DB.Exec(`UPDATE message_authorship SET spans_json=spans_json||' '`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n, _ := result.RowsAffected(); n == 0 {
+			t.Fatal("the fixture has no classified messages")
+		}
+	}
+	for _, statement := range itemDirtyTriggers("agent_events_dirty", "agent_events_dirty_") {
+		if _, err := catalog.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if dirty() != 0 {
+		t.Fatalf("%d conversations pending before any change", dirty())
+	}
+	reclassify()
+	if dirty() == 0 {
+		t.Fatal("precondition: the previous release's triggers mark on authorship changes")
+	}
+	if _, err := catalog.DB.Exec(`DELETE FROM agent_events_dirty; UPDATE meta SET value='5' WHERE key='agent_events_ledger_version'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.ensureAgentEventsLedger(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var triggers int
+	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE type='trigger' AND name LIKE 'agent\_events\_dirty\_%' ESCAPE '\' AND tbl_name='message_authorship'`).Scan(&triggers); err != nil || triggers != 0 {
+		t.Fatalf("%d authorship triggers left on the upgraded ledger (%v)", triggers, err)
+	}
+	if n := dirty(); n != 0 {
+		t.Fatalf("upgrading the ledger marked %d conversations", n)
+	}
+	reclassify()
+	if n := dirty(); n != 0 {
+		t.Fatalf("an authorship change marked %d conversations' agent events", n)
+	}
+	execTx(t, catalog.DB, `UPDATE messages SET text=text||' Again.' WHERE id='m-ev-reply'`)
+	if n := dirty(); n != 1 {
+		t.Fatalf("a changed reply marked %d conversations, want 1", n)
+	}
 }
 
 func TestAgentEventsLiveThreadTarget(t *testing.T) {
@@ -383,6 +439,62 @@ func TestAgentEventsRunsInLimitedSteps(t *testing.T) {
 	dry, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Full: true, DryRun: true})
 	if err != nil || dry.MessagesScored != 0 || dry.MessagesUnchanged != first.MessagesScored+rest.MessagesScored {
 		t.Fatalf("a dry run of a current ledger: %+v %v", dry, err)
+	}
+	// Conversations with nothing to score count toward no message limit: a
+	// limited pass over them ends at its conversation or time bound instead.
+	if dry.ConversationsBuilt < 2 {
+		t.Fatalf("the fixture has %d conversations, want several", dry.ConversationsBuilt)
+	}
+	for name, bound := range map[string]AgentEventsRunOptions{"conversations": {LimitConversations: 1}, "elapsed": {LimitElapsed: time.Nanosecond}} {
+		bound.Full, bound.Limit = true, 1000
+		cut, err := catalog.RunAgentEvents(t.Context(), labels, settings, bound)
+		if err != nil || !cut.Cut || cut.Complete || cut.ConversationsBuilt != 1 || cut.MessagesScored != 0 {
+			t.Fatalf("a pass over unchanged conversations bounded by %s: %+v %v", name, cut, err)
+		}
+	}
+	whole, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Full: true, Limit: 1000, LimitConversations: dry.ConversationsBuilt, LimitElapsed: time.Hour})
+	if err != nil || whole.Cut || !whole.Complete || whole.ConversationsBuilt != dry.ConversationsBuilt {
+		t.Fatalf("a bounded pass that reaches its last conversation: %+v %v", whole, err)
+	}
+	// Unchanged conversations stored together keep what each alone keeps: the
+	// stored rows, and a dirty mark written after the run read its token.
+	rows := func() []map[string]any {
+		t.Helper()
+		out, err := queryMaps(catalog.DB, `SELECT message_id,conversation_id,source,occurred_at,day,candidates,events,model,input_hash FROM agent_event_messages ORDER BY message_id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		events, err := queryMaps(catalog.DB, `SELECT message_id,family,probability,sentence_start,sentence_end,subject,response FROM agent_events ORDER BY message_id,family,sentence_start`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return append(out, events...)
+	}
+	before := rows()
+	built, err := queryMaps(catalog.DB, `SELECT conversation_id FROM agent_events_conversations ORDER BY conversation_id`)
+	if err != nil || len(built) < 2 {
+		t.Fatalf("built conversations: %v %v", built, err)
+	}
+	read, later := firstString(built[0]["conversation_id"]), firstString(built[1]["conversation_id"])
+	if _, err := catalog.DB.Exec(`INSERT INTO agent_events_dirty(conversation_id,token) VALUES(?,'read'),(?,'read')`, read, later); err != nil {
+		t.Fatal(err)
+	}
+	override(t, &beforeDerivedPublication, func() {
+		beforeDerivedPublication = nil
+		if _, err := catalog.DB.Exec(`UPDATE agent_events_dirty SET token='written since' WHERE conversation_id=?`, later); err != nil {
+			t.Error(err)
+		}
+	})
+	together, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Full: true})
+	if err != nil || together.Complete || together.MessagesScored != 0 || together.ConversationsBuilt != dry.ConversationsBuilt {
+		t.Fatalf("a pass over unchanged conversations: %+v %v", together, err)
+	}
+	if after := rows(); !reflect.DeepEqual(after, before) {
+		t.Fatalf("a pass over unchanged conversations changed stored rows:\n%v\n%v", before, after)
+	}
+	marks, err := queryMaps(catalog.DB, `SELECT conversation_id,token FROM agent_events_dirty`)
+	if err != nil || len(marks) != 1 || firstString(marks[0]["conversation_id"]) != later || firstString(marks[0]["token"]) != "written since" {
+		t.Fatalf("dirty marks after the pass = %v (%v), want only the one written since", marks, err)
 	}
 }
 
@@ -707,7 +819,8 @@ func TestAgentEventsPipelineOverlapsStages(t *testing.T) {
 					}
 					return nil
 				},
-				store: func(conversation *agentEventsConversation, written *AgentEventsRunStats) error {
+				store: func(conversations []*agentEventsConversation, written *AgentEventsRunStats) error {
+					conversation := conversations[0]
 					for _, row := range conversation.messages[0].rows {
 						if row.IDs != nil || len(row.Extra[labelrt.SegmentSpans]) == 0 {
 							return errors.New("save retained token IDs or lost sentence spans")
@@ -773,7 +886,7 @@ func TestAgentEventsPipelineBoundsPreparedWork(t *testing.T) {
 					return job, nil
 				},
 				infer: func([]*agentEventsConversation) error { return nil },
-				store: func(_ *agentEventsConversation, written *AgentEventsRunStats) error {
+				store: func(_ []*agentEventsConversation, written *AgentEventsRunStats) error {
 					retained.Add(-1)
 					written.Stored++
 					return nil
@@ -796,6 +909,86 @@ func TestAgentEventsPipelineBoundsPreparedWork(t *testing.T) {
 				t.Fatalf("retained %d conversations (peak %d), limit %d", retained.Load(), got, limit)
 			}
 		})
+	}
+}
+
+// Conversations whose stored rows all stand share transactions; one with rows
+// to write is stored alone, in order.
+func TestAgentEventsUnchangedConversationsShareTransactions(t *testing.T) {
+	restamp, scored := &agentEventsConversation{id: "r"}, &agentEventsConversation{id: "s", messages: []*agentEventsMessage{{}}}
+	retimed, removed := &agentEventsConversation{id: "t", retimed: []*agentEventsMessage{{}}}, &agentEventsConversation{id: "d", stale: []string{"m"}}
+	shape := func(conversations ...*agentEventsConversation) string {
+		parts := []string{}
+		for _, batch := range agentEventsStoreBatches(conversations, 3) {
+			part := ""
+			for _, conversation := range batch {
+				part += conversation.id
+			}
+			parts = append(parts, part)
+		}
+		return strings.Join(parts, " ")
+	}
+	if got := shape(restamp, restamp, restamp, restamp, scored, restamp, retimed, removed, restamp, restamp); got != "rrr r s r t d rr" {
+		t.Fatalf("store batches = %q", got)
+	}
+	if got := shape(); got != "" {
+		t.Fatalf("no conversations: %q", got)
+	}
+
+	// Through the pipeline: every conversation is stored once, in order, in
+	// fewer transactions than conversations.
+	override(t, &agentEventsStoreBatch, 4)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	jobs := make([]*agentEventsConversation, 40)
+	for i := range jobs {
+		jobs[i] = &agentEventsConversation{id: strconv.Itoa(i)}
+	}
+	// Preparation runs at most its workers ahead of delivery, so once the
+	// last conversation is being built nearly all the others wait for the
+	// coordinator, which hands them to the writer together.
+	last := make(chan struct{})
+	stored, transactions := []string{}, 0
+	stats := &AgentEventsRunStats{}
+	pipeline := agentEventsPipeline{
+		stats: stats, workers: 3, progress: func(string, ...any) {},
+		build: func(_ context.Context, _ int, job *agentEventsConversation) (*agentEventsConversation, error) {
+			switch job.id {
+			case "20":
+				job.messages = []*agentEventsMessage{{rows: make([]labelrt.Framed, 1)}}
+			case "39":
+				close(last)
+			}
+			return job, nil
+		},
+		infer: func(conversations []*agentEventsConversation) error {
+			select {
+			case <-last:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+		store: func(conversations []*agentEventsConversation, written *AgentEventsRunStats) error {
+			transactions++
+			if len(conversations) > 4 || len(conversations) > 1 && slices.ContainsFunc(conversations, func(c *agentEventsConversation) bool { return !c.restamp() }) {
+				return fmt.Errorf("a transaction of %d conversations", len(conversations))
+			}
+			for _, conversation := range conversations {
+				stored = append(stored, conversation.id)
+			}
+			return nil
+		},
+	}
+	if err := pipeline.run(ctx, cancel, jobs); err != nil {
+		t.Fatal(err)
+	}
+	want := make([]string, len(jobs))
+	for i := range want {
+		want[i] = strconv.Itoa(i)
+	}
+	if !slices.Equal(stored, want) || transactions >= len(jobs) || stats.progress.conversations != len(jobs) {
+		t.Fatalf("stored %v in %d transactions (progress %+v)", stored, transactions, stats.progress)
 	}
 }
 
@@ -831,7 +1024,7 @@ func TestAgentEventsPipelineFailureCancelsOtherStages(t *testing.T) {
 					}
 					return ctx.Err()
 				},
-				store: func(*agentEventsConversation, *AgentEventsRunStats) error {
+				store: func([]*agentEventsConversation, *AgentEventsRunStats) error {
 					if stage == "inference while saving" {
 						close(saving)
 						<-ctx.Done()

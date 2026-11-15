@@ -1307,7 +1307,9 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   [Progress and time estimates](progress-estimates.md). A range is shown
   only for `estimating`, or `provisional` marked as early ("about 3–6 min,
   early estimate"); otherwise `label` is null and surfaces show only "step
-  N of M".
+  N of M". Before discovery, a range whose high is more than ten times its
+  low is not shown either: the state is `learning` and the step says what is
+  being checked.
 - `freshness` (the §5 rows) and `freshness_summary` are filled from phase
   3; `resources` (§10) from phase 4, `null` when nothing could be read.
   `headings` (`{"work": "Work", "data": "Data"}`) are the words over Show
@@ -1783,7 +1785,7 @@ Every domain a page shows has an automatic owner. `backgroundLoop`
 three cadences, and Settings → Background Processing and the drive panel show
 the same schedule from one declaration (`backgroundItems`):
 
-| Item | Runs | Cadence before measurements | Measured by |
+| Item | Runs | Cadence before measurements | Journal kinds (cost before it has runs of its own) |
 |---|---|---|---|
 | New conversations | the scheduled index (`automaticLoop`) | Frequently (fixed) | `sync_history` |
 | Search | the Search view and search index daemons, continuously | Frequently (fixed) | — |
@@ -1791,15 +1793,15 @@ the same schedule from one declaration (`backgroundItems`):
 | Preserve originals | capture this Mac, then index every Mac's captures | Daily | `background.capture/preserve` |
 | Repositories & merges | the chain's GitHub, identities and Git stages | Frequently, adaptive | the three stages |
 | Tools & usage | the chain's tools stage | Frequently, adaptive | `analysis.tools` |
-| Update writing estimates | bounded recent/history lanes with reserved capacity, durable per-message outcomes, and exact suffix reuse when cheap | Frequently | `analysis.authorship` |
+| Update writing estimates | bounded recent/history lanes with reserved capacity, durable per-message outcomes, and exact suffix reuse when cheap, then related conversations | Frequently | `analysis.authorship`, `analysis.peers` |
 | Refine writing history | full historical classifier after the chain, when its input/version/calendar receipt is stale or work remains unfinished | Daily | `analysis.authorship.refine` |
-| Findings | the chain's findings stage, not forced | Hourly, adaptive | `analysis.findings` |
+| Findings | the chain's findings stage, not forced | Hourly, adaptive, never faster | `analysis.findings` `measure` |
 | Message labels | the chain's labels stage, only where `labels_enabled` is on (docs/local-labeler.md) | Hourly, adaptive | `analysis.labels` (not its `backlog` runs) |
 | Agent events | the chain's agent events stage, only where the agent events switch (Settings → Background Processing) or `agent_events_enabled` is on (docs/agent-events.md) | Hourly, adaptive | `analysis.agent_events` (not its `backlog` runs) |
 | Engagement labels | the chain's engagement stage, only where `engagement_enabled` is on (docs/engagement-labels.md); not listed elsewhere | Hourly, adaptive | `analysis.engagement` |
 | Pull request reviews | `RefreshPullRequestReviews` ([Pull request reviews](pull-request-reviews.md)), only where `pull_request_reviews_enabled` is on, when a pull request is due to be read; listed with its switch elsewhere | Hourly, adaptive | `forge.reviews` |
 | Ask Pharos suggestions | the suggestion signals ([Ask suggestions](ask-suggestions.md)), only where Ask Pharos is enabled, when their inputs changed | Hourly, adaptive | `ask.suggestions` |
-| Findings review | the findings stage once today's full pass is due | Daily (fixed) | `analysis.findings` |
+| Findings review | the findings stage once today's full pass is due | Daily (fixed) | `analysis.findings` `full` |
 | Library upgrade | `RunUpgrade`, when the stored count has pending steps | Daily (fixed) | `library.upgrade` |
 | Back up | a local backup to the last destination, when connected | only when chosen (opt-in Daily) | `backup.local` |
 
@@ -1810,12 +1812,49 @@ the same schedule from one declaration (`backgroundItems`):
   last completion. Daily runs at the daily time (03:00 by default) or the
   first quiet moment after, and regardless of quiet 12 h past it. A pass
   runs the most frequent cadence with due work; the next pass takes the
-  next.
-- **Placement.** An adaptive item moves to the most frequent cadence whose
-  limit its median cost (of its latest 7 journaled runs, at least 3) fits:
-  under 1 min Frequently, under 10 min Hourly, else Daily. It moves faster
-  only with a quarter to spare and slower only a quarter over, so a cost
-  near a limit does not flap. Placements are stored in
+  next. An hourly pass also takes the hourly items whose hour is up within
+  20 min (`hourlyJoin`), unless something else still holds them (a library
+  that is not quiet, a failure's retry, the battery policy, a queued
+  verification's own time): items whose clocks drifted apart run in one
+  pass and stay together, instead of each holding the library for a pass of
+  its own. The continuous items (Search, fingerprints) do not join.
+- **Costs.** Every scheduled run of an item records its own time in its
+  pass in `background_item_runs` (per Mac, kept two weeks): the sum of the
+  item's stages for a chain item, whether it was due or came along, and
+  never the pass's or the chain's time. Population stages (labels, agent
+  events, engagement) also record the conversations they looked at; the
+  other items do not count their work. Failed, interrupted and withdrawn
+  runs are not measurements. An item's typical run in Settings is the
+  middle of its latest 7 runs that had work. An item with fewer than 3 runs
+  of its own (a library this table is new to) is costed from the journal
+  instead, as the sum of its kinds' medians; the journal keeps only longer
+  runs, so that reads high for quick work. The findings stage's operation
+  says which pass it ran (`measure` or `full`), so the daily review is not
+  costed by the measure passes. Tools & usage includes the commit-link and
+  spend-by-branch steps that run in its stage, because they run whenever it
+  does.
+- **Placement.** An adaptive item sits at the most frequent cadence where
+  both hold (`placeCadence`): a run fits the cadence's limit (1 min
+  Frequently, 10 min Hourly), and a day of its runs' fixed cost fits the
+  cadence's budget (30 min a day Frequently, 2 h a day Hourly); else Daily.
+  The fixed cost is what a run with work costs before the work itself: for
+  an item that counts its work, the median time of the half of its latest
+  50 runs with the least work, less that work's own time; each unit's cost
+  is the time beyond the fixed cost over all the work, and a run's time at
+  a cadence is the fixed cost plus the work that arrives between runs. An
+  item that does not count its work is all fixed cost. A cadence runs an
+  item 24 times a day at most for Hourly, once for Daily, and for
+  Frequently as often as this Mac's Frequently passes ran over the last
+  week (40 a day until a day is measured). So a large fixed cost with
+  little work a run (agent events: about 10 min before any conversation)
+  runs Daily, and a quick run that would repeat all day does not move to
+  Frequently. Placements do not flap: an item moves slower only once it is
+  a quarter over, and faster only once even its slower runs (the upper
+  quartile) fit with a quarter to spare, so runs that are sometimes quick
+  and sometimes slow stay where the slow ones fit. Findings is never placed
+  faster than Hourly (`fastest`): a watched finding is decided over days. An
+  item's line in Settings says what keeps it from the next faster schedule,
+  with the numbers used. Placements are stored in
   `background_settings.placements_json`.
 - **Overrides** may permanently move an item to a slower cadence or to only
   when you ask, using its existing schedule picker. Every item also has
@@ -1959,21 +1998,20 @@ Pharos 0.7.5, 2026-10-27). They are recorded for later and not scheduled. PRs
 landing in the meantime may make some of them unnecessary, so check each one
 against current code before starting it.
 
-- **Forecast ranges are much wider than the evidence needs.**
-  - Automatic runs: the point estimate's median relative error is about 6% at
-    launch, yet the interval contains the outcome in about 99% of runs (75 of
-    76), with a median high/low ratio of about 9.
-  - Manual Index changes: median interval widths of 870–3,745 s on runs of
-    4–6 min, with 14 of 14 covered.
-  - The worst-case composition (adding the highs of sequential steps, the
-    live ×2 and overrun ×3 widening) plus calibration targets far more
-    coverage than needed. Aim for 80–90% (§10 and
-    [progress estimates](progress-estimates.md)).
-- **Stopped runs never train the forecast.** Capture & index runs took
-  between 6 minutes and 5 hours, every snapshot was `partial`, and 3 of 5
-  were interrupted. Interrupted runs record no outcome, so the operation
-  people most want a time for never reaches a total. Learning from the steps
-  that did finish would fix that.
+- **Forecast ranges were much wider than the evidence needs.** Done
+  (2026-11-14): the range is calibrated on previous outcomes at about 80%
+  coverage instead of summing step spreads, and the steps a stopped run
+  finished train the forecast
+  ([progress estimates](progress-estimates.md#whole-operation-forecasting-and-evaluation)).
+  Still open from that work:
+  - Manual Index changes under-cover (50–76% on 17 runs).
+  - Capture & index and library updates have too few completed runs to
+    calibrate (1 and 3), so their ranges stay half to twice the point.
+  - `background.update` and `analysis.chain` under it, the largest consumers
+    of background time, have no forecast at all; the panel shows a time only
+    for a top-level operation that has one.
+  - The progress a stopped step had made is stored but not yet used as a
+    rate sample.
 - **Memory peaks around 9.6 GB during routine incremental runs.** That is the
   median of the observed peak RSS (p95 9.8 GB, max 11.2 GB), at a median CPU
   of 236% of one core. The figure is process-wide, so concurrent maintenance
