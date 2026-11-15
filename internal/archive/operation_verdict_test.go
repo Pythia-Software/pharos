@@ -106,9 +106,9 @@ func TestUpdateRefusesOnlyWorkItWouldInterrupt(t *testing.T) {
 		{"nothing", "", verdictInput{}},
 		{"a batch writer", "", verdictInput{ops: []opView{runningView("index.changes.manual", nil)}}},
 		{"another process", "", verdictInput{ops: []opView{foreign}, leases: []leaseProbe{terminal}, locks: []heldLock{{Kind: "capture", Path: "/c/.capture.lock"}}}},
-		{"a step-latency writer", "waits for prepare the catalog", verdictInput{ops: []opView{runningView("catalog.initialize", nil)}}},
-		{"a broker operation", "waits for copy library", verdictInput{ops: []opView{runningView("library.transfer", func(view *opView) { view.Spec.Variant = "copy" })}}},
-		{"unregistered work", "waits for indexing sources", verdictInput{unregistered: []string{"Indexing sources"}}},
+		{"a step-latency writer", "in time: prepare the catalog.", verdictInput{ops: []opView{runningView("catalog.initialize", nil)}}},
+		{"a broker operation", "in time: copy library.", verdictInput{ops: []opView{runningView("library.transfer", func(view *opView) { view.Spec.Variant = "copy" })}}},
+		{"unregistered work", "in time: indexing sources.", verdictInput{unregistered: []string{"Indexing sources"}}},
 	} {
 		got := updateRefusal(computeEjectVerdict(updateInputs(test.in)))
 		if test.refusal == "" && got != "" || test.refusal != "" && !strings.Contains(got, test.refusal) {

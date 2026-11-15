@@ -1025,8 +1025,8 @@ final class ArchiveService: ObservableObject {
                                 // before its HTTP listener has opened.
                                 if child.isRunning { child.terminate() }
                             case .stopping(let body):
-                                throw UpdateFailure(message: ServiceClient.reason(body) ?? "Pharos is finishing a write. Wait a moment, then quit or install again.")
-                            case .failed(let reason): throw UpdateFailure(message: "Could not close Pharos's catalog: \(reason)")
+                                throw UpdateFailure(message: ServiceClient.reason(body) ?? "Pharos is finishing a write. Wait a moment, then install the update again.")
+                            case .failed(let reason): throw UpdateFailure(message: "Pharos could not close its libraries: \(reason)")
                             }
                         } else { child.terminate() }
                     }
@@ -1035,7 +1035,7 @@ final class ArchiveService: ObservableObject {
                     try UpdateProcesses.prepare(app: app, servicePID: child?.processIdentifier, stopService: stopService)
                     let deadline = Date().addingTimeInterval(timeout)
                     while child?.isRunning == true {
-                        if Date() >= deadline { throw UpdateFailure(message: "Pharos is still closing its catalog. Try quitting again in a moment.") }
+                        if Date() >= deadline { throw UpdateFailure(message: "Pharos is still closing its libraries. Try installing the update again in a moment.") }
                         Thread.sleep(forTimeInterval: 0.05)
                     }
                     try lease?.finish()
@@ -1075,7 +1075,7 @@ final class ArchiveService: ObservableObject {
             serviceLog = nil
             url = nil
             errorTitle = "Pharos stopped"
-            error = "The service has stopped. Reopen Pharos to resume, or try installing the update again."
+            error = "Pharos stopped its library service to install an update, but the update was not installed. Quit and reopen Pharos to continue, or choose Pharos → Check for Updates… to install it."
         } else if url == nil, let endpoint = lock.withLock({ self.endpoint }) {
             // Readiness callbacks stop while shutdown is pending.
             // A cancelled quit must resume observing the live child.
@@ -1848,7 +1848,7 @@ struct ArchiveWebView: NSViewRepresentable {
                     case "status": replyHandler(updates.headerState.dictionary, nil)
                     case "install":
                         guard updates.installFromHeader() else {
-                            replyHandler(nil, "This update is no longer ready. Use Check for Updates in the Pharos menu."); return
+                            replyHandler(nil, "This update is no longer ready. Choose Pharos → Check for Updates…"); return
                         }
                         replyHandler(updates.headerState.dictionary, nil)
                     default: replyHandler(nil, "Unknown update action.")

@@ -546,7 +546,7 @@
     const progress = state.phase === 'downloading' && Number.isFinite(state.progress) ? Math.max(0, Math.min(100, Math.floor(state.progress))) : null;
     return {busy, phase: state.phase, progress,
       icon: state.phase === 'preparing' ? 'package' : state.phase === 'installing' ? 'restart' : 'download',
-      title: state.phase === 'available' ? `Download and update Pharos to ${state.version}; Pharos will restart`
+      title: state.phase === 'available' ? `Update Pharos to ${state.version}. Pharos installs it and restarts.`
         : state.phase === 'downloading' ? `Downloading Pharos ${state.version}${progress == null ? '' : ` (${progress}%)`}. Pharos will restart when ready.`
           : state.phase === 'preparing' ? `Verifying and preparing Pharos ${state.version}. Pharos will restart when ready.`
             : `Installing Pharos ${state.version} and restarting…`};
