@@ -726,11 +726,19 @@ var utilityIO = func(_ *Op, fn func()) { withCaptureIOPolicy(fn) }
 // starts run at the default tier, so callers wrap the loop that does the IO
 // on its own goroutine. Safe on a nil handle, which runs fn as is.
 func (op *Op) RunIO(fn func()) {
-	if !op.lowersIO() {
+	if op == nil {
 		fn()
 		return
 	}
-	utilityIO(op, fn)
+	// The body is also what the operation's CPU time is measured over
+	// (background_cpu.go): its thread's clock, read at each end.
+	op.cpu.measure(func() {
+		if !op.lowersIO() {
+			fn()
+			return
+		}
+		utilityIO(op, fn)
+	})
 }
 
 // lowersIO reports whether RunIO lowers op's IO. The priority is fixed at

@@ -611,7 +611,7 @@ const scheduleCostRows = (current, figures) => ["frequent", "hourly", "daily", "
   gpu_seconds: figures?.gpu ? [90, 55, 2, 2][index] : null, peak_bytes: figures?.cpu ? 1.2e9 : null, measured: false,
 }));
 const usageRow = (source, label, cpu, changes = {}) => ({ source, label, cpu_seconds: cpu, worker_cpu_seconds: null, gpu_seconds: null, seconds: cpu === null ? 40 : cpu * 0.8, runs: 12.5,
-  peak_bytes: 2.4e9, shared_share: 0.12, days: [1, 0].map(back => ({ day: new Date(now - back * day).toISOString().slice(0, 10), cpu_seconds: cpu === null ? null : cpu * (back ? 1.3 : 0.7), seconds: 60 })), ...changes });
+  peak_bytes: 2.4e9, days: [1, 0].map(back => ({ day: new Date(now - back * day).toISOString().slice(0, 10), cpu_seconds: cpu === null ? null : cpu * (back ? 1.3 : 0.7), seconds: 60 })), ...changes });
 const backgroundCosts = {
   schedule_costs: {
     conversations: { reason: null, rows: [{ ...scheduleCostRows("frequent", { cpu: true })[0], bound: "about", measured: true }] },
@@ -620,13 +620,13 @@ const backgroundCosts = {
     preserve: { reason: null, rows: scheduleCostRows("daily", null) },
   },
   usage: { window_days: 7, measured_days: 2, cpu_seconds: 5321, since: new Date(now - day).toISOString().slice(0, 10), days: [1, 0].map(back => new Date(now - back * day).toISOString().slice(0, 10)), rows: [
-    usageRow("item:agent_events", "Agent events", 2900, { item: "agent_events", worker_cpu_seconds: 2400, gpu_seconds: 310, shared_share: 0.02 }),
+    usageRow("item:agent_events", "Agent events", 2900, { item: "agent_events", worker_cpu_seconds: 2400, gpu_seconds: 310 }),
     usageRow("item:conversations", "New conversations", 1100, { item: "conversations" }),
     usageRow("kind:library.rebuild", "Full recapture & reindex / Reindex from stored messages", 640),
     usageRow("item:tools", "Tools & usage", 71, { item: "tools" }),
-    usageRow("kind:maintenance.checkpoint", "Save the catalog", 0.3, { peak_bytes: null, shared_share: null }),
-    usageRow("kind:maintenance.cache-warm", "Warm page caches", null, { peak_bytes: null, shared_share: null }),
-    usageRow("other", "Pages and everything else", 610, { seconds: 0, runs: 0, peak_bytes: null, shared_share: null }),
+    usageRow("kind:maintenance.checkpoint", "Save the catalog", 0.3, { peak_bytes: null }),
+    usageRow("kind:maintenance.cache-warm", "Warm page caches", null, { peak_bytes: null }),
+    usageRow("other", "Pages and everything else", 610, { seconds: 0, runs: 0, peak_bytes: null }),
   ] },
 };
 export const backgroundDocument = {

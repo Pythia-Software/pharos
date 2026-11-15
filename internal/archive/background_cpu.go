@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -17,27 +18,31 @@ import (
 // analysis; both read what this file measures.
 //
 // Go work shares the service process, and the runtime keeps no CPU time per
-// goroutine, so no figure here is read directly for one piece of work.
-// The ledger divides the process's own CPU time (getrusage) among the work
-// that was running:
+// goroutine. The kernel does keep it per thread, so the ledger measures the
+// thread a piece of work runs on:
 //
-//   - Every operation, and every background item's run, is a span. A span
-//     with a running span inside it is not itself running: the innermost
-//     spans are the work.
-//   - At each boundary (a span starts, ends, blocks or resumes) and every
-//     few seconds while any runs, the CPU the process used since the last
-//     boundary goes to the spans that were running. One span takes it all.
-//     Several share it in proportion to what each kind of work uses when it
-//     runs alone (its measured cores, one until known); that part is an
-//     estimate, and it is kept apart (cpuUse.Shared) so its size is known.
-//   - CPU used while no span runs is not background work the ledger can
-//     name: pages and other requests, and loops that looked and found
-//     nothing. It is kept as cpuSourceOther rather than left out.
+//   - Every operation, and every background item's run, is a span. The body
+//     of its work (Op.RunIO, and a pass's call of an item) runs locked to
+//     its thread, and the thread's CPU clock is read before and after
+//     (cpuSpan.measure). That figure is measured, not divided: other work
+//     running at the same time, on other threads, is not in it.
+//   - A measured body inside another on the same thread (an operation an
+//     item starts) is counted to its own source, and taken out of the outer
+//     one's own figure; an item's run still reports everything inside it.
+//   - What the body's thread did is all that is counted to it. Goroutines the
+//     work starts, and the runtime's memory management on its behalf, run on
+//     other threads. So does everything that is not a span's body: pages and
+//     other requests, and loops that looked and found nothing. The
+//     process's CPU time (getrusage) less everything measured is kept as
+//     cpuSourceOther rather than left out, so the sources sum to what the
+//     process used.
+//   - The time a span was running (not queued or blocked, and with no span
+//     running inside it) is its running time, and the most memory the
+//     process held then is its peak.
 //
-// Requests are not spans, so a page that loads during a run is counted to
-// that run. Worker processes (the labeler) are different: their counters are
-// read for the lease that used them, so their CPU, memory and GPU time are
-// measured and go to the span that held the lease.
+// Worker processes (the labeler) are read directly: their counters are read
+// for the lease that used them, so their CPU, memory and GPU time go to the
+// span that held the lease.
 //
 // Nothing is written per sample. Totals are kept in memory per day and
 // source and stored with the next background run's own write, or every few
@@ -55,9 +60,8 @@ const (
 type cpuUse struct {
 	// Seconds is the time the work was running.
 	Seconds float64
-	// CPU is the service's CPU time attributed to the work, and Shared the
-	// part of it that came from intervals other work also ran in.
-	CPU, Shared *float64
+	// CPU is the service's CPU time the work's own threads used.
+	CPU *float64
 	// Worker and GPU are its worker processes' CPU and GPU time, measured
 	// over the leases the work held.
 	Worker, GPU *float64
@@ -85,7 +89,7 @@ func (use *cpuUse) add(other cpuUse) {
 	for _, pair := range []struct {
 		to   **float64
 		from *float64
-	}{{&use.CPU, other.CPU}, {&use.Shared, other.Shared}, {&use.Worker, other.Worker}, {&use.GPU, other.GPU}} {
+	}{{&use.CPU, other.CPU}, {&use.Worker, other.Worker}, {&use.GPU, other.GPU}} {
 		if pair.from != nil {
 			addTo(pair.to, *pair.from)
 		}
@@ -119,7 +123,12 @@ type cpuDay struct {
 	runs int
 }
 
-// cpuLedger divides the process's CPU among its running spans.
+// cpuScope is one measured body in progress on a thread; inner is the CPU
+// time of the measured bodies that ran inside it.
+type cpuScope struct{ inner float64 }
+
+// cpuLedger keeps what each span's threads used, and the rest of the
+// process's CPU.
 type cpuLedger struct {
 	mu  sync.Mutex
 	now func() time.Time
@@ -131,14 +140,18 @@ type cpuLedger struct {
 	// so far (nil where it cannot be read).
 	readProcess func(int) (processUsage, error)
 	readGPU     func() (gpuSnapshot, error)
+	// readThread is the calling thread's CPU seconds so far and its id.
+	readThread func() (float64, uint64, bool)
 
 	last   float64
 	lastOK bool
 	lastAt time.Time
 	spans  map[*cpuSpan]struct{}
 	leases map[*cpuLease]struct{}
-	// rates is each source's CPU use when it runs alone, in cores.
-	rates map[string]float64
+	// scopes is the measured body in progress on each thread, and pool the
+	// process's CPU time not yet counted to a span or to the rest.
+	scopes map[uint64]*cpuScope
+	pool   float64
 	// pending are the totals not yet stored; runsPending is whether any of
 	// them is a finished run, which is what makes a flush worth a write.
 	pending     map[cpuDayKey]*cpuDay
@@ -157,8 +170,8 @@ var (
 const cpuDaysKept = 35 * 24 * time.Hour
 
 func newCPULedger() *cpuLedger {
-	ledger := &cpuLedger{now: time.Now, readProcess: processUsageOf, readGPU: platformGPUClients,
-		spans: map[*cpuSpan]struct{}{}, leases: map[*cpuLease]struct{}{}, rates: map[string]float64{}, pending: map[cpuDayKey]*cpuDay{}}
+	ledger := &cpuLedger{now: time.Now, readProcess: processUsageOf, readGPU: platformGPUClients, readThread: threadCPUTime,
+		spans: map[*cpuSpan]struct{}{}, leases: map[*cpuLease]struct{}{}, scopes: map[uint64]*cpuScope{}, pending: map[cpuDayKey]*cpuDay{}}
 	ledger.readCPU = func() (float64, bool) {
 		usage := processResourceUsage()
 		return usage.cpu, usage.known.has(counterOwnCPU)
@@ -305,6 +318,52 @@ func (span *cpuSpan) setPaused(paused bool) {
 	span.paused = paused
 }
 
+// measure runs fn, the body of the span's work, locked to its thread, and
+// counts the CPU time the thread used to the span. Where the thread's clock
+// cannot be read it runs fn and counts nothing. Safe on a nil span.
+func (span *cpuSpan) measure(fn func()) {
+	if span == nil {
+		fn()
+		return
+	}
+	l := span.ledger
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	start, thread, ok := l.readThread()
+	if !ok {
+		fn()
+		return
+	}
+	scope := &cpuScope{}
+	l.mu.Lock()
+	outer := l.scopes[thread]
+	l.scopes[thread] = scope
+	l.mu.Unlock()
+	defer func() {
+		end, _, ok := l.readThread()
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if outer != nil {
+			l.scopes[thread] = outer
+		} else {
+			delete(l.scopes, thread)
+		}
+		if !ok || end < start {
+			return
+		}
+		if outer != nil {
+			outer.inner += end - start
+		}
+		own := max(0, end-start-scope.inner)
+		addTo(&l.dayLocked(span.source).CPU, own)
+		for at := span; at != nil; at = at.parent {
+			addTo(&at.use.CPU, own)
+		}
+		l.pool -= own
+	}()
+	fn()
+}
+
 // end closes the span and reports what it and the work inside it used. ran
 // is whether it counts as a run of its source: a pass that found nothing to
 // do and was discarded does not.
@@ -369,8 +428,9 @@ func (l *cpuLedger) runningLocked() []*cpuSpan {
 	return running
 }
 
-// settleLocked gives the CPU the process used since the last settlement to
-// the spans that were running, and reads memory for them.
+// settleLocked counts the time since the last settlement to the spans that
+// were running, reads memory for them, and moves the process's CPU time no
+// span measured to the rest.
 func (l *cpuLedger) settleLocked() {
 	at := l.now()
 	cpu, ok := l.readCPU()
@@ -380,45 +440,15 @@ func (l *cpuLedger) settleLocked() {
 		elapsed = 0
 	}
 	if ok && l.lastOK && cpu >= l.last {
-		delta := cpu - l.last
-		switch len(running) {
-		case 0:
-			if delta > 0 {
-				addTo(&l.dayLocked(cpuSourceOther).CPU, delta)
-			}
-		case 1:
-			l.creditLocked(running[0], delta, 0, elapsed)
-			// What this source uses alone weighs its share when it next runs
-			// beside other work. A short interval says little. An interval
-			// alone still holds requests' CPU, so the rate falls quickly and
-			// rises slowly: work that mostly waits keeps a small weight.
-			if elapsed >= 1 {
-				rate := delta / elapsed
-				if known, ok := l.rates[running[0].source]; ok && rate < known {
-					rate = 0.5*known + 0.5*rate
-				} else if ok {
-					rate = 0.9*known + 0.1*rate
-				}
-				l.rates[running[0].source] = rate
-			}
-		default:
-			weights, sum := make([]float64, len(running)), 0.0
-			for index, span := range running {
-				weights[index] = 1
-				if rate, ok := l.rates[span.source]; ok {
-					weights[index] = max(rate, 0.01)
-				}
-				sum += weights[index]
-			}
-			for index, span := range running {
-				share := delta * weights[index] / sum
-				l.creditLocked(span, share, share, elapsed)
-			}
+		l.pool += cpu - l.last
+	}
+	// A measured body takes its CPU from the pool when it ends. With none in
+	// progress, all that is left was used outside them.
+	if len(l.scopes) == 0 {
+		if l.pool > 0 {
+			addTo(&l.dayLocked(cpuSourceOther).CPU, l.pool)
 		}
-	} else {
-		for _, span := range running {
-			l.creditLocked(span, -1, 0, elapsed)
-		}
+		l.pool = 0
 	}
 	l.last, l.lastOK, l.lastAt = cpu, ok, at
 	if len(running) == 0 {
@@ -426,6 +456,10 @@ func (l *cpuLedger) settleLocked() {
 	}
 	memory, memoryOK := l.readMemory()
 	for _, span := range running {
+		l.dayLocked(span.source).Seconds += elapsed
+		for at := span; at != nil; at = at.parent {
+			at.use.Seconds += elapsed
+		}
 		held, known := memory, memoryOK
 		for lease := range l.leases {
 			if lease.span == span {
@@ -444,26 +478,8 @@ func (l *cpuLedger) settleLocked() {
 	}
 }
 
-// creditLocked adds an interval to span, the spans it is inside, and its
-// source's day. cpu is negative when the interval's CPU could not be read.
-func (l *cpuLedger) creditLocked(span *cpuSpan, cpu, shared, seconds float64) {
-	day := l.dayLocked(span.source)
-	day.Seconds += seconds
-	if cpu >= 0 {
-		addTo(&day.CPU, cpu)
-		addTo(&day.Shared, shared)
-	}
-	for at := span; at != nil; at = at.parent {
-		at.use.Seconds += seconds
-		if cpu >= 0 {
-			addTo(&at.use.CPU, cpu)
-			addTo(&at.use.Shared, shared)
-		}
-	}
-}
-
-// tick settles while work runs, so a long run's memory is read and its CPU
-// lands on the day it was used.
+// tick settles while work runs, so a long run's memory is read and its
+// running time lands on the day it was used.
 func (l *cpuLedger) tick() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -668,14 +684,13 @@ func storeCPUDays(ctx context.Context, tx *sql.Tx, totals map[cpuDayKey]*cpuDay)
 		if day.Peak != nil {
 			peak = *day.Peak
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO background_cpu_days(host_id,day,source,runs,seconds,cpu_seconds,shared_cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes)
-			VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(host_id,day,source) DO UPDATE SET runs=runs+excluded.runs, seconds=seconds+excluded.seconds,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO background_cpu_days(host_id,day,source,runs,seconds,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes)
+			VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(host_id,day,source) DO UPDATE SET runs=runs+excluded.runs, seconds=seconds+excluded.seconds,
 			cpu_seconds=CASE WHEN excluded.cpu_seconds IS NULL THEN cpu_seconds ELSE COALESCE(cpu_seconds,0)+excluded.cpu_seconds END,
-			shared_cpu_seconds=CASE WHEN excluded.shared_cpu_seconds IS NULL THEN shared_cpu_seconds ELSE COALESCE(shared_cpu_seconds,0)+excluded.shared_cpu_seconds END,
 			worker_cpu_seconds=CASE WHEN excluded.worker_cpu_seconds IS NULL THEN worker_cpu_seconds ELSE COALESCE(worker_cpu_seconds,0)+excluded.worker_cpu_seconds END,
 			gpu_seconds=CASE WHEN excluded.gpu_seconds IS NULL THEN gpu_seconds ELSE COALESCE(gpu_seconds,0)+excluded.gpu_seconds END,
 			peak_bytes=CASE WHEN excluded.peak_bytes IS NULL THEN peak_bytes ELSE MAX(COALESCE(peak_bytes,0),excluded.peak_bytes) END`,
-			currentHost().ID, key.day, key.source, day.runs, day.Seconds, nullFloat(day.CPU), nullFloat(day.Shared), nullFloat(day.Worker), nullFloat(day.GPU), peak); err != nil {
+			currentHost().ID, key.day, key.source, day.runs, day.Seconds, nullFloat(day.CPU), nullFloat(day.Worker), nullFloat(day.GPU), peak); err != nil {
 			return err
 		}
 	}
@@ -751,22 +766,22 @@ func (l *cpuLedger) flushDueNow() bool {
 func (c *Catalog) cpuDays(ctx context.Context, since time.Time) map[cpuDayKey]cpuDay {
 	first := since.Local().Format("2006-01-02")
 	days := map[cpuDayKey]cpuDay{}
-	rows, err := c.reader().QueryContext(ctx, `SELECT day,source,runs,seconds,cpu_seconds,shared_cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes
+	rows, err := c.reader().QueryContext(ctx, `SELECT day,source,runs,seconds,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes
 		FROM background_cpu_days WHERE host_id=? AND day>=?`, currentHost().ID, first)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var key cpuDayKey
 			var day cpuDay
-			var cpu, shared, worker, gpu sql.NullFloat64
+			var cpu, worker, gpu sql.NullFloat64
 			var peak sql.NullInt64
-			if rows.Scan(&key.day, &key.source, &day.runs, &day.Seconds, &cpu, &shared, &worker, &gpu, &peak) != nil {
+			if rows.Scan(&key.day, &key.source, &day.runs, &day.Seconds, &cpu, &worker, &gpu, &peak) != nil {
 				continue
 			}
 			for _, pair := range []struct {
 				to   **float64
 				from sql.NullFloat64
-			}{{&day.CPU, cpu}, {&day.Shared, shared}, {&day.Worker, worker}, {&day.GPU, gpu}} {
+			}{{&day.CPU, cpu}, {&day.Worker, worker}, {&day.GPU, gpu}} {
 				if pair.from.Valid {
 					*pair.to = &pair.from.Float64
 				}
@@ -809,11 +824,8 @@ type cpuSourceRow struct {
 	Seconds          float64  `json:"seconds"`
 	Runs             float64  `json:"runs"`
 	// PeakBytes is the most over the window, not a daily figure.
-	PeakBytes *int64 `json:"peak_bytes"`
-	// SharedShare is the part of the service's CPU here that was divided
-	// with other work running at the same time, 0 to 1.
-	SharedShare *float64     `json:"shared_share"`
-	Days        []cpuDayCell `json:"days"`
+	PeakBytes *int64       `json:"peak_bytes"`
+	Days      []cpuDayCell `json:"days"`
 }
 
 type cpuDayCell struct {
@@ -881,8 +893,9 @@ func cpuUsage(days map[cpuDayKey]cpuDay, at time.Time) map[string]any {
 	rows, whole := []cpuSourceRow{}, (*float64)(nil)
 	for source, row := range sources {
 		total := totals[source]
-		// Work that used nothing worth a bar: a tenth of a second all week.
-		if cpu := total.total(); source != cpuSourceOther && cpu != nil && *cpu < 0.1 && total.Seconds < 1 {
+		// Work that used nothing worth a bar: a tenth of a second all week,
+		// or bookkeeping with no measured body that ran under a second.
+		if cpu := total.total(); source != cpuSourceOther && (cpu == nil || *cpu < 0.1) && total.Seconds < 1 {
 			continue
 		}
 		row.Seconds, row.Runs = total.Seconds/measured, row.Runs/measured
@@ -893,9 +906,6 @@ func cpuUsage(days map[cpuDayKey]cpuDay, at time.Time) map[string]any {
 			return new(*value / measured)
 		}
 		row.CPUSeconds, row.WorkerCPUSeconds, row.GPUSeconds, row.PeakBytes = perDay(total.total()), perDay(total.Worker), perDay(total.GPU), total.Peak
-		if total.CPU != nil && total.Shared != nil && *total.CPU > 0 {
-			row.SharedShare = new(*total.Shared / *total.CPU)
-		}
 		for _, name := range window {
 			day := days[cpuDayKey{name, source}]
 			row.Days = append(row.Days, cpuDayCell{Day: name, CPUSeconds: day.total(), Seconds: day.Seconds})

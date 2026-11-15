@@ -425,7 +425,6 @@ func (c *Catalog) Initialize() error {
 		{"tool_calls", "path_absolute", "ALTER TABLE tool_calls ADD COLUMN path_absolute TEXT"},
 		// A catalog whose background_item_runs predates its resource columns.
 		{"background_item_runs", "cpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN cpu_seconds REAL"},
-		{"background_item_runs", "shared_cpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN shared_cpu_seconds REAL"},
 		{"background_item_runs", "worker_cpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN worker_cpu_seconds REAL"},
 		{"background_item_runs", "gpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN gpu_seconds REAL"},
 		{"background_item_runs", "peak_bytes", "ALTER TABLE background_item_runs ADD COLUMN peak_bytes INTEGER"},

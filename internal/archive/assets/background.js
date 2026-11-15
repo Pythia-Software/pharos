@@ -142,7 +142,7 @@
 .bg-usage-table tbody th{color:var(--ink);overflow-wrap:anywhere;min-width:120px}
 .bg-usage-table :is(td,th).num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 @container (max-width:560px){.bg-bars{grid-template-columns:minmax(0,1fr) max-content;gap:2px 12px}.bg-bar-track{grid-column:1/-1;grid-row:2;margin-bottom:8px}.bg-bar-label{max-width:none}
-  .bg-costs thead{display:none}.bg-costs,.bg-costs tbody,.bg-costs tr,.bg-costs th,.bg-costs td{display:block;width:auto}.bg-costs tbody th{width:auto;padding-bottom:0}.bg-costs td{border-top:0;padding:1px 0}.bg-costs td::before{content:attr(data-label) ": ";color:var(--muted);font-weight:400}.bg-costs td:last-child{padding-bottom:6px}}
+  .bg-costs thead{display:none}.bg-costs caption{display:block}.bg-costs,.bg-costs tbody,.bg-costs tr,.bg-costs th,.bg-costs td{display:block;width:auto}.bg-costs tbody th{width:auto;padding-bottom:0}.bg-costs td{border-top:0;padding:1px 0}.bg-costs td::before{content:attr(data-label) ": ";color:var(--muted);font-weight:400}.bg-costs td:last-child{padding-bottom:6px}}
 @media(max-width:900px){.bg-cols,.bg-battery{grid-template-columns:minmax(0,1fr)}}
 @container (max-width:560px){.bg-cols{grid-template-columns:minmax(0,1fr)}}`;
 
@@ -240,7 +240,7 @@
     if (folded.length) {
       const sum = key => folded.some(row => measured(row[key])) ? folded.reduce((total, row) => total + (Number(row[key]) || 0), 0) : null;
       bars.push({source: 'folded', label: `${folded.length} smaller kinds of work`, cpu_seconds: sum('cpu_seconds'), worker_cpu_seconds: sum('worker_cpu_seconds'), gpu_seconds: sum('gpu_seconds'),
-        seconds: sum('seconds') || 0, runs: sum('runs') || 0, peak_bytes: null, shared_share: null, days: [],
+        seconds: sum('seconds') || 0, runs: sum('runs') || 0, peak_bytes: null, days: [],
         parts: folded.map(row => [row.label, cpu(row.cpu_seconds)])});
     }
     bars.push(...rest);
@@ -256,11 +256,9 @@
       if (measured(row.peak_bytes)) details.push({label: 'Most memory', value: memory(row.peak_bytes)});
       if (row.parts) details.push(...row.parts.slice(0, 6).map(([label, value]) => ({label, value})));
       const recent = (row.days || []).filter(day => measured(day.cpu_seconds)).map(day => [dayLabel(day.day), amount(day.cpu_seconds)]);
-      const mixed = measured(row.shared_share) && row.shared_share >= 0.05
-        ? `About ${Math.round(100 * row.shared_share)}% of its CPU time was used while other work ran too, and is divided by estimate.` : '';
       return {source: row.source, label: row.label, rest: row.source === 'other', value: cpu(row.cpu_seconds), measured: measured(row.cpu_seconds),
         width: peak > 0 && measured(row.cpu_seconds) ? Math.max(0, Math.min(1, row.cpu_seconds / peak)) : 0,
-        popover: {heading: row.label, notes, rows: details, ...recent.length ? {totals: recent} : {}, ...mixed ? {detail: mixed} : {}}};
+        popover: {heading: row.label, notes, rows: details, ...recent.length ? {totals: recent} : {}}};
     });
     const table = all.map(row => ({label: row.label, cpu: cpu(row.cpu_seconds), share: share(row.cpu_seconds),
       // Only work that leases the labeling worker has GPU time to measure.
@@ -270,8 +268,8 @@
     return {empty: false, rows, table, days, total: measured(usage.cpu_seconds) ? `${amount(usage.cpu_seconds)} of CPU time a day` : '',
       gpu: all.some(row => measured(row.gpu_seconds)),
       note: `Average a day over ${days === 1 ? 'the 1 day' : `the ${days} days`} measured on this Mac while Pharos was open. `
-        + 'These are estimates: Pharos divides its own CPU time among the work running at each moment, so a page you open during a run counts to that run. '
-        + 'The labeling worker’s CPU and GPU time are measured directly. “Pages and everything else” is CPU time used while no background work ran; Terminal commands are not included.'};
+        + 'Each figure is the CPU time of the work’s own thread, plus the labeling worker’s where it uses one, so it is a little under the full cost: '
+        + 'memory management and helper threads are counted under “Pages and everything else”, with the pages you open. Terminal commands are not included.'};
   }
 
   // An item's or a cadence's state line: the server's label, then the age

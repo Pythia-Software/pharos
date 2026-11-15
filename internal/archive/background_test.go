@@ -827,7 +827,7 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	}
 	// What the run used is kept with it, and the day's totals ride the same
 	// write: one run of the item, not one for each operation inside it.
-	if own := catalog.itemRuns(ctx)["tools"][0]; processResourceUsage().known.has(counterOwnCPU) && (own.Use.CPU == nil || own.Use.Shared == nil) {
+	if own := catalog.itemRuns(ctx)["tools"][0]; func() bool { _, _, ok := threadCPUTime(); return ok }() && own.Use.CPU == nil {
 		t.Fatalf("the run's CPU time was not measured: %+v", own.Use)
 	}
 	var counted int
@@ -1770,12 +1770,14 @@ func TestBackgroundWritingEstimatesAndRefinementHaveIndependentSchedules(t *test
 // when it was used: the innermost span takes it, work running side by side
 // shares it by what each uses alone, waiting work takes none, and what no
 // work was running for is kept as the rest.
-func TestCPULedgerDividesProcessCPUAmongRunningWork(t *testing.T) {
+func TestCPULedgerMeasuresEachSpansThread(t *testing.T) {
 	at := time.Date(2026, 11, 14, 12, 0, 0, 0, time.Local)
 	cpu, memory := 0.0, int64(1<<30)
+	threads, thread, threadOK := map[uint64]float64{}, uint64(1), true
 	workers := map[int]processUsage{}
 	gpu := map[int]uint64{}
 	ledger := &cpuLedger{now: func() time.Time { return at }, readCPU: func() (float64, bool) { return cpu, true }, readMemory: func() (int64, bool) { return memory, true },
+		readThread: func() (float64, uint64, bool) { return threads[thread], thread, threadOK },
 		readProcess: func(pid int) (processUsage, error) {
 			usage, ok := workers[pid]
 			if !ok {
@@ -1790,41 +1792,54 @@ func TestCPULedgerDividesProcessCPUAmongRunningWork(t *testing.T) {
 			}
 			return snapshot, nil
 		},
-		spans: map[*cpuSpan]struct{}{}, leases: map[*cpuLease]struct{}{}, rates: map[string]float64{}, pending: map[cpuDayKey]*cpuDay{}}
+		spans: map[*cpuSpan]struct{}{}, leases: map[*cpuLease]struct{}{}, scopes: map[uint64]*cpuScope{}, pending: map[cpuDayKey]*cpuDay{}}
+	// spend is time passing while the process uses CPU on threads nothing
+	// measures; work is the current thread using it.
 	spend := func(seconds, used float64) { at, cpu = at.Add(time.Duration(seconds*float64(time.Second))), cpu+used }
+	work := func(seconds, used float64) { spend(seconds, used); threads[thread] += used }
 	source := func(name string) func(*cpuSpan) string { return func(*cpuSpan) string { return name } }
 	near := func(got *float64, want float64) bool { return got != nil && *got > want-1e-6 && *got < want+1e-6 }
 
-	// Nothing running: the rest.
 	ledger.begin(nil, source("kind:warmup"), false).end(false)
 	spend(10, 2)
 	pass := ledger.begin(nil, source(cpuSourcePass), false)
-	spend(1, 0.5)
-	// An item inside the pass takes over; an operation the pass starts from
-	// its own context while the item runs is the item's too.
+	// An operation the pass starts from its own context while the item runs
+	// is the item's too.
 	ctx, item := beginItemSpan(withCPUSpan(context.Background(), pass), "tools")
 	if cpuSpanFrom(ctx) != item {
 		t.Fatal("the item's context does not carry its span")
 	}
-	spend(4, 8)
-	child := ledger.begin(pass, func(parent *cpuSpan) string { return cpuSourceFor("maintenance.cache-warm", "", parent) }, false)
-	if child.parent != item || child.source != "item:tools" {
-		t.Fatalf("an operation started during the item belongs to %q under %v", child.source, child.parent)
-	}
-	memory = 3 << 30
-	spend(2, 2)
-	child.end(true)
-	// Work beside it: tools has used 2 and then 1 cores alone; the other
-	// kind is unknown, so one core. Waiting work takes nothing.
 	beside := ledger.begin(nil, source("item:fingerprints"), false)
 	waiting := ledger.begin(nil, source("kind:maintenance.checkpoint"), true)
-	rate := ledger.rates["item:tools"]
-	spend(10, 10)
+	var searchUse cpuUse
+	item.measure(func() {
+		work(4, 8)
+		child := ledger.begin(pass, func(parent *cpuSpan) string { return cpuSourceFor("maintenance.cache-warm", "", parent) }, false)
+		if child.parent != item || child.source != "item:tools" {
+			t.Fatalf("an operation started during the item belongs to %q under %v", child.source, child.parent)
+		}
+		memory = 3 << 30
+		// A body inside the item's, on its thread, is not counted twice.
+		child.measure(func() { work(2, 2) })
+		child.end(true)
+		// Another item's work inside this one is counted to that item.
+		search := ledger.begin(item, source("item:search"), false)
+		search.measure(func() { work(1, 3) })
+		searchUse = search.end(true)
+		// Other work on its own thread at the same time, and a helper
+		// thread nothing measures, take nothing from the item.
+		thread = 2
+		beside.measure(func() { work(0, 5) })
+		thread = 1
+		spend(0, 4)
+	})
 	waiting.setPaused(false)
 	waiting.end(true)
-	besideUse := beside.end(true)
-	if want := 10 / (rate + 1); !near(besideUse.CPU, want) || !near(besideUse.Shared, want) {
-		t.Fatalf("work beside the item: %v CPU, %v of it shared, want %v by its weight (tools alone uses %.2f cores)", *besideUse.CPU, *besideUse.Shared, want, rate)
+	if use := beside.end(true); !near(use.CPU, 5) {
+		t.Fatalf("work beside the item used its own thread's CPU: %v", use.CPU)
+	}
+	if !near(searchUse.CPU, 3) {
+		t.Fatalf("the work inside the item: %v", searchUse.CPU)
 	}
 	// A worker process the item leased: its own counters, GPU time apart.
 	workers[41], gpu[41] = processUsage{CPUSeconds: 100, Footprint: 2 << 30, Started: 7, Known: counterOwnCPU | counterMemory}, 5e9
@@ -1836,33 +1851,50 @@ func TestCPULedgerDividesProcessCPUAmongRunningWork(t *testing.T) {
 	release()
 	release()
 	use := item.end(true)
-	if !near(use.CPU, 8+2+10*rate/(rate+1)+1) || !near(use.Shared, 10*rate/(rate+1)) || !near(use.Worker, 35) || !near(use.GPU, 4) || use.Seconds != 21 {
-		t.Fatalf("the item used %+v CPU %v shared %v worker %v GPU %v", use, *use.CPU, *use.Shared, *use.Worker, *use.GPU)
+	if !near(use.CPU, 8+2+3) || !near(use.Worker, 35) || !near(use.GPU, 4) || use.Seconds != 12 {
+		t.Fatalf("the item used %+v CPU %v worker %v GPU %v", use, *use.CPU, *use.Worker, *use.GPU)
 	}
 	if use.Peak == nil || *use.Peak != 6<<30 {
 		t.Fatalf("the item's peak is the service and the workers it held: %v", use.Peak)
 	}
-	whole := pass.end(true)
-	if !near(whole.CPU, *use.CPU+0.5) {
-		t.Fatalf("the pass is its own work and its items': %v", *whole.CPU)
+	if whole := pass.end(true); !near(whole.CPU, *use.CPU) {
+		t.Fatalf("the pass reports its items' work: %v", *whole.CPU)
 	}
 	day := at.Format("2006-01-02")
 	pending := ledger.snapshot()
-	if other := pending[cpuDayKey{day, cpuSourceOther}]; !near(other.CPU, 2) || other.runs != 0 {
-		t.Fatalf("CPU with no work running is the rest: %+v", other)
+	// The sources sum to what the process used: 2 before, 4 by the helper
+	// and 1 during the lease were no measured thread's.
+	if other := pending[cpuDayKey{day, cpuSourceOther}]; !near(other.CPU, 2+4+1) || other.runs != 0 {
+		t.Fatalf("CPU no measured thread used is the rest: %+v", other)
 	}
-	if tools := pending[cpuDayKey{day, "item:tools"}]; tools.runs != 1 || !near(tools.CPU, *use.CPU) || !near(tools.Worker, 35) {
+	if tools := pending[cpuDayKey{day, "item:tools"}]; tools.runs != 1 || !near(tools.CPU, 10) || !near(tools.Worker, 35) {
 		t.Fatalf("the item's day: %+v", tools)
 	}
-	if checkpoint := pending[cpuDayKey{day, "kind:maintenance.checkpoint"}]; checkpoint.runs != 1 || checkpoint.CPU != nil && *checkpoint.CPU != 0 {
-		t.Fatalf("work that only waited used nothing: %+v", checkpoint)
+	if search := pending[cpuDayKey{day, "item:search"}]; search.runs != 1 || !near(search.CPU, 3) {
+		t.Fatalf("the other item's day: %+v", search)
 	}
-	// A counter that cannot be read leaves the figure unmeasured, not zero.
-	ledger.readCPU = func() (float64, bool) { return 0, false }
+	if checkpoint := pending[cpuDayKey{day, "kind:maintenance.checkpoint"}]; checkpoint.runs != 1 || checkpoint.CPU != nil {
+		t.Fatalf("work with no measured body has no CPU figure: %+v", checkpoint)
+	}
+	// A clock that cannot be read leaves the figure unmeasured, not zero.
+	threadOK = false
 	blind := ledger.begin(nil, source("kind:blind"), false)
-	spend(3, 0)
+	blind.measure(func() { work(3, 1) })
 	if use := blind.end(true); use.CPU != nil || use.Seconds != 3 {
-		t.Fatalf("an unreadable counter: %+v", use)
+		t.Fatalf("an unreadable clock: %+v", use)
+	}
+	threadOK = true
+	// The real clock: a locked thread that spins has used about that long.
+	if _, _, ok := threadCPUTime(); ok {
+		real := newCPULedger()
+		spin := real.begin(nil, source("kind:spin"), false)
+		spin.measure(func() {
+			for start := time.Now(); time.Since(start) < 50*time.Millisecond; {
+			}
+		})
+		if use := spin.end(true); use.CPU == nil || *use.CPU < 0.02 || *use.CPU > 0.2 {
+			t.Fatalf("50 ms of spinning measured as %v", use.CPU)
+		}
 	}
 	// Every way an operation ends closes its span: one left open would be
 	// counted as running, and take a share, for as long as the service runs.
@@ -1921,16 +1953,16 @@ func TestCPUUsageAveragesTheDaysMeasured(t *testing.T) {
 		}
 	}
 	store(map[cpuDayKey]*cpuDay{
-		{day(2), "item:labels"}:                 {cpuUse: cpuUse{Seconds: 600, CPU: f(300), Shared: f(30), Worker: f(900), GPU: f(60), Peak: &peak}, runs: 3},
-		{day(0), "item:labels"}:                 {cpuUse: cpuUse{Seconds: 300, CPU: f(150), Shared: f(60)}, runs: 1},
-		{day(1), "kind:maintenance.checkpoint"}: {cpuUse: cpuUse{Seconds: 30, CPU: f(6), Shared: f(0)}, runs: 9},
+		{day(2), "item:labels"}:                 {cpuUse: cpuUse{Seconds: 600, CPU: f(300), Worker: f(900), GPU: f(60), Peak: &peak}, runs: 3},
+		{day(0), "item:labels"}:                 {cpuUse: cpuUse{Seconds: 300, CPU: f(150)}, runs: 1},
+		{day(1), "kind:maintenance.checkpoint"}: {cpuUse: cpuUse{Seconds: 30, CPU: f(6)}, runs: 9},
 		{day(1), cpuSourceOther}:                {cpuUse: cpuUse{CPU: f(9000)}},
 		// Before the window, and too old to keep.
 		{day(12), "item:tools"}: {cpuUse: cpuUse{Seconds: 5, CPU: f(5)}, runs: 1},
 		{at.Add(-2 * cpuDaysKept).Local().Format("2006-01-02"), "item:tools"}: {cpuUse: cpuUse{Seconds: 5, CPU: f(5)}, runs: 1},
 	})
 	// A second write adds to the day rather than replacing it.
-	store(map[cpuDayKey]*cpuDay{{day(0), "item:labels"}: {cpuUse: cpuUse{Seconds: 300, CPU: f(150), Shared: f(0)}, runs: 1}})
+	store(map[cpuDayKey]*cpuDay{{day(0), "item:labels"}: {cpuUse: cpuUse{Seconds: 300, CPU: f(150)}, runs: 1}})
 	var kept int
 	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM background_cpu_days").Scan(&kept); err != nil || kept != 5 {
 		t.Fatalf("days past the kept window are dropped: %d kept, %v", kept, err)
@@ -1946,7 +1978,7 @@ func TestCPUUsageAveragesTheDaysMeasured(t *testing.T) {
 	}
 	labels := rows[0]
 	if labels.Label != "Message labels" || labels.Item != "labels" || *labels.CPUSeconds != 500 || *labels.WorkerCPUSeconds != 300 || *labels.GPUSeconds != 20 ||
-		labels.Seconds != 400 || labels.Runs != 5.0/3 || *labels.PeakBytes != peak || *labels.SharedShare != 0.15 {
+		labels.Seconds != 400 || labels.Runs != 5.0/3 || *labels.PeakBytes != peak {
 		t.Fatalf("labels a day over three days: %+v", labels)
 	}
 	if len(labels.Days) != 3 || labels.Days[0].Day != day(2) || *labels.Days[0].CPUSeconds != 1200 || labels.Days[1].CPUSeconds != nil || *labels.Days[2].CPUSeconds != 300 {
@@ -1983,7 +2015,7 @@ func TestScheduleCostsProjectEachCadenceFromMeasuredRuns(t *testing.T) {
 	runs := []itemRun{}
 	for hour := range 48 {
 		run := itemRun{Item: "labels", Cadence: cadenceHourly, Started: at.Add(-time.Duration(hour+1) * time.Hour), Seconds: 70, Units: units(10),
-			Use: cpuUse{CPU: f(35), Shared: f(0), Worker: f(140), GPU: f(7), Peak: &peak}}
+			Use: cpuUse{CPU: f(35), Worker: f(140), GPU: f(7), Peak: &peak}}
 		runs = append(runs, run)
 	}
 	labels, _ := backgroundItemByID("labels")

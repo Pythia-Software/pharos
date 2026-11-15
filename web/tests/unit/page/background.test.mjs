@@ -429,12 +429,12 @@ test("each schedule's cost: the current one marked, bounds in words, and an unme
 });
 
 const usage = { window_days: 7, measured_days: 2, cpu_seconds: 1500, days: ["2026-10-28", "2026-10-29"], rows: [
-  { source: "item:labels", label: "Source A", item: "labels", cpu_seconds: 900, worker_cpu_seconds: 600, gpu_seconds: 30, seconds: 400, runs: 2.5, peak_bytes: 3e9, shared_share: 0.2,
+  { source: "item:labels", label: "Source A", item: "labels", cpu_seconds: 900, worker_cpu_seconds: 600, gpu_seconds: 30, seconds: 400, runs: 2.5, peak_bytes: 3e9,
     days: [{ day: "2026-10-28", cpu_seconds: 1200, seconds: 500 }, { day: "2026-10-29", cpu_seconds: null, seconds: 0 }] },
-  { source: "item:tools", label: "Source B", item: "tools", cpu_seconds: 300, worker_cpu_seconds: null, gpu_seconds: null, seconds: 200, runs: 40, peak_bytes: 1e9, shared_share: 0.01, days: [] },
-  { source: "kind:x", label: "Source C", cpu_seconds: 0.2, worker_cpu_seconds: null, gpu_seconds: null, seconds: 1, runs: 100, peak_bytes: null, shared_share: null, days: [] },
-  { source: "kind:y", label: "Source D", cpu_seconds: null, worker_cpu_seconds: null, gpu_seconds: null, seconds: 30, runs: 1, peak_bytes: null, shared_share: null, days: [] },
-  { source: "other", label: "Source E", cpu_seconds: 300, worker_cpu_seconds: null, gpu_seconds: null, seconds: 0, runs: 0, peak_bytes: null, shared_share: null, days: [] },
+  { source: "item:tools", label: "Source B", item: "tools", cpu_seconds: 300, worker_cpu_seconds: null, gpu_seconds: null, seconds: 200, runs: 40, peak_bytes: 1e9, days: [] },
+  { source: "kind:x", label: "Source C", cpu_seconds: 0.2, worker_cpu_seconds: null, gpu_seconds: null, seconds: 1, runs: 100, peak_bytes: null, days: [] },
+  { source: "kind:y", label: "Source D", cpu_seconds: null, worker_cpu_seconds: null, gpu_seconds: null, seconds: 30, runs: 1, peak_bytes: null, days: [] },
+  { source: "other", label: "Source E", cpu_seconds: 300, worker_cpu_seconds: null, gpu_seconds: null, seconds: 0, runs: 0, peak_bytes: null, days: [] },
 ] };
 
 test("the CPU chart: one bar a source in the server's order, widths against the largest, the rest marked", () => {
@@ -449,14 +449,12 @@ test("the CPU chart: one bar a source in the server's order, widths against the 
   assert.ok(model.total.startsWith("25 min"));
 });
 
-test("a bar's hover detail: its measures, the worker and GPU apart, each measured day, and how much was divided by estimate", () => {
+test("a bar's hover detail: its measures, the worker and GPU apart, and each measured day", () => {
   const [labels, tools, , , other] = plain(background.usageModel(usage)).rows.map(row => row.popover);
   assert.equal(labels.heading, "Source A");
   assert.deepEqual(labels.rows.map(row => row.value), ["15 min", "10 min", "30 s", "7 min", "2.5", "3.0 GB"]);
   assert.equal(labels.totals.length, 1, "only days with a measured figure are listed");
   assert.equal(labels.totals[0][1], "20 min");
-  assert.match(labels.detail, /20%/);
-  assert.equal(tools.detail, undefined, "a share too small to matter is not mentioned");
   assert.deepEqual(tools.rows.map(row => row.value), ["5 min", "3 min", "40", "1.0 GB"]);
   assert.deepEqual(other.rows.map(row => row.value), ["5 min"], "the rest has no runs or running time");
 });

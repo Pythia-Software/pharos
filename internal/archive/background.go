@@ -454,9 +454,9 @@ func insertItemRuns(ctx context.Context, tx *sql.Tx, runs []itemRun) error {
 		if run.Use.Peak != nil {
 			peak = *run.Use.Peak
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO background_item_runs(host_id,item,cadence,started_at,seconds,units,cpu_seconds,shared_cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?)`, currentHost().ID, run.Item, run.Cadence, formatTime(run.Started), run.Seconds, units,
-			nullFloat(run.Use.CPU), nullFloat(run.Use.Shared), nullFloat(run.Use.Worker), nullFloat(run.Use.GPU), peak); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO background_item_runs(host_id,item,cadence,started_at,seconds,units,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes)
+			VALUES(?,?,?,?,?,?,?,?,?,?)`, currentHost().ID, run.Item, run.Cadence, formatTime(run.Started), run.Seconds, units,
+			nullFloat(run.Use.CPU), nullFloat(run.Use.Worker), nullFloat(run.Use.GPU), peak); err != nil {
 			return err
 		}
 	}
@@ -468,7 +468,7 @@ func insertItemRuns(ctx context.Context, tx *sql.Tx, runs []itemRun) error {
 // the table (an older one opened read-only) has none.
 func (c *Catalog) itemRuns(ctx context.Context) map[string][]itemRun {
 	runs := map[string][]itemRun{}
-	rows, err := c.reader().QueryContext(ctx, `SELECT item,cadence,started_at,seconds,units,cpu_seconds,shared_cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes
+	rows, err := c.reader().QueryContext(ctx, `SELECT item,cadence,started_at,seconds,units,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes
 		FROM background_item_runs WHERE host_id=? AND started_at>=? ORDER BY id DESC`, currentHost().ID, formatTime(time.Now().Add(-itemRunsKept)))
 	if err != nil {
 		return runs
@@ -478,14 +478,14 @@ func (c *Catalog) itemRuns(ctx context.Context) map[string][]itemRun {
 		var run itemRun
 		var started string
 		var units, peak sql.NullInt64
-		var cpu, shared, worker, gpu sql.NullFloat64
-		if rows.Scan(&run.Item, &run.Cadence, &started, &run.Seconds, &units, &cpu, &shared, &worker, &gpu, &peak) != nil {
+		var cpu, worker, gpu sql.NullFloat64
+		if rows.Scan(&run.Item, &run.Cadence, &started, &run.Seconds, &units, &cpu, &worker, &gpu, &peak) != nil {
 			continue
 		}
 		for _, pair := range []struct {
 			to   **float64
 			from sql.NullFloat64
-		}{{&run.Use.CPU, cpu}, {&run.Use.Shared, shared}, {&run.Use.Worker, worker}, {&run.Use.GPU, gpu}} {
+		}{{&run.Use.CPU, cpu}, {&run.Use.Worker, worker}, {&run.Use.GPU, gpu}} {
 			if pair.from.Valid {
 				*pair.to = &pair.from.Float64
 			}
@@ -1627,7 +1627,9 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			itemCtx, span := beginItemSpan(ctx, id)
 			var err error
 			// A CPU profile says which item its samples belong to.
-			pprof.Do(itemCtx, pprof.Labels("item", id), func(ctx context.Context) { err = s.runBackgroundItem(ctx, op, id) })
+			span.measure(func() {
+				pprof.Do(itemCtx, pprof.Labels("item", id), func(ctx context.Context) { err = s.runBackgroundItem(ctx, op, id) })
+			})
 			use := span.end(true)
 			if id == "fingerprints" {
 				if cancellationOnly(err) && errors.Is(context.Cause(ctx), errAutomaticPreempted) {
