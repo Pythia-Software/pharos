@@ -2,8 +2,11 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -109,26 +112,89 @@ func TestLabelerDeviceSettings(t *testing.T) {
 // places an item, when each cadence's work is due, the pass that runs it,
 // and the settings that steer it.
 
-// An adaptive item takes the most frequent cadence its cost fits, with a
-// quarter's margin each way so a cost near a limit stays put.
+// An adaptive item takes the most frequent cadence where a run fits the
+// cadence's limit and a day of its runs' fixed cost fits the cadence's
+// budget, with a quarter's margin each way; it moves faster only when its
+// slower runs fit too, so an item whose runs come in two sizes stays put.
 func TestPlaceCadenceMovesByMeasuredCostWithoutFlapping(t *testing.T) {
+	perDay := map[string]float64{cadenceFrequent: 40, cadenceHourly: 24, cadenceDaily: 1}
 	for _, test := range []struct {
-		name, current string
-		seconds       float64
-		runs          int
-		want          string
+		name, current, fastest string
+		cost                   itemCost
+		frequentPerDay         float64
+		want                   string
 	}{
-		{"too few runs to move", cadenceFrequent, 900, placementRuns - 1, cadenceFrequent},
-		{"a slow frequent item moves to hourly", cadenceFrequent, 300, 5, cadenceHourly},
-		{"far past hourly goes to daily", cadenceFrequent, 900, 5, cadenceDaily},
-		{"just over its limit stays", cadenceFrequent, 70, 5, cadenceFrequent},
-		{"a fast hourly item moves to frequent", cadenceHourly, 30, 5, cadenceFrequent},
-		{"just under the faster limit stays", cadenceHourly, 55, 5, cadenceHourly},
-		{"a daily item that got faster", cadenceDaily, 120, 5, cadenceHourly},
+		{name: "too few runs to move", current: cadenceFrequent, cost: itemCost{Runs: placementRuns - 1, Fixed: 900}, want: cadenceFrequent},
+		{name: "far too slow goes to daily", current: cadenceFrequent, cost: itemCost{Runs: 5, Fixed: 900}, want: cadenceDaily},
+		{name: "just over its day stays", current: cadenceFrequent, cost: itemCost{Runs: 5, Fixed: 50}, want: cadenceFrequent},
+		{name: "a quick run repeated all day leaves frequent", current: cadenceFrequent, cost: itemCost{Runs: 5, Fixed: 58}, want: cadenceHourly},
+		{name: "a quick run repeated all day is not promoted", current: cadenceHourly, cost: itemCost{Runs: 5, Fixed: 40, Slow: 40}, want: cadenceHourly},
+		{name: "the same run where frequent passes are rare", current: cadenceHourly, cost: itemCost{Runs: 5, Fixed: 40, Slow: 40}, frequentPerDay: 5, want: cadenceFrequent},
+		{name: "a large fixed cost with little work a run runs daily", current: cadenceHourly, cost: itemCost{Runs: 5, Fixed: 493, Slow: 600, PerUnit: 0.1, UnitsPerDay: 960}, want: cadenceDaily},
+		{name: "a light item moves to frequent", current: cadenceHourly, cost: itemCost{Runs: 5, Fixed: 10, Slow: 12}, want: cadenceFrequent},
+		{name: "quick runs among slow ones stay", current: cadenceHourly, cost: itemCost{Runs: 5, Fixed: 10, Slow: 300}, want: cadenceHourly},
+		{name: "slow runs among quick ones stay too", current: cadenceFrequent, cost: itemCost{Runs: 5, Fixed: 10, Slow: 300}, want: cadenceFrequent},
+		{name: "a daily item that got faster", current: cadenceDaily, cost: itemCost{Runs: 5, Fixed: 60, Slow: 80}, want: cadenceHourly},
+		{name: "much work a day makes each frequent run long", current: cadenceFrequent, cost: itemCost{Runs: 5, Fixed: 5, Slow: 5, PerUnit: 1, UnitsPerDay: 6000}, want: cadenceHourly},
+		{name: "never faster than its fastest cadence", current: cadenceDaily, fastest: cadenceHourly, cost: itemCost{Runs: 5, Fixed: 1, Slow: 1}, want: cadenceHourly},
+		{name: "a placement faster than its fastest cadence is corrected unmeasured", current: cadenceFrequent, fastest: cadenceHourly, want: cadenceHourly},
 	} {
-		if got := placeCadence(test.current, itemCost{Seconds: test.seconds, Runs: test.runs}); got != test.want {
+		rates := perDay
+		if test.frequentPerDay > 0 {
+			rates = map[string]float64{cadenceFrequent: test.frequentPerDay, cadenceHourly: 24, cadenceDaily: 1}
+		}
+		if got := placeCadence(test.current, test.fastest, test.cost, rates); got != test.want {
 			t.Errorf("%s: placed %s, want %s", test.name, got, test.want)
 		}
+	}
+}
+
+// Placement reads what a run costs before its work, what each unit of work
+// adds and how much work arrives, from the item's own runs; runs that found
+// nothing, however quick, do not make a run with work look cheap. Frequently's
+// runs a day are this Mac's measured passes.
+func TestOwnCostSeparatesFixedFromPerUnitWork(t *testing.T) {
+	at := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	units := func(n int64) *int64 { return &n }
+	runs := []itemRun{}
+	// Four days of hourly runs, newest first: 500 s whenever anything
+	// changed plus 0.1 s a conversation, and a few seconds when nothing did.
+	for hour := range 96 {
+		run := itemRun{Item: "agent_events", Cadence: cadenceHourly, Started: at.Add(-time.Duration(hour+1) * time.Hour), Seconds: 5, Units: units(0)}
+		if hour%3 != 0 {
+			conversations := int64(20 + 400*(hour%4))
+			run.Seconds, run.Units = 500+0.1*float64(conversations), &conversations
+		}
+		runs = append(runs, run)
+	}
+	cost := ownCost(runs, at)
+	if cost.Fixed < 450 || cost.Fixed > 560 || cost.PerUnit < 0.05 || cost.PerUnit > 0.15 || cost.Slow < cost.Fixed || cost.UnitsPerDay <= 0 {
+		t.Fatalf("a 500 s + 0.1 s/conversation item: %+v", cost)
+	}
+	perDay := map[string]float64{cadenceFrequent: frequentRunsDefault, cadenceHourly: hourlyRunsPerDay, cadenceDaily: 1}
+	if got := placeCadence(cadenceHourly, "", cost, perDay); got != cadenceDaily {
+		t.Fatalf("its fixed cost every hour is hours a day: placed %s", got)
+	}
+	if note := placementNote(backgroundItem{Adaptive: true}, cadenceDaily, cost, true, perDay); !strings.Contains(note, "Hourly") || !strings.Contains(note, "a day") {
+		t.Fatalf("Settings says what keeps it from the faster schedule: %q", note)
+	}
+	// An item that does not count its work is all fixed cost.
+	plain := ownCost([]itemRun{{Seconds: 30, Started: at}, {Seconds: 10, Started: at}, {Seconds: 20, Started: at}, {Seconds: 90, Started: at}}, at)
+	if plain.Fixed != 25 || plain.Slow != 90 || plain.PerUnit != 0 {
+		t.Fatalf("an uncounted item: %+v", plain)
+	}
+	own := map[string][]itemRun{"agent_events": runs}
+	if got := frequentRunsPerDay(own, at); got != frequentRunsDefault {
+		t.Fatalf("no frequent passes measured: %v a day", got)
+	}
+	for pass := range 12 {
+		started := at.Add(-time.Duration(pass*4) * time.Hour)
+		// Two items of one pass are one pass.
+		own["tools"] = append(own["tools"], itemRun{Cadence: cadenceFrequent, Started: started})
+		own["repositories"] = append(own["repositories"], itemRun{Cadence: cadenceFrequent, Started: started})
+	}
+	if got := frequentRunsPerDay(own, at); got < 2.9 || got > 3.1 {
+		t.Fatalf("12 frequent passes over four days: %v a day", got)
 	}
 }
 
@@ -342,6 +408,7 @@ func TestBackgroundPlanMovesEveryItem(t *testing.T) {
 	ago := formatTime(at.Add(-48 * time.Hour))
 	in := backgroundInputs{otherSources: []string{"tl1"}, backupDestination: "/backup", lastBackup: ago,
 		upgradePending: true, writingRefinementPending: true, verificationNext: at.Add(-time.Hour), labels: true, agentEvents: true, ask: true, suggestionsStale: true,
+		pullRequestReviews: true, pullRequestsDue: 1,
 		runs: map[string]backgroundRunRow{}, deferred: map[string]deferredRow{}}
 	for _, item := range backgroundItems {
 		in.runs[item.ID] = backgroundRunRow{succeeded: ago}
@@ -394,6 +461,61 @@ func TestBackgroundStandaloneCadencesWaitAfterCompletion(t *testing.T) {
 				t.Errorf("%s on %s ran again too soon: %+v", plan.ID, cadence, plan)
 			}
 		}
+	}
+}
+
+// Hourly items whose clocks drifted apart run in one pass: the pass for the
+// one that is due takes those whose hour is up within hourlyJoin, unless a
+// retry, a library that is not quiet or the battery still holds them. Other
+// cadences' passes take only what is due.
+func TestHourlyPassTakesItemsAboutToBeDue(t *testing.T) {
+	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
+	ago := func(d time.Duration) string { return formatTime(at.Add(-d)) }
+	pending := func(changed, completed time.Duration) deferredRow {
+		return deferredRow{generation: 2, completed: 1, changedAt: ago(changed), completedAt: ago(completed), pendingSince: ago(changed)}
+	}
+	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: defaultDailyAt, Overrides: map[string]string{}, Placements: map[string]string{}, Battery: defaultBatteryPolicy()}
+	inputs := func(labelsDone, verificationDone time.Duration) backgroundInputs {
+		return backgroundInputs{otherSources: []string{"tl1"}, labels: true, verificationNext: at.Add(-time.Hour),
+			deferred: map[string]deferredRow{"labels": pending(30*time.Minute, labelsDone), "tools": {generation: 1, completed: 1, changedAt: ago(30 * time.Minute)}},
+			runs: map[string]backgroundRunRow{"other-sources": {succeeded: ago(61 * time.Minute)}, "verification": {succeeded: ago(verificationDone)},
+				"preserve": {succeeded: ago(time.Minute)}, "review": {succeeded: ago(time.Minute)}}}
+	}
+	taken := func(in backgroundInputs) (string, []string) {
+		cadence, group := passGroup(backgroundPlan(settings, in, at), in.requested)
+		ids := []string{}
+		for _, plan := range group {
+			ids = append(ids, plan.ID)
+		}
+		return cadence, ids
+	}
+	in := inputs(50*time.Minute, 45*time.Minute)
+	in.findingsToday = true
+	if cadence, ids := taken(in); cadence != cadenceHourly || !slices.Equal(ids, []string{"other-sources", "verification", "labels"}) {
+		t.Fatalf("the hourly pass takes the items due within %v: %s %v", hourlyJoin, cadence, ids)
+	}
+	in = inputs(30*time.Minute, 45*time.Minute)
+	in.findingsToday = true
+	if _, ids := taken(in); !slices.Equal(ids, []string{"other-sources", "verification"}) {
+		t.Fatalf("an item that ran half an hour ago waits for its own hour: %v", ids)
+	}
+	in.runs["verification"] = backgroundRunRow{succeeded: ago(45 * time.Minute), finished: ago(5 * time.Minute), err: "boom"}
+	if _, ids := taken(in); !slices.Equal(ids, []string{"other-sources"}) {
+		t.Fatalf("a failed item waits out its retry: %v", ids)
+	}
+	in = inputs(50*time.Minute, 45*time.Minute)
+	in.findingsToday = true
+	in.deferred["labels"] = pending(2*time.Minute, 50*time.Minute)
+	if _, ids := taken(in); slices.Contains(ids, "labels") {
+		t.Fatalf("a stage still waits for a quiet library: %v", ids)
+	}
+	// A frequent pass does not bring hourly work forward.
+	in = inputs(50*time.Minute, 45*time.Minute)
+	in.findingsToday = true
+	in.deferred["tools"] = pending(time.Minute, 2*time.Hour)
+	in.runs["other-sources"] = backgroundRunRow{succeeded: ago(45 * time.Minute)}
+	if cadence, ids := taken(in); cadence != cadenceFrequent || !slices.Equal(ids, []string{"tools"}) {
+		t.Fatalf("a frequent pass takes only frequent work: %s %v", cadence, ids)
 	}
 }
 
@@ -559,21 +681,28 @@ func TestBackgroundOverridesOnlySlowItemsDown(t *testing.T) {
 	}
 }
 
-// An item's cost is the median of its latest successful journaled runs,
-// summed over its kinds; scheduled indexing's comes from its run history.
+// An item's cost is the middle of its own scheduled runs that had work,
+// however short. Until it has enough of them it is the median of its latest
+// successful journaled runs, summed over its kinds, where a findings review
+// and a findings measure are different variants; scheduled indexing's comes
+// from its run history.
 func TestBackgroundCostsAreMediansOfJournaledRuns(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	host := sqlQuote(currentHost().ID)
 	statements := []string{}
 	run := 0
-	journal := func(kind, state string, seconds int) {
+	journal := func(spec, state string, seconds int) {
 		run++
+		kind, variant, _ := strings.Cut(spec, "/")
 		start := time.Date(2026, 10, 28, 0, run, 0, 0, time.UTC)
-		statements = append(statements, fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,ended_at)
-			VALUES('j%d','j%d','%s','chained',%s,'service',1,'i','%s','%s','%s','%s')`, run, run, kind, host, state, formatTime(start), formatTime(start), formatTime(start.Add(time.Duration(seconds)*time.Second))))
+		statements = append(statements, fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,variant,trigger,host_id,process,pid,instance,state,started_at,updated_at,ended_at)
+			VALUES('j%d','j%d','%s','%s','chained',%s,'service',1,'i','%s','%s','%s','%s')`, run, run, kind, variant, host, state, formatTime(start), formatTime(start), formatTime(start.Add(time.Duration(seconds)*time.Second))))
 	}
 	for _, seconds := range []int{300, 400, 350} {
 		journal("analysis.authorship", "succeeded", seconds)
+		journal("analysis.peers", "succeeded", 50)
+		journal("analysis.findings/measure", "succeeded", seconds/10)
+		journal("analysis.findings/full", "succeeded", seconds*2)
 	}
 	journal("analysis.authorship", "failed", 10)
 	for _, kind := range []string{"analysis.github", "analysis.identities", "analysis.git"} {
@@ -585,10 +714,13 @@ func TestBackgroundCostsAreMediansOfJournaledRuns(t *testing.T) {
 		statements = append(statements, fmt.Sprintf("INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES(%s,'r%d','2026-10-28T00:00:00Z','%s')", host, index, sample))
 	}
 	execTx(t, catalog.DB, statements...)
-	costs := catalog.backgroundCosts(context.Background())
+	costs, _ := catalog.backgroundCosts(context.Background())
 	near := func(got, want float64) bool { return got > want-0.01 && got < want+0.01 }
-	if cost := costs["writing"]; !near(cost.Seconds, 350) || cost.Runs != 3 {
-		t.Fatalf("writing: %+v, want the median of its successful runs", cost)
+	if cost := costs["writing"]; !near(cost.Seconds, 400) || cost.Runs != 3 {
+		t.Fatalf("writing: %+v, want the medians of both its stages' successful runs", cost)
+	}
+	if measure, review := costs["findings"], costs["review"]; !near(measure.Seconds, 35) || !near(review.Seconds, 700) {
+		t.Fatalf("findings %+v and review %+v: each is measured by its own kind of pass", measure, review)
 	}
 	if cost := costs["repositories"]; !near(cost.Seconds, 10) || cost.Runs != 3 {
 		t.Fatalf("repositories: %+v, want its three stages' medians summed", cost)
@@ -596,8 +728,34 @@ func TestBackgroundCostsAreMediansOfJournaledRuns(t *testing.T) {
 	if cost := costs["conversations"]; !near(cost.Seconds, 20) || cost.Runs != 3 {
 		t.Fatalf("conversations: %+v, want the median of scheduled runs only", cost)
 	}
-	if _, ok := costs["findings"]; ok {
+	if _, ok := costs["tools"]; ok {
 		t.Fatal("an item with no runs has no cost")
+	}
+	// Its own runs replace the journal's once there are enough: all of them,
+	// whatever their length, and typically those that found work.
+	started := time.Now().Add(-time.Hour)
+	units := func(n int64) *int64 { return &n }
+	if err := catalog.writeTransaction(context.Background(), "item runs", func(tx *sql.Tx) error {
+		return insertItemRuns(context.Background(), tx, []itemRun{
+			{Item: "writing", Cadence: cadenceFrequent, Started: started, Seconds: 2}, {Item: "writing", Cadence: cadenceFrequent, Started: started, Seconds: 4},
+			{Item: "labels", Cadence: cadenceHourly, Started: started, Seconds: 1, Units: units(0)}, {Item: "labels", Cadence: cadenceHourly, Started: started, Seconds: 90, Units: units(40)},
+			{Item: "labels", Cadence: cadenceHourly, Started: started, Seconds: 1, Units: units(0)}, {Item: "labels", Cadence: cadenceHourly, Started: started, Seconds: 110, Units: units(60)},
+			// Too old to say anything about the item now.
+			{Item: "labels", Cadence: cadenceHourly, Started: started.Add(-2 * itemRunsKept), Seconds: 5000, Units: units(9)},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	costs, _ = catalog.backgroundCosts(context.Background())
+	if cost := costs["writing"]; !near(cost.Seconds, 400) {
+		t.Fatalf("writing: %+v, want the journal's until it has enough runs of its own", cost)
+	}
+	if cost := costs["labels"]; !near(cost.Seconds, 100) || cost.Runs != 4 {
+		t.Fatalf("labels: %+v, want the middle of its own runs that found work", cost)
+	}
+	var kept int
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM background_item_runs").Scan(&kept); err != nil || kept != 6 {
+		t.Fatalf("runs older than the kept window are dropped as new ones arrive: %d kept, %v", kept, err)
 	}
 }
 
@@ -661,8 +819,24 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	if runs["tools"].succeeded == "" || runs["tools"].err != "" {
 		t.Fatalf("the pass records each item it ran: %+v", runs["tools"])
 	}
+	// Each item's own time in the pass is kept for its cost.
+	if own := catalog.itemRuns(ctx); len(own["tools"]) != 1 || own["tools"][0].Cadence != cadenceFrequent || len(own["writing"]) != 0 {
+		t.Fatalf("the pass measures the items it ran, and only those: %+v", own)
+	}
 	if _, ran := runs["writing"]; ran {
 		t.Fatalf("an item that was not due has no run: %+v", runs)
+	}
+	// What the run used is kept with it, and the day's totals ride the same
+	// write: one run of the item, not one for each operation inside it.
+	if own := catalog.itemRuns(ctx)["tools"][0]; func() bool { _, _, ok := threadCPUTime(); return ok }() && own.Use.CPU == nil {
+		t.Fatalf("the run's CPU time was not measured: %+v", own.Use)
+	}
+	var counted int
+	if err := catalog.DB.QueryRow("SELECT COALESCE(SUM(runs),0) FROM background_cpu_days WHERE source='item:tools'").Scan(&counted); err != nil || counted != 1 {
+		t.Fatalf("the day counts one run of the item: %d, %v", counted, err)
+	}
+	if server.ops.cpu.flushDue() || server.ops.cpu.runsPending {
+		t.Fatal("the pass's runs ask for a write of their own after riding the pass's")
 	}
 	if server.backgroundPass(ctx, time.Now()) {
 		t.Fatal("a pass with nothing due ran something")
@@ -823,7 +997,11 @@ func TestMessageLabelsSettings(t *testing.T) {
 	if events := read()["agent_events"].(map[string]any); events["enabled"] != false || events["can_change"] != true {
 		t.Fatalf("agent events settings must remain visible while off: %v", events)
 	}
-	for _, id := range []string{"labels", "agent_events"} {
+	// Reading pull request reviews asks a forge, so it is off until chosen.
+	if reviews := read()["pull_request_reviews"].(map[string]any); reviews["enabled"] != false || reviews["can_change"] != true {
+		t.Fatalf("pull request reviews must be off and visible by default: %v", reviews)
+	}
+	for _, id := range []string{"labels", "agent_events", "pull-request-reviews"} {
 		view := read()["view"].(map[string]any)
 		found := false
 		for _, value := range view["items"].([]any) {
@@ -851,6 +1029,23 @@ func TestMessageLabelsSettings(t *testing.T) {
 	for _, body := range []string{`{}`, `{"enabled":"true"}`, `{"enabled":null}`} {
 		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", body); response.Code != http.StatusBadRequest {
 			t.Fatalf("invalid setting %s: %d", body, response.Code)
+		}
+		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/pull-request-reviews/settings", body); response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid pull request reviews setting %s: %d", body, response.Code)
+		}
+	}
+	for _, enabled := range []bool{true, false} {
+		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/pull-request-reviews/settings", map[string]any{"enabled": enabled}); response.Code != http.StatusOK {
+			t.Fatalf("pull request reviews %t: %d %s", enabled, response.Code, response.Body.String())
+		}
+		reloaded, err := LoadConfig(config.Path)
+		reviews := read()["pull_request_reviews"].(map[string]any)
+		if err != nil || reloaded.PullRequestReviews != enabled || server.Config().PullRequestReviews != enabled || reviews["enabled"] != enabled {
+			t.Fatalf("pull request reviews %t did not persist/apply: %v %v", enabled, reviews, err)
+		}
+		// Tests have no gh: on, the switch says why GitHub can't be asked.
+		if enabled && !strings.Contains(firstString(reviews["notice"]), "gh") {
+			t.Fatalf("a missing gh is not explained: %v", reviews)
 		}
 	}
 	for _, enabled := range []bool{true, false, true} {
@@ -1379,7 +1574,10 @@ func TestBackgroundPassHonorsHeldPrerequisites(t *testing.T) {
 		// Your writing is hourly, and the library is not quiet.
 		pending("authorship", time.Minute), pending("findings", time.Minute),
 		"INSERT INTO background_runs(host_id,item,succeeded_at) VALUES("+host+",'preserve',"+stamp(0)+"),("+host+",'review',"+stamp(0)+")",
+		// Findings was placed at Frequently before it had a fastest cadence;
+		// the person's own week at Frequently still stands.
 		"INSERT INTO background_settings(host_id,overrides_json,placements_json) VALUES("+host+",'{\"repositories\":\"manual\",\"writing\":\"hourly\"}','{\"findings\":\"frequent\"}')",
+		"INSERT INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES("+host+",'findings','frequent',"+stamp(-time.Hour)+")",
 		setMetaSQL("findings_generation", findingsVersion+"/2026-10-26"))
 	completed := func(name string) int64 {
 		var generation int64
@@ -1393,6 +1591,10 @@ func TestBackgroundPassHonorsHeldPrerequisites(t *testing.T) {
 	}
 	if completed("tools") != 2 || completed("findings") != 2 {
 		t.Fatalf("the frequent items did not run: tools %d, findings %d", completed("tools"), completed("findings"))
+	}
+	findings, _ := backgroundItemByID("findings")
+	if settings, err := catalog.backgroundSettings(ctx, time.Now()); err != nil || settings.Placements["findings"] != cadenceHourly || settings.cadence(findings) != cadenceFrequent {
+		t.Fatalf("measurement places findings no faster than hourly, under the person's temporary schedule: %+v, %v", settings.Placements, err)
 	}
 	if completed("identities") != 1 || completed("git") != 1 {
 		t.Fatal("a pass brought along stages set to only when you ask")
@@ -1448,6 +1650,18 @@ func TestBackgroundReviewBringsAlongStagesPendingWhenTheChainStarts(t *testing.T
 	}
 	if generation, _ := catalog.metaValue(ctx, "findings_generation"); generation != catalog.findingsGeneration() {
 		t.Fatalf("the review did not run today's full pass: %s", generation)
+	}
+	// The full pass is the review's run, not the findings item's, in the
+	// journal's kind and in the items' own runs; the stages that came along
+	// are measured as their items' runs too.
+	if !slices.ContainsFunc(server.ops.views(), func(view opView) bool {
+		return view.Spec.Kind == "analysis.findings" && view.Spec.Variant == "full"
+	}) {
+		t.Fatal("the full findings pass does not say it was one")
+	}
+	own := catalog.itemRuns(ctx)
+	if len(own["review"]) != 1 || len(own["findings"]) != 0 || len(own["repositories"]) != 1 || len(own["writing"]) != 1 {
+		t.Fatalf("each item's own run in the pass: %+v", own)
 	}
 }
 
@@ -1571,5 +1785,318 @@ func TestBackgroundWritingEstimatesAndRefinementHaveIndependentSchedules(t *test
 	reopened := reopenCatalog(t, catalog.Path)
 	if pending, err := reopened.authorshipRefinementPending(t.Context()); err != nil || pending {
 		t.Fatalf("refinement completion did not survive reopening: %v %v", pending, err)
+	}
+}
+
+// The ledger divides the process's CPU time among the work that was running
+// when it was used: the innermost span takes it, work running side by side
+// shares it by what each uses alone, waiting work takes none, and what no
+// work was running for is kept as the rest.
+func TestCPULedgerMeasuresEachSpansThread(t *testing.T) {
+	at := time.Date(2026, 11, 14, 12, 0, 0, 0, time.Local)
+	cpu, memory := 0.0, int64(1<<30)
+	threads, thread, threadOK := map[uint64]float64{}, uint64(1), true
+	workers := map[int]processUsage{}
+	gpu := map[int]uint64{}
+	ledger := &cpuLedger{now: func() time.Time { return at }, readCPU: func() (float64, bool) { return cpu, true }, readMemory: func() (int64, bool) { return memory, true },
+		readThread: func() (float64, uint64, bool) { return threads[thread], thread, threadOK },
+		readProcess: func(pid int) (processUsage, error) {
+			usage, ok := workers[pid]
+			if !ok {
+				return usage, errors.New("gone")
+			}
+			return usage, nil
+		},
+		readGPU: func() (gpuSnapshot, error) {
+			snapshot := gpuSnapshot{supported: true}
+			for pid, ns := range gpu {
+				snapshot.clients = append(snapshot.clients, gpuClient{id: uint64(pid), pid: pid, ns: ns, known: true})
+			}
+			return snapshot, nil
+		},
+		spans: map[*cpuSpan]struct{}{}, leases: map[*cpuLease]struct{}{}, scopes: map[uint64]*cpuScope{}, pending: map[cpuDayKey]*cpuDay{}}
+	// spend is time passing while the process uses CPU on threads nothing
+	// measures; work is the current thread using it.
+	spend := func(seconds, used float64) { at, cpu = at.Add(time.Duration(seconds*float64(time.Second))), cpu+used }
+	work := func(seconds, used float64) { spend(seconds, used); threads[thread] += used }
+	source := func(name string) func(*cpuSpan) string { return func(*cpuSpan) string { return name } }
+	near := func(got *float64, want float64) bool { return got != nil && *got > want-1e-6 && *got < want+1e-6 }
+
+	ledger.begin(nil, source("kind:warmup"), false).end(false)
+	spend(10, 2)
+	pass := ledger.begin(nil, source(cpuSourcePass), false)
+	// An operation the pass starts from its own context while the item runs
+	// is the item's too.
+	ctx, item := beginItemSpan(withCPUSpan(context.Background(), pass), "tools")
+	if cpuSpanFrom(ctx) != item {
+		t.Fatal("the item's context does not carry its span")
+	}
+	beside := ledger.begin(nil, source("item:fingerprints"), false)
+	waiting := ledger.begin(nil, source("kind:maintenance.checkpoint"), true)
+	var searchUse cpuUse
+	item.measure(func() {
+		work(4, 8)
+		child := ledger.begin(pass, func(parent *cpuSpan) string { return cpuSourceFor("maintenance.cache-warm", "", parent) }, false)
+		if child.parent != item || child.source != "item:tools" {
+			t.Fatalf("an operation started during the item belongs to %q under %v", child.source, child.parent)
+		}
+		memory = 3 << 30
+		// A body inside the item's, on its thread, is not counted twice.
+		child.measure(func() { work(2, 2) })
+		child.end(true)
+		// Another item's work inside this one is counted to that item.
+		search := ledger.begin(item, source("item:search"), false)
+		search.measure(func() { work(1, 3) })
+		searchUse = search.end(true)
+		// Other work on its own thread at the same time, and a helper
+		// thread nothing measures, take nothing from the item.
+		thread = 2
+		beside.measure(func() { work(0, 5) })
+		thread = 1
+		spend(0, 4)
+	})
+	waiting.setPaused(false)
+	waiting.end(true)
+	if use := beside.end(true); !near(use.CPU, 5) {
+		t.Fatalf("work beside the item used its own thread's CPU: %v", use.CPU)
+	}
+	if !near(searchUse.CPU, 3) {
+		t.Fatalf("the work inside the item: %v", searchUse.CPU)
+	}
+	// A worker process the item leased: its own counters, GPU time apart.
+	workers[41], gpu[41] = processUsage{CPUSeconds: 100, Footprint: 2 << 30, Started: 7, Known: counterOwnCPU | counterMemory}, 5e9
+	release := leaseWorkers(ctx, func() []int { return []int{41, 42} }, true)
+	workers[41], gpu[41] = processUsage{CPUSeconds: 130, Footprint: 2 << 30, Started: 7, Known: counterOwnCPU | counterMemory}, 9e9
+	// One the pool started during the lease: everything it used.
+	workers[42] = processUsage{CPUSeconds: 5, Footprint: 1 << 30, Started: 9, Known: counterOwnCPU | counterMemory}
+	spend(5, 1)
+	release()
+	release()
+	use := item.end(true)
+	if !near(use.CPU, 8+2+3) || !near(use.Worker, 35) || !near(use.GPU, 4) || use.Seconds != 12 {
+		t.Fatalf("the item used %+v CPU %v worker %v GPU %v", use, *use.CPU, *use.Worker, *use.GPU)
+	}
+	if use.Peak == nil || *use.Peak != 6<<30 {
+		t.Fatalf("the item's peak is the service and the workers it held: %v", use.Peak)
+	}
+	if whole := pass.end(true); !near(whole.CPU, *use.CPU) {
+		t.Fatalf("the pass reports its items' work: %v", *whole.CPU)
+	}
+	day := at.Format("2006-01-02")
+	pending := ledger.snapshot()
+	// The sources sum to what the process used: 2 before, 4 by the helper
+	// and 1 during the lease were no measured thread's.
+	if other := pending[cpuDayKey{day, cpuSourceOther}]; !near(other.CPU, 2+4+1) || other.runs != 0 {
+		t.Fatalf("CPU no measured thread used is the rest: %+v", other)
+	}
+	if tools := pending[cpuDayKey{day, "item:tools"}]; tools.runs != 1 || !near(tools.CPU, 10) || !near(tools.Worker, 35) {
+		t.Fatalf("the item's day: %+v", tools)
+	}
+	if search := pending[cpuDayKey{day, "item:search"}]; search.runs != 1 || !near(search.CPU, 3) {
+		t.Fatalf("the other item's day: %+v", search)
+	}
+	if checkpoint := pending[cpuDayKey{day, "kind:maintenance.checkpoint"}]; checkpoint.runs != 1 || checkpoint.CPU != nil {
+		t.Fatalf("work with no measured body has no CPU figure: %+v", checkpoint)
+	}
+	// A clock that cannot be read leaves the figure unmeasured, not zero.
+	threadOK = false
+	blind := ledger.begin(nil, source("kind:blind"), false)
+	blind.measure(func() { work(3, 1) })
+	if use := blind.end(true); use.CPU != nil || use.Seconds != 3 {
+		t.Fatalf("an unreadable clock: %+v", use)
+	}
+	threadOK = true
+	// The real clock: a locked thread that spins has used about that long.
+	if _, _, ok := threadCPUTime(); ok {
+		real := newCPULedger()
+		spin := real.begin(nil, source("kind:spin"), false)
+		spin.measure(func() {
+			for start := time.Now(); time.Since(start) < 50*time.Millisecond; {
+			}
+		})
+		if use := spin.end(true); use.CPU == nil || *use.CPU < 0.02 || *use.CPU > 0.2 {
+			t.Fatalf("50 ms of spinning measured as %v", use.CPU)
+		}
+	}
+	// Every way an operation ends closes its span: one left open would be
+	// counted as running, and take a share, for as long as the service runs.
+	registry := newOpRegistry("service")
+	registry.cpu = ledger
+	open := len(ledger.spans)
+	_, finished := registry.begin(context.Background(), OperationSpec{Kind: "maintenance.checkpoint"})
+	finished.Finish(nil)
+	_, skipped := registry.begin(context.Background(), OperationSpec{Kind: "maintenance.checkpoint"})
+	skipped.Skip("nothing-to-do")
+	_, failed := registry.begin(context.Background(), OperationSpec{Kind: "maintenance.checkpoint"})
+	failed.Finish(errors.New("failed"))
+	_, discarded := registry.beginTentative(context.Background(), OperationSpec{Kind: "maintenance.checkpoint"})
+	discarded.discard()
+	parentCtx, parent := registry.begin(context.Background(), OperationSpec{Kind: "analysis.chain"})
+	_, inner := registry.begin(parentCtx, OperationSpec{Kind: "analysis.tools", Queued: true})
+	if inner.cpu.parent != parent.cpu || !inner.cpu.paused || inner.cpu.source != "item:tools" {
+		t.Fatalf("a queued operation inside another waits there: %+v", inner.cpu)
+	}
+	inner.Run()
+	if inner.cpu.paused {
+		t.Fatal("a queued operation that starts is running")
+	}
+	restore := inner.waitFor("catalog-busy", "the catalog writer")
+	if !inner.cpu.paused {
+		t.Fatal("an operation waiting for the catalog writer is not running")
+	}
+	restore()
+	inner.SkipWith("nothing-to-do", "detail")
+	parent.Finish(nil)
+	if len(ledger.spans) != open {
+		t.Fatalf("%d spans left open by ended operations", len(ledger.spans)-open)
+	}
+	for kind, want := range map[string]string{"analysis.tools": "item:tools", "analysis.findings/full": "item:review", "analysis.findings/measure": "item:findings",
+		"analysis.labels/backlog": "item:labels", "index.changes.automatic": "item:conversations", "maintenance.library-view": "item:search", "maintenance.checkpoint": "kind:maintenance.checkpoint"} {
+		name, variant, _ := strings.Cut(kind, "/")
+		if got := cpuSourceFor(name, variant, nil); got != want {
+			t.Fatalf("%s is counted to %s, want %s", kind, got, want)
+		}
+	}
+}
+
+// The chart reads each source's use a day over the days measured, stored and
+// not yet stored, largest first with the unnamed rest last.
+func TestCPUUsageAveragesTheDaysMeasured(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	ctx := context.Background()
+	at := time.Now()
+	day := func(back int) string { return at.Local().AddDate(0, 0, -back).Format("2006-01-02") }
+	f := func(value float64) *float64 { return &value }
+	peak := int64(2 << 30)
+	store := func(totals map[cpuDayKey]*cpuDay) {
+		t.Helper()
+		if err := catalog.writeTransaction(ctx, "cpu days", func(tx *sql.Tx) error { return storeCPUDays(ctx, tx, totals) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store(map[cpuDayKey]*cpuDay{
+		{day(2), "item:labels"}:                 {cpuUse: cpuUse{Seconds: 600, CPU: f(300), Worker: f(900), GPU: f(60), Peak: &peak}, runs: 3},
+		{day(0), "item:labels"}:                 {cpuUse: cpuUse{Seconds: 300, CPU: f(150)}, runs: 1},
+		{day(1), "kind:maintenance.checkpoint"}: {cpuUse: cpuUse{Seconds: 30, CPU: f(6)}, runs: 9},
+		{day(1), cpuSourceOther}:                {cpuUse: cpuUse{CPU: f(9000)}},
+		// Before the window, and too old to keep.
+		{day(12), "item:tools"}: {cpuUse: cpuUse{Seconds: 5, CPU: f(5)}, runs: 1},
+		{at.Add(-2 * cpuDaysKept).Local().Format("2006-01-02"), "item:tools"}: {cpuUse: cpuUse{Seconds: 5, CPU: f(5)}, runs: 1},
+	})
+	// A second write adds to the day rather than replacing it.
+	store(map[cpuDayKey]*cpuDay{{day(0), "item:labels"}: {cpuUse: cpuUse{Seconds: 300, CPU: f(150)}, runs: 1}})
+	var kept int
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM background_cpu_days").Scan(&kept); err != nil || kept != 5 {
+		t.Fatalf("days past the kept window are dropped: %d kept, %v", kept, err)
+	}
+	// What has not been stored yet is read too.
+	catalog.ops = newOpRegistry("service")
+	catalog.ops.cpu = newCPULedger()
+	catalog.ops.cpu.pending[cpuDayKey{day(0), "item:tools"}] = &cpuDay{cpuUse: cpuUse{Seconds: 9}, runs: 1}
+	usage := cpuUsage(catalog.cpuDays(ctx, at.AddDate(0, 0, -cpuWindowDays)), at)
+	rows := usage["rows"].([]cpuSourceRow)
+	if usage["measured_days"] != 3 || len(rows) != 4 || rows[0].Source != "item:labels" || rows[len(rows)-1].Source != cpuSourceOther {
+		t.Fatalf("three measured days, labels first and the rest last: %v days, %+v", usage["measured_days"], rows)
+	}
+	labels := rows[0]
+	if labels.Label != "Message labels" || labels.Item != "labels" || *labels.CPUSeconds != 500 || *labels.WorkerCPUSeconds != 300 || *labels.GPUSeconds != 20 ||
+		labels.Seconds != 400 || labels.Runs != 5.0/3 || *labels.PeakBytes != peak {
+		t.Fatalf("labels a day over three days: %+v", labels)
+	}
+	if len(labels.Days) != 3 || labels.Days[0].Day != day(2) || *labels.Days[0].CPUSeconds != 1200 || labels.Days[1].CPUSeconds != nil || *labels.Days[2].CPUSeconds != 300 {
+		t.Fatalf("each day's own figure, and none for a day without runs: %+v", labels.Days)
+	}
+	// A source whose CPU was never read is listed without a figure.
+	if tools := rows[2]; tools.Source != "item:tools" || tools.CPUSeconds != nil || tools.Seconds != 3 {
+		t.Fatalf("unmeasured CPU is not zero: %+v", tools)
+	}
+	if empty := cpuUsage(map[cpuDayKey]cpuDay{}, at); empty["measured_days"] != 0 || empty["cpu_seconds"] != nil {
+		t.Fatalf("nothing measured: %+v", empty)
+	}
+}
+
+// Settings says what each schedule choice would cost an item a day, from its
+// own measured runs: time, CPU and memory, and nothing where a figure has
+// not been measured.
+func TestScheduleCostsProjectEachCadenceFromMeasuredRuns(t *testing.T) {
+	at := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	units := func(n int64) *int64 { return &n }
+	f := func(value float64) *float64 { return &value }
+	peak := int64(3 << 30)
+	perDay := map[string]float64{cadenceFrequent: 40, cadenceHourly: hourlyRunsPerDay, cadenceDaily: 1}
+	settings := backgroundSettings{Overrides: map[string]string{}, Placements: map[string]string{}, Temporary: map[string]temporaryCadence{}}
+	byCadence := func(rows []scheduleCost) map[string]scheduleCost {
+		out := map[string]scheduleCost{}
+		for _, row := range rows {
+			out[row.Cadence] = row
+		}
+		return out
+	}
+	// Two days of hourly runs: 60 s whenever anything changed plus 1 s a
+	// conversation, 10 conversations each; half a core, and a worker's two.
+	runs := []itemRun{}
+	for hour := range 48 {
+		run := itemRun{Item: "labels", Cadence: cadenceHourly, Started: at.Add(-time.Duration(hour+1) * time.Hour), Seconds: 70, Units: units(10),
+			Use: cpuUse{CPU: f(35), Worker: f(140), GPU: f(7), Peak: &peak}}
+		runs = append(runs, run)
+	}
+	labels, _ := backgroundItemByID("labels")
+	cost := ownCost(runs, at)
+	rows := byCadence(scheduleCosts(labels, settings, cost, true, perDay, nil))
+	if len(rows) != 4 || !rows[cadenceHourly].Current || rows[cadenceDaily].Current {
+		t.Fatalf("every schedule, with the current one marked: %+v", rows)
+	}
+	// The day's 240 conversations cost the same anywhere; only the fixed
+	// part repeats with the runs.
+	for cadence, want := range map[string]float64{cadenceFrequent: 40*cost.Fixed + 240*cost.PerUnit, cadenceHourly: 24*cost.Fixed + 240*cost.PerUnit, cadenceDaily: cost.Fixed + 240*cost.PerUnit} {
+		row := rows[cadence]
+		if row.Seconds == nil || math.Abs(*row.Seconds-want) > 1 || row.Bound != "about" || row.Per != "day" {
+			t.Fatalf("%s: %+v, want about %v s a day", cadence, row, want)
+		}
+		if row.CPUSeconds == nil || math.Abs(*row.CPUSeconds-2.5**row.Seconds) > 1e-6 || row.GPUSeconds == nil || math.Abs(*row.GPUSeconds-0.1**row.Seconds) > 1e-6 || *row.PeakBytes != peak {
+			t.Fatalf("%s: CPU and GPU follow the running time at the runs' rate, memory is their peak: %+v", cadence, row)
+		}
+	}
+	if *rows[cadenceFrequent].Seconds <= *rows[cadenceHourly].Seconds || *rows[cadenceHourly].Seconds <= *rows[cadenceDaily].Seconds {
+		t.Fatalf("a more frequent schedule repeats the fixed cost more often: %+v", rows)
+	}
+	if asked := rows[cadenceManual]; asked.Per != "run" || *asked.Seconds != 70 || *asked.CPUSeconds != 175 {
+		t.Fatalf("only when asked is one run's cost: %+v", asked)
+	}
+	// An item that does not count its work: away from the cadence its runs
+	// were measured at, the figure is a bound.
+	tools, _ := backgroundItemByID("tools")
+	plain := ownCost([]itemRun{{Cadence: cadenceHourly, Seconds: 30, Started: at}, {Cadence: cadenceHourly, Seconds: 30, Started: at}, {Cadence: cadenceHourly, Seconds: 30, Started: at}}, at)
+	settings.Placements["tools"] = cadenceHourly
+	rows = byCadence(scheduleCosts(tools, settings, plain, true, perDay, nil))
+	if rows[cadenceFrequent].Bound != "up_to" || rows[cadenceHourly].Bound != "about" || rows[cadenceDaily].Bound != "at_least" || *rows[cadenceDaily].Seconds != 30 {
+		t.Fatalf("an uncounted item's other schedules are bounds: %+v", rows)
+	}
+	// Runs that did not measure CPU say nothing about it.
+	if row := rows[cadenceHourly]; row.CPUSeconds != nil || row.PeakBytes != nil || row.GPUSeconds != nil {
+		t.Fatalf("CPU and memory not measured yet: %+v", row)
+	}
+	for _, row := range scheduleCosts(tools, settings, itemCost{}, false, perDay, nil) {
+		if row.Seconds != nil || row.CPUSeconds != nil || row.PeakBytes != nil {
+			t.Fatalf("an item with no measured runs has no figures: %+v", row)
+		}
+	}
+	// A fixed item has its own schedule only, with the day that was measured.
+	conversations, _ := backgroundItemByID("conversations")
+	measured := &cpuSourceRow{Seconds: 900, CPUSeconds: f(400), PeakBytes: &peak, Runs: 96}
+	fixed := scheduleCosts(conversations, settings, itemCost{}, false, perDay, measured)
+	if len(fixed) != 1 || !fixed[0].Current || !fixed[0].Measured || *fixed[0].Seconds != 900 || *fixed[0].CPUSeconds != 400 || fixed[0].GPUSeconds != nil {
+		t.Fatalf("a fixed item's measured day: %+v", fixed)
+	}
+	if fixed = scheduleCosts(conversations, settings, itemCost{}, false, perDay, nil); len(fixed) != 1 || fixed[0].Seconds != nil || fixed[0].Measured {
+		t.Fatalf("a fixed item not measured yet: %+v", fixed)
+	}
+	// Why it runs where it does.
+	if reason := placementReason(tools, settings, plain, true, perDay); !strings.Contains(reason, "Frequently") {
+		t.Fatalf("an adaptive item's reason names what measurement found: %q", reason)
+	}
+	settings.Overrides["tools"] = cadenceDaily
+	if reason := placementReason(tools, settings, plain, true, perDay); !strings.Contains(reason, "You chose Daily") || !strings.Contains(reason, "Hourly") {
+		t.Fatalf("a chosen schedule says so, and where measurement would put it: %q", reason)
 	}
 }

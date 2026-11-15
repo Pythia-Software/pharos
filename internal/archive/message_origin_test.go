@@ -44,6 +44,7 @@ func humanTurns(messages []MessageRecord) []string {
 func TestClaudeSeparatesInjectedInputFromHumanTurns(t *testing.T) {
 	messages := parseJSONL(t, "claude", filepath.Join(t.TempDir(), "session.jsonl"),
 		`{"sessionId":"s","uuid":"prompt","type":"user","message":{"role":"user","content":"Show me the header"}}`,
+		`{"sessionId":"s","uuid":"continue-turn","type":"user","message":{"role":"user","content":"continue"}}`,
 		`{"sessionId":"s","uuid":"read","parentUuid":"prompt","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_read","name":"Read","input":{"file_path":"/tmp/header.png"}}]}}`,
 		`{"sessionId":"s","uuid":"result","parentUuid":"read","type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_read","type":"tool_result","content":[{"type":"image","source":{"type":"base64","data":"AAAA","media_type":"image/png"}}]}]},"sourceToolAssistantUUID":"read"}`,
 		`{"sessionId":"s","uuid":"caption","parentUuid":"result","type":"user","message":{"role":"user","content":"[Image: original 3414x1894, displayed at 2000x1110. Multiply coordinates by 1.71 to map to original image.]"},"isMeta":true,"turnCompanion":true}`,
@@ -53,12 +54,33 @@ func TestClaudeSeparatesInjectedInputFromHumanTurns(t *testing.T) {
 		`{"sessionId":"s","uuid":"stdout","type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted</local-command-stdout>"}}`,
 		`{"sessionId":"s","uuid":"pasted","type":"user","message":{"role":"user","content":[{"type":"text","text":"What about this one?"},{"type":"image","source":{"type":"base64","data":"AAAA","media_type":"image/jpeg"}}]}}`,
 		`{"sessionId":"s","uuid":"only-image","type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","data":"AAAA","media_type":"image/png"}}]}}`,
+		// A ScheduleWakeup firing sends the agent its own prompt.
+		`{"sessionId":"s","uuid":"wakeup","type":"user","message":{"role":"user","content":"check the build"},"isMeta":true,"turnOrigin":"scheduled"}`,
+		// Typed while the agent worked: delivered into its turn as a queued
+		// command. Another session's message is not the person's, and a queued
+		// text also written as a user event counts once.
+		`{"sessionId":"s","uuid":"typed","type":"attachment","timestamp":"2026-11-15T02:37:39.946Z","attachment":{"type":"queued_command","prompt":"Please just push","commandMode":"prompt"}}`,
+		`{"sessionId":"s","uuid":"peer","type":"attachment","attachment":{"type":"queued_command","prompt":"<cross-session-message from=\"uds:/tmp/a.sock\">done</cross-session-message>","commandMode":"prompt"}}`,
+		`{"sessionId":"s","uuid":"queued-again","type":"attachment","attachment":{"type":"queued_command","prompt":"Run it again","commandMode":"prompt"}}`,
+		`{"sessionId":"s","uuid":"later-read","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_later","name":"Read","input":{"file_path":"/tmp/a"}}]}}`,
+		`{"sessionId":"s","uuid":"later-result","parentUuid":"later-read","type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_later","type":"tool_result","content":"file contents"}]}}`,
+		`{"sessionId":"s","uuid":"again","type":"user","message":{"role":"user","content":"Run it again"}}`,
+		// Only the person's next message is a repeat: "continue" sent earlier is another turn.
+		`{"sessionId":"s","uuid":"continue-queued","type":"attachment","attachment":{"type":"queued_command","prompt":"continue","commandMode":"prompt"}}`,
 	)
-	if turns := humanTurns(messages); strings.Join(turns, "|") != "Show me the header|What about this one?|(image attachment)" {
+	if turns := humanTurns(messages); strings.Join(turns, "|") != "Show me the header|continue|What about this one?|(image attachment)|Please just push|Run it again|continue" {
 		t.Fatalf("human turns = %q", turns)
 	}
 	found := byNativeID(messages)
-	for id, source := range map[string]string{"caption": "image_note", "skill": "skill", "notice": "task_notification", "summary": "compaction_summary", "stdout": "command_output"} {
+	if typed := found["typed"]; typed.Role != "user" || typed.CreatedAt != "2026-11-15T02:37:39.946Z" || typed.Sender != "" {
+		t.Fatalf("typed mid-turn = %#v", typed)
+	}
+	for _, id := range []string{"peer", "queued-again"} {
+		if _, ok := found[id]; ok {
+			t.Fatalf("%s should not be a message: %#v", id, found[id])
+		}
+	}
+	for id, source := range map[string]string{"caption": "image_note", "skill": "skill", "notice": "task_notification", "summary": "compaction_summary", "stdout": "command_output", "wakeup": "scheduled_wakeup"} {
 		message := found[id]
 		if message.Role != "system" || message.Kind != contextKind || !strings.Contains(message.Text, `"source":"`+source+`"`) {
 			t.Fatalf("%s = %#v, want %s context", id, message, source)

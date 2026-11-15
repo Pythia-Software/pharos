@@ -60,10 +60,20 @@ var (
 	// is asked for again, but creates no standing background work.
 	resultReturnAfter = time.Hour
 	// resultRefreshPause is how long the refresher waits for the service to
-	// be idle again, and resultSweepEvery how often it looks for stale
-	// entries nobody has asked for since they went stale.
+	// be idle again, and resultSweepEvery how often it looks for entries
+	// whose data has changed and nobody has asked for since.
 	resultRefreshPause = 250 * time.Millisecond
 	resultSweepEvery   = 2 * time.Minute
+	// resultSettle is how long the data behind an entry must have stayed the
+	// same before the sweep queues it. Every change to the catalog makes
+	// every entry stale, and rebuilding them all takes minutes of CPU, so a
+	// library that gains a few messages every few minutes would be rebuilt
+	// continuously for nobody: each round stale again before anyone saw it.
+	// The scheduled index runs every 15 minutes by default, so a wait that
+	// long holds off until an index has come and gone without writing
+	// anything, which is when a round of rebuilds will last. An entry
+	// someone asks for meanwhile does not wait (refreshSoon).
+	resultSettle = 15 * time.Minute
 	// resultBuildDeadline bounds one background refresh.
 	resultBuildDeadline = 2 * time.Minute
 	// resultChangeEvery is how often the refresher looks for a change to
@@ -154,10 +164,41 @@ type resultCache struct {
 	queued       map[resultKey]bool // true: in asked
 	wake         chan struct{}
 	stores       int
+	// settling is the stamp the sweep last read for each domain and scope,
+	// and when it first read that one (resultSettle).
+	settling map[[2]string]resultStampSeen
+	// failed is the stamp at which an entry's last background build failed.
+	// The sweep leaves the entry until the stamp changes: a build that
+	// cannot succeed (its query runs past resultBuildDeadline, say) would
+	// otherwise be tried again by every sweep, for nobody. A request for the
+	// entry still queues it.
+	failed map[resultKey]string
 	// missing holds requests whose build was abandoned before anything was
 	// stored (the browser gave up), for the refresher to build: without an
 	// entry there is nothing else to refresh from.
 	missing map[resultKey]*resultEntry
+}
+
+type resultStampSeen struct {
+	stamp string
+	since time.Time
+}
+
+// settled records that the sweep read stamp for a domain and scope at now,
+// and reports whether it has read the same one for resultSettle. A service
+// that has just started has seen nothing yet, so its first round waits too.
+func (cache *resultCache) settled(at [2]string, stamp string, now time.Time) bool {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	seen, known := cache.settling[at]
+	if !known || seen.stamp != stamp {
+		seen = resultStampSeen{stamp, now}
+		if cache.settling == nil {
+			cache.settling = map[[2]string]resultStampSeen{}
+		}
+		cache.settling[at] = seen
+	}
+	return now.Sub(seen.since) >= resultSettle
 }
 
 // resultMissingLimit bounds the abandoned requests remembered at once.
@@ -371,7 +412,9 @@ func (cache *resultCache) signal() {
 	}
 }
 
-func (cache *resultCache) nextRefresh() (resultKey, bool) {
+// nextRefresh takes the next queued entry, and reports whether a request
+// queued it (asked) and whether there was one at all.
+func (cache *resultCache) nextRefresh() (id resultKey, asked, ok bool) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	queue := &cache.asked
@@ -379,12 +422,13 @@ func (cache *resultCache) nextRefresh() (resultKey, bool) {
 		queue = &cache.swept
 	}
 	if len(*queue) == 0 {
-		return resultKey{}, false
+		return resultKey{}, false, false
 	}
-	id := (*queue)[0]
+	id = (*queue)[0]
 	*queue = (*queue)[1:]
+	asked = cache.queued[id]
 	delete(cache.queued, id)
-	return id, true
+	return id, asked, true
 }
 
 func writeCachedResult(w http.ResponseWriter, body []byte, state string, built time.Time) {
@@ -436,6 +480,15 @@ func (s *Server) serveResult(w http.ResponseWriter, r *http.Request, d *resultDo
 	if policy != resultLive {
 		entry = cache.get(ctx, d.name, key)
 	}
+	if entry != nil && entry.scope != request.scope {
+		// Stored when this request read another part of the data (by a
+		// build that scoped it differently). The refresher rebuilds an entry
+		// for the scope stored with it, so without this it would go on
+		// stamping the entry for a scope no request compares it with, and
+		// the entry would be stale to every request for good.
+		_, _ = cache.db.Exec(`UPDATE entries SET scope=? WHERE domain=? AND key=?`, request.scope, d.name, key)
+		entry.scope = request.scope
+	}
 	state := d.state(entry, stamp, time.Now())
 	serve := func() {
 		writeCachedResult(w, entry.body, state, entry.builtAt)
@@ -480,7 +533,7 @@ func (s *Server) refreshResult(ctx context.Context) bool {
 	if cache == nil {
 		return false
 	}
-	id, ok := cache.nextRefresh()
+	id, asked, ok := cache.nextRefresh()
 	if !ok {
 		return false
 	}
@@ -506,41 +559,59 @@ func (s *Server) refreshResult(ctx context.Context) bool {
 	if err != nil || entry.version == d.version && d.state(entry, stamp, time.Now()) != "stale" {
 		return true
 	}
-	build, cancel := context.WithTimeout(backgroundQuery(ctx), resultBuildDeadline)
+	build := backgroundQuery(ctx)
+	if !asked {
+		// Nobody is looking at this answer, so the derived values it reads
+		// are not kept warm on its account.
+		build = unaskedRead(build)
+	}
+	build, cancel := context.WithTimeout(build, resultBuildDeadline)
 	defer cancel()
 	built := time.Now()
 	body, err := d.build(build, s, entry.replay, time.Time{})
+	cache.mu.Lock()
 	if err != nil {
-		return true // the stale entry stays; a request for it queues it again
+		if cache.failed == nil {
+			cache.failed = map[resultKey]string{}
+		}
+		cache.failed[id] = stamp
+	} else {
+		delete(cache.failed, id)
+	}
+	cache.mu.Unlock()
+	if err != nil {
+		// The stale entry stays. A request for it queues it again, and so
+		// does the sweep once its data has changed again.
+		return true
 	}
 	entry.version, entry.stamp, entry.body, entry.builtAt = d.version, stamp, body, built
 	cache.put(entry)
 	return true
 }
 
-// sweepResults queues the stale entries asked for lately that no request
-// has queued: what a page will want the next time it is opened.
-func (s *Server) sweepResults(ctx context.Context) {
+// sweepResults queues the entries asked for lately whose data has changed
+// since they were computed and that no request has queued: what a page will
+// want the next time it is opened. It waits for the data to settle first
+// (resultSettle), as of now.
+func (s *Server) sweepResults(ctx context.Context, now time.Time) {
 	cache := s.results()
 	if cache == nil {
 		return
 	}
-	rows, err := cache.db.QueryContext(ctx, `SELECT domain,key,version,scope,stamp,clock,built_at FROM entries WHERE returned AND used_at>=? ORDER BY used_at DESC LIMIT 1000`,
-		time.Now().Add(-resultRefreshRecent).UnixMilli())
+	rows, err := cache.db.QueryContext(ctx, `SELECT domain,key,version,scope,stamp FROM entries WHERE returned AND used_at>=? ORDER BY used_at DESC LIMIT 1000`,
+		now.Add(-resultRefreshRecent).UnixMilli())
 	if err != nil {
 		return
 	}
 	var found []resultEntry
 	for rows.Next() {
 		var e resultEntry
-		var built int64
-		if rows.Scan(&e.domain, &e.key, &e.version, &e.scope, &e.stamp, &e.clock, &built) == nil {
-			e.builtAt = time.UnixMilli(built)
+		if rows.Scan(&e.domain, &e.key, &e.version, &e.scope, &e.stamp) == nil {
 			found = append(found, e)
 		}
 	}
 	rows.Close()
-	stamps := map[[2]string]string{}
+	stamps, settled := map[[2]string]string{}, map[[2]string]bool{}
 	for _, e := range found {
 		d := resultDomains[e.domain]
 		if d == nil {
@@ -551,10 +622,22 @@ func (s *Server) sweepResults(ctx context.Context) {
 			if stamps[at], err = d.stamp(ctx, s, e.scope); err != nil {
 				return
 			}
+			settled[at] = cache.settled(at, stamps[at], now)
 		}
-		// An entry of another version is rebuilt too: its request is still good.
-		if e.version != d.version || d.state(&e, stamps[at], time.Now()) == "stale" {
-			cache.refreshSoon(e.domain, e.key, false)
+		if !settled[at] {
+			continue
+		}
+		// An entry of another version is rebuilt too: its request is still
+		// good. One that has only aged (its window ends "now", and its data
+		// is as it was) is left until it is asked for: rebuilding it would
+		// move its window, usually to the same answer, for nobody.
+		if e.version != d.version || e.stamp != stamps[at] {
+			cache.mu.Lock()
+			failedAt, failed := cache.failed[resultKey{e.domain, e.key}]
+			cache.mu.Unlock()
+			if !failed || failedAt != stamps[at] {
+				cache.refreshSoon(e.domain, e.key, false)
+			}
 		}
 	}
 }
@@ -669,7 +752,7 @@ func (s *Server) refreshResultsWhile(ctx context.Context, cache *resultCache, fr
 		case <-changed:
 			s.rebuildDerivedAfterChange(ctx, &follower, free)
 		case <-swept:
-			s.sweepResults(ctx)
+			s.sweepResults(ctx, time.Now())
 			sweep.Reset(resultSweepEvery)
 		}
 		for ctx.Err() == nil {

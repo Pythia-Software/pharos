@@ -1,6 +1,6 @@
-// The pieces of a Human events row that the conversation reader's timeline
-// (reader-navigator.tsx) and the workspace Timeline's session lanes
-// (label-session-ribbon.tsx) share: a marker per engagement annotation, the
+// The pieces of a Human events row (TimelineHumanRows, timeline-rows.tsx), on
+// the conversation reader's timeline and the workspace Timeline's session
+// lanes alike: a marker per engagement annotation, the
 // dimension's letter in its colour, and the card it opens.
 import React from 'react';
 import type {useRibbonInspector} from './label-ribbon-inspector';

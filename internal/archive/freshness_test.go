@@ -62,6 +62,7 @@ func (f *freshnessFixture) builtToday() []string {
 		setMetaSQL("tool_ledger_generation", "7"), setMetaSQL("tool_rollup_generation", "7/"+toolRollupVersion),
 		setMetaSQL("tool_rollup_day", c.clock().Format("2006-01-02")), setMetaSQL("tool_rollup_timezone", toolRollupTimezone()),
 		setMetaSQL("tool_rollup_full_revision", "r1"), setMetaSQL("tool_rollup_built_full_revision", "r1"),
+		setMetaSQL("tool_rollup_price_revision", "p1"), setMetaSQL("tool_rollup_built_price_revision", "p1"),
 		setMetaSQL("authorship_inputs_generation", "3"), setMetaSQL("authorship_generation", "7:3/"+authorshipVersion), setMetaSQL("authorship_built_at", "2026-10-27T08:00:00Z"), setMetaSQL("authorship_complete_at", "2026-10-27T08:00:00Z"),
 		setMetaSQL("findings_generation", c.findingsGeneration()), setMetaSQL("findings_built_at", "2026-10-27T08:05:00Z"),
 		// Each completion was for the library's inputs as they are (7:3).
@@ -314,6 +315,10 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "view stopped", domain: "view", seed: []string{"INSERT INTO workspace_library_dirty(workspace_id) VALUES('w1')"}, in: freshnessInput{viewStopped: true}, state: freshBehind, reason: "stopped", count: 1, countKnown: true},
 		{name: "view catching up", domain: "view", seed: []string{"INSERT INTO workspace_library_dirty(workspace_id) VALUES('w1')"},
 			in: freshnessInput{ops: []freshnessOp{runningOp("op-view", "maintenance.library-view", "")}}, state: freshBehind, reason: "refreshing", catching: "op-view", count: 1, countKnown: true},
+		// Stored workspaces still showing a changed column's earlier value
+		// are behind too, each counted once however many columns it is owed.
+		{name: "view updating a changed column", domain: "view", seed: []string{"INSERT INTO workspace_library_column_pending(column_name,workspace_id) VALUES('turn_count','w1'),('turn_count','w2'),('models','w2')"},
+			state: freshBehind, reason: "refreshing", count: 2, countKnown: true, unit: "workspace"},
 		{name: "view version", domain: "view", seed: []string{setMetaSQL("workspace_library_version", "old")}, state: freshBehind, reason: "version"},
 
 		{name: "text search current", domain: "search.text", state: freshCurrent},
@@ -983,9 +988,48 @@ func TestUpgradeCountKeepsTheNewerAnswer(t *testing.T) {
 	f.exec("DELETE FROM meta WHERE key='upgrade_count'")
 	f.catalog.storeUpgradeCount(context.Background())
 	expectRow(t, f.ledger(freshnessInput{}), "upgrade", freshCurrent, "", "")
+	// The analysis chain counts again only when what the count reads changed:
+	// a new conversation, or a marker set or cleared on an existing one.
+	stored := func() string {
+		value, _ := f.catalog.metaValue(context.Background(), upgradeCountKey)
+		return value
+	}
+	counted := stored()
+	f.catalog.refreshUpgradeCount(context.Background())
+	if stored() != counted {
+		t.Fatal("counted again with nothing changed")
+	}
+	f.exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w2','claude','local','w2','Work','2026-10-27')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c2','w2','claude','local','c2')`)
+	f.catalog.refreshUpgradeCount(context.Background())
+	if pending := upgradeCountPending(t, stored(), "tools"); pending != 1 {
+		t.Fatalf("a new conversation was not counted: tools pending %d", pending)
+	}
+	f.exec(fmt.Sprintf(`INSERT INTO tool_ledger_state(conversation_id,version,tool_calls,updated_at) VALUES('c2',%s,0,'2026-10-27')`, sqlQuote(toolLedgerVersion)))
+	f.catalog.refreshUpgradeCount(context.Background())
+	if pending := upgradeCountPending(t, stored(), "tools"); pending != 0 {
+		t.Fatalf("a ledger written since was not counted: tools pending %d", pending)
+	}
+	f.exec("DELETE FROM conversations WHERE id='c2'", "DELETE FROM workspaces WHERE id='w2'")
+	f.catalog.storeUpgradeCount(context.Background())
 	f.exec(setMetaSQL(initializedBuildKey, "a-newer-build"))
 	// Not counted for this build, but with no conversations nothing waits.
 	expectRow(t, f.ledger(freshnessInput{}), "upgrade", freshCurrent, "empty", "")
+}
+
+func upgradeCountPending(t *testing.T, stored, step string) int64 {
+	t.Helper()
+	var count upgradeCount
+	if err := json.Unmarshal([]byte(stored), &count); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range count.Steps {
+		if s.ID == step {
+			return s.Pending
+		}
+	}
+	t.Fatalf("no %s step in %s", step, stored)
+	return 0
 }
 
 // Initialize no longer counts the upgrade's steps: the service counts them

@@ -69,7 +69,7 @@ export const askFamilies: AskFamily[] = [
   { id: "context-crowding", area: "context", form: "understand", prior: 1, variants: ["What’s crowding my agents’ context{scope}?", "Why do my long conversations run out of room{scope}?"] },
   { id: "context-improve", area: "context", form: "improve", prior: 0.9, signals: ["context.compaction"], variants: ["How could I keep long conversations from compacting{scope}?"] },
   { id: "spend-where", area: "spend", form: "understand", prior: 0.9, signals: ["spend.tokens"], variants: ["Where do my tokens go{scope}?", "What’s driving my API cost{scope}?"] },
-  { id: "spend-change", area: "spend", form: "change", prior: 1, signals: ["spend.change"], variants: ["How has my token use changed {period}?", "What changed in my API cost {period}?"] },
+  { id: "spend-change", area: "spend", form: "change", prior: 1, signals: ["spend.change"], variants: ["How has my token use changed {period}?", "What changed in my agents’ token use {period}?"] },
   { id: "models-fit", area: "models", form: "compare", prior: 1, variants: ["Am I using the right models for the right work?", "How do the models I use compare on cost and results?"] },
   { id: "caching-reuse", area: "caching", form: "improve", prior: 0.8, variants: ["How well do my agents reuse cached context?", "Where could better caching lower my API cost?"] },
   { id: "delegation-value", area: "delegation", form: "understand", prior: 0.9, variants: ["How much of my work do sub-agents do, and does it help?", "When do my agents delegate, and what does it cost?"] },

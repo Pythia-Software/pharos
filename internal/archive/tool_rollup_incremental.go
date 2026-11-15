@@ -13,8 +13,11 @@ import (
 var errToolPublicationChanged = errors.New("another tool rollup was published during construction")
 
 type toolRollupBuild struct {
-	full                                                 bool
-	generation, day, fullRevision, publication, timezone string
+	// full re-aggregates every call; reprice re-sums and re-prices every day
+	// from the stored cube.
+	full, reprice                                                       bool
+	generation, day, fullRevision, priceRevision, publication, timezone string
+	cubeRows, dailyRows                                                 int // rows the publish writes
 }
 
 func (c *Catalog) updateToolRollup(ctx context.Context, generation, day string, force bool) error {
@@ -75,6 +78,14 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	if err != nil {
 		return build, err
 	}
+	priceRev, err := readMeta(snapshot, ctx, "tool_rollup_price_revision")
+	if err != nil {
+		return build, err
+	}
+	builtPriceRev, err := readMeta(snapshot, ctx, "tool_rollup_built_price_revision")
+	if err != nil {
+		return build, err
+	}
 	publication, err := readMeta(snapshot, ctx, "tool_rollup_publication")
 	if err != nil {
 		return build, err
@@ -90,40 +101,47 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	}
 	zone := toolRollupTimezone()
 	build = toolRollupBuild{timezone: zone, full: force || !strings.HasSuffix(built, "/"+toolRollupVersion) || builtRev != fullRev || builtZone != zone,
-		generation: generation, day: day, fullRevision: fullRev, publication: publication}
+		generation: generation, day: day, fullRevision: fullRev, priceRevision: priceRev, publication: publication}
+	build.reprice = !build.full && priceRev != builtPriceRev
 	if _, err := snapshot.ExecContext(ctx, "CREATE TEMP TABLE tool_dirty_build AS SELECT * FROM tool_rollup_dirty"); err != nil {
 		return build, err
 	}
 	if _, err := snapshot.ExecContext(ctx, "CREATE INDEX temp.tool_dirty_build_idx ON tool_dirty_build(workspace_id)"); err != nil {
 		return build, err
 	}
-	var dirty int
-	if err := snapshot.QueryRowContext(ctx, "SELECT COUNT(*) FROM temp.tool_dirty_build").Scan(&dirty); err != nil {
-		return build, err
-	}
-	// Unpartitioned invalidation by an older writer cannot safely reuse the cube.
-	if generation != built && dirty == 0 {
-		build.full = true
-	}
-	workspaces, err := queryMapsContext(ctx, snapshot, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w
- WHERE EXISTS(SELECT 1 FROM tool_calls t WHERE t.workspace_id=w.id)`)
+	// A ledger generation that moved with nothing marked rebuilds no
+	// partition: every writer of a table the cube reads marks its workspaces
+	// in the same transaction (the partition triggers live in the catalog, so
+	// older executables fire them too), and the generation also moves for
+	// authorship-only inputs. The mirrors below are still recomputed.
+	links, err := queryMapsContext(ctx, snapshot, `SELECT a.workspace_id left_workspace,b.workspace_id right_workspace FROM conversation_identity_links l
+ JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id`)
 	if err != nil {
 		return build, err
 	}
-	links, err := queryMapsContext(ctx, snapshot, `SELECT a.workspace_id left_workspace,b.workspace_id right_workspace FROM conversation_identity_links l
- JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id`)
+	// Only a linked workspace can be a mirror, so only those are read.
+	linked := map[string]bool{}
+	for _, link := range links {
+		linked[firstString(link["left_workspace"])], linked[firstString(link["right_workspace"])] = true, true
+	}
+	linkedIDs := make([]string, 0, len(linked))
+	for id := range linked {
+		linkedIDs = append(linkedIDs, id)
+	}
+	workspaces, err := queryMapsContext(ctx, snapshot, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w
+ WHERE w.id IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM tool_calls t WHERE t.workspace_id=w.id)`, jsonText(linkedIDs))
 	if err != nil {
 		return build, err
 	}
 	if _, err := snapshot.ExecContext(ctx, "CREATE TEMP TABLE tool_mirror_build(workspace_id TEXT PRIMARY KEY)"); err != nil {
 		return build, err
 	}
+	mirrors := []string{}
 	for _, row := range suppressMirrorRows(workspaces, links) {
-		for _, id := range row["mirrored_workspace_ids"].([]string) {
-			if _, err := snapshot.ExecContext(ctx, "INSERT INTO temp.tool_mirror_build VALUES(?)", id); err != nil {
-				return build, err
-			}
-		}
+		mirrors = append(mirrors, row["mirrored_workspace_ids"].([]string)...)
+	}
+	if _, err := snapshot.ExecContext(ctx, "INSERT INTO temp.tool_mirror_build SELECT value FROM json_each(?)", jsonText(mirrors)); err != nil {
+		return build, err
 	}
 	// A representative change suppresses/restores entire workspaces, even if
 	// the changed call belongs only to the other member of the mirror group.
@@ -134,13 +152,23 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
  WHERE workspace_id NOT IN (SELECT workspace_id FROM temp.tool_dirty_build)`); err != nil {
 		return build, err
 	}
-	cubeQuery := toolCubeSelect("temp.tool_mirror_build")
+	cubeQuery, scope := toolCubeSelect("temp.tool_mirror_build"), "SELECT COUNT(*) FROM tool_calls"
 	if !build.full {
 		cubeQuery = strings.Replace(cubeQuery, " GROUP BY ", " AND t.workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build) GROUP BY ", 1)
+		scope += " WHERE workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build)"
 	}
-	// SQLite exposes no partial progress for this aggregation.
-	reportWork(ctx, "aggregating tool calls", "", 0, -1, "Unitary step")
+	// The calls in scope size the step; SQLite exposes no partial progress
+	// within the aggregation itself.
+	var calls int
+	if err := snapshot.QueryRowContext(ctx, scope).Scan(&calls); err != nil {
+		return build, err
+	}
+	reportWork(ctx, "aggregating tool calls", "tool call", 0, calls)
 	if _, err := snapshot.ExecContext(ctx, "CREATE TEMP TABLE tool_cube_build AS "+cubeQuery); err != nil {
+		return build, err
+	}
+	reportWork(ctx, "aggregating tool calls", "tool call", calls, calls)
+	if err := snapshot.QueryRowContext(ctx, "SELECT COUNT(*) FROM temp.tool_cube_build").Scan(&build.cubeRows); err != nil {
 		return build, err
 	}
 	if build.full {
@@ -148,8 +176,12 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 			return build, err
 		}
 	} else {
-		if _, err := snapshot.ExecContext(ctx, `CREATE TEMP TABLE tool_day_build AS SELECT DISTINCT day FROM main.tool_call_cube
- WHERE workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build)
+		// New prices re-price every day, summed again from the stored cube.
+		days := `SELECT DISTINCT day FROM main.tool_call_cube WHERE workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build)`
+		if build.reprice {
+			days = `SELECT DISTINCT day FROM main.tool_call_cube`
+		}
+		if _, err := snapshot.ExecContext(ctx, `CREATE TEMP TABLE tool_day_build AS `+days+`
  UNION SELECT DISTINCT day FROM temp.tool_cube_build`); err != nil {
 			return build, err
 		}
@@ -194,6 +226,7 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	if err := stmt.Close(); err != nil {
 		return build, err
 	}
+	build.dailyRows = len(daily)
 	if err := snapshot.Commit(); err != nil {
 		return build, err
 	}
@@ -224,7 +257,11 @@ func (c *Catalog) publishToolPartitions(ctx context.Context, conn *sql.Conn, bui
 	if publication != build.publication {
 		return errToolPublicationChanged
 	}
-	statements := []string{"DELETE FROM tool_mirror_workspaces", "INSERT INTO tool_mirror_workspaces SELECT * FROM temp.tool_mirror_build"}
+	// Mirrors publish as a difference: each written row marks the request
+	// exclusions stale and invalidates cached queries, and nearly every build
+	// keeps the same mirrors.
+	statements := []string{"DELETE FROM tool_mirror_workspaces WHERE workspace_id NOT IN (SELECT workspace_id FROM temp.tool_mirror_build)",
+		"INSERT INTO tool_mirror_workspaces SELECT workspace_id FROM temp.tool_mirror_build WHERE workspace_id NOT IN (SELECT workspace_id FROM main.tool_mirror_workspaces)"}
 	if build.full {
 		statements = append(statements, "DROP TABLE IF EXISTS main.tool_call_cube", "CREATE TABLE main.tool_call_cube AS SELECT * FROM temp.tool_cube_build",
 			"CREATE INDEX tool_call_cube_workspace_idx ON tool_call_cube(workspace_id)", "CREATE INDEX tool_call_cube_day_idx ON tool_call_cube(day)", "CREATE INDEX tool_call_cube_count_idx ON tool_call_cube(call_count)", "DELETE FROM tool_usage_daily")
@@ -235,17 +272,24 @@ func (c *Catalog) publishToolPartitions(ctx context.Context, conn *sql.Conn, bui
 	}
 	statements = append(statements, "INSERT INTO tool_usage_daily SELECT * FROM temp.tool_daily_build",
 		`DELETE FROM tool_rollup_dirty WHERE EXISTS(SELECT 1 FROM temp.tool_dirty_build b WHERE b.workspace_id=tool_rollup_dirty.workspace_id AND b.revision=tool_rollup_dirty.revision)`)
-	reportWork(ctx, "publishing tool rollup", "statement", 0, len(statements))
-	for index, statement := range statements {
+	// Progress counts the cube and daily rows written, which size the step
+	// (a full build's cube copy dominates it).
+	written := map[string]int{"CREATE TABLE main.tool_call_cube AS SELECT * FROM temp.tool_cube_build": build.cubeRows,
+		"INSERT INTO tool_call_cube SELECT * FROM temp.tool_cube_build": build.cubeRows, "INSERT INTO tool_usage_daily SELECT * FROM temp.tool_daily_build": build.dailyRows}
+	rows, done := build.cubeRows+build.dailyRows, 0
+	reportWork(ctx, "publishing tool rollup", "row", 0, rows)
+	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
 		}
-		reportWork(ctx, "publishing tool rollup", "statement", index+1, len(statements))
+		done += written[statement]
+		reportWork(ctx, "publishing tool rollup", "row", done, rows)
 	}
 	// Earlier builds rebuild the whole rollup when tool_rollup_day is
 	// not today; keep recording it for a library they also open.
 	for key, value := range map[string]string{"tool_rollup_generation": build.generation, "tool_rollup_day": build.day, "tool_rollup_timezone": build.timezone, "tool_rollup_built_full_revision": build.fullRevision,
-		"tool_rollup_writer_ms": fmt.Sprint(time.Since(started).Milliseconds())} {
+		"tool_rollup_built_price_revision": build.priceRevision,
+		"tool_rollup_writer_ms":            fmt.Sprint(time.Since(started).Milliseconds())} {
 		if _, err := tx.ExecContext(ctx, "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
 			return err
 		}

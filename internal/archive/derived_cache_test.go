@@ -449,4 +449,29 @@ func TestCachesOutliveCommitsDuringARun(t *testing.T) {
 	if got := value(); got != 3 {
 		t.Fatalf("a commit outside a run did not recompute: %d", got)
 	}
+	// After a change, the values a request asked for lately are recomputed
+	// ahead of the next one. A value read only on nobody's behalf (a stored
+	// answer rebuilt unasked) is computed for it but not kept warm.
+	var unasked atomic.Int32
+	background := func() int32 {
+		t.Helper()
+		value, err := cachedValue(unaskedRead(backgroundQuery(context.Background())), catalog, "unasked", func(context.Context) (int32, error) { return unasked.Add(1), nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	if background() != 1 || background() != 1 {
+		t.Fatal("an unasked read did not compute the value once")
+	}
+	commit()
+	if _, err := catalog.catalogVersion(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !catalog.recomputeStaleDerived(context.Background(), nil, nil) || calls.Load() != 4 || unasked.Load() != 1 {
+		t.Fatalf("after a change, the requested value was computed %d times (want 4) and the one nobody asked for %d (want 1)", calls.Load(), unasked.Load())
+	}
+	if background() != 2 {
+		t.Fatal("an unasked read after a change did not see it")
+	}
 }

@@ -122,6 +122,23 @@ func calibrateTimebase() (float64, bool) {
 	return hz, true
 }
 
+// sysThreadSelfID is SYS_thread_selfid: the calling thread's system-wide id.
+const sysThreadSelfID = 372
+
+// threadCPUTime is the CPU time the calling thread has used, and the
+// thread's id. It means something only to a goroutine locked to its thread.
+func threadCPUTime() (seconds float64, thread uint64, ok bool) {
+	var used unix.Timespec
+	if unix.ClockGettime(unix.CLOCK_THREAD_CPUTIME_ID, &used) != nil {
+		return 0, 0, false
+	}
+	id, _, errno := syscall.RawSyscall(sysThreadSelfID, 0, 0, 0)
+	if errno != 0 {
+		return 0, 0, false
+	}
+	return float64(used.Nano()) / 1e9, uint64(id), true
+}
+
 // rawUsage is the proc_pid_rusage call.
 func rawUsage(pid int) (rusageInfoV4Struct, error) {
 	var info rusageInfoV4Struct

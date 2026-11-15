@@ -35,7 +35,7 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
     note: "The retained history source. Linked copies count once, so work started in Conductor can have a native Claude or Codex source." },
   channel: { label: "Channel", fields: ["channel"], empty: "Unknown channel",
     note: "How the top-level conversation started. Linked helpers inherit that channel, including when their usage comes from a native Claude or Codex transcript. Channel attribution says how the channel was established: direct, inherited, inferred, or not established." },
-  branch_source: { label: "Branch recorded", fields: ["branch_source"], where: onBranch, order: ["turn", "session"], values: { turn: "Per turn", session: "Per session" } },
+  branch_source: { label: "Branch recorded", fields: ["branch_source"], where: onBranch, order: ["turn", "session"], values: { turn: "Per turn", session: "Per workspace" } },
 };
 
 export const branchAnalysisCatalog: AnalysisCatalog = {

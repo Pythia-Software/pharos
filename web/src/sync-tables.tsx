@@ -7,7 +7,7 @@ import { DataTable, QueryBuilder, MetricsPanel, ModalSurface, defaultRenderers, 
 import { clientTableStorageAdapter } from "./storage";
 import { useLocationRevision } from "./nested-pages";
 import { useViewEntry } from "./view-state";
-import { syncTables, runTables, runKey, resultLabel, operationLabels, operationHistoryTable, operationStates, operationTriggers, operationReasons, verificationOutcomes, type SyncRecord, type SyncTable } from "./sync-table-model";
+import { syncTables, runTables, runKey, resultLabel, operationLabels, operationHistoryTable, operationStates, operationTriggers, operationReasons, verificationOutcomes, syncCellLabels, resultNeedsAttention, type SyncRecord, type SyncTable } from "./sync-table-model";
 
 declare global {
   interface Window {
@@ -32,7 +32,9 @@ const renderers: RenderRegistry<SyncRecord> = {
   sync_seconds: ({ value }) => value == null ? "—" : Number(value) < 0 ? `−${format("seconds", -Number(value))}` : format("seconds", value),
   sync_memory: ({ value }) => format("memory", value),
   sync_percent: ({ value }) => format("percent", value),
-  sync_result: ({ value }) => <span className={`sync-result${["Failed", "Stopped", "Needs attention", "Indexed; verification postponed", "Verification failed", "Verification incomplete", "Error", "Needs capture"].includes(String(value)) ? " attention" : ""}`}>{String(value ?? "—")}</span>,
+  sync_result: ({ value, row }) => <span className={`sync-result${resultNeedsAttention(value, row) ? " attention" : ""}`}>{String(value ?? "—")}</span>,
+  // Stored values with display names: the row keeps the value filters match.
+  ...Object.fromEntries(Object.entries(syncCellLabels).map(([key, label]) => [key, (context: Parameters<RenderRegistry<SyncRecord>[string]>[0]) => defaultRenderers.text(context.value == null ? context : { ...context, value: label(String(context.value)) })])),
 };
 
 function SyncQueryTable({ table, label, onInspect }: { table: SyncTable; label: string; onInspect?: (id: string) => void }) {

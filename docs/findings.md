@@ -52,7 +52,7 @@ describes what shipped.
   it gets worse (its weekly rate doubles).
 - **Settings** (Findings → Settings, also linked from Settings): the threshold,
   the ranking unit, what prompts ask for (per repository or everywhere), and
-  **Refresh findings now**.
+  **Update Optimize now**.
 
 ## Where findings come from
 
@@ -214,7 +214,7 @@ full pass after the daily time
 Capture & index and separate index actions retain the daily refresh policy:
 a full pass on the first refresh after local midnight or a detector change,
 and otherwise measurements of watched findings, wins still accruing, and
-snoozes waiting for a pattern to get worse. **Refresh findings now** also
+snoozes waiting for a pattern to get worse. **Update Optimize now** also
 requests a full pass. Full discovery reuses durable conversation features while
 still evaluating all candidates and measurement plans. See
 [the measured performance report](performance/incremental-analysis.md).

@@ -191,8 +191,8 @@ stored text unchanged, as agent events are.
 
 ### Human events on the timeline
 
-The reader's timeline has a **Human events** row beside Agent events and Tool actions (`reader-navigator.tsx`,
-`HumanEventsRows`). It has one marker for each annotation (a displayed span) in a person's message: the first
+The reader's timeline has a **Human events** row beside Agent events and Tool actions (`TimelineHumanRows` in
+`web/src/timeline-rows.tsx`, the rows the reader's timeline and the workspace Timeline share). It has one marker for each annotation (a displayed span) in a person's message: the first
 letter of the dimension's display name (I G B V D E Q A T; `humanEventLetter`, `.eng-glyph`) as a heavy capital
 in the dimension's hue, the same as its underline, in a 7 px box like an agent event's marker. The same letter
 marks the dimension's row label, its Timeline Key chip and its inspector card. Like Agent events, the row
@@ -304,8 +304,8 @@ none, and every one of the 104 labels appears. The most frequent label has 20,25
 
 ### Human events on the workspace Timeline
 
-The workspace Timeline's session lanes show the same Human events (`LaneHumanEvents` in
-`web/src/label-session-ribbon.tsx`): a row under the lane's Message modes, Agent events and Tool actions rows that
+The workspace Timeline's session lanes show the same Human events, drawn by the same `TimelineHumanRows`
+(`web/src/timeline-rows.tsx`) under the lane's surface (`web/src/timeline-session-lane.tsx`): a row under the lane's Message modes, Agent events and Tool actions rows that
 folds out by dimension with counts (disclosure `delegation-labels:<session>:human`), the same letter marks, hover
 card and stacking (`web/src/human-events-rows.tsx` is shared with the reader), and Human events entries in that
 page's Key, folded icon mode included (`timeline_visibility`, section `human`).

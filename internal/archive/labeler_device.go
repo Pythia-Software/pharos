@@ -102,6 +102,10 @@ func (c *Catalog) labelerRunner(ctx context.Context, settings LabelerSettings, m
 		if c.ops != nil && c.ops.telemetry {
 			release = c.observeLabelerUse(ctx, runner, model, cfg.GPU, release)
 		}
+		// The workers' CPU, memory and GPU time over this use go to the work
+		// ctx runs in (background_cpu.go); model loading came before it.
+		end, inner := leaseWorkers(ctx, pool.PIDs, cfg.GPU), release
+		release = func() { end(); inner() }
 	}
 	return runner, release, err
 }

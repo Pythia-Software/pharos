@@ -485,7 +485,13 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	}
 	input := askInput()
 	input["currentURI"] = pageURI
+	before := upgradePending(t, s.Catalog)
 	askOK(t, s, "send", input)
+	// A saved chat records what ingest records, so it leaves no Library
+	// upgrade step pending.
+	if after := upgradePending(t, s.Catalog); !reflect.DeepEqual(after, before) {
+		t.Fatalf("a saved chat left upgrade work: %v, before %v", after, before)
+	}
 	session, err := s.askSession(t.Context(), "chat-1")
 	if err != nil || len(session.Conversation) != 1 || len(session.Conversation[0].Cards) != 2 {
 		t.Fatalf("session: %+v %v", session, err)
@@ -1350,7 +1356,9 @@ func TestAskCLIProcessCancellation(t *testing.T) {
 		for _, name := range []string{"Codex", "Claude", "Antigravity"} {
 			provider := askProvider{ID: name, path: cli, mcp: askMCPServer{Command: "/test/pharos", Args: []string{"mcp"}}, Models: []askModel{{ID: "test-model", Efforts: []string{"Default"}}}}
 			models, err := askDiscoverModels(t.Context(), provider)
-			if models != nil || !errors.Is(err, errProcessIsolationUnsupported) || strings.Contains(err.Error(), "authenticate") {
+			// The sign-in advice of a failed model listing ("Update it and
+			// sign in", "Sign in to agy") must not replace the refusal.
+			if advice := strings.ToLower(fmt.Sprint(err)); models != nil || !errors.Is(err, errProcessIsolationUnsupported) || strings.Contains(advice, "sign in") || strings.Contains(advice, "signed in") {
 				t.Fatalf("%s model discovery = %v, %v", name, models, err)
 			}
 			if _, err := askRunCLI(t.Context(), provider, askSelection{Provider: name, Model: "test-model", Effort: "Default"}, "prompt"); !errors.Is(err, errProcessIsolationUnsupported) {

@@ -1,6 +1,6 @@
 // sync.js: when Home refreshes after a run, when Index changes is busy, and
 // how the Sync page's run history is formatted (window.pharosSync).
-import { resultLabel, sourceNames, syncTables, runTables, operationHistoryTable, syncSchemas } from "../../../src/sync-table-model";
+import { resultLabel, sourceNames, syncTables, runTables, operationHistoryTable, syncSchemas, syncCellLabels, resultNeedsAttention } from "../../../src/sync-table-model";
 import { emptyLibraryState } from "../../../src/empty-library-model";
 import { applyQuery, EMPTY_QUERY, isFilterable, isSortable, isMeasurable, isGroupable, opsForField } from "@pythia-software/query-table-core";
 import { test } from "node:test";
@@ -300,10 +300,20 @@ test('work history queries include analyses and backups alongside indexing', () 
   assert.deepEqual(result.rows.map(row => row.id), ['backup', 'analysis']);
   assert.equal(history.rows[2].result, 'Failed');
   assert.equal(history.rows[2].error, 'Drive unavailable');
-  // What started the work reads as a label; an unknown trigger stays as recorded.
-  assert.equal(history.rows[2].trigger, 'Schedule');
-  assert.equal(operationHistoryTable([{ id: 'x', state: 'interrupted', trigger: 'mystery' }]).rows[0].trigger, 'mystery');
-  assert.equal(operationHistoryTable([{ id: 'x', state: 'interrupted', trigger: 'user' }]).rows[0].trigger, 'You');
+  // Rows keep the stored trigger, so a saved filter or link on it still
+  // matches; the cell and the filter picker show its label. An unknown
+  // trigger stays as recorded.
+  const started = operationHistoryTable([{ id: 'x', state: 'interrupted', trigger: 'mystery' }, { id: 'y', state: 'interrupted', trigger: 'user' }, { id: 'z', state: 'cancelled' }, ...operations]);
+  assert.deepEqual(started.rows.map(row => row.trigger), ['mystery', 'user', null, null, null, 'schedule']);
+  assert.deepEqual(applyQuery(started.rows, { ...EMPTY_QUERY, where: [{ field: 'trigger', op: '=', value: 'user' }] }, started.schema).rows.map(row => row.id), ['y']);
+  const triggerField = started.schema.fields.find(field => field.name === 'trigger');
+  assert.deepEqual(triggerField.filter.values.options.find(option => option.value === 'user'), { value: 'user', label: 'You' });
+  assert.deepEqual(['schedule', 'user', 'mystery'].map(syncCellLabels[triggerField.render]), ['Schedule', 'You', 'mystery']);
+  // Failed, stopped and interrupted work is highlighted from its stored state,
+  // whatever the state is called; a grouped cell has only the shown value.
+  assert.deepEqual(started.rows.map(row => [row.result, resultNeedsAttention(row.result, row)]), [['Interrupted', true], ['Interrupted', true], ['Stopped', true], ['Done', false], ['Done', false], ['Failed', true]]);
+  assert.equal(resultNeedsAttention('Renamed', { state: 'interrupted' }), true);
+  assert.deepEqual(['Interrupted', 'Stopped', 'Failed', 'Done', 'Running', 'Error', 'Needs capture', 'Up to date'].map(value => resultNeedsAttention(value)), [true, true, true, false, false, true, true, false]);
   const recent = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{field:'started_at',op:'>=',value:new Date(reference - 120000).toISOString()}] }, history.schema);
   assert.deepEqual(recent.rows.map(row => row.id), ['index', 'analysis']);
 });
@@ -345,9 +355,17 @@ test('diagnostic queries preserve separate numeric distributions and incomplete 
   assert.equal(tables.accuracy.rows[0].covered, null);
   assert.equal(tables.accuracy.rows[1].error_percent, 25);
   assert.equal(new Set(tables.coverage.rows.map(row => row.id)).size, 2);
-  // Checkpoints and verification results read as the same labels the run details use.
-  assert.deepEqual(tables.accuracy.rows.map(row => row.checkpoint), ['At launch', 'After discovery']);
-  assert.deepEqual(tables.coverage.rows.map(row => row.outcome), ['Verified', 'Skipped']);
+  // Checkpoints and verification results stay as stored, so filters on them
+  // match; they read as the same labels the run details use.
+  assert.deepEqual(tables.accuracy.rows.map(row => row.checkpoint), ['launch', 'discovered']);
+  assert.deepEqual(tables.accuracy.rows.map(row => syncCellLabels.sync_checkpoint(row.checkpoint)), ['At launch', 'After discovery']);
+  assert.deepEqual(tables.coverage.rows.map(row => row.outcome), ['passed', 'deferred']);
+  assert.deepEqual(tables.coverage.rows.map(row => syncCellLabels.sync_outcome(row.outcome)), ['Verified', 'Skipped']);
+  assert.deepEqual(applyQuery(tables.coverage.rows, { ...EMPTY_QUERY, where: [{ field: 'outcome', op: '=', value: 'deferred' }] }, tables.coverage.schema).rows.map(row => row.units), [1]);
+  for (const [table, name] of [[tables.accuracy, 'checkpoint'], [tables.coverage, 'outcome']]) {
+    const field = table.schema.fields.find(field => field.name === name);
+    for (const option of field.filter.values.options) assert.equal(syncCellLabels[field.render](option.value), option.label, `${name} ${option.value}`);
+  }
   assert.equal(tables.deferred.rows[0].completed_at, null);
   for (const table of Object.values(syncTables({}))) assert.deepEqual(table.rows, []);
   // CPU and RSS this platform could not read arrive as null: missing.
@@ -365,10 +383,14 @@ test('run detail queries distinguish unknown work totals and forecasts from meas
       { reason: 'discovered', estimate: { point_seconds: 10, low_seconds: 0, high_seconds: 15 }, actual_remaining_seconds: 0 },
       { reason: 'checkpoint', estimate: { point_seconds: 10 }, actual_remaining_seconds: 12 }] });
   assert.deepEqual(tables.sourceResults.rows.map(row => row.status), ['Partial', 'Failed', 'Capture was running']);
-  // Index-run phases read as labels; a source's phase keeps the source name.
-  assert.deepEqual(tables.phases.rows.map(row => row.name), ['Search view', 'codex', 'Verification']);
-  assert.equal(tables.stages.rows[0].stage, 'Verification: discover');
-  assert.deepEqual(tables.forecasts.rows.map(row => row.checkpoint), ['At launch', 'After discovery', 'checkpoint']);
+  // Rows keep the stored phase; index-run phases read as labels and a
+  // source's phase keeps the source name.
+  assert.deepEqual(tables.phases.rows.map(row => row.name), ['projections', 'codex', 'audit']);
+  assert.deepEqual(tables.phases.rows.map(row => syncCellLabels.sync_phase(row.name)), ['Search view', 'codex', 'Verification']);
+  assert.equal(tables.stages.rows[0].stage, 'audit: discover');
+  assert.equal(syncCellLabels.sync_stage(tables.stages.rows[0].stage), 'Verification: discover');
+  assert.deepEqual(tables.forecasts.rows.map(row => row.checkpoint), ['launch', 'discovered', 'checkpoint']);
+  assert.deepEqual(tables.forecasts.rows.map(row => syncCellLabels.sync_checkpoint(row.checkpoint)), ['At launch', 'After discovery', 'checkpoint']);
   assert.equal(tables.stages.rows[0].total, 0);
   assert.equal(tables.stages.rows[0].load_one_minute, 0);
   assert.equal(tables.stages.rows[1].total, null);

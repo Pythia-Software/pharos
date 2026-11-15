@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"slices"
 	"sort"
 	"strings"
@@ -31,7 +32,8 @@ func backgroundExplicit(ctx context.Context) bool {
 // data has an automatic owner on one of three cadences: Frequently, with the
 // scheduled index; Hourly, once the library has been quiet; and Daily,
 // overnight. An adaptive item sits in the most frequent cadence its measured
-// cost allows, so it moves as it gets faster or slower. Permanent overrides
+// cost allows, a run and a day (placeCadence), so it moves as it gets faster
+// or slower. Permanent overrides
 // slow work down; a temporary override can move any item between all four columns.
 
 const (
@@ -63,6 +65,22 @@ func validBackgroundCadence(cadence string) bool {
 // Daily takes the rest.
 var cadenceLimit = map[string]float64{cadenceFrequent: 60, cadenceHourly: 600}
 
+// cadenceDayBudget is the most a day, in seconds, an item at each cadence may
+// spend on the part of its runs that does not depend on how much changed: a
+// run's fixed cost, paid again by every run. A quick run repeated all day is
+// as heavy as a slow one.
+var cadenceDayBudget = map[string]float64{cadenceFrequent: 1800, cadenceHourly: 7200}
+
+// How often each cadence runs an item a day. Hourly and Daily are their
+// ceilings; Frequently follows the scheduled indexes that wrote something,
+// measured from this Mac's passes (frequentRunsPerDay), and until a day of
+// them is known it is taken to be frequentRunsDefault.
+const (
+	frequentRunsDefault = 40.0
+	hourlyRunsPerDay    = 24.0
+	frequentRunsWindow  = 7 * 24 * time.Hour
+)
+
 // The schedule's timings, package variables so tests can shorten them.
 var (
 	// backgroundTick is how often the loop looks for due work; a scheduled
@@ -73,6 +91,10 @@ var (
 	hourlyEvery  = time.Hour
 	hourlyQuiet  = 10 * time.Minute
 	hourlyLatest = 90 * time.Minute
+	// An hourly pass also takes the hourly items due within hourlyJoin, so
+	// items whose clocks drifted apart run in one pass and stay together,
+	// instead of each holding the library for a pass of its own.
+	hourlyJoin = 20 * time.Minute
 	// Daily work runs at the daily time, or the first quiet moment after;
 	// past dailyLatest it runs whether or not the library is quiet.
 	dailyLatest = 12 * time.Hour
@@ -104,8 +126,14 @@ type backgroundItem struct {
 	requiresEngagement bool
 	// requiresAsk items exist only where Ask Pharos is enabled on this Mac.
 	requiresAsk bool
+	// requiresPullRequestReviews items exist only where
+	// pull_request_reviews_enabled is on.
+	requiresPullRequestReviews bool
 	// afterChain items read what the chain writes, so a pass runs them last.
 	afterChain bool
+	// fastest is the most frequent cadence measurement may place an adaptive
+	// item at, where fresher results are of no use (empty: Frequently).
+	fastest string
 }
 
 // backgroundItems in the order they run within a pass (runBackgroundItems),
@@ -132,19 +160,22 @@ var backgroundItems = []backgroundItem{
 	{ID: "tools", Label: "Tools & usage", Verb: "Updating tools and usage", Feeds: "Analyze → Tool Summary, and the usage cards", Cadence: cadenceFrequent, Adaptive: true,
 		Stages: []string{"tools"}, Kinds: []string{"analysis.tools"}, Why: "Adds the commands and tokens of the workspaces that changed."},
 	{ID: "writing", Label: "Update writing estimates", Verb: "Updating writing estimates", Feeds: "Analyze → Human Words, its cards, and related conversations on workspace pages", Cadence: cadenceFrequent,
-		Stages: []string{"authorship", "peers"}, Kinds: []string{"analysis.authorship"}, Why: "Updates a bounded batch of new or changed messages, then links reviews to the work they read or were pasted into. Estimates are refined overnight."},
+		Stages: []string{"authorship", "peers"}, Kinds: []string{"analysis.authorship", "analysis.peers"}, Why: "Updates a bounded batch of new or changed messages, then links reviews to the work they read or were pasted into. Estimates are refined overnight."},
 	{ID: "findings", Label: "Findings", Verb: "Updating findings", Feeds: "Optimize", Cadence: cadenceHourly, Adaptive: true,
-		Stages: []string{"findings"}, Kinds: []string{"analysis.findings"}, Why: "Measures the findings you watch against new work."},
-	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Analyze → Message Labels, and the reader’s labels", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
+		Stages: []string{"findings"}, Kinds: []string{"analysis.findings/measure"}, fastest: cadenceHourly,
+		Why: "Measures the findings you watch against new work. A watched finding is decided over days, so this never runs more than hourly on its own."},
+	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
 		Stages: []string{"labels"}, Kinds: []string{"analysis.labels/"}, Why: "Labels the messages that changed on this Mac, after your writing; a backlog continues when plugged in."},
 	{ID: "agent_events", Label: "Agent events", Verb: "Finding agent events", Feeds: "Analyze → Agent Experience", Cadence: cadenceHourly, Adaptive: true, requiresAgentEvents: true,
 		Stages: []string{"agent_events"}, Kinds: []string{"analysis.agent_events/"}, Why: "Finds what agents ran into in the replies and thinking that changed on this Mac; a backlog continues when plugged in."},
 	{ID: "engagement", Label: "Engagement labels", Verb: "Labeling engagement", Feeds: "The conversation reader’s Engagement highlight (preview)", Cadence: cadenceHourly, Adaptive: true, requiresEngagement: true,
 		Stages: []string{"engagement"}, Kinds: []string{"analysis.engagement"}, Why: "Reads what you typed in the conversations that changed on this Mac; a backlog continues over later updates."},
 	{ID: "review", Label: "Findings review", Verb: "Reviewing findings", Feeds: "Optimize: new patterns and savings", Cadence: cadenceDaily, Fixed: true,
-		Kinds: []string{"analysis.findings"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
+		Kinds: []string{"analysis.findings/full"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
 	{ID: "writing-refine", Label: "Refine writing history", Verb: "Refining writing history", Feeds: "Writing classifications and copied-text evidence", Cadence: cadenceDaily, afterChain: true,
 		Kinds: []string{"analysis.authorship.refine"}, Why: "Applies the complete analysis to retained history, reconciling templates, copied text and conversation relationships."},
+	{ID: "pull-request-reviews", Label: "Pull request reviews", Verb: "Reading pull request reviews", Feeds: "Analyze → Outcomes", Cadence: cadenceHourly, Adaptive: true, requiresPullRequestReviews: true, afterChain: true,
+		Kinds: []string{"forge.reviews"}, Why: "Asks GitHub for the reviews and comments on pull requests your workspaces opened or committed to: open ones hourly, closed ones daily for a month."},
 	{ID: "suggestions", Label: "Ask Pharos suggestions", Verb: "Choosing Ask Pharos suggestions", Feeds: "Ask Pharos suggestions", Cadence: cadenceHourly, Adaptive: true, requiresAsk: true, afterChain: true,
 		Kinds: []string{"ask.suggestions"}, Why: "Looks over the last few weeks’ summaries for questions worth suggesting, after the analyses they read change."},
 	{ID: "fingerprints", Label: "Conversation fingerprints", Verb: "Rendering conversation fingerprints", Feeds: "Fingerprint columns and conversation cards", Cadence: cadenceFrequent, continuous: true, afterChain: true,
@@ -258,6 +289,10 @@ func (c *Catalog) backgroundPaused(ctx context.Context, at time.Time) bool {
 // for an adaptive item, else its declared cadence.
 func (settings backgroundSettings) placed(item backgroundItem) string {
 	if placement := settings.Placements[item.ID]; item.Adaptive && cadenceRank(placement) < len(cadences) {
+		// A placement stored before the item had a fastest cadence.
+		if cadenceRank(placement) < cadenceRank(item.fastest) && item.fastest != "" {
+			return item.fastest
+		}
 		return placement
 	}
 	return item.Cadence
@@ -288,7 +323,8 @@ func (settings backgroundSettings) usual(item backgroundItem) string {
 	return placed
 }
 
-// itemCost is an item's typical run: the median of its latest measured runs.
+// itemCost is an item's typical run: the median of its latest measured runs
+// that had work to do.
 type itemCost struct {
 	Seconds float64 `json:"seconds"`
 	Runs    int     `json:"runs"`
@@ -296,6 +332,70 @@ type itemCost struct {
 	// 2–3 h".
 	Low  float64 `json:"low"`
 	High float64 `json:"high"`
+	// What placement reads (placeCadence). Fixed is what a run with work
+	// costs before the work itself, and Slow the same for the item's slower
+	// runs (the upper quartile); PerUnit is each unit of work on top and
+	// UnitsPerDay how much work arrives, both zero for an item that does not
+	// count its work, whose whole run is then its fixed cost.
+	Fixed       float64 `json:"fixed_seconds"`
+	Slow        float64 `json:"slow_seconds"`
+	PerUnit     float64 `json:"unit_seconds"`
+	UnitsPerDay float64 `json:"units_per_day"`
+	// What the item's runs used beside their time (runsUse), for what each
+	// schedule would cost a day (scheduleCosts).
+	itemUse
+}
+
+// itemUse is what an item's measured runs say of its CPU and memory. A nil
+// figure is not measured yet.
+type itemUse struct {
+	// CPUPerSecond is the CPU time a second of running uses, the service's
+	// share and the workers' together; GPUPerSecond the workers' GPU time.
+	CPUPerSecond, GPUPerSecond *float64
+	// PeakBytes is the most memory Pharos held during any of the runs.
+	PeakBytes *int64
+	// Counted is whether the item counts its work, so that its cost at
+	// another schedule can be worked out rather than only bounded; RunsAt is
+	// the cadence most of the runs were made at.
+	Counted bool
+	RunsAt  string
+}
+
+// runsUse reads the latest modelRuns of runs, newest first. CPU needs
+// placementRuns runs that measured it.
+func runsUse(runs []itemRun) itemUse {
+	use := itemUse{Counted: len(runs) > 0}
+	seconds, cpu, gpu, measured, at := 0.0, 0.0, (*float64)(nil), 0, map[string]int{}
+	for _, run := range runs[:min(len(runs), modelRuns)] {
+		use.Counted = use.Counted && run.Units != nil
+		if run.Cadence != "requested" {
+			at[run.Cadence]++
+		}
+		if run.Use.Peak != nil && (use.PeakBytes == nil || *run.Use.Peak > *use.PeakBytes) {
+			use.PeakBytes = run.Use.Peak
+		}
+		total := run.Use.total()
+		if total == nil {
+			continue
+		}
+		measured++
+		seconds, cpu = seconds+run.Seconds, cpu+*total
+		if run.Use.GPU != nil {
+			addTo(&gpu, *run.Use.GPU)
+		}
+	}
+	for _, cadence := range cadences {
+		if at[cadence] > at[use.RunsAt] {
+			use.RunsAt = cadence
+		}
+	}
+	if measured >= placementRuns && seconds > 0 {
+		use.CPUPerSecond = new(cpu / seconds)
+		if gpu != nil {
+			use.GPUPerSecond = new(*gpu / seconds)
+		}
+	}
+	return use
 }
 
 // typicalRange is the middle of sorted run times: the median and the runs
@@ -314,18 +414,119 @@ func typicalRange(sorted []float64) (median, low, high float64) {
 const (
 	costRuns      = 7
 	placementRuns = 3
+	// modelRuns is how many recent runs placement's cost model reads: enough
+	// that a few unusual runs do not move an item.
+	modelRuns = 50
 )
 
-// backgroundCosts measures each item from the journal (and, for scheduled
-// indexing, its run history). An item measured by several kinds (the
-// repositories' three stages) costs the sum of their medians.
-func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
+// itemRun is one scheduled run of an item: its own time within its pass, and
+// how much work it found where the item counts that (itemUnitStage).
+type itemRun struct {
+	Item, Cadence string
+	// Started is the pass's start, shared by every item of the pass.
+	Started time.Time
+	Seconds float64
+	// Units is nil for an item that does not count its work.
+	Units *int64
+	// Use is the CPU, memory and GPU time the run used, each nil where it
+	// was not measured (background_cpu.go); its Seconds is not read.
+	Use cpuUse
+}
+
+// worked is whether the run had work, as far as it says: a run that does
+// not count its work is taken to have had some.
+func (run itemRun) worked() bool { return run.Units == nil || *run.Units > 0 }
+
+// itemRunsKept is how long an item's runs are kept.
+const itemRunsKept = 14 * 24 * time.Hour
+
+// itemUnitStage is the chain stage whose final count is its item's work:
+// the conversations the stage looked at. The other stages report totals
+// that are not the size of their work (identities counts every link).
+var itemUnitStage = map[string]string{"labels": "labels", "agent_events": "agent_events", "engagement": "engagement"}
+
+// insertItemRuns stores runs and drops those too old to be read again.
+func insertItemRuns(ctx context.Context, tx *sql.Tx, runs []itemRun) error {
+	if len(runs) == 0 {
+		return nil
+	}
+	for _, run := range runs {
+		var units any
+		if run.Units != nil {
+			units = *run.Units
+		}
+		var peak any
+		if run.Use.Peak != nil {
+			peak = *run.Use.Peak
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO background_item_runs(host_id,item,cadence,started_at,seconds,units,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes)
+			VALUES(?,?,?,?,?,?,?,?,?,?)`, currentHost().ID, run.Item, run.Cadence, formatTime(run.Started), run.Seconds, units,
+			nullFloat(run.Use.CPU), nullFloat(run.Use.Worker), nullFloat(run.Use.GPU), peak); err != nil {
+			return err
+		}
+	}
+	_, err := tx.ExecContext(ctx, "DELETE FROM background_item_runs WHERE host_id=? AND started_at<?", currentHost().ID, formatTime(time.Now().Add(-itemRunsKept)))
+	return err
+}
+
+// itemRuns is this Mac's kept runs by item, newest first. A catalog without
+// the table (an older one opened read-only) has none.
+func (c *Catalog) itemRuns(ctx context.Context) map[string][]itemRun {
+	runs := map[string][]itemRun{}
+	rows, err := c.reader().QueryContext(ctx, `SELECT item,cadence,started_at,seconds,units,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes
+		FROM background_item_runs WHERE host_id=? AND started_at>=? ORDER BY id DESC`, currentHost().ID, formatTime(time.Now().Add(-itemRunsKept)))
+	if err != nil {
+		return runs
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var run itemRun
+		var started string
+		var units, peak sql.NullInt64
+		var cpu, worker, gpu sql.NullFloat64
+		if rows.Scan(&run.Item, &run.Cadence, &started, &run.Seconds, &units, &cpu, &worker, &gpu, &peak) != nil {
+			continue
+		}
+		for _, pair := range []struct {
+			to   **float64
+			from sql.NullFloat64
+		}{{&run.Use.CPU, cpu}, {&run.Use.Worker, worker}, {&run.Use.GPU, gpu}} {
+			if pair.from.Valid {
+				*pair.to = &pair.from.Float64
+			}
+		}
+		if peak.Valid {
+			run.Use.Peak = &peak.Int64
+		}
+		run.Started, _ = parseTime(started)
+		if units.Valid {
+			run.Units = &units.Int64
+		}
+		runs[run.Item] = append(runs[run.Item], run)
+	}
+	return runs
+}
+
+// backgroundCosts measures each item from its own scheduled runs
+// (background_item_runs): every run counts, however short, and only the
+// item's own time in its pass. An item with fewer than placementRuns of them
+// (a library the schedule has not yet run on with this table) is measured
+// from the journal instead, as the sum of its kinds' medians; the journal
+// keeps only longer runs, so that reads high for quick work. Scheduled
+// indexing is measured from its run history.
+func (c *Catalog) backgroundCosts(ctx context.Context) (map[string]itemCost, map[string]float64) {
 	costs := map[string]itemCost{}
+	own := c.itemRuns(ctx)
+	at := time.Now()
 	for _, item := range backgroundItems {
 		if item.ID == "conversations" {
 			if cost, ok := c.automaticIndexCost(ctx); ok {
 				costs[item.ID] = cost
 			}
+			continue
+		}
+		if runs := own[item.ID]; len(runs) >= placementRuns {
+			costs[item.ID] = ownCost(runs, at)
 			continue
 		}
 		total, low, high, runs := 0.0, 0.0, 0.0, -1
@@ -359,10 +560,118 @@ func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 			}
 		}
 		if runs > 0 {
-			costs[item.ID] = itemCost{Seconds: total, Runs: runs, Low: low, High: high}
+			// The journal does not say what a run's time was spent on.
+			costs[item.ID] = itemCost{Seconds: total, Runs: runs, Low: low, High: high, Fixed: total, Slow: high}
 		}
 	}
-	return costs
+	return costs, map[string]float64{cadenceFrequent: frequentRunsPerDay(own, at), cadenceHourly: hourlyRunsPerDay, cadenceDaily: 1}
+}
+
+// frequentRunsPerDay is how many Frequently passes a day this Mac ran over
+// the last week of kept item runs: the passes after scheduled indexes that
+// wrote something. Without a day of history, or any such pass in it, it is
+// frequentRunsDefault.
+func frequentRunsPerDay(own map[string][]itemRun, at time.Time) float64 {
+	passes, oldest := map[time.Time]bool{}, at
+	for _, runs := range own {
+		for _, run := range runs {
+			if run.Started.IsZero() || at.Sub(run.Started) > frequentRunsWindow {
+				continue
+			}
+			if run.Started.Before(oldest) {
+				oldest = run.Started
+			}
+			if run.Cadence == cadenceFrequent {
+				passes[run.Started] = true
+			}
+		}
+	}
+	days := at.Sub(oldest).Hours() / 24
+	if days < 1 || len(passes) == 0 {
+		return frequentRunsDefault
+	}
+	return float64(len(passes)) / days
+}
+
+// ownCost is an item's cost from its own runs, newest first. Its typical run
+// is the middle of the latest costRuns that had work (of the latest costRuns
+// when none had). Its placement model reads the latest modelRuns: for an
+// item that counts its work, Fixed is the median time of the half of its
+// runs with the least work, PerUnit the time beyond that over all its work,
+// and Slow the upper quartile of the runs' time less their work's; a run
+// that found no work says nothing about what one with work costs. An item
+// that does not count its work is all fixed cost.
+func ownCost(runs []itemRun, at time.Time) itemCost {
+	cost := typicalCost(runs)
+	cost.itemUse = runsUse(runs)
+	recent := runs[:min(len(runs), modelRuns)]
+	counted, work, plain := true, []itemRun{}, []float64{}
+	for _, run := range recent {
+		counted = counted && run.Units != nil
+		if run.worked() {
+			plain = append(plain, run.Seconds)
+		}
+		if run.Units != nil && *run.Units > 0 {
+			work = append(work, run)
+		}
+	}
+	if !counted || len(work) < placementRuns {
+		if len(plain) == 0 {
+			for _, run := range recent {
+				plain = append(plain, run.Seconds)
+			}
+		}
+		sort.Float64s(plain)
+		cost.Fixed, _, cost.Slow = typicalRange(plain)
+		return cost
+	}
+	sort.SliceStable(work, func(i, j int) bool { return *work[i].Units < *work[j].Units })
+	units, seconds := 0.0, 0.0
+	for _, run := range work {
+		units += float64(*run.Units)
+		seconds += run.Seconds
+	}
+	// The two define each other, so settle them in a few rounds: the fixed
+	// cost is the small runs' time less their work's, and a unit's cost the
+	// time beyond the fixed cost over all the work.
+	for range 8 {
+		small := []float64{}
+		for _, run := range work[:(len(work)+1)/2] {
+			small = append(small, max(0, run.Seconds-cost.PerUnit*float64(*run.Units)))
+		}
+		sort.Float64s(small)
+		cost.Fixed, _, _ = typicalRange(small)
+		cost.PerUnit = max(0, (seconds-cost.Fixed*float64(len(work)))/units)
+	}
+	rest := []float64{}
+	for _, run := range work {
+		rest = append(rest, max(0, run.Seconds-cost.PerUnit*float64(*run.Units)))
+	}
+	sort.Float64s(rest)
+	_, _, cost.Slow = typicalRange(rest)
+	cost.Slow = max(cost.Slow, cost.Fixed)
+	// Work arrives over the time the runs cover, at least a day: a first
+	// run's backlog is not a day's work.
+	cost.UnitsPerDay = units / max(1, at.Sub(recent[len(recent)-1].Started).Hours()/24)
+	return cost
+}
+
+// typicalCost is the middle of an item's latest runs that had work.
+func typicalCost(runs []itemRun) itemCost {
+	values := []float64{}
+	for _, run := range runs {
+		if run.worked() && len(values) < costRuns {
+			values = append(values, run.Seconds)
+		}
+	}
+	if len(values) == 0 {
+		for _, run := range runs[:min(len(runs), costRuns)] {
+			values = append(values, run.Seconds)
+		}
+	}
+	sort.Float64s(values)
+	median, low, high := typicalRange(values)
+	return itemCost{Seconds: median, Runs: len(runs), Low: low, High: high}
 }
 
 // automaticIndexCost is scheduled indexing's typical run, from its run
@@ -410,28 +719,55 @@ func (c *Catalog) automaticSamples(ctx context.Context, limit int) []automaticSa
 	return samples
 }
 
+// cadenceLoad is what an item would cost at cadence: one run's time (its
+// fixed cost and the work that arrives between runs), and the seconds a day
+// its runs' fixed cost adds up to. The work itself costs the same whatever
+// the cadence, so only the fixed part is weighed by the day. fixed is the
+// fixed cost to use: the item's usual one, or its slower runs'.
+func cadenceLoad(cadence string, cost itemCost, fixed float64, perDay map[string]float64) (run, day float64) {
+	runs := max(1, perDay[cadence])
+	return fixed + cost.PerUnit*cost.UnitsPerDay/runs, runs * fixed
+}
+
 // placeCadence is where a measured cost puts an item now in current: the
-// most frequent cadence whose limit it fits. It moves to a faster cadence
-// only once it fits with a quarter to spare, and to a slower one only once
-// it is a quarter over, so a cost near a limit does not flap.
-func placeCadence(current string, cost itemCost) string {
+// most frequent cadence, no faster than fastest, where a run fits the
+// cadence's limit and a day of runs fits its budget. An item with a large
+// fixed cost and little work a run therefore runs less often, and a quick
+// run that would repeat all day does not move to Frequently.
+//
+// It does not flap. It moves to a slower cadence only once its usual run is a
+// quarter over, and to a faster one only once even its slower runs (the upper
+// quartile) fit with a quarter to spare: an item whose runs are sometimes
+// quick and sometimes slow stays where the slow ones fit.
+func placeCadence(current, fastest string, cost itemCost, perDay map[string]float64) string {
+	if cadenceRank(current) < cadenceRank(fastest) && fastest != "" {
+		current = fastest
+	}
 	if cost.Runs < placementRuns {
 		return current
 	}
-	target := cadenceDaily
-	for _, cadence := range []string{cadenceFrequent, cadenceHourly} {
-		if cost.Seconds <= cadenceLimit[cadence] {
-			target = cadence
-			break
+	fits := func(cadence string, fixed, slack float64) bool {
+		if cadence == cadenceDaily {
+			return true
+		}
+		run, day := cadenceLoad(cadence, cost, fixed, perDay)
+		return run <= slack*cadenceLimit[cadence] && day <= slack*cadenceDayBudget[cadence]
+	}
+	for _, cadence := range cadences {
+		allowed := fastest == "" || cadenceRank(cadence) >= cadenceRank(fastest)
+		if allowed && cadenceRank(cadence) < cadenceRank(current) && fits(cadence, max(cost.Slow, cost.Fixed), 0.75) {
+			return cadence
 		}
 	}
-	switch {
-	case cadenceRank(target) < cadenceRank(current) && cost.Seconds <= 0.75*cadenceLimit[target]:
-		return target
-	case cadenceRank(target) > cadenceRank(current) && cost.Seconds > 1.25*cadenceLimit[current]:
-		return target
+	if fits(current, cost.Fixed, 1.25) {
+		return current
 	}
-	return current
+	for _, cadence := range cadences {
+		if cadenceRank(cadence) > cadenceRank(current) && fits(cadence, cost.Fixed, 1) {
+			return cadence
+		}
+	}
+	return cadenceDaily
 }
 
 // costClass is the words for a typical run's weight.
@@ -473,9 +809,19 @@ func (c *Catalog) backgroundRuns(ctx context.Context) map[string]backgroundRunRo
 // recordBackgroundRun stores an item's outcome: started when it begins,
 // then finished with its error (nil for success). A withdrawn run
 // (backgroundWithdrawn) finishes with neither: it did not fail, and its
-// work is still pending.
-func (c *Catalog) recordBackgroundRun(ctx context.Context, item string, started time.Time, finished bool, failure error) {
-	_ = c.writeTransaction(ctx, "background run", func(tx *sql.Tx) error {
+// work is still pending. measured are the item runs to keep for the costs.
+func (c *Catalog) recordBackgroundRun(ctx context.Context, item string, started time.Time, finished bool, failure error, measured ...itemRun) {
+	var used map[cpuDayKey]*cpuDay
+	if finished {
+		used = c.takeCPU()
+	}
+	err := c.writeTransaction(ctx, "background run", func(tx *sql.Tx) error {
+		// The pass's measured item runs ride this write rather than taking
+		// one of their own. A measurement that cannot be kept is a missing
+		// one; the run's outcome is still recorded.
+		_ = insertItemRuns(ctx, tx, measured)
+		// What work used since the last write rides this one too.
+		_ = storeCPUDays(ctx, tx, used)
 		if !finished {
 			_, err := tx.ExecContext(ctx, `INSERT INTO background_runs(host_id,item,started_at) VALUES(?,?,?)
 				ON CONFLICT(host_id,item) DO UPDATE SET started_at=excluded.started_at`, currentHost().ID, item, formatTime(started))
@@ -491,6 +837,9 @@ func (c *Catalog) recordBackgroundRun(ctx context.Context, item string, started 
 			nilIfEmpty(problem), time.Since(started).Seconds())
 		return err
 	})
+	if err != nil {
+		c.restoreCPU(used)
+	}
 }
 
 // backgroundWithdrawn reports an item whose only outcome is work a Stop
@@ -567,6 +916,10 @@ type backgroundInputs struct {
 	// ask is whether Ask Pharos is enabled here; suggestionsStale whether
 	// its suggestions' inputs changed since they were chosen.
 	ask, suggestionsStale bool
+	// pullRequestReviews is whether pull_request_reviews_enabled is on;
+	// pullRequestsDue how many pull requests a pass would read now.
+	pullRequestReviews bool
+	pullRequestsDue    int
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
@@ -613,6 +966,11 @@ type itemPlan struct {
 	Overdue bool
 	// WaitsForPower is work the battery policy holds until plugged in.
 	WaitsForPower bool
+	// Joins is hourly work not yet due that runs with an hourly pass now: its
+	// hour is up within hourlyJoin, and nothing else (a quiet library, a
+	// retry, power) holds it. join is the moment from which it does.
+	Joins bool
+	join  time.Time
 }
 
 // backgroundPlan is every item's place in the schedule at at.
@@ -628,7 +986,7 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 	nextDaily := instant.AddDate(0, 0, 1)
 	plans := []itemPlan{}
 	for _, item := range backgroundItems {
-		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents || item.requiresAsk && !in.ask || item.requiresEngagement && !in.engagement {
+		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents || item.requiresAsk && !in.ask || item.requiresEngagement && !in.engagement || item.requiresPullRequestReviews && !in.pullRequestReviews {
 			continue
 		}
 		plan := itemPlan{ID: item.ID, Cadence: settings.cadence(item)}
@@ -663,6 +1021,9 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			if plan.Pending {
 				standaloneNext(&plan, settings, quiet, at)
 				plan.Next = maxTime(plan.Next, in.verificationNext)
+				if !plan.join.IsZero() {
+					plan.join = maxTime(plan.join, in.verificationNext)
+				}
 			}
 		case item.ID == "writing":
 			row := in.deferred["authorship"]
@@ -674,6 +1035,7 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 				standaloneNext(&plan, settings, quiet, at)
 				if plan.Cadence == cadenceHourly {
 					plan.Next = maxTime(plan.LastDone.Add(hourlyEvery), minTime(quiet, plan.LastDone.Add(hourlyLatest)))
+					plan.join = maxTime(plan.LastDone.Add(hourlyEvery-hourlyJoin), minTime(quiet, plan.LastDone.Add(hourlyLatest)))
 				}
 			}
 		case item.ID == "writing-refine":
@@ -709,6 +1071,7 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 				plan.Next = at
 			case plan.Cadence == cadenceHourly:
 				plan.Next = maxTime(plan.LastDone.Add(hourlyEvery), minTime(quiet, plan.LastDone.Add(hourlyLatest)))
+				plan.join = maxTime(plan.LastDone.Add(hourlyEvery-hourlyJoin), minTime(quiet, plan.LastDone.Add(hourlyLatest)))
 				plan.Overdue = at.Sub(plan.LastDone) > 3*hourlyEvery
 			case plan.Cadence == cadenceDaily:
 				daily()
@@ -735,14 +1098,18 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			} else {
 				plan.Next = nextDaily
 			}
-		case item.ID == "suggestions":
+		case item.ID == "suggestions" || item.ID == "pull-request-reviews":
 			plan.Pending = in.suggestionsStale
+			if item.ID == "pull-request-reviews" {
+				plan.Pending = in.pullRequestsDue > 0
+			}
 			switch {
 			case !plan.Pending:
 			case plan.Cadence == cadenceFrequent:
 				plan.Next = at
 			case plan.Cadence == cadenceHourly:
 				plan.Next = plan.LastDone.Add(hourlyEvery)
+				plan.join = plan.LastDone.Add(hourlyEvery - hourlyJoin)
 			case plan.Cadence == cadenceDaily:
 				daily()
 			}
@@ -770,13 +1137,18 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			// stopped is not asked again on every check; only a failure
 			// says Failed.
 			plan.Failed, plan.Error = run.err != "", run.err
-			if retry := value.Add(backgroundRetry); retry.After(plan.Next) {
+			retry := value.Add(backgroundRetry)
+			if retry.After(plan.Next) {
 				plan.Next = retry
+			}
+			if !plan.join.IsZero() && retry.After(plan.join) {
+				plan.join = retry
 			}
 		}
 		if cadenceRank(plan.Cadence) < len(cadences) {
 			switch settings.Battery.onPower(plan.Cadence, in.power) {
 			case batteryWait:
+				plan.join = time.Time{}
 				plan.Next, plan.WaitsForPower = time.Time{}, plan.Pending || item.ID == "conversations" || item.continuous
 			case batterySlower:
 				if item.ID == "conversations" && !plan.Next.IsZero() {
@@ -785,9 +1157,12 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			}
 		}
 		if plan.Cadence == cadenceManual || settings.Mode != "on" {
-			plan.Next = time.Time{}
+			plan.Next, plan.join = time.Time{}, time.Time{}
 		}
 		plan.Due = !plan.Next.IsZero() && !at.Before(plan.Next) && plan.Pending && item.ID != "conversations" && !(item.continuous && plan.Cadence == cadenceFrequent)
+		// The continuous items keep their own passes' rules (a retained
+		// fingerprint pass, Search's daemons).
+		plan.Joins = plan.Cadence == cadenceHourly && plan.Pending && !plan.Due && !plan.join.IsZero() && !at.Before(plan.join) && item.ID != "conversations" && !item.continuous
 		if in.requested[item.ID] && item.ID != "conversations" {
 			plan.Due = true
 		}
@@ -803,6 +1178,7 @@ func standaloneNext(plan *itemPlan, settings backgroundSettings, quiet, at time.
 		plan.Next = plan.LastDone.Add(time.Duration(max(settings.Interval, 1)) * time.Second)
 	case cadenceHourly:
 		plan.Next = maxTime(quiet, plan.LastDone.Add(hourlyEvery))
+		plan.join = maxTime(quiet, plan.LastDone.Add(hourlyEvery-hourlyJoin))
 		if !plan.LastDone.IsZero() && at.Sub(plan.LastDone) > 3*hourlyEvery {
 			plan.Next, plan.Overdue = at, true
 		}
@@ -865,7 +1241,9 @@ type backgroundState struct {
 	// retry stays scheduled demand.
 	fingerprintRetry string
 	costs            map[string]itemCost
-	costsAt          time.Time
+	// runsPerDay is how often each cadence runs an item, measured with costs.
+	runsPerDay map[string]float64
+	costsAt    time.Time
 	// power is the last power reading (cachedPower).
 	power   powerState
 	powerAt time.Time
@@ -896,12 +1274,19 @@ func (s *Server) cachedBackup(config Config) (string, string) {
 var costsMaxAge = time.Minute
 
 func (s *Server) cachedCosts(ctx context.Context) map[string]itemCost {
+	costs, _ := s.cachedMeasures(ctx)
+	return costs
+}
+
+// cachedMeasures is the items' costs and how often each cadence runs a day.
+func (s *Server) cachedMeasures(ctx context.Context) (map[string]itemCost, map[string]float64) {
 	s.background.mu.Lock()
 	defer s.background.mu.Unlock()
 	if s.background.costs == nil || time.Since(s.background.costsAt) > costsMaxAge {
-		s.background.costs, s.background.costsAt = s.Catalog.backgroundCosts(ctx), time.Now()
+		s.background.costs, s.background.runsPerDay = s.Catalog.backgroundCosts(ctx)
+		s.background.costsAt = time.Now()
 	}
-	return s.background.costs
+	return s.background.costs, s.background.runsPerDay
 }
 
 // wakeBackground makes the loop look for due work now.
@@ -986,6 +1371,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	if s.askEnabled(ctx) {
 		in.ask, in.suggestionsStale = true, s.Catalog.askSuggestionsStale(ctx, time.Now())
 	}
+	if config.PullRequestReviews {
+		in.pullRequestReviews, in.pullRequestsDue = true, s.Catalog.pullRequestReviewsDue(ctx)
+	}
 	return in
 }
 
@@ -1011,8 +1399,34 @@ func (s *Server) backgroundLoop(ctx context.Context) {
 	}
 }
 
-// backgroundPass runs the most frequent cadence that has due work, with
-// every item of it that is due; the next pass takes the next cadence.
+// passGroup is the work a pass takes from the plans: the most frequent
+// cadence that has due work (Run now's requests before any), with every item
+// of it that is due; the next pass takes the next cadence. An hourly pass
+// also takes the hourly items about to be due (itemPlan.Joins).
+func passGroup(plans []itemPlan, requested map[string]bool) (cadence string, group []itemPlan) {
+	label := func(plan itemPlan) string {
+		if requested[plan.ID] {
+			return "requested"
+		}
+		return plan.Cadence
+	}
+	for _, plan := range plans {
+		if !plan.Due {
+			continue
+		}
+		if label := label(plan); cadence == "" || label == "requested" && cadence != "requested" || cadence != "requested" && cadenceRank(label) < cadenceRank(cadence) {
+			cadence = label
+		}
+	}
+	for _, plan := range plans {
+		if plan.Due && label(plan) == cadence || cadence == cadenceHourly && plan.Joins {
+			group = append(group, plan)
+		}
+	}
+	return cadence, group
+}
+
+// backgroundPass runs the work passGroup takes from the plan.
 func (s *Server) backgroundPass(ctx context.Context, at time.Time) bool {
 	settings, err := s.Catalog.backgroundSettings(ctx, at)
 	if err != nil {
@@ -1041,27 +1455,14 @@ func (s *Server) backgroundPass(ctx context.Context, at time.Time) bool {
 		return false
 	}
 	plans := backgroundPlan(settings, s.backgroundInputsFor(ctx, requested), at)
-	group, cadence := []itemPlan{}, ""
-	for _, plan := range plans {
+	for index, plan := range plans {
 		if plan.ID == "fingerprints" && fingerprintRetry != "" && fingerprintReady && settings.Mode == "on" && !plan.WaitsForPower {
 			// This pass was already accepted: finish it after analysis even
 			// when the next Hourly/Daily/Ad hoc pass is not due yet.
-			plan.Due = true
-		}
-		if !plan.Due {
-			continue
-		}
-		label := plan.Cadence
-		if requested[plan.ID] {
-			label = "requested"
-		}
-		if cadence == "" || label == "requested" && cadence != "requested" || cadence != "requested" && cadenceRank(label) < cadenceRank(cadence) {
-			cadence, group = label, nil
-		}
-		if label == cadence {
-			group = append(group, plan)
+			plans[index].Due = true
 		}
 	}
+	cadence, group := passGroup(plans, requested)
 	if len(group) == 0 {
 		return false
 	}
@@ -1078,11 +1479,11 @@ func (s *Server) backgroundPass(ctx context.Context, at time.Time) bool {
 // updatePlacements moves adaptive items to where their measured cost puts
 // them, and stores the result when it changed.
 func (s *Server) updatePlacements(ctx context.Context, settings backgroundSettings) {
-	costs := s.cachedCosts(ctx)
+	costs, perDay := s.cachedMeasures(ctx)
 	placements := maps.Clone(settings.Placements)
 	for _, item := range backgroundItems {
 		if item.Adaptive {
-			placements[item.ID] = placeCadence(settings.placed(item), costs[item.ID])
+			placements[item.ID] = placeCadence(settings.placed(item), item.fastest, costs[item.ID], perDay)
 		}
 	}
 	if maps.Equal(placements, settings.Placements) {
@@ -1204,8 +1605,9 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 	// Under population execution, Run now is explicit demand; a scheduled
 	// pass is ordinary live demand. Neither makes history foreground.
 	ctx = withBackgroundExplicit(ctx, cadence == "requested")
-	record := func(id string, started time.Time, err error) {
-		s.Catalog.recordBackgroundRun(context.WithoutCancel(ctx), id, started, true, err)
+	passStarted := time.Now()
+	record := func(id string, started time.Time, err error, measured ...itemRun) {
+		s.Catalog.recordBackgroundRun(context.WithoutCancel(ctx), id, started, true, err, measured...)
 		succeeded = succeeded || err == nil
 	}
 	stepped := map[string]bool{}
@@ -1237,7 +1639,13 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			next(id)
 			started := time.Now()
 			s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
-			err := s.runBackgroundItem(ctx, op, id)
+			itemCtx, span := beginItemSpan(ctx, id)
+			var err error
+			// A CPU profile says which item its samples belong to.
+			span.measure(func() {
+				pprof.Do(itemCtx, pprof.Labels("item", id), func(ctx context.Context) { err = s.runBackgroundItem(ctx, op, id) })
+			})
+			use := span.end(true)
 			if id == "fingerprints" {
 				if cancellationOnly(err) && errors.Is(context.Cause(ctx), errAutomaticPreempted) {
 					// Manual indexing owns the ingest lock next. Keep this pass's
@@ -1255,7 +1663,11 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			if ctx.Err() != nil && err == nil {
 				err = ctx.Err()
 			}
-			record(id, started, err)
+			measured := []itemRun{}
+			if err == nil {
+				measured = append(measured, itemRun{Item: id, Cadence: cadence, Started: passStarted, Seconds: time.Since(started).Seconds(), Use: use})
+			}
+			record(id, started, err, measured...)
 			if err != nil && failure == nil && !backgroundWithdrawn(err) {
 				failure = fmt.Errorf("%s: %w", item.Label, err)
 			}
@@ -1331,9 +1743,21 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 	}
 	op.Plan(backgroundSteps(expanded)...)
 	findings := findingsMeasure
+	// The findings stage's time is the review's when it runs today's full
+	// pass, and the findings item's when it only measures.
+	findingsRun := "findings"
 	if slices.Contains(ids, "review") {
 		findings = findingsAuto
+		if s.Catalog.findingsFullDue(ctx) {
+			findingsRun = "review"
+		}
 	}
+	// Each stage's own time and, where its item counts work, how much it
+	// found (the stage's operation says, classic engine only).
+	stageSeconds, stageUnits := map[string]float64{}, map[string]int64{}
+	stageUse := map[string]cpuUse{}
+	ctx = withStageUnits(ctx, func(name string, units int64) { stageUnits[name] = units })
+	ctx = withStageUse(ctx, func(name string, use cpuUse) { stageUse[name] = use })
 	started := time.Now()
 	for _, id := range chainItems {
 		s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
@@ -1349,10 +1773,46 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 				next(id)
 			}
 		}
-		err := work()
+		began := time.Now()
+		var err error
+		pprof.Do(ctx, pprof.Labels("item", stageItem(name)), func(context.Context) { err = work() })
+		stageSeconds[name] += time.Since(began).Seconds()
 		outcome[name] = err
 		return err
 	})
+	// An item's run is the stages of it this pass asked for, whether the item
+	// was due or its stages came along. One that failed, was interrupted or
+	// never reached a stage is no measurement.
+	measured := []itemRun{}
+	for _, item := range backgroundItems {
+		names := item.Stages
+		if item.ID == "findings" || item.ID == "review" {
+			names = nil
+			if item.ID == findingsRun {
+				names = []string{"findings"}
+			}
+		}
+		if item.ID == "repositories" && stages["identities"] {
+			// GitHub runs with identities.
+			names = append([]string{"github"}, names...)
+		}
+		run, ran, ok := itemRun{Item: item.ID, Cadence: cadence, Started: passStarted}, false, true
+		for _, name := range names {
+			if !stages[name] && name != "github" {
+				continue
+			}
+			result, done := outcome[name]
+			ran, ok = true, ok && done && result == nil
+			run.Seconds += stageSeconds[name]
+			run.Use.add(stageUse[name])
+			if units, counted := stageUnits[name]; counted && itemUnitStage[item.ID] == name {
+				run.Units = &units
+			}
+		}
+		if ran && ok && ctx.Err() == nil {
+			measured = append(measured, run)
+		}
+	}
 	for _, id := range chainItems {
 		item, _ := backgroundItemByID(id)
 		names := item.Stages
@@ -1374,7 +1834,8 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 				break
 			}
 		}
-		record(id, started, itemErr)
+		record(id, started, itemErr, measured...)
+		measured = nil
 	}
 	if err != nil && failure == nil {
 		failure = err
@@ -1384,3 +1845,46 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 
 // stageItems is the background item each chain stage belongs to.
 var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "peers": "writing", "findings": "findings", "labels": "labels", "agent_events": "agent_events", "engagement": "engagement"}
+
+// findingsFullDue is whether the findings stage, left to decide, runs today's
+// full pass rather than only measuring (RefreshFindings).
+func (c *Catalog) findingsFullDue(ctx context.Context) bool {
+	built, _ := c.metaValue(ctx, "findings_generation")
+	return built != c.findingsGeneration()
+}
+
+// stageUseKey carries a background pass's reader of what each chain stage
+// used (background_cpu.go).
+type stageUseKey struct{}
+
+func withStageUse(ctx context.Context, report func(stage string, use cpuUse)) context.Context {
+	return context.WithValue(ctx, stageUseKey{}, report)
+}
+
+// reportStageUse tells the pass, if one is listening, what the finished
+// stage's operation and the work inside it used.
+func reportStageUse(ctx context.Context, name string, stage *Op) {
+	if report, ok := ctx.Value(stageUseKey{}).(func(string, cpuUse)); ok && stage != nil && stage.cpu != nil {
+		report(name, stage.cpu.used())
+	}
+}
+
+// stageUnitsKey carries a background pass's reader of how much each chain
+// stage found to do.
+type stageUnitsKey struct{}
+
+func withStageUnits(ctx context.Context, report func(stage string, units int64)) context.Context {
+	return context.WithValue(ctx, stageUnitsKey{}, report)
+}
+
+// reportStageUnits tells the pass, if one is listening, the total of the
+// stage's last measured step: the conversations a population stage looked at.
+func reportStageUnits(ctx context.Context, name string, stage *Op) {
+	report, ok := ctx.Value(stageUnitsKey{}).(func(string, int64))
+	if !ok || stage == nil {
+		return
+	}
+	if step := stage.view().Step; step.Unit != "" && step.Total >= 0 {
+		report(name, int64(step.Total))
+	}
+}

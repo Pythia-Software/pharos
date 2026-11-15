@@ -576,8 +576,11 @@ func (env *findingEnv) loadUsage() error {
 			conv.CostUSD += *priced.cost
 		}
 	}
+	// CROSS JOIN pins conversations as the outer loop: the window keeps about
+	// a quarter of all model requests, so walking every request first reads
+	// three times the pages for the same rows.
 	requests, err := queryMapsContext(env.ctx, env.db, `SELECT m.conversation_id,COUNT(*) requests,SUM(m.compacted_before) compactions,MAX(m.input_tokens) peak
-		FROM model_requests m JOIN conversations c ON c.id=m.conversation_id WHERE m.is_estimate=0 AND c.started_at>=? GROUP BY 1`, env.fromUTC)
+		FROM conversations c CROSS JOIN model_requests m ON m.conversation_id=c.id WHERE c.started_at>=? AND m.is_estimate=0 GROUP BY 1`, env.fromUTC)
 	if err != nil {
 		return err
 	}
@@ -1414,8 +1417,8 @@ func writeFindingDaily(tx *sql.Tx, id, from string, days map[string][3]float64) 
 	return nil
 }
 
-// findingImpact is what a finding cost in the last 28 days, shown as "a
-// month", with the shares its expected saving is worked out from (see
+// findingImpact is what a finding cost in the last 28 days, shown as "per
+// 28 days", with the shares its expected saving is worked out from (see
 // findings_estimate.go): the part the change could remove, and how much of
 // patterns like it stays untouched.
 func findingImpact(candidate *findingCandidate, persist findingPersist) map[string]any {

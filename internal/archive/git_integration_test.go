@@ -189,14 +189,20 @@ func TestMainIntegrationNegativeLookupCache(t *testing.T) {
 			t.Fatalf("no negative lookup was cached after %d scans: %v", attempt, calls)
 		}
 	}
+	if calls := refresh(); len(calls) != 0 {
+		t.Fatalf("unchanged ref files should need no Git, got %v", calls)
+	}
+	// Packing the refs rewrites the files the tip came from, so it is read
+	// again (and found unmoved).
+	git("pack-refs", "--all")
 	if calls := refresh(); len(calls) != 1 || !strings.Contains(calls[0], "for-each-ref") {
-		t.Fatalf("unchanged tip should need only one ref lookup, got %v", calls)
+		t.Fatalf("packed refs were not read again: %v", calls)
 	}
 	git("checkout", "main")
 	git("commit", "--allow-empty", "-m", "More main work")
 	git("update-ref", "refs/remotes/origin/main", "HEAD")
 	advanced := refresh()
-	if len(advanced) < 2 {
+	if len(advanced) < 2 || !strings.Contains(advanced[0], "for-each-ref") {
 		t.Fatalf("advanced main tip did not inspect the graph delta: %v", advanced)
 	}
 	for _, call := range advanced {
@@ -234,8 +240,28 @@ func TestMainIntegrationNegativeLookupCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	refresh()
-	if countRows(t, catalog, `SELECT COUNT(*) FROM workspaces WHERE id='healthy' AND main_merge_commit IS NOT NULL`) != 1 || countRows(t, catalog, `SELECT COUNT(*) FROM git_main_negative_lookups WHERE workspace_id='broken'`) != 0 {
+	if traced, _ := os.ReadFile(trace); strings.Contains(string(traced), broken) {
+		t.Fatalf("Git was started in a .git folder holding no repository: %s", traced)
+	}
+	if countRows(t, catalog, `SELECT COUNT(*) FROM workspaces WHERE id='healthy' AND main_merge_commit IS NOT NULL`) != 1 ||countRows(t, catalog, `SELECT COUNT(*) FROM git_main_negative_lookups WHERE workspace_id='broken'`) != 0 {
 		t.Fatal("a damaged repository hid healthy results or supplied durable negative evidence")
+	}
+	// A leftover .git folder inside a checkout is passed over by Git, which
+	// answers from the checkout's repository, and so is this scan.
+	nested := filepath.Join(repo, "leftover")
+	if err := os.MkdirAll(filepath.Join(nested, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, catalog.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,head_ref,indexed_at) SELECT 'nested','conductor','local','nested','Nested',head_ref,'t' FROM workspaces WHERE id='work'`)
+	if _, err := catalog.DB.Exec(`INSERT INTO workspace_sightings(workspace_id,host_id,source_name,location,first_seen_at,last_seen_at) VALUES('nested',?,'conductor',?,'t','t')`, currentHost().ID, nested); err != nil {
+		t.Fatal(err)
+	}
+	refresh()
+	if countRows(t, catalog, `SELECT COUNT(*) FROM workspaces WHERE id='nested' AND main_merge_commit IS NOT NULL`) != 1 {
+		t.Fatal("a leftover .git folder inside a checkout hid its repository's answer")
+	}
+	if err := os.RemoveAll(nested); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(broken, ".git")); err != nil {
 		t.Fatal(err)
@@ -286,6 +312,15 @@ func TestMainIntegrationNegativeLookupCache(t *testing.T) {
 	git("update-ref", "-d", "refs/remotes/origin/main")
 	if value := mainIntegration(repo, newHead, ""); value == nil {
 		t.Fatal("declared default branch was ignored")
+	}
+	// The tip cache follows origin/HEAD to the branch it names.
+	git("update-ref", "refs/remotes/origin/develop", "HEAD")
+	git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+	common, _ := integrationCommonDir(repo)
+	before, ok := integrationRefSignature(common)
+	git("update-ref", "refs/remotes/origin/develop", "HEAD~1")
+	if after, _ := integrationRefSignature(common); !ok || after == before {
+		t.Fatalf("moving origin/HEAD's branch left the ref signature alone: %q", before)
 	}
 
 }

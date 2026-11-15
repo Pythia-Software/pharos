@@ -131,7 +131,14 @@ func TestStatusSentencesKeepNamesAndGrammar(t *testing.T) {
 	for _, test := range []struct {
 		state, reason, detail, want string
 	}{
-		{opBlocked, "capture-running", "a capture on this Mac", "Waiting for a capture to finish: a capture on this Mac"},
+		{opBlocked, "capture-running", "a capture on this Mac to finish", "Waiting for a capture on this Mac to finish"},
+		{opBlocked, "capture-running", "", "Waiting for a capture to finish"},
+		{opBlocked, "interactive-query", "interactive queries to finish", "Waiting for interactive queries to finish"},
+		{opBlocked, "catalog-busy", "another write to the library", "Waiting for another write to the library"},
+		{opBlocked, "catalog-busy", "catalog-busy", "Waiting for another write to the library"},
+		{opBlocked, "ingest-busy", "source indexing and its follow-up analysis to finish", "Waiting for source indexing and its follow-up analysis to finish"},
+		{opBlocked, workBlockedWriter, "findings are already being updated", "Waiting for another write to the library: findings are already being updated"},
+		{opBlocked, workBlockedWriter, "another write to the library", "Waiting for another write to the library"},
 		{opBlocked, workBlockedRecentFirst, "an explicit recent request goes first", "Waiting for recent work to finish first: an explicit recent request goes first"},
 		{opBlocked, workBlockedDependency, workBlockedDependency, "Waiting for work it depends on"},
 		{opBlocked, workBlockedHeld, "stopped until Resume", "Stopped until you resume it, or quit and reopen Pharos"},
@@ -140,8 +147,14 @@ func TestStatusSentencesKeepNamesAndGrammar(t *testing.T) {
 		{opSkipped, "deferred-to-analysis.chain", "", "Skipped: left for “Update analyses”"},
 	} {
 		view := opView{Kind: kind, State: test.state, Reason: test.reason, Detail: test.detail}
-		if got := stateDetail(view); got != test.want {
+		got := stateDetail(view)
+		if got != test.want {
 			t.Errorf("%s/%s: %q; want %q", test.state, test.reason, got, test.want)
+		}
+		// A blocked line says its reason once, and names the library.
+		if head, tail, joined := strings.Cut(got, ": "); test.state == opBlocked && (strings.Contains(got, "catalog") ||
+			joined && strings.Contains(strings.ToLower(head), strings.ToLower(tail))) {
+			t.Errorf("%s/%s repeats its reason or names the catalog: %q", test.state, test.reason, got)
 		}
 	}
 }

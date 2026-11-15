@@ -522,8 +522,35 @@ func TestBoundWALNamesTheReaderThatPinsIt(t *testing.T) {
 	if item := firstItem(server.attention(context.Background()), "wal-pinned"); item == nil || item.Severity != "warning" || !strings.Contains(item.Detail, "index.changes.manual") || !strings.Contains(item.Detail, pin.Report) {
 		t.Fatalf("attention: %+v", item)
 	}
+	// While the same reader pins the log, later checks neither try the
+	// truncating pass, which would hold writers off only to give up, nor
+	// leave an operation each: the episode is already recorded.
+	truncations := 0
+	override(t, &checkpointTruncating, func() { truncations++ })
+	checkpoints := func() int {
+		n := 0
+		for _, view := range server.ops.views() {
+			if view.Spec.Kind == "maintenance.checkpoint" {
+				n++
+			}
+		}
+		return n
+	}
+	recorded := checkpoints()
+	for range 3 {
+		check()
+	}
+	if truncations != 0 || checkpoints() != recorded {
+		t.Fatalf("pinned checks: %d truncating passes, %d checkpoint operations (was %d)", truncations, checkpoints(), recorded)
+	}
+	if catalog.walPinned() == nil {
+		t.Fatal("pinned checks lost the diagnosis")
+	}
 	reader.Rollback()
 	check()
+	if truncations != 1 || walBytes(t, catalog) != 0 {
+		t.Fatalf("the check after the reader finished: %d truncating passes, WAL %d bytes", truncations, walBytes(t, catalog))
+	}
 	if catalog.walPinned() != nil {
 		t.Fatal("a successful checkpoint left the diagnosis")
 	}

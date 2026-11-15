@@ -194,6 +194,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops; closing the library stores what is still queued.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "ask.save", Class: workClassEssential, Label: "Save an Ask Pharos answer", Verb: "Saving an Ask Pharos answer", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops retrying; an answer not yet saved is lost, as when Pharos quits.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
+	{Kind: "forge.reviews", Class: workClassMaintenance, Label: "Read pull request reviews", Verb: "Reading pull request reviews", Holds: "—", Affects: "—", Stop: "work",
+		OnEject: "Stops between pull requests; what was read stays, and the next run reads the rest.", Latency: "record", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "ask.suggestions", Class: workClassMaintenance, Label: "Choose Ask Pharos suggestions", Verb: "Choosing Ask Pharos suggestions", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops; the suggestions already chosen stay until the next run.", Latency: "record", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "ask.models", Class: workClassMaintenance, Label: "Check Ask Pharos models", Verb: "Checking Ask Pharos models", Holds: "—", Affects: "—",
@@ -250,7 +252,7 @@ var operationKinds = []operationKind{
 
 	// G. Process and device lifecycle.
 	{Kind: "service.start", Class: workClassEssential, Label: "Open the library", Verb: "Opening the library", Holds: "M:w D:w", Affects: "—",
-		OnEject: "Not stoppable. If the library does not open within 2 min, Pharos stops trying.", Latency: "none", Journal: journalAlways, Priority: priorityForeground, Broker: true},
+		OnEject: "Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2), except while the catalog's initialize lock is held: then it waits, step \"Upgrade the library's catalog\" with the upgrade's progress (§3.5).", Latency: "none", Journal: journalAlways, Priority: priorityForeground, Broker: true},
 	{Kind: "library.release", Class: workClassEssential, Label: "Release the library", Verb: "Releasing the library", Holds: "D:w", Affects: "—",
 		OnEject: "This is the stop itself. If work does not stop within 7 s, the release fails and Pharos says it is finishing a write.", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "labels.fetch", Class: workClassSpecialized, Label: "Download the labeling model", Verb: "Downloading the labeling model", Holds: "—", Affects: "—",

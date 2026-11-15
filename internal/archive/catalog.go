@@ -60,6 +60,7 @@ type Catalog struct {
 	tools                     toolLedgerState
 	originsMu                 sync.Mutex
 	gitMainMu                 sync.Mutex
+	gitMainTips               map[string]integrationTipEntry
 	parallelismMu             sync.Mutex // serializes storing parallelism activity
 	sessionShapeMu            sync.Mutex // serializes storing session shape facts
 	// authorship tracks the human-authorship rebuild.
@@ -71,6 +72,19 @@ type Catalog struct {
 	labels sync.Mutex
 	// agentEventsRun keeps one agent events pass at a time in this process.
 	agentEventsRun sync.Mutex
+	// forgeAvailability is whether each forge could be asked when last
+	// checked (forgeUnavailable).
+	forgeAvailability struct {
+		mu    sync.Mutex
+		hosts map[string]forgeAvailable
+	}
+	// reviewsDue is the last count of pull requests due to be read
+	// (pullRequestReviewsDue).
+	reviewsDue struct {
+		mu    sync.Mutex
+		at    time.Time
+		count int
+	}
 	// engagementRun keeps one engagement pass at a time in this process.
 	engagementRun  sync.Mutex
 	labelers       *labelrt.Manager
@@ -278,6 +292,11 @@ func (c *Catalog) Initialize() error {
 	if err := c.checkSchemaVersion(); err != nil {
 		return err
 	}
+	// Its steps and estimate, for the window while the service cannot answer
+	// (initialize_progress.go). Each step below starts with progress.begin.
+	progress := c.startInitializeProgress()
+	defer progress.close()
+	progress.begin(initStepTables)
 	if err := c.migratePricingSchema(); err != nil {
 		return err
 	}
@@ -290,6 +309,7 @@ func (c *Catalog) Initialize() error {
 	if err := c.dropRetiredWorkRevisionTriggers(); err != nil {
 		return err
 	}
+	progress.begin(initStepAnalysis)
 	// The analysis triggers read the project columns.
 	if err := c.migrateProjects(); err != nil {
 		return fmt.Errorf("initialize projects: %w", err)
@@ -299,6 +319,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureOutcomeGit(); err != nil {
 		return fmt.Errorf("initialize outcome git: %w", err)
+	}
+	if err := c.ensurePullRequestReviews(); err != nil {
+		return fmt.Errorf("initialize pull request reviews: %w", err)
 	}
 	if err := c.ensureBranchUsage(); err != nil {
 		return fmt.Errorf("initialize branch usage: %w", err)
@@ -332,6 +355,7 @@ func (c *Catalog) Initialize() error {
 	if _, err := c.DB.Exec(queryTableComputedDDL + ";" + qtQuerySnapshotsDDL); err != nil {
 		return err
 	}
+	progress.begin(initStepColumns)
 	for _, migration := range []struct{ table, column, statement string }{
 		{"agent_sessions", "is_estimate", "ALTER TABLE agent_sessions ADD COLUMN is_estimate INTEGER NOT NULL DEFAULT 0"},
 		{"agent_sessions", "input_tokens_available", "ALTER TABLE agent_sessions ADD COLUMN input_tokens_available INTEGER NOT NULL DEFAULT 1"},
@@ -418,10 +442,20 @@ func (c *Catalog) Initialize() error {
 		{"tool_calls", "error_signature", "ALTER TABLE tool_calls ADD COLUMN error_signature TEXT"},
 		{"tool_calls", "test_failure", "ALTER TABLE tool_calls ADD COLUMN test_failure INTEGER NOT NULL DEFAULT 0"},
 		{"tool_calls", "repo_path", "ALTER TABLE tool_calls ADD COLUMN repo_path TEXT"},
+		{"tool_calls", "wait_kind", "ALTER TABLE tool_calls ADD COLUMN wait_kind TEXT"},
+		{"tool_calls", "wait_ended_at", "ALTER TABLE tool_calls ADD COLUMN wait_ended_at TEXT"},
+		{"tool_calls", "wait_status", "ALTER TABLE tool_calls ADD COLUMN wait_status TEXT"},
+		{"tool_calls", "wait_end_source", "ALTER TABLE tool_calls ADD COLUMN wait_end_source TEXT"},
+		{"tool_calls", "wait_events", "ALTER TABLE tool_calls ADD COLUMN wait_events INTEGER NOT NULL DEFAULT 0"},
 		{"tool_calls", "path_repository", "ALTER TABLE tool_calls ADD COLUMN path_repository TEXT"},
 		{"tool_calls", "path_repository_id", "ALTER TABLE tool_calls ADD COLUMN path_repository_id TEXT"},
 		{"tool_calls", "path_scope", "ALTER TABLE tool_calls ADD COLUMN path_scope TEXT"},
 		{"tool_calls", "path_absolute", "ALTER TABLE tool_calls ADD COLUMN path_absolute TEXT"},
+		// A catalog whose background_item_runs predates its resource columns.
+		{"background_item_runs", "cpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN cpu_seconds REAL"},
+		{"background_item_runs", "worker_cpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN worker_cpu_seconds REAL"},
+		{"background_item_runs", "gpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN gpu_seconds REAL"},
+		{"background_item_runs", "peak_bytes", "ALTER TABLE background_item_runs ADD COLUMN peak_bytes INTEGER"},
 	} {
 		has, err := c.hasColumn(migration.table, migration.column)
 		if err != nil {
@@ -446,36 +480,7 @@ func (c *Catalog) Initialize() error {
 	if err := c.migrateEffortUsage(); err != nil {
 		return err
 	}
-	for _, index := range []string{
-		messageLabelMessageIndexSQL,
-		messageLabelConversationIndexSQL,
-		"CREATE INDEX IF NOT EXISTS tool_query_facts_day_idx ON tool_query_facts(day)",
-		// Request-gap aggregation reads only these small timing fields, not tool bodies.
-		"CREATE INDEX IF NOT EXISTS tool_calls_next_request_timing_idx ON tool_calls(next_request_id,ended_at,agent_session_id,tool_category) WHERE next_request_id IS NOT NULL",
-		// Cover the timing projection so request reads never visit large
-		// conversation bodies or sort the entire ledger's window partitions.
-		"CREATE INDEX IF NOT EXISTS conversations_timing_idx ON conversations(id,workspace_id,provider,harness,agent_depth)",
-		"CREATE INDEX IF NOT EXISTS model_requests_source_message_idx ON model_requests(source_message_id) WHERE source_message_id IS NOT NULL",
-		"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,speed,service_tier,speed_source,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
-		"CREATE INDEX IF NOT EXISTS messages_timing_metadata_idx ON messages(conversation_id,source_order) WHERE kind='metadata'",
-		// Ask Pharos's compaction signal reads only requests after a
-		// compaction, a few in a thousand.
-		"CREATE INDEX IF NOT EXISTS model_requests_compacted_idx ON model_requests(requested_at) WHERE compacted_before>0",
-
-		"CREATE INDEX IF NOT EXISTS messages_conversation_model_effort_idx ON messages(conversation_id,effort,model) WHERE model IS NOT NULL OR effort IS NOT NULL",
-		"DROP INDEX IF EXISTS messages_conversation_effort_idx",
-		"CREATE INDEX IF NOT EXISTS agent_sessions_child_conversation_idx ON agent_sessions(child_conversation_id)",
-		"CREATE INDEX IF NOT EXISTS repositories_normalized_remote_idx ON repositories(normalized_remote)",
-		"CREATE INDEX IF NOT EXISTS repositories_root_commit_idx ON repositories(root_commit)",
-		"CREATE INDEX IF NOT EXISTS repositories_forge_id_idx ON repositories(forge_id)",
-		"CREATE INDEX IF NOT EXISTS message_authorship_work_idx ON message_authorship(work_id)",
-		// The summary only reads the timestamp and word count, not the large
-		// spans_json in each authorship record. Keep zero-word rows out too.
-		"CREATE INDEX IF NOT EXISTS message_authorship_summary_idx ON message_authorship(sent_at,typed_words) WHERE typed_words>0",
-		"CREATE INDEX IF NOT EXISTS agent_sessions_summary_idx ON agent_sessions(id,workspace_id,model)",
-		"CREATE INDEX IF NOT EXISTS agent_sessions_usage_idx ON agent_sessions(id,workspace_id,conversation_id,kind,depth,provider,model)",
-		"CREATE INDEX IF NOT EXISTS conversations_usage_idx ON conversations(id,harness,harness_version_first,harness_version_last,harness_version_source)",
-	} {
+	for _, index := range initializeIndexStatements {
 		if _, err := c.DB.Exec(index); err != nil {
 			return err
 		}
@@ -493,6 +498,7 @@ func (c *Catalog) Initialize() error {
 			return err
 		}
 	}
+	progress.begin(initStepTimings)
 	if err := c.ensureRequestTimings(); err != nil {
 		return fmt.Errorf("initialize request timings: %w", err)
 	}
@@ -502,6 +508,7 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureRequestEvidence(); err != nil {
 		return fmt.Errorf("initialize request evidence: %w", err)
 	}
+	progress.begin(initStepUsage)
 	if err := c.ensureUsageEstimation(); err != nil {
 		return fmt.Errorf("initialize usage estimation: %w", err)
 	}
@@ -512,12 +519,7 @@ func (c *Catalog) Initialize() error {
 		return fmt.Errorf("initialize conversation content: %w", err)
 	}
 	// Columns such as effort are added above when opening a legacy catalog.
-	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_analytics_time_idx
- ON tool_calls(started_at DESC,workspace_id,provider,tool_name,tool_category,model,effort,duration_ms,
- result_tokens,carried_tokens,output_tokens,parallel_count,carried_requests,status,error_type,id);
- CREATE INDEX IF NOT EXISTS tool_calls_analytics_idx
- ON tool_calls(workspace_id,provider,tool_name,tool_category,model,effort,duration_ms,
- result_tokens,carried_tokens,output_tokens,parallel_count,carried_requests,status,error_type,id,started_at)`); err != nil {
+	if _, err := c.DB.Exec(initializeLateIndexStatements[0]); err != nil {
 		return err
 	}
 	// Holds every column the Library's rows read (libraryWorkspaceFields), so
@@ -539,14 +541,10 @@ func (c *Catalog) Initialize() error {
 		branch,owner,flavor,version,lifecycle,preservation_completeness,main_merge_title,location,repository_id,project_folder,folder_repository_id)`); err != nil {
 		return err
 	}
-	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_signature_idx ON tool_calls(error_signature,started_at) WHERE error_signature IS NOT NULL`); err != nil {
-		return err
-	}
-	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_path_repository_idx ON tool_calls(path_repository_id) WHERE path_repository_id IS NOT NULL`); err != nil {
-		return err
-	}
-	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_path_absolute_idx ON tool_calls(path_absolute) WHERE path_absolute IS NOT NULL`); err != nil {
-		return err
+	for _, index := range initializeLateIndexStatements[1:] {
+		if _, err := c.DB.Exec(index); err != nil {
+			return err
+		}
 	}
 	if err := c.migrateHosts(); err != nil {
 		return err
@@ -595,6 +593,7 @@ func (c *Catalog) Initialize() error {
 	// TL1 transcripts were once stored under provider 'tl1' instead of the
 	// agent that wrote them. Re-read TL1 sources once so ingest can correct
 	// the provider in place, even when the registry itself is unchanged.
+	progress.begin(initStepBackfill)
 	var tl1ProviderVersion string
 	if err := c.DB.QueryRow("SELECT value FROM meta WHERE key='tl1_native_provider_version'").Scan(&tl1ProviderVersion); err == sql.ErrNoRows {
 		if _, err = c.DB.Exec("UPDATE source_states SET fingerprint=NULL WHERE kind='tl1'"); err != nil {
@@ -706,17 +705,68 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureExecutionSourceGeneration(); err != nil {
 		return fmt.Errorf("initialize execution source generation: %w", err)
 	}
+	progress.begin(initStepPlanner)
 	if err := c.ensureQueryPlannerStatistics(context.Background()); err != nil {
 		return fmt.Errorf("initialize query planner statistics: %w", err)
 	}
+	progress.begin(initStepDerivations)
 	if err := c.scheduleToolDerivations(); err != nil {
 		return fmt.Errorf("schedule derivations: %w", err)
 	}
 	if err := c.migrateLaunchPreferences(); err != nil {
 		return fmt.Errorf("initialize launch preferences: %w", err)
 	}
+	progress.record(c)
 	// Last, so a query open skips Initialize only after all of it succeeded.
 	return c.recordInitializedBuild()
+}
+
+// initializeIndexStatements are the indexes Initialize creates once the
+// column migrations have run. The startup upgrade's plan finds those still
+// to build here (initializeIndexSources).
+var initializeIndexStatements = []string{
+	messageLabelMessageIndexSQL,
+	messageLabelConversationIndexSQL,
+	"CREATE INDEX IF NOT EXISTS tool_query_facts_day_idx ON tool_query_facts(day)",
+	// Request-gap aggregation reads only these small timing fields, not tool bodies.
+	"CREATE INDEX IF NOT EXISTS tool_calls_next_request_timing_idx ON tool_calls(next_request_id,ended_at,agent_session_id,tool_category) WHERE next_request_id IS NOT NULL",
+	// Cover the timing projection so request reads never visit large
+	// conversation bodies or sort the entire ledger's window partitions.
+	"CREATE INDEX IF NOT EXISTS conversations_timing_idx ON conversations(id,workspace_id,provider,harness,agent_depth)",
+	"CREATE INDEX IF NOT EXISTS model_requests_source_message_idx ON model_requests(source_message_id) WHERE source_message_id IS NOT NULL",
+	"CREATE INDEX IF NOT EXISTS model_requests_timing_idx ON model_requests(conversation_id,COALESCE(agent_session_id,''),sequence,id,requested_at,native_id,model,effort,speed,service_tier,speed_source,input_tokens,cache_read_input_tokens,output_tokens,reasoning_output_tokens,compacted_before,agent_session_id)",
+	"CREATE INDEX IF NOT EXISTS messages_timing_metadata_idx ON messages(conversation_id,source_order) WHERE kind='metadata'",
+	// Ask Pharos's compaction signal reads only requests after a
+	// compaction, a few in a thousand.
+	"CREATE INDEX IF NOT EXISTS model_requests_compacted_idx ON model_requests(requested_at) WHERE compacted_before>0",
+
+	"CREATE INDEX IF NOT EXISTS messages_conversation_model_effort_idx ON messages(conversation_id,effort,model) WHERE model IS NOT NULL OR effort IS NOT NULL",
+	"DROP INDEX IF EXISTS messages_conversation_effort_idx",
+	"CREATE INDEX IF NOT EXISTS agent_sessions_child_conversation_idx ON agent_sessions(child_conversation_id)",
+	"CREATE INDEX IF NOT EXISTS repositories_normalized_remote_idx ON repositories(normalized_remote)",
+	"CREATE INDEX IF NOT EXISTS repositories_root_commit_idx ON repositories(root_commit)",
+	"CREATE INDEX IF NOT EXISTS repositories_forge_id_idx ON repositories(forge_id)",
+	"CREATE INDEX IF NOT EXISTS message_authorship_work_idx ON message_authorship(work_id)",
+	// The summary only reads the timestamp and word count, not the large
+	// spans_json in each authorship record. Keep zero-word rows out too.
+	"CREATE INDEX IF NOT EXISTS message_authorship_summary_idx ON message_authorship(sent_at,typed_words) WHERE typed_words>0",
+	"CREATE INDEX IF NOT EXISTS agent_sessions_summary_idx ON agent_sessions(id,workspace_id,model)",
+	"CREATE INDEX IF NOT EXISTS agent_sessions_usage_idx ON agent_sessions(id,workspace_id,conversation_id,kind,depth,provider,model)",
+	"CREATE INDEX IF NOT EXISTS conversations_usage_idx ON conversations(id,harness,harness_version_first,harness_version_last,harness_version_source)",
+}
+
+// initializeLateIndexStatements are created after the usage estimation and
+// content tables; the first must come before the Library index.
+var initializeLateIndexStatements = []string{
+	`CREATE INDEX IF NOT EXISTS tool_calls_analytics_time_idx
+ ON tool_calls(started_at DESC,workspace_id,provider,tool_name,tool_category,model,effort,duration_ms,
+ result_tokens,carried_tokens,output_tokens,parallel_count,carried_requests,status,error_type,id);
+ CREATE INDEX IF NOT EXISTS tool_calls_analytics_idx
+ ON tool_calls(workspace_id,provider,tool_name,tool_category,model,effort,duration_ms,
+ result_tokens,carried_tokens,output_tokens,parallel_count,carried_requests,status,error_type,id,started_at)`,
+	`CREATE INDEX IF NOT EXISTS tool_calls_signature_idx ON tool_calls(error_signature,started_at) WHERE error_signature IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS tool_calls_path_repository_idx ON tool_calls(path_repository_id) WHERE path_repository_id IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS tool_calls_path_absolute_idx ON tool_calls(path_absolute) WHERE path_absolute IS NOT NULL`,
 }
 
 // timestampColumns are the stored instants kept in timeLayout. usage_hour

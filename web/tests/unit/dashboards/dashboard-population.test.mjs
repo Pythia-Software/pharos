@@ -9,7 +9,7 @@ import cases from "../../../../testdata/site-map-cases.json";
 import { core } from "../helpers/recipes.mjs";
 import { describePopulation, populationLabels, populationOf, populationSuffix, selectionPopulation, withPopulation, withPopulationGroup } from "../../../src/dashboard-population";
 import { analysisQuery } from "../../../src/dashboard-analysis-model";
-import { trendQuery } from "../../../src/dashboard-trend-model";
+import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { withTimeRange } from "../../../src/chart-range";
 import { sessionShapeAnalysisCatalog as catalog } from "../../../src/session-shape-analysis-catalog";
 import { isModelField, modelFieldLabel, modelLabel } from "../../../src/model-label";
@@ -37,6 +37,13 @@ test("the stored model sentinel reads Model not recorded, and its filter keeps t
   assert.equal(labels("model_family", null), "Model not recorded", "a session with no model at all reads the same way");
   const where = withPopulationGroup(catalog, range, "model_family", "unknown model", "drop");
   assert.deepEqual(populationOf(catalog, where), [leaveOut("model_family", "unknown model")]);
+  // A trend's legend names the sentinel the same way, and its series stay on the stored value.
+  const now = Date.UTC(2026, 10, 10, 12), day = new Date(now - 20 * 86400000).toISOString().slice(0, 10);
+  const state = { view: "trend", metric: "sessions", split: "model_family" }, trend = trendQuery(catalog, state, range, { now, zone: "UTC" });
+  const results = trend.query.aggregations.map(clause => ({ id: clause.id, coverage: "exact", buckets: [["unknown model", 3], ["opus-4-8", 2]].map(([family, value]) => ({ keys: [day, family], value, count: value })) }));
+  const built = trendSeries(catalog, state, trend, results, { now });
+  assert.equal(built.error, undefined);
+  assert.deepEqual(Object.fromEntries(built.series.map(item => [item.value, item.label])), { "unknown model": "Model not recorded", "opus-4-8": "opus-4-8" });
 });
 
 test("the legend's Leave out and Count only write terms on the breakdown's field", () => {

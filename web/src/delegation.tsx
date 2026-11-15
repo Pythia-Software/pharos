@@ -1,4 +1,5 @@
 import { EstimateInfoButton } from "./estimate-info";
+import { providerName } from "./provider-names";
 import { formatUSD } from "./currency";
 import { formatTokens } from "./token-count";
 import { CursorPagination } from "./cursor-pagination";
@@ -12,7 +13,7 @@ import { preferences } from "./preferences";
 import { Icon } from "./icons";
 import { delegationRouteValues, delegationTabs, readDelegationRoute, type DelegationRoute } from "./delegation-route";
 import "./delegation.css";
-import {RecursiveSessionRibbon} from "./label-session-ribbon";
+import {RecursiveSessionRibbon} from "./timeline-session-lane";
 import {SessionIdentity,sessionBranchX} from "./session-identity";
 import {eventKindCounts} from "./event-merge";
 import {nativeTimelineLabels,type NativeTimelineMessage} from "./label-timeline-overlay";
@@ -22,16 +23,15 @@ import {humanEventDimensions,type HumanEvent} from "./human-events-model";
 import type {LabelMessage} from "./conversation-labels";
 import type {Taxonomy} from "./conversation-labels";
 import {splitTimelineCallers} from "./timeline-caller-model";
-import {cutAxisLabels,fromVirtual,idleGaps,laneBusy,timeScale,toVirtual,type IdleGap,type TimeScale} from "./timeline-idle-model";
+import {chosenGaps,cutAxisLabels,fromVirtual,idleGaps,laneBusy,laneWaits,timeScale,toVirtual,waitGaps,type IdleGap,type TimeCut,type TimeScale} from "./timeline-idle-model";
 import {useTimelineColumns} from "./timeline-columns";
 import {timelineSessionBranches} from "./timeline-label-model";
 import {sessionOutsideWindow,launchAttemptNote,laneCoverage,segmentPosition,type ExecutionSegment,type LaunchAttempt,type SessionAncestry} from "./delegation-ancestry";
 import {delegationAliasRequests,normalizeDelegationView,readerSelection,unresolvedAliases,type DelegationAliases} from "./delegation-aliases";
 import { estimateExplanation } from "./usage-estimate-model";
 import {coverageSummary,eventsPendingNote,occurrenceNote,omittedSegmentsNote,parentNote,qualityMark,sessionCountText,timelineEventsPending,timelineEventsPendingNote,type ExecutionCoverage,type ParentCertainty} from "./delegation-coverage";
-import {TimelineLegend,timelineLegendWindow,timelineToolCategories} from "./timeline-legend";
-import {updateTimelineVisibility,type TimelineVisibility} from "./timeline-visibility";
-import {ribbonSourceURL,type RibbonObservation} from "./label-session-ribbon-model";
+import {TimelineLegend,timelineKeyContent,timelineLegendWindow,timelineToolCategories,useTimelineVisibility} from "./timeline-legend";
+import {harnessWaitText,ribbonSourceURL,type RibbonObservation} from "./label-session-ribbon-model";
 
 // reader-model.js loads before the bundle and also supplies turn ages.
 declare function relativeAge(value: number | null | undefined): string;
@@ -150,6 +150,11 @@ type Mark = Span & {
   preview_truncated?: boolean;
   status?: string;
   name: string;
+  /** A harness wait runs on from `end` to `wait_end` (null: not recorded). */
+  wait_kind?: string;
+  wait_end?: number | null;
+  wait_status?: string;
+  wait_events?: number;
 };
 type Lane = {
   session: string;
@@ -177,12 +182,20 @@ type Lane = {
 };
 export type Activity = Span & { snapshot: string; lanes: Lane[]; inference: string; taxonomy?: Taxonomy };
 
-/** Both the Timeline and reader use the same workspace activity evidence. */
-export function timelineActivityGaps(activity:Activity,rows:Session[]):IdleGap[]{
+/** Both the Timeline and reader use the same workspace activity evidence:
+ * the idle gaps (harness waits count as busy) and the stretches only harness
+ * waits fill, which a timeline skips when asked to. */
+export function timelineActivityGaps(activity:Activity,rows:Session[]):{idle:IdleGap[];waits:IdleGap[]}{
   const byID=new Map(rows.map(row=>[row.id,row]));
   const busy=activity.lanes.flatMap(lane=>laneBusy(lane,byID.get(lane.session)));
   const callers=splitTimelineCallers(nativeTimelineLabels(activity).messages,rows).caller.flatMap(message=>{const at=message.at?Date.parse(message.at):NaN;return Number.isFinite(at)?[at]:[];});
-  return idleGaps({busy,callers});
+  const waits=activity.lanes.flatMap(lane=>laneWaits(lane));
+  return {idle:idleGaps({busy,callers}),waits:waits.length?waitGaps({busy:[...activity.lanes.flatMap(lane=>laneBusy(lane,byID.get(lane.session),{waits:false})),...callers.map(at=>({start:at,end:at}))],waits}):[]};
+}
+/** A skipped stretch's title: what filled it and when work resumed. */
+export function cutTitle(cut:Pick<TimeCut,'start'|'end'|'kind'>){
+  const length=duration(cut.end-cut.start),resumed=localTime(cut.end);
+  return cut.kind==='wait'?`Only machine waits ran for ${length}, skipped; resumed ${resumed}`:cut.kind==='mixed'?`Idle or machine waits only for ${length}, skipped; resumed ${resumed}`:`Nothing ran for ${length}, skipped; resumed ${resumed}`;
 }
 type Props = {
   workspace: string;
@@ -835,14 +848,14 @@ export function DelegationExplorer({
   // The reader is mounted separately from this explorer. Send it the same
   // whole-workspace evidence used by Timeline, including other sessions.
   useEffect(()=>{
-    const panel=contextHost?.closest<HTMLElement>('.conversation-panel') as (HTMLElement&{pharosReaderIdleGaps?:IdleGap[]})|null;
+    const panel=contextHost?.closest<HTMLElement>('.conversation-panel') as (HTMLElement&{pharosReaderIdleGaps?:IdleGap[];pharosReaderWaitGaps?:IdleGap[]})|null;
     if(!panel||!data||data.start==null||data.end==null)return;
     const included=new Set(data.rows.map(row=>row.id));
     for(const row of rows){if(included.size>=100)break;included.add(row.id);}
     const ids=rows.filter(row=>included.has(row.id)).map(row=>row.id).join(',');
     if(!ids)return;
     const controller=new AbortController(),params=new URLSearchParams({snapshot:data.snapshot,start:String(data.start),end:String(Math.max(data.start+1,data.end)),sessions:ids,width:'1000',labels:'1',...(relativesKey?{relatives:relativesKey}:{}),...(includeUncertain?{include_uncertain:'1'}:{})});
-    const publish=(gaps?:IdleGap[])=>{panel.pharosReaderIdleGaps=gaps;panel.dispatchEvent(new Event('pharos:reader-idle'));};
+    const publish=(gaps?:{idle:IdleGap[];waits:IdleGap[]})=>{panel.pharosReaderIdleGaps=gaps?.idle;panel.pharosReaderWaitGaps=gaps?.waits;panel.dispatchEvent(new Event('pharos:reader-idle'));};
     publish();
     readJSON<Activity>(`${endpoint}/parallel?${params}`,controller.signal).then(activity=>{
       if(!controller.signal.aborted&&activity.snapshot===data.snapshot)publish(timelineActivityGaps(activity,rows));
@@ -998,7 +1011,7 @@ export function DelegationExplorer({
     >
       <h2>{shownSession.label}</h2>
       <small>
-        {shownSession.provider} ·{" "}
+        {providerName(shownSession.provider)} ·{" "}
         {shownSession.model || "model not recorded"} ·{" "}
         {shownSession.effort || "effort not recorded"}
         {parentNote(shownSession) ? ` · ${parentNote(shownSession)}` : ""}
@@ -1226,7 +1239,7 @@ export function DelegationExplorer({
                                   <div className="delegation-node">
                                     <SessionIdentity
                                       name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`}
-                                      metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{n.provider} · {n.model || "model not recorded"} · {n.effort || "effort not recorded"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{n.events_pending ? ` · ${eventsPendingNote}` : ""}<SessionAge start={n.start} prefix=" · " /></>}
+                                      metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{providerName(n.provider)} · {n.model || "model not recorded"} · {n.effort || "effort not recorded"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{n.events_pending ? ` · ${eventsPendingNote}` : ""}<SessionAge start={n.start} prefix=" · " /></>}
                                       title={`${n.id} · ${n.coverage} coverage`}
                                       depth={mode === "hierarchy" ? n.depth : 0}
                                       branch={mode === "hierarchy" ? sessionBranches.get(n.id) : undefined}
@@ -1408,7 +1421,7 @@ function InboxSessions({ rows, data, shown, range, collapsed, toggle, openNode, 
     <div className="delegation-inbox-heading" role="row"><span role="columnheader" title={sessionCountText(data.session_count, data.session_count_uncertain)}>Agent session{data.session_count_uncertain ? " ≈" : ""}</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.label}</span>)}</div>
     {rows.map(n => <div key={n.id} role="row" data-session-id={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }}>
       <div role="cell" className="delegation-inbox-session">
-        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{n.provider} · {n.model || "model not recorded"} · {n.effort || "effort not recorded"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{!sessionOutsideWindow(n, range) && (n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens, "tokens")} tokens unallocated in branch` : "")}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
+        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{providerName(n.provider)} · {n.model || "model not recorded"} · {n.effort || "effort not recorded"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{!sessionOutsideWindow(n, range) && (n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens, "tokens")} tokens unallocated in branch` : "")}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
         {!!n.child_count && <button className="delegation-chevron session-fold" style={{left: sessionBranchX(n.depth) - 8}} aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} title={collapsed.has(n.id) ? "Expand sessions" : "Collapse sessions"} aria-expanded={!collapsed.has(n.id)} onClick={() => toggle(n)}><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
         <RelativesButton node={n} show={showRelatives} />
       </div>
@@ -1435,7 +1448,7 @@ function TimelineOverview({
   idle,
 }: {
   scale?: TimeScale;
-  idle?: { skip: boolean; set: (skip: boolean) => void; gaps: number };
+  idle?: { skip: boolean; set: (skip: boolean) => void; gaps: number; skipWaits: boolean; setWaits: (skip: boolean) => void; waits: number };
   full: Range;
   range: Range;
   density: number[];
@@ -1558,6 +1571,10 @@ function TimelineOverview({
           <input type="checkbox" data-view-field="timeline_idle" checked={idle.skip} onChange={event=>idle.set(event.currentTarget.checked)}/>
           Skip idle gaps{idle.skip&&idle.gaps?<small> · {idle.gaps}</small>:null}
         </label>:null}
+        {idle?<label className="delegation-idle-toggle" title="Also remove stretches of 15 minutes or more when the only thing running is a machine wait: a background command, a Monitor watch or a scheduled wakeup. Off by default, so the time spent waiting stays on the timeline.">
+          <input type="checkbox" data-view-field="timeline_waits" checked={idle.skipWaits} onChange={event=>idle.setWaits(event.currentTarget.checked)}/>
+          Skip machine waits{idle.skipWaits&&idle.waits?<small> · {idle.waits}</small>:null}
+        </label>:null}
         <button type="button" className="delegation-overview-reset" onClick={()=>{cancelDrag();change(full);}}>Reset</button>
       </div>
       <div
@@ -1578,7 +1595,7 @@ function TimelineOverview({
             return <i key={i} style={{ height: `${(count / maxDensity) * 100}%`, ...(scale.compressed ? { left: `${percentage(from)}%`, width: `${Math.max(0, percentage(to) - percentage(from))}%` } : {}) }} />;
           })}
         </div>
-        {scale.cuts.map(cut => <i key={cut.end} className="delegation-idle-cut" style={{ left: `${cut.fraction * 100}%` }} title={`Nothing ran for ${duration(cut.end - cut.start)}; resumed ${localTime(cut.end)}`} />)}
+        {scale.cuts.map(cut => <i key={cut.end} className="delegation-idle-cut" style={{ left: `${cut.fraction * 100}%` }} title={cutTitle(cut)} />)}
         <div
           className="delegation-dim"
           style={{ left: 0, width: `${percentage(view[0])}%` }}
@@ -1694,8 +1711,8 @@ export function ParallelActivity({
   const eventCounts=useMemo(()=>eventKindCounts([...nativeLabels.events.values()].flat()),[nativeLabels]);
   const actors=useMemo(()=>splitTimelineCallers(nativeLabels.messages,rows),[nativeLabels,rows]);
   const allMessages=useMemo(()=>[...nativeLabels.messages.values()].flat(),[nativeLabels]);
-  const [timelineDisclosures]=useViewState<Record<string,boolean>>("disclosures",{});
-  const [timelineVisibility,setTimelineVisibility]=useViewState<TimelineVisibility>("timeline_visibility",{});
+  const [timelineDisclosures]=useViewState<Record<string,boolean>>("disclosures",{},true);
+  const [timelineVisibility,selectTimelineKey]=useTimelineVisibility(true);
   const [brush, setBrush] = useState<Range | null>(null);
   // No control reads delegation_expanded since the detailed lanes went; the
   // binding keeps the field in the view contract until it is retired there.
@@ -1723,6 +1740,8 @@ export function ParallelActivity({
   // Idle gaps are found over the whole workspace, so the overview and every
   // zoomed window share one clock; a zoomed window fetches the whole range once.
   const [skipIdle, setSkipIdle] = useViewState<boolean>("timeline_idle", true, location.pathname.startsWith("/work/"));
+  const [skipWaits, setSkipWaits] = useViewState<boolean>("timeline_waits", false, location.pathname.startsWith("/work/"));
+  const skipAny = skipIdle || skipWaits;
   const [wholeActivity, setWholeActivity] = useState<(Activity & { sessions: string }) | null>(null);
   const track = useRef<HTMLDivElement>(null);
   const clock = useRef<HTMLDivElement>(null);
@@ -1781,7 +1800,7 @@ export function ParallelActivity({
       : null;
   const wholeWindow = range[0] === full[0] && range[1] === full[1];
   useEffect(() => {
-    if (!skipIdle || wholeWindow) return;
+    if (!skipAny || wholeWindow) return;
     if (wholeActivity?.snapshot === data.snapshot && wholeActivity.start === full[0] && wholeActivity.end === full[1] && wholeActivity.sessions === ids) return;
     const controller = new AbortController();
     const params = new URLSearchParams({ snapshot: data.snapshot, start: String(full[0]), end: String(full[1]), sessions: ids, width: "1000", labels: "1", ...(relatives ? {relatives} : {}), ...(includeUncertain ? {include_uncertain: "1"} : {}) });
@@ -1794,18 +1813,18 @@ export function ParallelActivity({
       }
     });
     return () => controller.abort();
-  }, [skipIdle, wholeWindow, endpoint, relatives, includeUncertain, ids, data, full[0], full[1],onSnapshotChanged]);
+  }, [skipAny, wholeWindow, endpoint, relatives, includeUncertain, ids, data, full[0], full[1],onSnapshotChanged]);
   const idleSource = wholeWindow ? visibleActivity : wholeActivity?.snapshot === data.snapshot && wholeActivity.sessions === ids && wholeActivity.start === full[0] && wholeActivity.end === full[1] ? wholeActivity : null;
   useEffect(() => {
     // Both reads must settle before recovery is rearmed: a successful visible
     // window must not fuel endless retries of a failing idle-window read.
-    if (visibleActivity && (!skipIdle || wholeWindow || idleSource)) onSnapshotLoaded(data.snapshot);
-  }, [visibleActivity, skipIdle, wholeWindow, idleSource, data.snapshot, onSnapshotLoaded]);
-  const gaps = useMemo<IdleGap[]>(() => {
-    if (!idleSource) return [];
+    if (visibleActivity && (!skipAny || wholeWindow || idleSource)) onSnapshotLoaded(data.snapshot);
+  }, [visibleActivity, skipAny, wholeWindow, idleSource, data.snapshot, onSnapshotLoaded]);
+  const gaps = useMemo(() => {
+    if (!idleSource) return {idle:[],waits:[]};
     return timelineActivityGaps(idleSource,rows);
   }, [idleSource, rows]);
-  const shownGaps = skipIdle ? gaps : [];
+  const shownGaps = useMemo(() => chosenGaps(gaps, {skipIdle, skipWaits}), [gaps, skipIdle, skipWaits]);
   const fullScale = useMemo(() => timeScale(full, shownGaps), [full[0], full[1], shownGaps]);
   const windowScale = useMemo(() => timeScale(range, shownGaps), [range[0], range[1], shownGaps]);
   // Zoom changes observations, not the sessions listed on this page.
@@ -1816,6 +1835,8 @@ export function ParallelActivity({
     {id:`caller:${data.rows[0]?.workspace_id??endpoint}`,caller:true,messages:actors.caller,marks:visibleActivity?.lanes.flatMap(lane=>lane.marks)??[],neighbors:allMessages},
     ...shownLaneRows.map(node=>({id:node.id,messages:actors.messages.get(node.id)??[],marks:visibleActivity?.lanes.find(lane=>lane.session===node.id)?.marks??[],neighbors:nativeLabels.messages.get(node.id)})),
   ],range),[actors,visibleActivity,shownLaneRows,nativeLabels,allMessages,range[0],range[1]]);
+  const humanKeys=useMemo(()=>humanEventDimensions([...nativeLabels.human.values()].flat()).map(({id,name,className})=>({id,name,className})),[nativeLabels]);
+  const keyContent=useMemo(()=>timelineKeyContent(legend,{taxonomy:nativeLabels.taxonomy,events:[...nativeLabels.events.values()].flat(),human:humanKeys}),[legend,nativeLabels,humanKeys]);
   const eventsExpanded=!previewOnly&&legend.populated.some(id=>timelineDisclosures[`delegation-labels:${id}:session`]);
   const hideEvents=compact || previewOnly;
   const columns=useTimelineColumns(true,{eventsCollapsed:!eventsExpanded});
@@ -1895,7 +1916,6 @@ export function ParallelActivity({
   const sourceHref=(node:Session,item:RibbonObservation)=>ribbonSourceURL(item,{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href);
   // A Human events marker opens its message in the conversation.
   const humanHref=(node:Session,e:HumanEvent)=>ribbonSourceURL({id:e.id,start:0,end:0,title:"",color:"",thinking:false,message:(nativeLabels.messages.get(node.id)??[]).find(message=>message.id===e.message_id)??({id:e.message_id} as LabelMessage)},{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href);
-  const humanKeys=humanEventDimensions([...nativeLabels.human.values()].flat()).map(({id,name,className})=>({id,name,className}));
   const eventHref=(node:Session,e:AgentEventLink)=>withEventLink(ribbonSourceURL({id:e.id,start:0,end:0,title:"",color:"",thinking:false,message:{id:e.message_id} as LabelMessage},{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href),e);
   return (
     <div className={`delegation-parallel ${previewOnly?"is-preview":""} is-recursive is-timeline ${hideEvents?"without-events":""}`} ref={track} style={columns.style}>
@@ -1911,9 +1931,9 @@ export function ParallelActivity({
         change={change}
         pending={pending}
         scale={fullScale}
-        idle={!previewOnly?{skip:skipIdle,set:setSkipIdle,gaps:gaps.length}:undefined}
+        idle={!previewOnly?{skip:skipIdle,set:setSkipIdle,gaps:gaps.idle.length,skipWaits,setWaits:setSkipWaits,waits:gaps.waits.length}:undefined}
       />
-      <TimelineLegend previewOnly={previewOnly} onOpenTimeline={openOverview} data-view-field="timeline_visibility" visibility={timelineVisibility} onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))} messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error} unknownTools={legend.unknownTools} events={[...nativeLabels.events.values()].flat()} human={humanKeys}/>
+      <TimelineLegend surface={previewOnly?"preview":"timeline"} onOpenTimeline={openOverview} data-view-field="timeline_visibility" content={keyContent} visibility={timelineVisibility} onSelect={selectTimelineKey}/>
       {error && (
         <p className="delegation-error" role="alert">
           {error}
@@ -1939,7 +1959,7 @@ export function ParallelActivity({
         <div className="delegation-axis lt-resizable-axis">
           <span className="lt-column-heading">Session{columns.handle('execution')}</span>
           {!hideEvents && <span className="lt-column-heading">Events{columns.handle('events')}</span>}
-          <div ref={clock} className="lt-clock-heading" {...brushHandlers}>{ticks.map((tick,i)=>cutLabels.hiddenTicks.has(i)?null:<small key={i} style={{left:`${i/(ticks.length-1)*100}%`}}><span className="delegation-tick-date">{tick.date}</span><time dateTime={new Date(tick.at).toISOString()} title={localTime(tick.at)}>{tick.time}</time></small>)}{windowScale.cuts.map((cut,i)=><span key={cut.end} className="lt-idle-cut" style={{left:`${cut.fraction*100}%`}} title={`Nothing ran for ${duration(cut.end-cut.start)}; resumed ${localTime(cut.end)}`}>{cutLabels.labelled.has(i)?<time dateTime={new Date(cut.end).toISOString()}><b>{resumeTime.format(new Date(cut.end))}</b>+{idleDuration(cut.end-cut.start)}</time>:null}</span>)}</div>
+          <div ref={clock} className="lt-clock-heading" {...brushHandlers}>{ticks.map((tick,i)=>cutLabels.hiddenTicks.has(i)?null:<small key={i} style={{left:`${i/(ticks.length-1)*100}%`}}><span className="delegation-tick-date">{tick.date}</span><time dateTime={new Date(tick.at).toISOString()} title={localTime(tick.at)}>{tick.time}</time></small>)}{windowScale.cuts.map((cut,i)=><span key={cut.end} className="lt-idle-cut" style={{left:`${cut.fraction*100}%`}} title={cutTitle(cut)}>{cutLabels.labelled.has(i)?<time dateTime={new Date(cut.end).toISOString()}><b>{resumeTime.format(new Date(cut.end))}</b>+{idleDuration(cut.end-cut.start)}</time>:null}</span>)}</div>
         </div>
         <div className="delegation-lane lt-recursive-lane lt-caller-row" data-session-id="caller">
           <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} caller sessionID={`caller:${data.rows[0]?.workspace_id??endpoint}`} depth={0} name="Caller" metadata="Human & supplied input" messages={actors.caller} boundaryMessages={allMessages} boundaryMarks={visibleActivity?.lanes.flatMap(lane=>lane.marks)??[]} marks={[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
@@ -1965,7 +1985,7 @@ export function ParallelActivity({
             return notes;
           })();
           return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
-            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${peerPrefix(n)}${n.provider} · ${n.model||"model not recorded"}${parentNote(n)?` · ${parentNote(n)}`:""}`} notes={laneNotes} messages={actors.messages.get(n.id)??[]} boundaryMessages={nativeLabels.messages.get(n.id)} marks={lane?.marks??[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
+            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${peerPrefix(n)}${providerName(n.provider)} · ${n.model||"model not recorded"}${parentNote(n)?` · ${parentNote(n)}`:""}`} notes={laneNotes} messages={actors.messages.get(n.id)??[]} boundaryMessages={nativeLabels.messages.get(n.id)} marks={lane?.marks??[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
               openSession={()=>openNode(n)}
               sourceHref={item=>sourceHref(n,item)}
               events={nativeLabels.events.get(n.id)} eventCounts={eventCounts} eventHref={e=>eventHref(n,e)}

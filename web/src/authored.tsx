@@ -1,4 +1,5 @@
 import { useViewEntry } from "./view-state";
+import { providerName, sourceName } from "./provider-names";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { authorshipCategories } from "./authorship-categories";
 import { createPortal } from "react-dom";
@@ -193,7 +194,7 @@ function AuthoredMessageCard({ row }: { row: Row }) {
   const collapsible = length > collapsedChars;
   const typed = Number(row.typed_words) || 0, other = Number(row.other_words) || 0;
   const sent = row.sent_at ? new Date(row.sent_at) : null;
-  const meta = [sent ? sent.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "", row.repository_name, row.source_kind, row.provider, row.subagent ? "Sub-agent" : ""].filter(Boolean);
+  const meta = [sent ? sent.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "", row.repository_name, row.source_kind ? sourceName(String(row.source_kind)) : "", row.provider ? providerName(String(row.provider)) : "", row.subagent ? "Sub-agent" : ""].filter(Boolean);
   return <article className="authored-card" data-pharos-target={`section:authored:message:${row.id}`}>
     <div className="authored-head">
       <div className="authored-summary">

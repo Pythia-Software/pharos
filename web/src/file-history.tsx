@@ -12,6 +12,7 @@ import {
   type FileHistory, type FileHistoryCommit, type FileLastCommits, type FileHistoryFile, type FileHistoryGit, type FileHistoryLink, type FileHistorySession, type FileLog,
   type FileLogCommit, type FilePageTarget, type FileProject, type FileTree, type FileTreeEntry, type RepositoryCheckout,
 } from "./file-history-model";
+import { CodeLines, CodeRuns, codeLines, codeRuns } from "./code-highlight";
 import "./file-history.css";
 
 const day = (value?: string | null) => value ? new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
@@ -278,7 +279,10 @@ function CheckoutSetup({ checkout, onDone }: { checkout: RepositoryCheckout; onD
     if (forgetting) { asked.current = true; keep.current?.focus(); }
     else if (asked.current) { asked.current = false; forget.current?.focus(); }
   }, [forgetting]);
+  const inFlight = useRef(false);
   const post = async (body: Record<string, unknown>) => {
+    if (inFlight.current) return false;
+    inFlight.current = true;
     setSaving(true); setError("");
     try {
       const response = await fetch(`/api/repositories/${encodeURIComponent(checkout.repository_id)}/checkout`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -286,9 +290,19 @@ function CheckoutSetup({ checkout, onDone }: { checkout: RepositoryCheckout; onD
       if (!response.ok) throw new Error(answer.error ?? `HTTP ${response.status}`);
       onDone?.();
       refreshFiles();
+      return true;
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
-    } finally { setSaving(false); }
+      return false;
+    } finally { inFlight.current = false; setSaving(false); }
+  };
+  // The question stays, with focus in it, until the request answers. The
+  // Forget button goes away with the checkout, so focus moves to the folder
+  // field; a failure leaves the question open under its error.
+  const forgetCheckout = async () => {
+    if (!await post({ clear: true })) return;
+    asked.current = false; setForgetting(false);
+    document.getElementById(`checkout-${checkout.repository_id}`)?.focus();
   };
   const candidates = (checkout.candidates ?? []).filter(path => path !== checkout.path);
   return <section className="files-checkout" aria-label="Repository checkout">
@@ -303,11 +317,11 @@ function CheckoutSetup({ checkout, onDone }: { checkout: RepositoryCheckout; onD
       <button type="submit" className="files-button" disabled={saving || !draft.trim()}>Use this folder</button>
       {checkout.status === "set" ? <button ref={forget} type="button" className="files-button" disabled={saving || forgetting} onClick={() => setForgetting(true)}>Forget the checkout…</button> : null}
     </form>
-    {forgetting ? <div className="files-checkout-confirm" role="group" aria-label="Forget checkout" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setForgetting(false); } }}>
+    {forgetting ? <div className="files-checkout-confirm" role="group" aria-label="Forget checkout" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (!inFlight.current) setForgetting(false); } }}>
       <p>Forget this checkout? Pharos stops showing code, blame, history and commit diffs for {checkout.name ?? "this repository"} until you choose a folder again. Nothing in the folder changes.</p>
       <div className="files-checkout-form">
-        <button type="button" className="files-button" onClick={() => { setForgetting(false); void post({ clear: true }); }}>Forget checkout</button>
-        <button ref={keep} type="button" className="files-button" onClick={() => setForgetting(false)}>Cancel</button>
+        <button type="button" className="files-button" aria-disabled={saving} onClick={() => void forgetCheckout()}>Forget checkout</button>
+        <button ref={keep} type="button" className="files-button" aria-disabled={saving} onClick={() => { if (!inFlight.current) setForgetting(false); }}>Cancel</button>
       </div>
     </div> : null}
     {error ? <Failure error={error} /> : null}
@@ -432,7 +446,7 @@ function CodeView({ project, path }: { project: string; path: string }) {
   const lines = content.text.replace(/\n$/, "").split("\n");
   return <div className="files-blob">
     <div className="files-blob-head muted">{plural(lines.length, "line")} · {content.size != null ? sizeText(content.size) : ""}{content.ref === "HEAD" ? " · the checkout’s HEAD" : ""}{content.truncated ? " · cut short" : ""}</div>
-    <div className="files-code"><pre className="files-gutter" aria-hidden="true">{lines.map((_, index) => index + 1).join("\n")}</pre><pre className="files-lines"><code>{lines.join("\n")}</code></pre></div>
+    <div className="files-code"><pre className="files-gutter" aria-hidden="true">{lines.map((_, index) => index + 1).join("\n")}</pre><pre className="files-lines"><code><CodeRuns runs={codeRuns(lines.join("\n"), path)} /></code></pre></div>
   </div>;
 }
 
@@ -451,12 +465,14 @@ function BlameView({ project, path }: { project: string; path: string }) {
   const blame = loaded.value!;
   if (blame.note || !blame.lines) return <p className="muted">{blame.note ?? "Git did not blame this file."}</p>;
   const rows = blameRows(blame), commits = blame.commits ?? {};
+  // The file is highlighted whole, then cut into the rows' runs of lines.
+  const highlighted = codeLines(blame.lines.join("\n"), path);
   const bySessions = Object.values(commits).filter(commit => commit.sessions.some(link => link.counted)).length;
   return <div className="files-blob">
     <div className="files-blob-head muted">{plural(blame.lines.length, "line")} from {plural(Object.keys(commits).length, "commit")}{bySessions ? `, ${bySessions} linked to workspaces (marked)` : ""}</div>
     <div className="files-blame">
       {rows.map(row => {
-        const commit = commits[row.hash], linked = commit?.sessions.some(link => link.counted);
+        const commit = commits[row.hash], linked = commit?.sessions.some(link => link.counted), lines = highlighted.slice(row.start - 1, row.start - 1 + row.lines.length);
         return <div key={row.start} className={`files-blame-row${linked ? " files-blame-session" : ""}`}>
           <div className="files-blame-meta">
             <span className="files-blame-when" title={commit?.author_at}>{age(commit?.author_at)}</span>
@@ -464,7 +480,7 @@ function BlameView({ project, path }: { project: string; path: string }) {
             {commit?.sessions.length ? <SessionLinks links={commit.sessions} /> : null}
           </div>
           <pre className="files-gutter" aria-hidden="true">{row.lines.map((_, index) => row.start + index).join("\n")}</pre>
-          <pre className="files-lines"><code>{row.lines.join("\n")}</code></pre>
+          <pre className="files-lines"><code><CodeLines lines={lines} /></code></pre>
         </div>;
       })}
     </div>
@@ -554,7 +570,7 @@ function ChangesPage({ project, path, repository, offset, last, onMore }: { proj
         <Outcome label={change.outcome_label} />
         <PageLink href={change.url} className="files-change-open">Open in conversation</PageLink>
       </div>
-      {change.hunks.length ? <DiffTable hunks={change.hunks.map(hunk => ({ header: hunk.header ?? "", lines: hunk.lines.map(([kind, text]) => ({ kind: kind as DiffLine["kind"], text })) }))} numbered={false} />
+      {change.hunks.length ? <DiffTable hunks={change.hunks.map(hunk => ({ header: hunk.header ?? "", lines: hunk.lines.map(([kind, text]) => ({ kind: kind as DiffLine["kind"], text })) }))} path={path} numbered={false} />
         : <p className="muted files-change-note">{change.note ?? (change.kind === "listed" ? "The call named this file without its lines." : "No lines to show.")}</p>}
       {change.truncated ? <p className="muted files-change-note">The rest of this edit is not shown.</p> : null}
     </article>)}
@@ -565,8 +581,9 @@ function ChangesPage({ project, path, repository, offset, last, onMore }: { proj
 const diffLineLimit = 3000;
 
 // DiffTable shows hunks of a diff, each line marked kept, added or removed,
-// with the old and new line numbers when Git gave them.
-function DiffTable({ hunks, numbered }: { hunks: { header: string; lines: DiffLine[] }[]; numbered: boolean }) {
+// with the old and new line numbers when Git gave them, and its text
+// highlighted line by line by the file's path.
+function DiffTable({ hunks, path, numbered }: { hunks: { header: string; lines: DiffLine[] }[]; path: string; numbered: boolean }) {
   let shown = 0;
   return <div className={`files-diff${numbered ? "" : " files-diff-plain"}`} role="table" aria-label="Diff">
     {hunks.map((hunk, index) => {
@@ -578,7 +595,7 @@ function DiffTable({ hunks, numbered }: { hunks: { header: string; lines: DiffLi
         {lines.map((line, at) => <div key={at} role="row" className={`files-diff-line${line.kind === "+" ? " add" : line.kind === "-" ? " del" : line.kind === "\\" ? " note" : ""}`}>
           {numbered ? <><span className="files-diff-num" role="cell">{line.old ?? ""}</span><span className="files-diff-num" role="cell">{line.new ?? ""}</span></> : null}
           <span className="files-diff-sign" role="cell" aria-label={line.kind === "+" ? "added" : line.kind === "-" ? "removed" : undefined}>{line.kind === "\\" ? "" : line.kind}</span>
-          <span className="files-diff-text" role="cell">{line.text}</span>
+          <span className="files-diff-text" role="cell">{line.kind === "\\" ? line.text : <CodeRuns runs={codeRuns(line.text, path)} />}</span>
         </div>)}
       </div>;
     })}
@@ -763,5 +780,5 @@ function CommitFileDiff({ project, commit, path }: { project: string; commit: st
   const files = parseUnifiedDiff(loaded.value!.diff ?? "");
   if (!files.length) return <p className="muted">No change to show.</p>;
   return <>{files.map(file => file.binary ? <p key={file.path} className="muted">A binary file.</p>
-    : <DiffTable key={file.path} hunks={file.hunks} numbered />)}{loaded.value!.truncated ? <p className="muted">This diff is too long to show in full.</p> : null}</>;
+    : <DiffTable key={file.path} hunks={file.hunks} path={file.path} numbered />)}{loaded.value!.truncated ? <p className="muted">This diff is too long to show in full.</p> : null}</>;
 }

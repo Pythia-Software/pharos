@@ -341,6 +341,15 @@ func TestRepairSessionBoundsPreservesAccounting(t *testing.T) {
 	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM agent_sessions WHERE time_bounds_source='attempt-envelope'`).Scan(&envelopes); err != nil || envelopes != want {
 		t.Fatalf("usage replay lost envelopes: %d, %v", envelopes, err)
 	}
+	// Replaying what is already attributed stores nothing again, so an
+	// upgrade's repair leaves the Search view and the metrics unmarked.
+	execSQL(t, c.DB, `DELETE FROM usage_attribution_state`, `DELETE FROM workspace_library_dirty`, `DELETE FROM mcp_metric_dirty`)
+	if repaired, err := c.RepairUsageAttribution(t.Context(), nil); err != nil || repaired == 0 {
+		t.Fatalf("replay repaired %d: %v", repaired, err)
+	}
+	if library, metrics := countRows(t, c, "SELECT COUNT(*) FROM workspace_library_dirty"), countRows(t, c, "SELECT COUNT(*) FROM mcp_metric_dirty"); library != 0 || metrics != 0 {
+		t.Fatalf("an unchanged replay marked %d Search view and %d metric workspaces", library, metrics)
+	}
 }
 
 func TestClaudeNonWriterCopyPreservesRootUsage(t *testing.T) {

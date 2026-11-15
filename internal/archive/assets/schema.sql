@@ -701,7 +701,8 @@ END;
 CREATE TRIGGER IF NOT EXISTS tool_command_fts_delete AFTER DELETE ON tool_calls BEGIN
   DELETE FROM tool_command_fts WHERE rowid=old.rowid;
 END;
-CREATE TRIGGER IF NOT EXISTS tool_command_fts_update AFTER UPDATE OF command,program,subcommand ON tool_calls BEGIN
+CREATE TRIGGER IF NOT EXISTS tool_command_fts_update AFTER UPDATE OF command,program,subcommand ON tool_calls
+WHEN old.command IS NOT new.command OR old.program IS NOT new.program OR old.subcommand IS NOT new.subcommand BEGIN
   DELETE FROM tool_command_fts WHERE rowid=old.rowid;
   INSERT INTO tool_command_fts(rowid,command,program,subcommand,command_name)
     SELECT new.rowid,new.command,new.program,new.subcommand,TRIM(COALESCE(new.program,'')||' '||COALESCE(new.subcommand,''))
@@ -1295,6 +1296,32 @@ CREATE TABLE IF NOT EXISTS background_runs (
   host_id TEXT NOT NULL, item TEXT NOT NULL, started_at TEXT, finished_at TEXT,
   succeeded_at TEXT, error TEXT, seconds REAL, PRIMARY KEY(host_id,item)
 );
+-- Every scheduled run of an item on this Mac, with its own time (not its
+-- pass's) and how much work it found: what the schedule's costs and placement
+-- are measured from (background.go, itemRun). background_runs keeps only the
+-- last run. started_at is the pass's start, shared by its items; units is
+-- NULL for an item that does not count its work. Rows older than two weeks
+-- are dropped as new ones arrive. cpu_seconds is the CPU time the run's own
+-- thread used in the service (work it handed to other threads is not in
+-- it); worker_cpu_seconds and gpu_seconds are its worker processes';
+-- peak_bytes the most memory Pharos held while it ran. Each is NULL where it was not measured
+-- (background_cpu.go).
+CREATE TABLE IF NOT EXISTS background_item_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, host_id TEXT NOT NULL, item TEXT NOT NULL, cadence TEXT NOT NULL,
+  started_at TEXT NOT NULL, seconds REAL NOT NULL, units INTEGER,
+  cpu_seconds REAL, worker_cpu_seconds REAL, gpu_seconds REAL, peak_bytes INTEGER
+);
+CREATE INDEX IF NOT EXISTS background_item_runs_host ON background_item_runs(host_id,started_at);
+-- What background work used on this Mac, per local day and source: a
+-- background item ("item:labels"), another operation kind
+-- ("kind:maintenance.checkpoint"), or "other" for the rest of the service's CPU time,
+-- which no measured work's thread used. Totals are added as runs end, never per sample; a NULL figure
+-- was not measured. Days older than five weeks are dropped.
+CREATE TABLE IF NOT EXISTS background_cpu_days (
+  host_id TEXT NOT NULL, day TEXT NOT NULL, source TEXT NOT NULL, runs INTEGER NOT NULL DEFAULT 0,
+  seconds REAL NOT NULL DEFAULT 0, cpu_seconds REAL, worker_cpu_seconds REAL,
+  gpu_seconds REAL, peak_bytes INTEGER, PRIMARY KEY(host_id,day,source)
+);
 CREATE TABLE IF NOT EXISTS background_temporary_cadences (
   host_id TEXT NOT NULL, item TEXT NOT NULL, cadence TEXT NOT NULL, expires_at TEXT NOT NULL,
   PRIMARY KEY(host_id,item)
@@ -1659,7 +1686,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS tool_query_text_delete AFTER DELETE ON tool_calls BEGIN
  DELETE FROM tool_query_text_fts WHERE rowid=old.rowid;
 END;
-CREATE TRIGGER IF NOT EXISTS tool_query_text_update AFTER UPDATE OF command ON tool_calls BEGIN
+CREATE TRIGGER IF NOT EXISTS tool_query_text_update AFTER UPDATE OF command ON tool_calls WHEN old.command IS NOT new.command BEGIN
  DELETE FROM tool_query_text_fts WHERE rowid=old.rowid;
  INSERT INTO tool_query_text_fts(rowid,body) SELECT new.rowid,qt_lower(new.command) WHERE new.command IS NOT NULL AND new.command<>'';
 END;
@@ -1673,7 +1700,7 @@ CREATE TRIGGER IF NOT EXISTS human_query_text_update AFTER UPDATE OF message_id 
  DELETE FROM human_query_text_fts WHERE rowid=old.rowid;
  INSERT INTO human_query_text_fts(rowid,body) SELECT new.rowid,qt_lower(text) FROM messages WHERE id=new.message_id AND text IS NOT NULL AND text<>'';
 END;
-CREATE TRIGGER IF NOT EXISTS human_query_text_body_update AFTER UPDATE OF text ON messages BEGIN
+CREATE TRIGGER IF NOT EXISTS human_query_text_body_update AFTER UPDATE OF text ON messages WHEN old.text IS NOT new.text BEGIN
  DELETE FROM human_query_text_fts WHERE rowid IN (SELECT rowid FROM message_authorship WHERE message_id=new.id);
  INSERT INTO human_query_text_fts(rowid,body) SELECT rowid,qt_lower(new.text) FROM message_authorship WHERE message_id=new.id AND new.text IS NOT NULL AND new.text<>'';
 END;
@@ -1698,7 +1725,9 @@ END;
 CREATE TRIGGER IF NOT EXISTS tool_query_facts_delete AFTER DELETE ON tool_calls BEGIN
  DELETE FROM tool_query_facts WHERE rowid=old.rowid;
 END;
-CREATE TRIGGER IF NOT EXISTS tool_query_facts_update AFTER UPDATE OF id,workspace_id,started_at,duration_ms,provider,tool_category,command_category,tool_name,mcp_server,program ON tool_calls BEGIN
+CREATE TRIGGER IF NOT EXISTS tool_query_facts_update AFTER UPDATE OF id,workspace_id,started_at,duration_ms,provider,tool_category,command_category,tool_name,mcp_server,program ON tool_calls
+WHEN (old.id,old.workspace_id,old.started_at,old.duration_ms,old.provider,old.tool_category,old.command_category,old.tool_name,old.mcp_server,old.program)
+ IS NOT (new.id,new.workspace_id,new.started_at,new.duration_ms,new.provider,new.tool_category,new.command_category,new.tool_name,new.mcp_server,new.program) BEGIN
  DELETE FROM tool_query_facts WHERE rowid=old.rowid;
  INSERT INTO tool_query_facts(rowid,id,workspace_id,started_at,duration_ms,provider,activity,tool_category,day)
  VALUES(new.rowid,new.id,new.workspace_id,new.started_at,new.duration_ms,new.provider,machine_activity(new.tool_category,new.command_category,new.tool_name,new.mcp_server,new.program),new.tool_category,date(new.started_at,'localtime'));

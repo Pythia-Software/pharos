@@ -1285,6 +1285,10 @@ func TestIncrementalDiscoversAllSourcesBeforeReadingAndRetainsForecasts(t *testi
 		if strings.HasPrefix(step.ID, "source:") && (!step.Inventory || step.Features.Groups != 1 || step.Features.Bytes <= 0) {
 			t.Errorf("discovered workload lost: %+v", step)
 		}
+		// An audit with an eligible input and one without are forecast apart.
+		if step.ID == "audit" && step.Units == nil {
+			t.Errorf("the audit did not record whether it had an input: %+v", step)
+		}
 	}
 	response := httptest.NewRecorder()
 	s.getIncrementalSync(response, httptest.NewRequest("GET", "/api/sync/history", nil))
@@ -1294,6 +1298,14 @@ func TestIncrementalDiscoversAllSourcesBeforeReadingAndRetainsForecasts(t *testi
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Samples) != 1 || len(result.Samples[0].Forecasts) == 0 || result.Accuracy[automaticRunKind] == nil {
 		t.Fatalf("forecast evidence missing from history API: %s (%v)", response.Body.String(), err)
+	}
+	// Whatever the audit concluded, its stage ends with its counted work done.
+	for _, phase := range result.Samples[0].Phases {
+		for _, work := range phase.Work {
+			if work.Phase == "verifying" && (!work.TotalKnown || work.Done != work.Total) {
+				t.Errorf("verification ended short of its total: %+v", work)
+			}
+		}
 	}
 }
 

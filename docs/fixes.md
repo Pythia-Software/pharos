@@ -26,11 +26,13 @@ the menu lists it either way: with no events it says so.
 
 `refreshFixes` (`fixes_store.go`) runs at three points:
 
-- after the agent events pass, at most hourly (`fixesChainInterval`);
-- at the end of the events backlog;
-- in the full Findings pass, after risky actions.
+- after an agent events pass or its backlog, at most once a day
+  (`fixesChainInterval`): a rebuild regroups the whole 90-day window, so it
+  does not follow every pass that stored an event;
+- in the full Findings pass, after risky actions (daily).
 
-Opening the page never starts it. A fingerprint skips the run when nothing it reads
+Events found since the last rebuild join the groups at the next one, and the
+page shows when the grouping was built. Opening the page never starts it. A fingerprint skips the run when nothing it reads
 has changed: event count, latest event, messages read, latest day and today's date.
 
 The grouping in `fixes.go` and `fixes_grouping.go` is a port of the Agent Experience

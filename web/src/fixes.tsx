@@ -143,7 +143,7 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
               <p>{overview.built_at ? `${Number(overview.in_scope_events || 0).toLocaleString()} agent events in scope${overview.end ? `, through ${date(overview.end)}` : ""}. ` : ""}{overview.coverage}</p>
               <p>{overview.excluded_events ? `${plural(overview.excluded_events, "event")} about your own requests were left out: they are about how a task was asked, not something to fix in the setup. ` : ""}Which events count as the same problem, the kind of fix and where it belongs are rules of thumb over the agents’ words; counts are exact{freshness.note ? " once events are rebuilt" : ""}. No language model runs to make these cards or their prompts.</p>
               <p>{overview.safeguard_events ? <>{plural(overview.safeguard_events, "event")} where an agent got around a safeguard (skipped a test, worked around a restriction) are notices in <a href={safetyURL()}>Risky actions</a>, one per instance, rather than fixes. A card says when its conversations hold any.</> : <>Agents getting around a safeguard raise notices in <a href={safetyURL()}>Risky actions</a> rather than fixes.</>}</p>
-              <a href={fixesURL("settings")}>Fixes settings and refresh</a>
+              <a href={fixesURL("settings")}>Fixes settings and updates</a>
             </ViewDisclosure>
           </>}
     {table ? <div className="safety-table" hidden={view !== "table" || Boolean(selected)}>
@@ -330,7 +330,7 @@ function FixesSettings({ overview, refreshDiscovery }: { overview: Overview | nu
   }
   async function refresh() {
     setBusy(true); setError(""); setMessage("");
-    try { await request("/api/findings/refresh", {}); await refreshDiscovery(); setMessage("Refresh requested. Efficiency, risky actions and fixes update in the background."); }
+    try { await request("/api/findings/refresh", {}); await refreshDiscovery(); setMessage("Update requested. Efficiency, risky actions and fixes update in the background."); }
     catch (failure) { setError((failure as Error).message); }
     finally { setBusy(false); }
   }
@@ -375,10 +375,10 @@ function FixesSettings({ overview, refreshDiscovery }: { overview: Overview | nu
         <p>Events about how a task was asked (unclear instructions, assumptions about the request, disagreeing) are left out of both.</p>
       </section>
       <section className="findings-panel">
-        <h2>Refresh</h2>
-        <p>Grouping runs in the background after the agent events pass and with each full Optimize refresh, over the last {settings.window_days} days of agent events. Opening this page never starts it.</p>
+        <h2>Updates</h2>
+        <p>Grouping runs in the background after the agent events pass and with each full Optimize update, over the last {settings.window_days} days of agent events. Opening this page never starts it.</p>
         <p className="findings-muted">{settings.built_at ? `Last grouped ${date(settings.built_at)}.` : "Not grouped yet."}</p>
-        <button type="button" className="findings-button" disabled={busy} onClick={() => void refresh()}>Refresh Optimize now</button>
+        <button type="button" className="findings-button" disabled={busy} onClick={() => void refresh()}>Update Optimize now</button>
       </section>
     </>}
   </div>;

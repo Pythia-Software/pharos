@@ -986,7 +986,7 @@ test('Timeline segments pin exact content before revealing their conversation so
  assert.equal(new URL(await eventLink.getAttribute('href'),'http://localhost').searchParams.get('reader_event_link'),'e-s-root');
  await page.keyboard.press('Escape');await pinned.waitFor({state:'hidden'});
  // Keyboard inspection pins the focused message and makes the source link reachable.
- const caller=page.locator('.lt-caller-row').getByRole('button',{name:/Inspect session ribbon/});await caller.focus();await caller.press('Enter');await pinned.waitFor();
+ const caller=page.locator('.lt-caller-row').getByRole('button',{name:/Inspect Events ribbon/});await caller.focus();await caller.press('Enter');await pinned.waitFor();
  assert.equal(await pinned.getByRole('link').first().evaluate(el=>el===document.activeElement),true);
  assert.match(await pinned.locator('blockquote').first().textContent(),/Implement/);
  await page.keyboard.press('Escape');await pinned.waitFor({state:'hidden'});

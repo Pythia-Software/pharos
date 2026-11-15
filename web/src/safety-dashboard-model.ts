@@ -2,11 +2,11 @@ import { agentEventsFreshnessMark, agentEventsStillCountedNote, type AgentEvents
 import { optimizeSelectionPlan, type OptimizeSelectionGroup } from "./optimize-model";
 export const safetyRanks = ["danger", "recent", "calls", "evidence"] as const;
 export type SafetyRank = typeof safetyRanks[number];
-export const safetyRankLabels: Record<SafetyRank, string> = { danger: "Danger", recent: "Recent", calls: "Tool calls", evidence: "New evidence" };
+export const safetyRankLabels: Record<SafetyRank, string> = { danger: "Danger", recent: "Recent", calls: "Count", evidence: "New evidence" };
 export const safetyRankExplanations: Record<SafetyRank, string> = {
   danger: "Most dangerous checks first, then the most recent.",
   recent: "The check with the latest notice first.",
-  calls: "The check with the most distinct tool calls first.",
+  calls: "The check with the most occurrences first: distinct tool calls, or agent events for a check that agent events raise.",
   evidence: "The check with the most notices that a later command gave stronger execution evidence first.",
 };
 

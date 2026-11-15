@@ -1,23 +1,18 @@
 import React,{useEffect,useId,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {Icon,type IconName} from './icons';
-import {SessionIdentity,SessionBranches,sessionBranchX as branchX} from './session-identity';
-import {ViewDisclosure} from './view-disclosure';
-import {useViewEntry} from './view-state';
 import {useRibbonInspector,useRibbonPointer,type RibbonHit} from './label-ribbon-inspector';
 import {PageLink} from './nested-pages';
 import {timelinePreviewText,trimTimelineSnippet} from './timeline-preview';
-import {agentEventClock,ribbonLayers,ribbonCounts,ribbonEventCount,ribbonPointerHits,ribbonToolPlacement,toolVisualEnd,ribbonOriginParts,sessionRibbonTree,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
+import {harnessWaitEnd,harnessWaitText,ribbonLayers,ribbonCounts,ribbonMarkMessage,ribbonPointerHits,ribbonToolPlacement,toolVisualEnd,ribbonOriginParts,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
 import {shortLabel,specificLabels,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
-import type {TimeRange,TimelineSessionBranch} from './timeline-label-model';
+import type {TimeRange} from './timeline-label-model';
 import {authorshipSegments,callerSource} from './timeline-caller-model';
 import {formatConcurrencyDuration} from './concurrency-data';
-import {eventKindCounts,markIds,mergeAgentEvents,type KindCounts} from './event-merge';
+import {markIds} from './event-merge';
 import {EventGlyph,EventLinkCard,EventLinkOverlay,eventHitTargets,eventLayout,eventTargetFocus,placeEvents,setEventLinkFocus,useEventLinkFocus} from './event-link-overlay';
 import {linkedTarget,type AgentEventLink} from './event-link-layout';
-import {timeScale,type TimeScale} from './timeline-idle-model';
-import {timelineEventVisible,timelineSectionVisible,timelineValueVisible,visibleTimelineTree,type TimelineVisibility} from './timeline-visibility';
-import {humanEventDimensions,humanEventGroups,humanEventLetter,humanEventPointSlots,timelineRowExpands,type HumanEvent,type HumanEventGroup} from './human-events-model';
-import {HumanEventMarkers} from './human-events-rows';
+import type {TimeScale} from './timeline-idle-model';
+import type {TimelineVisibility} from './timeline-visibility';
 
 // Agent events draw in each session's summary row, the way they draw in the
 // fingerprint (event-link-layout.ts): an event sits in the row of the session
@@ -25,11 +20,17 @@ import {HumanEventMarkers} from './human-events-rows';
 // (an arrow at the left edge when the target is before the window), and
 // hovering an event bands its message and its target in every row, so a
 // subagent's event lines up with the caller's prompt it is about.
-type EventLayer={events:AgentEventLink[];position:(e:AgentEventLink)=>number|null;targetPosition:(e:AgentEventLink)=>number|null;href?:(e:AgentEventLink)=>string|null};
-
-/** eventCounts: events per kind across the workspace, the population a merged mark's rarest kind comes from (event-merge.ts). */
-type Props={visibility?:TimelineVisibility;scale?:TimeScale;human?:HumanEvent[];humanHref?:(event:HumanEvent)=>string|null;events?:AgentEventLink[];eventCounts?:KindCounts;eventHref?:(e:AgentEventLink)=>string|null;eventLayer?:EventLayer;branch?:TimelineSessionBranch;openSession?:()=>void;current?:boolean;sourceHref?:(item:RibbonObservation)=>string|null;collapsed?:boolean;hideEvents?:boolean;caller?:boolean;boundaryMessages?:LabelMessage[];boundaryMarks?:ActivityMark[];sessionID:string;depth:number;name:string;metadata:string;notes?:React.ReactNode[];messages:LabelMessage[];marks:ActivityMark[];inferred:{start:number;end:number}[];taxonomy:Taxonomy;range:TimeRange;detail:boolean;brushHandlers:Pick<React.HTMLAttributes<HTMLDivElement>,"onPointerDown"|"onPointerMove"|"onPointerUp"|"onPointerCancel">;preview:TimeRange|null;foldControl:React.ReactNode;select:(item:RibbonObservation,anchor:HTMLButtonElement)=>void;restore:(item:RibbonObservation,anchor:HTMLButtonElement)=>void};
-function SourceContent({item,sourceHref,close,children}:{item:RibbonObservation;sourceHref?:Props['sourceHref'];close?:()=>void;children:React.ReactNode}){
+export type EventLayer={events:AgentEventLink[];position:(e:AgentEventLink)=>number|null;targetPosition:(e:AgentEventLink)=>number|null;href?:(e:AgentEventLink)=>string|null};
+export type RibbonSourceHref=(item:RibbonObservation)=>string|null;
+export type RibbonBrushHandlers=Pick<React.HTMLAttributes<HTMLDivElement>,"onPointerDown"|"onPointerMove"|"onPointerUp"|"onPointerCancel">;
+/** What a ribbon does under the pointer, the same on every timeline:
+ * - `inspect`: hover shows a mark's card and a click pins it with its links to the conversation (the Timeline's lanes);
+ * - `reveal`: hover shows the card and a click goes to the mark's message through `onReveal` (the conversation reader, whose transcript is on the page);
+ * - `none`: a picture (the Timeline's sidebar preview). */
+export type TimelineInteraction='inspect'|'reveal'|'none';
+/** A click on a `reveal` ribbon: the message of the tool dot or event marker under it, or else only where on the ribbon it fell. */
+export type RibbonReveal={message?:string;fraction:number};
+function SourceContent({item,sourceHref,close,children}:{item:RibbonObservation;sourceHref?:RibbonSourceHref;close?:()=>void;children:React.ReactNode}){
  const href=sourceHref?.(item);
  return href?<PageLink href={href} className="lt-observation-source" onClick={event=>{event.stopPropagation();close?.();}}>{children}<span>Open in conversation</span></PageLink>:<>{children}</>;
 }
@@ -39,7 +40,7 @@ function MessagePreview({message}:{message:LabelMessage}){
  const label=message.chunks?specificLabels(message)[0]?.[0]:undefined;
  return <blockquote className="lt-message-quote" style={label?{'--message-label-color':stateColor(label)} as React.CSSProperties:undefined}>{characters.slice(0,640).join('')}{clipped&&!body.endsWith('…')?'…':''}</blockquote>;
 }
-function ObservationCard({items,sourceHref,eventHref,close}:{items:RibbonObservation[];sourceHref?:Props['sourceHref'];eventHref?:Props['eventHref'];close?:()=>void}){
+export function ObservationCard({items,sourceHref,eventHref,close}:{items:RibbonObservation[];sourceHref?:RibbonSourceHref;eventHref?:EventLayer['href'];close?:()=>void}){
  const events=items.flatMap(item=>item.event?[item.event]:[]);
  if(events.length&&events.length===items.length)return <EventLinkCard events={events} href={eventHref} close={close}/>;
  const counts=ribbonCounts(items),labels=new Map<string,Set<string>>(),origins=new Map<string,Set<string>>();
@@ -63,9 +64,9 @@ function ObservationCard({items,sourceHref,eventHref,close}:{items:RibbonObserva
   </dl>}
   {composition.length?composition.slice(0,4).map(part=><SourceContent key={part.id} item={part} sourceHref={sourceHref} close={close}>{part.excerpt?<blockquote className="lt-message-quote" style={part.label&&part.label!=='?'?{'--message-label-color':stateColor(part.label)} as React.CSSProperties:undefined}>{composition.length>1?<strong>{callerSource(part.authorship!).name}</strong>:null}{trimTimelineSnippet(part.excerpt.text)}{part.excerpt.truncated?'…':''}</blockquote>:<small>This part is outside the retained preview.</small>}</SourceContent>):(sourceHref?messages.slice(0,4):messages.length===1?messages:[]).map(message=><SourceContent key={message.id} item={items.find(item=>item.message?.id===message.id)!} sourceHref={sourceHref} close={close}><MessagePreview message={message}/></SourceContent>)}
   {tools.slice(0,4).map(item=>{
-   const mark=item.mark!,elapsed=mark.end_known?mark.end-mark.start:null;
+   const mark=item.mark!,elapsed=mark.end_known?mark.end-mark.start:null,wait=harnessWaitText(mark);
    return <SourceContent key={item.id} item={item} sourceHref={sourceHref} close={close}><div className="lt-tool-preview">
-    <div className="lt-observation-tags"><span><i className="lt-tool-swatch" style={{color:item.color}}/>{mark.name}</span><span className={mark.error?'is-error':'lt-tool-meta'}>{elapsed===null?'End time unknown':elapsed<1000?`${Math.round(elapsed)}ms`:elapsed<60000?`${(elapsed/1000).toLocaleString(undefined,{maximumFractionDigits:2})}s`:formatConcurrencyDuration(elapsed)}{mark.error?' · Error':''}</span></div>
+    <div className="lt-observation-tags"><span><i className="lt-tool-swatch" style={{color:item.color}}/>{mark.name}</span><span className={mark.error?'is-error':'lt-tool-meta'}>{wait?'Launched in ':''}{elapsed===null?'End time unknown':elapsed<1000?`${Math.round(elapsed)}ms`:`${(elapsed/1000).toLocaleString(undefined,{maximumFractionDigits:2})}s`}{mark.error?' · Error':''}</span>{wait?<span className="lt-tool-meta lt-wait-meta"><i className="lt-tool-swatch lt-wait-tail" aria-hidden="true" style={{color:item.color}}/>{wait}</span>:null}</div>
     {mark.preview?<pre>{timelinePreviewText(mark.preview,{input:true})}{mark.preview_truncated?'…':''}</pre>:<small>Arguments not retained</small>}
    </div></SourceContent>;
   })}
@@ -79,7 +80,7 @@ function EventFocusBand({node,x}:{node:RibbonNode;x:(at:number)=>number}){
  if(!focus)return null;
  return <g pointerEvents="none">{[[focus.target,'is-target'],[focus.message,'is-observation']].flatMap(([id,kind])=>{const span=id?spans.get(id):undefined;if(!span)return [];const left=x(span[0]),right=Math.max(left+4,x(span[1]));return [<rect key={kind} className={`event-link-band ${kind}`} x={left-2} y={1} width={right-left+4} height={30} vectorEffect="non-scaling-stroke"/>];})}</g>;
 }
-export function SessionRibbon({node,range,clock,brushHandlers,preview,caller,inspector,sourceHref,disabled=false,hover=false,eventLayer,visibility,showUnknownTail=true}:{visibility?:TimelineVisibility;showUnknownTail?:boolean;clock:TimeScale;eventLayer?:EventLayer;node:RibbonNode;range:TimeRange;brushHandlers:Props["brushHandlers"];preview:TimeRange|null;caller?:boolean;inspector:ReturnType<typeof useRibbonInspector>;sourceHref?:Props["sourceHref"];disabled?:boolean;hover?:boolean}){
+export function SessionRibbon({node,range,clock,brushHandlers,preview=null,caller,inspector,sourceHref,interaction='inspect',onReveal,eventLayer,visibility,showUnknownTail=true}:{visibility?:TimelineVisibility;showUnknownTail?:boolean;clock:TimeScale;eventLayer?:EventLayer;node:RibbonNode;range:TimeRange;brushHandlers?:RibbonBrushHandlers;preview?:TimeRange|null;caller?:boolean;inspector:ReturnType<typeof useRibbonInspector>;sourceHref?:RibbonSourceHref;interaction?:TimelineInteraction;onReveal?:(hit:RibbonReveal)=>void}){
  const pattern=useId().replace(/:/g,''),container=useRef<HTMLDivElement>(null);
  const [scale,setScale]=useState({x:1,y:1});
  useEffect(()=>{inspector.close();},[range[0],range[1],node.id,visibility]);
@@ -113,6 +114,12 @@ export function SessionRibbon({node,range,clock,brushHandlers,preview,caller,ins
   // A round zero-length stroke remains circular in screen space.
   if(item.mark){
    const m=tools.get(item.id);if(!m)return null;const cx=m.x*scale.x,cy=m.y*scale.y;
+   // A harness wait: the launch draws as a call does, then a dashed tail
+   // to the wait's recorded end, or the short unknown tail when it was not recorded.
+   if(item.mark.wait_kind){
+    const launch=Math.min(m.x1,Math.max(m.x,m.x+px(item.mark.end_known?item.mark.end:item.mark.start)-px(item.start)))*scale.x,known=harnessWaitEnd(item.mark)!==null;
+    return <g key={item.id} data-tool-id={item.mark.tool_id} data-wait-kind={item.mark.wait_kind}>{launch>cx?<line x1={cx} x2={launch} y1={cy} y2={cy} stroke={item.color} strokeWidth={1} vectorEffect="non-scaling-stroke"/>:null}{m.x1*scale.x>launch?<line className={`lt-wait-line${known?'':' is-unknown'}`} x1={launch} x2={m.x1*scale.x} y1={cy} y2={cy} stroke={item.color} strokeWidth={1.5} strokeLinecap={known?undefined:"round"} strokeDasharray={known?"4 3":"0.1 2.5"} vectorEffect="non-scaling-stroke"/>:null}{item.start>=range[0]&&item.start<=range[1]?<path d={`M${cx} ${cy}h0`} fill="none" stroke={item.color} strokeWidth={2*m.r} strokeLinecap="round" vectorEffect="non-scaling-stroke"/>:null}</g>;
+   }
    return <g key={item.id} data-tool-id={item.mark.tool_id}>{m.x1>m.x?<line x1={cx} x2={m.x1*scale.x} y1={cy} y2={cy} stroke={item.color} strokeWidth={item.mark.end_known?1:1.5} strokeLinecap={item.mark.end_known?undefined:"round"} strokeDasharray={item.mark.end_known?undefined:"0.1 2.5"} vectorEffect="non-scaling-stroke"/>:null}{item.start>=range[0]&&item.start<=range[1]?<path d={`M${cx} ${cy}h0`} fill="none" stroke={item.color} strokeWidth={2*m.r} strokeLinecap="round" vectorEffect="non-scaling-stroke"/>:null}</g>;
   }
   const parts=caller&&item.message?item.authorship?[{category:item.authorship,start:0,end:1}]:authorshipSegments(item.message):[];
@@ -135,12 +142,12 @@ export function SessionRibbon({node,range,clock,brushHandlers,preview,caller,ins
   const rect=event.currentTarget.getBoundingClientRect(),f=(event.clientX-rect.left)/rect.width,step=5/rect.width,at=clock.time(f),tolerance=(clock.time(Math.min(1,f+step))-clock.time(Math.max(0,f-step)))/2;
   const {items:hits,target}=ribbonPointerHits(hitItems,at,tolerance,{x:(event.clientX-rect.left)/rect.width*width,y:(event.clientY-rect.top)/rect.height*height},targets);
   if(!hits.length)return null;
-  return {card:card(hits),hover:target&&(target.event||target.arc)?()=>setEventLinkFocus(eventTargetFocus(target,events)):unhover};
+  return {card:card(hits),hover:target&&(target.event||target.arc)?()=>setEventLinkFocus(eventTargetFocus(target,events)):unhover,message:target?ribbonMarkMessage(hits):undefined};
  };
- const interactive=!disabled&&!!sourceHref&&node.children.length>0;
- // hover: a ribbon that is otherwise disabled (the conversation reader's rows) still shows a mark's card under the pointer.
- const pointer=useRibbonPointer({inspector,hitAt,candidates,pinnable:!disabled&&!!sourceHref,disabled:disabled&&!hover,suspended:!!preview,unhover});
- return <div ref={container} className={`lt-session-ribbon ${node.id==='session'?'is-session':'is-detail'}`} {...(disabled?{}:brushHandlers)} onPointerLeave={inspector.leave}><svg viewBox="0 0 1000 32" preserveAspectRatio="none" role={interactive?'button':'img'} tabIndex={interactive?0:undefined} aria-label={interactive?`Inspect ${node.id==='session'?'session':node.title} ribbon. Arrow keys browse segments; Enter pins details.`:`${node.title} ribbon`} aria-describedby={inspector.id} {...pointer}>
+ const inspects=interaction==='inspect',interactive=inspects&&!!sourceHref&&node.children.length>0;
+ const pointer=useRibbonPointer({inspector,hitAt,candidates,pinnable:inspects&&!!sourceHref,disabled:interaction==='none',suspended:!!preview,unhover,
+  activate:interaction==='reveal'&&onReveal?(event,hit)=>{const rect=event.currentTarget.getBoundingClientRect();onReveal({message:hit?.message,fraction:rect.width?(event.clientX-rect.left)/rect.width:0});}:undefined});
+ return <div ref={container} className={`lt-session-ribbon ${node.id==='session'?'is-session':'is-detail'}`} {...(inspects?brushHandlers:{})} onPointerLeave={inspector.leave}><svg viewBox="0 0 1000 32" preserveAspectRatio="none" role={interactive?'button':'img'} tabIndex={interactive?0:undefined} aria-label={interactive?`Inspect ${node.id==='session'?'Events':node.title} ribbon. Arrow keys browse segments; Enter pins details.`:`${node.title} ribbon`} aria-describedby={inspector.id} {...pointer}>
 
   <defs>
    <pattern id={pattern+'-diagonal'} width="7" height="7" patternUnits="userSpaceOnUse" patternTransform={patternTransform}><path d="M-2 2 2 -2M0 7 7 0M5 9 9 5" stroke="var(--ink)" strokeWidth="1.3" opacity=".65"/></pattern>
@@ -165,73 +172,4 @@ export function RibbonNodeDetails({node}:{node:RibbonNode}){
  const eventGlyph=ownEvents&&node.id!=='events'?node.items[0]?.event:undefined;
  const icon=(node.id==='events'||node.id==='labels:thinking')?'thought':node.id==='activity'?'settings':node.id.startsWith('activity:')?ribbonIcons[node.items[0]?.mark?.category??'other']:node.id==='labels'?'read':node.id==='authorship'?'human':undefined;
  return <>{eventGlyph?<EventGlyph group={eventGlyph.group}/>:icon?<Icon name={icon}/>:node.items[0]?.label?<i style={{background:node.items[0].color}}/>:null}<strong>{node.title}</strong><small>{ownEvents?counts.events:counts.messages||counts.activity||counts.inferred}</small></>;
-}
-function RecursiveRibbonRow({node,props,level=0}:{node:RibbonNode;props:Props;level?:number}){
- const viewKey=`delegation-labels:${props.sessionID}:${node.id}`,[open]=useViewEntry('disclosures',viewKey,false),root=level===0;
- const inspector=useRibbonInspector();
- const identity=root?<SessionIdentity name={props.name} metadata={props.metadata} notes={props.notes} depth={props.depth} branch={props.branch} folded={!!props.foldControl} current={props.current} openSession={props.openSession}/>:<span className="lt-session-gutter" aria-hidden="true"><SessionBranches depth={props.depth} branch={props.branch} root={false}/></span>;
- // An Agent events row draws only its own events (with their arcs).
- const ownEvents=node.id==='events'||node.id.startsWith('events:')?new Set(node.items.flatMap(item=>item.event?[item.event.id]:[])):null;
- // The session row and the Agent events row merge events on near-identical
- // text into one mark (event-merge.ts); the group and kind rows below keep
- // every event, since they exist to decompose.
- const merge=root||node.id==='events',ownKey=ownEvents?[...ownEvents].join(' '):'';
- const eventLayer=useMemo(()=>{
-  const layer=root?props.eventLayer:ownEvents&&props.eventLayer?{...props.eventLayer,events:props.eventLayer.events.filter(e=>ownEvents.has(e.id))}:undefined;
-  return layer&&merge?{...layer,events:mergeAgentEvents(layer.events,props.eventCounts??eventKindCounts(props.eventLayer!.events))}:layer;
- },[props.eventLayer,props.eventCounts,root,merge,ownKey]);
- const count=ribbonEventCount(node.items,ownEvents?'events':'session');
- // The lane's Human events hang off its root row, which therefore stays a disclosure while it has any to show, even with every other section hidden in the Key.
- const humanGroups=useMemo(()=>root?laneHumanGroups(props):[],[root,props.human,props.boundaryMessages,props.messages,props.range[0],props.range[1],props.visibility]);
- const expands=timelineRowExpands(node.children.length,humanGroups.length);
- const label=<span className={`lt-session-row-label${root?' is-root':''}`} style={{paddingLeft:root?8:8+Math.min(level-1,8)*9}} aria-label={root?`${count} ${count===1?'item':'items'}: messages, tool calls and inferred spans`:undefined}>{root?<strong className="lt-event-count">{count}</strong>:<RibbonNodeDetails node={node}/>} {node.children.length||humanGroups.length?<Icon name="chevron-right" className="lt-session-caret"/>:<span className="lt-session-caret" aria-hidden="true">·</span>}</span>;
- const content=<>{identity}{!props.hideEvents && label}<SessionRibbon visibility={props.visibility} node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller&&timelineSectionVisible(props.visibility??{},'origins')} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></>;
- if(props.collapsed)return <div className="lt-session-row lt-session-preview">{content}</div>;
- if(!node.items.length&&!humanGroups.length)return <div className={`lt-session-row lt-session-empty ${root?'lt-session-empty-root':''}`}>{identity}{!props.hideEvents && label}<SessionRibbon visibility={props.visibility} node={node} range={props.range} clock={props.scale??timeScale(props.range)} brushHandlers={props.brushHandlers} preview={props.preview} caller={props.caller&&timelineSectionVisible(props.visibility??{},'origins')} inspector={inspector} sourceHref={props.sourceHref} disabled={props.collapsed} eventLayer={eventLayer}/></div>;
- if(!expands)return <div className="lt-session-leaf"><button type="button" data-ribbon-event={node.items[0]?.id} data-view-field="delegation_event" className="lt-session-row" ref={anchor=>{if(anchor)props.restore(node.items[0],anchor);}} style={{'--row-depth':level} as React.CSSProperties} onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} eventHref={props.eventHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}>{content}</button></div>;
- return <ViewDisclosure viewKey={viewKey} className={`lt-session-node ${root?'lt-session-root':''}`} summary={content}>{open?node.children.map(child=><RecursiveRibbonRow key={child.id} node={child} props={props} level={level+1}/>):null}{open&&humanGroups.length?<LaneHumanEvents props={props} groups={humanGroups}/>:null}</ViewDisclosure>;
-}
-const LANE_HUMAN_ROW_HEIGHT=28;
-/** A lane's Human events inside the window, as the Key leaves them. */
-function laneHumanGroups(props:Props):HumanEventGroup[]{
- if(!props.human?.length)return [];
- const visibility=props.visibility??{},times=new Map((props.boundaryMessages??props.messages).flatMap(message=>{const at=message.at?Date.parse(message.at):NaN;return Number.isFinite(at)?[[message.id,at] as [string,number]]:[];}));
- return humanEventGroups(props.human,id=>{const at=times.get(id);return at===undefined||at<props.range[0]||at>props.range[1]?undefined:at;},dimension=>timelineSectionVisible(visibility,'human')&&timelineValueVisible(visibility,'human',dimension));
-}
-/** Human events of one session lane, after its Agent events and Tool actions
- * rows: a marker per engagement annotation of the person's messages, folding
- * out by dimension as the reader's row does (HumanEventsRows). This clock is
- * shared by every lane, so a message's slot is laid over what follows its
- * instant instead of widening the clock (humanEventPointSlots). */
-function LaneHumanEvents({props,groups}:{props:Props;groups:HumanEventGroup[]}){
- const viewKey=`delegation-labels:${props.sessionID}:human`,[open]=useViewEntry('disclosures',viewKey,false);
- const inspector=useRibbonInspector({interactive:false});
- // The track exists only while there are markers to show (hidden in the Key, or none in the window, and the row is gone), so it is measured whenever it appears.
- const [track,setTrack]=useState<HTMLSpanElement|null>(null),[trackPx,setTrackPx]=useState(0);
- useEffect(()=>{if(!track||typeof ResizeObserver==='undefined')return;const measure=()=>setTrackPx(Math.round(track.clientWidth));const observer=new ResizeObserver(measure);observer.observe(track);measure();return()=>observer.disconnect();},[track]);
- const clock=props.scale??timeScale(props.range);
- const events=groups.flatMap(group=>group.events);
- if(!events.length)return null;
- const slots=humanEventPointSlots(clock,groups,trackPx),dimensions=humanEventDimensions(events);
- const gutter=<span className="lt-session-gutter" aria-hidden="true"><SessionBranches depth={props.depth} branch={props.branch} root={false}/></span>;
- const markers=(row:HumanEvent[])=>trackPx?<HumanEventMarkers events={row} slots={slots} trackPx={trackPx} height={LANE_HUMAN_ROW_HEIGHT} inspector={inspector} href={props.humanHref}/>:null;
- return <><ViewDisclosure viewKey={viewKey} className="lt-session-node lt-human-events" summary={<>{gutter}{!props.hideEvents&&<span className="lt-session-row-label" style={{paddingLeft:8}}><Icon name="human"/><strong>Human events</strong><small>{events.length}</small> <Icon name="chevron-right" className="lt-session-caret"/></span>}
-   <span ref={setTrack} className="reader-human-track lt-human-track" role="group" aria-label="Human events. Open a marker to read its text in the conversation.">{markers(events)}</span></>}>
-  {open?dimensions.map(dimension=><div key={dimension.id} className="lt-session-row lt-human-dimension">{gutter}{!props.hideEvents&&<span className="lt-session-row-label" style={{paddingLeft:17}}><i className={`eng-glyph ${dimension.className}`}>{humanEventLetter(dimension.name)}</i><strong>{dimension.name}</strong><small>{dimension.events.length}</small><span className="lt-session-caret" aria-hidden="true">·</span></span>}
-   <span className="reader-human-track lt-human-track" role="group" aria-label={`Human events · ${dimension.name}`}>{markers(dimension.events)}</span></div>):null}
- </ViewDisclosure>{inspector.portal}</>;
-}
-export function RecursiveSessionRibbon(props:Props){
- const fullTree=useMemo(()=>sessionRibbonTree(props.messages,props.marks,props.inferred,props.taxonomy,props.range,props.detail,props.caller,props.boundaryMessages,props.boundaryMarks,props.events),[props.messages,props.marks,props.inferred,props.taxonomy,props.range,props.detail,props.caller,props.boundaryMessages,props.boundaryMarks,props.events]);
- const tree=useMemo(()=>visibleTimelineTree(fullTree,props.visibility??{},props.caller),[fullTree,props.visibility,props.caller]);
- const untimed=props.messages.filter(m=>!m.at||!Number.isFinite(Date.parse(m.at))).length;
- const eventLayer=useMemo(()=>{
-  if(!props.events?.length)return undefined;
-  // The same clock the tree's event rows use: each event at its sentence's share of its message.
-  const times=agentEventClock(props.messages,props.boundaryMarks??props.marks,props.boundaryMessages??props.messages);
-  const clock=props.scale??timeScale(props.range),fraction=(at:number|null)=>at===null?null:at<props.range[0]?-1:at>props.range[1]?2:clock.fraction(at);
-  return {events:props.events.filter(event=>timelineEventVisible(props.visibility??{},event)),position:(e:AgentEventLink)=>{const f=fraction(times.at(e));return f===null||f<0||f>1?null:f;},targetPosition:(e:AgentEventLink)=>{const f=fraction(times.targetAt(e));return f===null||f<0?null:Math.min(1,f);},href:props.eventHref};
- },[props.visibility,props.events,props.messages,props.boundaryMessages,props.boundaryMarks,props.marks,props.range[0],props.range[1],props.scale,props.eventHref]);
- props={...props,eventLayer};
- return <div className="lt-session-tree">{props.foldControl?<div className="lt-session-fold-anchor"><div className="lt-session-fold" style={{left:branchX(props.depth)-8}}>{props.foldControl}</div></div>:null}<RecursiveRibbonRow node={tree} props={props}/>{untimed?<small className="lt-session-untimed">{`${untimed} message${untimed===1?'':'s'} without a timestamp cannot be placed on this timeline.`}</small>:null}</div>;
 }

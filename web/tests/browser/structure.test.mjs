@@ -537,6 +537,7 @@ const ROUTES = [
     },
   },
   { name: "Home", url: "/", ready: ".home-recent-grid .home-recent-card" },
+  { name: "Home card that couldn't load", url: "/", ready: ".home-collection .query-preview-error", preferences: { "pharos-bookmarks-v1": [{ id: "broken-card", dashboard: true, title: "A saved card whose definition is invalid", url: "/analyze?analyze_mode=dashboards&analyze_chart=not-json" }] } },
   { name: "Home without recent conversations", url: "/", ready: ".home-recent-empty", api: { "GET /api/library/recent-conversations": { items: [] } } },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",
     check: page => page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input")) },
@@ -1041,6 +1042,8 @@ const ROUTES = [
     await page.locator('[data-view-key="background:labels"]').click();
     await page.locator('[data-view-key="background:agent_events"]').click();
   }, shown: '#background-detail-labels:not([hidden])' },
+  { name: "Background Processing CPU time table", url: "/settings/sync", ready: "#backgroundSchedule [data-card=usage] .bg-bar",
+    open: page => page.locator('#backgroundSchedule [data-view-key="background:usage:table"] summary').click(), shown: '#backgroundSchedule [data-view-key="background:usage:table"][open] tbody tr' },
   { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing work", url: "/settings/sync", ready: "#backgroundSchedule [data-card=work] .bg-work-row", api: { "GET /api/background": workBackgroundDocument, "GET /api/work": workInspection },
     open: page => page.locator('#backgroundSchedule [data-view-key="background:work:details"] summary').click(), shown: '#backgroundSchedule [data-view-key="background:work:details"][open] .bg-work-row' },

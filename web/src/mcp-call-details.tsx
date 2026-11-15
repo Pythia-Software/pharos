@@ -3,6 +3,7 @@ import { queryRow } from "./query-transport";
 import { loadSchema } from "@pythia-software/query-table-core";
 import mcpSchema from "../../schemas/mcp_calls.schema.json";
 import { formatTokens } from "./token-count";
+import { CodeRuns, codeRuns } from "./code-highlight";
 
 export type MCPCall = { id: number; called_at: string; tool_name: string; arguments_json: string; status: string; error_text: string | null; duration_ms: number; response_bytes: number; estimated_output_tokens: number; result_count: number | null; truncated: boolean };
 
@@ -41,7 +42,7 @@ export function MCPCallDetails({ id, onClose }: { id: string; onClose: () => voi
     <div className="mcp-card-heading"><div><h2>{call?.tool_name ?? "MCP call"}</h2>{call ? <p className="muted">{new Date(call.called_at).toLocaleString()} · {call.status}</p> : null}</div><button type="button" onClick={onClose}>Close</button></div>
     {error ? <p className="query-table-error" role="alert">{error}</p> : !call ? <p role="status">Loading call details…</p> : <>
       <p className="muted">{mcpDetailNumber(call.estimated_output_tokens, formatTokens)} estimated output tokens · {mcpDetailNumber(call.response_bytes)} bytes · {mcpDetailNumber(call.duration_ms)} ms{call.result_count == null ? "" : ` · ${mcpDetailNumber(call.result_count)} ${call.result_count === 1 ? "result" : "results"}`}{call.truncated ? " · truncated" : ""}</p>
-      <h3>Sanitized arguments</h3><pre className="mcp-code">{call.arguments_json}</pre>
+      <h3>Sanitized arguments</h3><pre className="mcp-code"><CodeRuns runs={codeRuns(call.arguments_json, "json")} /></pre>
       {call.error_text ? <><h3>Error</h3><pre className="mcp-code badtext">{call.error_text}</pre></> : null}
     </>}
   </dialog>;

@@ -1032,12 +1032,15 @@ PY
   }
   async function removePlan(plan){
     if(removingBusy)return;removingBusy=true;renderSaved();
+    let removed=false;
     try{
       const d=connectedDestination(plan);if(d)await cloudRequest('/disconnect',{destination_id:d.id});
       await persist(saved.filter(p=>p.id!==plan.id));removing='';await loadCloud();if(editing===plan.id)editing='';refresh();
-      message(removalConfirmation(plan,Boolean(d)).done);
+      message(removalConfirmation(plan,Boolean(d)).done);removed=true;
     }catch(error){message(sentence(error.message),true);}
-    finally{removingBusy=false;renderSaved();if(removing===plan.id)focusRemoveControl('cancel');}
+    // The removed destination's controls are gone: focus moves to the next
+    // control in the list, or to the planner when the list is empty.
+    finally{removingBusy=false;renderSaved();if(removing===plan.id)focusRemoveControl('cancel');else if(removed)[...(savedPanel.hidden?mount:savedPanel).querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled])')].find(control=>control.getClientRects().length)?.focus();}
   }
   function renderSaved(){
     const heldRemove=savedPanel.contains(document.activeElement)?document.activeElement.dataset.cloudRemove:'';
