@@ -71,6 +71,19 @@ type Catalog struct {
 	labels sync.Mutex
 	// agentEventsRun keeps one agent events pass at a time in this process.
 	agentEventsRun sync.Mutex
+	// forgeAvailability is whether each forge could be asked when last
+	// checked (forgeUnavailable).
+	forgeAvailability struct {
+		mu    sync.Mutex
+		hosts map[string]forgeAvailable
+	}
+	// reviewsDue is the last count of pull requests due to be read
+	// (pullRequestReviewsDue).
+	reviewsDue struct {
+		mu    sync.Mutex
+		at    time.Time
+		count int
+	}
 	// engagementRun keeps one engagement pass at a time in this process.
 	engagementRun  sync.Mutex
 	labelers       *labelrt.Manager
@@ -299,6 +312,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureOutcomeGit(); err != nil {
 		return fmt.Errorf("initialize outcome git: %w", err)
+	}
+	if err := c.ensurePullRequestReviews(); err != nil {
+		return fmt.Errorf("initialize pull request reviews: %w", err)
 	}
 	if err := c.ensureBranchUsage(); err != nil {
 		return fmt.Errorf("initialize branch usage: %w", err)

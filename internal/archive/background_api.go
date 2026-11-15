@@ -23,6 +23,7 @@ var runningItem = map[string]string{
 	"maintenance.library-view": "search", kindMetrics: "search", "analysis.github": "repositories", "analysis.identities": "repositories", "analysis.git": "repositories",
 	"analysis.authorship.refine": "writing-refine", "analysis.tools": "tools", "analysis.authorship": "writing", "analysis.peers": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events", "analysis.engagement": "engagement",
 	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
+	"forge.reviews":   "pull-request-reviews",
 	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup",
 }
 
@@ -266,7 +267,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 	// The step details own model settings. Keep disabled models reachable in
 	// the unscheduled column without adding them to the execution plan.
 	for _, item := range backgroundItems {
-		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents {
+		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents || item.requiresPullRequestReviews && !in.pullRequestReviews {
 			plans = append(plans, itemPlan{ID: item.ID, Cadence: cadenceManual})
 		}
 	}
@@ -293,7 +294,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		switch {
 		case live[item.ID]:
 			state = "running"
-		case item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents:
+		case item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents || item.requiresPullRequestReviews && !in.pullRequestReviews:
 			state = "disabled"
 		case in.requested[item.ID] || queued[item.ID]:
 			state = "queued"
@@ -668,9 +669,10 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 	_, views := s.operationsDocumentViews(r.Context(), false)
 	freshness := s.freshness(r.Context(), views, false)
 	writeJSON(w, map[string]any{
-		"work":         s.workSettings(),
-		"labels":       s.labelsSettings(),
-		"agent_events": s.agentEventsSettings(r.Context()),
+		"work":                 s.workSettings(),
+		"labels":               s.labelsSettings(),
+		"agent_events":         s.agentEventsSettings(r.Context()),
+		"pull_request_reviews": s.pullRequestReviewsSettings(r.Context()),
 		"settings": map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "interval_seconds": settings.Interval,
 			"daily_at": settings.DailyAt, "hold_when_busy": settings.HoldWhenBusy, "overrides": settings.Overrides, "temporary_cadences": settings.Temporary, "battery": settings.Battery,
 			"battery_choices": batteryChoices, "battery_slower_minutes": int(batterySlowerInterval.Minutes()), "low_battery_percent": lowBatteryPercent},
@@ -901,6 +903,7 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 		case item.requiresAgentEvents && !s.agentEventsEnabled(r.Context()):
 		case item.requiresEngagement && !s.Config().Engagement.Enabled:
 		case item.requiresAsk && !s.askEnabled(r.Context()):
+		case item.requiresPullRequestReviews && !s.Config().PullRequestReviews:
 		default:
 			run = append(run, id)
 		}

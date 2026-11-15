@@ -37,6 +37,12 @@ var transferHistoryTables = []string{
 	// it is parsed, and it is not parsed again on the host that receives
 	// it. A web image fetched once may no longer be at its address.
 	"message_assets", "message_sources", "message_notes", "remote_assets", "conversation_content",
+	// What a forge said of a pull request (pull_request_reviews.go) cannot
+	// be read from the transcripts, and the forge may no longer serve it.
+	// A pull request this library already holds an answer for keeps it whole
+	// (see mergeHistory). Which workspaces a pull request belongs to is
+	// derived again here (refreshPullRequestWorkspaces).
+	"pull_request_details", "pull_request_commits", "pull_request_reviews", "pull_request_comments", "pull_request_fetches",
 }
 
 type transferFile struct {
@@ -550,6 +556,15 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	if err != nil {
 		return err
 	}
+	// A transfer catalog retained from before pull request reviews existed
+	// has none to give.
+	var reviews int
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM delivered.sqlite_master WHERE type='table' AND name='pull_request_fetches'").Scan(&reviews); err != nil {
+		return err
+	}
+	if reviews == 0 {
+		tables = slices.DeleteFunc(tables, func(name string) bool { return strings.HasPrefix(name, "pull_request_") })
+	}
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -652,6 +667,19 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	if _, err = tx.ExecContext(ctx, `DELETE FROM messages WHERE conversation_id IN (SELECT id FROM delivered_conversations)
  AND NOT EXISTS(SELECT 1 FROM incoming_messages s WHERE s.conversation_id=messages.conversation_id AND s.native_id=messages.native_id)`); err != nil {
 		return err
+	}
+	if reviews > 0 {
+		// A forge's answer is one pull request's details, commits, reviews
+		// and comments together, and its summary counts those rows. A pull
+		// request this library holds details of keeps its whole answer,
+		// whether or not its latest read succeeded; any other takes the
+		// incoming one whole, with its fetch record in place of a failed
+		// read's here.
+		if _, err = tx.ExecContext(ctx, `CREATE TEMP TABLE pull_requests_held(pr_id TEXT PRIMARY KEY);
+ INSERT INTO pull_requests_held SELECT pr_id FROM pull_request_details;
+ DELETE FROM pull_request_fetches WHERE pr_id NOT IN (SELECT pr_id FROM pull_requests_held) AND pr_id IN (SELECT pr_id FROM incoming_pull_request_details);`); err != nil {
+			return err
+		}
 	}
 	// Accepted session state is authoritative, including removals and hourly
 	// usage buckets. Replace its membership/usage and prune obsolete derived
@@ -783,6 +811,9 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 		}
 		if table == "metrics" || table == "metric_ledger" {
 			predicate = "workspace_id IN (SELECT id FROM delivered_workspaces)"
+		}
+		if strings.HasPrefix(table, "pull_request_") {
+			predicate = "pr_id NOT IN (SELECT pr_id FROM pull_requests_held)"
 		}
 		if integerID {
 			matches := []string{}

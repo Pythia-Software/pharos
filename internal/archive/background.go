@@ -104,6 +104,9 @@ type backgroundItem struct {
 	requiresEngagement bool
 	// requiresAsk items exist only where Ask Pharos is enabled on this Mac.
 	requiresAsk bool
+	// requiresPullRequestReviews items exist only where
+	// pull_request_reviews_enabled is on.
+	requiresPullRequestReviews bool
 	// afterChain items read what the chain writes, so a pass runs them last.
 	afterChain bool
 }
@@ -145,6 +148,8 @@ var backgroundItems = []backgroundItem{
 		Kinds: []string{"analysis.findings"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
 	{ID: "writing-refine", Label: "Refine writing history", Verb: "Refining writing history", Feeds: "Writing classifications and copied-text evidence", Cadence: cadenceDaily, afterChain: true,
 		Kinds: []string{"analysis.authorship.refine"}, Why: "Applies the complete analysis to retained history, reconciling templates, copied text and conversation relationships."},
+	{ID: "pull-request-reviews", Label: "Pull request reviews", Verb: "Reading pull request reviews", Feeds: "Analyze → Outcomes", Cadence: cadenceHourly, Adaptive: true, requiresPullRequestReviews: true, afterChain: true,
+		Kinds: []string{"forge.reviews"}, Why: "Asks GitHub for the reviews and comments on pull requests your workspaces opened or committed to: open ones hourly, closed ones daily for a month."},
 	{ID: "suggestions", Label: "Ask Pharos suggestions", Verb: "Choosing Ask Pharos suggestions", Feeds: "Ask Pharos suggestions", Cadence: cadenceHourly, Adaptive: true, requiresAsk: true, afterChain: true,
 		Kinds: []string{"ask.suggestions"}, Why: "Looks over the last few weeks' summaries for questions worth suggesting, after the analyses they read change."},
 	{ID: "fingerprints", Label: "Conversation fingerprints", Verb: "Rendering conversation fingerprints", Feeds: "Fingerprint columns and conversation cards", Cadence: cadenceFrequent, continuous: true, afterChain: true,
@@ -567,6 +572,10 @@ type backgroundInputs struct {
 	// ask is whether Ask Pharos is enabled here; suggestionsStale whether
 	// its suggestions' inputs changed since they were chosen.
 	ask, suggestionsStale bool
+	// pullRequestReviews is whether pull_request_reviews_enabled is on;
+	// pullRequestsDue how many pull requests a pass would read now.
+	pullRequestReviews bool
+	pullRequestsDue    int
 }
 
 func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
@@ -628,7 +637,7 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 	nextDaily := instant.AddDate(0, 0, 1)
 	plans := []itemPlan{}
 	for _, item := range backgroundItems {
-		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents || item.requiresAsk && !in.ask || item.requiresEngagement && !in.engagement {
+		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents || item.requiresAsk && !in.ask || item.requiresEngagement && !in.engagement || item.requiresPullRequestReviews && !in.pullRequestReviews {
 			continue
 		}
 		plan := itemPlan{ID: item.ID, Cadence: settings.cadence(item)}
@@ -735,8 +744,11 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			} else {
 				plan.Next = nextDaily
 			}
-		case item.ID == "suggestions":
+		case item.ID == "suggestions" || item.ID == "pull-request-reviews":
 			plan.Pending = in.suggestionsStale
+			if item.ID == "pull-request-reviews" {
+				plan.Pending = in.pullRequestsDue > 0
+			}
 			switch {
 			case !plan.Pending:
 			case plan.Cadence == cadenceFrequent:
@@ -985,6 +997,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	}
 	if s.askEnabled(ctx) {
 		in.ask, in.suggestionsStale = true, s.Catalog.askSuggestionsStale(ctx, time.Now())
+	}
+	if config.PullRequestReviews {
+		in.pullRequestReviews, in.pullRequestsDue = true, s.Catalog.pullRequestReviewsDue(ctx)
 	}
 	return in
 }

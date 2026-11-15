@@ -342,6 +342,7 @@ func TestBackgroundPlanMovesEveryItem(t *testing.T) {
 	ago := formatTime(at.Add(-48 * time.Hour))
 	in := backgroundInputs{otherSources: []string{"tl1"}, backupDestination: "/backup", lastBackup: ago,
 		upgradePending: true, writingRefinementPending: true, verificationNext: at.Add(-time.Hour), labels: true, agentEvents: true, ask: true, suggestionsStale: true,
+		pullRequestReviews: true, pullRequestsDue: 1,
 		runs: map[string]backgroundRunRow{}, deferred: map[string]deferredRow{}}
 	for _, item := range backgroundItems {
 		in.runs[item.ID] = backgroundRunRow{succeeded: ago}
@@ -823,7 +824,11 @@ func TestMessageLabelsSettings(t *testing.T) {
 	if events := read()["agent_events"].(map[string]any); events["enabled"] != false || events["can_change"] != true {
 		t.Fatalf("agent events settings must remain visible while off: %v", events)
 	}
-	for _, id := range []string{"labels", "agent_events"} {
+	// Reading pull request reviews asks a forge, so it is off until chosen.
+	if reviews := read()["pull_request_reviews"].(map[string]any); reviews["enabled"] != false || reviews["can_change"] != true {
+		t.Fatalf("pull request reviews must be off and visible by default: %v", reviews)
+	}
+	for _, id := range []string{"labels", "agent_events", "pull-request-reviews"} {
 		view := read()["view"].(map[string]any)
 		found := false
 		for _, value := range view["items"].([]any) {
@@ -851,6 +856,23 @@ func TestMessageLabelsSettings(t *testing.T) {
 	for _, body := range []string{`{}`, `{"enabled":"true"}`, `{"enabled":null}`} {
 		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/labels/settings", body); response.Code != http.StatusBadRequest {
 			t.Fatalf("invalid setting %s: %d", body, response.Code)
+		}
+		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/pull-request-reviews/settings", body); response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid pull request reviews setting %s: %d", body, response.Code)
+		}
+	}
+	for _, enabled := range []bool{true, false} {
+		if response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/pull-request-reviews/settings", map[string]any{"enabled": enabled}); response.Code != http.StatusOK {
+			t.Fatalf("pull request reviews %t: %d %s", enabled, response.Code, response.Body.String())
+		}
+		reloaded, err := LoadConfig(config.Path)
+		reviews := read()["pull_request_reviews"].(map[string]any)
+		if err != nil || reloaded.PullRequestReviews != enabled || server.Config().PullRequestReviews != enabled || reviews["enabled"] != enabled {
+			t.Fatalf("pull request reviews %t did not persist/apply: %v %v", enabled, reviews, err)
+		}
+		// Tests have no gh: on, the switch says why GitHub can't be asked.
+		if enabled && !strings.Contains(firstString(reviews["notice"]), "gh") {
+			t.Fatalf("a missing gh is not explained: %v", reviews)
 		}
 	}
 	for _, enabled := range []bool{true, false, true} {
