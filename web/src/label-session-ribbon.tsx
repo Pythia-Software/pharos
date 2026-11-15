@@ -3,7 +3,7 @@ import {Icon,type IconName} from './icons';
 import {useRibbonInspector,useRibbonPointer,type RibbonHit} from './label-ribbon-inspector';
 import {PageLink} from './nested-pages';
 import {timelinePreviewText,trimTimelineSnippet} from './timeline-preview';
-import {ribbonLayers,ribbonCounts,ribbonMarkMessage,ribbonPointerHits,ribbonToolPlacement,toolVisualEnd,ribbonOriginParts,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
+import {harnessWaitEnd,harnessWaitText,ribbonLayers,ribbonCounts,ribbonMarkMessage,ribbonPointerHits,ribbonToolPlacement,toolVisualEnd,ribbonOriginParts,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
 import {shortLabel,specificLabels,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
 import type {TimeRange} from './timeline-label-model';
 import {authorshipSegments,callerSource} from './timeline-caller-model';
@@ -63,9 +63,9 @@ export function ObservationCard({items,sourceHref,eventHref,close}:{items:Ribbon
   </dl>}
   {composition.length?composition.slice(0,4).map(part=><SourceContent key={part.id} item={part} sourceHref={sourceHref} close={close}>{part.excerpt?<blockquote className="lt-message-quote" style={part.label&&part.label!=='?'?{'--message-label-color':stateColor(part.label)} as React.CSSProperties:undefined}>{composition.length>1?<strong>{callerSource(part.authorship!).name}</strong>:null}{trimTimelineSnippet(part.excerpt.text)}{part.excerpt.truncated?'…':''}</blockquote>:<small>This part is outside the retained preview.</small>}</SourceContent>):(sourceHref?messages.slice(0,4):messages.length===1?messages:[]).map(message=><SourceContent key={message.id} item={items.find(item=>item.message?.id===message.id)!} sourceHref={sourceHref} close={close}><MessagePreview message={message}/></SourceContent>)}
   {tools.slice(0,4).map(item=>{
-   const mark=item.mark!,elapsed=mark.end_known?mark.end-mark.start:null;
+   const mark=item.mark!,elapsed=mark.end_known?mark.end-mark.start:null,wait=harnessWaitText(mark);
    return <SourceContent key={item.id} item={item} sourceHref={sourceHref} close={close}><div className="lt-tool-preview">
-    <div className="lt-observation-tags"><span><i className="lt-tool-swatch" style={{color:item.color}}/>{mark.name}</span><span className={mark.error?'is-error':'lt-tool-meta'}>{elapsed===null?'End time unknown':elapsed<1000?`${Math.round(elapsed)}ms`:`${(elapsed/1000).toLocaleString(undefined,{maximumFractionDigits:2})}s`}{mark.error?' · Error':''}</span></div>
+    <div className="lt-observation-tags"><span><i className="lt-tool-swatch" style={{color:item.color}}/>{mark.name}</span><span className={mark.error?'is-error':'lt-tool-meta'}>{wait?'Launched in ':''}{elapsed===null?'End time unknown':elapsed<1000?`${Math.round(elapsed)}ms`:`${(elapsed/1000).toLocaleString(undefined,{maximumFractionDigits:2})}s`}{mark.error?' · Error':''}</span>{wait?<span className="lt-tool-meta lt-wait-meta"><i className="lt-tool-swatch lt-wait-tail" aria-hidden="true" style={{color:item.color}}/>{wait}</span>:null}</div>
     {mark.preview?<pre>{timelinePreviewText(mark.preview,{input:true})}{mark.preview_truncated?'…':''}</pre>:<small>Arguments not retained</small>}
    </div></SourceContent>;
   })}
@@ -113,6 +113,12 @@ export function SessionRibbon({node,range,clock,brushHandlers,preview=null,calle
   // A round zero-length stroke remains circular in screen space.
   if(item.mark){
    const m=tools.get(item.id);if(!m)return null;const cx=m.x*scale.x,cy=m.y*scale.y;
+   // A harness wait: the launch draws as a call does, then a dashed tail
+   // to the wait's recorded end, or the short unknown tail when it was not recorded.
+   if(item.mark.wait_kind){
+    const launch=Math.min(m.x1,Math.max(m.x,m.x+px(item.mark.end_known?item.mark.end:item.mark.start)-px(item.start)))*scale.x,known=harnessWaitEnd(item.mark)!==null;
+    return <g key={item.id} data-tool-id={item.mark.tool_id} data-wait-kind={item.mark.wait_kind}>{launch>cx?<line x1={cx} x2={launch} y1={cy} y2={cy} stroke={item.color} strokeWidth={1} vectorEffect="non-scaling-stroke"/>:null}{m.x1*scale.x>launch?<line className={`lt-wait-line${known?'':' is-unknown'}`} x1={launch} x2={m.x1*scale.x} y1={cy} y2={cy} stroke={item.color} strokeWidth={1.5} strokeLinecap={known?undefined:"round"} strokeDasharray={known?"4 3":"0.1 2.5"} vectorEffect="non-scaling-stroke"/>:null}{item.start>=range[0]&&item.start<=range[1]?<path d={`M${cx} ${cy}h0`} fill="none" stroke={item.color} strokeWidth={2*m.r} strokeLinecap="round" vectorEffect="non-scaling-stroke"/>:null}</g>;
+   }
    return <g key={item.id} data-tool-id={item.mark.tool_id}>{m.x1>m.x?<line x1={cx} x2={m.x1*scale.x} y1={cy} y2={cy} stroke={item.color} strokeWidth={item.mark.end_known?1:1.5} strokeLinecap={item.mark.end_known?undefined:"round"} strokeDasharray={item.mark.end_known?undefined:"0.1 2.5"} vectorEffect="non-scaling-stroke"/>:null}{item.start>=range[0]&&item.start<=range[1]?<path d={`M${cx} ${cy}h0`} fill="none" stroke={item.color} strokeWidth={2*m.r} strokeLinecap="round" vectorEffect="non-scaling-stroke"/>:null}</g>;
   }
   const parts=caller&&item.message?item.authorship?[{category:item.authorship,start:0,end:1}]:authorshipSegments(item.message):[];

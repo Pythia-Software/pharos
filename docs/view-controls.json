@@ -450,6 +450,18 @@
     {
       "file": "web/src/timeline-legend.tsx",
       "field": "timeline_visibility"
+    },
+    {
+      "file": "web/src/delegation.tsx",
+      "field": "timeline_waits"
+    },
+    {
+      "file": "web/src/reader-navigator.tsx",
+      "field": "timeline_waits"
+    },
+    {
+      "file": "web/src/timeline-legend.tsx",
+      "field": "timeline_waits"
     }
   ],
   "controls": [
@@ -6176,6 +6188,16 @@
       "control": "aria-label=\"Pan selected timeline window\" onKeyDown={(e) => key(e, \"pan\")}",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+    },
+    {
+      "key": "c434aae0170ba5a2:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "TimelineOverview",
+      "tag": "input",
+      "control": "data-view-field=\"timeline_waits\" checked={idle.skipWaits} onChange={event=>idle.setWaits(event.currentTarget.checked)}",
+      "binding": "timeline_waits",
+      "contract": "view.timeline_waits",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "df5344bae4c12578:0",

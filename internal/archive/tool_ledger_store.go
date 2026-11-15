@@ -206,8 +206,9 @@ func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversatio
 			sequence,provider,model,effort,kind,tool_name,tool_category,mcp_server,command,program,subcommand,command_category,command_count,
 			has_pipe,has_redirect,has_heredoc,backgrounded,file_path,started_at,ended_at,duration_ms,duration_source,status,error_type,exit_code,
 			interrupted,truncated,input_bytes,result_bytes,result_tokens,result_tokens_source,request_id,next_request_id,parallel_count,
-			output_tokens,carried_requests,carried_tokens,lines_added,lines_removed,url,host,hosts,url_count,search_query,error_signature,test_failure,repo_path,path_repository,path_repository_id,path_scope,path_absolute,duration_is_estimate,duration_estimate_json)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL)`, "id"))
+			output_tokens,carried_requests,carried_tokens,lines_added,lines_removed,url,host,hosts,url_count,search_query,error_signature,test_failure,repo_path,path_repository,path_repository_id,path_scope,path_absolute,duration_is_estimate,duration_estimate_json,
+			wait_kind,wait_ended_at,wait_status,wait_end_source,wait_events)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,?,?,?,?,?)`, "id"))
 		if err != nil {
 			return err
 		}
@@ -271,7 +272,8 @@ func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversatio
 				boolInt(call.Interrupted), boolInt(call.Truncated), call.InputBytes, call.ResultBytes, call.ResultTokens,
 				nilIfEmpty(call.ResultTokensSource), requestID(call.RequestKey), requestID(call.NextRequestKey), call.ParallelCount,
 				call.OutputTokens, call.CarriedRequests, call.CarriedTokens, nullableInt(call.LinesAdded), nullableInt(call.LinesRemoved),
-				nilIfEmpty(call.URL), nilIfEmpty(call.Host), nilIfEmpty(call.Hosts), call.URLCount, nilIfEmpty(call.SearchQuery), nilIfEmpty(call.ErrorSignature), boolInt(call.TestFailure), nilIfEmpty(call.RepoPath), nilIfEmpty(call.PathRepository), nilIfEmpty(call.PathRepositoryID), nilIfEmpty(call.PathScope), nilIfEmpty(call.PathAbsolute)))
+				nilIfEmpty(call.URL), nilIfEmpty(call.Host), nilIfEmpty(call.Hosts), call.URLCount, nilIfEmpty(call.SearchQuery), nilIfEmpty(call.ErrorSignature), boolInt(call.TestFailure), nilIfEmpty(call.RepoPath), nilIfEmpty(call.PathRepository), nilIfEmpty(call.PathRepositoryID), nilIfEmpty(call.PathScope), nilIfEmpty(call.PathAbsolute),
+				nilIfEmpty(call.WaitKind), nilIfEmpty(call.WaitEndedAt), nilIfEmpty(call.WaitStatus), nilIfEmpty(call.WaitEndSource), call.WaitEvents))
 			if err != nil {
 				return err
 			}

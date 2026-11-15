@@ -9,12 +9,21 @@
 // work that is merely slow (a long tool call, a subagent thinking) is never a
 // gap, because its activity is busy time.
 //
+// Harness waits (a background command, a Monitor watch, a scheduled wakeup:
+// harness_waits.go) are machine time: busy for the idle rule, so a stretch the
+// agent spent waiting on its own job is drawn, not skipped. A timeline may
+// also skip them (waitGaps): stretches of at least IDLE_GAP_MS where nothing
+// but a wait is in flight. Skipping waits is a choice, off by default, since
+// a wait is often the answer to "why did this take so long".
+//
 // The clock is piecewise linear and strictly increasing: each skipped gap
 // keeps a thin sliver (CUT_SHARE of the active time) where the timeline draws
 // a bar, so time(fraction(t)) === t everywhere, including inside a gap.
 export type Interval={start:number;end:number};
-export type IdleGap={start:number;end:number};
-export type TimeCut={start:number;end:number;fraction:number};
+/** A skipped stretch: `idle` (nothing ran), `wait` (only harness waits ran), or `mixed` when both touch. */
+export type GapKind='idle'|'wait'|'mixed';
+export type IdleGap={start:number;end:number;kind?:GapKind};
+export type TimeCut={start:number;end:number;fraction:number;kind?:GapKind};
 export type TimeScale={range:[number,number];compressed:boolean;cuts:TimeCut[];
  /** Virtual (compressed) milliseconds across the range. */
  span:number;
@@ -65,13 +74,60 @@ export function timeScale(range:[number,number],gaps:IdleGap[]=[],share=CUT_SHAR
   fraction:at=>along('t','v',at)/span,time:f=>along('v','t',f*span)};
 }
 
-/** Busy time for one row; a row whose marks or messages were truncated stays busy to its session's end. */
-export function laneBusy(lane:{marks:{start:number;end:number;end_known?:boolean}[];model_inferred?:Interval[];messages?:{created_at?:string|null}[];truncated?:boolean;messages_truncated?:boolean},session?:{start:number|null;end:number|null}):Interval[]{
+type WaitMark={start:number;end:number;end_known?:boolean;wait_kind?:string;wait_end?:number|null};
+/** A harness wait's span, launch to its recorded end; null for other calls or an end not recorded. */
+export function markWait(mark:WaitMark):Interval|null{
+ return mark.wait_kind&&typeof mark.wait_end==='number'&&Number.isFinite(mark.wait_end)&&mark.wait_end>=mark.start?{start:mark.start,end:mark.wait_end}:null;
+}
+/** The harness waits in one row. */
+export const laneWaits=(lane:{marks:WaitMark[]}):Interval[]=>lane.marks.flatMap(mark=>{const wait=markWait(mark);return wait?[wait]:[];});
+/** Busy time for one row; a row whose marks or messages were truncated stays
+ * busy to its session's end. Harness waits are busy unless `waits` is false
+ * (waitGaps takes them separately). */
+export function laneBusy(lane:{marks:WaitMark[];model_inferred?:Interval[];messages?:{created_at?:string|null}[];truncated?:boolean;messages_truncated?:boolean},session?:{start:number|null;end:number|null},{waits=true}:{waits?:boolean}={}):Interval[]{
  const busy:Interval[]=lane.marks.map(m=>({start:m.start,end:m.end_known===false?m.start:m.end}));
+ if(waits)busy.push(...laneWaits(lane));
  for(const span of lane.model_inferred??[])busy.push(span);
  for(const m of lane.messages??[]){const at=m.created_at?Date.parse(m.created_at):NaN;if(Number.isFinite(at))busy.push({start:at,end:at});}
  if((lane.truncated||lane.messages_truncated)&&session?.end!=null){const last=busy.reduce((at,item)=>Math.max(at,item.end),session.start??-Infinity);busy.push({start:Number.isFinite(last)?last:session.end,end:session.end});}
  return busy;
+}
+
+const merged=(spans:Interval[])=>{
+ const out:Interval[]=[];
+ for(const span of spans.filter(item=>Number.isFinite(item.start)&&Number.isFinite(item.end)).map(item=>({start:item.start,end:Math.max(item.start,item.end)})).sort((a,b)=>a.start-b.start)){
+  const last=out.at(-1);
+  if(last&&span.start<=last.end)last.end=Math.max(last.end,span.end);else out.push({...span});
+ }
+ return out;
+};
+/** Stretches of at least `threshold` where a harness wait is in flight and
+ * nothing else is: the waits' union, less every other kind of busy time
+ * (busy computed with `waits: false`). */
+export function waitGaps({busy,waits,threshold=IDLE_GAP_MS}:{busy:Interval[];waits:Interval[];threshold?:number}):IdleGap[]{
+ const other=merged(busy),gaps:IdleGap[]=[];
+ let j=0;
+ for(const wait of merged(waits)){
+  let from=wait.start;
+  while(j<other.length&&other[j].end<from)j++;
+  for(let k=j;k<other.length&&other[k].start<=wait.end;k++){
+   if(other[k].start-from>=threshold)gaps.push({start:from,end:other[k].start,kind:'wait'});
+   from=Math.max(from,other[k].end);
+  }
+  if(wait.end-from>=threshold)gaps.push({start:from,end:wait.end,kind:'wait'});
+ }
+ return gaps;
+}
+/** The stretches a timeline skips, from the idle and wait gaps it may skip;
+ * stretches that touch become one cut. */
+export function chosenGaps({idle,waits}:{idle:IdleGap[];waits:IdleGap[]},{skipIdle,skipWaits}:{skipIdle:boolean;skipWaits:boolean}):IdleGap[]{
+ const chosen=[...(skipIdle?idle.map(g=>({...g,kind:g.kind??'idle'})):[]),...(skipWaits?waits.map(g=>({...g,kind:g.kind??'wait'})):[])].sort((a,b)=>a.start-b.start),out:IdleGap[]=[];
+ for(const gap of chosen){
+  const last=out.at(-1);
+  if(last&&gap.start<=last.end){last.end=Math.max(last.end,gap.end);if(last.kind!==gap.kind)last.kind='mixed';}
+  else out.push({...gap});
+ }
+ return out;
 }
 
 /** Virtual-time drags: pan and resize move by what the compressed overview shows. */

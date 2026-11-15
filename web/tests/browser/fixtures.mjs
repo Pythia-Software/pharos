@@ -1120,6 +1120,8 @@ export const defaultApi = {
 
   // The workspace reader and delegation explorer.
   "GET /api/work/:id": ({ params }) => params.id === workID ? work : undefined,
+  // The server's redirect from a conversation ID alone to its work.
+  "GET /conversation/:conversation": ({ params }) => work.conversations.some(item => item.id === params.conversation) ? { __redirect: `/work/${workID}/conversation/${encodeURIComponent(params.conversation)}` } : undefined,
   "GET /api/work/:id/conversations/:conversation": ({ params }) => {
     const overview = work.conversations.find(item => item.id === params.conversation);
     return params.id === workID && overview ? { ...overview, repo_root: work.location, messages: params.conversation === rootConversation ? transcript() : childMessages(params.conversation) } : undefined;
