@@ -2813,13 +2813,13 @@ func TestAuthorshipDailyRefinementClassifiesOnlyNewWriting(t *testing.T) {
 	}
 
 	// The fifth session makes rising a template, for its four earlier
-	// messages too. That is history, so the pass classifies all of it.
+	// messages too, which the pass restates from the checkpoint.
 	send("rising4", 7, 11, rising)
 	estimate()
 	if words("rising4", "template") != 0 {
 		t.Fatal("fixture: the estimate cannot know the prompt crossed the threshold")
 	}
-	if mode, _ := refine(false); mode != "daily refinement, a repeated prompt became a template" {
+	if mode, _ := refine(false); mode != "suffix" {
 		t.Fatalf("a new template ran %q", mode)
 	}
 	for i := range 5 {
