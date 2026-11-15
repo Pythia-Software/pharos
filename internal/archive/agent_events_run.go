@@ -29,7 +29,8 @@ import (
 // replaces the message's rows in agent_event_messages and agent_events. A
 // message is scored again only when its text or source, or the verifier,
 // changed. Conversations to look at come from a dirty table fed by the same
-// triggers as the labels ledger's, and from a structure fingerprint.
+// triggers as the labels ledger's, apart from authorship's
+// (agentEventsDirtyTriggers), and from a structure fingerprint.
 
 // agentEventsLedgerDDL is created by the first run: a library that never runs
 // the verifier has none of it.
@@ -52,8 +53,29 @@ CREATE TABLE IF NOT EXISTS agent_events_dirty (
 // dependency digest it was built against, so a read can tell rows built on
 // superseded execution evidence (agentEventsExecutionCurrent); 4 the members
 // of each component built at (ensureExecutionDependencyMembers); 5 stamp
-// triggers that advance the events cache domain.
-const agentEventsLedgerVersion = "5"
+// triggers that advance the events cache domain; 6 no dirty marks from
+// authorship (agentEventsDirtyTriggers). A version only installs schema and
+// triggers again: it marks nothing and rebuilds nothing.
+const agentEventsLedgerVersion = "6"
+
+// agentEventsDirtyTriggers mark a conversation's agent events dirty when what
+// they are built from changes: the labeling item triggers (itemDirtyTriggers)
+// without those on message_authorship. The pass reads agent replies and
+// thinking, whose units are the message's own text: only a user-role
+// message's unit consults its classification (labelingPass.record). The
+// daily authorship refine rewrites thousands of spans, and marked as many
+// conversations for a pass that then scored nothing. The drops stay in the
+// list, so a ledger that has those triggers loses them.
+func agentEventsDirtyTriggers() []string {
+	const prefix = "agent_events_dirty_"
+	statements := []string{}
+	for _, statement := range itemDirtyTriggers("agent_events_dirty", prefix) {
+		if !strings.HasPrefix(statement, "CREATE TRIGGER "+prefix+"message_authorship_") {
+			statements = append(statements, statement)
+		}
+	}
+	return statements
+}
 
 // agentEventStoreFloor is the lowest probability stored: rows between it and
 // agentEventThreshold are not events, but let a later threshold be studied
@@ -88,7 +110,7 @@ func (c *Catalog) ensureAgentEventsLedger(ctx context.Context) error {
 		if err := ensureExecutionDependencyMembers(ctx, tx); err != nil {
 			return err
 		}
-		for _, statement := range itemDirtyTriggers("agent_events_dirty", "agent_events_dirty_") {
+		for _, statement := range agentEventsDirtyTriggers() {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("%s: %w", statement[:60], err)
 			}

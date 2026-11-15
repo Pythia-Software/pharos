@@ -202,7 +202,9 @@ for each model, with automatic GPU capacity; see [device status](local-labeler.m
   The verifier's identity is its model identity (as the labels ledger's) plus `jayhawk-window-v1`, the lexicon,
   the units and the sentence versions; an imported row has no input hash, so the pass replaces it.
 - **Which conversations it looks at, newest first.** Those marked in `agent_events_dirty`, by the same triggers as
-  the labels ledger's (`itemDirtyTriggers`); those never built or whose structure fingerprint changed
+  the labels ledger's (`itemDirtyTriggers`) apart from authorship's (`agentEventsDirtyTriggers`): the pass reads
+  agent replies and thinking, whose units never consult a classification, so the daily authorship refine marks
+  nothing here; those never built or whose structure fingerprint changed
   (`agent_events_conversations`); those with rows another verifier made; and the forks of a conversation whose inputs
 changed, since what a fork inherited from its parent decides which replies are its own. A fork followed that way gets a
 dirty mark of its own, so a limited run that stops before it keeps it pending. Conversations that left the catalog lose

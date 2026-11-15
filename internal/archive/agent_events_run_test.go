@@ -293,6 +293,62 @@ func TestAgentEventsPassScoresChangedMessagesOnly(t *testing.T) {
 	if err != nil || switched.MessagesScored != current || switched.MessagesUnchanged != 0 {
 		t.Fatalf("after a model switch: %+v %v (%d messages)", switched, err, current)
 	}
+
+	// Authorship is no input: the pass reads agent replies and thinking. A
+	// ledger the previous release made marks conversations on every
+	// classification change; upgrading it removes those triggers and marks
+	// nothing, and a message's own change still marks its conversation.
+	dirty := func() int {
+		t.Helper()
+		var n int
+		if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM agent_events_dirty`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	reclassify := func() {
+		t.Helper()
+		result, err := catalog.DB.Exec(`UPDATE message_authorship SET spans_json=spans_json||' '`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n, _ := result.RowsAffected(); n == 0 {
+			t.Fatal("the fixture has no classified messages")
+		}
+	}
+	for _, statement := range itemDirtyTriggers("agent_events_dirty", "agent_events_dirty_") {
+		if _, err := catalog.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if dirty() != 0 {
+		t.Fatalf("%d conversations pending before any change", dirty())
+	}
+	reclassify()
+	if dirty() == 0 {
+		t.Fatal("precondition: the previous release's triggers mark on authorship changes")
+	}
+	if _, err := catalog.DB.Exec(`DELETE FROM agent_events_dirty; UPDATE meta SET value='5' WHERE key='agent_events_ledger_version'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.ensureAgentEventsLedger(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var triggers int
+	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE type='trigger' AND name LIKE 'agent\_events\_dirty\_%' ESCAPE '\' AND tbl_name='message_authorship'`).Scan(&triggers); err != nil || triggers != 0 {
+		t.Fatalf("%d authorship triggers left on the upgraded ledger (%v)", triggers, err)
+	}
+	if n := dirty(); n != 0 {
+		t.Fatalf("upgrading the ledger marked %d conversations", n)
+	}
+	reclassify()
+	if n := dirty(); n != 0 {
+		t.Fatalf("an authorship change marked %d conversations' agent events", n)
+	}
+	execTx(t, catalog.DB, `UPDATE messages SET text=text||' Again.' WHERE id='m-ev-reply'`)
+	if n := dirty(); n != 1 {
+		t.Fatalf("a changed reply marked %d conversations, want 1", n)
+	}
 }
 
 func TestAgentEventsLiveThreadTarget(t *testing.T) {
