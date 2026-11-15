@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -239,12 +240,7 @@ var gitRawDiff = []string{"--no-textconv", "--no-ext-diff"}
 var outcomeGitCommand = func(ctx context.Context, dir string, timeout time.Duration, stdin []byte, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	name, full := "git", append([]string{"-C", dir, "-c", "log.showSignature=false"}, args...)
-	if nice, err := exec.LookPath("nice"); err == nil {
-		name, full = nice, append([]string{"-n", "10", "git"}, full...)
-	}
-	command := exec.CommandContext(ctx, name, full...)
-	command.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0")
+	command := outcomeGitExec(ctx, dir, args...)
 	if stdin != nil {
 		command.Stdin = bytes.NewReader(stdin)
 	}
@@ -253,6 +249,57 @@ var outcomeGitCommand = func(ctx context.Context, dir string, timeout time.Durat
 		return nil, errGitTimeout
 	}
 	return output, err
+}
+
+func outcomeGitExec(ctx context.Context, dir string, args ...string) *exec.Cmd {
+	name, full := "git", append([]string{"-C", dir, "-c", "log.showSignature=false"}, args...)
+	if nice, err := exec.LookPath("nice"); err == nil {
+		name, full = nice, append([]string{"-n", "10", "git"}, full...)
+	}
+	command := exec.CommandContext(ctx, name, full...)
+	command.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0")
+	return command
+}
+
+// outcomeGitStream runs git as outcomeGitCommand does but hands its output to
+// read as it arrives, for diffs of a whole history (hundreds of megabytes in
+// a busy repository) that are never needed whole. stdin may be nil, or the
+// output of another stream. The error is read's, or else git's; read must
+// not keep the reader, and what it leaves unread is discarded.
+var outcomeGitStream = func(ctx context.Context, dir string, timeout time.Duration, stdin io.Reader, read func(io.Reader) error, args ...string) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	command := outcomeGitExec(ctx, dir, args...)
+	command.Stdin = stdin
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := command.Start(); err != nil {
+		return err
+	}
+	readErr := read(stdout)
+	if readErr != nil {
+		// Stop git rather than wait for it to write what nobody reads.
+		cancel()
+	} else if _, err := io.Copy(io.Discard, stdout); err != nil {
+		readErr = err
+	}
+	err = command.Wait()
+	switch {
+	case readErr != nil:
+		return readErr
+	case ctx.Err() == context.DeadlineExceeded:
+		return errGitTimeout
+	case err != nil:
+		if exit, ok := err.(*exec.ExitError); ok {
+			exit.Stderr = stderr.Bytes()
+		}
+		return err
+	}
+	return nil
 }
 
 // refreshSessionGit links sessions to local commits, repository by
@@ -1738,24 +1785,27 @@ func patchIDs(ctx context.Context, dir string, reverse bool, listed []string, re
 	if reverse {
 		args = append(args, "-R")
 	}
-	var stdin []byte
+	var stdin io.Reader
 	if listed != nil {
-		stdin = []byte(strings.Join(listed, "\n") + "\n")
+		stdin = strings.NewReader(strings.Join(listed, "\n") + "\n")
 		args = append(args, "--no-walk=unsorted", "--stdin")
 	}
-	patches, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, stdin, append(args, revisions...)...)
-	if err != nil {
-		return nil, err
-	}
-	output, err := outcomeGitCommand(ctx, dir, outcomeGitLogTimeout, patches, "patch-id", "--stable")
-	if err != nil {
-		return nil, err
-	}
+	// The log goes straight into patch-id: mainline's whole history of diffs
+	// is never held, only a line per commit.
 	ids := map[string]string{}
-	for _, line := range strings.Split(string(output), "\n") {
-		if fields := strings.Fields(line); len(fields) == 2 {
-			ids[fields[1]] = fields[0]
-		}
+	err := outcomeGitStream(ctx, dir, outcomeGitLogTimeout, stdin, func(patches io.Reader) error {
+		return outcomeGitStream(ctx, dir, outcomeGitLogTimeout, patches, func(output io.Reader) error {
+			lines := bufio.NewScanner(output)
+			for lines.Scan() {
+				if fields := strings.Fields(lines.Text()); len(fields) == 2 {
+					ids[fields[1]] = fields[0]
+				}
+			}
+			return lines.Err()
+		}, "patch-id", "--stable")
+	}, append(args, revisions...)...)
+	if err != nil {
+		return nil, err
 	}
 	return ids, nil
 }

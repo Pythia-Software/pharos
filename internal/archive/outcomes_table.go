@@ -10,7 +10,10 @@ import (
 // outcome label and the evidence tier that decided it, its project and
 // branch, the model that took most of its cost, its priced usage, its Tier 1
 // facts (files, lines, rework) and its Tier 2 commits and the lines they
-// added. See docs/projects-and-outcomes.md.
+// added, and what its forge said of the pull requests it opened or committed
+// to (Tier 3, pull_request_reviews.go): empty for a workspace with none read,
+// which is not the same as a pull request nobody reviewed. See
+// docs/projects-and-outcomes.md.
 
 // outcomeEvidenceTier is the highest evidence tier a session reached: local
 // Git checked it, its transcript recorded tool calls, or neither.
@@ -51,9 +54,12 @@ func (c *Catalog) outcomeRows(ctx context.Context) ([]map[string]any, error) {
 			(SELECT sg.linked_commits FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') linked_commits,
 			(SELECT sg.landed_commits FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') landed_commits,
 			(SELECT sg.lines_added FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') committed_lines,
-			(SELECT sg.lines_landed FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') landed_lines
+			(SELECT sg.lines_landed FROM session_git sg WHERE sg.workspace_id=w.id AND sg.status='checked') landed_lines,
+			rv.pull_requests,rv.pull_request_state,rv.review_status,rv.reviewer_kind,rv.reviews,rv.review_comments,rv.unresolved_threads,
+			rv.commits_after_review,rv.reviewed,rv.changes_requested,rv.review_wait_hours
 			FROM (SELECT w.*,`+outcomeLabelSQL("w")+` label FROM workspaces w) w`+projectJoin("w")+`
-			LEFT JOIN session_outcomes so ON so.workspace_id=w.id`)
+			LEFT JOIN session_outcomes so ON so.workspace_id=w.id
+			LEFT JOIN (`+workspaceReviewsSQL+`) rv ON rv.workspace_id=w.id`)
 		if err != nil {
 			return nil, err
 		}

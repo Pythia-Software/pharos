@@ -246,6 +246,60 @@ type authorshipIncremental struct {
 	added      []conversationLaunch
 	classifier *classifier
 	since      time.Time
+	// stale are queued messages in the suffix that are no longer inputs (a
+	// deleted, emptied or newly mirrored message); their rows are removed.
+	stale []string
+}
+
+// authorshipFullEvery is the longest the daily pass goes on classifying only
+// suffixes before it runs the full classifier again, as a check on them.
+var authorshipFullEvery = 7 * 24 * time.Hour
+
+// authorshipSuffixCovers reports whether classifying inputs, the user
+// messages sent since since, settles everything awaiting refinement: every
+// queued message, quick (provisional) estimate and deferred message is one of
+// them, or is queued from that span and no longer an input (returned as
+// stale). Work a suffix does not reach, such as a mirror reconsidered or an
+// old message's estimate, needs the full classifier. Quick estimates keep the
+// checkpoint, so this is what stops a suffix from blessing them.
+func (c *Catalog) authorshipSuffixCovers(ctx context.Context, inputs []authorInput, since time.Time) (stale []string, covered bool, err error) {
+	limit := 2*max(1, authorshipSuffixLimit) + len(inputs) + 1
+	rows, err := queryMapsContext(ctx, c.DB, `SELECT message_id,COALESCE(sent_at,'') sent_at,1 queued FROM authorship_pending
+ UNION ALL SELECT message_id,'',0 FROM authorship_message_state WHERE provisional=1
+ UNION ALL SELECT message_id,'',0 FROM authorship_message_state WHERE disposition='deferred' LIMIT ?`, limit)
+	if err != nil || len(rows) >= limit {
+		return nil, false, err
+	}
+	reached := make(map[string]bool, len(inputs))
+	for _, input := range inputs {
+		reached[input.ID] = true
+	}
+	// Queued rows first: an estimate of a message since removed is settled by
+	// the queue entry its removal left.
+	for _, queued := range []bool{true, false} {
+		for _, row := range rows {
+			id := asString(row["message_id"])
+			if integer(row["queued"]) != 0 != queued || reached[id] {
+				continue
+			}
+			at, ok := parseTime(asString(row["sent_at"]))
+			if !queued || !ok || at.Before(since) {
+				return nil, false, nil
+			}
+			reached[id] = true
+			stale = append(stale, id)
+		}
+	}
+	return stale, true, nil
+}
+
+// authorshipSettled reports that nothing awaits refinement: no queued
+// message, quick estimate or deferred message.
+func (c *Catalog) authorshipSettled(ctx context.Context) (bool, error) {
+	var waiting bool
+	err := c.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM authorship_pending) OR EXISTS(SELECT 1 FROM authorship_message_state WHERE provisional=1)
+ OR EXISTS(SELECT 1 FROM authorship_message_state WHERE disposition='deferred')`).Scan(&waiting)
+	return !waiting, err
 }
 
 func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncremental, error) {
@@ -333,15 +387,23 @@ func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncreme
 		run.reason = "no user suffix"
 		return run, nil
 	}
+	stale, covered, err := c.authorshipSuffixCovers(ctx, run.inputs, since)
+	if err != nil {
+		return nil, err
+	}
+	if !covered {
+		run.reason = "work outside the suffix"
+		return run, nil
+	}
 	classifier, err := c.loadAuthorshipClassifier(ctx, run.inputs, watermark)
 	if err != nil {
 		return nil, err
 	}
 	if classifier == nil {
-		run.reason = "historical template counts changed"
+		run.reason = "a repeated prompt became a template"
 		return run, nil
 	}
-	run.classifier, run.since, run.reason = classifier, since, "suffix"
+	run.classifier, run.since, run.stale, run.reason = classifier, since, stale, "suffix"
 	return run, nil
 }
 
@@ -452,14 +514,17 @@ func (c *Catalog) loadAuthorshipClassifier(ctx context.Context, inputs []authorI
 			return nil, err
 		}
 		use := classifier.templates[key]
-		sessions, days := len(old.sessions), len(old.days)
 		for session := range old.sessions {
 			use.sessions[session] = true
 		}
 		for day := range old.days {
 			use.days[day] = true
 		}
-		if use.template() && (len(use.sessions) != sessions || len(use.days) != days) {
+		// A prompt that crosses the threshold makes its earlier uses templates
+		// too, which only the full classifier can reclassify. One that already
+		// was a template changes nothing earlier: its counts are not stored
+		// with the classification (spanReason.bare).
+		if use.template() && !old.template() {
 			return nil, nil
 		}
 	}
@@ -721,6 +786,10 @@ func (c *Catalog) storeAuthorshipState(ctx context.Context, run *authorshipIncre
 	if err != nil {
 		return err
 	}
+	suppressed, err := c.authorshipSuppressedChanges(ctx, representatives)
+	if err != nil {
+		return err
+	}
 	return c.writeTransaction(ctx, "complete authorship checkpoint", func(tx *sql.Tx) error {
 		var revision string
 		if err := tx.QueryRowContext(ctx, "SELECT revision FROM authorship_dirty WHERE id=1").Scan(&revision); err != nil {
@@ -728,12 +797,19 @@ func (c *Catalog) storeAuthorshipState(ctx context.Context, run *authorshipIncre
 		}
 		metadata := map[string]string{"authorship_generation": generation, "authorship_built_at": now(), "authorship_quick_generation": generation, "authorship_quick_at": now(), "authorship_quick_version": authorshipQuickVersion}
 		if revision == run.checkpoint.revision {
-			if full && run.refinementKey == authorshipRefinementKey(revision) {
+			// The daily pass's suffix is refinement too: it reached every queued
+			// message and quick estimate (authorshipSuffixCovers) with the
+			// complete rules. A frequent pass's exact suffix leaves the receipt
+			// to the daily pass, which then has nothing left to classify.
+			if run.refinementKey != "" && run.refinementKey == authorshipRefinementKey(revision) {
 				metadata["authorship_refined_at"] = now()
 				metadata["authorship_refinement_inputs"] = run.refinementKey
+				if full {
+					metadata["authorship_full_refined_at"] = formatTime(c.clock())
+				}
 			}
 			metadata["authorship_complete_at"] = now()
-			if err := recordAuthorshipSuppressed(ctx, tx, representatives); err != nil {
+			if err := recordAuthorshipSuppressed(ctx, tx, suppressed); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('authorship_mirrors',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, jsonText(representatives)); err != nil {

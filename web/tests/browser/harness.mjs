@@ -90,6 +90,17 @@ function serve(routes, state, record) {
       return response.end(body);
     }
     if (!path.startsWith("/api/")) {
+      // A page route the server redirects, as /conversation/{id} goes to its
+      // work (redirectConversation): a stub returning { __redirect: path }.
+      for (const route of routes) {
+        const params = route.method === "GET" && route.match(path);
+        if (!params || typeof route.handler !== "function") continue;
+        const target = (await route.handler({ method: "GET", path, query: url.searchParams, params, state }))?.__redirect;
+        if (target) {
+          response.writeHead(302, { Location: target + url.search, "Cache-Control": "no-store" });
+          return response.end();
+        }
+      }
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       if (state.inbox) return response.end(asset("index.html", inboxRoot));
       if (path === "/app") return response.end(applicationHTML());

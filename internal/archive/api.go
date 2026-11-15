@@ -135,6 +135,7 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		catalog.ops = server.ops
 		// Background work's IO runs at the utility tier (§10).
 		server.ops.lowerIO = true
+		server.ops.cpu = newCPULedger()
 		server.journal = newJournalWriter(catalog, server.ops)
 		catalog.recordInitialize(server.ops, triggerStartup)
 		server.leases.dirs = func() []string { return leaseDirs(server.Config()) }
@@ -219,6 +220,7 @@ func (s *Server) Serve() error {
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("backgroundLoop", s.backgroundLoop)
+	s.daemon("cpuLedger", s.cpuLedgerLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
 	s.daemon("compressCaptures", s.compressCapturesLoop)
@@ -1054,6 +1056,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.postSessionPreferences(w, body)
 	case path == "/api/labels/settings":
 		s.postLabelsSettings(w, r, body)
+	case path == "/api/pull-request-reviews/settings":
+		s.postPullRequestReviewsSettings(w, r, body)
 	case path == "/api/capture":
 		s.startCapture(w, body)
 	case path == "/api/index":

@@ -55,7 +55,7 @@ func TestPeerLinksProbe(t *testing.T) {
 	}{
 		{"copies", func() ([]peerLink, error) { return c.derivePeerCopies(ctx, families) }},
 		{"tl1", func() ([]peerLink, error) { return c.derivePeerTL1(ctx, families) }},
-		{"reads", func() ([]peerLink, error) { links, _, err := c.derivePeerReads(ctx, families, ""); return links, err }},
+		{"reads", func() ([]peerLink, error) { links, _, err := c.derivePeerReads(ctx, families, nil); return links, err }},
 	} {
 		started = time.Now()
 		links, err := step.run()
@@ -73,7 +73,7 @@ func TestPeerLinksProbe(t *testing.T) {
 	}
 	if at, ok := parseTime(latest); ok {
 		started = time.Now()
-		links, readers, err := c.derivePeerReads(ctx, families, formatTime(at.Add(-24*time.Hour-peerRecheck)))
+		links, readers, err := c.derivePeerReads(ctx, families, peerScopeSince(at.Add(-24*time.Hour-peerRecheck)))
 		if err != nil {
 			t.Fatal(err)
 		}

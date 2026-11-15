@@ -23,6 +23,7 @@ var runningItem = map[string]string{
 	"maintenance.library-view": "search", kindMetrics: "search", "analysis.github": "repositories", "analysis.identities": "repositories", "analysis.git": "repositories",
 	"analysis.authorship.refine": "writing-refine", "analysis.tools": "tools", "analysis.authorship": "writing", "analysis.peers": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events", "analysis.engagement": "engagement",
 	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
+	"forge.reviews":   "pull-request-reviews",
 	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup",
 }
 
@@ -260,13 +261,13 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 	if err != nil {
 		return nil
 	}
-	costs := s.cachedCosts(ctx)
+	costs, perDay := s.cachedMeasures(ctx)
 	in := s.backgroundInputsFor(ctx, s.peekRequested())
 	plans := backgroundPlan(settings, in, at)
 	// The step details own model settings. Keep disabled models reachable in
 	// the unscheduled column without adding them to the execution plan.
 	for _, item := range backgroundItems {
-		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents {
+		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents || item.requiresPullRequestReviews && !in.pullRequestReviews {
 			plans = append(plans, itemPlan{ID: item.ID, Cadence: cadenceManual})
 		}
 	}
@@ -293,7 +294,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		switch {
 		case live[item.ID]:
 			state = "running"
-		case item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents:
+		case item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents || item.requiresPullRequestReviews && !in.pullRequestReviews:
 			state = "disabled"
 		case in.requested[item.ID] || queued[item.ID]:
 			state = "queued"
@@ -342,8 +343,8 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			entry["cost"] = map[string]any{"seconds": cost.Seconds, "runs": cost.Runs, "class": costClass(cost, true), "text": durationWords(cost.Seconds),
 				"typical": typicalWords(cost)}
 		}
-		if item.Adaptive && settings.placed(item) != cadenceFrequent && entry["temporary_cadence"] == nil {
-			entry["note"] = "Moves to Frequently once a run usually takes under a minute."
+		if note := placementNote(item, settings.placed(item), cost, measured, perDay); note != "" && entry["temporary_cadence"] == nil {
+			entry["note"] = note
 		}
 		if item.ID == "writing" && in.writingBacklog.Pending > 0 {
 			entry["backlog"] = in.writingBacklog
@@ -476,6 +477,35 @@ func itemSub(item backgroundItem, in backgroundInputs) string {
 		}
 	}
 	return item.Feeds
+}
+
+// placementNote says, for an adaptive item measurement has not placed at
+// Frequently, what keeps it from the next faster schedule: the sentence under
+// its line in Settings. A run's own length, or what a day of runs would add
+// up to, with the numbers the rule used (placeCadence).
+func placementNote(item backgroundItem, placed string, cost itemCost, measured bool, perDay map[string]float64) string {
+	if !item.Adaptive || cadenceRank(placed) == 0 || cadenceRank(placed) >= len(cadences) {
+		return ""
+	}
+	faster := cadences[cadenceRank(placed)-1]
+	name := cadenceLabels[faster]
+	switch {
+	case item.fastest != "" && cadenceRank(faster) < cadenceRank(item.fastest):
+		return fmt.Sprintf("Runs %s at most: its results would be no better for running more often.", cadenceLabels[item.fastest])
+	case !measured || cost.Runs < placementRuns:
+		return fmt.Sprintf("Moves to %s once its runs are measured and fit there.", name)
+	}
+	fixed := max(cost.Slow, cost.Fixed)
+	run, day := cadenceLoad(faster, cost, fixed, perDay)
+	switch {
+	case day > 0.75*cadenceDayBudget[faster]:
+		return fmt.Sprintf("Stays %s: each run costs %s before any new work, and %s would repeat that about %d times a day (%s a day).",
+			cadenceLabels[placed], durationWords(fixed), name, int(math.Round(perDay[faster])), durationWords(day))
+	case run > 0.75*cadenceLimit[faster]:
+		return fmt.Sprintf("Stays %s: with the work that arrives, a run at %s would take %s, and %s is for runs well under %d min.",
+			cadenceLabels[placed], name, durationWords(run), name, int(cadenceLimit[faster]/60))
+	}
+	return fmt.Sprintf("Moves to %s at the next update: its runs now fit there.", name)
 }
 
 // itemChoices are the cadences an item may be set to: its placement or
@@ -667,17 +697,21 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 	}
 	_, views := s.operationsDocumentViews(r.Context(), false)
 	freshness := s.freshness(r.Context(), views, false)
+	schedules, usage := s.backgroundCostsView(r.Context(), settings, at)
 	writeJSON(w, map[string]any{
-		"work":         s.workSettings(),
-		"labels":       s.labelsSettings(),
-		"agent_events": s.agentEventsSettings(r.Context()),
+		"work":                 s.workSettings(),
+		"labels":               s.labelsSettings(),
+		"agent_events":         s.agentEventsSettings(r.Context()),
+		"pull_request_reviews": s.pullRequestReviewsSettings(r.Context()),
 		"settings": map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "interval_seconds": settings.Interval,
 			"daily_at": settings.DailyAt, "hold_when_busy": settings.HoldWhenBusy, "overrides": settings.Overrides, "temporary_cadences": settings.Temporary, "battery": settings.Battery,
 			"battery_choices": batteryChoices, "battery_slower_minutes": int(batterySlowerInterval.Minutes()), "low_battery_percent": lowBatteryPercent},
 		"power": s.cachedPower(r.Context()),
 		"view":  s.backgroundView(r.Context(), views, freshness, at),
-		"rule":  map[string]any{"frequent_seconds": cadenceLimit[cadenceFrequent], "hourly_seconds": cadenceLimit[cadenceHourly]},
-		"cost":  s.backgroundDayCost(r.Context(), settings, s.cachedCosts(r.Context()), at),
+		"rule": map[string]any{"frequent_seconds": cadenceLimit[cadenceFrequent], "hourly_seconds": cadenceLimit[cadenceHourly],
+			"frequent_day_seconds": cadenceDayBudget[cadenceFrequent], "hourly_day_seconds": cadenceDayBudget[cadenceHourly]},
+		"cost":           s.backgroundDayCost(r.Context(), settings, s.cachedCosts(r.Context()), at),
+		"schedule_costs": schedules, "usage": usage,
 		"descriptions": map[string]any{cadenceFrequent: cadenceDescription(cadenceFrequent, settings), cadenceHourly: cadenceDescription(cadenceHourly, settings),
 			cadenceDaily: cadenceDescription(cadenceDaily, settings)},
 	}, 200)
@@ -901,10 +935,159 @@ func (s *Server) postBackgroundRun(w http.ResponseWriter, r *http.Request, body 
 		case item.requiresAgentEvents && !s.agentEventsEnabled(r.Context()):
 		case item.requiresEngagement && !s.Config().Engagement.Enabled:
 		case item.requiresAsk && !s.askEnabled(r.Context()):
+		case item.requiresPullRequestReviews && !s.Config().PullRequestReviews:
 		default:
 			run = append(run, id)
 		}
 	}
 	s.requestBackground(run...)
 	writeJSON(w, map[string]any{"accepted": true, "items": ids}, 202)
+}
+
+// scheduleCost is what one schedule choice would cost an item: a day of its
+// runs there, or one run for "only when you ask". A nil figure is not
+// measured yet.
+type scheduleCost struct {
+	Cadence string `json:"cadence"`
+	Label   string `json:"label"`
+	// Current is the schedule the item runs on now.
+	Current bool `json:"current"`
+	// Per is "day", or "run" where nothing runs until asked.
+	Per string `json:"per"`
+	// Bound says how to read Seconds and the figures that follow from it:
+	// "about" (worked out from the item's fixed and per-unit costs, or
+	// measured), "up_to" (each run would have less to do than the measured
+	// ones) or "at_least" (each run would have more).
+	Bound      string   `json:"bound"`
+	RunsPerDay *float64 `json:"runs_per_day"`
+	Seconds    *float64 `json:"seconds"`
+	CPUSeconds *float64 `json:"cpu_seconds"`
+	GPUSeconds *float64 `json:"gpu_seconds"`
+	PeakBytes  *int64   `json:"peak_bytes"`
+	// Measured is true for a day that was measured rather than projected.
+	Measured bool `json:"measured"`
+}
+
+// scheduleCosts is what each schedule the item can be given would cost a
+// day, most frequent first, from its own measured runs. A day at a cadence
+// is its runs there times the run's fixed cost, plus the day's work at its
+// per-unit cost (cadenceLoad): the work costs the same whatever the cadence.
+// An item that does not count its work is all fixed cost as far as its runs
+// say, so away from the cadence they were measured at the figure is a
+// bound: fewer, larger runs cost at least it, and more, smaller ones at most.
+// CPU and GPU time follow the running time at the runs' measured rates, and
+// memory is the most any run held.
+//
+// A fixed or continuous item has one row, its own schedule, with the day
+// the ledger measured (day; nil when it has none).
+func scheduleCosts(item backgroundItem, settings backgroundSettings, cost itemCost, measured bool, perDay map[string]float64, day *cpuSourceRow) []scheduleCost {
+	current := settings.cadence(item)
+	if item.Fixed || item.continuous {
+		row := scheduleCost{Cadence: current, Label: cadenceLabels[current], Current: true, Per: "day", Bound: "about", Measured: day != nil}
+		if current == cadenceManual {
+			row.Per, row.Measured = "run", false
+			return []scheduleCost{row}
+		}
+		if day != nil {
+			row.Seconds, row.CPUSeconds, row.GPUSeconds, row.PeakBytes, row.RunsPerDay = &day.Seconds, day.CPUSeconds, day.GPUSeconds, day.PeakBytes, &day.Runs
+		}
+		return []scheduleCost{row}
+	}
+	offered := map[string]bool{current: true}
+	if item.OptIn {
+		offered[cadenceManual], offered[cadenceDaily] = true, true
+	} else {
+		for _, cadence := range append(slices.Clone(cadences), cadenceManual) {
+			offered[cadence] = true
+		}
+	}
+	rows := []scheduleCost{}
+	for _, cadence := range append(slices.Clone(cadences), cadenceManual) {
+		if !offered[cadence] {
+			continue
+		}
+		row := scheduleCost{Cadence: cadence, Label: cadenceLabels[cadence], Current: cadence == current, Per: "day", Bound: "about", PeakBytes: cost.PeakBytes}
+		var seconds *float64
+		switch {
+		case cadence == cadenceManual:
+			row.Per = "run"
+			if measured {
+				seconds = &cost.Seconds
+			}
+		case measured:
+			runs := max(1, perDay[cadence])
+			row.RunsPerDay = &runs
+			_, repeated := cadenceLoad(cadence, cost, cost.Fixed, perDay)
+			seconds = new(repeated + cost.PerUnit*cost.UnitsPerDay)
+			if at := defaultString(cost.RunsAt, current); !cost.Counted && at != cadence && cadenceRank(at) < len(cadences) {
+				row.Bound = "at_least"
+				if cadenceRank(cadence) < cadenceRank(at) {
+					row.Bound = "up_to"
+				}
+			}
+		}
+		row.Seconds = seconds
+		if seconds != nil && cost.CPUPerSecond != nil {
+			row.CPUSeconds = new(*seconds * *cost.CPUPerSecond)
+		}
+		if seconds != nil && cost.GPUPerSecond != nil {
+			row.GPUSeconds = new(*seconds * *cost.GPUPerSecond)
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// placementReason says why an item runs where it does: your choice, or for
+// an adaptive item what measurement found (placementNote says what keeps it
+// from the next faster schedule).
+func placementReason(item backgroundItem, settings backgroundSettings, cost itemCost, measured bool, perDay map[string]float64) string {
+	placed, current := settings.placed(item), settings.cadence(item)
+	if _, temporary := settings.Temporary[item.ID]; temporary {
+		return fmt.Sprintf("You moved it to %s for a week.", cadenceLabels[current])
+	}
+	switch {
+	case item.Fixed:
+		return ""
+	case item.OptIn && current == cadenceManual:
+		return "Off until you give it a schedule."
+	case current != placed && item.Adaptive:
+		return fmt.Sprintf("You chose %s. Left to its measured cost it would run %s.", cadenceLabels[current], cadenceLabels[placed])
+	case current != placed || !item.Adaptive:
+		return ""
+	}
+	if note := placementNote(item, placed, cost, measured, perDay); note != "" {
+		return note
+	}
+	if !measured || cost.Runs < placementRuns {
+		return fmt.Sprintf("Runs %s until its runs are measured.", cadenceLabels[placed])
+	}
+	return fmt.Sprintf("Runs %s: its measured runs fit there, under %s a run and %s a day of repeated work.",
+		cadenceLabels[placed], durationPlain(cadenceLimit[placed]), durationPlain(cadenceDayBudget[placed]))
+}
+
+// durationPlain is a limit in words: "1 min", "2 h".
+func durationPlain(seconds float64) string {
+	return strings.TrimPrefix(durationWords(seconds), "about ")
+}
+
+// backgroundCostsView is what each item's schedule choices would cost, and
+// the chart of CPU by analysis: GET /api/background's schedule_costs and
+// usage.
+func (s *Server) backgroundCostsView(ctx context.Context, settings backgroundSettings, at time.Time) (map[string]any, map[string]any) {
+	costs, perDay := s.cachedMeasures(ctx)
+	usage := cpuUsage(s.Catalog.cpuDays(ctx, at.AddDate(0, 0, -cpuWindowDays)), at)
+	days := map[string]*cpuSourceRow{}
+	for _, row := range usage["rows"].([]cpuSourceRow) {
+		if row.Item != "" {
+			days[row.Item] = &row
+		}
+	}
+	schedules := map[string]any{}
+	for _, item := range backgroundItems {
+		cost, measured := costs[item.ID]
+		schedules[item.ID] = map[string]any{"rows": scheduleCosts(item, settings, cost, measured, perDay, days[item.ID]),
+			"reason": nullable(placementReason(item, settings, cost, measured, perDay))}
+	}
+	return schedules, usage
 }

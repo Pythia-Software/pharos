@@ -71,6 +71,11 @@ test('navigator compresses idle gaps before a caller resumes while retaining act
   const busyClock=readerNavigatorClock(messages,[{start:base+19*60000,end:base+39*60000,end_known:true,category:'delegate',count:1,error:false,name:'Subagent'}]);
   assert.equal(readerNavigatorScale(busyClock,['start','resume']).cuts.length,0,'a running subagent prevents a gap');
   assert.equal(readerNavigatorScale(clock,['start','resume'],true,[]).cuts.length,0,'workspace evidence also protects activity in other sessions');
+  // Machine waits are skipped only when chosen, from the Timeline's published wait gaps.
+  const waits=[{start:base+2*60000,end:base+19*60000,kind:'wait'}];
+  assert.equal(readerNavigatorScale(clock,['start','resume'],false,undefined,false,waits).cuts.length,0,'waits stay drawn by default');
+  assert.deepEqual(readerNavigatorScale(clock,['start','resume'],false,undefined,true,waits).cuts.map(cut=>[cut.start,cut.end,cut.kind]),[[base+2*60000,base+19*60000,'wait']]);
+  assert.equal(readerNavigatorScale(clock,['start','resume'],true,undefined,true,waits).cuts.length,2,'idle gaps and waits both cut');
   const untimed=readerNavigatorClock([message('start',0),{...message('end',1),at:null}].map(m=>({...m,at:null})),[]);
   assert.equal(readerNavigatorScale(untimed,['start','end']).compressed,false);
 });
@@ -112,6 +117,22 @@ test('untimed tools and delegations keep ordinal marks with unknown durations',(
   const mixed=readerNavigatorClock(messages.map((message,index)=>index===0?{...message,at:'2026-10-01T00:00:00Z'}:message),marks);
   assert.equal(mixed.timed,true);
   assert.equal(mixed.marks.length,0,'missing times never become ordinal positions on a real clock');
+});
+
+test('reader marks carry a call\'s recorded machine wait, which counts as activity unless skipped',()=>{
+  const ended=new Date(Date.UTC(2026,8,20,12,40,0)).toISOString();
+  const {events,graph}=render([human(),
+    event('call','tool_call',{name:'Bash',input:{command:'until done; do sleep 30; done',run_in_background:true}},1,{call_id:'c',harness_wait:{kind:'background_command',ended_at:ended,status:'completed',events:0}}),
+    event('result','tool_result',{content:'Command running in background with ID: b1'},2,{call_id:'c'}),
+    event('late','tool_call',{name:'Bash',input:{command:'sleep 9999',run_in_background:true}},3,{call_id:'d',harness_wait:{kind:'background_command',ended_at:null,status:'stopped',events:0}}),
+    event('reply','message','Done',2405),
+  ].map(message=>({...message,id:message.native_id})));
+  const marks=plain(reader.readerNavigatorMarks({...graph,messages:events}));
+  assert.deepEqual(marks.map(mark=>[mark.wait_kind,mark.wait_end,mark.wait_status]),[['background_command',Date.parse(ended),'completed'],['background_command',null,'stopped']]);
+  const clock=readerNavigatorClock(plain(events).map(message=>({...message,at:message.created_at,labels:[]})),marks);
+  assert.equal(readerNavigatorScale(clock,['human']).cuts.length,0,'the wait is activity');
+  const [cut]=readerNavigatorScale(clock,['human'],true,undefined,true).cuts;
+  assert.deepEqual([cut.start,cut.end,cut.kind],[Date.UTC(2026,8,20,12,0,3),Date.parse(ended),'wait'],'skipping waits cuts from the last other activity to its end');
 });
 
 test('reader tool categories match the timeline for tool calls',()=>{

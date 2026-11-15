@@ -26,6 +26,21 @@ var workDetailSections = map[string]string{
 	"edited_files": `SELECT path,repository_id,file_key,edits,lines_added,lines_removed,rewrote,first_edit_at,last_edit_at FROM session_files WHERE workspace_id=? ORDER BY last_edit_at DESC,file_key`,
 	"commit_links": `SELECT l.hash,l.repository_id,l.method,l.confidence,l.confidence>=` + fmt.Sprint(outcomeGitCounted) + ` counted,l.evidence_json,g.author_at,g.on_mainline,g.reverted_by
 		FROM session_commit_links l LEFT JOIN git_commits g ON g.repository_id=l.repository_id AND g.hash=l.hash WHERE l.workspace_id=? ORDER BY g.author_at,l.hash`,
+	// What a forge said of the pull requests the workspace opened or committed
+	// to (pull_request_reviews.go), one row each; "prs" above is every pull
+	// request its messages named. review_comments is their reviews' summaries
+	// and their comments in order, each with whether its author wrote the
+	// pull request.
+	"pull_request_reviews": `SELECT p.number,p.url,pw.role,pw.confidence,COALESCE(f.status,'not_read') read_status,f.fetched_at read_at,d.state,d.draft,d.title,d.author,d.created_at,d.merged_at,d.closed_at,
+		d.additions,d.deletions,d.changed_files,d.decision,d.review_status,d.reviewer_kind,d.reviews,d.changes_requested,d.approvals,d.comments,d.threads,d.unresolved_threads,d.first_review_at,d.commits_after_review,d.truncated
+		FROM pull_request_workspaces pw JOIN pull_requests p ON p.id=pw.pr_id LEFT JOIN pull_request_details d ON d.pr_id=p.id LEFT JOIN pull_request_fetches f ON f.pr_id=p.id
+		WHERE pw.workspace_id=? ORDER BY COALESCE(d.created_at,p.observed_at),p.number`,
+	"review_comments": `WITH own AS (SELECT pw.pr_id,p.number,d.author FROM pull_request_workspaces pw JOIN pull_requests p ON p.id=pw.pr_id LEFT JOIN pull_request_details d ON d.pr_id=p.id WHERE pw.workspace_id=?)
+		SELECT * FROM (SELECT own.number pull_request,'review' kind,r.state verdict,r.author,r.author_kind,COALESCE(lower(r.author)=lower(own.author),0) by_pull_request_author,r.submitted_at created_at,
+			NULL path,NULL line,NULL thread_id,NULL reply_to,NULL resolved,NULL outdated,r.body,r.url,r.review_id id FROM pull_request_reviews r JOIN own ON own.pr_id=r.pr_id
+		UNION ALL SELECT own.number,c.kind,NULL,c.author,c.author_kind,COALESCE(lower(c.author)=lower(own.author),0),c.created_at,
+			c.path,c.line,c.thread_id,c.reply_to,c.resolved,c.outdated,c.body,c.url,c.comment_id FROM pull_request_comments c JOIN own ON own.pr_id=c.pr_id)
+		ORDER BY pull_request,created_at,id`,
 	"receipts":               `SELECT * FROM receipts WHERE workspace_id=? ORDER BY created_at DESC,id`,
 	"metrics":                `SELECT * FROM metrics WHERE workspace_id=? ORDER BY name,id`,
 	"metric_ledger":          `SELECT * FROM metric_ledger WHERE workspace_id=? ORDER BY sequence`,

@@ -447,10 +447,11 @@ Gaps that stay open, each leaving a commit unlinked rather than guessed:
 
 ### Tier 3: from the forge
 
-PR state, merge and review outcome. This tier shows only when a forge
-integration is configured, and today none exists (see the corrections). The
-outcome model is built so that a missing Tier 3 never changes a label:
-landing is decided by Tier 2 mainline evidence.
+Pull request state, reviews and comments, read from the forge only where
+Pull request reviews is turned on ([Pull request reviews](pull-request-reviews.md)).
+It adds review breakdowns and measures to Analyze → Outcomes for workspaces
+whose own pull requests were read. A missing Tier 3 never changes a label, and
+neither does a present one: landing is decided by Tier 2 mainline evidence.
 
 ## Outcome labels
 
@@ -541,10 +542,11 @@ three panels:
 
 The tiers a library reached are read over the whole library, not the
 filters. A breakdown that needs a tier no session reached is offered
-disabled with its reason, and never drawn empty. Today that is the local
-Git check, whose reason reads "No session has local Git evidence: local Git
-checks only repositories on this Mac". There is no Tier 3 breakdown: Pharos
-holds no forge data for outcomes yet.
+disabled with its reason, and never drawn empty. The local Git check's reason
+reads "No session has local Git evidence: local Git checks only repositories
+on this Mac". The Tier 3 breakdowns (Review, Reviewed by, Pull request) need a
+pull request read from its forge, and their reason says where to turn that on
+([Pull request reviews](pull-request-reviews.md)).
 
 ### Spend by branch
 
@@ -1146,7 +1148,9 @@ fixture.
   the file viewer reads. It stores
   hashes, paths, counts and timestamps; a commit subject only as a
   fingerprint, to compare a commit with the command that made it.
-- It never makes a network call for git data.
+- It never makes a network call for git data. Reading pull request reviews
+  from a forge is separate, off unless turned on, and stores the forge's
+  answer, not Git's ([Pull request reviews](pull-request-reviews.md)).
 
 ## If you don't use git
 
@@ -1217,6 +1221,12 @@ No code writes `proposed` or `merged`.
 - **TL1:** candidate PR fields.
 - **Canonical exports.**
 
+Those rows are mentions, whatever relationship they claim. Which pull
+requests are a workspace's own is derived separately, in
+`pull_request_workspaces`, from `gh pr create` output and from forge commits
+that local Git links to the workspace
+([Pull request reviews](pull-request-reviews.md)).
+
 Claude Code and Codex produce none. The work page also discovers PR URLs in
 messages at read time (`discovered_prs`), without storing them.
 
@@ -1269,7 +1279,9 @@ head in, and writes `main_merge_*`. Its properties:
   read into the configuration and excluded from backups, and nothing else
   uses it. `docs/configuration.md` describes it, but no code makes a GitHub
   request. (`gh api` is used only to resolve repository IDs for identity.)
-  Tier 3 is therefore unavailable, and this work adds no network calls.
+  Tier 3 was therefore unavailable when this was written, and that work
+  added no network calls. It has since been built as an opt-in, through `gh`
+  rather than the token ([Pull request reviews](pull-request-reviews.md)).
 - **Mainline coverage:** `git_integration.go` checks only a workspace's
   `head_ref`. Claude Code sessions have none, so they never get a mainline
   answer. For Codex, `head_ref` is the commit the session *started from*,

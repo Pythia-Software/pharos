@@ -3,7 +3,7 @@ import {labelIntervals,type ActivityMark} from './label-session-ribbon-model';
 import type {AgentEventLink} from './event-link-layout';
 import type {HumanEvent} from './human-events-model';
 import type {TimeRange} from './timeline-label-model';
-import {idleGaps,laneBusy,timeScale,type IdleGap} from './timeline-idle-model';
+import {chosenGaps,idleGaps,laneBusy,laneWaits,timeScale,waitGaps,type IdleGap} from './timeline-idle-model';
 
 export type ReaderContext={title:string;color:string;message:{id:string};sample:{stream:string;compact?:boolean;trigger?:string;size:number|null;window?:number|null};from:number;width:number;label:string};
 export type ReaderNavigatorMark=Omit<ActivityMark,'start'|'end'>&{start:number|null;end:number|null};
@@ -37,7 +37,8 @@ export function readerNavigatorClock(messages:LabelMessage[],sourceMarks:ReaderN
     const start=timed?mark.start:mark.message_id?ordinals.get(mark.message_id):undefined;
     if(start==null||!Number.isFinite(start))return [];
     const known=timed&&mark.end_known&&mark.end!==null&&Number.isFinite(mark.end)&&mark.end>=start;
-    return [{...mark,start,end:known?mark.end!:start,end_known:known}];
+    // An untimed transcript's ordinal clock has no place for a wait's end.
+    return [{...mark,start,end:known?mark.end!:start,end_known:known,...(timed?{}:{wait_kind:undefined,wait_end:undefined})}];
   });
   const intervals=labelIntervals(drawn,marks),byID=new Map<string,TimeRange>();
   for(const {message,start,end} of intervals)byID.set(message.id,[start,end]);
@@ -48,17 +49,22 @@ export function readerNavigatorClock(messages:LabelMessage[],sourceMarks:ReaderN
   return {messages:drawn,marks,byID,range,timed};
 }
 
-/** Use the timeline's idle rule with all retained conversation activity. */
-export function readerNavigatorScale(clock:ReturnType<typeof readerNavigatorClock>,callerIDs:string[],skipIdle=true,workspaceGaps?:IdleGap[]){
-  if(!clock.timed||!skipIdle)return timeScale(clock.range);
-  if(workspaceGaps)return timeScale(clock.range,workspaceGaps);
-  const callers=new Set(callerIDs);
-  const busy=laneBusy({marks:clock.marks,messages:clock.messages.map(message=>({created_at:message.at}))});
+/** Use the timeline's idle rule with all retained conversation activity, and
+ * the workspace Timeline's gaps when it has published them. Machine waits
+ * (the calls' recorded waits) count as activity unless skipped. */
+export function readerNavigatorScale(clock:ReturnType<typeof readerNavigatorClock>,callerIDs:string[],skipIdle=true,workspaceGaps?:IdleGap[],skipWaits=false,workspaceWaitGaps?:IdleGap[]){
+  if(!clock.timed||!skipIdle&&!skipWaits)return timeScale(clock.range);
+  const own=workspaceGaps&&workspaceWaitGaps?null:readerGaps(clock,callerIDs);
+  return timeScale(clock.range,chosenGaps({idle:workspaceGaps??own!.idle,waits:workspaceWaitGaps??own!.waits},{skipIdle,skipWaits}));
+}
+export function readerGaps(clock:ReturnType<typeof readerNavigatorClock>,callerIDs:string[]):{idle:IdleGap[];waits:IdleGap[]}{
+  const callers=new Set(callerIDs),lane={marks:clock.marks,messages:clock.messages.map(message=>({created_at:message.at}))};
   const resumed=clock.messages.flatMap(message=>{
     const at=message.at?Date.parse(message.at):NaN;
     return callers.has(message.id)&&Number.isFinite(at)?[at]:[];
   });
-  return timeScale(clock.range,idleGaps({busy,callers:resumed}));
+  const waits=laneWaits(lane);
+  return {idle:idleGaps({busy:laneBusy(lane),callers:resumed}),waits:waits.length?waitGaps({busy:[...laneBusy(lane,undefined,{waits:false}),...resumed.map(at=>({start:at,end:at}))],waits}):[]};
 }
 
 export function readerGeometry(spans:ReaderSpan[]):ReaderGeometry{

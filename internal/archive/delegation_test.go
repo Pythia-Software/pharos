@@ -541,6 +541,62 @@ func TestDelegationTimelineMissingReferentArrives(t *testing.T) {
 	}
 }
 
+// A harness wait keeps its launch as the call's end and runs on to its
+// recorded end: a window that holds only the wait still lists it, it is never
+// grouped with short calls, and it measures the session's machine waits.
+func TestDelegationTimelineHarnessWaits(t *testing.T) {
+	c, config := testCatalog(t)
+	seedDelegation(t, c)
+	execTx(t, c.DB, `INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,sequence,provider,kind,tool_name,tool_category,status,started_at,ended_at,wait_kind,wait_ended_at,wait_status) VALUES
+('waiting','delegation-work','root','root-session',20,'claude','tool_call','Bash','command','ok','2026-01-01T00:00:01Z','2026-01-01T00:00:01.010Z','background_command','2026-01-01T00:00:09Z','completed'),
+('unended','delegation-work','root','root-session',21,'claude','tool_call','Monitor','command','ok','2026-01-01T00:00:02Z','2026-01-01T00:00:02.010Z','monitor',NULL,NULL),
+('outlived','delegation-work','nested','nested-session',22,'codex','tool_call','Bash','command','ok','2026-01-01T00:00:05Z','2026-01-01T00:00:05.010Z','background_command',NULL,'stopped'),
+('after','delegation-work','root','root-session',23,'claude','tool_call','Read','read','ok','2026-01-01T00:00:08.500Z','2026-01-01T00:00:08.600Z',NULL,NULL,NULL);`)
+	s, err := c.delegationSnapshot(context.Background(), "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.ByID["root-session"].Self["backgroundTime"]; got.Value == nil || *got.Value != 8000 || got.Quality != "partial" || got.Known != 1 || got.Total != 2 {
+		t.Fatalf("machine waits: %+v", got)
+	}
+	if got := s.ByID["child-session"].Self["backgroundTime"]; got.Value != nil {
+		t.Fatalf("a session without waits has no measured machine wait: %+v", got)
+	}
+	// A session whose only wait outlived it has an unknown machine wait, not 0 ms.
+	if got := s.ByID["nested-session"].Self["backgroundTime"]; got.Value != nil {
+		t.Fatalf("no recorded end is unknown: %+v", got)
+	}
+	server := testServer(t, config, c)
+	_, body := delegationGET(t, server, "/api/work/delegation-work/delegation")
+	snapshot := body["snapshot"].(string)
+	start, end := time.Date(2026, 1, 1, 0, 0, 5, 0, time.UTC).UnixMilli(), time.Date(2026, 1, 1, 0, 0, 6, 0, time.UTC).UnixMilli()
+	for _, labels := range []string{"", "&labels=1"} {
+		_, timeline := delegationGET(t, server, fmt.Sprintf("/api/work/delegation-work/parallel?sessions=root-session&width=100&snapshot=%s&start=%d&end=%d%s", snapshot, start, end, labels))
+		var wait map[string]any
+		for _, value := range timeline["lanes"].([]any)[0].(map[string]any)["marks"].([]any) {
+			if mark := value.(map[string]any); mark["tool_id"] == "waiting" {
+				wait = mark
+			}
+		}
+		if wait == nil || wait["wait_kind"] != "background_command" || wait["wait_status"] != "completed" || wait["count"] != float64(1) || wait["category"] != "run" ||
+			wait["end"] != float64(time.Date(2026, 1, 1, 0, 0, 1, 10e6, time.UTC).UnixMilli()) || wait["wait_end"] != float64(time.Date(2026, 1, 1, 0, 0, 9, 0, time.UTC).UnixMilli()) {
+			t.Fatalf("labels=%q: the wait inside the window: %v", labels, timeline["lanes"])
+		}
+		// Zoomed into the wait's tail, the launch seconds before the window
+		// does not suggest model work from the window's edge to the next call.
+		late := time.Date(2026, 1, 1, 0, 0, 8, 0, time.UTC).UnixMilli()
+		_, tail := delegationGET(t, server, fmt.Sprintf("/api/work/delegation-work/parallel?sessions=root-session&width=100&snapshot=%s&start=%d&end=%d%s", snapshot, late, late+1000, labels))
+		for _, value := range tail["lanes"].([]any)[0].(map[string]any)["model_inferred"].([]any) {
+			if phase := value.(map[string]any); phase["start"].(float64) < float64(late+500) {
+				t.Fatalf("labels=%q: inferred orchestration from a launch outside the window: %v", labels, phase)
+			}
+		}
+	}
+	if delegationCategory("Monitor", "other", "") != "poll" || delegationCategory("ScheduleWakeup", "other", "") != "poll" {
+		t.Fatal("harness watches and wakeups are poll / delay")
+	}
+}
+
 func TestDelegationTimelineWindowEvidenceAndErrorReferences(t *testing.T) {
 	c, config := testCatalog(t)
 	seedDelegation(t, c)

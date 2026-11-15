@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS conversation_name_candidates (
  PRIMARY KEY(conversation_id,kind)
 );
 CREATE INDEX IF NOT EXISTS conversation_name_candidates_message_idx ON conversation_name_candidates(message_id);
+CREATE TABLE IF NOT EXISTS conversation_names_claims (
+ conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+ token TEXT NOT NULL, claimed_at INTEGER NOT NULL
+) WITHOUT ROWID;
 `
 
 // The cached excerpt must still name the same unchanged, refined source.
@@ -210,31 +214,154 @@ func assignmentNameExcerpt(text string) string {
 	return ""
 }
 
-// One write transaction is also the input snapshot: an edit cannot interleave
-// between candidate validation and publication. Clean rows are durable progress;
-// a restart or an authorship refresh queues only the remaining/changed inputs.
+// conversationNamesClaimAbandoned is how old a claim is before its
+// conversations are queued again: longer than any batch takes to read.
+var conversationNamesClaimAbandoned = 10 * time.Minute
+
+// conversationNamesComputedHook, when set (tests), runs after a pass has
+// read its candidates and before it stores them.
+var conversationNamesComputedHook func()
+
+// refreshConversationNames names up to batch queued conversations and reports
+// how many it stored. Finding a name reads the conversation's messages, which
+// takes seconds on a busy drive, so that happens on a read snapshot and the
+// catalog writer is held only to claim the batch and to store it:
+//
+//   - Nothing queued is found on a reader, without the writer.
+//   - The claim takes the conversations off the queue (dirty=0) and records
+//     them in conversation_names_claims. The snapshot is opened after it, so
+//     an edit either precedes the claim and is read, or follows it and queues
+//     the conversation again through the triggers.
+//   - Names are stored only for conversations still claimed and not queued
+//     again; the others keep their place in the queue.
+//
+// Clean rows are durable progress; a restart or an authorship refresh queues
+// only the remaining/changed inputs. A claim whose pass never finished is
+// queued again once it is abandoned.
 func (c *Catalog) refreshConversationNames(ctx context.Context, batch int) (int, error) {
-	count := 0
-	err := c.writeTransaction(ctx, "name conversations", func(tx *sql.Tx) error {
-		count = 0
-		started := time.Now()
-		rows, err := queryMapsContext(ctx, tx, `SELECT s.conversation_id,c.workspace_id FROM conversation_names_state s
- JOIN conversations c ON c.id=s.conversation_id WHERE s.dirty=1 ORDER BY s.conversation_id LIMIT ?`, max(1, batch))
+	count, err := c.nameConversations(ctx, batch)
+	if err != nil {
+		return 0, fmt.Errorf("conversation names: %w", err)
+	}
+	return count, nil
+}
+
+// conversationNamesQueued reports whether a pass has anything to do: a
+// conversation queued, or a claim abandoned by a process that died, which
+// only the pass puts back on the queue.
+func (c *Catalog) conversationNamesQueued(ctx context.Context) (bool, error) {
+	return catalogExists(ctx, c, `SELECT 1 WHERE EXISTS(SELECT 1 FROM conversation_names_state WHERE dirty=1)
+ OR EXISTS(SELECT 1 FROM conversation_names_claims WHERE claimed_at<?)`, time.Now().Add(-conversationNamesClaimAbandoned).Unix())
+}
+
+func (c *Catalog) nameConversations(ctx context.Context, batch int) (int, error) {
+	abandoned := time.Now().Add(-conversationNamesClaimAbandoned).Unix()
+	// The queue is the partial index; conversations follow it, not lead it.
+	pending, err := queryMapsContext(ctx, c.reader(), `SELECT s.conversation_id FROM conversation_names_state s INDEXED BY conversation_names_pending
+ WHERE s.dirty=1 ORDER BY s.conversation_id LIMIT ?`, max(1, batch))
+	if err != nil {
+		return 0, err
+	}
+	lost, err := queryMapsContext(ctx, c.reader(), `SELECT conversation_id FROM conversation_names_claims WHERE claimed_at<? LIMIT 1`, abandoned)
+	if err != nil || len(pending) == 0 && len(lost) == 0 {
+		return 0, err
+	}
+	ids := make([]string, 0, len(pending))
+	for _, row := range pending {
+		ids = append(ids, asString(row["conversation_id"]))
+	}
+	token := randomToken()
+	if err := c.writeTransaction(ctx, "name conversations claim", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE conversation_names_state SET dirty=1 WHERE dirty=0
+ AND conversation_id IN (SELECT conversation_id FROM conversation_names_claims WHERE claimed_at<?)`, abandoned); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_names_claims WHERE claimed_at<?`, abandoned); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO conversation_names_claims(conversation_id,token,claimed_at)
+ SELECT conversation_id,?,? FROM conversation_names_state WHERE dirty=1 AND conversation_id IN (SELECT value FROM json_each(?))`,
+			token, time.Now().Unix(), jsonText(ids)); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE conversation_names_state SET dirty=0
+ WHERE conversation_id IN (SELECT conversation_id FROM conversation_names_claims WHERE token=?)`, token)
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	// Whatever is not stored goes back on the queue: conversations the time
+	// limit left unread, and all of them when the pass is stopped or fails.
+	requeue := func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`UPDATE conversation_names_state SET dirty=1 WHERE dirty=0
+ AND conversation_id IN (SELECT conversation_id FROM conversation_names_claims WHERE token=?)`, token); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`DELETE FROM conversation_names_claims WHERE token=?`, token)
+		return err
+	}
+	stored := false
+	defer func() {
+		if !stored {
+			_ = c.writeTransaction(context.WithoutCancel(ctx), "name conversations release", requeue)
+		}
+	}()
+	type named struct {
+		id, workspace string
+		candidates    []conversationNameCandidate
+	}
+	computed := []named{}
+	if err := func() error {
+		snapshot, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			return err
 		}
-		workspaces := []string{}
+		defer snapshot.Rollback()
+		rows, err := queryMapsContext(ctx, snapshot, `SELECT k.conversation_id,c.workspace_id FROM conversation_names_claims k
+ CROSS JOIN conversations c ON c.id=k.conversation_id WHERE k.token=? ORDER BY k.conversation_id`, token)
+		if err != nil {
+			return err
+		}
+		started := time.Now()
 		for _, row := range rows {
-			if count > 0 && time.Since(started) >= time.Second {
+			if len(computed) > 0 && time.Since(started) >= time.Second {
 				break
 			}
 			id := asString(row["conversation_id"])
-			candidates, err := conversationNameCandidates(ctx, tx, id)
+			candidates, err := conversationNameCandidates(ctx, snapshot, id)
 			if err != nil {
 				return err
 			}
+			computed = append(computed, named{id, asString(row["workspace_id"]), candidates})
+		}
+		return nil
+	}(); err != nil {
+		return 0, err
+	}
+	if conversationNamesComputedHook != nil {
+		conversationNamesComputedHook()
+	}
+	count := 0
+	err = c.writeTransaction(ctx, "name conversations", func(tx *sql.Tx) error {
+		count = 0
+		workspaces := []string{}
+		for _, conversation := range computed {
+			// Edited or moved since the claim: it is queued again, and what
+			// was read may be obsolete.
+			result, err := tx.ExecContext(ctx, `UPDATE conversation_names_state SET version=? WHERE conversation_id=? AND dirty=0
+ AND EXISTS(SELECT 1 FROM conversation_names_claims k WHERE k.conversation_id=conversation_names_state.conversation_id AND k.token=?)`,
+				conversationNamesVersion, conversation.id, token)
+			if err != nil {
+				return err
+			}
+			if held, err := result.RowsAffected(); err != nil || held == 0 {
+				if err != nil {
+					return err
+				}
+				continue
+			}
 			keep := []string{}
-			for _, n := range candidates {
+			for _, n := range conversation.candidates {
 				keep = append(keep, n.Kind)
 				if _, err := tx.ExecContext(ctx, `INSERT INTO conversation_name_candidates
  (conversation_id,kind,title,message_id,content_hash,source_hash,sender,sent_at,workspace_id,version) VALUES(?,?,?,?,?,?,?,?,?,?)
@@ -243,18 +370,21 @@ func (c *Catalog) refreshConversationNames(ctx context.Context, batch int) (int,
  WHERE title IS NOT excluded.title OR message_id IS NOT excluded.message_id OR content_hash IS NOT excluded.content_hash
  OR source_hash IS NOT excluded.source_hash OR sender IS NOT excluded.sender OR sent_at IS NOT excluded.sent_at
  OR workspace_id IS NOT excluded.workspace_id OR version IS NOT excluded.version`,
-					id, n.Kind, n.Title, n.Message, n.Hash, n.SourceHash, n.Sender, n.At, n.Workspace, conversationNamesVersion); err != nil {
+					conversation.id, n.Kind, n.Title, n.Message, n.Hash, n.SourceHash, n.Sender, n.At, n.Workspace, conversationNamesVersion); err != nil {
 					return err
 				}
 			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_name_candidates WHERE conversation_id=? AND kind NOT IN (SELECT value FROM json_each(?))`, id, jsonText(keep)); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_name_candidates WHERE conversation_id=? AND kind NOT IN (SELECT value FROM json_each(?))`, conversation.id, jsonText(keep)); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE conversation_names_state SET dirty=0,version=? WHERE conversation_id=?`, conversationNamesVersion, id); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_names_claims WHERE conversation_id=? AND token=?`, conversation.id, token); err != nil {
 				return err
 			}
 			count++
-			workspaces = append(workspaces, asString(row["workspace_id"]))
+			workspaces = append(workspaces, conversation.workspace)
+		}
+		if err := requeue(tx); err != nil {
+			return err
 		}
 		if len(workspaces) > 0 {
 			return refreshWorkspaceNames(tx, workspaces)
@@ -262,8 +392,9 @@ func (c *Catalog) refreshConversationNames(ctx context.Context, batch int) (int,
 		return nil
 	})
 	if err != nil {
-		return 0, fmt.Errorf("conversation names: %w", err)
+		return 0, err
 	}
+	stored = true
 	return count, nil
 }
 

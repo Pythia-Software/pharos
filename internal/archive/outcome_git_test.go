@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -558,6 +560,13 @@ func TestSessionGitScansOnlyWhatChanged(t *testing.T) {
 		}
 		return run(ctx, dir, timeout, stdin, args...)
 	})
+	stream := outcomeGitStream
+	override(t, &outcomeGitStream, func(ctx context.Context, dir string, timeout time.Duration, stdin io.Reader, read func(io.Reader) error, args ...string) error {
+		if slices.Contains(args, "log") {
+			logs++
+		}
+		return stream(ctx, dir, timeout, stdin, read, args...)
+	})
 	f.refresh()
 	if logs == 0 || len(f.links()["work"]) != 1 {
 		t.Fatalf("first scan: %d logs, %v", logs, f.links())
@@ -937,7 +946,12 @@ func TestReadAddedLines(t *testing.T) {
 	hash := strings.Repeat("a", 40)
 	output := "\x1e" + hash + "\n\ndiff --git app/main.go app/main.go\nindex 1..2 100644\n--- app/main.go\n+++ app/main.go\n@@ -1 +1,2 @@\n-removed := old(1)\n" +
 		"+added := value(1)\n++++ looks like a header but is content\n diff --git context line\ndiff --git gone.go gone.go\ndeleted file mode 100644\n--- gone.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone := value(2)\n"
-	files := readAddedLines(output)[hash]
+	// Read a byte at a time, as a pipe may deliver it.
+	added, err := readAddedLines(iotest.OneByteReader(strings.NewReader(output + "\x1e" + strings.Repeat("b", 40) + "\n")))
+	if err != nil || len(added) != 2 {
+		t.Fatalf("streamed records: %v %v", added, err)
+	}
+	files := added[hash]
 	want := lineSet{}
 	fingerprintLines("added := value(1)\n+++ looks like a header but is content", want)
 	if len(files) != 1 || fmt.Sprint(files["app/main.go"]) != fmt.Sprint(want) {

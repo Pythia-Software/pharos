@@ -39,9 +39,12 @@ export function cardCoverQuery(query: QueryState, recipe: QueryRecipe, requested
     if (!column) return { query };
     const view = recipe.exploration;
     const unit = view?.valueField === column.id ? view.unit : column.field === "duration_ms" || column.expression === "MEDIAN([duration_ms])" ? "ms" : ["card_rate", "card_escalation"].includes(column.id) ? "percent" : "";
-    const daily = view?.coverMetric?.field === column.id;
-    const metric: AggregationClause = daily ? { ...view!.coverMetric!, id: column.id, display: { ...view!.coverMetric!.display, kind: cover.kind ?? "auto" } } : {
-      id: column.id, op: ["sum", "count"].includes(column.op) ? "sum" : "max", field: column.id, groupBy: groupKeyFields(query.grouping.keys),
+    const keys = groupKeyFields(query.grouping.keys), daily = view?.coverMetric?.field === column.id;
+    // A saved card keeps the grouping it was saved with, while the recipe's
+    // cover metric follows the current catalog. Group only by keys the saved
+    // result has: a key added to the recipe later is not a column of it.
+    const metric: AggregationClause = daily ? { ...view!.coverMetric!, id: column.id, groupBy: view!.coverMetric!.groupBy.filter(key => keys.includes(key)), display: { ...view!.coverMetric!.display, kind: cover.kind ?? "auto" } } : {
+      id: column.id, op: ["sum", "count"].includes(column.op) ? "sum" : "max", field: column.id, groupBy: keys,
       label: column.label ?? column.id, groupLimit: 12,
       display: { kind: cover.kind ?? "bar-horizontal", ...(unit === "percent" ? { format: { kind: "percent", decimals: 1 } } : unit === "ms" ? { format: { kind: "duration", sourceUnit: "milliseconds" } } : unit === "hours" ? { format: { kind: "number", decimals: 0 } } : {}) },
     };

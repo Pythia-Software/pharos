@@ -62,7 +62,7 @@
 .human-event-card blockquote{border-left-color:var(--eng-hue)}
 .reader-turn-card>small{display:block;margin-top:6px;color:var(--muted)}
 
-/* The workspace Timeline's lanes (LaneHumanEvents, label-session-ribbon.tsx) draw the same markers on their own rows. */
+/* The workspace Timeline's lanes (timeline-session-lane.tsx) draw the same rows (TimelineHumanRows) under their own classes. */
 .lt-human-track{display:block;position:relative;min-width:0;height:28px;overflow:hidden;border-bottom:1px solid var(--line)}
 .lt-human-events>summary .lt-session-row-label .app-icon:first-child{color:var(--muted)}
 .lt-human-dimension .lt-session-row-label>i.eng-glyph{width:10px;height:10px;background:none}

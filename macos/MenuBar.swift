@@ -57,6 +57,98 @@ struct MenuBarPreferences {
     subscript(_ key: String) -> Bool { values[key] == true }
 }
 
+/// A catalog upgrade a library's service start waits for, as GET
+/// /api/app/operations reports it (initialize_progress.go). Every word but
+/// the elapsed time is the broker's. Pure, for the harness.
+struct CatalogUpgrade: Equatable {
+    var step = 0
+    var steps = 0
+    var stepName = ""
+    /// The step's one-off work, such as "Build a new index on tool_calls (2.0M rows)".
+    var work: [String] = []
+    var startedAt: Date?
+    /// "about 3–6 min left", or why there is no estimate.
+    var label = ""
+    var basis: String?
+    /// The progress bar: a segment a step, sized by its planned estimate.
+    var segments: [Segment] = []
+    /// The share of the bar the finished steps fill.
+    var done = 0.0
+
+    struct Segment: Equatable {
+        var name: String
+        /// "done", "running" or "pending".
+        var state: String
+        var fraction: Double
+        /// How long a finished step took.
+        var seconds: Double?
+    }
+
+    /// The first running operation's upgrade; nil if none is running.
+    static func running(_ document: [String: Any]) -> CatalogUpgrade? {
+        guard let app = document["app"] as? [String: Any], let operations = app["operations"] as? [[String: Any]] else { return nil }
+        let ended: Set<String> = ["succeeded", "failed", "cancelled", "interrupted", "skipped"]
+        for operation in operations {
+            guard let state = operation["state"] as? String, !ended.contains(state),
+                  let value = operation["catalog_upgrade"] as? [String: Any] else { continue }
+            return CatalogUpgrade(value)
+        }
+        return nil
+    }
+
+    init(step: Int = 0, steps: Int = 0, stepName: String = "", work: [String] = [], startedAt: Date? = nil, label: String = "", basis: String? = nil,
+         segments: [Segment] = [], done: Double = 0) {
+        self.step = step; self.steps = steps; self.stepName = stepName; self.work = work
+        self.startedAt = startedAt; self.label = label; self.basis = basis
+        self.segments = segments; self.done = done
+    }
+
+    init(_ value: [String: Any]) {
+        step = (value["step"] as? NSNumber)?.intValue ?? 0
+        steps = (value["steps"] as? NSNumber)?.intValue ?? 0
+        stepName = value["step_name"] as? String ?? ""
+        work = value["work"] as? [String] ?? []
+        label = value["label"] as? String ?? ""
+        basis = (value["basis"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let format = ISO8601DateFormatter()
+        format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        startedAt = (value["started_at"] as? String).flatMap(format.date(from:))
+        segments = (value["segments"] as? [[String: Any]] ?? []).map { segment in
+            Segment(name: segment["name"] as? String ?? "", state: segment["state"] as? String ?? "pending",
+                    fraction: (segment["fraction"] as? NSNumber)?.doubleValue ?? 0, seconds: (segment["seconds"] as? NSNumber)?.doubleValue)
+        }
+        done = min(max((value["fraction_done"] as? NSNumber)?.doubleValue ?? 0, 0), 1)
+    }
+
+    /// The finished steps, for the bar's accessibility value.
+    var finishedSteps: Int { segments.filter { $0.state == "done" }.count }
+
+    /// "3 min 17 s so far".
+    func elapsed(at date: Date) -> String? {
+        guard let startedAt else { return nil }
+        return Self.duration(date.timeIntervalSince(startedAt)) + " so far"
+    }
+
+    /// "<1 s", "42 s" or "3 min 17 s".
+    static func duration(_ interval: Double) -> String {
+        if interval < 0.5 { return "<1 s" }
+        let seconds = Int(interval.rounded())
+        return seconds < 60 ? "\(seconds) s" : "\(seconds / 60) min \(seconds % 60) s"
+    }
+
+    /// "Step 3 of 8: Update request timings".
+    var stepLine: String? {
+        guard step > 0, steps > 0, !stepName.isEmpty else { return nil }
+        return "Step \(step) of \(steps): \(stepName)"
+    }
+
+    /// The broker's estimate and the time so far, at date.
+    func timeLine(at date: Date) -> String {
+        guard let elapsed = elapsed(at: date) else { return label }
+        return label.isEmpty ? elapsed : "\(label) · \(elapsed)"
+    }
+}
+
 /// What the broker's /api/app/state says about the selected library and any
 /// library operation, as the native menu shows it. Pure, for the harness.
 struct ManagedLibraryStatus: Equatable {

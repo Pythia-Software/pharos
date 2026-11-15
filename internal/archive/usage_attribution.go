@@ -355,6 +355,30 @@ func insertSessionRemainder(tx *sql.Tx, sessionID, hour, model string, counts to
 	return err
 }
 
+// recordUsageAttribution marks a workspace whose every stored conversation
+// was just written (conversations, with their ids) as attributed by this
+// version, so the Library upgrade does not replay it. A workspace that was not
+// current first gets the model labels replay would have repaired.
+func recordUsageAttribution(tx *sql.Tx, workspaceID string, usageCurrent bool, conversations []ConversationRecord, ids []string) error {
+	if !usageCurrent {
+		var missingModel bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE workspace_id=?
+			AND (COALESCE(model,'') IN ('','Unknown model') OR model GLOB '<*>'))
+			OR EXISTS(SELECT 1 FROM conversations WHERE workspace_id=?
+			AND (COALESCE(model,'') IN ('','Unknown model') OR model GLOB '<*>'))`, workspaceID, workspaceID).Scan(&missingModel); err != nil {
+			return err
+		}
+		if missingModel {
+			if err := repairModelSummaries(tx, workspaceID, conversations, ids); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
+		ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`, workspaceID, usageAttributionVersion)
+	return err
+}
+
 // RepairUsageAttribution replays stored messages one workspace at a time.
 // The version row commits with the corrected sessions and metrics.
 func (c *Catalog) RepairUsageAttribution(ctx context.Context, progress func(int, int)) (int, error) {

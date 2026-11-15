@@ -1511,6 +1511,11 @@ const outcomeSummaryMetrics: AggregationClause[] = [
   { id: "kept_lines", op: "sum", field: "kept_lines", groupBy: [] },
 ];
 const outcomeTierMetrics: AggregationClause[] = [{ id: "sessions", op: "count", groupBy: ["evidence_tier"] }];
+const outcomeReviewMetrics: AggregationClause[] = [
+  { id: "comments", op: "sum", field: "review_comments", groupBy: ["model_family"] },
+  { id: "pull_requests", op: "sum", field: "pull_requests", groupBy: ["model_family"] },
+];
+const outcomeReachedMetrics: AggregationClause[] = [...outcomeTierMetrics, { id: "pull_requests", op: "sum", field: "pull_requests", groupBy: [] }];
 const outcomeReworkMetrics: AggregationClause[] = [
   { id: "removed", op: "sum", field: "rework_removed_lines", groupBy: ["project_name"] },
   { id: "kept", op: "sum", field: "kept_lines", groupBy: ["project_name"] },
@@ -1561,8 +1566,9 @@ function OutcomesDashboard() {
   // Tiers are read over the whole library, so a filter never hides a
   // breakdown. Until that read succeeds the full catalog stands, so a link to
   // a Git breakdown neither redraws nor reads as a library without Git.
-  const reached = useMetrics("outcomes", [], outcomeTierMetrics);
-  const catalog = outcomeCatalogFor(reached.error || !reached.metrics.length ? undefined : outcomeTiersReached(metricBuckets(reached, "sessions")));
+  const reached = useMetrics("outcomes", [], outcomeReachedMetrics);
+  const catalog = outcomeCatalogFor(reached.error || !reached.metrics.length ? undefined : outcomeTiersReached(metricBuckets(reached, "sessions"), metricBuckets(reached, "pull_requests")));
+  const reviewed = metricBuckets(reached, "pull_requests").some(bucket => Number(bucket.value) > 0);
   return <CatalogDashboard catalog={catalog} linkCatalog={outcomesAnalysisCatalog} dataset="outcomes" name="outcomes" defaults={dashboardDefaults.outcomes}
     summary={where => <OutcomesSummary where={where} />}
     panels={where => <div className="outcome-panels">
@@ -1572,6 +1578,9 @@ function OutcomesDashboard() {
       <OutcomeRatioPanel title="Cost per kept change by model" where={where} clauses={outcomeKeptCostMetrics} breakdown="model_family" empty="No workspace recorded usage."
         note="Each main model's judged workspaces' cost (kept or reworked), over its kept changes that have a price."
         format={outcomeKeptCostCell} />
+      {reviewed && <OutcomeRatioPanel title="Review comments per pull request by model" where={where} clauses={outcomeReviewMetrics} breakdown="model_family" empty="No pull request has been read."
+        note="Comments other people or bots left on each main model's pull requests, over its pull requests read from their forge."
+        format={row => [row.ratio == null ? "—" : row.ratio.toLocaleString("en-US", { maximumFractionDigits: 1 }), `${row.denominator.toLocaleString("en-US")} pull requests read`]} />}
       <OutcomeCoveragePanel where={where} />
     </div>} />;
 }

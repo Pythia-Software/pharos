@@ -146,13 +146,21 @@ With the Settings switch on (preference `pharos-agent-events-v1`, read as a feat
 labels, its own background item (Agent events, hourly and adaptive). It uses the message labeler's worker, ONNX
 Runtime and budget (`labels_worker`, `labels_runtime`, `labels_thread_budget`, …) with its own threads per worker,
 `agent_events_threads` (Settings → Agent events → CPU threads, shown for CPU execution; unset, `labels_threads`), and the same power rules: each chain
-pass scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events`
-`backlog` run when plugged in and stops if this Mac goes onto battery.
+pass scores about 1,000 messages (`agentEventsChainLimit`), and also ends after 2,000 conversations or two minutes of
+preparation (`agentEventsChainConversations`, `agentEventsChainElapsed`): conversations with nothing to score count
+toward no message limit, so a library-wide re-read of them would otherwise hold the chain for an hour. A larger
+backlog continues as an `analysis.agent_events` `backlog` run when plugged in and stops if this Mac goes onto battery.
 
 Either backlog run (this one and message labels') can be stopped: Stop in its Background Processing item, or in the
 status panel, cancels it (`Op.setStopper`). Committed conversations remain; unfinished conversations are read again
 on the next run. Agent events prepares upcoming conversations with up to four CPU workers while the model
-scores the current window and a writer saves earlier results, one atomic transaction per conversation.
+scores the current window and a writer saves earlier results, one atomic transaction per conversation with rows
+to write. Conversations whose stored rows all stand (only their ledger row and dirty mark are written) share a
+transaction, up to 200 that are already waiting for the writer (`agentEventsStoreBatch`). Before each transaction
+the pass brings the execution dependency lookups its publication check reads up to date from a committed snapshot
+(`primeExecutionPublication`), so the transaction holds the catalog's write lock for its own rows only: on the
+audited 50,000-conversation library 200 such conversations commit in about a quarter of a second, where each alone
+took 0.1 to 1 s.
 A shared budget bounds queued candidates
 and message bookkeeping to three windows of about 512 rows, plus at most one conversation per preparation worker.
 Each preparation worker owns its builder state; results are handed off in conversation order, and a blocked
@@ -196,7 +204,9 @@ for each model, with automatic GPU capacity; see [device status](local-labeler.m
   The verifier's identity is its model identity (as the labels ledger's) plus `jayhawk-window-v1`, the lexicon,
   the units and the sentence versions; an imported row has no input hash, so the pass replaces it.
 - **Which conversations it looks at, newest first.** Those marked in `agent_events_dirty`, by the same triggers as
-  the labels ledger's (`itemDirtyTriggers`); those never built or whose structure fingerprint changed
+  the labels ledger's (`itemDirtyTriggers`) apart from authorship's (`agentEventsDirtyTriggers`): the pass reads
+  agent replies and thinking, whose units never consult a classification, so the daily authorship refine marks
+  nothing here; those never built or whose structure fingerprint changed
   (`agent_events_conversations`); those with rows another verifier made; and the forks of a conversation whose inputs
 changed, since what a fork inherited from its parent decides which replies are its own. A fork followed that way gets a
 dirty mark of its own, so a limited run that stops before it keeps it pending. Conversations that left the catalog lose
