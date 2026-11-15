@@ -62,6 +62,7 @@ func (f *freshnessFixture) builtToday() []string {
 		setMetaSQL("tool_ledger_generation", "7"), setMetaSQL("tool_rollup_generation", "7/"+toolRollupVersion),
 		setMetaSQL("tool_rollup_day", c.clock().Format("2006-01-02")), setMetaSQL("tool_rollup_timezone", toolRollupTimezone()),
 		setMetaSQL("tool_rollup_full_revision", "r1"), setMetaSQL("tool_rollup_built_full_revision", "r1"),
+		setMetaSQL("tool_rollup_price_revision", "p1"), setMetaSQL("tool_rollup_built_price_revision", "p1"),
 		setMetaSQL("authorship_inputs_generation", "3"), setMetaSQL("authorship_generation", "7:3/"+authorshipVersion), setMetaSQL("authorship_built_at", "2026-10-27T08:00:00Z"), setMetaSQL("authorship_complete_at", "2026-10-27T08:00:00Z"),
 		setMetaSQL("findings_generation", c.findingsGeneration()), setMetaSQL("findings_built_at", "2026-10-27T08:05:00Z"),
 		// Each completion was for the library's inputs as they are (7:3).

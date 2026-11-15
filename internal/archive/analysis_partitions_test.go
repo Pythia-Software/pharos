@@ -55,6 +55,29 @@ func assertToolReference(t *testing.T, c *Catalog) {
 	}
 }
 
+// peekToolRollup prepares, without publishing, the build the next rollup
+// would make; the rollup must be stale.
+func peekToolRollup(t *testing.T, c *Catalog) toolRollupBuild {
+	t.Helper()
+	generation, _, day, stale, err := c.toolRollupStale(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stale {
+		t.Fatal("the change left the rollup current")
+	}
+	conn, err := c.DB.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	build, err := c.prepareToolRollup(t.Context(), conn, generation, day, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return build
+}
+
 func TestIncrementalToolRollupParity(t *testing.T) {
 	slowTest(t)
 	c, _ := testCatalog(t)
@@ -277,15 +300,25 @@ func TestToolRollupMirrorsPricesAndRollover(t *testing.T) {
 	if err := c.ensureToolRollup(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for _, query := range []string{
-		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('conv-0','conv-1','mirror',1,'{}')`,
-		`UPDATE workspaces SET source_kind='codex',activity_at='2026-10-08T00:00:00.000Z' WHERE id='ws-1'`,
-		`UPDATE conversations SET workspace_id='ws-2' WHERE id='conv-1'`,
-		`DELETE FROM conversation_identity_links`,
-		`UPDATE cost_changes SET input_per_mtok=input_per_mtok+0.1 WHERE id=(SELECT id FROM cost_changes LIMIT 1)`,
+	// The cube reads none of these: links and moves only choose the mirrors,
+	// which every build recomputes, and prices re-price the daily table from
+	// the stored cube.
+	link := `INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('conv-0','conv-1','mirror',1,'{}')`
+	for _, change := range []struct {
+		query   string
+		reprice bool
+	}{
+		{link, false},
+		{`UPDATE workspaces SET source_kind='codex',activity_at='2026-10-08T00:00:00.000Z' WHERE id='ws-1'`, false},
+		{`UPDATE conversations SET workspace_id='ws-2' WHERE id='conv-1'`, false},
+		{`DELETE FROM conversation_identity_links`, false},
+		{`UPDATE cost_changes SET input_per_mtok=input_per_mtok+0.1 WHERE id=(SELECT id FROM cost_changes LIMIT 1)`, true},
 	} {
-		if _, err := c.DB.Exec(query); err != nil {
+		if _, err := c.DB.Exec(change.query); err != nil {
 			t.Fatal(err)
+		}
+		if build := peekToolRollup(t, c); build.full || build.reprice != change.reprice {
+			t.Fatalf("%s: full=%v reprice=%v", change.query, build.full, build.reprice)
 		}
 		if err := c.ensureToolRollup(t.Context()); err != nil {
 			t.Fatal(err)

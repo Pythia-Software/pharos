@@ -236,7 +236,7 @@ type freshnessCapture struct {
 // freshnessMetaKeys are the meta rows the ledger reads, in one query.
 var freshnessMetaKeys = []string{"message_trigram_version", toolOutputMergedKey, "text_search_documents_version", "text_search_documents_cursor", "tool_command_fts_version",
 	"human_query_text_fts_ready", "tool_query_text_fts_ready", "tool_query_facts_ready", "workspace_library_version",
-	"tool_ledger_generation", "tool_rollup_generation", "tool_rollup_day", "tool_rollup_timezone", "tool_rollup_full_revision", "tool_rollup_built_full_revision",
+	"tool_ledger_generation", "tool_rollup_generation", "tool_rollup_day", "tool_rollup_timezone", "tool_rollup_full_revision", "tool_rollup_built_full_revision", "tool_rollup_price_revision", "tool_rollup_built_price_revision",
 	"authorship_inputs_generation", "authorship_generation", "authorship_built_at", "authorship_quick_generation", "authorship_quick_at", "authorship_complete_at", "authorship_refined_at", "findings_generation", "findings_built_at",
 	"findings_inputs_generation", "analysis_inputs:identities", "analysis_inputs:git", upgradeCountKey, initializedBuildKey}
 
@@ -852,7 +852,8 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	changedAt, isDeferred := pendingDeferral("tools")
 	layout := strings.HasSuffix(built, "/"+toolRollupVersion)
 	stale := built != meta["tool_ledger_generation"]+"/"+toolRollupVersion || dirty > 0 ||
-		meta["tool_rollup_timezone"] != toolRollupTimezone() || meta["tool_rollup_full_revision"] != meta["tool_rollup_built_full_revision"]
+		meta["tool_rollup_timezone"] != toolRollupTimezone() || meta["tool_rollup_full_revision"] != meta["tool_rollup_built_full_revision"] ||
+		meta["tool_rollup_price_revision"] != meta["tool_rollup_built_price_revision"]
 	switch {
 	case metaErr != nil || deferredErr != nil || dirtyErr != nil:
 		tools.state = freshUnknown

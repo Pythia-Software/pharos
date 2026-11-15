@@ -286,8 +286,9 @@ func reresolveToolPaths(tx *sql.Tx, directories []string) error {
 			changed = true
 		}
 	}
+	// The tool_calls update triggers mark each changed call's workspace.
 	if changed {
-		return bumpToolLedgerGeneration(tx)
+		return bumpToolLedgerPartitionGeneration(tx)
 	}
 	return nil
 }

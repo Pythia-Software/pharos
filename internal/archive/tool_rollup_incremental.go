@@ -13,8 +13,10 @@ import (
 var errToolPublicationChanged = errors.New("another tool rollup was published during construction")
 
 type toolRollupBuild struct {
-	full                                                 bool
-	generation, day, fullRevision, publication, timezone string
+	// full re-aggregates every call; reprice re-sums and re-prices every day
+	// from the stored cube.
+	full, reprice                                                       bool
+	generation, day, fullRevision, priceRevision, publication, timezone string
 }
 
 func (c *Catalog) updateToolRollup(ctx context.Context, generation, day string, force bool) error {
@@ -75,6 +77,14 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	if err != nil {
 		return build, err
 	}
+	priceRev, err := readMeta(snapshot, ctx, "tool_rollup_price_revision")
+	if err != nil {
+		return build, err
+	}
+	builtPriceRev, err := readMeta(snapshot, ctx, "tool_rollup_built_price_revision")
+	if err != nil {
+		return build, err
+	}
 	publication, err := readMeta(snapshot, ctx, "tool_rollup_publication")
 	if err != nil {
 		return build, err
@@ -90,7 +100,8 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	}
 	zone := toolRollupTimezone()
 	build = toolRollupBuild{timezone: zone, full: force || !strings.HasSuffix(built, "/"+toolRollupVersion) || builtRev != fullRev || builtZone != zone,
-		generation: generation, day: day, fullRevision: fullRev, publication: publication}
+		generation: generation, day: day, fullRevision: fullRev, priceRevision: priceRev, publication: publication}
+	build.reprice = !build.full && priceRev != builtPriceRev
 	if _, err := snapshot.ExecContext(ctx, "CREATE TEMP TABLE tool_dirty_build AS SELECT * FROM tool_rollup_dirty"); err != nil {
 		return build, err
 	}
@@ -148,8 +159,12 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 			return build, err
 		}
 	} else {
-		if _, err := snapshot.ExecContext(ctx, `CREATE TEMP TABLE tool_day_build AS SELECT DISTINCT day FROM main.tool_call_cube
- WHERE workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build)
+		// New prices re-price every day, summed again from the stored cube.
+		days := `SELECT DISTINCT day FROM main.tool_call_cube WHERE workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build)`
+		if build.reprice {
+			days = `SELECT DISTINCT day FROM main.tool_call_cube`
+		}
+		if _, err := snapshot.ExecContext(ctx, `CREATE TEMP TABLE tool_day_build AS `+days+`
  UNION SELECT DISTINCT day FROM temp.tool_cube_build`); err != nil {
 			return build, err
 		}
@@ -245,7 +260,8 @@ func (c *Catalog) publishToolPartitions(ctx context.Context, conn *sql.Conn, bui
 	// Earlier builds rebuild the whole rollup when tool_rollup_day is
 	// not today; keep recording it for a library they also open.
 	for key, value := range map[string]string{"tool_rollup_generation": build.generation, "tool_rollup_day": build.day, "tool_rollup_timezone": build.timezone, "tool_rollup_built_full_revision": build.fullRevision,
-		"tool_rollup_writer_ms": fmt.Sprint(time.Since(started).Milliseconds())} {
+		"tool_rollup_built_price_revision": build.priceRevision,
+		"tool_rollup_writer_ms":            fmt.Sprint(time.Since(started).Milliseconds())} {
 		if _, err := tx.ExecContext(ctx, "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
 			return err
 		}

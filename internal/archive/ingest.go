@@ -2543,8 +2543,9 @@ func (c *Catalog) reconcileIdentities(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	if after != before {
-		// New links can change which mirror represents the work in Tools.
-		if err := bumpToolLedgerGeneration(c.DB); err != nil {
+		// New links can change which mirror represents the work in Tools;
+		// the link triggers mark their workspaces for the next rollup.
+		if err := bumpToolLedgerPartitionGeneration(c.DB); err != nil {
 			return 0, err
 		}
 	}
