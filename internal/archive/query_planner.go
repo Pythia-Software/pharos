@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 )
 
@@ -33,10 +34,6 @@ func (c *Catalog) ensureQueryPlannerStatistics(ctx context.Context) error {
 			return err
 		}
 	}
-	var exists bool
-	if err := conn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='sqlite_stat1')").Scan(&exists); err != nil {
-		return err
-	}
 	var limit int
 	if err := conn.QueryRowContext(ctx, "PRAGMA analysis_limit").Scan(&limit); err != nil {
 		return err
@@ -45,20 +42,41 @@ func (c *Catalog) ensureQueryPlannerStatistics(ctx context.Context) error {
 		return err
 	}
 	defer conn.ExecContext(context.WithoutCancel(ctx), fmt.Sprintf("PRAGMA analysis_limit=%d", limit))
+	missing, err := plannerTablesToAnalyze(ctx, conn)
+	if err != nil {
+		return err
+	}
 	for _, table := range queryPlannerTables {
-		var analyzed bool
-		if exists {
-			if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_stat1 WHERE tbl=?)
- AND NOT EXISTS(SELECT 1 FROM sqlite_schema i WHERE i.type='index' AND i.tbl_name=? AND i.sql IS NOT NULL
- AND NOT EXISTS(SELECT 1 FROM sqlite_stat1 s WHERE s.idx=i.name))`, table, table).Scan(&analyzed); err != nil {
-				return err
-			}
-		}
-		if !analyzed {
+		if missing[table] {
 			if _, err := conn.ExecContext(ctx, "ANALYZE "+sqlIdentifier(table)); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// plannerTablesToAnalyze are the query-source tables without statistics,
+// or with an index that has none. The startup upgrade's plan reads it too
+// (initialize_progress.go), before the indexes this build adds exist.
+func plannerTablesToAnalyze(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (map[string]bool, error) {
+	var exists bool
+	if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='sqlite_stat1')").Scan(&exists); err != nil {
+		return nil, err
+	}
+	missing := map[string]bool{}
+	for _, table := range queryPlannerTables {
+		var analyzed bool
+		if exists {
+			if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_stat1 WHERE tbl=?)
+ AND NOT EXISTS(SELECT 1 FROM sqlite_schema i WHERE i.type='index' AND i.tbl_name=? AND i.sql IS NOT NULL
+ AND NOT EXISTS(SELECT 1 FROM sqlite_stat1 s WHERE s.idx=i.name))`, table, table).Scan(&analyzed); err != nil {
+				return nil, err
+			}
+		}
+		missing[table] = !analyzed
+	}
+	return missing, nil
 }

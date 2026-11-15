@@ -34,6 +34,9 @@ type executionResolution struct {
 	// and owning stream); copies, each copied launch's copy claim.
 	launches map[sourceRef]executionClaim
 	copies   map[sourceRef]executionClaim
+	// mirroredLaunches are launch streams joined with the same call retained
+	// in a mirror of their transcript (joinMirroredLaunches).
+	mirroredLaunches map[sourceRef]bool
 }
 
 // Parent precedence after provenance validation: originating launch
@@ -290,6 +293,123 @@ func (r *executionResolution) sameCallCopies(claims []executionClaim) []executio
 	return out
 }
 
+// joinMirroredLaunches identifies the launch calls of a mirror. A transcript
+// retained twice (a Conductor copy of a Claude Code session, for example) retains
+// each of its launch calls twice, and the copies may not agree on what the
+// call created: Conductor's acknowledgement names no agent, and it records
+// the agent's usage on its launch. Two launches are one call when they share
+// a provider call ID in one namespace and their transcripts are mirrors this
+// resolution joined; a launch that acknowledges a transcript the other's
+// target is not stays apart. The joined claim is a mirror identity between
+// the two launch streams, so it yields to a stronger creation edge like any
+// other. Unlike sameCallCopies, neither launch is a copy: the mirror's
+// reported usage is a second observation of the same execution
+// (MirroredLaunch).
+func (r *executionResolution) joinMirroredLaunches(claims []executionClaim, refs []sourceRef, u *executionUnion, launchTargets map[sourceRef]map[sourceRef]evidenceStrength,
+	conflicted map[sourceRef]bool, rejected map[executionClaim]string, bySubject map[sourceRef][]executionClaim, join func(executionClaim)) {
+	family := map[string]string{}
+	var find func(string) string
+	find = func(cid string) string {
+		parent, ok := family[cid]
+		if !ok || parent == cid {
+			return cid
+		}
+		root := find(parent)
+		family[cid] = root
+		return root
+	}
+	for _, claim := range claims {
+		if claim.Kind != claimMirror || claim.Strength < evidenceLegacy || rejected[claim] != "" || claim.Subject.Kind != sourceConversation || claim.Object.Kind != sourceConversation {
+			continue
+		}
+		if _, ok := u.parent[claim.Subject]; !ok {
+			continue
+		}
+		if _, ok := u.parent[claim.Object]; !ok || u.find(claim.Subject) != u.find(claim.Object) {
+			continue // the mirror itself did not join
+		}
+		a, b := find(claim.Subject.ID), find(claim.Object.ID)
+		family[a], family[b] = a, a
+	}
+	if len(family) == 0 {
+		return
+	}
+	type call struct{ namespace, id, family string }
+	groups := map[call][]sourceRef{}
+	keys := []call{}
+	for _, ref := range refs {
+		s := r.streams[ref]
+		if ref.Kind != sourceSession || !s.Launch || s.NativeID == "" || !providerEventIDs[s.Provider] || conflicted[ref] {
+			continue
+		}
+		if _, ok := u.parent[ref]; !ok {
+			continue // a copied launch binds through its original
+		}
+		if _, ok := family[s.ConversationID]; !ok {
+			continue
+		}
+		k := call{s.Provider + "/" + s.Account, s.NativeID, find(s.ConversationID)}
+		if groups[k] == nil {
+			keys = append(keys, k)
+		}
+		groups[k] = append(groups[k], ref)
+	}
+	// target is the component a launch's strongest acknowledgement names, if
+	// any. Equally strong targets are one component here, or a conflict.
+	target := func(launch sourceRef) (sourceRef, bool) {
+		best, found := evidenceStrength(0), sourceRef{}
+		for _, object := range slices.SortedFunc(maps.Keys(launchTargets[launch]), func(a, b sourceRef) int { return strings.Compare(a.String(), b.String()) }) {
+			if _, ok := u.parent[object]; ok && launchTargets[launch][object] > best {
+				best, found = launchTargets[launch][object], u.find(object)
+			}
+		}
+		return found, best > 0
+	}
+	for _, k := range keys {
+		group := groups[k]
+		if len(group) < 2 {
+			continue
+		}
+		// The launch that acknowledges a transcript anchors the call.
+		primary := group[0]
+		for _, ref := range group {
+			if _, ok := target(ref); ok {
+				primary = ref
+				break
+			}
+		}
+		for _, other := range group {
+			if other == primary || r.streams[other].ConversationID == r.streams[primary].ConversationID {
+				continue
+			}
+			if a, ok := target(primary); ok {
+				if b, ok := target(other); ok && a != b {
+					continue // each names a different transcript
+				}
+			}
+			claim := executionClaim{Kind: claimMirror, Subject: other, Object: primary, Strength: evidenceDerived,
+				Namespace: k.namespace, IDKind: idKindCallID, Rule: "mirrored-launch-call-id/v1", Locator: other}
+			join(claim)
+			if u.find(other) != u.find(primary) {
+				continue
+			}
+			if r.mirroredLaunches == nil {
+				r.mirroredLaunches = map[sourceRef]bool{}
+			}
+			r.mirroredLaunches[other], r.mirroredLaunches[primary] = true, true
+			bySubject[other] = append(bySubject[other], claim)
+		}
+	}
+}
+
+// MirroredLaunch reports whether a launch session was joined with the same
+// call in a mirror of its transcript. Its reported usage observes the same
+// work as the execution's other streams, so it counts only when none of
+// them reports any.
+func (r *executionResolution) MirroredLaunch(session string) bool {
+	return r.mirroredLaunches[sourceRef{sourceSession, session}]
+}
+
 func resolveExecutions(e *executionEvidence) *executionResolution {
 	r := &executionResolution{
 		Revision:   executionRevision{Resolver: executionResolverVersion, Generation: e.Generation},
@@ -501,6 +621,7 @@ func resolveExecutions(e *executionEvidence) *executionResolution {
 		conflicted[launch] = true
 		r.Conflicts = append(r.Conflicts, identityConflict{Sources: append([]sourceRef{launch}, objects...), Claims: strongest, Reason: "one launch acknowledges several transcripts"})
 	}
+	r.joinMirroredLaunches(claims, refs, u, launchTargets, conflicted, rejected, bySubject, join)
 	// Conflicts are found by iterating maps: list them in a stable order.
 	for i := range r.Conflicts {
 		sort.Slice(r.Conflicts[i].Claims, func(a, b int) bool {

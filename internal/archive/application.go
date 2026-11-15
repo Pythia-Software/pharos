@@ -302,6 +302,11 @@ func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, c
 	}()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
+	// A catalog upgrade's steps and estimate, read about once a second, so
+	// the window can say what the service is doing while it cannot answer.
+	var upgradeChecked time.Time
+	upgradeStep := ""
+	defer m.operations.setCatalogUpgrade(start, nil)
 	timeout := time.NewTimer(2 * time.Minute)
 	defer timeout.Stop()
 	for {
@@ -315,13 +320,21 @@ func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, c
 			// Upgrades run before the service publishes its endpoint. Killing
 			// one here rolls back its migration and makes every retry start over.
 			if catalogInitializationInProgress(config.CatalogPath) {
-				start.Step("Upgrade the library's catalog", "Waiting for catalog initialization to finish", -1)
+				if upgradeStep == "" {
+					// An upgrade from a build without a progress file.
+					upgradeStep = catalogUpgradeWaiting
+					start.Step("Upgrade the library's catalog", upgradeStep, -1)
+				}
 				timeout.Reset(2 * time.Minute)
 				continue
 			}
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 			return nil, fmt.Errorf("opening %s took too long", l.Name)
 		case <-ticker.C:
+			if time.Since(upgradeChecked) >= time.Second {
+				upgradeChecked = time.Now()
+				upgradeStep = m.reportCatalogUpgrade(start, config.CatalogPath, cmd.Process.Pid, upgradeStep)
+			}
 			b, e := os.ReadFile(path)
 			if e != nil {
 				continue
@@ -343,6 +356,38 @@ func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, c
 			}
 		}
 	}
+}
+
+// catalogUpgradeWaiting is the step's detail for an upgrade by a build
+// without a progress file, which the broker only knows by its lock.
+const catalogUpgradeWaiting = "Waiting for catalog initialization to finish"
+
+// reportCatalogUpgrade shows the catalog upgrade a starting service waits
+// for: the service's own, or another process's that holds the catalog's
+// initialize lock. A file a stopped upgrade left behind is neither.
+// It returns the step it last named, which it names again only on a change.
+// Once the file is gone (the upgrade ended) or stale, it detaches the
+// upgrade, and the start is back to waiting for the service.
+func (m *applicationManager) reportCatalogUpgrade(start *Op, catalog string, pid int, named string) string {
+	progress, ok := readInitializeProgress(catalog)
+	if !ok || (progress.PID != pid && !catalogInitializationInProgress(catalog)) {
+		m.operations.setCatalogUpgrade(start, nil)
+		if named == "" || named == catalogUpgradeWaiting {
+			return named
+		}
+		start.Step("Start the library's service", "", -1)
+		return ""
+	}
+	view := progress.view(time.Now())
+	detail := "Preparing the upgrade"
+	if view.Step > 0 {
+		detail = fmt.Sprintf("Step %d of %d: %s", view.Step, view.Steps, view.StepName)
+	}
+	if detail != named {
+		start.Step("Upgrade the library's catalog", detail, -1)
+	}
+	m.operations.setCatalogUpgrade(start, &progress)
+	return detail
 }
 
 // childIDsLocked lists the libraries whose services are running.

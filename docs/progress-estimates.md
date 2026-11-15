@@ -133,6 +133,57 @@ ingestion/capture progress hooks, and
 resumption, warm-up, stale observations, workload changes, history isolation,
 concurrent jobs, accessible bars, narrow panels, and upgrade handoffs.
 
+## Startup upgrades
+
+A new build runs `Catalog.Initialize` once on each library before its service
+can answer: schema changes, new indexes, backfills and version catch-ups. The
+window then says "Upgrading your library for this version of Pharos", that it
+happens once after an update, the step ("Step 3 of 8: Update request
+timings"), the step's one-off work ("Build a new index on tool_calls (1.8M
+rows)"), a range of the time left with its basis, the time so far and a
+checklist of the steps with each finished one's time
+(`CatalogUpgradeView`; the transport is in
+[background work §3.5](background-work.md#35-e-transitions)). A short window
+drops the checklist.
+
+Its bar has a segment a step, sized by the step's estimate as planned (at
+least 4% each, so quick steps stay visible) and fixed for the upgrade, so
+rescaling never moves it. Finished steps fill their segments. The running
+step's segment shows a moving highlight, not a fill: no statement in a step
+reports how far it is, and the bar never animates elapsed time toward a
+fill. Its accessible value is "3 of 8 steps done".
+
+Each upgrade is a one-off, so its estimate sums two parts per step:
+
+- **Routine work** every upgrade repeats is timed per step from this
+  library's last ten upgrades on this Mac (`activity_durations:<host>:initialize-v1`),
+  from the steps that did no one-off work. Before any are recorded, the
+  journal's earlier `catalog.initialize` durations (shortest to median) are
+  split across steps by shares measured on a large library.
+- **One-off work** is found before it runs: indexes in Initialize's statement
+  lists that the catalog lacks (`initializeIndexSources`), planner statistics
+  those or other indexes need, and usage estimates a new estimator clears.
+  Each is priced by its kind's units: rows for an index or a scan, rows ×
+  indexes for statistics, read from `sqlite_stat1` or the largest rowid
+  without reading the table. Rates come from this library's earlier steps
+  with one kind of work, else defaults measured on a 110 GB library quiet and
+  busy (an index on 1.8M rows took 35 s quiet and 75 s busy; clearing
+  estimates over 16.4M rows 28 s and 227 s).
+
+Once finished steps add up to ten seconds of estimate, their time over their
+estimates rescales the steps left (bounded to half to four times), so a busy
+drive shows at once. A step more than 30 s past its high estimate withdraws
+the countdown ("This step is taking longer than estimated"); a step without a
+basis (no earlier upgrade, or rows that could not be counted) gives no range.
+On 2026-11-15 the 0.9.7 → 0.9.8 upgrade of that library started at "About 1–7
+min left" and took 110 s on a quiet drive and about 7 min on a busy one.
+
+**Adding a migration.** An index on a large table belongs in one of the
+statement lists `initializeIndexSources` reads, so its build is announced and
+priced. Other whole-table work (a backfill, a clear on a version change) adds
+a detector to `planInitializeOneOffs` with the tables it reads and its kind;
+work it cannot see is only timed, as routine, from the next upgrade on.
+
 ## Whole-operation forecasting and evaluation
 
 An operation declares the work it will do before forecasting: discovery, source

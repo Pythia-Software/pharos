@@ -472,9 +472,13 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 		{"git", func(ctx context.Context) error { return s.Catalog.refreshMainIntegrations(ctx) }},
 		// Commit links (outcome_git.go) start from the outcomes the rollup
 		// derives, so they follow it here, never on a page's request, as
-		// does spend by branch (branch_usage.go).
+		// does spend by branch (branch_usage.go). Which pull requests are a
+		// workspace's own follows both (pull_request_reviews.go): it reads
+		// no forge, so it runs whether or not reading reviews is on, and a
+		// pull request a session just opened is there for the next reading
+		// pass to find due.
 		{"tools", func(ctx context.Context) error {
-			return errors.Join(s.Catalog.ensureToolRollup(ctx), s.Catalog.refreshSessionGit(ctx), s.Catalog.refreshBranchUsage(ctx))
+			return errors.Join(s.Catalog.ensureToolRollup(ctx), s.Catalog.refreshSessionGit(ctx), s.Catalog.refreshBranchUsage(ctx), s.Catalog.refreshPullRequestWorkspaces(ctx))
 		}},
 		{"authorship", func(ctx context.Context) error {
 			// A page may already be estimating older inputs. Wait for that

@@ -1056,6 +1056,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.postSessionPreferences(w, body)
 	case path == "/api/labels/settings":
 		s.postLabelsSettings(w, r, body)
+	case path == "/api/pull-request-reviews/settings":
+		s.postPullRequestReviewsSettings(w, r, body)
 	case path == "/api/capture":
 		s.startCapture(w, body)
 	case path == "/api/index":
