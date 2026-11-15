@@ -1,7 +1,7 @@
 # Importer plugins: bringing transcripts in from other places
 
-Design, revised 2026-11-15 against master. **Proposal: nothing here is built,
-and the decisions marked "Proposed" await the owner.** This document replaces
+Design, revised 2026-11-15 against master, with the owner's decisions of the
+same day (listed under [Decisions](#decisions)). **Nothing here is built.** This document replaces
 the *Importers* and *Cursors* sections of [plugins](plugins.md) and the import
 parts of the [implementation plan](plugins-implementation.md). The shared
 plugin model (manifest, consent, installing, limits, the run contract) stays in
@@ -110,27 +110,21 @@ That importer is part of this work:
 Three properties of envelopes shape the design:
 
 - **An envelope is a whole capture, not a change.** Every export is a new
-  `<id>/` folder holding every member. Fetching one every few hours would
-  move the whole history each time. Proposed: Pharos gives each installation
-  a private `state_dir` that survives runs; an importer keeps the previous
-  envelope's members there and fetches only members whose `sha256` it lacks
-  (the envelope lists them), then assembles the new envelope for Pharos to
-  verify. The byte limit counts what was fetched. A content-addressed outbox
-  on the sending side would make this cheap for buckets too; that is a
-  request to the capture-export owner, not something to work around here.
+  `<id>/` folder holding every member, so moving one every few hours would
+  move the whole history each time. Envelopes therefore travel in the
+  [pushed layout](#pushing-from-a-machine-that-runs-pharos), which stores
+  each member once by its hash; the importer fetches only what it lacks and
+  reassembles the envelope for Pharos to verify. The envelope format itself
+  does not change.
 - **Hashes detect corruption; they do not authenticate the sender.** Whoever
   can write where the importer fetches from can add conversations to the
-  library. Consent says so in those words for bucket and shared-folder
-  importers.
-- **Ask Pharos exclusions do not travel.** `ask_native_sessions` is applied
-  before parsing, in the library that ran Ask. An envelope from another
-  machine that runs Ask Pharos would bring its private Ask sessions in as
-  conversations. Until the envelope carries that exclusion list (a second
-  request to the capture-export owner), an envelope whose host has run Ask
-  Pharos cannot be told apart, so the review screen names the risk and the
-  importer lands envelopes only from hosts the person confirms do not use Ask
-  there. Recorded as a blocker for unattended envelope imports, not an
-  opt-out.
+  library. That is the person's choice to make: setup recommends a bucket
+  that needs credentials to write and says why, and does not refuse one that
+  does not.
+- **Ask Pharos sessions travel as conversations.** `ask_native_sessions`
+  is applied in the library that ran Ask, so an envelope from another
+  machine that uses Ask Pharos brings those sessions in as ordinary
+  conversations. Decided: that is acceptable.
 
 ### `export`: provider export files
 
@@ -148,8 +142,8 @@ name no machine: an export does not acquire the device that downloaded it.
 Unchanged in form; see [Usage imports](plugins.md#usage-imports). Corrections:
 
 - `cost.status` gains `partial`, which the labeling ledger records when only
-  part of a request's usage could be priced. Its `usd` is a floor and does
-  not count as cost, like every status other than `priced` and `assumed`.
+  part of a request's usage could be priced. Whether its `usd` counts as
+  cost is [open](#decisions).
 - Labeling usage is a **usage kind** (`automation`, with the job and dataset
   as fields), not a new channel. Channel answers how work started, and
   `automation:<name>` already names a message sender.
@@ -176,7 +170,7 @@ The old design invented `imp_…` hosts. Instead:
   the importer's hint (`/etc/machine-id`), so Machine and Execution machine
   work for remote sessions with no new dimension. Without a hint the machine
   is derived from the host, and never guessed from a hostname.
-- **Ephemeral machines are one machine per pool. Proposed.** A manifest or
+- **Ephemeral machines are one machine per pool.** A manifest or
   drop may declare a machine `pool` (for example "CI runners" or a dev
   container's project). Every container in the pool is the same machine and
   host, of kind `cloud`; the container's own ID stays in the run record as
@@ -243,6 +237,14 @@ Processing, under **Plugins**:
 
 `after_index` and `threshold` are exporter triggers and do not apply.
 
+### A place to keep state
+
+Besides `output_dir`, which lasts one run, each installation gets a private
+`state_dir` in the library that survives runs. An importer keeps there what
+saves it fetching again, such as the members of the last envelope. Pharos
+never reads it, counts it against the byte limit, and deletes it on
+uninstall, on Recover library and whenever the person asks.
+
 ### Process supervision
 
 Supervision lives in a reviewed native leaf, `plugin_process*.go`, listed in
@@ -267,9 +269,9 @@ Limits, revised:
 | Memory | sampling the group's footprint where a process-tree reader exists |
 | CPU time | sampled with memory, as a multiple of the grant |
 
-`RLIMIT_CPU` and `RLIMIT_FSIZE` are dropped: Go cannot set them per child on
-darwin, and a launcher shim is one more native binary to sign and review for
-limits that sampling already covers. Where no process-tree reader exists
+There is no `RLIMIT_CPU` or `RLIMIT_FSIZE`: Go cannot set them per child on
+darwin, and a launcher shim would be one more native binary to sign and
+review for limits that sampling already covers. Where no process-tree reader exists
 (Linux today), memory and CPU limits are reported as not enforced, never as
 passed.
 
@@ -297,15 +299,18 @@ clears every importer's cursor, trigger state and run state, and starts
 every plugin paused, with the same notice exporters get. Sending again is
 safe by design.
 
-## The four places
+## The places
 
-| Place | How it comes in | Needs |
+| Place | How it comes in | Needs on that machine |
 |---|---|---|
-| SSH host | `ssh_pull.py`, `files` drops, today. Later, where Pharos runs there: fetch `capture-export` envelopes | Nothing on the host; later a Linux Pharos CLI |
-| Dev container or cloud environment that stays up | The same importer through the tool's own transport (`ssh`, `docker exec`, the provider's CLI), `files` drops, machine `pool` | The transport on this Mac |
-| CI runner and other short-lived machines | A step at the end of the job copies the agent folders to a bucket or artifact store; a bucket importer brings them as `files` drops, machine `pool` | A push step; nothing to pull from once the machine is gone |
-| Portable machine pushing to a bucket | It runs Pharos: `capture` and `capture-export` to an outbox, synced to the bucket by the person's own tool (`aws s3 sync`, `rclone`); a bucket importer fetches and Pharos verifies | Works today from a Mac; Linux needs the CLI |
+| SSH host | Pulled: `ssh_pull.py`, `files` drops. Or pushed, as below | Nothing to pull; the Linux CLI to push |
+| Dev container or cloud environment that stays up | Pulled through the tool's own transport (`ssh`, `docker exec`, the provider's CLI) as `files` drops, or pushed | Nothing, or the Linux CLI |
+| CI runner and other short-lived machines | Pushed before the machine goes away | The Linux CLI and an upload credential |
+| Portable machine | Pushed to a bucket | Pharos, or the Linux CLI |
 | One-off export files | `export` drops into the export collector | — |
+
+All of these are supported: pulling raw files from a machine that runs
+nothing of ours, and pushing from a machine that runs Pharos's collector.
 
 `ssh_pull.py` changes that follow: read `kinds.json` instead of its own
 patterns; fetch Codex `.jsonl.zst` rollouts; look in `~/.config/claude` and
@@ -314,47 +319,127 @@ when the person's parameters say to (never by reading the remote environment
 unasked); dump only `CaptureTables` from a state database when the remote
 `sqlite3` allows, falling back to `.backup`, which Pharos filters on capture.
 
-**Bucket credentials.** Pharos stores none and ships no cloud SDK. A bucket
-importer calls the person's installed tool with a profile they name in the
-install form; `fetches_from` shows the bucket and prefix, **Allow on this
-Mac** shows the tool and profile found here, and consent carries the
-"anyone who can write here" sentence above.
+### Pushing from a machine that runs Pharos
 
-## Decisions for the owner
+**A prebuilt Linux CLI.** Releases gain a static `pharos` binary for Linux
+(x86-64 and arm64) that someone adds to a machine with one download. Its
+supported surface there is deliberately small: `capture`, `capture-export`,
+`capture-export-verify` and the new `capture-push`. It keeps a capture root
+and nothing else: no library, catalog, service or UI. This is the "Linux
+host" task the portability guide sets apart, scoped to those commands, and it
+is done when they have run and passed their lifecycle tests on Linux, not
+when they cross-compile. A Mac pushes with the same command from the app's
+own binary.
 
-1. **Pull files, or run Pharos's collector remotely?** Proposed: both forms,
-   one collection path. Build `files` first, since it works on any machine
-   today and reuses capture; build the envelope importer second, since master
-   needs it anyway and it serves Macs at once; treat a Linux Pharos CLI as its
-   own task.
-2. **Buckets.** Proposed: the pusher is Pharos's own `capture-export` plus the
-   person's sync tool, with no Pharos push agent and no stored credentials.
-   Two requests go to the capture-export owner: a content-addressed outbox,
-   and the Ask exclusion list in the envelope.
-3. **Sandboxes.** Proposed: pull while alive where the environment persists,
-   push at exit where it does not, and one machine per declared pool.
-4. **The same conversation twice.** Already one conversation with several
-   copies under the registry's identity; no change proposed.
-5. **`partial` usage cost.** Proposed: a floor that does not count as cost.
-   The alternative is to count the known part and mark the total incomplete.
-6. **Dropping `RLIMIT_CPU` and `RLIMIT_FSIZE`** in favour of sampling, rather
-   than adding a launcher shim.
+**`pharos capture-push DESTINATION`** captures the sources it was told
+about, exports each, and uploads what the destination lacks:
 
-## Order of work, once agreed
+```text
+<prefix>/members/<sha256>            each envelope member, stored once
+<prefix>/exports/<host>/<source>/<id>.json   the envelope's export.json
+<prefix>/heads/<host>/<source>.json  the newest envelope ID, written last
+```
 
-1. Contracts: drop `form`, machine `pool`, `state_dir`, withdraw
-   `pharos-drop/1`, `kinds.json` with its Go test.
+- It is incremental at both ends. Capture copies only what changed; the
+  pusher remembers which members it uploaded (and can ask the bucket when
+  its credential may), so a turn that added a few kilobytes uploads a few
+  kilobytes. The head is written last, so a reader never sees an envelope
+  whose members are not all there.
+- Old envelopes and members no head refers to can be removed by the
+  bucket's own lifecycle rule; nothing depends on them.
+- It needs no cloud toolchain. Uploads are plain HTTPS from the binary,
+  reusing the S3, GCS and Azure clients that cloud backups already have
+  (`cloud_upload.go`). Out of the box:
+
+  | Destination | Credential |
+  |---|---|
+  | Amazon S3 and S3-compatible stores | an access key, ideally one that may only put objects under the prefix |
+  | Google Cloud Storage | an HMAC key (the same signing as S3), or a service-account key |
+  | Azure Blob Storage | a SAS URL for the container or prefix |
+  | Anything else that accepts an HTTPS `PUT` | a URL template and an optional header, covering pre-signed and unauthenticated endpoints |
+
+  A credential comes from an environment variable or a file, never from the
+  command line. A write-only credential is enough and is what setup
+  suggests: a sandbox then holds nothing that can read other machines'
+  transcripts. Nothing assumes `aws`, `gcloud` or `az` is installed or
+  signed in, on either end.
+
+**Run it from the agent's own hooks.** Setup shows, per agent app, the
+snippet that runs the push automatically: for Claude Code a `Stop` hook (and
+`SessionEnd`), so every turn is uploaded as it finishes, which is what makes
+short-lived machines work without a reliable exit step; for others, the
+nearest equivalent or a timer. For that to be safe in a hook, `capture-push`:
+
+- returns at once and works in the background, so a turn never waits on a
+  network;
+- takes a lock, so overlapping turns start one push, and a push asked for
+  while one runs is folded into one more pass;
+- never fails the hook: errors go to a log that `capture-push --status`
+  reads.
+
+**The bucket importer is built in.** Fetching from a bucket needs no script
+or interpreter: a manifest with `{"builtin": "bucket-import/1"}` runs in
+Pharos's own binary with the same clients, like the declarative exporter. It
+reads the heads, fetches members it has not kept in its `state_dir`,
+reassembles each envelope and declares it as a `capture-export` drop. Its
+read credential is entered at install and stored with the plugin in the
+library, as cloud backups store theirs; `fetches_from` shows the bucket and
+prefix.
+
+**Setup is one screen that produces both halves.** Choosing "a bucket other
+machines push to" yields the importer on this Mac and, to copy, the install
+line for the Linux CLI, the `capture-push` configuration and the hook
+snippet, with the recommendation to use a bucket that requires credentials.
+
+## Decisions
+
+Decided by the owner on 2026-11-15:
+
+1. **Every mode is supported:** raw pulls, pushes from machines that run
+   Pharos, and a prebuilt Linux CLI that makes pushing easy to set up.
+2. **Uploads to AWS, GCP and Azure work out of the box,** over plain HTTPS
+   with whatever credential the person supplies, assuming no vendor CLI and
+   no signed-in toolchain.
+3. **Sandboxes:** pull where the environment persists, push where it does
+   not, one machine per declared pool, and setup that points people at
+   agent hooks so pushes happen after every turn.
+4. **The same conversation twice** is one conversation with several copies,
+   under the registry's identity. No change.
+5. **Ask Pharos sessions may be imported** as conversations.
+6. **Unauthenticated buckets are allowed;** setup recommends authenticated
+   ones.
+7. **No `RLIMIT_CPU` or `RLIMIT_FSIZE`:** limits are enforced by sampling.
+
+Open:
+
+- **A usage record whose cost is only partly known.** The labeling ledger
+  marks some requests `partial`: it could price some of the tokens but not
+  all. Either such a record adds nothing to cost totals and is shown as
+  "at least $x, unpriced in part" (proposed, since every other not-fully-
+  priced status already stays out of cost), or its known part is added to
+  cost and the total is marked incomplete.
+
+## Order of work
+
+1. Contracts: drop `form`, machine `pool`, `state_dir`, the pushed layout,
+   `bucket-import/1`, withdraw `pharos-drop/1`, `kinds.json` with its Go
+   test.
 2. Plugin runtime: manifests, installations, consent, Mac allowance, the
    background item, the native supervisor leaf with its contract tests,
    `plugin.run`.
 3. `files` collection through capture, hosts and machines, review, receipts,
    Recover library. `ssh_pull.py` becomes a catalog plugin.
-4. The envelope importer under `.imports/`, then a bucket importer.
-5. `export` drops; usage imports with the labeling ledger importer.
+4. The envelope importer under `.imports/`.
+5. `capture-push` with the pushed layout and the four destinations, on the
+   Mac first; then `bucket-import/1` and the setup screen.
+6. The Linux CLI: build, release artifact, native lifecycle tests on Linux,
+   hook snippets.
+7. `export` drops; usage imports with the labeling ledger importer.
 
 Data-safety tests to write with the code, not after: a drop cannot name a
 native or foreign host; a partial `files` run never reads absence as
 deletion; an interrupted collection leaves valid captures and the old
 cursor; an envelope that fails verification publishes nothing; the same
 session from two places is one conversation; Recover library clears cursors
-and pauses.
+and pauses; a push interrupted at any point leaves the previous head
+readable and never a head whose members are missing.
