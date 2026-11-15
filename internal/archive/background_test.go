@@ -1865,15 +1865,45 @@ func TestCPULedgerMeasuresEachSpansThread(t *testing.T) {
 	}
 	// A worker process the item leased: its own counters, GPU time apart.
 	workers[41], gpu[41] = processUsage{CPUSeconds: 100, Footprint: 2 << 30, Started: 7, Known: counterOwnCPU | counterMemory}, 5e9
-	release := leaseWorkers(ctx, func() []int { return []int{41, 42} }, true)
+	// One that is there when the lease starts and crashes during it: what it
+	// had used when last read still counts. Its GPU time after the start
+	// was never read, so it adds none rather than a guess.
+	workers[43], gpu[43] = processUsage{CPUSeconds: 10, Started: 8, Known: counterOwnCPU | counterMemory}, 1e9
+	pids := []int{41, 42, 43}
+	release := leaseWorkers(ctx, func() []int { return pids }, true)
+	workers[43], gpu[43] = processUsage{CPUSeconds: 16, Started: 8, Known: counterOwnCPU | counterMemory}, 3e9
+	ledger.tick()
+	delete(workers, 43)
+	delete(gpu, 43)
+	pids = []int{41, 42}
 	workers[41], gpu[41] = processUsage{CPUSeconds: 130, Footprint: 2 << 30, Started: 7, Known: counterOwnCPU | counterMemory}, 9e9
 	// One the pool started during the lease: everything it used.
 	workers[42] = processUsage{CPUSeconds: 5, Footprint: 1 << 30, Started: 9, Known: counterOwnCPU | counterMemory}
 	spend(5, 1)
 	release()
 	release()
+	// A stopped run kills its workers before it releases them: they are read
+	// first, so the run keeps their CPU and GPU time instead of none or zero.
+	workers[51], gpu[51] = processUsage{CPUSeconds: 20, Started: 11, Known: counterOwnCPU | counterMemory}, 2e9
+	stopped := leaseWorkers(ctx, func() []int { return []int{51} }, true)
+	workers[51], gpu[51] = processUsage{CPUSeconds: 27, Started: 11, Known: counterOwnCPU | counterMemory}, 5e9
+	ledger.observeLeases()
+	delete(workers, 51)
+	delete(gpu, 51)
+	stopped()
+	// Workers that were gone before anything was read again: their GPU time
+	// is not measured, which is not zero.
+	workers[61], gpu[61] = processUsage{CPUSeconds: 1, Started: 12, Known: counterOwnCPU | counterMemory}, 1e9
+	_, lost := beginItemSpan(withCPUSpan(context.Background(), pass), "labels")
+	gone := leaseWorkers(withCPUSpan(context.Background(), lost), func() []int { return []int{61} }, true)
+	delete(workers, 61)
+	delete(gpu, 61)
+	gone()
+	if use := lost.end(true); use.GPU != nil {
+		t.Fatalf("GPU time nothing read is not measured: %v", *use.GPU)
+	}
 	use := item.end(true)
-	if !near(use.CPU, 8+2+3) || !near(use.Worker, 35) || !near(use.GPU, 4) || use.Seconds != 12 {
+	if !near(use.CPU, 8+2+3) || !near(use.Worker, 35+6+7) || !near(use.GPU, 4+3) || use.Seconds != 12 {
 		t.Fatalf("the item used %+v CPU %v worker %v GPU %v", use, *use.CPU, *use.Worker, *use.GPU)
 	}
 	if use.Peak == nil || *use.Peak != 6<<30 {
@@ -1889,7 +1919,7 @@ func TestCPULedgerMeasuresEachSpansThread(t *testing.T) {
 	if other := pending[cpuDayKey{day, cpuSourceOther}]; !near(other.CPU, 2+4+1) || other.runs != 0 {
 		t.Fatalf("CPU no measured thread used is the rest: %+v", other)
 	}
-	if tools := pending[cpuDayKey{day, "item:tools"}]; tools.runs != 1 || !near(tools.CPU, 10) || !near(tools.Worker, 35) {
+	if tools := pending[cpuDayKey{day, "item:tools"}]; tools.runs != 1 || !near(tools.CPU, 10) || !near(tools.Worker, 48) {
 		t.Fatalf("the item's day: %+v", tools)
 	}
 	if search := pending[cpuDayKey{day, "item:search"}]; search.runs != 1 || !near(search.CPU, 3) {

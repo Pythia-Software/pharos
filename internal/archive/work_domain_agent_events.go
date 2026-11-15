@@ -414,7 +414,7 @@ func (s *agentEventsSession) execute(parent context.Context, jobs []*agentEvents
 	release := func() {}
 	stopPool := func() {
 		if runner != nil {
-			c.labelers.Kill(runner)
+			c.killLabeler(runner)
 			release()
 			runner, release = nil, func() {}
 		}

@@ -1885,7 +1885,14 @@ the same schedule from one declaration (`backgroundItems`):
     whose work is not inside `RunIO` has no CPU figure (shown as not
     measured). Short-lived commands the service starts (`git`) are not
     counted anywhere. Model loading happens before the worker's lease and
-    is not counted to it. Only the service is measured: Terminal commands
+    is not counted to it. A worker's counters cannot be read once it has
+    exited, so each lease keeps the latest reading of every worker it has
+    seen (taken with the 5 s settlement) and reads them once more before a
+    stopped run kills them: a worker that crashes mid-run loses at most the
+    CPU time since its last reading and its GPU time for the lease, and the
+    replacement's whole life, model loading included, counts. GPU time
+    nothing read is stored as not measured, never zero. Only the service is
+    measured: Terminal commands
     and the app's broker are not. A crash loses at most the totals not yet
     stored.
   - *Measured error.* On a clone of a real library (2026-11-15), items were
@@ -1901,8 +1908,16 @@ the same schedule from one declaration (`backgroundItems`):
     81 s): Repositories 3.1 against 2.7 (+15%), suggestions 3.6 against
     3.6 (+1%), Tools & usage 3.5 against 3.2 (+10%). Against the unscaled
     samples the same runs read 9–29% high, which is the profiler's
-    undercount. The labeling worker's figures were not checked this way:
-    the clone's labeling run never reached the worker. An earlier design
+    undercount. The labeling worker's figures were checked against
+    `proc_pid_rusage` and `ps` read every 0.5 s and `ioreg`'s
+    `accumulatedGPUTime` read every 1.5 s by a separate process: with a
+    warm worker, 2.113 s of worker CPU against 2.11 s, GPU time 1.7549 s
+    against 1.7549 s, and peak memory 4.74 GB against 4.57 GB (+4%); on a
+    cold start 2.109 s against 1.94–2.33 s (the lease begins inside the
+    worker's start-up burst) and peak memory 2.47 GB against 2.70 GB (−8%:
+    memory is read every 5 s); CPU-only, 588.47 s against 588.2–588.7 s,
+    with no GPU figure. There is no second source for GPU time without
+    root: both readings are the same driver counter. An earlier design
     that divided the process's CPU among the operations registered as
     running was 190–520% high on the same items, because blocked operations
     and requests use CPU too; it was dropped.
