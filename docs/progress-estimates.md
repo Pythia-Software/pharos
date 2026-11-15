@@ -66,8 +66,11 @@ throughput bounds are separate from the whole-operation model:
   influence over the first thirty seconds of observed progress.
   Legacy whole-run durations do not supply these stage throughput estimates,
   because they did not record how much work was performed.
-- A new job, source, stage, measurement unit, changed total, or reset counter
-  restarts live measurement. Work completed before observation or resumption
+- A new job, source, stage, measurement unit, or reset counter restarts live
+  measurement. A total that grows while its counter goes on does not: a queue
+  that grows as it drains, or an inventory that is counted again, keeps the
+  measured pace and only the remaining time follows the new total. Work
+  completed before observation or resumption
   is not credited to the new sample window. Restarted worker stages train
   throughput only from the counters advanced since that segment began.
 - After at least 45 seconds with no completed work (longer for slow counted

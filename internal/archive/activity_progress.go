@@ -168,10 +168,14 @@ type activityEstimator struct {
 func (o *progressObservation) estimate(work activityWork, at time.Time) activityEstimate {
 	work = work.measured()
 	result := activityEstimate{State: "learning", Basis: "Measuring the pace of this stage", Unit: work.Unit}
-	if len(o.samples) == 0 || work.Done < o.samples[len(o.samples)-1].done || work.Total != o.total {
+	// The pace is of completed units, so a total that moves while work goes on
+	// (a queue that grows as it drains, a re-counted inventory) keeps it. Only
+	// a counter that went back, or a total now below it, is different work.
+	if len(o.samples) == 0 || work.Done < o.samples[len(o.samples)-1].done || work.Total != o.total && work.Total > 0 && work.Total < work.Done {
 		o.samples = []progressSample{{at, work.Done}}
-		o.changed, o.total = at, work.Total
+		o.changed = at
 	}
+	o.total = work.Total
 	last := o.samples[len(o.samples)-1]
 	if work.Done > last.done {
 		o.changed = at

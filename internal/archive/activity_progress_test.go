@@ -100,12 +100,15 @@ func TestStageEstimateDoesNotCountResumedWorkOrUnknownTotals(t *testing.T) {
 	if got := o.estimate(w, start.Add(12*time.Second)); got.Rate != 1 {
 		t.Fatalf("included previously completed work in throughput: %+v", got)
 	}
-	w.Total = 2000
-	if got := o.estimate(w, start.Add(14*time.Second)); got.State != "learning" {
-		t.Fatalf("changed workload retained an old rate: %+v", got)
+	// A queue that grows as it drains is the same work: the pace of what has
+	// completed stands, and only the remaining time follows the new total.
+	before := o.estimate(w, start.Add(12*time.Second))
+	w.Done, w.Total = 816, 2000
+	if got := o.estimate(w, start.Add(16*time.Second)); got.State != "estimating" || got.Rate != 1 || got.HighSeconds <= before.HighSeconds {
+		t.Fatalf("a growing total restarted the measured pace: before=%+v after=%+v", before, got)
 	}
 	w.Total = 0
-	if got := o.estimate(w, start.Add(16*time.Second)); got.State != "unknown" || got.HighSeconds != 0 {
+	if got := o.estimate(w, start.Add(17*time.Second)); got.State != "unknown" || got.HighSeconds != 0 {
 		t.Fatalf("unknown denominator generated an ETA: %+v", got)
 	}
 	w.Done, w.Total = 0, 100

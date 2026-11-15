@@ -134,7 +134,10 @@ func (m *runWorkMeter) report(w activityWork) {
 	}
 	at := m.time()
 	refining := m.current != nil && m.current.Phase == w.Phase && m.current.Source == w.Source && m.current.Unit == "" && !m.current.TotalKnown && m.current.Total <= 0
-	if m.current == nil || m.current.Phase != w.Phase || m.current.Source != w.Source || !refining && (m.current.Unit != w.Unit || w.Done < m.current.Done || w.Total != m.current.Total) {
+	// A total that grows while its counter goes on is the same stage finding
+	// more to do. Closing it would restart the stage's clock and live pace.
+	grown := m.current != nil && m.current.Total > 0 && w.Total > m.current.Total
+	if m.current == nil || m.current.Phase != w.Phase || m.current.Source != w.Source || !refining && (m.current.Unit != w.Unit || w.Done < m.current.Done || w.Total != m.current.Total && !grown) {
 		m.closeStage(at, w.Phase != "failed" && w.Phase != "interrupted")
 		m.baseline = cloneWork(w)
 		w.StartedAt = formatTime(at)
