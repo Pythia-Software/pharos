@@ -31,9 +31,13 @@ type Catalog struct {
 	RepositorySeparate []string
 	// ReworkDays is the library's outcome_rework_days (outcomes.go); 0, for
 	// a catalog opened without the configuration, keeps the stored window.
-	ReworkDays    int
-	captureRootMu sync.RWMutex
-	captureRoot   string
+	ReworkDays int
+	// EngagementEnabled is the library's engagement_enabled (engagement.go):
+	// the reader and the Timeline show stored engagement spans only while it
+	// is on. A catalog opened without the configuration shows none.
+	EngagementEnabled bool
+	captureRootMu     sync.RWMutex
+	captureRoot       string
 	// evidenceOnly restricts offline rebuild enrichment to imported catalog rows.
 	// Set once before replay; live paths and unselected captures are unavailable.
 	evidenceOnly bool
@@ -67,6 +71,8 @@ type Catalog struct {
 	labels sync.Mutex
 	// agentEventsRun keeps one agent events pass at a time in this process.
 	agentEventsRun sync.Mutex
+	// engagementRun keeps one engagement pass at a time in this process.
+	engagementRun  sync.Mutex
 	labelers       *labelrt.Manager
 	labelersOnce   sync.Once
 	labelerWorkers sync.Map // model path -> labelerWorkerObservation

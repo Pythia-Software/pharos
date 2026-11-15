@@ -54,6 +54,8 @@ var unregisteredWorkAllowed = map[string]allowedWork{
 	"labels_prepare.go:prepareConversations":         {1, "bounded preparation workers inside analysis.labels or analysis.agent_events; inherit the operation context, apply its IO priority and join before the parent stage returns"},
 	"labels.go:chainLabels":                          {1, "the power watch inside a backlog labels run (the analysis.labels operation), which stops it when this Mac goes onto battery"},
 	"agent_events_pipeline.go:run":                   {2, "bounded preparation and persistence stages inside analysis.agent_events; both inherit its cancellation and are joined before the operation returns"},
+	"engagement_run.go:RunEngagement":                {1, "the reader inside analysis.engagement that reads and frames the next chunks while the model scores this one; it inherits the run's cancellation and is joined before the run returns"},
+	"engagement_run.go:engagementItems":              {1, "bounded framing workers inside analysis.engagement; they only tokenize in memory and are joined before the chunk is scored"},
 	"agent_events_run.go:chainAgentEvents":           {1, "the power watch inside a backlog agent events run (the analysis.agent_events operation), which stops it when this Mac goes onto battery"},
 	"worker.go:serve":                                {1, "the labeler worker binary's frame reader (cmd/pharos-labeler-ort): a separate process that never opens a catalog"},
 	"worker.go:start":                                {1, "the labeler worker binary's model runner (cmd/pharos-labeler-ort): a separate process that never opens a catalog"},

@@ -99,6 +99,9 @@ type backgroundItem struct {
 	// requiresAgentEvents ones only where agent_events_enabled is.
 	requiresLabels      bool
 	requiresAgentEvents bool
+	// requiresEngagement items exist only where engagement_enabled is on (a
+	// preview): elsewhere they are neither scheduled nor listed.
+	requiresEngagement bool
 	// requiresAsk items exist only where Ask Pharos is enabled on this Mac.
 	requiresAsk bool
 	// afterChain items read what the chain writes, so a pass runs them last.
@@ -136,6 +139,8 @@ var backgroundItems = []backgroundItem{
 		Stages: []string{"labels"}, Kinds: []string{"analysis.labels/"}, Why: "Labels the messages that changed on this Mac, after your writing; a backlog continues when plugged in."},
 	{ID: "agent_events", Label: "Agent events", Verb: "Finding agent events", Feeds: "Analyze → Agent Experience", Cadence: cadenceHourly, Adaptive: true, requiresAgentEvents: true,
 		Stages: []string{"agent_events"}, Kinds: []string{"analysis.agent_events/"}, Why: "Finds what agents ran into in the replies and thinking that changed on this Mac; a backlog continues when plugged in."},
+	{ID: "engagement", Label: "Engagement labels", Verb: "Labeling engagement", Feeds: "The conversation reader's Engagement highlight (preview)", Cadence: cadenceHourly, Adaptive: true, requiresEngagement: true,
+		Stages: []string{"engagement"}, Kinds: []string{"analysis.engagement"}, Why: "Reads what you typed in the conversations that changed on this Mac; a backlog continues over later updates."},
 	{ID: "review", Label: "Findings review", Verb: "Reviewing findings", Feeds: "Optimize: new patterns and savings", Cadence: cadenceDaily, Fixed: true,
 		Kinds: []string{"analysis.findings"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
 	{ID: "writing-refine", Label: "Refine writing history", Verb: "Refining writing history", Feeds: "Writing classifications and copied-text evidence", Cadence: cadenceDaily, afterChain: true,
@@ -147,7 +152,7 @@ var backgroundItems = []backgroundItem{
 }
 
 // stageOrder is the analysis chain's order (finishDeferredStages).
-var stageOrder = []string{"identities", "git", "tools", "authorship", "peers", "findings", "labels", "agent_events"}
+var stageOrder = []string{"identities", "git", "tools", "authorship", "peers", "findings", "labels", "agent_events", "engagement"}
 
 func backgroundItemByID(id string) (backgroundItem, bool) {
 	for _, item := range backgroundItems {
@@ -555,6 +560,8 @@ type backgroundInputs struct {
 	// why the pass waits for a download.
 	agentEvents        bool
 	agentEventsWaiting string
+	// engagement is whether engagement_enabled is on.
+	engagement bool
 	// labelerProblem is why neither can run, whatever is downloaded.
 	labelerProblem string
 	// ask is whether Ask Pharos is enabled here; suggestionsStale whether
@@ -621,7 +628,7 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 	nextDaily := instant.AddDate(0, 0, 1)
 	plans := []itemPlan{}
 	for _, item := range backgroundItems {
-		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents || item.requiresAsk && !in.ask {
+		if item.requiresLabels && !in.labels || item.requiresAgentEvents && !in.agentEvents || item.requiresAsk && !in.ask || item.requiresEngagement && !in.engagement {
 			continue
 		}
 		plan := itemPlan{ID: item.ID, Cadence: settings.cadence(item)}
@@ -972,6 +979,7 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	if s.agentEventsEnabled(ctx) {
 		in.agentEvents, in.agentEventsWaiting = true, config.AgentEvents.waiting(config.Labels)
 	}
+	in.engagement = config.Engagement.Enabled
 	if in.labels || in.agentEvents {
 		in.labelerProblem = config.Labels.withAssets().labelerProblem()
 	}
@@ -1375,4 +1383,4 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 }
 
 // stageItems is the background item each chain stage belongs to.
-var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "peers": "writing", "findings": "findings", "labels": "labels", "agent_events": "agent_events"}
+var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "peers": "writing", "findings": "findings", "labels": "labels", "agent_events": "agent_events", "engagement": "engagement"}

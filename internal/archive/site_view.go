@@ -824,7 +824,9 @@ func validateViewShape(name string, value any) error {
 			return fmt.Errorf("needs timeline visibility selections by section")
 		}
 		for section, value := range object {
-			if !slices.Contains([]string{"modes", "events", "tools", "origins", "sections"}, section) {
+			// The page's sections (web/src/timeline-visibility.ts): human is the
+			// conversation reader's and the workspace Timeline's Human events.
+			if !slices.Contains([]string{"modes", "events", "human", "tools", "origins", "sections"}, section) {
 				return fmt.Errorf("unknown timeline visibility section %q", section)
 			}
 			selection, ok := value.(map[string]any)

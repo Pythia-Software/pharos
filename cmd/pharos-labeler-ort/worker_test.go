@@ -962,3 +962,72 @@ func TestNativeTokenLimit(t *testing.T) {
 		})
 	}
 }
+
+// TestSparseOutput: a hello with the sparse option gets a per-token output
+// back as its entries at or above the floor, on attended positions only;
+// other outputs stay dense, and an output that is not per token is refused
+// at the hello.
+func TestSparseOutput(t *testing.T) {
+	info := fakeInfo()
+	info.Outputs = []labeler.TensorInfo{{Name: "logits", DType: "float32", Shape: []any{"batch", "tokens", 3}}, {Name: "probs", DType: "float32", Shape: []any{"batch", 3}}}
+	sess := &fakeSession{info: info}
+	// logits[r][t][k] = 4 where k == id % 3 (padding included), else -4.
+	sess.run = func(c fakeCall) ([]labeler.Tensor, error) {
+		out := []labeler.Tensor{}
+		for _, name := range c.outputs {
+			tensor := labeler.Tensor{Name: name, DType: labeler.DTypeFloat32, Dims: []int{c.batch, 3}, Float32: make([]float32, c.batch*3)}
+			if name == "logits" {
+				tensor.Dims, tensor.Float32 = []int{c.batch, c.seq, 3}, nil
+				for _, id := range c.ids {
+					for k := range 3 {
+						value := float32(-4)
+						if int(id%3) == k {
+							value = 4
+						}
+						tensor.Float32 = append(tensor.Float32, value)
+					}
+				}
+			}
+			out = append(out, tensor)
+		}
+		return out, nil
+	}
+	h := startWorker(t, sess)
+	hello := h.hello()
+	hello.Options = map[string]any{"sparse": labeler.SparseOption{Output: "logits", Activation: "sigmoid", Floor: 0.3}}
+	h.sendJSON(labeler.FrameHello, hello)
+	kind, payload := h.recv()
+	var ready labeler.Ready
+	if kind != labeler.FrameReady || json.Unmarshal(payload, &ready) != nil || !slices.Contains(ready.Capabilities, labeler.SparseCapability) {
+		t.Fatalf("want a ready with the sparse capability, got frame %q %s", kind, payload)
+	}
+	h.send(labeler.FrameRun, runPayload(t, 21, [][]int32{{3, 4, 5, 6}, {7, 8}}))
+	res := h.expectResult()
+	if probs := res.Tensor("probs"); probs == nil || !slices.Equal(probs.Dims, []int{2, 3}) {
+		t.Fatalf("the dense output changed: %+v", res.Outputs)
+	}
+	rows, err := labeler.SparseRows(res.Tensor("logits"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := func(entries []labeler.TokenLabel) []int32 {
+		out := []int32{}
+		for _, entry := range entries {
+			if entry.Prob < 0.98 || entry.Prob > 0.99 {
+				t.Fatalf("probability %v is not sigmoid(4)", entry.Prob)
+			}
+			out = append(out, entry.Token, entry.Label)
+		}
+		return out
+	}
+	// Row 1's two padded positions are left out.
+	if !slices.Equal(labels(rows[0]), []int32{0, 0, 1, 1, 2, 2, 3, 0}) || !slices.Equal(labels(rows[1]), []int32{0, 1, 1, 2}) {
+		t.Fatalf("entries %v", rows)
+	}
+
+	refused := newHarness(t).start(func(sessionConfig) (session, error) { return &fakeSession{info: info}, nil })
+	hello = refused.hello()
+	hello.Options = map[string]any{"sparse": labeler.SparseOption{Output: "probs", Floor: 0.3}}
+	refused.sendJSON(labeler.FrameHello, hello)
+	refused.expectError(0, labeler.ErrCodeModel, true)
+}

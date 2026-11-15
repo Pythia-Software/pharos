@@ -612,6 +612,7 @@ and how they are padded (`labeler.InputContracts`):
 |---|---|---|
 | `ids-attention-v1` | `input_ids` (ids), `attention_mask` (attention); mean pooling over every real token happens inside the model. `kestrel-68m`'s manifest predates the field and means this. | multiple of 8 |
 | `ids-attention-pool-v1` | the same plus `pooling_mask` (pool): 1 on the target text's tokens, so the model averages only those while attending to everything (LAPWING's target-only pooling) | multiple of 8 |
+| `ids-attention-token-labels-v1` | `input_ids` and `attention_mask`; the output is one logit per token and label, read as spans ([Engagement labels](engagement-labels.md)). Its directory has a `model.json` in place of a manifest (`labeler.LoadTokenLabelModel`). | multiple of 8 |
 
 - The manifest may name the inputs (`inputs`, a list of `{name, role}`,
   which must have the contract's roles) and raise the padding multiple
@@ -871,6 +872,12 @@ verifies `model_sha256` when given, and replies `h`:
  "limits": {"max_batch": 64, "max_seq": 512, "max_frame_bytes": 67108864},
  "capabilities": ["ping"]}
 ```
+
+A hello may carry `options`. One exists: `"sparse": {"output": "logits", "activation": "sigmoid", "floor": 0.3}`
+asks for that output as a float32 `[n, 4]` tensor of (row, token, label, probability) for the unpadded tokens at or
+above the floor, in place of the dense tensor. A worker that honours it lists the capability `sparse`
+(`labeler.SparseCapability`); `Runner.RunSparse` refuses a worker that does not, rather than read a dense tensor as
+sparse rows.
 
 `protocol` is the highest version both sides speak. A worker that shares none
 replies `e` with code `protocol`, fatal. One that cannot load the model, or

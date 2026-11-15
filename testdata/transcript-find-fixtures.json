@@ -247,7 +247,7 @@
     {"kind": "error", "path": ["events"]}
    ],
    "queries": [
-    {"term": "usage-checkpoint", "show": ["prompts", "reads", "events"], "want": {"shown": 0, "hidden": 5, "hidden_kinds": ["usage"]}},
+    {"term": "usage-checkpoint", "show": ["prompts", "reads", "events"], "want": {"shown": 0, "hidden": 0, "hidden_kinds": []}},
     {"term": "activity-marker", "show": ["prompts", "reads", "events"], "want": {"shown": 2, "hidden": 0, "hidden_kinds": []}}
    ]}
 ]

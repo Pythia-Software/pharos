@@ -619,6 +619,12 @@ func (structure transcriptStructure) find(pattern *regexp.Regexp, shown map[stri
 		if _, ok := structure.consumed[index]; ok && !output {
 			continue
 		}
+		// The reader never shows token usage records (transcriptUndisplayed
+		// in reader-model.js): the Turns · context bar and the turns' token
+		// summaries already show what they hold.
+		if len(structure.paths[index]) > 0 && structure.paths[index][0] == "usage" && event.toolCategory() == "run" {
+			continue
+		}
 		if !pattern.MatchString(event.findableText()) {
 			continue
 		}
@@ -887,7 +893,14 @@ func (c *Catalog) WorkConversationMatches(ctx context.Context, workspaceID strin
 		}
 		for offset, event := range normalizeRecord(record, nil) {
 			index := span[0] + offset
-			if offset >= span[1] || conversation.consumed[index] && !o.Output || !expression.MatchString(event.findableText()) {
+			if offset >= span[1] || conversation.consumed[index] && !o.Output {
+				continue
+			}
+			// Token usage records are never shown, so never matched (see find).
+			if len(conversation.paths[index]) > 0 && conversation.paths[index][0] == "usage" && event.toolCategory() == "run" {
+				continue
+			}
+			if !expression.MatchString(event.findableText()) {
 				continue
 			}
 			count := tallies[conversationID]

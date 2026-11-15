@@ -226,6 +226,21 @@ test("shared activity tags retain their content-category membership", () => {
   assert.ok(read.values.every(value=>!shown.has(value)));assert.ok(tools.values.every(value=>shown.has(value)),"a category hide does not hide the same recorded label in another category");
 });
 
+test("token usage records are never shown: no category row, no Find match, while other system events stay", () => {
+  const meta = (id, value, kind = "metadata") => ({ id, native_id: id, role: "system", kind, text: JSON.stringify(value) });
+  const hidden = [meta("u1", { type: "token_count", info: {} }), meta("u2", { type: "token_usage_record", usage: {} }), meta("u3", { type: "cost-state" }),
+    meta("u4", { payload: { type: "token_usage", note: "needle" } }, "result"), meta("u5", { type: "system", subtype: "thinking_tokens" })];
+  const kept = [meta("k1", { type: "reasoning_unavailable", note: "needle" }), meta("k2", { type: "token_budget", note: "needle" }), meta("k3", { payload: { type: "token_usage", note: "needle" } }, "error"),
+    { id: "k4", native_id: "k4", role: "user", kind: "message", text: "token_usage needle" }];
+  assert.deepEqual(hidden.map(reader.transcriptUndisplayed), hidden.map(() => true));
+  assert.deepEqual(kept.map(reader.transcriptUndisplayed), kept.map(() => false));
+  const found = plain(transcriptFind([...hidden, ...kept], { pattern: transcriptFindPattern("needle", false, false), shown: new Set(allKinds()), output: true }));
+  assert.equal(found.shown, 4); assert.equal(found.hidden, 0);
+  // Hiding Usage & quota still hides the usage entry that is left, an error.
+  const quiet = plain(transcriptFind([...hidden, ...kept], { pattern: transcriptFindPattern("needle", false, false), shown: transcriptShown({ level: "all-minus-usage" }), output: true }));
+  assert.deepEqual([quiet.shown, quiet.hidden, quiet.hidden_kinds], [3, 1, ["usage"]]);
+});
+
 test("find patterns escape plain terms and respect case", () => {
   assert.equal(transcriptFindPattern("a.b(c)", false, false).test("A.B(C)"), true);
   assert.equal(transcriptFindPattern("a.b(c)", false, false).test("axb(c)"), false);
@@ -394,8 +409,8 @@ test("whole-key presets cover content, highlights, activity and timeline",()=>{
  const quiet=plain(reader.readerKeyPresetValues('quiet'));
  assert.deepEqual(all.reader_filter,allKinds());
  assert.deepEqual(quiet.reader_filter,allKinds().filter(id=>id!=='usage'));
- assert.deepEqual([all.reader_writing,all.reader_events,all.reader_labels],[true,true,true]);
- assert.deepEqual([content.reader_writing,content.reader_events,content.reader_labels],[false,false,false]);
+ assert.deepEqual([all.reader_writing,all.reader_engagement,all.reader_events,all.reader_labels],[true,true,true,true]);
+ assert.deepEqual([content.reader_writing,content.reader_engagement,content.reader_events,content.reader_labels],[false,false,false,false]);
  assert.deepEqual(content.timeline_visibility,{sections:{values:[],excluded:false,allHidden:true}});
  for(const values of [all,content,quiet]){
   assert.deepEqual(values.reader_hidden_tags,[]);assert.deepEqual(values.reader_highlight_hidden,[]);

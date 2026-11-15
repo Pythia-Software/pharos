@@ -1,12 +1,13 @@
 import type {LabelMessage,Taxonomy} from './conversation-labels';
 import {labelIntervals,type ActivityMark} from './label-session-ribbon-model';
 import type {AgentEventLink} from './event-link-layout';
+import type {HumanEvent} from './human-events-model';
 import type {TimeRange} from './timeline-label-model';
 import {idleGaps,laneBusy,timeScale,type IdleGap} from './timeline-idle-model';
 
 export type ReaderContext={title:string;color:string;message:{id:string};sample:{stream:string;compact?:boolean;trigger?:string;size:number|null;window?:number|null};from:number;width:number;label:string};
 export type ReaderNavigatorMark=Omit<ActivityMark,'start'|'end'>&{start:number|null;end:number|null};
-export type ReaderNavigatorData={sessionID:string;messages:LabelMessage[];marks:ReaderNavigatorMark[];callerIDs:string[];events:AgentEventLink[];taxonomy:Taxonomy;turns:{target:HTMLDetailsElement;messages:string[];label:string}[];contexts:ReaderContext[];jumpContext:(entry:ReaderContext)=>void;jumpMessage:(id:string)=>void;voice?:ReaderVoice|null};
+export type ReaderNavigatorData={sessionID:string;messages:LabelMessage[];marks:ReaderNavigatorMark[];callerIDs:string[];events:AgentEventLink[];humanEvents?:HumanEvent[];taxonomy:Taxonomy;turns:{target:HTMLDetailsElement;messages:string[];label:string;card?:{title:string;at:string|null;when:string;prompt:string;stats:string[];tokens:string}}[];contexts:ReaderContext[];jumpContext:(entry:ReaderContext)=>void;jumpMessage:(id:string)=>void;jumpHumanEvent?:(event:HumanEvent)=>void;voice?:ReaderVoice|null};
 /** A voice conversation's player, owned by the reader: the lines it can play and what is playing. */
 export type ReaderVoiceLine={id:string;role:string;recorded:boolean;ready:boolean;duration:number|null;estimate:number};
 export type ReaderVoiceSpan={line:ReaderVoiceLine;index:number;start:number;length:number};

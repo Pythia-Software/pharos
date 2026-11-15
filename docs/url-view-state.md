@@ -93,7 +93,8 @@ Hide/Show retain unrelated choices; Hide others isolates that value or group.
 On the timeline, Show All restores the whole Key. Hidden values keep their
 muted swatches in both presentations so they can be shown again.
 
-`timeline_visibility` stores independent `modes`, `events`, `tools` and `origins`
+`timeline_visibility` stores independent `modes`, `events`, `human` (Human events,
+by engagement dimension ID such as `intent` or `register`), `tools` and `origins`
 selections. The optional `sections` selection controls whole layers by those
 same IDs. Section headings can show only that layer, add or remove it, exclude
 it, or reset the whole Key. Showing or adding a whole section includes all its
@@ -246,7 +247,8 @@ thinking-token estimates and cost bookkeeping. Reads and searches remain visible
 Applying a preset clears hidden activity tags and individual highlight exclusions.
 Individual changes update Last; links override the saved selection. These choices
 write `reader_filter_level`, `reader_filter`, `reader_hidden_tags`,
-`reader_writing`, `reader_events`, `reader_labels`, `reader_highlight_hidden`, and
+`reader_writing`, `reader_engagement`, `reader_events`, `reader_labels`,
+`reader_highlight_hidden`, and
 `timeline_visibility` together. Individual highlight keys still use Timeline's
 grouped legend menus. Ordinary key edits preserve exclusions for highlights absent
 from the current conversation. Opening an explicit `reader_event_link` enables

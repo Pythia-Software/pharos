@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -37,6 +38,8 @@ type RunnerConfig struct {
 	Workers, Threads, InFlight int
 	// MaxBatch is the most rows per batch the worker is told to expect.
 	MaxBatch int
+	// Options are the hello's worker options (for example "sparse").
+	Options map[string]any
 	// Pool options: restart backoff and its hook.
 	Backoff   func(n int) time.Duration
 	OnRestart func(slot int, cause error)
@@ -47,7 +50,7 @@ func NewRunner(ctx context.Context, model *Model, cfg RunnerConfig) (*Runner, er
 	cfg.Workers, cfg.Threads = max(1, cfg.Workers), max(1, cfg.Threads)
 	pool, err := NewPool(ctx, PoolConfig{Workers: cfg.Workers, Backoff: cfg.Backoff, OnRestart: cfg.OnRestart,
 		Worker: WorkerConfig{Path: cfg.Worker, Args: cfg.Args, Env: cfg.Env, Model: model.Path, ModelSHA256: model.SHA256, Threads: cfg.Threads,
-			VocabSize: model.Tokenizer.VocabSize(), MaxBatch: cfg.MaxBatch, MaxSeq: model.MaxSeq, Inputs: model.Inputs, InFlight: cfg.InFlight}})
+			VocabSize: model.Tokenizer.VocabSize(), MaxBatch: cfg.MaxBatch, MaxSeq: model.MaxSeq, Inputs: model.Inputs, InFlight: cfg.InFlight, Options: cfg.Options}})
 	if err != nil {
 		return nil, err
 	}
@@ -119,11 +122,57 @@ func (r *Runner) Run(ctx context.Context, rows []Framed, outputs []string, token
 // RunWithProgress is Run with a callback for each successful batch's row count.
 // Callbacks may overlap; the caller must synchronize any shared progress state.
 func (r *Runner) RunWithProgress(ctx context.Context, rows []Framed, outputs []string, tokenBudget int, progress func(int)) ([]RowOutputs, error) {
+	results := make([]RowOutputs, len(rows))
+	err := r.runPacked(ctx, rows, outputs, tokenBudget, progress, func(batch []int, result *RunResult) error {
+		for k, index := range batch {
+			row := RowOutputs{}
+			for _, tensor := range result.Outputs {
+				width := len(tensor.Float32) / len(batch)
+				row[tensor.Name] = tensor.Float32[k*width : (k+1)*width]
+			}
+			results[index] = row
+		}
+		return nil
+	})
+	return results, err
+}
+
+// RunSparse is RunWithProgress for one sparse output (SparseOption): each
+// row's entries, by position in the row. The runner must have been started
+// with the option, and its worker must have the sparse capability; a worker
+// without it would answer with the dense output, so this refuses it.
+func (r *Runner) RunSparse(ctx context.Context, rows []Framed, output string, tokenBudget int, progress func(int)) ([][]TokenLabel, error) {
+	option, err := SparseOptionFrom(r.cfg.Options)
+	if err != nil || option == nil || option.Output != output {
+		return nil, fmt.Errorf("the runner was not started with a sparse option for output %q", output)
+	}
+	if !slices.Contains(r.pool.Ready().Capabilities, SparseCapability) {
+		worker := r.pool.Ready().Worker
+		return nil, fmt.Errorf("%w: worker %s %s has no %q capability; token-label models need a newer worker", ErrModelUnavailable, worker.Name, worker.Version, SparseCapability)
+	}
+	results := make([][]TokenLabel, len(rows))
+	err = r.runPacked(ctx, rows, []string{output}, tokenBudget, progress, func(batch []int, result *RunResult) error {
+		entries, err := SparseRows(result.Tensor(output), len(batch))
+		if err != nil {
+			return err
+		}
+		for k, index := range batch {
+			results[index] = entries[k]
+		}
+		return nil
+	})
+	return results, err
+}
+
+// runPacked packs rows by length into batches under tokenBudget padded
+// tokens, keeps Capacity of them in flight, and hands each batch's result to
+// assign (batch holds the rows' indices). Calls of assign may overlap, on
+// disjoint rows.
+func (r *Runner) runPacked(ctx context.Context, rows []Framed, outputs []string, tokenBudget int, progress func(int), assign func(batch []int, result *RunResult) error) error {
 	lengths := make([]int, len(rows))
 	for i, row := range rows {
 		lengths[i] = len(row.IDs)
 	}
-	results := make([]RowOutputs, len(rows))
 	batches := PackBatches(lengths, r.TokenBudget(tokenBudget), r.MaxBatch(), r.Model.PadMultiple)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -148,17 +197,12 @@ func (r *Runner) RunWithProgress(ctx context.Context, rows []Framed, outputs []s
 				framed[k] = rows[index]
 			}
 			result, err := r.RunBatch(ctx, framed, outputs)
+			if err == nil {
+				err = assign(batch, result)
+			}
 			if err != nil {
 				once.Do(func() { failure = err; cancel() })
 				return
-			}
-			for k, index := range batch {
-				row := RowOutputs{}
-				for _, tensor := range result.Outputs {
-					width := len(tensor.Float32) / len(batch)
-					row[tensor.Name] = tensor.Float32[k*width : (k+1)*width]
-				}
-				results[index] = row
 			}
 			if progress != nil {
 				progress(len(batch))
@@ -169,7 +213,7 @@ func (r *Runner) RunWithProgress(ctx context.Context, rows []Framed, outputs []s
 	if failure == nil && ctx.Err() != nil {
 		failure = ctx.Err()
 	}
-	return results, failure
+	return failure
 }
 
 // Budget bounds what every model's workers use together: intra-op threads
@@ -215,7 +259,10 @@ func modelKey(model *Model) string { return model.Path + "@" + model.SHA256 }
 // runnerKey is a model with how its workers run: a different configuration
 // (one at a time, other thread counts) is another runner.
 func runnerKey(model *Model, cfg RunnerConfig) string {
-	args, _ := json.Marshal(struct{ Args, Env []string }{cfg.Args, cfg.Env})
+	args, _ := json.Marshal(struct {
+		Args, Env []string
+		Options   map[string]any `json:",omitempty"`
+	}{cfg.Args, cfg.Env, cfg.Options})
 	return fmt.Sprintf("%s|%s|%d|%d|%d|%d|%t|%s", modelKey(model), cfg.Worker, max(1, cfg.Workers), max(1, cfg.Threads), cfg.InFlight, cfg.MaxBatch, cfg.GPU, args)
 }
 

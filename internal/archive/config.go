@@ -77,6 +77,9 @@ type Config struct {
 	// AgentEvents configures the agent events pass (docs/agent-events.md);
 	// it runs on the labeler's worker and budget.
 	AgentEvents AgentEventSettings
+	// Engagement configures the engagement labels preview
+	// (docs/engagement-labels.md): off unless engagement_enabled is set.
+	Engagement EngagementSettings
 	// WorkEngine is the process-start comparison choice (PHAROS_WORK_ENGINE).
 	// BackgroundCPUs is cooperative worker capacity for this process, not a
 	// machine-wide cap; it is read only under the scheduled engine.
@@ -220,6 +223,7 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 	config.Labels = labelerSettingsFrom(root, base)
 	config.AgentEvents = agentEventSettingsFrom(root, base)
 	config.Labels = config.AgentEvents.withPeer(config.Labels)
+	config.Engagement = engagementSettingsFrom(root, base)
 	// The engine is a comparison switch chosen at process start, never stored
 	// with a library: a drive opened by another binary or Mac runs classic
 	// unless that process asks otherwise. Anything but "scheduled" is classic.

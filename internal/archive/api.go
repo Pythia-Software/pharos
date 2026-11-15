@@ -141,6 +141,7 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
 		catalog.ReworkDays = config.OutcomeReworkDays
+		catalog.EngagementEnabled = config.Engagement.Enabled
 		catalog.setCaptureRoot(config.CaptureRoot)
 	}
 	server.resourceBrokerOwned = os.Getenv("PHAROS_RESOURCE_OWNER") == "broker"
