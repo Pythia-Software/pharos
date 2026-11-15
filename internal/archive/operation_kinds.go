@@ -250,7 +250,7 @@ var operationKinds = []operationKind{
 
 	// G. Process and device lifecycle.
 	{Kind: "service.start", Class: workClassEssential, Label: "Open the library", Verb: "Opening the library", Holds: "M:w D:w", Affects: "—",
-		OnEject: "Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2).", Latency: "none", Journal: journalAlways, Priority: priorityForeground, Broker: true},
+		OnEject: "Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2), except while the catalog's initialize lock is held: then it waits, step \"Upgrade the library's catalog\" with the upgrade's progress (§3.5).", Latency: "none", Journal: journalAlways, Priority: priorityForeground, Broker: true},
 	{Kind: "library.release", Class: workClassEssential, Label: "Release the library", Verb: "Releasing the library", Holds: "D:w", Affects: "—",
 		OnEject: "Is the stop. Fails after 7 s with \"Pharos is finishing a write\".", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "labels.fetch", Class: workClassSpecialized, Label: "Download the labeling model", Verb: "Downloading the labeling model", Holds: "—", Affects: "—",

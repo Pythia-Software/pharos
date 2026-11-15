@@ -154,6 +154,9 @@ final class ArchiveService: ObservableObject {
         managedStatus.current(pendingFor: managedLibraryStateTask == nil ? nil : Date().timeIntervalSince(managedStateRequestedAt))
     }
     var libraryOperation: String? { managedApplication ? currentManagedStatus.activeOperation : nil }
+    /// A catalog upgrade the selected library's service is waiting for,
+    /// which the window shows while its page cannot load.
+    @Published private(set) var catalogUpgrade: CatalogUpgrade?
     var noLibrarySelected: Bool { managedApplication && currentManagedStatus.noLibrary }
     @Published var error: String?
     /// Why the window's page could not load although the service answers;
@@ -337,6 +340,8 @@ final class ArchiveService: ObservableObject {
                 // restarting broker) clears what an earlier one said.
                 let running = document.flatMap(ManagedLibraryStatus.runningBrokerOperations) ?? []
                 self.managedStatus = self.managedStatus.withBrokerOperations(running)
+                let upgrade = document.flatMap(CatalogUpgrade.running)
+                if self.catalogUpgrade != upgrade { self.catalogUpgrade = upgrade }
             }
         }
         brokerOperationsTask?.resume()
@@ -2317,6 +2322,200 @@ struct MenuBarWindowBridge: NSViewRepresentable {
     func updateNSView(_ view: WindowView, context: Context) {}
 }
 
+/// What the window shows while a library's service upgrades its catalog
+/// before it can answer: that this is a one-time upgrade, a bar of its steps,
+/// the step running and the estimate the broker reports (CatalogUpgrade in
+/// MenuBar.swift).
+struct CatalogUpgradeView: View {
+    let upgrade: CatalogUpgrade
+
+    var body: some View {
+        VStack(spacing: 14) {
+            // A short window drops the list of steps before clipping the card.
+            ViewThatFits(in: .vertical) {
+                card(steps: true)
+                card(steps: false)
+            }
+            Text("If you quit, the upgrade continues the next time Pharos opens.")
+                .font(.caption)
+                .opacity(0.55)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .harborBackdrop()
+    }
+
+    private func card(steps: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            header
+            VStack(alignment: .leading, spacing: 10) {
+                UpgradeProgressBar(upgrade: upgrade)
+                HStack(alignment: .firstTextBaseline) {
+                    if upgrade.step > 0, upgrade.steps > 0 {
+                        Text("Step \(upgrade.step) of \(upgrade.steps)")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(Harbor.brass)
+                    }
+                    Spacer(minLength: 12)
+                    Text(upgrade.label)
+                        .font(.callout.weight(.medium))
+                        .monospacedDigit()
+                }
+                if !upgrade.stepName.isEmpty {
+                    Text(upgrade.stepName)
+                        .font(.title3.weight(.medium))
+                }
+                ForEach(upgrade.work, id: \.self) { work in
+                    Label(work, systemImage: "cylinder.split.1x2")
+                        .font(.callout)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.07), in: Capsule())
+                }
+            }
+            if steps, !upgrade.segments.isEmpty {
+                Divider().overlay(Harbor.stone.opacity(0.12))
+                checklist
+            }
+            Divider().overlay(Harbor.stone.opacity(0.12))
+            footer
+        }
+        .padding(26)
+        .frame(width: 500)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Harbor.sea.opacity(0.72)))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Harbor.stone.opacity(0.1)))
+        .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Harbor.sea)
+                .frame(width: 42, height: 42)
+                .background(Circle().fill(Harbor.brass))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Upgrading your library")
+                    .font(.title2.weight(.semibold))
+                Text("This happens once after Pharos updates, and Pharos opens when it finishes.")
+                    .font(.callout)
+                    .opacity(0.7)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var checklist: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(Array(upgrade.segments.enumerated()), id: \.offset) { _, segment in
+                HStack(spacing: 10) {
+                    UpgradeStepMark(state: segment.state)
+                    Text(segment.name)
+                        .font(.callout.weight(segment.state == "running" ? .semibold : .regular))
+                        .opacity(segment.state == "pending" ? 0.5 : 0.92)
+                    Spacer(minLength: 8)
+                    if let seconds = segment.seconds, segment.state == "done" {
+                        Text(CatalogUpgrade.duration(seconds))
+                            .font(.caption)
+                            .monospacedDigit()
+                            .opacity(0.55)
+                    }
+                }
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Label(upgrade.elapsed(at: context.date) ?? "Starting", systemImage: "clock")
+                    .monospacedDigit()
+            }
+            Spacer(minLength: 8)
+            if let basis = upgrade.basis {
+                Text(basis).multilineTextAlignment(.trailing)
+            }
+        }
+        .font(.caption)
+        .opacity(0.6)
+    }
+}
+
+/// The upgrade's bar: a segment a step, sized by its estimate. Finished steps
+/// fill theirs; the running step's segment shows activity, not a fill,
+/// because its statements report no progress (docs/progress-estimates.md).
+struct UpgradeProgressBar: View {
+    let upgrade: CatalogUpgrade
+
+    var body: some View {
+        GeometryReader { geometry in
+            let gap: CGFloat = 3
+            let usable = max(0, geometry.size.width - gap * CGFloat(max(upgrade.segments.count - 1, 0)))
+            HStack(spacing: gap) {
+                if upgrade.segments.isEmpty {
+                    UpgradeSegment(state: "running")
+                } else {
+                    ForEach(Array(upgrade.segments.enumerated()), id: \.offset) { _, segment in
+                        UpgradeSegment(state: segment.state)
+                            .frame(width: usable * segment.fraction)
+                    }
+                }
+            }
+        }
+        .frame(height: 10)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Library upgrade")
+        .accessibilityValue(upgrade.segments.isEmpty ? "In progress" : "\(upgrade.finishedSteps) of \(upgrade.segments.count) steps done")
+    }
+}
+
+struct UpgradeSegment: View {
+    let state: String
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 3)
+        switch state {
+        case "done":
+            shape.fill(Harbor.brass)
+        case "running":
+            TimelineView(.animation) { context in
+                let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
+                shape.fill(Harbor.brass.opacity(0.32))
+                    .overlay {
+                        GeometryReader { geometry in
+                            LinearGradient(colors: [.clear, Harbor.brass.opacity(0.85), .clear], startPoint: .leading, endPoint: .trailing)
+                                .frame(width: max(24, geometry.size.width * 0.45))
+                                .offset(x: (geometry.size.width + max(24, geometry.size.width * 0.45)) * phase - max(24, geometry.size.width * 0.45))
+                        }
+                        .clipShape(shape)
+                    }
+            }
+        default:
+            shape.fill(Harbor.stone.opacity(0.12))
+        }
+    }
+}
+
+/// A step's mark in the checklist: done, running or still to come.
+struct UpgradeStepMark: View {
+    let state: String
+
+    var body: some View {
+        Group {
+            switch state {
+            case "done":
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(Harbor.brass)
+            case "running":
+                Image(systemName: "circle.dotted.circle").foregroundStyle(Harbor.brass)
+                    .symbolEffect(.pulse)
+            default:
+                Image(systemName: "circle").opacity(0.35)
+            }
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .frame(width: 16)
+    }
+}
+
 struct PharosWindow: View {
     @ObservedObject var service: ArchiveService
     @ObservedObject var updates: UpdateNotice
@@ -2325,6 +2524,9 @@ struct PharosWindow: View {
             if let disconnection = service.disconnected {
                 LibraryDisconnectedView(disconnection: disconnection, ejecting: service.ejecting,
                                         reopen: service.reopen, eject: { service.ejectLibrary() })
+            }
+            else if service.pageWaiting, service.url != nil, let upgrade = service.catalogUpgrade {
+                CatalogUpgradeView(upgrade: upgrade)
             }
             else if service.pageWaiting, service.url != nil {
                 VStack(spacing: 16) {
@@ -2341,7 +2543,10 @@ struct PharosWindow: View {
                 ArchiveWebView(url: url, service: service, updates: updates)
                     .ignoresSafeArea()
                     .overlay {
-                        if service.pageLoading {
+                        if service.pageLoading, let upgrade = service.catalogUpgrade {
+                            CatalogUpgradeView(upgrade: upgrade)
+                        }
+                        else if service.pageLoading {
                             VStack(spacing: 16) {
                                 PharosBeacon()
                                 Text(service.hasConnectedLibrary ? "Opening your library…" : "Opening Pharos…")
