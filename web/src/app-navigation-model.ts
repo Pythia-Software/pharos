@@ -36,6 +36,7 @@ export function optimizePages(): NestedPage[] {
 // Every dashboard has one home; adding a topic requires choosing its section.
 const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   activity: "People", human: "People", work_hours: "People", habits: "People",
+  tool_use: "Agents", context: "Agents",
   compaction: "Agents", skills: "Agents", calls: "Agents", tools: "Agents", time: "Agents",
   parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents", session_shape: "Agents", agent_event_rates: "Agents",
   "thinking-overview": "Agents", "thinking-detail": "Agents",

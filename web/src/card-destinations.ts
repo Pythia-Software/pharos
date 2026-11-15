@@ -31,6 +31,7 @@ const engine = (topic: UsageTopic, view: AnalysisState["view"], pinned: Partial<
 });
 const scatter = (metric: string, metricY: string, unit = "conversation", split = "none"): CardDashboard => ({ topic: "scatter", chart: { v: analysisVersion, view: "scatter", metric, metricY, unit, split, scale: "logarithmic", scaleY: "logarithmic" } });
 const sessions = engine("session_shape", "compare", {});
+const toolUse = engine("tool_use", "compare", {}), context = engine("context", "compare", {});
 const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = engine("skills", "trend"), human = engine("human", "trend"), carbon = engine("carbon", "compare"), parallel = engine("parallelism", "trend");
 // A card's trailing window with whole days and a mean reference level (buildCardTrend).
 const trailing = { rollingPeriods: 7, completePeriods: true, percentiles: ["mean"] as PercentileLevel[] };
@@ -177,21 +178,21 @@ const dashboards: Record<string, CardDashboard> = {
   "session-length-mix": sessions("sessions", "length_band", { view: "trend", rollingPeriods: 7 }),
   "session-active-time": sessions("active_time", "archetype", { view: "distribution", scale: "logarithmic" }),
   "session-turn-cycle": sessions("turn_cycle", "provider", { view: "distribution", scale: "logarithmic" }),
-  "session-autonomy": sessions("autonomy", "provider", { view: "distribution", scale: "logarithmic" }),
-  "session-model-failure-rates": sessions("failure_rate", "model_family", { minSamples: 20 }),
-  "session-kind-failure-rates": sessions("failure_rate", "archetype", { minSamples: 10 }),
-  "session-failure-trend": sessions("failure_rate", "none", { view: "trend", ...trailing }),
+  "session-autonomy": toolUse("autonomy", "provider", { view: "distribution", scale: "logarithmic" }),
+  "session-model-failure-rates": toolUse("failure_rate", "model_family", { minSamples: 20 }),
+  "session-kind-failure-rates": toolUse("failure_rate", "archetype", { minSamples: 10 }),
+  "session-failure-trend": toolUse("failure_rate", "none", { view: "trend", ...trailing }),
   "session-count-trend": sessions("sessions", "none", { view: "trend", ...trailing }),
   "session-hours-trend": sessions("active_hours", "none", { view: "trend", ...trailing }),
-  "session-autonomy-trend": sessions("autonomy", "none", { view: "trend", rollingPeriods: 7 }),
+  "session-autonomy-trend": toolUse("autonomy", "none", { view: "trend", rollingPeriods: 7 }),
   "session-turn-cycle-trend": sessions("turn_cycle", "none", { view: "trend", rollingPeriods: 7 }),
-  "session-context-trend": sessions("context_peak", "none", { view: "trend", rollingPeriods: 7 }),
+  "session-context-trend": context("context_peak", "none", { view: "trend", rollingPeriods: 7 }),
   "session-active-time-trend": sessions("active_time", "none", { view: "trend", rollingPeriods: 7 }),
   "session-length-hours": sessions("active_hours", "length_band", { view: "trend", rollingPeriods: 7 }),
-  "session-length-tool-calls": sessions("tool_calls", "length_band", { view: "trend", rollingPeriods: 7 }),
+  "session-length-tool-calls": toolUse("tool_calls", "length_band", { view: "trend", rollingPeriods: 7 }),
   "session-repository-hours": sessions("active_hours", "repository_name", {}),
-  "session-repository-verification": sessions("verification", "repository_name", { minSamples: 20 }),
-  "session-model-context": sessions("context_peak", "model_family", { view: "distribution" }),
+  "session-repository-verification": toolUse("verification", "repository_name", { minSamples: 20 }),
+  "session-model-context": context("context_peak", "model_family", { view: "distribution" }),
   "session-weekday": sessions("sessions", "none", { view: "cycle", cycle: "weekday", reduce: "median" }),
   "session-last-weekday": sessions("sessions", "none", { view: "cycle", cycle: "weekday", reduce: "median", cycleOn: "last_message" }),
 };

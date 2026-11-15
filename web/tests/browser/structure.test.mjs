@@ -235,6 +235,8 @@ const backgroundTaskStatus = { ...busyStatus,
 };
 const askFeedbackAPI = {...askAPI,"GET /api/ask/session":{...askSession,conversation:[{...askSession.conversation[0],status:"feedback",cards:[],feedback:{kind:"feature",comment:"Add Markdown export of selected conversations so I can share a review.\nPreserve message order and tool-call context."}}]}};
 const ROUTES = [
+  { name: "Tool Use dashboard", url: "/analyze?analyze_topic=tool_use", ready: '.usage-tool-use-dashboard section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
+  { name: "Context dashboard", url: "/analyze?analyze_topic=context", ready: '.usage-context-dashboard section[aria-label="Over time"][aria-busy="false"]' },
   {name:"Scatter Plots",url:"/analyze?analyze_topic=scatter&analyze_data=scatter",ready:".usage-scatter-dashboard"},
   {name:"Compaction comparison",url:"/analyze?"+new URLSearchParams({analyze_topic:"compaction",analyze_data:"compactions",analyze_chart:JSON.stringify({view:"compare",metric:"compactions",split:"trigger_provider"})}),ready:analysisReady},
   {name:"Compaction",url:"/analyze?analyze_topic=compaction&analyze_data=compactions",ready: `.usage-compaction-dashboard ${overTimeReady}`},
@@ -884,7 +886,7 @@ const ROUTES = [
         ? { ...answer, coverage: { state: "pending", pending_sessions: 5, stale_sessions: 2, missing_sessions: 3 } } : answer;
     },
   }, ready: ".usage-workspace-table .usage-dashboard-note[role=status]" },
-  { name: "Analyze binned distribution", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "distribution", metric: "active_time", split: "none" }))}`, ready: '.usage-analysis-dashboard[aria-busy="false"]' },
+  { name: "Analyze binned distribution", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "distribution", metric: "active_time", split: "none" }))}`, ready: '.usage-context-dashboard section[aria-label="Over time"][aria-busy="false"]' },
   { name: "Analyze trend heatmap", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "sessions", split: "autonomy_band", display: "heatmap", period: "day" }))}`, ready: '.usage-session-shape-dashboard section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
   { name: "Human Words conversation heatmap", url: `/analyze?analyze_topic=human&analyze_days=30&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "typed", split: "none", display: "heatmap", period: "day" }))}`, ready: 'section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
   // Spend by branch: the coverage split above the compared branches.
@@ -2121,11 +2123,11 @@ test("Card dashboard opens from the Card Library, fits, and supports changing vi
   await page.locator('.usage-dashboard .usage-query-destinations a').first().waitFor();
   await app.settled();
   assert.deepEqual(await layoutProblems(page), []);
-  await view.selectOption('trend');
-  await page.waitForFunction(() => JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).view === 'trend');
+  const [trend] = await view.selectOption({ label: 'Over time - bar' });
+  await page.waitForFunction(value => JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).view === value, trend);
   await page.reload();
   await page.getByRole('combobox', { name: 'Analysis', exact: true }).waitFor();
-  assert.equal(await page.getByRole('combobox', { name: 'Analysis', exact: true }).inputValue(), 'trend');
+  assert.equal(await page.getByRole('combobox', { name: 'Analysis', exact: true }).inputValue(), trend);
   await app.settled();
   assert.deepEqual(app.problems(), []);
 });

@@ -69,6 +69,7 @@ export const tokenUsageRecipes: QueryRecipe[] = [
       cover: { mode:"result",metricId:tokens.id,kind:"bar-horizontal",maxGroups:6,showOther:true },
     }),
     card(`origin-cost-${field}`, `API cost by ${label.toLowerCase()}`, `Recorded API-equivalent cost over the last {days} days, grouped by ${label.toLowerCase()}.`, [field], [{ id:"origin_cost",op:"sum",field:"cost_usd",label:"API equivalent" },tokens], `Inspect ${label.toLowerCase()} cost`, {
+      category: "cost",
       unit:"USD",note:"API list-price equivalent, not subscription spend or invoices. Assumed and partial prices retain their existing meaning; missing costs do not become zero. Channel and Machine follow conversation initiation, including descendants; execution placement stays separate. Unknown origin groups remain visible.",
       cover:{mode:"result",metricId:"origin_cost",kind:"bar-horizontal",maxGroups:6,showOther:true},
     }),

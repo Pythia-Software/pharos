@@ -209,25 +209,27 @@ const dashboardWhere = item => cardDashboardWhere("session_shape", "session_shap
 
 function cardPair(id) {
   const { recipe, item } = cardItem(id), chart = recipe.destination.chart;
-  assert.equal(recipe.destination.topic, "session_shape", id);
-  const card = cardCoverQuery(item.query, recipe), analysis = analysisQuery(catalog, chart, dashboardWhere(item), { now: cardNow });
+  assert.equal(recipe.destination.dataset, "session_shape", id);
+  const target = analysisCatalogs[recipe.destination.topic];
+  const card = cardCoverQuery(item.query, recipe), analysis = analysisQuery(target, chart, dashboardWhere(item), { now: cardNow });
   const cardResult = core.evaluateMetrics(ledger, card.query, schemas.session_shape, { now: cardNow }).metrics.find(metric => metric.id === card.metricId);
   const dashboard = selectGroups(core.evaluateMetrics(ledger, analysis.query, schemas.session_shape, { now: cardNow }).metrics[0], analysis.selection);
   assert.equal(cardResult.error, undefined, `${id}: card`);
   assert.equal(dashboard.error, undefined, `${id}: dashboard`);
   assert.ok(cardResult.buckets.length >= 1, `${id}: the card draws something`);
-  return { recipe, card: cardResult, dashboard, analysis, state: normalizeAnalysis(catalog, chart) };
+  return { recipe, card: cardResult, dashboard, analysis, state: normalizeAnalysis(target, chart) };
 }
 
-test("Session Shape cards: every one opens the Session Shape dashboard with its population as the filters", () => {
+test("Session-derived cards open their subject dashboard with their population as the filters", () => {
   const cards = queryRecipes.filter(recipe => recipe.dataset === "session_shape");
   assert.ok(cards.length >= 12, "a collection of cards");
   assert.equal(new Set(cards.map(recipe => recipe.title)).size, cards.length, "titles are distinct");
   for (const recipe of cards) {
-    assert.equal(recipe.category, "sessions", recipe.id);
-    assert.equal(recipe.destination.topic, "session_shape", recipe.id);
+    const topic = recipe.category === "context" ? "context" : ["tools", "errors", "steering"].includes(recipe.category) ? "tool_use" : "session_shape";
+    assert.equal(recipe.destination.topic, topic, recipe.id);
+    assert.equal(recipe.destination.dataset, "session_shape", recipe.id);
     const { item } = cardItem(recipe.id), params = new URL(item.url, "http://localhost").searchParams;
-    assert.equal(params.get("analyze_topic"), "session_shape", recipe.id);
+    assert.equal(params.get("analyze_topic"), topic, recipe.id);
     const filters = core.decodeQueryStrict(params.get("analyze_filters")).where;
     for (const term of recipe.where ?? []) assert.ok(filters.some(filter => JSON.stringify(filter) === JSON.stringify(term)), `${recipe.id}: ${JSON.stringify(term)} is a dashboard filter`);
   }
@@ -288,9 +290,10 @@ test("Session Shape heatmap cards: the card's grid of trailing seven-day session
     clearPreviewCache();
     const preview = await loadQueryPreview("session_shape", item.query, schemas.session_shape, { recipe: item, cover: item.cover, window: item.window, url: item.url });
     assert.ok(preview.grid, `${id}: a grid`);
-    const where = dashboardWhere(item), state = normalizeAnalysis(catalog, { ...dashboardDefaults.session_shape, ...item.destination.chart });
+    const target = analysisCatalogs[item.destination.topic];
+    const where = dashboardWhere(item), state = normalizeAnalysis(target, { ...dashboardDefaults[item.destination.topic], ...item.destination.chart });
     assert.deepEqual([state.view, state.display, state.period, state.rollingPeriods], ["trend", "heatmap", "day", 7], id);
-    const source = heatmapSource(catalog, state), query = trendQuery(source.catalog, source.state, where, { now: cardNow });
+    const source = heatmapSource(target, state), query = trendQuery(source.catalog, source.state, where, { now: cardNow });
     const built = trendSeries(source.catalog, { ...source.state, nonzero: false }, query, core.evaluateMetrics(ledger, query.query, schemas.session_shape, { now: cardNow }).metrics, { where, now: cardNow });
     assert.equal(built.error, undefined, id);
     const axis = heatmapAxis(catalog, state);

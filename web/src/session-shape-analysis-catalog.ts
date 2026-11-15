@@ -106,3 +106,19 @@ export const sessionShapeAnalysisCatalog: AnalysisCatalog = {
   scatter: ["active_time", "tool_calls"],
   population: true,
 };
+
+// Subject dashboards share session identities, coverage and bins with Session
+// Shape. A tool call's own row cannot express its session's length or autonomy.
+function subjectCatalog(keys: string[], metric: string, split: string, scatter: [string, string]): AnalysisCatalog {
+  return { ...sessionShapeAnalysisCatalog,
+    measures: Object.fromEntries(["sessions", ...keys].map(key => [key, measures[key]])),
+    trend: { metric, split }, scatter,
+  };
+}
+export const toolUseAnalysisCatalog = subjectCatalog([
+  "tool_calls", "autonomy", "failure_rate", "failed_calls", "rejections", "interrupts", "hook_blocks",
+  "identical_retries", "thrash_retries", "churned_files", "verification", "one_shot_rate", "long_unprompted_runs", "ended_on_failure",
+], "tool_calls", "length_band", ["autonomy", "tool_calls"]);
+export const contextAnalysisCatalog = subjectCatalog([
+  "context_peak", "context_pressure", "mid_task_compactions",
+], "context_peak", "none", ["context_peak", "mid_task_compactions"]);

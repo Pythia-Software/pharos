@@ -31,6 +31,8 @@ export const dashboardDefaults: Record<string, AnalysisState> = {
   skills: { metric: "records", split: "skill_name", ...daily },
   agent_experience: { metric: "events", split: "family_group", ...daily },
   agent_event_rates: { metric: "per_thousand", split: "friction_repository", view: "compare", minSamples: 200 },
+  tool_use: { metric: "tool_calls", split: "length_band", period: "day" },
+  context: { metric: "context_peak", split: "none", period: "day" },
   session_shape: { metric: "sessions", split: "length_band", period: "day" },
   // Spend by outcome over time: sessions are sparser than usage, so weeks.
   outcomes: { metric: "cost", split: "outcome_label", period: "week" },
@@ -50,6 +52,7 @@ export const legacyViewDefaults: Record<keyof typeof engineUsageTopics, LegacyVi
   tokens: { values: { nonzero: true, rollingPeriods: 0, scale: "half", display: "interval" } },
   human: legacyDaily, parallelism: legacyDaily, work_hours: legacyDaily, tools: { values: {} }, mcp: { values: {} }, carbon: legacyDaily,
   time: legacyDaily, skills: legacyDaily, agent_experience: legacyDaily, agent_event_rates: { values: {} },
+  tool_use: { values: {} }, context: { values: {} },
   session_shape: { values: { rollingPeriods: 7 }, chose: true },
   outcomes: legacyDaily, branches: { values: {} },
 };
