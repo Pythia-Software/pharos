@@ -489,7 +489,7 @@ writes what the builders read from the resolution and the occurrence index:
 | Labels and agent events builder (`labelingPass.inheritedHistory`), per selected record | `occurrenceIndex.Lookup`: role, the original it copies, the deciding rule | `occurrence` lines: observation, claim kind, object, context, role, original, owner, navigation target, rule chain |
 | The same, per record without an occurrence claim | `Bind` of the stream that recorded it (a copied launch's stream is inherited history) | `stream` lines: each stream the transcript retains, its binding state and execution, its main session, launch attempt, mirrored launch |
 | The same, per transcript | `occurrenceIndex.Partial` | `partial` line |
-| Usage lineage (`usageAttributionFrom`); no stored derivative reads it, the labeling pass carries it | execution, parent, root, depth, their quality and conflicts, mirrors, children | `execution` lines: identity, segments, streams, parent state and parent, family root, ancestry state, depth, root, certainty, chain, children, evidence kind |
+| Usage lineage (`usageAttributionFrom`); the labels and agent events builders do not read it, authorship does (below) | execution, parent, root, depth, their quality and conflicts, mirrors, children | `execution` lines: identity, segments, streams, parent state and parent, family root, ancestry state, depth, root, certainty, chain, children, evidence kind |
 
 Not in the result, because no builder of a stored derivative reads them: an
 execution's label and sibling order, its workspace and provider, and the
@@ -498,6 +498,17 @@ the resolution must add it to `executionResultLines` and change
 `executionResultEncoding`.** Otherwise a rules change that moves only that
 value leaves the builder's output stale. `TestExecutionResultCoversBuilderInputs`
 checks each line against the value it stands for.
+
+**Authorship is not redone by a rules change.** `authorshipContinuations`
+reads the usage lineage (a conversation with a root but no run of its own is
+a continuation) into stored `message_authorship`, which the labels builder
+reads. Authorship's generation follows its inputs and `authorshipVersion`,
+not the resolver's rules. A rules change that flips a continuation moves the
+`execution` lines, so that conversation's labels are marked and rebuilt, but
+from the authorship stored before the change. This was so before results
+were recorded too (a resolver bump rebuilt every label from unchanged
+authorship). Bump `authorshipVersion` with a resolver change that can move a
+continuation.
 
 Results are recorded at three points: when a ledger publishes (from the
 resolution its builder read, for every digest it publishes at); when
@@ -509,8 +520,10 @@ written under.
 **A rules change.** When an executable whose three versions differ from the
 recorded ones opens the catalog:
 
-1. Readers hold back exactly what the reconciliation will mark
-   (`planExecutionReconcile`); nothing else reads as pending.
+1. Readers hold every derivative back (`executionUnmarkedDependents`):
+   labels and agent events read as pending, as after any earlier bump. Which
+   of them the rules left alone is known only from a resolution of the whole
+   catalog, and a request never performs one.
 2. A writer's own mark (ingestion, the backfill) still propagates source
    changes but leaves the recorded rules alone, and no ledger publishes
    until they are reconciled.
@@ -522,8 +535,9 @@ recorded ones opens the catalog:
    resolves to another result than the recorded one, or whose digest has no
    comparable result; rewrites the recorded results; and records the rules
    and the cursor. Interrupted, none of it is stored and the next call
-   starts again. The writer resolves the catalog itself only if evidence
-   committed after the snapshot.
+   starts again. The writer resolves nothing: a component it has no result
+   from the snapshot for (evidence, or a publication, committed in between)
+   is marked. After it, only the marked derivatives read as pending.
 
 So a version bump costs one resolution of the catalog, and rebuilds the
 labels and agent events (and with them label facts and fingerprints) of the
@@ -573,6 +587,18 @@ none under the recorded rules:
   `execution_result_stamps_versions` behind `execution_dependents_versions`.
   What it published is then unknown, and the next reconciliation marks every
   derivative.
+- **Exposure: an `execution-v9` build without results, used after the rules
+  have advanced past v9.** Its digests are these (frozen at the v9 literals),
+  so it compares digests only: it reads derivatives built under the later
+  rules as current, records its own rules, and can publish its v9 reading at
+  a digest that still holds, clearing a mark. No release is in that state
+  (v0.9.8 is `execution-v8`); only development builds of master between the
+  v9 resolver and this change are. When this build next opens the catalog
+  the recorded rules are not the results' and every derivative is marked, so
+  the cost is one library-wide pass per alternation and nothing stays stale.
+  The two running against one catalog at once is not covered. There is no
+  guard such a build would honour short of changing a digest line, which
+  would rebuild every catalog already at v9; none was added.
 
 `TestUnmarkedSetFollowsEventLedgerWrites` checks the ledger stamp on its own.
 An events-only publication by another executable, with no labels write and

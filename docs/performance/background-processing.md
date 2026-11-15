@@ -170,6 +170,13 @@ Not done, largest first by the audit's estimate:
   a release that recorded no results (v0.9.8 and earlier) also marks
   everything once, and each alternation between such a release and a
   newer build rebuilds the library.
+- **Until a rules change is reconciled every label and agent event reads
+  as pending.** Requests never resolve the catalog; the first labels or
+  agent events run, or the end of an upgrade, compares the results (12 s
+  warm, 54 s cold on this library) and leaves only the changed ones marked.
+- **Authorship does not follow the resolver's rules**, although it reads
+  the usage lineage: a resolver change that moves a continuation needs an
+  `authorshipVersion` bump.
 - **Origins and parallelism record the resolver version** with their own,
   so a resolver bump recomputes both for every conversation.
 - **Tool-ledger version is global.** A bump for one source rebuilds all
