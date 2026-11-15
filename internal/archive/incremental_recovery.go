@@ -621,10 +621,10 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			}
 		}
 	}
-	// The freshness ledger's upgrade count (§5), cheap next to the whole
-	// chain; a background stage leaves it to the daily pass.
+	// The freshness ledger's upgrade count (§5), counted again only when
+	// what it reads changed; a background stage leaves it to the daily pass.
 	if only == nil {
-		s.Catalog.storeUpgradeCount(ctx)
+		s.Catalog.refreshUpgradeCount(ctx)
 	}
 	return nil
 }

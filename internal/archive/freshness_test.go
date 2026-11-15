@@ -983,9 +983,48 @@ func TestUpgradeCountKeepsTheNewerAnswer(t *testing.T) {
 	f.exec("DELETE FROM meta WHERE key='upgrade_count'")
 	f.catalog.storeUpgradeCount(context.Background())
 	expectRow(t, f.ledger(freshnessInput{}), "upgrade", freshCurrent, "", "")
+	// The analysis chain counts again only when what the count reads changed:
+	// a new conversation, or a marker set or cleared on an existing one.
+	stored := func() string {
+		value, _ := f.catalog.metaValue(context.Background(), upgradeCountKey)
+		return value
+	}
+	counted := stored()
+	f.catalog.refreshUpgradeCount(context.Background())
+	if stored() != counted {
+		t.Fatal("counted again with nothing changed")
+	}
+	f.exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w2','claude','local','w2','Work','2026-10-27')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c2','w2','claude','local','c2')`)
+	f.catalog.refreshUpgradeCount(context.Background())
+	if pending := upgradeCountPending(t, stored(), "tools"); pending != 1 {
+		t.Fatalf("a new conversation was not counted: tools pending %d", pending)
+	}
+	f.exec(fmt.Sprintf(`INSERT INTO tool_ledger_state(conversation_id,version,tool_calls,updated_at) VALUES('c2',%s,0,'2026-10-27')`, sqlQuote(toolLedgerVersion)))
+	f.catalog.refreshUpgradeCount(context.Background())
+	if pending := upgradeCountPending(t, stored(), "tools"); pending != 0 {
+		t.Fatalf("a ledger written since was not counted: tools pending %d", pending)
+	}
+	f.exec("DELETE FROM conversations WHERE id='c2'", "DELETE FROM workspaces WHERE id='w2'")
+	f.catalog.storeUpgradeCount(context.Background())
 	f.exec(setMetaSQL(initializedBuildKey, "a-newer-build"))
 	// Not counted for this build, but with no conversations nothing waits.
 	expectRow(t, f.ledger(freshnessInput{}), "upgrade", freshCurrent, "empty", "")
+}
+
+func upgradeCountPending(t *testing.T, stored, step string) int64 {
+	t.Helper()
+	var count upgradeCount
+	if err := json.Unmarshal([]byte(stored), &count); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range count.Steps {
+		if s.ID == step {
+			return s.Pending
+		}
+	}
+	t.Fatalf("no %s step in %s", step, stored)
+	return 0
 }
 
 // Initialize no longer counts the upgrade's steps: the service counts them
