@@ -225,7 +225,11 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 		// As in a full pass, an outcome without a counting row (a suppressed
 		// mirror, an ineligible message) is kept as completion evidence.
 		state.filter, state.args = messages.filter+" AND (disposition IN ('counted','deferred') OR NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=authorship_message_state.message_id))", messages.args
-		query = "SELECT id FROM workspaces WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id"
+		// A full pass names every workspace, with no authored title when no
+		// message gives one. New work can bring a workspace none of the
+		// suffix's messages is in (a mirror's, whose messages are not counted),
+		// so those without a name row are named here too.
+		query = "SELECT id FROM workspaces WHERE id IN (SELECT value FROM json_each(?)) OR NOT EXISTS(SELECT 1 FROM workspace_names n WHERE n.workspace_id=workspaces.id) ORDER BY id"
 		args = []any{jsonText(sortedNameIDs(works))}
 	}
 	workspaces, err := queryMapsContext(ctx, c.DB, query, args...)
