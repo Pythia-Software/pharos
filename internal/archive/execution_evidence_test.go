@@ -2295,10 +2295,15 @@ func TestDerivativesExposeEvidenceChangedElsewhere(t *testing.T) {
 			forgetDependencyCaches()
 		}},
 		// The occurrence rules change in a way that leaves c-events' facts
-		// as they were: what was built on them stays current.
+		// as they were: once the rules are reconciled (until then every
+		// derivative is pending, TestRulesChangeMarksOnlyChangedResults),
+		// what was built on them is current.
 		{name: "occurrence rules changed", unchanged: true, change: func(t *testing.T, catalog *Catalog) {
 			override(t, &occurrenceDependencyVersion, "occurrence-dependency/later")
 			forgetDependencyCaches()
+			if err := catalog.propagateExecutionChanges(t.Context()); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		// Derivatives from before digests were recorded, with no source
 		// change: the rebuild must read current again although the
