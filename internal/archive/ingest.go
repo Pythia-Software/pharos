@@ -2042,6 +2042,14 @@ func writeResolvedAgentSessions(tx *sql.Tx, workspaceID, conversationID string, 
 				return err
 			}
 		}
+		// A replay that derives the usage already stored (an upgrade's
+		// repair, mostly) leaves the rows alone: deleting and inserting them
+		// again would mark the workspace for every projection that reads them.
+		if stored, err := sessionUsageStored(tx, ids[summary.nativeID], usage, conversation.StartedAt, usageFallback); err != nil {
+			return err
+		} else if stored {
+			continue
+		}
 		if _, err := tx.Exec("DELETE FROM agent_session_usage WHERE agent_session_id=?", ids[summary.nativeID]); err != nil {
 			return err
 		}
