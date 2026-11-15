@@ -1037,7 +1037,7 @@ func (s *Server) routePopulationStage(ctx context.Context, name, kind string, ex
 		return err
 	}
 	if name == "agent_events" {
-		// Fixes group these events; a rebuild is a no-op when nothing changed.
+		// Fixes group these events: rebuilt at most daily (fixesChainInterval).
 		if err := w.call(ctx, 1, func(ctx context.Context, _ workAllocation) error { return c.refreshFixesSoon(ctx) }); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Fixes: %v\n", err)
 		}
