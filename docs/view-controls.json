@@ -1397,6 +1397,26 @@
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
     },
     {
+      "key": "cc5416da788f1ae5:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderUsage",
+      "tag": "details",
+      "control": "'details', 'bg-usage-table'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "The CPU time chart's table alternative uses the stable background:usage:table key in the shared disclosures map."
+    },
+    {
+      "key": "e9623f885cb8435b:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderUsage",
+      "tag": "summary",
+      "control": "'summary', '', 'Show as a table'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "The CPU time chart's table alternative uses the stable background:usage:table key in the shared disclosures map."
+    },
+    {
       "key": "7a822cb5e10acecd:0",
       "file": "internal/archive/assets/background.js",
       "owner": "renderWork",
