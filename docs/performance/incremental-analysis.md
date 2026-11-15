@@ -216,6 +216,31 @@ require changed inputs, and prevent overlapping passes. First-build/window
 rollover cost and resident memory need their own budget. No scheduling policy
 was enabled by this implementation.
 
+## Writing and related conversations (November 14, 2026)
+
+Measured on an APFS clone of a 110 GB library (46,000 classified prompts,
+17.8 million tool calls), four cores, one observation each. Wall times moved
+with cache warmth by a factor of four between otherwise identical full
+passes (120–490 s), so compare allocation and rows written first.
+
+| Pass | Before | After |
+|---|---|---|
+| Daily writing refinement, full | 477–486 s, 44.5 GB, 3,652 rows rewritten (5 changed class), writer held 29–30 s | 44.5 GB, 5 rows rewritten, no writer hold of a second |
+| Daily writing refinement after 100 new prompts | the full pass above | from the checkpoint: 5.8 s, 2.65 GB; a forced full pass then changed 0 rows |
+| Estimates pass with nothing queued | 0.22 s, 76 MB, a pass in the activity list | 0.18 s, 1.9 MB, no pass |
+| Related conversations after an old-dated chat import | 307 s, 26 GB, 6,920 readers derived again | 1.6 s, 51 MB, 0 readers, links unchanged |
+
+The daily pass still classifies everything when the identity or launch graph
+changed, when writing mirrors were reconsidered, when an import is dated
+before the checkpoint, when a repeated prompt first becomes a template, and
+once a week; its journal step names the reason. A library that gains
+identity links every day therefore still runs it in full on most days.
+
+Two full rescans of read links choose different writer messages for about
+four in ten links (the first matching line in map order); the linked work,
+confidence, reader message, time and evidence are identical, and that is the
+parity the incremental run was checked against.
+
 ## Reproduction and artifacts
 
 The opt-in harness rejects the installed production catalog path, including
