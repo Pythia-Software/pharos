@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -47,6 +48,9 @@ type brokerOperationRecord struct {
 	Step      string   `json:"step,omitempty"`
 	StartedAt string   `json:"started_at"`
 	EndedAt   string   `json:"ended_at,omitempty"`
+	// Upgrade is the catalog upgrade a service start is waiting for
+	// (initialize_progress.go); live only, never stored.
+	Upgrade *initializeProgress `json:"-"`
 }
 
 // brokerLibrary is what the snapshot needs about one registered library,
@@ -103,6 +107,26 @@ type brokerOperations struct {
 	leases        resourceLeaseCache
 	nativePID     int
 	nativeStarted uint64
+	// upgrades are the catalog upgrades running service starts wait for.
+	upgrades map[OpID]initializeProgress
+}
+
+// setCatalogUpgrade attaches the catalog upgrade op waits for, or detaches
+// it (nil), for GET /api/app/operations.
+func (b *brokerOperations) setCatalogUpgrade(op *Op, progress *initializeProgress) {
+	if b == nil || op == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if progress == nil {
+		delete(b.upgrades, op.id)
+		return
+	}
+	if b.upgrades == nil {
+		b.upgrades = map[OpID]initializeProgress{}
+	}
+	b.upgrades[op.id] = *progress
 }
 
 func brokerOperationsPath(installation string) string {
@@ -162,11 +186,17 @@ func (b *brokerOperations) launch(op *Op, work func(op *Op) error) {
 // newest first, ended ones capped at brokerKeepEnded.
 func (b *brokerOperations) records() []brokerOperationRecord {
 	records := []brokerOperationRecord{}
+	b.mu.Lock()
+	upgrades := maps.Clone(b.upgrades)
+	b.mu.Unlock()
 	for _, view := range b.reg.views() {
 		record := brokerOperationRecord{ID: string(view.ID), Kind: view.Spec.Kind, Variant: view.Spec.Variant, Trigger: view.Spec.Trigger, State: view.State,
 			Reason: view.Reason, Error: view.Error, Step: view.Step.Name, StartedAt: formatTime(view.Started)}
 		record.Libraries = view.Spec.Libraries
 		record.Subject = view.Spec.Subject
+		if upgrade, ok := upgrades[view.ID]; ok {
+			record.Upgrade = &upgrade
+		}
 		if !view.Ended.IsZero() {
 			record.EndedAt = formatTime(view.Ended)
 		}
@@ -308,6 +338,9 @@ func brokerOperationEntry(record brokerOperationRecord) map[string]any {
 	view.Process = "broker"
 	entry := operationEntry(view, nil, time.Now())
 	entry["libraries"] = record.Libraries
+	if record.Upgrade != nil && !opTerminal(record.State) {
+		entry["catalog_upgrade"] = record.Upgrade.view(time.Now())
+	}
 	return entry
 }
 

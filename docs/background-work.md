@@ -512,6 +512,15 @@ Notes:
   records Initialize as a live child of its operation (§6.5), so the
   service sees it while it runs. The broker separately records `service.start` (G), which
   covers the wait.
+- **Initialize's progress before the API.** Initialize writes its steps,
+  the one running and an estimate of each to `.initialize-progress.json`
+  beside `.initialize.lock`, and removes it when it ends
+  (`initialize_progress.go`). The broker reads it about once a second while
+  a service start waits, names the step on `service.start` ("Upgrade the
+  library's catalog", detail "Step 3 of 8: …") and adds the estimate to
+  that operation in `GET /api/app/operations` as `catalog_upgrade`. The
+  window shows it in place of "Waiting for Pharos to answer…"
+  ([progress estimates](progress-estimates.md#startup-upgrades)).
 - **Upgrade steps.** `library.upgrade` plans the pending steps of
   `UpgradeSteps` (seven today, then the Tools rollup), so the journal
   answers "interrupted at step 5", which in-memory state cannot.
@@ -538,7 +547,7 @@ Notes:
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `service.start` | Open the library · Opening the library | user (select), startup, respawn | brk | M:w D:w (`M` today, for up to 2 min) | — | — | Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2). | none | always (broker registry) | fg |
+| `service.start` | Open the library · Opening the library | user (select), startup, respawn | brk | M:w D:w (`M` today, for up to 2 min, or for as long as a catalog upgrade runs) | — | — | Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2), except while the catalog's initialize lock is held: then it waits, step "Upgrade the library's catalog" with the upgrade's progress (§3.5). | none | always (broker registry) | fg |
 | `library.release` | Release the library · Releasing the library | user (eject, quit, switch through the API), device (volume release), signal (SIGTERM/SIGINT), parent-exited, error | svc, brk | D:w | — | — | Is the stop. Fails after 7 s with "Pharos is finishing a write". | — | always | fg |
 | `labels.fetch` | Download the labeling model · Downloading the labeling model | startup (a library with `labels_enabled` opens on a Mac without the model or ONNX Runtime, or one with `agent_events_enabled` without the verifier or the runtime; retried 15 min after a failure), cli (`pharos labels fetch`, `pharos agent-events fetch`) | brk, cli | — (network and this Mac's support directory only) | — | — | Stops; it touches no library, and the next attempt resumes the download. | record | always (broker registry) | bg |
 | `app.update` | Update Pharos · Updating Pharos | schedule, user (Sparkle) | app | update-lock:w (native) | — | — | Native; bridged to the header ring as today. | — | never (Sparkle keeps its own) | bg |
