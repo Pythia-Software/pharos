@@ -315,6 +315,10 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "view stopped", domain: "view", seed: []string{"INSERT INTO workspace_library_dirty(workspace_id) VALUES('w1')"}, in: freshnessInput{viewStopped: true}, state: freshBehind, reason: "stopped", count: 1, countKnown: true},
 		{name: "view catching up", domain: "view", seed: []string{"INSERT INTO workspace_library_dirty(workspace_id) VALUES('w1')"},
 			in: freshnessInput{ops: []freshnessOp{runningOp("op-view", "maintenance.library-view", "")}}, state: freshBehind, reason: "refreshing", catching: "op-view", count: 1, countKnown: true},
+		// Stored workspaces still showing a changed column's earlier value
+		// are behind too, each counted once however many columns it is owed.
+		{name: "view updating a changed column", domain: "view", seed: []string{"INSERT INTO workspace_library_column_pending(column_name,workspace_id) VALUES('turn_count','w1'),('turn_count','w2'),('models','w2')"},
+			state: freshBehind, reason: "refreshing", count: 2, countKnown: true, unit: "workspace"},
 		{name: "view version", domain: "view", seed: []string{setMetaSQL("workspace_library_version", "old")}, state: freshBehind, reason: "version"},
 
 		{name: "text search current", domain: "search.text", state: freshCurrent},

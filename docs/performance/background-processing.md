@@ -50,6 +50,7 @@ The framework's own ticking is small: about 1.8% of a core idle.
 |---|---|---|
 | Label facts rebuild only when stored labels change; "pending" is applied at read time | 5,100 marked conversations: facts loop processed 11,073 conversations, wrote 151,054 rows, 78.7 s, writer held 24.2 s | 200 conversations, 3,366 rows, 2.9 s, 0.51 s. Final tables byte-identical |
 | Library view and workspace metrics are marked only when a column they read changes | Usage replay on 300 workspaces: 285 marks. Stamping 10,107 pull requests: 5,936 marks, 61.9 s | 12 marks. 0 marks, 0.22 s |
+| Each Library view column has its own version; a changed column is computed alone, in the background | A definition change dropped the table and marked every workspace: 56,980 whole rows, 428.5 s on the clone (8,434 s for the 11-12 bump in production) | Opening a catalog from the previous build marks 0 workspaces and keeps all 57,680 rows (the step takes 0.5 s). The four columns below, for every workspace: 75.6 s, writer held 5.2 s in all, 5.1 ms at worst |
 | Fingerprint triggers watch only what the renderer reads | Rewriting all agent-session tokens re-queued 50,558 conversations and 41,971 workspaces; a new labels model row re-queued everything | 0 and 0. A 50-conversation delta queues 8, not 50 |
 | A new identity link or a moved ledger generation no longer forces a full tool rollup | 50 conversations plus one link: 73.2 s, writer held 9.8 s, 201,707 query-cache bumps | 2.0 s, 0.26 s, 3,797. Cube, daily table and mirrors identical to a full rebuild |
 | Peers rescans only where new evidence could link | After an old-dated chat import: 307 s, 26 GB allocated, 6,920 readers | 1.6 s, 51 MB, 0 readers, identical links |
@@ -69,6 +70,7 @@ The framework's own ticking is small: about 1.8% of a core idle.
 | Saving unchanged agent-event conversations: 200 per transaction, dependency lookups primed | 1.04 s per conversation; 440 writer holds of 1 s or more in 838 conversations | 3.2 ms per conversation; none |
 | Project colour query groups before joining | 5.1–5.7 s per identities pass; 3.6–3.9 s inside an ingest write for the largest repository | 0.18 s; about 0 |
 | Findings usage query reads the window's conversations first | 17.96 s cold, 0.93 s warm | 4.90 s, 0.28 s, identical rows |
+| Library view counts turns, tool calls, tool errors and compactions from covering indexes and the ledgers, not message rows | 2,000 workspaces (342,196 messages): 481,638 pages read (241 per workspace); refresh 11.85 ms per workspace on first read, 1.77 ms warm; 48.5 G instructions warm | 101,554 pages (51 per workspace); 7.24 ms and 1.11 ms; 27.5 G |
 | Search update triggers skip unchanged text | 5,000 tool-call rewrites: 4.1–10.3 s, 142–174 MB of WAL | 0.43–2.2 s, 43–45 MB |
 | Capture compression pass that finds nothing | 4.1 s, 61 G instructions | 0.45–0.55 s, 8.3 G |
 | Git merge stage with nothing new | 125 `git` processes, 4.0–4.8 s | 15, 0.8 s |
@@ -131,18 +133,33 @@ body carries the clock the frontend draws from, so none is identical.
 Narrower per-table stamps are a follow-up in [the result cache
 notes](../result-cache.md).
 
+### What the Library view's ledger columns changed
+
+Turns and compactions are the same in all 57,680 workspaces of the audit
+copy. Turns still include a prompt on a branch since abandoned (25 of
+62,382), which the index of selected messages would have dropped.
+
+Tool calls come from the tool ledger, which holds a call once. In 29
+workspaces (28 Codex sessions run by Conductor and one Claude Code cloud
+export) the transcript repeats earlier calls under the same call ID, and the
+message count had counted each copy: 2,044,548 before, 2,033,493 now.
+
+Tool errors are the ledger's failed calls, where they were results flagged
+`is_error`: 70,054 before, 85,337 now, in 13,047 workspaces where it was
+9,601. The count changes in 3,947 workspaces. It rises in 3,918, mostly for
+nonzero exits and timeouts no flag recorded, and falls in 29 where a
+repeated result was counted twice. The ledger does not count an exit status
+of 1 from `rg`, `grep`, `diff`, `cmp` or `test` when the command runs that
+one program; a chained command ending that way still counts as a failure.
+
+The whole-library re-marks whose cause the audit could not find (about
+32,000 s in the window, probably another build's definition) now cost only
+the columns that build defines differently.
+
 ## Open
 
 Not done, largest first by the audit's estimate:
 
-- **Library view full re-marks of unknown cause.** About 32,000 s of full
-  re-marks in the window could not be attributed. A change to the view's
-  definition still drops the table and marks every workspace; per-column
-  versions would end that.
-- **Library view cost per workspace.** Four columns read message rows
-  through an index that does not cover them (about 280 pages per
-  workspace). Moving them to the ledgers changes the tool-errors count in
-  185 of 2,047 sampled workspaces, which is a product decision.
 - **Refine is still a full pass on most days.** New identity links, mirror
   changes and old-dated imports each force one (44.5 GB allocated).
 - **Tool-ledger version is global.** A bump for one source rebuilds all

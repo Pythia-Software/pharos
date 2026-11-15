@@ -30,12 +30,15 @@ func libraryFixture(t *testing.T) (*Catalog, Config) {
 		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES
 			('m1','cc','1','user','message','Please fix the parser','2026-09-23T02:00:00Z','h'),
 			('m2','cc','2','assistant','tool_call','{}','2026-09-23T02:00:01Z','h'),
-			('m3','cc','3','tool','tool_result','{"is_error":1}','2026-09-23T02:00:02Z','h'),
+			('m3','cc','3','tool','tool_result','{"exit_code":2}','2026-09-23T02:00:02Z','h'),
 			('m4','cc','4','assistant','message','Fixed it','2026-09-23T02:00:03Z','h'),
 			('m5','ca','1','user','message','Mirror prompt','2026-09-23T03:00:00Z','h'),
 			('k1','cc','k1','system','metadata','{"subtype":"compact_boundary","type":"system"}','2026-09-23T02:00:04Z','h'),
 			('k2','cc','k2','system','metadata','{"compaction_trigger":"auto","payload":{},"type":"compacted"}','2026-09-23T02:00:05Z','h'),
 			('k3','cc','k3','system','metadata','{"payload":{},"type":"compacted"}','2026-09-23T02:00:06Z','h')`,
+		// The call failed by its exit status, which only the tool ledger records.
+		`INSERT INTO tool_calls(id,workspace_id,conversation_id,call_message_id,result_message_id,sequence,provider,kind,tool_name,tool_category,status,error_type,exit_code)
+			VALUES('t1','c','cc','m2','m3',1,'claude','tool','Bash','shell','error','nonzero_exit',2)`,
 		`INSERT INTO metrics(workspace_id,name,value,unit,status,extractor_version,observed_at) VALUES
 			('c','total_tokens',500,'tokens','observed','test','x'),('a','total_tokens',900,'tokens','observed','test','x')`,
 		`INSERT INTO metric_ledger(workspace_id,sequence,event_kind,error_type) VALUES('c',1,'tool','timeout')`,
@@ -120,8 +123,19 @@ func TestLibraryReflectsEveryDependencyBeforeAndAfterRefresh(t *testing.T) {
 			func(rows map[string]map[string]any) bool { return integer(rows["c"]["turn_count"]) == 2 }},
 		{"agent session insert", `INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,parent_id,kind,provider,depth) VALUES('sc3','c','cc','t3','sc','subagent','claude',1)`,
 			func(rows map[string]map[string]any) bool { return integer(rows["c"]["subagent_count"]) == 3 }},
-		{"message update", `UPDATE messages SET text='{"is_error":0}' WHERE id='m3'`,
+		{"tool call update", `UPDATE tool_calls SET status='ok',error_type=NULL WHERE id='t1'`,
 			func(rows map[string]map[string]any) bool { return integer(rows["c"]["tool_error_count"]) == 0 }},
+		{"tool call insert", `INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status) VALUES('t2','c','cc',2,'claude','tool','Read','file','ok')`,
+			func(rows map[string]map[string]any) bool { return integer(rows["c"]["tool_use_count"]) == 2 }},
+		// A boundary is stored by a trigger on its message, and reclassified
+		// without the message changing.
+		{"compaction boundary delete", `DELETE FROM compaction_boundaries WHERE message_id='k1'`,
+			func(rows map[string]map[string]any) bool { return integer(rows["c"]["compaction_count"]) == 1 }},
+		{"compaction message insert", `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('k4','cc','k4','system','metadata','{"subtype":"compact_boundary","type":"system"}','h')`,
+			func(rows map[string]map[string]any) bool { return integer(rows["c"]["compaction_count"]) == 2 }},
+		// An abandoned branch's prompt was still sent.
+		{"message leaves the branch", `UPDATE messages SET selected=0 WHERE id='m6'`,
+			func(rows map[string]map[string]any) bool { return integer(rows["c"]["turn_count"]) == 2 }},
 		{"change file delete", `DELETE FROM change_files WHERE path='README.md'`,
 			func(rows map[string]map[string]any) bool { return integer(rows["c"]["changed_file_count"]) == 1 }},
 		{"metric update", `UPDATE metrics SET value=700 WHERE workspace_id='c'`,
@@ -501,6 +515,168 @@ func TestLibraryProjectionRebuildsWhenDefinitionChanges(t *testing.T) {
 	var legacy int
 	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'workspace_query_stats%'").Scan(&legacy); err != nil || legacy != 0 {
 		t.Fatalf("legacy query stats remain: %d %v", legacy, err)
+	}
+}
+
+// A build that defines one column differently, adds one and drops one keeps
+// every stored row: only those columns change, a workspace at a time, and no
+// workspace is marked.
+func TestLibraryColumnChangeRecomputesOnlyThatColumn(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	ctx := context.Background()
+	if err := catalog.refreshAllLibrary(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stored := func(column, workspace string) any {
+		t.Helper()
+		var value any
+		if err := catalog.DB.QueryRow(`SELECT "`+column+`" FROM workspace_library WHERE workspace_id=?`, workspace).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	owed := func() int { return countRows(t, catalog, "SELECT COUNT(*) FROM workspace_library_column_pending") }
+	// Nothing recomputes a column whose definition stands: this stays.
+	execSQL(t, catalog.DB, "UPDATE workspace_library SET pr_numbers='kept'")
+	turns := stored("turn_count", "c")
+	columns := []libraryColumn{}
+	for _, column := range libraryColumns {
+		switch column.name {
+		case "turn_count":
+			column.expr = "100+" + column.expr
+		case "harness_versions":
+			continue
+		}
+		columns = append(columns, column)
+	}
+	override(t, &libraryColumns, append(columns, libraryColumn{"message_count",
+		"(SELECT COUNT(*) FROM conversations nx JOIN messages nm ON nm.conversation_id=nx.id WHERE nx.workspace_id=w.id)"}))
+	generation := countRows(t, catalog, "SELECT value FROM query_cache_generation WHERE id=1")
+	if err := catalog.ensureLibrary(); err != nil {
+		t.Fatal(err)
+	}
+	if rows, marked := countRows(t, catalog, "SELECT COUNT(*) FROM workspace_library"), dirtyCount(t, catalog); rows != 3 || marked != 0 || owed() != 6 {
+		t.Fatalf("after the change: %d stored rows, %d marked, %d column values owed; want 3, 0 and 6", rows, marked, owed())
+	}
+	// Until its turn, a workspace reads the earlier value; a new column is
+	// unknown, not zero.
+	row, err := catalog.libraryRows(ctx, "w.id='c'", nil, nil)
+	if err != nil || len(row) != 1 || row[0]["turn_count"] != turns || row[0]["message_count"] != nil {
+		t.Fatalf("before the backfill: %v turns (want %v), %v messages (want unknown): %v", row[0]["turn_count"], turns, row[0]["message_count"], err)
+	}
+	if pending, err := catalog.libraryPending(100); err != nil || pending != 3 {
+		t.Fatalf("%d workspaces reported as updating, want 3 (%v)", pending, err)
+	}
+	if countRows(t, catalog, "SELECT COUNT(*) FROM pragma_table_info('workspace_library') WHERE name='harness_versions'") != 0 {
+		t.Fatal("the removed column is still stored")
+	}
+	// One pass, then a restart: the next carries on from what is left.
+	pass, err := catalog.refreshLibraryColumns(ctx, 2)
+	if err != nil || pass.workspaces != 2 || owed() != 4 {
+		t.Fatalf("first pass: %+v, %d owed (%v)", pass, owed(), err)
+	}
+	if err := catalog.ensureLibrary(); err != nil || owed() != 4 || dirtyCount(t, catalog) != 0 {
+		t.Fatalf("after a restart: %d owed, %d marked (%v)", owed(), dirtyCount(t, catalog), err)
+	}
+	// A workspace written to meanwhile is its refresh's to compute.
+	execSQL(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash)
+		VALUES('m6','cb','6','user','message','More','2026-09-23T04:00:00Z','h')`)
+	for {
+		pass, err := catalog.refreshLibraryColumns(ctx, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pass.workspaces == 0 {
+			break
+		}
+	}
+	if its := countRows(t, catalog, "SELECT COUNT(*) FROM workspace_library_column_pending WHERE workspace_id='b'"); its == 0 || owed() != its || dirtyCount(t, catalog) != 1 {
+		t.Fatalf("the written workspace: %d values owed, %d of them its own, %d marked", owed(), its, dirtyCount(t, catalog))
+	}
+	if err := catalog.refreshAllLibrary(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if owed() != 0 || dirtyCount(t, catalog) != 0 {
+		t.Fatalf("at the end: %d values owed, %d marked", owed(), dirtyCount(t, catalog))
+	}
+	want := map[string]map[string]int64{"a": {"turn_count": 101, "message_count": 1}, "b": {"turn_count": 101, "message_count": 1}, "c": {"turn_count": 101, "message_count": 7}}
+	for workspace, values := range want {
+		for column, value := range values {
+			if got := stored(column, workspace); got != value {
+				t.Errorf("%s.%s = %v, want %d", workspace, column, got, value)
+			}
+		}
+		// b was refreshed whole, which computes every column.
+		if kept := stored("pr_numbers", workspace); (kept == "kept") != (workspace != "b") {
+			t.Errorf("%s: pr_numbers %v: an unchanged column is computed again only by a refresh", workspace, kept)
+		}
+	}
+	// A cached request must not go on answering with the earlier values.
+	if after := countRows(t, catalog, "SELECT value FROM query_cache_generation WHERE id=1"); after == generation {
+		t.Fatal("stored values changed without the cache generation moving")
+	}
+	// A pass with nothing owed does not take the catalog writer.
+	writes := catalog.writers.next
+	if pass, err := catalog.refreshLibraryColumns(ctx, 2); err != nil || pass.workspaces != 0 || catalog.writers.next != writes {
+		t.Fatalf("idle pass: %+v, took the writer %v (%v)", pass, catalog.writers.next != writes, err)
+	}
+}
+
+// A catalog from the last build that versioned the view as a whole keeps its
+// rows and its marks: only columns defined differently since are owed.
+func TestLibraryUpgradeFromWholeVersionMarksNothing(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		catalog, _ := libraryFixture(t)
+		if err := catalog.refreshAllLibrary(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		// As that build left it: one version, its triggers, no column records.
+		execSQL(t, catalog.DB, setMetaSQL("workspace_library_version", libraryLegacyVersion), "DELETE FROM workspace_library_columns",
+			setMetaSQL(libraryTriggersKey, libraryLegacyVersion+":earlier"))
+		want := []string{}
+		if changed {
+			columns := slices.Clone(libraryColumns)
+			columns[0].expr = "1+" + columns[0].expr
+			override(t, &libraryColumns, columns)
+		}
+		for _, column := range libraryColumns {
+			if libraryLegacyDigests[column.name] != column.digest() {
+				want = append(want, column.name)
+			}
+		}
+		if changed && len(want) == 0 {
+			t.Fatal("the changed column is not seen as changed")
+		}
+		if err := catalog.ensureLibrary(); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := queryMaps(catalog.DB, "SELECT column_name,COUNT(*) n FROM workspace_library_column_pending GROUP BY 1 ORDER BY 1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		owed := []string{}
+		for _, row := range rows {
+			if row["n"] != int64(3) {
+				t.Errorf("%v is owed for %v workspaces, want 3", row["column_name"], row["n"])
+			}
+			owed = append(owed, firstString(row["column_name"]))
+		}
+		slices.Sort(want)
+		if !slices.Equal(owed, want) {
+			t.Errorf("columns owed %v, want those defined differently since: %v", owed, want)
+		}
+		if stored, marked := countRows(t, catalog, "SELECT COUNT(*) FROM workspace_library"), dirtyCount(t, catalog); stored != 3 || marked != 0 {
+			t.Fatalf("upgrade kept %d of 3 rows and marked %d workspaces", stored, marked)
+		}
+		var version string
+		if err := catalog.DB.QueryRow("SELECT value FROM meta WHERE key='workspace_library_version'").Scan(&version); err != nil || version != libraryVersion() {
+			t.Fatalf("version after the upgrade: %q (%v)", version, err)
+		}
+		// Its triggers are this build's, and still mark.
+		execSQL(t, catalog.DB, "UPDATE messages SET role='assistant' WHERE id='m1'")
+		if dirtyCount(t, catalog) != 1 {
+			t.Fatalf("a changed message marked %d workspaces after the upgrade", dirtyCount(t, catalog))
+		}
 	}
 }
 

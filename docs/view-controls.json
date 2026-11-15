@@ -8121,6 +8121,15 @@
       "reason": "Bound directly to the registered view field."
     },
     {
+      "key": "0f22ee7c41739666:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "button",
+      "control": "onClick={event => { event.stopPropagation(); // ui.py installs the shell clipboard wrapper, the shared host clipboard owner. const report = `Pharos card \"${title}\" (${id}) couldn't load.\\n${error}`; void (window.pharosCopyText?.(report) ?? Promise.reject()).then(() => \"copied\" as const, () => \"failed\" as const).then(result => { setCopied(result); setTimeout(() => setCopied(\"\"), 2000); }); }}",
+      "contract": "action",
+      "reason": "Copies the card's load error to the clipboard; changes no view state."
+    },
+    {
       "key": "502369976da84683:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",
@@ -8166,6 +8175,15 @@
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
     {
+      "key": "a44b2f8e128d6e66:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "button",
+      "control": "aria-label={`Reload ${title}`} onClick={event => { event.stopPropagation(); onReload(); requestAnimationFrame(() => card.current?.querySelector<HTMLAnchorElement>(\".query-card-open\")?.focus({ preventScroll: true })); }}",
+      "contract": "editing",
+      "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
+    },
+    {
       "key": "a7dc844b99e1b790:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",
@@ -8182,15 +8200,6 @@
       "control": "aria-label=\"Call to action\" value={actionLabel ?? \"\"} onChange={event => editing.onAction!(event.target.value)}",
       "contract": "editing",
       "reason": "The card editor's call to action, edited in place on the card. An unapplied authoring draft saved only with the card."
-    },
-    {
-      "key": "d09bdc3a13ea798d:0",
-      "file": "web/src/query-card.tsx",
-      "owner": "QueryCard",
-      "tag": "button",
-      "control": "aria-label={`Reload preview for ${title}`} onClick={event => { event.stopPropagation(); onReload(); requestAnimationFrame(() => card.current?.querySelector<HTMLAnchorElement>(\".query-card-open\")?.focus({ preventScroll: true })); }}",
-      "contract": "editing",
-      "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
     {
       "key": "d75f3d3c712a91c0:0",
