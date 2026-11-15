@@ -672,6 +672,42 @@ async function holdsFocus(page, surface, opener) {
   await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
 }
 
+// Every modal shares one stack (internal/archive/assets/modal.js): a dialog
+// opened over another owns Escape, the backdrop and Tab, only the top one
+// dims the page, and each returns focus to its own opener. A drawer beneath
+// a dialog stays open until the dialog is gone.
+test("stacked modals close one at a time, dim the page once and return focus to each opener", { skip }, async t => {
+  const { page, shot } = await open(t, { url: "/analyze?parallelism=1", concurrency: true, ready: "dialog.concurrency-dialog[open] .concurrency-info-button" });
+  const outer = page.locator("dialog.concurrency-dialog"), inner = page.locator("dialog.concurrency-info-dialog");
+  const info = outer.getByRole("button", { name: "About parallelism views", exact: true });
+  await press(info);
+  await inner.waitFor();
+  const covered = () => page.evaluate(() => [...document.querySelectorAll("dialog")].filter(dialog => dialog.open).map(dialog => [dialog.className, dialog.hasAttribute("data-modal-covered")]));
+  assert.deepEqual(await covered(), [["concurrency-dialog", true], ["concurrency-info-dialog", false]], "only the top dialog paints its scrim");
+  assert.equal(await page.evaluate(() => window.pharosModal.top()?.id), "parallelism-calculation");
+  await shot("stacked-modals");
+  await holdsFocus(page, inner, info);
+  assert.equal(await outer.isVisible(), true, "Escape closes only the top dialog");
+  assert.deepEqual(await covered(), [["concurrency-dialog", false]]);
+  // A backdrop click outside the remaining dialog closes it.
+  await page.mouse.click(4, 4);
+  await outer.waitFor({ state: "hidden" });
+  assert.equal(new URL(page.url()).searchParams.get("parallelism"), null);
+
+  // A dialog opened over an open drawer takes Escape first; the drawer is next.
+  const history = page.locator("#historyDrawer");
+  await page.evaluate(() => setDrawer("historyDrawer"));
+  await page.waitForFunction(() => document.querySelector("#historyDrawer")?.classList.contains("open"));
+  await page.evaluate(() => window.pharosOpenEstimateDialog(document.querySelector("#historyFilter")));
+  const estimate = page.getByRole("dialog", { name: "How estimates work" });
+  await estimate.waitFor();
+  await page.keyboard.press("Escape");
+  await estimate.waitFor({ state: "detached" });
+  assert.equal(await history.evaluate(element => element.classList.contains("open")), true, "Escape on the dialog leaves the drawer open");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector("#historyDrawer")?.classList.contains("open"));
+});
+
 // The unified activity panel (flag on) takes focus from the chip, keeps it
 // while open, gives it back on Escape, and keeps focus and its disclosure
 // across a pushed snapshot. Stop and Eject decisions are unit tested in
@@ -1336,7 +1372,7 @@ test("the findings prompt review takes focus, keeps it and returns it on Escape"
   const { page, settled } = await open(t, { url: "/findings?highlight=page", ready: ".findings-card" });
   const review = page.locator(".findings-cart button.primary").first();
   await press(review);
-  const dialog = page.locator('.findings-dialog[role="dialog"]');
+  const dialog = page.locator('dialog.findings-dialog');
   await dialog.waitFor();
   await settled();
   await dialog.getByRole('heading').first().click({ button: 'right' });
@@ -1375,7 +1411,7 @@ for (const scenario of [
     assert.equal(await page.locator("#findingsCart").count(), 1, "the hidden table does not duplicate the cart");
     await shot("cart");
     await cartPanel.locator("button.primary").click();
-    const dialog = page.locator('.findings-dialog[role="dialog"]');
+    const dialog = page.locator('dialog.findings-dialog');
     await dialog.waitFor();
     await dialog.getByRole("button", { name: "Keep in prompt" }).click();
     await page.locator(scenario.detail).getByRole("button", { name: scenario.remove, exact: true }).click();
@@ -1392,7 +1428,7 @@ for (const scenario of [
 test("page Find inside an ARIA modal searches only the modal and Escape closes Find before the modal", { skip }, async t => {
   const { page, settled } = await open(t, { url: "/findings", ready: ".findings-card" });
   await press(page.locator(".findings-cart button.primary").first());
-  const dialog = page.locator('.findings-dialog[role="dialog"]');
+  const dialog = page.locator('dialog.findings-dialog');
   await dialog.waitFor();
   await settled();
   await page.keyboard.press(process.platform === "darwin" ? "Meta+f" : "Control+f");

@@ -3,7 +3,8 @@ import { formatUSD } from "./currency";
 import { formatTokens } from "./token-count";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewState } from "./view-state";
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Modal } from "./modal";
 import "./findings.css";
 import { Icon } from "./icons";
 import { findingDetailURL, findingsRank, readFindingsRoute, type FindingsList, type FindingsRoute } from "./findings-route";
@@ -273,47 +274,16 @@ function Menu({ label, items, className = "", heading, align = "start", ariaLabe
   </span>;
 }
 
-/** A modal dialog: focus moves in, Tab stays inside, Escape closes, and focus returns to what opened it. */
+/** A modal dialog on the shared stack: focus moves to its title, and Escape, the backdrop and Tab behave as in every Pharos modal. */
 export function Dialog({ title, onClose, children, footer, wide }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
-  const box = useRef<HTMLDivElement>(null);
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    box.current?.querySelector<HTMLElement>("h2")?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); closeRef.current(); return; }
-      if (event.key !== "Tab" || !box.current) return;
-      // Tab moves focus here rather than in the engine: WebKit leaves buttons
-      // out of the tab order unless Full Keyboard Access is on, so a trap that
-      // only wraps from the first or last control never fires there.
-      const dialog = box.current;
-      const focusable = [...dialog.querySelectorAll<HTMLElement>("a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])")].filter(element => {
-        if (!element.getClientRects().length) return false;
-        // A radio group is one stop: its checked radio, or its first when none is.
-        if (!(element instanceof HTMLInputElement) || element.type !== "radio" || element.checked) return true;
-        const group = [...dialog.querySelectorAll<HTMLInputElement>("input[type=radio]")].filter(radio => radio.name === element.name);
-        return !group.some(radio => radio.checked) && group[0] === element;
-      });
-      event.preventDefault();
-      if (!focusable.length) return;
-      const active = document.activeElement ?? document.body;
-      const following = focusable.filter(element => active !== element && active.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
-      const preceding = focusable.filter(element => active.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_PRECEDING);
-      (event.shiftKey ? preceding[preceding.length - 1] ?? focusable[focusable.length - 1] : following[0] ?? focusable[0]).focus();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("keydown", onKey); opener?.focus?.(); };
-  }, []);
-  return <div className="findings-backdrop" onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div ref={box} className={`findings-dialog ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="findingsDialogTitle">
-      <div className="findings-dialog-body">
-        <h2 id="findingsDialogTitle" tabIndex={-1}>{title}</h2>
-        {children}
-      </div>
-      {footer ? <div className="findings-dialog-footer">{footer}</div> : null}
+  const titleId = useId();
+  return <Modal className={`findings-dialog ${wide ? "wide" : ""}`} aria-labelledby={titleId} initialFocus="h2" onClose={onClose}>
+    <div className="findings-dialog-body">
+      <h2 id={titleId} tabIndex={-1}>{title}</h2>
+      {children}
     </div>
-  </div>;
+    {footer ? <div className="findings-dialog-footer">{footer}</div> : null}
+  </Modal>;
 }
 
 function Tile({ label, value, detail, onClick, pressed }: { label: string; value: React.ReactNode; detail?: React.ReactNode; onClick?: () => void; pressed?: boolean }) {

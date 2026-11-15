@@ -9,6 +9,7 @@ import { closeConcurrencyModal, loadConcurrencyData } from "./concurrency-store"
 import { pushMachineLocation } from "./machine-location";
 import { useDrilldownHistory, ZoomNavigation } from "./machine-navigation";
 import { Icon } from "./icons";
+import { Modal, ModalClose } from "./modal";
 import "./concurrency.css";
 import { DashboardLoading } from "./card-loading";
 
@@ -129,40 +130,21 @@ export function ConcurrencyModal() {
 }
 
 function ConcurrencyDialog() {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const element = dialog.current!, previous = document.activeElement as HTMLElement | null;
-    element.showModal();
-    return () => { element.close(); previous?.focus({ preventScroll: true }); };
-  }, []);
-  return <dialog ref={dialog} className="concurrency-dialog" aria-labelledby="parallelism-title" data-feedback-label="Parallelism modal"
-    onCancel={event => { event.preventDefault(); closeConcurrencyModal(); }}
-    onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) closeConcurrencyModal(); }}>
-    <header className="concurrency-dialog-heading"><div><h2 id="parallelism-title">Parallelism</h2><p>Concurrent activity over time.</p></div><button type="button" className="concurrency-close" aria-label="Close parallelism" onClick={closeConcurrencyModal}><Icon name="close" /></button></header>
+  return <Modal className="concurrency-dialog" aria-labelledby="parallelism-title" data-feedback-label="Parallelism modal" onDismiss={closeConcurrencyModal} onClose={closeConcurrencyModal}>
+    <header className="concurrency-dialog-heading"><div><h2 id="parallelism-title">Parallelism</h2><p>Concurrent activity over time.</p></div><ModalClose label="Close parallelism" onClick={closeConcurrencyModal} /></header>
     <ConcurrencyPanel />
-  </dialog>;
+  </Modal>;
 }
 
 function ConcurrencyInfoDialog({ data, onClose }: { data: ConcurrencyData; onClose: () => void }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const element = dialog.current!, previous = document.activeElement as HTMLElement | null;
-    element.showModal();
-    return () => { element.close();if (previous?.isConnected) previous.focus({ preventScroll: true }); };
-  }, []);
-  return <dialog ref={dialog} id="parallelism-calculation" className="concurrency-info-dialog" aria-labelledby="parallelism-calculation-title"
-    onCancel={event => { event.preventDefault();event.stopPropagation();onClose(); }}
-    onClick={event => {
-      event.stopPropagation();const rect = event.currentTarget.getBoundingClientRect();
-      if (event.target === event.currentTarget && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) onClose();
-    }}>
-    <header className="concurrency-dialog-heading"><h2 id="parallelism-calculation-title">How parallelism is calculated</h2><button type="button" className="concurrency-close" aria-label="Close calculation details" onClick={onClose}><Icon name="close" /></button></header>
+  return <Modal id="parallelism-calculation" className="concurrency-info-dialog" aria-labelledby="parallelism-calculation-title" onClose={onClose}>
+    <header className="concurrency-dialog-heading"><h2 id="parallelism-calculation-title">How parallelism is calculated</h2><ModalClose label="Close calculation details" onClick={onClose} /></header>
     <h3>Threaded</h3><p>Connects turns within each top-level conversation using the selected turn gap. Gaps up to that length count as continuous activity, with no padding after the final turn. Pale ribbons show the gaps between turns.</p>
     <h3>Model activity</h3><p>Estimates when a model is running from input-to-response timestamps, excluding recorded tool waits. This is estimated timing rather than measured model processing time.</p>
     <h3>Workspaces or conversations</h3><p><strong>Workspaces</strong> counts each checkout once (or each recorded workspace when no checkout is known), even when it has several conversations active. <strong>Conversations</strong> counts each independently started top-level conversation separately, including conversations in the same checkout. Linked sub-agent activity belongs to its parent conversation in either view. Colors identify projects, and rows stay with the same project where packing allows.</p>
     <h3>Averages and working time</h3><p>Average parallelism includes the full selected date range or zoom interval, including idle time. Today so far uses elapsed time since local midnight. The usage summary in the header uses each column’s displayed interval. Working time and its percentage with 2+ workspaces or conversations use a fixed one-hour idle cutoff.</p>
     <h3>Timing coverage</h3><p>This timing data covers {data.period_start} – {data.period_end} in {data.timezone}. Only Claude, Codex and Antigravity conversations have timing here. {data.coverage.mirrors_removed} duplicate conversation recording{data.coverage.mirrors_removed === 1 ? " was" : "s were"} counted once. {data.coverage.unexplained_waits_excluded} model wait{data.coverage.unexplained_waits_excluded === 1 ? "" : "s"} over ten minutes {data.coverage.unexplained_waits_excluded === 1 ? "was" : "were"} left out of Model activity. The usage summary in the header uses the saved counting choice, turn gap and project; windows outside this timing range show —.</p>
-  </dialog>;
+  </Modal>;
 }
 
 export type ConcurrencySelection = { settings: ConcurrencySettings; bounds: Interval; selected: ConcurrencyThread | null };
