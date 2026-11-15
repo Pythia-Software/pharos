@@ -185,6 +185,28 @@ class SSHPullTests(unittest.TestCase):
         self.assertEqual({relative for source, relative in asked if source == "codex"}, {"sessions/rollout-9.jsonl"})
         self.assertEqual({drop["source"]: drop["root"] for drop in result["drops"]}["codex"], str(moved))
 
+    def test_what_it_fetches_is_what_the_registry_says_pharos_reads(self):
+        """kinds.json comes from Pharos's provider registry; ssh_pull's own patterns must agree with it."""
+        import re
+        import ssh_pull
+        kinds = {kind["kind"]: kind for kind in json.loads((CONTRACTS / "kinds.json").read_text())["kinds"]}
+
+        def matcher(globs):
+            patterns = [re.compile("^" + re.escape(glob).replace(r"\*\*/", "(?:.*/)?").replace(r"\*", "[^/]*") + "$")
+                        for glob in globs]
+            return lambda relative: any(pattern.match(relative) for pattern in patterns)
+
+        samples = ["-w/s1.jsonl", "-w/s1/subagents/a.jsonl", "-w/sessions-index.json", "-w/notes.txt",
+                   "sessions/2026/r.jsonl", "sessions/2026/r.jsonl.zst", "archived_sessions/r.jsonl.zst",
+                   "rollout-2.jsonl", "session_index.jsonl", "state_5.sqlite", "state.sqlite", "logs_1.sqlite",
+                   "log/codex-tui.jsonl", "history.jsonl", "sessions/notes.txt"]
+        for name, (kind, root, _) in ssh_pull.SOURCES.items():
+            self.assertIn(root, kinds[kind]["roots"], name)
+            wanted = matcher(kinds[kind]["files"] + kinds[kind].get("databases", []))
+            for relative in samples:
+                if kind == "codex" or relative.startswith("-w/"):
+                    self.assertEqual(bool(ssh_pull.wanted(kind, relative)), wanted(relative), (kind, relative))
+
 
 if __name__ == "__main__":
     unittest.main()

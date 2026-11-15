@@ -195,6 +195,19 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(self.errors("plugin-manifest.schema.json",
                                      {**manifest, "permissions": {**manifest["permissions"], "read": read}}), [])
 
+    def test_drop_kinds_are_the_registry_kinds(self):
+        """kinds.json is written from the provider registry by a Go test; the schemas follow it."""
+        kinds = json.loads((HERE / "kinds.json").read_text())["kinds"]
+        names = {name for kind in kinds for name in [kind["kind"], *kind.get("aliases", [])]}
+        declared = set(self.schemas["common.schema.json"]["$defs"]["transcript_kind"]["enum"])
+        self.assertEqual(declared, names)
+        forms = {form: {name for kind in kinds if form in kind["forms"] for name in [kind["kind"], *kind.get("aliases", [])]}
+                 for form in ("capture-export", "export")}
+        for rule in self.schemas["common.schema.json"]["$defs"]["drop"]["allOf"]:
+            form = rule["if"]["properties"].get("form", {}).get("const")
+            if form in forms:
+                self.assertEqual(set(rule["then"]["properties"]["kind"]["enum"]), forms[form], form)
+
     def test_openapi_references_resolve(self):
         for name in ("connector-api.openapi.json", "receiver-api.openapi.json"):
             document = json.loads((HERE / name).read_text())

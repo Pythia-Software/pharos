@@ -83,8 +83,8 @@ registry (`provider_registry.go`), recording each file's original path as
 - Codex's `.jsonl.zst` rollouts keep the plain file's identity, as capture
   already arranges.
 
-A kind may arrive as a `files` drop when the registry says so (a new
-`Importable` field on `providerSpec`). First: `claude` and `codex`. Kinds
+A kind may arrive as a `files` drop when the registry says so
+(`providerSpec.Import`). First: `claude`, `codex` and canonical JSON. Kinds
 whose folders exist on Linux (Copilot CLI, OpenCode, Cline, Cursor CLI and
 others) are added one at a time, each with a golden record taken from a Linux
 layout; until then they are refused by name. Kinds bound to a Mac app's
@@ -203,14 +203,19 @@ conversation, which costs storage but not correctness.
 
 ## Kinds come from the registry
 
-`transcript_kind` in `common.schema.json` and the globs in the old text were
-hand-written and went stale. Proposed: `pharos plugin kinds` prints, from the
-provider registry, each importable kind with its aliases, drop forms, the
-files its `Plan` reads, its `CaptureTables`, its `Content` capabilities and
-its usual folders. The checked-in copy,
-`contracts/plugins/kinds.json`, is held equal to the registry by a Go test,
-and the JSON Schemas and `ssh_pull.py` read it. Consent and **Does this look
-right?** show the `Content` capabilities in the words the registry uses.
+A kind is importable when its entry in the provider registry says so
+(`providerSpec.Import`): which drop forms it may use, its usual folders on
+any operating system, and the globs of what its `Plan` captures.
+[`contracts/plugins/kinds.json`](../contracts/plugins/kinds.json) publishes
+that for importers, with each kind's aliases, `CaptureTables` and `Content`
+capabilities. Three tests keep the hand-written lists from going stale
+again: a Go test holds `kinds.json` equal to the registry and checks each
+kind's globs against what its `Plan` really captures from a sample folder,
+and Python tests hold the JSON Schemas and `ssh_pull.py` to `kinds.json`.
+Today `claude`, `codex` and `canonical` arrive as files, `claude` and `codex`
+as envelopes, and `chatgpt` and `claude-ai` as export files. Still to come:
+`pharos plugin kinds` to print it, and consent and **Does this look right?**
+showing the `Content` capabilities in the registry's words.
 
 Usual folders on other operating systems are data for importers only. Source
 discovery's rule holds: Pharos reads nowhere it was not told to, and an
@@ -326,8 +331,8 @@ nothing of ours, and pushing from a machine that runs Pharos's collector.
 `ssh_pull.py` now fetches Codex `.jsonl.zst` rollouts, looks in
 `~/.config/claude/projects` as well as `~/.claude/projects` (another profile
 is one more entry in `roots`), and follows the remote `CLAUDE_CONFIG_DIR` and
-`CODEX_HOME` only when `remote_env` is set, never unasked. Still to come: it
-reads `kinds.json` instead of its own patterns. Claude Code and Codex declare
+`CODEX_HOME` only when `remote_env` is set, never unasked. A test holds its
+patterns to `kinds.json`. Claude Code and Codex declare
 no `CaptureTables`, so its database snapshot needs no filter today; a kind
 that declares them is filtered by Pharos on capture, and its importer should
 fetch only those tables where the remote `sqlite3` allows.
@@ -593,8 +598,8 @@ checked examples.
 
 ## Order of work
 
-1. Contracts (done, except `kinds.json`, which arrives with its Go test in
-   step 2).
+1. Contracts (done, with `kinds.json` and the registry's `Import`
+   declarations).
 2. Plugin runtime: manifests, installations, consent, Mac allowance, the
    background item, the native supervisor leaf with its contract tests,
    `plugin.run`.

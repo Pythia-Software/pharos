@@ -49,6 +49,9 @@ type providerSpec struct {
 	// to keep them all. A provider whose database also holds credentials
 	// keeps only the tables, or rows, its adapter reads.
 	CaptureTables map[string]captureTable
+	// Import says how the kind may arrive through an importer plugin; nil
+	// refuses it there (plugin_kinds.go).
+	Import *providerImport
 	// Automatic sources are read by background updates.
 	Automatic bool
 	// Setup is the provider's place in the setup wizard's list of tools,
@@ -159,8 +162,10 @@ func init() {
 			Kind: "claude", DisplayName: "Claude Code", Summary: "Conversations from the Claude Code app and CLI.", FolderHint: "The Claude configuration folder holding projects (usually ~/.claude), or its projects folder.", Instructions: "~/.claude/CLAUDE.md", Mutation: "retrieval-only", Automatic: true, Setup: 1, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd git_branch model message_tokens tool_calls tool_results reasoning timestamps subagents harness_version", Varies: "effort speed title",
 				Notes: map[string]string{"effort": "When the transcript records it.", "speed": "When the transcript records the request's speed or service tier.", "title": "When Claude Code named the session."}},
-			New:          func(base baseAdapter) Adapter { return &jsonlAdapter{baseAdapter: base, provider: "claude"} },
-			Plan:         (*capturePlan).claude,
+			New:  func(base baseAdapter) Adapter { return &jsonlAdapter{baseAdapter: base, provider: "claude"} },
+			Plan: (*capturePlan).claude,
+			Import: &providerImport{Forms: []string{importFiles, importCaptureExport}, Roots: []string{".claude/projects", ".config/claude/projects"},
+				Files: []string{"**/*.jsonl", "**/sessions-index.json"}},
 			Preservation: retainedInputs,
 			Probe: &providerProbe{
 				Folders: []string{".claude", ".config/claude"}, Profiles: &probeProfiles{"", ".claude"},
@@ -190,6 +195,10 @@ func init() {
 			Resolve: resolveRolloutSource,
 			New:     func(base baseAdapter) Adapter { return &jsonlAdapter{baseAdapter: base, provider: "codex"} },
 			Plan:    (*capturePlan).codex,
+			Import: &providerImport{Forms: []string{importFiles, importCaptureExport}, Roots: []string{".codex"},
+				Files: []string{"sessions/**/*.jsonl", "sessions/**/*.jsonl.zst", "archived_sessions/**/*.jsonl", "archived_sessions/**/*.jsonl.zst",
+					"**/rollout*.jsonl", "**/rollout*.jsonl.zst", "session_index.jsonl"},
+				Databases: []string{"state.sqlite", "state_*.sqlite"}},
 			Preservation: func(source SourceConfig) string {
 				if source.Options["sqlite_record_capture"] != true {
 					return "filesystem-retained-sqlite-gated"
@@ -462,6 +471,7 @@ func init() {
 			Content: contentCapabilities{Varies: "cwd git_branch model effort speed message_tokens tool_calls tool_results reasoning timestamps subagents title harness_version cost", VariesNote: "When the export holds it."},
 			New:     func(base baseAdapter) Adapter { return &canonicalAdapter{base} },
 			Plan:    (*capturePlan).canonical, Preservation: retainedInputs,
+			Import: &providerImport{Forms: []string{importFiles}, Files: []string{"**/*.json"}},
 		},
 		{
 			Kind: "tl1-export", DisplayName: "TL1 export", Mutation: "tl1-release", MirrorRank: 0,
@@ -475,6 +485,7 @@ func init() {
 				Notes: map[string]string{"model": "Some exports record only an opaque label such as bidi; the underlying model is unknown.", "tool_calls": "Some exports retain search references and tool icons without the calls themselves.", "tool_results": "Only when explicit tool replies are exported.", "speed": "When the export records the tier.", "reasoning": "Or only how long it thought.", "message_tokens": "Exports have no token counts."}, VariesNote: "When the export holds it."},
 			New:  func(base baseAdapter) Adapter { return &chatGPTAdapter{baseAdapter: base} },
 			Plan: (*capturePlan).chatGPT, Preservation: retainedInputs,
+			Import: &providerImport{Forms: []string{importExportFiles}},
 		},
 		{
 			Kind: claudeSettingsKind, DisplayName: "Claude Chat settings", Summary: "Cached conversation selections: model, effort and thinking mode. No chat text or token counts.", FolderHint: "Claude’s app data folder (~/Library/Application Support/Claude), or its Cache/Cache_Data folder.", Mutation: "retrieval-only", Automatic: true, Setup: 15, OfferWhenFound: true,
@@ -495,6 +506,7 @@ func init() {
 				Notes: map[string]string{"tool_calls": "Not in older exports, which flatten each message to text.", "tool_results": "Not in older exports, which flatten each message to text.", "model": "Inspected exports omit model names; explicitly exported message models are retained.", "message_tokens": "Inspected exports omit token consumption. Token budgets are not usage; explicit assistant usage is retained when supplied.", "reasoning": "Exported thinking text or summaries; hidden reasoning is unavailable."}, VariesNote: "When the export holds it."},
 			New:  func(base baseAdapter) Adapter { return &claudeAIAdapter{base} },
 			Plan: (*capturePlan).claudeAI, Preservation: retainedInputs,
+			Import: &providerImport{Forms: []string{importExportFiles}},
 		},
 	}
 }

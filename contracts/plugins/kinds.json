@@ -1,0 +1,192 @@
+{
+  "contract": "pharos-plugin-kinds/1",
+  "kinds": [
+    {
+      "kind": "claude",
+      "name": "Claude Code",
+      "forms": [
+        "files",
+        "capture-export"
+      ],
+      "roots": [
+        ".claude/projects",
+        ".config/claude/projects"
+      ],
+      "files": [
+        "**/*.jsonl",
+        "**/sessions-index.json"
+      ],
+      "content": {
+        "supported": [
+          "cwd",
+          "git_branch",
+          "harness_version",
+          "message_tokens",
+          "model",
+          "reasoning",
+          "subagents",
+          "timestamps",
+          "tool_calls",
+          "tool_results"
+        ],
+        "varies": [
+          "effort",
+          "speed",
+          "title"
+        ],
+        "notes": {
+          "effort": "When the transcript records it.",
+          "speed": "When the transcript records the request's speed or service tier.",
+          "title": "When Claude Code named the session."
+        }
+      }
+    },
+    {
+      "kind": "codex",
+      "name": "Codex",
+      "forms": [
+        "files",
+        "capture-export"
+      ],
+      "roots": [
+        ".codex"
+      ],
+      "files": [
+        "sessions/**/*.jsonl",
+        "sessions/**/*.jsonl.zst",
+        "archived_sessions/**/*.jsonl",
+        "archived_sessions/**/*.jsonl.zst",
+        "**/rollout*.jsonl",
+        "**/rollout*.jsonl.zst",
+        "session_index.jsonl"
+      ],
+      "databases": [
+        "state.sqlite",
+        "state_*.sqlite"
+      ],
+      "content": {
+        "supported": [
+          "cwd",
+          "git_branch",
+          "harness_version",
+          "message_tokens",
+          "model",
+          "timestamps",
+          "tool_calls",
+          "tool_results"
+        ],
+        "varies": [
+          "effort",
+          "reasoning",
+          "speed",
+          "subagents",
+          "title"
+        ],
+        "notes": {
+          "effort": "From releases that record it.",
+          "reasoning": "A summary, or only that it reasoned when the reasoning is encrypted.",
+          "speed": "From releases that record the turn's service tier.",
+          "subagents": "From releases that record which session started another.",
+          "title": "When Codex named the session."
+        }
+      }
+    },
+    {
+      "kind": "canonical",
+      "name": "Canonical export",
+      "forms": [
+        "files"
+      ],
+      "files": [
+        "**/*.json"
+      ],
+      "content": {
+        "varies": [
+          "cost",
+          "cwd",
+          "effort",
+          "git_branch",
+          "harness_version",
+          "message_tokens",
+          "model",
+          "reasoning",
+          "speed",
+          "subagents",
+          "timestamps",
+          "title",
+          "tool_calls",
+          "tool_results"
+        ]
+      }
+    },
+    {
+      "kind": "chatgpt",
+      "aliases": [
+        "chatgpt-export"
+      ],
+      "name": "ChatGPT",
+      "forms": [
+        "export"
+      ],
+      "content": {
+        "supported": [
+          "timestamps"
+        ],
+        "varies": [
+          "effort",
+          "model",
+          "reasoning",
+          "speed",
+          "title",
+          "tool_calls",
+          "tool_results"
+        ],
+        "not_applicable": [
+          "cwd",
+          "git_branch",
+          "harness_version",
+          "subagents"
+        ],
+        "notes": {
+          "message_tokens": "Exports have no token counts.",
+          "model": "Some exports record only an opaque label such as bidi; the underlying model is unknown.",
+          "reasoning": "Or only how long it thought.",
+          "speed": "When the export records the tier.",
+          "tool_calls": "Some exports retain search references and tool icons without the calls themselves.",
+          "tool_results": "Only when explicit tool replies are exported."
+        }
+      }
+    },
+    {
+      "kind": "claude-ai",
+      "name": "Claude.ai",
+      "forms": [
+        "export"
+      ],
+      "content": {
+        "supported": [
+          "timestamps"
+        ],
+        "varies": [
+          "reasoning",
+          "title",
+          "tool_calls",
+          "tool_results"
+        ],
+        "not_applicable": [
+          "cwd",
+          "git_branch",
+          "harness_version",
+          "subagents"
+        ],
+        "notes": {
+          "message_tokens": "Inspected exports omit token consumption. Token budgets are not usage; explicit assistant usage is retained when supplied.",
+          "model": "Inspected exports omit model names; explicitly exported message models are retained.",
+          "reasoning": "Exported thinking text or summaries; hidden reasoning is unavailable.",
+          "tool_calls": "Not in older exports, which flatten each message to text.",
+          "tool_results": "Not in older exports, which flatten each message to text."
+        }
+      }
+    }
+  ]
+}
