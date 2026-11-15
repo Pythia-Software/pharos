@@ -1740,6 +1740,65 @@ func TestMessageLabelFacts(t *testing.T) {
 	parity()
 	flush()
 	parity()
+	// Label bookkeeping alone rebuilds no facts. A dirty mark holds the
+	// stored labels back as pending; clearing it after a rebuild that rewrote
+	// no label (only the conversation's stamp) shows them again, as stored.
+	queued := func() int64 { return scalar("SELECT count(*) FROM message_label_facts_dirty") }
+	statusOf := func(message string) string {
+		t.Helper()
+		stored, _ := c.sqlDatasetFor("message_labels")
+		for _, row := range read(stored) {
+			if row["message_id"] == message {
+				return firstString(row["label_status"])
+			}
+		}
+		t.Fatalf("no stored row for %s", message)
+		return ""
+	}
+	if statusOf("facts-a1") != "matched" {
+		t.Fatalf("stored label before a mark: %s", statusOf("facts-a1"))
+	}
+	execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('facts-a','again')`)
+	if queued() != 0 || statusOf("facts-a1") != "unlabeled" || statusOf("facts-b1") != "matched" {
+		t.Fatalf("a label mark: %d facts queued, facts-a1 %s, facts-b1 %s", queued(), statusOf("facts-a1"), statusOf("facts-b1"))
+	}
+	parity()
+	projectedParity()
+	// Facts rebuilt for another reason while the mark stands keep the
+	// ledger's labels, still held back from readers.
+	execTx(t, c.DB, `INSERT INTO message_label_facts_dirty VALUES('facts-a')`)
+	flush()
+	parity()
+	execTx(t, c.DB, `UPDATE message_labels_conversations SET structure='rebuilt',built_at='2026-02-01' WHERE conversation_id='facts-a';
+ DELETE FROM message_labels_dirty WHERE conversation_id='facts-a'`)
+	if queued() != 0 || statusOf("facts-a1") != "matched" {
+		t.Fatalf("an unchanged label rebuild: %d facts queued, facts-a1 %s", queued(), statusOf("facts-a1"))
+	}
+	parity()
+	// A catalog an earlier build maintained stored marked conversations as
+	// unlabeled, and queued them from the marks. Upgrading requeues only the
+	// conversations marked now, and removes those triggers.
+	execTx(t, c.DB, `CREATE TRIGGER message_label_facts_dirty_message_labels_dirty_insert AFTER INSERT ON message_labels_dirty BEGIN
+ INSERT INTO message_label_facts_dirty(conversation_id) VALUES(NEW.conversation_id) ON CONFLICT(conversation_id) DO NOTHING; END`,
+		`INSERT INTO message_labels_dirty(conversation_id,token) VALUES('facts-a','earlier')`,
+		`DELETE FROM message_label_facts_dirty`)
+	if err := c.ensureMessageLabelFacts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if queued() != 1 || scalar("SELECT count(*) FROM message_label_facts_dirty WHERE conversation_id='facts-a'") != 1 {
+		t.Fatalf("upgrade queued %d conversations' facts", queued())
+	}
+	flush()
+	execTx(t, c.DB, `INSERT INTO message_labels_dirty(conversation_id,token) VALUES('facts-b','later')`)
+	if err := c.ensureMessageLabelFacts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if queued() != 0 {
+		t.Fatalf("an upgraded catalog queued %d conversations' facts for label marks", queued())
+	}
+	parity()
+	execTx(t, c.DB, `DELETE FROM message_labels_dirty`)
+	parity()
 	// Typed-word accounting changes independently of label inference.
 	execTx(t, c.DB, `INSERT INTO message_authorship(message_id,conversation_id,workspace_id,sent_at,day,total_chars,typed_words,spans_json) VALUES('facts-a2','facts-a','facts-work','2026-01-01','2026-01-01',7,2,'[]')`)
 	parity()
