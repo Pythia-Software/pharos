@@ -197,7 +197,7 @@ func detectDrift(env *findingEnv) ([]*findingCandidate, error) {
 			}
 			did := map[string]string{"search": "searched for " + found.file, "read": "read " + found.file + " by hand", "skill": "read a skill from " + found.file + " by hand"}[found.kind]
 			item.addEvidence(findingHandle{At: at, ConversationID: conv.ID, WorkspaceID: conv.WorkspaceID, MessageID: firstString(found.row["message_id"]),
-				ToolCallID: firstString(found.row["id"]), Where: env.evidenceWhere(conv) + " · " + providerLabel(conv.Provider), Did: did,
+				ToolCallID: firstString(found.row["id"]), Where: env.evidenceWhereBy(conv, conv.Provider), Did: did,
 				Happened: "`" + clipText(firstLine(defaultString(firstString(found.row["command"]), firstString(found.row["file_path"]))), 80) + "`"})
 		}
 	}
@@ -294,7 +294,10 @@ func describeDrift(env *findingEnv, candidate *findingCandidate, provider string
 		actions = append(actions, "reading another agent app’s skills by hand")
 	}
 	candidate.write = func(candidate *findingCandidate, stats findingStats) findingCard {
-		title := fmt.Sprintf("%s can't find %s's instructions", providerLabel(provider), repository)
+		title := fmt.Sprintf("%s can’t find %s’s instructions", providerLabel(provider), repository)
+		if repository == "" {
+			title = providerLabel(provider) + " can’t find this repository’s instructions"
+		}
 		why := ""
 		switch {
 		case len(present) > 0 && !has(native):
@@ -302,7 +305,7 @@ func describeDrift(env *findingEnv, candidate *findingCandidate, provider string
 		case len(present) == 0 && len(files) > 0:
 			why = fmt.Sprintf("%s has no agent instructions file. ", repository)
 		}
-		explanation := fmt.Sprintf("%s%s looked for them in %s this month, %s.", why, providerLabel(provider), fractionPhrase(stats.Rate, "conversations"), joinWords(actions))
+		explanation := fmt.Sprintf("%s%s looked for them in %s in the last 28 days, %s.", why, providerLabel(provider), fractionPhrase(stats.Rate, "conversations"), joinWords(actions))
 		// Where the harness records what it loaded, say plainly that it
 		// loaded nothing here.
 		if loaded.Recorded >= 10 && loaded.ProjectLoaded == 0 {

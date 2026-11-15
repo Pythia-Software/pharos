@@ -90,10 +90,10 @@ func handoffFor(target string, settings findingSettings, habits map[string]repos
 		return "diff", "Changes outside a repository always show the diff first."
 	}
 	if settings.Handoff == "pr" || settings.Handoff == "diff" {
-		return settings.Handoff, "Set for every repository in Findings settings."
+		return settings.Handoff, "Set for every repository in Efficiency settings."
 	}
 	if override := settings.RepositoryHandoff[rest]; override != "" {
-		return override, "Set for this repository in Findings settings."
+		return override, "Set for this repository in Efficiency settings."
 	}
 	habit := habits[rest]
 	if habit.Work == 0 {

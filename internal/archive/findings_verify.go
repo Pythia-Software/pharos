@@ -495,7 +495,7 @@ func (env *findingEnv) result(candidate *findingCandidate, item *findingInterven
 		guardsOK = guard("error rate", before.ErrorRate, after.ErrorRate, true) && guardsOK
 	}
 	if metric.GuardSuccess {
-		guardsOK = guard("engagements ending in success", before.SuccessRate, after.SuccessRate, false) && guardsOK
+		guardsOK = guard("conversations whose last call to the program succeeded", before.SuccessRate, after.SuccessRate, false) && guardsOK
 		// Help and usage errors must both fall, not trade places.
 		guardsOK = guard("help calls", before.HelpRate, after.HelpRate, true) && guardsOK
 		guardsOK = guard("usage errors", before.UsageRate, after.UsageRate, true) && guardsOK
@@ -559,15 +559,30 @@ func resultSentence(metric findingMetric, before, after windowStats, outcome str
 	}
 	switch metric.Kind {
 	case "mean":
-		return fmt.Sprintf("Since the change, a typical %s has %s instead of %s.", strings.TrimSuffix(metric.Unit, "s"), tokensPhrase(after.Median), tokensPhrase(before.Median))
+		// Mean metrics measure one call's result (heavy output) or what a
+		// conversation took in before its first edit (orientation, exploration).
+		if metric.Unit == "calls" {
+			return fmt.Sprintf("Since the change, a typical call returned %s, instead of %s.", tokensPhrase(after.Median), tokensPhrase(before.Median))
+		}
+		return fmt.Sprintf("Since the change, a typical %s used %s before its first edit, instead of %s.", strings.TrimSuffix(metric.Unit, "s"), tokensPhrase(after.Median), tokensPhrase(before.Median))
 	case "share":
-		return fmt.Sprintf("Since the change, this accounts for %s of the total instead of %s.", fractionPhrase(after.Rate, ""), fractionPhrase(before.Rate, ""))
+		return fmt.Sprintf("Since the change, this accounts for %s of the total instead of %s.", sharePhrase(after.Rate), sharePhrase(before.Rate))
 	}
-	unit := strings.TrimSuffix(metric.Unit, "s")
+	units := resultUnits(metric)
 	if after.Hits == 0 {
-		return fmt.Sprintf("Since the change, it hasn't happened in %s; before, it happened in %s.", countNoun(after.Units, unit), fractionPhrase(before.Rate, ""))
+		return fmt.Sprintf("Since the change, it hasn’t happened in %s; before, it happened in %s.", countNoun(after.Units, strings.TrimSuffix(units, "s")), fractionPhrase(before.Rate, units))
 	}
-	return fmt.Sprintf("Since the change, this happens in %s instead of %s.", fractionPhrase(after.Rate, metric.Unit), fractionPhrase(before.Rate, ""))
+	return fmt.Sprintf("Since the change, this happens in %s instead of %s.", fractionPhrase(after.Rate, units), fractionPhrase(before.Rate, ""))
+}
+
+// resultUnits names what a rate metric counts in a sentence. The CLI
+// detector's stored unit, "engagements", is one conversation's use of a
+// program, so it reads as conversations.
+func resultUnits(metric findingMetric) string {
+	if metric.Unit == "engagements" {
+		return "conversations"
+	}
+	return metric.Unit
 }
 
 // harnessNote says when the harness version changed during a result's

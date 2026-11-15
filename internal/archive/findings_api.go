@@ -477,7 +477,7 @@ func (view *findingView) scopeLabel(row *findingRow) string {
 		host, provider, _ := strings.Cut(rest, ":")
 		label := "All repositories · " + providerLabel(provider)
 		if view.hosts > 1 {
-			label += " · " + defaultString(view.cart.hosts[host], "another Mac")
+			label += " · " + defaultString(view.cart.hosts[host], "an unnamed Mac")
 		}
 		return label
 	}
