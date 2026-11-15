@@ -1285,6 +1285,10 @@ func TestIncrementalDiscoversAllSourcesBeforeReadingAndRetainsForecasts(t *testi
 		if strings.HasPrefix(step.ID, "source:") && (!step.Inventory || step.Features.Groups != 1 || step.Features.Bytes <= 0) {
 			t.Errorf("discovered workload lost: %+v", step)
 		}
+		// An audit with an eligible input and one without are forecast apart.
+		if step.ID == "audit" && step.Units == nil {
+			t.Errorf("the audit did not record whether it had an input: %+v", step)
+		}
 	}
 	response := httptest.NewRecorder()
 	s.getIncrementalSync(response, httptest.NewRequest("GET", "/api/sync/history", nil))

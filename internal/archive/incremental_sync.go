@@ -550,6 +550,10 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		phase := meter.beginPhase("audit")
 		workMeter.model = "analysis-v1:audit"
 		workMeter.report(activityWork{Phase: "verifying", Unit: "input", TotalKnown: true, Total: float64(min(1, len(pool.units)))})
+		// A pass audits at most one input, or finds none eligible and returns
+		// at once: the two are different work, so they are forecast apart.
+		eligible := float64(min(1, len(pool.units)))
+		op.declareUnits("audit", eligible)
 		op.begin("audit")
 		handle.RunIO(func() { audit = s.Catalog.auditPool(ctx, pool, run.ID) })
 		op.end("audit", ctx.Err() == nil && audit.Outcome != "read_error")

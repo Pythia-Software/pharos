@@ -15,6 +15,15 @@ import (
 // quantities. Dependencies compose concurrent paths using max, not a sum.
 const forecastVersion = "operation-v1"
 
+// forecastEstimator names the model that produced a stored snapshot. Step
+// durations train every estimator, but whole-operation calibration reads only
+// snapshots of the current one, so the intervals of an older model never
+// calibrate this one. Rows keep their key, version and shape: executables
+// sharing a library decode each other's history and ignore fields they do not
+// know. An older executable drops those fields from the rows it rewrites,
+// which costs calibration samples and nothing else.
+const forecastEstimator = 2
+
 type forecastStep struct {
 	ID          string               `json:"id"`
 	Model       string               `json:"model"`
@@ -27,6 +36,15 @@ type forecastStep struct {
 	Seconds     float64              `json:"seconds"`
 	Observation *progressObservation `json:"-"`
 	Work        *activityWork        `json:"-"`
+	// Units is a quantity a step declares for itself when its Features do not
+	// carry one (the audit's eligible inputs). Absent means none was declared,
+	// which is different from a declared zero.
+	Units *float64 `json:"units,omitempty"`
+	// What a step that failed or was interrupted while running had counted, in
+	// WorkUnit. It is evidence for later fitting, not a completed duration.
+	DoneUnits  float64 `json:"done_units,omitempty"`
+	TotalUnits float64 `json:"total_units,omitempty"`
+	WorkUnit   string  `json:"work_unit,omitempty"`
 }
 
 type operationEstimate struct {
@@ -53,6 +71,8 @@ type forecastSnapshot struct {
 	Reason   string            `json:"reason"`
 	Estimate operationEstimate `json:"estimate"`
 	Actual   *float64          `json:"actual_remaining_seconds,omitempty"`
+	// Estimator is absent on snapshots from before forecastEstimator existed.
+	Estimator int `json:"estimator,omitempty"`
 }
 
 type forecastRun struct {
@@ -216,28 +236,35 @@ func (op *operationForecast) add(id, model, label string, features workFeatures,
 	op.steps = append(op.steps, forecastStep{ID: id, Model: model, Label: label, After: after, Features: features, Inventory: inventory, State: "pending"})
 }
 
-func (s *Server) beginOperation(runID, model string) *operationForecast {
-	history := slices.Clone(s.forecastHistory(model))
+// operationHistory is what one operation learns from: its own model's runs,
+// and the steps other operations share with it. Runs of every outcome are
+// kept, because the steps an interrupted or failed run did complete are
+// measured durations. Shared runs carry no forecasts: stage evidence never
+// supplies another operation's error ratios.
+func operationHistory(model string, load func(string) []forecastRun) []forecastRun {
+	history := slices.Clone(load(model))
 	for _, peerModel := range []string{automaticRunKind, manualSyncRunKind, indexRunKind, "library-update:update", "library-update:full"} {
 		if peerModel == model {
 			continue
 		}
-		for _, run := range s.forecastHistory(peerModel) {
-			if run.State != "complete" {
-				continue
-			}
+		sharedIncremental := (model == automaticRunKind || model == manualSyncRunKind) && (peerModel == automaticRunKind || peerModel == manualSyncRunKind)
+		for _, run := range load(peerModel) {
 			steps := []forecastStep{}
 			for _, step := range run.Steps {
-				sharedIncremental := (model == automaticRunKind || model == manualSyncRunKind) && (peerModel == automaticRunKind || peerModel == manualSyncRunKind)
 				if sharedIncremental || strings.HasPrefix(step.ID, "analysis:") {
 					steps = append(steps, step)
 				}
 			}
-			// Shared stage evidence never supplies another operation's error ratios.
-			history = append(history, forecastRun{State: "complete", Steps: steps})
+			history = append(history, forecastRun{Model: peerModel, FinishedAt: run.FinishedAt, State: run.State, Steps: steps})
 		}
 	}
-	op := &operationForecast{server: s, runID: runID, model: model, started: time.Now(), history: history}
+	// Newest last across models: a step reads its most recent samples.
+	slices.SortStableFunc(history, func(a, b forecastRun) int { return strings.Compare(a.FinishedAt, b.FinishedAt) })
+	return history
+}
+
+func (s *Server) beginOperation(runID, model string) *operationForecast {
+	op := &operationForecast{server: s, runID: runID, model: model, started: time.Now(), history: operationHistory(model, s.forecastHistory)}
 	s.updateRun(runID, func(run *SyncRun) { run.operation = op })
 	return op
 }
@@ -256,6 +283,37 @@ func (op *operationForecast) revise(id, model string, features workFeatures, kno
 			}
 			s.Features, s.Inventory = features, known
 			return
+		}
+	}
+}
+
+// declareUnits records a quantity a step learns only as it starts.
+func (op *operationForecast) declareUnits(id string, units float64) {
+	if op == nil {
+		return
+	}
+	op.mu.Lock()
+	defer op.mu.Unlock()
+	for i := range op.steps {
+		if op.steps[i].ID == id {
+			op.steps[i].Units = &units
+		}
+	}
+}
+
+// settled reports that a step has no work left in this run. A failed step is
+// not retried, so it is not remaining work either.
+func (s forecastStep) settled() bool {
+	return s.State == "complete" || s.State == "skipped" || s.State == "failed"
+}
+
+// stopRunning closes a running step that did not complete, keeping what it
+// had counted.
+func (s *forecastStep) stopRunning(at time.Time) {
+	s.Seconds, s.State = at.Sub(s.Started).Seconds(), "failed"
+	if s.Work != nil {
+		if work := s.Work.measured(); work.Total > 0 {
+			s.DoneUnits, s.TotalUnits, s.WorkUnit = work.Done, work.Total, work.Unit
 		}
 	}
 }
@@ -285,10 +343,9 @@ func (op *operationForecast) end(id string, success bool) {
 	defer op.mu.Unlock()
 	for i := range op.steps {
 		if s := &op.steps[i]; s.ID == id && s.State == "running" {
-			s.Seconds = op.time().Sub(s.Started).Seconds()
-			s.State = "failed"
+			s.stopRunning(op.time())
 			if success {
-				s.State = "complete"
+				s.State, s.DoneUnits, s.TotalUnits, s.WorkUnit = "complete", 0, 0, ""
 			}
 			s.Work, s.Observation = nil, nil
 		}
@@ -372,7 +429,7 @@ func (op *operationForecast) snapshotLocked(reason string, at time.Time) {
 		}
 		op.snapshots = slices.Delete(op.snapshots, remove, remove+1)
 	}
-	op.snapshots = append(op.snapshots, forecastSnapshot{At: max(0, at.Sub(op.started).Seconds()), Reason: reason, Estimate: op.estimateLocked(at, reason)})
+	op.snapshots = append(op.snapshots, forecastSnapshot{At: max(0, at.Sub(op.started).Seconds()), Reason: reason, Estimate: op.estimateLocked(at, reason), Estimator: forecastEstimator})
 }
 
 func (op *operationForecast) estimate(at time.Time, stopping bool) *operationEstimate {
@@ -386,8 +443,20 @@ func (op *operationForecast) estimate(at time.Time, stopping bool) *operationEst
 		return &operationEstimate{State: "stopping", Basis: "Stopping after committed work is safe", CurrentStep: current, TotalSteps: total}
 	}
 	value := op.estimateLocked(at, "")
+	if !value.Inventory && value.HighSeconds > forecastCheckingSpread*value.LowSeconds {
+		// Before discovery a run is either nothing to do or real work, and a
+		// range spanning both says nothing. Surfaces show the step being
+		// checked and no time. Stored snapshots keep the numbers: they are
+		// what later runs measure this checkpoint's error against.
+		value.State, value.Basis = "learning", "Checking what has changed; the time depends on what is found"
+		value.LowSeconds, value.HighSeconds, value.Point = 0, 0, 0
+	}
 	return &value
 }
+
+// forecastCheckingSpread is how many times its low a range's high may be,
+// while the inventory is unknown, and still be shown.
+const forecastCheckingSpread = 10
 
 // Use the planned order, including skipped steps, so numbering stays stable
 // as cached work is skipped. A step can contain several measured substeps.
@@ -397,7 +466,7 @@ func (op *operationForecast) stepPositionLocked() (current, total int) {
 		if step.State == "running" {
 			return i + 1, total
 		}
-		if current == 0 && step.State != "complete" && step.State != "skipped" {
+		if current == 0 && !step.settled() {
 			current = i + 1
 		}
 	}
@@ -420,7 +489,7 @@ func (op *operationForecast) estimateLocked(at time.Time, checkpoint string) ope
 				path[j] = max(path[j], parent[j])
 			}
 		}
-		if step.State != "complete" && step.State != "skipped" {
+		if !step.settled() {
 			result.Remaining++
 			result.Inventory = result.Inventory && step.Inventory
 			prediction := predictStep(op.history, step)
@@ -440,16 +509,17 @@ func (op *operationForecast) estimateLocked(at time.Time, checkpoint string) ope
 				}
 				provisional = provisional || prediction.samples < 5 || prediction.provisional || !step.Inventory
 				elapsed := 0.0
+				low, high, point := prediction.low, prediction.high, prediction.point
 				if step.State == "running" {
 					elapsed = max(0, at.Sub(step.Started).Seconds())
-				}
-				low, high, point := max(0, prediction.low-elapsed), max(0, prediction.high-elapsed), max(0, prediction.point-elapsed)
-				// A slow/blocked item must never count down through zero. Retain a
-				// residual-life forecast and widen after the expected time passes.
-				if elapsed >= prediction.point {
-					point = max(prediction.point/2, (elapsed-prediction.point)/2)
-					high = max(high, 3*point)
-					provisional = true
+					point -= elapsed
+					// A slow/blocked item must never count down through zero: past
+					// its expected time, expect half as long again as it has taken.
+					if point <= 0 {
+						point = elapsed / 2
+						provisional = true
+					}
+					low, high = max(0, low-elapsed), max(high-elapsed, 2*point)
 				}
 				// A source's indexing stage supplies live pace. Retain a historical
 				// tail for saving/retained generations instead of claiming its last
@@ -490,44 +560,17 @@ func (op *operationForecast) estimateLocked(at time.Time, checkpoint string) ope
 	} else {
 		result.State, result.Basis = "estimating", "History of remaining sources and analyses on this Mac; updates with recent pace"
 		if result.Modeled > 0 {
-			result.Basis = "Workload and machine-load models for remaining work; updates with recent pace"
+			result.Basis = "Workload models for remaining work; updates with recent pace"
 		}
 		if provisional {
 			result.State, result.Basis = "provisional", "Broad forecast; discovery or comparable history is still limited"
 		}
-		// Calibrate with PREVIOUS whole-operation outcomes at the same checkpoint.
-		// Ratios are prequential: a run never calibrates its own predictions.
-		ratios := []float64{}
-		reason := checkpoint
-		if reason == "" || reason == "stage" {
-			reason = "progress"
-			elapsed := at.Sub(op.started).Seconds()
-			if elapsed < 15 {
-				reason = "launch"
-			}
-			for _, snapshot := range op.snapshots {
-				if snapshot.Reason == "discovered" && elapsed-snapshot.At < 15 {
-					reason = "discovered"
-					break
-				}
-			}
-		}
-		for _, run := range op.history {
-			if run.State != "complete" {
-				continue
-			}
-			for _, snapshot := range run.Forecasts {
-				if snapshot.Reason == reason && snapshot.Actual != nil && snapshot.Estimate.Point > 0 {
-					ratios = append(ratios, *snapshot.Actual/snapshot.Estimate.Point)
-					break // one observation per run, not one vote per poll
-				}
-			}
-		}
-		if len(ratios) >= 8 {
-			slices.Sort(ratios)
-			result.LowSeconds = min(result.LowSeconds, result.Point*ratios[(len(ratios)-1)/10])
-			result.HighSeconds = max(result.HighSeconds, result.Point*ratios[(len(ratios)-1)*9/10])
-		}
+		// The interval comes from how PREVIOUS runs of this operation ended
+		// relative to their forecast at the same checkpoint, so it narrows as
+		// well as widens. Ratios are prequential: a run never calibrates its
+		// own predictions. Summed step ranges bound it only until then.
+		result.LowSeconds, result.HighSeconds = forecastInterval(result.Point, result.LowSeconds, result.HighSeconds,
+			calibrationRatios(op.history, op.calibrationReasonLocked(at, checkpoint)))
 		result.LowSeconds = max(.001, result.LowSeconds)
 		result.HighSeconds = max(result.LowSeconds, result.HighSeconds)
 	}
@@ -538,6 +581,75 @@ func (op *operationForecast) estimateLocked(at time.Time, checkpoint string) ope
 		result.Progress = fraction(elapsed, elapsed+result.Point)
 	}
 	return result
+}
+
+// calibrationReasonLocked names the checkpoint whose past errors describe an
+// estimate made now: before discovery, at it, or during the work after it.
+func (op *operationForecast) calibrationReasonLocked(at time.Time, checkpoint string) string {
+	if checkpoint == "launch" || checkpoint == "discovered" {
+		return checkpoint
+	}
+	for _, snapshot := range op.snapshots {
+		if snapshot.Reason == "discovered" {
+			return "progress"
+		}
+	}
+	if at.Sub(op.started).Seconds() < 15 {
+		return "launch"
+	}
+	for _, step := range op.steps {
+		if step.ID == "discovery" && (step.State == "pending" || step.State == "running") {
+			return "launch"
+		}
+	}
+	return "progress"
+}
+
+// calibrationRatios returns ln(actual remaining / forecast point) of completed
+// runs, oldest first. Launch and discovery give one ratio a run. Progress gives
+// one for each quarter of a run, from the first snapshot at or past it, so
+// neither a long run nor a frequently polled one outvotes the others.
+func calibrationRatios(history []forecastRun, reason string) []float64 {
+	ratios := []float64{}
+	for _, run := range history {
+		if run.State != "complete" {
+			continue
+		}
+		quarter := 1
+		for _, snapshot := range run.Forecasts {
+			if snapshot.Estimator != forecastEstimator || snapshot.Actual == nil || !finitePositive(snapshot.Estimate.Point) {
+				continue
+			}
+			ratio := math.Log(max(.5, *snapshot.Actual) / snapshot.Estimate.Point)
+			if reason != "progress" {
+				if snapshot.Reason == reason {
+					ratios = append(ratios, ratio)
+					break
+				}
+				continue
+			}
+			for ; quarter <= 3 && run.Seconds > 0 && snapshot.At >= float64(quarter)/4*run.Seconds; quarter++ {
+				ratios = append(ratios, ratio)
+			}
+		}
+	}
+	return ratios
+}
+
+// forecastInterval aims at about 80% coverage. Fewer than 20 past outcomes use
+// wider quantiles, and fewer than 8 only a factor of two around the point,
+// extended by the summed step ranges.
+func forecastInterval(point, low, high float64, ratios []float64) (float64, float64) {
+	if len(ratios) < 8 {
+		return min(low, point/2), max(high, point*2)
+	}
+	ratios = slices.Clone(ratios[max(0, len(ratios)-forecastSamples):])
+	slices.Sort(ratios)
+	lower, upper := .05, .95
+	if len(ratios) >= 20 {
+		lower, upper = .1, .9
+	}
+	return point * math.Exp(quantile(ratios, lower)), point * math.Exp(quantile(ratios, upper))
 }
 
 func (op *operationForecast) finish(state string) {
@@ -554,7 +666,7 @@ func (op *operationForecast) finish(state string) {
 	record := forecastRun{Version: forecastVersion, Model: op.model, FinishedAt: formatTime(at), RunID: op.runID, State: state, Seconds: at.Sub(op.started).Seconds(), Forecasts: op.snapshots}
 	for _, step := range op.steps {
 		if step.State == "running" {
-			step.State, step.Seconds = "failed", at.Sub(step.Started).Seconds()
+			step.stopRunning(at)
 		}
 		step.Observation, step.Work = nil, nil
 		record.Steps = append(record.Steps, step)
@@ -642,199 +754,163 @@ type stepPrediction struct {
 	provisional      bool
 }
 
-// Log-space ridge regression bounds sparse/correlated features. Workload is
-// useful immediately as a throughput prior; multivariable weights require at
-// least 20 complete samples. Missing/different byte bases never share weights.
-func predictStep(history []forecastRun, target forecastStep) stepPrediction {
-	var samples []forecastStep
-	for _, run := range history {
-		if run.State != "complete" {
-			continue
+// forecastSamples bounds what one fit or calibration reads: recent runs
+// describe this library and this code better than old ones.
+const forecastSamples = 40
+
+// quantile interpolates linearly in sorted values.
+func quantile(sorted []float64, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	position := p * float64(len(sorted)-1)
+	low := int(position)
+	high := min(len(sorted)-1, low+1)
+	return sorted[low] + (sorted[high]-sorted[low])*(position-float64(low))
+}
+
+// stepQuantity returns how a target and its peers are measured, or nil when
+// the target has no known quantity. Incremental sources are measured in
+// conversation groups: re-deriving a conversation costs by what is stored for
+// it, not by the bytes appended, and file sizes are whole-file lengths. A full
+// index keeps its volume measure, and never mixes file bytes with decoded
+// database text.
+func stepQuantity(target forecastStep) func(forecastStep) (float64, bool) {
+	switch {
+	case target.Units != nil:
+		return func(s forecastStep) (float64, bool) {
+			if s.Units == nil {
+				return 0, false
+			}
+			return *s.Units, true
 		}
-		for _, step := range run.Steps {
+	case !target.Inventory:
+		return nil
+	case strings.HasPrefix(target.ID, "source:"):
+		return func(s forecastStep) (float64, bool) { return s.Features.Groups, s.Inventory }
+	case target.ID != "index":
+		return nil
+	case target.Features.Bytes > 0:
+		return func(s forecastStep) (float64, bool) {
+			return s.Features.Bytes, s.Inventory && s.Features.BytesBasis == target.Features.BytesBasis
+		}
+	case target.Features.Messages > 0:
+		return func(s forecastStep) (float64, bool) { return s.Features.Messages, s.Inventory }
+	default:
+		return func(s forecastStep) (float64, bool) { return s.Features.Groups, s.Inventory }
+	}
+}
+
+// theilSen fits seconds = a + b·units robustly: the median pairwise slope,
+// then the median intercept, neither below zero. Equal units give a = median.
+func theilSen(units, seconds []float64) (a, b float64) {
+	slopes := []float64{}
+	for i := range units {
+		for j := i + 1; j < len(units); j++ {
+			if units[i] != units[j] {
+				slopes = append(slopes, (seconds[j]-seconds[i])/(units[j]-units[i]))
+			}
+		}
+	}
+	slices.Sort(slopes)
+	b = max(0, quantile(slopes, .5))
+	intercepts := make([]float64, len(units))
+	for i := range units {
+		intercepts[i] = seconds[i] - b*units[i]
+	}
+	slices.Sort(intercepts)
+	return max(0, quantile(intercepts, .5)), b
+}
+
+// predictStep estimates one step from completed steps with its ID, whatever
+// became of the run they were in: an interrupted run's finished steps are
+// measured durations.
+//
+// A step key's version string changes cost, so samples of the target's model
+// are used alone as soon as one exists. Until then the newest samples of other
+// versions stand in, marked provisional, instead of leaving the step (and with
+// it the whole operation) without a forecast.
+//
+// A step with a quantity is a fixed cost plus a cost per unit, and its range
+// is the spread of its peers around that fit. A known empty step reads only
+// empty peers, never a scaled-down real one, and the reverse.
+func predictStep(history []forecastRun, target forecastStep) stepPrediction {
+	quantity := stepQuantity(target)
+	want, known := 0.0, false
+	if quantity != nil {
+		want, known = quantity(target)
+	}
+	// Newest first, and only the most recent forecastSamples of each list: what
+	// a step cost lately says more than a longer record does. Then the peers
+	// comparable with the target, with their units, or those with no quantity.
+	type peers struct {
+		read                  int
+		seconds, units, loose []float64
+	}
+	var same, other peers
+	for i := len(history) - 1; i >= 0; i-- {
+		for _, step := range history[i].Steps {
+			if step.ID != target.ID || step.State != "complete" || !finitePositive(step.Seconds) {
+				continue
+			}
 			if target.Features.Dirty != nil && step.Features.Dirty != nil && *target.Features.Dirty != *step.Features.Dirty {
 				continue
 			}
-			if step.ID == target.ID && (target.Model == "" || step.Model == target.Model) && step.State == "complete" && finitePositive(step.Seconds) && (!target.Inventory || target.Features.BytesBasis == "" || step.Features.BytesBasis == target.Features.BytesBasis) {
-				samples = append(samples, step)
+			list := &other
+			if target.Model == "" || step.Model == target.Model {
+				list = &same
 			}
-		}
-	}
-	if len(samples) == 0 {
-		return stepPrediction{}
-	}
-	// Quantity known at prediction time also selects the fallback. A known
-	// empty inventory uses only empty peers instead of scaling a rebuild to 0.
-	quantity := func(s forecastStep) float64 {
-		switch {
-		case target.Inventory && target.Features.Bytes > 0:
-			return s.Features.Bytes
-		case target.Inventory && target.Features.Messages > 0:
-			return s.Features.Messages
-		case target.Inventory:
-			return s.Features.Groups
-		default:
-			return 0
-		}
-	}
-	values := []float64{}
-	peers := []forecastStep{}
-	minQuantity, maxQuantity := math.Inf(1), 0.0
-	for _, sample := range samples {
-		value := sample.Seconds
-		if target.Inventory && sample.Inventory {
-			want, had := quantity(target), quantity(sample)
-			if (want == 0) != (had == 0) {
+			if list.read++; list.read > forecastSamples {
 				continue
 			}
-			if want > 0 && had > 0 {
-				// Retain fixed overhead; don't assume all duration is byte-linear.
-				value *= .2 + .8*(want/had)
-				minQuantity, maxQuantity = min(minQuantity, had), max(maxQuantity, had)
+			if !known {
+				list.seconds = append(list.seconds, step.Seconds)
+			} else if had, ok := quantity(step); !ok {
+				list.loose = append(list.loose, step.Seconds)
+			} else if (want == 0) == (had == 0) {
+				list.seconds, list.units = append(list.seconds, step.Seconds), append(list.units, had)
 			}
 		}
-		if !finitePositive(value) {
-			continue
-		}
-		peers = append(peers, sample)
-		values = append(values, value)
 	}
-	samples = peers
-	extrapolating := maxQuantity > 0 && (quantity(target) > maxQuantity*4 || quantity(target) < minQuantity/4)
-	if len(values) == 0 {
+	list, provisional := same, false
+	if len(same.seconds)+len(same.loose) == 0 {
+		list, provisional = other, true
+	}
+	if known && len(list.seconds) == 0 {
+		// Peers recorded before this step declared a quantity.
+		list.seconds, known, provisional = list.loose, false, true
+	}
+	seconds := list.seconds
+	if len(seconds) == 0 {
 		return stepPrediction{}
 	}
-	slices.Sort(values)
-	point := values[len(values)/2]
-	spread := math.Log(3.0)
-	if len(values) >= 5 {
-		spread = max(math.Log(1.5), math.Log(max(values[(len(values)-1)*9/10], .001)/max(values[(len(values)-1)/10], .001)))
+	sorted := slices.Sorted(slices.Values(seconds))
+	result := stepPrediction{point: quantile(sorted, .5), samples: len(seconds), provisional: provisional}
+	result.low, result.high = result.point/3, result.point*3
+	if len(seconds) < 3 {
+		result.provisional = true
+		return result
 	}
-	if extrapolating {
-		spread = max(spread, math.Log(4))
+	if !known || want == 0 {
+		result.low, result.high = quantile(sorted, .1), quantile(sorted, .9)
+		return result
 	}
-	fittedModel := false
-	if len(samples) >= 20 && !extrapolating {
-		if fitted, errorSpread, ok := ridgeDuration(samples, target); ok {
-			point, spread, fittedModel = fitted, max(spread/2, errorSpread), true
-		}
-	}
-	return stepPrediction{point: point, low: point / math.Exp(spread), high: point * math.Exp(spread), samples: len(values), provisional: extrapolating, fitted: fittedModel}
-}
-
-func durationVector(f workFeatures) []float64 {
-	load := 0.0
-	if f.LoadOneMinute != nil {
-		load = *f.LoadOneMinute
-	}
-	values := []float64{f.Groups, f.Bytes, f.Messages, f.Conversations, f.Files, f.SinceLastIndexSeconds, load}
-	for i, v := range values {
-		values[i] = math.Log1p(max(0, v))
-	}
-	return values
-}
-
-func ridgeDuration(samples []forecastStep, target forecastStep) (float64, float64, bool) {
-	// Only fit columns observed on the target and most peers; zero/missing
-	// bytes, load, or conversations cannot silently become a useful signal.
-	want := durationVector(target.Features)
-	means, scales := make([]float64, len(want)), make([]float64, len(want))
-	rows := make([][]float64, len(samples))
-	for i, sample := range samples {
-		rows[i] = durationVector(sample.Features)
-		for j, v := range rows[i] {
-			means[j] += v / float64(len(samples))
-		}
-	}
-	columns := []int{}
-	for j := range want {
-		present := 0
-		for i, row := range rows {
-			scales[j] += math.Pow(row[j]-means[j], 2) / float64(len(rows))
-			if row[j] > 0 || j == 6 && samples[i].Features.LoadOneMinute != nil {
-				present++
-			}
-		}
-		scales[j] = math.Sqrt(scales[j])
-		if (want[j] > 0 || j == 6 && target.Features.LoadOneMinute != nil) && scales[j] > .05 && present*5 >= len(rows)*4 {
-			columns = append(columns, j)
-		}
-	}
-	if len(columns) == 0 {
-		return 0, 0, false
-	}
-	vector := func(row []float64) []float64 {
-		x := []float64{1}
-		for _, j := range columns {
-			x = append(x, min(4, max(-4, (row[j]-means[j])/scales[j])))
-		}
-		return x
-	}
-	n := len(columns) + 1
-	a := make([][]float64, n)
-	for i := range a {
-		a[i] = make([]float64, n+1)
-		if i > 0 {
-			a[i][i] = 4
-		}
-	}
-	yMean := 0.0
-	for i, row := range rows {
-		x, y := vector(row), math.Log(samples[i].Seconds)
-		yMean += y / float64(len(rows))
-		for j := range x {
-			for k := range x {
-				a[j][k] += x[j] * x[k]
-			}
-			a[j][n] += x[j] * y
-		}
-	}
-	for i := 0; i < n; i++ {
-		pivot := i
-		for j := i + 1; j < n; j++ {
-			if math.Abs(a[j][i]) > math.Abs(a[pivot][i]) {
-				pivot = j
-			}
-		}
-		a[i], a[pivot] = a[pivot], a[i]
-		if math.Abs(a[i][i]) < 1e-9 {
-			return 0, 0, false
-		}
-		divisor := a[i][i]
-		for k := i; k <= n; k++ {
-			a[i][k] /= divisor
-		}
-		for j := 0; j < n; j++ {
-			if j != i {
-				factor := a[j][i]
-				for k := i; k <= n; k++ {
-					a[j][k] -= factor * a[i][k]
-				}
-			}
-		}
-	}
-	predict := func(row []float64) float64 {
-		y := 0.0
-		for j, x := range vector(row) {
-			y += x * a[j][n]
-		}
-		return y
-	}
-	sse, baseline := 0.0, 0.0
-	residuals := []float64{}
-	for i, row := range rows {
-		y := math.Log(samples[i].Seconds)
-		error := y - predict(row)
-		sse += error * error
-		baseline += math.Pow(y-yMean, 2)
-		residuals = append(residuals, math.Abs(error))
-	}
-	if sse >= baseline*.9 {
-		return 0, 0, false
+	units := list.units
+	a, b := theilSen(units, seconds)
+	fit := func(units float64) float64 { return max(.05, a+b*units) }
+	residuals := make([]float64, len(seconds))
+	for i := range seconds {
+		residuals[i] = math.Log(max(.01, seconds[i]) / fit(units[i]))
 	}
 	slices.Sort(residuals)
-	point := math.Exp(predict(want))
-	return point, max(math.Log(1.5), residuals[(len(residuals)-1)*9/10]*1.5), finitePositive(point)
+	result.point, result.fitted = fit(want), b > 0
+	result.low, result.high = result.point*math.Exp(quantile(residuals, .1)), result.point*math.Exp(quantile(residuals, .9))
+	if want > slices.Max(units)*4 || want < slices.Min(units)/4 {
+		// Outside what was measured: keep the fit, widen and say so.
+		result.provisional = true
+		result.low, result.high = min(result.low, result.point/3), max(result.high, result.point*3)
+	}
+	return result
 }
 
 // Metrics include unavailable predictions, and exclude censored/interrupted
@@ -847,7 +923,8 @@ func forecastAccuracy(history []forecastRun) map[string]any {
 		absolute, relative, width := []float64{}, []float64{}, []float64{}
 		for _, run := range history {
 			for _, snapshot := range run.Forecasts {
-				if snapshot.Reason != reason {
+				// Another estimator's snapshots say nothing about this one.
+				if snapshot.Reason != reason || snapshot.Estimator != forecastEstimator {
 					continue
 				}
 				attempts++

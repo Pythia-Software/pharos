@@ -1297,7 +1297,9 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   [Progress and time estimates](progress-estimates.md). A range is shown
   only for `estimating`, or `provisional` marked as early ("about 3–6 min,
   early estimate"); otherwise `label` is null and surfaces show only "step
-  N of M".
+  N of M". Before discovery, a range whose high is more than ten times its
+  low is not shown either: the state is `learning` and the step says what is
+  being checked.
 - `freshness` (the §5 rows) and `freshness_summary` are filled from phase
   3; `resources` (§10) from phase 4, `null` when nothing could be read.
   `headings` (`{"work": "Work", "data": "Data"}`) are the words over Show
@@ -1948,21 +1950,20 @@ Pharos 0.7.5, 2026-10-27). They are recorded for later and not scheduled. PRs
 landing in the meantime may make some of them unnecessary, so check each one
 against current code before starting it.
 
-- **Forecast ranges are much wider than the evidence needs.**
-  - Automatic runs: the point estimate's median relative error is about 6% at
-    launch, yet the interval contains the outcome in about 99% of runs (75 of
-    76), with a median high/low ratio of about 9.
-  - Manual Index changes: median interval widths of 870–3,745 s on runs of
-    4–6 min, with 14 of 14 covered.
-  - The worst-case composition (adding the highs of sequential steps, the
-    live ×2 and overrun ×3 widening) plus calibration targets far more
-    coverage than needed. Aim for 80–90% (§10 and
-    [progress estimates](progress-estimates.md)).
-- **Stopped runs never train the forecast.** Capture & index runs took
-  between 6 minutes and 5 hours, every snapshot was `partial`, and 3 of 5
-  were interrupted. Interrupted runs record no outcome, so the operation
-  people most want a time for never reaches a total. Learning from the steps
-  that did finish would fix that.
+- **Forecast ranges were much wider than the evidence needs.** Done
+  (2026-11-14): the range is calibrated on previous outcomes at about 80%
+  coverage instead of summing step spreads, and the steps a stopped run
+  finished train the forecast
+  ([progress estimates](progress-estimates.md#whole-operation-forecasting-and-evaluation)).
+  Still open from that work:
+  - Manual Index changes under-cover (50–76% on 17 runs).
+  - Capture & index and library updates have too few completed runs to
+    calibrate (1 and 3), so their ranges stay half to twice the point.
+  - `background.update` and `analysis.chain` under it, the largest consumers
+    of background time, have no forecast at all; the panel shows a time only
+    for a top-level operation that has one.
+  - The progress a stopped step had made is stored but not yet used as a
+    rate sample.
 - **Memory peaks around 9.6 GB during routine incremental runs.** That is the
   median of the observed peak RSS (p95 9.8 GB, max 11.2 GB), at a median CPU
   of 236% of one core. The figure is process-wide, so concurrent maintenance

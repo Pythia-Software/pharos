@@ -1,9 +1,11 @@
 package archive
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -477,10 +479,28 @@ func TestOperationForecastComposesDependenciesAndUnknownSteps(t *testing.T) {
 	if got.Point != 130 || got.Remaining != 4 || got.State != "provisional" || got.LowSeconds >= 130 || got.HighSeconds <= 130 {
 		t.Fatalf("should use the longer concurrent branch and broad sparse-history bounds: %+v", got)
 	}
+	// One step that is either nothing or real work (an audit with or without an
+	// eligible input) must not set the width of the whole operation.
+	audit := forecastStep{ID: "audit", Model: "v1", Label: "audit", State: "complete", Inventory: true}
+	for i := range 12 {
+		audit.Seconds = []float64{.003, 5}[i%2]
+		op.history = append(op.history, forecastRun{State: "complete", Steps: []forecastStep{audit}})
+	}
+	bimodal := &operationForecast{started: at, steps: slices.Clone(op.steps), history: op.history}
+	audit.State, audit.After = "pending", []string{"findings"}
+	bimodal.steps = append(bimodal.steps, audit)
+	if wide := bimodal.estimate(at, false); wide.Point < 130 || wide.Point > 135 || wide.HighSeconds > got.HighSeconds+6 || wide.LowSeconds < got.LowSeconds {
+		t.Fatalf("one bimodal step set the whole operation's range: %+v, without it %+v", wide, got)
+	}
 	op.steps = append(op.steps, forecastStep{ID: "new", Label: "New analysis", State: "pending", After: []string{"findings"}})
 	got = op.estimate(at, false)
 	if got.State != "partial" || got.Point != 0 || got.HighSeconds != 0 || got.Predicted != 4 || len(got.Unknown) != 1 {
 		t.Fatalf("a partial path became a whole-operation ETA: %+v", got)
+	}
+	// A step that failed is not retried in this run, so it is not remaining.
+	op.steps[len(op.steps)-1].State = "failed"
+	if got = op.estimate(at, false); got.Point != 130 || got.Remaining != 4 {
+		t.Fatalf("a failed step stayed in the forecast: %+v", got)
 	}
 	op.skip("new")
 	op.steps[0].State, op.steps[0].Started = "running", at
@@ -493,41 +513,66 @@ func TestOperationForecastComposesDependenciesAndUnknownSteps(t *testing.T) {
 	}
 }
 
-func TestOperationModelLearnsVolumeAndLoadWithoutMixingVersions(t *testing.T) {
+func TestOperationModelLearnsFixedAndPerGroupCostAndInheritsAcrossVersions(t *testing.T) {
 	history := []forecastRun{}
-	for i := range 60 {
-		groups, load := float64(5+i%10*10), float64(1+i/10)
-		step := forecastStep{ID: "source:a", Model: "codex:v1:changes", State: "complete", Inventory: true,
-			Features: workFeatures{Groups: groups, Bytes: groups * 1000, BytesBasis: "transcript", LoadOneMinute: &load},
-			Seconds:  2 * (1 + groups) * (1 + load)}
-		history = append(history, forecastRun{State: "complete", Steps: []forecastStep{step}})
+	sample := func(model string, groups, seconds float64) forecastStep {
+		// Bytes are whole-file lengths, unrelated to what an update costs.
+		return forecastStep{ID: "source:a", Model: model, State: "complete", Inventory: true, Seconds: seconds,
+			Features: workFeatures{Groups: groups, Bytes: 1e9 / (1 + groups), BytesBasis: "transcript"}}
 	}
-	low, high := 1.5, 5.5
-	target := forecastStep{ID: "source:a", Model: "codex:v1:changes", Inventory: true, Features: workFeatures{Groups: 40, Bytes: 40_000, BytesBasis: "transcript", LoadOneMinute: &low}}
-	fast := predictStep(history, target)
-	target.Features.LoadOneMinute = &high
-	slow := predictStep(history, target)
-	if slow.point < fast.point*1.8 || fast.point < 150 || fast.point > 280 || slow.low > slow.point || slow.high < slow.point {
-		t.Fatalf("did not learn machine load at equal volume: fast=%+v slow=%+v", fast, slow)
+	for i := range 30 {
+		groups := float64(5 + i%10*10)
+		history = append(history, forecastRun{State: "complete", Steps: []forecastStep{sample("codex:v1:changes", groups, (12+2*groups)*(.9+float64(i%3)*.1))}})
 	}
+	target := sample("codex:v1:changes", 40, 0)
+	target.State = "pending"
+	small, large := target, target
+	small.Features.Groups, large.Features.Groups = 1, 80
+	got, few, many := predictStep(history, target), predictStep(history, small), predictStep(history, large)
+	if got.point < 80 || got.point > 105 || got.low >= got.point || got.high <= got.point || got.high > got.point*1.5 || !got.fitted {
+		t.Fatalf("12 s + 2 s a group at 40 groups: %+v", got)
+	}
+	// The fixed cost survives at one group; the per-group cost scales the rest.
+	if few.point < 8 || few.point > 20 || many.point < 150 || many.point > 200 {
+		t.Fatalf("fixed and per-group cost: one group %+v, eighty %+v", few, many)
+	}
+	target.Features.Bytes, target.Features.BytesBasis = 5, "message_text"
+	if other := predictStep(history, target); other.point != got.point {
+		t.Fatalf("bytes changed a forecast made on conversation groups: %+v, want %+v", other, got)
+	}
+	// A new extractor version borrows the previous one's history, marked
+	// provisional, and uses its own alone from its first sample.
 	target.Model = "codex:v2:changes"
-	if got := predictStep(history, target); got.point != 0 {
-		t.Fatalf("extractor versions shared a fit: %+v", got)
+	if inherited := predictStep(history, target); inherited.point != got.point || !inherited.provisional {
+		t.Fatalf("a version change left the step without a forecast: %+v", inherited)
 	}
-	target.Model, target.Features.BytesBasis = "codex:v1:changes", "message_text"
-	if got := predictStep(history, target); got.point != 0 {
-		t.Fatalf("mixed file bytes and decoded database text: %+v", got)
+	bumped := append(slices.Clone(history), forecastRun{State: "complete", Steps: []forecastStep{sample("codex:v2:changes", 40, 500)}})
+	if own := predictStep(bumped, target); own.point != 500 || !own.provisional {
+		t.Fatalf("the previous version outweighed the new one's sample: %+v", own)
 	}
-	target.Features = workFeatures{}
+	target.Model, target.Features = "codex:v1:changes", workFeatures{}
 	if got := predictStep(history, target); got.point != 0 {
 		t.Fatalf("a known empty inventory borrowed nonempty duration: %+v", got)
 	}
-	// Interrupted work is never a completed runtime observation.
-	history[0].State = "interrupted"
-	target.Inventory = false
-	target.Model = "codex:v1:changes"
-	if got := predictStep(history[:1], target); got.point != 0 {
-		t.Fatalf("censored run trained a fit: %+v", got)
+	for range 3 {
+		history = append(history, forecastRun{State: "complete", Steps: []forecastStep{sample("codex:v1:changes", 0, .01)}})
+	}
+	if got := predictStep(history, target); got.point != .01 {
+		t.Fatalf("an empty inventory should cost what empty runs did: %+v", got)
+	}
+	target.Features.Groups = 40
+	if after := predictStep(history, target); after.point != got.point {
+		t.Fatalf("empty runs diluted real ones: %+v, want %+v", after, got)
+	}
+	// What an interrupted run finished is a measured duration; the step it was
+	// stopped in is not.
+	stopped := sample("codex:v1:changes", 40, 90)
+	if got := predictStep([]forecastRun{{State: "interrupted", Steps: []forecastStep{stopped}}}, target); got.point != 90 {
+		t.Fatalf("a completed step of an interrupted run did not train: %+v", got)
+	}
+	stopped.State = "failed"
+	if got := predictStep([]forecastRun{{State: "interrupted", Steps: []forecastStep{stopped}}}, target); got.point != 0 {
+		t.Fatalf("censored step trained a fit: %+v", got)
 	}
 }
 
@@ -562,6 +607,27 @@ func TestOperationForecastPersistsWorkerSnapshotsAndEvaluatesOnlyCompletedRuns(t
 	}
 	if history[2].Forecasts[0].Actual != nil {
 		t.Fatal("interrupted duration was scored as completion")
+	}
+	// The stopped step keeps what it had counted, apart from completed steps.
+	if step := history[2].Steps[0]; step.State != "failed" || step.DoneUnits != 10 || step.TotalUnits != 100 || step.WorkUnit != "group" || history[0].Steps[0].TotalUnits != 0 {
+		t.Fatalf("stopped step's progress: %+v", step)
+	}
+	if history[1].Forecasts[0].Estimator != forecastEstimator {
+		t.Fatalf("snapshot does not name its estimator: %+v", history[1].Forecasts[0])
+	}
+	// Rows an older executable wrote, or rewrote without the newer fields,
+	// still load and still train; their snapshots only stop calibrating.
+	var older []forecastRun
+	if err := json.Unmarshal([]byte(`[{"version":"operation-v1","model":"manual-sync","finished_at":"2026-01-01T00:00:00.000Z","run_id":"r","state":"complete","seconds":50,
+		"steps":[{"id":"index","model":"v1","label":"Index","features":{"groups":100},"inventory_known":true,"state":"complete","seconds":50}],
+		"forecasts":[{"elapsed_seconds":0,"reason":"launch","estimate":{"state":"provisional","basis":"","low_seconds":1,"high_seconds":900,"point_seconds":50,"predicted_steps":1,"remaining_steps":1,"inventory_known":true},"actual_remaining_seconds":50}]}]`), &older); err != nil {
+		t.Fatal(err)
+	}
+	if got := predictStep(older, forecastStep{ID: "index", Model: "v1", Inventory: true, Features: workFeatures{Groups: 100}}); got.point != 50 {
+		t.Fatalf("an older row did not train: %+v", got)
+	}
+	if got := calibrationRatios(older, "launch"); len(got) != 0 {
+		t.Fatalf("another estimator's snapshot calibrated this one: %v", got)
 	}
 	accuracy := forecastAccuracy(history)["launch"].(map[string]any)
 	if accuracy["attempts"] != 3 || accuracy["predicted"] != 2 || accuracy["evaluated"] != 1 || accuracy["covered"] != 1 {
@@ -655,15 +721,65 @@ func TestOperationForecastSeparatesReusableAnalysisAndCalibratesPriorErrors(t *t
 	}
 	at := time.Now()
 	rebuild.State = "pending"
-	op := &operationForecast{started: at, steps: []forecastStep{rebuild}, history: history, snapshots: []forecastSnapshot{{Reason: "discovered", At: 0}}}
-	before := op.estimate(at, false)
-	actual := 1000.0
-	for range 8 {
-		op.history = append(op.history, forecastRun{State: "complete", Forecasts: []forecastSnapshot{{Reason: "discovered", Estimate: operationEstimate{Point: 100}, Actual: &actual}}})
+	op := &operationForecast{started: at, steps: []forecastStep{rebuild}, history: history}
+	before := op.estimateLocked(at, "discovered")
+	outcomes := func(count int, estimator int, state string, actual func(int) float64) []forecastRun {
+		runs := []forecastRun{}
+		for i := range count {
+			remaining := actual(i)
+			runs = append(runs, forecastRun{State: state, Seconds: 2 * remaining, Forecasts: []forecastSnapshot{{At: remaining, Reason: "discovered", Estimate: operationEstimate{Point: 100}, Actual: &remaining, Estimator: estimator}}})
+		}
+		return runs
 	}
-	after := op.estimate(at, false)
-	if after.HighSeconds < 1000 || after.HighSeconds <= before.HighSeconds || after.Point != before.Point {
+	late := func(int) float64 { return 1000 }
+	// Another estimator's errors, and runs that never completed, say nothing.
+	op.history = slices.Concat(history, outcomes(8, 0, "complete", late), outcomes(8, forecastEstimator, "interrupted", late))
+	if got := op.estimateLocked(at, "discovered"); got.LowSeconds != before.LowSeconds || got.HighSeconds != before.HighSeconds {
+		t.Fatalf("uncomparable outcomes calibrated the range: before=%+v after=%+v", before, got)
+	}
+	op.history = slices.Concat(history, outcomes(8, forecastEstimator, "complete", late))
+	after := op.estimateLocked(at, "discovered")
+	if after.HighSeconds < 999 || after.HighSeconds <= before.HighSeconds || after.Point != before.Point {
 		t.Fatalf("previous underestimates did not widen bounds: before=%+v after=%+v", before, after)
+	}
+	// Consistent outcomes narrow the range below the uncalibrated one, and it
+	// still contains what those runs took.
+	op.history = slices.Concat(history, outcomes(24, forecastEstimator, "complete", func(i int) float64 { return 90 + float64(i%5)*5 }))
+	narrow := op.estimateLocked(at, "discovered")
+	if narrow.LowSeconds <= before.LowSeconds || narrow.HighSeconds >= before.HighSeconds || narrow.LowSeconds > 95 || narrow.HighSeconds < 105 {
+		t.Fatalf("consistent outcomes did not narrow bounds: before=%+v after=%+v", before, narrow)
+	}
+	// The same errors are read while work is in progress at each quarter of a
+	// run, whatever snapshot crossed it.
+	op.snapshots = []forecastSnapshot{{Reason: "discovered"}}
+	if got := op.estimateLocked(at, ""); got.HighSeconds >= before.HighSeconds {
+		t.Fatalf("no progress calibration: %+v", got)
+	}
+	// Before discovery an automatic run is either nothing or real work. No
+	// surface shows a time for a range that spans both; a known inventory or
+	// a usable range is shown.
+	view := opView{State: opRunning, Forecast: op}
+	if value := operationTime(view, at); value["label"] == nil {
+		t.Fatalf("a known, calibrated forecast lost its label: %+v", value)
+	}
+	op.steps[0].Inventory = false
+	if value := operationTime(view, at); value["label"] == nil {
+		t.Fatalf("a narrow early forecast lost its label: %+v", value)
+	}
+	op.history, op.snapshots = history, nil
+	wide := forecastStep{ID: "source:a", Model: "v1", State: "complete", Inventory: true}
+	for i := range 12 {
+		wide.Seconds = []float64{.01, 100}[i%2]
+		op.history = append(op.history, forecastRun{State: "complete", Steps: []forecastStep{wide}})
+	}
+	wide.State, wide.Inventory = "pending", false
+	op.steps = []forecastStep{wide}
+	if value := operationTime(view, at); value["label"] != nil || value["low_seconds"] != nil || value["state"] != "learning" {
+		t.Fatalf("a range from nothing to real work was shown before discovery: %+v", value)
+	}
+	// The stored snapshot keeps the numbers, to score this checkpoint later.
+	if shown, stored := op.estimate(at, false), op.estimateLocked(at, "launch"); shown.Point != 0 || stored.Point <= 0 || stored.HighSeconds <= stored.LowSeconds {
+		t.Fatalf("shown %+v, stored %+v", shown, stored)
 	}
 }
 
