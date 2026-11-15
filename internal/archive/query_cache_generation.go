@@ -54,6 +54,9 @@ var queryCacheTables = []string{
 	"session_shape_facts", "session_shape_dirty",
 	// What each conversation holds beside its words, which searches filter by.
 	"conversation_content",
+	// The Library counts compactions here. A message's boundary is written
+	// with the message, but a reclassification writes boundaries alone.
+	"compaction_boundaries",
 }
 
 // queryCacheDomains are the tables only some cached views read: what the

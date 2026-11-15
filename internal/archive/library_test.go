@@ -30,12 +30,15 @@ func libraryFixture(t *testing.T) (*Catalog, Config) {
 		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES
 			('m1','cc','1','user','message','Please fix the parser','2026-09-23T02:00:00Z','h'),
 			('m2','cc','2','assistant','tool_call','{}','2026-09-23T02:00:01Z','h'),
-			('m3','cc','3','tool','tool_result','{"is_error":1}','2026-09-23T02:00:02Z','h'),
+			('m3','cc','3','tool','tool_result','{"exit_code":2}','2026-09-23T02:00:02Z','h'),
 			('m4','cc','4','assistant','message','Fixed it','2026-09-23T02:00:03Z','h'),
 			('m5','ca','1','user','message','Mirror prompt','2026-09-23T03:00:00Z','h'),
 			('k1','cc','k1','system','metadata','{"subtype":"compact_boundary","type":"system"}','2026-09-23T02:00:04Z','h'),
 			('k2','cc','k2','system','metadata','{"compaction_trigger":"auto","payload":{},"type":"compacted"}','2026-09-23T02:00:05Z','h'),
 			('k3','cc','k3','system','metadata','{"payload":{},"type":"compacted"}','2026-09-23T02:00:06Z','h')`,
+		// The call failed by its exit status, which only the tool ledger records.
+		`INSERT INTO tool_calls(id,workspace_id,conversation_id,call_message_id,result_message_id,sequence,provider,kind,tool_name,tool_category,status,error_type,exit_code)
+			VALUES('t1','c','cc','m2','m3',1,'claude','tool','Bash','shell','error','nonzero_exit',2)`,
 		`INSERT INTO metrics(workspace_id,name,value,unit,status,extractor_version,observed_at) VALUES
 			('c','total_tokens',500,'tokens','observed','test','x'),('a','total_tokens',900,'tokens','observed','test','x')`,
 		`INSERT INTO metric_ledger(workspace_id,sequence,event_kind,error_type) VALUES('c',1,'tool','timeout')`,
@@ -120,8 +123,19 @@ func TestLibraryReflectsEveryDependencyBeforeAndAfterRefresh(t *testing.T) {
 			func(rows map[string]map[string]any) bool { return integer(rows["c"]["turn_count"]) == 2 }},
 		{"agent session insert", `INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,parent_id,kind,provider,depth) VALUES('sc3','c','cc','t3','sc','subagent','claude',1)`,
 			func(rows map[string]map[string]any) bool { return integer(rows["c"]["subagent_count"]) == 3 }},
-		{"message update", `UPDATE messages SET text='{"is_error":0}' WHERE id='m3'`,
+		{"tool call update", `UPDATE tool_calls SET status='ok',error_type=NULL WHERE id='t1'`,
 			func(rows map[string]map[string]any) bool { return integer(rows["c"]["tool_error_count"]) == 0 }},
+		{"tool call insert", `INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status) VALUES('t2','c','cc',2,'claude','tool','Read','file','ok')`,
+			func(rows map[string]map[string]any) bool { return integer(rows["c"]["tool_use_count"]) == 2 }},
+		// A boundary is stored by a trigger on its message, and reclassified
+		// without the message changing.
+		{"compaction boundary delete", `DELETE FROM compaction_boundaries WHERE message_id='k1'`,
+			func(rows map[string]map[string]any) bool { return integer(rows["c"]["compaction_count"]) == 1 }},
+		{"compaction message insert", `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('k4','cc','k4','system','metadata','{"subtype":"compact_boundary","type":"system"}','h')`,
+			func(rows map[string]map[string]any) bool { return integer(rows["c"]["compaction_count"]) == 2 }},
+		// An abandoned branch's prompt was still sent.
+		{"message leaves the branch", `UPDATE messages SET selected=0 WHERE id='m6'`,
+			func(rows map[string]map[string]any) bool { return integer(rows["c"]["turn_count"]) == 2 }},
 		{"change file delete", `DELETE FROM change_files WHERE path='README.md'`,
 			func(rows map[string]map[string]any) bool { return integer(rows["c"]["changed_file_count"]) == 1 }},
 		{"metric update", `UPDATE metrics SET value=700 WHERE workspace_id='c'`,

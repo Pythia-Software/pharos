@@ -31,9 +31,13 @@ func TestQueryPlansUseIndexes(t *testing.T) {
 		{name: "document outcome", query: documentOutcomeQuery, args: []any{"x"}, want: []string{"(conversation_id=?)"}, avoid: []string{"messages_prose_idx"}},
 		{name: "library previews", query: libraryPreviewSelect("w.id=?"), args: []any{"x"}, want: []string{"(conversation_id=?)"}, avoid: []string{"messages_prose_idx"}},
 		// The Library projection reads effort and model pairs from the
-		// covering message index, not from message rows.
+		// covering message index, not from message rows. It counts turns by
+		// looking each of a conversation's messages up among the user
+		// messages, never by walking those, and fetches no message row for it.
 		{name: "library projection", query: libraryDerivedSelect("w.id=?"), args: []any{"x"},
-			want: []string{"(conversation_id=?)", "COVERING INDEX messages_conversation_model_effort_idx"}, avoid: []string{"messages_prose_idx"}},
+			want: []string{"(conversation_id=?)", "COVERING INDEX messages_conversation_model_effort_idx",
+				"tm USING COVERING INDEX messages_conversation_idx", "COVERING INDEX messages_prose_idx (role=? AND created_at=? AND rowid=?)"},
+			avoid: []string{"messages_prose_idx (role=?)", "messages_prose_idx (role=? AND created_at=?)"}},
 		{name: "native alias lookup", query: nativeAliasMatchQuery, args: []any{"local", "session", "wrapper"}, want: []string{"conversations_native_alias_idx"}, avoid: []string{"SCAN conversations"}},
 		{name: "conversation children", query: childConversationQuery, args: []any{"x"}, want: []string{"COVERING INDEX conversations_parent_idx"}},
 		{name: "usage summary authorship", query: usageSummaryAuthorshipSQL, want: []string{"COVERING INDEX message_authorship_summary_idx"}},

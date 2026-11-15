@@ -40,9 +40,15 @@ func currentGroupConversation(alias string) string {
 // libraryColumns are evaluated per workspace with the workspace aliased as w.
 var libraryColumns = []libraryColumn{
 	{"conversation_count", "(SELECT COUNT(*) FROM conversations cx WHERE cx.workspace_id=w.id AND " + currentGroupConversation("cx") + ")"},
-	// A unary + on role keeps a workspace's messages found through its
-	// conversations, not messages_prose_idx (see libraryPreviewSelect).
-	{"turn_count", "(SELECT COUNT(*) FROM conversations tx JOIN messages tm INDEXED BY messages_conversation_idx ON tm.conversation_id=tx.id WHERE tx.workspace_id=w.id AND " + currentGroupConversation("tx") + " AND +tm.role='user' AND tm.kind='message')"},
+	// Every user message, including one on a branch since abandoned: it was
+	// sent. Both indexes cover what is read of them, so no message row is
+	// fetched: each of the conversation's messages is looked up, by time and
+	// rowid, among the user messages in messages_prose_idx.
+	// messages_label_conversation_idx would be one read, but it leaves out
+	// abandoned branches.
+	{"turn_count", `(SELECT COUNT(*) FROM conversations tx JOIN messages tm INDEXED BY messages_conversation_idx ON tm.conversation_id=tx.id
+		WHERE tx.workspace_id=w.id AND ` + currentGroupConversation("tx") + `
+		AND EXISTS(SELECT 1 FROM messages tu INDEXED BY messages_prose_idx WHERE tu.role='user' AND tu.kind='message' AND tu.created_at IS tm.created_at AND tu.rowid=tm.rowid))`},
 	{"changed_file_count", "(SELECT COUNT(*) FROM change_sets csx JOIN change_files cfx ON cfx.change_set_id=csx.id WHERE csx.workspace_id=w.id)"},
 	// A unary + on name keeps metrics found through their workspace, not
 	// metrics_name_value_idx, which holds every workspace's metric of that name.
@@ -50,17 +56,24 @@ var libraryColumns = []libraryColumn{
 	{"token_count", `COALESCE(
 		(SELECT MAX(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name='total_tokens'),
 		(SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name IN ('input_tokens','output_tokens','cache_tokens')), CASE WHEN EXISTS(SELECT 1 FROM agent_sessions ax WHERE ax.workspace_id=w.id AND ax.is_estimate=1) THEN 0 END) + COALESCE((SELECT SUM(ax.total_tokens) FROM agent_sessions ax JOIN conversations cx ON cx.id=ax.conversation_id WHERE ax.workspace_id=w.id AND ` + currentGroupConversation("cx") + ` AND ax.is_estimate=1),0)`},
+	// Tool calls and their failures are the tool ledger's (tool_calls), as
+	// in the workspace metrics. It holds each call once, where a transcript
+	// that replays earlier entries (a resumed or forked Codex session) holds
+	// the call's messages again. A failure is a call the ledger gave the
+	// status error: a result flagged as an error, a nonzero exit, a timeout,
+	// a rejection. It excuses an exit status of 1 that only reports nothing
+	// found (rg, grep, diff) for a command that runs one program, so a
+	// chained command ending that way still counts.
 	{"tool_use_count", `MAX(
-		(SELECT COUNT(*) FROM conversations tc JOIN messages tm ON tm.conversation_id=tc.id WHERE tc.workspace_id=w.id AND ` + currentGroupConversation("tc") + ` AND tm.kind IN ('tool_call','delegation')),
+		(SELECT COUNT(*) FROM conversations tc JOIN tool_calls tl ON tl.conversation_id=tc.id WHERE tc.workspace_id=w.id AND ` + currentGroupConversation("tc") + `),
 		COALESCE((SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name='tool_calls' AND mx.extractor_version<>'core-v1'),0))`},
 	{"tool_error_count", `MAX(
-		(SELECT COUNT(*) FROM conversations ec JOIN messages em ON em.conversation_id=ec.id WHERE ec.workspace_id=w.id AND ` + currentGroupConversation("ec") + ` AND em.kind IN ('tool_result','delegation_result') AND json_extract(CASE WHEN json_valid(em.text) THEN em.text ELSE '{}' END,'$.is_error')=1),
+		(SELECT COUNT(*) FROM conversations ec JOIN tool_calls el ON el.conversation_id=ec.id WHERE ec.workspace_id=w.id AND ` + currentGroupConversation("ec") + ` AND el.status='error'),
 		COALESCE((SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name='tool_errors' AND mx.extractor_version<>'core-v1'),0))`},
-	// Claude marks a compaction with a compact_boundary event. Codex replays
-	// earlier compactions when a session resumes or forks, so only those the
-	// adapter attributed to a turn (compaction_trigger) are counted.
-	{"compaction_count", `(SELECT COUNT(*) FROM conversations kc JOIN messages km ON km.conversation_id=kc.id WHERE kc.workspace_id=w.id AND ` + currentGroupConversation("kc") + ` AND km.kind='metadata'
-		AND (km.text LIKE '%"subtype":"compact_boundary"%' OR km.text LIKE '%"compaction_trigger":"%'))`},
+	// compaction_boundaries holds the compactions that count (compactions.go):
+	// Claude's compact_boundary events, and of Codex's, which replays earlier
+	// ones when a session resumes or forks, those attributed to a turn.
+	{"compaction_count", `(SELECT COUNT(*) FROM conversations kc JOIN compaction_boundaries kb ON kb.conversation_id=kc.id WHERE kc.workspace_id=w.id AND ` + currentGroupConversation("kc") + `)`},
 	// A child conversation's main session replaces its linked delegation in
 	// this count. Unlinked children may belong to another workspace or still
 	// have a delegation without a result.
@@ -118,6 +131,11 @@ type libraryDependency struct {
 
 func workspaceColumn(row string) string { return "SELECT " + row + ".workspace_id AS id" }
 
+// conversationWorkspace finds the workspace of the conversation a row is in.
+func conversationWorkspace(row string) string {
+	return "SELECT workspace_id AS id FROM conversations WHERE id=" + row + ".conversation_id"
+}
+
 var libraryDependencies = []libraryDependency{
 	// Workspace columns are read live; a new workspace only needs a stored row.
 	{table: "workspaces", workspaces: func(row string) string { return "SELECT " + row + ".id AS id" }, insertOnly: true},
@@ -126,9 +144,10 @@ var libraryDependencies = []libraryDependency{
 		return "SELECT workspace_id AS id FROM conversations WHERE harness='claude-ai-export' AND account=" + row + ".account AND native_id=" + row + ".conversation_uuid"
 	}},
 	{table: "conversation_group_membership", workspaces: workspaceColumn},
-	{table: "messages", workspaces: func(row string) string {
-		return "SELECT workspace_id AS id FROM conversations WHERE id=" + row + ".conversation_id"
-	}},
+	{table: "messages", workspaces: conversationWorkspace},
+	// Both are counted through their conversations, as messages are.
+	{table: "tool_calls", workspaces: conversationWorkspace},
+	{table: "compaction_boundaries", workspaces: conversationWorkspace},
 	{table: "change_sets", workspaces: workspaceColumn},
 	{table: "change_files", workspaces: func(row string) string {
 		return "SELECT workspace_id AS id FROM change_sets WHERE id=" + row + ".change_set_id"
