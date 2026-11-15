@@ -343,9 +343,34 @@ func TestConversationNamesBackfillInvalidateAndResume(t *testing.T) {
 	if got := conversationDisplayName(t, c, cid); got.Text == "Inspect message naming" {
 		t.Fatal("edited assignment reused a stale excerpt")
 	}
+	// The pass reads messages without the writer, so an edit can arrive while
+	// it does. It then stores nothing it read and the conversation stays queued.
+	override(t, &conversationNamesComputedHook, func() {
+		conversationNamesComputedHook = nil
+		record.Conversations[0].Messages[0].Text = "Inspect conversation ownership again"
+		ingestNamingRecord(t, c, record)
+	})
+	if count, err := c.refreshConversationNames(t.Context(), 2); err != nil || count != 0 {
+		t.Fatalf("a pass overtaken by an edit named %d: %v", count, err)
+	}
+	if got := conversationDisplayName(t, c, cid); got.Text == "Inspect conversation ownership" || countRows(t, c, `SELECT COUNT(*) FROM conversation_names_state WHERE dirty=1`) != 1 {
+		t.Fatalf("an edit during the pass was lost: %+v", got)
+	}
+	// So does a pass that is stopped part way.
+	stopped, stop := context.WithCancel(t.Context())
+	override(t, &conversationNamesComputedHook, func() { stop() })
+	if _, err := c.refreshConversationNames(stopped, 2); err == nil {
+		t.Fatal("a stopped pass stored its names")
+	}
+	conversationNamesComputedHook = nil
 	drainConversationNames(t, c)
-	if got := conversationDisplayName(t, c, cid); got.Text != "Inspect conversation ownership" {
+	if got := conversationDisplayName(t, c, cid); got.Text != "Inspect conversation ownership again" {
 		t.Fatal(got)
+	}
+	// With nothing queued, a pass does not take the catalog writer.
+	writes := c.writers.next
+	if count, err := c.refreshConversationNames(t.Context(), 2); err != nil || count != 0 || c.writers.next != writes {
+		t.Fatalf("idle pass: named %d, took the writer %v, %v", count, c.writers.next != writes, err)
 	}
 	// An upgrade queues completed conversations once, without re-ingest.
 	fixtureExec(t, c, `UPDATE conversation_names_state SET version='older'`)
