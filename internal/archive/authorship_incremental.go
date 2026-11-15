@@ -786,6 +786,10 @@ func (c *Catalog) storeAuthorshipState(ctx context.Context, run *authorshipIncre
 	if err != nil {
 		return err
 	}
+	suppressed, err := c.authorshipSuppressedChanges(ctx, representatives)
+	if err != nil {
+		return err
+	}
 	return c.writeTransaction(ctx, "complete authorship checkpoint", func(tx *sql.Tx) error {
 		var revision string
 		if err := tx.QueryRowContext(ctx, "SELECT revision FROM authorship_dirty WHERE id=1").Scan(&revision); err != nil {
@@ -805,7 +809,7 @@ func (c *Catalog) storeAuthorshipState(ctx context.Context, run *authorshipIncre
 				}
 			}
 			metadata["authorship_complete_at"] = now()
-			if err := recordAuthorshipSuppressed(ctx, tx, representatives); err != nil {
+			if err := recordAuthorshipSuppressed(ctx, tx, suppressed); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('authorship_mirrors',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, jsonText(representatives)); err != nil {

@@ -2250,6 +2250,36 @@ func TestAuthorshipQuickUpgradeRetainsExcludedMirrors(t *testing.T) {
 	}
 	check("native", authorshipSuppressed, false)
 	check("mirror", authorshipCounted, true)
+	// The frequent pass alone reconsiders both copies when the representative
+	// changes back, and a refinement then records the excluded one.
+	execTx(t, c.DB,
+		`UPDATE workspaces SET source_kind='codex' WHERE id='native'`,
+		`UPDATE workspaces SET source_kind='conductor' WHERE id='mirror'`)
+	update()
+	check("native", authorshipCounted, true)
+	check("mirror", authorshipSuppressed, false)
+	execSQL(t, c.DB, `DELETE FROM authorship_message_state WHERE message_id='mirror'`)
+	if err := c.RefineAuthorship(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	check("native", authorshipCounted, true)
+	check("mirror", authorshipSuppressed, false)
+	// A mirror pair without user messages changes the map and queues nothing.
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('quiet','codex','local','quiet','Quiet','2026-09-01'),('quiet-mirror','conductor','local','quiet-mirror','Quiet mirror','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('quiet','quiet','codex','local','quiet'),('quiet-mirror','quiet-mirror','codex','local','quiet-mirror')`,
+		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('quiet','quiet-mirror','mirror',1,'{}')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('quiet-reply','quiet-mirror','quiet-reply','assistant','message','Nothing was asked here','2026-09-01T12:00:00.000Z','quiet-reply')`)
+	representatives, err := c.authorshipRepresentatives(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.refreshAuthorshipMirrors(t.Context(), representatives); err != nil {
+		t.Fatal(err)
+	}
+	if stored, _ := c.metaValue(t.Context(), "authorship_mirrors"); stored != jsonText(representatives) || len(representatives) != 2 || c.authorshipQuickPending() {
+		t.Fatalf("a mirror without writing: stored=%s pending=%v", stored, c.authorshipQuickPending())
+	}
 }
 
 func TestAuthorshipQuickLanesProgressUnderNewWriting(t *testing.T) {
