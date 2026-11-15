@@ -1626,17 +1626,21 @@ BEGIN
  INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
  INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
 END;
--- The earliest start among tool calls whose result arrived after the call was
--- stored. The ledger updates such calls in place, so their rowid is old and
--- the related-work refresh would not see a diff's output otherwise.
+-- Conversations whose tool calls changed in place, with the span of those
+-- calls' starts. Such a call keeps its rowid, so the related-work refresh,
+-- which reads new rows, would not see it otherwise. Its triggers are
+-- generated from the statements the refresh reads (peerTriggerDDL).
+CREATE TABLE IF NOT EXISTS work_peer_links_changed (
+  conversation_id TEXT PRIMARY KEY,
+  first TEXT NOT NULL,
+  last TEXT NOT NULL,
+  revision TEXT NOT NULL) WITHOUT ROWID;
+-- What builds before work_peer_links_changed noted instead: the earliest such
+-- start in the library. Still read, since such a build may have written it.
 CREATE TABLE IF NOT EXISTS work_peer_links_dirty (
   id INTEGER PRIMARY KEY CHECK(id=1),
   since TEXT NOT NULL,
   revision TEXT NOT NULL);
-CREATE TRIGGER IF NOT EXISTS work_peer_links_result_update AFTER UPDATE OF result_message_id ON tool_calls
-WHEN new.result_message_id IS NOT NULL AND old.result_message_id IS NOT new.result_message_id AND new.started_at IS NOT NULL BEGIN
- INSERT INTO work_peer_links_dirty VALUES(1,new.started_at,hex(randomblob(8))) ON CONFLICT(id) DO UPDATE SET since=min(since,excluded.since),revision=excluded.revision;
-END;
 CREATE TRIGGER IF NOT EXISTS session_shape_requests_insert AFTER INSERT ON model_requests
 BEGIN
  INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;

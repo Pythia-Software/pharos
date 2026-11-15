@@ -836,10 +836,13 @@ func TestToolLedgerReplayChangesOnlyRowsThatDiffer(t *testing.T) {
 		// One call as an older version stored it, and one it derived that
 		// this version does not.
 		"UPDATE tool_calls SET tool_category='as an older version had it' WHERE id=(SELECT MIN(id) FROM tool_calls WHERE started_at IS NOT NULL)",
+		// One that started at another time, as a version stored it before a
+		// column was derived that no related-conversations link reads.
+		`UPDATE tool_calls SET wait_events=wait_events+7 WHERE id=(SELECT MAX(id) FROM tool_calls WHERE started_at<>(SELECT started_at FROM tool_calls WHERE tool_category='as an older version had it'))`,
 		"INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status) SELECT 'no-longer-derived',workspace_id,conversation_id,999,provider,kind,tool_name,tool_category,status FROM tool_calls LIMIT 1",
 		"INSERT INTO tool_commands(tool_call_id,position,command) VALUES('no-longer-derived',0,'true')",
 		"DELETE FROM replay_writes",
-		"DELETE FROM work_peer_links_dirty",
+		"DELETE FROM work_peer_links_changed",
 		"UPDATE tool_ledger_state SET version='an older version'")
 	var corrected string
 	if err := catalog.DB.QueryRow("SELECT started_at FROM tool_calls WHERE tool_category='as an older version had it'").Scan(&corrected); err != nil {
@@ -852,13 +855,14 @@ func TestToolLedgerReplayChangesOnlyRowsThatDiffer(t *testing.T) {
 		t.Fatalf("replayed ledger differs:\n%s\n%s", got, want)
 	}
 	var written int
-	if err := catalog.DB.QueryRow("SELECT COUNT(DISTINCT id) FROM replay_writes").Scan(&written); err != nil || written != 2 {
-		t.Fatalf("replay wrote %d of %d calls, want the corrected and the removed one (%v)", written, calls+1, err)
+	if err := catalog.DB.QueryRow("SELECT COUNT(DISTINCT id) FROM replay_writes").Scan(&written); err != nil || written != 3 {
+		t.Fatalf("replay wrote %d of %d calls, want the two corrected and the removed one (%v)", written, calls+1, err)
 	}
-	// The corrected call kept its rowid, so related conversations are told
-	// to look again from its start.
-	var since string
-	if err := catalog.DB.QueryRow("SELECT since FROM work_peer_links_dirty").Scan(&since); err != nil || since != corrected {
-		t.Fatalf("related conversations recheck from %q, want the corrected call's start %q (%v)", since, corrected, err)
+	// The call classified differently kept its rowid, so related
+	// conversations are told to look again around its start, in its
+	// conversation only. The other corrected call changes no link.
+	var first, last string
+	if err := catalog.DB.QueryRow("SELECT first,last FROM work_peer_links_changed").Scan(&first, &last); err != nil || first != corrected || last != corrected {
+		t.Fatalf("related conversations recheck %q to %q, want the corrected call's start %q (%v)", first, last, corrected, err)
 	}
 }

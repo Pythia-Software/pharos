@@ -515,6 +515,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureCompactionBoundaries(); err != nil {
 		return fmt.Errorf("initialize compaction boundaries: %w", err)
 	}
+	if err := c.ensurePeerLinkTriggers(); err != nil {
+		return fmt.Errorf("initialize related conversations' triggers: %w", err)
+	}
 	if err := c.ensureConversationContent(); err != nil {
 		return fmt.Errorf("initialize conversation content: %w", err)
 	}
