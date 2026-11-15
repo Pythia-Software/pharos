@@ -241,6 +241,15 @@ test("token usage records are never shown: no category row, no Find match, while
   assert.deepEqual([quiet.shown, quiet.hidden, quiet.hidden_kinds], [3, 1, ["usage"]]);
 });
 
+test("a context sample on an undrawn usage record is reached through the drawn message before it", () => {
+  const usage = id => ({ id, native_id: id, role: "system", kind: "metadata", text: JSON.stringify({ type: "token_count", info: {} }) });
+  const call = id => ({ id, native_id: id, role: "assistant", kind: "tool_call", text: JSON.stringify({ name: "Bash", input: { command: id } }) });
+  const owned = [usage("first"), call("a"), call("b"), usage("context")], order = new Map(owned.map((message, index) => [message, index]));
+  assert.equal(reader.contextJumpAnchor(owned, owned[3], order), owned[2]);
+  assert.equal(reader.contextJumpAnchor(owned, owned[1], order), owned[1], "a drawn message is its own anchor");
+  assert.equal(reader.contextJumpAnchor(owned, owned[0], order), null, "nothing drawn comes before it");
+});
+
 test("find patterns escape plain terms and respect case", () => {
   assert.equal(transcriptFindPattern("a.b(c)", false, false).test("A.B(C)"), true);
   assert.equal(transcriptFindPattern("a.b(c)", false, false).test("axb(c)"), false);

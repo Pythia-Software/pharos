@@ -1104,6 +1104,8 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
       return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
     }, await people.elementHandle());
     await shot('nested-dashboards');
+    // Groups below the top level start collapsed unless they hold the current page.
+    await press(dialog.locator('summary').filter({ hasText: /^Conversations & agent sessions$/ }));
     await dialog.getByRole('link', { name: 'TL1 attempts', exact: true }).scrollIntoViewIfNeeded();
     assert.equal(await onScreen(dialog.getByRole('button', { name: 'All pages', exact: true })), true, 'scrolling keeps the way back reachable');
     assert.equal(await onScreen(dialog.getByRole('button', { name: 'Close navigation', exact: true })), true, 'scrolling keeps the close control reachable');
@@ -1925,7 +1927,6 @@ for (const trigger of ["context jump", "scroll"]) test(`a ${trigger} reaches a p
     await page.evaluate(() => { const scroller = document.querySelector(".workspace-reader-content"); scroller.scrollTop = scroller.scrollHeight; });
     await page.getByRole("button", { name: /Open conversation/ }).waitFor();
   }
-  await page.getByRole('checkbox', {name:'Context',exact:true}).check();
   await page.locator(".token-marker").last().click();
   await page.waitForFunction(() => {
     const target = document.querySelector(".token-highlight");
@@ -2216,7 +2217,8 @@ test('Capture & index keeps run details focus, table scrolling and query edits t
 });
 
 test('Mac menu editing preserves focus when adding, moving, and removing items', { skip }, async t => {
-  const { page, shot } = await open(t, { url: '/settings/layout', ready: '#showMacMenuBar', preferences: { 'pharos-menu-bar': { enabled: false } } });
+  // Every item is on by default; start with one off so the toolbox can add it.
+  const { page, shot } = await open(t, { url: '/settings/layout', ready: '#showMacMenuBar', preferences: { 'pharos-menu-bar': { enabled: false, cost: false } } });
   const disclosure = page.locator('#menuBarExpand');
   const visibility = page.getByRole('switch', { name: 'macOS menu bar', exact: true });
   const options = page.locator('#menuBarOptions');
@@ -3471,8 +3473,9 @@ for (const width of [1920,320]) test(`Ask Pharos work previews fit beside their 
   const requested=calls.filter(call=>call.path==='/api/fingerprints').flatMap(call=>call.body.items);
   for(const id of ['conv-root','conv-child'])assert.ok(requested.some(item=>item.entity==='conversation'&&item.id===id),'the conversation ID selects its fingerprint');
   for (const card of cards) assert.equal(await page.getByRole('figure',{name:'Preview: '+card.title,exact:true}).locator('p').count(),2,'where/when and who/how much render');
-  const after=new URL(page.url());if(home)after.searchParams.delete('ask_chat');
-  assert.equal(after.href,before,'previews leave the underlying page URL alone');
+  // Home's Ask records its chat in the URL, possibly before the question is sent.
+  const withoutChat=href=>{const url=new URL(href);if(home)url.searchParams.delete('ask_chat');return url.href};
+  assert.equal(withoutChat(page.url()),withoutChat(before),'previews leave the underlying page URL alone');
   assert.ok(await surface.evaluate(element=>element.contains(document.activeElement)),'loading previews must not move focus out of Ask');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'work preview overflowed the viewport');
   assert.ok(await page.evaluate(()=>[...document.querySelectorAll('.pharos-work-preview')].every(el=>el.scrollWidth<=el.clientWidth)),'work preview content overflowed its card');
@@ -3564,10 +3567,12 @@ for (const [width, count, view] of [[390,2,'compare'],[1440,1,'trend']]) test(`A
   await modal.waitFor({state:'hidden'});
 });
 
+// Data updates is off by default (header.js); these tests add it to the default tools.
+const readinessTools={'pharos-header-tools-v1':['back','library','readiness','summary','ask','feedback','settings']};
 for(const width of [1440,390])test(`Data updates follows the native modal and Background Processing at ${width}px`,{skip},async t=>{
   const {idleStatus}=await import('./fixtures.mjs');
   const status={...idleStatus,freshness:[...idleStatus.freshness,{domain:'an.ledger',label:'Tool ledger',behind:{state:'current'}},{domain:'an.authorship',group:'analyses',label:'Writing estimates',as_of:new Date(Date.now()-3600000).toISOString(),pending_since:new Date(Date.now()-187*60000).toISOString(),behind:{state:'behind',count:128,unit:'message'},reason:{code:'changed',text:'New messages are waiting'},next:'Next frequent update'}]};
-  const {page,calls,push,shot,settled}=await open(t,{url:'/analyze?analyze_topic=human&readiness_preview=hours',viewport:{width,height:1000},ready:'.usage-analysis-trend[aria-busy="false"]',api:{'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
+  const {page,calls,push,shot,settled}=await open(t,{url:'/analyze?analyze_topic=human&readiness_preview=hours',viewport:{width,height:1000},ready:'.usage-analysis-trend[aria-busy="false"]',preferences:readinessTools,api:{'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
   assert.equal(await page.locator('.data-freshness-icon use').evaluateAll(elements=>elements.filter(element=>!document.getElementById(element.getAttribute('href').slice(1))).length),0,'freshness symbols resolve in the served page shell');
   await shot('lag-clock');
   await activateHeaderTool(page,'dataReadinessToggle');
@@ -3616,7 +3621,7 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  const upgrade={...background.view.items.find(item=>item.id==='writing-refine'),id:'upgrade',label:'Library upgrade',verb:'Upgrading the library',fixed:true};
  background.view.items.push(upgrade);background.view.cadences.find(cadence=>cadence.id==='daily').items.push('upgrade');
  const status={...idleStatus,background:background.view};
- const {page,settled,push,shot}=await open(t,{url:'/library?query_layout='+queryLayout,viewport:{width,height:1000},ready:'[data-readiness-result="query:library"]',api:{'GET /api/background':background,'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
+ const {page,settled,push,shot}=await open(t,{url:'/library?query_layout='+queryLayout,viewport:{width,height:1000},ready:'[data-readiness-result="query:library"]',preferences:readinessTools,api:{'GET /api/background':background,'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
  const dialog=page.locator('#dataReadinessDialog');
  const check=async (selector)=>{
   const button=page.locator(selector).first();await button.waitFor();
@@ -3643,16 +3648,16 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
   ['/findings?view=table','query:findings'],
   ['/findings?optimize_area=safety&view=table&query_layout='+encodeURIComponent(JSON.stringify({safety:true})),'query:safety'],
   ['/findings?optimize_area=fixes&view=table','query:fixes'],
-  ['/analyze?analyze_topic=habits','chart:habits-calendar'],
+  ['/analyze?analyze_topic=habits','chart:habits-days'],
   ['/analyze?analyze_topic=thinking-overview','chart:thinking-waits'],
   ['/analyze?analyze_topic=thinking-detail','chart:thinking-distributions'],
   ['/analyze?analyze_topic=parallelism','chart:ribbon'],
   ['/analyze?analyze_topic=carbon','carbon:estimate'],
-  ['/analyze?analyze_topic=agent_experience','events:examples'],
+  ['/analyze?analyze_topic=agent_experience','metric:agent_events:Events'],
  ]){
   await page.evaluate(url=>window.pharosNavigate(url),url);
   await check(`[data-readiness-result="${identity}"]`);
-  if(identity==='events:examples'&&process.env.PHAROS_UI_SCREENSHOTS){
+  if(identity==='metric:agent_events:Events'&&process.env.PHAROS_UI_SCREENSHOTS){
    await activateHeaderTool(page,'dataReadinessToggle');await dialog.waitFor();
    await shot('agent-experience-update-details');
    await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
@@ -3687,7 +3692,7 @@ test('Live data updates keep real backlog, existing results and first-build prog
  const status={...idleStatus,freshness:[{...currentSource,pending_since:iso(540),behind:{state:'behind',count:128,unit:'conversation'},reason:{code:'needs-capture',text:'New conversations are waiting'}},view,{domain:'conv:new',label:'Conversations (new)',as_of:null,output_missing:true,behind:{state:'behind'},reason:{code:'never-indexed',text:'Not indexed yet'}}]};
  const excluded={...EMPTY_QUERY,where:[{field:'source_kind',op:'=',value:'new',negated:true}]};
  const bookmark={id:'durable-readiness',title:'Saved conversations',url:'/library?q_library=@aaaaaaaaaaaaaaaaaaaaaa',query:excluded};
- const {page,push,settled,shot}=await open(t,{url:'/library?view=conversation&q_library='+encodeURIComponent(encodeQuery(excluded)),ready:'.conversation-result-card',preferences:{'pharos-bookmarks-v1':[bookmark]},api:{
+ const {page,push,settled,shot}=await open(t,{url:'/library?view=conversation&q_library='+encodeURIComponent(encodeQuery(excluded)),ready:'.conversation-result-card',preferences:{...readinessTools,'pharos-bookmarks-v1':[bookmark]},api:{
   'GET /api/status':status,'GET /api/status/stream':eventStream(status),
   '* /api/query/:dataset/:operation':call=>{
    const reply=defaultApi['* /api/query/:dataset/:operation'](call);

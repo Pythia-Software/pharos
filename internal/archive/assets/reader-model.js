@@ -1051,6 +1051,14 @@ function transcriptCategory(message,context){
 // entry and no count, and Find leaves them out. Other System events, and a
 // usage record that is an error, stay.
 function transcriptUndisplayed(message){return message?.kind!=='message'&&transcriptCategory(message,{})==='usage'&&toolCategory(message)==='run'}
+// Usage records are not drawn, so a context sample one carries is reached
+// through the last drawn message before it in the same turn (null when none).
+function contextJumpAnchor(owned,message,order){
+  if(!transcriptUndisplayed(message))return message;
+  let anchor=null;
+  for(const other of owned)if(!transcriptUndisplayed(other)&&order.get(other)<order.get(message)&&(!anchor||order.get(other)>order.get(anchor)))anchor=other;
+  return anchor;
+}
 // The reader's grouping of normalized events: results paired to their calls,
 // each turn's final reply, and each event's category path (its own category,
 // then those of the sub-agents holding it). A paired result takes its call's

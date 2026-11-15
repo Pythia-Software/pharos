@@ -48,6 +48,14 @@ export const skip = launchPlan().skip ?? false;
 // A configured header tool can be inline or in More at the current width.
 export async function activateHeaderTool(page, id) {
   const tool = page.locator(`#${id}`);
+  // After a resize the header moves tools in and out of More over the next
+  // frames (header.js layout); choose once two frames leave both unchanged.
+  await page.evaluate(id => new Promise(resolve => {
+    const shown = () => [document.getElementById(id), document.getElementById('headerMore')].map(element => Boolean(element?.getClientRects().length)).join();
+    let last = shown(), quiet = 0;
+    const tick = () => { const now = shown(); quiet = now === last ? quiet + 1 : 0; last = now; if (quiet >= 2) resolve(); else requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  }), id);
   if (!await tool.isVisible()) await page.getByRole('button', { name: 'More tools', exact: true }).click();
   await tool.click();
 }

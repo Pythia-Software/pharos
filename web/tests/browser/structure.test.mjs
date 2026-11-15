@@ -886,7 +886,7 @@ const ROUTES = [
         ? { ...answer, coverage: { state: "pending", pending_sessions: 5, stale_sessions: 2, missing_sessions: 3 } } : answer;
     },
   }, ready: ".usage-workspace-table .usage-dashboard-note[role=status]" },
-  { name: "Analyze binned distribution", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "distribution", metric: "active_time", split: "none" }))}`, ready: '.usage-context-dashboard section[aria-label="Over time"][aria-busy="false"]' },
+  { name: "Analyze binned distribution", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "distribution", metric: "active_time", split: "none" }))}`, ready: '.usage-analysis-dashboard[aria-busy="false"]' },
   { name: "Analyze trend heatmap", url: `/analyze?analyze_topic=session_shape&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "sessions", split: "autonomy_band", display: "heatmap", period: "day" }))}`, ready: '.usage-session-shape-dashboard section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
   { name: "Human Words conversation heatmap", url: `/analyze?analyze_topic=human&analyze_days=30&analyze_chart=${encodeURIComponent(JSON.stringify({ v: 2, view: "trend", metric: "typed", split: "none", display: "heatmap", period: "day" }))}`, ready: 'section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
   // Spend by branch: the coverage split above the compared branches.
@@ -2123,7 +2123,7 @@ test("Card dashboard opens from the Card Library, fits, and supports changing vi
   await page.locator('.usage-dashboard .usage-query-destinations a').first().waitFor();
   await app.settled();
   assert.deepEqual(await layoutProblems(page), []);
-  const [trend] = await view.selectOption({ label: 'Over time - bar' });
+  const [trend] = await view.selectOption({ label: 'Over time · bar' });
   await page.waitForFunction(value => JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).view === value, trend);
   await page.reload();
   await page.getByRole('combobox', { name: 'Analysis', exact: true }).waitFor();
