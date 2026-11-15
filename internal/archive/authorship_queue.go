@@ -45,30 +45,31 @@ func (c *Catalog) authorshipRepresentatives(ctx context.Context) (map[string]str
 // still stand.
 func (c *Catalog) authorshipMirrorSignature(ctx context.Context) (string, error) {
 	digest := sha256.New()
-	for _, query := range []string{
-		`SELECT id,COALESCE(source_kind,''),COALESCE(activity_at,'') FROM (` + linkedWorkspacesSQL + `) ORDER BY id`,
-		`SELECT left_workspace,right_workspace,'' FROM (` + identityLinkWorkspacesSQL + `) ORDER BY 1,2`,
-	} {
-		rows, err := c.reader().QueryContext(ctx, query)
-		if err != nil {
+	// One read of the links with both ends' workspaces: each lookup is a
+	// seek into a wide row, and they are the whole cost of an idle pass.
+	rows, err := c.reader().QueryContext(ctx, `SELECT l.left_workspace,l.right_workspace,
+ COALESCE(a.source_kind,''),COALESCE(a.activity_at,''),COALESCE(b.source_kind,''),COALESCE(b.activity_at,'')
+ FROM (`+identityLinkWorkspacesSQL+`) l LEFT JOIN workspaces a ON a.id=l.left_workspace LEFT JOIN workspaces b ON b.id=l.right_workspace ORDER BY 1,2`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	fields := make([]sql.RawBytes, 6)
+	targets := make([]any, len(fields))
+	for i := range fields {
+		targets[i] = &fields[i]
+	}
+	for rows.Next() {
+		if err := rows.Scan(targets...); err != nil {
 			return "", err
 		}
-		for rows.Next() {
-			var a, b, c sql.RawBytes
-			if err := rows.Scan(&a, &b, &c); err != nil {
-				rows.Close()
-				return "", err
-			}
-			for _, field := range []sql.RawBytes{a, b, c} {
-				digest.Write(field)
-				digest.Write([]byte{0})
-			}
+		for _, field := range fields {
+			digest.Write(field)
+			digest.Write([]byte{0})
 		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return "", err
-		}
-		digest.Write([]byte{1})
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
 	}
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
