@@ -22,10 +22,10 @@ const ruleHelp: Record<string, string> = {
   "Code block": "Text inside ``` fences.",
   "Log, trace, code, or data": "At least three lines of program output or code (logs, stack traces, diffs, JSON, file:line, shell prompts, source) with at most two prose lines between them.",
   "Table": "Two or more markdown table rows.",
-  "Formatted like agent output": "A region with two or more headings or three or more bolded bullets, the way agents format replies.",
+  "Formatted like agent output": "A region with two or more headings, three or more bolded bullets, or a heading and two bolded bullets, the way agents format replies.",
   "Mostly identifiers, paths, or code": "A line whose words are mostly identifiers: paths, IDs, selectors, or code.",
   "Path, URL, or ID": "A run of identifiers 20 or more characters long inside a typed sentence.",
-  "Sent faster than typing": "The rest of the message arrived faster than 20 characters a second after your previous message in this conversation.",
+  "Sent faster than typing": "The rest of the message arrived faster than 20 characters a second after your previous message in this conversation (checked only when 600 or more characters are left).",
   "Generated page feedback": "The generated labels, selectors, page text, styles, and instructions around a feedback comment.",
   "Human feedback comment": "The comment entered in a recognized page-feedback report; generated context is counted separately.",
   "Matches agent-written content": "Matches newly authored file content or added patch lines from the preceding seven days, including short review items anchored to that same source.",
@@ -36,7 +36,7 @@ const ruleHelp: Record<string, string> = {
   "Matches recent agent output": "A run of 12 or more words matching one agent source from the preceding seven days, or a short review item anchored to that same source.",
   "Already sent earlier": "A run of 12 or more words matching a message you sent before, however long ago.",
   "Line already sent in other conversations": "A line of 8 or more words already sent in 2 other conversations.",
-  "Repeated prompt": "The same text was sent in 5 or more sessions on 3 or more days: a button or saved prompt.",
+  "Repeated prompt": "The same text was sent in 5 or more conversations on 3 or more days: a button or saved prompt.",
   "Slash command": "A leading slash command. Its arguments stay typed.",
   "Attachment reference": "A Conductor attachment marker, an attachment path, or an image placeholder.",
   "Launched by a command": "A headless run linked to the shell command, in another conversation, that started it.",
@@ -50,8 +50,8 @@ const ruleHelp: Record<string, string> = {
 const harnessRules = new Set(["Conductor system instruction", "System reminder", "Environment context", "Project instructions", "Plugin recommendations", "Harness context"]);
 export function explainAuthorshipRule(rule: string | undefined, category: string | undefined): string {
   if (rule && ruleHelp[rule]) return ruleHelp[rule];
-  if (rule && harnessRules.has(rule)) return "A block the agent app adds at the start of the message. It stays part of the prompt; only this count sets it apart.";
-  if (rule?.startsWith("Sent by a headless") || rule === "Sent by a codex exec run") return "The run's transcript or logs show it was started headlessly, by a script or another agent.";
+  if (rule && harnessRules.has(rule)) return "A block the agent app adds to the start of the message. It is still sent as part of the prompt; Pharos only leaves it out of your writing.";
+  if (rule?.startsWith("Sent by a headless") || rule === "Sent by a codex exec run") return "The run’s transcript or logs show it was started headlessly, by a script or another agent.";
   return categoryByKey.get(category ?? "")?.description ?? "";
 }
 
@@ -167,13 +167,15 @@ export function AuthoredText({ segments }: { segments: Segment[] }) {
   </div>;
 }
 
+const wordCount = (words: number) => `${words.toLocaleString()} word${words === 1 ? "" : "s"}`;
+
 // A row's words per category, as a thin stacked bar.
 function CategoryBar({ row }: { row: Row }) {
   const parts = authorshipCategories.map(category => [category, Number(row[`${category.key}_words`]) || 0] as const).filter(([, words]) => words > 0);
   const total = parts.reduce((sum, [, words]) => sum + words, 0);
   if (!total) return null;
-  return <div className="authored-bar" role="img" aria-label={parts.map(([category, words]) => `${category.label} ${words} words`).join(", ")}>
-    {parts.map(([category, words]) => <i key={category.key} data-category={category.key} style={{ flex: words }} title={`${category.label}: ${words.toLocaleString()} words (${Math.round(100 * words / total)}%)`} />)}
+  return <div className="authored-bar" role="img" aria-label={parts.map(([category, words]) => `${category.label}: ${wordCount(words)}`).join(", ")}>
+    {parts.map(([category, words]) => <i key={category.key} data-category={category.key} style={{ flex: words }} title={`${category.label}: ${wordCount(words)} (${Math.round(100 * words / total)}%)`} />)}
   </div>;
 }
 
@@ -198,7 +200,7 @@ function AuthoredMessageCard({ row }: { row: Row }) {
     </div>
     <div className="authored-facts">
       <span className="authored-fact" data-category="typed"><i className="authored-swatch" data-category="typed" />{typed.toLocaleString()} word{typed === 1 ? "" : "s"} typed</span>
-      {other ? <span className="authored-fact">{other.toLocaleString()} from elsewhere</span> : null}
+      {other ? <span className="authored-fact">{wordCount(other)} from elsewhere</span> : null}
       {row.main_category && row.main_category !== "typed" ? <span className="authored-fact"><i className="authored-swatch" data-category={row.main_category} />Mostly {categoryLabel(row.main_category).toLowerCase()}</span> : null}
       {row.typed_share !== null && row.typed_share !== undefined ? <span className="authored-fact muted">{Number(row.typed_share).toLocaleString()}% typed</span> : null}
     </div>
@@ -249,11 +251,11 @@ export const authoredRenderers = {
       const text = !detail && segment.category === "harness" ? "[App instructions] " : segment.text.slice(0, limit - used);
       used += text.length;
       shown.push(segment.category
-        ? <mark key={index} className="authored-span" data-category={segment.category} title={`${categoryLabel(segment.category)} · ${segment.reason || segment.rule || ""}${segment.words ? ` · ${segment.words} words` : ""}`}>{text}</mark>
+        ? <mark key={index} className="authored-span" data-category={segment.category} title={`${categoryLabel(segment.category)} · ${segment.reason || segment.rule || ""}${segment.words ? ` · ${wordCount(segment.words)}` : ""}`}>{text}</mark>
         : <React.Fragment key={index}>{text}</React.Fragment>);
     }
     const Content = detail ? "div" : "span";
-    return <Content className={detail ? "usage-authored-detail" : "usage-authored-snippet"}>{shown}{!detail && segmentsOf(row).reduce((n, s) => n + s.text.length, 0) > used ? "…" : null}{detail && row.text_truncated ? <p className="muted">Retained preview is truncated. Open the source message to read further.</p> : null}</Content>;
+    return <Content className={detail ? "usage-authored-detail" : "usage-authored-snippet"}>{shown}{!detail && segmentsOf(row).reduce((n, s) => n + s.text.length, 0) > used ? "…" : null}{detail && row.text_truncated ? <p className="muted">Only the start of this message is shown. Open it in its conversation to read the rest.</p> : null}</Content>;
   },
   authorship_category({ value }: CellContext<Row>) {
     return value ? <CategoryPill category={String(value)} /> : "";

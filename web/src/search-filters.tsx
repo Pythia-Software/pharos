@@ -7,12 +7,17 @@ import { lowerLabel, sentenceText, type SentencePart } from "./text-search-model
 import { Icon } from "./icons";
 
 const labels: Record<string, string> = { "=": "is", "!=": "is not", ">=": "at least", "<=": "at most", ">": "after / greater than", "<": "before / less than", contains: "contains text", starts_with: "starts with", ends_with: "ends with", has_word: "contains word", has_words: "contains all words", matches_regex: "matches pattern", not_matches_regex: "does not match pattern", is_null: "is empty", is_not_null: "is not empty", includes: "includes" };
+// Dates read "after/before"; other ordered values "greater/less than".
+const dateOps: Record<string, string> = { ">": "after", "<": "before" }, valueOps: Record<string, string> = { ">": "greater than", "<": "less than" };
+const opLabel = (op: string, field?: FieldDef) => (field?.type === "datetime" ? dateOps[op] : field ? valueOps[op] : undefined) ?? labels[op] ?? op.replaceAll("_", " ");
+// What a value of each field type looks like, for the validation message.
+const expectedValue: Record<string, string> = { datetime: "a date or timestamp", number: "a number", bool: "yes or no" };
 export function filterIssue(fields: FieldDef[], where: WhereTerm[]): string {
   for (const term of where) for (const clause of predicatesOf(term)) {
     const field = fields.find(f => f.name === clause.field);
     if (NULLARY_OPS.has(clause.op)) continue;
     if (!clause.value.trim()) return `Enter a value for ${field?.label ?? clause.field}, or remove that condition.`;
-    if (field) { try { coerceValue(field.type, clause.value); } catch { return `Enter a valid ${field.type} value for ${field.label}.`; } }
+    if (field) { try { coerceValue(field.type, clause.value); } catch { return `Enter ${expectedValue[field.type] ?? "a valid value"} for ${field.label}.`; } }
   }
   return "";
 }
@@ -22,7 +27,7 @@ export function describeWhere(fields: FieldDef[], where: WhereTerm[]): SentenceP
   const describe = (clause: WhereClause): SentencePart[] => {
     const field = fields.find(f => f.name === clause.field);
     const value = clause.value.trim();
-    return [`${clause.negated ? "not " : ""}${lowerLabel(field?.label ?? clause.field)} ${labels[clause.op] ?? clause.op.replaceAll("_", " ")}`, ...(NULLARY_OPS.has(clause.op) ? [] : [" ", value ? { value: `“${value}”` } : "…"])];
+    return [`${clause.negated ? "not " : ""}${lowerLabel(field?.label ?? clause.field)} ${opLabel(clause.op, field)}`, ...(NULLARY_OPS.has(clause.op) ? [] : [" ", value ? { value: `“${value}”` } : "…"])];
   };
   const branch = (clauses: WhereClause[]): SentencePart[] => clauses.length > 1 ? ["(", ...clauses.flatMap((clause, i) => [...(i ? [" and "] : []), ...describe(clause)]), ")"] : describe(clauses[0]);
   return where.map(term => "any" in term ? ["(", ...branchesOf(term).flatMap((clauses, i) => [...(i ? [" or "] : []), ...branch(clauses)]), ")"] : describe(term));
@@ -57,7 +62,7 @@ export function SearchFilters({ fields, where, onChange, subject = "", lead = "a
         {!field ? <option value={term.field}>{term.field}</option> : null}{fields.filter(isFilterable).map(f => <option value={f.name} key={f.name}>{f.label}</option>)}
       </SearchSelect>
       <SearchSelect aria-label={`Filter operator ${path}`} value={term.op} onChange={event => change({ ...term, setFilter: undefined, op: event.target.value as WhereClause["op"] })}>
-        {[...new Set([...operators, term.op])].map(op => <option value={op} key={op}>{labels[op] ?? op.replaceAll("_", " ")}</option>)}
+        {[...new Set([...operators, term.op])].map(op => <option value={op} key={op}>{opLabel(op, field)}</option>)}
       </SearchSelect>
       {!NULLARY_OPS.has(term.op) ? options ? <SearchSelect className="text-value-select" aria-label={`Filter value ${path}`} value={term.value} onChange={event => change({ ...term, setFilter: undefined, value: event.target.value })}><option value="">Choose value…</option>{term.value && !options.some(o => o.value === term.value) ? <option value={term.value}>{term.value}</option> : null}{options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</SearchSelect> : <WrappingInput aria-label={`Filter value ${path}`} value={term.value} placeholder={field?.type === "datetime" ? "Date or timestamp" : "Value…"} onValue={value => change({ ...term, setFilter: undefined, value })} /> : null}
       <SearchPopover label={`Options for filter ${path}`} className="text-condition-options" popupClassName="text-add-popup" triggerContent={<Icon name="more" />}>{close => <>

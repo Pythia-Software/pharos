@@ -422,6 +422,10 @@ test("whole-key presets cover content, highlights, activity and timeline",()=>{
  assert.equal(reader.readerKeyPresetID({level:'all'},all,['labels:C.report'],[],{}),null);
  assert.match(reader.readerKeyLastNote(content),/All content shown.*Text highlighting shown: none.*Timeline elements hidden/);
  assert.match(reader.readerKeyLastNote(quiet),/Hidden: Usage & quota/);
+ // The note names saved exclusions and timeline filters as the Key shows them, not by their stored keys.
+ const edited=reader.readerKeyLastNote({...all,reader_highlight_hidden:['writing','engagement:rights','events:event-friction','labels:C.report','annotation:x'],timeline_visibility:{events:{values:['learning'],excluded:false},modes:{values:['?'],excluded:true}}});
+ assert.match(edited,/Highlight exclusions: Human writing, Engagement labels · Delegation, Agent events · Friction, Message labels · Report, 1 individual annotation\./);
+ assert.match(edited,/Timeline filters: Agent events: only Reactions and learning; Message modes: hidden Uncategorized\./);
  assert.equal(reader.readerKeyPresetValues('last'),null);
  assert.equal(reader.readerKeyPresetValues('unknown'),null);
 });

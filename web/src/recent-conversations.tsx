@@ -13,6 +13,13 @@ type RecentConversation = {
   labels_ready: boolean; duration_ms?: number; tool_calls?: number; tokens?: number; cost_usd?: number; price_status?: string; is_estimate?: boolean;
 };
 
+// The cost tooltip in words for each stored price status.
+const priceNotes: Record<string, string> = {
+  assumed: "Estimated API list-price equivalent, using an assumed price for at least one model",
+  partial: "Known API cost only: some usage has no list price",
+  unpriced: "Known API cost only: some models have no list price",
+};
+
 function previewText(text: string, role: "user" | "assistant") {
   return window.pharosMessageSummary?.({ role, text }) ?? text;
 }
@@ -35,7 +42,7 @@ export function RecentConversations({ active, generation }: { active: boolean; g
 
   return <section className="home-recent" aria-labelledby="recentConversationsTitle">
     <div className="home-recent-heading"><h2 id="recentConversationsTitle">Recent conversations</h2>
-      <p className="muted">A few starting points to explore your recent work.</p>
+      <p className="muted">A varied selection of your recently active conversations.</p>
     </div>
     <div className="home-recent-grid" aria-busy={loading}>
       {items.map(item => {
@@ -50,16 +57,16 @@ export function RecentConversations({ active, generation }: { active: boolean; g
             <div className="home-recent-meta">{[item.repository, item.provider, item.model, item.effort].filter(Boolean).join(" · ")}</div>
             <div className="home-recent-facts">
               {item.activity_at && Number.isFinite(Date.parse(item.activity_at)) ? <time dateTime={item.activity_at}>{new Date(item.activity_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</time> : null}
-              {item.subagent_depth > 0 ? <span>Sub-agents · Depth {item.subagent_depth}</span> : null}
+              {item.subagent_depth > 0 ? <span>Sub-agents {item.subagent_depth} level{item.subagent_depth === 1 ? "" : "s"} deep</span> : null}
               {item.duration_ms != null ? <span>{formatConcurrencyDuration(item.duration_ms)} elapsed</span> : null}
               {item.tool_calls != null ? <span>{item.tool_calls.toLocaleString()} tool calls</span> : null}
               {item.tokens != null ? <span title={item.is_estimate?estimateExplanation:undefined}>{formatTokens(item.tokens)} tokens{item.is_estimate?"*":""}</span> : null}
-              {cost ? <span title={item.is_estimate ? estimateExplanation : item.price_status && item.price_status !== "complete" ? `Pricing: ${item.price_status}` : "Estimated API list-price equivalent"}>{cost}{item.is_estimate?"*":""} {item.price_status === "unpriced" || item.price_status === "partial" ? "known " : ""}API cost{item.price_status === "assumed" ? " (estimated)" : ""}</span> : null}
+              {cost ? <span title={item.is_estimate ? estimateExplanation : priceNotes[item.price_status ?? ""] ?? "Estimated API list-price equivalent"}>{cost}{item.is_estimate?"*":""} {item.price_status === "unpriced" || item.price_status === "partial" ? "known " : ""}API cost{item.price_status === "assumed" ? " (estimated)" : ""}</span> : null}
             </div>
           </div>
           {(item.first_input || item.last_response) ? <div className="home-recent-exchange">
             {item.first_input ? <div className="home-recent-message human"><p><span>First ask</span>{" "}{previewText(item.first_input, "user")}</p></div> : null}
-            {item.last_response ? <div className="home-recent-message assistant"><p><span>Latest response</span>{" "}{previewText(item.last_response, "assistant")}</p></div> : null}
+            {item.last_response ? <div className="home-recent-message assistant"><p><span>Last reply</span>{" "}{previewText(item.last_response, "assistant")}</p></div> : null}
           </div> : null}
         </article>;
       })}

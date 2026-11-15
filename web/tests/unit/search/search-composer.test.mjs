@@ -110,7 +110,7 @@ test("fresh searches never reuse another draft's workspace restrictions", () => 
 });
 test("corrupt workspace query is visible instead of silently broadening the search", () => {
  const state = m.restoreSearch(new URLSearchParams("q_library=not-a-query"), schema);
- assert.match(state.error, /workspace filters could not be read/);
+ assert.match(state.error, /Could not read the search in this link/);
 });
 test("rolling windows travel with the query until their date filters change", () => {
  const params = new URL(m.searchURL(m.freshSearch(schema)), "http://localhost").searchParams;
@@ -214,7 +214,7 @@ test("conversation outlines retain child conversations, orphaned sessions and ma
  assert.equal(conversationSelection(sessions, loaded, "", firstTurn.id).id, "first", "Back restores a turn in the earlier session");
  assert.equal(conversationSelection(sessions, loaded, "first", secondTurn.id).id, "first", "an explicit session remains authoritative");
  assert.equal(conversationSelection(sessions, {}, "", "").id, "first", "fresh browsing keeps the first session default");
- assert.match(conversationSelection(sessions, loaded, "", "deleted").error, /no longer available/);
+ assert.match(conversationSelection(sessions, loaded, "", "deleted").error, /no longer in the library/);
  loaded.first = { ...ready([]), error: "Unavailable" };
  assert.equal(conversationSelection(sessions, loaded, "", secondTurn.id).id, "second", "a failed session must not hide a later match");
  assert.match(conversationSelection(sessions, loaded, "", "deleted").error, /Could not load/);

@@ -23,7 +23,7 @@ export function ConversationCard({ title, facts, actions, children, ...props }: 
 }
 
 export type TranscriptMessage = { id?: string; native_id?: string; role: string; text: unknown; raw_text?: unknown; authorship?: unknown; text_clipped?: boolean };
-export type OutlineEntry = { id: string; kind: "turn" | "agent"; label: string; prompt: string; human: TranscriptMessage | null; response: TranscriptMessage | null; messages: TranscriptMessage[]; tools: number; children: OutlineEntry[] };
+export type OutlineEntry = { id: string; kind: "turn" | "agent"; label: string; prompt: string; human: TranscriptMessage | null; /** Whether the turn's prompt holds your writing (reader-model.js hasHumanWriting). */ writing?: boolean; response: TranscriptMessage | null; messages: TranscriptMessage[]; tools: number; children: OutlineEntry[] };
 /** A message to open in Browse, with Search's terms to mark in it. */
 export type ResultTarget = { messageID: string; conversationID?: string; pattern: RegExp | null };
 declare global {
@@ -187,7 +187,7 @@ export function conversationSelection(conversations: Row[], loaded: Record<strin
     if (findOutlineEntry(state.entries, entryID)) return { id, loadID: id, pending: false, error: "" };
   }
   const failed = roots.some(({ conversation }) => loaded[String(conversation.id)]?.error);
-  return { id: "", loadID: "", pending: false, error: failed ? "Could not load the conversation for this saved turn." : "This saved turn is no longer available." };
+  return { id: "", loadID: "", pending: false, error: failed ? "Could not load the conversation for this linked turn." : "This turn is no longer in the library." };
 }
 
 export function ResultConversationBrowser({ workspaceID, readJSON, target }: { workspaceID: string; readJSON: (path: string, signal?: AbortSignal) => Promise<Row>; target?: ResultTarget | null }) {
@@ -213,7 +213,7 @@ export function ResultConversationBrowser({ workspaceID, readJSON, target }: { w
       if (!outline) throw new Error("The conversation reader did not load. Reload this page to try again.");
       if (!controller.signal.aborted) setLoaded(previous => ({ ...previous, [id]: { loading: false, error: "", entries: outline(conversation), conversation } }));
     } catch (error) {
-      if (!controller.signal.aborted) setLoaded(previous => ({ ...previous, [id]: { loading: false, error: error instanceof Error ? error.message : "Conversation unavailable", entries: [] } }));
+      if (!controller.signal.aborted) setLoaded(previous => ({ ...previous, [id]: { loading: false, error: error instanceof Error ? error.message : "Could not load this conversation.", entries: [] } }));
     } finally { if (requests.current.get(id) === controller) requests.current.delete(id); }
   }
   useEffect(() => {
@@ -223,7 +223,7 @@ export function ResultConversationBrowser({ workspaceID, readJSON, target }: { w
       if (controller.signal.aborted) return;
       const conversations: Row[] = work.conversations ?? [];
       setOverview({ conversations, loading: false, error: "" });
-    }).catch(error => { if (!controller.signal.aborted) setOverview({ conversations: [], loading: false, error: error instanceof Error ? error.message : "Conversation unavailable" }); });
+    }).catch(error => { if (!controller.signal.aborted) setOverview({ conversations: [], loading: false, error: error instanceof Error ? error.message : "Could not load this workspace’s conversations." }); });
     return () => { controller.abort(); for (const request of requests.current.values()) request.abort(); requests.current.clear(); };
   }, [workspaceID, reload]);
   const forest = conversationForest(overview.conversations);
@@ -271,7 +271,7 @@ export function ResultConversationBrowser({ workspaceID, readJSON, target }: { w
   function entryList(id: string, entries: OutlineEntry[]): React.ReactNode {
     return <ul>{entries.map(item => <li key={item.id} className={`conversation-outline-entry${item.children.length ? " has-subagents" : ""}`}>
       <button type="button" data-view-field="search_cards" className={item.kind === "turn" && !item.human ? "conversation-outline-setup" : undefined} aria-current={id === currentID && item.id === entry?.id ? "true" : undefined} onClick={() => choose(id, item.id)}>
-        <span data-overflow-title="">{item.kind === "agent" ? "Sub-agent · " : ""}{item.label}{item.tools ? ` · ${item.tools} tool${item.tools === 1 ? "" : "s"}` : ""}</span>{item.prompt !== item.label ? <small data-overflow-title="">{item.prompt}</small> : null}
+        <span data-overflow-title="">{item.kind === "agent" ? "Sub-agent · " : ""}{item.label}{item.tools ? ` · ${item.tools} tool call${item.tools === 1 ? "" : "s"}` : ""}</span>{item.prompt !== item.label ? <small data-overflow-title="">{item.prompt}</small> : null}
       </button>
       {item.children.length ? <ViewDisclosure viewKey={`search:${workspaceID}:conversation:${id}:entry:${item.id}:children`} className="conversation-outline-children" defaultOpen summary={<>{item.children.length} sub-agent{item.children.length === 1 ? "" : "s"}<small>in {item.kind === "turn" ? item.label.toLowerCase() : item.label}</small></>}>{entryList(id, item.children)}</ViewDisclosure> : null}
     </li>)}</ul>;
@@ -283,7 +283,7 @@ export function ResultConversationBrowser({ workspaceID, readJSON, target }: { w
       return <li key={id}><ViewDisclosure viewKey={`search:${workspaceID}:conversation:${id}`} defaultOpen={id === String(forest[0]?.conversation.id) || id === currentID}
         summary={<span title="A conversation contains a sequence of prompts and replies. Select a turn below to preview it.">{conversation.parent_id ? "Sub-agent conversation" : "Conversation"} · {conversation.provider || "Agent"}{data && !data.loading && !data.error ? ` · ${turnCount} turn${turnCount === 1 ? "" : "s"}` : ""}</span>}>
         <p className="conversation-outline-session" data-overflow-title="">{conversation.title || conversation.first_prompt || id}</p>
-        {data?.loading ? <p role="status">Loading turns…</p> : data?.error ? <p role="alert">{data.error} <button type="button" onClick={() => void load(id)}>Retry</button></p> : data ? data.entries.length ? entryList(id, data.entries) : <p>No retained turns.</p> : null}
+        {data?.loading ? <p role="status">Loading turns…</p> : data?.error ? <p role="alert">{data.error} <button type="button" onClick={() => void load(id)}>Retry</button></p> : data ? data.entries.length ? entryList(id, data.entries) : <p>No retained turns are available.</p> : null}
         {children.length ? branchList(children) : null}
       </ViewDisclosure></li>;
     })}</ul>;
@@ -295,7 +295,7 @@ export function ResultConversationBrowser({ workspaceID, readJSON, target }: { w
     </nav>
     <section className="result-turn-content" id={regionID} aria-label="Selected turn preview" aria-busy={overview.loading || selection.pending || state?.loading}>
       {overview.loading || selection.pending || state?.loading ? <p role="status">Loading turns…</p> : overview.error || selection.error || state?.error ? <p role="alert">{overview.error || selection.error || state?.error} <button type="button" onClick={() => overview.error || selection.error ? setReload(value => value + 1) : void load(currentID)}>Retry</button></p> : entry ? <div key={currentID} className="result-exchange show-writing">
-        {entry.human ? <ResultMessage workspaceID={workspaceID} label={entry.kind === "agent" || current?.parent_id ? "Assignment" : "You"} message={entry.human} kind="human" reveal={revealOf(entry.human)} full={entry.human === selected} /> : null}
+        {entry.human ? <ResultMessage workspaceID={workspaceID} label={entry.kind === "agent" || current?.parent_id ? "Assignment" : entry.writing ? "You" : "Prompt"} message={entry.human} kind="human" reveal={revealOf(entry.human)} full={entry.human === selected} /> : null}
         {matched ? <ResultMessage workspaceID={workspaceID} label="Match" message={matched} kind={matched.role === "user" ? "human" : "assistant"} reveal={revealOf(matched)} full /> : null}
         <ResultMessage workspaceID={workspaceID} label={entry.kind === "agent" ? entry.label : current?.provider || "Agent"} message={entry.response ?? { role: "assistant", text: "No retained response for this turn." }} kind="assistant" reveal={revealOf(entry.response)} full={entry.response === selected} />
       </div> : <p className="muted">No retained turns are available.</p>}

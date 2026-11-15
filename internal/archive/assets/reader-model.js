@@ -316,7 +316,7 @@ function conversationTokenReports(messages){
       const prior=seen.get('task:'+key);if(prior)prior.total=null;
       if(key)seen.set('task:'+key,report);reports[index]=report;return;
     }else if(type==='result'||type==='turn.completed'||type==='cost-state'){
-      scope=type==='cost-state'?'session':'run';label=scope==='session'?'Agent usage checkpoint':'Run accounting checkpoint';
+      scope=type==='cost-state'?'session':'run';label=scope==='session'?'Agent session usage checkpoint':'End-of-run usage report';
       const reported=tokenTotal(usage),aggregate=modelTotal===null?reported:Math.max(reported??0,modelTotal);
       const start=runStarts.get(stream)||0,attributed=sum(start,stream==='main'?null:stream);
       total=aggregate===null?null:Math.max(0,aggregate-attributed);
@@ -505,32 +505,50 @@ function usageEstimatePresentation(conversation,owned=null){
   const valid=value=>['expected','lower','upper'].every(key=>Number.isFinite(value?.[key])&&value[key]>=0);
   const input=responses.every(response=>valid(response.input?.input_tokens)&&Number.isFinite(response.input.requests))?responses.reduce((total,response)=>{for(const key of ['expected','lower','upper'])total[key]+=response.input.input_tokens[key];total.requests+=response.input.requests;total.read+=response.input.cache_read_input_tokens||0;total.nontext=total.nontext||response.input.nontext_excluded===true;return total},{expected:0,lower:0,upper:0,requests:0,read:0,nontext:false}):null;
   if(input)return{...sum,input,label:`~${usageEstimateNumber(input.expected)} estimated input + ~${usageEstimateNumber(sum.expected)} estimated output tokens`,
-    detail:`Input: ${usageEstimateNumber(input.lower)}–${usageEstimateNumber(input.upper)} sensitivity range across ${input.requests.toLocaleString()} inferred model request${input.requests===1?'':'s'}; each request re-reads the conversation so far, including tool results. It counts visible text only: the expected value leaves out hidden system prompts and tool definitions${input.nontext?', and images or files without extracted text':''}. About ${usageEstimateNumber(input.read)} of it is priced as cache reads under an assumed standard prompt cache. Output: ${usageEstimateNumber(sum.lower)}–${usageEstimateNumber(sum.upper)} sensitivity range. ${local?'Local coding calibration with published assumptions':'Published estimation assumptions'} (${report.manifest_revision}).${unknown?' Model or effort unreported; fallback assumptions apply.':''}${assumedModels.length?` Estimation and API pricing assume ${assumedModels.join(', ')} from saved conversation settings; the model used for each response was not recorded.`:''} For selected-branch responses in conversations without reported usage.`,
+    detail:`Estimated for replies on the selected branch, because this conversation reports no usage. Input: ${usageEstimateNumber(input.lower)}–${usageEstimateNumber(input.upper)} sensitivity range across ${input.requests.toLocaleString()} inferred model request${input.requests===1?'':'s'}; each request re-reads the conversation so far, including tool results. It counts visible text only: the expected value leaves out hidden system prompts and tool definitions${input.nontext?', and images or files without extracted text':''}. About ${usageEstimateNumber(input.read)} of it is priced as cache reads under an assumed standard prompt cache. Output: ${usageEstimateNumber(sum.lower)}–${usageEstimateNumber(sum.upper)} sensitivity range. ${local?'Local coding calibration with published assumptions':'Published estimation assumptions'} (${report.manifest_revision}).${unknown?' Model or effort unreported; fallback assumptions apply.':''}${assumedModels.length?` Estimation and API pricing assume ${assumedModels.join(', ')} from saved conversation settings; the model used for each response was not recorded.`:''}`,
     assumptions:'/api/estimation/assumptions'};
   return{...sum,label:`~${usageEstimateNumber(sum.expected)} estimated output tokens`,
-    detail:`${usageEstimateNumber(sum.lower)}–${usageEstimateNumber(sum.upper)} sensitivity range. ${local?'Local coding calibration with published assumptions':'Published estimation assumptions'} (${report.manifest_revision}).${unknown?' Model or effort unreported; fallback assumptions apply.':''}${assumedModels.length?` Estimation and API pricing assume ${assumedModels.join(', ')} from saved conversation settings; the model used for each response was not recorded.`:''} Output only, for selected-branch responses in conversations without reported usage. Input and cache usage are unavailable; API cost, when priced, covers estimated output only.`,
+    detail:`Estimated output only, for replies on the selected branch, because this conversation reports no usage. Output: ${usageEstimateNumber(sum.lower)}–${usageEstimateNumber(sum.upper)} sensitivity range. ${local?'Local coding calibration with published assumptions':'Published estimation assumptions'} (${report.manifest_revision}).${unknown?' Model or effort unreported; fallback assumptions apply.':''}${assumedModels.length?` Estimation and API pricing assume ${assumedModels.join(', ')} from saved conversation settings; the model used for each response was not recorded.`:''} Input and cache usage are unavailable; API cost, when priced, covers estimated output only.`,
     assumptions:'/api/estimation/assumptions'};
+}
+// A tool call's duration in seconds, as a duration ("2.5 s", "20 min 34 s",
+// "1 h 5 min"). Estimates keep two significant figures; recorded values are
+// shown as recorded.
+function toolSecondsText(seconds,estimated){
+  let s=estimated?Number(seconds.toPrecision(2)):seconds;
+  if(s<10)return `${Number(s.toFixed(1))} s`;
+  s=Math.round(s);if(s<60)return `${s} s`;
+  if(s<3600){const m=Math.floor(s/60),r=s%60;return `${m} min${r?` ${r} s`:''}`}
+  const h=Math.floor(s/3600),m=Math.round((s%3600)/60);return m===60?`${h+1} h`:`${h} h${m?` ${m} min`:''}`;
+}
+function toolSecondsRange(range,estimated){
+  const lower=toolSecondsText(range.lower,estimated),upper=toolSecondsText(range.upper,estimated);
+  if(lower===upper)return lower;
+  const plain=/^[\d.]+ s$/;return plain.test(lower)&&plain.test(upper)?`${lower.slice(0,-2)}–${upper}`:`${lower} to ${upper}`;
 }
 function toolDurationEstimatePresentation(message){
   const estimate=message?.duration_estimate,value=estimate?.seconds;
   if(!value||!['expected','lower','upper'].every(key=>Number.isFinite(value[key])&&value[key]>=0))return null;
-  const execution=estimate.execution_seconds,argument=estimate.argument_generation_seconds;
+  const execution=estimate.execution_seconds,argument=estimate.argument_generation_seconds,spanEstimated=estimate.status!=='observed';
   if(execution&&['observed','estimated'].includes(estimate.execution_status)&&['expected','lower','upper'].every(key=>Number.isFinite(execution[key])&&execution[key]>=0)){
-    const recorded=estimate.execution_status==='observed';
-    return{label:`${recorded?'Recorded execution:':'Estimated execution: ~'}${recorded?' ':''}${usageEstimateNumber(execution.expected)} s${recorded?'':'*'}`,detail:`${usageEstimateNumber(execution.lower)}–${usageEstimateNumber(execution.upper)} s ${recorded?'native argument-stop to result-observation span':'execution sensitivity range'}. ${argument&&Number.isFinite(argument.expected)?`Argument generation: ${estimate.argument_generation_status==='observed'?'recorded':'estimated'} ${usageEstimateNumber(argument.expected)} s. `:''}Full call-to-result span: ${usageEstimateNumber(value.expected)} s. Execution can include transport and agent app time; parallel calls can overlap.`};
+    const recorded=estimate.execution_status==='observed',argumentRecorded=estimate.argument_generation_status==='observed';
+    return{label:`${recorded?'Recorded execution: ':'Estimated execution: ~'}${toolSecondsText(execution.expected,!recorded)}${recorded?'':'*'}`,detail:`${recorded?`Recorded from when the agent finished writing the call to when its result arrived: ${toolSecondsRange(execution,false)}`:`Execution sensitivity range: ${toolSecondsRange(execution,true)}`}. ${argument&&Number.isFinite(argument.expected)?`Argument generation: ${argumentRecorded?'recorded':'estimated'} ${toolSecondsText(argument.expected,!argumentRecorded)}. `:''}Full call-to-result span: ${toolSecondsText(value.expected,spanEstimated)}. Execution can include transport and agent app time; parallel calls can overlap.`};
   }
-  if(estimate.status==='observed')return{label:`Recorded tool span: ${usageEstimateNumber(value.expected)} s`,detail:'Native call start to result observation; this can include transport and agent app time.'};
+  if(estimate.status==='observed')return{label:`Recorded tool span: ${toolSecondsText(value.expected,false)}`,detail:'Recorded from when the call started to when its result arrived; this can include transport and agent app time.'};
   if(estimate.status!=='estimated')return null;
-  return{label:`Estimated call-to-result span: ~${usageEstimateNumber(value.expected)} s*`,detail:`${usageEstimateNumber(value.lower)}–${usageEstimateNumber(value.upper)} s sensitivity range, including argument generation. Published tool assumptions; parallel calls can overlap. Model time after the result is not included.`};
+  return{label:`Estimated call-to-result span: ~${toolSecondsText(value.expected,true)}*`,detail:`Sensitivity range: ${toolSecondsRange(value,true)}, including argument generation. Published tool assumptions; parallel calls can overlap. Model time after the result is not included.`};
 }
 // What the timeline's Turns row says about a turn on hover: the turn header's
 // own words (its number and who asked, the ask, and its counts).
 // A turn's activities, as its header and its hover card count them: every
 // event that is not a message, without the records the reader never shows.
 function turnActivities(turn){return(turn?.events||[]).filter(message=>message.kind!=='message'&&!transcriptUndisplayed(message))}
+// A turn's name: "You" only when its prompt holds your writing; a prompt
+// from a parent agent, a script or an unclassified source says "Prompt".
+function turnTitle(turn,index){return `Turn ${index+1}${turn?.human?(hasHumanWriting(turn.human)?' · You':' · Prompt'):''}`}
 function turnCardView(turn,index){
   const events=turn?.events||[],count=(items,singular,plural)=>`${items.length} ${items.length===1?singular:plural}`,of=kind=>events.filter(message=>message.kind===kind);
-  return{title:`Turn ${index+1}${turn?.human?' · You':''}`,at:turn?.human?.created_at||events[0]?.created_at||null,prompt:shortText(messageSummary(turn?.human)||'Agent setup',160),
+  return{title:turnTitle(turn,index),at:turn?.human?.created_at||events[0]?.created_at||null,prompt:shortText(messageSummary(turn?.human)||'Agent setup',160),
     stats:[count(of('message'),'reply','replies'),count(turnActivities(turn),'activity','activities'),count(of('tool_call'),'tool call','tool calls'),count(of('delegation'),'sub-agent','sub-agents')]};
 }
 function turnSummaryData(conversation){
@@ -560,7 +578,7 @@ function conversationOutline(conversation){
   });
   let turnNumber=0;
   return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Agent setup',
-    prompt:messageSummary(turn.human)||'Agent setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,messages:ownedMessages([turn.human,...turn.events],graph),
+    prompt:messageSummary(turn.human)||'Agent setup',human:turn.human,writing:Boolean(turn.human&&hasHumanWriting(turn.human)),response:turn.events.filter(message=>message.kind==='message').at(-1)||null,messages:ownedMessages([turn.human,...turn.events],graph),
     tools:turn.events.filter(message=>message.kind==='tool_call').length,children:agents(turn.events)}));
 }
 // Publish the result-card model with the model script itself, independently of
@@ -652,6 +670,8 @@ function mcpPresentation(message,results=[],artifactLinks={}){
   const add=(title,text,format='text')=>{if(typeof text==='string'&&text.trim())sections.push({title,text,format})};
   const resultText=()=>sections.push(...mcpTextSections(results));
   let label='',target='',href='',category='tool';
+  // Past tense once the source recorded the call's outcome; until then, what was asked.
+  const done=(past,request=past)=>status==='recorded'?past:request;
   if(family==='docs'){
     const receipt=records.find(r=>r.verdict||r.frame||r.created)||{},payload=mcpJSON(input.payload)||{},create=input.container?.create;
     const artifactId=input.container?.id||receipt.frame?.slug||receipt.created?.minted,link=artifactLinks[artifactId];
@@ -687,26 +707,26 @@ function mcpPresentation(message,results=[],artifactLinks={}){
     if(status==='partial')label='Partially updated document';
     if(!sections.length)resultText();
   }else if(family==='memory'&&/^memory_(read|write|edit|delete|list|search)$/.test(method)){
-    label=({memory_read:'Read memory',memory_write:'Write memory',memory_edit:'Edit memory',memory_delete:'Delete memory',memory_list:'List memories',memory_search:'Search memories'})[method];target=input.path||input.query||'Memory';category=/write|edit|delete/.test(method)?'edit':'read';
+    label=done(...({memory_read:['Read memory'],memory_write:['Wrote memory','Write memory'],memory_edit:['Edited memory','Edit memory'],memory_delete:['Deleted memory','Delete memory'],memory_list:['Listed memories','List memories'],memory_search:['Searched memories','Search memories']})[method]);target=input.path||input.query||'Memory';category=/write|edit|delete/.test(method)?'edit':'read';
     add('Content',input.content||input.body,'markdown');resultText();
   }else if(family==='browser'){
-    label=/^(browser_)?batch$/.test(method)?'Browser actions':method==='javascript_tool'?'Run browser JavaScript':method.replace(/_/g,' ');category='web';target=input.url||input.action_summary||input.action||input.text||'Browser';
+    label=/^(browser_)?batch$/.test(method)?'Browser actions':method==='javascript_tool'?done('Ran browser JavaScript','Run browser JavaScript'):method.replace(/_/g,' ').replace(/^./,letter=>letter.toUpperCase());category='web';target=input.url||input.action_summary||input.action||input.text||'Browser';
     if(Array.isArray(input.actions))input.actions.filter(Boolean).forEach((action,index)=>{const args=action.input||{};add(`${index+1}. ${action.name||'Browser action'}`,args.action_summary||args.url||args.text||args.action||JSON.stringify(args),/javascript/.test(action.name)?'code':'text')});
     else add('Action',input.action_summary||input.url||input.text||input.action,/javascript/.test(method)?'code':'text');resultText();
   }else if(family==='gmail'&&method==='search_threads'){
-    label='Search email threads';category='search';target=input.query||'Gmail';const data=records.find(r=>Array.isArray(r.threads));
+    label=done('Searched email threads','Search email threads');category='search';target=input.query||'Gmail';const data=records.find(r=>Array.isArray(r.threads));
     if(data){facts.push(['Threads retained',String(data.threads.length)]);if(data.resultCountEstimate!=null)facts.push(['Estimated matches',String(data.resultCountEstimate)]);for(const thread of data.threads)add(thread.subject||thread.id,thread.snippet||thread.body);if(data.nextPageToken)facts.push(['Coverage','More results available in source'])}else resultText();
   }else if(family==='device'&&method==='device_bash'){
-    label='Run on device';category='command';target=input.description||input.command||'Device';add('Command',input.command,'code');resultText();
+    label=done('Ran on device','Run on device');category='command';target=input.description||input.command||'Device';add('Command',input.command,'code');resultText();
   }else if(family==='conductor'&&['getworkspacediff','getdiffcomments','diffcomment','getterminaloutput'].includes(method)){
-    label=({getworkspacediff:'Read workspace diff',getdiffcomments:'Read review comments',diffcomment:'Leave review comments',getterminaloutput:'Read terminal output'})[method];category=method==='diffcomment'?'edit':'read';target=input.file||input.source||'Conductor';
+    label=({getworkspacediff:'Read workspace diff',getdiffcomments:'Read review comments',diffcomment:done('Left review comments','Leave review comments'),getterminaloutput:'Read terminal output'})[method];category=method==='diffcomment'?'edit':'read';target=input.file||input.source||'Conductor';
     for(const comment of Array.isArray(input.comments)?input.comments.filter(Boolean):[])add([comment.file,comment.lineNumber].filter(Boolean).join(':'),comment.body,'markdown');resultText();
   }else if(family==='github'&&['fetch_file','fetch','get_pr_info','fetch_pr','fetch_issue','fetch_pr_comments','fetch_issue_comments','search','search_issues','search_prs'].includes(method)){
-    label=method==='fetch_file'?'Read GitHub file':/search/.test(method)?'Search GitHub':'Read GitHub';category='read';target=[input.repository_full_name||input.repo_full_name,input.path||input.pr_number||input.issue_number||input.query].filter(Boolean).join(' · ')||input.url||'GitHub';
+    label=method==='fetch_file'?'Read GitHub file':/search/.test(method)?done('Searched GitHub','Search GitHub'):'Read GitHub';category='read';target=[input.repository_full_name||input.repo_full_name,input.path||input.pr_number||input.issue_number||input.query].filter(Boolean).join(' · ')||input.url||'GitHub';
     const data=records.find(r=>r.display_url)||{};if(/^https:\/\/(github\.com|api\.github\.com|raw\.githubusercontent\.com)\//.test(data.display_url||input.url||''))href=data.display_url||input.url;
     if(method==='fetch_file')add(input.path,data.content,'code');else resultText();
   }else if(family==='pharos'){
-    const labels={get_conversation_messages:'Read conversation messages',get_conversation_excerpt:'Read conversation excerpt',get_conversation_overview:'Read conversation overview',get_work_detail:'Read workspace',search_messages:'Search messages',search_conversations:'Search conversations',search_work:'Search workspaces',query_statistics:'Query statistics',get_archive_status:'Read library status',site_link:'Resolve Pharos link'};
+    const labels={get_conversation_messages:'Read conversation messages',get_conversation_excerpt:'Read conversation excerpt',get_conversation_overview:'Read conversation overview',get_work_detail:'Read workspace',search_messages:done('Searched messages','Search messages'),search_conversations:done('Searched conversations','Search conversations'),search_work:done('Searched workspaces','Search workspaces'),query_statistics:done('Queried statistics','Query statistics'),get_archive_status:'Read library status',site_link:done('Resolved Pharos link','Resolve Pharos link')};
     label=labels[method];if(!label)return null;category=/search|query/.test(method)?'search':'read';target=input.query||input.conversation_id||input.workspace_id||'Pharos';
     for(const [key,value] of Object.entries(input))if(value!=null&&typeof value!=='object')facts.push([key.replace(/_/g,' '),String(value)]);
     const data=records.find(r=>r.items||r.messages||r.rows||r.groups||r.overview||r.statistics||r.url)||records.at(-1)||{};
@@ -807,7 +827,7 @@ function transcriptActivityPresentation(message){
       const service=method.match(/^(github|search_service|plugin_management|chatgpt_space|sites|pets|safety_settings|hotline)_(.+)$/i);
       if(service)server+='__'+service[1];
     }
-    const names={'remote-devices':'Remote devices','claude_browser':'Browser','remote-devices__claude_browser':'Browser (remote devices)','claude-in-chrome':'Browser (Chrome)','remote_claude-in-chrome':'Browser (Chrome)','chrome':'Browser (Chrome)','claude_docs':'Docs','gmail':'Gmail','google_sheets':'Google Sheets','google_drive':'Google Drive','codex_apps':'Codex apps','codex_apps__github':'GitHub','codex_apps__search_service':'Search service','codex_apps__plugin_management':'Plugin management','codex_apps__chatgpt_space':'Pages','codex_apps__sites':'Sites','conductor':'Conductor','pharos':'Pharos','memory':'Memory','cua_repl':'Computer','node_repl':'JavaScript'};
+    const names={'remote-devices':'Remote devices','claude_browser':'Browser','remote-devices__claude_browser':'Browser (remote devices)','claude-in-chrome':'Browser (Chrome)','remote_claude-in-chrome':'Browser (Chrome)','chrome':'Browser (Chrome)','claude_docs':'Claude Docs','gmail':'Gmail','google_sheets':'Google Sheets','google_drive':'Google Drive','codex_apps':'Codex apps','codex_apps__github':'GitHub','codex_apps__search_service':'Search service','codex_apps__plugin_management':'Plugin management','codex_apps__chatgpt_space':'Pages','codex_apps__sites':'Sites','conductor':'Conductor','pharos':'Pharos','memory':'Memory','cua_repl':'Computer','node_repl':'JavaScript'};
     const id=server.toLowerCase(),label=names[id]||server;
     const serverIcon=/browser|chrome/.test(id)?'web':id.endsWith('github')?'git':id==='remote-devices'?'command':/docs|sheets|drive|chatgpt_space/.test(id)?'read':/gmail|search_service/.test(id)?'search':id==='memory'?'context':'tool';
     keyPath=[group('mcp','MCP','tool'),group('mcp:'+id,label,serverIcon)];
@@ -952,7 +972,7 @@ function readerDisclosureToggle(id,open,expanded,collapsed){
 function readerContentShown(state,key,fallback){return state&&Object.hasOwn(state,key)?state[key]===true:fallback}
 
 // Transcript filter and find
-const TRANSCRIPT_CATEGORIES=[['prompts','Prompts','Messages you, or a parent agent, sent'],['response','Final responses','The last reply of each turn'],['replies','Interim replies','Agent messages before the final reply of a turn'],['thinking','Thinking','Reasoning the agent recorded'],['edits','File edits','Edits and writes'],['commands','Commands','Shell commands'],['reads','Reads & searches','File reads, listings, and searches'],['tools','Other tools','Browser, todo, MCP, and other tool calls'],['agents','Sub-agents','Delegated agent runs'],['events','System events','Injected context, attachments, run events, and errors'],['usage','Usage & quota','Token and quota checkpoints and cost bookkeeping']];
+const TRANSCRIPT_CATEGORIES=[['prompts','Prompts','Messages you, or a parent agent, sent'],['response','Final responses','The last reply of each turn'],['replies','Interim replies','Agent messages before the final reply of a turn'],['thinking','Thinking','Reasoning the agent recorded'],['edits','File edits','Edits and writes'],['commands','Commands','Shell commands'],['reads','Reads & searches','File reads, listings, and searches'],['tools','Other tools','Browser, todo, MCP, and other tool calls'],['agents','Sub-agents','Delegated agent sessions'],['events','System events','Injected context, attachments, run events, and errors'],['usage','Usage & quota','Token and quota checkpoints and cost bookkeeping']];
 const TRANSCRIPT_LEVELS=[['all','All','Every event',TRANSCRIPT_CATEGORIES.map(([key])=>key)],['all-minus-usage','All minus usage','Every event except token usage',TRANSCRIPT_CATEGORIES.map(([key])=>key).filter(key=>key!=='usage')],['thought','Chain of thought','Prompts, replies, and thinking; no tool activity',['prompts','response','replies','thinking']],['primary','Primary only','Prompts and each turn’s final response',['prompts','response']],['custom','Custom','Choose each kind of event',null]];
 // Named URL presets stand alone. A category list is required only for Custom;
 // older links with just a category list still select Custom.
@@ -1519,21 +1539,23 @@ const READER_HIGHLIGHTS=[
 // event groups). Human writing is offered only where there is some; a
 // classifier only once it has run on the library, so its row can say why a
 // conversation has nothing to show.
+// One wording for a classifier whose results for this conversation are out of date.
+const READER_STALE_NOTE='Waiting to be updated after a change';
 function readerHighlightOptions(conversation,messages,taxonomy=[]){
   const options=[];
   for(const option of READER_HIGHLIGHTS){
     if(option.id==='writing'){if(messages.some(hasHumanWriting))options.push({...option,available:true,note:'',legend:[]});continue}
     if(option.id==='engagement'){const summary=conversation?.engagement;if(!summary)continue;
       const layers=engagementLayers(messages.flatMap(message=>messageEngagementView(message)||[]));
-      options.push({...option,available:layers.length>0,title:layers.length?option.title:'No engagement labels found in what was typed in this conversation',note:summary.pending?'Waiting to be read again after a change':'',
+      options.push({...option,available:layers.length>0,title:layers.length?option.title:'No engagement labels found in what was typed in this conversation',note:summary.pending?READER_STALE_NOTE:'',
         legend:layers.map(layer=>({name:layer.dimensionName,className:layer.className,key:layer.dimension}))});continue}
     if(option.id==='events'){const summary=conversation?.agent_events;if(!summary)continue;
       const views=messages.map(message=>messageEventView(message)).filter(Boolean),count=views.reduce((sum,view)=>sum+view.length,0),groups=new Set(views.flat().map(event=>event.group));
-      options.push({...option,available:count>0,title:count?option.title:'No agent events found in this conversation',note:summary.pending?'Waiting to be rebuilt for changed transcripts or session evidence; which messages these belong to may change':'',
+      options.push({...option,available:count>0,title:count?option.title:'No agent events found in this conversation',note:summary.pending?READER_STALE_NOTE+'; these events may move to other messages':'',
         legend:[...EVENT_GROUPS.filter(([group])=>groups.has(group)).map(([group])=>({name:group,className:eventGroupClass(group)})),...(views.flat().some(event=>event.target)?[{name:'Earlier text linked to an event',className:'event-target-legend'}]:[])]});continue}
     const summary=conversation?.labels;if(!summary)continue;
     const families=new Set(messages.map(message=>messageLabelView(message,taxonomy)?.family).filter(family=>family!==undefined));
-    options.push({...option,available:Boolean(summary.labeled),title:summary.labeled?option.title:'Pharos has not labeled this conversation yet',note:summary.pending?(summary.labeled?'Still labeling this conversation':'Not labeled yet'):'',
+    options.push({...option,available:Boolean(summary.labeled),title:summary.labeled?option.title:'Pharos has not labeled this conversation yet',note:summary.pending?(summary.labeled?READER_STALE_NOTE:'Not labeled yet'):'',
       legend:[...LABEL_FAMILIES,['','Other']].filter(([key])=>families.has(key)).map(([key,name])=>({name,family:key}))});
   }
   return options;
@@ -1552,17 +1574,38 @@ function readerKeyPresetValues(id){
     ...Object.fromEntries(READER_HIGHLIGHTS.map(option=>[option.field,preset.highlights])),reader_highlight_hidden:[],
     timeline_visibility:preset.timeline?{}:{sections:{values:[],excluded:false,allHidden:true}}};
 }
+// Display names for the saved Key choices the "Last" note lists: a hidden
+// highlight key (as readerHighlightOptions legends make them) and a Timeline
+// section and value (the Timeline Key's names; values without a name here
+// stay as recorded).
+function readerHighlightKeyName(key){
+  const [kind,...rest]=String(key).split(':'),item=rest.join(':'),option=READER_HIGHLIGHTS.find(option=>option.id===kind);
+  if(!option)return String(key);if(!rest.length)return option.label;
+  const name=kind==='engagement'?engagementDimensionName(item)
+    :kind==='events'?(item==='event-target-legend'?'Earlier text linked to an event':EVENT_GROUPS.find(([group])=>eventGroupClass(group)===item)?.[0])
+    :kind==='labels'?(LABEL_FAMILIES.find(([family])=>family===item)?.[1]||(item?null:'Other')):null;
+  return `${option.label} · ${name||item}`;
+}
+const TIMELINE_KEY_SECTIONS={sections:'Timeline',modes:'Message modes',events:'Agent events',human:'Human events',tools:'Tool actions',origins:'Text source'};
+function timelineKeyValueName(section,value){
+  const name=section==='sections'?TIMELINE_KEY_SECTIONS[value]
+    :section==='events'?EVENT_GROUPS.find(([,key])=>key===value)?.[0]
+    :section==='human'?engagementDimensionName(value)
+    :section==='modes'?(value==='?'?'Uncategorized':value==='P'?'Sender':value==='C'?'Receiver':LABEL_FAMILIES.find(([family])=>family===value)?.[1])
+    :section==='tools'&&value==='error'?'Error':null;
+  return name||String(value);
+}
 function readerKeyLastNote(values){
   const shown=new Set(values.reader_filter||[]),visible=TRANSCRIPT_CATEGORIES.filter(([id])=>shown.has(id)).map(([,label])=>label),hidden=TRANSCRIPT_CATEGORIES.filter(([id])=>!shown.has(id)).map(([,label])=>label);
   const on=READER_HIGHLIGHTS.filter(option=>values[option.field]).map(option=>option.label),off=READER_HIGHLIGHTS.filter(option=>!values[option.field]).map(option=>option.label);
   const parts=[hidden.length?`Content shown: ${visible.join(', ')||'none'}. Hidden: ${hidden.join(', ')}.`:'All content shown.',`Text highlighting shown: ${on.join(', ')||'none'}; hidden: ${off.join(', ')||'none'}.`];
   const tags=values.reader_hidden_tags||[],marks=values.reader_highlight_hidden||[];
   if(tags.length)parts.push(`Activity filters: ${tags.map(id=>{const show=id.startsWith('show:'),tag=show?id.slice(5):id;return (show?'show ':'hide ')+(transcriptTagParts(tag)?.[1]||tag)}).join(', ')}.`);
-  if(marks.length){const annotations=marks.filter(id=>id.startsWith('annotation:')).length,keys=marks.filter(id=>!id.startsWith('annotation:'));parts.push(`Highlight exclusions: ${[...keys,...annotations?[annotations+' individual annotation'+(annotations===1?'':'s')]:[]].join(', ')}.`)}
+  if(marks.length){const annotations=marks.filter(id=>id.startsWith('annotation:')).length,keys=marks.filter(id=>!id.startsWith('annotation:'));parts.push(`Highlight exclusions: ${[...keys.map(readerHighlightKeyName),...annotations?[annotations+' individual annotation'+(annotations===1?'':'s')]:[]].join(', ')}.`)}
   const timeline=values.timeline_visibility||{},entries=Object.entries(timeline);
   if(!entries.length)parts.push('All timeline elements shown.');
   else if(entries.length===1&&timeline.sections?.allHidden)parts.push('Timeline elements hidden.');
-  else parts.push('Timeline filters: '+entries.map(([section,selection])=>`${section}: ${selection.allHidden?'all hidden':selection.excluded?'hidden '+selection.values.join(', '):'only '+selection.values.join(', ')}`).join('; ')+'.');
+  else parts.push('Timeline filters: '+entries.map(([section,selection])=>{const names=(selection.values||[]).map(value=>timelineKeyValueName(section,value)).join(', ');return `${TIMELINE_KEY_SECTIONS[section]||section}: ${selection.allHidden?'all hidden':selection.excluded?'hidden '+names:'only '+names}`}).join('; ')+'.');
   return parts.join(' ');
 }
 function readerKeyPresetID(state,highlights,hidden=[],tags=[],timeline={}){
@@ -1766,8 +1809,8 @@ function peerReasonText(reason,names=id=>id){
   const d=reason?.details||{},certain=reason?.confidence==='high'?'':' (uncertain)',from=names(reason?.from_workspace_id),to=names(reason?.to_workspace_id);
   const subject=name=>name.charAt(0).toUpperCase()+name.slice(1),possessive=name=>name==='it'?'its':`${name}’s`;
   if(reason?.kind==='read_written_by'){
-    const timing=d.timing==='start'?`, starting as ${from} finished a turn`:d.timing==='return'?`; ${possessive(from)} next prompt followed`:'';
-    return`${subject(to)} saw ${peerCount(d.lines,'line','lines')} ${from} wrote, in ${d.basis==='diff'?'a diff':'files it read'}${timing}${certain}`;
+    const timing=d.timing==='start'?`, starting just as ${from} finished a turn`:d.timing==='return'?`; ${possessive(from)} next prompt came after that`:'';
+    return`${subject(to)} read ${peerCount(d.lines,'line','lines')} that ${from} wrote, in ${d.basis==='diff'?'a diff':'files'}${timing}${certain}`;
   }
   if(reason?.kind==='copied_into')return`A prompt in ${to} quoted ${peerCount(d.words,'word','words')} of a reply in ${from}${certain}`;
   if(reason?.kind==='tl1_candidate')return`Both are TL1 tasks on the same candidate${certain}`;
@@ -1782,7 +1825,7 @@ function peerChip(peer,{page='',titles={}}={},now=Date.now()){
   return{
     label:[peerRoleLabel(peer.role),peer.title||'Untitled workspace',peer.provider,relativeAge(peer.started_at,now)].filter(Boolean).join(' · '),
     href:'/work/'+encodeURIComponent(peer.workspace_id),certain,reasons,
-    title:[certain?'Related work':'Possibly related work · uncertain',...reasons].join('\n'),
+    title:[certain?'Related work':'Possibly related work (uncertain)',...reasons].join('\n'),
   };
 }
 // The strip's order: most recently started first, whatever the certainty
@@ -1791,7 +1834,7 @@ function peersByAge(peers){
   const started=peer=>{const time=new Date(peer?.started_at??NaN).getTime();return Number.isFinite(time)?time:-Infinity};
   return[...peers||[]].sort((a,b)=>started(b)-started(a)||0);
 }
-const HANDOFF_VERBS={'copied_into:in':'Quotes','copied_into:out':'Quoted in','read_written_by:in':'Shows lines from','read_written_by:out':'Read in'};
+const HANDOFF_VERBS={'copied_into:in':'Quotes','copied_into:out':'Quoted in','read_written_by:in':'Shows lines from','read_written_by:out':'Lines read in'};
 // The markers a message carries, one per linked message, certain first.
 function handoffMarkers(message){
   const markers=new Map();
@@ -1803,7 +1846,7 @@ function handoffMarkers(message){
     markers.set(key,{label:`${verb} ${h.title||'Untitled workspace'}`,certain,
       workspace:h.workspace_id,conversation:h.conversation_id,message:h.message_id,
       href:`/work/${encodeURIComponent(h.workspace_id)}/conversation/${encodeURIComponent(h.conversation_id)}?${params}`,
-      title:certain?'Hand-off between related work':'Possible hand-off between related work · uncertain'});
+      title:certain?'Hand-off between related work':'Possible hand-off between related work (uncertain)'});
   }
   return[...markers.values()].sort((a,b)=>Number(b.certain)-Number(a.certain));
 }

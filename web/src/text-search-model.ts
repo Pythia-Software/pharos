@@ -62,7 +62,7 @@ export function withSearchDateComparison(draft: TextSearchDraft, field: "from" |
 export function newKeywordSearch(clock = new Date()): TextSearchDraft {
   return withSearchDateWindow(emptyTextSearch(), "30d", clock);
 }
-export const ruleLabels: Record<RuleKind, string> = { words: "All of these words", anyWords: "Any of these words", phrase: "This phrase", prefix: "A word beginning with", near: "Two phrases near each other", pre: "Two phrases in this order" };
+export const ruleLabels: Record<RuleKind, string> = { words: "All of these words", anyWords: "Any of these words", phrase: "This phrase", prefix: "A word starting with", near: "Two phrases near each other", pre: "Two phrases in this order" };
 export const scopes = [
   { id: "prose", label: "Conversation messages", description: "User messages, agent replies, and any saved agent reasoning.", surface: "prose" },
   { id: "user", label: "User messages", description: "What users sent to agents, including pasted or attached text retained in those messages.", surface: "user" },
@@ -72,13 +72,13 @@ export const scopes = [
   { id: "developer", label: "Developer instructions", description: "Instructions supplied by the application in developer messages, when retained.", surface: "all", role: "developer" },
   { id: "tools", label: "Tool calls and output", description: "Commands and tool requests. Tool output is not word-indexed: search it within one conversation.", surface: "tools" },
   { id: "all", label: "All stored text", description: "Every stored message type, including instructions and tool calls. Tool output is not word-indexed: search it within one conversation.", surface: "all" },
-  { id: "typed", label: "Words typed by users", description: "Only spans classified as typed. Unclassified or stale spans may be missing.", surface: "typed" },
-  { id: "pasted", label: "Pasted text", description: "Only spans classified as pasted into a user's message.", surface: "pasted" },
-  { id: "quoted", label: "Quoted text", description: "Only spans classified as quotations.", surface: "quoted" },
-  { id: "resent", label: "Resent text", description: "Only spans classified as repeated from an earlier message.", surface: "resent" },
+  { id: "typed", label: "Typed or dictated text", description: "Only spans classified as typed or dictated. Unclassified or stale spans may be missing.", surface: "typed" },
+  { id: "pasted", label: "Likely pasted text", description: "Only spans classified as pasted into a user’s message.", surface: "pasted" },
+  { id: "quoted", label: "Copied or quoted text", description: "Only spans classified as quotations or copies of earlier text.", surface: "quoted" },
+  { id: "resent", label: "Re-sent text", description: "Only spans classified as repeated from an earlier message.", surface: "resent" },
   { id: "template", label: "Template text", description: "Only spans classified as template content.", surface: "template" },
-  { id: "harness", label: "Agent setup text", description: "Only spans classified as content inserted by the agent app.", surface: "harness" },
-  { id: "automated", label: "Automatically inserted text", description: "Only spans classified as automated content.", surface: "automated" },
+  { id: "harness", label: "App instructions", description: "Only spans classified as content inserted by the agent app.", surface: "harness" },
+  { id: "automated", label: "Automated input", description: "Only spans classified as automated content.", surface: "automated" },
   { id: "attachment", label: "Attachment text", description: "Only spans classified as attachment content inside retained messages.", surface: "attachment" },
 ] as const;
 // textScopeNote is the editor's note on what a search's scope leaves out:
@@ -95,30 +95,30 @@ export function textScopeNote(draft: TextSearchDraft): "scan" | "tool-output" | 
 }
 export function scopeChoice(scope: TextScope) { return scopes.find(s => s.surface === scope.surface && scope.kinds.length === 0 && scope.roles.join(",") === ("role" in s ? s.role : "")); }
 export function chooseScope(scope: TextScope, id: string): TextScope { const choice = scopes.find(s => s.id === id); return choice ? { ...scope, surface: choice.surface, roles: "role" in choice ? [choice.role] : [], kinds: [] } : scope; }
-export const sourceLabel = (value: string) => ({ claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", "claude-ai": "Claude.ai", copilot: "Copilot CLI", opencode: "OpenCode", cline: "Cline", "vscode-copilot": "VS Code Copilot", cursor: "Cursor", "cursor-cli": "Cursor CLI", zed: "Zed", conductor: "Conductor", antigravity: "Antigravity", canonical: "Imported archive", tl1: "TL1", "tl1-export": "TL1 export" }[value] ?? value);
+export const sourceLabel = (value: string) => ({ claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", "claude-ai": "Claude.ai", copilot: "Copilot CLI", opencode: "OpenCode", cline: "Cline", "vscode-copilot": "VS Code Copilot", cursor: "Cursor", "cursor-cli": "Cursor CLI", zed: "Zed", conductor: "Conductor", antigravity: "Antigravity", canonical: "Canonical export", tl1: "TL1", "tl1-export": "TL1 export" }[value] ?? value);
 const hasWord = (text: string) => /[\p{L}\p{N}]/u.test(text);
 const combine = (op: "and" | "or", nodes: TextQuery[]): TextQuery => nodes.length === 1 ? nodes[0] : { op, children: nodes };
 export function compileRules(root: TextGroup): { where?: TextQuery; issues: SearchIssue[] } {
   const issues: SearchIssue[] = [];
   let count = 0;
   const compile = (condition: TextCondition, depth: number): TextQuery | undefined => {
-    if (++count > 32 || depth > 4) { issues.push({ id: condition.id, message: "This search is too complex. Use at most 32 rules and groups, nested up to four levels." }); return; }
+    if (++count > 32 || depth > 4) { issues.push({ id: condition.id, message: "This search is too complex. Use at most 32 conditions and groups, nested up to four levels." }); return; }
     if (condition.kind === "group") {
       const included: TextQuery[] = [], excluded: TextQuery[] = [];
       for (const child of condition.children) { const node = compile(child, depth + 1); if (node) (child.exclude ? excluded : included).push(node); }
-      if (!condition.children.some(c => !c.exclude)) issues.push({ id: condition.id, message: "Include at least one rule in this group before excluding matches." });
+      if (!condition.children.some(c => !c.exclude)) issues.push({ id: condition.id, message: "Include at least one condition in this group before excluding matches." });
       if (!included.length) return;
       const positive = combine(condition.join === "all" ? "and" : "or", included);
       return excluded.length ? { op: "not", children: [positive, combine("or", excluded)] } : positive;
     }
     const issue = (message: string) => { issues.push({ id: condition.id, message }); return undefined; };
     const text = condition.text.trim();
-    if (!hasWord(text)) return issue("Add a word or phrase to this rule.");
-    if (new TextEncoder().encode(text).length > 2000) return issue("Shorten this rule to 2,000 bytes or fewer.");
+    if (!hasWord(text)) return issue("Add a word or phrase to this condition.");
+    if (new TextEncoder().encode(text).length > 2000) return issue("Shorten this condition to 2,000 bytes or fewer.");
     if (condition.kind === "near" || condition.kind === "pre") {
       if (!hasWord(condition.other)) return issue("Add the second phrase.");
       const distance = Number(condition.distance);
-      if (!condition.distance.trim() || !Number.isInteger(distance) || distance < 0 || distance > 100) return issue("Choose between 0 and 100 words between the phrases.");
+      if (!condition.distance.trim() || !Number.isInteger(distance) || distance < 0 || distance > 100) return issue("Enter a distance from 0 to 100 words.");
       return { op: condition.kind, distance, children: [{ op: "phrase", text }, { op: "phrase", text: condition.other.trim() }] };
     }
     if (condition.kind === "prefix") {
@@ -130,7 +130,7 @@ export function compileRules(root: TextGroup): { where?: TextQuery; issues: Sear
     return combine(condition.kind === "anyWords" ? "or" : "and", words.map(text => ({ op: "term", text })));
   };
   const where = compile(root, 0);
-  if (where && JSON.stringify(where).length > 16000) issues.push({ id: root.id, message: "Shorten the search or use fewer rules." });
+  if (where && JSON.stringify(where).length > 16000) issues.push({ id: root.id, message: "Shorten the search or use fewer conditions." });
   return { where: issues.length ? undefined : where, issues };
 }
 // Which matching options can change a search. Phrase punctuation matters
@@ -153,7 +153,7 @@ export function searchRequest(draft: TextSearchDraft): { request?: Record<string
   else if (draft.editor === "visual") where = { op: draft.match === "literal" ? "literal" : "regex", text: draft.text };
   if (/^\d{4}-\d{2}-\d{2}$/.test(draft.scope.from) && /^\d{4}-\d{2}-\d{2}$/.test(draft.scope.to) && draft.scope.from > draft.scope.to) issues.push({ id: "dates", message: "The end date must be on or after the start date." });
   const window = searchDateWindow(draft);
-  if (window?.duration === "today" && (!Number.isFinite(Date.parse(window.from)) || !window.to || !Number.isFinite(Date.parse(window.to)) || Date.parse(window.to) < Date.parse(window.from))) issues.push({ id: "dates", message: "Choose Today again to resolve its local date bounds." });
+  if (window?.duration === "today" && (!Number.isFinite(Date.parse(window.from)) || !window.to || !Number.isFinite(Date.parse(window.to)) || Date.parse(window.to) < Date.parse(window.from))) issues.push({ id: "dates", message: "Choose “today” again to update its dates." });
   if (window && window.duration !== "today" && (searchDuration(window.duration) === null || !window.from)) issues.push({ id: "dates", message: "Enter a duration such as 30d, 7d, or 24h." });
   if (issues.length) return { issues };
   const { roles, kinds, ...filters } = draft.scope;
@@ -256,7 +256,7 @@ export function querySyntax(q: TextQuery, separators = false): string {
   if (q.op === "term") {
     const text = q.text ?? "";
     if (!/[\s"()*]/u.test(text) && !/^(AND|OR|NOT|NEAR\/\d+|PRE\/\d+)$/u.test(text)) return text;
-    if (separators && /[^\p{L}\p{N}\p{M}]/u.test(text)) throw new Error("This word rule contains punctuation that query syntax would interpret differently. Keep it in the visual editor to preserve its meaning.");
+    if (separators && /[^\p{L}\p{N}\p{M}]/u.test(text)) throw new Error("This word condition contains punctuation that Syntax would interpret differently. Keep it in Rules to preserve its meaning.");
   }
   if (q.op === "term" || q.op === "phrase") return quoted(q.text ?? "");
   if (q.op === "prefix") return `${quoted(q.text ?? "")}*`;
@@ -269,15 +269,15 @@ export function visualFromQuery(q: TextQuery, separators = false): Pick<TextSear
     if (q.op === "and" || q.op === "or") return { ...newGroup(), join: q.op === "and" ? "all" : "any", children: q.children!.map(convert) };
     if (q.op === "not") return { ...newGroup(), children: [convert(q.children![0]), { ...convert(q.children![1]), exclude: true }] };
     if (q.op === "near" || q.op === "pre") {
-      if (q.children!.some(c => c.op === "prefix")) throw new Error("This query combines proximity with word beginnings. Keep it in query mode to preserve its meaning.");
-      if (separators && q.children!.some(c => c.op === "term" && /[^\p{L}\p{N}\p{M}]/u.test(c.text ?? ""))) throw new Error("This proximity query uses word punctuation that visual phrase rules would interpret differently. Keep it in query mode to preserve its meaning.");
+      if (q.children!.some(c => c.op === "prefix")) throw new Error("This query combines proximity with word beginnings. Keep it in Syntax to preserve its meaning.");
+      if (separators && q.children!.some(c => c.op === "term" && /[^\p{L}\p{N}\p{M}]/u.test(c.text ?? ""))) throw new Error("This proximity query uses word punctuation that phrase conditions in Rules would interpret differently. Keep it in Syntax to preserve its meaning.");
       return { ...newRule(q.children![0].text), kind: q.op, other: q.children![1].text ?? "", distance: String(q.distance ?? 0) };
     }
     return { ...newRule(q.text), kind: q.op === "prefix" ? "prefix" : q.op === "term" && !/\s/u.test(q.text ?? "") ? "words" : "phrase" };
   };
   const node = convert(q), root = node.kind === "group" ? node : { ...newGroup(), children: [node] };
   const result = compileRules(root);
-  if (result.issues.length) throw new Error("This query is too complex for the visual editor. You can continue editing its syntax.");
+  if (result.issues.length) throw new Error("This query is too complex for Rules. You can keep editing it in Syntax.");
   return { editor: "visual", root, match: "rules", text: "" };
 }
 export function readTextSearch(params: URLSearchParams, clock = new Date()): { draft: TextSearchDraft; active: boolean; error: string } {
@@ -314,7 +314,7 @@ export function readTextSearch(params: URLSearchParams, clock = new Date()): { d
       }
       if (!searchRequest(restored).request) throw new Error();
       return { draft: restored, active: true, error: "" };
-    } catch { return { draft, active: false, error: "This saved search could not be opened. Edit the rules below and search again. The table is currently unfiltered by text." }; }
+    } catch { return { draft, active: false, error: "This saved search could not be opened. Edit the conditions below and search again. Results are not filtered by text." }; }
   }
   const query = params.get("search") ?? "";
   // Saved builders (including an explicitly cleared date) and legacy searches
