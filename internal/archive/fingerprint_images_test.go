@@ -1158,6 +1158,115 @@ func TestFingerprintSourceColumns(t *testing.T) {
 	}
 }
 
+// A workspace with one conversation, or none, draws images already drawn: it
+// shares them without a load or a render, and they are the bytes its own
+// render would produce.
+func TestFingerprintWorkspaceSharing(t *testing.T) {
+	c, _ := seedFingerprintLibrary(t)
+	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('fp-one','test','test','fp-one','One','2026-01-01'),('fp-empty','test','test','fp-empty','Empty','2026-01-01');
+INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('fp-c','fp-one','test','test','c');
+INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('fp-c1','fp-c','c1','user','message','question','c1','2026-01-02T12:00:00Z'),('fp-c2','fp-c','c2','assistant','message','answer','c2','2026-01-02T12:05:00Z');
+INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status,started_at,ended_at) VALUES('fp-ct','fp-one','fp-c',1,'test','call','Bash','command','error','2026-01-02T12:01:00Z','2026-01-02T12:03:00Z')`)
+	renderer, err := newFingerprintRenderer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	c.fingerprints.renderer = fingerprintRenderFunc(func(ctx context.Context, input any, mask int) (fingerprintRendered, error) {
+		calls++
+		return renderer.Render(ctx, input, mask)
+	})
+	images := func(entity, id string) string {
+		t.Helper()
+		rows, err := queryMapsContext(t.Context(), c.reader(), `SELECT profile,theme,events,hash FROM fingerprint_images WHERE entity=? AND entity_id=? ORDER BY profile,theme,events`, entity, id)
+		if err != nil || len(rows) == 0 {
+			t.Fatalf("%s %s: no images %v", entity, id, err)
+		}
+		return jsonText(rows)
+	}
+	// What the workspace's own render draws, for the comparison.
+	ownRender := func(id string, mask int) string {
+		t.Helper()
+		input, err := c.messageLabelFingerprintInput(t.Context(), id, true, 0, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input["events"] = input["agent_events"]
+		result, err := renderer.Render(t.Context(), input, mask)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows := []map[string]any{}
+		for _, image := range result.Images {
+			rows = append(rows, map[string]any{"profile": image.Profile, "theme": image.Theme, "events": map[bool]int{true: 1}[image.Events], "hash": image.Hash})
+		}
+		return jsonText(rows)
+	}
+	sameHashes := func(a, b string) bool {
+		var left, right []map[string]any
+		_ = json.Unmarshal([]byte(a), &left)
+		_ = json.Unmarshal([]byte(b), &right)
+		hashes := func(rows []map[string]any) map[string]any {
+			out := map[string]any{}
+			for _, row := range rows {
+				out[fmt.Sprint(row["profile"], row["theme"], row["events"])] = row["hash"]
+			}
+			return out
+		}
+		return len(left) > 0 && jsonText(hashes(left)) == jsonText(hashes(right))
+	}
+	renderFingerprintTestEntity(t, c, "conversation", "fp-c")
+	renderFingerprintTestEntity(t, c, "workspace", "fp-one")
+	if calls != 1 || !sameHashes(images("workspace", "fp-one"), images("conversation", "fp-c")) || !sameHashes(images("workspace", "fp-one"), ownRender("fp-one", 1)) {
+		t.Fatalf("one-conversation workspace: calls=%d workspace=%s conversation=%s", calls, images("workspace", "fp-one"), images("conversation", "fp-c"))
+	}
+	if m, err := c.fingerprintMetadata(t.Context(), fingerprintRequest{"workspace", "fp-one", "wide"}, true); err != nil || m.State != "ready" {
+		t.Fatal("shared workspace images not ready", m, err)
+	}
+	// The first empty workspace renders; the next shares its images.
+	renderFingerprintTestEntity(t, c, "workspace", "fp-other")
+	renderFingerprintTestEntity(t, c, "workspace", "fp-empty")
+	if calls != 2 || !sameHashes(images("workspace", "fp-empty"), images("workspace", "fp-other")) || !sameHashes(images("workspace", "fp-empty"), ownRender("fp-empty", 1)) {
+		t.Fatalf("empty workspace: calls=%d", calls)
+	}
+	// A change queues both; the workspace waits for its conversation, which
+	// goes first at the workspace's priority, then shares its new images.
+	execTx(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('fp-c3','fp-c','c3','user','message','more','c3','2026-01-02T12:09:00Z');
+UPDATE fingerprint_entities SET dirty=0 WHERE id NOT IN ('fp-c','fp-one');
+UPDATE fingerprint_entities SET next_attempt=0,priority=CASE entity WHEN 'workspace' THEN 100 ELSE 0 END WHERE id IN ('fp-c','fp-one')`)
+	if more, err := c.refreshFingerprintImages(t.Context()); err != nil || !more || calls != 2 {
+		t.Fatalf("workspace did not wait for its conversation: more=%v calls=%d %v", more, calls, err)
+	}
+	if waiting := countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE entity='workspace' AND id='fp-one' AND dirty=1 AND next_attempt>unixepoch() AND attempts=0`); waiting != 1 || countRows(t, c, `SELECT priority FROM fingerprint_entities WHERE entity='conversation' AND id='fp-c'`) != 100 {
+		t.Fatal("waiting workspace or its conversation's priority not recorded")
+	}
+	if more, err := c.refreshFingerprintImages(t.Context()); err != nil || !more || calls != 3 {
+		t.Fatalf("conversation did not go first: more=%v calls=%d %v", more, calls, err)
+	}
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET next_attempt=0 WHERE entity='workspace' AND id='fp-one'`)
+	if more, err := c.refreshFingerprintImages(t.Context()); err != nil || !more || calls != 3 {
+		t.Fatalf("workspace did not share its conversation's new images: more=%v calls=%d %v", more, calls, err)
+	}
+	if !sameHashes(images("workspace", "fp-one"), images("conversation", "fp-c")) || !sameHashes(images("workspace", "fp-one"), ownRender("fp-one", 1)) || countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`) != 0 {
+		t.Fatal("workspace images differ from its conversation's after a change")
+	}
+	// A conversation whose render failed leaves its workspace to render alone.
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=1,attempts=1,next_attempt=unixepoch()+300,revision='failed' WHERE entity='conversation' AND id='fp-c';
+UPDATE fingerprint_entities SET revision='changed' WHERE entity='workspace' AND id='fp-one'`)
+	renderFingerprintTestEntity(t, c, "workspace", "fp-one")
+	if calls != 4 {
+		t.Fatalf("workspace waited for a failing conversation: calls=%d", calls)
+	}
+	// A second conversation makes the workspace its own drawing.
+	execTx(t, c.DB, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('fp-d','fp-one','test','test','d');
+INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('fp-d1','fp-d','d1','user','message','other','d1','2026-01-03T12:00:00Z')`)
+	renderFingerprintTestEntity(t, c, "conversation", "fp-d")
+	renderFingerprintTestEntity(t, c, "workspace", "fp-one")
+	if calls != 6 {
+		t.Fatalf("multi-conversation workspace was not rendered: calls=%d", calls)
+	}
+}
+
 func TestFingerprintCancellation(t *testing.T) {
 	c, _ := seedFingerprintLibrary(t)
 	started := make(chan struct{})

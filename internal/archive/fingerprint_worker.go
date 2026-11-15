@@ -28,6 +28,7 @@ type fingerprintWorker struct {
 	secondary fingerprintImageRenderer
 	active    [2]*fingerprintEntity
 	pass      fingerprintPass
+	empty     map[int]fingerprintEmpty // by appearance (needed mask)
 }
 
 // fingerprintPass is the one "Render fingerprints" operation both workers
@@ -360,6 +361,12 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (more bool, err 
 	if needed == 0 {
 		return true, c.publishFingerprintImages(ctx, entity, id, revision, fingerprintRendered{})
 	}
+	if entity == "workspace" {
+		stage = "share images"
+		if shared, err := c.shareWorkspaceFingerprint(ctx, id, revision, needed); err != nil || shared {
+			return shared, err
+		}
+	}
 	renderCtx, cancel := context.WithTimeout(ctx, fingerprintRenderTimeout)
 	defer cancel()
 	stage = "load input"
@@ -427,7 +434,137 @@ func (c *Catalog) refreshFingerprintImages(ctx context.Context) (more bool, err 
 	// stamped current. A concurrently requested event-hidden variant stays queued.
 	stage = "publish images"
 	err = c.publishFingerprintImages(ctx, entity, id, revision, result)
+	if err == nil && entity == "workspace" {
+		if sessions, _ := input["conversation"].(map[string]any)["sessions"].([]map[string]any); len(sessions) == 0 {
+			// No conversation: every empty workspace draws these images.
+			worker.rememberEmpty(needed, result.Images)
+		}
+	}
 	return true, err
+}
+
+// fingerprintEmpty is the images of a workspace without conversations, for
+// one appearance at one renderer version: the renderer's input is then the
+// same for every such workspace but for its ID, which it does not draw.
+type fingerprintEmpty struct {
+	renderer string
+	images   []fingerprintRenderedImage
+}
+
+func (w *fingerprintWorker) rememberEmpty(needed int, images []fingerprintRenderedImage) {
+	if int64(len(images)) != fingerprintImagesPerAppearance() {
+		return
+	}
+	stored := make([]fingerprintRenderedImage, len(images))
+	for i, image := range images {
+		stored[i] = fingerprintRenderedImage{Profile: image.Profile, Theme: image.Theme, Events: image.Events, Hash: image.Hash}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.empty == nil {
+		w.empty = map[int]fingerprintEmpty{}
+	}
+	w.empty[needed] = fingerprintEmpty{fingerprintRendererVersion(), stored}
+}
+
+var errFingerprintNotShared = errors.New("fingerprint images cannot be shared")
+
+// shareWorkspaceFingerprint publishes a workspace's images without loading or
+// rendering it when they are already drawn. A workspace with one conversation
+// draws exactly that conversation's images (the renderer's input differs only
+// in the entity ID and the main-session default, neither drawn), so it takes
+// the conversation's current images. A workspace without conversations takes
+// the empty images this process last drew. Images are shared by hash; the
+// PNGs are stored once either way. When the one conversation is itself
+// queued, the workspace waits for it instead of drawing the same images
+// twice; a conversation that failed leaves the workspace to render on its own.
+// shared reports a unit of work: published, or deferred behind its conversation.
+func (c *Catalog) shareWorkspaceFingerprint(ctx context.Context, id, revision string, needed int) (shared bool, err error) {
+	members, err := queryMapsContext(ctx, c.reader(), `SELECT id FROM conversations WHERE workspace_id=? LIMIT 2`, id)
+	if err != nil || len(members) > 1 {
+		return false, err
+	}
+	events := needed == 1
+	var images []fingerprintRenderedImage
+	source := ""
+	if len(members) == 0 {
+		c.fingerprints.mu.Lock()
+		empty, ok := c.fingerprints.empty[needed]
+		c.fingerprints.mu.Unlock()
+		if !ok || empty.renderer != fingerprintRendererVersion() {
+			return false, nil
+		}
+		images = empty.images
+	} else {
+		source = firstString(members[0]["id"])
+		rows, err := queryMapsContext(ctx, c.reader(), `SELECT e.dirty,e.attempts,e.next_attempt,e.priority,
+ (SELECT COUNT(*) FROM fingerprint_images i WHERE i.entity='conversation' AND i.entity_id=e.id AND i.revision=e.revision AND i.renderer=? AND i.events=?) ready
+ FROM fingerprint_entities e WHERE e.entity='conversation' AND e.id=?`, fingerprintRendererVersion(), events, source)
+		if err != nil || len(rows) == 0 {
+			return false, err
+		}
+		conversation := rows[0]
+		if integer(conversation["ready"]) != fingerprintImagesPerAppearance() {
+			if integer(conversation["dirty"]) == 0 || integer(conversation["attempts"]) != 0 {
+				return false, nil
+			}
+			// Queued behind its conversation: retry after it, and let the
+			// conversation go first at the workspace's priority.
+			return true, c.writeTransaction(ctx, "wait for a workspace's conversation fingerprint", func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(ctx, `UPDATE fingerprint_entities SET next_attempt=max(unixepoch(),?)+2 WHERE entity='workspace' AND id=? AND revision=?`, integer(conversation["next_attempt"]), id, revision); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(ctx, `UPDATE fingerprint_entities SET priority=max(priority,(SELECT priority FROM fingerprint_entities WHERE entity='workspace' AND id=?)) WHERE entity='conversation' AND id=? AND dirty=1`, id, source)
+				return err
+			})
+		}
+	}
+	err = c.writeTransaction(ctx, "share fingerprint images", func(tx *sql.Tx) error {
+		// Recheck in the transaction: the workspace's membership, and that
+		// the images are still current and their PNGs present.
+		members, err := queryMapsContext(ctx, tx, `SELECT id FROM conversations WHERE workspace_id=? LIMIT 2`, id)
+		if err != nil {
+			return err
+		}
+		want := 0
+		if source != "" {
+			want = 1
+		}
+		if len(members) != want || source != "" && firstString(members[0]["id"]) != source {
+			return errFingerprintNotShared
+		}
+		if source != "" {
+			rows, err := queryMapsContext(ctx, tx, `SELECT i.profile,i.theme,i.events,i.hash FROM fingerprint_images i JOIN fingerprint_entities e ON e.entity=i.entity AND e.id=i.entity_id AND e.revision=i.revision
+ WHERE i.entity='conversation' AND i.entity_id=? AND i.renderer=? AND i.events=? ORDER BY i.profile,i.theme`, source, fingerprintRendererVersion(), events)
+			if err != nil {
+				return err
+			}
+			images = images[:0]
+			for _, row := range rows {
+				images = append(images, fingerprintRenderedImage{Profile: firstString(row["profile"]), Theme: firstString(row["theme"]), Events: integer(row["events"]) != 0, Hash: firstString(row["hash"])})
+			}
+		}
+		hashes := make([]string, 0, len(images))
+		for _, image := range images {
+			hashes = append(hashes, image.Hash)
+		}
+		var present int64
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM fingerprint_blobs WHERE hash IN (SELECT DISTINCT value FROM json_each(?))`, jsonText(hashes)).Scan(&present); err != nil {
+			return err
+		}
+		var distinct int64
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(DISTINCT value) FROM json_each(?)`, jsonText(hashes)).Scan(&distinct); err != nil {
+			return err
+		}
+		if int64(len(images)) != fingerprintImagesPerAppearance() || present != distinct {
+			return errFingerprintNotShared
+		}
+		return publishFingerprintImagesTx(ctx, tx, "workspace", id, revision, fingerprintRendered{Images: images})
+	})
+	if errors.Is(err, errFingerprintNotShared) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // Reuse a complete appearance across source revisions, including after restart.
@@ -448,42 +585,48 @@ func (c *Catalog) reuseFingerprintImages(ctx context.Context, entity, id, inputH
 
 func (c *Catalog) publishFingerprintImages(ctx context.Context, entity, id, revision string, result fingerprintRendered) error {
 	return c.writeTransaction(ctx, "publish fingerprint images", func(tx *sql.Tx) error {
-		var current string
-		if err := tx.QueryRowContext(ctx, `SELECT revision FROM fingerprint_entities WHERE entity=? AND id=?`, entity, id).Scan(&current); errors.Is(err, sql.ErrNoRows) {
-			return nil
-		} else if err != nil {
-			return err
-		}
-		if current != revision {
-			return nil
-		}
-		for _, image := range result.Images {
-			if image.PNG != nil {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO fingerprint_blobs(hash,png) VALUES(?,?) ON CONFLICT(hash) DO NOTHING`, image.Hash, image.PNG); err != nil {
-					return err
-				}
-			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO fingerprint_images(entity,entity_id,profile,theme,events,revision,renderer,input_hash,input_revision,hash) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(entity,entity_id,profile,theme,events) DO UPDATE SET revision=excluded.revision,renderer=excluded.renderer,input_hash=excluded.input_hash,input_revision=excluded.input_revision,hash=excluded.hash`, entity, id, image.Profile, image.Theme, image.Events, revision, fingerprintRendererVersion(), result.InputHash, revision, image.Hash); err != nil {
+		return publishFingerprintImagesTx(ctx, tx, entity, id, revision, result)
+	})
+}
+
+// publishFingerprintImagesTx publishes result for the entity's revision, and
+// nothing if the entity has moved on to another one.
+func publishFingerprintImagesTx(ctx context.Context, tx *sql.Tx, entity, id, revision string, result fingerprintRendered) error {
+	var current string
+	if err := tx.QueryRowContext(ctx, `SELECT revision FROM fingerprint_entities WHERE entity=? AND id=?`, entity, id).Scan(&current); errors.Is(err, sql.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if current != revision {
+		return nil
+	}
+	for _, image := range result.Images {
+		if image.PNG != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO fingerprint_blobs(hash,png) VALUES(?,?) ON CONFLICT(hash) DO NOTHING`, image.Hash, image.PNG); err != nil {
 				return err
 			}
 		}
-		ready, err := queryMapsContext(ctx, tx, `SELECT events,COUNT(*) count FROM fingerprint_images WHERE entity=? AND entity_id=? AND revision=? AND renderer=? GROUP BY events`, entity, id, revision, fingerprintRendererVersion())
-		if err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO fingerprint_images(entity,entity_id,profile,theme,events,revision,renderer,input_hash,input_revision,hash) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(entity,entity_id,profile,theme,events) DO UPDATE SET revision=excluded.revision,renderer=excluded.renderer,input_hash=excluded.input_hash,input_revision=excluded.input_revision,hash=excluded.hash`, entity, id, image.Profile, image.Theme, image.Events, revision, fingerprintRendererVersion(), result.InputHash, revision, image.Hash); err != nil {
 			return err
 		}
-		readyMask := 0
-		for _, row := range ready {
-			if integer(row["count"]) == fingerprintImagesPerAppearance() {
-				if integer(row["events"]) == 0 {
-					readyMask |= 2
-				} else {
-					readyMask |= 1
-				}
+	}
+	ready, err := queryMapsContext(ctx, tx, `SELECT events,COUNT(*) count FROM fingerprint_images WHERE entity=? AND entity_id=? AND revision=? AND renderer=? GROUP BY events`, entity, id, revision, fingerprintRendererVersion())
+	if err != nil {
+		return err
+	}
+	readyMask := 0
+	for _, row := range ready {
+		if integer(row["count"]) == fingerprintImagesPerAppearance() {
+			if integer(row["events"]) == 0 {
+				readyMask |= 2
+			} else {
+				readyMask |= 1
 			}
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE fingerprint_entities SET dirty=CASE WHEN events_mask&?=events_mask THEN 0 ELSE 1 END,priority=CASE WHEN events_mask&?=events_mask THEN 0 ELSE priority END,attempts=0,next_attempt=0,last_error='' WHERE entity=? AND id=? AND revision=?`, readyMask, readyMask, entity, id, revision)
-		return err
-	})
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE fingerprint_entities SET dirty=CASE WHEN events_mask&?=events_mask THEN 0 ELSE 1 END,priority=CASE WHEN events_mask&?=events_mask THEN 0 ELSE priority END,attempts=0,next_attempt=0,last_error='' WHERE entity=? AND id=? AND revision=?`, readyMask, readyMask, entity, id, revision)
+	return err
 }
 
 func (s *Server) maintainFingerprintImages(ctx context.Context) {
