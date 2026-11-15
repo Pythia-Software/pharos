@@ -517,7 +517,22 @@ PY
   }
   // The month a forecast chart key selects, or null for keys it ignores.
   function chartKeyMonth(key,selected,last){const i={ArrowLeft:selected-1,ArrowRight:selected+1,Home:0,End:last}[key];return i==null?null:Math.max(0,Math.min(last,i));}
-  window.pharosCloudBackup = {defaults,security,providers,regions,tiers,reviewed,compressionMeasurement,normalize,rate,estimate,calendarPeriods,forecast,projection,priceRange,validation,lifecycle,destination,setup,setupStages,prompt,formatCost,restoreDownload,chartKeyMonth};
+  // What removing a configured destination does, asked before it happens and
+  // reported after. Disconnecting clears the credential stored in this library
+  // and turns its schedule off; it never calls the cloud provider.
+  function removalConfirmation(plan,connected){
+    const given=String(plan?.name||'').trim(),name=given?`“${given}”`:'this destination';
+    return connected?{
+      question:`Disconnect and remove ${name}? Uploads to it stop. Backups already in your cloud bucket stay there. Pharos clears the upload credential from this library, but library backups made earlier still contain it.`,
+      confirm:'Remove destination',cancel:'Cancel',
+      done:'Removed. Pharos cleared its stored upload credential and turned off scheduled backups for this destination. Your cloud bucket and backups were not changed, and library backups made earlier still contain the credential.',
+    }:{
+      question:`Remove ${name}? Pharos discards this saved configuration. It is not connected, so nothing in your cloud account changes.`,
+      confirm:'Remove destination',cancel:'Cancel',
+      done:'Configuration removed. Cloud resources were not changed.',
+    };
+  }
+  window.pharosCloudBackup = {removalConfirmation,defaults,security,providers,regions,tiers,reviewed,compressionMeasurement,normalize,rate,estimate,calendarPeriods,forecast,projection,priceRange,validation,lifecycle,destination,setup,setupStages,prompt,formatCost,restoreDownload,chartKeyMonth};
 
   const mount = document.getElementById('cloudBackupPlanner');
   if (!mount) return;
@@ -557,7 +572,7 @@ PY
     .cloud-chart-legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted);margin:12px 0 5px}.cloud-chart-legend span{display:flex;gap:6px;align-items:center}.cloud-chart-legend i{display:block;box-sizing:border-box;width:10px;height:10px;flex-shrink:0}.cloud-chart-scenarios{margin-top:6px}.cloud-legend-flat{border:1px solid var(--muted);opacity:.55}.cloud-legend-projected{border:1px dotted var(--ink)}.cloud-legend-storage{background:var(--sea)}.cloud-legend-upload{background:var(--accent)}.cloud-legend-minimum{background:var(--bad)}
     .cloud-chart{margin:0;position:relative;min-width:0}.cloud-chart figcaption{font-size:13px;font-weight:550;margin:8px 0 3px}.cloud-chart svg{display:block;width:100%;height:auto;overflow:visible;border-radius:4px}.cloud-chart svg:focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}.cloud-chart-tick{font:12px var(--sans,sans-serif);fill:var(--muted)}.cloud-chart-grid{stroke:var(--line);stroke-width:.7}.cloud-bar-storage{fill:var(--sea)}.cloud-bar-upload{fill:var(--accent)}.cloud-bar-minimum{fill:var(--bad)}.cloud-bar-flat{opacity:.5}.cloud-bar-total{fill:none;stroke:var(--ink);stroke-width:.6}.cloud-bar-projected .cloud-bar-total{stroke-dasharray:1 2}.cloud-chart-cursor{fill:var(--ink);opacity:.08}.cloud-chart-readout{display:grid;gap:5px;margin-top:8px;font-size:12px;color:var(--muted);line-height:1.45;overflow-wrap:anywhere}.cloud-chart-readout>strong{color:var(--ink);font-weight:550}.cloud-cost-row span{display:block}.cloud-cost-row b{font-weight:550;color:var(--ink)}.cloud-results>.cloud-note{margin:8px 0 0;font-size:11px}
     .cloud-class-choices{display:grid;gap:10px;margin:12px 0}.cloud-class-choice{display:grid;grid-template-columns:auto 1fr;gap:5px 8px;align-items:center;font-size:12px}.cloud-class-choice small{grid-column:2;color:var(--muted);font-size:11px}.cloud-facts{margin:14px 0;display:grid;gap:8px}.cloud-facts div{padding-bottom:7px;border-bottom:1px solid var(--line)}.cloud-facts dt{color:var(--muted);font-size:11px}.cloud-facts dd{margin:4px 0 0;font-size:12px;overflow-wrap:anywhere}.cloud-wizard pre{margin:8px 0 0;padding:12px;border-radius:7px;max-height:400px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);font:11px/1.5 ui-monospace,SFMono-Regular,monospace}.cloud-review~.cloud-actions{margin-top:14px}
-    .cloud-beta{color:var(--muted);font-size:12px;line-height:1.3}.cloud-ongoing{margin-top:20px;min-width:0}.cloud-ongoing article{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin:12px 0;min-width:0}.cloud-ongoing h4{margin:0 0 8px}.cloud-schedule-settings{margin-top:12px}.cloud-schedule-settings .cloud-fields{margin:12px 0;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr))}.cloud-history-select{display:block;max-width:100%;margin:12px 0}.cloud-saved{border-top:1px solid var(--line);padding:18px 20px}.cloud-saved-item{padding:10px 0;border-bottom:1px solid var(--line)}.cloud-saved-item strong{display:block;overflow-wrap:anywhere}.cloud-saved-item p{margin:5px 0}.cloud-saved-item .cloud-actions{margin-top:7px}
+    .cloud-beta{color:var(--muted);font-size:12px;line-height:1.3}.cloud-ongoing{margin-top:20px;min-width:0}.cloud-ongoing article{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin:12px 0;min-width:0}.cloud-ongoing h4{margin:0 0 8px}.cloud-schedule-settings{margin-top:12px}.cloud-schedule-settings .cloud-fields{margin:12px 0;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr))}.cloud-history-select{display:block;max-width:100%;margin:12px 0}.cloud-saved{border-top:1px solid var(--line);padding:18px 20px}.cloud-saved-item{padding:10px 0;border-bottom:1px solid var(--line)}.cloud-saved-item strong{display:block;overflow-wrap:anywhere}.cloud-saved-item p{margin:5px 0}.cloud-saved-item .cloud-actions{margin-top:7px}.cloud-remove-confirm .danger{border-color:var(--bad);color:var(--bad)}
     .cloud-fields.cloud-protection-fields{grid-template-columns:1fr;max-width:520px;margin:0}.cloud-command-stage{border-top:1px solid var(--line);padding:18px 0}.cloud-command-stage h4{margin-bottom:8px}.cloud-command-stage .cloud-note{max-width:760px}
     .cloud-run-layout{margin-top:20px;display:grid;grid-template-columns:minmax(0,1.3fr) minmax(230px,.7fr);gap:24px;align-items:start}.cloud-run-block{border-top:1px solid var(--line);padding:18px 0 0;margin-top:18px}.cloud-run-block h4{margin-bottom:6px}.cloud-run-block>.cloud-field{margin:12px 0}.cloud-run-layout .cloud-fields{grid-template-columns:1fr}.cloud-run-layout pre{max-height:220px}.cloud-preview-banner{padding:10px 12px;border:1px dashed var(--line);border-radius:6px;font-size:12px;color:var(--muted);margin:12px 0 18px}.cloud-run-result{padding:12px;border:1px solid var(--line);border-radius:6px;font-size:13px;margin-top:12px}.cloud-run-result.success{border-color:var(--sea)}.cloud-run-result.error{border-color:var(--bad)}.cloud-run-result strong{display:block;margin-bottom:5px}.cloud-run-checks{list-style:none;padding:0;margin:12px 0;display:grid;gap:9px;font-size:12px}.cloud-run-checks li{padding-left:18px;position:relative}.cloud-run-checks li::before{content:'○';position:absolute;left:0;color:var(--muted)}.cloud-run-checks li.complete::before{content:'✓';color:var(--sea)}.cloud-run-metadata{background:var(--bg);padding:16px;border-radius:8px;min-width:0}.cloud-run-metadata h4{margin-bottom:8px}.cloud-preview-scenarios{max-width:500px}.cloud-preview-scenarios select{font:inherit}.cloud-setup-check{display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:16px 0}.cloud-setup-check input{margin-top:4px;flex-shrink:0}
     .cloud-cost-tooltip[hidden]{display:none}.usage-chart-tip.chart-tooltip.cloud-cost-tooltip{min-width:min(220px,calc(100vw - 16px))}
@@ -995,11 +1010,42 @@ PY
   }
   async function persist(nextPlans){const response=await fetch('/api/preferences',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({set:{[prefKey]:nextPlans}})});if(!response.ok)throw new Error('Could not save this configuration.');saved=nextPlans;renderSaved();}
   async function savePlan(){if(Object.keys(validation(raw)).length)return;if(!editing&&saved.length>=20){message('You can configure up to 20 destinations.',true);return;}const id=editing||'cloud-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7),plan={...normalize(raw),id},nextPlans=editing&&saved.some(p=>p.id===editing)?saved.map(p=>p.id===editing?plan:p):[...saved,plan];saving=true;refresh();try{await persist(nextPlans);editing=id;message('Configuration saved in Pharos. No credential imported and no upload scheduled.');}catch(error){message(error.message,true);}finally{saving=false;refresh();}}
+  // Removing a destination asks in place first (the app's web view has no
+  // confirm dialog). The question is drawn from the destination's state at
+  // that moment, and keyboard focus survives the periodic redraw.
+  let removing='',removingBusy=false;
+  const removeControl=(control,key)=>{control.dataset.cloudRemove=key;return control;};
+  const focusRemoveControl=key=>[...savedPanel.querySelectorAll('[data-cloud-remove]')].find(b=>b.dataset.cloudRemove===key)?.focus();
+  function removeStart(plan,connected){
+    const start=removeControl(button(connected?'Disconnect and remove…':'Remove…',()=>{removing=plan.id;renderSaved();focusRemoveControl('cancel');}),'start:'+plan.id);
+    start.setAttribute('aria-label',`${connected?'Disconnect and remove':'Remove'} ${plan.name}`);start.disabled=removing===plan.id;
+    return start;
+  }
+  function removeConfirm(plan,connected){
+    const ask=removalConfirmation(plan,Boolean(connected)),box=node('div',null,'cloud-remove-confirm'),actions=node('div',null,'cloud-actions');
+    const cancel=()=>{if(removingBusy)return;removing='';renderSaved();focusRemoveControl('start:'+plan.id);};
+    box.setAttribute('role','group');box.setAttribute('aria-label',ask.confirm);
+    box.onkeydown=event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();cancel();}};
+    actions.append(Object.assign(removeControl(button(ask.confirm,()=>void removePlan(plan),'danger'),'confirm'),{disabled:removingBusy}),Object.assign(removeControl(button(ask.cancel,cancel),'cancel'),{disabled:removingBusy}));
+    box.append(node('p',ask.question),actions);
+    return box;
+  }
+  async function removePlan(plan){
+    if(removingBusy)return;removingBusy=true;renderSaved();
+    try{
+      const d=connectedDestination(plan);if(d)await cloudRequest('/disconnect',{destination_id:d.id});
+      await persist(saved.filter(p=>p.id!==plan.id));removing='';await loadCloud();if(editing===plan.id)editing='';refresh();
+      message(removalConfirmation(plan,Boolean(d)).done);
+    }catch(error){message(sentence(error.message),true);}
+    finally{removingBusy=false;renderSaved();if(removing===plan.id)focusRemoveControl('cancel');}
+  }
   function renderSaved(){
+    const heldRemove=savedPanel.contains(document.activeElement)?document.activeElement.dataset.cloudRemove:'';
     savedPanel.replaceChildren(node('h4','Configured destinations'));if(!saved.length&&!cloudState.destinations.some(d=>d.connected)){savedPanel.hidden=true;return;}savedPanel.hidden=false;let total=0;
     const plans=[...saved];for(const d of cloudState.destinations.filter(d=>d.connected))if(!plans.some(p=>connectedDestination(p)?.id===d.id))plans.push({...normalize(d.config),id:d.id});
-    for(const plan of plans){const connected=connectedDestination(plan),activeSchedule=scheduleFor(connected),e=forecast(activeSchedule?.enabled?{...plan,...scheduleSpec(activeSchedule)}:plan),item=node('div',null,'cloud-saved-item');total+=e.year;item.append(node('strong',plan.name),node('p',`${providers[plan.provider].name} · ${plan.region} · ${money(e.year)} first year`,'cloud-note'),node('p',connected?`Connected · ${scheduleStatus(connected)}`:'Configured only · not connected','cloud-note'));const row=node('div',null,'cloud-actions');row.append(button('Edit',()=>{raw={...plan};editing=plan.id;editedSize=true;touched.clear();providerShown='';step=1;refresh();panels[1].focus();}),Object.assign(button(plan.passwordProtected?'View setup steps':'Copy commands',event=>{if(!plan.passwordProtected){void copy(setup(plan),event.currentTarget);return;}raw={...plan};editing=plan.id;editedSize=true;touched.clear();submitted=false;step=2;refresh();panels[2].focus();}),{disabled:Object.keys(validation(plan)).length>0}),button(connected?'Disconnect and remove':'Remove',async()=>{try{const d=connectedDestination(plan);if(d)await cloudRequest('/disconnect',{destination_id:d.id});await persist(saved.filter(p=>p.id!==plan.id));await loadCloud();if(editing===plan.id)editing='';refresh();message(d?'Removed. Pharos deleted its stored upload credential and turned off scheduled backups for this destination. Your cloud bucket and backups were not changed, and library backups made earlier still contain the credential.':'Configuration removed. Cloud resources were not changed.');}catch(error){message(sentence(error.message),true);}}));item.append(row);savedPanel.append(item);}
+    for(const plan of plans){const connected=connectedDestination(plan),activeSchedule=scheduleFor(connected),e=forecast(activeSchedule?.enabled?{...plan,...scheduleSpec(activeSchedule)}:plan),item=node('div',null,'cloud-saved-item');total+=e.year;item.append(node('strong',plan.name),node('p',`${providers[plan.provider].name} · ${plan.region} · ${money(e.year)} first year`,'cloud-note'),node('p',connected?`Connected · ${scheduleStatus(connected)}`:'Configured only · not connected','cloud-note'));const row=node('div',null,'cloud-actions');row.append(button('Edit',()=>{raw={...plan};editing=plan.id;editedSize=true;touched.clear();providerShown='';step=1;refresh();panels[1].focus();}),Object.assign(button(plan.passwordProtected?'View setup steps':'Copy commands',event=>{if(!plan.passwordProtected){void copy(setup(plan),event.currentTarget);return;}raw={...plan};editing=plan.id;editedSize=true;touched.clear();submitted=false;step=2;refresh();panels[2].focus();}),{disabled:Object.keys(validation(plan)).length>0}),removeStart(plan,connected));item.append(row);if(removing===plan.id)item.append(removeConfirm(plan,connected));savedPanel.append(item);}
     savedPanel.append(node('p',`Combined first-year forecast: ${money(total)}.`,'cloud-note'),button('Plan another backup',()=>{const suffix=Math.random().toString(36).slice(2,8);raw={...normalize(raw),name:'Cloud backup',bucket:'pharos-backup-'+suffix,account:'pharos'+suffix,identity:'pharos-backup-'+suffix,group:'pharos-backup-'+suffix};editing='';step=0;submitted=false;touched.clear();providerShown='';refresh();mount.scrollIntoView({block:'start'});}));
+    if(heldRemove)focusRemoveControl(heldRemove);
   }
   window.pharosCloudBackup.seedLibrary=(bytes,growth)=>{
     latestGrowth=growth;if(bytes>0)latestLibraryBytes=bytes;if(editedSize||editing||!(bytes>0))return;
