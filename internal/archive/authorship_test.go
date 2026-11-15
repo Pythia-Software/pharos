@@ -1880,9 +1880,8 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 			t.Fatalf("carried checkpoint graph: %q (%v)", graph, err)
 		}
 
-		// A use that named its workspace cannot be restated alone: as a
-		// template it has no typed words, and the name passes to a later
-		// message, which the full classifier finds.
+		// A use that named its workspace has no typed words as a template, so
+		// the name passes to the workspace's next typed message.
 		opening := "Open the release checklist and tell me which steps are still unchecked"
 		for i := range 4 {
 			session(fmt.Sprintf("opening%d", i), "codex", "codex/codex_sdk_ts", day+(5+i*2/3)*24*60+i, opening, fmt.Sprintf("Step %d of the checklist looks wrong to me, please verify it by hand", i))
@@ -1891,11 +1890,15 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 			t.Fatalf("four sessions of a prompt were classified as %q", mode)
 		}
 		session("opening4", "codex", "codex/codex_sdk_ts", day+8*24*60, opening)
-		if mode := rebuild(); mode == "suffix" {
-			t.Fatal("a template that named workspaces was restated from the checkpoint")
+		if mode := rebuild(); mode != "suffix" {
+			t.Fatalf("a template that named workspaces was classified as %q", mode)
 		}
 		if _, template, _, _ := row("native-opening0-0"); template == 0 {
 			t.Fatal("the earliest opening prompt did not become a template")
+		}
+		var naming sql.NullString
+		if err := c.DB.QueryRow(`SELECT authored_message_id FROM workspace_names WHERE workspace_id='native-opening0'`).Scan(&naming); err != nil || naming.String != "native-opening0-1" {
+			t.Fatalf("workspace named by %q after its opening became a template (%v)", naming.String, err)
 		}
 	})
 

@@ -324,7 +324,17 @@ type authorResult struct {
 	Spans []authorSpan
 	// Answers are the question-form options the message submitted.
 	Answers []questionAnswer
+	// naming marks, in a pass that restates earlier messages, the results that
+	// decide a workspace's name again: authorshipRenames is the restated
+	// message that gave the name, and authorshipNameOnly a later message whose
+	// stored classification is read for the name and written nowhere.
+	naming int
 }
+
+const (
+	authorshipRenames = iota + 1
+	authorshipNameOnly
+)
 
 // textOrigin names the message a span's text was found in.
 type textOrigin struct {

@@ -553,8 +553,8 @@ func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncreme
 //   - What the message leaves for later ones (its text and lines) does not
 //     depend on its category, so the stored state stands.
 //
-// A use that named its workspace is the exception: as a template it has no
-// typed words, and the name passes to a later message.
+// A use that named its workspace has, as a template, no typed words, so the
+// name passes to a later message; the results say which (authorResult.naming).
 func (c *Catalog) restateTemplates(ctx context.Context, suffix *classifier, representative map[string]string, claimed map[string]bool, launches []conversationLaunch, since time.Time) ([]authorResult, bool, error) {
 	sessions := map[string]bool{}
 	for _, conversations := range suffix.crossed {
@@ -585,19 +585,71 @@ func (c *Catalog) restateTemplates(ctx context.Context, suffix *classifier, repr
 	if len(uses) > authorshipSuffixLimit {
 		return nil, false, nil
 	}
-	var names bool
-	if err := c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM workspace_names WHERE authored_message_id IN (SELECT value FROM json_each(?)))`, jsonText(messages)).Scan(&names); err != nil || names {
-		return nil, false, err
-	}
 	restating.questions, err = c.loadAuthorshipQuestionsBefore(ctx, ids, since)
 	if err != nil {
 		return nil, false, err
 	}
+	named, err := queryMapsContext(ctx, c.DB, `SELECT workspace_id,authored_message_id FROM workspace_names WHERE authored_message_id IN (SELECT value FROM json_each(?)) ORDER BY workspace_id`, jsonText(messages))
+	if err != nil {
+		return nil, false, err
+	}
+	naming := map[string]bool{}
+	for _, row := range named {
+		naming[asString(row["authored_message_id"])] = true
+	}
 	results := make([]authorResult, 0, len(uses))
 	for _, input := range uses {
-		results = append(results, authorResult{Input: input, Spans: restating.classify(input), Answers: restating.answers})
+		result := authorResult{Input: input, Spans: restating.classify(input), Answers: restating.answers}
+		if naming[input.ID] {
+			if authoredWorkspaceTitle(input.Text, result.Spans) != "" {
+				return nil, false, nil
+			}
+			result.naming = authorshipRenames
+		}
+		results = append(results, result)
+	}
+	// The name passes to the workspace's next message with typed words: one
+	// of the suffix's, which the plan reads after these, unless an earlier
+	// message has some. The earlier ones' classifications stand, so the stored
+	// spans are what a full pass would read, in its order.
+	limit := formatTime(since)
+	for _, row := range named {
+		next, err := c.nextAuthoredName(ctx, asString(row["workspace_id"]), limit, messages)
+		if err != nil {
+			return nil, false, err
+		}
+		if next != nil {
+			results = append(results, *next)
+		}
 	}
 	return results, true, nil
+}
+
+// nextAuthoredName is the first message of a workspace, sent before limit and
+// not among restated, whose stored classification gives a name.
+func (c *Catalog) nextAuthoredName(ctx context.Context, workspace, limit string, restated []string) (*authorResult, error) {
+	rows, err := c.reader().QueryContext(ctx, `SELECT a.message_id,a.sent_at,a.spans_json,m.text FROM message_authorship a JOIN messages m ON m.id=a.message_id
+		WHERE a.workspace_id=? AND a.typed_words>0 AND a.sent_at<? AND a.message_id NOT IN (SELECT value FROM json_each(?)) ORDER BY a.sent_at,a.message_id`, workspace, limit, jsonText(restated))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, sent, encoded string
+		var text sql.NullString
+		if err := rows.Scan(&id, &sent, &encoded, &text); err != nil {
+			return nil, err
+		}
+		var spans []authorSpan
+		at, ok := parseTime(sent)
+		if !ok || json.Unmarshal([]byte(encoded), &spans) != nil {
+			continue
+		}
+		if authoredWorkspaceTitle(text.String, spans) != "" {
+			return &authorResult{Input: authorInput{ID: id, WorkspaceID: workspace, Text: text.String, SentAt: at}, Spans: spans, naming: authorshipNameOnly}, nil
+		}
+	}
+	return nil, rows.Err()
 }
 
 // planned are the results a pass stores: the suffix's, and before them the
