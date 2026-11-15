@@ -294,9 +294,9 @@
   const WORK_STATES = {queued: 'Waiting to start', running: 'Running', blocked: 'Waiting', stopping: 'Stopping', succeeded: 'Done',
     failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted', skipped: 'Skipped'};
   const WORK_REASONS = {
-    dependency: 'Waiting for work it depends on', capacity: 'Waiting for a free CPU slot', power: 'Waiting for power',
+    dependency: 'Waiting for work it depends on', capacity: 'Waiting for a free CPU slot', power: 'Waiting until this Mac is plugged in',
     policy: 'Waiting for background settings to allow it', writer: 'Waiting for another write to the library', external: 'Waiting for an outside service',
-    held: 'Stopped until you resume it or Pharos restarts', failed: 'Stopped after a failure', 'failures-full': 'Stopped after too many failures',
+    held: 'Stopped until you resume it, or quit and reopen Pharos', failed: 'Stopped after a failure', 'failures-full': 'Stopped after too many failures',
     'retry-backoff': 'Trying again shortly after a failure', 'allocation-exceeds-cap': 'Needs more CPU slots than the allowance',
     'request-memory': 'Waiting for memory', 'request-limit': 'Waiting for other requests to finish', 'recent-first': 'Waiting for recent work to finish first',
     paused: 'Background processing is paused', 'inputs-keep-changing': 'Its conversations kept changing; they stay queued for the next update',
@@ -323,11 +323,11 @@
     const max = Math.max(1, Math.floor(Number(work.max_cpu_slots)) || 1);
     const value = Math.min(max, Math.max(1, Math.floor(Number(work.cpu_slots)) || 1));
     const canChange = work.can_change === true;
-    const locked = canChange ? '' : work.locked_reason || 'Set by PHAROS_BACKGROUND_CPUS when Pharos started. Restart without it to change it here.';
+    const locked = canChange ? '' : work.locked_reason || 'Set by PHAROS_BACKGROUND_CPUS when Pharos started. Quit Pharos and reopen it without PHAROS_BACKGROUND_CPUS to change it here.';
     let inUse = '';
     if (authority) {
       const cap = Math.max(1, Number(authority.cpu_cap) || value), used = Math.max(0, Number(authority.cpu_allocated) || 0);
-      const parts = [`${used} of ${cap} in use`];
+      const parts = [`${used} of ${cap} slots in use`];
       if (authority.cpu_waiters > 0) parts.push(`${authority.cpu_waiters} waiting`);
       if (authority.cpu_over_budget > 0) parts.push(`${plural(authority.cpu_over_budget, 'slot')} over until current work reaches a safe point`);
       inUse = parts.join(' · ');
@@ -493,14 +493,15 @@
     const run = button('', async () => {
       if (waitingForMoves()) return;
       await call('/api/background/run', body);
-      toast(`${label} runs now.`);
+      toast(body.cadence ? `Everything in “${label}” runs next.` : `${label} runs next.`);
       refresh(true);
     }, 'bg-run');
     run.append(play());
     run.dataset.focusKey = 'run:' + (body.item || body.cadence);
     run.disabled = disabled || waitingForMoves();
-    run.title = `Run ${label} now`;
-    run.setAttribute('aria-label', `Run ${label} now`);
+    const name = body.cadence ? `Run everything in “${label}” now` : `Run ${label} now`;
+    run.title = name;
+    run.setAttribute('aria-label', name);
     return run;
   }
 
@@ -545,14 +546,14 @@
       } else if (column.id === 'daily') {
         const hours = ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00', '06:00', '12:00', '18:00', '22:00', '23:00'];
         const label = value => new Date(`2000-01-01T${value}:00`).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
-        when.append('Overnight at ', select(hours.map(value => [value, label(value)]), model.settings.daily_at || '03:00', value => save({daily_at: value}), 'Daily update time'), ', or the first quiet moment after');
+        when.append('Daily at ', select(hours.map(value => [value, label(value)]), model.settings.daily_at || '03:00', value => save({daily_at: value}), 'Daily update time'), ', or the first quiet moment after');
       } else {
         when.textContent = column.description;
       }
       section.append(head);
       if (column.id === 'hourly' || column.id === 'daily') {
         const hold = node('label', 'bg-busy');
-        hold.title = 'Shared by Hourly and Daily';
+        hold.title = 'Applies to Hourly and Daily. Work that is very late runs anyway.';
         const box = node('input');
         box.type = 'checkbox';
         box.setAttribute('role', 'switch');
@@ -724,9 +725,9 @@
     const card = node('section', 'bg-card');
     const mode = node('div', 'bg-mode');
     const intro = node('div');
-    intro.append(node('h3', '', 'Task Schedule'),
-      node('p', 'muted', {on: 'Everything below runs automatically. Pharos measures every run and moves work between schedules as it gets faster or slower.',
-        paused: 'Paused; everything resumes at the end of the pause.', manual: 'Nothing runs until you choose Update everything now.'}[model.mode] || ''));
+    intro.append(node('h3', '', 'Task schedule'),
+      node('p', 'muted', {on: 'Scheduled work runs automatically. Pharos measures each run and moves adaptive work to a faster or slower schedule.',
+        paused: 'Paused; everything resumes at the end of the pause.', manual: 'Nothing runs on a schedule. Use Run now on an item, or Index changes now.'}[model.mode] || ''));
     const seg = node('div', 'bg-seg');
     seg.setAttribute('role', 'group');
     seg.setAttribute('aria-label', 'Background Processing');
@@ -738,9 +739,9 @@
       choice.setAttribute('aria-pressed', String(pressed));
       seg.append(choice);
     }
-    const everything = button('Update everything now', async () => {
+    const everything = button('Index changes now', async () => {
       await call('/api/sync/check', {});
-      toast('Updating everything now: new conversations first, then every analysis.');
+      toast('Indexing changes: new conversations first, then the analyses that depend on them.');
     });
     everything.prepend(play());
     mode.append(intro, seg, everything);
@@ -749,7 +750,7 @@
     if (model.rule) {
       const rule = node('div', 'bg-rule');
       rule.append(node('strong', '', 'How work is placed:'), ...[`usually under ${duration(model.rule.frequent_seconds)} → Frequently`,
-        `under ${duration(model.rule.hourly_seconds)} → Hourly`, 'longer → Daily', 'Choose an item for its cost, or to change or run it; drag one to another schedule for a week.'].map(text => node('span', '', text)));
+        `under ${duration(model.rule.hourly_seconds)} → Hourly`, 'longer → Daily', 'Select an item to see its cost, change its schedule or run it. Drag it to another column to move it for a week.'].map(text => node('span', '', text)));
       card.append(rule);
     }
     content.append(card);
@@ -758,7 +759,7 @@
     if (model.battery) {
       const battery = node('section', 'bg-card');
       battery.dataset.card = 'battery';
-      battery.append(node('h3', '', 'On battery'), node('p', 'muted', `${model.battery.status} Choose what keeps running when this Mac is unplugged; Update everything now and Run now always run.`));
+      battery.append(node('h3', '', 'On battery'), node('p', 'muted', `${model.battery.status} Choose what keeps running when this Mac is unplugged; Index changes now and Run now always run.`));
       const rows = node('div', 'bg-battery');
       for (const row of model.battery.rows) {
         const label = node('label', 'bg-battery-row');
@@ -809,7 +810,7 @@
 
   function renderAgentEventSettings(events) {
     return labelSwitch('agentEventsEnabled', 'agentEvents', 'Agent events (preview)',
-      'Find obstacles, discoveries and workarounds in agent replies from the last 90 days. Turning this off keeps its results.', events,
+      'Find obstacles, discoveries and workarounds in agent replies and thinking from the last 90 days. Turning this off keeps its results.', events,
       async enabled => {
         window.pharosPrefs.set(AGENT_EVENTS_KEY, enabled);
         await window.pharosPrefs.flush?.();
@@ -911,7 +912,7 @@
     card.dataset.key = 'work';
     const allowance = model.allowance;
     card.append(node('h3', '', 'Background CPU'),
-      node('p', 'muted', `How many CPU-heavy background workers ${allowance.scope} may run at once. Other Pharos processes have their own allowance; interactive pages are not limited by it.`));
+      node('p', 'muted', 'How many CPU-heavy background tasks Pharos may run at once for this library. Other Pharos processes have their own allowance; pages you open are not limited by it.'));
     const cpu = node('div', 'bg-work-cpu');
     const label = node('label', '', 'Allowance ');
     const choice = select(allowance.choices.map(value => [value, String(value)]), allowance.value, async value => {
@@ -931,18 +932,18 @@
     }, 'Background CPU allowance');
     choice.dataset.focusKey = 'work:cpu';
     choice.disabled = !allowance.canChange;
-    label.append(choice, ` of ${plural(allowance.max, 'CPU')}`);
+    label.append(choice, ` of ${plural(allowance.max, 'slot')}`);
     cpu.append(label);
     if (allowance.inUse) cpu.append(node('span', 'bg-state', allowance.inUse));
-    card.append(cpu, node('p', 'muted', allowance.locked || 'This shares out work; it is not measured CPU use, which Load in the activity panel shows. A lower allowance applies once current work reaches a safe point.'));
+    card.append(cpu, node('p', 'muted', allowance.locked || 'This shares out work; it is not measured CPU use, which the Load row in the Background Processing panel shows. A lower allowance applies once current work reaches a safe point.'));
     if (model.paused) card.append(node('p', 'muted', 'Background processing is paused; requests wait until it resumes.'));
 
     const actions = node('div', 'bg-work-actions');
-    const recent = button('Bring last 2 days up to date', () => workAction('recent', {}, 'Bringing the last 2 days up to date first; older history continues afterward.', 'work:recent'));
+    const recent = button('Update analyses for the last 2 days', () => workAction('recent', {}, 'Updating analyses for the last 2 days first; older history continues afterward.', 'work:recent'));
     recent.prepend(play());
     recent.dataset.focusKey = 'work:recent';
     recent.disabled = model.recentLive;
-    const history = button('Catch up all history', () => workAction('backfill', {}, 'Catching up all history at low priority, after recent work.', 'work:backfill'));
+    const history = button('Update analyses for all history', () => workAction('backfill', {}, 'Updating analyses for all history at low priority, after recent work.', 'work:backfill'));
     history.dataset.focusKey = 'work:backfill';
     history.disabled = model.backfillLive;
     history.title = 'Runs after recent work, at low priority. Cancel it at any time.';
@@ -1016,10 +1017,10 @@
     row.append(copy);
     // Stop and Resume share a focus key: one replaces the other.
     const words = {
-      stop: ['Stop', `Stopping ${task.label} at its next safe point. It stays stopped until you resume it or Pharos restarts.`,
-        'Stops at the next safe point and holds it until you resume it or Pharos restarts. Requests that need it wait.'],
-      resume: ['Resume', `${task.label} resumed.`, 'Lets it run again.'],
-      retry: ['Retry', `Trying ${task.label}'s failures again.`, 'Tries what failed again.'],
+      stop: ['Stop', `Stopping ${task.label} at its next safe point. It stays stopped until you resume it, or quit and reopen Pharos.`,
+        'Stops at the next safe point and holds it until you resume it, or quit and reopen Pharos. Requests that need it wait.'],
+      resume: ['Resume', `Resumed ${task.label}.`, 'Lets it run again.'],
+      retry: ['Retry', `Retrying what failed in ${task.label}.`, 'Tries what failed again.'],
     };
     for (const action of task.actions) {
       const [text, message, title] = words[action];

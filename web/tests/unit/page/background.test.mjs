@@ -291,7 +291,7 @@ const inspection = {
   ],
   tasks: [
     { kind: "analysis.authorship", state: "running", running: { kind: "analysis.authorship", batch: 9, units: 12, cpus: 2 }, batches: 3 },
-    { kind: "analysis.labels", state: "blocked", blocker: { reason: "held", detail: "stopped until Resume or a service restart" }, failures: 2,
+    { kind: "analysis.labels", state: "blocked", blocker: { reason: "held", detail: "stopped until you resume it, or quit and reopen Pharos" }, failures: 2,
       failure_examples: [{ kind: "analysis.labels", unit: { id: "c1" }, attempts: 3, error: "Error A", exhausted: true }] },
     { kind: "maintenance.parallelism", batches: 0 },
     { kind: "maintenance.labels.query", state: "blocked", blocker: { reason: "power" } },
@@ -371,7 +371,7 @@ test("tasks: Stop while they have work, Resume while held, Retry after failures;
   assert.match(byKind["analysis.authorship"].text, /12 conversations\D+2 CPU/);
   assert.deepEqual(byKind["analysis.labels"].actions, ["resume", "retry"]);
   assert.equal(byKind["analysis.labels"].state, "held");
-  assert.ok(!byKind["analysis.labels"].text.includes("service restart"), "a hold's implementation detail is not repeated");
+  assert.ok((byKind["analysis.labels"].text.match(/quit and reopen Pharos/gi) ?? []).length <= 1, "a hold's detail is not repeated");
   assert.deepEqual(byKind["analysis.labels"].examples, ["Error A"]);
   assert.deepEqual(byKind["maintenance.labels.query"].actions, ["stop"]);
   assert.deepEqual(model.idleTasks, ["Measure parallel work"]);

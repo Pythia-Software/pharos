@@ -85,9 +85,9 @@ function writeDefaultId(key: string, id: string | null) {
 
 function savedQueryName(name: string, items: SavedQuery[]): string {
   const normalized = name.trim();
-  if (!normalized || normalized.length > MAX_SAVED_NAME_LENGTH) throw new Error(`Saved query name must be between 1 and ${MAX_SAVED_NAME_LENGTH} characters.`);
-  if (items.length >= MAX_SAVED_QUERIES) throw new Error(`At most ${MAX_SAVED_QUERIES} saved queries are allowed.`);
-  if (items.some(saved => saved.name === normalized)) throw new Error(`Saved query "${normalized}" already exists.`);
+  if (!normalized || normalized.length > MAX_SAVED_NAME_LENGTH) throw new Error(`Saved view name must be between 1 and ${MAX_SAVED_NAME_LENGTH} characters.`);
+  if (items.length >= MAX_SAVED_QUERIES) throw new Error(`At most ${MAX_SAVED_QUERIES} saved views are allowed.`);
+  if (items.some(saved => saved.name === normalized)) throw new Error(`Saved view “${normalized}” already exists.`);
   return normalized;
 }
 
@@ -111,7 +111,7 @@ export function clientTableStorageAdapter(): StorageAdapter {
       return found || null;
     },
     async setDefaultSaved(key, id) {
-      if (id && !read(key).some(item => item.id === id)) throw new Error(`Saved query "${id}" does not exist.`);
+      if (id && !read(key).some(item => item.id === id)) throw new Error(`Saved view “${id}” does not exist.`);
       writeDefaultId(key, id);
     },
     async saveNamed(key, name, query, savedAt, snapshotCode) {
@@ -122,7 +122,7 @@ export function clientTableStorageAdapter(): StorageAdapter {
     },
     async updateNamed(key, id, query, savedAt, snapshotCode) {
       const items = read(key), original = items.find(item => item.id === id);
-      if (!original) throw new Error(`Saved query "${id}" does not exist.`);
+      if (!original) throw new Error(`Saved view “${id}” does not exist.`);
       const item: SavedQuery = { id, name: original.name, savedAt, query: normalizeQueryState(query), ...(snapshotCode ? { snapshotCode } : {}) };
       write(key, items.map(entry => entry.id === id ? item : entry));
       return item;
@@ -168,7 +168,7 @@ export function libraryStorageAdapter(options: { fresh?: boolean; onRecovery?: (
       return found ?? null;
     },
     async setDefaultSaved(key, id) {
-      if (id && !readSaved(key).some(query => query.id === id)) throw new Error(`Saved query "${id}" does not exist.`);
+      if (id && !readSaved(key).some(query => query.id === id)) throw new Error(`Saved view “${id}” does not exist.`);
       writeDefaultId(key, id);
     },
     async saveNamed(key, name, query, savedAt) {

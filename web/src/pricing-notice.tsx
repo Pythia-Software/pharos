@@ -48,13 +48,13 @@ export function PricingNotice({ copy }: { copy: (text: string) => Promise<void> 
   };
   return <section className="pricing-notice" aria-label="Missing model prices">
     <div className="pricing-notice-heading">
-      <div><h2>Some work has no API price</h2><p>Across this library, {models.length} {models.length === 1 ? "model needs" : "models need"} pricing research: {models.map(model => model.model).join(", ")}. Unpriced usage is missing from API cost totals.</p></div>
-      <button type="button" disabled={copying || !pricing?.prompt} onClick={() => void copyPrompt()}>Copy refresh prices prompt</button>
+      <div><h2>Some models have no API price</h2><p>Across this library, {models.length.toLocaleString()} {models.length === 1 ? "model needs" : "models need"} pricing research: {models.map(model => model.model).join(", ")}. Unpriced usage is missing from API cost totals.</p></div>
+      <button type="button" disabled={copying || !pricing?.prompt} onClick={() => void copyPrompt()}>Copy pricing prompt</button>
     </div>
     {error ? <p className="query-table-error" role="alert">{error}</p> : null}
     {notice ? <p role="status">{notice}</p> : null}
     <ViewDisclosure viewKey="tokens.pricing-prompt" summary="Pricing prompt">
-      <textarea aria-label="Pricing refresh prompt" readOnly value={pricing?.prompt ?? ""} rows={12} />
+      <textarea aria-label="Pricing prompt" readOnly value={pricing?.prompt ?? ""} rows={12} />
     </ViewDisclosure>
   </section>;
 }

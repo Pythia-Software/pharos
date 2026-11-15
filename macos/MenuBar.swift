@@ -367,12 +367,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         row("backup", "Last backup", path: "/settings/backups")
         row("space", "Library size", path: "/settings")
         row("free", "Calculating free space…")
-        row("search", "Search conversations…", path: "/library")
-        row("analyze", "Analyze usage…", path: "/analyze")
-        row("optimize", "Optimize…", path: "/findings")
-        row("capture", "Background Processing…", path: "/settings/sync")
-        row("health", "Library health & backups…", path: "/settings")
-        row("sources", "Manage sources…", path: "/settings/sources")
+        row("search", "Search conversations", path: "/library")
+        row("analyze", "Analyze usage", path: "/analyze")
+        row("optimize", "Optimize", path: "/findings")
+        row("capture", "Background Processing", path: "/settings/sync")
+        row("health", "Library health", path: "/settings")
+        row("sources", "Manage sources", path: "/settings/sources")
         let finder = NSMenuItem(title: "Show library in Finder", action: #selector(showLibraryInFinder), keyEquivalent: "")
         finder.target = self; rows["finder"] = finder
         // Logs opens Settings → Logs at a source. update() marks the sources

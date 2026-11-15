@@ -143,7 +143,7 @@ export function DataTaxonomyModal() {
   }}>
     <header className="data-guide-header">
       <h2 id="dataGuideTitle">Data Guide</h2>
-      <button type="button" className="data-guide-close" aria-label="Close data guide" onClick={() => dialog.current?.close()}><Icon name="close" /></button>
+      <button type="button" className="data-guide-close" aria-label="Close Data Guide" onClick={() => dialog.current?.close()}><Icon name="close" /></button>
     </header>
     <div className="data-guide-body">
       <nav ref={termNavigation} className="data-guide-terms app-navigation-list" aria-label="Data Guide terms">

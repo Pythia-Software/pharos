@@ -701,7 +701,7 @@
     if (!background.length) return activities;
     const sync = activities.find(activity => ['sync', 'index'].includes(activity.kind));
     const primary = sync || background[0];
-    const grouped = {...primary, label: sync ? primary.label : 'Automatic sync in progress',
+    const grouped = {...primary, label: sync ? primary.label : 'Automatic index in progress',
       stepTitle: primary.stepTitle || primary.label, relatedActivities: background.filter(activity => activity !== primary)};
     return activities.flatMap(activity => activity === primary ? [grouped] : background.includes(activity) ? [] : [activity]);
   }
@@ -1253,7 +1253,8 @@
   function sourceAccount(account) { return account ? [node('span', 'pharos-sub', ` · Account: ${account}`)] : []; }
 
   // ---- Settings → Health and Backups
-  const CHECK_TITLES = {encryption: 'Encryption', spotlight: 'Spotlight', filesystem: 'File system', location: 'Location', free_space: 'Free space', volume_pin: 'Volume pin', backup: 'Backup'};
+  const CHECK_TITLES = {volume: 'Drive', encryption: 'Encryption', spotlight: 'Spotlight', filesystem: 'File system', location: 'Location', free_space: 'Free space', volume_pin: 'Volume pin', backup: 'Backup'};
+  const CHECK_STATUS_WORDS = {problem: 'Problem', warning: 'Warning', info: 'Note', unknown: 'Unknown'};
   const STATUS_DOT = {ok: '', info: 'idle', unknown: 'idle', warning: 'warn', problem: 'bad'};
   let backupDraft = null, backupError = null, backupBusy = false;
 
@@ -1275,7 +1276,7 @@
         list.append(...backupChecks.map(driveCheckItem));
         backupPage.append(list);
       }
-      backupPage.append(backupPanel(backup, drive.volume?.name || 'Library drive'));
+      backupPage.append(backupPanel(backup, drive.volume?.name || 'the library’s drive'));
     }
     const cards = document.getElementById('healthCards');
     if (!cards) return;
@@ -1290,10 +1291,10 @@
     const volume = drive.volume || {};
     const name = volume.name || status?.drive?.name || 'Library drive';
     const head = node('div', 'pharos-section-head'), intro = node('div');
-    const title = node('h3', '', drive.scope === 'archive_root' ? `Archive drive · ${name}` : `Library drive · ${name}`);
+    const title = node('h3', '', drive.scope === 'archive_root' ? `Data drive · ${name}` : `Library drive · ${name}`);
     intro.append(title);
     const facts = [];
-    if (volume.location) facts.push({external: 'external drive', 'disk-image': 'disk image', internal: "this Mac's internal disk"}[volume.location] || volume.location);
+    if (volume.location) facts.push({external: 'external drive', 'disk-image': 'disk image', internal: 'this Mac’s internal disk'}[volume.location] || volume.location);
     if (volume.filesystem) facts.push(volume.filesystem.toUpperCase());
     if (drive.free_bytes != null) facts.push(`${size(drive.free_bytes)} free`);
     if (drive.sizes?.library_bytes) facts.push(`library ${size(drive.sizes.library_bytes)}`);
@@ -1303,7 +1304,7 @@
     const attention = node('div', 'pharos-health-attention');
     const attentionChecks = checks.filter(check => check.status === 'warning' || check.status === 'problem');
     if (attentionChecks.length) {
-      attention.append(node('span', 'pharos-health-attention-label', 'Needs Attention:'));
+      attention.append(node('span', 'pharos-health-attention-label', 'Needs attention:'));
       for (const check of attentionChecks) {
         const chip = button(CHECK_TITLES[check.id] || check.id, 'pharos-chip warn', () => {
           window.pharosView?.write('disclosures', {...window.pharosView.read('disclosures', {}), 'library:drive-health': true});
@@ -1341,7 +1342,7 @@
     item.dataset.check = check.id;
     item.append(node('span', 'pharos-dot ' + (STATUS_DOT[check.status] ?? 'idle')));
     const titleLine = node('div', 'pharos-check-title', CHECK_TITLES[check.id] || check.id);
-    if (check.status !== 'ok') titleLine.append(node('span', check.status === 'problem' ? 'pharos-error' : check.status === 'warning' ? 'pharos-warn' : 'pharos-sub', ` · ${check.status}`));
+    if (check.status !== 'ok') titleLine.append(node('span', check.status === 'problem' ? 'pharos-error' : check.status === 'warning' ? 'pharos-warn' : 'pharos-sub', ` · ${CHECK_STATUS_WORDS[check.status] || check.status}`));
     item.append(titleLine, node('div', 'pharos-sub', check.summary));
     if (check.recommendation) item.append(node('div', '', check.recommendation));
     if (check.action) item.append(node('div', 'pharos-sub', check.action));
@@ -1363,7 +1364,7 @@
     }
     const run = backup.run;
     if (backup.active && run) {
-      box.append(node('div', '', `Backing up to ${run.destination} · ${run.phase || 'starting'} · ${plural(run.files_copied, 'file')} copied, ${plural(run.files_unchanged, 'file')} unchanged · ${size(run.bytes_copied)} copied`), progressBar(null));
+      box.append(node('div', '', `Backing up to ${run.destination} · ${run.phase || 'starting'} · ${plural(run.files_copied, 'file')} copied, ${plural(run.files_unchanged, 'file')} unchanged · ${size(run.bytes_copied)} copied`), progressBar(null, 'Backup progress'));
       box.append(button('Cancel backup', '', async () => { try { await post('/api/backup/cancel'); } catch (error) { toast(error.message); } refreshSettings(); }));
     } else if (run && run.completed_at) {
       const done = run.state === 'complete', partial = run.state === 'partial';
@@ -1410,7 +1411,7 @@
       error.setAttribute('role', 'alert');
       box.append(error);
     }
-    box.append(node('p', 'pharos-sub', 'Choose a folder on another drive, or on a Mac with FileVault on. The library’s own drive is refused: a backup there would be lost with it. Later backups copy only what changed.'));
+    box.append(node('p', 'pharos-sub', 'Choose a folder on another drive, or on a FileVault-protected Mac you trust. The library’s own drive is refused: a backup there would be lost with it. Later backups copy only what changed.'));
     return box;
   }
 
