@@ -39,6 +39,9 @@ export type QueryRecipe = {
   id: string; idea: string; title: string; description: string; dataset: QueryDataset;
   field: string; days?: number[]; where?: WhereTerm[]; measures: AggregationClause[];
   unit: string; category: QueryCategory; scope?: string; note?: string; emptyLabel?: string;
+  // Its empty cover tells the person how to turn its data on, so the catalog
+  // and Home keep it when empty (card-interest.ts).
+  emptyIsSetup?: boolean;
   eligibility?: { metricId: string; minValue: number };
   exploration?: CardExploration;
   cover?: CardCover;

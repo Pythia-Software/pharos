@@ -7,6 +7,7 @@ import { cardDatasets, cardLibraryParams, cardSorts, cardTemplates, cardTopicAll
 export { cardLibraryParams } from "./card-library-model";
 import { cardKind } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
+import { cardInterest, cardInterestOptions, catalogSparseNote, type CardInterest, type CardInterestOptions } from "./card-interest";
 import { queryCategories, type QueryCategory } from "./query-categories";
 import type { QueryDataset } from "./query-links";
 import { QueryCard } from "./query-card";
@@ -105,7 +106,13 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
   const [chosen, setChosen] = useState(initial.topic), [days, setDaysValue] = useViewState<string>("card_window", "default", active);
   const setDays = (value: WindowChoice | "default") => setDaysValue(String(value));
   const [filtersOpen, setFiltersOpen] = useViewState("card_filters", initial.filters, active);
+  // Cards whose cover has no or too little data for this library are left
+  // out (card-interest.ts) unless every card is asked for.
+  const [showAll, setShowAll] = useViewState("card_all", false, active);
   const [previews, setPreviews] = useState<Record<string, QueryPreview>>({}), [errors, setErrors] = useState<Record<string, string>>({}), [loading, setLoading] = useState(true);
+  // Verdicts for covers prepared in the background, so tab counts know about
+  // cards outside the current tab. Reset when the covers change.
+  const [prepared, setPrepared] = useState<Record<string, CardInterest>>({});
   const tabs = useRef<HTMLDivElement>(null);
   const topic = chosen === ALL || topics.includes(chosen as QueryCategory) ? chosen : topics[0] ?? ALL;
   const matching = useMemo(() => recipes.filter(recipe => (!dataset || recipe.dataset === dataset) && (!kind || cardKind(recipe) === kind) && `${recipe.id} ${recipe.idea} ${recipe.title} ${recipe.description} ${cardDatasets[recipe.dataset]} ${queryCategories[recipe.category].label}`.toLowerCase().includes(search.toLowerCase())), [recipes, search, dataset, kind]);
@@ -114,6 +121,14 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     return key(a).localeCompare(key(b)) || a.title.localeCompare(b.title);
   }), [matching, topic, sort]);
   const cards = useMemo(() => visible.map(recipe => instantiateRecipe(recipe, cardDays(recipe, days === "default" ? "default" : readWindowChoice(days)))), [visible, days, generation]);
+  const judging = useMemo(() => new Map<string, CardInterestOptions>(recipes.map(recipe => [recipe.id, cardInterestOptions(recipe)])), [recipes]);
+  const interest = (id: string) => previews[id] || errors[id] ? cardInterest(previews[id], { ...judging.get(id), error: errors[id] }) : prepared[id];
+  // A search asks for particular cards, so it shows every match.
+  const searching = Boolean(search.trim());
+  const sparse = (id: string) => !searching && (interest(id)?.level ?? "interesting") !== "interesting";
+  const uninteresting = (id: string) => !showAll && sparse(id);
+  const shown = cards.filter(item => !uninteresting(item.id));
+  const sparseNote = catalogSparseNote(cards.filter(item => sparse(item.id)).length, shown.length, showAll);
   const reloadPreview = usePreviewReload(setPreviews, setErrors, [cards, schemas, active]);
   const nearby = useRef(new Set<string>());
   const previousJobs = useRef(new Map<string, string>());
@@ -135,7 +150,8 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     }, { root: document.querySelector("main"), rootMargin: "600px 0px" });
     document.querySelectorAll(".card-library-entry").forEach(element => observer.observe(element));
     return () => observer.disconnect();
-  }, [active, cards]);
+  }, [active, shown.length, cards]);
+  useEffect(() => { setPrepared({}); }, [days, generation]);
   useEffect(() => {
     if (!active) { setLoading(false); return; }
     const controller = new AbortController(); setLoading(true); setErrors({});
@@ -162,12 +178,18 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     // Warm the rest of the catalog after foreground cards. Small batches yield
     // between topics and are cancelled when the view or data changes.
     const items = recipes.map(recipe => instantiateRecipe(recipe, cardDays(recipe, days === "default" ? "default" : readWindowChoice(days))));
+    const arrivals = batchPreviewArrivals(batch => setPrepared(current => {
+      const next = { ...current };
+      for (const { id, preview, error } of batch) next[id] = cardInterest(preview, { ...judging.get(id), error: error === undefined ? undefined : String(error) });
+      return next;
+    }), 400);
     void (async () => {
       for (let at = 0; at < items.length && !controller.signal.aborted; at += 8) {
-        await loadCardPreviews(items.slice(at, at + 8).map(job), () => {}, controller.signal, { follow: false });
+        await loadCardPreviews(items.slice(at, at + 8).map(job), (id, preview, error) => { if (!controller.signal.aborted) arrivals.publish(id, preview, error); }, controller.signal, { follow: false });
       }
+      if (!controller.signal.aborted) arrivals.flush();
     })();
-    return () => controller.abort();
+    return () => { controller.abort(); arrivals.cancel(); };
   }, [prewarm, loading, active, cards, schemas, generation, recipes, days]);
   function filter<T>(set: (value: T) => void) { return (value: T) => { set(value); }; }
   function choose(key: string, focus = false) {
@@ -202,20 +224,25 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
       event.preventDefault(); choose(tabKeys[(next + tabKeys.length) % tabKeys.length], true);
     }}>
       {tabKeys.map(key => {
-        const count = key === ALL ? matching.length : matching.filter(recipe => recipe.category === key).length;
+        const count = matching.filter(recipe => (key === ALL || recipe.category === key) && !uninteresting(recipe.id)).length;
         return <button key={key} type="button" role="tab" id={`card-library-tab-${key}`} data-topic={key} data-empty={count ? undefined : ""} aria-selected={key === topic} aria-controls="card-library-panel" tabIndex={key === topic ? 0 : -1}
           style={key === ALL ? undefined : { "--topic-tone": queryCategories[key as QueryCategory].tone } as React.CSSProperties} onClick={() => choose(key)}>
           {key === ALL ? "All" : queryCategories[key as QueryCategory].label}<span className="card-library-tab-count">{count}</span>
         </button>;
       })}
     </div>
-    {filtersOpen ? <p className="card-library-count" role="status">{cards.length} of {recipes.length} cards{loading ? ` · ${completed === cards.length ? "Refreshing charts…" : `Loading charts… ${completed}/${cards.length}`}` : ""}<span>Empty views stay visible here.</span></p> : null}
+    {filtersOpen ? <p className="card-library-count" role="status">{shown.length} of {recipes.length} cards{loading ? ` · ${completed === cards.length ? "Refreshing charts…" : `Loading charts… ${completed}/${cards.length}`}` : ""}</p> : null}
+    {sparseNote ? <p className="card-library-sparse">
+      {sparseNote}
+      <button type="button" data-view-field="card_all" onClick={() => setShowAll(!showAll)}>{showAll ? "Hide them" : "Show all cards"}</button>
+    </p> : null}
     <p className="card-library-feedback" role="status">{message}</p>
-    <div id="card-library-panel" className="card-library-grid" role="tabpanel" aria-labelledby={`card-library-tab-${topic}`} aria-busy={loading}>{cards.map(item => <div className="card-library-entry" id={`card-${item.id}`} data-card-definition={item.id} data-card-idea={item.idea} key={item.id}>
+    <div id="card-library-panel" className="card-library-grid" role="tabpanel" aria-labelledby={`card-library-tab-${topic}`} aria-busy={loading}>{shown.map(item => <div className="card-library-entry" id={`card-${item.id}`} data-card-definition={item.id} data-card-idea={item.idea} key={item.id}>
       <QueryCard discovery id={item.id} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={suggestionWindowLabel(item)} category={item.category} loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={previews[item.id]} error={errors[item.id]}
         readinessSource={{dataset:item.dataset,query:item.query}} onOpen={onOpen} onKeep={() => onKeep(item)} onReload={() => reloadPreview(job(item))} />
       {collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> Added to your collection</span> : null}
     </div>)}</div>
+    {!shown.length && cards.length ? <p className="card-library-empty">None of these cards has enough data in this window. <button type="button" data-view-field="card_all" onClick={() => setShowAll(true)}>Show all cards</button></p> : null}
     {!cards.length ? <p className="card-library-empty">No cards match these filters. <button type="button" onClick={clearFilters}>Clear filters</button></p> : null}
   </section>;
 }
