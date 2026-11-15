@@ -21,7 +21,12 @@ import (
 // executionEvidenceVersion names the extraction rules below. A conversation
 // whose execution_evidence_state carries another version has claims of
 // unknown completeness, and is re-derived (from retained rows where that is
-// enough; see docs/execution-evidence-backfill.md). v2 records authority
+// enough; see docs/execution-evidence-backfill.md). The version is not a
+// line of a component digest, but a change still supersedes digests widely:
+// the digest's rows include each conversation's stored state and claims, and
+// the legacy launch results and coverage read for a conversation whose
+// state is not current, so they change when the version does and again when
+// the conversation is re-derived. v2 records authority
 // apart from origin (parsed envelopes are derived) and marks Codex
 // forked_from history, both derivable from retained rows. v3 records
 // Copilot session-parent fallbacks and bounds Cursor copies whose proof is

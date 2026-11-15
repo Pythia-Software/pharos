@@ -1250,8 +1250,9 @@ var executionDependentLedgers = [][2]string{{"message_labels_conversations", "me
 // markExecutionDependents would mark. Writers that call it leave nothing
 // unmarked, but another writer, or another process's older executable,
 // leaves its changes past the cursor until the next mark; a catalog that has
-// never marked, or marked under other resolver or evidence versions, has
-// every derivative to compare. executionUnmarked computes that set exactly,
+// never marked has every derivative's digest to compare, and one marked
+// under other rules has every derivative's resolved result to compare as
+// well (planExecutionReconcile). executionUnmarked computes that set exactly,
 // with the mark's own function (executionUnmarkedDependents), without
 // writing.
 
@@ -1627,8 +1628,9 @@ func (p *executionPublication) finish(ctx context.Context, tx *sql.Tx) error {
 
 // executionDependentsKey (meta) is the execution source generation whose
 // changes markExecutionDependents has propagated, and
-// executionDependentsVersionsKey the resolver and evidence versions it
-// compared digests under.
+// executionDependentsVersionsKey the rules the unmarked derivatives agree
+// with (executionDependentsVersions). A mark records the rules only when it
+// has compared the derivatives under them (reconcileExecutionResults).
 const (
 	executionDependentsKey         = "execution_dependents_through"
 	executionDependentsVersionsKey = "execution_dependents_versions"

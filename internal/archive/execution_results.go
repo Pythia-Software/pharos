@@ -324,7 +324,17 @@ func planExecutionReconcile(ctx context.Context, q queryer, ledgers []string, st
 	}
 	consistent, comparable := state.consistent(), state.comparable()
 	recorded := map[string]string{}
-	if consistent || comparable {
+	switch {
+	case consistent:
+		// Nothing rests on a comparison: record the results the caller
+		// remembered (primeExecutionResults), and leave a component whose
+		// evidence committed since to its next publication.
+		file, _, err := dependencyCacheKey(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		plan.results, _ = rememberedExecutionResults(file, held)
+	case comparable:
 		if plan.results, err = executionResultsFor(ctx, q, digests, held); err != nil {
 			return nil, err
 		}
