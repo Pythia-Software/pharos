@@ -1743,7 +1743,7 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 		for i := range 3 { // the prompt in three sessions on three days
 			id := fmt.Sprintf("h%d", i)
 			statements = append(statements, fmt.Sprintf(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,started_at) VALUES('%s','old','codex','local','%s','codex','%s')`, id, id, formatTime(authorAt(i*24*60))),
-				send("p"+id, id, i*24*60+1, prompt), send("t"+id, id, i*24*60+30, fmt.Sprintf("Number %d: tidy the importer and explain each step you took afterwards", i)))
+				send("p"+id, id, i*24*60+30, prompt), send("t"+id, id, i*24*60+1, fmt.Sprintf("Number %d: tidy the importer and explain each step you took afterwards", i)))
 		}
 		execTx(t, c.DB, statements...)
 		// session writes what one indexing transaction does for an app session
@@ -1809,12 +1809,12 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 		// prompt stays under the template threshold. The link claims the Claude
 		// SDK session, which is otherwise a run nobody recorded starting.
 		day := 10 * 24 * 60
-		session("codex", "codex", "codex/codex_sdk_ts", day, prompt, "Then compare the importer with the exporter and list what differs between them")
+		session("codex", "codex", "codex/codex_sdk_ts", day, "Then compare the importer with the exporter and list what differs between them", prompt)
 		session("claude", "claude", "claude-code/sdk-ts", day+60, "Walk through the scheduler and say which queue each task waits in")
 		if mode := rebuild(); mode != "suffix" {
 			t.Fatalf("new linked sessions were classified as %q, not from the checkpoint", mode)
 		}
-		if _, template, _, found := row("native-codex-0"); !found || template != 0 {
+		if _, template, _, found := row("native-codex-1"); !found || template != 0 {
 			t.Fatalf("prompt in a fourth session: template=%d found=%v", template, found)
 		}
 		if typed, _, automated, found := row("native-claude-0"); !found || typed == 0 || automated != 0 {
@@ -1826,14 +1826,16 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 			}
 		}
 
-		// A fifth session makes the prompt a template in every earlier one,
-		// which only the full classifier can restate.
-		session("fifth", "codex", "codex/codex_sdk_ts", day+24*60, prompt)
-		if mode := rebuild(); mode == "suffix" {
-			t.Fatal("a prompt crossing the template threshold was classified from the checkpoint")
+		// A fifth session makes the prompt a template in every earlier one.
+		// Those are restated from the sessions the checkpoint lists for it.
+		session("fifth", "codex", "codex/codex_sdk_ts", day+24*60, "First compare the two schedulers and say which one drops fewer tasks", prompt)
+		if mode := rebuild(); mode != "suffix" {
+			t.Fatalf("a prompt crossing the template threshold was classified as %q", mode)
 		}
-		if _, template, _, _ := row("ph0"); template == 0 {
-			t.Fatal("the earliest use did not become a template")
+		for _, id := range []string{"ph0", "ph2", "native-codex-1", "native-fifth-1"} {
+			if _, template, _, _ := row(id); template == 0 {
+				t.Fatalf("%s did not become a template", id)
+			}
 		}
 
 		// A link to a conversation already classified changes history: its copy
@@ -1876,6 +1878,24 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 		var graph string
 		if err := c.DB.QueryRow(`SELECT value FROM meta WHERE key='authorship_state_graph'`).Scan(&graph); err != nil || !strings.HasPrefix(graph, authorshipGraphFormat) {
 			t.Fatalf("carried checkpoint graph: %q (%v)", graph, err)
+		}
+
+		// A use that named its workspace cannot be restated alone: as a
+		// template it has no typed words, and the name passes to a later
+		// message, which the full classifier finds.
+		opening := "Open the release checklist and tell me which steps are still unchecked"
+		for i := range 4 {
+			session(fmt.Sprintf("opening%d", i), "codex", "codex/codex_sdk_ts", day+(5+i*2/3)*24*60+i, opening, fmt.Sprintf("Step %d of the checklist looks wrong to me, please verify it by hand", i))
+		}
+		if mode := rebuild(); mode != "suffix" {
+			t.Fatalf("four sessions of a prompt were classified as %q", mode)
+		}
+		session("opening4", "codex", "codex/codex_sdk_ts", day+8*24*60, opening)
+		if mode := rebuild(); mode == "suffix" {
+			t.Fatal("a template that named workspaces was restated from the checkpoint")
+		}
+		if _, template, _, _ := row("native-opening0-0"); template == 0 {
+			t.Fatal("the earliest opening prompt did not become a template")
 		}
 	})
 

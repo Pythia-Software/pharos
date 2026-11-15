@@ -355,6 +355,9 @@ type authorshipIncremental struct {
 	// stale are queued messages in the suffix that are no longer inputs (a
 	// deleted, emptied or newly mirrored message); their rows are removed.
 	stale []string
+	// restated are earlier uses of prompts that became templates with this
+	// suffix, classified again (restateTemplates).
+	restated []authorResult
 }
 
 // authorshipFullEvery is the longest the daily pass goes on classifying only
@@ -517,12 +520,93 @@ func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncreme
 	if err != nil {
 		return nil, err
 	}
-	if classifier == nil {
-		run.reason = "a repeated prompt became a template"
-		return run, nil
+	if len(classifier.crossed) > 0 {
+		restated, ok, err := c.restateTemplates(ctx, classifier, representative, claimed, run.launches, since)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			run.reason = "a repeated prompt became a template"
+			return run, nil
+		}
+		run.restated = restated
 	}
 	run.classifier, run.since, run.stale, run.reason = classifier, since, stale, "suffix"
 	return run, nil
+}
+
+// restateTemplates classifies again the earlier uses of the prompts that
+// became templates with this suffix (classifier.crossed), and reports false
+// when only the full classifier can.
+//
+// It is what the full classifier stores for them, because their new
+// classification needs nothing but what is read here:
+//   - The earlier uses are the counted messages with that template key in the
+//     sessions the checkpoint lists for it: a template's sessions are exactly
+//     the conversations whose counted, not automated messages have the key.
+//   - classify claims the whole message for a template before any rule that
+//     looks at other messages (agent output, re-sent text, reused lines,
+//     typing speed), and a claim takes only unclaimed bytes, so those rules
+//     add nothing. The claims before it read the message's own text and its
+//     conversation's question forms, which the checkpoint holds in asking
+//     order with their times.
+//   - What the message leaves for later ones (its text and lines) does not
+//     depend on its category, so the stored state stands.
+//
+// A use that named its workspace is the exception: as a template it has no
+// typed words, and the name passes to a later message.
+func (c *Catalog) restateTemplates(ctx context.Context, suffix *classifier, representative map[string]string, claimed map[string]bool, launches []conversationLaunch, since time.Time) ([]authorResult, bool, error) {
+	sessions := map[string]bool{}
+	for _, conversations := range suffix.crossed {
+		for _, id := range conversations {
+			sessions[id] = true
+		}
+	}
+	ids := sortedNameIDs(sessions)
+	if len(ids) == 0 {
+		return nil, true, nil
+	}
+	inputs, err := c.authorInputsScope(ctx, c.reader(), representative, claimed, launches, nil, ids)
+	if err != nil {
+		return nil, false, err
+	}
+	restating := newClassifier(nil)
+	// Nothing after the template claim can claim; skip preparing for it.
+	restating.quick = true
+	uses, messages := inputs[:0], []string{}
+	for _, input := range inputs {
+		key := templateKey(input.Text)
+		if _, automated := automatedReason(input); automated || suffix.crossed[key] == nil || !input.SentAt.Before(since) {
+			continue
+		}
+		restating.templates[key] = suffix.templates[key]
+		uses, messages = append(uses, input), append(messages, input.ID)
+	}
+	if len(uses) > authorshipSuffixLimit {
+		return nil, false, nil
+	}
+	var names bool
+	if err := c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM workspace_names WHERE authored_message_id IN (SELECT value FROM json_each(?)))`, jsonText(messages)).Scan(&names); err != nil || names {
+		return nil, false, err
+	}
+	restating.questions, err = c.loadAuthorshipQuestionsBefore(ctx, ids, since)
+	if err != nil {
+		return nil, false, err
+	}
+	results := make([]authorResult, 0, len(uses))
+	for _, input := range uses {
+		results = append(results, authorResult{Input: input, Spans: restating.classify(input), Answers: restating.answers})
+	}
+	return results, true, nil
+}
+
+// planned are the results a pass stores: the suffix's, and before them the
+// earlier messages it restated.
+func (run *authorshipIncremental) planned(results []authorResult) []authorResult {
+	if len(run.restated) == 0 {
+		return results
+	}
+	return append(slices.Clone(run.restated), results...)
 }
 
 // storedLaunches are conversation_launches as the classifier reads them. A
@@ -639,11 +723,14 @@ func (c *Catalog) loadAuthorshipClassifier(ctx context.Context, inputs []authorI
 			use.days[day] = true
 		}
 		// A prompt that crosses the threshold makes its earlier uses templates
-		// too, which only the full classifier can reclassify. One that already
-		// was a template changes nothing earlier: its counts are not stored
-		// with the classification (spanReason.bare).
+		// too; they are restated (restateTemplates), from the sessions that
+		// sent it. One that already was a template changes nothing earlier:
+		// its counts are not stored with the classification (spanReason.bare).
 		if use.template() && !old.template() {
-			return nil, nil
+			if classifier.crossed == nil {
+				classifier.crossed = map[string][]string{}
+			}
+			classifier.crossed[key] = sortedNameIDs(old.sessions)
 		}
 	}
 	conversations := map[string]bool{}
