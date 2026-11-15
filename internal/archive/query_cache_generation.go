@@ -223,7 +223,7 @@ func (c *Catalog) projectionReadiness(ctx context.Context) (map[string]any, erro
 	var textReady bool
 	var queryTextReady bool
 	err := c.DB.QueryRowContext(ctx, `SELECT
- (SELECT COUNT(*) FROM workspace_library_dirty),
+ (SELECT COUNT(*) FROM workspace_library_dirty)+(SELECT COUNT(*) FROM workspace_library_column_pending),
  (SELECT COUNT(*) FROM mcp_metric_dirty),
  EXISTS(SELECT 1 FROM meta WHERE key='text_search_documents_version' AND value='1'),
  (SELECT COUNT(*) FROM meta WHERE key IN ('human_query_text_fts_ready','tool_query_text_fts_ready') AND value='1')=2 AND
