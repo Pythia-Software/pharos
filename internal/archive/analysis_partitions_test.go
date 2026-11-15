@@ -145,8 +145,23 @@ func TestIncrementalToolRollupBoundedAndNoop(t *testing.T) {
 	if _, err := c.DB.Exec("UPDATE tool_calls SET result_tokens=result_tokens+1 WHERE conversation_id='conv-0'"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.ensureToolRollup(t.Context()); err != nil {
+	// Progress is sized by the calls of the dirty workspace and the rows
+	// written, so the estimator can tell a partition from a full build.
+	inScope := countRows(t, c, "SELECT COUNT(*) FROM tool_calls WHERE workspace_id IN (SELECT workspace_id FROM tool_rollup_dirty)")
+	last := map[string]activityWork{}
+	var mu sync.Mutex
+	if err := c.ensureToolRollup(withWorkProgress(t.Context(), func(work activityWork) {
+		mu.Lock()
+		defer mu.Unlock()
+		last[work.Phase] = work
+	})); err != nil {
 		t.Fatal(err)
+	}
+	if work := last["aggregating tool calls"]; work.Unit != "tool call" || work.Total != float64(inScope) || work.Done != work.Total || inScope == 0 {
+		t.Fatalf("aggregation reported %+v for %d calls in scope", work, inScope)
+	}
+	if work := last["publishing tool rollup"]; work.Unit != "row" || work.Total == 0 || work.Done != work.Total {
+		t.Fatalf("publication reported %+v", work)
 	}
 	after, err := queryMaps(c.DB, "SELECT rowid,* FROM tool_call_cube WHERE workspace_id='ws-3' ORDER BY rowid")
 	if err != nil {

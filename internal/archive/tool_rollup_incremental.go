@@ -17,6 +17,7 @@ type toolRollupBuild struct {
 	// from the stored cube.
 	full, reprice                                                       bool
 	generation, day, fullRevision, priceRevision, publication, timezone string
+	cubeRows, dailyRows                                                 int // rows the publish writes
 }
 
 func (c *Catalog) updateToolRollup(ctx context.Context, generation, day string, force bool) error {
@@ -151,13 +152,23 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
  WHERE workspace_id NOT IN (SELECT workspace_id FROM temp.tool_dirty_build)`); err != nil {
 		return build, err
 	}
-	cubeQuery := toolCubeSelect("temp.tool_mirror_build")
+	cubeQuery, scope := toolCubeSelect("temp.tool_mirror_build"), "SELECT COUNT(*) FROM tool_calls"
 	if !build.full {
 		cubeQuery = strings.Replace(cubeQuery, " GROUP BY ", " AND t.workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build) GROUP BY ", 1)
+		scope += " WHERE workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build)"
 	}
-	// SQLite exposes no partial progress for this aggregation.
-	reportWork(ctx, "aggregating tool calls", "", 0, -1, "Unitary step")
+	// The calls in scope size the step; SQLite exposes no partial progress
+	// within the aggregation itself.
+	var calls int
+	if err := snapshot.QueryRowContext(ctx, scope).Scan(&calls); err != nil {
+		return build, err
+	}
+	reportWork(ctx, "aggregating tool calls", "tool call", 0, calls)
 	if _, err := snapshot.ExecContext(ctx, "CREATE TEMP TABLE tool_cube_build AS "+cubeQuery); err != nil {
+		return build, err
+	}
+	reportWork(ctx, "aggregating tool calls", "tool call", calls, calls)
+	if err := snapshot.QueryRowContext(ctx, "SELECT COUNT(*) FROM temp.tool_cube_build").Scan(&build.cubeRows); err != nil {
 		return build, err
 	}
 	if build.full {
@@ -215,6 +226,7 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	if err := stmt.Close(); err != nil {
 		return build, err
 	}
+	build.dailyRows = len(daily)
 	if err := snapshot.Commit(); err != nil {
 		return build, err
 	}
@@ -260,12 +272,18 @@ func (c *Catalog) publishToolPartitions(ctx context.Context, conn *sql.Conn, bui
 	}
 	statements = append(statements, "INSERT INTO tool_usage_daily SELECT * FROM temp.tool_daily_build",
 		`DELETE FROM tool_rollup_dirty WHERE EXISTS(SELECT 1 FROM temp.tool_dirty_build b WHERE b.workspace_id=tool_rollup_dirty.workspace_id AND b.revision=tool_rollup_dirty.revision)`)
-	reportWork(ctx, "publishing tool rollup", "statement", 0, len(statements))
-	for index, statement := range statements {
+	// Progress counts the cube and daily rows written, which size the step
+	// (a full build's cube copy dominates it).
+	written := map[string]int{"CREATE TABLE main.tool_call_cube AS SELECT * FROM temp.tool_cube_build": build.cubeRows,
+		"INSERT INTO tool_call_cube SELECT * FROM temp.tool_cube_build": build.cubeRows, "INSERT INTO tool_usage_daily SELECT * FROM temp.tool_daily_build": build.dailyRows}
+	rows, done := build.cubeRows+build.dailyRows, 0
+	reportWork(ctx, "publishing tool rollup", "row", 0, rows)
+	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
 		}
-		reportWork(ctx, "publishing tool rollup", "statement", index+1, len(statements))
+		done += written[statement]
+		reportWork(ctx, "publishing tool rollup", "row", done, rows)
 	}
 	// Earlier builds rebuild the whole rollup when tool_rollup_day is
 	// not today; keep recording it for a library they also open.
