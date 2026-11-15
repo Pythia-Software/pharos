@@ -194,6 +194,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops; closing the catalog stores what is still queued.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "ask.save", Class: workClassEssential, Label: "Save an Ask Pharos answer", Verb: "Saving an Ask Pharos answer", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops retrying; an answer not yet saved is lost, as when the service stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
+	{Kind: "forge.reviews", Class: workClassMaintenance, Label: "Read pull request reviews", Verb: "Reading pull request reviews", Holds: "—", Affects: "—", Stop: "work",
+		OnEject: "Stops between pull requests; what was read stays, and the next run reads the rest.", Latency: "record", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "ask.suggestions", Class: workClassMaintenance, Label: "Choose Ask Pharos suggestions", Verb: "Choosing Ask Pharos suggestions", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops; the suggestions already chosen stay until the next run.", Latency: "record", Journal: journalLonger(5 * time.Second), Priority: priorityBackground},
 	{Kind: "ask.models", Class: workClassMaintenance, Label: "Check Ask Pharos models", Verb: "Checking Ask Pharos models", Holds: "—", Affects: "—",

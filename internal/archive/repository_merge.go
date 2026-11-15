@@ -118,6 +118,9 @@ func mergeRepositoryGroupTx(tx *sql.Tx, group repositoryMergeGroup) error {
 			if _, err := tx.Exec(`INSERT OR IGNORE INTO work_pr_links(workspace_id,pr_id,relationship,confidence,evidence_json) SELECT workspace_id,?,relationship,confidence,evidence_json FROM work_pr_links WHERE pr_id=?`, winner, entry.id); err != nil {
 				return err
 			}
+			if err := movePullRequestReviews(tx, entry.id, winner); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(`DELETE FROM pull_requests WHERE id=?`, entry.id); err != nil {
 				return err
 			}
@@ -250,6 +253,9 @@ func movePullRequest(tx *sql.Tx, oldID, repositoryID, newID string) error {
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO work_pr_links(workspace_id,pr_id,relationship,confidence,evidence_json)
 		SELECT workspace_id,?,relationship,confidence,evidence_json FROM work_pr_links WHERE pr_id=?`, newID, oldID); err != nil {
+		return err
+	}
+	if err := movePullRequestReviews(tx, oldID, newID); err != nil {
 		return err
 	}
 	_, err := tx.Exec(`DELETE FROM pull_requests WHERE id=?`, oldID)

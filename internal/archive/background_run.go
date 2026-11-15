@@ -50,6 +50,15 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 		err := s.Catalog.refineAuthorship(ctx, false)
 		child.Finish(err)
 		return err
+	case "pull-request-reviews":
+		ctx, child := op.Child(OperationSpec{Kind: "forge.reviews", Trigger: triggerChained})
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		child.setStopper(cancel)
+		ctx = withWorkProgress(ctx, child.mirrorWork)
+		_, err := s.Catalog.RefreshPullRequestReviews(ctx)
+		child.Finish(err)
+		return err
 	case "suggestions":
 		ctx, child := op.Child(OperationSpec{Kind: "ask.suggestions", Trigger: triggerChained})
 		err := s.refreshAskSuggestions(ctx)

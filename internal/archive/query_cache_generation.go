@@ -33,6 +33,9 @@ var queryCacheTables = []string{
 	"session_files",
 	"cost_changes", "model_aliases", "summaries", "semantic_documents",
 	"change_sets", "change_files", "pull_requests", "work_pr_links",
+	// What forges said of workspaces' pull requests: a pull request read
+	// again unchanged writes only pull_request_fetches, which no view reads.
+	"pull_request_details", "pull_request_workspaces",
 	"metrics", "metric_ledger", "text_search_documents", "reasoning_extraction_state",
 	"tl1_installations", "tl1_flavors", "tl1_tasks", "tl1_attempts", "tl1_candidates",
 	"tl1_events", "tl1_review_findings", "tl1_human_touches", "tl1_configuration_health",

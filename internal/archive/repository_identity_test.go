@@ -495,6 +495,13 @@ func TestRepositoryMergeKeepsPRLinks(t *testing.T) {
 		`INSERT INTO pull_requests(id,host,repository_id,number,title,commit_refs_json) VALUES('p1','github.com','a',1,'rich','["abc"]'),('p2','github.com','b',1,NULL,'[]'),('p3','github.com','a',2,'second','[]')`,
 		`INSERT INTO work_pr_links(workspace_id,pr_id,relationship,confidence,evidence_json) VALUES('w','p1','mentions',1,'{}'),('w','p3','mentions',1,'{}')`,
 		`INSERT INTO protections(scope_type,scope_id,mode,reason,created_at) VALUES('repository','a','protect','keep','t')`,
+		// What a forge said of a pull request follows it to its new ID.
+		// Pull request 1 was read under both IDs: one read stands whole,
+		// with its own comments and none of the other's.
+		`INSERT INTO pull_request_details(pr_id,state,comments) VALUES('p1','merged',1),('p2','open',1),('p3','open',1)`,
+		`INSERT INTO pull_request_comments(pr_id,comment_id,kind,body) VALUES('p1','old','conversation','Read as p1.'),('p2','new','conversation','Read as p2.'),('p3','c1','conversation','Looks right.')`,
+		`INSERT INTO pull_request_workspaces(workspace_id,pr_id,role,confidence,evidence_json) VALUES('w','p1','opened',1,'{}')`,
+		`INSERT INTO pull_request_workspaces(workspace_id,pr_id,role,confidence,evidence_json) VALUES('w','p3','opened',1,'{}')`,
 	} {
 		if _, err := catalog.DB.Exec(query); err != nil {
 			t.Fatal(err)
@@ -529,6 +536,22 @@ func TestRepositoryMergeKeepsPRLinks(t *testing.T) {
 		if want := stableID("pr", "github.com", repo, number); id != want {
 			t.Fatalf("PR %d id=%s, want %s", number, id, want)
 		}
+		var state, comments string
+		var links int
+		if err := catalog.DB.QueryRow(`SELECT state,(SELECT GROUP_CONCAT(body) FROM pull_request_comments WHERE pr_id=d.pr_id),(SELECT COUNT(*) FROM pull_request_workspaces WHERE pr_id=d.pr_id)
+			FROM pull_request_details d WHERE pr_id=?`, id).Scan(&state, &comments, &links); err != nil || links != 1 {
+			t.Fatalf("PR %d review details: %q, workspaces %d, %v", number, state, links, err)
+		}
+		// Whichever read of pull request 1 stood, its rows are its own.
+		if want := map[string]string{"merged": "Read as p1.", "open": "Read as p2."}[state]; number == 1 && comments != want || number == 2 && comments != "Looks right." {
+			t.Fatalf("PR %d (%s) holds another read's comments: %q", number, state, comments)
+		}
+	}
+	// Two pull requests remain, each with one read: nothing is left under
+	// an old ID, and the read that lost is gone.
+	var kept int
+	if err := catalog.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM pull_request_details)+(SELECT COUNT(*) FROM pull_request_comments)`).Scan(&kept); err != nil || kept != 4 {
+		t.Fatalf("review rows after the merge: %d, want two details and two comments: %v", kept, err)
 	}
 	var links int
 	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM work_pr_links WHERE workspace_id='w'`).Scan(&links); err != nil || links != 2 {
