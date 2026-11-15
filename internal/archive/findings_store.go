@@ -763,6 +763,19 @@ func (c *Catalog) currentHostID() string {
 	return ""
 }
 
+// findingTargetParts gives the provider and the Mac of a target that is one
+// provider's instructions for every repository, as people know them, so a
+// page need not read them back out of the label. The Mac is "" when it has
+// no name here; ok is false for any other target.
+func findingTargetParts(target string, hosts map[string]string) (provider, mac string, ok bool) {
+	kind, rest, _ := strings.Cut(target, ":")
+	if kind != "global" {
+		return "", "", false
+	}
+	host, key, _ := strings.Cut(rest, ":")
+	return providerLabel(key), hosts[host], true
+}
+
 // findingTargetLabel names a prompt target the way the user sees it.
 func findingTargetLabel(target string, repositories map[string]string, hosts map[string]string) string {
 	kind, rest, _ := strings.Cut(target, ":")
@@ -790,21 +803,11 @@ func findingTargetLabel(target string, repositories map[string]string, hosts map
 }
 
 func providerLabel(provider string) string {
-	switch provider {
-	case "claude":
-		return "Claude"
-	case "codex":
-		return "Codex"
-	case "antigravity":
-		return "Antigravity"
-	case "gemini":
-		return "Gemini"
-	}
 	if provider == "" {
 		return "agents"
 	}
-	if spec, ok := providerFor(provider); ok {
-		return spec.DisplayName
+	if name := providerDisplayName(provider); name != provider {
+		return name
 	}
 	return strings.ToUpper(provider[:1]) + provider[1:]
 }

@@ -12,6 +12,7 @@ import { analysisQuery } from "../../../src/dashboard-analysis-model";
 import { trendQuery } from "../../../src/dashboard-trend-model";
 import { withTimeRange } from "../../../src/chart-range";
 import { sessionShapeAnalysisCatalog as catalog } from "../../../src/session-shape-analysis-catalog";
+import { isModelField, modelFieldLabel, modelLabel } from "../../../src/model-label";
 
 const schema = core.loadSchema(document);
 const labels = populationLabels(catalog, schema.fields);
@@ -25,6 +26,17 @@ test("the population is the filters other than the range, and replacing it keeps
   const replaced = withPopulation(catalog, [...range, harness], [{ field: "agent_kind", op: "=", value: "root" }]);
   assert.deepEqual(populationOf(catalog, replaced), [{ field: "agent_kind", op: "=", value: "root" }]);
   assert.deepEqual(replaced.filter(term => !populationOf(catalog, [term]).length), range);
+});
+
+test("the stored model sentinel reads Model not recorded, and its filter keeps the stored value", () => {
+  assert.deepEqual(["Unknown model", "unknown model", "gpt-6-sol", ""].map(modelLabel), ["Model not recorded", "Model not recorded", "gpt-6-sol", ""]);
+  assert.deepEqual(["model", "root_model", "model_family", "root_model_family", "model_effort", "harness", "remodel"].map(isModelField), [true, true, true, true, false, false, false]);
+  assert.equal(modelFieldLabel("title", "Unknown model"), "Unknown model", "only a model field holds the sentinel");
+  assert.equal(labels("model_family", "unknown model"), "Model not recorded");
+  assert.equal(labels("model_family", "opus-4-8"), "opus-4-8");
+  assert.equal(labels("model_family", null), "Model not recorded", "a session with no model at all reads the same way");
+  const where = withPopulationGroup(catalog, range, "model_family", "unknown model", "drop");
+  assert.deepEqual(populationOf(catalog, where), [leaveOut("model_family", "unknown model")]);
 });
 
 test("the legend's Leave out and Count only write terms on the breakdown's field", () => {

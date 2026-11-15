@@ -1,5 +1,6 @@
 import { todayBounds } from "./day-window";
 import { parseRelativeDuration } from "@pythia-software/query-table-core";
+import { providerName, sourceName } from "./provider-names";
 
 // The visual editor produces the engine's typed tree. Text entered into a rule
 // never becomes Boolean syntax, even when it contains AND, OR, or parentheses.
@@ -95,7 +96,6 @@ export function textScopeNote(draft: TextSearchDraft): "scan" | "tool-output" | 
 }
 export function scopeChoice(scope: TextScope) { return scopes.find(s => s.surface === scope.surface && scope.kinds.length === 0 && scope.roles.join(",") === ("role" in s ? s.role : "")); }
 export function chooseScope(scope: TextScope, id: string): TextScope { const choice = scopes.find(s => s.id === id); return choice ? { ...scope, surface: choice.surface, roles: "role" in choice ? [choice.role] : [], kinds: [] } : scope; }
-export const sourceLabel = (value: string) => ({ claude: "Claude", codex: "Codex", chatgpt: "ChatGPT", "claude-ai": "Claude.ai", copilot: "Copilot CLI", opencode: "OpenCode", cline: "Cline", "vscode-copilot": "VS Code Copilot", cursor: "Cursor", "cursor-cli": "Cursor CLI", zed: "Zed", conductor: "Conductor", antigravity: "Antigravity", canonical: "Canonical export", tl1: "TL1", "tl1-export": "TL1 export" }[value] ?? value);
 const hasWord = (text: string) => /[\p{L}\p{N}]/u.test(text);
 const combine = (op: "and" | "or", nodes: TextQuery[]): TextQuery => nodes.length === 1 ? nodes[0] : { op, children: nodes };
 export function compileRules(root: TextGroup): { where?: TextQuery; issues: SearchIssue[] } {
@@ -222,8 +222,8 @@ export function searchSentence(d: TextSearchDraft, context: SentenceContext = {}
   const subject = kind === "file" ? "modified files" : kind === "url" ? "tool URLs" : scopeChoice(d.scope)?.label.toLowerCase() ?? "messages in a saved scope";
   const s = d.scope, filters: SentencePart[][] = [];
   if (kind === "text") {
-    if (s.provider) filters.push(["from ", { value: sourceLabel(s.provider) }]);
-    if (s.source) filters.push(["recorded by ", { value: sourceLabel(s.source) }]);
+    if (s.provider) filters.push(["from ", { value: providerName(s.provider) }]);
+    if (s.source) filters.push(["recorded by ", { value: sourceName(s.source) }]);
     if (s.repository) filters.push(["in repositories matching ", quote(s.repository)]);
     const window = searchDateWindow(d);
     if (window) {

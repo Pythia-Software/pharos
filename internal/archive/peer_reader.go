@@ -11,15 +11,17 @@ import (
 // workPeer is related top-level work shown beside a workspace: the chip strip
 // on its page, and its family in the Hierarchy and Timeline when certain.
 type workPeer struct {
-	WorkspaceID string           `json:"workspace_id"`
-	Title       string           `json:"title"`
-	Provider    string           `json:"provider"`
-	StartedAt   string           `json:"started_at,omitempty"`
-	EndedAt     string           `json:"ended_at,omitempty"`
-	Role        string           `json:"role"`
-	Confidence  string           `json:"confidence"`
-	Via         string           `json:"via,omitempty"`
-	Evidence    []workPeerReason `json:"evidence"`
+	WorkspaceID string `json:"workspace_id"`
+	Title       string `json:"title"`
+	Provider    string `json:"provider"`
+	// ProviderName is the provider's display name, for the chip.
+	ProviderName string           `json:"provider_name,omitempty"`
+	StartedAt    string           `json:"started_at,omitempty"`
+	EndedAt      string           `json:"ended_at,omitempty"`
+	Role         string           `json:"role"`
+	Confidence   string           `json:"confidence"`
+	Via          string           `json:"via,omitempty"`
+	Evidence     []workPeerReason `json:"evidence"`
 }
 
 // workPeerReason is one stored link that relates a peer.
@@ -219,6 +221,7 @@ func (c *Catalog) workPeers(ctx context.Context, workspace string) ([]workPeer, 
 			return nil, err
 		}
 		p.Title, p.Provider, p.StartedAt, p.EndedAt = title.String, provider.String, started.String, ended.String
+		p.ProviderName = providerDisplayName(p.Provider)
 		out = append(out, *p)
 	}
 	// Certain work first, then in the order it started.
@@ -313,6 +316,7 @@ func (c *Catalog) peerConversations(ctx context.Context, peers []workPeer, inclu
 		for _, row := range rows {
 			row["title"], row["peer_role"], row["peer"], row["peer_confidence"] = p.Title, p.Role, true, p.Confidence
 		}
+		nameProviders(rows)
 		out = append(out, rows...)
 	}
 	return out, nil

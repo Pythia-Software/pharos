@@ -519,7 +519,11 @@ func (view *findingView) carts() []map[string]any {
 			}
 		}
 		handoff, reason := handoffFor(target, view.cart.settings, view.cart.habits)
-		output = append(output, map[string]any{"target": target, "label": view.cart.label(target), "items": items, "ticked": ticked, "handoff": handoff, "handoff_reason": reason})
+		group := map[string]any{"target": target, "label": view.cart.label(target), "items": items, "ticked": ticked, "handoff": handoff, "handoff_reason": reason}
+		if provider, mac, ok := findingTargetParts(target, view.cart.hosts); ok {
+			group["provider_name"], group["host_label"] = provider, mac
+		}
+		output = append(output, group)
 	}
 	sort.SliceStable(output, func(i, j int) bool {
 		return strings.HasPrefix(firstString(output[i]["target"]), "repo:") && !strings.HasPrefix(firstString(output[j]["target"]), "repo:")

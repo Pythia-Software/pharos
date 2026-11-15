@@ -602,6 +602,72 @@ func providerFor(kind string) (*providerSpec, bool) {
 	return nil, false
 }
 
+// providerBrands name the conversation providers whose stored key is not
+// the name of a source kind. "claude" is the provider of Claude Code sessions
+// and of Claude.ai chats alike, so it is named for neither source.
+var providerBrands = map[string]string{"claude": "Claude", "gemini": "Gemini"}
+
+// sourceDisplayName names a source kind (workspaces.source_kind) to people,
+// as the registry does. A kind it does not know keeps its stored key.
+func sourceDisplayName(kind string) string {
+	if spec, ok := providerFor(kind); ok {
+		return spec.DisplayName
+	}
+	return kind
+}
+
+// providerDisplayName names a conversation's provider (conversations.provider)
+// to people. Most providers are stored under their source's kind; a key no
+// source declares keeps its stored spelling. Model makers ("anthropic") and
+// agent apps ("claude-code/cli") are other key spaces.
+func providerDisplayName(provider string) string {
+	if name := providerBrands[strings.ToLower(provider)]; name != "" {
+		return name
+	}
+	return sourceDisplayName(provider)
+}
+
+// providerDisplayNames is every provider key Pharos can name, for pages that
+// hold only the stored keys (GET /api/providers).
+func providerDisplayNames() map[string]string {
+	names := map[string]string{}
+	for _, spec := range providerRegistry {
+		names[spec.Kind] = providerDisplayName(spec.Kind)
+	}
+	for provider, name := range providerBrands {
+		names[provider] = name
+	}
+	return names
+}
+
+// nameProviders adds provider_name beside each row's stored provider, so a
+// page shows the display name without keeping its own list.
+func nameProviders(rows []map[string]any) {
+	for _, row := range rows {
+		if provider := firstString(row["provider"]); provider != "" {
+			row["provider_name"] = providerDisplayName(provider)
+		}
+	}
+}
+
+// sourceLabel names one configured source (its name in library.toml) for a
+// list of sources: its kind's display name, with the source's own name when
+// that says more. Antigravity's apps are separate sources of one kind, named
+// for their data folders.
+func sourceLabel(name, kind string) string {
+	if product := antigravityProducts[name]; product != "" && (kind == "" || strings.EqualFold(kind, "antigravity")) {
+		return product
+	}
+	spec, known := providerFor(defaultString(kind, name))
+	if !known {
+		return name
+	}
+	if strings.EqualFold(name, spec.Kind) || slices.Contains(spec.KindAliases, strings.ToLower(name)) {
+		return spec.DisplayName
+	}
+	return spec.DisplayName + " (" + name + ")"
+}
+
 // globalInstructionPaths are the files and folders, home-relative, where
 // providers keep their rules for every project: each once, in registry order.
 func globalInstructionPaths() []string {

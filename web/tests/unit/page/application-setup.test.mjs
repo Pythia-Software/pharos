@@ -233,7 +233,7 @@ test('startup folder choices restore controls and affect only their initiating w
     const field={value:'/manual/path',isConnected:true,closest:()=>null},button={isConnected:true,disabled:false,focus(){this.focused=true;}},busy={disabled:true};
     let currentField=field,updated=0,sourceSetup=false;
     const setup={hidden:false},dialog={open:true,classList:{contains:()=>sourceSetup}},notices=[],calls=[];
-    const window={pharosHost:{capabilities:{folders:{available:native}},folders:{chooseLibraryFolder:()=>{calls.push('host');return pending}}}};
+    const window={pharosHost:{capabilities:{folders:{available:native}},folders:{chooseLibraryFolder:purpose=>{calls.push(['host',purpose]);return pending}}}};
     const model=vm.runInNewContext('let wizardView=0;'+picker+';({pickFolder,replaceView(){wizardView++}})',{
       window,dialog,$:key=>key==='library-form'?{querySelectorAll:()=>[button,busy]}:key==='setup'?setup:currentField,
       notice:(text,error)=>{if(error)notices.push(text)},updateLibraryProposal:()=>updated++,call:async(action,body)=>{calls.push([action,plain(body)]);return {path:await pending}},
@@ -249,7 +249,8 @@ test('startup folder choices restore controls and affect only their initiating w
     assert.equal(currentField.value,selected?result+(id==='recover-path'?'/Recovered Library':''):['field replaced','view replaced'].includes(change)?'/replacement':'/manual/path');
     assert.equal(updated,selected&&id==='path'?1:0);
     assert.deepEqual(notices,current&&result instanceof Error?['Picker unavailable']:[]);
-    assert.deepEqual(calls,native?['host']:[['choose-folder',{}]]);
+    const purpose={backup:'backup','recover-path':'restore'}[id];
+    assert.deepEqual(plain(calls),native?[['host',purpose]]:[['choose-folder',purpose?{purpose}:{}]]);
     assert.equal(button.disabled,false);assert.equal(busy.disabled,true);assert.equal(!!button.focused,current);
   }
 });

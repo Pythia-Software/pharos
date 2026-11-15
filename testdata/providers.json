@@ -71,6 +71,28 @@
       "label": "Reported cost"
     }
   ],
+  "provider_names": {
+    "antigravity": "Antigravity",
+    "canonical": "Canonical export",
+    "chatgpt": "ChatGPT",
+    "claude": "Claude",
+    "claude-ai": "Claude.ai",
+    "claude-ai-settings": "Claude Chat settings",
+    "cline": "Cline",
+    "codex": "Codex",
+    "conductor": "Conductor",
+    "copilot": "Copilot CLI",
+    "cursor": "Cursor",
+    "cursor-cli": "Cursor CLI",
+    "gemini": "Gemini",
+    "hermes": "Hermes Agent",
+    "openclaw": "OpenClaw",
+    "opencode": "OpenCode",
+    "tl1": "TL1",
+    "tl1-export": "TL1 export",
+    "vscode-copilot": "VS Code Copilot",
+    "zed": "Zed"
+  },
   "providers": [
     {
       "automatic": true,

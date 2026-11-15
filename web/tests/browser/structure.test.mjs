@@ -776,7 +776,7 @@ const ROUTES = [
       const outline = page.getByRole("navigation", { name: "Conversation outline", exact: true });
       await outline.getByRole("button", { name: /^Turn 1/ }).first().waitFor();
       if (selection === "sub-agent") {
-        await outline.locator("summary").filter({ hasText: "Sub-agent conversation · codex" }).click();
+        await outline.locator("summary").filter({ hasText: "Sub-agent conversation · Codex" }).click();
         await outline.getByRole("button", { name: /Turn 1.*Review the change/ }).click();
       } else await outline.getByRole("button", { name: /^Turn 3/ }).first().click();
       await page.getByRole("region", { name: "Selected turn preview" }).locator(".result-message").first().waitFor();

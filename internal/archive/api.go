@@ -446,7 +446,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/probe":
 		writeJSON(w, ProbeSources(s.Config(), s.Catalog), http.StatusOK)
 	case path == "/api/providers":
-		writeJSON(w, map[string]any{"providers": providerInfos(), "capabilities": contentCapabilityList}, http.StatusOK)
+		writeJSON(w, map[string]any{"providers": providerInfos(), "provider_names": providerDisplayNames(), "capabilities": contentCapabilityList}, http.StatusOK)
 	case path == "/api/probe/tools":
 		home, _ := os.UserHomeDir()
 		writeJSON(w, map[string]any{"tools": probeTools(home, s.Config())}, http.StatusOK)

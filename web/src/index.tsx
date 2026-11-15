@@ -106,6 +106,7 @@ import { queryFromURL, readRollingWindow, resolveRollingQuery, rollingQueryMatch
 import { sourceWorkspacesURL } from "./search-composer-state";
 import { mainIntegration, pullRequestLabel, pullRequestURL, pullRequests } from "./pull-requests";
 import { optionLabels } from "./option-labels";
+import { modelFieldLabel } from "./model-label";
 import { preferences } from "./preferences";
 import { UsageChartColorsProvider, useUsageTableRenderers } from "./usage-chart-colors";
 import libraryDocument from "../../schemas/library.schema.json";
@@ -448,7 +449,7 @@ const statusBadges: Record<string, (value: string, label: string) => React.React
 const filterPresentations = Object.fromEntries(Object.entries(schemas).map(([dataset, schema]) => {
   const labels = optionLabels(schema.fields);
   const badges = new Map(schema.fields.flatMap(field => typeof field.render === "string" && statusBadges[field.render] ? [[field.name, statusBadges[field.render]] as const] : []));
-  const label = (field: string, value: string) => isOriginDimension(field) ? originLabel(field, value) : labels.get(field)?.get(value) ?? value;
+  const label = (field: string, value: string) => isOriginDimension(field) ? originLabel(field, value) : labels.get(field)?.get(value) ?? modelFieldLabel(field, value);
   const presentation: FilterValuePresentation = {
     label,
     render: (field, value) => value ? badges.get(field)?.(value, label(field, value)) : undefined,

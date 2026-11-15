@@ -428,6 +428,24 @@ func TestFindingPromptTargets(t *testing.T) {
 	if providerLabel("vscode-copilot") != "VS Code Copilot" || providerLabel("opencode") != "OpenCode" || providerLabel("claude") != "Claude" {
 		t.Fatalf("labels name providers as the registry does: %s, %s", providerLabel("vscode-copilot"), providerLabel("opencode"))
 	}
+	// A page reads a global target's provider and Mac from fields, since a
+	// display name can be several words and a Mac can have no name.
+	if provider, mac, ok := findingTargetParts("global:h:vscode-copilot", map[string]string{"h": "Studio"}); !ok || provider != "VS Code Copilot" || mac != "Studio" {
+		t.Fatal(provider, mac, ok)
+	}
+	if provider, mac, ok := findingTargetParts("global:other:claude", map[string]string{"h": "Studio"}); !ok || provider != "Claude" || mac != "" {
+		t.Fatal(provider, mac, ok)
+	}
+	if _, _, ok := findingTargetParts("repo:r1", nil); ok {
+		t.Fatal("a repository target has no provider of its own")
+	}
+	// A provider and a source are different keys: "claude" is the provider of
+	// Claude Code sessions and Claude.ai chats, and the kind of the first's
+	// source. An unknown key keeps its stored spelling in a page.
+	if providerDisplayName("claude") != "Claude" || sourceDisplayName("claude") != "Claude Code" || sourceDisplayName("claude-ai") != "Claude.ai" ||
+		providerDisplayName("somebody-else") != "somebody-else" || providerLabel("") != "agents" || providerLabel("gemini") != "Gemini" {
+		t.Fatal(providerDisplayName("claude"), sourceDisplayName("claude"), providerDisplayName("somebody-else"))
+	}
 	repo := renderFindingPrompt("repo:r", "alpha", "/src/alpha", "pr", []cartItem{{Row: row, Step: row.Card.Steps[0], Attempt: 1}})
 	if !strings.Contains(repo, "You are working in the alpha repository (/src/alpha).") || !strings.HasSuffix(repo, "Open a pull request.") {
 		t.Fatalf("repository prompt:\n%s", repo)

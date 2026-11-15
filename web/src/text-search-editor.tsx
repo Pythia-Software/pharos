@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { Icon } from "./icons";
 import { SearchSelect } from "./search-select";
 import { SearchInput, WrappingInput } from "./search-input";
-import { chooseScope, compileRules, refreshSearchToday, newGroup, newRule, optionScope, optionsInEffect, querySyntax, scopeChoice, scopes, searchDateValue, searchDateWindow, searchRequest, searchSentence, sourceLabel, textScopeNote, visualFromQuery, withSearchDateComparison, withSearchDateRange, withSearchDateWindow, type SentencePart, type RuleKind, type SearchDateComparison, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
+import { chooseScope, compileRules, refreshSearchToday, newGroup, newRule, optionScope, optionsInEffect, querySyntax, scopeChoice, scopes, searchDateValue, searchDateWindow, searchRequest, searchSentence, textScopeNote, visualFromQuery, withSearchDateComparison, withSearchDateRange, withSearchDateWindow, type SentencePart, type RuleKind, type SearchDateComparison, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
+import { providerName, sourceName } from "./provider-names";
 import "./text-search-editor.css";
 
 const EditorDOMPrefix = createContext("");
@@ -334,7 +335,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
           }}><option value="all">all time</option><option value="today">today (local time)</option><option value="last" disabled={dateWindow?.duration !== "today" && !!draft.scope[field.key === "from" ? "to" : "from"]}>last</option><option value="from" disabled={field.key !== "from" && !!draft.scope.from}>on or after</option><option value="to" disabled={dateWindow?.duration !== "today" && field.key !== "to" && !!draft.scope.to}>on or before</option></SearchSelect> : null}
           {options && !choicesError ? <SearchSelect id={id} aria-label={name} value={value} onChange={e => scope({ [field.key]: e.target.value })}>
             <option value="">Any {field.label.toLowerCase()}</option>
-            {Array.from(new Set([...options, ...(value ? [value] : [])])).map(v => <option key={v} value={v}>{sourceLabel(v)}</option>)}
+            {Array.from(new Set([...options, ...(value ? [value] : [])])).map(v => <option key={v} value={v}>{field.key === "provider" ? providerName(v) : sourceName(v)}</option>)}
           </SearchSelect> : relative?.duration === "today" ? <span className="text-filter-note">Since local midnight</span> : relative ? <WrappingInput id={id} aria-label={name} value={relative.duration} placeholder="30d, 7d, 24h" aria-invalid={issueList.some(i => i.id === "dates")} aria-describedby={`${filterID}-dates`} onValue={duration => patch(withSearchDateWindow(draft, duration))} />
             : date ? <input id={id} aria-label={name} type="date" value={searchDateValue(value)} aria-invalid={issueList.some(i => i.id === "dates")} aria-describedby={`${filterID}-dates ${id}-utc`} onChange={e => scope({ [field.key]: e.target.value })} />
             : <WrappingInput id={id} aria-label={name} value={value} placeholder={field.placeholder} aria-invalid={date && issueList.some(i => i.id === "dates")} aria-describedby={date ? `${filterID}-dates ${id}-utc` : undefined} onValue={text => scope({ [field.key]: text })} />}

@@ -34,7 +34,7 @@ type Card = {
   regressed?: Row; reopened?: Row; inconclusive?: Row; undo?: Row; result?: Row;
 };
 type CartItem = { id: string; finding_id?: string; title: string; ticked: boolean; change_label: string; suggested_target: string; undo?: boolean; clone?: boolean };
-export type CartGroup = { target: string; label: string; handoff: Handoff | "review"; handoff_reason: string; ticked: number; items: CartItem[] };
+export type CartGroup = { target: string; label: string; handoff: Handoff | "review"; handoff_reason: string; ticked: number; items: CartItem[]; provider_name?: string; host_label?: string };
 export type Target = { target: string; label: string };
 type Checkpoint = { threshold: number; shown: number; typical_wait_days: number; clear_share: number };
 type Repository = { id: string; name: string; work: number; pr_share: number; handoff: Handoff; override: Handoff | null };
@@ -532,9 +532,12 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false, a
     return () => { cancelled = true; };
   }, [group.target, ids, handoff, repository, endpoint, mode, area]);
   const count = ids.length;
-  const global = group.label.match(/· (\S+) on (.+)$/);
+  // Findings send the provider and the Mac as fields. Fixes send only the
+  // label, which names both when the library has several Macs.
+  const named = group.label.match(/· (.+) on (.+)$/);
+  const provider: string = group.provider_name || named?.[1] || "", mac: string = group.host_label || named?.[2] || "that Mac";
   const where = repository ? `an agent working in ${group.label}`
-    : group.target.startsWith("global:") ? (global ? `an agent on ${global[2]}; it changes the instructions every ${global[1]} session there reads` : "an agent on that Mac; it changes the instructions every session there reads")
+    : group.target.startsWith("global:") ? `an agent on ${mac}; it changes the instructions every ${provider ? `${provider} ` : ""}session there reads`
       : `an agent working in the repository that defines ${group.label}`;
   async function start() {
     if (!prompt?.prompt) return;

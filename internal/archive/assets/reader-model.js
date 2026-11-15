@@ -1816,6 +1816,9 @@ function peerReasonText(reason,names=id=>id){
   if(reason?.kind==='tl1_candidate')return`Both are TL1 tasks on the same candidate${certain}`;
   return`Related${certain}`;
 }
+// A row's provider as people know it: the display name the response sends
+// beside the stored key (provider_registry.go), else the key itself.
+function providerName(row,fallback=''){return row?.provider_name||row?.provider||fallback}
 // A peer's chip. page names the workspace shown; titles names other work.
 function peerChip(peer,{page='',titles={}}={},now=Date.now()){
   const certain=peer.confidence==='high';
@@ -1823,7 +1826,7 @@ function peerChip(peer,{page='',titles={}}={},now=Date.now()){
   const reasons=(peer.evidence||[]).map(reason=>peerReasonText(reason,names));
   if(peer.via)reasons.push(`Linked through ${titles[peer.via]||'other related work'}`);
   return{
-    label:[peerRoleLabel(peer.role),peer.title||'Untitled workspace',peer.provider,relativeAge(peer.started_at,now)].filter(Boolean).join(' · '),
+    label:[peerRoleLabel(peer.role),peer.title||'Untitled workspace',providerName(peer),relativeAge(peer.started_at,now)].filter(Boolean).join(' · '),
     href:'/work/'+encodeURIComponent(peer.workspace_id),certain,reasons,
     title:[certain?'Related work':'Possibly related work (uncertain)',...reasons].join('\n'),
   };

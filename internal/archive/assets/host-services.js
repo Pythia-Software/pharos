@@ -99,7 +99,7 @@
     folders: {async chooseLibraryFolder(purpose) {
       // Onboarding already uses source/export to select NSOpenPanel's mode.
       // The default library action retains its exact no-purpose payload.
-      if (purpose !== undefined && !['library', 'source', 'export'].includes(purpose)) throw failure('invalid-request', 'Unknown folder picker purpose.');
+      if (purpose !== undefined && !['library', 'source', 'export', 'backup', 'restore'].includes(purpose)) throw failure('invalid-request', 'Unknown folder picker purpose.');
       return request('folders', {action: 'chooseFolder', ...(purpose === undefined ? {} : {purpose})}, value => value === null || typeof value === 'string' && value.length > 0);
     }},
     updates: {

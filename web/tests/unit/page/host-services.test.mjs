@@ -230,10 +230,10 @@ test('host source discovery covers new nested scripts and executable shell fragm
 test('onboarding picker purposes preserve legacy source and export panel modes', async () => {
   const sent=[];
   const host=load({webkit:{messageHandlers:{pharosLibrary:{postMessage:async payload=>{sent.push(plain(payload));return null;}}}}}).pharosHost;
-  for(const purpose of ['source','export']) assert.equal(await host.folders.chooseLibraryFolder(purpose),null);
-  assert.deepEqual(sent,[{action:'chooseFolder',purpose:'source'},{action:'chooseFolder',purpose:'export'}]);
+  for(const purpose of ['source','export','backup','restore']) assert.equal(await host.folders.chooseLibraryFolder(purpose),null);
+  assert.deepEqual(sent,['source','export','backup','restore'].map(purpose=>({action:'chooseFolder',purpose})));
   await assert.rejects(host.folders.chooseLibraryFolder('arbitrary'),rejected('invalid-request'));
-  assert.equal(sent.length,2);
+  assert.equal(sent.length,4);
   const missing=load({webkit:{messageHandlers:{}},navigator:{clipboard:{writeText:async()=>{throw new Error('Must not use browser clipboard in native host');}}}}).pharosHost;
   assert.equal(missing.kind,'legacy-webkit');
   await assert.rejects(missing.clipboard.writeText('text'),rejected('unsupported'));

@@ -279,6 +279,11 @@ func TestWorkOverviewOmitsMessagesAndCarriesWhatThePageScannedFor(t *testing.T) 
 	if integer(conversations[0]["message_count"]) != 5 {
 		t.Fatalf("message count: %v", conversations[0]["message_count"])
 	}
+	// The page shows display names; the stored keys stay as they are. The
+	// provider Claude is not its source, Claude Code.
+	if conversations[0]["provider"] != "claude" || conversations[0]["provider_name"] != "Claude" || overview["source_kind"] != "claude" || overview["source_name"] != "Claude Code" {
+		t.Fatalf("provider %v (%v), source %v (%v)", conversations[0]["provider"], conversations[0]["provider_name"], overview["source_kind"], overview["source_name"])
+	}
 	if jsonText(overview["discovered_prs"]) != `[{"host":"github.com","number":12,"url":"https://github.com/acme/tool/pull/12"}]` {
 		t.Fatalf("pull requests: %s", jsonText(overview["discovered_prs"]))
 	}

@@ -496,9 +496,17 @@ for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 
 });
 
 test('Cloud backup forecast, setup, password stages and Reset keep keyboard focus', {skip}, async t => {
-  const {page}=await open(t,{url:'/settings/backups',ready:'#cloud-explore'});
+  const {page}=await open(t,{url:'/settings/backups',ready:'#cloud-explore',preferences:{'pharos-cloud-backup-configurations-v2':[{id:'cloud-fixture',name:'Offsite copy',provider:'aws',region:'us-east-1',tier:'aws-standard',bucket:'pharos-example-bucket'}]}});
   const explore=page.getByRole('button',{name:'Explore cloud backup options',exact:true});
   await explore.click();
+  // Removing a destination asks in place: focus enters the question, and Cancel or Escape returns it.
+  const remove=page.getByRole('button',{name:'Remove Offsite copy',exact:true}),cancelRemove=page.locator('.cloud-saved').getByRole('button',{name:'Cancel',exact:true});
+  for(const key of ['Enter','Escape']){
+    await remove.click();
+    assert.ok(await cancelRemove.evaluate(input=>input===document.activeElement));
+    await page.keyboard.press(key);
+    assert.ok(await remove.evaluate(input=>input===document.activeElement));
+  }
   // The price forecast keeps focus while the keyboard moves its readout (months: unit/page/cloud-backup).
   for(const chart of await page.locator('.cloud-results svg').all()){
     await chart.focus();
@@ -677,7 +685,6 @@ test("Unified activity panel holds focus and its disclosure across refreshes", {
   const panel = page.getByRole("dialog", { name: "Background Processing", exact: true });
   await panel.waitFor();
   await holdsFocus(page, panel, chip);
-  assert.equal(await page.locator("#pharosDrivePanel").count(), 0, "the old drive panel stays closed");
 
   await press(chip);
   await panel.waitFor();

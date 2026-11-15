@@ -828,6 +828,8 @@ var pickerPurposes = map[string]struct {
 	"library": {Prompt: "Choose a Pharos library or a parent folder for a new library."},
 	"source":  {Prompt: "Choose the folder that holds this tool’s conversations."},
 	"export":  {Prompt: "Choose the export you downloaded: its ZIP, conversations.json or manifest.", File: true},
+	"backup":  {Prompt: "Choose a completed backup or a self-contained copy of a library."},
+	"restore": {Prompt: "Choose where to put the restored library. Pharos creates a “Recovered Library” folder there."},
 }
 
 func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {

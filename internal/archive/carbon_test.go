@@ -212,7 +212,7 @@ func TestCarbonUsageFiltersAndHourlyTotals(t *testing.T) {
 			if total != sample.want || read.Unknown != sample.want || read.Unclassified != 0 || len(read.Models) != 0 {
 				t.Fatalf("total=%d, read %+v, want %d", total, read, sample.want)
 			}
-			if strings.Join(read.Choices["repository_name"], ",") != "example/repo" || strings.Join(read.Choices["provider"], ",") != "codex" {
+			if strings.Join(read.Choices["project_name"], ",") != "example/repo" || strings.Join(read.Choices["provider"], ",") != "codex" {
 				t.Fatalf("filters hid choices: %#v", read.Choices)
 			}
 		})

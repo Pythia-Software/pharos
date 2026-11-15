@@ -35,7 +35,6 @@
 .storage-compact-actions{display:flex;flex-wrap:wrap;gap:8px}
 @media(max-width:500px){.storage-legend li{white-space:normal}.storage-table .storage-split{display:none}.storage-table .storage-name{width:45%}.storage-table .num{width:25%}.storage-breakdown{padding:14px}}
 `;
-  const SOURCES = {claude: 'Claude Code', codex: 'Codex', conductor: 'Conductor', tl1: 'TL1', antigravity: 'Antigravity', 'antigravity-cli': 'Antigravity CLI'};
   const VIEWS = [['machines', 'By Mac'], ['sources', 'By source'], ['projects', 'By project']];
   // Each part's color: its group's hue, lighter for the smaller parts.
   const FILLS = {
@@ -68,8 +67,8 @@
       .map(part => ({...part, bytes: Number(part.bytes), fill: FILLS[part.key] || FILLS.other, share: percent(Number(part.bytes), total)}));
     const rows = (data?.[selected] || []).map(row => {
       const originals = Number(row.originals_bytes) || 0, catalog = Number(row.catalog_bytes) || 0;
-      const label = selected === 'sources' ? SOURCES[row.id] || row.label : row.label;
-      return {id: row.id, label, originals, catalog, total: originals + catalog};
+      // The server names every row, sources from the provider registry.
+      return {id: row.id, label: row.label, originals, catalog, total: originals + catalog};
     });
     const largest = Math.max(0, ...rows.map(row => row.total));
     for (const row of rows) {
