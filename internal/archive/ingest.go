@@ -1009,9 +1009,8 @@ func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord
 			}
 			record.Conversations[index].Messages = conversation.Messages
 		}
-		var searchCurrent bool
-		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM message_search_state WHERE conversation_id=? AND version=?)
-		 OR NOT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?)`, conversationID, messageSearchVersion, conversationID).Scan(&searchCurrent); err != nil {
+		searchCurrent, err := messageSearchCurrent(tx, conversationID)
+		if err != nil {
 			return 0, 0, err
 		}
 		messageWriter, err := newMessageWriter(tx, conversationID)
@@ -1169,22 +1168,7 @@ func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord
 			}
 		}
 		if complete {
-			if !usageCurrent {
-				var missingModel bool
-				if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE workspace_id=?
-					AND (COALESCE(model,'') IN ('','Unknown model') OR model GLOB '<*>'))
-					OR EXISTS(SELECT 1 FROM conversations WHERE workspace_id=?
-					AND (COALESCE(model,'') IN ('','Unknown model') OR model GLOB '<*>'))`, workspaceID, workspaceID).Scan(&missingModel); err != nil {
-					return 0, 0, err
-				}
-				if missingModel {
-					if err := repairModelSummaries(tx, workspaceID, record.Conversations, conversationIDs); err != nil {
-						return 0, 0, err
-					}
-				}
-			}
-			if _, err := tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
-				ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`, workspaceID, usageAttributionVersion); err != nil {
+			if err := recordUsageAttribution(tx, workspaceID, usageCurrent, record.Conversations, conversationIDs); err != nil {
 				return 0, 0, err
 			}
 		}
