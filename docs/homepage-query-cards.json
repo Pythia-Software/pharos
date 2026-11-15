@@ -10053,7 +10053,7 @@
       ],
       "id": "human-messages-per-day",
       "title": "Messages per day",
-      "description": "Messages containing your words per day, averaged over each trailing seven complete days, across the last {days} days.",
+      "description": "Messages containing your words per day, averaged over each trailing seven complete days, across the last 30 days.",
       "days": [
         30
       ],
@@ -10123,7 +10123,7 @@
       ],
       "id": "human-conversations-per-day",
       "title": "Conversations per day",
-      "description": "Conversations in which you wrote per day, averaged over each trailing seven complete days, across the last {days} days.",
+      "description": "Conversations in which you wrote per day, averaged over each trailing seven complete days, across the last 30 days.",
       "days": [
         30
       ],
@@ -20345,7 +20345,7 @@
       "note": "Likely saving = what the pattern cost × the share a change can remove × how often a change takes × how often the pattern persists untreated. Estimates per 28 days, in USD, from the latest Findings analysis.",
       "id": "findings-open",
       "title": "Biggest open findings",
-      "description": "Optimization findings with the largest likely monthly saving, from the latest Findings analysis.",
+      "description": "Optimization findings with the largest likely saving per 28 days, from the latest Findings analysis.",
       "action": "Review your findings",
       "where": [
         {
@@ -20426,7 +20426,7 @@
       "note": "Likely saving = what the pattern cost × the share a change can remove × how often a change takes × how often the pattern persists untreated. Estimates per 28 days, in USD, from the latest Findings analysis. Each open finding counts once, under the kind of change its prompt makes: repository instructions, repository tools and skills, agent app settings, automation prompts or your global instructions.",
       "id": "findings-fixes",
       "title": "Savings by kind of fix",
-      "description": "Likely monthly savings across open findings, by where the suggested change is made.",
+      "description": "Likely savings per 28 days across open findings, by where the suggested change is made.",
       "action": "Compare kinds of fix",
       "where": [
         {
@@ -21316,7 +21316,7 @@
       ],
       "id": "session-failure-trend",
       "title": "Failure rate over time",
-      "description": "Failed tool calls divided by all tool calls over each trailing seven complete days, across the last {days} days.",
+      "description": "Failed tool calls divided by all tool calls over each trailing seven complete days, across the last 30 days.",
       "action": "Explore Session Shape",
       "where": [
         {
@@ -23155,7 +23155,7 @@
       "field": "called_at",
       "category": "tools",
       "idea": "skills-06",
-      "unit": "calls",
+      "unit": "requests",
       "days": [
         30,
         90
@@ -23209,7 +23209,7 @@
         "valueField": "card_call_count",
         "subjects": "daily groups",
         "action": "Explore daily comparison",
-        "unit": "calls",
+        "unit": "requests",
         "coverMetric": {
           "id": "daily_mcp_calls",
           "op": "sum",

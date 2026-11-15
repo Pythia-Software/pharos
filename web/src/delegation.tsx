@@ -1,4 +1,5 @@
 import { EstimateInfoButton } from "./estimate-info";
+import { providerName } from "./provider-names";
 import { formatUSD } from "./currency";
 import { formatTokens } from "./token-count";
 import { CursorPagination } from "./cursor-pagination";
@@ -998,7 +999,7 @@ export function DelegationExplorer({
     >
       <h2>{shownSession.label}</h2>
       <small>
-        {shownSession.provider} ·{" "}
+        {providerName(shownSession.provider)} ·{" "}
         {shownSession.model || "model not recorded"} ·{" "}
         {shownSession.effort || "effort not recorded"}
         {parentNote(shownSession) ? ` · ${parentNote(shownSession)}` : ""}
@@ -1226,7 +1227,7 @@ export function DelegationExplorer({
                                   <div className="delegation-node">
                                     <SessionIdentity
                                       name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`}
-                                      metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{n.provider} · {n.model || "model not recorded"} · {n.effort || "effort not recorded"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{n.events_pending ? ` · ${eventsPendingNote}` : ""}<SessionAge start={n.start} prefix=" · " /></>}
+                                      metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{providerName(n.provider)} · {n.model || "model not recorded"} · {n.effort || "effort not recorded"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{n.events_pending ? ` · ${eventsPendingNote}` : ""}<SessionAge start={n.start} prefix=" · " /></>}
                                       title={`${n.id} · ${n.coverage} coverage`}
                                       depth={mode === "hierarchy" ? n.depth : 0}
                                       branch={mode === "hierarchy" ? sessionBranches.get(n.id) : undefined}
@@ -1408,7 +1409,7 @@ function InboxSessions({ rows, data, shown, range, collapsed, toggle, openNode, 
     <div className="delegation-inbox-heading" role="row"><span role="columnheader" title={sessionCountText(data.session_count, data.session_count_uncertain)}>Agent session{data.session_count_uncertain ? " ≈" : ""}</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.label}</span>)}</div>
     {rows.map(n => <div key={n.id} role="row" data-session-id={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }}>
       <div role="cell" className="delegation-inbox-session">
-        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{n.provider} · {n.model || "model not recorded"} · {n.effort || "effort not recorded"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{!sessionOutsideWindow(n, range) && (n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens, "tokens")} tokens unallocated in branch` : "")}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
+        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{providerName(n.provider)} · {n.model || "model not recorded"} · {n.effort || "effort not recorded"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{!sessionOutsideWindow(n, range) && (n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens, "tokens")} tokens unallocated in branch` : "")}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
         {!!n.child_count && <button className="delegation-chevron session-fold" style={{left: sessionBranchX(n.depth) - 8}} aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} title={collapsed.has(n.id) ? "Expand sessions" : "Collapse sessions"} aria-expanded={!collapsed.has(n.id)} onClick={() => toggle(n)}><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
         <RelativesButton node={n} show={showRelatives} />
       </div>
@@ -1965,7 +1966,7 @@ export function ParallelActivity({
             return notes;
           })();
           return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
-            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${peerPrefix(n)}${n.provider} · ${n.model||"model not recorded"}${parentNote(n)?` · ${parentNote(n)}`:""}`} notes={laneNotes} messages={actors.messages.get(n.id)??[]} boundaryMessages={nativeLabels.messages.get(n.id)} marks={lane?.marks??[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
+            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${peerPrefix(n)}${providerName(n.provider)} · ${n.model||"model not recorded"}${parentNote(n)?` · ${parentNote(n)}`:""}`} notes={laneNotes} messages={actors.messages.get(n.id)??[]} boundaryMessages={nativeLabels.messages.get(n.id)} marks={lane?.marks??[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
               openSession={()=>openNode(n)}
               sourceHref={item=>sourceHref(n,item)}
               events={nativeLabels.events.get(n.id)} eventCounts={eventCounts} eventHref={e=>eventHref(n,e)}

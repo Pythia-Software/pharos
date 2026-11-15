@@ -130,6 +130,13 @@ test("All time saved preview copy follows its source query window", t => {
   const trend = queryRecipes.find(recipe => recipe.id === "token-volume-trend");
   const all = savedCardPreviewJob(updateQueryWindowURL(instantiateRecipe(trend, 180, clock).url, null), schemas.usage);
   assert.equal(all.options.recipe.description, "Daily tokens by provider across all time, averaged over seven calendar days including idle days.");
+  // A sparkline with its own lookback always draws its last 30 days, so its
+  // text names that fixed history whatever window the card was opened at.
+  for (const id of ["human-messages-per-day", "human-conversations-per-day", "session-failure-trend", "machine-call-trend", "machine-latency-trend"]) {
+    const fixed = queryRecipes.find(recipe => recipe.id === id);
+    assert.ok(fixed.trend.lookback, id);
+    for (const days of [7, 30, 90, null]) assert.match(instantiateRecipe(fixed, days, clock).description, /seven complete days, across the last 30 days\.$/, `${id} at ${days}`);
+  }
   const volume = queryRecipes.find(recipe => recipe.id === "human-word-total");
   assert.equal(savedCardPreviewJob(updateQueryWindowURL(instantiateRecipe(volume, 7, clock).url, null), schemas[volume.dataset]).options.recipe.title, "All-time writing volume over time");
   const cumulative = queryRecipes.find(recipe => recipe.id === "cumulative-api-cost");

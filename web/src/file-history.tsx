@@ -278,7 +278,10 @@ function CheckoutSetup({ checkout, onDone }: { checkout: RepositoryCheckout; onD
     if (forgetting) { asked.current = true; keep.current?.focus(); }
     else if (asked.current) { asked.current = false; forget.current?.focus(); }
   }, [forgetting]);
+  const inFlight = useRef(false);
   const post = async (body: Record<string, unknown>) => {
+    if (inFlight.current) return false;
+    inFlight.current = true;
     setSaving(true); setError("");
     try {
       const response = await fetch(`/api/repositories/${encodeURIComponent(checkout.repository_id)}/checkout`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -286,9 +289,19 @@ function CheckoutSetup({ checkout, onDone }: { checkout: RepositoryCheckout; onD
       if (!response.ok) throw new Error(answer.error ?? `HTTP ${response.status}`);
       onDone?.();
       refreshFiles();
+      return true;
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
-    } finally { setSaving(false); }
+      return false;
+    } finally { inFlight.current = false; setSaving(false); }
+  };
+  // The question stays, with focus in it, until the request answers. The
+  // Forget button goes away with the checkout, so focus moves to the folder
+  // field; a failure leaves the question open under its error.
+  const forgetCheckout = async () => {
+    if (!await post({ clear: true })) return;
+    asked.current = false; setForgetting(false);
+    document.getElementById(`checkout-${checkout.repository_id}`)?.focus();
   };
   const candidates = (checkout.candidates ?? []).filter(path => path !== checkout.path);
   return <section className="files-checkout" aria-label="Repository checkout">
@@ -303,11 +316,11 @@ function CheckoutSetup({ checkout, onDone }: { checkout: RepositoryCheckout; onD
       <button type="submit" className="files-button" disabled={saving || !draft.trim()}>Use this folder</button>
       {checkout.status === "set" ? <button ref={forget} type="button" className="files-button" disabled={saving || forgetting} onClick={() => setForgetting(true)}>Forget the checkout…</button> : null}
     </form>
-    {forgetting ? <div className="files-checkout-confirm" role="group" aria-label="Forget checkout" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setForgetting(false); } }}>
+    {forgetting ? <div className="files-checkout-confirm" role="group" aria-label="Forget checkout" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (!inFlight.current) setForgetting(false); } }}>
       <p>Forget this checkout? Pharos stops showing code, blame, history and commit diffs for {checkout.name ?? "this repository"} until you choose a folder again. Nothing in the folder changes.</p>
       <div className="files-checkout-form">
-        <button type="button" className="files-button" onClick={() => { setForgetting(false); void post({ clear: true }); }}>Forget checkout</button>
-        <button ref={keep} type="button" className="files-button" onClick={() => setForgetting(false)}>Cancel</button>
+        <button type="button" className="files-button" aria-disabled={saving} onClick={() => void forgetCheckout()}>Forget checkout</button>
+        <button ref={keep} type="button" className="files-button" aria-disabled={saving} onClick={() => { if (!inFlight.current) setForgetting(false); }}>Cancel</button>
       </div>
     </div> : null}
     {error ? <Failure error={error} /> : null}

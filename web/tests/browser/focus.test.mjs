@@ -542,6 +542,11 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
   assert.ok(await page.locator('#cloud-step-0').evaluate(panel=>panel===document.activeElement));
   await page.keyboard.press('Tab');
   assert.ok(await page.getByLabel('Cloud provider',{exact:true}).evaluate(input=>input===document.activeElement));
+  // Confirming removes the destination's own controls, so focus moves to a control that is still there.
+  await remove.scrollIntoViewIfNeeded();await remove.click();
+  await page.locator('.cloud-saved').getByRole('button',{name:'Remove destination',exact:true}).click();
+  await remove.waitFor({state:'detached'});
+  await page.waitForFunction(()=>document.activeElement!==document.body&&document.activeElement.isConnected&&document.activeElement.getClientRects().length>0);
   await page.getByRole('button',{name:'Close cloud backup options',exact:true}).click();
   assert.ok(await explore.evaluate(input=>input===document.activeElement));
 });
@@ -2478,7 +2483,7 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   await clear.focus();await page.keyboard.press('Enter');
   assert.ok(await question.evaluate(element=>element===document.activeElement),'clearing a failure returns focus to the composer');
   assert.equal(await question.evaluate(element=>element.value),'');
-  assert.ok(await page.getByRole('log',{name:'Conversation',exact:true}).isHidden(),'clearing hides the prior conversation');
+  assert.ok(await page.getByRole('log',{name:'Chat',exact:true}).isHidden(),'clearing hides the prior conversation');
   assert.ok(await page.locator('.pharos-model-trigger').isEnabled(),'a cleared chat allows choosing another model');
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),null);
   await shot('cleared-chat');

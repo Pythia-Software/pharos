@@ -161,9 +161,12 @@ func cloudSnapshot(ctx context.Context, config Config, dir string, progress func
 }
 
 // cloudSnapshotPhase names a backup item, as the page and Background
-// Processing show it while the cloud snapshot copies that item.
+// Processing show it while the cloud snapshot copies that item. A snapshot
+// held up by a capture says so, rather than looking stuck in preparation.
 func cloudSnapshotPhase(phase string) string {
 	switch phase {
+	case backupWaitingForCapture:
+		return "Waiting for a capture to finish before preparing the library snapshot"
 	case "catalog":
 		return "Copying the library index"
 	case "captures":

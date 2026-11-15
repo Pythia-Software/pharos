@@ -111,11 +111,11 @@ const finding = (recipe: Omit<QueryRecipe, "category" | "idea" | "dataset" | "fi
 const openFindings = [equal("state", "open"), positive("likely_usd")];
 
 const findingRecipes: QueryRecipe[] = [
-  finding({ id: "findings-open", title: "Biggest open findings", description: "Optimization findings with the largest likely monthly saving, from the latest Findings analysis.", action: "Review your findings", where: openFindings, measures: [],
+  finding({ id: "findings-open", title: "Biggest open findings", description: "Optimization findings with the largest likely saving per 28 days, from the latest Findings analysis.", action: "Review your findings", where: openFindings, measures: [],
     exploration: compare(["id"], [likely, { id: "fd_title", op: "row", field: "title", label: "Finding" }, sum("fd_at_stake", "at_stake_usd", "At stake (USD)")], "USD", "open findings", "Review your findings",
       { labelFields: ["fd_title"], representative: { orderBy: [{ field: "first_seen_at", dir: "desc", nulls: "last" }] }, context: [{ field: "fd_at_stake", label: "at stake", unit: "USD" }] }),
     cover: { mode: "result", metricId: likely.id, kind: "bar-horizontal", maxGroups: 3, showOther: false } }),
-  finding({ id: "findings-fixes", title: "Savings by kind of fix", description: "Likely monthly savings across open findings, by where the suggested change is made.", action: "Compare kinds of fix", where: openFindings, measures: [],
+  finding({ id: "findings-fixes", title: "Savings by kind of fix", description: "Likely savings per 28 days across open findings, by where the suggested change is made.", action: "Compare kinds of fix", where: openFindings, measures: [],
     note: `${findingsNote} Each open finding counts once, under the kind of change its prompt makes: repository instructions, repository tools and skills, agent app settings, automation prompts or your global instructions.`,
     exploration: share(compare(["lever_label"], [likely, count("fd_count", "Open findings")], "USD", "kinds of fix", "Compare kinds of fix", { context: [{ field: "fd_count", label: "open findings" }] }), "Likely saving by kind of fix"),
     cover: { mode: "result", metricId: likely.id, kind: "pie", maxGroups: 5, showOther: true, showLegend: true, height: 300 } }),

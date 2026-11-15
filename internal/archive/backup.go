@@ -552,7 +552,7 @@ func prepareBackup(config Config, dest string, prune bool) (*backupJob, error) {
 	name := facts.displayName()
 	switch facts.Encryption {
 	case "none":
-		job.run.Warnings = append(job.run.Warnings, fmt.Sprintf("%s is not encrypted, and the backup holds every conversation in the library.", name))
+		job.run.Warnings = append(job.run.Warnings, fmt.Sprintf("The backup holds every conversation in the library, and %s is not encrypted.", name))
 	case "hardware-only":
 		job.run.Warnings = append(job.run.Warnings, "FileVault is off, so this Mac's internal disk, and the backup on it, unlock without a password.")
 	}
@@ -815,6 +815,10 @@ var (
 	backupWALPoll         = 100 * time.Millisecond
 )
 
+// backupWaitingForCapture is the phase of a backup, or of a cloud backup's
+// snapshot, while a capture holds the files it is about to copy.
+const backupWaitingForCapture = "waiting for a capture to finish"
+
 var errBackupWALGrew = errors.New("The library changed too much while it was copied (indexing is probably running). Back up again when indexing finishes.")
 
 // boundWAL returns a context for the snapshot that ends once the source's WAL
@@ -1001,7 +1005,7 @@ func (j *backupJob) lockCaptures(hostDir string) (func(), error) {
 		}
 		if !waiting {
 			waiting = true
-			j.phase("waiting for a capture to finish")
+			j.phase(backupWaitingForCapture)
 		}
 		select {
 		case <-j.ctx.Done():

@@ -475,7 +475,7 @@ func nullableTime(value time.Time) any {
 func itemSub(item backgroundItem, in backgroundInputs) string {
 	switch item.ID {
 	case "conversations":
-		return "All your enabled sources"
+		return "Your automatic sources"
 	case "other-sources":
 		return strings.Join(in.otherSources, ", ")
 	case "labels":

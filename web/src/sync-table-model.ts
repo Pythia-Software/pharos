@@ -5,7 +5,10 @@ import { loadSchema, type FieldSchema } from "@pythia-software/query-table-core"
 // so filters, ordering, grouping and metrics operate on the measured values.
 export type SyncRecord = Record<string, any>;
 export type SyncTable = { schema: FieldSchema<SyncRecord>; rows: SyncRecord[]; empty: string };
-type Column = [name: string, label: string, type?: "text" | "number" | "datetime", render?: string, width?: number];
+// labels: a closed set of stored values and their display names. Rows keep the
+// stored value, so saved filters and links still match; the cell renderer and
+// the filter picker show the label.
+type Column = [name: string, label: string, type?: "text" | "number" | "datetime", render?: string, width?: number, labels?: Record<string, string>];
 function schema(name: string, columns: Column[], sort?: string, hidden: Column[] = []): FieldSchema<SyncRecord> {
   return loadSchema<SyncRecord>({ name: `sync_${name}`, version: 1, idField: "id", defaultLimit: 25,
     defaultSort: sort ? [{ field: sort, dir: "desc" }] : [],
@@ -13,7 +16,8 @@ function schema(name: string, columns: Column[], sort?: string, hidden: Column[]
     fields: [{ name: "id", label: "Identity", type: "text", source: "backend", select: { default: false } },
       // These are fields supplied by clientRows, rather than derived columns.
       // Native filtering, sorting, grouping and metrics use that distinction.
-      ...[...columns, ...hidden].map(([name, label, type = "text", render]) => ({ name, label, type, render, source: "backend", aggregate: { groupable: true } }))],
+      ...[...columns, ...hidden].map(([name, label, type = "text", render, , labels]) => ({ name, label, type, render, source: "backend", aggregate: { groupable: true },
+        ...(labels ? { filter: { values: { source: "static", options: Object.entries(labels).map(([value, label]) => ({ value, label })) } } } : {}) }))],
   });
 }
 const duration = (name: string, label: string): Column => [name, label, "number", "sync_seconds", 110];
@@ -21,23 +25,6 @@ const memory = (name: string, label: string): Column => [name, label, "number", 
 const date = (name: string, label: string): Column => [name, label, "datetime", "sync_time", 160];
 const count = (name: string, label: string): Column => [name, label, "number", "number", 120];
 const percent = (name: string, label: string): Column => [name, label, "number", "sync_percent", 140];
-export const syncSchemas = {
-  operations: schema("operations", [date("started_at", "Started"), ["work", "Operation", "text", undefined, 210], ["result", "State", "text", "sync_result", 140], ["trigger", "Started by"], duration("seconds", "Elapsed"), ["subject", "Subject", "text", undefined, 170], ["error", "Error", "text", undefined, 240]], "started_at", [
-    ["kind", "Kind"], ["variant", "Variant"], ["parent_id", "Parent operation"], ["step", "Last step"], date("ended_at", "Finished"),
-  ]),
-  history: schema("history", [date("finished_at", "When"), ["result", "Result", "text", "sync_result", 140], ["sources", "Sources", "text", undefined, 170], count("conversations", "Conversations"), count("messages_in_changed_groups", "Messages"), duration("seconds", "Elapsed"), duration("cpu_seconds", "CPU time"), memory("rss_observed_peak_bytes", "RAM peak")], "finished_at", [
-    ["state", "State"], ["trigger", "Trigger"], ["class", "Workload"], count("changed_groups", "Changed groups"), percent("cpu_percent_one_core", "CPU (% of one core)"), memory("rss_baseline_bytes", "RAM at start"), memory("allocated_bytes", "Allocated"), ["verification", "Verification"],
-  ]),
-  sources: schema("sources", [["source_name", "Source"], date("attempted_at", "Last checked"), date("succeeded_at", "Last success"), date("last_capture_at", "Last captured"), ["status", "Status", "text", "sync_result"], ["error", "Error", "text", "text", 300]]),
-  costs: schema("costs", [["workload", "Workload"], count("samples", "Runs"), duration("elapsed_median", "Elapsed median"), duration("elapsed_p95", "Elapsed p95"), duration("cpu_median", "CPU median"), duration("cpu_p95", "CPU p95"), memory("ram_last", "Last RAM peak"), percent("cpu_duty", "Estimated CPU duty (% of one core)")]),
-  accuracy: schema("accuracy", [["operation", "Operation"], ["checkpoint", "Checkpoint"], count("predicted", "Available"), count("attempts", "Attempts"), count("evaluated", "Evaluated"), duration("error_seconds", "Median error"), percent("error_percent", "Median relative error"), count("covered", "Within range"), duration("width_seconds", "Median range width")]),
-  coverage: schema("coverage", [["source_name", "Source"], count("units", "Units"), ["outcome", "Result"], date("last_verification", "Last verified")]),
-  deferred: schema("deferred", [["name", "Source group"], date("changed_at", "Changed"), date("completed_at", "Last completed")]),
-  sourceResults: schema("source_results", [["source", "Source"], count("conversations", "Conversations"), count("messages", "Messages"), count("workspaces", "Workspaces changed"), ["status", "Status"], ["error", "Error", "text", "text", 300]]),
-  phases: schema("phases", [["name", "Phase"], duration("seconds", "Elapsed"), duration("cpu_seconds", "CPU time")]),
-  stages: schema("stages", [["stage", "Stage", "text", undefined, 200], count("done", "Done"), count("total", "Total"), ["unit", "Unit"], duration("seconds", "Elapsed"), count("conversations", "Input conversations"), count("groups", "Input groups"), memory("bytes", "Input bytes"), ["bytes_basis", "Bytes basis"], count("messages", "Input messages"), duration("since_last_index_seconds", "Since prior index"), count("load_one_minute", "Load (1 min)")]),
-  forecasts: schema("forecasts", [["checkpoint", "When predicted"], duration("elapsed_seconds", "Into run"), duration("point_seconds", "Estimated remaining"), duration("low_seconds", "Low estimate"), duration("high_seconds", "High estimate"), duration("actual_remaining_seconds", "Actual remaining"), duration("error_seconds", "Error (estimate − actual)"), count("predicted_steps", "Steps estimated"), count("remaining_steps", "Remaining steps")]),
-};
 export const operationLabels: Record<string, string> = { "automatic-sync": "Index changes (automatic)", "manual-sync": "Index changes (manual)", "capture-index": "Index captures", "library-update:update": "Capture & index", "library-update:full": "Full rebuild", "library-update:retained": "Retained repair" };
 // Operation states, what started an operation and why it ended, as the
 // Background Processing tables and Operation details show them.
@@ -53,6 +40,38 @@ export const forecastCheckpoints: Record<string, string> = { launch: "At launch"
 export const phaseLabels: Record<string, string> = { discovery: "Discovery", projections: "Search view", audit: "Verification", github: "GitHub", identities: "Identities",
   git: "Git", tools: "Tool index", authorship: "Authorship", findings: "Findings" };
 const phaseLabel = (name: string): string => phaseLabels[name] || name;
+// Display names for stored cell values, by renderer key. A value outside the
+// set shows as recorded.
+export const syncCellLabels: Record<string, (value: string) => string> = {
+  sync_trigger: value => operationTriggers[value] || value,
+  sync_checkpoint: value => forecastCheckpoints[value] || value,
+  sync_outcome: value => verificationOutcomes[value] || value,
+  sync_phase: phaseLabel,
+  // "<phase>: <stage>", where only the phase has a display name.
+  sync_stage: value => { const at = value.indexOf(": "); return at < 0 ? value : phaseLabel(value.slice(0, at)) + value.slice(at); },
+};
+// Results that need a look. Operation rows carry their stored state; a source's
+// status is derived, and a grouped cell has only the shown value.
+const attentionStates = new Set(["failed", "cancelled", "interrupted"]);
+const attentionLabels = new Set([...[...attentionStates].map(state => operationStates[state]), "Error", "Needs capture"]);
+export const resultNeedsAttention = (value: unknown, row?: SyncRecord): boolean => attentionStates.has(String(row?.state)) || attentionLabels.has(String(value));
+export const syncSchemas = {
+  operations: schema("operations", [date("started_at", "Started"), ["work", "Operation", "text", undefined, 210], ["result", "State", "text", "sync_result", 140], ["trigger", "Started by", "text", "sync_trigger", undefined, operationTriggers], duration("seconds", "Elapsed"), ["subject", "Subject", "text", undefined, 170], ["error", "Error", "text", undefined, 240]], "started_at", [
+    ["kind", "Kind"], ["variant", "Variant"], ["parent_id", "Parent operation"], ["step", "Last step"], date("ended_at", "Finished"),
+  ]),
+  history: schema("history", [date("finished_at", "When"), ["result", "Result", "text", "sync_result", 140], ["sources", "Sources", "text", undefined, 170], count("conversations", "Conversations"), count("messages_in_changed_groups", "Messages"), duration("seconds", "Elapsed"), duration("cpu_seconds", "CPU time"), memory("rss_observed_peak_bytes", "RAM peak")], "finished_at", [
+    ["state", "State"], ["trigger", "Trigger"], ["class", "Workload"], count("changed_groups", "Changed groups"), percent("cpu_percent_one_core", "CPU (% of one core)"), memory("rss_baseline_bytes", "RAM at start"), memory("allocated_bytes", "Allocated"), ["verification", "Verification"],
+  ]),
+  sources: schema("sources", [["source_name", "Source"], date("attempted_at", "Last checked"), date("succeeded_at", "Last success"), date("last_capture_at", "Last captured"), ["status", "Status", "text", "sync_result"], ["error", "Error", "text", "text", 300]]),
+  costs: schema("costs", [["workload", "Workload"], count("samples", "Runs"), duration("elapsed_median", "Elapsed median"), duration("elapsed_p95", "Elapsed p95"), duration("cpu_median", "CPU median"), duration("cpu_p95", "CPU p95"), memory("ram_last", "Last RAM peak"), percent("cpu_duty", "Estimated CPU duty (% of one core)")]),
+  accuracy: schema("accuracy", [["operation", "Operation"], ["checkpoint", "Checkpoint", "text", "sync_checkpoint", undefined, forecastCheckpoints], count("predicted", "Available"), count("attempts", "Attempts"), count("evaluated", "Evaluated"), duration("error_seconds", "Median error"), percent("error_percent", "Median relative error"), count("covered", "Within range"), duration("width_seconds", "Median range width")]),
+  coverage: schema("coverage", [["source_name", "Source"], count("units", "Units"), ["outcome", "Result", "text", "sync_outcome", undefined, verificationOutcomes], date("last_verification", "Last verified")]),
+  deferred: schema("deferred", [["name", "Source group"], date("changed_at", "Changed"), date("completed_at", "Last completed")]),
+  sourceResults: schema("source_results", [["source", "Source"], count("conversations", "Conversations"), count("messages", "Messages"), count("workspaces", "Workspaces changed"), ["status", "Status"], ["error", "Error", "text", "text", 300]]),
+  phases: schema("phases", [["name", "Phase", "text", "sync_phase"], duration("seconds", "Elapsed"), duration("cpu_seconds", "CPU time")]),
+  stages: schema("stages", [["stage", "Stage", "text", "sync_stage", 200], count("done", "Done"), count("total", "Total"), ["unit", "Unit"], duration("seconds", "Elapsed"), count("conversations", "Input conversations"), count("groups", "Input groups"), memory("bytes", "Input bytes"), ["bytes_basis", "Bytes basis"], count("messages", "Input messages"), duration("since_last_index_seconds", "Since prior index"), count("load_one_minute", "Load (1 min)")]),
+  forecasts: schema("forecasts", [["checkpoint", "When predicted", "text", "sync_checkpoint", undefined, forecastCheckpoints], duration("elapsed_seconds", "Into run"), duration("point_seconds", "Estimated remaining"), duration("low_seconds", "Low estimate"), duration("high_seconds", "High estimate"), duration("actual_remaining_seconds", "Actual remaining"), duration("error_seconds", "Error (estimate − actual)"), count("predicted_steps", "Steps estimated"), count("remaining_steps", "Remaining steps")]),
+};
 export const sourceNames = (run: SyncRecord): string[] => run.sources?.length ? run.sources : [...new Set<string>([
   ...(run.source_results ?? []).map((result: SyncRecord) => result.source),
   ...(run.phases ?? []).filter((phase: SyncRecord) => !["audit", "projections", "github", "identities", "git", "tools", "authorship", "findings"].includes(phase.name)).map((phase: SyncRecord) => phase.name),
@@ -73,7 +92,7 @@ export function operationHistoryTable(operations: SyncRecord[] = []): SyncTable 
     const start = Date.parse(row.started_at), end = Date.parse(row.ended_at || row.updated_at);
     const seconds = Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, (end - start) / 1000) : null;
     return { id: row.id, started_at: validDate(row.started_at), ended_at: validDate(row.ended_at), work: row.label || row.kind,
-      result: state(row), trigger: row.trigger ? operationTriggers[row.trigger] || row.trigger : null, seconds, subject: row.subject || null, error: row.error || null,
+      result: state(row), state: row.state ?? null, trigger: row.trigger || null, seconds, subject: row.subject || null, error: row.error || null,
       kind: row.kind, variant: row.variant || null, parent_id: row.parent_id || null, step: row.step_name || null };
   }), empty: "No background work recorded yet. It will appear here after it runs." };
 }
@@ -89,12 +108,12 @@ export function syncTables(status: SyncRecord): Record<"sources" | "costs" | "ac
       elapsed_median: measured(stats.elapsed_seconds?.median), elapsed_p95: measured(stats.elapsed_seconds?.p95), cpu_median: measured(stats.cpu_seconds?.median), cpu_p95: measured(stats.cpu_seconds?.p95), ram_last: measured(stats.rss_observed_peak_bytes?.last), cpu_duty: measured(stats.estimated_cpu_duty_percent_one_core),
     })), "Performance measurements will appear after the first run."),
     accuracy: table("accuracy", Object.entries<SyncRecord>(status.forecast_accuracy ?? {}).flatMap(([model, checkpoints]) => Object.entries<SyncRecord>(checkpoints).filter(([, stats]) => stats.attempts > 0).map(([checkpoint, stats]) => ({
-      id: JSON.stringify([model, checkpoint]), operation: operationLabels[model] || model, checkpoint: forecastCheckpoints[checkpoint] || checkpoint,
+      id: JSON.stringify([model, checkpoint]), operation: operationLabels[model] || model, checkpoint,
       predicted: stats.predicted, attempts: stats.attempts, evaluated: stats.evaluated, covered: stats.evaluated ? stats.covered : null,
       error_seconds: stats.evaluated ? measured(stats.median_absolute_error_seconds) : null, error_percent: stats.evaluated && measured(stats.median_relative_error) !== null ? stats.median_relative_error * 100 : null,
       width_seconds: stats.evaluated ? measured(stats.median_interval_width_seconds) : null,
     }))), "Forecast measurements will appear after completed runs."),
-    coverage: table("coverage", rows(status.coverage, item => JSON.stringify([item.source_name, item.outcome])).map(item => ({ ...item, outcome: verificationOutcomes[item.outcome] || item.outcome, last_verification: validDate(item.last_verification) })), "No verification coverage recorded yet."),
+    coverage: table("coverage", rows(status.coverage, item => JSON.stringify([item.source_name, item.outcome])).map(item => ({ ...item, last_verification: validDate(item.last_verification) })), "No verification coverage recorded yet."),
     deferred: table("deferred", rows(status.deferred, item => item.name).map(item => ({ ...item, changed_at: validDate(item.changed_at), completed_at: validDate(item.completed_at) })), "No pending library-wide work."),
   };
 }
@@ -103,14 +122,14 @@ export function runTables(run: SyncRecord): Record<"sourceResults" | "phases" | 
   const table = (key: keyof typeof syncSchemas, rows: SyncRecord[], empty: string): SyncTable => ({ schema: syncSchemas[key], rows, empty });
   return {
     sourceResults: table("sourceResults", rows(run.source_results, result => result.source).map(result => ({ ...result, status: result.error ? "Failed" : result.deferred ? "Capture was running" : result.yielded ? "Partial" : "Complete", error: result.error || null })), "Per-source counts were not recorded for this older run."),
-    phases: table("phases", rows(run.phases, (phase, index) => `${phase.name}:${index}`).map(phase => ({ ...phase, name: phaseLabel(phase.name) })), "No phase measurements recorded."),
+    phases: table("phases", rows(run.phases, (phase, index) => `${phase.name}:${index}`), "No phase measurements recorded."),
     stages: table("stages", (run.phases ?? []).flatMap((phase: SyncRecord, phaseIndex: number) => (phase.work ?? []).map((work: SyncRecord, index: number) => ({
-      id: `${phaseIndex}:${index}`, stage: `${phaseLabel(phase.name)}: ${work.phase}`, done: work.unit ? measured(work.done) : null, total: work.unit && (work.total_known || work.total > 0) ? measured(work.total) : null, unit: work.unit || null, seconds: measured(work.seconds),
+      id: `${phaseIndex}:${index}`, stage: `${phase.name}: ${work.phase}`, done: work.unit ? measured(work.done) : null, total: work.unit && (work.total_known || work.total > 0) ? measured(work.total) : null, unit: work.unit || null, seconds: measured(work.seconds),
       ...Object.fromEntries(["conversations", "groups", "bytes", "messages", "since_last_index_seconds", "load_one_minute"].map(key => [key, measured(work.features?.[key])])), bytes_basis: work.features?.bytes_basis || null,
     }))), "No stage measurements recorded."),
     forecasts: table("forecasts", (run.forecasts ?? []).map((snapshot: SyncRecord, index: number) => {
       const estimate = snapshot.estimate ?? {}, predicted = estimate.point_seconds > 0, actual = measured(snapshot.actual_remaining_seconds);
-      return { id: String(index), checkpoint: forecastCheckpoints[snapshot.reason] || snapshot.reason,
+      return { id: String(index), checkpoint: snapshot.reason,
         elapsed_seconds: measured(snapshot.elapsed_seconds), point_seconds: predicted ? estimate.point_seconds : null, low_seconds: predicted ? measured(estimate.low_seconds) : null, high_seconds: predicted ? measured(estimate.high_seconds) : null,
         actual_remaining_seconds: actual, error_seconds: predicted && actual !== null ? estimate.point_seconds - actual : null, predicted_steps: estimate.predicted_steps ?? 0, remaining_steps: estimate.remaining_steps ?? 0 };
     }), "No forecasts recorded."),

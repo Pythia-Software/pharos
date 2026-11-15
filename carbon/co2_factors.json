@@ -7,7 +7,7 @@
       "label": "Small models",
       "match": ["haiku", "-mini", "-nano", "luna", "spark", "flash", "lite"],
       "output_wh_per_mtok": {"low": 30, "central": 100, "high": 300},
-      "basis": "The floor is a best-case GB200 throughput measurement for a large MoE model (about 25 Wh per 1M output tokens, GPU only) scaled for host and idle servers; small models run several times cheaper than mid-size ones on ML.ENERGY’s measurements.",
+      "basis": "This tier is an assumption. The floor is a best-case GB200 throughput measurement for a large MoE model (about 25 Wh per 1M output tokens, GPU only) scaled for host and idle servers; small models run several times cheaper than mid-size ones on ML.ENERGY’s measurements.",
       "sources": ["lmsys-gb200", "mlenergy-v3", "google-2025"]
     },
     {

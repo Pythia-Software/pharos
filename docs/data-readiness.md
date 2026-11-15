@@ -112,7 +112,7 @@ with an explanation that the check time is unavailable). Scheduled changes say
 work, without promising a start time. Step names describe actions (“Read tool
 calls,” “Summarize tool use”), and progress reads “58 of 128 messages.” Raw job
 identifiers and service diagnostics stay out of this surface. The link to the
-existing Background Processing page reads “Update settings.”
+existing Background Processing page reads “Background Processing.”
 
 ## Output availability and preview isolation
 

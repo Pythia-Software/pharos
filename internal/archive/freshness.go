@@ -992,7 +992,7 @@ func (l *ledger) findings(c *Catalog, meta map[string]string, metaErr error, def
 		entry.state, entry.reason, entry.next = freshUnknown, "no-record", l.findingsNext()
 	default:
 		// The full pass runs once a day: later data waits for the next one
-		// (or Refresh findings now). Within today that is its designed
+		// (or Update Optimize now). Within today that is its designed
 		// cadence; tomorrow, without a pass, it is daily-pass-due.
 		entry.state, entry.reason, entry.next = freshScheduled, "changed", l.findingsNext()
 		entry.short = "updates tomorrow"

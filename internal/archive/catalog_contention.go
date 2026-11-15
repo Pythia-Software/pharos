@@ -50,7 +50,7 @@ func (c *Catalog) retryCatalogWrite(ctx context.Context, operation string, waiti
 			waiting()
 		}
 		timer := time.NewTimer(delay)
-		resume := opFrom(ctx).waitFor("catalog-busy", "the catalog writer")
+		resume := opFrom(ctx).waitFor("catalog-busy", "another write to the library")
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -204,7 +204,7 @@ func (c *Catalog) queueWriteGate(ctx context.Context, label string) (func(), wri
 	tracker.mu.Unlock()
 	tracker.waiting.Add(1)
 	request.writerQueued(waiter.since)
-	resume := opFrom(ctx).waitFor("catalog-busy", "the catalog writer")
+	resume := opFrom(ctx).waitFor("catalog-busy", "another write to the library")
 	// Someone is waiting on a request: if its write is still queued after
 	// contentionReportAfter, say what the process is doing.
 	var report <-chan time.Time
@@ -317,7 +317,7 @@ func (c *Catalog) beginTrackedWriteUsing(ctx context.Context, label string, db c
 	if err == nil {
 		// Past the gate, only a writer outside this process's queue (another
 		// process, another Mac, an untracked statement) can hold SQLite's lock.
-		resume := opFrom(ctx).waitFor("catalog-busy", "the catalog writer")
+		resume := opFrom(ctx).waitFor("catalog-busy", "another write to the library")
 		counted := request.pause()
 		began := time.Now()
 		tx, err = beginCatalogWrite(ctx, db)

@@ -855,7 +855,7 @@
             },
             {
               "value": "claude",
-              "label": "Claude"
+              "label": "Claude Code"
             },
             {
               "value": "chatgpt",

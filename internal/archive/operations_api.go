@@ -69,18 +69,32 @@ var workBlockedSentences = map[string]string{
 	workBlockedRecentFirst: "Waiting for recent work to finish first", workBlockedPaused: "Background processing is paused",
 }
 
-// blockedSentence is a blocked operation's line: its reason in words, then
-// the caller's detail after a colon. A detail that only repeats the reason
-// code, or follows a hold that says it all, is left out.
+// blockedSentence is a blocked operation's line, one clause per reason.
+//
+// A wait code (operationReasons) comes with the thing waited for as its
+// detail, a noun phrase such as "the capture on Mac B to finish": the line
+// is "Waiting for" that, or the code's own sentence when there is no detail.
+// The two are never joined, since they say the same thing.
+//
+// A work-runner reason (workBlockedSentences) comes with a free-form detail,
+// often a clause or an error: the line is the reason's sentence, then the
+// detail after a colon. A detail that only repeats the reason code or the
+// sentence, or follows a hold that says it all, is left out.
 func blockedSentence(reason, detail string) string {
-	sentence := operationReasons[reason]
-	if sentence == "" {
-		sentence = workBlockedSentences[reason]
+	if detail == reason {
+		detail = ""
 	}
+	if sentence := operationReasons[reason]; sentence != "" {
+		if detail == "" {
+			return sentence
+		}
+		return "Waiting for " + detail
+	}
+	sentence := workBlockedSentences[reason]
 	if sentence == "" {
 		sentence = "Waiting"
 	}
-	if detail == "" || detail == reason || reason == workBlockedHeld {
+	if detail == "" || reason == workBlockedHeld || strings.Contains(strings.ToLower(sentence), strings.ToLower(strings.TrimRight(detail, "."))) {
 		return sentence
 	}
 	return sentence + ": " + detail

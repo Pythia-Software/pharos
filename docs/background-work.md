@@ -249,7 +249,7 @@ index.changes.manual                          run, plan: discover, 3 sources, au
    └─ analysis.tools   analysis.authorship  analysis.peers  analysis.findings
 ```
 
-The same `analysis.findings` kind started by "Refresh findings now" is a
+The same `analysis.findings` kind started by "Update Optimize now" is a
 top-level run with trigger `user`. Grouping is by `Parent`, never by label.
 
 ## 3. The kinds table
@@ -341,7 +341,7 @@ Scheduled indexing never runs it; it marks `sync_deferred` instead (§5).
 | `analysis.labels` (variant `backlog`) | Label messages · Labeling messages | chained (the last stage, when `labels_enabled` is on; background item Message labels), cli (`pharos labels run`); `backlog` is chained after a stage that left more than its share, plugged in only, and stops if this Mac goes onto battery | svc, cli (+ worker process) | D:w W:w | an.labels | work | Stops between batches; the next run resumes it. | batch | >5 s when not a stage | bg |
 | `analysis.agent_events` (variant `backlog`) | Find agent events · Finding agent events | chained (after labels, when the Agent Experience switch or `agent_events_enabled` is on; background item Agent events; the first run downloads the verifier if the broker has not), user (turning the switch on runs the item), cli (`pharos agent-events run`); `backlog` as for `analysis.labels` | svc, cli (+ worker process) | D:w W:w | an.agent_events | work | Stops between chunks of conversations; the next run resumes it. | batch | >5 s when not a stage | bg |
 | `analysis.engagement` | Label engagement · Labeling engagement | chained (the last stage, only where `engagement_enabled` is on; background item Engagement labels; it downloads nothing), cli (`pharos engagement run`) | svc, cli (+ worker process) | D:w W:w | an.engagement | work | Stops between chunks of messages; the next run resumes it. | batch | >5 s when not a stage | bg |
-| `analysis.findings` | Update findings · Updating findings | chained, user ("Refresh findings now"), read (`GET /api/findings` before the first build) | svc | D:w W:w | findings | — | Stops; it runs again after the next index. | batch | >5 s when not a stage; always for `user` | bg; fg for `user` |
+| `analysis.findings` | Update findings · Updating findings | chained, user ("Update Optimize now"), read (`GET /api/findings` before the first build) | svc | D:w W:w | findings | — | Stops; it runs again after the next index. | batch | >5 s when not a stage; always for `user` | bg; fg for `user` |
 | `analysis.refresh` | Update analyses · Updating analyses | chained (after a legacy source sync: Git, then tools, then findings) | svc | D:w W:w | an.git, an.tools, findings | — | Stops; it runs again after the next index. | batch | >5 s | bg |
 
 Notes:

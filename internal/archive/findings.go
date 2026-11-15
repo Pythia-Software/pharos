@@ -1414,8 +1414,8 @@ func writeFindingDaily(tx *sql.Tx, id, from string, days map[string][3]float64) 
 	return nil
 }
 
-// findingImpact is what a finding cost in the last 28 days, shown as "a
-// month", with the shares its expected saving is worked out from (see
+// findingImpact is what a finding cost in the last 28 days, shown as "per
+// 28 days", with the shares its expected saving is worked out from (see
 // findings_estimate.go): the part the change could remove, and how much of
 // patterns like it stays untouched.
 func findingImpact(candidate *findingCandidate, persist findingPersist) map[string]any {

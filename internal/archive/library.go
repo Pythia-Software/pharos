@@ -561,7 +561,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			// waiting through its analysis chain as active measurement.
 			reason, detail := "ingest-busy", "source indexing and its follow-up analysis to finish"
 			if c.libraryRefreshStopped() {
-				reason, detail = "search-stopped", "the Search view refresh to resume"
+				reason, detail = "search-stopped", "Search view indexing to resume"
 			}
 			if resumeProjections == nil || projectionWaitReason != reason {
 				if resumeProjections != nil {

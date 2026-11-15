@@ -176,7 +176,7 @@ function estimateSentence(estimate: Estimate | undefined): string {
   if (!estimate) return "";
   const results = estimate.results ? ` (${counted(estimate.results, "result")} of yours so far)` : "";
   const cases = estimate.persist_cases ? ` (from ${counted(estimate.persist_cases, "pattern")} in this library)` : "";
-  return `The change could remove about ${about(estimate.removable)} of it. Changes like it work about ${about(estimate.takes)} of the time${results}. Left alone, about ${about(Math.min(estimate.persists, 1))} of patterns like it are still there a month later${cases}.`;
+  return `The change could remove about ${about(estimate.removable)} of it. Changes like it work about ${about(estimate.takes)} of the time${results}. Left alone, about ${about(Math.min(estimate.persists, 1))} of patterns like it are still there 28 days later${cases}.`;
 }
 const rankLabels: Record<Rank, string> = { usd: "API cost", tokens: "Tokens", minutes: "Agent time", failures: "Failures" };
 
@@ -535,9 +535,10 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false, a
   // Findings send the provider and the Mac as fields. Fixes send only the
   // label, which names both when the library has several Macs.
   const named = group.label.match(/· (.+) on (.+)$/);
+  // A target with no provider is labelled for "agents" in general (providerLabel in findings_store.go).
   const provider: string = group.provider_name || named?.[1] || "", mac: string = group.host_label || named?.[2] || "that Mac";
   const where = repository ? `an agent working in ${group.label}`
-    : group.target.startsWith("global:") ? `an agent on ${mac}; it changes the instructions every ${provider ? `${provider} ` : ""}session there reads`
+    : group.target.startsWith("global:") ? `an agent on ${mac}; it changes the instructions every ${provider && provider !== "agents" ? `${provider} ` : "agent "}session there reads`
       : `an agent working in the repository that defines ${group.label}`;
   async function start() {
     if (!prompt?.prompt) return;
@@ -550,7 +551,9 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false, a
       setState("done");
       window.setTimeout(onCopied, 1400);
     } catch (failure) {
-      setState(""); setError(`The prompt is on your clipboard, but Pharos could not ${handsOff ? "record the handoff" : "start measuring"}: ${(failure as Error).message}. Close and review the prompt again before pasting it.`);
+      // The server's message is usually a whole sentence; end it only when it does not end itself.
+      const reason = String((failure as Error).message || "").trim();
+      setState(""); setError(`The prompt is on your clipboard, but Pharos could not ${handsOff ? "record the handoff" : "start measuring"}: ${reason}${/[.!?…]$/.test(reason) ? "" : "."} Close and review the prompt again before pasting it.`);
     }
   }
   const lede = area === "safety" ? `${spelled(count, "notice")}. Paste this into your agent for ${group.label}. It will investigate and recommend next steps. Copying moves these notices to Handed off.`
@@ -1072,8 +1075,8 @@ function FindingsSettings({ overview, reload }: { overview: Overview | null; rel
       <h2 id="findingsUpdateTitle">Updating findings</h2>
       <p>Findings are recomputed once a day after the first index, or when you ask. Findings you’re watching update after every index.</p>
       <div className="findings-actions">
-        <button type="button" className="findings-button" disabled={running} onClick={() => void refresh()}>{running ? "Refreshing…" : "Refresh Optimize now"}</button>
-        <span className="findings-muted" role="status">{running ? `${status.phase ? `${upperFirst(status.phase)}…` : "Working…"}` : status.error ? `The last refresh failed: ${status.error}` : status.built_at ? `Last refreshed ${whenText(status.built_at)}${seconds(status.took_ms) ? ` · took ${seconds(status.took_ms)}` : ""}` : "Not computed yet"}</span>
+        <button type="button" className="findings-button" disabled={running} onClick={() => void refresh()}>{running ? "Updating…" : "Update Optimize now"}</button>
+        <span className="findings-muted" role="status">{running ? `${status.phase ? `${upperFirst(status.phase)}…` : "Working…"}` : status.error ? `The last update failed: ${status.error}` : status.built_at ? `Last updated ${whenText(status.built_at)}${seconds(status.took_ms) ? ` · took ${seconds(status.took_ms)}` : ""}` : "Not computed yet"}</span>
       </div>
       {status.measured_at ? <p className="findings-muted">Findings you’re watching were last measured {whenText(status.measured_at)}.</p> : null}
     </section>
@@ -1134,7 +1137,7 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
         {built ? <p className="findings-updated">{status.running ? <>Updating{status.phase ? ` · ${status.phase}` : ""}… </> : null}Updated {whenText(status.built_at)} from {counted(Math.round(num(status.conversations_28d)), "conversation")}.</p> : null}
       </div>
     </div>
-    {status.error ? <p className="findings-error" role="alert">The last refresh failed: {status.error}</p> : null}
+    {status.error ? <p className="findings-error" role="alert">The last update failed: {status.error}</p> : null}
     {!built ? <Building status={status} /> : !findings.length && !overview.wins?.length && !overview.cart?.length ? <EmptyOpen overview={overview} /> : <>
       {route.list === "wins" ? <WinsHero overview={overview} /> : <div className="findings-tiles">
         <Tile label="Saved so far (estimate)" value={unitValue[rank](saved[rank])} detail={`${savings(saved[rank])} so far`} onClick={() => setList("wins")} />

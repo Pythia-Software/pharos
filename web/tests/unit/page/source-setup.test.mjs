@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import {assets} from '../helpers/classic-script.mjs';
 import registry from '../../../../testdata/providers.json';
 import {providerName,rowProviderName,sourceName} from '../../../src/provider-names';
+import {schemas} from '../helpers/recipes.mjs';
 const source=readFileSync(join(assets,'onboarding.js'),'utf8').split('// Source setup UI.')[0];
 const [makeWizard,capabilityRows,captureSettings]=vm.runInNewContext(source+';[createPharosSourceWizard,pharosCapabilityRows,captureClaudeSettings]');
 const create=()=>makeWizard(registry.providers);
@@ -282,6 +283,14 @@ test('pages name sources and providers as the registry does, and keep an unknown
   // A provider is not its source: Claude Code and Claude.ai are both sources of the provider Claude.
   assert.deepEqual([providerName('claude'),sourceName('claude'),sourceName('claude-ai')],['Claude','Claude Code','Claude.ai']);
   assert.deepEqual([providerName('somebody-else'),sourceName('toString'),providerName('')],['somebody-else','toString','']);
+  // A table's static Source and Provider options carry the same names, each in its own key space.
+  let named=0;
+  for(const [dataset,schema] of Object.entries(schemas))for(const field of schema.fields){
+    const name=/(^|_)source_kind$/.test(field.name)?sourceName:field.name==='provider'?providerName:null,values=field.filter?.values;
+    if(!name||values?.source!=='static')continue;
+    for(const option of values.options)if(typeof option!=='string'){assert.equal(option.label,name(option.value),`${dataset}.${field.name} ${option.value}`);named++;}
+  }
+  assert.ok(named>0);
   assert.equal(rowProviderName({provider:'codex',provider_name:'Codex CLI'}),'Codex CLI','the name a response sends wins');
   assert.equal(rowProviderName({provider:'vscode-copilot'}),'VS Code Copilot');
   assert.equal(rowProviderName({provider:''},'Agent'),'Agent');

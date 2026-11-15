@@ -48,11 +48,20 @@ func TestFindingWording(t *testing.T) {
 			t.Errorf("sharePhrase(%v) = %q, want %q", rate, got, want)
 		}
 	}
-	if got := resultSentence(findingMetric{Kind: "share", Unit: "conversations"}, windowStats{Rate: 0.5}, windowStats{Rate: 0.33}, interventionUnchanged); got != "Since the change, this accounts for about 35% of the total instead of about half." {
+	if got := resultSentence("outliers", findingMetric{Kind: "share", Unit: "conversations"}, windowStats{Rate: 0.5}, windowStats{Rate: 0.33}, interventionUnchanged); got != "Since the change, this accounts for about 35% of the total instead of about half." {
 		t.Errorf("share result = %q", got)
 	}
-	if got := resultSentence(findingMetric{Kind: "rate", Unit: "engagements"}, windowStats{Rate: 0.34}, windowStats{Rate: 0.2, Hits: 2, Units: 10}, interventionUnchanged); got != "Since the change, this happens in 1 of every 5 conversations instead of 1 in 3." {
+	if got := resultSentence("cli", findingMetric{Kind: "rate", Unit: "engagements"}, windowStats{Rate: 0.34}, windowStats{Rate: 0.2, Hits: 2, Units: 10}, interventionUnchanged); got != "Since the change, this happens in 1 of every 5 conversations instead of 1 in 3." {
 		t.Errorf("rate result = %q", got)
+	}
+	// Orientation measures what was read before the first edit; exploration
+	// measures what later requests re-read of it. Each sentence says which.
+	preEditMetric := findingMetric{Kind: "mean", Unit: "conversations", Value: "tokens"}
+	if got := resultSentence("orientation", preEditMetric, windowStats{Median: 40000}, windowStats{Median: 12000}, interventionImproved); got != "Since the change, a typical conversation used 12K tokens before its first edit, instead of 40K tokens." {
+		t.Errorf("orientation result = %q", got)
+	}
+	if got := resultSentence("exploration", preEditMetric, windowStats{Median: 900000}, windowStats{Median: 300000}, interventionImproved); !strings.Contains(got, "re-read 300K tokens") || !strings.Contains(got, "instead of 900K tokens") || strings.Contains(got, "used") {
+		t.Errorf("exploration result = %q", got)
 	}
 	if theyOrIt(1) != "It" || theyOrIt(2) != "They" {
 		t.Errorf("theyOrIt: %q %q", theyOrIt(1), theyOrIt(2))

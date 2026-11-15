@@ -1751,9 +1751,9 @@
       "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
-      "key": "c52ca0d734dc8b0a:0",
+      "key": "d93f1a8eb5da1407:0",
       "file": "internal/archive/assets/data-guide.js",
-      "owner": "tf",
+      "owner": "rf",
       "tag": "aria-expanded",
       "control": "document.getElementById(\"dataGuideToggle\")",
       "disclosure": true,
@@ -6166,6 +6166,15 @@
       "reason": "Opens the repository checkout editor in place. The checkout is a per-Mac setting stored in the catalog (repository_checkouts), not view state; the editor closes once it saves."
     },
     {
+      "key": "2362447412c2c989:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "CheckoutSetup",
+      "tag": "button",
+      "control": "onClick={() => { if (!inFlight.current) setForgetting(false); }}",
+      "contract": "settings",
+      "reason": "Confirmation step before forgetting the repository's checkout on this Mac (POST /api/repositories/{id}/checkout with clear), a stored setting; the open question is a transient action, not view state."
+    },
+    {
       "key": "31d56ca856f13a7d:0",
       "file": "web/src/file-history.tsx",
       "owner": "CheckoutSetup",
@@ -6193,11 +6202,11 @@
       "reason": "Chooses a recorded checkout as the repository's checkout on this Mac (POST /api/repositories/{id}/checkout), a stored setting, not view state."
     },
     {
-      "key": "a7236aaa0d3f20be:0",
+      "key": "a1069b6b9d12fbdc:0",
       "file": "web/src/file-history.tsx",
       "owner": "CheckoutSetup",
       "tag": "button",
-      "control": "onClick={() => { setForgetting(false); void post({ clear: true }); }}",
+      "control": "onClick={() => void forgetCheckout()}",
       "contract": "settings",
       "reason": "Confirmation step before forgetting the repository's checkout on this Mac (POST /api/repositories/{id}/checkout with clear), a stored setting; the open question is a transient action, not view state."
     },
@@ -6211,20 +6220,11 @@
       "reason": "Draft folder for the repository's checkout; saving it writes the per-Mac setting, so the draft itself is excluded."
     },
     {
-      "key": "c45f0e5082952e0b:0",
-      "file": "web/src/file-history.tsx",
-      "owner": "CheckoutSetup",
-      "tag": "button",
-      "control": "onClick={() => setForgetting(false)}",
-      "contract": "settings",
-      "reason": "Confirmation step before forgetting the repository's checkout on this Mac (POST /api/repositories/{id}/checkout with clear), a stored setting; the open question is a transient action, not view state."
-    },
-    {
-      "key": "f6451e63518b5a7d:0",
+      "key": "d70d8d0b0a3ad982:0",
       "file": "web/src/file-history.tsx",
       "owner": "CheckoutSetup",
       "tag": "div",
-      "control": "aria-label=\"Forget checkout\" onKeyDown={event => { if (event.key === \"Escape\") { event.preventDefault(); event.stopPropagation(); setForgetting(false); } }}",
+      "control": "aria-label=\"Forget checkout\" onKeyDown={event => { if (event.key === \"Escape\") { event.preventDefault(); event.stopPropagation(); if (!inFlight.current) setForgetting(false); } }}",
       "contract": "settings",
       "reason": "Confirmation step before forgetting the repository's checkout on this Mac (POST /api/repositories/{id}/checkout with clear), a stored setting; the open question is a transient action, not view state."
     },
