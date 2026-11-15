@@ -188,6 +188,27 @@ func TestResultCachePolicies(t *testing.T) {
 	if n := swept(112 * time.Minute); n != 0 {
 		t.Fatalf("the sweep rebuilt %d entries that were current", n)
 	}
+	// A build that fails is not tried again by every sweep: the entry waits
+	// for a request, or for its data to change again.
+	stamp, broken = "7", true
+	tried := func(after time.Duration) (tries int) {
+		t.Helper()
+		server.sweepResults(t.Context(), changed.Add(after))
+		for server.refreshResult(t.Context()) {
+			tries++
+		}
+		return tries
+	}
+	if first, again := tried(4*time.Hour)+tried(6*time.Hour), tried(7*time.Hour); first != 2 || again != 0 {
+		t.Fatalf("the sweep tried %d failing builds, then %d again with nothing changed", first, again)
+	}
+	if state, _ := ask(resultCached, "a", false); state != "stale" || !server.refreshResult(t.Context()) {
+		t.Fatalf("a request for an entry whose build failed was %s and not queued", state)
+	}
+	stamp, broken = "8", false
+	if n := swept(8*time.Hour) + swept(10*time.Hour); n != 2 {
+		t.Fatalf("the sweep rebuilt %d entries after another change, want the two whose builds had failed", n)
+	}
 	override(t, &resultSettle, 0)
 	// The file outlives the process, and another version's entries are not served.
 	_, stored := ask(resultCached, "a", false)

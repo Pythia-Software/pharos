@@ -167,6 +167,12 @@ type resultCache struct {
 	// settling is the stamp the sweep last read for each domain and scope,
 	// and when it first read that one (resultSettle).
 	settling map[[2]string]resultStampSeen
+	// failed is the stamp at which an entry's last background build failed.
+	// The sweep leaves the entry until the stamp changes: a build that
+	// cannot succeed (its query runs past resultBuildDeadline, say) would
+	// otherwise be tried again by every sweep, for nobody. A request for the
+	// entry still queues it.
+	failed map[resultKey]string
 	// missing holds requests whose build was abandoned before anything was
 	// stored (the browser gave up), for the refresher to build: without an
 	// entry there is nothing else to refresh from.
@@ -554,8 +560,20 @@ func (s *Server) refreshResult(ctx context.Context) bool {
 	defer cancel()
 	built := time.Now()
 	body, err := d.build(build, s, entry.replay, time.Time{})
+	cache.mu.Lock()
 	if err != nil {
-		return true // the stale entry stays; a request for it queues it again
+		if cache.failed == nil {
+			cache.failed = map[resultKey]string{}
+		}
+		cache.failed[id] = stamp
+	} else {
+		delete(cache.failed, id)
+	}
+	cache.mu.Unlock()
+	if err != nil {
+		// The stale entry stays. A request for it queues it again, and so
+		// does the sweep once its data has changed again.
+		return true
 	}
 	entry.version, entry.stamp, entry.body, entry.builtAt = d.version, stamp, body, built
 	cache.put(entry)
@@ -605,7 +623,12 @@ func (s *Server) sweepResults(ctx context.Context, now time.Time) {
 		// is as it was) is left until it is asked for: rebuilding it would
 		// move its window, usually to the same answer, for nobody.
 		if e.version != d.version || e.stamp != stamps[at] {
-			cache.refreshSoon(e.domain, e.key, false)
+			cache.mu.Lock()
+			failedAt, failed := cache.failed[resultKey{e.domain, e.key}]
+			cache.mu.Unlock()
+			if !failed || failedAt != stamps[at] {
+				cache.refreshSoon(e.domain, e.key, false)
+			}
 		}
 	}
 }

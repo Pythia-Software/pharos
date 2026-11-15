@@ -92,6 +92,10 @@ when its answers will last. This delays only work nobody asked for. An entry
 a request is answered with is queued at once, ahead of the sweep's, whether
 or not the data has settled.
 
+A background build that fails (an error, or a query that runs past the
+two-minute limit) leaves the stale entry as it is. The sweep does not queue
+that entry again until its data changes again; a request for it still does.
+
 An entry that is stale only by age (a window ending now, over data that has
 not changed) is rebuilt when it is asked for and not before. Rebuilding it
 unasked only moves its window, which three times in four gives the same
