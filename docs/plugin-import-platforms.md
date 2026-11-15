@@ -86,6 +86,12 @@ plain HTTPS like its uploads:
  "identity_token": {"command": ["ns", "oidc-token", "--audience", "sts.amazonaws.com"]}}
 ```
 
+The token comes from a command, an environment variable or a file, and is
+fetched again for every pass, since such tokens live minutes. The exchange
+is AWS's `AssumeRoleWithWebIdentity`, Google's workload identity federation
+or Microsoft's federated credential, by destination type
+(`push.schema.json` has the fields for each).
+
 - No secret is stored on the platform, pasted into a settings page or
   visible to an agent. There is nothing to rotate and nothing left behind
   when an integration is abandoned.
@@ -198,22 +204,54 @@ suspends on inactivity and resumes on demand.
 | Slot | Answer |
 |---|---|
 | Install | One line in `.niteshift/setup`, which runs as root on a fresh environment and is captured in the snapshot |
-| Credential | Keyless: `ns oidc-token` exchanged for bucket access. Otherwise a Setup-script-scope secret that the service references by name, fetched each time it starts |
+| Credential | Keyless: `ns oidc-token --audience …` exchanged for bucket access. Otherwise a Setup-script-scope secret that the service references by name, fetched each time it starts |
 | Trigger | A `pharos-push` entry in `.niteshift/services.yaml` running `capture-push --watch`, restarted by Niteshift and after every resume |
-| Identity | The token's `org_id`, `environment_id` and `user_id` claims; the task and its link are **unverified** |
-| Limits | A suspended task runs nothing, which the watcher's first pass on resume covers. No stop or teardown hook is documented. Egress rules are **unverified** |
+| Identity | Environment variables and the identity token's claims, below |
+| Limits | A suspended task runs nothing, which the watcher's first pass on resume covers. No stop or teardown hook is documented |
 
 What a person does: run **Create the bucket** with "trust Niteshift", then
 commit a two-file change (a prompt for an agent is provided) and open a
 task. No secret is entered anywhere.
 
-To check in a real sandbox before shipping: where each agent keeps its
-transcripts and under which user; whether a service's environment can run
-`ns oidc-token`; whether outbound HTTPS to the bucket is allowed by
-default; and what identifies the task. Niteshift also offers an MCP server
-that reads task transcripts. That is a different, lossier source (its
-rendering, not the agent's files) and is not used; it is noted as a
-fallback for an agent that leaves no files.
+**Checked in a running Claude Code task on 2026-11-15:**
+
+- The agent runs as `root` with `HOME=/root`, in `/root/workspace/<repo>`.
+  Niteshift sets `CLAUDE_CONFIG_DIR=/root/.claude` and
+  `CODEX_HOME=/root/.codex`, and `IS_SANDBOX=1`.
+- Claude Code is driven through the Claude Agent SDK by Niteshift's own
+  wrapper and still writes ordinary transcripts:
+  `/root/.claude/projects/-root-workspace-<repo>/<session>.jsonl`, with
+  `subagents/` beside them. The `claude` kind's globs match as they are.
+- Identity is in the environment: `NITESHIFT_TASK_ID`, `NITESHIFT_TASK_URL`
+  (`https://niteshift.dev/repo/<org>/<repo>/<task>`),
+  `NITESHIFT_SANDBOX_ID`, `NITESHIFT_USER_ID`, `NITESHIFT_USER_EMAIL` and
+  `NITESHIFT_USER_GITHUB_USERNAME`. These are the recipe's markers and its
+  task link, and `NITESHIFT_USER_ID` is the owner.
+- `ns oidc-token` works from the task. The token's issuer is
+  `https://identity.niteshift.dev`, its subject
+  `org:<org>:environment:<environment>`, and it also carries `org_id`,
+  `environment_id`, `task_id`, `user_id` and `principal_type`. It lives
+  five minutes, so the pusher exchanges a fresh one for each pass.
+- Outbound HTTPS reaches AWS (S3 and STS), Google Cloud (Storage and STS),
+  Microsoft's sign-in host and GitHub with no allowlist to configure.
+- **Niteshift owns the agents' user-level settings.** It writes
+  `~/.claude/settings.json` with its own `Stop` hook (the one that asks the
+  agent to commit and push) and `~/.codex/hooks.json` likewise. The recipe
+  must never edit those files: the service is the trigger, and the plugin
+  is the alternative.
+- `cleanupPeriodDays` is 30 there, so a transcript not pushed within a
+  month is gone; the watcher pushes within seconds.
+
+**Still to check:** where a Codex task writes its rollouts (Niteshift runs
+Codex through its app server, and `~/.codex/sessions` did not exist in the
+Claude task); that a supervised service may run `ns oidc-token`; what
+`NITESHIFT_USER_ID` and the token's `user_id` hold for a task an automation
+started and for one started from Slack or Linear; and that the capture root
+is absent from the snapshot new tasks start from.
+
+Niteshift also offers an MCP server that reads task transcripts. That is a
+different, lossier source (its rendering, not the agent's files) and is not
+used; it is noted as a fallback for an agent that leaves no files.
 
 ### Dev containers (one recipe, several platforms)
 
@@ -299,9 +337,6 @@ Decided by the owner on 2026-11-15:
 - **Niteshift comes first,** and its recipe stays unverified until access
   to an environment arrives; the generic additions do not wait for it.
 
-Still proposed:
-
-- **Keyless credentials** as the preferred answer where a platform issues
-  identity tokens. It adds a token exchange per cloud to `capture-push`.
-- **Team members can read `shared`.** The alternative is a separate read
-  grant for it.
+- **Keyless credentials are built,** and preferred wherever a platform
+  issues identity tokens.
+- **Every team member can read `shared`.**
