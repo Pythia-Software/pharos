@@ -710,7 +710,7 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	c.claimStructuredQuestionAnswers(l, input, replies)
 	sort.Slice(c.answers, func(i, j int) bool { return c.answers[i].Start < c.answers[j].Start })
 	if use := c.templates[templateKey(text)]; use != nil && use.template() {
-		l.claim(0, len(text), spanTemplate, reasonRepeatedPrompt.with(fmt.Sprintf("sent in %d sessions on %d days", len(use.sessions), len(use.days))), textOrigin{})
+		l.claim(0, len(text), spanTemplate, reasonRepeatedPrompt.with(fmt.Sprintf("sent in %d conversations on %d days", len(use.sessions), len(use.days))), textOrigin{})
 	}
 	if match := slashPattern.FindStringIndex(body); match != nil && !strings.Contains(body, "\n") {
 		l.claim(bodyStart+match[0], bodyStart+match[1], spanTemplate, reasonSlashCommand, textOrigin{})

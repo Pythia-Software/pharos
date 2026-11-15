@@ -870,7 +870,7 @@ func (q *workRequest) settled(i int) bool {
 func (r *workRunner) kindBlockerLocked(ks *workKindState, now time.Time) workBlocker {
 	switch {
 	case ks.held:
-		return workBlocker{Reason: workBlockedHeld, Detail: "stopped until Resume or a service restart"}
+		return workBlocker{Reason: workBlockedHeld, Detail: "stopped until you resume it, or quit and reopen Pharos"}
 	case ks.full:
 		return workBlocker{Reason: workBlockedFailuresFull, Detail: fmt.Sprintf("%d failures are remembered; Retry clears them", workFailureLimit)}
 	}
@@ -1572,7 +1572,11 @@ func (r *workRunner) coverTaskLocked(q *workRequest, t *workRequestTask, now tim
 				break
 			}
 		}
-		t.blocker = workBlocker{Reason: workBlockedDependency, DependsOn: dependsOn, Detail: fmt.Sprintf("%d units wait for a prerequisite", waiting)}
+		verb := " wait for a prerequisite"
+		if waiting == 1 {
+			verb = " waits for a prerequisite"
+		}
+		t.blocker = workBlocker{Reason: workBlockedDependency, DependsOn: dependsOn, Detail: plural(waiting, "unit") + verb}
 	default:
 		// Counted once, when the task is done: a backoff that keeps the
 		// task open must not count the same exhausted unit again.
@@ -1699,9 +1703,9 @@ func (r *workRunner) updateRequestLocked(q *workRequest) {
 	if remaining == 0 {
 		switch {
 		case failedTask || q.nFailed > 0 || q.libraryFail > 0:
-			r.finishRequestLocked(q, opFailed, workUnitsFailed, fmt.Sprintf("%d units failed", q.nFailed+q.libraryFail))
+			r.finishRequestLocked(q, opFailed, workUnitsFailed, plural(q.nFailed+q.libraryFail, "unit")+" failed")
 		case q.nExhausted > 0:
-			r.finishRequestLocked(q, opInterrupted, workInputsKeepChanging, fmt.Sprintf("%d units kept changing", q.nExhausted))
+			r.finishRequestLocked(q, opInterrupted, workInputsKeepChanging, plural(q.nExhausted, "unit")+" kept changing")
 		default:
 			r.finishRequestLocked(q, opSucceeded, "", "")
 		}

@@ -97,7 +97,7 @@ func cloudActivity(job *cloudJob) libraryActivity {
 	switch job.operation {
 	case "connect":
 		activity.Label = "Testing a cloud backup destination"
-		activity.Detail = "Uploading a small test file"
+		activity.Detail = "Uploading a connection check"
 		activity.OnEject = "Stops the test; connect the destination again afterwards."
 	case "verify":
 		activity.Label = "Verifying a cloud backup"
@@ -106,7 +106,7 @@ func cloudActivity(job *cloudJob) libraryActivity {
 	default:
 		activity.Label = "Uploading a cloud backup"
 		if job.kind == "sample" {
-			activity.Label = "Uploading a cloud test backup"
+			activity.Label = "Uploading a cloud backup test archive"
 		}
 		phase := defaultString(job.phase, "Preparing archive")
 		activity.Detail = phase
@@ -116,7 +116,7 @@ func cloudActivity(job *cloudJob) libraryActivity {
 			activity.Detail = fmt.Sprintf("%s · %s of %s", phase, humanBytes(job.done), humanBytes(job.total))
 		}
 		activity.Work = work
-		activity.OnEject = "Stops the upload and deletes its staged archive; the last completed cloud backup is unchanged. Start it again from Settings → Backups, or a schedule runs it at its next time."
+		activity.OnEject = "Stops the upload and deletes its staged archive; the last completed cloud backup is unchanged. Start it again from Settings → Backups, or wait for the next scheduled backup."
 	}
 	return activity
 }
@@ -214,7 +214,7 @@ func (s *Server) interruptCloudRun(run *cloudRun) bool {
 	host := currentHost().ID
 	changed := false
 	if run.State == "running" && run.OwnerHost == host && run.OwnerPID > 0 && (processGone(run.OwnerPID) || (run.OwnerPID == os.Getpid() && s.cloud.active != run.ID)) {
-		run.State, run.Phase, run.Error = "failed", "interrupted", "Upload was interrupted before completion could be confirmed. No restore was verified."
+		run.State, run.Phase, run.Error = "failed", "interrupted", "The upload stopped before Pharos could confirm it finished. Start the backup again."
 		changed = true
 	}
 	if run.VerificationState == "running" && run.VerificationHost == host && run.VerificationPID > 0 && (processGone(run.VerificationPID) || (run.VerificationPID == os.Getpid() && s.cloud.active != run.ID)) {

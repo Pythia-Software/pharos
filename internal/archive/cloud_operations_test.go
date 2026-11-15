@@ -676,7 +676,7 @@ func TestCloudInterruptRequiresAbsence(t *testing.T) {
 				}
 				return
 			}
-			if !changed || got.State != "failed" || got.Phase != "interrupted" || !strings.Contains(got.Error, "Upload was interrupted") ||
+			if !changed || got.State != "failed" || got.Phase != "interrupted" || !strings.Contains(got.Error, "The upload stopped before Pharos could confirm it finished") ||
 				got.VerificationState != "failed" || !strings.Contains(got.VerificationError, "Verification was interrupted") || got.Verified {
 				t.Fatalf("an ended owner's run: %+v", got)
 			}

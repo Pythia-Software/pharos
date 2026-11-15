@@ -552,7 +552,7 @@ func prepareBackup(config Config, dest string, prune bool) (*backupJob, error) {
 	name := facts.displayName()
 	switch facts.Encryption {
 	case "none":
-		job.run.Warnings = append(job.run.Warnings, fmt.Sprintf("%s is not encrypted, and the backup holds every archived conversation.", name))
+		job.run.Warnings = append(job.run.Warnings, fmt.Sprintf("%s is not encrypted, and the backup holds every conversation in the library.", name))
 	case "hardware-only":
 		job.run.Warnings = append(job.run.Warnings, "FileVault is off, so this Mac's internal disk, and the backup on it, unlock without a password.")
 	}
@@ -815,7 +815,7 @@ var (
 	backupWALPoll         = 100 * time.Millisecond
 )
 
-var errBackupWALGrew = errors.New("the catalog's WAL grew by more than the backup allows while it was copied (indexing is probably writing); back up again once it finishes")
+var errBackupWALGrew = errors.New("The library changed too much while it was copied (indexing is probably running). Back up again when indexing finishes.")
 
 // boundWAL returns a context for the snapshot that ends once the source's WAL
 // grows by more than backupWALGrowth, recording the peak it saw.

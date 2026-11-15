@@ -353,7 +353,7 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		}
 		op.add("source:"+source.Name, model, "Index "+source.Name, workFeatures{}, false)
 	}
-	op.add("projections", "analysis-v1", "Refresh the Library view", workFeatures{}, true)
+	op.add("projections", "analysis-v1", "Index the Search view", workFeatures{}, true)
 	op.add("audit", "audit-v1", "Verify changed inputs", workFeatures{}, true)
 	if manual {
 		addAnalysisForecast(op, true)
@@ -491,7 +491,7 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 						work = plan.work(phase, source.Name, model, processed)
 						work.Kind = "incremental"
 					}
-					work.Next = "Refresh the Library view and verify changed inputs"
+					work.Next = "Index the Search view and verify changed inputs"
 					workMeter.report(work)
 				})
 			})
@@ -527,10 +527,10 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 	}
 	if len(changedWorkspaces) > 0 && ctx.Err() == nil {
 		op.begin("projections")
-		s.updateRun(run.ID, func(run *SyncRun) { run.Phase, run.CurrentSource = "refreshing the Library view", nil })
+		s.updateRun(run.ID, func(run *SyncRun) { run.Phase, run.CurrentSource = "indexing the Search view", nil })
 		phase := meter.beginPhase("projections")
 		workMeter.model = "analysis-v1:projections"
-		workMeter.report(activityWork{Phase: "refreshing the Library view"})
+		workMeter.report(activityWork{Phase: "indexing the Search view"})
 		ids := []string{}
 		for id := range changedWorkspaces {
 			ids = append(ids, id)
@@ -891,7 +891,7 @@ func (s *Server) postIncrementalSync(w http.ResponseWriter, r *http.Request, bod
 			}
 			return nil
 		}) {
-			writeError(w, errors.New("service stopping"), 503)
+			writeError(w, errServiceStopping, 503)
 			return
 		}
 		writeJSON(w, map[string]any{"accepted": true}, 202)

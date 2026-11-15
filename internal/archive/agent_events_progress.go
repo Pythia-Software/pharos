@@ -117,9 +117,10 @@ func (p *agentEventsProgress) publish(force bool) {
 	case p.saving:
 		phase = "Saving results"
 	}
-	detail := []string{phase, agentEventsCount(p.counts.messages) + " messages saved", agentEventsCount(p.counts.candidates) + " candidates scored"}
+	detail := []string{phase, agentEventsCount(p.counts.messages) + map[bool]string{true: " message saved", false: " messages saved"}[p.counts.messages == 1],
+		agentEventsCount(p.counts.candidates) + map[bool]string{true: " possible event scored", false: " possible events scored"}[p.counts.candidates == 1]}
 	if seconds := at.Sub(p.started).Seconds(); seconds >= 1 && p.counts.candidates > 0 {
-		detail = append(detail, fmt.Sprintf("%.0f candidates/s overall", float64(p.counts.candidates)/seconds))
+		detail = append(detail, fmt.Sprintf("%.0f possible events/s overall", float64(p.counts.candidates)/seconds))
 	}
 	if p.device != "" && !p.scoring {
 		detail = append(detail, strings.ToUpper(p.device)+" worker")

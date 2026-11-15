@@ -254,7 +254,11 @@ func (b authorshipBacklog) note(at time.Time) string {
 	if b.Pending == 0 {
 		return ""
 	}
-	note := fmt.Sprintf("%d messages await writing estimates (%d recent, %d historical).", b.Pending, b.Recent, b.Historical)
+	verb := "await"
+	if b.Pending == 1 {
+		verb = "awaits"
+	}
+	note := fmt.Sprintf("%s %s writing estimates (%d recent, %d historical).", plural(b.Pending, "message"), verb, b.Recent, b.Historical)
 	if queued, ok := parseTime(b.OldestQueued); ok {
 		note += " Oldest waiting work: " + durationWords(max(0, at.Sub(queued).Seconds())) + "."
 	}

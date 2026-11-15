@@ -165,7 +165,7 @@ func TestDriveChecksRecommendWithoutRunningAnything(t *testing.T) {
 		t.Fatalf("report: %v", report)
 	}
 	encryption := checkNamed(t, report, "encryption")
-	if encryption.Status != "problem" || encryption.Command != "diskutil apfs encryptVolume /Volumes/euclid -user disk" || !strings.Contains(encryption.Action, `Encrypt "euclid"`) {
+	if encryption.Status != "problem" || encryption.Command != "diskutil apfs encryptVolume /Volumes/euclid -user disk" || !strings.Contains(encryption.Action, `Encrypt “euclid”`) {
 		t.Errorf("encryption: %+v", encryption)
 	}
 	spotlight := checkNamed(t, report, "spotlight")
