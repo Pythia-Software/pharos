@@ -32,7 +32,8 @@ test('dashboard cards retain the complete chart and relative population through 
   assert.deepEqual(restored.where,where);
   assert.deepEqual(restored.state,normalizeAnalysis(catalog,state));
   for (const key of ['overlay','highlight','chart_pins']) assert.equal(restored.params.has(key),false);
-  assert.equal(dashboardCardWindow(url),'Past 7 days');
+  assert.equal(dashboardCardWindow(url),'Last 7 days');
+  assert.equal(dashboardCardWindow(makeURL(state,[{...where[0],value:'-1d'},...where.slice(1)])),'Last 24 hours','one day is not "1 days"');
   assert.equal(dashboardCardCollected(url),false);
   const card = collectDashboardCard(url,' My tokens ',' My description ');
   assert.equal(dashboardCardCollected(url),true,'Ask offers each chart address once');
@@ -172,13 +173,13 @@ test('catalog default copy follows chart semantics, selections, time windows and
   assert.match(trend.description, /mean of 10 earlier periods/);
   assert.match(copy({ display: 'cumulative' }).title, /Cumulative/);
   assert.match(copy({ share: true }).title, /Share of/);
-  assert.match(copy({ view: 'compare', unit: 'conversation', reduce: 'median' }).title, /Median per conversation/);
-  assert.match(copy({ view: 'compare', unit: 'conversation', reduce: 'count' }).title, /Number of conversations/);
+  assert.match(copy({ view: 'compare', unit: 'conversation', reduce: 'median' }).title, /Median per top-level conversation/);
+  assert.match(copy({ view: 'compare', unit: 'conversation', reduce: 'count' }).title, /Number of top-level conversations/);
   assert.match(copy({ view: 'compare', compareAs: 'share' }).title, /Share of/);
-  assert.match(copy({ view: 'distribution', unit: 'conversation', minSamples: 5 }).description, /Minimum 5 conversations/);
-  assert.match(copy({ view: 'distribution', unit: 'conversation' }).title, /distribution per conversation/);
+  assert.match(copy({ view: 'distribution', unit: 'conversation', minSamples: 5 }).description, /Minimum 5 top-level conversations/);
+  assert.match(copy({ view: 'distribution', unit: 'conversation' }).title, /distribution per top-level conversation/);
   const scatter = copy({ view: 'scatter', unit: 'conversation', metricY: 'cost' });
-  assert.match(scatter.title, /vs.*cost.*per conversation/i);
+  assert.match(scatter.title, /vs.*cost.*per top-level conversation/i);
   assert.match(copy({ view: 'cycle', cycle: 'hour', reduce: 'mean' }).title, /Mean.*hour of day/);
   assert.match(copy({ selection: { values: ['codex'], excluded: true } }).title, /Exclude provider: codex/);
   const branchCopy = split => dashboardCardMetadata(dashboardCardURL('/analyze?analyze_topic=branches', analysisCatalogs.branches,
@@ -234,7 +235,7 @@ test('Habits defaults describe each actor and range, independently of unrelated 
   assert.match(dashboardCardMetadata(url({}), 'habits-calendar').title, /Your active days/);
   assert.match(dashboardCardMetadata(url({ habits_calendar: 'agents', habits_weekends: 'hide' }), 'habits-calendar').title, /agents you started.*weekdays only/);
   assert.match(dashboardCardDescription(url({ habits_weeks: '53' }), 'habits-calendar'), /17 weeks.*all 53 weeks/);
-  assert.match(dashboardCardDescription(url({ habits_punchcard: 'difference', habits_punchcard_days: '30' }), 'habits-punchcard'), /Past 30 days.*Agent time minus your engaged time/);
+  assert.match(dashboardCardDescription(url({ habits_punchcard: 'difference', habits_punchcard_days: '30' }), 'habits-punchcard'), /Last 30 days.*Agent time minus your engaged time/);
   assert.match(dashboardCardDescription(url({ habits_shape_days: '7' }), 'habits-days'), /last 7 days/);
   assert.match(dashboardCardMetadata(url({}), 'habits-pace').title, /work and rest/);
 });
@@ -243,14 +244,17 @@ test('bespoke card context follows saved assumptions and chart controls', t => {
   fixture(t);
   const carbon = settings => dashboardCardURL('/analyze?' + new URLSearchParams({ analyze_topic: 'carbon', analyze_carbon: JSON.stringify(settings) }), analysisCatalogs.carbon, dashboardDefaults.carbon, []);
   const assumptions = dashboardCardDescription(carbon({ scenario: 'high', pueScenario: 'low', grid: 'custom', customGrid: 200, inputSensitivity: 'third' }));
-  assert.match(assumptions, /Energy estimate: high/);
-  assert.match(assumptions, /Facility overhead: low/);
-  assert.match(assumptions, /Grid: 200 g CO₂e\/kWh/);
+  assert.match(assumptions, /Energy scenario: High/);
+  assert.match(assumptions, /Facility overhead \(PUE\): Low/);
+  assert.match(assumptions, /Electricity grid: 200 g CO₂e\/kWh/);
   assert.match(assumptions, /Watershed input sensitivity/);
+  const named = dashboardCardDescription(carbon({ scenario: 'central', pueScenario: 'central', grid: 'us_virginia', inputSensitivity: 'current' }));
+  assert.match(named, /Electricity grid: Virginia and the Carolinas \(AWS us-east-1\)/, 'the grid is named as the Carbon Impact page names it');
+  assert.match(named, /Price ratio input sensitivity/);
   const parallel = settings => dashboardCardURL('/analyze?' + new URLSearchParams({ analyze_topic: 'parallelism', analyze_parallelism: JSON.stringify(settings) }), analysisCatalogs.parallelism, dashboardDefaults.parallelism, []);
   const ribbonURL = parallel({ counting: 'agent', mode: 'user', gap: 15, repository: 'pharos', range: 'day', day: '2026-10-01' });
   const ribbon = dashboardCardMetadata(ribbonURL, 'ribbon');
-  assert.match(ribbon.title, /Concurrent sessions.*pharos/);
+  assert.match(ribbon.title, /Concurrent conversations.*pharos/);
   assert.match(ribbon.description, /2026-10-01.*gaps up to 15 minutes/);
   assert.match(dashboardCardDescription(ribbonURL), /Count top-level conversations.*15 minutes/);
   const workspace = new URL(parallel({ counting: 'workspace' }), location.origin);
@@ -261,9 +265,9 @@ test('bespoke card context follows saved assumptions and chart controls', t => {
   const thinking = controls => pageCardURL('/analyze?' + new URLSearchParams({ analyze_topic: 'thinking-detail', thinking: JSON.stringify(controls) }));
   const time = dashboardCardMetadata(thinking({ view: 'time', period: 'hours', hours: 6, normalization: 'count', range: '7d', model: 'gpt-5', effort: 'high' }), 'thinking-distributions');
   assert.match(time.title, /gpt-5.*high effort/);
-  assert.match(time.description, /Past 7 days.*Periods: 6 hours/);
-  assert.match(time.description, /shaded by its requests/);
-  assert.match(dashboardCardDescription(thinking({ view: 'heatmap', normalization: 'share' }), 'thinking-distributions'), /share of the group's waits/);
+  assert.match(time.description, /Last 7 days.*Periods: 6 hours/);
+  assert.match(time.description, /shaded by its number of timed model requests/);
+  assert.match(dashboardCardDescription(thinking({ view: 'heatmap', normalization: 'share' }), 'thinking-distributions'), /share of the group’s waits/);
   assert.match(dashboardCardDescription(thinking({ view: 'calendar', calendarRows: 'week', calendarMetric: 'ratio' }), 'thinking-distributions'), /Rows: week.*workload estimate/);
 });
 
@@ -477,7 +481,7 @@ test('a Parallelism URL offers its ribbon and its chart as cards, each collected
   assert.deepEqual(at(start+hour),{alpha:1,beta:.5});
   assert.deepEqual(at(start+2*hour),{});
   const filtered = dashboardCardURL('/analyze?'+new URLSearchParams({analyze_topic:'parallelism',analyze_parallelism:JSON.stringify({...ribbon,repository:'beta',range:'7d'})}),analysisCatalogs.parallelism,dashboardDefaults.parallelism,[]);
-  assert.equal(dashboardCardWindow(filtered,'ribbon'),'Past 7 days');
+  assert.equal(dashboardCardWindow(filtered,'ribbon'),'Last 7 days');
   const only = await loadDashboardCardPreview(filtered,schemas.parallelism,undefined,undefined,start,'ribbon',timing);
   assert.deepEqual(only.series.map(item=>item.key),['beta']);
 });
@@ -505,15 +509,15 @@ test('a Habits URL offers each section as a card, titled, windowed and previewed
   assert.equal(new URL(url, location.origin).searchParams.has('habits_day'), false, 'a selected day is not part of a card');
   assert.deepEqual(dashboardCardTargets(url).map(target => target.id), ['habits-streaks', 'habits-calendar', 'habits-pace']);
   assert.equal(dashboardCardTargets(url).find(target => target.id === 'habits-calendar').title, 'Days with automatic agent runs · weekdays only');
-  assert.equal(dashboardCardWindow(url, 'habits-calendar'), 'Past 13 weeks');
+  assert.equal(dashboardCardWindow(url, 'habits-calendar'), 'Last 13 weeks');
   // A year's calendar draws the weeks a card can show, and says so.
   const year = pageCardURL(address.replace('habits_weeks=13', 'habits_weeks=53'));
-  assert.equal(dashboardCardWindow(year, 'habits-calendar'), 'Past 17 weeks');
+  assert.equal(dashboardCardWindow(year, 'habits-calendar'), 'Last 17 weeks');
   const yearPreview = await loadDashboardCardPreview(year, schemas.rhythm, undefined, undefined, Date.parse('2026-10-07T12:00:00Z'), 'habits-calendar', undefined, summary);
   assert.equal(yearPreview.habits.weeks, 17);
   assert.match(yearPreview.note, /open it for the year/);
   assert.equal(dashboardCardWindow(url, 'habits-punchcard'), 'All time');
-  assert.equal(dashboardCardWindow(url, 'habits-days'), 'Past 7 days');
+  assert.equal(dashboardCardWindow(url, 'habits-days'), 'Last 7 days');
   assert.equal(dashboardCardWindow(url, 'habits-streaks'), 'Today');
   assert.equal(dashboardCardPresentation(url, 'habits-calendar').category, 'machines');
   assert.equal(dashboardCardPresentation(url, 'habits-streaks').category, 'human');
@@ -568,7 +572,7 @@ test('Waiting and Thinking charts are dashboard cards over their page population
   const overview = pageCardURL(page('thinking-overview', { range: '30d', model: 'gpt-5' })), params = new URL(overview, location.origin).searchParams;
   assert.deepEqual([params.has('highlight'), params.has('card_id'), params.get('analyze_topic')], [false, false, 'thinking-overview']);
   assert.deepEqual(dashboardCardTargets(overview).map(target => [target.id, target.title]), [['thinking-waits', 'Model wait distribution: gpt-5 · harness is codex']]);
-  assert.equal(dashboardCardWindow(overview, 'thinking-waits'), 'Past 30 days');
+  assert.equal(dashboardCardWindow(overview, 'thinking-waits'), 'Last 30 days');
   assert.equal(dashboardCardPresentation(overview, 'thinking-compactions').category, 'thinking');
   // Home reads the page's query filters and controls as the card's records.
   const source = dashboardCardSource(overview);

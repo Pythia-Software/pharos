@@ -96,9 +96,12 @@ export function buildCardTrend(trend: CardTrend, lookback: number, results: Aggr
   const pointTimes = ends.map(end => end === today ? now : new Date(`${shiftDay(end, 1)}T00:00:00`).getTime() - 1);
   const prior = points.slice(0, -1).filter((point): point is number => point !== null), latest = points.at(-1);
   const count = total(rows, ends.at(-1)!);
-  const text = (value: string) => value.replaceAll("{days}", String(lookback));
+  // One day reads "last day", never "last 1 days".
+  const text = (value: string) => value.replace(/\{days\} (local )?days/g, (_, local = "") => lookback === 1 ? `${local}day` : `${lookback} ${local}days`).replaceAll("{days}", String(lookback));
+  // Every sample names a plural count ("calls", "usage records"); one drops its final s.
+  const sample = count === 1 ? trend.sample.replace(/s$/, "") : trend.sample;
   const observations = [...rows.values()].reduce((sum, item) => sum + item, 0);
-  return { observations, study: { kind: "trend", value: latest ?? undefined, valueLabel: text(trend.valueLabel), pointValueLabel: text(trend.pointValueLabel), trendLabel: trend.trendLabel ?? `Trailing ${lookback}d`, format: trend.format,
-    sampleLabel: `${count.toLocaleString()} ${trend.sample} in the latest ${lookback === 1 ? "day" : `${lookback} days`}`, points, pointTimes, lookbackDays: lookback,
+  return { observations, study: { kind: "trend", value: latest ?? undefined, valueLabel: text(trend.valueLabel), pointValueLabel: text(trend.pointValueLabel), trendLabel: trend.trendLabel ?? `Trailing ${lookback === 1 ? "day" : `${lookback} days`}`, format: trend.format,
+    sampleLabel: `${count.toLocaleString()} ${sample} in the latest ${lookback === 1 ? "day" : `${lookback} days`}`, points, pointTimes, lookbackDays: lookback,
     baseline: prior.length ? prior.reduce((sum, item) => sum + item, 0) / prior.length : undefined, detail: text(trend.detail) } };
 }

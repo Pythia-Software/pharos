@@ -115,7 +115,7 @@ test("All time saved preview copy follows its source query window", t => {
     assert.equal(job.options.window, undefined);
     assert.equal(job.options.recipe.window, undefined);
     assert.equal(job.options.recipe.title, "All-time writing");
-    assert.equal(job.options.recipe.description, "Human-written words sent across all time, by the day they were sent; provisional estimates are shaded lighter until the daily refinement.");
+    assert.equal(job.options.recipe.description, "Human-written words sent across all time, by the day they were sent; estimated counts are shaded lighter until Pharos refines them each day.");
     assert.equal(queryHasTimeFilter(job.query, recipe.field), false);
     const restored = savedCardPreviewJob(updateQueryWindowURL(job.options.url, days), schemas[recipe.dataset]);
     assert.equal(restored.options.recipe.title, item.title);
@@ -133,7 +133,7 @@ test("All time saved preview copy follows its source query window", t => {
   const volume = queryRecipes.find(recipe => recipe.id === "human-word-total");
   assert.equal(savedCardPreviewJob(updateQueryWindowURL(instantiateRecipe(volume, 7, clock).url, null), schemas[volume.dataset]).options.recipe.title, "All-time writing volume over time");
   const cumulative = queryRecipes.find(recipe => recipe.id === "cumulative-api-cost");
-  assert.equal(savedCardPreviewJob(updateQueryWindowURL(instantiateRecipe(cumulative, 365, clock).url, null), schemas.usage).options.recipe.description, "API-equivalent cost accumulated from the start of recorded history, split by provider; fully priced facts only.");
+  assert.equal(savedCardPreviewJob(updateQueryWindowURL(instantiateRecipe(cumulative, 365, clock).url, null), schemas.usage).options.recipe.description, "API cost accumulated from the start of recorded history, split by provider; fully priced usage only.");
   const custom = instantiateRecipe({ ...trend, title: "My workload", description: "Keep my wording." }, 7, clock);
   const customAll = savedCardPreviewJob(updateQueryWindowURL(custom.url, null), schemas.usage);
   assert.equal(customAll.options.recipe.title, custom.title);
@@ -614,6 +614,8 @@ test("eligible Today cards preserve calendar intent through saved windows and re
   for (const recipe of queryRecipes.filter(supportsToday)) {
     const card = instantiateRecipe(recipe, "today", clock);
     assert.equal(suggestionWindowLabel(card), "Today", recipe.id);
+    // A trend's trailing period becomes the day itself, not "trailing today’s period".
+    for (const text of [card.title, card.description]) assert.doesNotMatch(text, /trailing today|today’s period|today, across/, recipe.id);
     const spec = queryFromURL(card.url, card.query);
     assert.equal(spec.window.mode, "today", recipe.id);
     const tomorrow = new Date(clock); tomorrow.setDate(tomorrow.getDate() + 1);

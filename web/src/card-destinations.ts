@@ -223,7 +223,7 @@ export function refineCardDestination(recipe: QueryRecipe): QueryRecipe {
         display: { kind: "scatter", xLabel: x.label, yLabel: y.label, xScale: { mode: "log" }, yScale: { mode: "log" }, xFormat: x.format, yFormat: y.format } }],
       cover: { mode: "source", metricId, kind: "scatter", maxGroups: 2000, showLegend: split !== "none" },
       destination: { ...dashboard, dataset: "scatter", detailAction: "Inspect scatter plot points" }, action: "Explore Scatter Plots",
-      note: `${x.note} ${y.note} Values are computed independently and matched by entity identity. Points need both values.`,
+      note: `${x.note} ${y.note} Each point is one ${unit === "work" ? "workspace" : "conversation"}, shown only when both values are recorded and above zero.`,
     };
   }
   return { ...recipe, destination: { ...dashboard, dataset: usageTopicDatasets[dashboard.topic], detailAction: recipe.action }, action: `Explore ${usageTopics[dashboard.topic].label}` };

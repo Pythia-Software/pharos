@@ -13,11 +13,11 @@ export function savedCardPreviewJob(url: string, schema: FieldSchema, fallback?:
   const params = new URL(url, location.origin).searchParams, dataset = cardSourceDataset(params);
   const recipe = queryRecipes.find(recipe => recipe.id === params.get("card_id") && recipe.dataset === dataset);
   const spec = queryFromURL(url, fallback);
-  if (!recipe || !dataset || !spec || schema.name !== `pharos_${dataset}`) throw new Error("This card's source query is unavailable.");
+  if (!recipe || !dataset || !spec || schema.name !== `pharos_${dataset}`) throw new Error("This card’s source query is unavailable.");
   let cover = defaultCardCover(recipe);
   if (params.has("card_cover")) {
     const value = JSON.parse(params.get("card_cover")!);
-    if (!value || !["source", "result"].includes(value.mode) || typeof value.metricId !== "string") throw new Error("This card's chart settings are invalid.");
+    if (!value || !["source", "result"].includes(value.mode) || typeof value.metricId !== "string") throw new Error("This card’s chart settings are invalid.");
     cover = value as CardCover;
   }
   const window = readRollingWindow(params, dataset);
@@ -36,10 +36,10 @@ export function savedCardPreviewJob(url: string, schema: FieldSchema, fallback?:
 
 export async function resolveSavedCardPreviewJob(url: string, schema: FieldSchema, signal?: AbortSignal): Promise<PreviewJob> {
   const params = new URL(url, location.origin).searchParams, dataset = cardSourceDataset(params);
-  if (!dataset) throw new Error("This card's source query is unavailable.");
+  if (!dataset) throw new Error("This card’s source query is unavailable.");
   const service = createQueryLinkService(schema.name, httpQuerySnapshotStore("/api/query-snapshots"));
   const query = await service.resolve(new URL(url, location.origin).href, `q_${dataset}`, signal);
-  if (!query) throw new Error("This card's source query is unavailable.");
+  if (!query) throw new Error("This card’s source query is unavailable.");
   return savedCardPreviewJob(url, schema, query);
 }
 
@@ -50,12 +50,12 @@ export async function resolveSavedCardPreviewJob(url: string, schema: FieldSchem
 export async function resolveCardDashboardURL(address: string, signal?: AbortSignal): Promise<string> {
   const url = new URL(address, location.origin), params = url.searchParams, dataset = cardSourceDataset(params);
   const recipe = queryRecipes.find(recipe => recipe.id === params.get("card_id") && recipe.dataset === dataset);
-  if (url.origin !== location.origin || url.pathname !== "/analyze" || params.get("analyze_mode") !== "dashboards" || !dataset || !(recipe?.destination || recipe?.thinking)) throw new Error("This card's dashboard is unavailable.");
+  if (url.origin !== location.origin || url.pathname !== "/analyze" || params.get("analyze_mode") !== "dashboards" || !dataset || !(recipe?.destination || recipe?.thinking)) throw new Error("This card’s dashboard is unavailable.");
   const service = createQueryLinkService(`pharos_${dataset}`, httpQuerySnapshotStore("/api/query-snapshots"));
   const query = await service.resolve(url.href, `q_${dataset}`, signal);
-  if (!query) throw new Error("This card's source query is unavailable.");
+  if (!query) throw new Error("This card’s source query is unavailable.");
   const spec = queryFromURL(url.href, query);
-  if (!spec) throw new Error("This card's source query is unavailable.");
+  if (!spec) throw new Error("This card’s source query is unavailable.");
   const destination = new URL(cardDestination(recipe, resolveRollingQuery(spec.query, spec.window), spec.window), location.origin);
   return usageWorkspaceURL({ mode: "dashboards" }, destination.searchParams) + url.hash;
 }
