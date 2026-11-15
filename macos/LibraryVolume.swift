@@ -142,6 +142,16 @@ enum ServiceClient {
     }
 
     /// The reason in a refused release's JSON answer, if it gave one.
+    /// What every eject path says when a release failed for `reason`, which
+    /// may be a system error's own sentence, so it ends the message.
+    static func releaseFailure(_ reason: String, library: String = "the library") -> String {
+        "Pharos could not release \(library): \(reason)"
+    }
+
+    /// What a 503's body says the service is finishing, or the service's own
+    /// words for a release that ran out of time.
+    static func busy(_ body: String) -> String { reason(body) ?? ReleaseState.finishingMessage }
+
     static func reason(_ body: String) -> String? {
         let answer = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any]
         guard let reason = answer?["error"] as? String, !reason.isEmpty else { return nil }
@@ -155,7 +165,8 @@ enum ServiceClient {
         var components = URLComponents(url: service, resolvingAgainstBaseURL: false)
         components?.path = path
         components?.query = query
-        guard let url = components?.url else { return .failed("invalid service URL \(service)") }
+        // The service URL carries the API token; never show it.
+        guard let url = components?.url else { return .failed("its service address is invalid") }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.httpBody = body
@@ -177,7 +188,8 @@ enum ServiceClient {
                 result = .stopping(String(decoding: data ?? Data(), as: UTF8.self))
             } else {
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                result = .failed("HTTP \(status): \(String(decoding: data ?? Data(), as: UTF8.self))")
+                let said = reason(String(decoding: data ?? Data(), as: UTF8.self))
+                result = .failed(said.map { "\($0) (HTTP \(status))" } ?? "HTTP \(status)")
             }
         }
         task.resume()
@@ -210,7 +222,7 @@ enum ReleaseState: Equatable {
         switch answer {
         case .released, .notRunning: return (.released, .approve)
         case .stopping: return (.finishing, .dissent(finishingMessage))
-        case .failed(let reason): return (.none, .dissent("Pharos could not release its library (\(reason)); try ejecting again."))
+        case .failed(let reason): return (.none, .dissent(ServiceClient.releaseFailure(reason)))
         }
     }
 
@@ -253,7 +265,7 @@ enum ManagedLibraryEject {
             return volume
         }
         if let application, let volume = LibraryVolume(containing: application) { return volume }
-        throw Failure("The selected library and this application are not on a drive that Pharos can eject.")
+        throw Failure("Neither the selected library nor Pharos is on a drive that Pharos can eject.")
     }
 
     static func release(_ volume: LibraryVolume, service: URL, token: String) -> ServiceClient.Release {
@@ -285,9 +297,10 @@ enum VolumeEject {
     tries=0
     while kill -0 "$1" 2>/dev/null && [ "$tries" -lt "$4" ]; do sleep 0.1; tries=$((tries + 1)); done
     if ! output=$(/usr/sbin/diskutil eject "$2" 2>&1); then
-        /usr/bin/osascript - "$3 was not ejected" "$output" >/dev/null 2>&1 <<'EOF'
+        /usr/bin/osascript - "Pharos could not eject $3" "$output" >/dev/null 2>&1 <<'EOF'
     on run argv
-        display alert (item 1 of argv) message (item 2 of argv) as warning
+        set advice to "Pharos has closed its library. Quit anything else that is using the drive, then eject it in Finder."
+        display alert (item 1 of argv) message ((item 2 of argv) & return & return & advice) as warning
     end run
     EOF
     fi

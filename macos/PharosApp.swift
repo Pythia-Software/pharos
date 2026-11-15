@@ -295,7 +295,7 @@ final class ArchiveService: ObservableObject {
         } catch { self.error = "Could not start Pharos: \(error.localizedDescription)" }
         if let appVolume = LibraryVolume(containing: bundle), let watcher = LibraryVolumeMonitor(volumeUUID: appVolume.uuid) {
             managedPortable = true
-            watcher.approveUnmount = { .dissent("Pharos is running from this drive. Use Eject in Pharos, or quit Pharos before ejecting it.") }
+            watcher.approveUnmount = { .dissent("Pharos is running from this drive. Quit Pharos, then eject it.") }
             watcher.onUnmount = { DispatchQueue.main.async { NSApplication.shared.terminate(nil) } }
             monitor = watcher
             watcher.start()
@@ -387,7 +387,8 @@ final class ArchiveService: ObservableObject {
                         let body = try? JSONSerialization.data(withJSONObject: ["volume": "uuid:" + volume.uuid])
                         switch ServiceClient.release(broker.url, token: broker.token, path: "/api/app/release-volume", body: body) {
                         case .released, .notRunning: return .approve
-                        case .stopping(let reason), .failed(let reason): return .dissent("Pharos could not release this library yet: \(reason)")
+                        case .stopping(let body): return .dissent(ServiceClient.busy(body))
+                        case .failed(let reason): return .dissent(ServiceClient.releaseFailure(reason, library: "the library on this drive"))
                         }
                     }
                     self.managedLibraryMonitors[volume.uuid] = watcher
@@ -593,7 +594,7 @@ final class ArchiveService: ObservableObject {
         // Pharos runs from the drive, so it cannot be unmounted until Pharos
         // quits. Say so, rather than leave Finder to blame "a program".
         let name = volume.name
-        monitor.approveUnmount = { .dissent("Pharos is running from \(name). Use Eject in Pharos, or quit Pharos, to eject it.") }
+        monitor.approveUnmount = { .dissent("Pharos is running from \(name). Use Eject in Pharos, or quit Pharos and then eject it.") }
         monitor.onUnmount = { [weak self] in DispatchQueue.main.async { self?.libraryWentAway() } }
         monitor.onMount = { [weak self] mount in DispatchQueue.main.async { self?.libraryCameBack(at: mount) } }
         self.monitor = monitor
@@ -719,7 +720,7 @@ final class ArchiveService: ObservableObject {
         guard !ejecting else { reply("Pharos is already ejecting a drive."); return }
         guard let request = localRequest("/api/app/state"), let broker = lock.withLock({ endpoint }) else {
             resumeUpdates()
-            reply("Pharos is not ready to release its library yet.")
+            reply("Pharos is not ready to eject yet. Try again in a moment.")
             return
         }
         ejecting = true
@@ -735,16 +736,17 @@ final class ArchiveService: ObservableObject {
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return fail("Pharos is closing.") }
             do {
-                if let error { throw error }
+                let unknown = "Pharos could not find out which library is selected"
+                if let error { throw ManagedLibraryEject.Failure("\(unknown): \(error.localizedDescription)") }
                 guard (response as? HTTPURLResponse)?.statusCode == 200, let data else {
-                    throw ManagedLibraryEject.Failure("Could not read the connected library. Try again once Pharos is ready.")
+                    throw ManagedLibraryEject.Failure("\(unknown). Try again in a moment.")
                 }
                 let volume = try ManagedLibraryEject.volume(in: data, application: app)
                 switch ManagedLibraryEject.release(volume, service: broker.url, token: broker.token) {
                 case .released: break
                 case .notRunning: throw ManagedLibraryEject.Failure("Pharos stopped before confirming that its library was released.")
-                case .stopping: throw ManagedLibraryEject.Failure(ReleaseState.finishingMessage)
-                case .failed(let reason): throw ManagedLibraryEject.Failure("Could not release the library: \(reason)")
+                case .stopping(let body): throw ManagedLibraryEject.Failure(ServiceClient.busy(body))
+                case .failed(let reason): throw ManagedLibraryEject.Failure(ServiceClient.releaseFailure(reason))
                 }
                 if LibraryVolume(containing: app)?.uuid == volume.uuid {
                     // The broker can also own libraries on other disks. Ask
@@ -764,7 +766,10 @@ final class ArchiveService: ObservableObject {
                     DispatchQueue.main.async { reply(nil); NSApp.terminate(nil) }
                 } else {
                     // The app remains available with its local libraries.
-                    try NSWorkspace.shared.unmountAndEjectDevice(at: volume.mount)
+                    do { try NSWorkspace.shared.unmountAndEjectDevice(at: volume.mount) }
+                    catch {
+                        throw ManagedLibraryEject.Failure("Pharos released the library, but macOS could not eject \(volume.name): \(error.localizedDescription)")
+                    }
                     DispatchQueue.main.async {
                         self.ejecting = false
                         self.resumeUpdates()
