@@ -389,11 +389,15 @@ func (l *cpuLedger) settleLocked() {
 		case 1:
 			l.creditLocked(running[0], delta, 0, elapsed)
 			// What this source uses alone weighs its share when it next runs
-			// beside other work. A short interval says little.
+			// beside other work. A short interval says little. An interval
+			// alone still holds requests' CPU, so the rate falls quickly and
+			// rises slowly: work that mostly waits keeps a small weight.
 			if elapsed >= 1 {
 				rate := delta / elapsed
-				if known, ok := l.rates[running[0].source]; ok {
-					rate = 0.7*known + 0.3*rate
+				if known, ok := l.rates[running[0].source]; ok && rate < known {
+					rate = 0.5*known + 0.5*rate
+				} else if ok {
+					rate = 0.9*known + 0.1*rate
 				}
 				l.rates[running[0].source] = rate
 			}

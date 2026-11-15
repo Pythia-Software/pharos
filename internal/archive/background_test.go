@@ -1864,6 +1864,38 @@ func TestCPULedgerDividesProcessCPUAmongRunningWork(t *testing.T) {
 	if use := blind.end(true); use.CPU != nil || use.Seconds != 3 {
 		t.Fatalf("an unreadable counter: %+v", use)
 	}
+	// Every way an operation ends closes its span: one left open would be
+	// counted as running, and take a share, for as long as the service runs.
+	registry := newOpRegistry("service")
+	registry.cpu = ledger
+	open := len(ledger.spans)
+	_, finished := registry.begin(context.Background(), OperationSpec{Kind: "maintenance.checkpoint"})
+	finished.Finish(nil)
+	_, skipped := registry.begin(context.Background(), OperationSpec{Kind: "maintenance.checkpoint"})
+	skipped.Skip("nothing-to-do")
+	_, failed := registry.begin(context.Background(), OperationSpec{Kind: "maintenance.checkpoint"})
+	failed.Finish(errors.New("failed"))
+	_, discarded := registry.beginTentative(context.Background(), OperationSpec{Kind: "maintenance.checkpoint"})
+	discarded.discard()
+	parentCtx, parent := registry.begin(context.Background(), OperationSpec{Kind: "analysis.chain"})
+	_, inner := registry.begin(parentCtx, OperationSpec{Kind: "analysis.tools", Queued: true})
+	if inner.cpu.parent != parent.cpu || !inner.cpu.paused || inner.cpu.source != "item:tools" {
+		t.Fatalf("a queued operation inside another waits there: %+v", inner.cpu)
+	}
+	inner.Run()
+	if inner.cpu.paused {
+		t.Fatal("a queued operation that starts is running")
+	}
+	restore := inner.waitFor("catalog-busy", "the catalog writer")
+	if !inner.cpu.paused {
+		t.Fatal("an operation waiting for the catalog writer is not running")
+	}
+	restore()
+	inner.SkipWith("nothing-to-do", "detail")
+	parent.Finish(nil)
+	if len(ledger.spans) != open {
+		t.Fatalf("%d spans left open by ended operations", len(ledger.spans)-open)
+	}
 	for kind, want := range map[string]string{"analysis.tools": "item:tools", "analysis.findings/full": "item:review", "analysis.findings/measure": "item:findings",
 		"analysis.labels/backlog": "item:labels", "index.changes.automatic": "item:conversations", "maintenance.library-view": "item:search", "maintenance.checkpoint": "kind:maintenance.checkpoint"} {
 		name, variant, _ := strings.Cut(kind, "/")

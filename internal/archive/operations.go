@@ -655,6 +655,8 @@ func (op *Op) forgetLocked() {
 	for _, child := range op.children {
 		child.forgetLocked()
 	}
+	// An operation forgotten before it ended must not stay counted as running.
+	op.cpu.end(false)
 	delete(op.reg.ops, op.id)
 }
 
@@ -951,6 +953,7 @@ func (op *Op) SkipWith(reason, detail string) {
 	if op.state == opQueued || op.state == opRunning || op.state == opBlocked || op.state == opStopping {
 		op.state, op.reason = opSkipped, reason
 		op.ended = op.reg.clock()
+		op.cpu.end(false)
 		op.finishResourcesLocked()
 		if detail != "" {
 			op.detail = detail
