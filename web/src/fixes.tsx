@@ -45,7 +45,7 @@ type Detail = Omit<FixCard, "status"> & {
 async function request<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const value = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(value.error ?? `Request failed (${response.status})`);
+  if (!response.ok) throw new Error(value.error ?? `Could not complete the request (HTTP ${response.status}).`);
   return value as T;
 }
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
@@ -92,9 +92,9 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
     catch (failure) { setError((failure as Error).message); }
   }, [setError]);
 
-  const lede = view === "settings" ? "Choose which recurring problems stay on the menu. Your choices follow the library between Macs."
-    : selected ? "One recurring problem, the agents' own words about it, and where the fix probably belongs."
-      : "Problems agents keep running into across separate work items, which one change to guidance, the environment, a tool or docs could prevent. Tick cards to copy a prompt for your agent; a problem that recurs after its handoff opens again.";
+  const lede = view === "settings" ? "Choose which recurring problems Open shows. Your choices follow the library between Macs."
+    : selected ? "One recurring problem, the agents’ own words about it, and where the fix probably belongs."
+      : "Problems agents keep running into across separate workspaces, which one change to guidance, the environment, a tool or docs could prevent. Tick cards to copy a prompt for your agent; a problem that recurs after its handoff opens again.";
   const hiddenNote = overview ? fixesHiddenNote(shown.hidden, overview.bounds) : "";
   const freshness = fixesEventsFreshness(overview?.events_freshness);
   const stateTips: Record<FixesState, string> = {
@@ -130,10 +130,10 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
                 <OptimizeSelectionBar selection={selection} copy={copy} items={items} api={api} area="fixes" changed={changed} noun={noun} place={place} promptLimit={overview.prompt_limit} />
                 {shown.main.length ? <div className="optimize-card-grid">{shown.main.map(item => <FixCardView key={item.id} item={item} selection={selection} bounds={overview.bounds} />)}</div>
                   : <div className="findings-empty"><strong>{where || kind ? "No fixes match these filters." : list === "open" ? "No open fixes." : list === "handed_off" ? "Nothing handed off yet." : "Nothing closed."}</strong>
-                    <p>{where || kind ? "Choose Everywhere and All kinds to see every fix in this list." : list === "open" && shown.hidden.total ? "Your settings hide every open problem; show them above, or loosen the bounds." : list === "open" ? "No problem recurred across enough separate work items." : "Fixes you act on appear here."}</p></div>}
+                    <p>{where || kind ? "Choose Everywhere and All kinds to see every fix in this list." : list === "open" && shown.hidden.total ? "Your settings hide every open problem; show them above, or loosen the bounds." : list === "open" ? "No problem recurred across enough separate workspaces." : "Fixes you act on appear here."}</p></div>}
                 {hiddenNote ? <p className="findings-muted fixes-hidden-note">{hiddenNote} <a href={fixesHiddenTableURL()}>List them in the table</a> · <a href={fixesURL("settings")}>Change these bounds</a></p> : null}
-                {shown.maybe.length ? <ViewDisclosure viewKey="fixes:maybe" className="fixes-maybe" summary={<>Maybe worth writing down · {plural(shown.maybe.length, "codebase fact")} fewer than five work items relearned</>}>
-                  <p className="findings-muted">Often a task's own findings rather than something guidance should carry. Check before acting.</p>
+                {shown.maybe.length ? <ViewDisclosure viewKey="fixes:maybe" className="fixes-maybe" summary={<>Maybe worth writing down · {plural(shown.maybe.length, "codebase fact")} relearned in fewer than five workspaces</>}>
+                  <p className="findings-muted">Often a task’s own findings rather than something guidance should carry. Check before acting.</p>
                   <div className="optimize-card-grid">{shown.maybe.map(item => <FixCardView key={item.id} item={item} selection={selection} bounds={overview.bounds} />)}</div>
                 </ViewDisclosure> : null}
               </section>
@@ -141,7 +141,7 @@ export function FixesPage({ copy, view = "", table, refreshDiscovery }: { copy: 
             </div>
             <ViewDisclosure viewKey="fixes:coverage" className="safety-coverage" summary={<>What Pharos grouped{overview.built_at ? ` · updated ${date(overview.built_at)}` : ""}</>}>
               <p>{overview.built_at ? `${Number(overview.in_scope_events || 0).toLocaleString()} agent events in scope${overview.end ? `, through ${date(overview.end)}` : ""}. ` : ""}{overview.coverage}</p>
-              <p>{overview.excluded_events ? `${plural(overview.excluded_events, "event")} about your own requests were left out: they are about how a task was asked, not something to fix in the setup. ` : ""}Which events count as the same problem, the kind of fix and where it belongs are rules of thumb over the agents' words; counts are exact{freshness.note ? " once events are rebuilt" : ""}. No language model runs to make these cards or their prompts.</p>
+              <p>{overview.excluded_events ? `${plural(overview.excluded_events, "event")} about your own requests were left out: they are about how a task was asked, not something to fix in the setup. ` : ""}Which events count as the same problem, the kind of fix and where it belongs are rules of thumb over the agents’ words; counts are exact{freshness.note ? " once events are rebuilt" : ""}. No language model runs to make these cards or their prompts.</p>
               <p>{overview.safeguard_events ? <>{plural(overview.safeguard_events, "event")} where an agent got around a safeguard (skipped a test, worked around a restriction) are notices in <a href={safetyURL()}>Risky actions</a>, one per instance, rather than fixes. A card says when its conversations hold any.</> : <>Agents getting around a safeguard raise notices in <a href={safetyURL()}>Risky actions</a> rather than fixes.</>}</p>
               <a href={fixesURL("settings")}>Fixes settings and refresh</a>
             </ViewDisclosure>
@@ -184,7 +184,7 @@ function FixCardView({ item, selection, bounds }: { item: FixCard; selection: Se
   const where = `${item.destination_kind}: ${item.destination}`;
   const facts = [...fixesFacts(item), item.safeguards ? plural(item.safeguards, "safeguard workaround") : ""].filter(Boolean);
   return <OptimizeCard ids={[item.id]} selection={selection} className={`fixes-card${hidden ? " hidden-by-bounds" : ""}${item.deprioritized ? " quiet" : ""}`} target={`fix:${item.id}`}
-    count={item.work_items} countLabel={plural(item.work_items, "work item")} label={`Select: ${item.title}`}>
+    count={item.work_items} countLabel={plural(item.work_items, "workspace")} label={`Select: ${item.title}`}>
     <a className="fixes-card-title" href={fixDetailURL(item.id)}>{item.title}</a>
     {lead ? <blockquote className="fixes-lead" title={lead}>{lead}</blockquote> : null}
     <div className="fixes-chips">
@@ -207,10 +207,10 @@ function FixesCart({ cart, items, onReview, table = false, detail = false }: { c
   const byID = new Map(items.map(item => [item.id, item]));
   const groups = cart.map(group => ({ target: group.target, label: group.label, group,
     entries: group.items.map(entry => ({ key: entry.id, title: entry.title, ids: [entry.id], ticked: entry.ticked ? 1 : 0,
-      detail: [byID.get(entry.id)?.category_label, byID.get(entry.id) ? plural(byID.get(entry.id)!.work_items, "work item") : ""].filter(Boolean).join(" · ") })) }));
+      detail: [byID.get(entry.id)?.category_label, byID.get(entry.id) ? plural(byID.get(entry.id)!.work_items, "workspace") : ""].filter(Boolean).join(" · ") })) }));
   return <OptimizeCart className="fixes-cart" title="Fix prompts to copy" groups={groups} api={api} changed={changed} noun={noun} onReview={onReview}
     empty={detail ? "Add fixes to a prompt for their place. The shared setup and each repository get their own prompt." : `Tick ${table ? "rows" : "a card"} to copy a prompt, or add ${table ? "them" : "it"} to a prompt for ${table ? "their place" : "its place"}. The shared setup and each repository get their own prompt.`}
-    note="Fixes, risky actions and efficiency use separate prompts. After copying, these fixes leave Open and remain in Handed off; one that recurs opens again." />;
+    note="Efficiency, risky actions and fixes use separate prompts. After copying, these fixes leave Open and remain in Handed off; one that recurs opens again." />;
 }
 
 function FixDetailView({ id, overview, back, backLabel, act, onReview }: { id: string; overview: Overview; back: () => void; backLabel: string; act: (id: string, body: Record<string, unknown>, done: string) => Promise<void>; onReview: (target: string) => void }) {
@@ -227,10 +227,10 @@ function FixDetailView({ id, overview, back, backLabel, act, onReview }: { id: s
   const hidden = card ? fixesHiddenReason(card, overview.bounds) : "";
   const hours = (n: number) => `${n.toLocaleString(undefined, { maximumFractionDigits: 1 })} h`;
   const facts: Array<[string, React.ReactNode]> = detail ? [
-    ["Work items", detail.work_items.toLocaleString()],
+    ["Workspaces", detail.work_items.toLocaleString()],
     ["Events", <>{detail.events.toLocaleString()} <span className="findings-muted">· {plural(detail.conversations, "conversation")}{detail.thinking ? ` · ${detail.thinking.toLocaleString()} in thinking` : ""}</span></>],
     ["Seen", <>{fixesRange(detail.status)}{status && status.state !== "unknown" ? <span className="findings-muted"> · quiet {plural(status.days_quiet, "day")}</span> : null}</>],
-    ["Agent time", detail.cost.episodes ? <>{hours(detail.cost.hours)} <span className="findings-muted">· {plural(detail.cost.episodes, "friction episode")}, {detail.cost.unresolved.toLocaleString()} unresolved</span></> : <span className="findings-muted" title="Lessons and facts don't start friction episodes, so no agent time is measured.">None measured</span>],
+    ["Agent time", detail.cost.episodes ? <>{hours(detail.cost.hours)} <span className="findings-muted">· {plural(detail.cost.episodes, "friction episode")}, {detail.cost.unresolved.toLocaleString()} unresolved</span></> : <span className="findings-muted" title="Lessons and facts don’t start friction episodes, so no agent time is measured.">None measured</span>],
     ...(detail.groups > 1 ? [["Merged", plural(detail.groups, "recurring group")] as [string, React.ReactNode]] : []),
     ["Repositories", detail.repositories.map(repository => `${repository.key} ${repository.count}`).join(", ")],
     ["Kinds", detail.kinds.map(kind => `${kind.label ?? kind.key} ${kind.count}`).join(", ")],
@@ -238,7 +238,7 @@ function FixDetailView({ id, overview, back, backLabel, act, onReview }: { id: s
   ] : [];
   return <div className="fixes-detail-page">
     <button type="button" className="findings-button" data-view-field="fixes_item" onClick={back}>{backLabel}</button>
-    {error ? <p className="findings-error" role="alert">{error === "Request failed (404)" || /not found/i.test(error) ? "This problem is no longer in the latest grouping." : error}</p> : null}
+    {error ? <p className="findings-error" role="alert">{error === "Could not complete the request (HTTP 404)." || /not found/i.test(error) ? "This problem is no longer in the latest grouping." : error}</p> : null}
     {!detail ? (!error ? <p className="findings-muted">Loading…</p> : null) : <article className="fixes-detail" data-pharos-target={`fix:${detail.id}`}>
       <p className="fixes-detail-meta"><span className="findings-chip">{detail.category_label}</span>{card ? <StatusChip item={card} /> : null}<span className="findings-muted" title={detail.scope_reason}>{scopeLabel(detail)} · {fixesStateLabels[card?.state ?? "open"]}</span></p>
       <h2>{detail.title}</h2>
@@ -277,7 +277,7 @@ function FixDetailView({ id, overview, back, backLabel, act, onReview }: { id: s
             <h3 id="fixStoppedTitle">Has it stopped?</h3>
             <p>{status?.detail}</p>
             {status?.commits_since?.length ? <p className="findings-muted">Guidance commits since it was last seen: {status.commits_since.map(note => `${note.repository} ${note.sha} (${note.day}) “${note.subject}”`).join("; ")}</p> : null}
-            {status?.persisted ? <p className="findings-muted">It recurred {plural(status.persisted.events_after ?? 0, "time")} after {status.persisted.repository} {status.persisted.sha} (“{status.persisted.subject}”, {status.persisted.day}); that guidance change didn't stop it.</p> : null}
+            {status?.persisted ? <p className="findings-muted">It recurred {plural(status.persisted.events_after ?? 0, "time")} after {status.persisted.repository} {status.persisted.sha} (“{status.persisted.subject}”, {status.persisted.day}); that guidance change didn’t stop it.</p> : null}
           </section>
           <section className="findings-panel" aria-labelledby="fixGuidanceTitle">
             <h3 id="fixGuidanceTitle">Already in the guidance?</h3>
@@ -287,7 +287,7 @@ function FixDetailView({ id, overview, back, backLabel, act, onReview }: { id: s
           </section>
           {detail.tool_errors.length || detail.files.length || detail.safeguards ? <section className="findings-panel" aria-labelledby="fixNamedTitle">
             <h3 id="fixNamedTitle">Around it</h3>
-            {detail.tool_errors.length ? <><p className="findings-muted">Failed calls just before</p><ul className="fixes-list">{detail.tool_errors.map(entry => <li key={entry.key}><code>{entry.key}</code> ×{entry.count}</li>)}</ul></> : null}
+            {detail.tool_errors.length ? <><p className="findings-muted">Failed tool calls just before</p><ul className="fixes-list">{detail.tool_errors.map(entry => <li key={entry.key}><code>{entry.key}</code> ×{entry.count}</li>)}</ul></> : null}
             {detail.files.length ? <p className="fixes-named"><span className="findings-muted">Files and commands named</span> {detail.files.map(file => <code key={file}>{file}</code>)}</p> : null}
             {detail.safeguards ? <p className="fixes-safeguards">{plural(detail.safeguards, "event")} in these conversations got around a safeguard; they are notices in <a href={safetyURL()}>Risky actions</a>, where each instance is reviewed on its own.</p> : null}
           </section> : null}
@@ -330,7 +330,7 @@ function FixesSettings({ overview, refreshDiscovery }: { overview: Overview | nu
   }
   async function refresh() {
     setBusy(true); setError(""); setMessage("");
-    try { await request("/api/findings/refresh", {}); await refreshDiscovery(); setMessage("Refresh requested. Grouping continues in the background."); }
+    try { await request("/api/findings/refresh", {}); await refreshDiscovery(); setMessage("Refresh requested. Efficiency, risky actions and fixes update in the background."); }
     catch (failure) { setError((failure as Error).message); }
     finally { setBusy(false); }
   }
@@ -344,25 +344,25 @@ function FixesSettings({ overview, refreshDiscovery }: { overview: Overview | nu
     {message ? <p role="status">{message}</p> : null}
     {!settings || !bounds ? <p className="findings-muted">Loading fixes settings…</p> : <>
       <section className="findings-panel" data-pharos-target="section:fixes-bounds">
-        <h2>What stays on the menu</h2>
-        <p>A problem agents stopped running into, or one only a few work items hit, is rarely worth a change. These bounds rank such problems lower or take them off Open. Hidden problems are counted on the dashboard, and you can show them there at any time; what you handed off or closed stays listed.</p>
-        <p className="findings-muted">{settings.open ? `${plural(settings.open, "open problem")}: ${(settings.open - settings.hidden_stale - settings.hidden_rare - (settings.hidden_intended ?? 0)).toLocaleString()} shown, ${settings.hidden_stale.toLocaleString()} hidden as quiet, ${settings.hidden_rare.toLocaleString()} hidden as rare${settings.hidden_intended ? `, ${settings.hidden_intended.toLocaleString()} left out as intended` : ""}.` : "No open problems yet."}{settings.end ? ` "Quiet" counts days before ${date(settings.end)}, the latest day the agent events pass read.` : ""}</p>
+        <h2>What Open shows</h2>
+        <p>A problem agents stopped running into, or one only a few workspaces hit, is rarely worth a change. These bounds rank such problems lower or take them off Open. Hidden problems are counted on the dashboard, and you can show them there at any time; what you handed off or closed stays listed.</p>
+        <p className="findings-muted">{settings.open ? `${plural(settings.open, "open problem")}: ${(settings.open - settings.hidden_stale - settings.hidden_rare - (settings.hidden_intended ?? 0)).toLocaleString()} shown, ${settings.hidden_stale.toLocaleString()} hidden as quiet, ${settings.hidden_rare.toLocaleString()} hidden as rare${settings.hidden_intended ? `, ${settings.hidden_intended.toLocaleString()} left out as intended` : ""}.` : "No open problems yet."}{settings.end ? ` “Quiet” counts days before ${date(settings.end)}, the latest day the agent events pass read.` : ""}</p>
         <div className="fixes-bounds">
           <label htmlFor={ids.quiet}><strong>Rank lower once quiet for</strong><small>Its priority drops to 60% past this, and to 30% past three times it.</small></label>
           <select id={ids.quiet} disabled={busy} value={bounds.quiet_days} onChange={event => void save({ quiet_days: Number(event.target.value) }, "Saved. Priorities use the new bound.")}>
             {[...new Set([...quietOptions, bounds.quiet_days])].sort((a, b) => a - b).map(days => <option key={days} value={days}>{plural(days, "day")}</option>)}
           </select>
-          <label htmlFor={ids.hide}><strong>Hide once quiet for</strong><small>Off Open until it recurs.</small></label>
+          <label htmlFor={ids.hide}><strong>Hide once quiet for</strong><small>Hidden from Open until it recurs.</small></label>
           <select id={ids.hide} disabled={busy} value={bounds.hide_days} onChange={event => void save({ hide_days: Number(event.target.value) }, "Saved. Open uses the new bound.")}>
             {[...new Set([...hideOptions, bounds.hide_days])].sort((a, b) => (a || 1e9) - (b || 1e9)).map(days => <option key={days} value={days}>{days ? label(plural(days, "day"), preview({ ...bounds, hide_days: days }).stale) : "Never"}</option>)}
           </select>
-          <label htmlFor={ids.minimum}><strong>Hide when seen in fewer than</strong><small>Every problem recurs in at least two work items; raise this to keep only the common ones.</small></label>
+          <label htmlFor={ids.minimum}><strong>Hide when seen in fewer than</strong><small>Every problem recurs in at least two workspaces; raise this to keep only the common ones.</small></label>
           <select id={ids.minimum} disabled={busy} value={bounds.min_work_items} onChange={event => void save({ min_work_items: Number(event.target.value) }, "Saved. Open uses the new bound.")}>
-            {[...new Set([...minimumOptions, bounds.min_work_items])].sort((a, b) => a - b).map(n => <option key={n} value={n}>{label(plural(n, "work item"), preview({ ...bounds, min_work_items: n }).rare)}</option>)}
+            {[...new Set([...minimumOptions, bounds.min_work_items])].sort((a, b) => a - b).map(n => <option key={n} value={n}>{label(plural(n, "workspace"), preview({ ...bounds, min_work_items: n }).rare)}</option>)}
           </select>
         </div>
         <p className="fixes-defaults"><button type="button" className="findings-button" disabled={busy || Boolean(isDefault)} onClick={() => void save({ reset: true }, "Restored the defaults.")}>Restore defaults</button>
-          <span className="findings-muted">Rank lower after {plural(settings.default_bounds.quiet_days, "day")}, hide after {plural(settings.default_bounds.hide_days, "day")}, hide below {plural(settings.default_bounds.min_work_items, "work item")}.</span></p>
+          <span className="findings-muted">Rank lower after {plural(settings.default_bounds.quiet_days, "day")}, hide after {plural(settings.default_bounds.hide_days, "day")}, hide below {plural(settings.default_bounds.min_work_items, "workspace")}.</span></p>
       </section>
       <section className="findings-panel" data-pharos-target="section:fixes-ranks">
         <h2>How Rank by orders the dashboard</h2>
@@ -370,15 +370,15 @@ function FixesSettings({ overview, refreshDiscovery }: { overview: Overview | nu
       </section>
       <section className="findings-panel">
         <h2>Fixes and Risky actions</h2>
-        <p>Fixes are problems agents keep running into that you can prevent once: a missing tool, a shell surprise, a failing integration or check, a stale doc, a fact agents relearn. They are grouped across work items and ranked by how often they recur, so these bounds apply.</p>
-        <p>An agent getting around a safeguard (skipping or weakening a test, working around a restriction, bypassing a hook) is different: one instance can matter, so each raises its own notice in <a href={safetyURL()}>Risky actions</a>, under its safeguard checks, and is never hidden for being rare. Fixes leaves those events out and only says when a problem's conversations hold some. Both share triage, prompts per place and handoffs, but in separate baskets.</p>
+        <p>Fixes are problems agents keep running into that you can prevent once: a missing tool, a shell surprise, a failing integration or check, a stale doc, a fact agents relearn. They are grouped across workspaces and ranked by how often they recur, so these bounds apply.</p>
+        <p>An agent getting around a safeguard (skipping or weakening a test, working around a restriction, bypassing a hook) is different: one instance can matter, so each raises its own notice in <a href={safetyURL()}>Risky actions</a>, under its safeguard checks, and is never hidden for being rare. Fixes leaves those events out and only says when a problem’s conversations hold some. Both share triage, prompts per place and handoffs, but use separate prompts.</p>
         <p>Events about how a task was asked (unclear instructions, assumptions about the request, disagreeing) are left out of both.</p>
       </section>
       <section className="findings-panel">
         <h2>Refresh</h2>
-        <p>Grouping runs in the background after the agent events pass and with each full Findings refresh, over the last {settings.window_days} days of agent events. Opening this page never starts it.</p>
+        <p>Grouping runs in the background after the agent events pass and with each full Optimize refresh, over the last {settings.window_days} days of agent events. Opening this page never starts it.</p>
         <p className="findings-muted">{settings.built_at ? `Last grouped ${date(settings.built_at)}.` : "Not grouped yet."}</p>
-        <button type="button" className="findings-button" disabled={busy} onClick={() => void refresh()}>Refresh Findings now</button>
+        <button type="button" className="findings-button" disabled={busy} onClick={() => void refresh()}>Refresh Optimize now</button>
       </section>
     </>}
   </div>;

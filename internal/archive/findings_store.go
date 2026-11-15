@@ -695,13 +695,13 @@ func (c *Catalog) reorderFindingCart(ctx context.Context, target string, value a
 			return err
 		}
 		if len(ids) != count {
-			return fmt.Errorf("cart changed; reload before reordering")
+			return fmt.Errorf("The prompt changed. Reload, then reorder.")
 		}
 		seen := map[string]bool{}
 		for i, raw := range ids {
 			id := firstString(raw)
 			if seen[id] {
-				return fmt.Errorf("duplicate cart item")
+				return fmt.Errorf("The prompt lists the same finding twice.")
 			}
 			seen[id] = true
 			stamp := fmt.Sprintf("0000-order:%s:%09d", target, i)
@@ -717,7 +717,7 @@ func (c *Catalog) reorderFindingCart(ctx context.Context, target string, value a
 			}
 			n, _ := result.RowsAffected()
 			if n != 1 {
-				return fmt.Errorf("cart changed; reload before reordering")
+				return fmt.Errorf("The prompt changed. Reload, then reorder.")
 			}
 		}
 		return nil
