@@ -222,12 +222,20 @@ func (p delegationProjection) familyContext(locals, expand []executionID, limit,
 }
 
 // parentEvidence names the winning parent claim for the explorer's evidence
-// column, in the vocabulary it already published.
-func (p delegationProjection) parentEvidence(x *execution) (string, sourceRef) {
+// column, in the vocabulary it already published. Of equally winning launches
+// (one call retained in mirrored transcripts), the one retained in workspace
+// links to its launch message.
+func (p delegationProjection) parentEvidence(x *execution, workspace string) (string, sourceRef) {
 	if x.Parent.State != parentResolved || len(x.Parent.Evidence) == 0 {
 		return "", sourceRef{}
 	}
 	claim := x.Parent.Evidence[0]
+	for _, c := range x.Parent.Evidence {
+		if s := p.res.Stream(c.Subject); c.Kind == claim.Kind && s != nil && s.WorkspaceID == workspace {
+			claim = c
+			break
+		}
+	}
 	switch claim.Kind {
 	case claimLaunchOwner:
 		return "exact-delegation-handle", claim.Subject

@@ -29,7 +29,8 @@ import (
 // replaces the message's rows in agent_event_messages and agent_events. A
 // message is scored again only when its text or source, or the verifier,
 // changed. Conversations to look at come from a dirty table fed by the same
-// triggers as the labels ledger's, and from a structure fingerprint.
+// triggers as the labels ledger's, apart from authorship's
+// (agentEventsDirtyTriggers), and from a structure fingerprint.
 
 // agentEventsLedgerDDL is created by the first run: a library that never runs
 // the verifier has none of it.
@@ -52,8 +53,29 @@ CREATE TABLE IF NOT EXISTS agent_events_dirty (
 // dependency digest it was built against, so a read can tell rows built on
 // superseded execution evidence (agentEventsExecutionCurrent); 4 the members
 // of each component built at (ensureExecutionDependencyMembers); 5 stamp
-// triggers that advance the events cache domain.
-const agentEventsLedgerVersion = "5"
+// triggers that advance the events cache domain; 6 no dirty marks from
+// authorship (agentEventsDirtyTriggers). A version only installs schema and
+// triggers again: it marks nothing and rebuilds nothing.
+const agentEventsLedgerVersion = "6"
+
+// agentEventsDirtyTriggers mark a conversation's agent events dirty when what
+// they are built from changes: the labeling item triggers (itemDirtyTriggers)
+// without those on message_authorship. The pass reads agent replies and
+// thinking, whose units are the message's own text: only a user-role
+// message's unit consults its classification (labelingPass.record). The
+// daily authorship refine rewrites thousands of spans, and marked as many
+// conversations for a pass that then scored nothing. The drops stay in the
+// list, so a ledger that has those triggers loses them.
+func agentEventsDirtyTriggers() []string {
+	const prefix = "agent_events_dirty_"
+	statements := []string{}
+	for _, statement := range itemDirtyTriggers("agent_events_dirty", prefix) {
+		if !strings.HasPrefix(statement, "CREATE TRIGGER "+prefix+"message_authorship_") {
+			statements = append(statements, statement)
+		}
+	}
+	return statements
+}
 
 // agentEventStoreFloor is the lowest probability stored: rows between it and
 // agentEventThreshold are not events, but let a later threshold be studied
@@ -88,7 +110,7 @@ func (c *Catalog) ensureAgentEventsLedger(ctx context.Context) error {
 		if err := ensureExecutionDependencyMembers(ctx, tx); err != nil {
 			return err
 		}
-		for _, statement := range itemDirtyTriggers("agent_events_dirty", "agent_events_dirty_") {
+		for _, statement := range agentEventsDirtyTriggers() {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("%s: %w", statement[:60], err)
 			}
@@ -258,6 +280,11 @@ type AgentEventsRunOptions struct {
 	// Limit stops before a conversation once this many messages were scored
 	// (0: no limit); the rest stay pending.
 	Limit int
+	// LimitConversations and LimitElapsed stop it too, once this many
+	// conversations were prepared or preparation has run this long (0: no
+	// limit): conversations with nothing to score count toward no Limit.
+	LimitConversations int
+	LimitElapsed       time.Duration
 	// Full looks at every conversation; only messages whose inputs changed
 	// are scored again either way.
 	Full bool
@@ -378,7 +405,7 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 			return stats, err
 		}
 	}
-	builder, err := newLabelsItemBuilder(dctx, c.reader())
+	builder, err := c.newLabelsItemBuilderFor(dctx, c.reader())
 	if err != nil {
 		return stats, err
 	}
@@ -492,9 +519,9 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 			return conversation, err
 		},
 		infer: infer,
-		store: func(conversation *agentEventsConversation, written *AgentEventsRunStats) (err error) {
+		store: func(conversations []*agentEventsConversation, written *AgentEventsRunStats) (err error) {
 			opFrom(ctx).RunIO(func() {
-				err = c.storeAgentEvents(ctx, verifier.identity, []*agentEventsConversation{conversation}, written)
+				err = c.storeAgentEvents(ctx, verifier.identity, conversations, written)
 			})
 			return err
 		},
@@ -793,12 +820,17 @@ func (c *Catalog) agentEventsConversation(ctx context.Context, builder *labelsIt
 // storeAgentEvents writes scored conversations in one transaction: each
 // message's row and its candidates at or above agentEventStoreFloor, rows of
 // messages that are no longer agent replies or thinking removed, the
-// conversation's ledger row, and the dirty mark this run read.
+// conversation's ledger row, and the dirty mark this run read. The pipeline
+// passes one conversation with rows to write, or several with none
+// (agentEventsStoreBatch).
 func (c *Catalog) storeAgentEvents(ctx context.Context, identity string, conversations []*agentEventsConversation, stats *AgentEventsRunStats) error {
 	lexicon, _ := agentEventLexicon()
 	at := now()
 	var removed, stored, eventsTotal int
 	stale := 0
+	// What the publication check reads is brought up to date before the
+	// writer is taken, so the transaction holds it for its own rows only.
+	c.primeExecutionPublication(ctx)
 	if beforeDerivedPublication != nil {
 		beforeDerivedPublication()
 	}
@@ -929,8 +961,15 @@ func (s *Server) agentEventsEnabled(ctx context.Context) bool {
 }
 
 // agentEventsChainLimit is the chain stage's share: about this many messages
-// scored per pass; a backlog continues as its own run when plugged in.
-var agentEventsChainLimit = 1000
+// scored per pass; a backlog continues as its own run when plugged in. A
+// pass over conversations with little or nothing to score ends after
+// agentEventsChainConversations of them or agentEventsChainElapsed, so the
+// stages behind it never wait out a library-wide re-read.
+var (
+	agentEventsChainLimit         = 1000
+	agentEventsChainConversations = 2000
+	agentEventsChainElapsed       = 2 * time.Minute
+)
 
 // chainAgentEvents is the analysis chain's agent events stage, after labels:
 // the same power rules (labelsForPower) and the same backlog handling.
@@ -955,10 +994,10 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 		}
 	}
 	labels, bulk := labelsForPower(settings.labeler(labels), s.cachedPower(ctx))
-	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true), Progress: os.Stderr})
+	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, LimitConversations: agentEventsChainConversations, LimitElapsed: agentEventsChainElapsed, Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true), Progress: os.Stderr})
 	if err == nil {
-		// Fixes group these events (fixes.go); a rebuild is a no-op when
-		// nothing changed, and spaced out while events keep arriving.
+		// Fixes group these events (fixes.go): rebuilt at most daily from
+		// here (fixesChainInterval), not after every pass.
 		if err := s.Catalog.refreshFixesSoon(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Fixes: %v\n", err)
 		}
@@ -1002,7 +1041,7 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 		}()
 		_, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true), Progress: os.Stderr, progressBase: stats.progress})
 		if err == nil {
-			if err := s.Catalog.refreshFixes(ctx, false); err != nil && ctx.Err() == nil {
+			if err := s.Catalog.refreshFixesSoon(ctx); err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Fixes: %v\n", err)
 			}
 			s.Catalog.refreshAgentEventFactsLogged(ctx, false)

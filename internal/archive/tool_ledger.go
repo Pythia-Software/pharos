@@ -22,8 +22,10 @@ import (
 // final_message_id), which occurrence ownership classifies requests by. v14
 // reads the file of a patch a code-mode script holds as a string literal, and
 // of a patch recorded as a list of changes. v15 repairs Claude.ai export
-// tool-block timestamps before replaying the ledger.
-const toolLedgerVersion = "tools-v15-claude-ai-tool-time"
+// tool-block timestamps before replaying the ledger. v16 records harness
+// waits (background commands, Monitor watches, scheduled wakeups) to the
+// notice that ends them (harness_waits.go).
+const toolLedgerVersion = "tools-v16-harness-waits"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the
@@ -85,7 +87,14 @@ type toolCall struct {
 	URL, Host, Hosts, SearchQuery                              string
 	URLCount                                                   int
 	URLs                                                       []toolURL
+	// The harness wait the call started (harness_waits.go): the launch is
+	// StartedAt..EndedAt; the wait runs on to WaitEndedAt, empty when the
+	// transcript does not show its end.
+	WaitKind, WaitEndedAt, WaitStatus, WaitEndSource string
+	WaitEvents                                       int
 
+	wait           harnessWait
+	messageIndex   int
 	resultIndex    int
 	estimateTokens int64
 	commandTexts   []string
@@ -238,7 +247,7 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 			continue
 		}
 		seen[key] = true
-		call := toolCall{Key: key, CallID: message.CallID, Stream: streams[index], Kind: message.Kind, CallNativeID: message.NativeID, Sequence: len(calls), StartedAt: message.CreatedAt, Model: defaultString(nilIfEmpty(strings.TrimSpace(message.Model)), conversationModel), Effort: message.Effort, resultIndex: -1, ParallelCount: 1}
+		call := toolCall{Key: key, CallID: message.CallID, Stream: streams[index], Kind: message.Kind, CallNativeID: message.NativeID, Sequence: len(calls), StartedAt: message.CreatedAt, messageIndex: index, Model: defaultString(nilIfEmpty(strings.TrimSpace(message.Model)), conversationModel), Effort: message.Effort, resultIndex: -1, ParallelCount: 1}
 		var envelope map[string]any
 		_ = json.Unmarshal([]byte(message.Text), &envelope)
 		call.ToolName = defaultString(envelope["tool"], "tool")
@@ -302,6 +311,7 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 			call.ErrorSignature = toolErrorSignature(content)
 		}
 		applyToolDuration(&call, content, details)
+		detectHarnessWait(&call, input, details, content)
 		applyLineCounts(&call, input, details)
 		applyToolURLs(&call, input, content)
 		// Emitting request: the usage in the same provider event, otherwise the
@@ -351,6 +361,7 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		}
 	}
 	attributeResultTokens(messages, streams, calls, byKey, perStream, compactions)
+	resolveHarnessWaits(messages, calls)
 	return requests, calls
 }
 

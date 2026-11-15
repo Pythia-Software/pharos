@@ -221,6 +221,12 @@ func storedAs(file string, v capturedVersion) capturedVersion {
 	if v.Encoding == "" {
 		return v
 	}
+	// Only a file still at its original size can be an unrenamed entry, so a
+	// stat settles every other one without opening it. A compression renames
+	// plain bytes into encoded ones, never back, so the answer cannot go stale.
+	if info, err := os.Stat(file); err != nil || !info.Mode().IsRegular() || info.Size() != v.Size || info.Size() == v.StoredSize {
+		return v
+	}
 	f, err := os.Open(file)
 	if err != nil {
 		return v

@@ -450,6 +450,18 @@
     {
       "file": "web/src/timeline-legend.tsx",
       "field": "timeline_visibility"
+    },
+    {
+      "file": "web/src/delegation.tsx",
+      "field": "timeline_waits"
+    },
+    {
+      "file": "web/src/reader-navigator.tsx",
+      "field": "timeline_waits"
+    },
+    {
+      "file": "web/src/timeline-legend.tsx",
+      "field": "timeline_waits"
     }
   ],
   "controls": [
@@ -1389,6 +1401,26 @@
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
     },
     {
+      "key": "cc5416da788f1ae5:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderUsage",
+      "tag": "details",
+      "control": "'details', 'bg-usage-table'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "The CPU time chart's table alternative uses the stable background:usage:table key in the shared disclosures map."
+    },
+    {
+      "key": "e9623f885cb8435b:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderUsage",
+      "tag": "summary",
+      "control": "'summary', '', 'Show as a table'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "The CPU time chart's table alternative uses the stable background:usage:table key in the shared disclosures map."
+    },
+    {
       "key": "7a822cb5e10acecd:0",
       "file": "internal/archive/assets/background.js",
       "owner": "renderWork",
@@ -1738,9 +1770,9 @@
       "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
-      "key": "2962e22456cdab94:0",
+      "key": "6206c76139bb5178:0",
       "file": "internal/archive/assets/data-guide.js",
-      "owner": "df",
+      "owner": "pf",
       "tag": "aria-expanded",
       "control": "document.getElementById(\"dataGuideToggle\")",
       "disclosure": true,
@@ -6093,6 +6125,16 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
+      "key": "c434aae0170ba5a2:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "TimelineOverview",
+      "tag": "input",
+      "control": "data-view-field=\"timeline_waits\" checked={idle.skipWaits} onChange={event=>idle.setWaits(event.currentTarget.checked)}",
+      "binding": "timeline_waits",
+      "contract": "view.timeline_waits",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "df5344bae4c12578:0",
       "file": "web/src/delegation.tsx",
       "owner": "TimelineOverview",
@@ -8027,6 +8069,15 @@
       "reason": "Bound directly to the registered view field."
     },
     {
+      "key": "0f22ee7c41739666:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "button",
+      "control": "onClick={event => { event.stopPropagation(); // ui.py installs the shell clipboard wrapper, the shared host clipboard owner. const report = `Pharos card \"${title}\" (${id}) couldn't load.\\n${error}`; void (window.pharosCopyText?.(report) ?? Promise.reject()).then(() => \"copied\" as const, () => \"failed\" as const).then(result => { setCopied(result); setTimeout(() => setCopied(\"\"), 2000); }); }}",
+      "contract": "action",
+      "reason": "Copies the card's load error to the clipboard; changes no view state."
+    },
+    {
       "key": "502369976da84683:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",
@@ -8072,6 +8123,15 @@
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
     {
+      "key": "a44b2f8e128d6e66:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "button",
+      "control": "aria-label={`Reload ${title}`} onClick={event => { event.stopPropagation(); onReload(); requestAnimationFrame(() => card.current?.querySelector<HTMLAnchorElement>(\".query-card-open\")?.focus({ preventScroll: true })); }}",
+      "contract": "editing",
+      "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
+    },
+    {
       "key": "a7dc844b99e1b790:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",
@@ -8088,15 +8148,6 @@
       "control": "aria-label=\"Call to action\" value={actionLabel ?? \"\"} onChange={event => editing.onAction!(event.target.value)}",
       "contract": "editing",
       "reason": "The card editor's call to action, edited in place on the card. An unapplied authoring draft saved only with the card."
-    },
-    {
-      "key": "d09bdc3a13ea798d:0",
-      "file": "web/src/query-card.tsx",
-      "owner": "QueryCard",
-      "tag": "button",
-      "control": "aria-label={`Reload preview for ${title}`} onClick={event => { event.stopPropagation(); onReload(); requestAnimationFrame(() => card.current?.querySelector<HTMLAnchorElement>(\".query-card-open\")?.focus({ preventScroll: true })); }}",
-      "contract": "editing",
-      "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
     {
       "key": "d75f3d3c712a91c0:0",

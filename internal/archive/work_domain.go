@@ -213,7 +213,7 @@ func (c *Catalog) prepareAuthorshipEstimates(ctx context.Context, generation str
 		if err != nil {
 			return err
 		}
-		if err := c.refreshAuthorshipMirrors(ctx, representative); err != nil {
+		if err := c.refreshAuthorshipMirrors(ctx, representative, ""); err != nil {
 			return err
 		}
 		c.authorship.mu.Lock()
@@ -297,7 +297,7 @@ func (c *Catalog) estimateAuthorshipFor(ctx context.Context, ids []string, gener
 			if err != nil {
 				return err
 			}
-			if err := c.refreshAuthorshipMirrors(ctx, representative); err != nil {
+			if err := c.refreshAuthorshipMirrors(ctx, representative, ""); err != nil {
 				return err
 			}
 			c.authorship.mu.Lock()

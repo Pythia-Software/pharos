@@ -76,17 +76,8 @@ ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision;`},
 			return err
 		}
 	}
-	if _, err := c.DB.Exec(`CREATE TRIGGER IF NOT EXISTS analysis_conversation_workspace_update AFTER UPDATE OF workspace_id ON conversations WHEN OLD.workspace_id<>NEW.workspace_id BEGIN
- INSERT INTO meta(key,value) VALUES('tool_rollup_full_revision',hex(randomblob(16))) ON CONFLICT(key) DO UPDATE SET value=excluded.value; END`); err != nil {
+	if err := c.ensureToolRollupInputTriggers(); err != nil {
 		return err
-	}
-	for _, table := range []string{"conversation_identity_links", "cost_changes", "model_aliases"} {
-		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
-			if _, err := c.DB.Exec(fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS analysis_full_%s_%s AFTER %s ON %s BEGIN
-   INSERT INTO meta(key,value) VALUES('tool_rollup_full_revision',hex(randomblob(16))) ON CONFLICT(key) DO UPDATE SET value=excluded.value; END`, table, event, event, table)); err != nil {
-				return err
-			}
-		}
 	}
 	for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
 		refs := []string{"NEW"}
@@ -151,9 +142,56 @@ ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision;`},
 	return nil
 }
 
-// Broad callers (identity reconciliation and repair) retain a full fallback.
-// Ingest calls bumpToolLedgerPartitionGeneration because its changed partitions
-// are already recorded by the authoritative-row triggers.
+// ensureToolRollupInputTriggers records the rollup inputs that are not tool
+// calls. The cube never reads identity links or a conversation's workspace:
+// they only choose the mirrored workspaces, which every build recomputes and
+// diffs, so they mark their workspaces rather than demanding a full rebuild
+// (one link arrives per continuation, dozens a day). Prices are read only when
+// the daily table is summed from the cube, so a price change re-prices it from
+// the stored cube. Earlier builds rotated the full revision for all three; their
+// triggers are replaced by name, and an older executable that reinstalls them
+// only adds a full rebuild back.
+func (c *Catalog) ensureToolRollupInputTriggers() error {
+	drop := []string{"analysis_conversation_workspace_update"}
+	for _, table := range []string{"conversation_identity_links", "cost_changes", "model_aliases"} {
+		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
+			drop = append(drop, "analysis_full_"+table+"_"+event)
+		}
+	}
+	for _, name := range drop {
+		if _, err := c.DB.Exec("DROP TRIGGER IF EXISTS " + name); err != nil {
+			return err
+		}
+	}
+	mark := func(conversations string) string {
+		return `INSERT INTO tool_rollup_dirty SELECT workspace_id,hex(randomblob(16)) FROM conversations WHERE id IN (` + conversations + `) AND workspace_id IS NOT NULL
+ ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision;`
+	}
+	triggers := []string{
+		`analysis_conversation_workspace_move AFTER UPDATE OF workspace_id ON conversations WHEN OLD.workspace_id IS NOT NEW.workspace_id BEGIN
+ INSERT INTO tool_rollup_dirty SELECT value,hex(randomblob(16)) FROM (SELECT OLD.workspace_id value UNION SELECT NEW.workspace_id) WHERE value IS NOT NULL
+ ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision; END`,
+		"analysis_links_insert AFTER INSERT ON conversation_identity_links BEGIN " + mark("NEW.left_id,NEW.right_id") + " END",
+		"analysis_links_update AFTER UPDATE OF left_id,right_id ON conversation_identity_links WHEN OLD.left_id IS NOT NEW.left_id OR OLD.right_id IS NOT NEW.right_id BEGIN " +
+			mark("OLD.left_id,OLD.right_id,NEW.left_id,NEW.right_id") + " END",
+		"analysis_links_delete AFTER DELETE ON conversation_identity_links BEGIN " + mark("OLD.left_id,OLD.right_id") + " END",
+	}
+	for _, table := range []string{"cost_changes", "model_aliases"} {
+		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
+			triggers = append(triggers, fmt.Sprintf(`analysis_price_%s_%s AFTER %s ON %s BEGIN
+ INSERT INTO meta(key,value) VALUES('tool_rollup_price_revision',hex(randomblob(16))) ON CONFLICT(key) DO UPDATE SET value=excluded.value; END`, table, strings.ToLower(event), event, table))
+		}
+	}
+	for _, trigger := range triggers {
+		if _, err := c.DB.Exec("CREATE TRIGGER IF NOT EXISTS " + trigger); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Every caller records its changed partitions through the authoritative-row
+// triggers; bumpToolLedgerGeneration adds a full rebuild for a broad repair.
 func bumpToolLedgerPartitionGeneration(tx execer) error {
 	_, err := tx.Exec(`INSERT INTO meta(key,value) VALUES('tool_ledger_generation','1')
  ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT)`)

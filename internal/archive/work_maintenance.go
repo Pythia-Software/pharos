@@ -348,7 +348,7 @@ func (s *Server) maintenanceWorkDefinitions(_ *workAuthority) ([]workDefinition,
 			}},
 		{kind: kindLibraryView, phase: "refresh", hold: projectionHold, loop: true,
 			probe: func(ctx context.Context) (bool, error) {
-				return catalogExists(ctx, c, "SELECT 1 FROM workspace_library_dirty")
+				return catalogExists(ctx, c, "SELECT 1 FROM workspace_library_dirty UNION ALL SELECT 1 FROM workspace_library_column_pending")
 			},
 			step: libraryStep(func(ctx context.Context) (int, error) {
 				count, err := c.refreshLibrary(ctx, 10, nil)
@@ -371,14 +371,12 @@ func (s *Server) maintenanceWorkDefinitions(_ *workAuthority) ([]workDefinition,
 			step: libraryStep(func(ctx context.Context) (int, error) { return c.refreshMetricProjections(ctx, metricProjectionBatch) })},
 		{kind: kindPreviews, phase: "fill", hold: projectionHold, loop: true,
 			probe: func(ctx context.Context) (bool, error) {
-				return catalogExists(ctx, c, `SELECT 1 FROM workspace_library l WHERE l.turn_count+l.tool_use_count>200
-					AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_previews)
-					AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)`)
+				return catalogExists(ctx, c, "SELECT 1 "+previewsQueuedSQL)
 			},
 			step: libraryStep(func(ctx context.Context) (int, error) { return c.refreshPreviews(ctx, 25) })},
 		{kind: kindNames, phase: "name", hold: projectionHold, loop: true,
 			probe: func(ctx context.Context) (bool, error) {
-				return catalogExists(ctx, c, "SELECT 1 FROM conversation_names_state WHERE dirty=1")
+				return c.conversationNamesQueued(ctx)
 			},
 			step: libraryStep(func(ctx context.Context) (int, error) { return c.refreshConversationNames(ctx, 25) })},
 		{kind: kindSubstring, phase: "build", once: true, loop: true, step: cursorStep(c.indexSubstringBatch)},
@@ -1039,7 +1037,7 @@ func (s *Server) routePopulationStage(ctx context.Context, name, kind string, ex
 		return err
 	}
 	if name == "agent_events" {
-		// Fixes group these events; a rebuild is a no-op when nothing changed.
+		// Fixes group these events: rebuilt at most daily (fixesChainInterval).
 		if err := w.call(ctx, 1, func(ctx context.Context, _ workAllocation) error { return c.refreshFixesSoon(ctx) }); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Fixes: %v\n", err)
 		}

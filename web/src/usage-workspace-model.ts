@@ -64,6 +64,8 @@ export const engineUsageTopics = {
   outcomes: { label: "Outcomes", description: "What became of agents' work, and what did it cost? Workspaces by outcome, rework, cost per kept change and evidence coverage, with or without Git." },
   branches: { label: "Spend by Branch", description: "Which branches did agents spend on? Cost per branch in Git repositories, turn by turn, with how much of it has a recorded branch." },
   agent_experience: { label: "Agent Experience", description: "What are agents running into? Obstacles, surprises, discoveries, workarounds and unchecked claims, found in their replies and thinking." },
+  tool_use: { label: "Tool Use", description: "Explore tool calls, failures, retries and verified handbacks across agent sessions, including their length and tool calls per typed message." },
+  context: { label: "Context", description: "Explore peak context, context pressure and mid-task compactions across agent sessions with the required recorded evidence." },
   session_shape: { label: "Session Shape", description: "What does a typical session look like, and which went badly? Session length, active time, tool calls, autonomy and turn cycles, and forensic signals against your own history." },
 } as const;
 export const usageTopics = { ...engineUsageTopics,
@@ -81,6 +83,7 @@ export const usageDatasetTopics: Record<UsageDataset, UsageTopic> = {
 };
 export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
   scatter: "scatter",
+  tool_use: "session_shape", context: "session_shape",
   compaction:"compactions", labels:"message_labels",
   "thinking-overview":"model_requests", "thinking-detail":"model_requests",
   calls: "tool_calls", activity: "conversation_activity", tokens: "usage", human: "writing_messages", time: "tool_calls", parallelism: "parallelism", habits: "rhythm", work_hours: "rhythm", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage", agent_experience: "agent_events", agent_event_rates: "agent_event_rates", session_shape: "session_shape", outcomes: "outcomes", branches: "branch_usage",

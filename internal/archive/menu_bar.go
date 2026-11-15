@@ -272,7 +272,7 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 		return nil, err
 	}
 	if problem == "" && openIssues > 0 {
-		problem = "Indexed conversations need verification. Open Capture & index for details."
+		problem = "Indexed conversations need verification. Open Background Processing for details."
 	}
 	// Runs can fail before recording source state. Ignore deliberate stops.
 	s.runsMu.RLock()
@@ -292,7 +292,7 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 					problem = result.Source + ": " + message
 				}
 			}
-			message := defaultString(run.Error, "Indexing failed. Open Capture & index for details.")
+			message := defaultString(run.Error, "Indexing failed. Open Background Processing for details.")
 			if problem == "" && !sourceErrors[message] && relevantSources(run.Sources) {
 				problem = message
 			}
@@ -317,7 +317,7 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 			generalFailure = generalFailure || !sourceErrors[failure.Error]
 		}
 		if relevantFailure || generalFailure && relevantSources(run.Sources) {
-			problem = "Capture failed. Open Capture & index for details."
+			problem = "Capture failed. Open Background Processing for details."
 		}
 	}
 	_, backups := s.backups.status()

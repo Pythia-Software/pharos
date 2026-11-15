@@ -1682,7 +1682,7 @@ test('untimed session navigator draws calls and failures and reveals by message 
   };
   const contentInset=async()=>actionRow.evaluate(row=>row.querySelector('.timeline-content').getBoundingClientRect().left-row.getBoundingClientRect().left);
   assert.ok(Math.abs(await contentInset())<1,'untimed actions use the full row width');
-  const sections=navigator.locator('.reader-section-node').first();
+  const sections=navigator.locator('.reader-navigator-timeline-disclosure');
   const assertCaretFits=async(label)=>{
     const placement=await label.evaluate(element=>{const text=element.querySelector('strong').getBoundingClientRect(),caret=element.querySelector('.reader-section-chevron').getBoundingClientRect(),bounds=element.getBoundingClientRect();return {right:caret.left>=text.right,inside:caret.left>=bounds.left&&caret.right<=bounds.right&&caret.top>=bounds.top&&caret.bottom<=bounds.bottom};});
     assert.ok(placement.right&&placement.inside,'the caret stays to the right of its label and inside the row');

@@ -42,7 +42,7 @@ yield_poll_seconds = 2.0
 # tl1_url = "http://127.0.0.1:8781/archive/v1"
 # Prefer PHAROS_TL1_TOKEN rather than storing this value.
 # tl1_token = "..."
-# Prefer GITHUB_TOKEN. GitHub enrichment sends only repo/PR identifiers.
+# Unused: GitHub is read through the gh tool's own login.
 # github_token = "..."
 
 [[sources]]
@@ -880,16 +880,17 @@ and never open the catalog themselves, so they don't keep the drive busy (see
    - it closes the catalog, checkpointing its WAL, and exits.
 3. macOS ejects the drive, and Pharos stays open with its other libraries.
 
-If the release cannot finish within 7 seconds, Pharos says "Pharos is finishing a
-write; try ejecting again in a moment." The library's service still stops, so
+If the release cannot finish within 7 seconds, Pharos says "The library is still
+closing. Try ejecting again in a moment." The library's service still stops, so
 the next attempt usually succeeds. Eject is refused while a library operation (a
-transfer, restore or delivery) is running. Pharos says it is finishing, and you
-can eject once the operation ends.
+transfer, restore or delivery) is running. Pharos says "Pharos is finishing a
+library operation. Eject again when it is done."
 
 Pharos also watches each library's volume, by UUID, through DiskArbitration. An
 eject from Finder or `diskutil eject` asks Pharos to release the library first.
 The eject is approved once the release succeeds; otherwise it is refused with
-"Pharos could not release this library yet: …". Quitting Pharos stops every
+one of those messages, or "Pharos could not release the library on this
+drive: …" for any other failure. Quitting Pharos stops every
 library's service the same way. Agents' MCP tools then report that Pharos is
 offline until it is reopened.
 
@@ -1950,6 +1951,13 @@ deleted) is not asked about again for six hours. `gh` is found on `PATH` and in
 `~/.local/bin`. When it is missing or not signed in (`gh auth login`), everything
 works without GitHub; renamed repositories may stay separate until it is. The
 old `resolve_repository_forge` key is ignored.
+
+Reading pull request reviews is a separate, opt-in use of `gh`:
+`pull_request_reviews_enabled = true` (the Pull request reviews switch in
+Settings → Background Processing) lets a scheduled background item ask GitHub
+for the reviews and comments on pull requests your workspaces opened or
+committed to, and store them in the library. It is off by default. See
+[Pull request reviews](pull-request-reviews.md).
 
 For a rename whose old checkout is gone and whose forge redirect cannot be
 resolved, add explicit aliases to `library.toml` or `archive.toml`:

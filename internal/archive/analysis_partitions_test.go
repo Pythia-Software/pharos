@@ -55,6 +55,29 @@ func assertToolReference(t *testing.T, c *Catalog) {
 	}
 }
 
+// peekToolRollup prepares, without publishing, the build the next rollup
+// would make; the rollup must be stale.
+func peekToolRollup(t *testing.T, c *Catalog) toolRollupBuild {
+	t.Helper()
+	generation, _, day, stale, err := c.toolRollupStale(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stale {
+		t.Fatal("the change left the rollup current")
+	}
+	conn, err := c.DB.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	build, err := c.prepareToolRollup(t.Context(), conn, generation, day, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return build
+}
+
 func TestIncrementalToolRollupParity(t *testing.T) {
 	slowTest(t)
 	c, _ := testCatalog(t)
@@ -122,8 +145,23 @@ func TestIncrementalToolRollupBoundedAndNoop(t *testing.T) {
 	if _, err := c.DB.Exec("UPDATE tool_calls SET result_tokens=result_tokens+1 WHERE conversation_id='conv-0'"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.ensureToolRollup(t.Context()); err != nil {
+	// Progress is sized by the calls of the dirty workspace and the rows
+	// written, so the estimator can tell a partition from a full build.
+	inScope := countRows(t, c, "SELECT COUNT(*) FROM tool_calls WHERE workspace_id IN (SELECT workspace_id FROM tool_rollup_dirty)")
+	last := map[string]activityWork{}
+	var mu sync.Mutex
+	if err := c.ensureToolRollup(withWorkProgress(t.Context(), func(work activityWork) {
+		mu.Lock()
+		defer mu.Unlock()
+		last[work.Phase] = work
+	})); err != nil {
 		t.Fatal(err)
+	}
+	if work := last["aggregating tool calls"]; work.Unit != "tool call" || work.Total != float64(inScope) || work.Done != work.Total || inScope == 0 {
+		t.Fatalf("aggregation reported %+v for %d calls in scope", work, inScope)
+	}
+	if work := last["publishing tool rollup"]; work.Unit != "row" || work.Total == 0 || work.Done != work.Total {
+		t.Fatalf("publication reported %+v", work)
 	}
 	after, err := queryMaps(c.DB, "SELECT rowid,* FROM tool_call_cube WHERE workspace_id='ws-3' ORDER BY rowid")
 	if err != nil {
@@ -277,21 +315,53 @@ func TestToolRollupMirrorsPricesAndRollover(t *testing.T) {
 	if err := c.ensureToolRollup(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for _, query := range []string{
-		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('conv-0','conv-1','mirror',1,'{}')`,
-		`UPDATE workspaces SET source_kind='codex',activity_at='2026-10-08T00:00:00.000Z' WHERE id='ws-1'`,
-		`UPDATE conversations SET workspace_id='ws-2' WHERE id='conv-1'`,
-		`DELETE FROM conversation_identity_links`,
-		`UPDATE cost_changes SET input_per_mtok=input_per_mtok+0.1 WHERE id=(SELECT id FROM cost_changes LIMIT 1)`,
+	// The cube reads none of these: links and moves only choose the mirrors,
+	// which every build recomputes, a harness edit moves only the shared
+	// ledger generation, and prices re-price the daily table from the cube.
+	link := `INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('conv-0','conv-1','mirror',1,'{}')`
+	for _, change := range []struct {
+		query   string
+		reprice bool
+	}{
+		{link, false},
+		{`UPDATE workspaces SET source_kind='codex',activity_at='2026-10-08T00:00:00.000Z' WHERE id='ws-1'`, false},
+		{`UPDATE conversations SET workspace_id='ws-2' WHERE id='conv-1'`, false},
+		{`UPDATE conversations SET harness='other' WHERE id='conv-3'`, false},
+		{`DELETE FROM conversation_identity_links`, false},
+		{`UPDATE cost_changes SET input_per_mtok=input_per_mtok+0.1 WHERE id=(SELECT id FROM cost_changes LIMIT 1)`, true},
 	} {
-		if _, err := c.DB.Exec(query); err != nil {
+		if _, err := c.DB.Exec(change.query); err != nil {
 			t.Fatal(err)
+		}
+		if build := peekToolRollup(t, c); build.full || build.reprice != change.reprice {
+			t.Fatalf("%s: full=%v reprice=%v", change.query, build.full, build.reprice)
 		}
 		if err := c.ensureToolRollup(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 		assertToolReference(t, c)
 	}
+	// Unchanged mirrors are not rewritten, so a build leaves the request
+	// exclusions, which read them, current.
+	if _, err := c.DB.Exec(strings.Replace(link, "conv-1", "conv-2", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ensureToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if countRows(t, c, "SELECT COUNT(*) FROM tool_mirror_workspaces") == 0 || countRows(t, c, "SELECT COUNT(*) FROM meta WHERE key='model_request_exclusions_stale'") != 0 {
+		t.Fatal("fixture has no mirror or stale exclusions")
+	}
+	if _, err := c.DB.Exec("UPDATE tool_calls SET result_tokens=result_tokens+1 WHERE conversation_id='conv-3'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.updateStaleToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if countRows(t, c, "SELECT COUNT(*) FROM meta WHERE key='model_request_exclusions_stale'") != 0 {
+		t.Fatal("a build with unchanged mirrors marked the request exclusions stale")
+	}
+	assertToolReference(t, c)
 	current = current.AddDate(0, 0, 1)
 	if err := c.ensureToolRollup(t.Context()); err != nil {
 		t.Fatal(err)

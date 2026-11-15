@@ -12,7 +12,7 @@ import type {TimeRange,TimelineSessionBranch} from './timeline-label-model';
 import type {KindCounts} from './event-merge';
 import type {AgentEventLink} from './event-link-layout';
 import {timeScale,type TimeScale} from './timeline-idle-model';
-import {timelineSectionVisible,timelineValueVisible,visibleTimelineTree,type TimelineVisibility} from './timeline-visibility';
+import {timelineSectionVisible,timelineValueVisible,timelineWaitsVisible,visibleTimelineTree,visibleWaitMarks,type TimelineVisibility} from './timeline-visibility';
 import {humanEventGroups,type HumanEvent,type HumanEventGroup} from './human-events-model';
 import {TimelineRow,timelineEventLayer,type TimelineLane,type TimelineSurface} from './timeline-rows';
 
@@ -46,7 +46,11 @@ function laneSurface(props:Props):TimelineSurface{
 }
 
 export function RecursiveSessionRibbon(props:Props){
- const fullTree=useMemo(()=>sessionRibbonTree(props.messages,props.marks,props.inferred,props.taxonomy,props.range,props.detail,props.caller,props.boundaryMessages,props.boundaryMarks,props.events),[props.messages,props.marks,props.inferred,props.taxonomy,props.range,props.detail,props.caller,props.boundaryMessages,props.boundaryMarks,props.events]);
+ const waitsShown=timelineWaitsVisible(props.visibility??{});
+ // Hidden machine waits leave each launch, before windowing (timeline-visibility.ts).
+ const marks=useMemo(()=>visibleWaitMarks(props.marks,props.visibility??{}),[props.marks,waitsShown]);
+ const boundaryMarks=useMemo(()=>props.boundaryMarks&&visibleWaitMarks(props.boundaryMarks,props.visibility??{}),[props.boundaryMarks,waitsShown]);
+ const fullTree=useMemo(()=>sessionRibbonTree(props.messages,marks,props.inferred,props.taxonomy,props.range,props.detail,props.caller,props.boundaryMessages,boundaryMarks,props.events),[props.messages,marks,props.inferred,props.taxonomy,props.range,props.detail,props.caller,props.boundaryMessages,boundaryMarks,props.events]);
  const tree=useMemo(()=>visibleTimelineTree(fullTree,props.visibility??{},props.caller),[fullTree,props.visibility,props.caller]);
  const untimed=props.messages.filter(m=>!m.at||!Number.isFinite(Date.parse(m.at))).length;
  const scale=useMemo(()=>props.scale??timeScale(props.range),[props.scale,props.range[0],props.range[1]]);

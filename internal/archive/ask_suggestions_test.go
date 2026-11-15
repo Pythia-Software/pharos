@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -332,6 +333,59 @@ func TestAskSuggestionsEndpointAndLeads(t *testing.T) {
 	}
 	if s.Catalog.askSuggestionInputs(t.Context(), now) == s.Catalog.askSuggestionInputs(t.Context(), now.Add(48*time.Hour)) {
 		t.Fatal("suggestions do not follow the days' windows")
+	}
+	// An index completing a stage, or a findings measure pass, waits for the
+	// next quarter of the day; a findings review does not.
+	midnight := time.Date(2026, 11, 13, 0, 0, 0, 0, time.Local)
+	if inputs := s.Catalog.askSuggestionInputs; inputs(t.Context(), midnight.Add(time.Hour)) != inputs(t.Context(), midnight.Add(5*time.Hour)) ||
+		inputs(t.Context(), midnight.Add(5*time.Hour)) == inputs(t.Context(), midnight.Add(7*time.Hour)) {
+		t.Fatal("suggestion inputs do not move by quarter day")
+	}
+	execTx(t, s.Catalog.DB, `INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at) VALUES('tools',9,9,'2026-01-01','2026-01-01')
+ ON CONFLICT(name) DO UPDATE SET generation=generation+1,completed_generation=generation+1`,
+		`INSERT OR REPLACE INTO meta(key,value) VALUES('findings_measured_at','2026-11-13T00:00:00Z')`)
+	if s.Catalog.askSuggestionsStale(t.Context(), now) {
+		t.Fatal("a completed stage or measure pass re-ran every signal")
+	}
+	execTx(t, s.Catalog.DB, `INSERT OR REPLACE INTO meta(key,value) VALUES('findings_generation','next-review')`)
+	if !s.Catalog.askSuggestionsStale(t.Context(), now) {
+		t.Fatal("a findings review did not refresh the signals")
+	}
+	if err := s.refreshAskSuggestions(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// A signal that times out (a cold page cache) keeps its previous score
+	// rather than dropping its areas; one that fails otherwise stays out.
+	kept, _ := s.Catalog.askSuggestionState(t.Context())
+	if _, ok := kept.Signals["verification.failures"]; !ok {
+		t.Fatalf("seeded failures did not score: %+v", kept.Signals)
+	}
+	original, slow := askSignalFuncs, map[string]askSignalFunc{}
+	for name, signal := range original {
+		slow[name] = signal
+	}
+	slow["verification.failures"] = func(ctx context.Context, _ *askSignalRun) (askSignal, error) {
+		<-ctx.Done()
+		return askSignal{}, ctx.Err()
+	}
+	slow["context.compaction"] = func(context.Context, *askSignalRun) (askSignal, error) {
+		return askSignal{}, errors.New("no such table")
+	}
+	override(t, &askSignalFuncs, slow)
+	override(t, &askSignalTimeout, 20*time.Millisecond)
+	if err := s.refreshAskSuggestions(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.Catalog.askSuggestionState(t.Context())
+	if after.Signals["verification.failures"] != kept.Signals["verification.failures"] || !strings.HasPrefix(after.Errors["verification.failures"], askSignalTimedOut) {
+		t.Fatalf("a timed-out signal lost its previous score: %+v %v", after.Signals["verification.failures"], after.Errors)
+	}
+	if _, ok := after.Signals["context.compaction"]; ok || after.Errors["context.compaction"] == "" {
+		t.Fatalf("a failed signal kept its previous score: %v", after.Errors)
+	}
+	askSignalFuncs, askSignalTimeout = original, time.Minute
+	if err := s.refreshAskSuggestions(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 	var offered map[string]any
 	suggestions := get()["suggestions"].([]any)

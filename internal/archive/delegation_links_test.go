@@ -989,3 +989,100 @@ func TestDelegationFamilyBoundKeepsRelativesReachable(t *testing.T) {
 		t.Fatalf("left-out ancestors must stay named in the chain: %v", chain)
 	}
 }
+
+// A Conductor copy of a Claude Code session retains each Agent call again: its
+// acknowledgement names no agent, and Conductor records the agent's usage on
+// that launch. The two calls are one execution with the agent's transcript,
+// whose usage counts once.
+func TestDelegationMirroredLaunches(t *testing.T) {
+	c, _ := testCatalog(t)
+	tx := seedTx(t, c.DB)
+	run := func(q string, args ...any) {
+		t.Helper()
+		if _, err := tx.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, w := range []string{"native", "conductor"} {
+		run(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES(?,'claude','local',?,?,'2026-01-01')`, w, w, w)
+	}
+	for _, cv := range []struct{ id, workspace, native, parent string }{
+		{"parent", "native", "s1", ""}, {"child", "native", "s1:subagent:agent-x", "parent"},
+		{"other", "native", "s1:subagent:agent-y", "parent"}, {"mirror", "conductor", "conductor:s1", ""},
+	} {
+		run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id) VALUES(?,?,'claude','local',?,?)`, cv.id, cv.workspace, cv.native, nilIfEmpty(cv.parent))
+	}
+	run(`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('parent','mirror','native-alias',1,'{}')`)
+	for _, s := range []struct {
+		id, workspace, conversation string
+		tokens                      int
+	}{{"parent", "native", "parent", 100}, {"child", "native", "child", 40}, {"other", "native", "other", 7}, {"mirror", "conductor", "mirror", 100}} {
+		run(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,usage_status,total_tokens) VALUES(?,?,?,'main','root','claude','reported-reconciled',?)`, s.id+"-session", s.workspace, s.conversation, s.tokens)
+	}
+	for _, launch := range []struct {
+		id, workspace, conversation, child string
+		tokens                             int
+	}{{"native-launch", "native", "parent", "child", 0}, {"mirror-launch", "conductor", "mirror", "", 41}} {
+		run(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,call_id,content_hash) VALUES(?,?,?,'assistant','delegation','{"input":{"description":"explore"},"tool":"Agent"}','toolu_1',?)`, launch.id, launch.conversation, launch.id, launch.id)
+		usage := "unavailable"
+		if launch.tokens > 0 {
+			usage = "reported-reconciled"
+		}
+		run(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,parent_id,delegation_message_id,kind,provider,usage_status,total_tokens,child_conversation_id) VALUES(?,?,?,'toolu_1',?,?,'subagent','claude',?,?,?)`,
+			launch.id+"-session", launch.workspace, launch.conversation, launch.conversation+"-session", launch.id, usage, launch.tokens, nilIfEmpty(launch.child))
+	}
+	commitSeed(t, tx)
+	snapshot := func(workspace string) *delegationSnapshot {
+		t.Helper()
+		s, err := c.readDelegationSnapshot(t.Context(), workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	tokens := func(n *delegationNode) float64 {
+		if n == nil || n.Self["tokens"].Value == nil {
+			return -1
+		}
+		return *n.Self["tokens"].Value
+	}
+	// Each workspace shows the agent once, with the usage it retains.
+	native := snapshot("native")
+	if alias, _ := native.resolveAlias("mirror-launch-session"); alias != "child-session" || native.ByID["mirror-launch-session"] != nil {
+		t.Fatalf("the mirrored launch must resolve to the agent's execution: %q %+v", alias, native.Nodes)
+	}
+	child := native.ByID["child-session"]
+	if child == nil || child.ContextOnly || native.ByID[child.ParentID] == nil || native.ByID[child.ParentID].ParentID != "" || tokens(child) != 40 || child.Self["tokens"].Quality == "partial" || child.MessageID != "native-launch" {
+		t.Fatalf("agent row lost its own usage or launch: %+v", child)
+	}
+	for _, n := range native.Nodes {
+		if n.ContextOnly && n.Label == child.Label {
+			t.Fatalf("mirrored launch left an empty duplicate row: %+v", n)
+		}
+	}
+	mirrored := snapshot("conductor").ByID["child-session"]
+	if mirrored == nil || mirrored.ContextOnly || tokens(mirrored) != 41 || mirrored.ExternalChild == nil || mirrored.ExternalChild.ConversationID != "child" || mirrored.MessageID != "mirror-launch" {
+		t.Fatalf("the mirror's launch must show the same agent with its recorded usage: %+v", mirrored)
+	}
+	// Retained beside the transcript, the mirror's usage is a second report.
+	if _, err := c.DB.Exec(`UPDATE conversations SET workspace_id='native' WHERE id='mirror'; UPDATE agent_sessions SET workspace_id='native' WHERE conversation_id='mirror'`); err != nil {
+		t.Fatal(err)
+	}
+	if n := snapshot("native").ByID["child-session"]; tokens(n) != 40 {
+		t.Fatalf("a mirrored launch's usage must not add to its transcript's: %+v", n)
+	}
+	// A launch acknowledging another transcript is another call.
+	if _, err := c.DB.Exec(`UPDATE agent_sessions SET child_conversation_id='other' WHERE id='mirror-launch-session'`); err != nil {
+		t.Fatal(err)
+	}
+	if alias, _ := snapshot("native").resolveAlias("mirror-launch-session"); alias != "other-session" {
+		t.Fatal("launches naming different transcripts must stay apart", alias)
+	}
+	// Without the mirror, an equal call ID in another transcript proves nothing.
+	if _, err := c.DB.Exec(`UPDATE agent_sessions SET child_conversation_id=NULL WHERE id='mirror-launch-session'; DELETE FROM conversation_identity_links`); err != nil {
+		t.Fatal(err)
+	}
+	if alias, _ := snapshot("native").resolveAlias("mirror-launch-session"); alias == "child-session" {
+		t.Fatal("an unmirrored launch must not join by call ID alone")
+	}
+}

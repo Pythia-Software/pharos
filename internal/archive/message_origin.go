@@ -47,6 +47,10 @@ func claudeInjectedSource(event map[string]any, text string) string {
 	if event["isCompactSummary"] == true {
 		return "compaction_summary"
 	}
+	// A ScheduleWakeup firing: the harness sends the agent its own prompt.
+	if firstString(event["turnOrigin"]) == "scheduled" {
+		return "scheduled_wakeup"
+	}
 	if event["isMeta"] == true {
 		switch {
 		case strings.HasPrefix(trimmed, "[Image:"):

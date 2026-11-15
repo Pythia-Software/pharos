@@ -165,7 +165,7 @@ func volumeTests(_ args: [String]) {
     // A release that fails makes the eject fail with Pharos's message.
     releaseToken = "wrong-token"
     let refused = run("/usr/sbin/diskutil", "unmount", mount)
-    check(refused.status != 0 && refused.output.contains("Pharos could not release its library (HTTP 401"), "failed release dissents: \(refused.output.split(separator: "\n").first ?? "")")
+    check(refused.status != 0 && refused.output.contains("Pharos could not release the library: authentication required (HTTP 401)"), "failed release dissents: \(refused.output.split(separator: "\n").first ?? "")")
     check(events.count("approval") == 1, "approval callback ran once")
     if case .failed(let reason)? = lastRelease { check(reason.contains("401"), "release hook reported the failure (\(reason.prefix(40)))") } else { check(false, "release hook did not fail: \(String(describing: lastRelease))") }
     check(process.isRunning && FileManager.default.fileExists(atPath: config), "service and volume are untouched")

@@ -6,7 +6,7 @@ import type {RibbonReveal} from './label-session-ribbon';
 import {useRibbonInspector} from './label-ribbon-inspector';
 import type {IdleGap} from './timeline-idle-model';
 import {TimelineLegend,timelineKeyContent,timelineLegendCounts,timelineLegendDomains,timelineLegendWindow,useTimelineVisibility} from './timeline-legend';
-import {timelineSectionVisible,timelineValueVisible,visibleTimelineTree} from './timeline-visibility';
+import {timelineSectionVisible,timelineValueVisible,timelineWaitsVisible,visibleTimelineTree,visibleWaitMarks} from './timeline-visibility';
 import {TimelineRow,timelineEventLayer,type TimelineLane,type TimelineSurface} from './timeline-rows';
 import {useViewState} from './view-state';
 import {voiceClock,type ReaderVoice} from './reader-navigator-model';
@@ -17,21 +17,21 @@ import './reader-navigator.css';
 
 const chevron=<svg className="reader-section-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="m4 2 4 4-4 4"/></svg>;
 /** How the reader frames the shared timeline rows (timeline-rows.tsx): a label
- * and a track, whose click reveals a message in the transcript below. With
- * `top`, the session's own row is the navigator's "Timeline" row, holding
- * `top` (its keyboard control) over the ribbon, and the rows under it start at
- * the margin. Otherwise the session's row is named as a section. */
-function readerSurface(sessionID:string,top?:React.ReactNode):TimelineSurface{
-  const indent=(level:number)=>Math.min(Math.max(0,top?level-1:level),6)*10;
+ * and a track, whose click reveals a message in the transcript below. The
+ * session's own row is the navigator's top row, named `title` and holding
+ * `top` (its keyboard control) over the ribbon; it folds out into the rows
+ * under it, which start at the margin. */
+function readerSurface(sessionID:string,title:string,top:React.ReactNode):TimelineSurface{
+  const indent=(level:number)=>Math.min(Math.max(0,level-1),6)*10;
   return {
     interaction:'reveal',
     viewKey:row=>`reader-timeline:${sessionID}:${row}`,
-    classes:{node:root=>root&&top?'reader-navigator-timeline-disclosure':'reader-section-node',leaf:root=>root&&top?'reader-navigator-row':'reader-section-leaf',human:'reader-human-events',dimension:'reader-section-leaf reader-human-dimension',humanTrack:'reader-section-track reader-human-track'},
+    classes:{node:root=>root?'reader-navigator-timeline-disclosure':'reader-section-node',leaf:root=>root?'reader-navigator-row':'reader-section-leaf',human:'reader-human-events',dimension:'reader-section-leaf reader-human-dimension',humanTrack:'reader-section-track reader-human-track'},
     labels:true,
-    label:({root,level,expands})=>root&&top&&!expands?{className:'reader-navigator-label'}:{className:'reader-section-label',style:{paddingLeft:indent(level)}},
-    rootLabel:(node,{count,expands})=>top&&!expands?'Timeline':<><strong>{top?'Timeline':node.title}</strong><small>{count}</small></>,
+    label:({root,level,expands})=>root&&!expands?{className:'reader-navigator-label'}:{className:'reader-section-label',style:{paddingLeft:indent(level)}},
+    rootLabel:(_node,{count,expands})=>expands?<><strong>{title}</strong><small>{count}</small></>:title,
     caret:expands=>expands?chevron:null,
-    track:(ribbon,root)=>root&&top?<div className="reader-navigator-track reader-navigator-timeline" role="group" aria-label="Session timeline. Click to reveal a message.">{ribbon}{top}</div>:<span className="reader-section-track">{ribbon}</span>,
+    track:(ribbon,root)=>root?<div className="reader-navigator-track reader-navigator-timeline" role="group" aria-label={`${title}. Click to reveal a message.`}>{ribbon}{top}</div>:<span className="reader-section-track">{ribbon}</span>,
   };
 }
 /** The hover card of a turn on the Turns row: what the turn's header says. */
@@ -59,20 +59,24 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
   const keyEdited=useCallback(()=>{panel.dispatchEvent(new Event('pharos:reader-key-edit'));},[panel]);
   const [visibility,selectKey]=useTimelineVisibility(true,keyEdited);
   const [skipIdle]=useViewState<boolean>('timeline_idle',true);
+  const [skipWaits]=useViewState<boolean>('timeline_waits',false);
   const [singleSession,setSingleSession]=useState(()=>panel.parentElement?.dataset.readerSingleSession==='true');
   useEffect(()=>{const reader=panel.parentElement;if(!reader)return;const update=()=>setSingleSession(reader.dataset.readerSingleSession==='true');reader.addEventListener('pharos:reader-sessions',update);update();return()=>reader.removeEventListener('pharos:reader-sessions',update);},[panel]);
-  const [workspaceGaps,setWorkspaceGaps]=useState<IdleGap[]|undefined>(()=>(panel as HTMLElement&{pharosReaderIdleGaps?:IdleGap[]}).pharosReaderIdleGaps);
-  useEffect(()=>{const update=()=>setWorkspaceGaps((panel as HTMLElement&{pharosReaderIdleGaps?:IdleGap[]}).pharosReaderIdleGaps);panel.addEventListener('pharos:reader-idle',update);update();return()=>panel.removeEventListener('pharos:reader-idle',update);},[panel]);
+  type GapPanel=HTMLElement&{pharosReaderIdleGaps?:IdleGap[];pharosReaderWaitGaps?:IdleGap[]};
+  const [workspaceGaps,setWorkspaceGaps]=useState<IdleGap[]|undefined>(()=>(panel as GapPanel).pharosReaderIdleGaps);
+  const [waitGaps,setWaitGaps]=useState<IdleGap[]|undefined>(()=>(panel as GapPanel).pharosReaderWaitGaps);
+  useEffect(()=>{const update=()=>{setWorkspaceGaps((panel as GapPanel).pharosReaderIdleGaps);setWaitGaps((panel as GapPanel).pharosReaderWaitGaps);};panel.addEventListener('pharos:reader-idle',update);update();return()=>panel.removeEventListener('pharos:reader-idle',update);},[panel]);
   const host=useRef<HTMLElement>(null),turnInspector=useRibbonInspector();
   const clock=useMemo(()=>readerNavigatorClock(data.messages,data.marks),[data]);
-  const baseScale=useMemo(()=>readerNavigatorScale(clock,data.callerIDs,skipIdle,workspaceGaps),[clock,data.callerIDs,skipIdle,workspaceGaps]);
+  const baseScale=useMemo(()=>readerNavigatorScale(clock,data.callerIDs,skipIdle,workspaceGaps,skipWaits,waitGaps),[clock,data.callerIDs,skipIdle,workspaceGaps,skipWaits,waitGaps]);
   const [trackPx,setTrackPx]=useState(640);
   // The Timeline key's Human events chips choose the dimensions drawn here; the Highlights key's Engagement chips choose the underlines.
   const humanKeys=useMemo(()=>humanEventDimensions((data.humanEvents??[]).filter(event=>clock.byID.has(event.message_id))).map(({id,name,className})=>({id,name,className})),[data,clock]);
   const humanGroups=useMemo(()=>humanEventGroups(data.humanEvents??[],id=>clock.byID.get(id)?.[0],dimension=>timelineSectionVisible(visibility,'human')&&timelineValueVisible(visibility,'human',dimension)),[data,clock,visibility]);
   const humanLayout=useMemo(()=>humanEventLayout(baseScale,humanGroups,trackPx),[baseScale,humanGroups,trackPx]),scale=humanLayout.scale;
   const ribbonMessages=useMemo(()=>[...new Map(clock.messages.filter(message=>['message','reasoning','thinking'].includes(message.kind)).map(message=>[message.id,message])).values()],[clock]);
-  const tree=useMemo(()=>sessionRibbonTree(ribbonMessages,clock.marks,[],data.taxonomy,clock.range,true,false,clock.messages,clock.marks,data.events),[data,clock,ribbonMessages]);
+  const waitsShown=timelineWaitsVisible(visibility),marks=useMemo(()=>visibleWaitMarks(clock.marks,visibility),[clock,waitsShown]);
+  const tree=useMemo(()=>sessionRibbonTree(ribbonMessages,marks,[],data.taxonomy,clock.range,true,false,clock.messages,marks,data.events),[data,clock,ribbonMessages,marks]);
   const visibleTree=useMemo(()=>tree?visibleTimelineTree(tree,visibility):null,[tree,visibility]);
   const contexts=useMemo(()=>{const nextByStream=new Map<string,number>();return data.contexts.map(entry=>({...entry,end:0})).reverse().map(entry=>{const start=clock.byID.get(entry.message.id)?.[0]??clock.range[0],end=nextByStream.get(entry.sample.stream)??clock.range[1];nextByStream.set(entry.sample.stream,start);return {...entry,end:Math.max(start,end)};}).reverse();},[data,clock]);
   const eventClock=useMemo(()=>agentEventClock(clock.messages,clock.marks),[clock]);
@@ -87,17 +91,15 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
   const reveal=({message,fraction}:RibbonReveal)=>{const id=message??nearestReaderMessage(clock.byID,scale.time(Math.max(0,Math.min(1,fraction))));if(id)data.jumpMessage(id);};
   const available=availableReaderNavigators(data,clock.byID),hasContext=available.includes('context'),hasTurns=available.includes('turns'),hasVoice=!!data.voice,hasBars=timelineVisible||hasContext||hasTurns||hasVoice,contextNote=useId();
   const keyboard=<button type="button" className="reader-navigator-keyboard" aria-label="Browse session timeline" title="Left / right: move through the session · Home / End: first / last message" onFocus={event=>{const band=host.current?.querySelector<HTMLElement>('.reader-navigator-window');event.currentTarget.dataset.position=band?.dataset.position||'0';}} onClick={event=>{event.stopPropagation();reveal({fraction:Number(event.currentTarget.dataset.position??0)});}} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const button=event.currentTarget,previous=Number(button.dataset.position??0),next=event.key==='Home'?0:event.key==='End'?1:Math.max(0,Math.min(1,previous+(event.key==='ArrowLeft'?-.02:.02)));button.dataset.position=String(next);reveal({fraction:next});}}/>;
-  // One lane, framed twice when the reader shows several sessions: the navigator's Timeline row alone, then this session as a section that folds out. A conversation of one session folds out of its Timeline row.
-  const lane:Omit<TimelineLane,'surface'>={visibility,range:clock.range,scale,events:eventLayer,showUnknownTail:clock.timed,onReveal:reveal,
+  // The reader zooms to this session's span, so a workspace timeline above it would draw the same thing: one row, named for the session when the workspace has several.
+  const lane:TimelineLane={surface:readerSurface(data.sessionID,singleSession?'Timeline':'Session Timeline',keyboard),visibility,range:clock.range,scale,events:eventLayer,showUnknownTail:clock.timed,onReveal:reveal,
     human:humanGroups.length?{groups:humanGroups,layout:{slots:humanLayout.slots,trackPx},jump:event=>data.jumpHumanEvent?data.jumpHumanEvent(event):data.jumpMessage(event.message_id),revealAt:fraction=>reveal({fraction})}:undefined};
-  const timelineRow={...lane,surface:readerSurface(data.sessionID,keyboard)},sessionRows={...lane,surface:readerSurface(data.sessionID)};
   useEffect(()=>{if(host.current&&hasBars)return trackReaderViewport(panel,host.current,data,clock.byID,scale);},[panel,data,clock,scale,hasBars]);
   useEffect(()=>{const track=host.current?.querySelector<HTMLElement>('.reader-navigator-window-track');if(!track||typeof ResizeObserver==='undefined')return;const measure=()=>{const width=Math.round(track.clientWidth/8)*8;if(width>0)setTrackPx(width);};const observer=new ResizeObserver(measure);observer.observe(track);measure();return()=>observer.disconnect();},[hasBars]);
   return <><aside ref={host} className="reader-navigator" aria-label="Session navigator" data-range={clock.range.join(',')}>
     {hasBars?<>
       <div className="reader-navigator-bars">
-        {timelineVisible?<TimelineRow node={visibleTree!} lane={timelineRow} flat={!singleSession}/>:null}
-        {timelineVisible&&!singleSession&&(visibleTree!.children.length||lane.human)?<TimelineRow node={visibleTree!} lane={sessionRows}/>:null}
+        {timelineVisible?<TimelineRow node={visibleTree!} lane={lane}/>:null}
         {hasContext||hasTurns?<div className={`reader-navigator-row${hasContext?'':' is-turns'}`}>
           <span className="reader-navigator-label">{hasContext?'Turns · context':'Turns'}</span>
           <div className={`reader-navigator-track reader-navigator-turns${hasContext?' reader-navigator-context':''}`} role="group" aria-label={hasContext?'Conversation turns and context growth':'Conversation turns'} aria-describedby={hasContext?contextNote:undefined}>

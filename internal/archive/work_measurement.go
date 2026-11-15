@@ -134,7 +134,13 @@ func (m *runWorkMeter) report(w activityWork) {
 	}
 	at := m.time()
 	refining := m.current != nil && m.current.Phase == w.Phase && m.current.Source == w.Source && m.current.Unit == "" && !m.current.TotalKnown && m.current.Total <= 0
-	if m.current == nil || m.current.Phase != w.Phase || m.current.Source != w.Source || !refining && (m.current.Unit != w.Unit || w.Done < m.current.Done || w.Total != m.current.Total) {
+	// A total that moves while its counter goes on is the same stage: a queue
+	// that found more to do, or one that held less than was counted and ends
+	// on what was done. Closing it would restart the stage's clock and live
+	// pace, and leave the stage recorded as unfinished. Only a total below
+	// the counter is different work.
+	grown := m.current != nil && m.current.Total > 0 && w.Total > 0 && w.Total >= w.Done
+	if m.current == nil || m.current.Phase != w.Phase || m.current.Source != w.Source || !refining && (m.current.Unit != w.Unit || w.Done < m.current.Done || w.Total != m.current.Total && !grown) {
 		m.closeStage(at, w.Phase != "failed" && w.Phase != "interrupted")
 		m.baseline = cloneWork(w)
 		w.StartedAt = formatTime(at)
@@ -203,7 +209,7 @@ func (s *Server) observeWork(id, kind string, work activityWork, at time.Time) {
 	}
 	observation := s.estimator.observations[key]
 	if observation == nil {
-		observation = &progressObservation{history: s.workTimings(workTimingKey(defaultString(work.Kind, kind), work))}
+		observation = &progressObservation{history: s.stageTimings(defaultString(work.Kind, kind), work)}
 		s.estimator.observations[key] = observation
 	}
 	observation.estimate(work, at)

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -29,12 +30,15 @@ func libraryFixture(t *testing.T) (*Catalog, Config) {
 		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES
 			('m1','cc','1','user','message','Please fix the parser','2026-09-23T02:00:00Z','h'),
 			('m2','cc','2','assistant','tool_call','{}','2026-09-23T02:00:01Z','h'),
-			('m3','cc','3','tool','tool_result','{"is_error":1}','2026-09-23T02:00:02Z','h'),
+			('m3','cc','3','tool','tool_result','{"exit_code":2}','2026-09-23T02:00:02Z','h'),
 			('m4','cc','4','assistant','message','Fixed it','2026-09-23T02:00:03Z','h'),
 			('m5','ca','1','user','message','Mirror prompt','2026-09-23T03:00:00Z','h'),
 			('k1','cc','k1','system','metadata','{"subtype":"compact_boundary","type":"system"}','2026-09-23T02:00:04Z','h'),
 			('k2','cc','k2','system','metadata','{"compaction_trigger":"auto","payload":{},"type":"compacted"}','2026-09-23T02:00:05Z','h'),
 			('k3','cc','k3','system','metadata','{"payload":{},"type":"compacted"}','2026-09-23T02:00:06Z','h')`,
+		// The call failed by its exit status, which only the tool ledger records.
+		`INSERT INTO tool_calls(id,workspace_id,conversation_id,call_message_id,result_message_id,sequence,provider,kind,tool_name,tool_category,status,error_type,exit_code)
+			VALUES('t1','c','cc','m2','m3',1,'claude','tool','Bash','shell','error','nonzero_exit',2)`,
 		`INSERT INTO metrics(workspace_id,name,value,unit,status,extractor_version,observed_at) VALUES
 			('c','total_tokens',500,'tokens','observed','test','x'),('a','total_tokens',900,'tokens','observed','test','x')`,
 		`INSERT INTO metric_ledger(workspace_id,sequence,event_kind,error_type) VALUES('c',1,'tool','timeout')`,
@@ -119,8 +123,19 @@ func TestLibraryReflectsEveryDependencyBeforeAndAfterRefresh(t *testing.T) {
 			func(rows map[string]map[string]any) bool { return integer(rows["c"]["turn_count"]) == 2 }},
 		{"agent session insert", `INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,parent_id,kind,provider,depth) VALUES('sc3','c','cc','t3','sc','subagent','claude',1)`,
 			func(rows map[string]map[string]any) bool { return integer(rows["c"]["subagent_count"]) == 3 }},
-		{"message update", `UPDATE messages SET text='{"is_error":0}' WHERE id='m3'`,
+		{"tool call update", `UPDATE tool_calls SET status='ok',error_type=NULL WHERE id='t1'`,
 			func(rows map[string]map[string]any) bool { return integer(rows["c"]["tool_error_count"]) == 0 }},
+		{"tool call insert", `INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status) VALUES('t2','c','cc',2,'claude','tool','Read','file','ok')`,
+			func(rows map[string]map[string]any) bool { return integer(rows["c"]["tool_use_count"]) == 2 }},
+		// A boundary is stored by a trigger on its message, and reclassified
+		// without the message changing.
+		{"compaction boundary delete", `DELETE FROM compaction_boundaries WHERE message_id='k1'`,
+			func(rows map[string]map[string]any) bool { return integer(rows["c"]["compaction_count"]) == 1 }},
+		{"compaction message insert", `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('k4','cc','k4','system','metadata','{"subtype":"compact_boundary","type":"system"}','h')`,
+			func(rows map[string]map[string]any) bool { return integer(rows["c"]["compaction_count"]) == 2 }},
+		// An abandoned branch's prompt was still sent.
+		{"message leaves the branch", `UPDATE messages SET selected=0 WHERE id='m6'`,
+			func(rows map[string]map[string]any) bool { return integer(rows["c"]["turn_count"]) == 2 }},
 		{"change file delete", `DELETE FROM change_files WHERE path='README.md'`,
 			func(rows map[string]map[string]any) bool { return integer(rows["c"]["changed_file_count"]) == 1 }},
 		{"metric update", `UPDATE metrics SET value=700 WHERE workspace_id='c'`,
@@ -160,6 +175,237 @@ func TestLibraryReflectsEveryDependencyBeforeAndAfterRefresh(t *testing.T) {
 		if !reflect.DeepEqual(before, after) {
 			t.Fatalf("%s: refreshed rows differ:\nbefore %#v\nafter  %#v", change.name, before, after)
 		}
+	}
+}
+
+// A refresh computes from a read snapshot, so the writer is free meanwhile.
+// What was written to a workspace while its row was computed must not be
+// lost: the workspace stays marked and nothing computed before is stored.
+func TestLibraryRefreshKeepsWorkspacesWrittenWhileComputing(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	ctx := context.Background()
+	if err := catalog.refreshAllLibrary(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Idle: nothing to do is found without the writer.
+	writes := catalog.writers.next
+	if count, err := catalog.refreshLibrary(ctx, 10, nil); err != nil || count != 0 {
+		t.Fatalf("idle refresh: %d %v", count, err)
+	}
+	if catalog.writers.next != writes {
+		t.Fatal("an idle refresh took the catalog writer")
+	}
+	turns := func(id string) (stored int) {
+		t.Helper()
+		if err := catalog.DB.QueryRow("SELECT turn_count FROM workspace_library WHERE workspace_id=?", id).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		return stored
+	}
+	for _, written := range []struct {
+		name, during string
+		want         int
+	}{
+		// A dependency written while the workspace is already marked.
+		{"a message", `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('late','cc','late','user','message','Later','h')`, 3},
+		// A repair marking it by hand, for a change no trigger saw.
+		{"a mark", `INSERT OR IGNORE INTO workspace_library_dirty(workspace_id) VALUES('c')`, 4},
+	} {
+		execSQL(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES('early-`+written.name+`','cc','early-`+written.name+`','user','message','Early','h')`,
+			`UPDATE summaries SET initiation='Changed by `+written.name+`' WHERE workspace_id='b'`)
+		before := turns("c")
+		override(t, &libraryComputedHook, func() {
+			libraryComputedHook = nil
+			execSQL(t, catalog.DB, written.during)
+		})
+		attempted, stored, err := catalog.refreshLibraryBatch(ctx, 10, nil)
+		if err != nil || attempted != 2 || stored != 1 {
+			t.Fatalf("%s while computing: attempted %d, stored %d, %v", written.name, attempted, stored, err)
+		}
+		if got := turns("c"); got != before {
+			t.Fatalf("%s while computing: stored a row computed before it (%d turns, was %d)", written.name, got, before)
+		}
+		var marked string
+		if err := catalog.DB.QueryRow("SELECT group_concat(workspace_id) FROM workspace_library_dirty").Scan(&marked); err != nil || marked != "c" {
+			t.Fatalf("%s while computing: marked %q, want c: %v", written.name, marked, err)
+		}
+		if err := catalog.refreshAllLibrary(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got := turns("c"); got != written.want || dirtyCount(t, catalog) != 0 {
+			t.Fatalf("after %s: %d turns stored, want %d; %d marked", written.name, got, written.want, dirtyCount(t, catalog))
+		}
+	}
+	// A refresh that fails gives its workspaces back at once.
+	execSQL(t, catalog.DB, `UPDATE summaries SET initiation='Again' WHERE workspace_id='b'`)
+	stopped, cancel := context.WithCancel(ctx)
+	override(t, &libraryComputedHook, func() { cancel() })
+	if _, _, err := catalog.refreshLibraryBatch(stopped, 10, nil); err == nil {
+		t.Fatal("a stopped refresh stored its batch")
+	}
+	libraryComputedHook = nil
+	if count, err := catalog.refreshLibrary(ctx, 10, nil); err != nil || count != 1 || dirtyCount(t, catalog) != 0 {
+		t.Fatalf("after a stopped refresh: %d refreshed, %d marked, %v", count, dirtyCount(t, catalog), err)
+	}
+}
+
+// projectionTriggerCases are the stored projections whose UPDATE triggers
+// mark only when a column their statements read has changed.
+func projectionTriggerCases() []struct {
+	name, trigger, dirty string
+	statements           []string
+	lookups              map[string]func(string) string
+} {
+	library := map[string]func(string) string{}
+	for _, dependency := range libraryDependencies {
+		if !dependency.insertOnly {
+			library[dependency.table] = dependency.workspaces
+		}
+	}
+	return []struct {
+		name, trigger, dirty string
+		statements           []string
+		lookups              map[string]func(string) string
+	}{
+		{"Search view", "workspace_library_", "workspace_library_dirty", libraryViewStatements(), library},
+		{"workspace metrics", "mcp_metric_", "mcp_metric_dirty", metricProjectionStatements, metricDependencies},
+	}
+}
+
+func projectionTableColumns(t *testing.T, q queryer, table string) []string {
+	t.Helper()
+	rows, err := queryMaps(q, "SELECT name FROM pragma_table_info(?)", table)
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("%s columns: %d %v", table, len(rows), err)
+	}
+	columns := []string{}
+	for _, row := range rows {
+		columns = append(columns, firstString(row["name"]))
+	}
+	return columns
+}
+
+// SQLite's own name resolution says which columns a projection reads: a
+// statement no longer compiles against a table that lacks a column it reads.
+// Every such column must be one its table's UPDATE trigger compares, or a
+// change to it would leave stored rows stale with nothing marked.
+func TestProjectionTriggersWatchEveryColumnRead(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	for _, projection := range projectionTriggerCases() {
+		for table, lookup := range projection.lookups {
+			var trigger string
+			if err := catalog.DB.QueryRow("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", projection.trigger+table+"_update").Scan(&trigger); err != nil {
+				t.Fatalf("%s: %s update trigger: %v", projection.name, table, err)
+			}
+			// The trigger's own expression reads the changed row as NEW.
+			statements := append(slices.Clone(projection.statements),
+				"SELECT EXISTS("+strings.ReplaceAll(lookup("NEW"), "NEW.", "changed_row.")+") FROM "+table+" changed_row")
+			columns := projectionTableColumns(t, catalog.DB, table)
+			indexes, err := queryMaps(catalog.DB, `SELECT l.name,i.name column_name FROM pragma_index_list(?) l JOIN pragma_index_info(l.name) i
+				WHERE l.name NOT LIKE 'sqlite_%' AND i.name IS NOT NULL ORDER BY l.name,i.seqno`, table)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Only a statement that names the table can read it, and only a
+			// column it names (none here selects a bare *).
+			reading := slices.DeleteFunc(statements, func(statement string) bool { return !strings.Contains(statement, table) })
+			// A temporary table of the same name, without the column, is the
+			// one the statements then name. Its indexes keep their names for
+			// INDEXED BY, less the column.
+			reads := func(column string) bool {
+				tx, err := catalog.DB.Begin()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				kept := slices.DeleteFunc(slices.Clone(columns), func(name string) bool { return name == column })
+				shadow := []string{`CREATE TEMP TABLE "` + table + `" AS SELECT "` + strings.Join(kept, `","`) + `" FROM main."` + table + `" WHERE 0`}
+				indexed := map[string][]string{}
+				for _, row := range indexes {
+					if name := firstString(row["column_name"]); name != column {
+						indexed[firstString(row["name"])] = append(indexed[firstString(row["name"])], name)
+					}
+				}
+				for name, on := range indexed {
+					shadow = append(shadow, `CREATE INDEX temp."`+name+`" ON "`+table+`"("`+strings.Join(on, `","`)+`")`)
+				}
+				for _, statement := range shadow {
+					if _, err := tx.Exec(statement); err != nil {
+						t.Fatalf("%s without %s: %v", table, column, err)
+					}
+				}
+				for _, statement := range reading {
+					rows, err := tx.Query("EXPLAIN "+statement, make([]any, strings.Count(statement, "?"))...)
+					if err == nil {
+						rows.Close()
+						continue
+					}
+					// A named index that held only this column is gone too.
+					if !strings.Contains(err.Error(), "no such column") && !strings.Contains(err.Error(), "no such index") {
+						t.Fatalf("%s without %s.%s: %v", projection.name, table, column, err)
+					}
+					return true
+				}
+				return false
+			}
+			watched := []string{}
+			for _, column := range columns {
+				if strings.Contains(trigger, `OLD."`+column+`" IS NOT NEW."`+column+`"`) {
+					watched = append(watched, column)
+				} else if strings.Contains(strings.Join(reading, "\n"), column) && reads(column) {
+					t.Errorf("%s reads %s.%s, which its update trigger does not compare", projection.name, table, column)
+				}
+			}
+			// The check itself must still see a read where there is one.
+			if !slices.ContainsFunc(watched, reads) {
+				t.Errorf("%s: none of the columns %s's trigger compares (%v) is seen to be read", projection.name, table, watched)
+			}
+		}
+	}
+}
+
+// A writer that stores rows again unchanged, as an upgrade's recomputation
+// and a repeated index do, leaves both projections alone.
+func TestProjectionsIgnoreRowsRewrittenUnchanged(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	execTx(t, catalog.DB, `INSERT INTO tool_ledger_state(conversation_id,version,updated_at) VALUES('cc','v','x')`,
+		`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,attribution,total_tokens) VALUES('sc','2026-09-23T02','opus','reported',5)`,
+		`INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES('sc1','m2',1)`,
+		`INSERT INTO conversation_group_membership(conversation_id,workspace_id,active) VALUES('cc','c',1)`,
+		`INSERT INTO claude_chat_settings_observations(host_id,source_name,account,organization_uuid,conversation_uuid,observed_at,time_basis,cache_entry,snapshot_id,model)
+			VALUES('h','s','local','o','cc','2026-09-23T02:00:00Z','observed','e','snap','opus')`)
+	if err := catalog.refreshAllLibrary(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rewritten := 0
+	for _, projection := range projectionTriggerCases() {
+		for table := range projection.lookups {
+			if countRows(t, catalog, "SELECT COUNT(*) FROM "+table) == 0 {
+				continue
+			}
+			rewritten++
+			assignments := []string{}
+			for _, column := range projectionTableColumns(t, catalog.DB, table) {
+				assignments = append(assignments, `"`+column+`"="`+column+`"`)
+			}
+			execSQL(t, catalog.DB, "UPDATE "+table+" SET "+strings.Join(assignments, ","))
+			if marked := countRows(t, catalog, "SELECT COUNT(*) FROM "+projection.dirty); marked != 0 {
+				t.Errorf("%s: rewriting %s unchanged marked %d workspaces", projection.name, table, marked)
+			}
+		}
+	}
+	if rewritten < 20 {
+		t.Fatalf("the fixture rewrote only %d dependency tables", rewritten)
+	}
+	// Columns neither projection reads: when a row was observed or indexed.
+	execSQL(t, catalog.DB, `UPDATE pull_requests SET observed_at='later'`, `UPDATE workspaces SET indexed_at='later',title='Renamed'`)
+	if library, metrics := dirtyCount(t, catalog), countRows(t, catalog, "SELECT COUNT(*) FROM mcp_metric_dirty"); library != 0 || metrics != 0 {
+		t.Fatalf("unread columns marked %d Search view and %d metric workspaces", library, metrics)
+	}
+	// One they read still marks, in a statement that also rewrites others.
+	execSQL(t, catalog.DB, `UPDATE messages SET kind=kind,role='assistant' WHERE id='m1'`)
+	if library, metrics := dirtyCount(t, catalog), countRows(t, catalog, "SELECT COUNT(*) FROM mcp_metric_dirty"); library != 1 || metrics != 1 {
+		t.Fatalf("a changed message marked %d Search view and %d metric workspaces, want 1 and 1", library, metrics)
 	}
 }
 
@@ -269,6 +515,168 @@ func TestLibraryProjectionRebuildsWhenDefinitionChanges(t *testing.T) {
 	var legacy int
 	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'workspace_query_stats%'").Scan(&legacy); err != nil || legacy != 0 {
 		t.Fatalf("legacy query stats remain: %d %v", legacy, err)
+	}
+}
+
+// A build that defines one column differently, adds one and drops one keeps
+// every stored row: only those columns change, a workspace at a time, and no
+// workspace is marked.
+func TestLibraryColumnChangeRecomputesOnlyThatColumn(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	ctx := context.Background()
+	if err := catalog.refreshAllLibrary(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stored := func(column, workspace string) any {
+		t.Helper()
+		var value any
+		if err := catalog.DB.QueryRow(`SELECT "`+column+`" FROM workspace_library WHERE workspace_id=?`, workspace).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	owed := func() int { return countRows(t, catalog, "SELECT COUNT(*) FROM workspace_library_column_pending") }
+	// Nothing recomputes a column whose definition stands: this stays.
+	execSQL(t, catalog.DB, "UPDATE workspace_library SET pr_numbers='kept'")
+	turns := stored("turn_count", "c")
+	columns := []libraryColumn{}
+	for _, column := range libraryColumns {
+		switch column.name {
+		case "turn_count":
+			column.expr = "100+" + column.expr
+		case "harness_versions":
+			continue
+		}
+		columns = append(columns, column)
+	}
+	override(t, &libraryColumns, append(columns, libraryColumn{"message_count",
+		"(SELECT COUNT(*) FROM conversations nx JOIN messages nm ON nm.conversation_id=nx.id WHERE nx.workspace_id=w.id)"}))
+	generation := countRows(t, catalog, "SELECT value FROM query_cache_generation WHERE id=1")
+	if err := catalog.ensureLibrary(); err != nil {
+		t.Fatal(err)
+	}
+	if rows, marked := countRows(t, catalog, "SELECT COUNT(*) FROM workspace_library"), dirtyCount(t, catalog); rows != 3 || marked != 0 || owed() != 6 {
+		t.Fatalf("after the change: %d stored rows, %d marked, %d column values owed; want 3, 0 and 6", rows, marked, owed())
+	}
+	// Until its turn, a workspace reads the earlier value; a new column is
+	// unknown, not zero.
+	row, err := catalog.libraryRows(ctx, "w.id='c'", nil, nil)
+	if err != nil || len(row) != 1 || row[0]["turn_count"] != turns || row[0]["message_count"] != nil {
+		t.Fatalf("before the backfill: %v turns (want %v), %v messages (want unknown): %v", row[0]["turn_count"], turns, row[0]["message_count"], err)
+	}
+	if pending, err := catalog.libraryPending(100); err != nil || pending != 3 {
+		t.Fatalf("%d workspaces reported as updating, want 3 (%v)", pending, err)
+	}
+	if countRows(t, catalog, "SELECT COUNT(*) FROM pragma_table_info('workspace_library') WHERE name='harness_versions'") != 0 {
+		t.Fatal("the removed column is still stored")
+	}
+	// One pass, then a restart: the next carries on from what is left.
+	pass, err := catalog.refreshLibraryColumns(ctx, 2)
+	if err != nil || pass.workspaces != 2 || owed() != 4 {
+		t.Fatalf("first pass: %+v, %d owed (%v)", pass, owed(), err)
+	}
+	if err := catalog.ensureLibrary(); err != nil || owed() != 4 || dirtyCount(t, catalog) != 0 {
+		t.Fatalf("after a restart: %d owed, %d marked (%v)", owed(), dirtyCount(t, catalog), err)
+	}
+	// A workspace written to meanwhile is its refresh's to compute.
+	execSQL(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash)
+		VALUES('m6','cb','6','user','message','More','2026-09-23T04:00:00Z','h')`)
+	for {
+		pass, err := catalog.refreshLibraryColumns(ctx, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pass.workspaces == 0 {
+			break
+		}
+	}
+	if its := countRows(t, catalog, "SELECT COUNT(*) FROM workspace_library_column_pending WHERE workspace_id='b'"); its == 0 || owed() != its || dirtyCount(t, catalog) != 1 {
+		t.Fatalf("the written workspace: %d values owed, %d of them its own, %d marked", owed(), its, dirtyCount(t, catalog))
+	}
+	if err := catalog.refreshAllLibrary(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if owed() != 0 || dirtyCount(t, catalog) != 0 {
+		t.Fatalf("at the end: %d values owed, %d marked", owed(), dirtyCount(t, catalog))
+	}
+	want := map[string]map[string]int64{"a": {"turn_count": 101, "message_count": 1}, "b": {"turn_count": 101, "message_count": 1}, "c": {"turn_count": 101, "message_count": 7}}
+	for workspace, values := range want {
+		for column, value := range values {
+			if got := stored(column, workspace); got != value {
+				t.Errorf("%s.%s = %v, want %d", workspace, column, got, value)
+			}
+		}
+		// b was refreshed whole, which computes every column.
+		if kept := stored("pr_numbers", workspace); (kept == "kept") != (workspace != "b") {
+			t.Errorf("%s: pr_numbers %v: an unchanged column is computed again only by a refresh", workspace, kept)
+		}
+	}
+	// A cached request must not go on answering with the earlier values.
+	if after := countRows(t, catalog, "SELECT value FROM query_cache_generation WHERE id=1"); after == generation {
+		t.Fatal("stored values changed without the cache generation moving")
+	}
+	// A pass with nothing owed does not take the catalog writer.
+	writes := catalog.writers.next
+	if pass, err := catalog.refreshLibraryColumns(ctx, 2); err != nil || pass.workspaces != 0 || catalog.writers.next != writes {
+		t.Fatalf("idle pass: %+v, took the writer %v (%v)", pass, catalog.writers.next != writes, err)
+	}
+}
+
+// A catalog from the last build that versioned the view as a whole keeps its
+// rows and its marks: only columns defined differently since are owed.
+func TestLibraryUpgradeFromWholeVersionMarksNothing(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		catalog, _ := libraryFixture(t)
+		if err := catalog.refreshAllLibrary(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		// As that build left it: one version, its triggers, no column records.
+		execSQL(t, catalog.DB, setMetaSQL("workspace_library_version", libraryLegacyVersion), "DELETE FROM workspace_library_columns",
+			setMetaSQL(libraryTriggersKey, libraryLegacyVersion+":earlier"))
+		want := []string{}
+		if changed {
+			columns := slices.Clone(libraryColumns)
+			columns[0].expr = "1+" + columns[0].expr
+			override(t, &libraryColumns, columns)
+		}
+		for _, column := range libraryColumns {
+			if libraryLegacyDigests[column.name] != column.digest() {
+				want = append(want, column.name)
+			}
+		}
+		if changed && len(want) == 0 {
+			t.Fatal("the changed column is not seen as changed")
+		}
+		if err := catalog.ensureLibrary(); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := queryMaps(catalog.DB, "SELECT column_name,COUNT(*) n FROM workspace_library_column_pending GROUP BY 1 ORDER BY 1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		owed := []string{}
+		for _, row := range rows {
+			if row["n"] != int64(3) {
+				t.Errorf("%v is owed for %v workspaces, want 3", row["column_name"], row["n"])
+			}
+			owed = append(owed, firstString(row["column_name"]))
+		}
+		slices.Sort(want)
+		if !slices.Equal(owed, want) {
+			t.Errorf("columns owed %v, want those defined differently since: %v", owed, want)
+		}
+		if stored, marked := countRows(t, catalog, "SELECT COUNT(*) FROM workspace_library"), dirtyCount(t, catalog); stored != 3 || marked != 0 {
+			t.Fatalf("upgrade kept %d of 3 rows and marked %d workspaces", stored, marked)
+		}
+		var version string
+		if err := catalog.DB.QueryRow("SELECT value FROM meta WHERE key='workspace_library_version'").Scan(&version); err != nil || version != libraryVersion() {
+			t.Fatalf("version after the upgrade: %q (%v)", version, err)
+		}
+		// Its triggers are this build's, and still mark.
+		execSQL(t, catalog.DB, "UPDATE messages SET role='assistant' WHERE id='m1'")
+		if dirtyCount(t, catalog) != 1 {
+			t.Fatalf("a changed message marked %d workspaces after the upgrade", dirtyCount(t, catalog))
+		}
 	}
 }
 
@@ -511,18 +919,36 @@ Please fix the parser' WHERE id='m1'`)
 	if _, last := preview(); last != "Shipped it" || stored() != 0 {
 		t.Fatalf("after an older build's refresh: %q, stored %d", last, stored())
 	}
-	// Large workspaces are filled in; small ones are quick to preview without.
+	// Large workspaces are filled in; small ones are quick to preview without,
+	// and leave the queue that refresh put them on.
 	if filled, err := catalog.refreshPreviews(ctx, 25); err != nil || filled != 0 {
 		t.Fatalf("filled %d small workspaces (%v)", filled, err)
 	}
-	if _, err := catalog.DB.Exec("UPDATE workspace_library SET turn_count=1000 WHERE workspace_id='c'"); err != nil {
-		t.Fatal(err)
+	if queued := countRows(t, catalog, "SELECT COUNT(*) FROM workspace_previews_pending"); queued != 0 {
+		t.Fatalf("%d small workspaces stay queued", queued)
 	}
+	// With none queued, a pass does not take the catalog writer.
+	writes := catalog.writers.next
+	if filled, err := catalog.refreshPreviews(ctx, 25); err != nil || filled != 0 || catalog.writers.next != writes {
+		t.Fatalf("idle pass: filled %d, took the writer %v (%v)", filled, catalog.writers.next != writes, err)
+	}
+	// The older build refreshes it again once it has grown.
+	execSQL(t, catalog.DB, "UPDATE workspace_library SET turn_count=1000 WHERE workspace_id='c'",
+		"INSERT INTO workspace_library_dirty(workspace_id) VALUES('c')", "DELETE FROM workspace_library_dirty")
 	if filled, err := catalog.refreshPreviews(ctx, 25); err != nil || filled != 1 || stored() != 1 {
 		t.Fatalf("filled %d, stored %d (%v)", filled, stored(), err)
 	}
 	if _, last := preview(); last != "Shipped it" {
 		t.Fatalf("filled preview %q", last)
+	}
+	// A catalog from before the queue has its large workspaces without
+	// previews queued once, when the queue is created.
+	execSQL(t, catalog.DB, "DROP TABLE workspace_previews_pending", "DELETE FROM workspace_previews")
+	if err := catalog.ensureLibrary(); err != nil {
+		t.Fatal(err)
+	}
+	if filled, err := catalog.refreshPreviews(ctx, 25); err != nil || filled != 1 || stored() != 1 || dirtyCount(t, catalog) != 0 {
+		t.Fatalf("upgrade: filled %d, stored %d, %d marked (%v)", filled, stored(), dirtyCount(t, catalog), err)
 	}
 	for _, stamp := range []struct {
 		at   string

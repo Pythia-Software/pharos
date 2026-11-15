@@ -9,7 +9,7 @@ import tracker from "../../../../docs/homepage-query-cards.json";
 import { queryRecipes, supportsToday, instantiateRecipe, loadQueryPreview, clearPreviewCache, suggestionWindowLabel } from "../../../src/curiosity-data";
 import { queryFromURL, queryHasTimeFilter, queryURL, resolveRollingQuery, rollingQueryMatches } from "../../../src/query-links";
 import { migrateSavedQueries, readBookmarks, removeBookmark, savedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
-import { cardChart, cardCoverQuery, cardGroupsFor, defaultCardCover, withCardGroups } from "../../../src/card-cover";
+import { cardKind, cardChart, cardCoverQuery, cardGroupsFor, defaultCardCover, withCardGroups } from "../../../src/card-cover";
 import { wishlistCardRecipes } from "../../../src/wishlist-card-recipes";
 import { updateQueryWindowURL } from "../../../src/query-links";
 import { parallelismSelectionQuery, readDashboardQuery, readDashboardLink } from "../../../src/usage-dashboard-model";
@@ -762,6 +762,14 @@ test("saved cards migrate to the full dashboard mapping while preserving their s
   assert.deepEqual(saved.query, original.query);
   assert.deepEqual(saved.cover, original.cover);
   migrateSavedQueries(); assert.deepEqual(readBookmarks(), [saved], "migration is idempotent");
+  // A card saved before its recipe gained a breakdown key keeps its saved
+  // grouping; the cover must not group the saved result by the new key.
+  const words = queryRecipes.find(recipe => recipe.id === "human-words"), current = instantiateRecipe(words, 7, clock).query;
+  assert.ok(current.grouping.keys.some(key => core.groupKeyFields([key])[0] === "estimate"));
+  const older = { ...current, grouping: { ...current.grouping, keys: current.grouping.keys.filter(key => core.groupKeyFields([key])[0] !== "estimate") } };
+  const [metric] = cardCoverQuery(older, words, defaultCardCover(words)).query.aggregations;
+  assert.deepEqual(metric.groupBy, core.groupKeyFields(older.grouping.keys));
+  assert.deepEqual(cardCoverQuery(current, words, defaultCardCover(words)).query.aggregations[0].groupBy, core.groupKeyFields(current.grouping.keys));
 });
 
 
@@ -816,4 +824,26 @@ test("direct older card links resolve durable sources and report unavailable sou
   await assert.rejects(resolveCardDashboardURL(legacy.href));
   legacy.searchParams.set(`q_${recipe.dataset}`, "invalid-inline-query");
   await assert.rejects(resolveCardDashboardURL(legacy.href));
+});
+
+
+test("card topics follow the measured subject rather than the source records", () => {
+  const groups = {
+    tools: ["session-repository-verification", "session-length-tool-calls", "session-autonomy", "session-autonomy-trend", "batched-tools", "machine-time", "machine-activities", "machine-operations", "machine-call-trend", "machine-latency-trend"],
+    errors: ["session-model-failure-rates", "session-kind-failure-rates", "session-failure-trend"],
+    context: ["session-context-trend", "session-model-context"],
+    cost: ["origin-cost-channel", "origin-cost-machine_id", "origin-cost-execution_machine_id"],
+    delegation: ["largest-subagent-depth", "largest-subagent-weight", "session-delegation-count"],
+    human: ["human-labels-trend"], thinking: ["thinking-labels-trend"],
+    sessions: ["session-length-mix", "session-archetype-mix", "session-count-trend"],
+  };
+  for (const [category, ids] of Object.entries(groups)) for (const id of ids) {
+    assert.equal(queryRecipes.find(recipe => recipe.id === id)?.category, category, id);
+  }
+  const example = queryRecipes.find(recipe => recipe.id === "session-length-tool-calls");
+  assert.equal(cardKind(example), "Heatmap");
+  assert.equal(example.destination.topic, "tool_use");
+  const item = instantiateRecipe(example, 30), params = new URL(item.url, "http://localhost").searchParams;
+  const state = normalizeAnalysis(analysisCatalogs.tool_use, JSON.parse(params.get("analyze_chart")));
+  assert.deepEqual([state.metric, state.split, state.display, state.rollingPeriods], ["tool_calls", "length_band", "heatmap", 7]);
 });

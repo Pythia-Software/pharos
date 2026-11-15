@@ -142,7 +142,7 @@ import {  CategoryPill, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { startConcurrencySummary } from "./concurrency-store";
 import { HabitsDashboard } from "./habits";
-import { sessionShapeAnalysisCatalog } from "./session-shape-analysis-catalog";
+import { sessionShapeAnalysisCatalog, toolUseAnalysisCatalog, contextAnalysisCatalog } from "./session-shape-analysis-catalog";
 import { SessionShapeDefinitions, SessionsToRead, SignalTable, revealDefinitions } from "./session-shape-panels";
 import { formatSeconds } from "./session-shape-model";
 import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
@@ -1197,6 +1197,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "time") return <ToolTimeDashboard />;
   if (topic === "agent_experience") return <AgentExperienceDashboard />;
   if (topic === "agent_event_rates") return <AgentEventRatesDashboard />;
+  if (topic === "tool_use" || topic === "context") return <SessionSubjectDashboard topic={topic} />;
   if (topic === "session_shape") return <SessionShapeDashboard />;
   if (topic === "outcomes") return <OutcomesDashboard />;
   if (topic === "branches") return <BranchesDashboard />;
@@ -1483,6 +1484,12 @@ function AgentEventRatesDashboard() {
 // views are Card Library cards that open this chart. Durations in seconds
 // read as durations.
 const sessionShapeAmount: AmountFormat = (value, measure) => measure.format.kind === "duration" && measure.format.sourceUnit === "seconds" ? formatSeconds(value) : catalogAmount(value, measure);
+function SessionSubjectDashboard({ topic }: { topic: "tool_use" | "context" }) {
+  const note = sessionShapeFreshnessNote(useSessionShapeCoverage());
+  return <CatalogDashboard catalog={topic === "tool_use" ? toolUseAnalysisCatalog : contextAnalysisCatalog} dataset="session_shape"
+    name={topic === "tool_use" ? "tool-use" : "context"} defaults={dashboardDefaults[topic]} format={sessionShapeAmount}
+    before={note ? <p className="usage-dashboard-note" role="status">{note}</p> : undefined} />;
+}
 function SessionShapeDashboard() {
   const note = sessionShapeFreshnessNote(useSessionShapeCoverage());
   return <CatalogDashboard catalog={sessionShapeAnalysisCatalog} dataset="session_shape" name="session-shape" defaults={dashboardDefaults.session_shape} format={sessionShapeAmount}
@@ -1511,6 +1518,11 @@ const outcomeSummaryMetrics: AggregationClause[] = [
   { id: "kept_lines", op: "sum", field: "kept_lines", groupBy: [] },
 ];
 const outcomeTierMetrics: AggregationClause[] = [{ id: "sessions", op: "count", groupBy: ["evidence_tier"] }];
+const outcomeReviewMetrics: AggregationClause[] = [
+  { id: "comments", op: "sum", field: "review_comments", groupBy: ["model_family"] },
+  { id: "pull_requests", op: "sum", field: "pull_requests", groupBy: ["model_family"] },
+];
+const outcomeReachedMetrics: AggregationClause[] = [...outcomeTierMetrics, { id: "pull_requests", op: "sum", field: "pull_requests", groupBy: [] }];
 const outcomeReworkMetrics: AggregationClause[] = [
   { id: "removed", op: "sum", field: "rework_removed_lines", groupBy: ["project_name"] },
   { id: "kept", op: "sum", field: "kept_lines", groupBy: ["project_name"] },
@@ -1561,8 +1573,9 @@ function OutcomesDashboard() {
   // Tiers are read over the whole library, so a filter never hides a
   // breakdown. Until that read succeeds the full catalog stands, so a link to
   // a Git breakdown neither redraws nor reads as a library without Git.
-  const reached = useMetrics("outcomes", [], outcomeTierMetrics);
-  const catalog = outcomeCatalogFor(reached.error || !reached.metrics.length ? undefined : outcomeTiersReached(metricBuckets(reached, "sessions")));
+  const reached = useMetrics("outcomes", [], outcomeReachedMetrics);
+  const catalog = outcomeCatalogFor(reached.error || !reached.metrics.length ? undefined : outcomeTiersReached(metricBuckets(reached, "sessions"), metricBuckets(reached, "pull_requests")));
+  const reviewed = metricBuckets(reached, "pull_requests").some(bucket => Number(bucket.value) > 0);
   return <CatalogDashboard catalog={catalog} linkCatalog={outcomesAnalysisCatalog} dataset="outcomes" name="outcomes" defaults={dashboardDefaults.outcomes}
     summary={where => <OutcomesSummary where={where} />}
     panels={where => <div className="outcome-panels">
@@ -1572,6 +1585,9 @@ function OutcomesDashboard() {
       <OutcomeRatioPanel title="Cost per kept change by model" where={where} clauses={outcomeKeptCostMetrics} breakdown="model_family" empty="No workspace recorded usage."
         note="Each main model's judged workspaces' cost (kept or reworked), over its kept changes that have a price."
         format={outcomeKeptCostCell} />
+      {reviewed && <OutcomeRatioPanel title="Review comments per pull request by model" where={where} clauses={outcomeReviewMetrics} breakdown="model_family" empty="No pull request has been read."
+        note="Comments other people or bots left on each main model's pull requests, over its pull requests read from their forge."
+        format={row => [row.ratio == null ? "—" : row.ratio.toLocaleString("en-US", { maximumFractionDigits: 1 }), `${row.denominator.toLocaleString("en-US")} pull requests read`]} />}
       <OutcomeCoveragePanel where={where} />
     </div>} />;
 }

@@ -152,7 +152,7 @@ struct CatalogUpgrade: Equatable {
 /// What the broker's /api/app/state says about the selected library and any
 /// library operation, as the native menu shows it. Pure, for the harness.
 struct ManagedLibraryStatus: Equatable {
-    static let unanswered = "Finishing a library operation…"
+    static let unanswered = "Waiting for a library operation to finish…"
     /// Whether the broker has answered at least once.
     var known = false
     var selected = ""
@@ -444,7 +444,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         row("open", "Open Pharos", path: "")
         row("status", "Pharos · Starting")
-        row("detail", "Starting local archive…")
+        row("detail", "Starting Pharos…")
         row("indexed", "Not indexed yet")
         let index = NSMenuItem(title: "Index changes now", action: #selector(indexNow), keyEquivalent: "")
         index.target = self; rows["index"] = index
@@ -462,7 +462,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         row("search", "Search conversations…", path: "/library")
         row("analyze", "Analyze usage…", path: "/analyze")
         row("optimize", "Optimize…", path: "/findings")
-        row("capture", "Capture & index…", path: "/settings/sync")
+        row("capture", "Background Processing…", path: "/settings/sync")
         row("health", "Library health & backups…", path: "/settings")
         row("sources", "Manage sources…", path: "/settings/sources")
         let finder = NSMenuItem(title: "Show library in Finder", action: #selector(showLibraryInFinder), keyEquivalent: "")
@@ -483,7 +483,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         logs.submenu = sources
         rows["logs"] = logs
         row("settings", "Settings…", path: "/settings/preferences")
-        let eject = NSMenuItem(title: "Eject library…", action: #selector(ejectLibrary), keyEquivalent: "")
+        let eject = NSMenuItem(title: "Eject library", action: #selector(ejectLibrary), keyEquivalent: "")
         eject.target = self; rows["eject"] = eject
         // Cmd-Q remains in the app's standard menu. Repeating it here makes
         // AppKit reserve a shortcut column beside every status-menu row.
@@ -619,11 +619,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let result: Result<[String: Any], Error>
             do {
                 if let error { throw error }
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let data else {
-                    throw NSError(domain: "Pharos", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not reach the local archive service."])
+                guard let http = response as? HTTPURLResponse, let data else {
+                    throw NSError(domain: "Pharos", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not reach the library’s service."])
+                }
+                // An answer with an error status is not an unreachable service.
+                guard (200..<300).contains(http.statusCode) else {
+                    throw NSError(domain: "Pharos", code: 1, userInfo: [NSLocalizedDescriptionKey: "The library’s service answered with an error (HTTP \(http.statusCode))."])
                 }
                 guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    throw NSError(domain: "Pharos", code: 2, userInfo: [NSLocalizedDescriptionKey: "The local archive returned an invalid response."])
+                    throw NSError(domain: "Pharos", code: 2, userInfo: [NSLocalizedDescriptionKey: "The library’s service sent an answer Pharos could not read."])
                 }
                 result = .success(value)
             } catch { result = .failure(error) }
@@ -708,7 +712,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             case .working: title = "Pharos · Working"; dot.color = .systemYellow
             case .idle: title = "Pharos · Idle"; dot.color = .systemGreen
             }
-            detail = unified.detail
+            // "Safe to eject" says nothing about a library no Eject row can eject.
+            detail = unified.state == .idle && drive["ejectable"] as? Bool != true ? "" : unified.detail
         }
         setRowTitle("status", title)
         setRowTitle("detail", detail)
@@ -718,28 +723,31 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         item?.button?.setAccessibilityLabel(detail.isEmpty ? title : "\(title). \(detail)")
         rows["error"]?.isHidden = problem == nil
         rows["error"]?.representedObject = snapshot["error_path"] as? String ?? "/settings/sync"
-        setRowTitle("indexed", Self.date(snapshot["indexed_at"]).map { "Indexed \(Self.ago($0))" } ?? "Not indexed yet")
+        // Before the first answer the last index is unknown, not absent.
+        setRowTitle("indexed", Self.date(snapshot["indexed_at"]).map { "Indexed \(Self.ago($0))" } ?? (snapshot.isEmpty ? "Checking last index…" : "Not indexed yet"))
         for key in ["indexed", "words", "tokens", "carbon", "cost", "streak", "agent_streak", "backup", "space", "index", "eject"] {
             rows[key]?.isHidden = !preferences[key]
         }
         metric("words", "Words typed", (usage?["human_words"] as? NSNumber).map { NumberFormatter.localizedString(from: $0, number: .decimal) })
         metric("tokens", "Tokens used", (usage?["tokens"] as? NSNumber).map { Self.compact($0.doubleValue) + ((usage?["is_estimate"] as? Bool) == true ? "*" : "") })
         metric("carbon", "Estimated CO₂e", (usage?["co2e_g"] as? NSNumber).map { Self.mass($0.doubleValue) + ((usage?["is_estimate"] as? Bool) == true ? "*" : "") })
-        metric("cost", "Estimated API cost", (usage?["cost_usd"] as? NSNumber).map { Self.dollars($0.doubleValue) + ((usage?["cost_is_estimate"] as? Bool) == true ? "*" : ["partial", "unpriced"].contains(usage?["price_status"] as? String ?? "") ? "+" : "") })
+        // With usage loaded, no cost means nothing could be priced, or nothing was used.
+        let unpriced = usage == nil ? nil : ((usage?["tokens"] as? NSNumber)?.doubleValue ?? 0) > 0 ? "Unpriced" : Self.dollars(0)
+        metric("cost", "Estimated API cost", (usage?["cost_usd"] as? NSNumber).map { Self.dollars($0.doubleValue) + ((usage?["cost_is_estimate"] as? Bool) == true ? "*" : ["partial", "unpriced"].contains(usage?["price_status"] as? String ?? "") ? "+" : "") } ?? unpriced)
         // An estimate carries processed input unless the window says some is missing.
         let estimatedInput = (usage?["input_tokens_available"] as? Bool) != false
         let estimateNote = estimatedInput ? "Includes estimated usage: generated output and processed input counted from the visible conversation. Hidden system prompts are not counted." : "Includes estimated generated output; input and cache usage are unavailable."
         rows["tokens"]?.toolTip = (usage?["is_estimate"] as? Bool) == true ? estimateNote : nil
         rows["carbon"]?.toolTip = (usage?["is_estimate"] as? Bool) == true ? estimateNote : nil
-        rows["cost"]?.toolTip = (usage?["cost_is_estimate"] as? Bool) == true ? (estimatedInput ? "Includes cost of estimated usage; its cache division is assumed and the API price equivalent is partial." : "Estimated output cost only; the API price equivalent is partial.") : ["partial", "unpriced"].contains(usage?["price_status"] as? String ?? "") ? "Priced subtotal only; some usage cannot be priced." : nil
+        rows["cost"]?.toolTip = (usage?["cost_is_estimate"] as? Bool) == true ? (estimatedInput ? "Includes the API cost of estimated tokens, priced with an assumed split between cached and uncached input." : "Includes the API cost of estimated output only; input could not be estimated.") : ["partial", "unpriced"].contains(usage?["price_status"] as? String ?? "") ? "Priced subtotal only; some usage cannot be priced." : nil
         let streaks = usage?["streaks"] as? [String: String]
         metric("streak", "Your streak", streaks?["you"])
         metric("agent_streak", "Agent streak", streaks?["agents"])
-        metric("backup", "Last backup", Self.date(snapshot["backup_at"]).map(Self.ago) ?? "Never")
+        metric("backup", "Last backup", Self.date(snapshot["backup_at"]).map(Self.ago) ?? (snapshot.isEmpty ? nil : "Never"))
         let storage = snapshot["storage"] as? [String: Any] ?? [:]
         let sizes = storage["sizes"] as? [String: Any] ?? [:]
         metric("space", "Library size", (sizes["library_bytes"] as? NSNumber).map { Self.bytes($0.int64Value) } ?? "Calculating…")
-        setRowTitle("free", (storage["free_bytes"] as? NSNumber).map { "\(Self.bytes($0.int64Value)) free on \(drive["name"] as? String ?? "library drive")" } ?? "Checking free space…")
+        setRowTitle("free", (storage["free_bytes"] as? NSNumber).map { "\(Self.bytes($0.int64Value)) free on \(drive["name"] as? String ?? "the library drive")" } ?? "Checking free space…")
         rows["free"]?.isHidden = !preferences["space"]
         let hasUsage = ["words", "tokens", "carbon", "cost"].contains { preferences[$0] }
         setRowTitle("usage-note", usageError == nil ? "Loading usage…" : "Usage unavailable")
@@ -747,7 +755,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         rows["usage-note"]?.toolTip = usageError
         let ejectable = drive["ejectable"] as? Bool == true
         rows["eject"]?.isHidden = !preferences["eject"] || !ejectable
-        setRowTitle("eject", "Eject \(drive["name"] as? String ?? "library")…")
+        setRowTitle("eject", "Eject \(drive["name"] as? String ?? "library")")
         rows["eject"]?.isEnabled = ejectable && !service.ejecting && service.url != nil
         rows["finder"]?.isEnabled = libraryDirectory != nil
         let logAttention = snapshot["logs"] as? [String: String] ?? [:]

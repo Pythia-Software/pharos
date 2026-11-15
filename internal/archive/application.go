@@ -526,7 +526,7 @@ func (m *applicationManager) updateRefusal(ctx context.Context) string {
 // it (GET /api/release?for=update). A service that cannot say refuses.
 func libraryUpdateRefusal(ctx context.Context, client *http.Client, library brokerLibrary) string {
 	unanswered := func(err error) string {
-		return fmt.Sprintf("The update waits for %s, whose service did not say whether it can stop (%v).", library.Name, err)
+		return fmt.Sprintf("The service of the library %s did not say whether its work can stop (%v).", library.Name, err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, library.Child.URL+"/api/release?for=update", nil)
 	if err != nil {
@@ -627,7 +627,7 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !m.operationMu.TryLock() {
-			writeError(w, fmt.Errorf("a library operation is still running"), 503)
+			writeError(w, fmt.Errorf("A library operation is still running."), 503)
 			return
 		}
 		defer m.operationMu.Unlock()
@@ -647,7 +647,7 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		m.mu.Unlock()
 		if remaining > 0 {
-			writeError(w, fmt.Errorf("libraries are still closing"), 503)
+			writeError(w, fmt.Errorf("Libraries are still closing."), 503)
 			return
 		}
 		writeJSON(w, map[string]any{"released": true}, 200)
@@ -864,14 +864,15 @@ try {
 }
 
 // pickerPurposes are what a picker can be opened to choose, and what it says.
-// The native app's NSOpenPanel says the same (PharosApp.swift).
+// The native app's NSOpenPanel says the same, and for an export also
+// accepts its folder (PharosApp.swift).
 var pickerPurposes = map[string]struct {
 	Prompt string
 	File   bool
 }{
 	"library": {Prompt: "Choose a Pharos library or a parent folder for a new library."},
 	"source":  {Prompt: "Choose the folder that holds this tool’s conversations."},
-	"export":  {Prompt: "Choose the export you downloaded: its ZIP, or its conversations.json.", File: true},
+	"export":  {Prompt: "Choose the export you downloaded: its ZIP, conversations.json or manifest.", File: true},
 }
 
 func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
@@ -940,7 +941,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/app/release-volume" {
 		if !m.operationMu.TryLock() {
-			writeError(w, fmt.Errorf("Pharos is finishing a library operation; wait and eject again"), 503)
+			writeError(w, fmt.Errorf("Pharos is finishing a library operation. Eject again when it is done."), 503)
 			return
 		}
 		defer m.operationMu.Unlock()
@@ -967,7 +968,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 				m.suspended[l.ID] = true
 				m.stopChildLocked(l.ID)
 				if m.children[l.ID] != nil {
-					releaseErr = fmt.Errorf("library is still closing; retry eject shortly")
+					releaseErr = fmt.Errorf("The library is still closing. Try ejecting again in a moment.")
 					writeError(w, releaseErr, 503)
 					return
 				}
