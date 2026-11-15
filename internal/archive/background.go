@@ -731,10 +731,9 @@ func (c *Catalog) backgroundRuns(ctx context.Context) map[string]backgroundRunRo
 func (c *Catalog) recordBackgroundRun(ctx context.Context, item string, started time.Time, finished bool, failure error, measured ...itemRun) {
 	_ = c.writeTransaction(ctx, "background run", func(tx *sql.Tx) error {
 		// The pass's measured item runs ride this write rather than taking
-		// one of their own.
-		if err := insertItemRuns(ctx, tx, measured); err != nil {
-			return err
-		}
+		// one of their own. A measurement that cannot be kept is a missing
+		// one; the run's outcome is still recorded.
+		_ = insertItemRuns(ctx, tx, measured)
 		if !finished {
 			_, err := tx.ExecContext(ctx, `INSERT INTO background_runs(host_id,item,started_at) VALUES(?,?,?)
 				ON CONFLICT(host_id,item) DO UPDATE SET started_at=excluded.started_at`, currentHost().ID, item, formatTime(started))
@@ -1671,20 +1670,29 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 		outcome[name] = err
 		return err
 	})
-	// An item's run is the stages of it that ran, whether it was due or came
-	// along; one that failed or was interrupted is no measurement.
+	// An item's run is the stages of it this pass asked for, whether the item
+	// was due or its stages came along. One that failed, was interrupted or
+	// never reached a stage is no measurement.
 	measured := []itemRun{}
 	for _, item := range backgroundItems {
-		run, ran, ok := itemRun{Item: item.ID, Cadence: cadence, Started: passStarted}, false, true
-		for name, result := range outcome {
-			owner := stageItem(name)
-			if name == "findings" {
-				owner = findingsRun
+		names := item.Stages
+		if item.ID == "findings" || item.ID == "review" {
+			names = nil
+			if item.ID == findingsRun {
+				names = []string{"findings"}
 			}
-			if owner != item.ID {
+		}
+		if item.ID == "repositories" && stages["identities"] {
+			// GitHub runs with identities.
+			names = append([]string{"github"}, names...)
+		}
+		run, ran, ok := itemRun{Item: item.ID, Cadence: cadence, Started: passStarted}, false, true
+		for _, name := range names {
+			if !stages[name] && name != "github" {
 				continue
 			}
-			ran, ok = true, ok && result == nil
+			result, done := outcome[name]
+			ran, ok = true, ok && done && result == nil
 			run.Seconds += stageSeconds[name]
 			if units, counted := stageUnits[name]; counted && itemUnitStage[item.ID] == name {
 				run.Units = &units
