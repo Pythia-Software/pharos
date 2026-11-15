@@ -39,6 +39,13 @@ rebuild the same index; read both before starting either.
 | [message-search-without-text-copy.md](message-search-without-text-copy.md) | `messages_fts` stores a second copy of all message text (25.6 GB of a 94.5 GB catalog); make it contentless without changing results |
 | [message-search-without-tool-output.md](message-search-without-tool-output.md) | Tool results are ~84% of the word index; stop indexing them and make the affected searches say so (#274) |
 
+## Design reviews
+
+| Handoff | Problem |
+|---|---|
+| [plugins-design-review.md](plugins-design-review.md) | Review the importer and exporter plugin design, its public contracts and implementation plan before anything is built |
+| [plugin-importers.md](plugin-importers.md) | Take over the import side of the plugin design: pull transcripts from SSH hosts, sandboxes and buckets on a cadence, revised against master |
+
 ## Capture compression
 
 Phases of [Compressing captured originals at rest](../capture-compression.md),

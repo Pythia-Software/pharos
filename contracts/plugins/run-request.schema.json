@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.pythia.software/contracts/plugins/run-request.schema.json",
+  "title": "Pharos run request (pharos-run/1)",
+  "description": "Written by Pharos for each run. Its path is the last argument of the command and is also in PHAROS_REQUEST; api.url and api.token are also in PHAROS_API and PHAROS_TOKEN. Scripts ignore fields they do not know: fields may be added within version 1.",
+  "type": "object",
+  "required": [
+    "contract",
+    "direction",
+    "plugin",
+    "run_id",
+    "started_at",
+    "deadline",
+    "dry_run",
+    "trigger",
+    "limits",
+    "api",
+    "output_dir",
+    "cursor",
+    "params"
+  ],
+  "properties": {
+    "contract": {
+      "const": "pharos-run/1"
+    },
+    "direction": {
+      "enum": [
+        "import",
+        "export"
+      ]
+    },
+    "plugin": {
+      "$ref": "common.schema.json#/$defs/plugin_ref"
+    },
+    "run_id": {
+      "description": "Unique per run; exporters use it as the idempotency key for deliveries.",
+      "$ref": "common.schema.json#/$defs/run_id"
+    },
+    "started_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "deadline": {
+      "description": "Pharos stops the run's process group at this time. Stop earlier and report partial.",
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "dry_run": {
+      "description": "Do everything except deliver (exporters) or expect the drop to be discarded (importers). Used by pharos plugin test and previews.",
+      "type": "boolean"
+    },
+    "trigger": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "schedule",
+            "after_index",
+            "threshold",
+            "manual",
+            "continue",
+            "retry",
+            "test"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        }
+      }
+    },
+    "limits": {
+      "description": "This run's limits, in plain units. Every one is enforced.",
+      "type": "object",
+      "required": [
+        "max_bytes"
+      ],
+      "properties": {
+        "max_bytes": {
+          "description": "Bytes the run may write to output_dir, result.json included.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_requests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_served_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_memory": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "api": {
+      "description": "The connector API and this run's token, valid until the run ends. Importers get one with no read scopes.",
+      "type": "object",
+      "required": [
+        "url",
+        "token"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "token": {
+          "type": "string",
+          "minLength": 32
+        }
+      }
+    },
+    "output_dir": {
+      "description": "An empty folder for the run's output. result.json goes here; importers put drops here.",
+      "type": "string",
+      "minLength": 1
+    },
+    "cursor": {
+      "description": "The cursor of the last acknowledged run, or null for the first run, after a reset, or after the receiver asked for everything.",
+      "$ref": "common.schema.json#/$defs/cursor"
+    },
+    "params": {
+      "description": "The person's values for the manifest's params, verbatim.",
+      "type": "object"
+    },
+    "library_instance": {
+      "$ref": "common.schema.json#/$defs/library_instance"
+    },
+    "as_of": {
+      "description": "Exporters: the run's cutoff; also in /grant.",
+      "$ref": "common.schema.json#/$defs/as_of"
+    },
+    "takeover": {
+      "description": "Exporters, while a takeover is open: the plugin must make its receiver replace what it holds from replaces_instance. Pharos has reset what it counts as acknowledged, so the runs send everything; the run that returns complete ends the takeover.",
+      "type": "object",
+      "required": [
+        "id",
+        "replaces_instance"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/takeover"
+        },
+        "replaces_instance": {
+          "$ref": "common.schema.json#/$defs/library_instance"
+        }
+      }
+    }
+  }
+}

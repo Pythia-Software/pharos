@@ -1,0 +1,28 @@
+{
+  "contract": "pharos-drop/1",
+  "generated_at": "2026-11-02T09:00:00Z",
+  "sender_id": "snd_8KqT2w",
+  "machines": [
+    {
+      "key": "host_macbook-air",
+      "label": "MacBook Air (gbw)",
+      "os": "darwin"
+    }
+  ],
+  "drops": [
+    {
+      "dir": "macbook-air/claude",
+      "kind": "claude",
+      "machine": "host_macbook-air",
+      "root": "/Users/gbw/.claude/projects"
+    }
+  ],
+  "files": [
+    {
+      "path": "macbook-air/claude/-Users-gbw-src-pharos/0b7e.jsonl",
+      "size": 48213,
+      "sha256": "sha256:7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c",
+      "mtime": "2026-11-01T22:14:09Z"
+    }
+  ]
+}

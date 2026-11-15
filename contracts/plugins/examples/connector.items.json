@@ -1,0 +1,18 @@
+{
+  "dataset": "conversations/1",
+  "as_of": "2026-10-30T15:00:00Z",
+  "items": [
+    {
+      "id": "c_6d1fQ0aZ",
+      "version": 1793718000000004,
+      "fields": {
+        "started_at": "2026-10-30T09:12:00Z",
+        "provider": "anthropic",
+        "model": "claude-opus-5-5",
+        "work_item": "w_9tq3LmA2"
+      }
+    }
+  ],
+  "cursor": "pg_2",
+  "more": true
+}
