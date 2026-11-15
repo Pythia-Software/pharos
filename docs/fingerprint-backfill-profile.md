@@ -57,6 +57,38 @@ both profiles/themes/event appearances, also stays byte-identical.
   gates, cooperative yields, cancellation, and the slower battery policy's single
   worker and delay.
 
+## Queue, sharing and estimates (November 2026)
+
+Measured on an APFS clone of the 13 November library backup (108,238 entities).
+
+- **What queues an image.** `fingerprintSources` (`fingerprint_cache.go`) lists, per
+  source table, only the columns the renderer's input or its pending/withheld
+  state reads. Rewriting every `agent_sessions` token and model column used to
+  queue 50,558 conversations and 41,971 workspaces; every workspace title,
+  57,680 workspaces; every label's tokens and contract, 42,533 conversations; a
+  new labels model row, every entity. Each now queues none.
+  `TestFingerprintSourceColumns` changes every column left out and fails if the
+  queue or the input moves. Changes the labels or events ledgers rebuild from
+  (for example `messages.content_hash`) still queue images through their dirty
+  marks, as they must.
+- **Shared workspace images.** A workspace with one conversation draws exactly that
+  conversation's images, and every workspace without conversations draws the
+  same four; together they are 53% of the entities. Such a workspace publishes,
+  by hash, its conversation's current images (or the empty images this process
+  last drew) without a load or a render: 4 ms against 0.5 s for a
+  one-conversation workspace on the clone, 1.5 ms against 34 ms for an empty one.
+  A workspace whose conversation is queued waits for it. Stored images are
+  unchanged.
+- **Large workspaces.** Their labels' execution check reads the catalog-wide digests
+  once instead of walking each conversation: the 997-conversation workspace's
+  first load in a process fell from 2 m 27 s (past the 2-minute render timeout,
+  so it retried indefinitely) to 4.3 s.
+- **Progress.** A pass reports units done plus the dirty entities eligible now,
+  recounted every 30 s (0.25 s on the clone with 27,000 dirty).
+- **Not addressed.** With tens of thousands of conversations withheld for execution
+  evidence, each unit's selection and pending check cost about 0.2 s on the clone,
+  whatever the unit draws.
+
 ## Reproduction and limits
 
 The build-tagged `TestCompactFingerprintBatch` probe documents all environment
