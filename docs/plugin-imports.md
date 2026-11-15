@@ -92,20 +92,25 @@ storage stay refused.
 
 ### `capture-export`: a verified envelope
 
-For machines that run `pharos capture` and `pharos capture-export`
-([capture export](capture-export.md)). The drop is one envelope folder,
-unchanged. Pharos runs `VerifyCaptureExport` on it, then lands it as history
-copies land: under `captures/.imports/<envelope id>/` with a receipt, read
-through `capturedFileFor`. This replaces `pharos-drop/1`, which is withdrawn.
+For machines that run Pharos's collector ([capture export](capture-export.md)).
+The drop is one envelope folder, unchanged, which Pharos checks with
+`VerifyCaptureExport`. This replaces `pharos-drop/1`, which is withdrawn, and
+it needs the importer master lacks ("there is no capture-only importer").
+Where a verified envelope lands depends on how it arrived:
 
-It needs the importer master lacks ("there is no capture-only importer").
-That importer is part of this work:
+- **A one-off envelope,** carried by hand or fetched once, lands as history
+  copies do: published under `captures/.imports/<envelope id>/` with a
+  no-replace rename and a receipt, and read through `capturedFileFor`.
+- **A stream of envelopes from one pusher** (below) cannot land that way:
+  each is the pusher's whole capture, and a copy per turn would multiply the
+  history. The pusher's host is owned by the importer, nothing else writes
+  its `captures/<host>/<source>/`, so each verified envelope is **added to**
+  that capture: members the library lacks are written, the manifest is
+  replaced last, and a receipt records the envelope. Nothing an earlier
+  envelope brought is ever removed, whatever a later one omits.
 
-- verify, then publish under `.imports/<id>` with a no-replace rename; an
-  envelope already present is a no-op;
-- write a receipt (below) and let indexing read the capture from there;
-- inherit the envelope's first-scope limits: Claude Code and Codex only, no
-  SQLite record capture.
+Either way the first-scope limits hold: Claude Code and Codex only, no SQLite
+record capture.
 
 Three properties of envelopes shape the design:
 
@@ -142,8 +147,11 @@ name no machine: an export does not acquire the device that downloaded it.
 Unchanged in form; see [Usage imports](plugins.md#usage-imports). Corrections:
 
 - `cost.status` gains `partial`, which the labeling ledger records when only
-  part of a request's usage could be priced. Whether its `usd` counts as
-  cost is [open](#decisions).
+  part of a request's usage could be priced. Its `usd`, the known part,
+  counts as cost. The unknown remainder makes any total that includes it an
+  estimate, shown with the same mark API cost figures already carry when
+  they rest on estimates (as with Claude.ai chats); no separate "incomplete"
+  state is added.
 - Labeling usage is a **usage kind** (`automation`, with the job and dataset
   as fields), not a new channel. Channel answers how work started, and
   `automation:<name>` already names a message sender.
@@ -162,19 +170,22 @@ The old design invented `imp_…` hosts. Instead:
   and the remote user, so a script cannot name an existing host. For an
   envelope the ID is the one the sending Pharos gave itself in `host.json`.
 - **A host belongs to the first thing that wrote it.** An imported host is
-  owned by its installation; a drop naming a host that this library captured
-  natively, or that another installation owns, is refused. Envelopes never
-  land in a live `captures/<host>/` in any case.
+  owned by its installation; a drop naming a host that another installation
+  owns is refused. A drop naming a host this library captures natively (a
+  laptop that both runs Pharos here and pushes to the bucket) is skipped and
+  reported as this library's own, not treated as an error.
 - **The machine registry carries the device.** Each imported host maps to a
   `machines` row through `host_machines`, from the envelope's `machine_id` or
   the importer's hint (`/etc/machine-id`), so Machine and Execution machine
   work for remote sessions with no new dimension. Without a hint the machine
   is derived from the host, and never guessed from a hostname.
-- **Ephemeral machines are one machine per pool.** A manifest or
-  drop may declare a machine `pool` (for example "CI runners" or a dev
-  container's project). Every container in the pool is the same machine and
-  host, of kind `cloud`; the container's own ID stays in the run record as
-  evidence. A thousand runners must not become a thousand values of Machine.
+- **Ephemeral machines are one machine per pool.** A pusher or drop may
+  declare a machine `pool` (for example "CI runners" or a dev container's
+  project). Every container in the pool is the same **machine**, of kind
+  `cloud`, so a thousand runners are one value of Machine. Each container
+  stays its own **host**, because each has its own capture and two captures
+  must never write one folder. Hosts are bookkeeping, not a dimension people
+  group by; lists show a pool as one line with its count and last activity.
 - **Recorded paths are POSIX.** Capture manifests use legacy POSIX lexical
   paths (`internal/sourcepath`). A drop's `root` must be an absolute POSIX
   path; a Windows-style root is refused until a path-flavor migration exists.
@@ -331,65 +342,212 @@ is done when they have run and passed their lifecycle tests on Linux, not
 when they cross-compile. A Mac pushes with the same command from the app's
 own binary.
 
-**`pharos capture-push DESTINATION`** captures the sources it was told
-about, exports each, and uploads what the destination lacks:
+**`pharos capture-push`** captures the sources it was told about and uploads
+what the destination lacks. It needs no cloud toolchain: uploads are plain
+HTTPS from the binary, reusing the S3, GCS and Azure clients that cloud
+backups already have (`cloud_upload.go`). Out of the box:
+
+| Destination | Credential |
+|---|---|
+| Amazon S3 and S3-compatible stores | an access key, ideally one that may only put objects under the prefix |
+| Google Cloud Storage | an HMAC key (the same signing as S3), or a service-account key |
+| Azure Blob Storage | a SAS URL for the container or prefix |
+| Anything else that accepts an HTTPS `PUT` | a URL template and an optional header, covering pre-signed and unauthenticated endpoints |
+
+A credential comes from a file or an environment variable, never from the
+command line. A write-only credential is enough and is what setup creates: a
+sandbox then holds nothing that can read other machines' transcripts. Nothing
+assumes `aws`, `gcloud` or `az` is installed or signed in, on either end.
+
+**The bucket importer is built in.** Fetching needs no script or
+interpreter: a manifest with `{"builtin": "bucket-import/1"}` runs in
+Pharos's own binary with the same clients, like the declarative exporter. Its
+credential may read and list, is imported at setup and stored with the plugin
+in the library, as cloud backups store theirs; `fetches_from` shows the
+bucket and prefix.
+
+## Pushing after every turn
+
+Setup encourages running the push from the agent app's own hooks: for Claude
+Code a `Stop` hook (and `SessionEnd`), for others the nearest equivalent or a
+timer. Every turn is then uploaded as it finishes, which is what makes
+short-lived machines work without a reliable exit step. That puts three
+pressures on the design: a push must cost what the turn added, several
+things push at once, and nothing may be lost or counted twice.
+
+### The bucket layout: nothing is ever overwritten
 
 ```text
-<prefix>/members/<sha256>            each envelope member, stored once
-<prefix>/exports/<host>/<source>/<id>.json   the envelope's export.json
-<prefix>/heads/<host>/<source>.json  the newest envelope ID, written last
+<prefix>/chunks/<sha256>                              a piece of a member, named by its content
+<prefix>/exports/<pusher>/<source>/<time>-<id>.json   one envelope: export.json plus each member's chunk list
+<prefix>/hello/<pusher>.json                          written by `capture-push --check`
 ```
 
-- It is incremental at both ends. Capture copies only what changed; the
-  pusher remembers which members it uploaded (and can ask the bucket when
-  its credential may), so a turn that added a few kilobytes uploads a few
-  kilobytes. The head is written last, so a reader never sees an envelope
-  whose members are not all there.
-- Old envelopes and members no head refers to can be removed by the
-  bucket's own lifecycle rule; nothing depends on them.
-- It needs no cloud toolchain. Uploads are plain HTTPS from the binary,
-  reusing the S3, GCS and Azure clients that cloud backups already have
-  (`cloud_upload.go`). Out of the box:
+- **A pusher is one capture root.** It gets a random ID when the root is
+  created. Every key a pusher writes is either under its own ID or named by
+  the content it holds. Two writers therefore never put different bytes at
+  one key, so the bucket needs no locking, no conditional writes and no
+  read permission for pushers, and an interrupted or repeated upload is
+  harmless.
+- **An envelope's file is written after its chunks,** so a reader never
+  sees one whose pieces are missing. A push that dies halfway leaves only
+  unreferenced chunks, which the next push reuses.
+- **Members are stored in content-defined chunks** (the `gear-v1` chunking
+  the Claude export store already uses). Transcripts grow by appending, so a
+  member's hash changes every turn while all but its last chunk stay the
+  same; whole-file addressing would upload a long conversation again on
+  every turn.
+- **`<time>` orders a pusher's envelopes** and each names the one before
+  it. Keys are never reused, so even a mistake that makes two machines share
+  a pusher ID loses nothing: both chains are there to read.
 
-  | Destination | Credential |
-  |---|---|
-  | Amazon S3 and S3-compatible stores | an access key, ideally one that may only put objects under the prefix |
-  | Google Cloud Storage | an HMAC key (the same signing as S3), or a service-account key |
-  | Azure Blob Storage | a SAS URL for the container or prefix |
-  | Anything else that accepts an HTTPS `PUT` | a URL template and an optional header, covering pre-signed and unauthenticated endpoints |
+### On the pushing machine
 
-  A credential comes from an environment variable or a file, never from the
-  command line. A write-only credential is enough and is what setup
-  suggests: a sandbox then holds nothing that can read other machines'
-  transcripts. Nothing assumes `aws`, `gcloud` or `az` is installed or
-  signed in, on either end.
+- **One push at a time, and the last turn always goes.** `capture-push`
+  returns at once and works in the background, so a turn never waits on a
+  network. It takes a lock on the capture root. A push asked for while one
+  runs sets a flag, and the running push makes one more pass when it
+  finishes: ten sessions ending turns together cause two passes, not ten,
+  and the newest bytes are always in the last one. Passes are at least
+  30 seconds apart.
+- **A pass costs what changed.** Capture copies only changed files. The
+  pusher builds the envelope from the capture root in place (it does not
+  write the outbox copy `capture-export` makes), keeps each file's hashes
+  and chunk list by path, size and time, and remembers which chunks it has
+  uploaded.
+- **Several pieces of work at once are one capture.** Sessions, worktrees
+  and agent apps of one OS user share one capture root and one pusher;
+  every pass carries all of them. Another OS user or container is another
+  pusher and never touches the first one's keys.
+- **A transcript caught mid-write is fine.** A pass may copy a file while
+  an agent is appending to it. The next pass brings the rest, and the reader
+  already tolerates an unfinished last line.
+- **It never fails the hook.** Errors go to a log that
+  `capture-push --status` reads. After repeated refusals from the bucket it
+  tries once a day and says so, instead of failing on every turn forever.
+- **`capture-push --wait`** uploads in the foreground, for the last step of
+  a CI job: a background push can be killed with its machine.
+- **A copied capture root is noticed.** The root records the machine it was
+  made on; found on another machine (an image baked with one inside, a
+  cloned volume) it takes a new pusher ID before pushing. Setup says not to
+  bake one into an image.
 
-**Run it from the agent's own hooks.** Setup shows, per agent app, the
-snippet that runs the push automatically: for Claude Code a `Stop` hook (and
-`SessionEnd`), so every turn is uploaded as it finishes, which is what makes
-short-lived machines work without a reliable exit step; for others, the
-nearest equivalent or a timer. For that to be safe in a hook, `capture-push`:
+### On the library's side
 
-- returns at once and works in the background, so a turn never waits on a
-  network;
-- takes a lock, so overlapping turns start one push, and a push asked for
-  while one runs is folded into one more pass;
-- never fails the hook: errors go to a log that `capture-push --status`
-  reads.
+- **The importer reads each pusher's newest envelope,** plus any envelope
+  the newest does not descend from. Its cursor is the last key it handled
+  per pusher. Envelopes pushed between two fetches are skipped, since each
+  one contains the ones before it.
+- **It fetches only chunks it lacks,** keeping what it needs to know that in
+  its `state_dir`, rebuilds each member, and hands Pharos a whole envelope to
+  verify. A chunk whose bytes do not match its name is refused and reported.
+- **Collection only adds** (see [envelopes](#capture-export-a-verified-envelope)).
+  Handling an envelope twice changes nothing; handling them out of order
+  changes nothing; an envelope that lacks something an earlier one had
+  removes nothing and is reported as a regression.
+- **A conversation that grows is one conversation.** Each turn's push makes
+  the same file longer; indexing extends the same conversation, as it does
+  for a transcript growing on this Mac.
+- **The same conversation from several places is one conversation.** Two
+  pushers that both hold a session (a transcript copied into a new container
+  and resumed, or a pull and a push of the same machine) are copies under
+  the authority rules above: a longer copy takes over, diverging copies
+  merge by message, and no message is counted twice because messages are
+  keyed by their native IDs within the conversation.
+- **Usage is not doubled.** Tokens and cost come from the conversation's
+  messages, so copies and repeated pushes cannot add to them.
 
-**The bucket importer is built in.** Fetching from a bucket needs no script
-or interpreter: a manifest with `{"builtin": "bucket-import/1"}` runs in
-Pharos's own binary with the same clients, like the declarative exporter. It
-reads the heads, fetches members it has not kept in its `state_dir`,
-reassembles each envelope and declares it as a `capture-export` drop. Its
-read credential is entered at install and stored with the plugin in the
-library, as cloud backups store theirs; `fetches_from` shows the bucket and
-prefix.
+### Keeping the bucket small
 
-**Setup is one screen that produces both halves.** Choosing "a bucket other
-machines push to" yields the importer on this Mac and, to copy, the install
-line for the Linux CLI, the `capture-push` configuration and the hook
-snippet, with the recommendation to use a bucket that requires credentials.
+Setup gives the bucket a lifecycle rule that deletes objects after 90 days,
+and tells the pusher so. A pusher uploads again any chunk its current
+envelope still needs once its record of that chunk is half that old, which
+resets the clock. So a live pusher's history stays whole, a machine that has
+gone leaves nothing behind after 90 days, and an abandoned experiment cleans
+itself up. The library keeps everything it collected; the bucket is a relay.
+A library that first reads the bucket later than that gets what live pushers
+still hold, not what dead ones once sent, and setup says so.
+
+## Setting up
+
+**Setup recommends the bucket.** The first screen offers three ways in and
+marks the first:
+
+1. **Other machines push to a cloud bucket (recommended).** Neither side
+   needs the other to be switched on, reachable or awake at the same time; a
+   sandbox that lives for a minute still delivers; nothing depends on SSH
+   keys, addresses or this Mac's network.
+2. **Pull over SSH,** for a machine you cannot install anything on.
+3. **A script of your own.**
+
+**The bucket path is two sets of commands, kept apart by privilege**, in the
+manner of cloud backup's setup: each is offered as prepared Bash and as a
+prompt to hand to an agent.
+
+- **Create the bucket** runs once, where the person is signed in to their
+  cloud account with rights to create things. It creates the bucket (private,
+  with the lifecycle rule), a credential that can only write under the
+  prefix, and a credential that can only read and list. It writes two files
+  and prints nothing secret:
+  - `pharos-push.json`: the destination and the write credential;
+  - `pharos-read.json`: the destination and the read credential, which
+    Pharos imports from the file and then offers to delete.
+- **Set up a machine** runs on each sandbox, dev server or image, with
+  `pharos-push.json` and nothing else. It installs the Linux CLI, puts the
+  file where `capture-push` reads it (or names the CI secret to hold it),
+  adds the hooks for the agent apps found there, and finishes with
+  `capture-push --check`. The agent given this prompt never sees an
+  administrator's session or a credential that can read.
+
+Setup also saves the non-secret plan of what was created, so removal can
+later print the exact commands that take it down.
+
+**Setup shows which half is not working.** While it is open it checks the
+bucket every few seconds and ticks off:
+
+1. Pharos can read the bucket.
+2. A machine has reached the bucket (a `hello` object, written by `--check`
+   and by every first push).
+3. An envelope has arrived.
+4. Conversations were collected (then **Does this look right?**).
+
+Each step that has not happened names what to run or look at. Someone who
+stops at step 2 knows the bucket is fine and the sandbox is not.
+
+## Integrations that never work, or stop
+
+Many setups will be started and abandoned, or work for a month and go
+quiet. They must not check a dead bucket forever, clutter Background
+Processing, or leave credentials lying about. Pharos tells four states
+apart, by what it received and not by whether runs "succeeded":
+
+| State | Means | What Pharos does |
+|---|---|---|
+| **Setting up** | Nothing has ever been collected | Checks often for an hour, hourly for a day, daily for a week. Then pauses itself, with one notice: finish setup, or remove it. After 30 days paused it is removed, with its stored credential; nothing was imported, so nothing is lost |
+| **Active** | Collected something recently | Runs on its cadence |
+| **Quiet** | Fetches succeed and bring nothing new, for longer than 30 days and four times its longest gap so far | Drops to a daily check without asking. Its line says since when, with **Stop checking**. After 90 days quiet it pauses itself with one notice. What it imported stays |
+| **Failing** | Fetches fail (credential expired, bucket gone, host unreachable) | The existing rule: retries, then paused after five failures, naming the cause and the one thing to do |
+
+- **Quiet is not broken.** A bucket nobody pushed to and a bucket that
+  refuses the credential are different states with different words. A
+  missing measurement is never shown as zero conversations.
+- **One notice per change of state,** never a repeating one. Paused
+  integrations cost nothing and sit together at the bottom of **Plugins**
+  under one count.
+- **Pushers inside a working bucket** come and go by design. They are shown
+  as a count and a last-active time per pool, never as a list of failures,
+  and are never pruned from the library.
+- **Removing is as guided as adding.** Remove shows what will stay (every
+  imported conversation), deletes the stored credential, and prints from the
+  saved plan the commands that delete the bucket and its credentials and
+  that take the hook and key off each machine, as Bash or as an agent
+  prompt. Running them is the person's choice.
+- **The far side quiets itself too.** A pusher whose bucket has refused it
+  for a week tries daily, not per turn, and the lifecycle rule empties a
+  bucket nobody pushes to.
+
+The automatic pause and removal apply only to importers, and removal only to
+ones that never collected anything.
 
 ## Decisions
 
@@ -410,14 +568,21 @@ Decided by the owner on 2026-11-15:
    ones.
 7. **No `RLIMIT_CPU` or `RLIMIT_FSIZE`:** limits are enforced by sampling.
 
-Open:
+8. **Setup recommends the bucket,** with bucket creation and machine setup
+   as separate command sets, each as Bash or an agent prompt.
+9. **A partly priced usage record counts its known part,** and the
+   uncertainty joins the existing estimate mark on API cost.
+10. **Pushes are designed for every turn:** nothing in the bucket is
+    overwritten, members are chunked, collection only adds.
 
-- **A usage record whose cost is only partly known.** The labeling ledger
-  marks some requests `partial`: it could price some of the tokens but not
-  all. Either such a record adds nothing to cost totals and is shown as
-  "at least $x, unpriced in part" (proposed, since every other not-fully-
-  priced status already stays out of cost), or its known part is added to
-  cost and the total is marked incomplete.
+Proposed, not yet confirmed:
+
+- Envelopes from a pusher are added to that host's capture rather than each
+  landing under `.imports/`, which stays the home of one-off envelopes.
+- Each container in a pool is its own host, under one machine.
+- The numbers: 30 seconds between passes; a 90-day bucket lifecycle; a
+  setup that never collected anything pauses after a week and is removed
+  after 30 more days; a quiet integration pauses after 90 days.
 
 ## Order of work
 
@@ -429,17 +594,23 @@ Open:
    `plugin.run`.
 3. `files` collection through capture, hosts and machines, review, receipts,
    Recover library. `ssh_pull.py` becomes a catalog plugin.
-4. The envelope importer under `.imports/`.
-5. `capture-push` with the pushed layout and the four destinations, on the
-   Mac first; then `bucket-import/1` and the setup screen.
-6. The Linux CLI: build, release artifact, native lifecycle tests on Linux,
+4. The envelope importer: one-off under `.imports/`, streams added to the
+   pusher's capture.
+5. `capture-push` with the bucket layout, chunking and the four
+   destinations, on the Mac first; then `bucket-import/1`.
+6. Setup: the recommended bucket path, both command sets, the four-step
+   check; integration states, automatic pause and guided removal.
+7. The Linux CLI: build, release artifact, native lifecycle tests on Linux,
    hook snippets.
-7. `export` drops; usage imports with the labeling ledger importer.
+8. `export` drops; usage imports with the labeling ledger importer.
 
 Data-safety tests to write with the code, not after: a drop cannot name a
 native or foreign host; a partial `files` run never reads absence as
 deletion; an interrupted collection leaves valid captures and the old
 cursor; an envelope that fails verification publishes nothing; the same
 session from two places is one conversation; Recover library clears cursors
-and pauses; a push interrupted at any point leaves the previous head
-readable and never a head whose members are missing.
+and pauses; a push interrupted at any point never leaves an envelope whose
+chunks are missing; envelopes handled twice, out of order or from two
+pushers sharing an ID add everything and remove nothing; overlapping pushes
+on one machine always upload the newest bytes; a setup that collected
+something is never removed automatically.

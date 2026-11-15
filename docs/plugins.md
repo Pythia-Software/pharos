@@ -907,7 +907,9 @@ per request and model, shown here pretty-printed:
   however many runs bring it, and no other plugin can overwrite it. A record sent again replaces the stored one, which makes re-running
   over a growing or resumed ledger safe.
 - **Cost and estimates stay apart.** `cost.usd` counts as spend only when
-  `status` is `priced` or `assumed`; other statuses show as unpriced usage.
+  `status` is `priced`, `assumed` or `partial` (the known part of a partly
+  priced request, which marks totals as estimates); other statuses show as
+  unpriced usage.
   `estimate` is exposure, never cost. Failed attempts with usage still count.
 - **Marked as automation.** In Pharos's own usage views the records are a
   usage kind of their own, **Automation**, with their kind (labeling), job and

@@ -28,7 +28,7 @@
     },
     "tokens": {"$ref": "common.schema.json#/$defs/tokens"},
     "cost": {
-      "description": "Spend. usd counts as cost only when status is priced or assumed; other statuses are unpriced usage. partial means only part of the usage could be priced: usd is a floor, not a cost.",
+      "description": "Spend. usd counts as cost when status is priced, assumed or partial; other statuses are unpriced usage. partial means only part of the usage could be priced: usd is the known part, and totals that include it are shown as estimates.",
       "type": "object",
       "additionalProperties": false,
       "required": ["status"],
@@ -37,7 +37,7 @@
         "status": {"enum": ["priced", "assumed", "partial", "unpriced", "unknown"]},
         "priced_model": {"description": "The price-book model used, when it differs from model.", "type": "string"}
       },
-      "if": {"properties": {"status": {"enum": ["priced", "assumed"]}}},
+      "if": {"properties": {"status": {"enum": ["priced", "assumed", "partial"]}}},
       "then": {"required": ["usd"]}
     },
     "estimate": {
