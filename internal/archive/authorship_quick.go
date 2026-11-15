@@ -64,11 +64,25 @@ func (c *Catalog) UpdateAuthorship(parent context.Context, generation string) (f
 	ctx, cancel := context.WithTimeout(parent, authorshipQuickBudget)
 	defer cancel()
 	err := c.withAuthorshipLease(func() error {
+		// Most passes follow an index that queued no writing: say so and stop.
+		if idle, _, err := c.publishIdleAuthorship(ctx, generation); err != nil || idle {
+			return err
+		}
+		signature, err := c.authorshipMirrorSignature(ctx)
+		if err != nil {
+			return err
+		}
 		representative, err := c.authorshipRepresentatives(ctx)
 		if err != nil {
 			return err
 		}
-		if err := c.refreshAuthorshipMirrors(ctx, representative); err != nil {
+		// Mirrors that moved between the two reads are looked at again.
+		if again, err := c.authorshipMirrorSignature(ctx); err != nil {
+			return err
+		} else if again != signature {
+			signature = ""
+		}
+		if err := c.refreshAuthorshipMirrors(ctx, representative, signature); err != nil {
 			return err
 		}
 		pending, err := c.authorshipPending(ctx)
@@ -290,7 +304,18 @@ func (c *Catalog) quickAuthorshipRows(ctx context.Context, representative map[st
 		}
 	}
 	results := []authorResult{}
-	reportWork(ctx, "estimating your writing", "message", 0, len(inputs))
+	// A pass's lanes read the queue in batches; its progress is the pass's
+	// (runAuthorshipLanes), not the batch in hand.
+	progress, _ := ctx.Value(authorshipQuickProgressKey{}).(*authorshipQuickProgress)
+	report := func(done int) {
+		if progress == nil {
+			reportWork(ctx, "estimating your writing", "message", done, len(inputs))
+			return
+		}
+		progress.total = max(progress.total, progress.done+len(rows))
+		reportWork(ctx, "estimating your writing", "message", progress.done+done, progress.total)
+	}
+	report(0)
 	for i, input := range inputs {
 		if err := ctx.Err(); err != nil {
 			return 0, nil, err
@@ -305,7 +330,7 @@ func (c *Catalog) quickAuthorshipRows(ctx context.Context, representative map[st
 			classifier.lastUserSent[input.ConversationID] = at
 		}
 		results = append(results, authorResult{Input: input, Spans: classifier.classify(input), Answers: classifier.answers})
-		reportWork(ctx, "estimating your writing", "message", i+1, len(inputs))
+		report(i + 1)
 	}
 	// An empty non-nil ID slice means no output writes, not a whole-table diff.
 	if ids == nil {
@@ -352,8 +377,18 @@ func (c *Catalog) quickAuthorshipRows(ctx context.Context, representative map[st
 		}
 		return nil
 	})
+	if err == nil && progress != nil {
+		progress.done += len(rows)
+		report(0)
+	}
 	return len(rows), read, err
 }
+
+// authorshipQuickProgress is one estimates pass's progress across its
+// batches: queued messages handled, of those queued when it began.
+type authorshipQuickProgress struct{ done, total int }
+
+type authorshipQuickProgressKey struct{}
 
 // RefineAuthorship explicitly forces the complete historical classifier.
 // It uses the same lease as estimates and preserves queued edits on failure.

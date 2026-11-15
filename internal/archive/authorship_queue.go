@@ -2,7 +2,9 @@ package archive
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -18,8 +20,15 @@ const (
 	authorshipDeferred   = "deferred"
 )
 
+// linkedWorkspacesSQL selects the workspaces an identity link joins. Only
+// they can mirror one another, so they decide the representatives; reading
+// every workspace instead was most of an idle estimates pass.
+const linkedWorkspacesSQL = `SELECT id,source_kind,activity_at FROM workspaces WHERE id IN (
+ SELECT a.workspace_id FROM conversation_identity_links l JOIN conversations a ON a.id=l.left_id
+ UNION SELECT b.workspace_id FROM conversation_identity_links l JOIN conversations b ON b.id=l.right_id)`
+
 func (c *Catalog) authorshipRepresentatives(ctx context.Context) (map[string]string, error) {
-	workspaces, err := queryMapsContext(ctx, c.reader(), `SELECT id,source_kind,activity_at FROM workspaces`)
+	workspaces, err := queryMapsContext(ctx, c.reader(), linkedWorkspacesSQL)
 	if err != nil {
 		return nil, err
 	}
@@ -28,6 +37,79 @@ func (c *Catalog) authorshipRepresentatives(ctx context.Context) (map[string]str
 		return nil, err
 	}
 	return mirrorRepresentatives(workspaces, links), nil
+}
+
+// authorshipMirrorSignature digests everything the representatives are chosen
+// from (the linked workspaces' kinds and activity, and the links), streamed
+// without building the map, so a pass can tell that the mirrors it stored
+// still stand.
+func (c *Catalog) authorshipMirrorSignature(ctx context.Context) (string, error) {
+	digest := sha256.New()
+	for _, query := range []string{
+		`SELECT id,COALESCE(source_kind,''),COALESCE(activity_at,'') FROM (` + linkedWorkspacesSQL + `) ORDER BY id`,
+		`SELECT left_workspace,right_workspace,'' FROM (` + identityLinkWorkspacesSQL + `) ORDER BY 1,2`,
+	} {
+		rows, err := c.reader().QueryContext(ctx, query)
+		if err != nil {
+			return "", err
+		}
+		for rows.Next() {
+			var a, b, c sql.RawBytes
+			if err := rows.Scan(&a, &b, &c); err != nil {
+				rows.Close()
+				return "", err
+			}
+			for _, field := range []sql.RawBytes{a, b, c} {
+				digest.Write(field)
+				digest.Write([]byte{0})
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return "", err
+		}
+		digest.Write([]byte{1})
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+// authorshipIdleBudget bounds the wait for the writer when a pass has only a
+// generation to publish: the next pass publishes it as well.
+var authorshipIdleBudget = time.Second
+
+// publishIdleAuthorship publishes generation as estimated when nothing is
+// queued and the mirrors are the ones already reconsidered, and reports
+// whether it did. The estimates' generation includes the tool ledger's, which
+// moves with nearly every index, so most passes have only this to do; it
+// costs two small reads and one metadata write instead of loading every
+// workspace, and gives up rather than wait out the pass's budget behind
+// another writer.
+//
+// idle reports that there was nothing else to do, published that the
+// generation is now the estimates'.
+func (c *Catalog) publishIdleAuthorship(parent context.Context, generation string) (idle, published bool, err error) {
+	pending, err := c.authorshipPending(parent)
+	if err != nil || pending {
+		return false, false, err
+	}
+	signature, err := c.authorshipMirrorSignature(parent)
+	if err != nil {
+		return false, false, err
+	}
+	stored, err := c.metaValue(parent, "authorship_mirrors_signature")
+	if err != nil || stored != signature {
+		return false, false, err
+	}
+	ctx, cancel := context.WithTimeout(parent, authorshipIdleBudget)
+	defer cancel()
+	if err := c.publishAuthorshipEstimates(ctx, generation); err != nil {
+		if parent.Err() == nil && ctx.Err() == context.DeadlineExceeded {
+			return true, false, nil
+		}
+		return false, false, err
+	}
+	quick, err := c.metaValue(parent, "authorship_quick_generation")
+	return true, quick == generation, err
 }
 
 // Suppression depends on workspace identity, not text. This metadata-only
@@ -84,14 +166,23 @@ func recordAuthorshipSuppressed(ctx context.Context, tx *sql.Tx, changes [][2]st
 
 // A previously suppressed copy may become the representative, and a counted
 // copy may stop being one. Persist the map and queue both sides atomically.
-func (c *Catalog) refreshAuthorshipMirrors(ctx context.Context, representatives map[string]string) error {
+//
+// signature is authorshipMirrorSignature read before representatives; stored
+// with them, it lets later passes skip this while the mirrors' inputs stand.
+// A change between the two reads only makes the next pass look again.
+func (c *Catalog) refreshAuthorshipMirrors(ctx context.Context, representatives map[string]string, signature string) error {
 	stored, err := c.metaValue(ctx, "authorship_mirrors")
 	if err != nil {
 		return err
 	}
 	current := jsonText(representatives)
 	if stored == current {
-		return nil
+		if noted, err := c.metaValue(ctx, "authorship_mirrors_signature"); err != nil || signature == "" || noted == signature {
+			return err
+		}
+		return c.writeTransaction(ctx, "note writing mirrors", func(tx *sql.Tx) error {
+			return setMeta(tx, "authorship_mirrors_signature", signature)
+		})
 	}
 	previous := map[string]string{}
 	if stored != "" {
@@ -144,8 +235,10 @@ func (c *Catalog) refreshAuthorshipMirrors(ctx context.Context, representatives 
 				return err
 			}
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('authorship_mirrors',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, current)
-		return err
+		if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('authorship_mirrors',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, current); err != nil {
+			return err
+		}
+		return setMeta(tx, "authorship_mirrors_signature", signature)
 	})
 }
 
@@ -270,6 +363,14 @@ func (c *Catalog) runAuthorshipLanes(ctx context.Context, representatives map[st
 	limit := max(1, authorshipQuickLimit)
 	recentLimit := limit - limit/5
 	cutoff := formatTime(c.clock().Add(-authorshipRecentWindow))
+	// Report the pass, not each 25-message batch: the run history showed
+	// "N of 25" for a pass that handled up to the whole limit.
+	progress := &authorshipQuickProgress{}
+	if err := c.reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM authorship_pending LIMIT ?)`, limit).Scan(&progress.total); err != nil {
+		return err
+	}
+	ctx = context.WithValue(ctx, authorshipQuickProgressKey{}, progress)
+	reportWork(ctx, "estimating your writing", "message", 0, progress.total)
 	deadline, _ := ctx.Deadline()
 	recentCtx, stop := context.WithTimeout(ctx, time.Until(deadline)*3/4)
 	recent, err := c.runAuthorshipLane(recentCtx, representatives, recentLimit, cutoff, true)
@@ -284,6 +385,10 @@ func (c *Catalog) runAuthorshipLanes(ctx context.Context, representatives map[st
 	}
 	if remaining := limit - recent - historical; remaining > 0 {
 		_, err = c.runAuthorshipLane(ctx, representatives, remaining, cutoff, true)
+	}
+	if err == nil {
+		// The queue may have held less than was counted: end on what was done.
+		reportWork(ctx, "estimating your writing", "message", progress.done, progress.done)
 	}
 	return err
 }

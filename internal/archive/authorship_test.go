@@ -500,8 +500,12 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	if len(started) != 1 {
 		t.Fatal("page read started historical refinement")
 	}
+	// The generation moved with the tool ledger alone: nothing is queued and
+	// the mirrors stand, so the refresh publishes it without a pass.
 	c.refreshAuthorship()
-	started[1](t.Context())
+	if len(started) != 1 {
+		t.Fatal("an index that queued no writing started an estimates pass")
+	}
 	if c.ensureAuthorship() {
 		t.Fatal("estimates did not catch up")
 	}
@@ -512,29 +516,44 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	execTx(t, c.DB, `UPDATE meta SET value='1/authorship-v0' WHERE key='authorship_quick_generation'`, `DELETE FROM meta WHERE key='authorship_quick_version'`)
 	c.authorship.estimatesAttempted = false
 	c.ensureAuthorship()
-	if len(started) != 3 {
+	if len(started) != 2 {
 		t.Fatal("older estimates did not start a bounded update")
 	}
-	started[2](t.Context())
+	started[1](t.Context())
+	// Writing that arrives while this process indexes gets a pass, and a
+	// follow-up when the ingest ends.
 	c.ingestStarted()
-	if err := bumpToolLedgerGeneration(c.DB); err != nil {
-		t.Fatal(err)
-	}
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','c')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('m','c','m','user','message','Please fix the parser','2026-09-01T12:00:00.000Z','m')`)
 	c.refreshAuthorship()
-	started[3](t.Context())
-	if !c.authorship.deferred.Load() {
+	if len(started) != 3 {
+		t.Fatal("queued writing did not start an estimates pass")
+	}
+	started[2](t.Context())
+	if !c.authorship.deferred.Load() || c.authorshipQuickPending() {
 		t.Fatal("update during indexing did not remember its follow-up")
 	}
 	c.ingestEnded(true)
-	if len(started) != 4 {
+	if len(started) != 3 {
 		t.Fatal("stopped ingest started another pass")
 	}
+	// So does a generation published without a pass.
+	c.authorship.deferred.Store(false)
+	if err := bumpToolLedgerGeneration(c.DB); err != nil {
+		t.Fatal(err)
+	}
 	c.ingestStarted()
+	c.refreshAuthorship()
+	if !c.authorship.deferred.Load() || len(started) != 3 {
+		t.Fatal("a generation published during indexing did not remember its follow-up")
+	}
 	c.ingestEnded(false)
 	if c.authorship.deferred.Load() {
 		t.Fatal("normal ingest end did not consume its follow-up")
 	}
-	if len(started) != 4 {
+	if len(started) != 3 {
 		t.Fatal("current estimates were rebuilt again")
 	}
 }
@@ -2274,7 +2293,7 @@ func TestAuthorshipQuickUpgradeRetainsExcludedMirrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.refreshAuthorshipMirrors(t.Context(), representatives); err != nil {
+	if err := c.refreshAuthorshipMirrors(t.Context(), representatives, ""); err != nil {
 		t.Fatal(err)
 	}
 	if stored, _ := c.metaValue(t.Context(), "authorship_mirrors"); stored != jsonText(representatives) || len(representatives) != 2 || c.authorshipQuickPending() {
@@ -2306,8 +2325,18 @@ func TestAuthorshipQuickLanesProgressUnderNewWriting(t *testing.T) {
 			message(fmt.Sprintf("live%d-%d", pass, i), at.Add(time.Duration(pass)*time.Minute))
 		}
 		want, _, _ := c.authorshipGenerations()
-		if err := c.UpdateAuthorship(t.Context(), want); err != nil {
+		// Progress is the pass's, across both lanes' batches.
+		var last activityWork
+		ctx := withWorkProgress(t.Context(), func(work activityWork) {
+			if work.Phase == "estimating your writing" {
+				last = work
+			}
+		})
+		if err := c.UpdateAuthorship(ctx, want); err != nil {
 			t.Fatal(err)
+		}
+		if last.Done != 5 || last.Total != 5 {
+			t.Fatalf("pass %d reported %v of %v messages, want its 5", pass, last.Done, last.Total)
 		}
 		var historical, all int
 		if err := c.DB.QueryRow(`SELECT COUNT(*),SUM(message_id LIKE 'history%') FROM message_authorship`).Scan(&all, &historical); err != nil {

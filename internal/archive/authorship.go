@@ -1284,6 +1284,26 @@ func (c *Catalog) refreshAuthorshipInContext(parent context.Context) bool {
 		return false
 	}
 	if want, built, err := c.authorshipEstimateGenerations(); err == nil && (want != built || c.authorshipQuickPending()) {
+		// The generation moves with the tool ledger, on nearly every index.
+		// With no writing queued there is only that to publish, which needs
+		// no operation of its own.
+		ctx := parent
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		published := false
+		_ = c.withAuthorshipLease(func() (err error) {
+			_, published, err = c.publishIdleAuthorship(ctx, want)
+			return err
+		})
+		if published {
+			// As after a pass: writing that arrives while this process is
+			// still indexing gets its follow-up when the ingest ends.
+			if c.ingestRuns.Load() > 0 {
+				c.authorship.deferred.Store(true)
+			}
+			return false
+		}
 		return c.startAuthorshipInContext(want, parent)
 	}
 	return false
