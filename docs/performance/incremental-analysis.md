@@ -111,9 +111,31 @@ reads workspace/link metadata globally, and daily aggregation reads all cube
 partitions on affected days. The measured speedup does not imply that every
 read is bounded by the changed call count. Competing publication is
 rejected; busy publication retries reuse temporary data. Full fallback handles
-upgrades, broad attribution/pricing changes, timezone changes, and repair.
+upgrades, timezone changes, and repair.
 A new day no longer forces it (November 2026): the cube groups each call by
-its own local day.
+its own local day. Nor do identity links, conversation moves, pricing, or a
+ledger generation that moved with no partition marked (November 2026). The
+cube reads none of them: links and moves only choose the mirrors, which every
+build recomputes from the linked workspaces and publishes as a difference, and
+their triggers mark the linked workspaces; a pricing change rotates
+`tool_rollup_price_revision`, which re-sums and re-prices every day of
+`tool_usage_daily` from the stored cube. Before this, one link per Codex or
+Claude continuation (39–296 a day) made nearly every production build a full
+one: about 87–110 seconds instead of about 2 on the owner's library, and every
+publish rewrote all 7,173 mirror rows, which marked the request exclusions
+stale and invalidated the query cache once per row.
+
+Measured on a clone of that library (classic engine, warm, one run each):
+
+| Change | Rollup before → after | Writer hold | Query-cache bumps | Mirror rows written |
+|---|---|---|---|---|
+| 50 conversations + 1 new link | 73.2 s (full) → 2.0 s | 9.8 s → 0.26 s | 201,707 → 3,797 | 14,354 → 1 |
+| 50 conversations | 0.39 s → 1.13 s (stage 2.87 s → 1.62 s: no exclusions rebuild) | 0.06 s → 0.06 s | 15,268 → 914 | 14,354 → 0 |
+| Harness edit only | 39.0 s (full) → 0.15 s | 8.9 s → 0.01 s | 201,698 → 0 | 14,354 → 0 |
+| A price row rewritten | full (not timed) → 13.3 s (re-price) | full → 3.2 s | not compared | 0 |
+
+The cube, daily table and mirrors after the incremental series matched a full
+rebuild on the same inputs row for row (386,873, 93,672 and 7,177 rows).
 
 Findings cache conversation inputs and static call classifications, with
 independent prompt-message revisions. Each refresh still performs full candidate
@@ -193,6 +215,31 @@ manual for now; a future opt-in trial should be no more frequent than hourly,
 require changed inputs, and prevent overlapping passes. First-build/window
 rollover cost and resident memory need their own budget. No scheduling policy
 was enabled by this implementation.
+
+## Writing and related conversations (November 14, 2026)
+
+Measured on an APFS clone of a 110 GB library (46,000 classified prompts,
+17.8 million tool calls), four cores, one observation each. Wall times moved
+with cache warmth by a factor of four between otherwise identical full
+passes (120–490 s), so compare allocation and rows written first.
+
+| Pass | Before | After |
+|---|---|---|
+| Daily writing refinement, full | 477–486 s, 44.5 GB, 3,652 rows rewritten (5 changed class), writer held 29–30 s | 44.5 GB, 5 rows rewritten, no writer hold of a second |
+| Daily writing refinement after 100 new prompts | the full pass above | from the checkpoint: 5.8 s, 2.65 GB; a forced full pass then changed 0 rows |
+| Estimates pass with nothing queued | 0.22 s, 76 MB, a pass in the activity list | 0.18 s, 1.9 MB, no pass |
+| Related conversations after an old-dated chat import | 307 s, 26 GB, 6,920 readers derived again | 1.6 s, 51 MB, 0 readers, links unchanged |
+
+The daily pass still classifies everything when the identity or launch graph
+changed, when writing mirrors were reconsidered, when an import is dated
+before the checkpoint, when a repeated prompt first becomes a template, and
+once a week; its journal step names the reason. A library that gains
+identity links every day therefore still runs it in full on most days.
+
+Two full rescans of read links choose different writer messages for about
+four in ten links (the first matching line in map order); the linked work,
+confidence, reader message, time and evidence are identical, and that is the
+parity the incremental run was checked against.
 
 ## Reproduction and artifacts
 

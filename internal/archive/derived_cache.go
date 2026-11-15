@@ -60,9 +60,13 @@ type derivedEntry struct {
 	value   any
 	err     error
 	fault   any
-	// compute and usedAt let warmCaches recompute a value still in use.
+	// compute and askedAt let warmCaches recompute a value still in use.
+	// usedAt is the last read of any kind, which the bounded families
+	// (delegation, Thinking cohorts) expire by; askedAt is the last read on
+	// someone's behalf, which is every read but an unaskedRead.
 	compute func(context.Context) (any, error)
 	usedAt  time.Time
+	askedAt time.Time
 	// While the build runs, waiters counts the callers waiting for it. When
 	// the last leaves, idle waits derivedIdleGrace and then abandons the build:
 	// cancels it and discards whatever it returns. keep marks a build a warm-up
@@ -116,7 +120,8 @@ func (cache *derivedCache) abandon(entry *derivedEntry) {
 	}
 }
 
-// recentUse is how long after its last request a value is kept warm.
+// recentUse is how long after the last request for it (derivedEntry.askedAt)
+// a value is kept warm.
 const recentUse = 30 * time.Minute
 
 const (
@@ -245,8 +250,19 @@ func warmOnly(ctx context.Context) context.Context {
 
 func isWarmOnly(ctx context.Context) bool { return ctx.Value(warmOnlyKey{}) == true }
 
+// unaskedRead marks a context whose reads of derived values are on nobody's
+// behalf: a stored answer rebuilt because its data changed, not because
+// anyone asked for it. Such a read is served like any other but does not
+// keep the value warm. If it did, the rebuilds would themselves be the
+// reason the values behind them are recomputed after every change.
+type unaskedReadKey struct{}
+
+func unaskedRead(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unaskedReadKey{}, true)
+}
+
 // derivedValue is cachedValue without a type. A request marks the value as
-// used, which keeps it warm.
+// asked for, which keeps it warm, unless it is an unaskedRead.
 func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(context.Context) (any, error), request bool) (any, error) {
 	if timing := timingFrom(ctx); timing != nil {
 		// The computation is shared by every request that asks, so it is no
@@ -280,6 +296,7 @@ func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, comput
 	if request && ctx.Value(backgroundQueryKey{}) == nil {
 		defer heavyQueries.attend()()
 	}
+	asked := request && ctx.Value(unaskedReadKey{}) == nil
 	// Attribution is published by writers (see ensureOrigins); publication
 	// advances the generation, so values computed from older origins are
 	// recomputed.
@@ -388,18 +405,15 @@ func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, comput
 			}
 		}
 		if entry == nil || entry.version != version || entry.abandoned {
-			usedAt := time.Time{}
+			var usedAt, askedAt time.Time
 			if entry != nil {
-				usedAt = entry.usedAt
+				usedAt, askedAt = entry.usedAt, entry.askedAt
 			}
-			entry = &derivedEntry{version: version, ready: make(chan struct{}), compute: compute, usedAt: usedAt, keep: !request}
+			entry = &derivedEntry{version: version, ready: make(chan struct{}), compute: compute, usedAt: usedAt, askedAt: askedAt, keep: !request}
 			if cache.entries == nil {
 				cache.entries = map[string]*derivedEntry{}
 			}
 			cache.entries[key] = entry
-			if request {
-				entry.usedAt = time.Now()
-			}
 			generation := cache.generation
 			work, cancel := context.WithCancel(context.WithoutCancel(ctx))
 			onFault := cache.onFault
@@ -454,10 +468,14 @@ func (c *Catalog) derivedValueUnadmitted(ctx context.Context, key string, comput
 				}()
 				value, err = computeDerived(work, key, compute)
 			}()
-		} else if request {
-			entry.usedAt = time.Now()
-		} else {
+		} else if !request {
 			entry.keep = true
+		}
+		if request {
+			entry.usedAt = time.Now()
+		}
+		if asked {
+			entry.askedAt = entry.usedAt
 		}
 		entry.waiters++
 		if entry.idle != nil {
@@ -613,7 +631,7 @@ func (c *Catalog) recomputeStaleDerived(ctx context.Context, wanted func(generat
 		if wanted != nil && !wanted(generation) {
 			continue
 		}
-		if entry.version != cache.versions.generations.of(generation) && time.Since(entry.usedAt) < recentUse {
+		if entry.version != cache.versions.generations.of(generation) && time.Since(entry.askedAt) < recentUse {
 			stale[key] = entry.compute
 		}
 	}

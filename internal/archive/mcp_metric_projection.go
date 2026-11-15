@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -33,26 +35,6 @@ func (c *Catalog) ensureMetricSchema() error {
 	if err != nil {
 		return err
 	}
-	dependencies := map[string]func(string) string{
-		"workspaces":    func(row string) string { return "SELECT " + row + ".id AS workspace_id" },
-		"conversations": func(row string) string { return "SELECT " + row + ".workspace_id AS workspace_id" },
-		"messages": func(row string) string {
-			return "SELECT workspace_id FROM conversations WHERE id=" + row + ".conversation_id"
-		},
-		"agent_sessions": func(row string) string { return "SELECT " + row + ".workspace_id AS workspace_id" },
-		"agent_session_usage": func(row string) string {
-			return "SELECT workspace_id FROM agent_sessions WHERE id=" + row + ".agent_session_id"
-		},
-		"agent_session_messages": func(row string) string {
-			return "SELECT workspace_id FROM agent_sessions WHERE id=" + row + ".agent_session_id"
-		},
-		"tool_calls": func(row string) string { return "SELECT " + row + ".workspace_id AS workspace_id" },
-		"tool_ledger_state": func(row string) string {
-			return "SELECT workspace_id FROM conversations WHERE id=" + row + ".conversation_id"
-		},
-		"metrics":                       func(row string) string { return "SELECT " + row + ".workspace_id AS workspace_id" },
-		"conversation_group_membership": func(row string) string { return "SELECT " + row + ".workspace_id AS workspace_id" },
-	}
 	// Prices are not a trigger dependency: replacePricing marks the
 	// workspaces whose usage a price change reprices. Earlier builds marked
 	// every workspace for each price row written.
@@ -63,31 +45,8 @@ func (c *Catalog) ensureMetricSchema() error {
 			}
 		}
 	}
-	for table, lookup := range dependencies {
-		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
-			marks, releases := []string{}, []string{}
-			rows := []string{"NEW"}
-			if event == "DELETE" {
-				rows = []string{"OLD"}
-			} else if event == "UPDATE" {
-				rows = []string{"OLD", "NEW"}
-			}
-			for _, row := range rows {
-				marks = append(marks, `INSERT INTO mcp_metric_dirty SELECT workspace_id FROM (`+lookup(row)+`) WHERE workspace_id IN (SELECT id FROM workspaces) AND workspace_id NOT IN (SELECT workspace_id FROM mcp_metric_dirty);`)
-			}
-			if _, err = c.DB.Exec(`CREATE TRIGGER IF NOT EXISTS mcp_metric_` + table + `_` + strings.ToLower(event) + ` AFTER ` + event + ` ON ` + table + ` BEGIN ` + strings.Join(marks, " ") + ` END`); err != nil {
-				return err
-			}
-			// Claims exist only while a refresh computes, so this trigger's
-			// body is skipped for nearly every write.
-			for _, row := range rows {
-				releases = append(releases, `DELETE FROM mcp_metric_claims WHERE workspace_id IN (`+lookup(row)+`);`)
-			}
-			if _, err = c.DB.Exec(`CREATE TRIGGER IF NOT EXISTS mcp_metric_release_` + table + `_` + strings.ToLower(event) + ` AFTER ` + event + ` ON ` + table +
-				` WHEN EXISTS(SELECT 1 FROM mcp_metric_claims) BEGIN ` + strings.Join(releases, " ") + ` END`); err != nil {
-				return err
-			}
-		}
+	if err := c.ensureMetricTriggers(); err != nil {
+		return err
 	}
 	var version string
 	err = c.DB.QueryRow("SELECT value FROM meta WHERE key='mcp_metric_version'").Scan(&version)
@@ -100,6 +59,112 @@ func (c *Catalog) ensureMetricSchema() error {
 		INSERT INTO meta(key,value) VALUES('mcp_metric_version','` + metricProjectionVersion + `') ON CONFLICT(key) DO UPDATE SET value=excluded.value;`)
 	}
 	return err
+}
+
+// metricDependencies maps a changed row (NEW or OLD) of each table the
+// projection reads to the workspace it belongs to.
+var metricDependencies = map[string]func(string) string{
+	"workspaces":    func(row string) string { return "SELECT " + row + ".id AS workspace_id" },
+	"conversations": func(row string) string { return "SELECT " + row + ".workspace_id AS workspace_id" },
+	"messages": func(row string) string {
+		return "SELECT workspace_id FROM conversations WHERE id=" + row + ".conversation_id"
+	},
+	"agent_sessions": func(row string) string { return "SELECT " + row + ".workspace_id AS workspace_id" },
+	"agent_session_usage": func(row string) string {
+		return "SELECT workspace_id FROM agent_sessions WHERE id=" + row + ".agent_session_id"
+	},
+	"agent_session_messages": func(row string) string {
+		return "SELECT workspace_id FROM agent_sessions WHERE id=" + row + ".agent_session_id"
+	},
+	"tool_calls": func(row string) string { return "SELECT " + row + ".workspace_id AS workspace_id" },
+	"tool_ledger_state": func(row string) string {
+		return "SELECT workspace_id FROM conversations WHERE id=" + row + ".conversation_id"
+	},
+	"metrics":                       func(row string) string { return "SELECT " + row + ".workspace_id AS workspace_id" },
+	"conversation_group_membership": func(row string) string { return "SELECT " + row + ".workspace_id AS workspace_id" },
+}
+
+// metricTriggerDDL marks a written row's workspace, and releases its claim
+// while a refresh computes. An insert or a delete always does; an update only
+// when it changes a column the projection's statements read
+// (projectionChangeCondition), so a row stored again unchanged marks nothing.
+func metricTriggerDDL(q queryer) ([]string, error) {
+	statements := []string{}
+	for _, table := range slices.Sorted(maps.Keys(metricDependencies)) {
+		lookup := metricDependencies[table]
+		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
+			rows, changed := []string{"NEW"}, ""
+			if event == "DELETE" {
+				rows = []string{"OLD"}
+			} else if event == "UPDATE" {
+				rows = []string{"OLD", "NEW"}
+				condition, err := projectionChangeCondition(q, table, append(slices.Clone(metricProjectionStatements), lookup("NEW")))
+				if err != nil {
+					return nil, err
+				}
+				changed = "(" + condition + ")"
+			}
+			marks, releases := []string{}, []string{}
+			for _, row := range rows {
+				marks = append(marks, `INSERT INTO mcp_metric_dirty SELECT workspace_id FROM (`+lookup(row)+`) WHERE workspace_id IN (SELECT id FROM workspaces) AND workspace_id NOT IN (SELECT workspace_id FROM mcp_metric_dirty);`)
+				releases = append(releases, `DELETE FROM mcp_metric_claims WHERE workspace_id IN (`+lookup(row)+`);`)
+			}
+			when := ""
+			if changed != "" {
+				when = " WHEN " + changed
+			}
+			statements = append(statements, `CREATE TRIGGER mcp_metric_`+table+`_`+strings.ToLower(event)+` AFTER `+event+` ON `+table+when+` BEGIN `+strings.Join(marks, " ")+` END`)
+			// Claims exist only while a refresh computes, so this trigger's
+			// body is skipped for nearly every write.
+			when = " WHEN EXISTS(SELECT 1 FROM mcp_metric_claims)"
+			if changed != "" {
+				when += " AND " + changed
+			}
+			statements = append(statements, `CREATE TRIGGER mcp_metric_release_`+table+`_`+strings.ToLower(event)+` AFTER `+event+` ON `+table+when+` BEGIN `+strings.Join(releases, " ")+` END`)
+		}
+	}
+	return statements, nil
+}
+
+// ensureMetricTriggers installs the triggers when they are not the ones this
+// build generates, replacing an earlier build's. It marks nothing: triggers
+// that fired on every update marked at least as often as these.
+func (c *Catalog) ensureMetricTriggers() error {
+	triggers, err := metricTriggerDDL(c.DB)
+	if err != nil {
+		return err
+	}
+	var installed string
+	err = c.DB.QueryRow("SELECT value FROM meta WHERE key='mcp_metric_triggers'").Scan(&installed)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if installed == triggerDigest(triggers) {
+		return nil
+	}
+	tx, err := c.beginWrite(context.Background())
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	names, err := queryMaps(tx, "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'mcp_metric_%'")
+	if err != nil {
+		return err
+	}
+	for _, row := range names {
+		if _, err := tx.Exec(`DROP TRIGGER IF EXISTS "` + firstString(row["name"]) + `"`); err != nil {
+			return err
+		}
+	}
+	for _, statement := range triggers {
+		if _, err := tx.Exec(statement); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES('mcp_metric_triggers',?)", triggerDigest(triggers)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // metricClaimAbandoned is how old a claim is before another refresh may take
@@ -391,47 +456,72 @@ type metricInputs struct {
 	fallback      map[[2]string][]map[string]any
 }
 
+// The projection's statements. metricTriggerDDL reads them to find the
+// columns an update must change to mark a workspace, so everything the
+// projection reads from these tables belongs here.
+const (
+	metricChosen    = ` IN (SELECT value FROM json_each(?))`
+	metricDelegated = `EXISTS(SELECT 1 FROM agent_session_messages am JOIN agent_sessions a ON a.id=am.agent_session_id WHERE am.message_id=m.id AND a.native_id<>'main')`
+	metricCompacted = `m.kind='metadata' AND (m.text LIKE '%"subtype":"compact_boundary"%' OR m.text LIKE '%"compaction_trigger":"%')`
+
+	metricCountsSQL = `SELECT m.conversation_id,
+		COUNT(CASE WHEN m.role='user' AND m.kind='message' THEN 1 END) turns,
+		COUNT(CASE WHEN ` + metricCompacted + ` THEN 1 END) compactions,
+		COUNT(CASE WHEN m.role='user' AND m.kind='message' AND NOT ` + metricDelegated + ` THEN 1 END) own_turns,
+		COUNT(CASE WHEN ` + metricCompacted + ` AND NOT ` + metricDelegated + ` THEN 1 END) own_compactions
+		FROM messages m WHERE m.conversation_id` + metricChosen + ` GROUP BY m.conversation_id`
+	metricCallsSQL = `SELECT t.conversation_id,COUNT(*) calls,COUNT(CASE WHEN t.status='error' THEN 1 END) errors,
+		COUNT(CASE WHEN a.native_id='main' OR t.agent_session_id IS NULL THEN 1 END) own_calls,
+		COUNT(CASE WHEN t.status='error' AND (a.native_id='main' OR t.agent_session_id IS NULL) THEN 1 END) own_errors
+		FROM tool_calls t LEFT JOIN agent_sessions a ON a.id=t.agent_session_id AND a.conversation_id=t.conversation_id
+		WHERE t.conversation_id` + metricChosen + ` GROUP BY t.conversation_id`
+	metricLedgerSQL = `SELECT conversation_id,version FROM tool_ledger_state WHERE conversation_id` + metricChosen
+	// One conversation's rows keep the order they are stored in: costs are
+	// summed in it, and a different order moves a sum's last digits.
+	metricUsageSQL = `SELECT u.*,a.id session_id,a.native_id,a.model session_model,a.usage_status,a.conversation_id usage_conversation
+		FROM json_each(?) chosen CROSS JOIN agent_sessions a ON a.conversation_id=chosen.value CROSS JOIN agent_session_usage u ON u.agent_session_id=a.id
+		WHERE a.usage_status<>'in-child-conversation'`
+	// Navigation placeholders and external children are delegates too.
+	metricDelegatesSQL = `SELECT chosen.value id FROM json_each(?) chosen
+		WHERE EXISTS(SELECT 1 FROM agent_sessions WHERE conversation_id=chosen.value AND native_id<>'main')
+		OR EXISTS(SELECT 1 FROM conversations WHERE parent_id=chosen.value)`
+	// +name: by workspace. The index on name holds every workspace's rows.
+	metricFallbackSQL = `SELECT workspace_id,COALESCE(conversation_id,'') conversation_id,name,value,status,coverage FROM metrics
+		WHERE workspace_id` + metricChosen + ` AND +name IN ('total_tokens','input_tokens','output_tokens','cache_read_input_tokens')
+		ORDER BY observed_at DESC,extractor_version DESC,id DESC`
+)
+
+var (
+	metricConversationsSQL = `SELECT c.id,c.workspace_id,c.provider,c.started_at,c.ended_at FROM conversations c
+		WHERE c.workspace_id` + metricChosen + ` AND ` + currentGroupConversation("c")
+	metricProjectionStatements = []string{metricConversationsSQL, metricCountsSQL, metricCallsSQL, metricLedgerSQL, metricUsageSQL, metricDelegatesSQL, metricFallbackSQL}
+)
+
 func loadMetricInputs(ctx context.Context, tx *sql.Tx, workspaces, conversations string) (metricInputs, error) {
 	in := metricInputs{counts: map[string]map[string]any{}, calls: map[string]map[string]any{}, ledger: map[string]string{},
 		usage: map[string][]map[string]any{}, delegates: map[string]bool{}, fallback: map[[2]string][]map[string]any{}}
-	const chosen = ` IN (SELECT value FROM json_each(?))`
-	const delegated = `EXISTS(SELECT 1 FROM agent_session_messages am JOIN agent_sessions a ON a.id=am.agent_session_id WHERE am.message_id=m.id AND a.native_id<>'main')`
-	const compaction = `m.kind='metadata' AND (m.text LIKE '%"subtype":"compact_boundary"%' OR m.text LIKE '%"compaction_trigger":"%')`
-	rows, err := queryMapsContext(ctx, tx, `SELECT m.conversation_id,
-		COUNT(CASE WHEN m.role='user' AND m.kind='message' THEN 1 END) turns,
-		COUNT(CASE WHEN `+compaction+` THEN 1 END) compactions,
-		COUNT(CASE WHEN m.role='user' AND m.kind='message' AND NOT `+delegated+` THEN 1 END) own_turns,
-		COUNT(CASE WHEN `+compaction+` AND NOT `+delegated+` THEN 1 END) own_compactions
-		FROM messages m WHERE m.conversation_id`+chosen+` GROUP BY m.conversation_id`, conversations)
+	rows, err := queryMapsContext(ctx, tx, metricCountsSQL, conversations)
 	if err != nil {
 		return in, err
 	}
 	for _, row := range rows {
 		in.counts[firstString(row["conversation_id"])] = row
 	}
-	rows, err = queryMapsContext(ctx, tx, `SELECT t.conversation_id,COUNT(*) calls,COUNT(CASE WHEN t.status='error' THEN 1 END) errors,
-		COUNT(CASE WHEN a.native_id='main' OR t.agent_session_id IS NULL THEN 1 END) own_calls,
-		COUNT(CASE WHEN t.status='error' AND (a.native_id='main' OR t.agent_session_id IS NULL) THEN 1 END) own_errors
-		FROM tool_calls t LEFT JOIN agent_sessions a ON a.id=t.agent_session_id AND a.conversation_id=t.conversation_id
-		WHERE t.conversation_id`+chosen+` GROUP BY t.conversation_id`, conversations)
+	rows, err = queryMapsContext(ctx, tx, metricCallsSQL, conversations)
 	if err != nil {
 		return in, err
 	}
 	for _, row := range rows {
 		in.calls[firstString(row["conversation_id"])] = row
 	}
-	rows, err = queryMapsContext(ctx, tx, `SELECT conversation_id,version FROM tool_ledger_state WHERE conversation_id`+chosen, conversations)
+	rows, err = queryMapsContext(ctx, tx, metricLedgerSQL, conversations)
 	if err != nil {
 		return in, err
 	}
 	for _, row := range rows {
 		in.ledger[firstString(row["conversation_id"])] = firstString(row["version"])
 	}
-	// One conversation's rows keep the order they are stored in: costs are
-	// summed in it, and a different order moves a sum's last digits.
-	rows, err = queryMapsContext(ctx, tx, `SELECT u.*,a.id session_id,a.native_id,a.model session_model,a.usage_status,a.conversation_id usage_conversation
-		FROM json_each(?) chosen CROSS JOIN agent_sessions a ON a.conversation_id=chosen.value CROSS JOIN agent_session_usage u ON u.agent_session_id=a.id
-		WHERE a.usage_status<>'in-child-conversation'`, conversations)
+	rows, err = queryMapsContext(ctx, tx, metricUsageSQL, conversations)
 	if err != nil {
 		return in, err
 	}
@@ -439,20 +529,14 @@ func loadMetricInputs(ctx context.Context, tx *sql.Tx, workspaces, conversations
 		id := firstString(row["usage_conversation"])
 		in.usage[id] = append(in.usage[id], row)
 	}
-	// Navigation placeholders and external children are delegates too.
-	rows, err = queryMapsContext(ctx, tx, `SELECT chosen.value id FROM json_each(?) chosen
-		WHERE EXISTS(SELECT 1 FROM agent_sessions WHERE conversation_id=chosen.value AND native_id<>'main')
-		OR EXISTS(SELECT 1 FROM conversations WHERE parent_id=chosen.value)`, conversations)
+	rows, err = queryMapsContext(ctx, tx, metricDelegatesSQL, conversations)
 	if err != nil {
 		return in, err
 	}
 	for _, row := range rows {
 		in.delegates[firstString(row["id"])] = true
 	}
-	// +name: by workspace. The index on name holds every workspace's rows.
-	rows, err = queryMapsContext(ctx, tx, `SELECT workspace_id,COALESCE(conversation_id,'') conversation_id,name,value,status,coverage FROM metrics
-		WHERE workspace_id`+chosen+` AND +name IN ('total_tokens','input_tokens','output_tokens','cache_read_input_tokens')
-		ORDER BY observed_at DESC,extractor_version DESC,id DESC`, workspaces)
+	rows, err = queryMapsContext(ctx, tx, metricFallbackSQL, workspaces)
 	if err != nil {
 		return in, err
 	}
@@ -465,8 +549,7 @@ func loadMetricInputs(ctx context.Context, tx *sql.Tx, workspaces, conversations
 
 func projectMetricChunk(ctx context.Context, tx *sql.Tx, book priceBook, workspaces []string, store metricStore) error {
 	chosen := jsonText(workspaces)
-	rows, err := queryMapsContext(ctx, tx, `SELECT c.id,c.workspace_id,c.provider,c.started_at,c.ended_at FROM conversations c
-		WHERE c.workspace_id IN (SELECT value FROM json_each(?)) AND `+currentGroupConversation("c"), chosen)
+	rows, err := queryMapsContext(ctx, tx, metricConversationsSQL, chosen)
 	if err != nil {
 		return err
 	}

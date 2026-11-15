@@ -6,7 +6,19 @@ import (
 	"errors"
 	"os"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
+
+// threadCPUTime is the CPU time the calling thread has used, and the
+// thread's id. It means something only to a goroutine locked to its thread.
+func threadCPUTime() (seconds float64, thread uint64, ok bool) {
+	var used unix.Timespec
+	if unix.ClockGettime(unix.CLOCK_THREAD_CPUTIME_ID, &used) != nil {
+		return 0, 0, false
+	}
+	return float64(used.Nano()) / 1e9, uint64(unix.Gettid()), true
+}
 
 // resourceBasis names how processUsageOf measures: on Linux a process
 // reports only itself, its getrusage CPU and the Go runtime's memory, which

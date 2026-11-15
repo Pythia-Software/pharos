@@ -49,17 +49,19 @@ function voiceSchedule(lines){
   return{total,spans};
 }
 // highlightCode cuts source text into runs for display: comments, strings,
-// numbers and keywords by the file's extension, and everything else plain.
-// It reads the text once with one pattern per family of languages and is
-// not a parser: it is for reading a file, a diff or a preview, not for
-// judging the code. An extension it does not know, or a very long text, is
-// one plain run.
+// numbers and keywords by the file's extension (or a language name, such as
+// a Markdown fence's), and everything else plain. It reads the text once
+// with one pattern per family of languages and is not a parser: it is for
+// reading a file, a diff or a preview, not for judging the code. A name it
+// does not know, or a very long text, is one plain run.
 const CODE_WORDS={
   c:'abstract as async await bool boolean break case catch chan char class const continue default defer delete do double else enum export extends false final finally float fn for from func function go if implements import in instanceof int interface let long map match mut new nil null package private protected pub public range return select self static string struct super switch this throw true try type typeof undefined use var void while yield',
   hash:'False None True alias and as assert async await begin break case class continue def del do done echo elif else end esac except export false fi finally for from function global if import in is lambda local module nil not null or pass raise require rescue return self then true try unless until when while with yield',
   sql:'add all alter and as asc begin between by case commit create default delete desc distinct drop else end exists from group having in index insert into is join key left limit not null on or order primary references right select set table then union unique update values view when where with',
 };
-const CODE_FAMILIES={c:'c cc cpp cs css go h hpp java js json jsonc jsx kt mjs cjs php rs scss swift ts tsx',hash:'bash py r rb sh toml yaml yml zsh pl',sql:'sql',markup:'htm html svg xml vue'};
+const CODE_FAMILIES={c:'c cc cpp cs css cts dart go gradle groovy h hpp java js json jsonc jsonl json5 jsx kt kts less mjs mts cjs php proto rs scala scss swift ts tsx zig',hash:'bash conf dockerfile env fish ini makefile mk py pyi r rb sh tf toml yaml yml zsh pl',sql:'sql',markup:'htm html svg xml vue plist'};
+// Language names as Markdown fences and tools write them, by an extension above.
+const CODE_LANGUAGES={javascript:'js',node:'js',typescript:'ts',python:'py',python3:'py',ruby:'rb',golang:'go',rust:'rs',kotlin:'kt',csharp:'cs','c#':'cs','c++':'cpp',shell:'sh',console:'sh',shellsession:'sh',terminal:'sh',zshrc:'zsh',bashrc:'sh',postgres:'sql',postgresql:'sql',sqlite:'sql',mysql:'sql',terraform:'tf',hcl:'tf',protobuf:'proto',docker:'dockerfile',make:'makefile'};
 const CODE_PATTERNS={
   c:/(\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|("(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?|`(?:\\[\s\S]|[^`\\])*`?)|(\b\d[\w.]*)|([A-Za-z_$][\w$]*)/g,
   hash:/(#[^\n]*)|("""[\s\S]*?(?:"""|$)|'{3}[\s\S]*?(?:'{3}|$)|"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)|(\b\d[\w.]*)|([A-Za-z_][\w]*)/g,
@@ -68,7 +70,22 @@ const CODE_PATTERNS={
 };
 const codeFamilyByExtension=(()=>{const found={};for(const [family,names]of Object.entries(CODE_FAMILIES))for(const name of names.split(' '))found[name]=family;return found})();
 const codeWordSets={};
-function codeFamily(name){const match=/\.([A-Za-z0-9]+)$/.exec(String(name||''));return match?codeFamilyByExtension[match[1].toLowerCase()]||'':''}
+function codeFamily(name){
+  // A path names its language by extension (or as a Dockerfile or Makefile);
+  // a bare word may also be a language's name.
+  const value=String(name||''),base=value.split('/').pop().toLowerCase(),match=/\.([a-z0-9]+)$/.exec(base);
+  const key=match?match[1]:value.includes('/')&&!/^(?:docker|make|gnumake)file$/.test(base)?'':base.replace(/^gnu/,'');
+  const own=(map,word)=>Object.hasOwn(map,word)?map[word]:'';
+  return own(codeFamilyByExtension,key)||own(codeFamilyByExtension,own(CODE_LANGUAGES,key))||'';
+}
+// A Markdown fence's info string names its language first ("ts",
+// "python title=x", "go:main.go", "{.rust}") or names a file ("main.go").
+// A fence without one shows JSON as JSON.
+function codeFenceName(info,text=''){
+  const word=String(info||'').trim().split(/\s/)[0].replace(/^\{?\.?|\}$/g,''),[language,file]=word.split(':');
+  if(file&&codeFamily(file))return file;if(language)return language;
+  const trimmed=String(text).trim();return /^[{[]/.test(trimmed)&&parsedJSON(trimmed)!==null?'json':'';
+}
 function highlightCode(text,name){
   text=String(text??'');const family=codeFamily(name);if(!family||text.length>400000)return[{kind:'',text}];
   const words=family==='markup'?null:codeWordSets[family]||(codeWordSets[family]=new Set(CODE_WORDS[family].split(' '))),insensitive=family==='sql',runs=[];let at=0;
@@ -78,6 +95,28 @@ function highlightCode(text,name){
     if(!match[0])continue;push('',text.slice(at,match.index));push(kind,match[0]);at=match.index+match[0].length;
   }
   push('',text.slice(at));return runs;
+}
+// highlightCodeLines is highlightCode cut at line ends, one list of runs per
+// line, for views that draw a file line by line (a gutter, blame, a read).
+// The file is read whole, so a comment or string that spans lines keeps its
+// colour on each of them.
+function highlightCodeLines(text,name){
+  const lines=[[]];
+  for(const run of highlightCode(text,name)){const parts=run.text.split('\n');parts.forEach((part,index)=>{if(index)lines.push([]);if(part)lines[lines.length-1].push({kind:run.kind,text:part})})}
+  return lines;
+}
+// A file read with line numbers ("    12→text" or "12\ttext", as agents'
+// read tools return it) highlights its text and keeps each number as a
+// gutter run. Whatever follows the numbered lines (a note the tool added)
+// stays plain; text whose first line is not numbered highlights as is.
+function highlightNumberedCode(text,name){
+  text=String(text??'');if(!codeFamily(name))return[{kind:'',text}];
+  const lines=text.split('\n'),numbered=[];for(const line of lines){const match=/^(\s*\d+(?:→|\t))(.*)$/.exec(line);if(!match)break;numbered.push(match)}
+  if(!numbered.length)return highlightCode(text,name);
+  const code=highlightCodeLines(numbered.map(match=>match[2]).join('\n'),name),runs=[];
+  numbered.forEach((match,index)=>{if(index)runs.push({kind:'',text:'\n'});runs.push({kind:'gutter',text:match[1]},...code[index])});
+  if(numbered.length<lines.length)runs.push({kind:'',text:'\n'+lines.slice(numbered.length).join('\n')});
+  return runs;
 }
 // ChatGPT's export writes what its app drew inside a reply (a citation, a
 // named place, a widget) as private-use runs: U+E200 type U+E202 payload
@@ -778,7 +817,7 @@ function toolFailed(message,results){const category=toolCategory(message);return
 function readerTimelineCategory(message){
   const payload=toolPayload(message),name=String(payload.name||'').toLowerCase(),category=toolCategory(message);
   if(['wait_agent','wait','taskoutput'].includes(name))return 'wait';
-  if(/sleep|poll/.test(name)||name==='write_stdin')return 'poll';
+  if(/sleep|poll/.test(name)||['write_stdin','monitor','schedulewakeup'].includes(name))return 'poll';
   if(category==='agent'||/delegate|spawn/.test(name)||name==='task')return 'delegate';
   if(['read','search'].includes(category)||/read|search|glob/.test(name))return 'read';
   if(['edit','write'].includes(category)||/patch|write/.test(name)||name==='edit')return 'write';
@@ -815,7 +854,7 @@ function transcriptActivityPresentation(message){
   else if(message.kind==='attachment'){keyPath=[group('attachments','Attachments','read')];icon='read'}
   else if(message.kind==='context'||raw?.type==='claude_ai_conversation'){
     keyPath=[group('context','Context','context')];
-    icon=raw?.type==='claude_ai_conversation'?'chat':/agent_listing/.test(raw?.source||'')?'agent':/tools|mcp/.test(raw?.source||'')?'tool':raw?.source==='date_note'?'history':'context';
+    icon=raw?.type==='claude_ai_conversation'?'chat':/agent_listing/.test(raw?.source||'')?'agent':/tools|mcp/.test(raw?.source||'')?'tool':raw?.source==='date_note'||raw?.source==='scheduled_wakeup'?'history':'context';
   }else if(message.kind!=='tool_call'&&message.kind!=='delegation')keyPath=[group('events','System events','event')];
   else if(/^(toolsearch|tool_search|search_tools|list_tools)$/i.test(name)){keyPath=[group('discovery','Tool discovery','search')];icon='search'}
   else if(/^skill$/i.test(name)){keyPath=[group('skills','Skills','read')];icon='read'}
@@ -918,8 +957,17 @@ function readerNavigatorMarks(model,describe=message=>({name:toolPayload(message
     return{start,end:start!==null&&Number.isFinite(end)?Math.max(start,end):null,
       end_known:start!==null&&Number.isFinite(end)&&end>=start,
       category:readerTimelineCategory(message),
-      count:1,error:toolFailed(message,results),message_id:message.id,tool_id:message.call_id||message.native_id,...describe(message)};
+      count:1,error:toolFailed(message,results),message_id:message.id,tool_id:message.call_id||message.native_id,...readerHarnessWait(message),...describe(message)};
   });
+}
+// A background command, Monitor watch or scheduled wakeup the call started
+// (harness_wait, from the tool index): its kind and recorded end, which is
+// null when the transcript does not show one.
+function readerHarnessWait(message){
+  const wait=message.harness_wait;
+  if(!wait||typeof wait.kind!=='string'||!wait.kind)return{};
+  const end=Date.parse(wait.ended_at);
+  return{wait_kind:wait.kind,wait_end:Number.isFinite(end)?end:null,wait_status:typeof wait.status==='string'?wait.status:undefined,wait_events:Number(wait.events)||0};
 }
 
 // File paths
@@ -1695,6 +1743,14 @@ function markdownMarkRuns(children){
   }
   return result;
 }
+// A fenced block's text in highlightCode's runs, each a tok-* span, with the
+// mask's highlights cut inside them.
+function markdownCode(text,mask,info){
+  const runs=highlightCode(text,codeFenceName(info,text));if(runs.length===1&&!runs[0].kind)return markdownText(text,mask);
+  const children=[];let at=0;
+  for(const run of runs){const parts=markdownText(run.text,mask.slice(at,at+run.text.length));at+=run.text.length;if(!run.kind){children.push(...parts);continue}const span=markdownElement('span','tok-'+run.kind);span.children=parts;children.push(span)}
+  return children;
+}
 function markdownTree(text,depth=0,mask=''){
   let source=String(text);
   if(source.includes('\r\n')){let at=0;mask=source.split('\r\n').map(part=>{const flags=mask.slice(at,at+part.length);at+=part.length+2;return flags}).join('0');source=source.replace(/\r\n/g,'\n')}
@@ -1706,7 +1762,7 @@ function markdownTree(text,depth=0,mask=''){
   while(i<lines.length){
     const line=lines[i];if(!line.trim()){i++;continue}
     const fence=line.match(/^\s*(\x60{3,}|~{3,})(.*)$/);
-    if(fence){const body=[],marks=[];i++;while(i<lines.length&&!lines[i].trim().startsWith(fence[1])){body.push(lines[i]);marks.push(flags[i++])}if(i<lines.length)i++;const pre=markdownElement('pre'),code=markdownElement('code');code.children=markdownText(body.join('\n'),marks.join('0'));if(fence[2].trim())code.language=fence[2].trim();pre.children.push(code);root.children.push(pre);continue}
+    if(fence){const body=[],marks=[];i++;while(i<lines.length&&!lines[i].trim().startsWith(fence[1])){body.push(lines[i]);marks.push(flags[i++])}if(i<lines.length)i++;const pre=markdownElement('pre'),code=markdownElement('code');code.children=markdownCode(body.join('\n'),marks.join('0'),fence[2]);if(fence[2].trim())code.language=fence[2].trim();pre.children.push(code);root.children.push(pre);continue}
     const heading=line.match(/^(#{1,6})\s+(.+)$/);if(heading){root.children.push(inline('h'+heading[1].length,heading[2],flags[i].slice(line.length-heading[2].length)));i++;continue}
     if(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)){root.children.push(markdownElement('hr'));i++;continue}
     if(/^\s*>/.test(line)){const body=[],marks=[];while(i<lines.length&&/^\s*>/.test(lines[i])){const prefix=lines[i].match(/^\s*>\s?/)[0].length;body.push(lines[i].slice(prefix));marks.push(flags[i].slice(prefix));i++}const quote=markdownElement('blockquote');quote.children.push(markdownTree(body.join('\n'),depth+1,marks.join('0')));root.children.push(quote);continue}

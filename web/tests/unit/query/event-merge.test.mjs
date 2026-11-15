@@ -6,6 +6,10 @@ import {eventSpanGroups} from '../../../../internal/archive/assets/event-spans.j
 import {byRarity,eventCardView,eventKindCounts,markIds,mergeAgentEvents} from '../../../src/event-merge.ts';
 import {eventLayout,placeEvents} from '../../../src/event-link-overlay.tsx';
 import {ribbonEventCount} from '../../../src/label-session-ribbon-model.ts';
+import {timelineEventLayer,timelineRowEvents} from '../../../src/timeline-rows.tsx';
+import {timeScale} from '../../../src/timeline-idle-model.ts';
+import {eventGroup} from '../../../src/event-link-layout.ts';
+const eventKey=group=>eventGroup(group).key;
 import {reader,spans as classic} from '../helpers/transcript.mjs';
 import {plain} from '../helpers/classic-script.mjs';
 
@@ -63,4 +67,27 @@ test('a merged card lists each kind once with the text and a shared target once;
  assert.deepEqual(view.targets.map(t=>t.text),['drawer only']);
  assert.equal(eventKindCounts([mark]).get('obstacle'),2,'a mark counts its events');
  assert.equal(ribbonEventCount(members.map(e=>({id:e.id,start:0,end:0,title:'',color:'',thinking:false,event:e})),'events'),3,'row headers count events, not marks');
+});
+
+test('timeline rows draw the same events on every page: all on the session row, their own on event rows, merged where a row summarises',()=>{
+ const a=event('a','obstacle',friction,[0,10]),b=event('b','obstacle',friction,[1,10]),c=event('c','discovery',learning,[40,50]);
+ const item=e=>({id:'i'+e.id,start:0,end:0,title:e.label,color:'',thinking:false,event:e}),node=(id,events)=>({id,title:id,items:events.map(item),children:[]});
+ const layer={events:[a,b,c],position:()=>.5,targetPosition:()=>null};
+ const ids=row=>row.events.map(markIds);
+ assert.deepEqual(ids(timelineRowEvents(node('session',[a,b,c]),layer,true)),[['a','b'],['c']]);
+ assert.deepEqual(ids(timelineRowEvents(node('events',[a,b,c]),layer,false)),[['a','b'],['c']],'the Agent events row merges like the session row');
+ assert.deepEqual(ids(timelineRowEvents(node('events:friction',[a,b]),layer,false)),[['a'],['b']],'group and kind rows keep every event');
+ assert.equal(timelineRowEvents(node('activity',[]),layer,false),undefined);
+ assert.equal(timelineRowEvents(node('session',[a]),undefined,true),undefined);
+});
+
+test('an event layer leaves out hidden events and those outside the window, and keeps arcs to earlier targets',()=>{
+ const inside=event('in','obstacle',friction,[0,10]),before=event('before','obstacle',friction,[0,10]),after=event('after','discovery',learning,[0,10]);
+ const at={in:150,before:50,after:250},target={in:50,before:null,after:400};
+ const times={at:e=>at[e.id],targetAt:e=>target[e.id]},range=[100,200];
+ const layer=timelineEventLayer({events:[inside,before,after],times,scale:timeScale(range),range,visibility:{events:{values:[eventKey(learning)],excluded:true}}});
+ assert.deepEqual(layer.events.map(e=>e.id),['in','before'],'the Key hides a group on every timeline');
+ assert.equal(layer.position(inside),.5);assert.equal(layer.position(before),null);assert.equal(layer.position(after),null);
+ assert.equal(layer.targetPosition(inside),null,'a target before the window is drawn as an arrow at the edge, not placed');
+ assert.equal(layer.targetPosition(after),1);assert.equal(layer.targetPosition(before),null);
 });

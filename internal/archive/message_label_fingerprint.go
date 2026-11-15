@@ -12,6 +12,11 @@ import (
 
 var messageLabelFingerprintLimit = 2400
 
+// fingerprintSharedDigestsFrom is how many represented conversations make a
+// fingerprint read the catalog-wide execution digests rather than walk each
+// conversation's dependencies (about a tenth of a second each).
+var fingerprintSharedDigestsFrom = 8
+
 // Bounded ribbon evidence, fetched by entity identity only when its column is
 // visible. A workspace combines its conversations in recorded time order.
 // No message bodies are sent and reading never starts labeling.
@@ -111,6 +116,22 @@ func (c *Catalog) messageLabelFingerprintInput(ctx context.Context, id string, w
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	if hasLabels != 0 && len(keys) >= fingerprintSharedDigestsFrom {
+		// Each conversation's labels check their execution evidence. Uncached,
+		// that is one dependency walk per conversation (two and a half minutes
+		// for a 997-conversation workspace, past the render timeout, so it
+		// retried forever); the catalog-wide digests, cached per source
+		// generation and patched from the last one (the event freshness below
+		// reads them too), answer every conversation from one read.
+		stage = "execution digests"
+		if _, tracked, err := executionSourceGeneration(ctx, c.reader()); err != nil {
+			return nil, err
+		} else if tracked {
+			if _, err := executionDependencyDigests(ctx, c.reader()); err != nil {
+				return nil, err
+			}
+		}
+	}
 	attachers := map[string]func(map[string]any){}
 	pendingConversations := map[string]bool{}
 	taxonomy, knownTaxonomy := []map[string]any{}, map[string]bool{}

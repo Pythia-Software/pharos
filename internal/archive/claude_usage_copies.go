@@ -637,9 +637,6 @@ func rebuildWorkspaceUsage(tx *sql.Tx, workspaceID string, conversations []Conve
 	}
 	record := WorkspaceRecord{Conversations: conversations}
 	if metrics := reconciledTokenMetrics(record); len(metrics) > 0 || claudeRecordHasUsage(record) {
-		if _, err := tx.Exec("DELETE FROM metrics WHERE workspace_id=? AND unit='tokens'", workspaceID); err != nil {
-			return err
-		}
 		// The persisted sessions also include facts preserved from legacy
 		// imports. Replacing metrics from messages alone would omit them in
 		// a workspace that mixes legacy and reconstructable conversations.
@@ -662,7 +659,10 @@ func rebuildWorkspaceUsage(tx *sql.Tx, workspaceID string, conversations []Conve
 				totals[field] = value
 			}
 		}
-		return replaceMetrics(tx, workspaceID, tokenMetricRows(totals))
+		// These become the workspace's only token metrics. Those already
+		// stored as derived stay as they are, so a repair that changes
+		// nothing marks nothing.
+		return replaceTokenMetrics(tx, workspaceID, tokenMetricRows(totals))
 	}
 	return nil
 }
@@ -697,4 +697,90 @@ func loadStoredWorkspaceConversations(ctx context.Context, q queryer, workspaceI
 			Model: firstString(item["model"]), Effort: firstString(item["effort"]), AgentDepth: int(integer(item["agent_depth"])), StartedAt: firstString(item["started_at"]), EndedAt: firstString(item["ended_at"]), Coverage: firstString(item["coverage"]), SessionBounds: decodeSessionBounds(item["session_bounds_json"]), Messages: messages})
 	}
 	return conversations, ids, nil
+}
+
+// Inserts and deletes always mark, so a writer that replaces a workspace's
+// rows with the same rows (an upgrade's repair replays every workspace, and
+// nearly all of them come out as stored) must leave them in place instead.
+
+// sessionUsageStored reports whether a session's stored hourly usage is
+// exactly what writing usage would store: the buckets with tokens, summed by
+// hour, model, effort and attribution, and nothing else (no estimate, no
+// remainder a later step added).
+func sessionUsageStored(tx *sql.Tx, session string, usage map[usageBucket]tokenCounts, startedAt, fallbackModel string) (bool, error) {
+	fields := []string{"input_tokens", "uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_5m_input_tokens",
+		"cache_creation_1h_input_tokens", "output_tokens", "reasoning_output_tokens", "unclassified_tokens", "total_tokens"}
+	want := map[usageBucket][]int64{}
+	for bucket, counts := range usage {
+		if counts["total_tokens"] <= 0 {
+			continue
+		}
+		key := usageBucket{defaultString(bucket.hour, usageHour(startedAt)), defaultString(bucket.model, fallbackModel), bucket.effort, bucket.attribution}
+		if want[key] == nil {
+			want[key] = make([]int64, len(fields))
+		}
+		for i, value := range []int64{integer(counts["input_tokens"]),
+			integer(max(counts["input_tokens"]-counts["cache_read_input_tokens"]-counts["cache_creation_input_tokens"], 0)),
+			integer(counts["cache_read_input_tokens"]), integer(counts["cache_creation_input_tokens"]),
+			integer(counts["cache_creation_5m_input_tokens"]), integer(counts["cache_creation_1h_input_tokens"]),
+			integer(counts["output_tokens"]), integer(counts["reasoning_output_tokens"]),
+			integer(max(counts["total_tokens"]-counts["input_tokens"]-counts["output_tokens"], 0)),
+			integer(counts["total_tokens"])} {
+			want[key][i] += value
+		}
+	}
+	rows, err := queryMaps(tx, `SELECT usage_hour,model,effort,attribution,`+strings.Join(fields, ",")+`,
+		is_estimate=0 AND input_tokens_available=1 AND usage_estimate_json IS NULL plain FROM agent_session_usage WHERE agent_session_id=?`, session)
+	if err != nil || len(rows) != len(want) {
+		return false, err
+	}
+	for _, row := range rows {
+		values := want[usageBucket{firstString(row["usage_hour"]), firstString(row["model"]), firstString(row["effort"]), firstString(row["attribution"])}]
+		if values == nil || integer(row["plain"]) != 1 {
+			return false, nil
+		}
+		for i, field := range fields {
+			if integer(row[field]) != values[i] {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+// replaceTokenMetrics makes values a workspace's only token metrics, as
+// deleting them all and storing values does, but leaves in place the rows
+// that already say the same.
+func replaceTokenMetrics(tx *sql.Tx, workspaceID string, values []map[string]any) error {
+	stored, err := queryMaps(tx, `SELECT id,conversation_id,name,value,unit,status,extractor_version,coverage,definition FROM metrics WHERE workspace_id=? AND unit='tokens'`, workspaceID)
+	if err != nil {
+		return err
+	}
+	changed := []map[string]any{}
+	kept := map[int64]bool{}
+	for _, value := range values {
+		same := false
+		for _, row := range stored {
+			has, numeric := number(row["value"])
+			wanted, known := number(value["value"])
+			if row["conversation_id"] == nil && firstString(row["name"]) == firstString(value["name"]) &&
+				firstString(row["extractor_version"]) == defaultString(value["extractor_version"], "core-v1") &&
+				numeric && known && has == wanted && firstString(row["unit"]) == defaultString(value["unit"], "count") &&
+				firstString(row["status"]) == defaultString(value["status"], "observed") && row["coverage"] == nil && value["coverage"] == nil &&
+				firstString(row["definition"]) == firstString(value["definition"]) {
+				same, kept[integer(row["id"])] = true, true
+			}
+		}
+		if !same {
+			changed = append(changed, value)
+		}
+	}
+	for _, row := range stored {
+		if !kept[integer(row["id"])] {
+			if _, err := tx.Exec("DELETE FROM metrics WHERE id=?", integer(row["id"])); err != nil {
+				return err
+			}
+		}
+	}
+	return replaceMetrics(tx, workspaceID, changed)
 }
