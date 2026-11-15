@@ -104,6 +104,15 @@
               }
             }
           }
+        },
+        "platform": {
+          "$ref": "#/$defs/platform"
+        },
+        "initiator": {
+          "$ref": "#/$defs/initiator"
+        },
+        "owner": {
+          "$ref": "#/$defs/owner"
         }
       }
     },
@@ -154,6 +163,15 @@
           "items": {
             "type": "string"
           }
+        },
+        "platform": {
+          "$ref": "#/$defs/platform"
+        },
+        "initiator": {
+          "$ref": "#/$defs/initiator"
+        },
+        "owner": {
+          "$ref": "#/$defs/owner"
         }
       }
     },
@@ -177,7 +195,7 @@
           ]
         },
         "prefix": {
-          "description": "Key prefix inside the bucket, without a leading or trailing slash.",
+          "description": "Key prefix inside the bucket, without a leading or trailing slash. A push configuration may contain {owner}, so a team's sandboxes file each person's work apart; a read configuration names one owner's prefix, or the folder above them all.",
           "type": "string",
           "pattern": "^(?!/)(?!.*/$).*$"
         },
@@ -361,6 +379,76 @@
           }
         }
       ]
+    },
+    "platform": {
+      "description": "Where a sandbox runs, as far as the platform exposes it (docs/plugin-import-platforms.md). name is the recipe's key and becomes the conversation's channel.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,39}$"
+        },
+        "environment": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "task": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "task_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "started_from": {
+          "description": "What started the task inside the platform, such as slack, linear or sentry.",
+          "type": "string",
+          "maxLength": 80
+        }
+      }
+    },
+    "initiator": {
+      "description": "Who or what started the work. An automation has no person, and its exports go to the owner shared.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "person",
+            "automation"
+          ]
+        },
+        "name": {
+          "description": "For an automation, its name, used as the automation:<name> sender.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "automation"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "name"
+        ]
+      }
+    },
+    "owner": {
+      "description": "The {owner} a push resolved: the platform's identifier for the person the task was started for, or shared when the platform says there is none.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$"
     }
   }
 }

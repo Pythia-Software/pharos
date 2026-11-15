@@ -150,6 +150,8 @@ class ContractTests(unittest.TestCase):
                  "destination": {"type": "http", "url_template": "https://example.com/{key}"}}),
             "an S3 destination without a credential": ("push.schema.json#/$defs/config",
                 {"contract": "pharos-push-config/1", "access": "write", "destination": {"type": "s3", "bucket": "b"}}),
+            "an automation without a name": ("push.schema.json#/$defs/hello",
+                {**example("push.hello.json"), "initiator": {"kind": "automation"}}),
             "an unknown status": ("run-result.schema.json", {**result, "status": "done"}),
             "a need that is not offered": ("receiver.schema.json#/$defs/hello_response",
                 {"need": "more-permissions", "accepts": [], "max_batch_bytes": 65536, "max_version": 0}),

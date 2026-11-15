@@ -1,6 +1,7 @@
 # Importing from agent platforms
 
-Design, 2026-11-15. **Proposal; nothing here is built.** It extends
+Design, 2026-11-15, with the owner's decisions of that day (see
+[Decisions](#decisions)). **Nothing here is built.** It extends
 [importer plugins](plugin-imports.md), whose bucket path
 (`pharos capture-push` on the machine, `bucket-import/1` in the library) is
 the base. This document asks how that becomes a five-minute job on the
@@ -61,6 +62,13 @@ carries:
 - a `SessionStart` hook that installs the CLI into the home folder when it
   is missing, checked against a pinned hash.
 
+It is published from **our own GitHub repository as its own marketplace**,
+not submitted to Anthropic's or OpenAI's official ones, where a plugin that
+uploads transcripts is unlikely to be accepted. Both agents add a
+marketplace from a repository, and a platform's settings can name it (on
+Niteshift, the environment's Plugins panel). Setup prints the line that
+adds it.
+
 Where plugins are available, a person enables the plugin and supplies the
 destination, and nothing is added to setup scripts or to the repository.
 The same plugin serves a laptop, a dev container and a hosted sandbox.
@@ -99,33 +107,66 @@ as the platform exposes them. The library uses it for three things:
   export carried a task link.
 - **Whose work it is** (next section).
 
-Whether a platform is also a value of **Channel** is a product decision
-left open here. The task was started through the platform (from Slack,
-Linear or its own UI), which is what Channel means, and Conductor and TL1
-already have channels of their own. Until decided, the platform is recorded
-as evidence so the choice needs no re-import.
+**The platform is the conversation's Channel.** Work started through
+Niteshift has channel `niteshift`, as work started through Conductor has
+`conductor`. Each recipe declares its channel key and label, and the
+platform block in an export is the explicit, versioned initiation
+declaration that channel resolution already ranks first. Descendants
+inherit it as usual. What started the task inside the platform (Slack,
+Linear, a Sentry alert, its own UI) is kept as finer evidence under that
+channel, where the platform exposes it.
 
 ## Teams: whose transcripts go to whose library
 
-A platform environment is configured once for a team, so every teammate's
-sandboxes push to the same destination, while each person's library should
-hold their own work. The push configuration's prefix may therefore contain
-`{owner}`:
+The expected arrangement: every engineer runs Pharos on their own machine,
+all of the team's platform sandboxes push to one bucket, and each person
+pulls down only their own conversations. A platform environment is
+configured once for the team, so the separation has to come from the push.
+The push configuration's prefix may contain `{owner}`:
 
 ```json
 {"prefix": "pharos/{owner}", "destination": {"type": "s3", "bucket": "example-pharos", "...": "..."}}
 ```
 
-- The owner is the platform's identifier for the person who started the
-  task, from the identity slot; where the platform gives none, the push
-  refuses to guess and says what to set.
-- Each person's Pharos reads only `pharos/<their owner>/`, and **Create the
-  bucket** can issue each a read credential limited to that prefix, so
-  teammates cannot read each other's transcripts.
-- A library that is meant to hold a team's work reads `pharos/` and sees
-  each owner as a pool of their own.
-- Setup shows the owners found in the bucket and asks which one is you,
-  instead of asking anyone to find their platform user ID.
+**Runs a person started.** The owner is the platform's identifier for the
+person the task was started for, from the identity slot. A task started
+from Slack or Linear belongs to the person who started it there, as far as
+the platform maps that person to one of its users (**unverified** for
+Niteshift).
+
+**Runs nobody started.** Some tasks have no person: an instance that
+fixes whatever a Sentry alert reports, a scheduled automation. They are a
+normal case, not an error:
+
+- A task with no person goes to the owner `shared`, and its export records
+  what started it (`initiator`: an automation and its name, such as
+  "Sentry autofix") beside the platform block.
+- A push never guesses a person. It uses `shared` only when the platform
+  says there is none; when the platform could not be asked, it refuses and
+  says what to set, so a broken identity lookup cannot quietly file
+  everyone's work under `shared`.
+- In the library these conversations are marked as started by an
+  automation, named with the existing `automation:<name>` sender, so they
+  never read as the person's own work even in the library that imports
+  them.
+
+**Who pulls what.**
+
+- Each person's importer names the owners it takes: by default theirs
+  alone. Setup lists the owners found in the bucket and asks which one is
+  you, instead of asking anyone to find a platform user ID.
+- **Shared runs are opt-in per library.** Nobody imports them by default,
+  so a team's automation spend is not counted once in every engineer's
+  library. Whoever looks after the automations, or a library kept for the
+  team, turns on **Also import shared runs**.
+- **Create the bucket** issues each person a read credential limited to
+  their own prefix and to `shared`. Teammates cannot read each other's
+  transcripts; ownerless runs are readable by the team.
+- A library meant to hold everything reads `pharos/` and sees each owner,
+  `shared` included, separately.
+- Owners are fixed when pushed and nothing in the bucket moves, so taking
+  over someone else's or an automation's runs is done by adding that owner
+  to an importer, never by rewriting the bucket.
 
 A single person's bucket has no `{owner}` and nothing changes.
 
@@ -245,16 +286,22 @@ scope.
   with keyless access, removing the role's trust is the one switch that
   ends it everywhere.
 
-## Decisions for the owner
+## Decisions
 
-1. **Keyless credentials** as the preferred answer where a platform issues
-   identity tokens. It adds a token exchange per cloud to `capture-push`.
-2. **A Pharos agent plugin** for Claude Code and Codex, published to their
-   marketplaces, including a hook that installs the CLI.
-3. **`{owner}` prefixes** for team environments. This needs to know how the
-   Niteshift client works: one person's sandboxes, or a team sharing an
-   environment where each person wants their own library, or one library
-   for the team.
-4. **Platform as a Channel value,** or evidence only.
-5. **Access to a Niteshift environment** to verify the recipe's unverified
-   answers.
+Decided by the owner on 2026-11-15:
+
+- **Owners.** Teams share one bucket and each person pulls their own
+  conversations; runs with no person go to `shared`, which a library
+  imports only when asked to.
+- **A Pharos plugin for Claude Code and Codex,** hosted as our own
+  marketplace on GitHub, not in the vendors' official ones.
+- **The platform is a Channel value** (`niteshift` first).
+- **Niteshift comes first,** and its recipe stays unverified until access
+  to an environment arrives; the generic additions do not wait for it.
+
+Still proposed:
+
+- **Keyless credentials** as the preferred answer where a platform issues
+  identity tokens. It adds a token exchange per cloud to `capture-push`.
+- **Team members can read `shared`.** The alternative is a separate read
+  grant for it.

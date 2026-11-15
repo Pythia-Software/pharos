@@ -5,9 +5,19 @@
   "version": "0.9.9",
   "os": "linux",
   "label": "runner-7 (ci)",
-  "pool": "CI runners",
+  "pool": "Niteshift · api",
   "sources": [
     "claude",
     "codex"
-  ]
+  ],
+  "platform": {
+    "name": "niteshift",
+    "environment": "api",
+    "started_from": "sentry"
+  },
+  "initiator": {
+    "kind": "automation",
+    "name": "Sentry autofix"
+  },
+  "owner": "shared"
 }
