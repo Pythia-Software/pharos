@@ -1296,6 +1296,17 @@ CREATE TABLE IF NOT EXISTS background_runs (
   host_id TEXT NOT NULL, item TEXT NOT NULL, started_at TEXT, finished_at TEXT,
   succeeded_at TEXT, error TEXT, seconds REAL, PRIMARY KEY(host_id,item)
 );
+-- Every scheduled run of an item on this Mac, with its own time (not its
+-- pass's) and how much work it found: what the schedule's costs and placement
+-- are measured from (background.go, itemRun). background_runs keeps only the
+-- last run. started_at is the pass's start, shared by its items; units is
+-- NULL for an item that does not count its work. Rows older than two weeks
+-- are dropped as new ones arrive.
+CREATE TABLE IF NOT EXISTS background_item_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, host_id TEXT NOT NULL, item TEXT NOT NULL, cadence TEXT NOT NULL,
+  started_at TEXT NOT NULL, seconds REAL NOT NULL, units INTEGER
+);
+CREATE INDEX IF NOT EXISTS background_item_runs_host ON background_item_runs(host_id,started_at);
 CREATE TABLE IF NOT EXISTS background_temporary_cadences (
   host_id TEXT NOT NULL, item TEXT NOT NULL, cadence TEXT NOT NULL, expires_at TEXT NOT NULL,
   PRIMARY KEY(host_id,item)

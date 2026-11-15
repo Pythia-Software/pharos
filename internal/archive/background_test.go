@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -559,21 +560,28 @@ func TestBackgroundOverridesOnlySlowItemsDown(t *testing.T) {
 	}
 }
 
-// An item's cost is the median of its latest successful journaled runs,
-// summed over its kinds; scheduled indexing's comes from its run history.
+// An item's cost is the middle of its own scheduled runs that had work,
+// however short. Until it has enough of them it is the median of its latest
+// successful journaled runs, summed over its kinds, where a findings review
+// and a findings measure are different variants; scheduled indexing's comes
+// from its run history.
 func TestBackgroundCostsAreMediansOfJournaledRuns(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	host := sqlQuote(currentHost().ID)
 	statements := []string{}
 	run := 0
-	journal := func(kind, state string, seconds int) {
+	journal := func(spec, state string, seconds int) {
 		run++
+		kind, variant, _ := strings.Cut(spec, "/")
 		start := time.Date(2026, 10, 28, 0, run, 0, 0, time.UTC)
-		statements = append(statements, fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,ended_at)
-			VALUES('j%d','j%d','%s','chained',%s,'service',1,'i','%s','%s','%s','%s')`, run, run, kind, host, state, formatTime(start), formatTime(start), formatTime(start.Add(time.Duration(seconds)*time.Second))))
+		statements = append(statements, fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,variant,trigger,host_id,process,pid,instance,state,started_at,updated_at,ended_at)
+			VALUES('j%d','j%d','%s','%s','chained',%s,'service',1,'i','%s','%s','%s','%s')`, run, run, kind, variant, host, state, formatTime(start), formatTime(start), formatTime(start.Add(time.Duration(seconds)*time.Second))))
 	}
 	for _, seconds := range []int{300, 400, 350} {
 		journal("analysis.authorship", "succeeded", seconds)
+		journal("analysis.peers", "succeeded", 50)
+		journal("analysis.findings/measure", "succeeded", seconds/10)
+		journal("analysis.findings/full", "succeeded", seconds*2)
 	}
 	journal("analysis.authorship", "failed", 10)
 	for _, kind := range []string{"analysis.github", "analysis.identities", "analysis.git"} {
@@ -587,8 +595,11 @@ func TestBackgroundCostsAreMediansOfJournaledRuns(t *testing.T) {
 	execTx(t, catalog.DB, statements...)
 	costs := catalog.backgroundCosts(context.Background())
 	near := func(got, want float64) bool { return got > want-0.01 && got < want+0.01 }
-	if cost := costs["writing"]; !near(cost.Seconds, 350) || cost.Runs != 3 {
-		t.Fatalf("writing: %+v, want the median of its successful runs", cost)
+	if cost := costs["writing"]; !near(cost.Seconds, 400) || cost.Runs != 3 {
+		t.Fatalf("writing: %+v, want the medians of both its stages' successful runs", cost)
+	}
+	if measure, review := costs["findings"], costs["review"]; !near(measure.Seconds, 35) || !near(review.Seconds, 700) {
+		t.Fatalf("findings %+v and review %+v: each is measured by its own kind of pass", measure, review)
 	}
 	if cost := costs["repositories"]; !near(cost.Seconds, 10) || cost.Runs != 3 {
 		t.Fatalf("repositories: %+v, want its three stages' medians summed", cost)
@@ -596,8 +607,34 @@ func TestBackgroundCostsAreMediansOfJournaledRuns(t *testing.T) {
 	if cost := costs["conversations"]; !near(cost.Seconds, 20) || cost.Runs != 3 {
 		t.Fatalf("conversations: %+v, want the median of scheduled runs only", cost)
 	}
-	if _, ok := costs["findings"]; ok {
+	if _, ok := costs["tools"]; ok {
 		t.Fatal("an item with no runs has no cost")
+	}
+	// Its own runs replace the journal's once there are enough: all of them,
+	// whatever their length, and typically those that found work.
+	started := time.Now().Add(-time.Hour)
+	units := func(n int64) *int64 { return &n }
+	if err := catalog.writeTransaction(context.Background(), "item runs", func(tx *sql.Tx) error {
+		return insertItemRuns(context.Background(), tx, []itemRun{
+			{Item: "writing", Cadence: cadenceFrequent, Started: started, Seconds: 2}, {Item: "writing", Cadence: cadenceFrequent, Started: started, Seconds: 4},
+			{Item: "labels", Cadence: cadenceHourly, Started: started, Seconds: 1, Units: units(0)}, {Item: "labels", Cadence: cadenceHourly, Started: started, Seconds: 90, Units: units(40)},
+			{Item: "labels", Cadence: cadenceHourly, Started: started, Seconds: 1, Units: units(0)}, {Item: "labels", Cadence: cadenceHourly, Started: started, Seconds: 110, Units: units(60)},
+			// Too old to say anything about the item now.
+			{Item: "labels", Cadence: cadenceHourly, Started: started.Add(-2 * itemRunsKept), Seconds: 5000, Units: units(9)},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	costs = catalog.backgroundCosts(context.Background())
+	if cost := costs["writing"]; !near(cost.Seconds, 400) {
+		t.Fatalf("writing: %+v, want the journal's until it has enough runs of its own", cost)
+	}
+	if cost := costs["labels"]; !near(cost.Seconds, 100) || cost.Runs != 4 {
+		t.Fatalf("labels: %+v, want the middle of its own runs that found work", cost)
+	}
+	var kept int
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM background_item_runs").Scan(&kept); err != nil || kept != 6 {
+		t.Fatalf("runs older than the kept window are dropped as new ones arrive: %d kept, %v", kept, err)
 	}
 }
 
@@ -660,6 +697,10 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	runs := catalog.backgroundRuns(ctx)
 	if runs["tools"].succeeded == "" || runs["tools"].err != "" {
 		t.Fatalf("the pass records each item it ran: %+v", runs["tools"])
+	}
+	// Each item's own time in the pass is kept for its cost.
+	if own := catalog.itemRuns(ctx); len(own["tools"]) != 1 || own["tools"][0].Cadence != cadenceFrequent || len(own["writing"]) != 0 {
+		t.Fatalf("the pass measures the items it ran, and only those: %+v", own)
 	}
 	if _, ran := runs["writing"]; ran {
 		t.Fatalf("an item that was not due has no run: %+v", runs)
@@ -1448,6 +1489,18 @@ func TestBackgroundReviewBringsAlongStagesPendingWhenTheChainStarts(t *testing.T
 	}
 	if generation, _ := catalog.metaValue(ctx, "findings_generation"); generation != catalog.findingsGeneration() {
 		t.Fatalf("the review did not run today's full pass: %s", generation)
+	}
+	// The full pass is the review's run, not the findings item's, in the
+	// journal's kind and in the items' own runs; the stages that came along
+	// are measured as their items' runs too.
+	if !slices.ContainsFunc(server.ops.views(), func(view opView) bool {
+		return view.Spec.Kind == "analysis.findings" && view.Spec.Variant == "full"
+	}) {
+		t.Fatal("the full findings pass does not say it was one")
+	}
+	own := catalog.itemRuns(ctx)
+	if len(own["review"]) != 1 || len(own["findings"]) != 0 || len(own["repositories"]) != 1 || len(own["writing"]) != 1 {
+		t.Fatalf("each item's own run in the pass: %+v", own)
 	}
 }
 

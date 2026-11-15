@@ -427,11 +427,21 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 		measure = func(_ string, work func() error) error { return work() }
 	}
 	invoke := func(name string, work func(context.Context) error) error {
-		stageCtx, stage := chain.childFrom(ctx, OperationSpec{Kind: "analysis." + name, Trigger: triggerChained})
+		spec := OperationSpec{Kind: "analysis." + name, Trigger: triggerChained}
+		if name == "findings" {
+			// A full pass takes minutes and measuring seconds: the journal
+			// says which this was, so neither is costed by the other.
+			spec.Variant = "measure"
+			if forceFindings || findings == findingsAuto && s.Catalog.findingsFullDue(ctx) {
+				spec.Variant = "full"
+			}
+		}
+		stageCtx, stage := chain.childFrom(ctx, spec)
 		// A background stage (Git, tools, authorship, findings) runs at its
 		// priority class; foreground ones as they are.
 		var err error
 		stage.RunIO(func() { err = measure(name, func() error { return work(stageCtx) }) })
+		reportStageUnits(ctx, name, stage)
 		stage.Finish(err)
 		return err
 	}

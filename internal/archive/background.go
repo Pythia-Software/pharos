@@ -132,9 +132,9 @@ var backgroundItems = []backgroundItem{
 	{ID: "tools", Label: "Tools & usage", Verb: "Updating tools and usage", Feeds: "Analyze → Tools, and the usage cards", Cadence: cadenceFrequent, Adaptive: true,
 		Stages: []string{"tools"}, Kinds: []string{"analysis.tools"}, Why: "Adds the commands and tokens of the workspaces that changed."},
 	{ID: "writing", Label: "Update writing estimates", Verb: "Updating writing estimates", Feeds: "Human Words cards, Analyze → Writing, and related conversations on Work pages", Cadence: cadenceFrequent,
-		Stages: []string{"authorship", "peers"}, Kinds: []string{"analysis.authorship"}, Why: "Updates a bounded batch of new or changed messages, then links reviews to the work they read or were pasted into. Estimates are refined overnight."},
+		Stages: []string{"authorship", "peers"}, Kinds: []string{"analysis.authorship", "analysis.peers"}, Why: "Updates a bounded batch of new or changed messages, then links reviews to the work they read or were pasted into. Estimates are refined overnight."},
 	{ID: "findings", Label: "Findings", Verb: "Updating findings", Feeds: "Optimize", Cadence: cadenceHourly, Adaptive: true,
-		Stages: []string{"findings"}, Kinds: []string{"analysis.findings"}, Why: "Measures the findings you watch against new work."},
+		Stages: []string{"findings"}, Kinds: []string{"analysis.findings/measure"}, Why: "Measures the findings you watch against new work."},
 	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
 		Stages: []string{"labels"}, Kinds: []string{"analysis.labels/"}, Why: "Labels the messages that changed on this Mac, after your writing; a backlog continues when plugged in."},
 	{ID: "agent_events", Label: "Agent events", Verb: "Finding agent events", Feeds: "Analyze → Agent Experience", Cadence: cadenceHourly, Adaptive: true, requiresAgentEvents: true,
@@ -142,7 +142,7 @@ var backgroundItems = []backgroundItem{
 	{ID: "engagement", Label: "Engagement labels", Verb: "Labeling engagement", Feeds: "The conversation reader's Engagement highlight (preview)", Cadence: cadenceHourly, Adaptive: true, requiresEngagement: true,
 		Stages: []string{"engagement"}, Kinds: []string{"analysis.engagement"}, Why: "Reads what you typed in the conversations that changed on this Mac; a backlog continues over later updates."},
 	{ID: "review", Label: "Findings review", Verb: "Reviewing findings", Feeds: "Optimize: new patterns and savings", Cadence: cadenceDaily, Fixed: true,
-		Kinds: []string{"analysis.findings"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
+		Kinds: []string{"analysis.findings/full"}, Why: "Looks at the last 28 days again for new patterns; the window moves once a day."},
 	{ID: "writing-refine", Label: "Refine writing history", Verb: "Refining writing history", Feeds: "Writing classifications and copied-text evidence", Cadence: cadenceDaily, afterChain: true,
 		Kinds: []string{"analysis.authorship.refine"}, Why: "Applies the complete analysis to retained history, reconciling templates, copied text and conversation relationships."},
 	{ID: "suggestions", Label: "Ask Pharos suggestions", Verb: "Choosing Ask Pharos suggestions", Feeds: "Ask Pharos suggestions", Cadence: cadenceHourly, Adaptive: true, requiresAsk: true, afterChain: true,
@@ -288,7 +288,8 @@ func (settings backgroundSettings) usual(item backgroundItem) string {
 	return placed
 }
 
-// itemCost is an item's typical run: the median of its latest measured runs.
+// itemCost is an item's typical run: the median of its latest measured runs
+// that had work to do.
 type itemCost struct {
 	Seconds float64 `json:"seconds"`
 	Runs    int     `json:"runs"`
@@ -316,16 +317,93 @@ const (
 	placementRuns = 3
 )
 
-// backgroundCosts measures each item from the journal (and, for scheduled
-// indexing, its run history). An item measured by several kinds (the
-// repositories' three stages) costs the sum of their medians.
+// itemRun is one scheduled run of an item: its own time within its pass, and
+// how much work it found where the item counts that (itemUnitStage).
+type itemRun struct {
+	Item, Cadence string
+	// Started is the pass's start, shared by every item of the pass.
+	Started time.Time
+	Seconds float64
+	// Units is nil for an item that does not count its work.
+	Units *int64
+}
+
+// worked is whether the run had work, as far as it says: a run that does
+// not count its work is taken to have had some.
+func (run itemRun) worked() bool { return run.Units == nil || *run.Units > 0 }
+
+// itemRunsKept is how long an item's runs are kept.
+const itemRunsKept = 14 * 24 * time.Hour
+
+// itemUnitStage is the chain stage whose final count is its item's work:
+// the conversations the stage looked at. The other stages report totals
+// that are not the size of their work (identities counts every link).
+var itemUnitStage = map[string]string{"labels": "labels", "agent_events": "agent_events", "engagement": "engagement"}
+
+// insertItemRuns stores runs and drops those too old to be read again.
+func insertItemRuns(ctx context.Context, tx *sql.Tx, runs []itemRun) error {
+	if len(runs) == 0 {
+		return nil
+	}
+	for _, run := range runs {
+		var units any
+		if run.Units != nil {
+			units = *run.Units
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO background_item_runs(host_id,item,cadence,started_at,seconds,units) VALUES(?,?,?,?,?,?)",
+			currentHost().ID, run.Item, run.Cadence, formatTime(run.Started), run.Seconds, units); err != nil {
+			return err
+		}
+	}
+	_, err := tx.ExecContext(ctx, "DELETE FROM background_item_runs WHERE host_id=? AND started_at<?", currentHost().ID, formatTime(time.Now().Add(-itemRunsKept)))
+	return err
+}
+
+// itemRuns is this Mac's kept runs by item, newest first. A catalog without
+// the table (an older one opened read-only) has none.
+func (c *Catalog) itemRuns(ctx context.Context) map[string][]itemRun {
+	runs := map[string][]itemRun{}
+	rows, err := c.reader().QueryContext(ctx, "SELECT item,cadence,started_at,seconds,units FROM background_item_runs WHERE host_id=? AND started_at>=? ORDER BY id DESC",
+		currentHost().ID, formatTime(time.Now().Add(-itemRunsKept)))
+	if err != nil {
+		return runs
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var run itemRun
+		var started string
+		var units sql.NullInt64
+		if rows.Scan(&run.Item, &run.Cadence, &started, &run.Seconds, &units) != nil {
+			continue
+		}
+		run.Started, _ = parseTime(started)
+		if units.Valid {
+			run.Units = &units.Int64
+		}
+		runs[run.Item] = append(runs[run.Item], run)
+	}
+	return runs
+}
+
+// backgroundCosts measures each item from its own scheduled runs
+// (background_item_runs): every run counts, however short, and only the
+// item's own time in its pass. An item with fewer than placementRuns of them
+// (a library the schedule has not yet run on with this table) is measured
+// from the journal instead, as the sum of its kinds' medians; the journal
+// keeps only longer runs, so that reads high for quick work. Scheduled
+// indexing is measured from its run history.
 func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 	costs := map[string]itemCost{}
+	own := c.itemRuns(ctx)
 	for _, item := range backgroundItems {
 		if item.ID == "conversations" {
 			if cost, ok := c.automaticIndexCost(ctx); ok {
 				costs[item.ID] = cost
 			}
+			continue
+		}
+		if runs := own[item.ID]; len(runs) >= placementRuns {
+			costs[item.ID] = ownCost(runs)
 			continue
 		}
 		total, low, high, runs := 0.0, 0.0, 0.0, -1
@@ -363,6 +441,26 @@ func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 		}
 	}
 	return costs
+}
+
+// ownCost is an item's typical run from its own runs, newest first: the
+// middle of the latest costRuns that had work, or of the latest costRuns
+// when none had.
+func ownCost(runs []itemRun) itemCost {
+	values := []float64{}
+	for _, run := range runs {
+		if run.worked() && len(values) < costRuns {
+			values = append(values, run.Seconds)
+		}
+	}
+	if len(values) == 0 {
+		for _, run := range runs[:min(len(runs), costRuns)] {
+			values = append(values, run.Seconds)
+		}
+	}
+	sort.Float64s(values)
+	median, low, high := typicalRange(values)
+	return itemCost{Seconds: median, Runs: len(runs), Low: low, High: high}
 }
 
 // automaticIndexCost is scheduled indexing's typical run, from its run
@@ -473,9 +571,14 @@ func (c *Catalog) backgroundRuns(ctx context.Context) map[string]backgroundRunRo
 // recordBackgroundRun stores an item's outcome: started when it begins,
 // then finished with its error (nil for success). A withdrawn run
 // (backgroundWithdrawn) finishes with neither: it did not fail, and its
-// work is still pending.
-func (c *Catalog) recordBackgroundRun(ctx context.Context, item string, started time.Time, finished bool, failure error) {
+// work is still pending. measured are the item runs to keep for the costs.
+func (c *Catalog) recordBackgroundRun(ctx context.Context, item string, started time.Time, finished bool, failure error, measured ...itemRun) {
 	_ = c.writeTransaction(ctx, "background run", func(tx *sql.Tx) error {
+		// The pass's measured item runs ride this write rather than taking
+		// one of their own.
+		if err := insertItemRuns(ctx, tx, measured); err != nil {
+			return err
+		}
 		if !finished {
 			_, err := tx.ExecContext(ctx, `INSERT INTO background_runs(host_id,item,started_at) VALUES(?,?,?)
 				ON CONFLICT(host_id,item) DO UPDATE SET started_at=excluded.started_at`, currentHost().ID, item, formatTime(started))
@@ -1204,8 +1307,9 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 	// Under population execution, Run now is explicit demand; a scheduled
 	// pass is ordinary live demand. Neither makes history foreground.
 	ctx = withBackgroundExplicit(ctx, cadence == "requested")
-	record := func(id string, started time.Time, err error) {
-		s.Catalog.recordBackgroundRun(context.WithoutCancel(ctx), id, started, true, err)
+	passStarted := time.Now()
+	record := func(id string, started time.Time, err error, measured ...itemRun) {
+		s.Catalog.recordBackgroundRun(context.WithoutCancel(ctx), id, started, true, err, measured...)
 		succeeded = succeeded || err == nil
 	}
 	stepped := map[string]bool{}
@@ -1255,7 +1359,11 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			if ctx.Err() != nil && err == nil {
 				err = ctx.Err()
 			}
-			record(id, started, err)
+			measured := []itemRun{}
+			if err == nil {
+				measured = append(measured, itemRun{Item: id, Cadence: cadence, Started: passStarted, Seconds: time.Since(started).Seconds()})
+			}
+			record(id, started, err, measured...)
 			if err != nil && failure == nil && !backgroundWithdrawn(err) {
 				failure = fmt.Errorf("%s: %w", item.Label, err)
 			}
@@ -1331,9 +1439,19 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 	}
 	op.Plan(backgroundSteps(expanded)...)
 	findings := findingsMeasure
+	// The findings stage's time is the review's when it runs today's full
+	// pass, and the findings item's when it only measures.
+	findingsRun := "findings"
 	if slices.Contains(ids, "review") {
 		findings = findingsAuto
+		if s.Catalog.findingsFullDue(ctx) {
+			findingsRun = "review"
+		}
 	}
+	// Each stage's own time and, where its item counts work, how much it
+	// found (the stage's operation says, classic engine only).
+	stageSeconds, stageUnits := map[string]float64{}, map[string]int64{}
+	ctx = withStageUnits(ctx, func(name string, units int64) { stageUnits[name] = units })
 	started := time.Now()
 	for _, id := range chainItems {
 		s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
@@ -1349,10 +1467,35 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 				next(id)
 			}
 		}
+		began := time.Now()
 		err := work()
+		stageSeconds[name] += time.Since(began).Seconds()
 		outcome[name] = err
 		return err
 	})
+	// An item's run is the stages of it that ran, whether it was due or came
+	// along; one that failed or was interrupted is no measurement.
+	measured := []itemRun{}
+	for _, item := range backgroundItems {
+		run, ran, ok := itemRun{Item: item.ID, Cadence: cadence, Started: passStarted}, false, true
+		for name, result := range outcome {
+			owner := stageItem(name)
+			if name == "findings" {
+				owner = findingsRun
+			}
+			if owner != item.ID {
+				continue
+			}
+			ran, ok = true, ok && result == nil
+			run.Seconds += stageSeconds[name]
+			if units, counted := stageUnits[name]; counted && itemUnitStage[item.ID] == name {
+				run.Units = &units
+			}
+		}
+		if ran && ok && ctx.Err() == nil {
+			measured = append(measured, run)
+		}
+	}
 	for _, id := range chainItems {
 		item, _ := backgroundItemByID(id)
 		names := item.Stages
@@ -1374,7 +1517,8 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 				break
 			}
 		}
-		record(id, started, itemErr)
+		record(id, started, itemErr, measured...)
+		measured = nil
 	}
 	if err != nil && failure == nil {
 		failure = err
@@ -1384,3 +1528,30 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 
 // stageItems is the background item each chain stage belongs to.
 var stageItems = map[string]string{"identities": "repositories", "git": "repositories", "tools": "tools", "authorship": "writing", "peers": "writing", "findings": "findings", "labels": "labels", "agent_events": "agent_events", "engagement": "engagement"}
+
+// findingsFullDue is whether the findings stage, left to decide, runs today's
+// full pass rather than only measuring (RefreshFindings).
+func (c *Catalog) findingsFullDue(ctx context.Context) bool {
+	built, _ := c.metaValue(ctx, "findings_generation")
+	return built != c.findingsGeneration()
+}
+
+// stageUnitsKey carries a background pass's reader of how much each chain
+// stage found to do.
+type stageUnitsKey struct{}
+
+func withStageUnits(ctx context.Context, report func(stage string, units int64)) context.Context {
+	return context.WithValue(ctx, stageUnitsKey{}, report)
+}
+
+// reportStageUnits tells the pass, if one is listening, the total of the
+// stage's last measured step: the conversations a population stage looked at.
+func reportStageUnits(ctx context.Context, name string, stage *Op) {
+	report, ok := ctx.Value(stageUnitsKey{}).(func(string, int64))
+	if !ok || stage == nil {
+		return
+	}
+	if step := stage.view().Step; step.Unit != "" && step.Total >= 0 {
+		report(name, int64(step.Total))
+	}
+}
