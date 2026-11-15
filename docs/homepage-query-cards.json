@@ -3168,8 +3168,7 @@
           "nonzero": false,
           "compareAs": "share"
         },
-        "dataset": "tool_calls",
-        "detailAction": "Inspect tool error calls"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -3291,8 +3290,7 @@
           "nonzero": false,
           "minSamples": 2
         },
-        "dataset": "tool_calls",
-        "detailAction": "Inspect recurring error evidence"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -3502,8 +3500,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "tool_calls",
-        "detailAction": "Inspect failed file edits"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -3594,8 +3591,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "tool_calls",
-        "detailAction": "Inspect reported test failures"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -3752,8 +3748,7 @@
           "nonzero": false,
           "compareAs": "share"
         },
-        "dataset": "tool_calls",
-        "detailAction": "Inspect tool context additions"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -3844,8 +3839,7 @@
           "nonzero": false,
           "minSamples": 10
         },
-        "dataset": "tool_calls",
-        "detailAction": "Inspect truncated tool calls"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -3931,8 +3925,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "tool_calls",
-        "detailAction": "Explore frequently read paths"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -4132,8 +4125,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "tool_calls",
-        "detailAction": "Explore recorded web sites"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -4229,8 +4221,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "tool_calls",
-        "detailAction": "Explore connected tool methods"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -4355,8 +4346,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "skill_usages",
-        "detailAction": "Inspect conversations using each skill"
+        "dataset": "skill_usages"
       }
     },
     {
@@ -4535,8 +4525,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "writing_messages",
-        "detailAction": "Explore daily word counts"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -4623,8 +4612,7 @@
           "nonzero": false,
           "compareAs": "share"
         },
-        "dataset": "writing_messages",
-        "detailAction": "See breakdown by project"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -4730,8 +4718,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Explore daily model use"
+        "dataset": "usage"
       }
     },
     {
@@ -4843,8 +4830,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Explore daily project tokens"
+        "dataset": "usage"
       }
     },
     {
@@ -4966,8 +4952,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Explore daily project costs"
+        "dataset": "usage"
       }
     },
     {
@@ -5313,8 +5298,7 @@
           "nonzero": false,
           "minSamples": 10
         },
-        "dataset": "tool_calls",
-        "detailAction": "Compare error rates"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -5480,8 +5464,7 @@
           "nonzero": false,
           "minSamples": 3
         },
-        "dataset": "tool_calls",
-        "detailAction": "Explore command duration ranges"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -5595,8 +5578,7 @@
           "nonzero": false,
           "minSamples": 3
         },
-        "dataset": "tool_calls",
-        "detailAction": "Explore tool result sizes"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -5799,8 +5781,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "tool_calls",
-        "detailAction": "Compare cross-project errors"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -5904,8 +5885,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "tool_calls",
-        "detailAction": "Explore project error evidence"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -6048,8 +6028,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "skill_usages",
-        "detailAction": "Inspect skills across projects"
+        "dataset": "skill_usages"
       }
     },
     {
@@ -6537,8 +6516,7 @@
           "unit": "path_conversation",
           "reduce": "max"
         },
-        "dataset": "tool_calls",
-        "detailAction": "Inspect repeated conversation reads"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -6658,8 +6636,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "writing_messages",
-        "detailAction": "Explore authorship by project"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -6803,8 +6780,7 @@
           "view": "distribution",
           "unit": "conversation"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect large token workloads"
+        "dataset": "usage"
       }
     },
     {
@@ -6909,8 +6885,7 @@
           },
           "view": "compare"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect model input reuse"
+        "dataset": "usage"
       }
     },
     {
@@ -7028,8 +7003,7 @@
           "unit": "conversation",
           "reduce": "mean"
         },
-        "dataset": "usage",
-        "detailAction": "Compare model effort per conversation"
+        "dataset": "usage"
       }
     },
     {
@@ -7275,8 +7249,7 @@
           },
           "view": "compare"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect delegated execution depths"
+        "dataset": "usage"
       }
     },
     {
@@ -7387,8 +7360,7 @@
           "view": "compare",
           "compareAs": "share"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect token pricing coverage"
+        "dataset": "usage"
       }
     },
     {
@@ -7601,8 +7573,7 @@
           "nonzero": false,
           "minSamples": 3
         },
-        "dataset": "mcp_calls",
-        "detailAction": "Explore Pharos payload size ranges"
+        "dataset": "mcp_calls"
       }
     },
     {
@@ -8128,8 +8099,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "writing_messages",
-        "detailAction": "Inspect human contributions"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -9113,8 +9083,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "tool_calls",
-        "detailAction": "Inspect shared web references"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -9283,8 +9252,7 @@
           "cycle": "hour",
           "reduce": "total"
         },
-        "dataset": "writing_messages",
-        "detailAction": "Explore writing times"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -9387,8 +9355,7 @@
             "mean"
           ]
         },
-        "dataset": "writing_messages",
-        "detailAction": "Explore daily writing trends"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -9495,8 +9462,7 @@
           "nonzero": false,
           "rollingPeriods": 7
         },
-        "dataset": "writing_messages",
-        "detailAction": "Explore daily project writing"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -9580,8 +9546,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "writing_messages",
-        "detailAction": "Inspect message lengths"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -9681,8 +9646,7 @@
           "unit": "conversation",
           "reduce": "mean"
         },
-        "dataset": "writing_messages",
-        "detailAction": "Explore conversation writing"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -9721,8 +9685,7 @@
           "unit": "work",
           "reduce": "mean"
         },
-        "dataset": "writing_messages",
-        "detailAction": "Inspect contributing messages"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -9804,8 +9767,7 @@
           "unit": "conversation",
           "reduce": "mean"
         },
-        "dataset": "writing_messages",
-        "detailAction": "Compare project averages"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -9997,8 +9959,7 @@
           "nonzero": false,
           "unit": "conversation"
         },
-        "dataset": "writing_messages",
-        "detailAction": "Compare conversation totals"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -10074,8 +10035,7 @@
           "nonzero": false,
           "rollingPeriods": 7
         },
-        "dataset": "writing_messages",
-        "detailAction": "Read source messages"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -10145,8 +10105,7 @@
             "mean"
           ]
         },
-        "dataset": "writing_messages",
-        "detailAction": "Explore daily message counts"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -10222,8 +10181,7 @@
             "mean"
           ]
         },
-        "dataset": "writing_messages",
-        "detailAction": "Explore daily conversation counts"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -10348,8 +10306,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Explore daily model tokens"
+        "dataset": "usage"
       }
     },
     {
@@ -10474,8 +10431,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Explore daily model costs"
+        "dataset": "usage"
       }
     },
     {
@@ -10620,8 +10576,7 @@
           "unit": "conversation",
           "minSamples": 5
         },
-        "dataset": "usage",
-        "detailAction": "Explore top-level conversation costs"
+        "dataset": "usage"
       }
     },
     {
@@ -10838,8 +10793,7 @@
           "unit": "conversation",
           "reduce": "max"
         },
-        "dataset": "usage",
-        "detailAction": "Find the largest fan-outs"
+        "dataset": "usage"
       }
     },
     {
@@ -10929,8 +10883,7 @@
           "scale": "logarithmic",
           "scaleY": "logarithmic"
         },
-        "dataset": "scatter",
-        "detailAction": "Inspect scatter plot points"
+        "dataset": "scatter"
       }
     },
     {
@@ -11081,8 +11034,7 @@
           "unit": "conversation",
           "minSamples": 3
         },
-        "dataset": "usage",
-        "detailAction": "Explore conversation delegation"
+        "dataset": "usage"
       }
     },
     {
@@ -11208,8 +11160,7 @@
           "view": "compare",
           "compareAs": "bars"
         },
-        "dataset": "usage",
-        "detailAction": "Explore agent roles by model"
+        "dataset": "usage"
       }
     },
     {
@@ -11300,8 +11251,7 @@
           "view": "compare",
           "compareAs": "share"
         },
-        "dataset": "usage",
-        "detailAction": "Explore effort cost shares"
+        "dataset": "usage"
       }
     },
     {
@@ -11500,8 +11450,7 @@
           "scale": "logarithmic",
           "scaleY": "logarithmic"
         },
-        "dataset": "scatter",
-        "detailAction": "Inspect scatter plot points"
+        "dataset": "scatter"
       }
     },
     {
@@ -11592,8 +11541,7 @@
           "scale": "logarithmic",
           "scaleY": "logarithmic"
         },
-        "dataset": "scatter",
-        "detailAction": "Inspect scatter plot points"
+        "dataset": "scatter"
       }
     },
     {
@@ -11687,8 +11635,7 @@
           "view": "compare",
           "compareAs": "share"
         },
-        "dataset": "usage",
-        "detailAction": "Explore model token shares"
+        "dataset": "usage"
       }
     },
     {
@@ -11791,8 +11738,7 @@
           },
           "view": "compare"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect conversations by model"
+        "dataset": "usage"
       }
     },
     {
@@ -11886,8 +11832,7 @@
           },
           "view": "compare"
         },
-        "dataset": "usage",
-        "detailAction": "Explore project model use"
+        "dataset": "usage"
       }
     },
     {
@@ -12095,8 +12040,7 @@
           "view": "compare",
           "compareAs": "share"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect model cost shares"
+        "dataset": "usage"
       }
     },
     {
@@ -12395,8 +12339,7 @@
           },
           "view": "compare"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect project input reuse"
+        "dataset": "usage"
       }
     },
     {
@@ -12691,8 +12634,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "tool_calls",
-        "detailAction": "Compare project error rates"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -12799,8 +12741,7 @@
           "unit": "tool_conversation",
           "minSamples": 3
         },
-        "dataset": "tool_calls",
-        "detailAction": "Explore conversation error counts"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -12877,8 +12818,7 @@
           "nonzero": false,
           "compareAs": "share"
         },
-        "dataset": "tool_calls",
-        "detailAction": "Inspect tool call activity"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -12979,8 +12919,7 @@
           "unit": "conversation",
           "minSamples": 3
         },
-        "dataset": "tool_calls",
-        "detailAction": "Explore conversation tool activity"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -13247,8 +13186,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "tool_calls",
-        "detailAction": "Inspect Pharos calling clients"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -13311,8 +13249,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "mcp_calls",
-        "detailAction": "Inspect requested sources"
+        "dataset": "mcp_calls"
       }
     },
     {
@@ -13422,8 +13359,7 @@
           "nonzero": false,
           "minSamples": 3
         },
-        "dataset": "mcp_calls",
-        "detailAction": "Explore Pharos tool duration ranges"
+        "dataset": "mcp_calls"
       }
     },
     {
@@ -13621,8 +13557,7 @@
           "nonzero": false,
           "minSamples": 3
         },
-        "dataset": "skill_usages",
-        "detailAction": "Explore retained skill body sizes"
+        "dataset": "skill_usages"
       }
     },
     {
@@ -13873,8 +13808,7 @@
           "unit": "skill_path",
           "minSamples": 3
         },
-        "dataset": "skill_usages",
-        "detailAction": "Explore skill loading across conversations"
+        "dataset": "skill_usages"
       }
     },
     {
@@ -14244,8 +14178,7 @@
           "unit": "conversation",
           "minSamples": 3
         },
-        "dataset": "tool_calls",
-        "detailAction": "Explore conversation search counts"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -14470,8 +14403,7 @@
           "nonzero": false,
           "minSamples": 10
         },
-        "dataset": "mcp_calls",
-        "detailAction": "Inspect zero-result searches by method"
+        "dataset": "mcp_calls"
       }
     },
     {
@@ -14596,8 +14528,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Explore daily provider costs"
+        "dataset": "usage"
       }
     },
     {
@@ -14692,8 +14623,7 @@
           },
           "view": "compare"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect priced cost totals"
+        "dataset": "usage"
       }
     },
     {
@@ -14814,8 +14744,7 @@
           "view": "compare",
           "compareAs": "share"
         },
-        "dataset": "usage",
-        "detailAction": "Explore project cost shares"
+        "dataset": "usage"
       }
     },
     {
@@ -14948,8 +14877,7 @@
           "unit": "conversation",
           "reduce": "median"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect costly conversations this period"
+        "dataset": "usage"
       }
     },
     {
@@ -15112,8 +15040,7 @@
           "unit": "conversation",
           "minSamples": 3
         },
-        "dataset": "usage",
-        "detailAction": "Explore conversation cost ranges"
+        "dataset": "usage"
       }
     },
     {
@@ -15203,8 +15130,7 @@
           "scale": "logarithmic",
           "scaleY": "logarithmic"
         },
-        "dataset": "scatter",
-        "detailAction": "Inspect scatter plot points"
+        "dataset": "scatter"
       }
     },
     {
@@ -15282,8 +15208,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Inspect channel usage"
+        "dataset": "usage"
       }
     },
     {
@@ -15361,8 +15286,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Inspect channel cost"
+        "dataset": "usage"
       }
     },
     {
@@ -15440,8 +15364,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Inspect machine usage"
+        "dataset": "usage"
       }
     },
     {
@@ -15519,8 +15442,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Inspect machine cost"
+        "dataset": "usage"
       }
     },
     {
@@ -15598,8 +15520,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Inspect execution machine usage"
+        "dataset": "usage"
       }
     },
     {
@@ -15677,8 +15598,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Inspect execution machine cost"
+        "dataset": "usage"
       }
     },
     {
@@ -15852,8 +15772,7 @@
           "unit": "run_effort",
           "minSamples": 3
         },
-        "dataset": "usage",
-        "detailAction": "Explore runs by effort"
+        "dataset": "usage"
       }
     },
     {
@@ -15954,8 +15873,7 @@
           "view": "compare",
           "compareAs": "share"
         },
-        "dataset": "usage",
-        "detailAction": "Explore project token shares"
+        "dataset": "usage"
       }
     },
     {
@@ -16114,8 +16032,7 @@
           "unit": "conversation",
           "minSamples": 3
         },
-        "dataset": "usage",
-        "detailAction": "Explore conversation token ranges"
+        "dataset": "usage"
       }
     },
     {
@@ -16274,8 +16191,7 @@
           "unit": "conversation",
           "minSamples": 3
         },
-        "dataset": "usage",
-        "detailAction": "Explore conversation output ranges"
+        "dataset": "usage"
       }
     },
     {
@@ -16376,8 +16292,7 @@
           },
           "view": "compare"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect output-share denominators"
+        "dataset": "usage"
       }
     },
     {
@@ -16543,8 +16458,7 @@
           "unit": "conversation",
           "minSamples": 3
         },
-        "dataset": "usage",
-        "detailAction": "Explore conversations in each group"
+        "dataset": "usage"
       }
     },
     {
@@ -16713,8 +16627,7 @@
           "unit": "conversation",
           "minSamples": 3
         },
-        "dataset": "usage",
-        "detailAction": "Explore conversations in each group"
+        "dataset": "usage"
       }
     },
     {
@@ -16886,8 +16799,7 @@
           "unit": "conversation",
           "minSamples": 3
         },
-        "dataset": "usage",
-        "detailAction": "Explore conversations in each group"
+        "dataset": "usage"
       }
     },
     {
@@ -17682,8 +17594,7 @@
           "view": "distribution",
           "unit": "conversation"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect total delegated runs per conversation"
+        "dataset": "usage"
       }
     },
     {
@@ -17792,8 +17703,7 @@
           },
           "view": "trend"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect average delegation fan-out"
+        "dataset": "usage"
       }
     },
     {
@@ -17958,8 +17868,7 @@
           "view": "distribution",
           "unit": "delegating_run"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect delegation breadth"
+        "dataset": "usage"
       }
     },
     {
@@ -18095,8 +18004,7 @@
           },
           "view": "compare"
         },
-        "dataset": "usage",
-        "detailAction": "Inspect delegated token shares"
+        "dataset": "usage"
       }
     },
     {
@@ -18252,8 +18160,7 @@
           },
           "view": "compare"
         },
-        "dataset": "usage",
-        "detailAction": "Explore conversations using delegation"
+        "dataset": "usage"
       }
     },
     {
@@ -18417,8 +18324,7 @@
           "unit": "delegated_run",
           "minSamples": 3
         },
-        "dataset": "usage",
-        "detailAction": "Explore individual delegated workloads"
+        "dataset": "usage"
       }
     },
     {
@@ -19189,8 +19095,7 @@
           "nonzero": false,
           "seriesLimit": 6
         },
-        "dataset": "tool_calls",
-        "detailAction": "Explore tool time"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -19293,8 +19198,7 @@
           "nonzero": false,
           "compareAs": "share"
         },
-        "dataset": "tool_calls",
-        "detailAction": "Compare activities"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -19381,8 +19285,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "tool_calls",
-        "detailAction": "Inspect slow operations"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -19451,8 +19354,7 @@
             "mean"
           ]
         },
-        "dataset": "tool_calls",
-        "detailAction": "Explore daily tool calls"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -19526,8 +19428,7 @@
             "mean"
           ]
         },
-        "dataset": "tool_calls",
-        "detailAction": "Inspect daily call times"
+        "dataset": "tool_calls"
       }
     },
     {
@@ -19612,8 +19513,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "parallelism",
-        "detailAction": "See each day’s timeline"
+        "dataset": "parallelism"
       }
     },
     {
@@ -19682,8 +19582,7 @@
             "mean"
           ]
         },
-        "dataset": "parallelism",
-        "detailAction": "Open the parallelism view"
+        "dataset": "parallelism"
       }
     },
     {
@@ -19748,8 +19647,7 @@
           "cycle": "hour",
           "reduce": "total"
         },
-        "dataset": "parallelism",
-        "detailAction": "Find your parallel hours"
+        "dataset": "parallelism"
       }
     },
     {
@@ -19834,8 +19732,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "parallelism",
-        "detailAction": "Compare projects"
+        "dataset": "parallelism"
       }
     },
     {
@@ -19954,8 +19851,7 @@
             "mean"
           ]
         },
-        "dataset": "usage",
-        "detailAction": "Explore carbon impact"
+        "dataset": "usage"
       }
     },
     {
@@ -20058,8 +19954,7 @@
           "nonzero": false,
           "compareAs": "share"
         },
-        "dataset": "usage",
-        "detailAction": "Compare model tiers"
+        "dataset": "usage"
       }
     },
     {
@@ -20145,8 +20040,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "usage",
-        "detailAction": "Compare projects"
+        "dataset": "usage"
       }
     },
     {
@@ -20232,8 +20126,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "usage",
-        "detailAction": "Compare models"
+        "dataset": "usage"
       }
     },
     {
@@ -20336,8 +20229,7 @@
           "nonzero": false,
           "compareAs": "share"
         },
-        "dataset": "usage",
-        "detailAction": "Compare providers"
+        "dataset": "usage"
       }
     },
     {
@@ -20440,8 +20332,7 @@
           "nonzero": false,
           "compareAs": "share"
         },
-        "dataset": "usage",
-        "detailAction": "Compare effort levels"
+        "dataset": "usage"
       }
     },
     {
@@ -20753,8 +20644,7 @@
           },
           "view": "compare"
         },
-        "dataset": "usage",
-        "detailAction": "Review model pricing"
+        "dataset": "usage"
       }
     },
     {
@@ -20808,8 +20698,7 @@
           "split": "harness",
           "period": "day"
         },
-        "dataset": "session_shape",
-        "detailAction": "Compare agent apps"
+        "dataset": "session_shape"
       }
     },
     {
@@ -20878,8 +20767,7 @@
           "period": "day",
           "rollingPeriods": 7
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore sessions over time"
+        "dataset": "session_shape"
       }
     },
     {
@@ -20948,8 +20836,7 @@
           "period": "day",
           "rollingPeriods": 7
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore sessions over time"
+        "dataset": "session_shape"
       }
     },
     {
@@ -21028,8 +20915,7 @@
           "scale": "logarithmic",
           "minSamples": 3
         },
-        "dataset": "session_shape",
-        "detailAction": "Compare session active time"
+        "dataset": "session_shape"
       }
     },
     {
@@ -21108,8 +20994,7 @@
           "scale": "logarithmic",
           "minSamples": 3
         },
-        "dataset": "session_shape",
-        "detailAction": "Compare turn cycles"
+        "dataset": "session_shape"
       }
     },
     {
@@ -21203,8 +21088,7 @@
           "scale": "logarithmic",
           "minSamples": 3
         },
-        "dataset": "session_shape",
-        "detailAction": "Compare tool calls per typed message"
+        "dataset": "session_shape"
       }
     },
     {
@@ -21307,8 +21191,7 @@
           "period": "day",
           "minSamples": 20
         },
-        "dataset": "session_shape",
-        "detailAction": "Compare model failure rates"
+        "dataset": "session_shape"
       }
     },
     {
@@ -21406,8 +21289,7 @@
           "period": "day",
           "minSamples": 10
         },
-        "dataset": "session_shape",
-        "detailAction": "Compare failure rates by session kind"
+        "dataset": "session_shape"
       }
     },
     {
@@ -21486,8 +21368,7 @@
             "mean"
           ]
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore failure rate over time"
+        "dataset": "session_shape"
       }
     },
     {
@@ -21560,8 +21441,7 @@
           "split": "repository_name",
           "period": "day"
         },
-        "dataset": "session_shape",
-        "detailAction": "Compare repositories"
+        "dataset": "session_shape"
       }
     },
     {
@@ -21664,8 +21544,7 @@
           "period": "day",
           "minSamples": 20
         },
-        "dataset": "session_shape",
-        "detailAction": "Compare verified handbacks"
+        "dataset": "session_shape"
       }
     },
     {
@@ -21737,8 +21616,7 @@
             "mean"
           ]
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore sessions over time"
+        "dataset": "session_shape"
       }
     },
     {
@@ -21844,8 +21722,7 @@
             "mean"
           ]
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore active hours over time"
+        "dataset": "session_shape"
       }
     },
     {
@@ -21924,8 +21801,7 @@
           "period": "day",
           "rollingPeriods": 7
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore tool calls per typed message over time"
+        "dataset": "session_shape"
       }
     },
     {
@@ -21994,8 +21870,7 @@
           "period": "day",
           "rollingPeriods": 7
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore turn cycle (session median) over time"
+        "dataset": "session_shape"
       }
     },
     {
@@ -22069,8 +21944,7 @@
           "period": "day",
           "rollingPeriods": 7
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore peak context share over time"
+        "dataset": "session_shape"
       }
     },
     {
@@ -22139,8 +22013,7 @@
           "period": "day",
           "rollingPeriods": 7
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore active time per session over time"
+        "dataset": "session_shape"
       }
     },
     {
@@ -22248,8 +22121,7 @@
           "period": "day",
           "rollingPeriods": 7
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore active hours by session length"
+        "dataset": "session_shape"
       }
     },
     {
@@ -22362,8 +22234,7 @@
           "period": "day",
           "rollingPeriods": 7
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore tool calls by session length"
+        "dataset": "session_shape"
       }
     },
     {
@@ -22446,8 +22317,7 @@
           "period": "day",
           "minSamples": 10
         },
-        "dataset": "session_shape",
-        "detailAction": "Compare peak context"
+        "dataset": "session_shape"
       }
     },
     {
@@ -22524,8 +22394,7 @@
           "cycle": "weekday",
           "reduce": "median"
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore when sessions start"
+        "dataset": "session_shape"
       }
     },
     {
@@ -22603,8 +22472,7 @@
           "reduce": "median",
           "cycleOn": "last_message"
         },
-        "dataset": "session_shape",
-        "detailAction": "Explore when sessions end"
+        "dataset": "session_shape"
       }
     },
     {
@@ -22692,8 +22560,7 @@
           "scale": "logarithmic",
           "scaleY": "logarithmic"
         },
-        "dataset": "scatter",
-        "detailAction": "Inspect scatter plot points"
+        "dataset": "scatter"
       },
       "action": "Explore Scatter Plots",
       "note": "Typed words are text you typed or dictated; pastes, copied agent output, templates, attachments, app instructions and automated prompts are counted separately. API cost is the list-price equivalent, including assumed and partial prices; unpriced usage has no cost and adds nothing. Each point is one conversation, shown only when both values are recorded and above zero."
@@ -22745,8 +22612,7 @@
           "scale": "linear",
           "nonzero": false
         },
-        "dataset": "compactions",
-        "detailAction": "Explore Compaction"
+        "dataset": "compactions"
       },
       "action": "Explore Compaction",
       "note": "Counts recorded boundaries. Claude records manual or automatic triggers; Codex attribution is inferred from turn position. Unknown triggers remain visible. Replayed Codex boundaries are excluded."
@@ -22799,8 +22665,7 @@
           "nonzero": false,
           "share": true
         },
-        "dataset": "message_labels",
-        "detailAction": "Explore message labels"
+        "dataset": "message_labels"
       },
       "action": "Explore Message Labels",
       "note": "Messages can have several labels. These are stored classifications; opening the dashboard does not run inference."
@@ -22859,8 +22724,7 @@
           "nonzero": false,
           "share": true
         },
-        "dataset": "message_labels",
-        "detailAction": "Explore message labels"
+        "dataset": "message_labels"
       },
       "action": "Explore Message Labels",
       "note": "Messages can have several labels. These are stored classifications; opening the dashboard does not run inference."
@@ -22919,8 +22783,7 @@
           "nonzero": false,
           "share": true
         },
-        "dataset": "message_labels",
-        "detailAction": "Explore message labels"
+        "dataset": "message_labels"
       },
       "action": "Explore Message Labels",
       "note": "Messages can have several labels. These are stored classifications; opening the dashboard does not run inference."
@@ -23038,8 +22901,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Explore smoothed token volume"
+        "dataset": "usage"
       }
     },
     {
@@ -23156,8 +23018,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Explore logarithmic token volume"
+        "dataset": "usage"
       }
     },
     {
@@ -23283,8 +23144,7 @@
             "excluded": false
           }
         },
-        "dataset": "usage",
-        "detailAction": "Explore cumulative API cost"
+        "dataset": "usage"
       }
     },
     {
@@ -23374,8 +23234,7 @@
           "nonzero": false,
           "rollingPeriods": 7
         },
-        "dataset": "mcp_calls",
-        "detailAction": "Explore Pharos request trends"
+        "dataset": "mcp_calls"
       }
     },
     {
@@ -23469,8 +23328,7 @@
           "nonzero": false,
           "minSamples": 200
         },
-        "dataset": "agent_event_rates",
-        "detailAction": "See where agents struggle"
+        "dataset": "agent_event_rates"
       }
     },
     {
@@ -23558,8 +23416,7 @@
           "nonzero": false,
           "minSamples": 200
         },
-        "dataset": "agent_event_rates",
-        "detailAction": "Read what was out of date"
+        "dataset": "agent_event_rates"
       }
     },
     {
@@ -23647,8 +23504,7 @@
           "nonzero": false,
           "minSamples": 200
         },
-        "dataset": "agent_event_rates",
-        "detailAction": "Read the failures"
+        "dataset": "agent_event_rates"
       }
     },
     {
@@ -23742,8 +23598,7 @@
           "nonzero": false,
           "minSamples": 200
         },
-        "dataset": "agent_event_rates",
-        "detailAction": "Review the choices"
+        "dataset": "agent_event_rates"
       }
     },
     {
@@ -24134,8 +23989,7 @@
           "nonzero": false,
           "minSamples": 200
         },
-        "dataset": "agent_event_rates",
-        "detailAction": "Compare weeks"
+        "dataset": "agent_event_rates"
       }
     },
     {
@@ -24471,8 +24325,7 @@
           "nonzero": false,
           "cycle": "weekday"
         },
-        "dataset": "writing_messages",
-        "detailAction": "Inspect daily totals"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -24550,8 +24403,7 @@
           "nonzero": false,
           "cycle": "weekday"
         },
-        "dataset": "writing_messages",
-        "detailAction": "Inspect daily totals"
+        "dataset": "writing_messages"
       }
     },
     {
@@ -24624,8 +24476,7 @@
           "nonzero": false,
           "cycle": "weekday"
         },
-        "dataset": "parallelism",
-        "detailAction": "Inspect daily totals"
+        "dataset": "parallelism"
       }
     },
     {
@@ -24699,8 +24550,7 @@
           "nonzero": false,
           "cycle": "weekday"
         },
-        "dataset": "parallelism",
-        "detailAction": "Inspect daily totals"
+        "dataset": "parallelism"
       }
     },
     {

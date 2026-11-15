@@ -35,7 +35,7 @@ export function RecordSearchEditor<Row>({ api, dataset, layout, target = recordS
       </div>
       <div className="text-editor-messages">{issue ? <p role="alert" className="text-editor-error">{issue}</p> : null}</div>
       <div className="text-editor-footer">
-        <SearchOrderControl catalogue={fields} subject={target.label.toLowerCase()} order={order.length ? order : api.defaults.orderBy} onChange={setOrder} />
+        <SearchOrderControl catalogue={fields} order={order.length ? order : api.defaults.orderBy} onChange={setOrder} />
         <div className="text-submit-actions">
           {dirty ? <p className="text-draft-status" role="status">Changes have not been searched yet.</p> : null}
           {where.length ? <button type="button" onClick={() => setWhere([])}>Clear</button> : null}

@@ -770,13 +770,10 @@ searchable. Settings → Sources keeps the ways to add sources, source
 configuration, and enable switches, with **Open Background Processing** linking to
 the controls. Settings → Background Processing shows what Pharos keeps current
 on its own, Frequently, Hourly and Daily, with each item's measured cost, and
-offers **Capture & index**: capture
-this Mac, index captures from every Mac, then any pending library upgrade.
-The same button is in the drive panel the header's library disk opens.
-Expand **Capture or index separately** for **Capture this Mac**, which copies
-enabled local sources into the library, or **Index captured files**, which
-indexes captures from every Mac. Progress and the index **Stop** control are
-on that page too. The header button beside the library disk runs **Index
+offers **Index changes now** and a **Run now** on each item, including the
+captures and any pending library upgrade. Progress and each running item's
+**Stop** control are on that page too. The header button beside the library
+chip runs **Index
 changes**: it indexes what changed in this Mac's sources, without capturing
 them. Settings → Background Processing also offers the schedule's controls
 (on, paused, only when I ask; the interval and the daily time), measured

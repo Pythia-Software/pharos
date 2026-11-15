@@ -1503,8 +1503,6 @@ What that means now:
 
 - `status-store.js` connects on every page, and `status-panel.js` is the
   one renderer of the header chip, its panel and Index changes' state.
-  `library.js` and `sync.js` still ask `pharosStatusStore.enabled()`,
-  which is always true, until their old drive panel paths are removed.
 - `/api/menu-bar/status` always carries `unified_activity: true`, so the
   native menu also polls the snapshot. The shipped `MenuBar.swift` still
   reads the field.
@@ -1526,8 +1524,8 @@ an activity; and the verdict is never `safe` while `libraryActivities`
 lists a writer (§4.3).
 
 **Dual-write, no retirement.** Existing endpoints, fields and pollers keep
-working unchanged; the old drive panel's code stays, though nothing opens
-it now. Removing them is a later phase, not part of this series.
+working unchanged. Removing them is a later phase, not part of this series;
+the old drive panel's code in `library.js` has since been removed.
 
 **Unregistered work is a test failure.** A Go test parses the package's
 non-test files and fails on any `spawn(`, `runBackground(` or `go func`
@@ -1973,7 +1971,7 @@ against current code before starting it.
   5 s / 16 MiB budget, writer contention or the capture lock is the cause.
 - **Retire the old status paths.** This is the phase that follows this
   contract's rollout. The flag is gone (§9); once the panel has been
-  stable, remove the old drive panel in `library.js`, the menu bar's
+  stable, remove the menu bar's
   legacy path, the run-record progress fields, the `detail` strings, client grouping by
   label, the duplicate pollers and the three older freshness rules (§5).
 - **SQLite maintenance as operation kinds.** A periodic `ANALYZE` refresh

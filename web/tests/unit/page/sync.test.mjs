@@ -279,24 +279,6 @@ test("a run's sources come from its record, else from its results and per-source
   assert.deepEqual(plain(sourceNames({})), []);
 });
 
-test('run history queries use measured values across the entire retained history', () => {
-  const records = Array.from({ length: 7 }, (_, index) => ({ run_id: `run-${index}`, state: index === 2 ? 'failed' : index === 3 ? 'deferred' : 'complete',
-    finished_at: new Date(reference - index * 60000).toISOString(), seconds: [2, 100, 12, 1, 6, 60, 9][index], cpu_seconds: index,
-    conversations: index, messages_in_changed_groups: index * 10, rss_observed_peak_bytes: 1048576 * (index + 1), sources: ['codex'] }));
-  const { history } = syncTables({ history: records });
-  assert.equal(history.rows.length, records.length);
-  const query = { ...EMPTY_QUERY, where: [{ field: 'seconds', op: '>=', value: 9 }], orderBy: [{ field: 'seconds', dir: 'desc' }], limit: 2 };
-  const result = applyQuery(history.rows, query, history.schema);
-  assert.equal(result.total, 4);
-  assert.deepEqual(result.rows.map(row => row.id), ['run-1', 'run-5']);
-  assert.equal(history.rows[2].result, 'Failed');
-  // A run that left sources to the next one because a capture held them is not a failure.
-  assert.equal(history.rows[3].result, 'Capture was running');
-  assert.equal(history.rows[5].cpu_seconds, 5);
-  const recent = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{ field: 'finished_at', op: '>=', value: new Date(reference - 60000).toISOString() }] }, history.schema);
-  assert.deepEqual(recent.rows.map(row => row.id).sort(), ['run-0', 'run-1']);
-});
-
 test('work history queries include analyses and backups alongside indexing', () => {
   const operations = [
     { id: 'index', label: 'Index changes', kind: 'index.changes.manual', state: 'succeeded', started_at: new Date(reference - 20000).toISOString(), ended_at: new Date(reference).toISOString() },
@@ -330,7 +312,6 @@ test('run results distinguish postponed verification from errors and indexing fa
   for (const [outcome, label] of [["deferred", "Indexed; verification postponed"], ["read_error", "Verification failed"], ["mismatch", "Needs attention"], ["unknown", "Verification incomplete"]]) {
     const record = { state: "complete", conversations: 3, audit: { outcome } };
     assert.equal(resultLabel(record), label);
-    assert.equal(syncTables({ history: [record] }).history.rows[0].result, label);
     assert.equal(resultLabel({ ...record, state: "failed" }), "Failed");
     assert.equal(resultLabel({ ...record, state: "interrupted" }), "Interrupted");
   }
@@ -340,18 +321,15 @@ test('run results distinguish postponed verification from errors and indexing fa
 });
 
 test('source status keeps error and preservation state while missing dates stay null', () => {
-  const { sources, history } = syncTables({ source_states: [
+  const { sources } = syncTables({ source_states: [
     { source_name: 'codex', pending_preservation: true, last_capture_at: '', succeeded_at: 'invalid' },
     { source_name: 'claude', pending_preservation: true, error: 'Permission denied', attempted_at: new Date(reference).toISOString() },
     { source_name: 'gemini' },
-  ], history: [{ finished_at: new Date(reference).toISOString(), state: 'complete', audit: { outcome: 'mismatch' } }] });
+  ] });
   assert.deepEqual(sources.rows.map(row => row.status), ['Needs capture', 'Error', 'Up to date']);
   assert.equal(sources.rows[0].last_capture_at, null);
   assert.equal(sources.rows[0].succeeded_at, null);
   assert.equal(sources.rows[1].error, 'Permission denied');
-  assert.equal(history.rows[0].id, new Date(reference).toISOString());
-  assert.equal(history.rows[0].result, 'Needs attention');
-  assert.equal(history.rows[0].seconds, null);
   const errors = applyQuery(sources.rows, { ...EMPTY_QUERY, where: [{ field: 'status', op: '=', value: 'Error' }] }, sources.schema);
   assert.deepEqual(errors.rows.map(row => row.id), ['claude']);
 });
@@ -372,11 +350,9 @@ test('diagnostic queries preserve separate numeric distributions and incomplete 
   assert.deepEqual(tables.coverage.rows.map(row => row.outcome), ['Verified', 'Skipped']);
   assert.equal(tables.deferred.rows[0].completed_at, null);
   for (const table of Object.values(syncTables({}))) assert.deepEqual(table.rows, []);
-  // CPU and RSS this platform could not read arrive as null: missing, while
-  // a measured zero stays a zero.
-  const unmeasured = syncTables({ history: [{ run_id: 'a', seconds: 2, cpu_seconds: null, cpu_percent_one_core: null, rss_observed_peak_bytes: null, rss_baseline_bytes: 0 }],
+  // CPU and RSS this platform could not read arrive as null: missing.
+  const unmeasured = syncTables({
     statistics: { changes: { samples: 1, elapsed_seconds: { median: 2, p95: 2, last: 2 }, cpu_seconds: null, rss_observed_peak_bytes: null, estimated_cpu_duty_percent_one_core: null } } });
-  assert.deepEqual([unmeasured.history.rows[0].cpu_seconds, unmeasured.history.rows[0].cpu_percent_one_core, unmeasured.history.rows[0].rss_observed_peak_bytes, unmeasured.history.rows[0].rss_baseline_bytes], [null, null, null, 0]);
   assert.deepEqual([unmeasured.costs.rows[0].cpu_median, unmeasured.costs.rows[0].ram_last, unmeasured.costs.rows[0].cpu_duty, unmeasured.costs.rows[0].elapsed_median], [null, null, null, 2]);
 });
 

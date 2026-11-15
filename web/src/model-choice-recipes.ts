@@ -116,7 +116,6 @@ export const modelChoiceRecipes: QueryRecipe[] = [
 ];
 const copy: Record<string, { title: string; description: string; action: string }> = {
   "usage-models": { title: "Model use over time", description: "Recorded tokens during the last {days} days, grouped by day and model; cached input is included.", action: "Explore daily model use" },
-  "effort-cost": { title: "Model effort cost", description: "API cost over the last {days} days, grouped by model and effort; unknown effort retained.", action: "Inspect model effort breakdown" },
   "tl1-advancement": { title: "TL1 configuration advancement", description: "Attempt advancement over the last {days} days within TL1 project, flavor, execution-class, and version groups; three-attempt minimum.", action: "Compare TL1 attempt groups" },
   "tl1-mixed-dispositions": { title: "Mixed TL1 dispositions", description: "Shared TL1 candidates with multiple configurations and recorded dispositions during the last {days} days; groups remain separate.", action: "Inspect shared candidate outcomes" },
 };

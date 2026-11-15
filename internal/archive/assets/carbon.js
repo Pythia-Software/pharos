@@ -178,10 +178,10 @@
 @media(max-width:760px){.carbon-controls{display:grid;gap:8px}.carbon-controls>.carbon-control:not(:first-child){flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 12px}.carbon-segmented button{min-height:30px}.carbon-table th:first-child,.carbon-table td:first-child{white-space:normal}.carbon-method .carbon-table{display:block;overflow-x:auto}.carbon-comparison{max-width:100%;flex-wrap:wrap;white-space:normal}.carbon-table .carbon-share{display:none}.carbon-controls select{min-width:0;width:100%}}`;
 
   const CATEGORY_LABELS = {
-    uncached_input: ['Uncached input', 'Prompt tokens processed in full'],
-    cache_write: ['Cache writes', 'Input processed and stored for reuse'],
-    cache_read: ['Cache reads', 'Input served from a prompt cache'],
-    output: ['Output', 'Generated tokens, including reasoning'],
+    uncached_input: 'Uncached input',
+    cache_write: 'Cache writes',
+    cache_read: 'Cache reads',
+    output: 'Output',
   };
   const SCENARIOS = [['low', 'Low'], ['central', 'Central'], ['high', 'High']];
   const INPUT_SENSITIVITIES = [['current', 'Price ratio'], ['third', 'Watershed']];
@@ -319,38 +319,11 @@
       lead: 'Dotted boxes contain assumptions. Select a box to see the value, why it was chosen and its sources.',
       sections: [['Reading the calculation', 'Token counts are reported, from reconciled usage logs. Four factors are assumptions, shown in dotted boxes: token-type ratios, model-tier energy, facility overhead (PUE) and grid carbon intensity. The solid box marks output, the 1× reference by definition. Wh to kWh is an exact unit conversion. Everything calculated from these is an estimate.']],
     },
-    grid: {
-      title: 'Electricity grid', lead: 'The grid factor converts facility electricity into estimated operational CO₂e.',
-      sections: [
-        ['The calculation', 'Facility kWh × grid grams CO₂e per kWh gives grams CO₂e. Changing the grid changes emissions, not electricity use.'],
-        ['Location and accounting', 'The default US average is a location-based proxy because the serving region is generally undisclosed. Regional factors describe the electricity mix in a place; the Google contracts option is a market-based example and should only be used for comparable procurement.'],
-      ],
-      example: 'At 350 g CO₂e/kWh, 1 kWh of facility electricity gives 350 g CO₂e.',
-      sources: [['EPA eGRID summary data', 'https://www.epa.gov/egrid/summary-data'], ['Watershed on grid accounting', 'https://watershed.com/en-GB/blog/ai-emissions-by-region']],
-    },
-    customGrid: {
-      title: 'Custom grid carbon intensity', lead: 'Enter a carbon intensity in grams of CO₂e per kilowatt-hour of electricity.',
-      sections: [
-        ['Use a documented factor', 'A location-based figure should match the actual serving region where possible. A market-based figure should reflect the provider’s qualifying electricity contracts. This app cannot determine either from token logs.'],
-      ],
-      sources: [['EPA eGRID summary data', 'https://www.epa.gov/egrid/summary-data']],
-    },
-    pue: {
-      title: 'Facility overhead (PUE)', lead: 'Power usage effectiveness is facility electricity divided by IT equipment electricity.',
-      sections: [
-        ['Why it matters', 'A PUE of 1.15 adds 15% to the estimated server energy for cooling, power distribution, and other facility overhead. It is applied after token energy is calculated.'],
-        ['The choices', 'Low, central, and high come from the cited data-center factors. This setting is independent of the energy scenario so you can test overhead separately.'],
-      ],
-      example: '100 Wh of server electricity × 1.15 PUE = 115 Wh at the facility.',
-      sources: [['Google data-center efficiency', 'https://datacenters.google/efficiency/']],
-    },
-    estimate: {
-      title: 'Energy scenario', lead: 'Select the low, central, or high published-model assumptions used for token energy.',
-      sections: [
-        ['What changes', 'The switch changes model-tier energy and token-type ratios together.'],
-        ['How to read the range', 'The low–high span combines the factor extremes. It is a sensitivity range, not a statistical confidence interval or a direct measurement of the provider’s servers.'],
-      ],
-    },
+    // Their dialogs show factorEvidence, so only the title is used.
+    grid: {title: 'Electricity grid'},
+    customGrid: {title: 'Custom grid carbon intensity'},
+    pue: {title: 'Facility overhead (PUE)'},
+    estimate: {title: 'Energy scenario'},
     inputSensitivity: {
       title: 'Input sensitivity',
       sections: [
@@ -359,7 +332,6 @@
         ['Watershed · 3:1', 'Watershed’s Activity Tier lists 0.32 Wh per 1,000 input tokens and 0.96 Wh per 1,000 output tokens. It derives its input factor from Google’s measured typical prompt energy, an assumed prompt length, and a 3:1 decode-to-prefill ratio. Google did not publish that prompt’s token split, so the per-token factors remain modeled estimates.'],
         ['Why both are useful', 'The price-ratio proxy follows a provider’s observed pricing; Watershed starts from published prompt electricity data and a phase-energy model. Neither directly measures per-token energy for the proprietary models in this card. Selecting either ratio keeps output energy and the relative cache discounts fixed; the low and high estimates retain their spread.'],
       ],
-      example: 'In this card, a large model at Central counts fresh input at 180 Wh per million tokens with Price ratio or 300 Wh with Watershed. Cache reads are 18 or 30 Wh per million tokens, respectively; output remains 900 Wh.',
       sources: [['Watershed AI emissions framework, Table 2', 'https://cdn.sanity.io/files/3ogo9b9g/production/a5c1f64ca5864e61b47e6384ee4d0ed31bc861f4.pdf#page=24'], ['Anthropic pricing', 'https://platform.claude.com/docs/en/about-claude/pricing']],
     },
     vehicle: {
@@ -381,7 +353,7 @@
   };
 
   function openInfo(topic, trigger, key = '') {
-    const info = INFO[topic] || (topic === 'tier' ? {title: factorsData?.tiers.find(tier => tier.key === key)?.label} : topic === 'ratio' ? {title: `${CATEGORY_LABELS[key]?.[0]} relative energy`} : null);
+    const info = INFO[topic] || (topic === 'tier' ? {title: factorsData?.tiers.find(tier => tier.key === key)?.label} : topic === 'ratio' ? {title: `${CATEGORY_LABELS[key]} relative energy`} : null);
     if (!info) return;
     const dialog = node('dialog', 'carbon-info-dialog');
     dialog.setAttribute('aria-labelledby', 'carbon-info-title');
@@ -522,7 +494,7 @@
       basis = tier.basis; range = tier.output_wh_per_mtok; sources = tier.sources;
       section.append(node('p', '', `Model-name matches: ${tier.match.join(', ')}. This size tier is a proxy for the logged model, not a measurement of its serving hardware.${tier.key === factors.default_tier ? ' Models of unknown size use this tier by default.' : ''}`));
     } else if (kind === 'ratio') {
-      title = `${CATEGORY_LABELS[key][0]} · relative energy`;
+      title = `${CATEGORY_LABELS[key]} · relative energy`;
       defined = key === 'output';
       if (defined) {
         value = '1× output energy';
@@ -579,7 +551,7 @@
     const button = node('button', 'carbon-factor-link');
     button.append(text);
     button.type = 'button'; button.dataset.carbonControl = `factor:${kind}:${key}`;
-    button.setAttribute('aria-label', kind === 'assumptions' ? 'How assumption boxes work' : `Explain ${kind === 'tier' ? key + ' model-tier energy' : kind === 'ratio' ? CATEGORY_LABELS[key][0] + ' relative energy' : kind === 'pue' ? 'facility overhead (PUE)' : 'grid carbon intensity'}`);
+    button.setAttribute('aria-label', kind === 'assumptions' ? 'How assumption boxes work' : `Explain ${kind === 'tier' ? key + ' model-tier energy' : kind === 'ratio' ? CATEGORY_LABELS[key] + ' relative energy' : kind === 'pue' ? 'facility overhead (PUE)' : 'grid carbon intensity'}`);
     if (kind === 'ratio' && key === 'output') button.classList.add('carbon-defined-box');
     else if (kind === 'assumptions' || text instanceof Node) button.classList.add('carbon-assumption-box');
     button.onclick = () => openInfo(kind, button, key);
@@ -659,7 +631,7 @@
     for (const category of Object.keys(CATEGORY_LABELS)) {
       if (!terms.some(term => term.category === category && term.count > 0)) continue;
       const groupBody = node('tbody'); groupBody.dataset.category = category;
-      const group = node('tr', 'carbon-ledger-group'), heading = node('th', '', CATEGORY_LABELS[category][0]);
+      const group = node('tr', 'carbon-ledger-group'), heading = node('th', '', CATEGORY_LABELS[category]);
       heading.colSpan = 10; heading.scope = 'rowgroup'; group.append(heading); groupBody.append(group);
       for (const tier of tiers) {
         const term = terms.find(term => term.tier === tier.key && term.category === category);
@@ -669,7 +641,7 @@
         const detailRow = node('tr', 'carbon-term-evidence'), detailCell = node('td'); detailCell.colSpan = 10;
         detailRow.id = `carbon-row-${tier.key}-${term.category}`; detailRow.hidden = window.pharosView?.read('disclosures', {})['carbon:' + key] !== true;
         const toggle = node('button', 'carbon-row-trigger', tierLabel(tier)); toggle.type = 'button';
-        toggle.setAttribute('aria-label', `Explain ${CATEGORY_LABELS[category][0]} · ${tier.label}`);
+        toggle.setAttribute('aria-label', `Explain ${CATEGORY_LABELS[category]} · ${tier.label}`);
         toggle.append(node('small', '', 'Details'));
         toggle.dataset.carbonControl = key; toggle.setAttribute('aria-expanded', String(!detailRow.hidden)); toggle.setAttribute('aria-controls', detailRow.id);
         toggle.dataset.viewKey = 'carbon:' + key; toggle.dataset.viewDefault = 'false';
@@ -723,7 +695,7 @@
       fallback.append(node('p', '', `Models of unknown size are assigned to ${tier.label} by default. This assignment is an assumption.`));
       const list = node('ul');
       for (const model of data.default_tier_models || []) list.append(node('li', '', `${model.model}: ${tokens(model.tokens)} tokens`));
-      if (data.default_tier_unknown_tokens) list.append(node('li', '', `Unknown model: ${tokens(data.default_tier_unknown_tokens)} tokens`));
+      if (data.default_tier_unknown_tokens) list.append(node('li', '', `Model not recorded: ${tokens(data.default_tier_unknown_tokens)} tokens`));
       fallback.append(list, factorEvidence(factors, setup, 'tier', factors.default_tier)); content.append(fallback);
     }
     if (data.unclassified_tokens) content.append(node('p', 'carbon-note', `${tokens(data.unclassified_tokens)} unclassified tokens in this selection are counted as uncached input (an assumption); they are not counted twice.`));
@@ -812,7 +784,7 @@
     const ratios = node('table', 'carbon-table'), ratioHead = node('tr'), ratioBody = node('tbody');
     for (const text of ['Token type', 'Low', 'Central', 'High', 'Basis']) ratioHead.append(node('th', '', text));
     ratios.createTHead().append(ratioHead);
-    const ratioRows = [...Object.keys(CATEGORY_LABELS).filter(key => factors.ratios[key]).map(key => [CATEGORY_LABELS[key][0], factors.ratios[key]]),
+    const ratioRows = [...Object.keys(CATEGORY_LABELS).filter(key => factors.ratios[key]).map(key => [CATEGORY_LABELS[key], factors.ratios[key]]),
       ['Facility overhead (PUE)', factors.pue]];
     for (const [label, ratio] of ratioRows) {
       const tr = node('tr'), basis = node('td', 'carbon-basis', ratio.basis);
