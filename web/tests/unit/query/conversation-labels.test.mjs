@@ -73,7 +73,7 @@ import {timelinePreviewText,trimTimelineSnippet} from '../../../src/timeline-pre
 import {nativeTimelineLabels} from '../../../src/label-timeline-overlay.tsx';
 
 import {timelineKeyContent,timelineModeGroups,timelineLegendWindow,timelineLegendDomains,timelineLegendCounts} from '../../../src/timeline-legend.tsx';
-import {timelineValueVisible,timelineSectionVisible,timelineEventVisible,updateTimelineVisibility,visibleTimelineTree,visibleWaitMarks,timelineWaitsVisible} from '../../../src/timeline-visibility';
+import {timelineValueVisible,timelineSectionVisible,timelineEventVisible,updateTimelineVisibility,visibleTimelineTree,visibleWaitMarks,timelineWaitsVisible,timelineWaitsSkip} from '../../../src/timeline-visibility';
 
 import {workflowSessions} from '../../../src/conversation-labels.ts';
 
@@ -344,12 +344,24 @@ test('tool dots take free lanes for overlapping calls, hit-test by position and 
  // The Key lists machine waits as a Tool actions chip. Hiding it leaves each
  // launch, so a window that holds only the wait draws nothing.
  const content=timelineKeyContent({messages:[],origins:[],tools:['run','wait'],unknownTools:[],waitTools:['run'],error:false});
- assert.deepEqual(timelineLegendDomains(content).tools,['run','wait','machine_wait'],'Machine wait is its own value beside the Wait call category');
- const hidden=updateTimelineVisibility({},'tools',['machine_wait'],'hide');
- assert.equal(timelineWaitsVisible(updateTimelineVisibility({},'tools',['wait'],'hide')),true,'hiding Wait call keeps machine waits');
- assert.equal(timelineValueVisible(hidden,'tools','wait'),true,'hiding Machine wait keeps wait calls');
+ const domains=timelineLegendDomains(content);
+ assert.deepEqual([domains.tools,domains.waits],[['run','wait'],['machine_wait']],'Machine wait is its own choice beside the Wait call category');
+ const hidden=updateTimelineVisibility({},'waits',['machine_wait'],'hide');
  assert.equal(timelineWaitsVisible({}),true);assert.equal(timelineWaitsVisible(hidden),false);
- assert.equal(timelineWaitsVisible(updateTimelineVisibility({},'sections',['tools'],'hide')),false,'hiding all tool actions hides their waits');
+ assert.equal(timelineValueVisible(hidden,'tools','wait'),true,'hiding Machine wait keeps wait calls');
+ assert.equal(timelineWaitsVisible(updateTimelineVisibility(hidden,'waits',['machine_wait'],'toggle')),true,'a click flips it back');
+ // Category choices never touch machine waits or Skip machine waits.
+ for(const [values,action] of [[['wait'],'hide'],[['run'],'only'],[['run'],'toggle'],[['run','wait'],'exclude']]){
+  const next=updateTimelineVisibility({},'tools',values,action);
+  assert.equal(timelineWaitsVisible(next),true,`${action} ${values}`);assert.equal(timelineWaitsSkip({},next,'tools',values),null);
+ }
+ assert.equal(timelineWaitsSkip({},hidden,'waits',['machine_wait']),true,'hiding Machine wait skips waits');
+ assert.equal(timelineWaitsSkip(hidden,{},'waits',['machine_wait']),false,'showing it again stops skipping');
+ assert.equal(timelineWaitsSkip(hidden,updateTimelineVisibility(hidden,'tools',['run'],'clear'),'tools',['run']),null,'Show all keeps the checkbox');
+ const noTools=updateTimelineVisibility({},'sections',['tools'],'hide');
+ assert.equal(timelineWaitsVisible(noTools),false,'hiding Tool actions hides their waits');
+ assert.equal(timelineWaitsSkip({},noTools,'sections',['tools']),true);
+ assert.equal(timelineWaitsVisible(updateTimelineVisibility(noTools,'waits',['machine_wait'],'show')),true,'showing Machine wait shows its section');
  const [stripped]=visibleWaitMarks([wait],hidden);
  assert.equal(stripped.wait_kind,undefined);assert.equal(stripped.end,wait.end);
  assert.equal(visibleWaitMarks([wait],{})[0],wait);
@@ -542,7 +554,7 @@ test('every timeline builds its key the same way from what its ribbons draw',()=
  const drawn=timelineLegendWindow([{messages:[message('a','C.report.finding',{at:at(0)})],marks}],[0,100]);
  const human=[{id:'tone',name:'Tone',className:'eng-tone'}],content=timelineKeyContent(drawn,{human});
  assert.deepEqual(Object.entries(content.tools),[['run','Run / build / test'],['custom','custom']],'known tool actions keep the Key\'s order; an unknown category is named as recorded');
- assert.deepEqual(timelineLegendDomains(content),{modes:['C.report.finding'],events:[],tools:['run','custom','error'],origins:[],human:['tone']});
+ assert.deepEqual(timelineLegendDomains(content),{modes:['C.report.finding'],events:[],tools:['run','custom','error'],waits:[],origins:[],human:['tone']});
  assert.deepEqual(content.unknownTools,['error']);
  assert.deepEqual(timelineLegendDomains(timelineKeyContent({...drawn,tools:['read','run','git']})).tools,['read','run','git','error']);
 });

@@ -22,13 +22,14 @@ import (
 //     (or KillShell) ends it early. A notice that the command "didn't finish
 //     before the previous session ended" means its end is unknown.
 //   - Monitor: the launch result names a task ID and a timeout. Each event is
-//     a notification without a status; a completion notice, an expiry event,
-//     TaskStop or the timeout ends the watch.
-//   - ScheduleWakeup: the result names the time it fires. A later
-//     ScheduleWakeup in the same stream replaces it and stop cancels it.
+//     a notification without a status; a completion notice, an expiry event
+//     (Claude Code sends one at the timeout) or TaskStop ends the watch.
+//   - ScheduleWakeup: the result names the time it is due. A later
+//     ScheduleWakeup in the same stream replaces it and stop cancels it; it
+//     fired when its scheduled turn (scheduled_wakeup context) arrives.
 //
-// An end the transcript does not show (the session ended first) is left
-// unknown rather than guessed.
+// An end the transcript does not show (the session ended first, or a wakeup
+// with no scheduled turn) is left unknown rather than guessed.
 const (
 	waitBackgroundCommand = "background_command"
 	waitMonitor           = "monitor"
@@ -174,9 +175,20 @@ func resolveHarnessWaits(messages []MessageRecord, calls []toolCall) {
 		return
 	}
 	last := time.Time{}
-	for _, message := range messages {
-		if at, ok := parseTime(message.CreatedAt); ok && at.After(last) {
+	// The turns ScheduleWakeup firings started, in transcript order.
+	type turn struct {
+		index   int
+		at      time.Time
+		claimed bool
+	}
+	turns := []*turn{}
+	for index, message := range messages {
+		at, ok := parseTime(message.CreatedAt)
+		if ok && at.After(last) {
 			last = at
+		}
+		if ok && message.Kind == contextKind && strings.Contains(message.Text, `"source":"scheduled_wakeup"`) {
+			turns = append(turns, &turn{index: index, at: at})
 		}
 	}
 	started := func(call *toolCall) (time.Time, bool) { return parseTime(call.StartedAt) }
@@ -257,45 +269,55 @@ func resolveHarnessWaits(messages []MessageRecord, calls []toolCall) {
 			}
 		}
 	}
-	// A wakeup fires at its planned time unless the stream replaced or
-	// stopped it first; a watch that saw no end expires at its timeout.
+	// A wakeup ends when the stream replaces or stops it before it is due,
+	// or at its scheduled turn: the first one from shortly before it is due
+	// and before the stream sets another wakeup. A wakeup due within the
+	// transcript without one (the session ended or was resumed later) has an
+	// unknown end; one due after it is pending.
 	for i := range calls {
 		call := &calls[i]
-		switch call.WaitKind {
-		case waitWakeup:
-			planned, ok := parseTime(call.wait.planned)
-			if !ok {
+		if call.WaitKind != waitWakeup {
+			continue
+		}
+		planned, ok := parseTime(call.wait.planned)
+		if !ok {
+			continue
+		}
+		bound := len(messages)
+		for j := i + 1; j < len(calls); j++ {
+			next := &calls[j]
+			if next.Stream != call.Stream || (next.WaitKind != waitWakeup && !next.wait.stopWakeup) {
 				continue
 			}
-			for j := i + 1; j < len(calls); j++ {
-				next := &calls[j]
-				if next.Stream != call.Stream || (next.WaitKind != waitWakeup && !next.wait.stopWakeup) {
-					continue
+			bound = next.messageIndex
+			if at, ok := parseTime(next.StartedAt); ok && at.Before(planned) {
+				status := "replaced"
+				if next.wait.stopWakeup {
+					status = "cancelled"
 				}
-				if at, ok := parseTime(next.StartedAt); ok && at.Before(planned) {
-					status := "replaced"
-					if next.wait.stopWakeup {
-						status = "cancelled"
-					}
-					end(call, at, status, "superseded")
-				}
+				end(call, at, status, "superseded")
+			}
+			break
+		}
+		if call.WaitEndSource != "" {
+			continue
+		}
+		for _, t := range turns {
+			if !t.claimed && t.index > call.messageIndex && t.index < bound && !t.at.Before(planned.Add(-wakeupEarly)) {
+				t.claimed = true
+				end(call, t.at, "fired", "scheduled_turn")
 				break
 			}
-			if !planned.After(last) {
-				end(call, planned, "fired", "scheduled")
-			} else {
-				unknown(call, "pending", "")
-			}
-		case waitMonitor:
-			start, ok := started(call)
-			if ok && call.wait.timeout > 0 {
-				if planned := start.Add(time.Duration(call.wait.timeout) * time.Millisecond); !planned.After(last) {
-					end(call, planned, "expired", "timeout")
-				}
-			}
+		}
+		if call.WaitEndSource == "" && planned.After(last) {
+			unknown(call, "pending", "")
 		}
 	}
 }
+
+// wakeupEarly is how far before its due time a wakeup's turn may arrive;
+// Claude Code has been seen firing one 30 s early.
+const wakeupEarly = 2 * time.Minute
 
 // harnessWaitAttacher adds each tool call message's recorded wait, as
 // harness_wait {kind, ended_at, status, events}, so the conversation reader's

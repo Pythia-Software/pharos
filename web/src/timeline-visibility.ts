@@ -2,7 +2,10 @@ import {updateSliceValues,sliceValueVisible,sliceSelectionActive,sliceGroupCount
 import {eventGroup,type AgentEventLink} from './event-link-layout';
 import {ribbonOriginParts,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
 
-export const timelineVisibilitySections=['modes','events','tools','origins','human'] as const;
+// waits holds the Key's Machine wait choice apart from the tools categories,
+// so isolating a category never hides waits; it is drawn, shown and hidden
+// with the Tool actions section.
+export const timelineVisibilitySections=['modes','events','tools','waits','origins','human'] as const;
 export type TimelineVisibilitySection=typeof timelineVisibilitySections[number];
 export type TimelineVisibilityKey=TimelineVisibilitySection|'sections';
 export type TimelineVisibility=Partial<Record<TimelineVisibilityKey,SliceSelection<string>>>;
@@ -10,12 +13,19 @@ export const timelineSelection=(visibility:TimelineVisibility,section:TimelineVi
 export function timelineValueVisible(visibility:TimelineVisibility,section:TimelineVisibilityKey,value:string){
  return sliceValueVisible(timelineSelection(visibility,section),value);
 }
-export const timelineSectionVisible=(visibility:TimelineVisibility,section:TimelineVisibilitySection)=>timelineValueVisible(visibility,'sections',section);
+export const timelineSectionVisible=(visibility:TimelineVisibility,section:TimelineVisibilitySection)=>timelineValueVisible(visibility,'sections',section==='waits'?'tools':section);
 export function timelineGroupCounts(visibility:TimelineVisibility,section:TimelineVisibilitySection,values:string[]){
  return timelineSectionVisible(visibility,section)?sliceGroupCounts(timelineSelection(visibility,section),values):{visibleCount:0,hiddenCount:new Set(values).size};
 }
 export function updateTimelineVisibility(visibility:TimelineVisibility,section:TimelineVisibilityKey,values:string[],action:LegendAction):TimelineVisibility{
  if(action==='clear')return {};
+ if(section==='waits'){
+  // One value: a click flips it; Only and Show show it (and its Tool actions section).
+  const show=action==='toggle'?!timelineWaitsVisible(visibility):action==='show'||action==='only';
+  const next=show&&!timelineSectionVisible(visibility,'waits')?updateTimelineVisibility(visibility,'sections',['tools'],'show'):{...visibility};
+  if(show)delete next.waits;else next.waits={values:[timelineWaitKey],excluded:true};
+  return next;
+ }
  if(action==='show'||action==='hide'||action==='only'){
   const next={...visibility};
   if(section==='sections'){
@@ -54,15 +64,23 @@ export function validTimelineVisibility(value:unknown):value is TimelineVisibili
   &&selection&&typeof selection==='object'&&!Array.isArray(selection)&&typeof selection.excluded==='boolean'
   &&Array.isArray(selection.values)&&selection.values.length<=1000&&selection.values.every((item:unknown)=>typeof item==='string')&&validHiddenSelection(selection));
 }
-/** The Key's Machine wait chip: a tools value beside the categories. Hiding
- * it drops the waits from the marks a ribbon is built from (each launch
- * stays, so a window holding only a wait shows nothing) and checks Skip
- * machine waits (useTimelineVisibility). */
-// Distinct from the wait tool category (Wait call), which shares the tools section.
+/** The Key's Machine wait chip, in the waits selection. Hiding it drops the
+ * waits from the marks a ribbon is built from (each launch stays, so a
+ * window holding only a wait shows nothing) and checks Skip machine waits
+ * (useTimelineVisibility). */
 export const timelineWaitKey='machine_wait';
-export const timelineWaitsVisible=(visibility:TimelineVisibility)=>timelineSectionVisible(visibility,'tools')&&timelineValueVisible(visibility,'tools',timelineWaitKey);
+export const timelineWaitsVisible=(visibility:TimelineVisibility)=>timelineSectionVisible(visibility,'waits')&&timelineValueVisible(visibility,'waits',timelineWaitKey);
 export function visibleWaitMarks<T extends ActivityMark>(marks:T[],visibility:TimelineVisibility):T[]{
  return timelineWaitsVisible(visibility)||!marks.some(mark=>mark.wait_kind)?marks:marks.map(mark=>mark.wait_kind?{...mark,wait_kind:undefined,wait_end:undefined,wait_status:undefined,wait_events:undefined}:mark);
+}
+/** What a Key choice does to Skip machine waits (timeline_waits): hiding the
+ * Machine wait chip, or the Tool actions holding it, skips waits on the clock
+ * and showing it again stops; null leaves the setting as the person chose it,
+ * as a category choice or Show all does. */
+export function timelineWaitsSkip(before:TimelineVisibility,after:TimelineVisibility,section:TimelineVisibilityKey,values:string[]):boolean|null{
+ const targeted=section==='waits'||section==='sections'&&values.length===1&&values[0]==='tools';
+ const shown=timelineWaitsVisible(after);
+ return targeted&&timelineWaitsVisible(before)!==shown?!shown:null;
 }
 export const timelineEventVisible=(visibility:TimelineVisibility,event:AgentEventLink)=>timelineSectionVisible(visibility,'events')&&timelineValueVisible(visibility,'events',eventGroup(event.group).key);
 

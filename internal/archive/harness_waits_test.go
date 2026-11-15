@@ -35,6 +35,12 @@ var harnessWaitFixture = []string{
 	// A command still running when the session ends.
 	`{"type":"assistant","uuid":"a7","parentUuid":"u2","sessionId":"waits","timestamp":"2026-11-13T19:21:00.000Z","message":{"id":"msg_7","role":"assistant","model":"claude-opus-5","content":[{"type":"tool_use","id":"toolu_late","name":"Bash","input":{"command":"sleep 9999","run_in_background":true}}],"usage":{"input_tokens":10,"output_tokens":5}}}`,
 	`{"type":"user","uuid":"r7","parentUuid":"a7","sessionId":"waits","timestamp":"2026-11-13T19:21:01.000Z","message":{"role":"user","content":[{"tool_use_id":"toolu_late","type":"tool_result","content":"Command running in background with ID: btask3.","is_error":false}]},"toolUseResult":{"backgroundTaskId":"btask3"}}`,
+	// A one-minute watch and a wakeup due at 19:40, neither of which the
+	// transcript shows ending: the session ends first.
+	`{"type":"assistant","uuid":"a8","parentUuid":"r7","sessionId":"waits","timestamp":"2026-11-13T19:21:10.000Z","message":{"id":"msg_8","role":"assistant","model":"claude-opus-5","content":[{"type":"tool_use","id":"toolu_watch2","name":"Monitor","input":{"command":"tail -f other","timeout_ms":60000}}],"usage":{"input_tokens":10,"output_tokens":5}}}`,
+	`{"type":"user","uuid":"r8","parentUuid":"a8","sessionId":"waits","timestamp":"2026-11-13T19:21:11.000Z","message":{"role":"user","content":[{"tool_use_id":"toolu_watch2","type":"tool_result","content":"Monitor started (task bmon2, expires in 1m unless the source ends first)","is_error":false}]},"toolUseResult":{"taskId":"bmon2","timeoutMs":60000,"persistent":false}}`,
+	`{"type":"assistant","uuid":"a9","parentUuid":"r8","sessionId":"waits","timestamp":"2026-11-13T19:22:00.000Z","message":{"id":"msg_9","role":"assistant","model":"claude-opus-5","content":[{"type":"tool_use","id":"toolu_wake3","name":"ScheduleWakeup","input":{"delaySeconds":1080,"prompt":"check again"}}],"usage":{"input_tokens":10,"output_tokens":5}}}`,
+	`{"type":"user","uuid":"r9","parentUuid":"a9","sessionId":"waits","timestamp":"2026-11-13T19:22:01.000Z","message":{"role":"user","content":[{"tool_use_id":"toolu_wake3","type":"tool_result","content":"Next wakeup scheduled","is_error":false}]},"toolUseResult":{"scheduledFor":1794598800000,"clampedDelaySeconds":1080,"wasClamped":false}}`,
 }
 
 func TestHarnessWaitsRunToTheNoticeThatEndsThem(t *testing.T) {
@@ -73,7 +79,10 @@ func TestHarnessWaitsRunToTheNoticeThatEndsThem(t *testing.T) {
 	// Expired at its timeout, not at the later notice; one event on the way.
 	check("toolu_monitor", waitMonitor, "2026-11-13T18:33:00.000Z", "expired", "expiry", 1)
 	check("toolu_wake1", waitWakeup, "2026-11-13T18:50:00.000Z", "replaced", "superseded", 0)
-	check("toolu_wake2", waitWakeup, "2026-11-13T19:20:00.000Z", "fired", "scheduled", 0)
+	// Fired at its scheduled turn, half a second after it was due.
+	check("toolu_wake2", waitWakeup, "2026-11-13T19:20:00.500Z", "fired", "scheduled_turn", 0)
+	check("toolu_wake3", waitWakeup, "", "pending", "", 0)
+	check("toolu_watch2", waitMonitor, "", "", "", 0)
 	check("toolu_late", waitBackgroundCommand, "", "", "", 0)
 	check("toolu_stop", "", "", "", "", 0)
 
@@ -92,7 +101,7 @@ func TestHarnessWaitsRunToTheNoticeThatEndsThem(t *testing.T) {
 			waits[firstString(message["call_id"])] = wait
 		}
 	}
-	if wait := waits["toolu_monitor"]; len(waits) != 6 || wait["kind"] != waitMonitor || wait["ended_at"] != "2026-11-13T18:33:00.000Z" || wait["status"] != "expired" || wait["events"] != int64(1) {
+	if wait := waits["toolu_monitor"]; len(waits) != 8 || wait["kind"] != waitMonitor || wait["ended_at"] != "2026-11-13T18:33:00.000Z" || wait["status"] != "expired" || wait["events"] != int64(1) {
 		t.Fatalf("reader waits: %v", waits)
 	}
 
@@ -100,10 +109,14 @@ func TestHarnessWaitsRunToTheNoticeThatEndsThem(t *testing.T) {
 	// reported unfinished, so its end stays unknown, and a new command's
 	// completion is attached to its launch.
 	writeFixture(t, root, "project/waits.jsonl", append(slices.Clone(harnessWaitFixture),
-		`{"type":"user","uuid":"n4","parentUuid":"r7","sessionId":"waits","timestamp":"2026-11-13T20:00:00.000Z","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>\n<task-id>btask3</task-id>\n<task-id>__orphan_summary__:shell</task-id>\n<status>stopped</status>\n<summary>Background shell command didn't finish before the previous session ended</summary>\n</task-notification>"}}`,
+		`{"type":"user","uuid":"n4","parentUuid":"r9","sessionId":"waits","timestamp":"2026-11-13T20:00:00.000Z","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>\n<task-id>btask3</task-id>\n<task-id>__orphan_summary__:shell</task-id>\n<status>stopped</status>\n<summary>Background shell command didn't finish before the previous session ended</summary>\n</task-notification>"}}`,
 	))
 	ingestFixture(t, catalog, "claude", root)
 	calls = read()
 	check("toolu_late", waitBackgroundCommand, "", "stopped", "session_end", 0)
+	// Due within the transcript now, but no scheduled turn and no expiry
+	// notice: neither end is guessed.
+	check("toolu_wake3", waitWakeup, "", "", "", 0)
+	check("toolu_watch2", waitMonitor, "", "", "", 0)
 	check("toolu_wait", waitBackgroundCommand, "2026-11-13T18:44:00.000Z", "completed", "notification", 0)
 }
