@@ -68,6 +68,10 @@ func Run(arguments []string) error {
 	}
 	// Capture push reads its own configuration and state folder only.
 	if command == "capture-push" {
+		// --config names the push configuration here, not a library's.
+		if configPath != "" {
+			args = append([]string{"--config", configPath}, args...)
+		}
 		return runCapturePushCLI(args)
 	}
 	// Labeling never opens the catalog through OpenCatalog: prepare reads a

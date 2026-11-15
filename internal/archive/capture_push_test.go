@@ -552,6 +552,14 @@ func TestCapturePushHookNeverFailsATurn(t *testing.T) {
 	if status := readPushStatus(f.options); status.Problem == "" {
 		t.Fatalf("status with a broken configuration: %+v", status)
 	}
+	// Through the program's own entry, which takes --config for itself.
+	writeSourceFile(t, f.options.ConfigPath, `{"contract":"pharos-push-config/1","access":"write","prefix":"team","destination":{"type":"http","url_template":"https://bucket.test/{key}"}}`)
+	printed, err := captureStdout(t, func() error {
+		return Run([]string{"capture-push", "--config", f.options.ConfigPath, "--state", f.options.StateDir, "--check"})
+	})
+	if err != nil || !strings.Contains(printed, `"ok": true`) {
+		t.Fatalf("check through Run: %v\n%s", err, printed)
+	}
 	if err := runCapturePushCLI(append([]string{"--wait", "--watch"}, args...)); err == nil {
 		t.Fatal("two modes were accepted")
 	}
