@@ -40,7 +40,9 @@ func TestResultCachePolicies(t *testing.T) {
 	server := testServer(t, config, catalog)
 	stamp, builds, broken := "1", 0, false
 	domain := registerResultDomain(&resultDomain{name: "test", version: "1", maxAge: time.Hour,
-		stamp: func(context.Context, *Server, string) (string, error) { return stamp, nil },
+		stamp: func(_ context.Context, _ *Server, scope string) (string, error) {
+			return stamp + strings.TrimPrefix(scope, "all"), nil
+		},
 		build: func(ctx context.Context, _ *Server, replay []byte, _ time.Time) ([]byte, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err
@@ -208,6 +210,22 @@ func TestResultCachePolicies(t *testing.T) {
 	stamp, broken = "8", false
 	if n := swept(8*time.Hour) + swept(10*time.Hour); n != 2 {
 		t.Fatalf("the sweep rebuilt %d entries after another change, want the two whose builds had failed", n)
+	}
+	// An entry stored when its request read another scope (by a build that
+	// scoped it differently) is rebuilt for the scope the request reads now.
+	narrowed := func() string {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, "/test", nil)
+		r.Header.Set(resultCacheHeader, resultCached)
+		w := httptest.NewRecorder()
+		server.serveResult(w, r, domain, resultRequest{replay: []byte("scoped"), scope: "narrow"})
+		return w.Header().Get(resultCacheHeader)
+	}
+	if state, _ := ask(resultCached, "scoped", false); state != "live" {
+		t.Fatal(state)
+	}
+	if first, rebuilt, then := narrowed(), server.refreshResult(t.Context()), narrowed(); first != "stale" || !rebuilt || then != "fresh" {
+		t.Fatalf("an entry stored under another scope was %s, then %s after its rebuild", first, then)
 	}
 	override(t, &resultSettle, 0)
 	// The file outlives the process, and another version's entries are not served.

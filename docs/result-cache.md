@@ -63,6 +63,10 @@ still be served; nothing is deleted when data changes.
 | stale | serve it, queue a refresh | compute; if the service is busy or computing fails, serve it and queue a refresh | compute |
 | none | compute | compute | compute |
 
+An entry is stored with the scope its request read (the argument of the
+domain's stamp). When a build changes which scope a request reads, the first
+request for a stored entry moves it to the new scope, and it is rebuilt there.
+
 The response header `X-Pharos-Cache` says what happened (`fresh`, `stale` or
 `live`) and `X-Pharos-Cache-Built` says when the body was computed.
 

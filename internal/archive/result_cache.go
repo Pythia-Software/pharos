@@ -480,6 +480,15 @@ func (s *Server) serveResult(w http.ResponseWriter, r *http.Request, d *resultDo
 	if policy != resultLive {
 		entry = cache.get(ctx, d.name, key)
 	}
+	if entry != nil && entry.scope != request.scope {
+		// Stored when this request read another part of the data (by a
+		// build that scoped it differently). The refresher rebuilds an entry
+		// for the scope stored with it, so without this it would go on
+		// stamping the entry for a scope no request compares it with, and
+		// the entry would be stale to every request for good.
+		_, _ = cache.db.Exec(`UPDATE entries SET scope=? WHERE domain=? AND key=?`, request.scope, d.name, key)
+		entry.scope = request.scope
+	}
 	state := d.state(entry, stamp, time.Now())
 	serve := func() {
 		writeCachedResult(w, entry.body, state, entry.builtAt)
