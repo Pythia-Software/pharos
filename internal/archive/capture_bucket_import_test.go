@@ -37,6 +37,9 @@ func (f *pushFixture) library(prefix string) (*Catalog, Config, string) {
 
 func TestBucketImportCollectsPushedCapturesAsTheirHost(t *testing.T) {
 	f := newPushFixture(t, "")
+	t.Setenv("NITESHIFT_TASK_ID", "task_abc")
+	t.Setenv("NITESHIFT_SANDBOX_ID", "sbx_1")
+	t.Setenv("NITESHIFT_TASK_URL", "https://niteshift.dev/repo/acme/api/task_abc")
 	writeSourceFile(t, f.transcript, claudeLine("session", "u1", "hello from the sandbox", "/root/workspace/api", 1))
 	pushed := f.push().Sources[0]
 	sandbox := f.bucket.export(pushed.Export).Envelope.HostID
@@ -76,6 +79,13 @@ func TestBucketImportCollectsPushedCapturesAsTheirHost(t *testing.T) {
 		return count
 	}
 	before := messages()
+
+	// The sandbox's pool is its machine and its platform its channel.
+	var channel, machine, kind string
+	if err := catalog.DB.QueryRow(`SELECT o.channel, m.label, m.kind FROM origin_observations o JOIN host_machines h ON h.host_id=? JOIN machines m ON m.id=h.machine_id AND m.id=o.execution_machine_id`, sandbox).
+		Scan(&channel, &machine, &kind); err != nil || channel != "niteshift" || machine != "Niteshift · api" || kind != "cloud" {
+		t.Fatalf("origin: channel %q, machine %q (%s), %v", channel, machine, kind, err)
+	}
 
 	// Collecting again changes nothing and fetches nothing.
 	puts := len(f.bucket.keys(""))
@@ -153,5 +163,55 @@ func TestBucketImportOnlyAdds(t *testing.T) {
 	useHost(t, sandbox)
 	if result, err := importBucket(context.Background(), config.CaptureRoot, read); err == nil || !strings.Contains(strings.Join(result.Errors, " "), "this Mac") {
 		t.Fatalf("an export claiming this Mac: %+v, %v", result, err)
+	}
+}
+
+func TestBucketImportRunsAsABackgroundItem(t *testing.T) {
+	f := newPushFixture(t, "")
+	writeSourceFile(t, f.transcript, claudeLine("session", "u1", "hello from the sandbox", "/root/workspace/api", 1))
+	sandbox := f.bucket.export(f.push().Sources[0].Export).Envelope.HostID
+	catalog, config, read := f.library("team")
+	t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+	server := testServer(t, config, catalog)
+
+	// Nothing is connected: the item has nothing to do.
+	if in := server.backgroundInputsFor(context.Background(), nil); in.bucketImports != 0 {
+		t.Fatalf("buckets before setup: %d", in.bucketImports)
+	}
+	raw, err := os.ReadFile(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A push configuration, or one whose files would move, is refused.
+	if _, err := saveBucketImport(config, []byte(strings.Replace(string(raw), `"read"`, `"write"`, 1))); err == nil {
+		t.Fatal("a write configuration was saved")
+	}
+	if _, err := saveBucketImport(config, []byte(strings.Replace(string(raw), `"secret"`, `{"file":"key.txt"}`, 1))); err == nil {
+		t.Fatal("a relative secret file was saved")
+	}
+	saved, err := saveBucketImport(config, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listed := savedBucketImports(config); len(listed) != 1 || listed[0].ID != saved.ID || listed[0].Prefix != "team" {
+		t.Fatalf("saved: %+v", listed)
+	}
+	if in := server.backgroundInputsFor(context.Background(), nil); in.bucketImports != 1 {
+		t.Fatalf("buckets after setup: %d", in.bucketImports)
+	}
+
+	// One run collects and indexes.
+	ctx, op := server.ops.begin(context.Background(), OperationSpec{Kind: "capture.import", Variant: "bucket", Trigger: triggerSchedule})
+	err = server.runBackgroundItem(ctx, op, "bucket-import")
+	op.Finish(err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var conversations int
+	if err := server.Catalog.DB.QueryRow(`SELECT COUNT(*) FROM conversations WHERE origin_host_id=?`, sandbox).Scan(&conversations); err != nil || conversations != 1 {
+		t.Fatalf("conversations from the sandbox: %d, %v", conversations, err)
+	}
+	if err := removeBucketImport(config, saved.ID); err != nil || len(savedBucketImports(config)) != 0 {
+		t.Fatalf("remove: %v", err)
 	}
 }

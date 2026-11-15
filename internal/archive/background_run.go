@@ -37,6 +37,8 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 		return err
 	case "backup":
 		return s.backgroundBackup(ctx, op)
+	case "bucket-import":
+		return s.backgroundBucketImport(ctx, op)
 	case "writing-refine":
 		if s.work.declares(kindRefine) {
 			// The runner's execution is the refinement's operation.

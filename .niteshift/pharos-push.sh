@@ -2,6 +2,9 @@
 # Installs the pharos CLI if it is missing, then pushes transcripts as they
 # change. Run by the pharos-push service in services.yaml.
 set -eu
+# A failure (no network, access not granted) waits before the service is
+# restarted, so a broken setup retries every few minutes, not in a loop.
+trap 'status=$?; [ "$status" -eq 0 ] || sleep 300; exit "$status"' EXIT
 here=$(cd "$(dirname "$0")" && pwd)
 bucket=pythia-pharos-push-test
 audience=$(jq -r '.destination.identity_token.command[-1]' "$here/pharos-push.json")
@@ -28,4 +31,4 @@ fi
 if [ $# -eq 0 ]; then
   set -- --watch
 fi
-exec "$bin" capture-push --config "$here/pharos-push.json" "$@"
+"$bin" capture-push --config "$here/pharos-push.json" "$@"

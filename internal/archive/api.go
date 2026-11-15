@@ -432,6 +432,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		s.speech(w, r)
 	case path == "/api/claude-imports":
 		s.getClaudeImports(w, r)
+	case path == "/api/bucket-imports":
+		s.getBucketImports(w)
 	case path == "/api/markdown-link":
 		s.markdownLink(w, r)
 	case path == "/api/markdown-favicon":
@@ -1104,6 +1106,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.postChatGPTImports(w, body)
 	case path == "/api/claude-imports/watch":
 		s.postClaudeWatch(w, body)
+	case path == "/api/bucket-imports":
+		s.postBucketImports(w, body)
 	case path == "/api/claude-imports" || path == "/api/claude-imports/links" || path == "/api/claude-imports/cancel":
 		s.postClaudeImports(w, r, body)
 	case path == "/api/probe":

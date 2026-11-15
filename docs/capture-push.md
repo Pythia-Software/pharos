@@ -222,18 +222,49 @@ platform.
 
 Code: `internal/archive/capture_bucket_import.go`; tests beside it.
 
+### As a Background Processing item
+
+Connecting a bucket makes collection a scheduled item, **Collect from other
+machines** (Hourly by default; its schedule is changed like any other
+item's). Each run collects from every connected bucket, then indexes the
+hosts that received something. Until a bucket is connected the item is
+unavailable.
+
+```text
+pharos --config LIBRARY_CONFIG bucket-import --from pharos-read.json --save   # connect, and collect once
+pharos --config LIBRARY_CONFIG bucket-import                                  # collect from every connected bucket
+pharos --config LIBRARY_CONFIG bucket-import --list
+pharos --config LIBRARY_CONFIG bucket-import --remove ID
+```
+
+The service does the same over its API: `GET /api/bucket-imports` lists
+the connected buckets without their credentials, and
+`POST /api/bucket-imports` takes `{"config": READ_CONFIGURATION}` or
+`{"remove": ID}`. A connected configuration holds this Mac's credential, so
+it is kept in this Mac's support folder (`bucket-imports/`), not in the
+library; files it names must be absolute paths. Removing one keeps what it
+collected.
+
+### Machine and Channel
+
+A collected host's **pool** is its machine: every sandbox of
+"Niteshift · api" is one machine of kind `cloud`, however many there were.
+A host with no pool is a machine of its own. The **platform** an export
+names is the Channel of that host's conversations (`niteshift`), ranked
+with an explicit initiation, so it outranks what the agent app implies; a
+conversation's own recorded initiation still wins. Both are applied when
+the host's captures are indexed.
+
 ## Limits
 
 - `bucket-import` reads Google Cloud Storage and S3 (and S3-compatible
   stores). Azure and plain-URL destinations can be pushed to but not yet
   imported from.
-- It is a command, not yet a scheduled background item, and has no setup
-  screen. The platform, owner and pool an export carries are recorded
-  beside the host but do not yet set the conversation's Channel or the
-  machine's pool.
-- The operation's recorded holds are those of `capture.import` (this Mac's
-  capture); it writes another host's. `docs/background-work.md` needs its
-  own row for the variant when it becomes a scheduled item.
+- Settings has no screen for connecting a bucket yet; the command and the
+  API above do it.
+- The owner and initiator an export carries are recorded beside the host
+  but not shown; an automation's runs are not yet marked with the
+  `automation:<name>` sender.
 - It follows each pusher's newest export only. An export that the newest
   does not descend from (two machines sharing one pusher ID) is not yet
   found.

@@ -2,12 +2,14 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -40,6 +42,27 @@ type bucketImportedHost struct {
 	Platform    *pushPlatform  `json:"platform,omitempty"`
 	Initiator   *pushInitiator `json:"initiator,omitempty"`
 	ImportedAt  string         `json:"imported_at"`
+}
+
+// applyBucketImport gives a host collected from a bucket its machine and
+// channel. Every host of a pool is one machine, so a thousand short-lived
+// sandboxes are one value of Machine; a host outside any pool is a machine
+// of its own. Neither is guessed from a hostname.
+func applyBucketImport(hostDir string, host *Host) {
+	data, err := os.ReadFile(filepath.Join(hostDir, bucketImportMarker))
+	var marker bucketImportedHost
+	if err != nil || json.Unmarshal(data, &marker) != nil || marker.Pusher == "" {
+		return
+	}
+	host.machineKind, host.machineLabel = "cloud", host.Label
+	host.MachineID = stableID("machine", "pusher", marker.Pusher)
+	if marker.Pool != "" {
+		host.MachineID, host.machineLabel = stableID("machine", "pool", marker.Destination, marker.Pool), marker.Pool
+	}
+	if marker.Platform != nil {
+		evidence, _ := json.Marshal(map[string]any{"platform": marker.Platform, "initiator": marker.Initiator, "owner": marker.Owner})
+		host.channel, host.channelEvidence = marker.Platform.Name, string(evidence)
+	}
 }
 
 // bucketImportState is <capture root>/.bucket-imports/<destination>/state.json.
@@ -366,19 +389,245 @@ func copyFileDurably(source, target string) error {
 // runBucketImportCLI is pharos bucket-import: collect, then say which
 // hosts to index.
 func runBucketImportCLI(config Config, args []string) error {
+	usage := errors.New("usage: pharos bucket-import [--from READ_CONFIG [--save]] | --list | --remove ID")
 	flags := flag.NewFlagSet("bucket-import", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	from := flags.String("from", "", "read configuration (pharos-read.json)")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *from == "" {
-		return errors.New("usage: pharos bucket-import --from READ_CONFIG")
+	save := flags.Bool("save", false, "keep the configuration for scheduled collection")
+	list := flags.Bool("list", false, "list saved buckets")
+	remove := flags.String("remove", "", "forget a saved bucket")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *save && *from == "" {
+		return usage
+	}
+	switch {
+	case *list:
+		return printJSON(map[string]any{"buckets": savedBucketImports(config)})
+	case *remove != "":
+		return removeBucketImport(config, *remove)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return runCLIOperation(config, "bucket-import", OperationSpec{Kind: "capture.import", Variant: "bucket"}, func(context.Context, *Op) error {
-		result, err := importBucket(ctx, config.CaptureRoot, expandPath(*from))
+		if *from == "" {
+			results, _, err := importSavedBuckets(ctx, config)
+			if printErr := printJSON(results); err == nil {
+				err = printErr
+			}
+			return err
+		}
+		path := expandPath(*from)
+		if *save {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			saved, err := saveBucketImport(config, raw)
+			if err != nil {
+				return err
+			}
+			path = saved.path
+		}
+		result, err := importBucket(ctx, config.CaptureRoot, path)
 		if printErr := printJSON(result); err == nil {
 			err = printErr
 		}
 		return err
 	})
+}
+
+// Saved read configurations: the buckets the Background Processing item
+// "Collect from other machines" reads. They hold this Mac's credentials, so
+// they live in its support folder, not in the library.
+
+type savedBucketImport struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	Bucket      string `json:"bucket,omitempty"`
+	Prefix      string `json:"prefix"`
+	path        string
+	destination string
+}
+
+func bucketImportStore(config Config) string {
+	return filepath.Join(pharosSupportDir(), "bucket-imports", stableID("capture-root", config.CaptureRoot))
+}
+
+func savedBucketImports(config Config) []savedBucketImport {
+	saved := []savedBucketImport{}
+	entries, _ := os.ReadDir(bucketImportStore(config))
+	for _, entry := range entries {
+		id, ok := strings.CutSuffix(entry.Name(), ".json")
+		if !ok || entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(bucketImportStore(config), entry.Name())
+		read, err := readPushConfig(path)
+		if err != nil {
+			continue
+		}
+		d := read.Destination
+		saved = append(saved, savedBucketImport{ID: id, Type: d.Type, Bucket: firstString(d.Bucket, d.Container), Prefix: read.Prefix, path: path})
+	}
+	return saved
+}
+
+// saveBucketImport checks a read configuration and keeps it for the
+// background item. The same bucket and prefix replace their earlier entry.
+func saveBucketImport(config Config, raw []byte) (savedBucketImport, error) {
+	dir := bucketImportStore(config)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return savedBucketImport{}, err
+	}
+	scratch, err := os.CreateTemp(dir, ".check-*")
+	if err != nil {
+		return savedBucketImport{}, err
+	}
+	defer os.Remove(scratch.Name())
+	_, err = scratch.Write(raw)
+	if closeErr := scratch.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return savedBucketImport{}, err
+	}
+	read, err := readPushConfig(scratch.Name())
+	if err != nil {
+		return savedBucketImport{}, errors.New(strings.TrimPrefix(err.Error(), scratch.Name()+": "))
+	}
+	d := read.Destination
+	switch {
+	case read.Access != "read":
+		return savedBucketImport{}, errors.New(`a library needs the read configuration ("access": "read")`)
+	case strings.Contains(read.Prefix, "{owner}"):
+		return savedBucketImport{}, errors.New("a read configuration names one owner's folder; replace {owner} in its prefix")
+	}
+	for _, file := range []string{d.SecretAccessKey.file, d.ServiceAccountKey.file, d.SASURL.file, d.Header.file} {
+		if file != "" && !filepath.IsAbs(expandPath(file)) {
+			return savedBucketImport{}, fmt.Errorf("give %s as an absolute path", file)
+		}
+	}
+	for _, token := range []*pushIdentityToken{d.IdentityToken, d.AccessToken} {
+		if token != nil && token.File != "" && !filepath.IsAbs(expandPath(token.File)) {
+			return savedBucketImport{}, fmt.Errorf("give %s as an absolute path", token.File)
+		}
+	}
+	if _, err := newPushReadStore(read, dir); err != nil {
+		return savedBucketImport{}, err
+	}
+	id := stableID("push-destination", d.Type, d.Bucket, d.Endpoint, d.Account, d.Container, d.URLTemplate, read.Prefix)
+	path := filepath.Join(dir, id+".json")
+	if err := writeFileAtomic(path, raw, 0o600); err != nil {
+		return savedBucketImport{}, err
+	}
+	return savedBucketImport{ID: id, Type: d.Type, Bucket: firstString(d.Bucket, d.Container), Prefix: read.Prefix, path: path}, nil
+}
+
+// removeBucketImport forgets a saved configuration. What it collected stays.
+func removeBucketImport(config Config, id string) error {
+	for _, saved := range savedBucketImports(config) {
+		if saved.ID == id {
+			return os.Remove(saved.path)
+		}
+	}
+	return fmt.Errorf("no saved bucket %q", id)
+}
+
+// importSavedBuckets collects from every saved bucket and returns the hosts
+// that received something.
+func importSavedBuckets(ctx context.Context, config Config) ([]bucketImportResult, []string, error) {
+	results, hosts := []bucketImportResult{}, []string{}
+	var failure error
+	for _, saved := range savedBucketImports(config) {
+		if ctx.Err() != nil {
+			return results, hosts, ctx.Err()
+		}
+		result, err := importBucket(ctx, config.CaptureRoot, saved.path)
+		if err != nil {
+			failure = errors.Join(failure, fmt.Errorf("%s %s: %w", saved.Type, firstString(saved.Bucket, saved.Prefix), err))
+		}
+		results = append(results, result)
+		for _, host := range result.Hosts {
+			if !slices.Contains(hosts, host) {
+				hosts = append(hosts, host)
+			}
+		}
+	}
+	return results, hosts, failure
+}
+
+// backgroundBucketImport is the Background Processing item: collect from
+// the saved buckets, then index the hosts that received something.
+func (s *Server) backgroundBucketImport(ctx context.Context, op *Op) error {
+	config := s.Config()
+	ctx, child := op.Child(OperationSpec{Kind: "capture.import", Variant: "bucket", Trigger: triggerChained})
+	_, hosts, failure := importSavedBuckets(ctx, config)
+	if len(hosts) > 0 && ctx.Err() == nil {
+		if err := s.indexCapturedHosts(ctx, hosts); err != nil {
+			failure = errors.Join(failure, err)
+		}
+	}
+	child.Finish(failure)
+	return failure
+}
+
+// indexCapturedHosts indexes the captures of the hosts named, as the
+// scheduled capture-and-index pass does for every host.
+func (s *Server) indexCapturedHosts(ctx context.Context, hosts []string) error {
+	targets, err := captureTargets(s.Config().CaptureRoot, hosts, false, nil)
+	if err != nil {
+		return err
+	}
+	var failure error
+	wrote := false
+	for _, target := range targets {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		result := s.Catalog.admittedIngest(ctx, target.Source, target.Host.ID, func(ctx context.Context) IngestResult {
+			return s.Catalog.IndexCapture(withIngestMode(ctx, ingestMode{deferGit: true}), target, nil)
+		})
+		wrote = wrote || result.Workspaces > 0
+		if result.Error != nil {
+			failure = errors.Join(failure, fmt.Errorf("%s: %v", target.label(), result.Error))
+		}
+	}
+	if wrote {
+		if err := s.Catalog.writeTransaction(ctx, "background deferred", func(tx *sql.Tx) error { return markSyncDeferred(tx) }); err != nil {
+			failure = errors.Join(failure, err)
+		}
+	}
+	return failure
+}
+
+// getBucketImports lists the saved buckets, without their credentials.
+func (s *Server) getBucketImports(w http.ResponseWriter) {
+	writeJSON(w, map[string]any{"buckets": savedBucketImports(s.Config())}, http.StatusOK)
+}
+
+// postBucketImports saves a read configuration ({"config": {...}}) or
+// forgets one ({"remove": ID}), and asks for a collection.
+func (s *Server) postBucketImports(w http.ResponseWriter, body map[string]any) {
+	config := s.Config()
+	if id, ok := body["remove"].(string); ok && id != "" {
+		if err := removeBucketImport(config, id); err != nil {
+			writeError(w, err, http.StatusNotFound)
+			return
+		}
+		s.getBucketImports(w)
+		return
+	}
+	read, ok := body["config"].(map[string]any)
+	if !ok {
+		writeError(w, errors.New(`send {"config": READ_CONFIGURATION} or {"remove": ID}`), http.StatusBadRequest)
+		return
+	}
+	raw, err := json.MarshalIndent(read, "", "  ")
+	if err == nil {
+		_, err = saveBucketImport(config, raw)
+	}
+	if err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	s.getBucketImports(w)
 }

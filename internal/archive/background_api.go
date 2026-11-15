@@ -23,7 +23,7 @@ var runningItem = map[string]string{
 	"maintenance.library-view": "search", kindMetrics: "search", "analysis.github": "repositories", "analysis.identities": "repositories", "analysis.git": "repositories",
 	"analysis.authorship.refine": "writing-refine", "analysis.tools": "tools", "analysis.authorship": "writing", "analysis.peers": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events", "analysis.engagement": "engagement",
 	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
-	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup",
+	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup", "capture.import/bucket": "bucket-import",
 }
 
 func itemOfView(view opView) string {
@@ -297,7 +297,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			state = "disabled"
 		case in.requested[item.ID] || queued[item.ID]:
 			state = "queued"
-		case item.ID == "backup" && in.backupDestination == "":
+		case item.ID == "backup" && in.backupDestination == "", item.ID == "bucket-import" && in.bucketImports == 0:
 			state = "unavailable"
 		case plan.Cadence == cadenceManual:
 			state = "manual"

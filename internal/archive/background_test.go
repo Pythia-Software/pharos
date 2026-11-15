@@ -340,7 +340,7 @@ func TestBackgroundVerificationQueueRespectsCadence(t *testing.T) {
 func TestBackgroundPlanMovesEveryItem(t *testing.T) {
 	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
 	ago := formatTime(at.Add(-48 * time.Hour))
-	in := backgroundInputs{otherSources: []string{"tl1"}, backupDestination: "/backup", lastBackup: ago,
+	in := backgroundInputs{otherSources: []string{"tl1"}, backupDestination: "/backup", bucketImports: 1, lastBackup: ago,
 		upgradePending: true, writingRefinementPending: true, verificationNext: at.Add(-time.Hour), labels: true, agentEvents: true, ask: true, suggestionsStale: true,
 		runs: map[string]backgroundRunRow{}, deferred: map[string]deferredRow{}}
 	for _, item := range backgroundItems {
