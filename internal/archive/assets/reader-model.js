@@ -489,7 +489,8 @@ function conversationGraph(messages){
 // Diagnostic sensitivity ranges accompany canonical usage. The input context rail continues to
 // describe reported consumption. Sum uncertainty bounds as sensitivity, never
 // relabel the sum as a calibrated confidence interval.
-function usageEstimateNumber(value){return Number.isFinite(value)&&value>=0?Number(value.toPrecision(2)).toLocaleString():null}
+// Estimates keep two significant figures, in the shared token units.
+function usageEstimateNumber(value){return Number.isFinite(value)&&value>=0?pharosTokens.formatTokens(Number(value.toPrecision(2))):null}
 function usageEstimatePresentation(conversation,owned=null){
   const report=conversation?.usage_estimates;
   if(report?.range_kind!=='sensitivity_not_confidence'||!Array.isArray(report.responses))return null;

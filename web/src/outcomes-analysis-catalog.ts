@@ -3,6 +3,7 @@ import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-mode
 import { projectBreakdown, projectLegacy } from "./project-analysis";
 import { outcomeLabels } from "./outcomes";
 import { formatUSD } from "./currency";
+import { tokenMetricFormat } from "./token-count";
 
 // Outcomes over the outcomes dataset: one record is one Library workspace (its
 // session), with its outcome label, the evidence tier that decided it, its
@@ -17,7 +18,7 @@ const repository: WhereTerm[] = [{ field: "project_kind", op: "=", value: "repos
 const measures: Record<string, AnalysisMeasure> = {
   sessions: { label: "Workspaces", unit: "workspaces", format: count, op: "count", additive: true, note: "Each Library workspace counts once, at its start." },
   cost: { label: "API cost (USD)", unit: "USD", format: usd, op: "sum", field: "cost_usd", value: "cost_usd", additive: true, note: "A session's whole API-equivalent cost counts at its start, priced as the Library prices it; unpriced usage adds nothing." },
-  tokens: { label: "Tokens", unit: "tokens", format: count, op: "sum", field: "tokens", value: "tokens", additive: true, note: "A session's reconciled tokens count at its start." },
+  tokens: { label: "Tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "tokens", value: "tokens", additive: true, note: "A session's reconciled tokens count at its start." },
   files_changed: { label: "Files changed", unit: "files", format: count, op: "sum", field: "files_changed", value: "files_changed", additive: true, note: "Files each session edited, from its own tool calls." },
   lines_added: { label: "Lines added", unit: "lines", format: count, op: "sum", field: "lines_added", value: "lines_added", additive: true, note: "Lines the sessions' edits added, where the harness records line counts." },
   lines_removed: { label: "Lines removed", unit: "lines", format: count, op: "sum", field: "lines_removed", value: "lines_removed", additive: true, note: "Lines the sessions' edits removed, where the harness records line counts." },

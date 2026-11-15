@@ -1,9 +1,10 @@
 import React from "react";
 import type { AggregationBucket } from "@pythia-software/query-table-core";
 import { sharedBoxScale, boxCost, boxNumber, boxDuration, boxBytes, boxDetails, boxAxisCost, boxAxisNumber, boxOutliers, boxWhiskerExtent } from "./compact-box-model";
+import { formatTokens } from "./token-count";
 
 export function CompactBoxPlot({ buckets, budget, colors, labels, compact = false, scale = "linear", unit = "USD", axisLabel = unit, format: formatter }: { buckets: AggregationBucket[]; budget: number; colors: string[]; labels: string[]; compact?: boolean; scale?: "linear" | "log"; unit?: string; axisLabel?: string; format?: (value: number) => string }) {
-  const currency = unit === "USD", duration = unit === "ms", bytes = unit === "bytes", format = formatter ?? (currency ? boxCost : duration ? boxDuration : bytes ? boxBytes : boxNumber);
+  const currency = unit === "USD", duration = unit === "ms", bytes = unit === "bytes", tokens = unit === "tokens", format = formatter ?? (currency ? boxCost : duration ? boxDuration : bytes ? boxBytes : tokens ? formatTokens : boxNumber);
   const axis = sharedBoxScale(buckets, budget, scale, !currency && !duration && !formatter);
   const left = (value: number) => `${axis.fraction(value) * 100}%`;
   return <div className={`query-shared-box${compact || Math.min(budget, buckets.length) > 8 ? " is-dense" : ""}`}>
@@ -26,7 +27,7 @@ export function CompactBoxPlot({ buckets, budget, colors, labels, compact = fals
         </div>;
       })}
     </div>
-    <div className="query-box-axis">{axis.ticks.map((value, index) => <span key={value} style={{ left: left(value), transform: index === 0 ? "none" : index === axis.ticks.length - 1 ? "translateX(-100%)" : "translateX(-50%)" }}>{formatter ? format(value) : currency ? boxAxisCost(value) : duration || bytes ? format(value) : boxAxisNumber(value)}</span>)}</div>
+    <div className="query-box-axis">{axis.ticks.map((value, index) => <span key={value} style={{ left: left(value), transform: index === 0 ? "none" : index === axis.ticks.length - 1 ? "translateX(-100%)" : "translateX(-50%)" }}>{formatter ? format(value) : currency ? boxAxisCost(value) : duration || bytes || tokens ? format(value) : boxAxisNumber(value)}</span>)}</div>
     <small className="query-box-key">Box: middle 50% · line: median · dots: sampled outliers and extremes</small>
   </div>;
 }

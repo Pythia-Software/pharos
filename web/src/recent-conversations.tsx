@@ -4,6 +4,7 @@ import { FingerprintImage } from "./fingerprint-image";
 import { formatConcurrencyDuration } from "./concurrency-data";
 import { PageLink } from "./nested-pages";
 import { Icon } from "./icons";
+import { formatTokens } from "./token-count";
 
 type RecentConversation = {
   id: string; workspace_id: string; title: string; repository?: string;
@@ -52,7 +53,7 @@ export function RecentConversations({ active, generation }: { active: boolean; g
               {item.subagent_depth > 0 ? <span>Sub-agents · Depth {item.subagent_depth}</span> : null}
               {item.duration_ms != null ? <span>{formatConcurrencyDuration(item.duration_ms)} elapsed</span> : null}
               {item.tool_calls != null ? <span>{item.tool_calls.toLocaleString()} tool calls</span> : null}
-              {item.tokens != null ? <span title={item.is_estimate?estimateExplanation:undefined}>{item.tokens.toLocaleString()} tokens{item.is_estimate?"*":""}</span> : null}
+              {item.tokens != null ? <span title={item.is_estimate?estimateExplanation:undefined}>{formatTokens(item.tokens)} tokens{item.is_estimate?"*":""}</span> : null}
               {cost ? <span title={item.is_estimate ? estimateExplanation : item.price_status && item.price_status !== "complete" ? `Pricing: ${item.price_status}` : "Estimated API list-price equivalent"}>{cost}{item.is_estimate?"*":""} {item.price_status === "unpriced" || item.price_status === "partial" ? "known " : ""}API cost{item.price_status === "assumed" ? " (estimated)" : ""}</span> : null}
             </div>
           </div>

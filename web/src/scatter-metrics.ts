@@ -12,13 +12,14 @@ import { carbonCatalogShape } from "./carbon-analysis-catalog";
 import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
 import { parallelismCatalogShape } from "./parallelism-analysis-catalog";
 import sessions from "../../schemas/session_shape.schema.json";
+import { isTokenField, tokenMetricFormat } from "./token-count";
 
 export type ScatterPoint = "conversation" | "work" | "agent_session" | "message";
 export type ScatterMetric = { id: string; group: string; dataset: string; measure: AnalysisMeasure; keys: Partial<Record<ScatterPoint, string>>; time: AnalysisCatalog["time"]; params?: Record<string, string> };
 const own = { conversation: "conversation_id", work: "workspace_id" };
 const sessionKeys = { ...own, agent_session: "agent_session_id" };
 const number = { kind: "number", decimals: 0 } as const;
-const metric = (label: string, field: string, note: string, op: AnalysisMeasure["op"] = "sum"): AnalysisMeasure => ({ label, field, op, unit: "", format: number, additive: op === "sum", note });
+const metric = (label: string, field: string, note: string, op: AnalysisMeasure["op"] = "sum"): AnalysisMeasure => ({ label, field, op, ...isTokenField(field) ? { unit: "tokens", format: tokenMetricFormat } : { unit: "", format: number }, additive: op === "sum", note });
 const catalogs: Array<[string, string, AnalysisCatalog, Partial<Record<ScatterPoint, string>>, Record<string, string>?]> = [
   ["human", "Human Words", humanAnalysisCatalog, { ...sessionKeys, message: "id" }],
   ["tokens", "Tokens and Cost", tokenAnalysisCatalog, sessionKeys],

@@ -52,6 +52,7 @@ import { loadThinkingData, loadThinkingFit, supportedThinkingPeriod, thinkingHou
 import { loadFollowing, type ServedReadiness } from "./result-cache";
 import { useDatasetRefresh } from "./use-dataset-refresh";
 import "./thinking.css";
+import { formatTokens } from "./token-count";
 
 // The page's address is its cards' definition (thinking-card.ts).
 const cardSource = { page: true as const, schema: loadSchema(modelRequestDocument) };
@@ -103,7 +104,7 @@ function GroupTable({ data, state }: { data: ThinkingResponse; state: ThinkingSt
   const ratio = state.view === "calendar" && state.calendarMetric === "ratio",
     reasoning = state.view === "reasoning",
     format = (v: number | null) => ratio ? amount(v) : reasoning
-      ? v === null ? "—" : thinkingCount(v) + " tokens"
+      ? v === null ? "—" : formatTokens(v) + " tokens"
       : thinkingDuration(v);
   return <div className="thinking-table-wrap"><table>
     <thead><tr><th>Group</th><th>Retained requests</th>

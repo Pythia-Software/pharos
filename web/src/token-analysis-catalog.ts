@@ -3,6 +3,7 @@ import { recordedCacheReads, recordedInput } from "./usage-estimate-model";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 import { tokenTypes } from "./token-chart-request";
 import { projectBreakdown, projectLegacy } from "./project-analysis";
+import { tokenMetricFormat } from "./token-count";
 
 // Tokens and Cost over the usage ledger. One record is one agent session's
 // usage of one model and effort on one recorded day.
@@ -10,11 +11,11 @@ import { projectBreakdown, projectLegacy } from "./project-analysis";
 const tokens = { kind: "number", decimals: 0 } as const, usd = { kind: "currency", currency: "USD" } as const, percent = { kind: "percent", decimals: 1 } as const;
 const priced: WhereTerm[] = [{ field: "price_status", op: "=", value: "priced" }];
 const measures: Record<string, AnalysisMeasure> = {
-  tokens: { label: "Tokens", unit: "tokens", format: tokens, op: "sum", field: "total_tokens", value: "total_tokens", additive: true, note: "Tokens include cached input and reported reasoning output." },
+  tokens: { label: "Tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "total_tokens", value: "total_tokens", additive: true, note: "Tokens include cached input and reported reasoning output." },
   cost: { label: "API cost (USD)", unit: "USD", format: usd, op: "sum", field: "cost_usd", value: "cost_usd", additive: true, note: "API cost is the list-price equivalent, including assumed and partial prices; unpriced usage has no cost and adds nothing." },
   priced_cost: { label: "Fully priced API cost (USD)", unit: "USD", format: usd, op: "sum", field: "cost_usd", value: "cost_usd", additive: true, where: priced, note: "Only fully priced usage (price_status=priced) is included; assumed, partial and unpriced usage is left out of every measure in this view." },
-  input: { label: "Input tokens", unit: "tokens", format: tokens, op: "sum", field: "input_tokens", value: "input_tokens", additive: true, note: "Input includes cache reads and cache writes." },
-  output: { label: "Output tokens", unit: "tokens", format: tokens, op: "sum", field: "output_tokens", value: "output_tokens", additive: true, note: "Output includes reported reasoning output." },
+  input: { label: "Input tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "input_tokens", value: "input_tokens", additive: true, note: "Input includes cache reads and cache writes." },
+  output: { label: "Output tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "output_tokens", value: "output_tokens", additive: true, note: "Output includes reported reasoning output." },
   cache_read_share: { label: "Cache-read share of input", unit: "percent", format: percent, op: "sum", ratio: [{ op: "sum", expression: recordedCacheReads, label: "recorded cache reads" }, { op: "sum", expression: recordedInput, label: "recorded input" }], additive: false, note: "Cache reads divided by all input, cache writes included, weighted by tokens rather than averaging per-record percentages. Recorded usage only: an estimate's cache division is assumed." },
   output_share: { label: "Output share of tokens", unit: "percent", format: percent, op: "sum", ratio: ["output_tokens", "total_tokens"], additive: false, note: "Output tokens divided by all recorded tokens, weighted by tokens." },
   delegating_share: { label: "Conversations using delegation", unit: "percent", format: percent, op: "sum", expression: "COUNT_DISTINCT(IF([delegated_run_depth]>0,[root_conversation_id],NULL))/NULLIF(COUNT_DISTINCT([root_conversation_id]),0)", additive: false, note: "Top-level conversations with an active delegated execution divided by all top-level conversations with matching usage. Over time computes each period separately; smoothing averages those period shares." },

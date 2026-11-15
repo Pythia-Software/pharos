@@ -9,6 +9,7 @@ import type { CarbonFactors } from "./carbon-analysis-catalog";
 
 import type { CarbonTokens, CarbonUsage } from "./carbon-usage";
 import type { ServedReadiness } from "./result-cache";
+import { formatTokens } from "./token-count";
 
 type CarbonResult = { pue: number; co2: number; facilityWh: number; byCategory: Record<string, { wh: number }>; grams: (wh: number) => number };
 type CarbonData = CarbonUsage & { factors: CarbonFactors };
@@ -84,7 +85,7 @@ export function CarbonImpact({ where, onFilter, usage: state, children }: { wher
     {error ? <button type="button" onClick={state.retry}>Retry carbon usage</button> : null}
     {children}
     <div className="data-readiness-region"><DataReadinessIndicator id="carbon:estimate" title="Filtered carbon estimate" dataset="usage" query={{where}} {...state.readiness} /><div id="carbonSummary" className="carbon-card carbon-summary" aria-label="Filtered carbon estimate" /></div>
-    {data?.undated_tokens ? <p className="muted">{data.undated_tokens.toLocaleString()} tokens have no usage date. They are included in the total but cannot be placed on the chart.</p> : null}
+    {data?.undated_tokens ? <p className="muted">{formatTokens(data.undated_tokens)} tokens have no usage date. They are included in the total but cannot be placed on the chart.</p> : null}
     </section>
     <div id="carbonAssumptions" className="carbon-card carbon-assumptions-card" />
     <div id="carbonCard" className={data ? "carbon-card" : ""} />

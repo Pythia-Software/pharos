@@ -359,7 +359,7 @@ func askContextOutput(ctx context.Context, run *askSignalRun) (askSignal, error)
 	}
 	repository := askConcentrated(byRepository)
 	return askSignal{Score: saturate(truncated, 30), Support: int(truncated), Repository: repository, Period: askPeriod(recent, truncated),
-		Lead: fmt.Sprintf("%.0f tool outputs were truncated in the last 28 days; tool results added about %.1fM tokens%s.", truncated, tokens/1e6, askInRepository(repository))}, nil
+		Lead: fmt.Sprintf("%.0f tool outputs were truncated in the last 28 days; tool results added about %s%s.", truncated, tokensPhrase(tokens), askInRepository(repository))}, nil
 }
 
 // Compactions use model_requests_compacted_idx, which holds only requests
@@ -463,7 +463,7 @@ func askSpendTokens(ctx context.Context, run *askSignalRun) (askSignal, error) {
 	}
 	repository := askConcentrated(byRepository)
 	return askSignal{Score: 0.4 + 0.4*saturate(tokens, 5e8), Support: int(tokens / 1e6), Repository: repository, Period: askPeriod(recent, tokens),
-		Lead: fmt.Sprintf("%.1fM tokens were recorded in the last 28 days%s.", tokens/1e6, askInRepository(repository))}, nil
+		Lead: fmt.Sprintf("%s were recorded in the last 28 days%s.", tokensPhrase(tokens), askInRepository(repository))}, nil
 }
 
 // A week against the four before it, or this month against the last.
@@ -477,12 +477,12 @@ func askSpendChange(ctx context.Context, run *askSignalRun) (askSignal, error) {
 	best, period, lead := 0.0, "", ""
 	if recent >= 1e6 && weekly >= 1e6 {
 		best, period = saturate(math.Abs(math.Log2(recent/weekly))-0.5, 0.5), "week"
-		lead = fmt.Sprintf("%.1fM tokens in the last 7 days against about %.1fM a week in the three weeks before.", recent/1e6, weekly/1e6)
+		lead = fmt.Sprintf("%s in the last 7 days against about %s a week in the three weeks before.", tokensPhrase(recent), formatTokens(weekly))
 	}
 	if tokens >= 1e6 && w.before >= 1e6 {
 		if score := saturate(math.Abs(math.Log2(tokens/w.before))-0.5, 0.5); score > best {
 			best, period = score, "month"
-			lead = fmt.Sprintf("%.1fM tokens in the last 28 days against %.1fM in the 28 days before.", tokens/1e6, w.before/1e6)
+			lead = fmt.Sprintf("%s in the last 28 days against %s in the 28 days before.", tokensPhrase(tokens), formatTokens(w.before))
 		}
 	}
 	if best < 0.05 {
@@ -502,7 +502,7 @@ func askSpendCache(ctx context.Context, run *askSignalRun) (askSignal, error) {
 		return askSignal{}, nil
 	}
 	hit := math.Min(1, cached/input)
-	return askSignal{Score: 0.3 + 0.5*(1-hit), Support: int(input / 1e6), Lead: fmt.Sprintf("%.0f%% of %.1fM input tokens in the last 28 days were cache reads.", 100*hit, input/1e6)}, nil
+	return askSignal{Score: 0.3 + 0.5*(1-hit), Support: int(input / 1e6), Lead: fmt.Sprintf("%.0f%% of %s input tokens in the last 28 days were cache reads.", 100*hit, formatTokens(input))}, nil
 }
 
 func askReasoning(ctx context.Context, run *askSignalRun) (askSignal, error) {
@@ -517,7 +517,7 @@ func askReasoning(ctx context.Context, run *askSignalRun) (askSignal, error) {
 	}
 	share := math.Min(1, reasoning/output)
 	return askSignal{Score: 0.25 + 0.5*saturate(share, 0.2), Support: int(reasoning / 1e3), Repository: askConcentrated(byRepository), Period: askPeriod(recent, reasoning),
-		Lead: fmt.Sprintf("Reasoning was %.0f%% of %.1fM output tokens in the last 28 days.", 100*share, output/1e6)}, nil
+		Lead: fmt.Sprintf("Reasoning was %.0f%% of %s output tokens in the last 28 days.", 100*share, formatTokens(output))}, nil
 }
 
 func askModelMix(ctx context.Context, run *askSignalRun) (askSignal, error) {

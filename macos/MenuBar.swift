@@ -835,8 +835,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         formatter.roundingMode = .halfUp
         return formatter.string(from: NSNumber(value: abs(value) < 0.005 ? 0 : value)) ?? ""
     }
+    // Token counts, as token-count.js writes them: 1.23K, 12.3M.
     static func compact(_ value: Double) -> String {
-        scaled(value, units: ["", "k", "M", "B", "T"], separator: "")
+        scaled(value, units: ["", "K", "M", "B", "T"], separator: "")
     }
     static func mass(_ grams: Double) -> String {
         scaled(grams, units: ["g", "kg", "t"], separator: " ")

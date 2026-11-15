@@ -6,6 +6,7 @@ import { cumulativeBuckets, rollingAverageBuckets, shareBuckets, timelineGeometr
 import { ChartLegend } from "./chart-legend";
 import { periodPopover } from "./chart-popover-model";
 import { percentileLabel, type PercentileLevel } from "./dashboard-analysis-model";
+import { formatTokens } from "./token-count";
 
 export function compactTimelineBuckets(source: ChartBucket[], { display, rollingPeriods = 0, percent = false, nonzero = false }: { display?: ChartDisplay; rollingPeriods?: number; percent?: boolean; nonzero?: boolean } = {}): ChartBucket[] {
   const amounts = display === "cumulative" ? cumulativeBuckets(source) : rollingAverageBuckets(source, rollingPeriods, { period: "day" }).filter(bucket => !bucket.history);
@@ -15,6 +16,7 @@ export function compactTimelineBuckets(source: ChartBucket[], { display, rolling
 const tooltipValue = (value: number, unit: string) => unit === "USD"
   ? formatUSD(value)
   : unit === "percent" ? localeNumber(value, { style: "percent", maximumFractionDigits: 2 })
+  : unit === "tokens" ? `${formatTokens(value)} tokens`
   : `${localeNumber(value, { maximumFractionDigits: 3 })}${unit ? ` ${unit}` : ""}`;
 
 // Both Usage and query-card covers use these marks. Keep stack geometry and
@@ -61,7 +63,7 @@ export function CompactColumns({ buckets: sourceBuckets, series, unit = "", show
   })) });
   return <span className="query-cover-timeline" aria-hidden="true">
     <span className="query-timeline-plot">
-      <span className="query-timeline-ticks">{axis.map(value => <span key={value} style={{ bottom: `${y(value)}%` }}>{percentageValues ? tooltipValue(value, "percent") : unit === "USD" ? formatUSD(value) : value.toLocaleString(undefined, { notation: "compact", maximumSignificantDigits: 3 })}</span>)}</span>
+      <span className="query-timeline-ticks">{axis.map(value => <span key={value} style={{ bottom: `${y(value)}%` }}>{percentageValues ? tooltipValue(value, "percent") : unit === "USD" ? formatUSD(value) : unit === "tokens" ? formatTokens(value) : value.toLocaleString(undefined, { notation: "compact", maximumSignificantDigits: 3 })}</span>)}</span>
       <span className="query-cover-columns">{buckets.map(bucket => <span key={bucket.key} style={drawLines || grouped ? { position: "relative" } : undefined} {...periodDetails(bucket)} title="">
         {drawLines ? series.filter(item => bucket.values[item.key] !== undefined).map(item => <i key={item.key} className="query-timeline-point" style={{ bottom: `${y(bucket.values[item.key])}%`, background: item.color }} />) : <ColumnMarks bucket={bucket} series={series} scale={y} percent={percent} grouped={grouped} />}
       </span>)}

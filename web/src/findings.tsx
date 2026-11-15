@@ -1,5 +1,6 @@
 import { DataReadinessIndicator } from "./data-readiness";
 import { formatUSD } from "./currency";
+import { formatTokens } from "./token-count";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewState } from "./view-state";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -147,7 +148,8 @@ function aboutMoney(value: unknown): string {
   const step = 10 ** (Math.floor(Math.log10(amount)) - 1);
   return `$${(Math.round(amount / step) * step).toLocaleString()}`;
 }
-const compact = (value: unknown) => num(value).toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
+// Findings amounts are token counts or measured check values; both read in token precision.
+const compact = (value: unknown) => formatTokens(num(value));
 function minutes(value: unknown): string {
   const m = num(value);
   if (m === 0) return "0 min";

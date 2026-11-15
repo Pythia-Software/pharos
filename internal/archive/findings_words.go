@@ -116,21 +116,9 @@ func dollars(value float64) string {
 	return "$0"
 }
 
-// tokensPhrase writes a token count as "9.8M tokens".
+// tokensPhrase writes a token count as "9.84M tokens".
 func tokensPhrase(value float64) string {
-	return compactNumber(value) + " tokens"
-}
-
-func compactNumber(value float64) string {
-	switch abs := math.Abs(value); {
-	case abs >= 1e9:
-		return trimZero(fmt.Sprintf("%.1f", value/1e9)) + "B"
-	case abs >= 1e6:
-		return trimZero(fmt.Sprintf("%.1f", value/1e6)) + "M"
-	case abs >= 1e3:
-		return trimZero(fmt.Sprintf("%.0f", value/1e3)) + "k"
-	}
-	return fmt.Sprintf("%.0f", value)
+	return formatTokens(value) + " tokens"
 }
 
 func trimZero(text string) string { return strings.TrimSuffix(text, ".0") }

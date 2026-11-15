@@ -40,7 +40,7 @@ test("usage sensitivity diagnostics scope to owned messages; canonical estimates
   const withInput = {usage_estimates:{...report,responses:report.responses.map((response,index)=>({...response,input:{requests:index+2,input_tokens:{expected:50000,lower:30000,upper:90000},cache_read_input_tokens:20000}}))}};
   const both = reader.usageEstimatePresentation(withInput);
   assert.deepEqual([both.input.expected,both.input.requests,both.expected],[100000,5,2000],"input and output keep separate sums");
-  assert.match(both.label,/100,000 estimated input.*2,000 estimated output/);
+  assert.match(both.label,/~100K estimated input.*~2K estimated output/);
   assert.match(both.detail,/5 inferred model requests.*hidden system prompts/s);
   const mixed = {usage_estimates:{...report,responses:[withInput.usage_estimates.responses[0],report.responses[1]]}};
   assert.equal(reader.usageEstimatePresentation(mixed).input,undefined,"a missing input estimate is not a zero");

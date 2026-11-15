@@ -1,6 +1,7 @@
 import type { AggregationClause, WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 import { projectBreakdown, projectLegacy } from "./project-analysis";
+import { tokenMetricFormat } from "./token-count";
 
 // Spend by branch over the branch_usage dataset: one record is one session's
 // priced usage on one branch, with one model, in one hour. Only sessions
@@ -13,7 +14,7 @@ const onBranch: WhereTerm[] = [{ field: "coverage", op: "=", value: "on_branch" 
 const measures: Record<string, AnalysisMeasure> = {
   cost: { label: "API cost (USD)", unit: "USD", format: usd, op: "sum", field: "cost_usd", value: "cost_usd", additive: true,
     note: "API-equivalent cost, priced as the Library prices it. Within an hour, a session's cost is split among its branches by the tokens each branch's turns used." },
-  tokens: { label: "Tokens", unit: "tokens", format: count, op: "sum", field: "tokens", value: "tokens", additive: true, note: "Reconciled tokens, split among branches the same way." },
+  tokens: { label: "Tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "tokens", value: "tokens", additive: true, note: "Reconciled tokens, split among branches the same way." },
   sessions: { label: "Sessions", unit: "sessions", format: count, op: "count_distinct", field: "workspace_id", additive: false, note: "Distinct sessions; a session that switched branches counts once on each." },
 };
 

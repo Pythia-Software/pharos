@@ -220,8 +220,9 @@ test("saved Parallel activity routes use Timeline while retaining navigation and
 
 
 test("token observations distinguish minima, unallocated branches and missing prices",()=>{
-  assert.equal(metricText(metric(116837,"reported-minimum")),"≥116.8K");
-  assert.equal(tableMetricText(metric(116837,"reported-minimum")),"≥116.8K*");
+  assert.equal(metricText(metric(116837,"reported-minimum")),"≥116K");
+  assert.equal(metricText(metric(999999,"reported-minimum")),"≥999K","a lower bound never rounds up into the next unit");
+  assert.equal(tableMetricText(metric(116837,"reported-minimum")),"≥116K*");
   assert.equal(tableMetricText(metric(1000,"reported")),"1K");
   assert.equal(tableMetricText(metric(1000,"partial")),"1K+");
   assert.equal(tableMetricText(metric(null,"reported-minimum")),formatted(null));

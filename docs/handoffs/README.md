@@ -18,6 +18,7 @@ tests.
 | [usage-v3-hour-grouping.md](usage-v3-hour-grouping.md) | `/query-v3` groups usage by `hour` over daily records, where it is null; only `/metrics` reads the hourly ledger |
 | [query-table-schema-reload.md](query-table-schema-reload.md) | Every staged Query Table request makes its connection re-parse the whole catalog schema twice, adding about 6 ms of CPU |
 | [query-table-log-axes.md](query-table-log-axes.md) | Native log axes give the smallest bar zero length and unround ticks, and histograms bin evenly, so long-tailed histograms cannot take a log axis; requires an upstream release |
+| [query-table-significant-digits.md](query-table-significant-digits.md) | Query Table formats compact numbers by fraction digits, so its cards and charts read token counts as `123.4K` instead of `123K`; requires an upstream release |
 
 ## Analysis chain cost
 

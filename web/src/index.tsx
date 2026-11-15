@@ -13,6 +13,7 @@ import { sessionShapeFreshnessNote, useSessionShapeCoverage } from "./session-sh
 import { agentEventDatasets, agentEventItemPendingMessage, agentEventsFreshnessMark, agentEventsFreshnessNote, agentEventsNeverRead, useAgentEventsCoverage } from "./agent-events-freshness";
 import peopleMessageLabelsDocument from "../../schemas/people_message_labels.schema.json";
 import { formatUSD } from "./currency";
+import { formatTokens, isTokenField } from "./token-count";
 import { installOverflowTitles } from "./overflow-tooltip";
 import { fitQueryToScreen } from "./query-fit";
 import { queryRow } from "./query-transport";
@@ -336,8 +337,8 @@ const renderers: RenderRegistry<Row> = {
     // Links saved before the percent display carry a 0–100 cache rate.
     if (context.value != null && context.field.name === "usage_cache_hit_percent") return `${Number(context.value).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
     const value = Number(context.value);
-    if (/(^token_count$|_tokens$)/.test(context.field.name) && Number.isFinite(value) && Math.abs(value) >= 1e6)
-      return estimatedValue(<span title={value.toLocaleString()}>{compactNumber(value)}</span>,context.row,context.field.name);
+    if (isTokenField(context.field.name) && Number.isFinite(value) && Math.abs(value) >= 1000)
+      return estimatedValue(<span title={value.toLocaleString()}>{formatTokens(value)}</span>,context.row,context.field.name);
     const summary = context.query?.grouping?.summaries.find(summary => summary.id === context.field.name);
     const expression = summary?.expression ?? "";
     const field = summary?.field ?? (/duration/.test(expression) ? "duration_ms" : /token|cost/.test(expression) ? "total_tokens" : context.field.name);
@@ -492,7 +493,7 @@ function metricFields(fields: FieldSchema<Row>["fields"]): FieldSchema<Row>["fie
   let mapped = metricFieldCache.get(fields);
   if (!mapped) {
     mapped = fields.map((field) => {
-      if (field.render !== "usd" && !(field.render === "number" && /(^token_count$|_tokens$)/.test(field.name))) return field;
+      if (field.render !== "usd" && !(field.render === "number" && isTokenField(field.name))) return field;
       const alias = { ...field, render: "byte_size" };
       if (field.render === "usd") usdMetricFields.add(alias);
       else tokenMetricFields.add(alias);
@@ -506,7 +507,7 @@ const metricRenderers: RenderRegistry<Row> = {
   ...renderers,
   byte_size(context: CellContext<Row>) {
     if (usdMetricFields.has(context.field as object)) return formatUSD(Number(context.value));
-    if (tokenMetricFields.has(context.field as object)) return compactNumber(Number(context.value));
+    if (tokenMetricFields.has(context.field as object)) return formatTokens(Number(context.value));
     return defaultRenderers.byte_size(context);
   },
 };
@@ -1067,8 +1068,8 @@ function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationCl
 
 const costTick = formatUSD;
 // Tokens and Cost amounts; shares and ratios are formatted by the trend.
-const tokenAmount: AmountFormat = (value, measure) => measure.unit === "USD" ? formatUSD(value) : compactNumber(value);
-const tokenTick: AmountFormat = (value, measure) => measure.unit === "USD" ? costTick(value) : compactNumber(value);
+const tokenAmount: AmountFormat = (value, measure) => measure.unit === "USD" ? formatUSD(value) : measure.unit === "tokens" ? formatTokens(value) : compactNumber(value);
+const tokenTick: AmountFormat = (value, measure) => measure.unit === "USD" ? costTick(value) : measure.unit === "tokens" ? formatTokens(value) : compactNumber(value);
 
 function TokenSummary({ where }: { where: WhereTerm[] }) {
   const result = useMetrics("usage", where, tokenSummaryMetrics);
@@ -1082,10 +1083,10 @@ function TokenSummary({ where }: { where: WhereTerm[] }) {
   const estimated = result.metrics.some(metric => metric.is_estimate);
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:usage:${label}`} title={label} dataset="usage" query={{where}} {...result.readiness} /></span><strong title={estimated ? estimateExplanation : undefined}>{amount}{estimated && !["Loading…", "Unavailable", "Unpriced"].includes(amount) && ["Total tokens", "API price equivalent", "Output tokens"].includes(label) ? "*" : ""}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics usage-cards token-summary" aria-label="Machine token summary" aria-busy={result.loading}>
-    {card("Total tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(tokens), "available input and output; * includes estimated usage")}
+    {card("Total tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : formatTokens(tokens), "available input and output; * includes estimated usage")}
     {card("API price equivalent", result.loading ? "Loading…" : result.error ? "Unavailable" : tokens && !hasCost ? "Unpriced" : formatUSD(cost), "list prices · may include assumed/partial prices; unpriced usage excluded")}
-    {card("Cache hit rate", result.loading ? "Loading…" : result.error ? "Unavailable" : cacheHit, `${compactNumber(recordedReads)} cached input tokens read · recorded usage only`)}
-    {card("Output tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : compactNumber(output), "including thinking output")}
+    {card("Cache hit rate", result.loading ? "Loading…" : result.error ? "Unavailable" : cacheHit, `${formatTokens(recordedReads)} cached input tokens read · recorded usage only`)}
+    {card("Output tokens", result.loading ? "Loading…" : result.error ? "Unavailable" : formatTokens(output), "including thinking output")}
     {card("Agent sessions", result.loading ? "Loading…" : result.error ? "Unavailable" : sessions.toLocaleString(), "distinct agent sessions in the current filters")}
   </div>;
 }
@@ -1203,7 +1204,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
 }
 
 // CO₂e and electricity in the Carbon page's units; other amounts compactly.
-const carbonAmount = (format: (value: number, metric: string) => string): AmountFormat => (value, measure) => measure.unit === "g CO₂e" ? format(value, "co2") : measure.unit === "Wh" ? format(value, "energy") : compactNumber(value);
+const carbonAmount = (format: (value: number, metric: string) => string): AmountFormat => (value, measure) => measure.unit === "g CO₂e" ? format(value, "co2") : measure.unit === "Wh" ? format(value, "energy") : measure.unit === "tokens" ? formatTokens(value) : compactNumber(value);
 const carbonLoading = <p className="muted" role="status">Loading your Carbon assumptions…</p>;
 
 // Carbon's views, drawn with the catalog of the current assumptions inside
@@ -1329,12 +1330,12 @@ function ConversationsSummary({ where }: { where: WhereTerm[] }) {
   const result = useMetrics("conversation_activity", where, conversationSummaryMetrics);
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
   const conversations = value("conversations"), messages = value("messages"), output = value("output");
-  const per = (amount: number) => { const mean = amount / conversations; return conversations ? `${mean < 10 ? mean.toLocaleString(undefined, { maximumFractionDigits: 1 }) : compactNumber(mean)} per conversation` : "none in this range"; };
+  const per = (amount: number, format = (mean: number) => mean < 10 ? mean.toLocaleString(undefined, { maximumFractionDigits: 1 }) : compactNumber(mean)) => conversations ? `${format(amount / conversations)} per conversation` : "none in this range";
   const card = (label: string, amount: string, detail: string) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:conversation_activity:${label}`} title={label} dataset="conversation_activity" query={{where}} {...result.readiness} /></span><strong>{result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
   return <div className="mcp-metrics dashboard-stats" aria-label="Conversations summary" aria-busy={result.loading}>
     {card("Conversations", conversations.toLocaleString(), "top-level, with their delegated work")}
     {card("Your messages", messages.toLocaleString(), per(messages))}
-    {card("Output tokens", compactNumber(output), per(output))}
+    {card("Output tokens", formatTokens(output), per(output, formatTokens))}
     {card("Projects", value("projects").toLocaleString(), "with conversation activity")}
   </div>;
 }
@@ -1345,7 +1346,7 @@ function ConversationsSummary({ where }: { where: WhereTerm[] }) {
 const durationText = (ms: number) => Math.abs(ms) >= 3_600_000 ? `${(ms / 3_600_000).toLocaleString(undefined, { maximumFractionDigits: 1 })} h` : formatDurationMS(ms);
 // Durations in hours where the measure says so (Tool Time's recorded time),
 // otherwise as a duration; counts compactly.
-const catalogAmount: AmountFormat = (value, measure) => measure.format.kind === "duration" ? measure.unit === "hours" ? compactNumber(value / 3_600_000) : durationText(value) : measure.unit === "USD" ? formatUSD(value) : compactNumber(value);
+const catalogAmount: AmountFormat = (value, measure) => measure.format.kind === "duration" ? measure.unit === "hours" ? compactNumber(value / 3_600_000) : durationText(value) : measure.unit === "USD" ? formatUSD(value) : measure.unit === "tokens" ? formatTokens(value) : compactNumber(value);
 // readWhere reads filters an older link wrote in another dataset's fields
 // (Human Words' works); it returns where itself when nothing changes.
 // panels follow the chart and share the dashboard's filters. frame places

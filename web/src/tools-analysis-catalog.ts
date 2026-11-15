@@ -3,6 +3,7 @@ import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-mode
 import { timeBounds, type TimeFields } from "./chart-range";
 import { toolDashboardWhere } from "./usage-dashboard-model";
 import { projectBreakdown, projectLegacy } from "./project-analysis";
+import { tokenMetricFormat } from "./token-count";
 
 // Tools over the tools rollup: one record is one recorded day's calls of one
 // tool, command, model, project and origin. A rollup row is no observation
@@ -19,8 +20,8 @@ const measures: Record<string, AnalysisMeasure> = {
   truncation_rate: { label: "Truncation rate", unit: "percent", format: percent, op: "sum", ratio: ["truncated_count", "call_count"], additive: false, note: "Calls whose recorded result was truncated, divided by all calls, pooled over each group's calls." },
   time: { label: "Recorded tool time", unit: "ms", format: duration, op: "sum", field: "total_duration_ms", additive: true, note: "Summed recorded durations can overlap and include approval waits. Calls without timing contribute no recorded duration." },
   mean_time: { label: "Mean timed call duration", unit: "ms", format: duration, op: "sum", ratio: ["total_duration_ms", "timed_count"], additive: false, note: "Total recorded duration divided by calls with timing, pooled over each group's calls. Untimed calls are excluded." },
-  context_added: { label: "Context added", unit: "tokens", format: count, op: "sum", field: "result_tokens", additive: true, note: "Tokens added by tool results. These are estimates from retained result text." },
-  context_carried: { label: "Context carried", unit: "tokens", format: count, op: "sum", field: "carried_tokens", additive: true, note: "Result tokens counted again as later model requests re-read them, until compaction. This measures repeated context consumption." },
+  context_added: { label: "Context added", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "result_tokens", additive: true, note: "Tokens added by tool results. These are estimates from retained result text." },
+  context_carried: { label: "Context carried", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "carried_tokens", additive: true, note: "Result tokens counted again as later model requests re-read them, until compaction. This measures repeated context consumption." },
 };
 
 const commands: WhereTerm[] = [{ field: "tool_category", op: "=", value: "command" }];
