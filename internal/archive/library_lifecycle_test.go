@@ -1188,17 +1188,21 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 			t.Fatal("readiness started a library service")
 		}
 	})
-	t.Run("both shells load shared host services before their callers", func(t *testing.T) {
+	t.Run("both shells load shared host services and the modal stack before their callers", func(t *testing.T) {
 		for name, page := range map[string]string{"library": appHTML(), "startup": applicationHTML()} {
-			include := `<script src="/assets/host-services.js"></script>`
-			adapter := strings.Index(page, include)
 			caller := strings.Index(page, `<script src="/assets/onboarding.js"`)
-			if strings.Count(page, include) != 1 || adapter < 0 || caller < adapter {
-				t.Fatalf("%s shell must load shared host services once before callers", name)
+			for _, script := range []string{"host-services.js", "modal.js"} {
+				include := `<script src="/assets/` + script + `"></script>`
+				adapter := strings.Index(page, include)
+				if strings.Count(page, include) != 1 || adapter < 0 || caller < adapter {
+					t.Fatalf("%s shell must load %s once before callers", name, script)
+				}
 			}
 		}
-		if data, err := assets.ReadFile("assets/host-services.js"); err != nil || len(data) == 0 {
-			t.Fatal("host services are not embedded", err)
+		for _, script := range []string{"host-services.js", "modal.js"} {
+			if data, err := assets.ReadFile("assets/" + script); err != nil || len(data) == 0 {
+				t.Fatal(script, "is not embedded", err)
+			}
 		}
 	})
 	t.Run("switch, open, create and rename move MCP with the selection", func(t *testing.T) {

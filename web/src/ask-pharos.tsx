@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { Modal } from "./modal";
 import { createPortal } from "react-dom";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { HomeSearch } from "./search-composer";
@@ -61,7 +62,7 @@ export function AskPharosSearch({ schemas }: { schemas: Record<QueryDataset, Fie
 export function AskPharosSettings() {
   const [status, setStatus] = useState<Status | null>(null), [error, setError] = useState("");
   const [busy, setBusy] = useState(false), [refreshing, setRefreshing] = useState(false), [refreshed, setRefreshed] = useState("");
-  const consent = useRef<HTMLDialogElement>(null);
+  const consent = useRef<HTMLDialogElement>(null), [consenting, setConsenting] = useState(false);
   const refresh = async () => {
     try { const result = await askAPI<Status>("status"); setStatus(result); return result; }
     catch (error) { setError(String(error)); return null; }
@@ -102,14 +103,14 @@ export function AskPharosSettings() {
           <p className="ask-preferences-actions"><button type="button" disabled={refreshing} onClick={() => void refreshCLIs()}>{refreshing ? "Refreshing…" : "Refresh available CLIs"}</button><span className="muted" role="status">{refreshed}</span></p>
         </div>
       </ViewDisclosure> : <div className="optional-behavior">{heading}</div>}
-      <button type="button" className={`toggle ask-preferences-toggle${enabled ? " on" : ""}`} role="switch" aria-checked={enabled} aria-labelledby="askPharosEnabledTitle" aria-describedby="askPharosEnabledDescription" disabled={!status || busy || (!providers.length && !enabled)} onClick={() => enabled ? void save({ enabled: false }) : consent.current?.showModal()} />
+      <button type="button" className={`toggle ask-preferences-toggle${enabled ? " on" : ""}`} role="switch" aria-checked={enabled} aria-labelledby="askPharosEnabledTitle" aria-describedby="askPharosEnabledDescription" disabled={!status || busy || (!providers.length && !enabled)} onClick={() => enabled ? void save({ enabled: false }) : setConsenting(true)} />
     </div>
     <div className="optional-behavior">
       <div><h3 id="askPharosInvitationTitle">Show the Ask Pharos invitation</h3><p id="askPharosInvitationDescription" className="muted">While Ask Pharos is off, offer to turn it on beside search. On by default.</p></div>
       <button type="button" className={`toggle${status?.settings.showInvitation ? " on" : ""}`} role="switch" aria-checked={Boolean(status?.settings.showInvitation)} aria-labelledby="askPharosInvitationTitle" aria-describedby="askPharosInvitationDescription" disabled={!status || busy} onClick={() => void save({ showInvitation: !status?.settings.showInvitation })} />
     </div>
     {error && <p className="ask-preferences-error" role="alert">{error}</p>}
-    <dialog ref={consent} className="ask-consent" aria-labelledby="ask-settings-consent-title">
+    <Modal open={consenting} dialogRef={consent} className="ask-consent" aria-labelledby="ask-settings-consent-title" dismissible={!busy} onClose={() => setConsenting(false)}>
       <h2 id="ask-settings-consent-title">Ask in your own words</h2>
       <p>Ask Pharos navigates the app using your installed, authenticated CLI. Each question uses your agent account’s quota. These conversations will themselves be indexed by Pharos.</p>
       <p>The agent can consult your Pharos page visits and previous Ask Pharos chats through a private interface. Page visits are never offered through the general MCP service.</p>
@@ -117,7 +118,7 @@ export function AskPharosSettings() {
       <button type="button" disabled={busy} onClick={() => void save({ enabled: true, consent: true })}>Enable Ask Pharos</button>
       <button type="button" onClick={() => consent.current?.close()}>Not right now</button>
       <button type="button" disabled={busy} onClick={() => void save({ enabled: false, showInvitation: false })}>No, and don’t show this again</button>
-    </dialog>
+    </Modal>
   </>;
 }
 

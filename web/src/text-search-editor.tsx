@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./icons";
+import { modalHost } from "./modal";
 import { SearchSelect } from "./search-select";
 import { SearchInput, WrappingInput } from "./search-input";
 import { chooseScope, compileRules, refreshSearchToday, newGroup, newRule, optionScope, optionsInEffect, querySyntax, scopeChoice, scopes, searchDateValue, searchDateWindow, searchRequest, searchSentence, sourceLabel, textScopeNote, visualFromQuery, withSearchDateComparison, withSearchDateRange, withSearchDateWindow, type SentencePart, type RuleKind, type SearchDateComparison, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
@@ -59,7 +60,7 @@ export function SearchPopover({ label, title, className, popupClassName = "", tr
       // Safari blurs the active control when clicking buttons or checkboxes.
       // Keep focus in the menu before the modal redirects it and dismisses it.
       if (event.button === 0 && control) { event.preventDefault(); control.focus(); }
-    }}>{children(() => setOpen(false))}</div>, trigger.current?.closest('dialog, [role="dialog"][aria-modal="true"]') ?? document.body) : null}
+    }}>{children(() => setOpen(false))}</div>, modalHost(trigger.current)) : null}
   </>;
 }
 function ConditionOptions({ node, path, scopeLabel, onExclude }: { node: TextCondition; path: string; scopeLabel: string; onExclude: (exclude: boolean) => void }) {

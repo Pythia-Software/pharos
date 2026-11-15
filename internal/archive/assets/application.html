@@ -217,6 +217,7 @@ body[data-application-setup] #navigator{display:none}
 <section class="card" id="next" tabindex="-1" hidden><h2 id="ready-title">Your library is ready</h2><p>Next, choose how Pharos finds your AI conversations on this Mac: in the places your tools usually keep them, or only in folders you name. Nothing is copied until you approve it.</p><div class="setup-actions"><a class="button secondary" href="/library">Browse library</a><button class="primary" id="configure-sources" type="button">Continue</button></div></section>
 </div></dialog>
 <script src="/assets/host-services.js"></script>
+<script src="/assets/modal.js"></script>
 <script id="setup-wizard-model">
 function nextPharosLibraryName(libraries) {
   const names = new Set(libraries.map(library => library.name));

@@ -1,4 +1,5 @@
 import { DataReadinessIndicator } from "./data-readiness";
+import { Modal } from "./modal";
 import { cardReadinessSource } from "./data-readiness-card";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
@@ -53,11 +54,6 @@ export function CreateDashboardCard({ source, target = "chart" }: { source?: Das
     return () => controller.abort();
   }, [key]);
   const opened = Boolean(draft);
-  useEffect(() => {
-    if (!opened || dialog.current?.open) return;
-    dialog.current?.showModal();
-    dialog.current?.querySelector<HTMLInputElement>(".query-title")?.focus();
-  }, [opened]);
   if (!from) return null;
   const start = () => {
     const url = "page" in from ? pageCardURL(location.href) : dashboardCardURL(location.href, from.catalog, from.state, from.where), targets = dashboardCardTargets(url, from.schema);
@@ -76,7 +72,7 @@ export function CreateDashboardCard({ source, target = "chart" }: { source?: Das
 
     <button type="button" className="dashboard-card-create" aria-label="Create card" title="Create card" onClick={start}><Icon name="plus" /></button>
     {saved ? <span role="status">Added to <a href="/home" onClick={event => { event.preventDefault(); window.pharosNavigate?.("/home"); }}>Home</a></span> : null}
-    <dialog ref={dialog} className="home-editor card-editor" aria-labelledby="createDashboardCardTitle" onClose={() => setDraft(null)}>{draft ? <form onSubmit={event => {
+    <Modal open={opened} dialogRef={dialog} className="home-editor card-editor" aria-labelledby="createDashboardCardTitle" backdropDismiss={false} initialFocus=".query-title" onClose={() => setDraft(null)}>{draft ? <form onSubmit={event => {
       event.preventDefault();
       try { collectDashboardCard(draft.url, draft.title, draft.description, draft.target, { action: draft.action, category: draft.category }, undefined, countable && draft.groups.trim() ? Number(draft.groups) : undefined); dialog.current?.close(); setSaved(true); }
       catch (failure) { update({ error: failure instanceof Error ? failure.message : String(failure) }); }
@@ -98,6 +94,6 @@ export function CreateDashboardCard({ source, target = "chart" }: { source?: Das
       <p className="home-editor-window-note">Name the card, describe it and choose its category and call to action in place. It keeps this chart’s current filters and time range; relative ranges keep moving as new data arrives.</p>
       {draft.error ? <p role="alert">{draft.error}</p> : null}
       <div className="home-editor-actions"><button type="button" onClick={() => dialog.current?.close()}>Cancel</button><button type="submit">Create card</button></div>
-    </form> : null}</dialog>
+    </form> : null}</Modal>
   </span>;
 }

@@ -1,4 +1,5 @@
 import { useViewState } from "./view-state";
+import "./modal";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
@@ -124,8 +125,8 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
   const show = () => {
     setBranch(section.pages.length ? section.id : "root");
     setOpen(true);
-    // Native dialog owns focus, Escape, and inertness behind the switcher.
-    dialog.current?.showModal();
+    // The shared modal stack owns Escape, the backdrop and Tab; onClose returns focus to the trigger.
+    if (dialog.current) window.pharosModal!.open(dialog.current, { restoreFocus: false });
   };
   useEffect(() => {
     if (!open || !dialog.current) return;
@@ -146,11 +147,7 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
       <aside id="appNavigationRail" data-view-field="nav_expanded" className="app-navigation-rail" aria-label={`${section.label} navigation`} hidden={!rail}><div className="app-navigation-rail-head"><h2 className="app-navigation-rail-title">{section.label}</h2></div><nav className="app-navigation-list" aria-label={`${section.label} pages`}>
       <NavigationItems pages={section.pages} current={selected.current} navigate={navigate} expanded={expanded[section.id] ?? {}} toggle={(id, defaultOpen) => toggle(section.id, id, defaultOpen)} />
     </nav></aside></>, contentNavigation)}
-    {createPortal(<dialog ref={dialog} id="appNavigationDialog" className={`app-navigation-dialog ${branch === "root" ? "app-navigation-root" : ""}`} aria-label="Navigate Pharos" onClose={() => { setOpen(false); if (!navigating.current) trigger.current?.focus({ preventScroll: true }); }} onClick={event => {
-      if (event.target !== dialog.current) return;
-      const rect = dialog.current.getBoundingClientRect();
-      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) close();
-    }}>
+    {createPortal(<dialog ref={dialog} id="appNavigationDialog" className={`app-navigation-dialog ${branch === "root" ? "app-navigation-root" : ""}`} aria-label="Navigate Pharos" onClose={() => { setOpen(false); if (!navigating.current) trigger.current?.focus({ preventScroll: true }); }}>
       <div className="app-navigation-sections"><div className="app-navigation-dialog-title">Pharos</div><nav className="app-navigation-list" aria-label="All pages">{pickerSections}</nav></div>
       <div className="app-navigation-pages"><div className="app-navigation-dialog-head"><button className="app-navigation-all" type="button" onClick={() => setBranch("root")}><Icon name="arrow-left" />All pages</button><strong>{activeBranch.label}</strong><button className="app-navigation-close" type="button" aria-label="Close navigation" onClick={close}><Icon name="close" /></button></div><nav className="app-navigation-list" aria-label={`${activeBranch.label} pages`}><NavigationItems pages={activeBranch.pages} current={activeBranch.id === section.id ? selected.current : ""} navigate={navigate} expanded={expanded[activeBranch.id] ?? {}} toggle={(id, defaultOpen) => toggle(activeBranch.id, id, defaultOpen)} /></nav></div>
       {branch === "root" ? <button className="app-navigation-root-close app-navigation-close" type="button" aria-label="Close navigation" onClick={close}><Icon name="close" /></button> : null}

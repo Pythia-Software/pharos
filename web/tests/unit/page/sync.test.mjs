@@ -23,6 +23,7 @@ test('issue diagnostics copy stays focusable, runs once while pending and settle
     const transfer=()=>{const pending=Promise.withResolvers();transfers.push(pending);return pending.promise;};
     const details={id:'issue',source_name:'codex',unit:'/Volumes/My drive/資料\nfile'};
     loadClassicScript('sync.js', {
+      pharosModal:{open:dialog=>body.append(dialog)},
       document:{...syncDocument,body,getElementById:id=>id==='syncDashboard'?dashboard:null,createElement:tag=>{
         const element=syncDocument.createElement(tag),attributes=new Map();element.showModal=()=>{};
         Object.assign(element,{setAttribute:(name,value)=>attributes.set(name,String(value)),getAttribute:name=>attributes.get(name)??null,removeAttribute:name=>attributes.delete(name)});
@@ -106,6 +107,7 @@ test("maintenance actions yield scheduled work, while diagnostics remain availab
     let detailsReads = 0;
     const issue = { id: "mismatch", source_name: "claude", unit: "session.jsonl" };
     loadClassicScript("sync.js", {
+      pharosModal: { open: dialog => body.append(dialog) },
       document: { ...syncDocument, body, getElementById: id => id === "syncDashboard" ? dashboard : null,
         createElement: tag => Object.assign(syncDocument.createElement(tag), { showModal() {} }) },
       fetch: async path => ({ ok: true, json: async () => {

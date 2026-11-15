@@ -38,14 +38,10 @@
 .carbon-info-button:hover{border-color:var(--line,#ccc);background:color-mix(in srgb,var(--accent,#315845) 9%,var(--panel,#fff));color:var(--accent,#315845)}
 .carbon-info-button:focus-visible{outline:2px solid var(--focus-ring, #315845);outline-offset:2px}
 .carbon-info-button svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.carbon-info-dialog{width:min(640px,calc(100vw - 32px));max-height:min(82vh,760px);padding:0;border:1px solid var(--line,#ccc);border-radius:12px;background:var(--panel,#fff);color:var(--ink,#222);box-shadow:0 20px 60px #0005;overflow:auto}
-.carbon-info-dialog::backdrop{background:rgba(14,25,22,.55)}
+.carbon-info-dialog{width:min(640px,calc(100vw - 32px));max-height:min(82vh,760px);padding:0;overflow:auto;}
 .carbon-info-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:24px 26px 16px;border-bottom:1px solid var(--line,#ccc)}
 .carbon-info-eyebrow{margin:0 0 5px;color:var(--accent,#315845);font-size:11px;font-weight:750;letter-spacing:.09em;text-transform:uppercase}
 .carbon-info-head h2{margin:0;font-size:21px;line-height:1.2}
-.carbon-info-close{flex:none;min-width:32px;min-height:32px;border:1px solid var(--line,#ccc);border-radius:6px;background:var(--panel,#fff);color:var(--ink,#222);font:inherit;font-size:23px;line-height:1;cursor:pointer}
-.carbon-info-close:hover{color:var(--accent,#315845)}
-.carbon-info-close:focus-visible{outline:2px solid var(--focus-ring, #315845);outline-offset:2px}
 .carbon-info-body{padding:20px 26px 26px;font-size:var(--fs-md,13px);line-height:1.55}
 .carbon-info-lead{margin:0 0 18px;font-size:15px;line-height:1.5}
 .carbon-info-section{margin-top:18px}
@@ -386,10 +382,7 @@
     const head = node('div', 'carbon-info-head'), titleBlock = node('div');
     titleBlock.append(node('p', 'carbon-info-eyebrow', 'Carbon footprint · guide'), node('h2', '', info.title));
     titleBlock.querySelector('h2').id = 'carbon-info-title';
-    const close = node('button', 'carbon-info-close', '×');
-    close.type = 'button';
-    close.setAttribute('aria-label', 'Close information');
-    close.onclick = () => dialog.close();
+    const close = window.pharosModal.closeButton('Close information');
     head.append(titleBlock, close);
     const body = node('div', 'carbon-info-body');
     if (factorsData && ['tier', 'ratio', 'pue', 'grid', 'customGrid', 'inputSensitivity', 'estimate'].includes(topic)) {
@@ -417,11 +410,7 @@
     }
     }
     dialog.append(head, body);
-    dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
-    dialog.addEventListener('close', () => { dialog.remove(); if (trigger.isConnected) trigger.focus(); }, {once: true});
-    document.body.append(dialog);
-    dialog.showModal();
-    close.focus();
+    window.pharosModal.open(dialog, {opener: trigger, focus: close, remove: true});
   }
 
   function infoButton(topic, label) {

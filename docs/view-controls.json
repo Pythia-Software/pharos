@@ -1533,15 +1533,6 @@
       "reason": "Carbon assumptions and dashboard filters; save defaults is a separate settings action."
     },
     {
-      "key": "a26e7786c35ffe35:0",
-      "file": "internal/archive/assets/carbon.js",
-      "owner": "openInfo",
-      "tag": "button",
-      "control": "'button', 'carbon-info-close', '×'",
-      "contract": "view.carbon",
-      "reason": "Carbon assumptions and dashboard filters; save defaults is a separate settings action."
-    },
-    {
       "key": "d5f82a8e174bfd3f:0",
       "file": "internal/archive/assets/carbon.js",
       "owner": "render",
@@ -1747,14 +1738,23 @@
       "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
-      "key": "e01457ab83ea326f:0",
+      "key": "2962e22456cdab94:0",
       "file": "internal/archive/assets/data-guide.js",
-      "owner": "Zh",
+      "owner": "df",
       "tag": "aria-expanded",
       "control": "document.getElementById(\"dataGuideToggle\")",
       "disclosure": true,
       "contract": "view.guide_open",
       "reason": "The header reflects the Data Guide dialog state owned by the shared guide_open view binding."
+    },
+    {
+      "key": "c4f758feaad4e65b:0",
+      "file": "internal/archive/assets/data-guide.js",
+      "owner": "T",
+      "tag": "button",
+      "control": "\"button\"",
+      "contract": "transient",
+      "reason": "The shared modal close button closes a temporary dialog; the state of the dialog it closes is classified with that dialog's owner."
     },
     {
       "key": "6a2c5c95cbcbc1d8:0",
@@ -2247,6 +2247,15 @@
       "control": "'button'",
       "contract": "settings",
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
+    },
+    {
+      "key": "94474510e554dd24:0",
+      "file": "internal/archive/assets/modal.js",
+      "owner": "closeButton",
+      "tag": "button",
+      "control": "'button'",
+      "contract": "transient",
+      "reason": "The shared modal close button closes a temporary dialog; the state of the dialog it closes is classified with that dialog's owner."
     },
     {
       "key": "16925fb5d94fc624:0",
@@ -3362,15 +3371,6 @@
       "reason": "Opens temporary source ingestion information without changing the saved view."
     },
     {
-      "key": "564581034a484353:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<module>",
-      "tag": "button",
-      "control": "'button', 'estimate-dialog-close', '×'",
-      "contract": "transient",
-      "reason": "Closes the temporary explanation of estimates; it does not change view or query state."
-    },
-    {
       "key": "baba6335b1abcbd9:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<module>",
@@ -3378,15 +3378,6 @@
       "control": "'button', 'estimate-marker-button', '*'",
       "contract": "transient",
       "reason": "Opens the shared temporary explanation of estimates shown in Quick Stats."
-    },
-    {
-      "key": "e91ec901e257f7ab:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<module>",
-      "tag": "button",
-      "control": "'button', 'source-info-close', 'Close'",
-      "contract": "transient",
-      "reason": "Opens or closes temporary source ingestion information without changing the saved view."
     },
     {
       "key": "268e44e7d57fe32e:0",
@@ -3864,15 +3855,6 @@
       "control": "'button', 'asset-dialog-button', 'Comments'",
       "contract": "transient",
       "reason": "Shows or hides the comments beside an artifact in the temporary attachment viewer; nothing outside this opening of the viewer changes."
-    },
-    {
-      "key": "e9fa6606430bcce8:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "openAssetDialog",
-      "tag": "button",
-      "control": "'button', 'asset-dialog-close', '×'",
-      "contract": "transient",
-      "reason": "Closes the temporary attachment viewer; it does not change view or query state."
     },
     {
       "key": "81ba1be63f5cd631:0",
@@ -4550,15 +4532,6 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "8eb49bf54dd06bac:0",
-      "file": "web/src/app-navigation.tsx",
-      "owner": "AppNavigation",
-      "tag": "dialog",
-      "control": "id=\"appNavigationDialog\" aria-label=\"Navigate Pharos\" onClose={() => { setOpen(false); if (!navigating.current) trigger.current?.focus({ preventScroll: true }); }} onClick={event => { if (event.target !== dialog.current) return; const rect = dialog.current.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) close(); }}",
-      "contract": "navigation",
-      "reason": "Canonical destination URLs; sidebar presentation uses nav_collapsed/nav_expanded. Navigation menu openness is transient."
-    },
-    {
       "key": "de97224649418b89:0",
       "file": "web/src/app-navigation.tsx",
       "owner": "AppNavigation",
@@ -4631,15 +4604,6 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "9734238f092e57d4:0",
-      "file": "web/src/ask-pharos.tsx",
-      "owner": "AskPharosSettings",
-      "tag": "button",
-      "control": "onClick={() => enabled ? void save({ enabled: false }) : consent.current?.showModal()}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
       "key": "a7564a0744f78aa4:0",
       "file": "web/src/ask-pharos.tsx",
       "owner": "AskPharosSettings",
@@ -4674,6 +4638,15 @@
       "owner": "AskPharosSettings",
       "tag": "button",
       "control": "onClick={() => void save({ showInvitation: !status?.settings.showInvitation })}",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
+      "key": "cbb8bcdd0304ef51:0",
+      "file": "web/src/ask-pharos.tsx",
+      "owner": "AskPharosSettings",
+      "tag": "button",
+      "control": "onClick={() => enabled ? void save({ enabled: false }) : setConsenting(true)}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -4984,38 +4957,20 @@
       "reason": "Ribbon selection and zoom use analyze_parallelism. The updated accessible label names the counted conversation or workspace; hover and an unfinished drag remain transient."
     },
     {
-      "key": "cc8808c8b6fc9051:0",
+      "key": "7a1773ef3b03979b:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyDialog",
-      "tag": "button",
-      "control": "aria-label=\"Close parallelism\" onClick={closeConcurrencyModal}",
+      "tag": "ModalClose",
+      "control": "onClick={closeConcurrencyModal}",
       "contract": "view.parallelism",
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
     {
-      "key": "de16481f360681af:0",
-      "file": "web/src/concurrency.tsx",
-      "owner": "ConcurrencyDialog",
-      "tag": "dialog",
-      "control": "onCancel={event => { event.preventDefault(); closeConcurrencyModal(); }} onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) closeConcurrencyModal(); }}",
-      "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
-    },
-    {
-      "key": "75ff71b116744f52:0",
+      "key": "6a9214704d8f9d37:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyInfoDialog",
-      "tag": "dialog",
-      "control": "id=\"parallelism-calculation\" onCancel={event => { event.preventDefault();event.stopPropagation();onClose(); }} onClick={event => { event.stopPropagation();const rect = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) onClose(); }}",
-      "contract": "view.parallelism",
-      "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
-    },
-    {
-      "key": "a97f3bae6db7a5d2:0",
-      "file": "web/src/concurrency.tsx",
-      "owner": "ConcurrencyInfoDialog",
-      "tag": "button",
-      "control": "aria-label=\"Close calculation details\" onClick={onClose}",
+      "tag": "ModalClose",
+      "control": "onClick={onClose}",
       "contract": "view.parallelism",
       "reason": "Canonical ribbon choices use analyze_parallelism; its help/menu openness is transient and legacy modes are deferred."
     },
@@ -5663,21 +5618,11 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "a99328a9e768c962:0",
+      "key": "e51a3d9c233163e3:0",
       "file": "web/src/data-readiness.tsx",
       "owner": "DataReadinessModal",
-      "tag": "button",
-      "control": "data-view-field=\"readiness_open\" aria-label=\"Close update details\" onClick={()=>dialog.current?.close()}",
-      "binding": "readiness_open",
-      "contract": "view.readiness_open",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "ac9be1b4534065e3:0",
-      "file": "web/src/data-readiness.tsx",
-      "owner": "DataReadinessModal",
-      "tag": "dialog",
-      "control": "id=\"dataReadinessDialog\" data-view-field=\"readiness_open\" onClick={event=>{if(event.target!==event.currentTarget)return;const r=event.currentTarget.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)event.currentTarget.close();}}",
+      "tag": "ModalClose",
+      "control": "data-view-field=\"readiness_open\" onClick={()=>dialog.current?.close()}",
       "binding": "readiness_open",
       "contract": "view.readiness_open",
       "reason": "Bound directly to the registered view field."
@@ -5691,15 +5636,6 @@
       "binding": "readiness_open",
       "contract": "view.readiness_open",
       "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "14a033ebe0d2b22e:0",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "aria-label=\"Close data guide\" onClick={() => dialog.current?.close()}",
-      "contract": "view.guide_open",
-      "reason": "Guide visibility, entity and example are registered view fields."
     },
     {
       "key": "1e830d92a97c6ec1:0",
@@ -5741,14 +5677,13 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "f6f8510693f78716:0",
+      "key": "a7f5f136c386a1f0:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "DataTaxonomyModal",
-      "tag": "dialog",
-      "control": "id=\"dataGuideDialog\" data-view-field=\"guide_open\" onClick={event => { if (event.target !== event.currentTarget) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.currentTarget.close(); }}",
-      "binding": "guide_open",
+      "tag": "ModalClose",
+      "control": "onClick={() => dialog.current?.close()}",
       "contract": "view.guide_open",
-      "reason": "Bound directly to the registered view field."
+      "reason": "Guide visibility, entity and example are registered view fields."
     },
     {
       "key": "2aeccf1d7c617d6b:0",
@@ -6450,15 +6385,6 @@
       "owner": "DetailOverview",
       "tag": "button",
       "control": "onClick={() => setConfirming(true)}",
-      "contract": "findings",
-      "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
-    },
-    {
-      "key": "586b019585e71e0a:0",
-      "file": "web/src/findings.tsx",
-      "owner": "Dialog",
-      "tag": "div",
-      "control": "onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}",
       "contract": "findings",
       "reason": "List/repo/finding/tab route state, rank override and disclosures; action buttons mutate records and are excluded."
     },
@@ -7790,15 +7716,6 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
-      "key": "61265959f7277d74:0",
-      "file": "web/src/mcp-call-details.tsx",
-      "owner": "MCPCallDetails",
-      "tag": "dialog",
-      "control": "aria-label=\"MCP call details\" onClose={onClose} onClick={event => { if (event.target !== event.currentTarget) return; const box = event.currentTarget.getBoundingClientRect(); if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) onClose(); }}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
       "key": "64c5c9a319022ce8:0",
       "file": "web/src/mcp-call-details.tsx",
       "owner": "MCPCallDetails",
@@ -7834,6 +7751,15 @@
       "binding": "label_results",
       "contract": "view.label_results",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "c7e0acb9b409b6f9:0",
+      "file": "web/src/modal.tsx",
+      "owner": "ModalClose",
+      "tag": "button",
+      "control": "aria-label={label}",
+      "contract": "transient",
+      "reason": "The shared modal close button closes a temporary dialog; the state of the dialog it closes is classified with that dialog's owner."
     },
     {
       "key": "3755037a7f824e46:0",
@@ -8673,11 +8599,11 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "425d816dd758d861:0",
+      "key": "e019fb3c998d4090:0",
       "file": "web/src/search-dialog.tsx",
       "owner": "SearchDialog",
-      "tag": "button",
-      "control": "aria-label=\"Close search\" onClick={() => (document.getElementById(\"searchDialog\") as HTMLDialogElement).close()}",
+      "tag": "ModalClose",
+      "control": "onClick={() => (document.getElementById(\"searchDialog\") as HTMLDialogElement).close()}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },

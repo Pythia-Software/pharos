@@ -2,7 +2,7 @@
    attention; nothing else uses them. Fallbacks cover standalone pages. */
 ::highlight(pharos-matches) { background: var(--attention-mark, #fff176); color: var(--attention-ink, #1d1a0a); }
 ::highlight(pharos-landing) { background: var(--attention-current, #ff9f43); color: var(--attention-ink, #1d1a0a); }
-.pharos-find { --pharos-find-top: 88px; position: fixed; z-index: 10000; top: var(--pharos-find-top); right: 24px; width: min(480px, calc(100vw - 48px)); box-sizing: border-box; display: grid; gap: 6px; padding: 8px 8px 8px 4px; border: 1px solid var(--line, #ccc); border-radius: 8px; background: var(--panel, #fff); color: var(--ink, #222); box-shadow: 0 12px 32px #0004; font-size: var(--fs-sm, 12px); }
+.pharos-find { --pharos-find-top: 88px; position: fixed; z-index: var(--z-find, 10000); top: var(--pharos-find-top); right: 24px; width: min(480px, calc(100vw - 48px)); box-sizing: border-box; display: grid; gap: 6px; padding: 8px 8px 8px 4px; border: 1px solid var(--line, #ccc); border-radius: 8px; background: var(--panel, #fff); color: var(--ink, #222); box-shadow: 0 12px 32px #0004; font-size: var(--fs-sm, 12px); }
 .pharos-find [hidden] { display: none !important; }
 .pharos-find.dragging { box-shadow: 0 16px 40px #0006; user-select: none; }
 .pharos-find-row, .pharos-find-meta { display: flex; align-items: center; gap: 4px; min-width: 0; }

@@ -3,6 +3,7 @@ import { readViewState, readClassicViewState, writeViewState, writeViewStates, i
 import { attentionTargets, viewContract, viewFields, retainNavigationView } from "./view-contract";
 import { adoptTextTargets, installPageFind } from "./page-find";
 import { preferences } from "./preferences";
+import { modalHost } from "./modal";
 import { attentionMutationMatters, attentionReferenceAt, attentionTargetNoun, createDetailLanding, toggleAttentionTarget, type AttentionNode } from "./view-attention-model";
 import "./view-attention.css";
 
@@ -165,7 +166,7 @@ export function installViewAttention() {
     const clear = document.createElement("button"); clear.type = "button"; clear.textContent = "Clear highlights";
     clear.onclick = () => { closeMenu(); clearAttention(); };
     const parentPopover = event.target instanceof Element ? event.target.closest(":popover-open") : null;
-    menu.append(clear); (parentPopover ?? document.querySelector("dialog:modal") ?? document.body).append(menu);
+    menu.append(clear); (parentPopover ?? modalHost()).append(menu);
     menu.showPopover();
     const rect = menu.getBoundingClientRect();
     menu.style.left = `${Math.max(0, Math.min(event.clientX, innerWidth - rect.width))}px`;

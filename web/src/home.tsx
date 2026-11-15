@@ -1,4 +1,5 @@
 import { readWindowChoice } from "./day-window";
+import { Modal } from "./modal";
 import React, { useEffect, useRef, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
@@ -126,7 +127,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   useEffect(() => {
     if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(timeWindowValue(queryFromURL(editing.url, editing.query))); const metricId = editing.coverMetricId ?? editing.cover?.metricId ?? ""; setEditCover(coverChoices.some(choice => choice.id === metricId) ? metricId : ""); setEditGroups(editing.maxGroups === undefined ? "" : String(editing.maxGroups));
       if (editing.dashboard) { let category: QueryCategory = "usage"; try { category = dashboardCardPresentation(editing.url, editing.dashboardTarget).category; } catch { /* The preview reports the invalid definition. */ } setEditAction(editing.action ?? DASHBOARD_CARD_ACTION); setEditCategory(editing.category ?? category); }
-      setEditError(""); editor.current?.showModal(); editor.current?.querySelector<HTMLInputElement>(".query-title")?.focus(); }
+      setEditError(""); }
   }, [editing]);
 
   async function keep(item: QuerySuggestion, before?: string) {
@@ -207,7 +208,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       onRefresh={() => { refreshPolicy.current = "fresh"; clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag}
       onAllCards={() => navigate("/cards")} />
     <RecentConversations active={active && !hidden} generation={generation} />
-    <dialog ref={editor} className="home-editor card-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {
+    <Modal open={editing !== null} dialogRef={editor} className="home-editor card-editor" aria-labelledby="homeEditorTitle" backdropDismiss={false} initialFocus=".query-title" onClose={() => setEditing(null)}><form onSubmit={event => {
       event.preventDefault(); if (!editing) return;
       try {
         const updated = updateBookmark(editing.id, editTitle, editDescription, !canEditWindow ? undefined : editDays === "all" ? null : editDays ? readWindowChoice(editDays) : undefined, editCover,
@@ -245,6 +246,6 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
         editor.current?.close(); navigate(next.url);
       }}>Try grouped comparison <Icon name="arrow-right" /></button><small>Open the latest version of this question. Save it from the table to keep it.</small></div> : null}
       <div className="home-editor-actions"><button type="button" onClick={() => editor.current?.close()}>Cancel</button><button type="submit">Save changes</button></div>
-    </form></dialog>
+    </form></Modal>
   </div>;
 }

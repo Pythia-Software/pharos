@@ -127,7 +127,7 @@ body.feedback-targeting .pharos-floating button{cursor:pointer!important}
 #pharos-ask .pharos-chat-history{position:fixed;inset:var(--pharos-history-top,0px) auto 0 0;width:min(380px,calc(100vw - 40px));max-width:none;height:auto;max-height:none;margin:0;padding:0;flex-direction:column;background:var(--pharos-panel);color:var(--pharos-ink);border:0;border-right:1px solid var(--pharos-line);border-radius:0;box-shadow:18px 0 45px #0003;text-align:left;font:inherit;overflow:hidden;transform:translateX(-100%);transition:transform .22s cubic-bezier(.22,.75,.25,1),overlay .22s allow-discrete,display .22s allow-discrete}
 #pharos-ask .pharos-chat-history[open]{display:flex;transform:none}
 @starting-style{#pharos-ask .pharos-chat-history[open]{transform:translateX(-100%)}}
-#pharos-ask .pharos-chat-history::backdrop{inset:var(--pharos-history-top,0px) 0 0;background:color-mix(in srgb,#071b12 30%,transparent);transition:background .22s,overlay .22s allow-discrete,display .22s allow-discrete}
+#pharos-ask .pharos-chat-history::backdrop{inset:var(--pharos-history-top,0px) 0 0;background:var(--modal-scrim,color-mix(in srgb,#071b12 30%,transparent));transition:background .22s,overlay .22s allow-discrete,display .22s allow-discrete}
 @starting-style{#pharos-ask .pharos-chat-history[open]::backdrop{background:transparent}}
 @media(prefers-reduced-motion:reduce){#pharos-ask .pharos-chat-history,#pharos-ask .pharos-chat-history::backdrop{transition:none}}
 #pharos-ask .pharos-history-entry:hover,#pharos-ask .pharos-history-close:hover{background:color-mix(in srgb,var(--pharos-sea) 8%,var(--pharos-panel))}
@@ -195,7 +195,7 @@ body.feedback-targeting .pharos-floating button{cursor:pointer!important}
 #pharos-ask .pharos-product-heading h2{flex:1;min-width:0}
 #pharos-ask .pharos-settings-trigger{font-size:12px!important;flex:none}
 #pharos-ask .pharos-modal{width:520px;max-width:calc(100% - 32px);max-height:calc(100% - 32px);margin:72px auto 24px;padding:26px;background:var(--pharos-panel);color:var(--pharos-ink);border:1px solid var(--pharos-line);border-radius:16px;text-align:left;box-shadow:0 20px 70px color-mix(in srgb,var(--pharos-ink) 22%,transparent);font:inherit;overflow:auto}
-#pharos-ask .pharos-modal::backdrop{background:color-mix(in srgb,#071b12 54%,transparent);backdrop-filter:blur(3px)}
+#pharos-ask .pharos-modal::backdrop{background:var(--modal-scrim,color-mix(in srgb,#071b12 54%,transparent));backdrop-filter:blur(3px)}
 #pharos-ask .pharos-modal h3{font:400 25px/1.3 Charter,Georgia,serif;margin:0 0 16px}
 #pharos-ask .pharos-modal p{font-size:14px;line-height:1.6;margin:12px 0}
 #pharos-ask .pharos-connect-label{display:flex;align-items:center;gap:10px;margin:18px 0;color:var(--pharos-muted)}
@@ -323,7 +323,7 @@ body.feedback-targeting .pharos-floating button{cursor:pointer!important}
 #pharos-ask textarea {max-height:none}
 .ask-preferences {position:relative;margin-top:4px}.ask-preferences>.optional-behavior,.ask-preferences-disclosure>summary {display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:16px 78px 16px 20px;border-bottom:0;list-style:none}.ask-preferences-disclosure>summary::-webkit-details-marker {display:none}.ask-preferences-disclosure>summary h3 {margin:0;font-size:var(--fs-base);color:var(--ink)}.ask-preferences-disclosure>summary p {margin:4px 0 0}.ask-preferences-disclosure>summary .menu-bar-expand {flex:none;margin-top:8px;border-radius:4px;font-size:var(--fs-md)}.ask-preferences-disclosure>summary:hover .menu-bar-expand {border-color:var(--accent)}.ask-preferences-disclosure>summary:focus-visible {outline:none}.ask-preferences-disclosure>summary:focus-visible .menu-bar-expand {outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}.ask-preferences-disclosure[open] .menu-bar-expand .app-icon {transform:rotate(180deg)}.ask-preferences-disclosure:not([open]) .ask-expand-open,.ask-preferences-disclosure[open] .ask-expand-closed {display:none}.ask-preferences-toggle {position:absolute;top:28px;right:20px}.ask-preferences-toggle:focus-visible {outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}.ask-preferences-body p {margin:16px 0}.ask-preferences-actions {display:flex;flex-wrap:wrap;align-items:center;gap:12px}.ask-preferences-error {color:var(--bad, #c0392b)}
 @media(max-width:560px){.ask-preferences>.optional-behavior,.ask-preferences-disclosure>summary {flex-wrap:wrap;gap:12px}.ask-preferences-disclosure>summary>div {flex-basis:100%}.ask-preferences-disclosure>summary .menu-bar-expand {margin-top:0}.ask-preferences>.optional-behavior,.ask-preferences-disclosure>summary {padding-right:20px}.ask-preferences h3 {padding-right:50px}.ask-preferences-toggle {top:15px}}
-.ask-consent {max-width:min(520px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:14px;padding:24px}.ask-consent::backdrop {background:#0007;backdrop-filter:blur(3px)}.ask-consent button {margin:5px}
+.ask-consent {max-width:min(520px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;padding:24px;}.ask-consent button {margin:5px}
 
 #pharos-ask .pharos-history-search{margin:0 16px 8px 18px}
 #pharos-ask .pharos-history-search-row{display:flex;gap:6px;align-items:stretch}
@@ -355,7 +355,7 @@ body.feedback-targeting .pharos-floating button{cursor:pointer!important}
 @keyframes pharos-dialog-enter{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 @media(prefers-reduced-motion:reduce){.pharos-ask-dialog[open],.pharos-ask-dialog[data-positioned]{animation:none;transition:none}}
 .pharos-ask-dialog:has(.pharos-browse-hint:not([hidden])){padding-bottom:44px}
-.pharos-ask-dialog::backdrop{background:#1119;backdrop-filter:blur(3px)}
+.pharos-ask-dialog::backdrop{background:var(--modal-scrim,#1119);backdrop-filter:blur(3px)}
 .pharos-ask-dialog #pharos-ask{margin:0 auto;width:100%}
 .pharos-ask-dialog #pharos-ask .pharos-product{--pharos-product-padding:0px;max-width:none;padding:0;border:0;border-radius:0;background:transparent}
 .pharos-ask-dialog #pharos-ask .pharos-suggestions{display:none}

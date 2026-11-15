@@ -1,4 +1,5 @@
 import { readViewState } from "./view-state";
+import { topModal } from "./modal";
 import { FIND_LIMIT, FIND_MINIMUM, findFromAttention, findMatches, findPattern, findTest, stepIndex, writeFindParameters, type FindPattern, type FindState } from "./page-find-model";
 import "./page-find.css";
 
@@ -51,7 +52,7 @@ function writeFind(state: FindState | null) {
 }
 const stateKey = (state: FindState | null) => JSON.stringify([state, state?.text === typed, location.pathname, new URLSearchParams(location.search).get("conversation")]);
 // The topmost open modal, native or ARIA, owns the page while it is shown.
-const modal = () => [...document.querySelectorAll<HTMLElement>("dialog[open], [role='dialog'][aria-modal='true']")].filter(element => element.checkVisibility()).at(-1) ?? null;
+const modal = topModal;
 const root = () => modal() ?? document.querySelector<HTMLElement>(".drawer.open") ?? document.querySelector<HTMLElement>(".view.active") ?? document.querySelector<HTMLElement>("main");
 const summaryOf = (disclosure: Element) => disclosure instanceof HTMLDetailsElement ? disclosure.querySelector<HTMLElement>(":scope > summary") ?? disclosure : disclosure as HTMLElement;
 

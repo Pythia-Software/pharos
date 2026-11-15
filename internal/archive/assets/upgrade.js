@@ -9,8 +9,8 @@
   'use strict';
   const INTRO = 'This version of Pharos counts tokens more accurately and records more about each tool call and conversation. Your existing catalog needs a one-time pass to catch up. Nothing leaves this Mac except a question to GitHub about repository names, and your transcripts are not changed.';
   const CSS = `
-.pharos-upgrade-backdrop{position:fixed;inset:0;z-index:9000;display:grid;place-items:center;padding:24px;background:color-mix(in srgb,#000 42%,transparent)}
-.pharos-upgrade{width:min(720px,100%);max-height:calc(100vh - 48px);display:flex;flex-direction:column;background:var(--panel,#fff);color:var(--ink,#222);border:1px solid var(--line,#ccc);border-radius:16px;box-shadow:0 24px 70px #0006;overflow:hidden}
+.pharos-upgrade{width:720px;max-height:calc(100vh - 48px);flex-direction:column;padding:0;overflow:hidden}
+.pharos-upgrade[open]{display:flex}
 .pharos-upgrade>h2{margin:0;padding:22px 24px 6px;font:700 24px/1.2 var(--serif,serif);letter-spacing:-.02em}
 .pharos-upgrade-intro{margin:0;padding:0 24px 16px;color:var(--muted,#666);font-size:14px;border-bottom:1px solid var(--line,#ccc)}
 .pharos-upgrade-body{overflow:auto;padding:4px 24px 14px}
@@ -58,7 +58,7 @@
   }
 
   function close() {
-    document.getElementById('pharosUpgrade')?.remove();
+    document.getElementById('pharosUpgrade')?.close();
   }
 
   function stepRow(step) {
@@ -110,8 +110,7 @@
     return section;
   }
 
-  function render() {
-    const panel = document.querySelector('#pharosUpgrade .pharos-upgrade');
+  function render(panel = document.getElementById('pharosUpgrade')) {
     if (!panel || !status) return;
     const body = node('div', 'pharos-upgrade-body');
     for (const step of status.steps) body.append(stepRow(step));
@@ -143,18 +142,14 @@
     refresh();
     injectStyle();
     if (!document.getElementById('pharosUpgrade')) {
-      const backdrop = node('div', 'pharos-upgrade-backdrop');
-      backdrop.id = 'pharosUpgrade';
-      const panel = node('div', 'pharos-upgrade');
-      panel.setAttribute('role', 'dialog');
+      const panel = node('dialog', 'pharos-upgrade');
+      panel.id = 'pharosUpgrade';
       panel.setAttribute('aria-label', 'Library upgrade details');
       panel.append(node('h2', '', 'Library upgrade details'),
         node('p', 'pharos-upgrade-intro', INTRO));
-      backdrop.append(panel);
-      backdrop.addEventListener('click', event => { if (event.target === backdrop) close(); });
-      document.body.append(backdrop);
-    }
-    render();
+      render(panel);
+      window.pharosModal.open(panel, {remove: true});
+    } else render();
   }
 
   // Saved table queries live in the library's preferences and last-used ones
