@@ -56,7 +56,7 @@ test('source schedule and Settings task come from the ledger rather than source 
  data.background.items=[{id:'conversations',label:'New conversations',state:'current',next_at:iso(-3)},{id:'other-sources',label:'Other sources',state:'manual',cadence:'manual',next_at:null}];
  const source=()=>readinessModel(data,[scope('usage')],now).stages.find(stage=>stage.id==='conv:custom');
  assert.equal(source().item.id,'other-sources');assert.equal(source().nextAt,null);
- assert.match(readinessStageDescription(source()),/request an update in settings/);
+ assert.match(readinessStageDescription(source()),/when you ask, from Settings → Background Processing/);
  data.background.items[1]={...data.background.items[1],state:'scheduled',cadence:'daily',next_at:iso(-360)};
  data.freshness[1].reason={code:'overdue',text:'Not checked recently'};
  assert.equal(source().nextAt,iso(-360));assert.equal(source().item.id,'other-sources');
@@ -291,23 +291,23 @@ test('unmounting and hidden retained pages remove their scopes from the header',
 test('current summaries use the source check time, and never invent a missing time',()=>{
  const data=snapshot([row('an.authorship')]);
  data.freshness[0].as_of=iso(6);
- assert.equal(readinessModel(data,[scope()],now).label,'Up to date as of 6 minutes ago');
+ assert.equal(readinessModel(data,[scope()],now).label,'Up to date 6 minutes ago');
  const preview=readinessPreview(readinessModel(data,[scope()],now),'clear',now);
- assert.equal(preview.label,'Up to date as of 6 minutes ago');
+ assert.equal(preview.label,'Up to date 6 minutes ago');
  data.freshness[0].as_of=null;
- assert.equal(readinessModel(data,[scope()],now).label,'No updates waiting');
+ assert.equal(readinessModel(data,[scope()],now).label,'No changes waiting');
  assert.match(readinessModel(data,[scope()],now).sentence,/check time is unavailable/);
  data.freshness[1].behind.state='scheduled';
  assert.equal(readinessModel(data,[scope()],now).label,'Update scheduled');
 });
 test('stage copy explains progress without exposing processing identifiers or diagnostics',()=>{
- assert.equal(readinessStageLabel('an.ledger','Tools ledger'),'Read tool calls');
+ assert.equal(readinessStageLabel('an.ledger','Tools ledger'),'Build the tool index');
  assert.equal(readinessStageLabel('an.tools','Tools rollup'),'Summarize tool use');
- assert.equal(readinessStageLabel('@unknown:writing_messages'),'Check for updates');
+ assert.equal(readinessStageLabel('@unknown:writing_messages'),'Check this data');
  const stage={id:'an.tools',label:'Tools',state:'blocked',reason:'internal exception: join generation mismatch',row:row('an.tools',{reason:{code:'blocked',text:'raw diagnostic'}})};
- assert.match(readinessStageDescription(stage),/earlier step couldn’t finish/);
+ assert.match(readinessStageDescription(stage),/earlier step could not finish/);
  assert.equal(readinessStageState(stage),'Waiting');
- assert.equal(readinessStageDescription({...stage,state:'behind',next:'updates with the next manual index',row:row('an.tools',{reason:{code:'changed'}})}),'Runs when you request an update in settings.');
+ assert.equal(readinessStageDescription({...stage,state:'behind',next:'updates with the next manual index',row:row('an.tools',{reason:{code:'changed'}})}),'Runs when you ask, from Settings → Background Processing.');
  assert.equal(readinessStageState({...stage,state:'future-internal-state'}),'Status unavailable');
  assert.equal(readinessProgressText({...stage,done:58,total:128,unit:'message'}),'58 of 128 messages');
  assert.equal(readinessProgressText({...stage,done:1,unit:'message'}),'1 message done');
@@ -339,7 +339,7 @@ test('per-source stages collapse into one row per step, state and next run, with
  data.background.items.push({id:'other-sources',label:'Other sources',state:'manual',cadence:'manual',next_at:null});
  const split=readinessGroups(readinessModel(data,[scope()],now).stages);
  assert.deepEqual(split.map(group=>group.subjects.join(' · ')).slice(0,2),['claude, codex on Studio','claude on Air']);
- assert.match(split[1].detail,/request an update in settings/);assert.equal(split[1].nextAt,null);
+ assert.match(split[1].detail,/when you ask, from Settings → Background Processing/);assert.equal(split[1].nextAt,null);
  // Failures come before waiting work; an operation's progress shows once.
  data.operations=[{id:'op-ic',state:'running',label:'Index captures',step:{done:1,total:3,unit:'source'}}];
  for(const row of data.freshness.filter(row=>row.domain.startsWith('capt:studio')&&row.behind.state==='behind'))row.catching_up='op-ic';

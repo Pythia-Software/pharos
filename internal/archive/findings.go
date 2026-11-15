@@ -341,8 +341,8 @@ var findingDetectors = []findingDetector{
 
 // findingDetectorLabels name the detectors for the people reading the cards.
 var findingDetectorLabels = map[string]string{
-	"failure": "Recurring failures", "drift": "Instruction drift", "cli": "CLI friction", "docs": "Documentation hosts",
-	"orientation": "Orientation tax", "exploration": "Delegable exploration", "heavy-output": "Context-heavy commands",
+	"failure": "Recurring failures", "drift": "Instruction drift", "cli": "CLI friction", "docs": "Reference lookups",
+	"orientation": "Reading before the first edit", "exploration": "Exploration a sub-agent could do", "heavy-output": "Context-heavy commands",
 	"outlier": "Cost outliers", "tl1": "TL1 flavors",
 }
 
@@ -845,7 +845,7 @@ func (c *Catalog) refreshFindings(ctx context.Context, fullPass func(built, gene
 	full := fullPass(built, generation)
 	err = c.runFindingsPass(ctx, full)
 	if err == nil && full {
-		c.setFindingsPhase("reviewing safety selections")
+		c.setFindingsPhase("checking risky actions")
 		err = c.refreshSafety(ctx)
 	}
 	if err == nil && full {
@@ -1023,7 +1023,7 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 		if !full && len(env.specs[detector.name]) == 0 {
 			continue
 		}
-		c.setFindingsPhase(detector.name)
+		c.setFindingsPhase("checking " + lowerFirst(defaultString(findingDetectorLabels[detector.name], detector.name)))
 		var found []*findingCandidate
 		var err error
 		started := time.Now()
@@ -1417,8 +1417,8 @@ func writeFindingDaily(tx *sql.Tx, id, from string, days map[string][3]float64) 
 	return nil
 }
 
-// findingImpact is what a finding cost in the last 28 days, shown as "a
-// month", with the shares its expected saving is worked out from (see
+// findingImpact is what a finding cost in the last 28 days, shown as "per
+// 28 days", with the shares its expected saving is worked out from (see
 // findings_estimate.go): the part the change could remove, and how much of
 // patterns like it stays untouched.
 func findingImpact(candidate *findingCandidate, persist findingPersist) map[string]any {

@@ -24,6 +24,7 @@ import { DashboardLoading } from "./card-loading";
 import {
   thinkingBreakdowns,
   thinkingCount,
+  thinkingCountOf,
   thinkingDuration,
   thinkingFixedOrder,
   thinkingPercentiles,
@@ -107,9 +108,9 @@ function GroupTable({ data, state }: { data: ThinkingResponse; state: ThinkingSt
       ? v === null ? "—" : formatTokens(v) + " tokens"
       : thinkingDuration(v);
   return <div className="thinking-table-wrap"><table>
-    <thead><tr><th>Group</th><th>Retained requests</th>
-      <th>{reasoning ? "Positive reports" : ratio ? "Gaps with estimates" : "Usable gaps"}</th>
-      <th>Median</th><th>P95</th><th>Conversations</th></tr></thead>
+    <thead><tr><th>Group</th><th>Retained model requests</th>
+      <th>{reasoning ? "Positive reports" : ratio ? "Timed model requests with estimates" : "Timed model requests"}</th>
+      <th>Median</th><th>P95</th><th>{reasoning ? "Retained conversations" : "Conversations with usable timing"}</th></tr></thead>
     <tbody>{data.groups.map(g => <tr key={g.key}>
       <th><GroupLabel group={g} state={state} /></th>
       <td>{thinkingCount(g.Retained)}</td><td>{thinkingCount(g.stats.n)}</td>
@@ -215,7 +216,7 @@ function ComparisonHeatmap({
         Color:{" "}
         {state.normalization === "share"
           ? "0–100% of each group"
-          : "0–" + thinkingCount(maximum) + " requests"}
+          : "0–" + thinkingCountOf(maximum, "timed model request")}
         .
       </p>
     </div>
@@ -229,8 +230,8 @@ function Methodology() {
       className="usage-query-search thinking-disclosure"
     >
       <p>
-        Think time estimates the wait between the latest linked tool result
-        and the first recorded response with token usage. The model-request
+        The wait is the time between the latest linked tool result and the
+        first recorded response with token usage. The model-request
         record’s <code>requested_at</code> field names that response evidence,
         not a verified request-send clock. The wait includes reasoning, some
         generation, queueing, scheduling and delivery. It measures neither
@@ -250,9 +251,9 @@ function Methodology() {
       <p>
         Distributions and quartiles use individual observations, including
         sparse groups; only overlays and boxes impose sample thresholds. Wait
-        boxes need 30 usable gaps from three conversations. Reasoning boxes need
-        30 retained requests from three retained conversations and a positive
-        reasoning report. Positive reasoning counts use all retained requests,
+        boxes need 30 timed model requests from three conversations. Reasoning
+        boxes need 30 retained model requests from three retained conversations and a positive
+        reasoning report. Positive reasoning counts use all retained model requests,
         including those without timing. Numeric defaults cannot distinguish
         unreported reasoning from an explicit zero.
       </p>
@@ -308,14 +309,14 @@ function Methodology() {
       </p>
       <h3>After compaction</h3>
       <p>
-        Each pair compares three requests before and after a compaction, within
-        one conversation/agent stream, fixed model and effort, and one hour.
-        Each side needs two usable gaps. Wait, context and output ratios are
-        computed per event before taking medians. Output and task stage may
-        change too. The gap crossing compaction is excluded; the next two
-        requests must both have usable gaps. All
-        events enter statistics even when a ratio exceeds the fixed 0–1×
-        viewport.
+        Each pair compares three model requests before a compaction with three
+        after it, in one conversation stream, with the same model and effort,
+        within one hour. The first wait after compaction is skipped because it
+        spans the compaction; the before side needs two usable waits and the
+        two waits after the skipped one must both be usable. Wait, context and
+        output ratios are computed per event before taking medians. Output and
+        task stage may change too. All events enter statistics even when a
+        ratio exceeds the fixed 0–1× viewport.
       </p>
       <h3>Complete turn duration</h3>
       <p>
@@ -336,7 +337,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
     ? decodeQueryStrict(nativeFilters)
     : EMPTY_QUERY;
   if (!nativeQuery || nativeQuery.grouping)
-    throw Error("Invalid Thinking population filters.");
+    throw Error("This link’s Thinking filters are invalid.");
   const [linked, setLinked] = useViewState<Partial<ThinkingState>>(
     "thinking",
     () => initialThinking(new URLSearchParams(location.search)),
@@ -467,7 +468,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
         </PageLink>
         {detail ? (
           <PageLink href={thinkingDashboardURL(state, false, true)}>
-            Methodology & validation →
+            Methodology →
           </PageLink>
         ) : null}
         <PageLink
@@ -562,7 +563,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 value={state.normalization}
                 options={[
                   ["share", "Share within group"],
-                  ["count", "Request counts"],
+                  ["count", "Timed model request counts"],
                 ]}
                 onChange={(v) =>
                   change({ normalization: v as ThinkingState["normalization"] })
@@ -622,7 +623,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               label="Measure"
               value={state.calendarMetric}
               options={[
-                ["raw", "Actual wait · seconds"],
+                ["raw", "Actual wait"],
                 ["ratio", "Compared with workload estimate"],
               ]}
               onChange={(v) =>
@@ -676,13 +677,13 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 : detail &&
                     state.view === "calendar" &&
                     state.calendarMetric === "ratio"
-                  ? "gaps with workload estimates"
-                  : "usable timing gaps"}
+                  ? "timed model requests with workload estimates"
+                  : "timed model requests"}
             </strong>{" "}
-            from {thinkingCount(data.Retained)} retained requests ·{" "}
-            {thinkingCount(data.Conversations)} conversations
+            from {thinkingCountOf(data.Retained, "retained model request")} ·{" "}
+            {thinkingCountOf(data.Conversations, "conversation")}
             {detail
-              ? ` · ${dataGroups.length} groups shown`
+              ? ` · ${thinkingCountOf(dataGroups.length, "group")} shown`
               : ""}
             .
           </p>
@@ -707,19 +708,19 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 <p className="usage-dashboard-note">
                   Cells show{" "}
                   {state.calendarMetric === "raw"
-                    ? "median actual wait in seconds"
+                    ? "median actual wait"
                     : "median individual observed / estimated wait; 2× means twice the workload estimate"}
-                  . {thinkingCount(data.Timed)} raw gaps ·{" "}
-                  {thinkingCount(data.Adjusted)} supported estimates. Each cell
-                  needs 20 observations from three conversations. Dates and
+                  . {thinkingCountOf(data.Timed, "timed model request")} ·{" "}
+                  {thinkingCountOf(data.Adjusted, "supported estimate")}. Each cell
+                  needs 20 timed model requests from three conversations. Dates and
                   hours use {data.timezone}. Drag vertically to narrow Range.
                 </p>
               ) : null}
               {!dataGroups.length ? (
                 <p className="query-empty">
                   {data.Retained
-                    ? "No observations available for this view. Choose a wider range or clear filters."
-                    : "No retained requests in this range. Choose a wider range or clear filters."}
+                    ? "No timed model requests for this view. Choose a wider range or clear filters."
+                    : "No retained model requests in this range. Choose a wider range or clear filters."}
                 </p>
               ) : (
                 <div
@@ -789,7 +790,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   <SearchHelp label="Percentile lines">
                     <p>
                       Exact median, P75, P90 and P95 need 30, 50, 100 and 200
-                      timed requests per group/period respectively, plus five
+                      timed model requests per group/period respectively, plus five
                       conversations. Unsupported periods break the line. These
                       are descriptive quantiles, not confidence intervals.
                     </p>
@@ -813,8 +814,8 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   </div>
                   <h3>Is one time of day consistently faster? <DataReadinessIndicator id="thinking:hour" title="Is one time of day consistently faster?" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></h3>
                   <p className="usage-dashboard-note">
-                    Day-balanced workload-adjusted gaps in three-hour windows.
-                    Each day/window needs 20 modeled gaps from three
+                    Day-balanced workload-adjusted waits in three-hour windows.
+                    Each day/window needs 20 model requests with workload estimates from three
                     conversations; each point needs four qualifying days.
                     Whiskers bootstrap whole days.
                   </p>
@@ -851,7 +852,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                       <thead>
                         <tr>
                           <th>Group</th>
-                          <th>Adjusted gap ratio</th>
+                          <th>Adjusted wait ratio</th>
                           <th>Approx. 95% interval</th>
                           <th>Paired days</th>
                         </tr>
@@ -882,10 +883,12 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               ) : null}
               <p className="usage-dashboard-note">
                 {box
-                  ? "Boxes span p25–p75; the middle line is the median, whiskers p10–p90. Unsupported groups retain labels without boxes."
+                  ? "Boxes span P25–P75; the middle line is the median, whiskers P10–P90. Unsupported groups retain labels without boxes."
                   : state.view === "calendar"
-                    ? "Unsupported estimates remain missing; raw observations stay available. This is retrospective normalization using generated output, not a start-of-request forecast."
-                    : "Four rounded latency bins per order of magnitude, 100 ms–600 s. Hover for counts. Shares normalize within each timed group/time bucket. Drag across time to update Range for every group and view; double-click restores the pre-brush range."}
+                    ? "Unsupported estimates remain missing; actual waits stay available. This is retrospective normalization using generated output, not a start-of-request forecast."
+                    : state.view === "time"
+                      ? "Four rounded wait bins per order of magnitude, 100 ms–600 s. Hover for counts. Shares normalize within each group and time bucket. Drag across time to narrow Range for every group and view; double-click restores the earlier range."
+                      : "Four rounded wait bins per order of magnitude, 100 ms–600 s. Hover for counts. Shares normalize within each group."}
               </p>
             </>
           ) : (
@@ -894,7 +897,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 <div>
                   <span>Typical wait<DataReadinessIndicator id="thinking:metric:typical-wait" title="Typical wait" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></span>
                   <strong>{thinkingDuration(data.summary.median)}</strong>
-                  <small>Median observed gap</small>
+                  <small>Median observed wait</small>
                 </div>
                 <div>
                   <span>Slowest 10% begin at<DataReadinessIndicator id="thinking:metric:slowest-10%-begin-at" title="Slowest 10% begin at" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></span>
@@ -905,16 +908,15 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   <span>Timing coverage<DataReadinessIndicator id="thinking:metric:timing-coverage" title="Timing coverage" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></span>
                   <strong>
                     {data.Retained
-                      ? ((100 * data.Timed) / data.Retained).toFixed(1)
-                      : "0"}
-                    %
+                      ? ((100 * data.Timed) / data.Retained).toFixed(1) + "%"
+                      : "—"}
                   </strong>
-                  <small>Usable gaps / retained requests</small>
+                  <small>Timed / retained model requests</small>
                 </div>
                 <div>
                   <span>Conversations represented<DataReadinessIndicator id="thinking:metric:conversations-represented" title="Conversations represented" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></span>
                   <strong>{thinkingCount(data.Conversations)}</strong>
-                  <small>Including requests without timing</small>
+                  <small>Including model requests without timing</small>
                 </div>
               </div>
               <p className="usage-dashboard-note">
@@ -952,11 +954,11 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                             <th>
                               {model}
                               <small>
-                                {thinkingCount(
+                                {thinkingCountOf(
                                   data.factors!.find((f) => f.model === model)!
                                     .N,
-                                )}{" "}
-                                requests
+                                  "model request",
+                                )}
                               </small>
                             </th>
                             {["context", "reasoning", "other"].map((factor) => {
@@ -995,7 +997,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   </div>
                   {!data.factors?.length ? (
                     <p className="usage-dashboard-note">
-                      No supported adjusted fits: each model needs 250 requests
+                      No supported adjusted fits: each model needs 250 model requests
                       from 25 conversations and independent within-stream
                       variation.
                     </p>
@@ -1011,7 +1013,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               </div>
               <ViewDisclosure
                 viewKey="thinking:coverage"
-                summary="Which models and agents have usable timing?"
+                summary="Which models and agent apps have usable timing?"
                 className="usage-query-search thinking-disclosure"
               >
                 <h3>By recorded model <DataReadinessIndicator id="thinking:models" title="By recorded model" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></h3>
@@ -1025,18 +1027,19 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   state={{ ...state, view: "histogram", groupBy: "harness" }}
                 />
                 <p>
-                  Missing timing stays in the retained denominator. A source
-                  with no projected usage requests cannot appear in this table.
-                  Model names are retained as recorded; Provider identifies the agent
-                  product and may differ from the API vendor.
+                  Model requests without usable timing still count in Retained
+                  model requests. A model or agent app with no recorded model
+                  requests does not appear. Model names are shown as recorded.
                 </p>
               </ViewDisclosure>
               <ViewDisclosure viewKey="thinking:compaction-waits" summary="How compaction changes observed waits" className="usage-query-search thinking-disclosure">
                 <p className="usage-dashboard-note">
                   Compare median waits before and after compaction within the
-                  same model, effort and conversation stream. We use up to three
-                  waits before and the next two usable waits after, skipping the
-                  wait that crosses compaction.
+                  same model, effort and conversation stream: three model
+                  requests before and three after, within one hour. The first
+                  wait after compaction spans the compaction and is skipped; the
+                  before side needs two usable waits and both later waits must be
+                  usable.
                 </p>
                 <p className="usage-dashboard-note">
                   For example, waits of 10, 9 and 11 seconds before compaction
@@ -1068,7 +1071,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 <p>
                   Context accumulates, compaction resets it, and waits settle or
                   spike. The twelve longest matching streams are available as
-                  examples; aggregate charts always use all selected requests.
+                  examples; aggregate charts always use all selected model requests.
                 </p>
                 {data.traces?.length ? (
                   <>
@@ -1080,8 +1083,8 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                           t.ID,
                           t.Model +
                             " · " +
-                            t.Count +
-                            " requests · " +
+                            thinkingCountOf(t.Count, "model request") +
+                            " · " +
                             t.Conversation,
                         ])}
                         onChange={(session) => change({ session })}
@@ -1109,13 +1112,13 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                         <PageLink
                           href={`/work/${encodeURIComponent(trace.Workspace)}?conversation=${encodeURIComponent(trace.Conversation)}`}
                         >
-                          Open source conversation →
+                          Open conversation →
                         </PageLink>
                       </>
                     ) : null}
                   </>
                 ) : (
-                  <p>No matching stream has six retained requests.</p>
+                  <p>No matching stream has six retained model requests.</p>
                 )}
               </ViewDisclosure>
               <ViewDisclosure
@@ -1128,16 +1131,17 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 ) : validation ? (
                   <>
                     <p>
-                      {thinkingCount(validation.pairs)} matched positive
-                      response timers. Rank correlation:{" "}
+                      {thinkingCountOf(validation.pairs, "response")} with an
+                      app-reported thinking time matched to a wait. Rank
+                      correlation:{" "}
                       {validation.correlation?.toFixed(2) ?? "unavailable"};
-                      median reported thinking / gap:{" "}
+                      median reported thinking ÷ wait:{" "}
                       {amount(validation.medianRatio)}.
                     </p>
                     {validation.pairs ? (
                       <ThinkingScatter
                         points={validation.points}
-                        title="Recorded thinking (Y) vs observed gap (X)"
+                        title="Recorded thinking (Y) vs observed wait (X)"
                       />
                     ) : (
                       <p>
@@ -1160,9 +1164,10 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                           title="Reported API + tool (Y) vs total duration (X)"
                         />
                         <p>
-                          {validation.counterOverlap} of{" "}
-                          {validation.counterCount} latest conversation cost
-                          states report API + tool above total. The scatter
+                          In {thinkingCount(validation.counterOverlap)} of{" "}
+                          {thinkingCountOf(validation.counterCount, "conversation")},
+                          the app’s latest cumulative API + tool time exceeds its
+                          total duration. The scatter
                           shows up to 1,600 conversation states; counts use
                           every matched state. Counters are cumulative and may
                           overlap or reset; they can span dates outside the

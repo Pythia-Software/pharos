@@ -58,7 +58,7 @@ function ProviderColorCard({ provider, busy, save }: { provider: ModelProvider; 
   const dirty = Object.keys(drafts).length > 0, comparison = modelPaletteComparison(models, proposedBase, drafts);
   const warnings = providerColorWarnings(provider, proposedBase, comparison.entries);
   return <section className="model-provider-card" aria-label={`${brand.label} colors`}>
-    <ColorEditor kind="provider" name={provider} label={brand.label} detail={`${models.length} models`} draft={proposedBase} setDraft={color => edit("provider", provider, color)} busy={busy} canReset={differs(proposedBase, brand.color)} reset={() => edit("provider", provider, "")} picker={picker} actions={dirty ? <>
+    <ColorEditor kind="provider" name={provider} label={brand.label} detail={`${models.length.toLocaleString()} ${models.length === 1 ? "model" : "models"}`} draft={proposedBase} setDraft={color => edit("provider", provider, color)} busy={busy} canReset={differs(proposedBase, brand.color)} reset={() => edit("provider", provider, "")} picker={picker} actions={dirty ? <>
       <button type="button" disabled={busy} onClick={() => void saveDrafts()} aria-label={`Save palette for ${brand.label}`}>Save</button>
       <button type="button" disabled={busy} onClick={discard}>Discard changes</button>
     </> : null} />
@@ -88,7 +88,7 @@ export function ModelColorSettings() {
   }
   return <div className="model-color-settings">
     <p className="muted">Each provider has a color family, with distinct shades for model classes and smaller variations for their versions. Your palette stays consistent across charts, cards, and dashboards and saves with your library. Select a model’s swatch in either row or its name to open or close its editor. After you change a palette, Save applies its pending changes and Discard changes clears them.</p>
-    <p className="model-color-note">For contemporary releases, core classes deepen in order: {hierarchy}. Older versions are lighter within each class. Dates use the pricing catalog or the first recorded use of an unnumbered label. Defaults can rebalance as models arrive. Changing a provider color shifts its automatic palette; your individual choices stay yours.</p>
+    <p className="model-color-note">For contemporary releases, core classes deepen in order: {hierarchy}. Older versions are lighter within each class. Dates come from the pricing catalog. A few unversioned names, such as “opus”, use a reviewed first-seen date. Defaults can rebalance as models arrive. Changing a provider’s color shifts its automatic palette; your individual choices stay yours.</p>
     <div role="status" aria-live="polite">{message}</div>
     {error ? <p role="alert">{error}</p> : null}
     <div className="model-provider-list">{modelProviders.filter(provider => knownModels().some(model => modelProvider(model) === provider) || customModelColor("provider", provider)).map(provider => <ProviderColorCard key={provider} provider={provider} busy={busy} save={save} />)}</div>

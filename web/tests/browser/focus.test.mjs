@@ -496,9 +496,17 @@ for (const [topic, display, width] of [['tokens', 'interval', 1440], ['tokens', 
 });
 
 test('Cloud backup forecast, setup, password stages and Reset keep keyboard focus', {skip}, async t => {
-  const {page}=await open(t,{url:'/settings/backups',ready:'#cloud-explore'});
+  const {page}=await open(t,{url:'/settings/backups',ready:'#cloud-explore',preferences:{'pharos-cloud-backup-configurations-v2':[{id:'cloud-fixture',name:'Offsite copy',provider:'aws',region:'us-east-1',tier:'aws-standard',bucket:'pharos-example-bucket'}]}});
   const explore=page.getByRole('button',{name:'Explore cloud backup options',exact:true});
   await explore.click();
+  // Removing a destination asks in place: focus enters the question, and Cancel or Escape returns it.
+  const remove=page.getByRole('button',{name:'Remove Offsite copy',exact:true}),cancelRemove=page.locator('.cloud-saved').getByRole('button',{name:'Cancel',exact:true});
+  for(const key of ['Enter','Escape']){
+    await remove.click();
+    assert.ok(await cancelRemove.evaluate(input=>input===document.activeElement));
+    await page.keyboard.press(key);
+    assert.ok(await remove.evaluate(input=>input===document.activeElement));
+  }
   // The price forecast keeps focus while the keyboard moves its readout (months: unit/page/cloud-backup).
   for(const chart of await page.locator('.cloud-results svg').all()){
     await chart.focus();
@@ -534,6 +542,11 @@ test('Cloud backup forecast, setup, password stages and Reset keep keyboard focu
   assert.ok(await page.locator('#cloud-step-0').evaluate(panel=>panel===document.activeElement));
   await page.keyboard.press('Tab');
   assert.ok(await page.getByLabel('Cloud provider',{exact:true}).evaluate(input=>input===document.activeElement));
+  // Confirming removes the destination's own controls, so focus moves to a control that is still there.
+  await remove.scrollIntoViewIfNeeded();await remove.click();
+  await page.locator('.cloud-saved').getByRole('button',{name:'Remove destination',exact:true}).click();
+  await remove.waitFor({state:'detached'});
+  await page.waitForFunction(()=>document.activeElement!==document.body&&document.activeElement.isConnected&&document.activeElement.getClientRects().length>0);
   await page.getByRole('button',{name:'Close cloud backup options',exact:true}).click();
   assert.ok(await explore.evaluate(input=>input===document.activeElement));
 });
@@ -578,7 +591,7 @@ test('Sync diagnostics copying keeps keyboard focus through delayed success, fai
     'GET /api/sync/status':{...defaultApi['GET /api/sync/status'],busy:true,maintenance_busy:true,issues:[issue]},
     'GET /api/sync/issues':{issues:[issue]},
   }});
-  await page.getByRole('button',{name:'View details / copy diagnostics',exact:true}).click();
+  await page.getByRole('button',{name:'View details and diagnostics…',exact:true}).click();
   const dialog=page.locator('dialog.sync-dialog');
   const button=dialog.getByRole('button',{name:'Copy diagnostics',exact:true});
   await deferredCopyKeepsFocus(page,button);
@@ -674,10 +687,9 @@ test("Unified activity panel holds focus and its disclosure across refreshes", {
   const chip = page.locator("#pharosDrive");
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 2);
   await press(chip);
-  const panel = page.getByRole("dialog", { name: "Library drive", exact: true });
+  const panel = page.getByRole("dialog", { name: "Background Processing", exact: true });
   await panel.waitFor();
   await holdsFocus(page, panel, chip);
-  assert.equal(await page.locator("#pharosDrivePanel").count(), 0, "the old drive panel stays closed");
 
   await press(chip);
   await panel.waitFor();
@@ -700,7 +712,7 @@ test("Unified activity panel holds focus and its disclosure across refreshes", {
   push('/api/status/stream', {...snapshot, revision: 5});
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library?.revision === 5);
   assert.notEqual(await progress.getAttribute('aria-valuenow'), null, 'measured progress returns when inventory is known');
-  const detail = 'Waiting for the catalog writer';
+  const detail = 'Waiting for another write to the library';
   const child = {id: 'git', kind: 'analysis.git', label: 'Check repositories', state: 'running', state_label: 'Checking repositories',
     step: {name: 'Checking Git history', unit: 'repository', done: 2, total: 5, fraction: .4}, children: []};
   const waiting = {state: 'blocked', state_label: 'Waiting', detail};
@@ -757,7 +769,7 @@ test("Eject when safe ejects once safe while the page is hidden", { skip }, asyn
   await page.evaluate(() => { window.ejects = 0; window.webkit = { messageHandlers: { pharosLibrary: { postMessage: async () => { window.ejects++; return {released: true}; } } } }; });
   await page.waitForFunction(() => window.pharosStatusStore.current()?.view?.library);
   await press(page.locator("#pharosDrive"));
-  const panel = page.getByRole("dialog", { name: "Library drive", exact: true });
+  const panel = page.getByRole("dialog", { name: "Background Processing", exact: true });
   await panel.getByRole("button", { name: /Eject when safe/ }).click();
   await panel.getByRole("button", { name: /Waiting to eject/ }).waitFor();
   await page.evaluate(() => {
@@ -833,13 +845,13 @@ for (const width of [1440, 320]) test(`Data guide takes focus, keeps controls re
   }), true, 'explaining sessions scrolls a delegated session into view');
   await press(helper);
   assert.equal(await helper.evaluate(element => element === document.activeElement), true, 'explaining an inline helper retains focus');
-  for (const [term, label] of [['skills', 'skills and instructions'], ['compactions', 'context compactions'], ['tokens', 'tokens and api cost'], ['models', 'models and effort'], ['channels', 'channels'], ['agent_apps', 'agent apps']]) {
+  for (const [term, label] of [['skills', 'skills and instructions'], ['compactions', 'context compactions'], ['tokens', 'tokens and API cost'], ['models', 'models and effort'], ['channels', 'channels'], ['agent_apps', 'agent apps']]) {
     const link = dialog.getByRole('button', { name: `Explain ${label}`, exact: true }).first();
     await press(link);
     await page.waitForFunction(value => new URLSearchParams(location.search).get('guide_entity') === value, term);
     assert.equal(await link.evaluate(element => element === document.activeElement), true, 'switching between parts of the same illustration retains keyboard focus');
   }
-  const laterUsage = dialog.getByRole('button', { name: 'Explain tokens and api cost', exact: true }).last();
+  const laterUsage = dialog.getByRole('button', { name: 'Explain tokens and API cost', exact: true }).last();
   await press(laterUsage);
   await page.waitForFunction(() => new URLSearchParams(location.search).get('guide_entity') === 'tokens');
   assert.equal(await laterUsage.evaluate(element => element === document.activeElement), true, 'a link later in the conversation keeps focus when the guide highlights repeated usage');
@@ -850,7 +862,7 @@ for (const width of [1440, 320]) test(`Data guide takes focus, keeps controls re
   await choose('tool_calls', 'Tool calls');
   await holdsFocus(page, dialog, opener);
   await press(opener);
-  await dialog.getByRole("button", { name: "Close data guide", exact: true }).click();
+  await dialog.getByRole("button", { name: "Close Data Guide", exact: true }).click();
   await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
 });
 
@@ -875,7 +887,7 @@ for (const width of [1440, 320]) test(`Data guide takes focus, keeps controls re
     });
     await aggregate.selectOption("avg");
     assert.equal(await aggregate.inputValue(), "avg");
-    // Wait for the scheduled refresh as well as in-flight requests. Opening a
+    // Wait for the scheduled update as well as in-flight requests. Opening a
     // popover before the aggregation refresh starts can race its focus return.
     await refreshed;
     await app.settled();
@@ -1035,7 +1047,7 @@ test("Search content search takes focus and returns it to the query builder @ 39
   const { page } = await open(t, { url: "/library?view=table", viewport: { width: 390, height: 844 }, ready: "#queryTableLibrary .qt-row" });
   const button = page.getByRole("button", { name: "Messages", exact: true });
   await press(button);
-  const dialog = page.getByRole("dialog", { name: "Search within this workspace", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Search messages, files and URLs", exact: true });
   await useSearchMenus(page, dialog);
   await holdsFocus(page, dialog, button);
 });
@@ -1051,9 +1063,9 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
   const app = await open(t, { url: `/library?view=table&${new URLSearchParams({ text_builder: JSON.stringify(draft) })}`, viewport: { width, height: 600 }, ready: "#queryTableLibrary .qt-row",
     api: { "POST /api/search/text/validate": ({ body }) => ({ where: body.where }) } });
   const { page } = app;
-  await press(page.getByRole("button", { name: "Edit messages search", exact: true }));
-  const dialog = page.getByRole("dialog", { name: "Search within this workspace", exact: true });
-  const heading = dialog.getByRole("heading", { name: "Search within this workspace", exact: true });
+  await press(page.getByRole("button", { name: "Edit message search", exact: true }));
+  const dialog = page.getByRole("dialog", { name: "Search messages, files and URLs", exact: true });
+  const heading = dialog.getByRole("heading", { name: "Search messages, files and URLs", exact: true });
   const inViewport = element => { const rect = element.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; };
   assert.ok(await heading.evaluate(inViewport), "the modal heading is outside the viewport");
   const bounds = await dialog.boundingBox();
@@ -1297,9 +1309,9 @@ test("Home search button focuses its input", { skip }, async t => {
   await page.waitForFunction(element => document.activeElement === element, await add.elementHandle());
 });
 
-test("All Cards moves focus to its content and browser history returns Home", { skip }, async t => {
+test("Open Card Library moves focus to its content and browser history returns Home", { skip }, async t => {
   const { page, settled, shot } = await open(t, { ready: ".home-belt-row .query-card", preferences: { "pharos-home-card-library-v1": { shown: true } } });
-  await press(page.getByRole("button", { name: "All Cards", exact: true }));
+  await press(page.getByRole("button", { name: "Open Card Library", exact: true }));
   const heading = page.getByRole("heading", { name: "Card Library", exact: true });
   await heading.waitFor();
   await page.waitForFunction(() => document.activeElement?.tagName === "MAIN");
@@ -1337,7 +1349,7 @@ test("the findings prompt review takes focus, keeps it and returns it on Escape"
 for (const scenario of [
   { name: "Risky action", url: "/findings?optimize_area=safety&view=table&safety_case=safety_sample", api: "/api/findings/safety", id: "safety_sample", collection: "cases", detail: ".safety-detail", remove: "In prompt · Remove", add: "Add to prompt" },
   { name: "Fix", url: "/findings?optimize_area=fixes&view=table&fixes_item=fix_sample", api: "/api/findings/fixes", id: "fix_sample", collection: "items", detail: ".fixes-detail", remove: "In prompt · Remove", add: "Add to prompt" },
-  { name: "Efficiency finding", url: "/findings?finding=failure%3Arepo%3Arepo_explo%3Adef", api: "/api/findings", id: "failure:repo:repo_explo:def", collection: "findings", detail: ".findings-detail", remove: "Remove from prompt", add: "Add to Prompt Cart" },
+  { name: "Efficiency finding", url: "/findings?finding=failure%3Arepo%3Arepo_explo%3Adef", api: "/api/findings", id: "failure:repo:repo_explo:def", collection: "findings", detail: ".findings-detail", remove: "Remove from prompt", add: "Add to prompt" },
 ]) {
   test(`${scenario.name} detail keeps its prompt cart usable`, { skip }, async t => {
     const overview = structuredClone(defaultApi[`GET ${scenario.api}`]);
@@ -1363,7 +1375,7 @@ for (const scenario of [
     await cartPanel.locator("button.primary").click();
     const dialog = page.locator('.findings-dialog[role="dialog"]');
     await dialog.waitFor();
-    await dialog.getByRole("button", { name: "Keep in cart" }).click();
+    await dialog.getByRole("button", { name: "Keep in prompt" }).click();
     await page.locator(scenario.detail).getByRole("button", { name: scenario.remove, exact: true }).click();
     await cartPanel.locator(".findings-cart-empty").waitFor();
     await page.locator(scenario.detail).getByRole("button", { name: scenario.add, exact: true }).click();
@@ -1523,8 +1535,8 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
     for (const expanded of [true, false]) {
       if(expanded){
         await page.getByRole('button',{name:'Conversation actions',exact:true}).click();
-        await page.getByRole('menuitem',{name:'Archive details',exact:true}).click();
-      }else await page.getByRole('button',{name:'Close Archive details',exact:true}).click();
+        await page.getByRole('menuitem',{name:'Preservation details',exact:true}).click();
+      }else await page.getByRole('button',{name:'Close Preservation details',exact:true}).click();
       assert.equal(await page.locator(".archive-details").evaluate(details => details.open), expanded);
       if(expanded){
         const details=page.locator('.archive-body');
@@ -1543,8 +1555,8 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
     sourceOnly=true;
     await page.reload();
     await page.locator('.reader-navigator').waitFor();
-    assert.equal(await page.locator('.archive-details').isVisible(),false,'source alone does not need Archive details');
-    assert.doesNotMatch(await page.locator('.coverage-warning').innerText(),/See Archive details/);
+    assert.equal(await page.locator('.archive-details').isVisible(),false,'source alone does not need Preservation details');
+    assert.doesNotMatch(await page.locator('.coverage-warning').innerText(),/See Preservation details/);
     await shot('source-only-heading');
   } else {
     // The child fixture is a single exchange without context measurements.
@@ -1687,7 +1699,7 @@ test('untimed session navigator draws calls and failures and reveals by message 
   assert.ok(await web.locator('.external-indicator').isVisible());
   const browse=page.locator('.action-row').filter({has:web}).getByRole('button',{name:'Browse',exact:true});
   await browse.scrollIntoViewIfNeeded();await settled();await browse.click();
-  await page.getByRole('menu',{name:'Filter Browse',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).waitFor();
+  await page.getByRole('menu',{name:'Show or hide Browse',exact:true}).getByRole('menuitem',{name:'Hide',exact:true}).waitFor();
   await page.keyboard.press('Escape');
   await shot('reader-timeline-sections');
   await page.setViewportSize({width:320,height:900});
@@ -1849,7 +1861,7 @@ test('session navigator scrolling reuses transcript geometry on a long session',
   }});
   assert.equal(await page.locator('.token-marker').count(),960,'the fixture exercises hundreds of context profiles');
   await page.getByRole('button',{name:'Conversation actions',exact:true}).click();
-  await page.getByRole('menuitem',{name:'Close All Turns',exact:true}).click();
+  await page.getByRole('menuitem',{name:'Close all turns',exact:true}).click();
   await settled();
   // Warm the sticky transition before instrumenting the scroll path.
   await page.locator('.turn').nth(2).evaluate(turn=>turn.scrollIntoView({block:'start',behavior:'instant'}));
@@ -1867,7 +1879,7 @@ test('session navigator scrolling reuses transcript geometry on a long session',
   assert.equal(measurements.transcriptReads,0,'scrolling must not remeasure transcript targets');
   t.diagnostic(JSON.stringify({fixture:'160 turns / 1,920 messages / 960 context samples, collapsed',...measurements}));
   await page.getByRole('button',{name:'Conversation actions',exact:true}).click();
-  await page.getByRole('menuitem',{name:'Open All Turns',exact:true}).click();
+  await page.getByRole('menuitem',{name:'Open all turns',exact:true}).click();
   await settled();
   const expanded=await measureScroll();
   assert.equal(expanded.transcriptReads,0,'expanded history also reuses cached geometry');
@@ -2148,7 +2160,7 @@ test('Analyze record keyword editor keeps focus through apply, edit and cancel',
   const dialog=page.locator('.explore-search-modal');
   await dialog.waitFor();
   await page.waitForFunction(element=>element.contains(document.activeElement),await dialog.elementHandle());
-  await dialog.getByRole('textbox',{name:'Text for rule 1.1',exact:true}).fill('target');
+  await dialog.getByRole('textbox',{name:'Text for condition 1.1',exact:true}).fill('target');
   await shot('keyword-draft');
   await dialog.getByRole('button',{name:'Apply keyword filter',exact:true}).click();
   await dialog.waitFor({state:'hidden'});
@@ -2166,7 +2178,7 @@ test('Analyze record keyword editor keeps focus through apply, edit and cancel',
 
 test('Capture & index keeps run details focus, table scrolling and query edits through live refreshes @ 390', { skip }, async t => {
   const { page, settled } = await open(t, { url: '/settings/sync', viewport: { width: 390, height: 900 }, ready: '#syncHistoryTables .qt-row' });
-  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
+  const history = page.getByRole('region', { name: 'Recent background work', exact: true });
   // Run details keep focus through a refresh and return it on close.
   const opener = history.getByRole('button', { name: 'Details', exact: true }).first();
   await press(opener);
@@ -2178,7 +2190,7 @@ test('Capture & index keeps run details focus, table scrolling and query edits t
 
   // Tables keep their horizontal scroll through a status refresh.
   await page.getByText('Performance & verification details', { exact: true }).click();
-  const labels = ['Recent run history', 'Source status', 'Measured indexing cost'];
+  const labels = ['Recent background work', 'Source status', 'Measured indexing cost'];
   const positions = [];
   for (const label of labels) {
     const wrap = page.getByRole('region', { name: label, exact: true }).locator('.qt-table-wrap');
@@ -2382,7 +2394,7 @@ test('Ask Pharos keeps long chats scrollable and the editor reachable @ 390', {s
   assert.ok(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(fits),'editor must stay on screen');
   assert.ok(await page.locator('.pharos-user-question').last().evaluate(fits),'latest prompt should be visible with a short reply');
   assert.ok(await page.getByRole('button',{name:'Send question',exact:true}).evaluate(fits),'send must stay on screen');
-  const clear=page.locator('.pharos-ai').getByRole('button',{name:'New Chat',exact:true});
+  const clear=page.locator('.pharos-ai').getByRole('button',{name:'New chat',exact:true});
   assert.ok(await clear.evaluate(button=>{
     const transcript=document.querySelector('.pharos-thread-viewport'),before=transcript.getBoundingClientRect();
     button.hidden=true;
@@ -2449,7 +2461,7 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   const element={id:'element-original',kind:'element',name:'Selected chart',url:url.url,selector:'#chart',offset:0};
   const draftFile={id:'file-draft',kind:'file',name:'draft.csv',path:'/tmp/private/draft.csv',size:12,offset:5};
   const turn={id:'first-turn',prompt:'Which commands keep failing?',attachments:[file,url],cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'clarification',reply:'',clarification:{question:'Which project?',options:['Pharos','All projects']},cards:[],elapsedMs:1000};
-  const original={id:'failed-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'Keep the time range to this week.',draftAttachments:[draftFile],conversation:[turn,{...turn,id:'failed-turn',prompt:'Pharos',attachments:[element],status:'error',clarification:null,reply:'The agent returned an empty response; try again'}]};
+  const original={id:'failed-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'Keep the time range to this week.',draftAttachments:[draftFile],conversation:[turn,{...turn,id:'failed-turn',prompt:'Pharos',attachments:[element],status:'error',clarification:null,reply:'The agent returned an empty answer. Try again.'}]};
   const sessions=new Map([[original.id,original]]);
   const {page,settled,shot,calls}=await open(t,{url:'/?ask_chat=failed-chat',viewport:{width:320,height:900},ready:'.pharos-recovery:not([hidden])',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
@@ -2467,17 +2479,17 @@ test('Ask Pharos retry with another model focuses the picker @ 320',{skip},async
   }});
   await shot('failed-chat');
   const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
-  const clear=page.locator('.pharos-recovery').getByRole('button',{name:'New Chat',exact:true});
+  const clear=page.locator('.pharos-recovery').getByRole('button',{name:'New chat',exact:true});
   await clear.focus();await page.keyboard.press('Enter');
   assert.ok(await question.evaluate(element=>element===document.activeElement),'clearing a failure returns focus to the composer');
   assert.equal(await question.evaluate(element=>element.value),'');
-  assert.ok(await page.getByRole('log',{name:'Conversation',exact:true}).isHidden(),'clearing hides the prior conversation');
+  assert.ok(await page.getByRole('log',{name:'Chat',exact:true}).isHidden(),'clearing hides the prior conversation');
   assert.ok(await page.locator('.pharos-model-trigger').isEnabled(),'a cleared chat allows choosing another model');
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),null);
   await shot('cleared-chat');
   await page.goBack();await clear.waitFor();await settled();
   assert.equal(await question.evaluate(element=>element.value),original.draft,'the failed chat remains available with its prior draft');
-  const retry=page.getByRole('button',{name:'Try Again with a different model',exact:true});
+  const retry=page.getByRole('button',{name:'Try again with a different model',exact:true});
   await retry.focus();await page.keyboard.press('Enter');
   const picker=page.getByRole('dialog',{name:'Model selection',exact:true});
   assert.ok(await picker.evaluate(element=>element.contains(document.activeElement)),'retry moves keyboard focus into the model picker');
@@ -2616,13 +2628,13 @@ test('Ask Pharos chat links survive reload and browser Back', {skip,timeout:6000
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   await page.getByRole('status').filter({hasText:'Your latest reply'}).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),id);
-  await page.getByRole('button',{name:'New Chat',exact:true}).click();
+  await page.getByRole('button',{name:'New chat',exact:true}).click();
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),null);
   await page.goBack();await page.getByRole('status').filter({hasText:'Your latest reply'}).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('ask_chat'),id);
   // Back can arrive before a slow chat load. Its late response must not
   // replace the page the user has already returned to.
-  await page.getByRole('button',{name:'New Chat',exact:true}).click();await settled();
+  await page.getByRole('button',{name:'New chat',exact:true}).click();await settled();
   delaySession=true;
   const loading=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/ask/session'&&request.method()==='GET');
   await page.evaluate(()=>window.pharosNavigate('/?ask_chat=saved-chat'));await loading;
@@ -2864,7 +2876,7 @@ for(const [width,height,motion] of [[2133,1070,'no-preference'],[320,480,'reduce
   await editor.fill('Give me a detailed overview of my recent work.');
   await page.getByRole('button',{name:'Send question',exact:true}).click();
   await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
-  assert.equal(await clear.getAttribute('aria-label'),'New Chat');
+  assert.equal(await clear.getAttribute('aria-label'),'New chat');
   await checkWindowControls();
   const activeFrame=await modal.locator('.pharos-ai-frame').boundingBox();
   if(width>1000)assert.ok(activeFrame.width>emptyFrame.width,'the active conversation uses the available width');
@@ -2963,9 +2975,9 @@ test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip},
   assert.equal(await askHeader.getAttribute('aria-current'),null);
   assert.ok(await page.locator('#askPharosToggle').evaluate(element=>element===document.activeElement)||await page.locator('#headerMore').evaluate(element=>element===document.activeElement),'Close returns focus to the header');
   await activateHeaderTool(page,'askPharosToggle');
-  await page.getByRole('button',{name:'Switch to non-AI search',exact:true}).click();
+  await page.getByRole('button',{name:'Switch to regular search',exact:true}).click();
   await modal.getByRole('button',{name:'Search past work',exact:true}).click();
-  await modal.getByRole('textbox',{name:'Text for rule 1.1',exact:true}).fill('cache');
+  await modal.getByRole('textbox',{name:'Text for condition 1.1',exact:true}).fill('cache');
   await modal.getByRole('button',{name:'Search messages',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/library');
   await modal.waitFor({state:'hidden'});
@@ -2981,7 +2993,7 @@ test('Ask Pharos errors float over full screen and dismiss without moving it @ 3
   const notice=page.locator('#askPage .pharos-notice');
   assert.equal(await page.locator('#askPharosToggle').getAttribute('aria-current'),'page');
   assert.equal(await page.locator('#askPharosToggle').getAttribute('aria-expanded'),'false');
-  assert.match(await notice.getByRole('alert').textContent(),/Removed is unavailable/);
+  assert.match(await notice.getByRole('alert').textContent(),/Removed is no longer available/);
   const surface=page.locator('#askPage .pharos-product > :not(.pharos-notice-anchor):not([hidden])').first();
   const shown=await surface.boundingBox(),box=await notice.boundingBox(),ask=await page.locator('#askPage .pharos-product').boundingBox();
   assert.ok(box.x>=ask.x&&box.x+box.width<=ask.x+ask.width&&box.y>=ask.y,'the message stays on screen over Ask');
@@ -3134,11 +3146,11 @@ test('Ask Pharos floating progress keeps focus and a ready response leaves the p
   assert.ok(await editor.evaluate(element=>element===document.activeElement));
   await page.keyboard.press('Escape');await modal.waitFor({state:'hidden'});await panel.waitFor();
   state.finish();
-  await panel.getByRole('button',{name:/Your response is ready/}).waitFor();
+  await panel.getByRole('button',{name:/Answer ready/}).waitFor();
   assert.equal(new URL(page.url()).pathname,'/settings','a ready response must leave the current page alone');
   assert.ok(!state.sent.currentURI,'the request respects the removed page context');
   await shot('ask-floating-ready');
-  await panel.getByRole('button',{name:/Your response is ready/}).click();
+  await panel.getByRole('button',{name:/Answer ready/}).click();
   await page.locator('.pharos-destination:not([hidden])').click();
   await modal.waitFor({state:'hidden'});
   await page.waitForURL(url=>url.pathname==='/library');
@@ -3222,7 +3234,7 @@ test('Ask Pharos on Home can keep browsing without losing the active chat', {ski
   await page.locator('#homeAskSearch').getByRole('button',{name:'A. Tokens',exact:true}).waitFor();
   await shot('home-answer');
   assert.ok((await homeFrame.boundingBox()).width>emptyHomeWidth,'a restored conversation uses more of the available Home width');
-  await page.locator('#homeAskSearch').getByRole('button',{name:'New Chat',exact:true}).click();
+  await page.locator('#homeAskSearch').getByRole('button',{name:'New chat',exact:true}).click();
   assert.ok(Math.abs((await homeFrame.boundingBox()).width-emptyHomeWidth)<1,'clearing the conversation restores the Home composer width');
 });
 
@@ -3384,7 +3396,7 @@ test('dashboard card creation keeps focus in its dialog, restores it on cancel a
   await shot('created-dashboard-card-home');
   // Home's editor changes the same labels.
   await card.getByRole('button',{name:'Edit My provider tokens',exact:true}).click();
-  const editor = page.getByRole('dialog',{name:'Make this view yours'});
+  const editor = page.getByRole('dialog',{name:'Edit card'});
   await editor.getByRole('combobox',{name:'Category',exact:true}).selectOption('usage');
   await editor.getByRole('textbox',{name:'Call to action',exact:true}).fill('Open my tokens');
   await shot('edit-dashboard-card-home');
@@ -3415,12 +3427,12 @@ test('Ask Pharos loads chart previews behind the floating panel so a ready answe
   await page.getByRole('button',{name:'Float Ask Pharos',exact:true}).click();await modal.waitFor({state:'hidden'});
   const panel=page.getByRole('complementary',{name:'Ask Pharos progress'});
   finish();
-  await panel.getByRole('button',{name:/Your response is ready/}).waitFor();
+  await panel.getByRole('button',{name:/Answer ready/}).waitFor();
   await page.waitForFunction(count=>{const charts=[...document.querySelectorAll('figure[aria-label^="Chart preview:"]')];return charts.length===count&&charts.every(chart=>chart.getAttribute('aria-busy')==='false');},cards.length);
   const queries=()=>calls.filter(call=>/^\/api\/query\/usage\/(metrics|query-v3)$/.test(call.path)).length;
   const loaded=queries();
   assert.ok(loaded>0,'floating answers query their charts before they are opened');
-  await panel.getByRole('button',{name:/Your response is ready/}).click();await modal.waitFor();
+  await panel.getByRole('button',{name:/Answer ready/}).click();await modal.waitFor();
   for (const card of cards) assert.equal(await page.getByRole('figure',{name:'Chart preview: '+card.title,exact:true}).getAttribute('aria-busy'),'false','opening the answer shows its loaded chart');
   assert.equal(queries(),loaded,'opening a just-loaded answer reuses its charts');
 });
@@ -3450,15 +3462,15 @@ for (const width of [1920,320]) test(`Ask Pharos work previews fit beside their 
   const before=page.url();
   await question.press('Enter');
   for (const card of cards) {
-    const figure=page.getByRole('figure',{name:'Work preview: '+card.title,exact:true});
+    const figure=page.getByRole('figure',{name:'Preview: '+card.title,exact:true});
     await figure.waitFor();await figure.scrollIntoViewIfNeeded();
-    await page.waitForFunction(title=>document.querySelector(`figure[aria-label="Work preview: ${title}"]`)?.getAttribute('aria-busy')==='false',card.title);
+    await page.waitForFunction(title=>document.querySelector(`figure[aria-label="Preview: ${title}"]`)?.getAttribute('aria-busy')==='false',card.title);
     assert.equal(await page.getByRole('link',{name:new RegExp(card.title)}).getAttribute('href'),card.href);
     if(card.id!=='work')await figure.getByRole('img',{name:'Conversation fingerprint',exact:true}).waitFor();
   }
   const requested=calls.filter(call=>call.path==='/api/fingerprints').flatMap(call=>call.body.items);
   for(const id of ['conv-root','conv-child'])assert.ok(requested.some(item=>item.entity==='conversation'&&item.id===id),'the conversation ID selects its fingerprint');
-  for (const card of cards) assert.equal(await page.getByRole('figure',{name:'Work preview: '+card.title,exact:true}).locator('p').count(),2,'where/when and who/how much render');
+  for (const card of cards) assert.equal(await page.getByRole('figure',{name:'Preview: '+card.title,exact:true}).locator('p').count(),2,'where/when and who/how much render');
   const after=new URL(page.url());if(home)after.searchParams.delete('ask_chat');
   assert.equal(after.href,before,'previews leave the underlying page URL alone');
   assert.ok(await surface.evaluate(element=>element.contains(document.activeElement)),'loading previews must not move focus out of Ask');
@@ -3535,7 +3547,7 @@ for (const [width, count, view] of [[390,2,'compare'],[1440,1,'trend']]) test(`A
     return;
   }
   await shot('ask-chart-previews');
-  await page.getByRole('button',{name:'New Chat',exact:true}).click();
+  await page.getByRole('button',{name:'New chat',exact:true}).click();
   await settled();
   assert.equal(await page.getByRole('figure',{name:/^Chart preview:/}).count(),0);
   assert.ok(await question.evaluate(element=>element===document.activeElement));
@@ -3552,7 +3564,7 @@ for (const [width, count, view] of [[390,2,'compare'],[1440,1,'trend']]) test(`A
   await modal.waitFor({state:'hidden'});
 });
 
-for(const width of [1440,390])test(`Data freshness follows the native modal and Background Processing at ${width}px`,{skip},async t=>{
+for(const width of [1440,390])test(`Data updates follows the native modal and Background Processing at ${width}px`,{skip},async t=>{
   const {idleStatus}=await import('./fixtures.mjs');
   const status={...idleStatus,freshness:[...idleStatus.freshness,{domain:'an.ledger',label:'Tool ledger',behind:{state:'current'}},{domain:'an.authorship',group:'analyses',label:'Writing estimates',as_of:new Date(Date.now()-3600000).toISOString(),pending_since:new Date(Date.now()-187*60000).toISOString(),behind:{state:'behind',count:128,unit:'message'},reason:{code:'changed',text:'New messages are waiting'},next:'Next frequent update'}]};
   const {page,calls,push,shot,settled}=await open(t,{url:'/analyze?analyze_topic=human&readiness_preview=hours',viewport:{width,height:1000},ready:'.usage-analysis-trend[aria-busy="false"]',api:{'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
@@ -3569,9 +3581,9 @@ for(const width of [1440,390])test(`Data freshness follows the native modal and 
   await page.setViewportSize({width,height:320});
   const constrained=await dialog.locator('.data-guide-body').evaluate(element=>({client:element.clientHeight,scroll:element.scrollHeight}));
   assert(constrained.scroll>constrained.client,'long update details scroll inside a short viewport');
-  assert(await dialog.getByRole('link',{name:'Update settings'}).isVisible());
+  assert(await dialog.getByRole('link',{name:'Background Processing'}).isVisible());
   await page.setViewportSize({width,height:1000});
-  await picker.selectOption('clear');await page.waitForFunction(()=>document.getElementById('dataReadinessTitle')?.textContent==='Up to date as of 6 minutes ago');
+  await picker.selectOption('clear');await page.waitForFunction(()=>document.getElementById('dataReadinessTitle')?.textContent==='Up to date 6 minutes ago');
   const compact=await dialog.boundingBox();
   assert(compact.height<900,'short update details do not fill the viewport');
   await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
@@ -3580,7 +3592,7 @@ for(const width of [1440,390])test(`Data freshness follows the native modal and 
   await activateHeaderTool(page,'dataReadinessToggle');await dialog.waitFor();
   await shot('update-details');
   const updated={...status,freshness:status.freshness.map(row=>row.domain==='an.authorship'?{...row,pending_since:null,behind:{state:'current'},reason:null,as_of:new Date().toISOString()}:row)};
-  push('/api/status/stream',updated);await page.waitForFunction(()=>/Up to date|No updates waiting|Showing saved results/.test(document.getElementById('dataReadinessTitle')?.textContent));
+  push('/api/status/stream',updated);await page.waitForFunction(()=>/Up to date|No changes waiting|Showing saved results/.test(document.getElementById('dataReadinessTitle')?.textContent));
   await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
   assert.ok(await page.evaluate(()=>['dataReadinessToggle','headerMore'].includes(document.activeElement?.id)));
   push('/api/status/stream',status);
@@ -3590,7 +3602,7 @@ for(const width of [1440,390])test(`Data freshness follows the native modal and 
   await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=human'));
   await page.locator('[data-readiness-result="chart:writing_messages"]').click();await dialog.waitFor();
   assert.notEqual(await dialog.locator('header small').innerText(),'This page');
-  await dialog.getByRole('link',{name:'Update settings',exact:true}).click();await page.locator('#backgroundSchedule .bg-col').first().waitFor();await settled();
+  await dialog.getByRole('link',{name:'Background Processing',exact:true}).click();await page.locator('#backgroundSchedule .bg-col').first().waitFor();await settled();
   assert(await page.locator('.data-readiness-workload').isVisible());
   assert.equal(calls.filter(call=>call.method==='POST'&&/^\/api\/(sync|background|labels)/.test(call.path)).length,0,'reviewing status never enqueues work or changes Settings');
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
@@ -3661,7 +3673,7 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  await page.waitForFunction(()=>window.pharosStatusStore?.current()?.view?.library?.freshness?.some(row=>row.domain==='an.ledger'));
  await page.evaluate(()=>window.pharosNavigate('/analyze?analyze_topic=thinking-overview'));
  await page.locator('[data-readiness-result="chart:thinking-waits"]').click();await dialog.waitFor();
- await dialog.getByRole('link',{name:'Update settings',exact:true}).click();
+ await dialog.getByRole('link',{name:'Background Processing',exact:true}).click();
  await page.locator('#background-detail-upgrade').waitFor();
 });
 
@@ -3739,7 +3751,7 @@ test('Live data updates keep real backlog, existing results and first-build prog
  await page.waitForFunction(()=>document.activeElement?.dataset.readinessResult==='card:durable-readiness');
  await page.keyboard.press('Enter');
  await details.waitFor();
- await details.getByRole('link',{name:'Update settings',exact:true}).click();
+ await details.getByRole('link',{name:'Background Processing',exact:true}).click();
  await page.locator('#background-detail-conversations').waitFor();
  // Suggested cards also expose their update details on hover.
  await page.evaluate(()=>window.pharosNavigate('/cards'));
@@ -4114,10 +4126,10 @@ test('source limitations dialog returns focus and stays usable on a narrow scree
   const index=structuredClone(defaultApi['GET /api/index']);index.hosts[0].sources[0].kind='claude';
   const {page,settled,shot}=await open(t,{url:'/settings/sources',viewport:{width:1920,height:1050},ready:'#sourceGrid .source-card',api:{'GET /api/index':index}});
   await settled();
-  const info=page.getByRole('button',{name:'Ingestion limitations for claude',exact:true});
+  const info=page.getByRole('button',{name:'What Pharos reads from claude',exact:true});
   await info.scrollIntoViewIfNeeded();await shot('source-cards');
   await info.click();
-  const dialog=page.getByRole('dialog',{name:'claude · ingestion limitations'});
+  const dialog=page.getByRole('dialog',{name:'What Pharos reads from claude'});
   await dialog.waitFor();
   assert.ok(await dialog.getByRole('button',{name:'Close',exact:true}).evaluate(el=>document.activeElement===el));
   await shot('source-limitations-desktop');
@@ -4125,9 +4137,9 @@ test('source limitations dialog returns focus and stays usable on a narrow scree
   await page.keyboard.press('Escape');
   await dialog.waitFor({state:'hidden'});
   await page.waitForFunction(element=>document.activeElement===element,await info.elementHandle());
-  const remote=page.getByRole('button',{name:'Ingestion limitations for Claude',exact:true});
+  const remote=page.getByRole('button',{name:'What Pharos reads from Claude',exact:true});
   await remote.click();
-  await page.getByRole('dialog',{name:'Claude · ingestion limitations'}).waitFor();
+  await page.getByRole('dialog',{name:'What Pharos reads from Claude'}).waitFor();
   await page.keyboard.press('Escape');
   await page.waitForFunction(element=>document.activeElement===element,await remote.elementHandle());
 });

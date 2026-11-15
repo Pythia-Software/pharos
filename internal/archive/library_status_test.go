@@ -81,7 +81,7 @@ func TestUnplugAdviceAlwaysSaysEject(t *testing.T) {
 	if !strings.HasSuffix(other["summary"].(string), "Pharos cannot stop it.") {
 		t.Fatalf("another process's capture: %#v", other)
 	}
-	drive.Ejectable, drive.Location, drive.Name = false, "internal", "this Mac's internal disk"
+	drive.Ejectable, drive.Location, drive.Name = false, "internal", "this Mac’s internal disk"
 	if internal := unplugAdvice(drive, nil); internal["action"] != "none" || internal["without_eject"] != "not-applicable" {
 		t.Fatalf("internal: %#v", internal)
 	}
@@ -193,7 +193,7 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 		phases     []string
 		setRunning func(bool)
 	}{
-		{"Classifying your writing", []string{"refreshing authorship", "reading authorship inputs", "classifying authorship", "saving authorship"}, func(running bool) {
+		{"Updating writing estimates", []string{"refreshing authorship", "reading authorship inputs", "classifying authorship", "saving authorship"}, func(running bool) {
 			catalog.authorship.mu.Lock()
 			catalog.authorship.running = running
 			catalog.authorship.mu.Unlock()
@@ -213,9 +213,9 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 				})
 				status = expect("sync")
 				activity = status["activities"].([]any)[0].(map[string]any)
-				wantLabel := "Manual sync in progress"
+				wantLabel := "Manual index in progress"
 				if kind == automaticRunKind {
-					wantLabel = "Automatic sync in progress"
+					wantLabel = "Automatic index in progress"
 				}
 				if activity["label"] != wantLabel || activity["work"].(map[string]any)["phase"] != phase || activity["progress"] != 0.75 {
 					t.Fatalf("analysis substep: %#v", activity)
@@ -346,7 +346,7 @@ func TestLibraryRefreshCanBeStoppedAndResumed(t *testing.T) {
 	clock = clock.Add(libraryCatchUpShown)
 	status := libraryStatusCall(t, server, "/api/library/status")
 	activity := status["activities"].([]any)[0].(map[string]any)
-	if activity["label"] != "Indexing the Library view" || activity["stoppable"] != true || activity["stop_path"] != "/api/library/refresh/stop" {
+	if activity["label"] != "Indexing the Search view" || activity["stoppable"] != true || activity["stop_path"] != "/api/library/refresh/stop" {
 		t.Fatalf("library refresh activity: %#v", activity)
 	}
 
@@ -456,7 +456,7 @@ func TestLibraryStatusNamesTheVolumeFromTheDriveChecks(t *testing.T) {
 	config.APIToken = "test-token"
 	server := testServer(t, config, catalog)
 	before := libraryStatusCall(t, server, "/api/library/status")
-	if drive := before["drive"].(map[string]any); drive["name"] != "this Mac's internal disk" || drive["volume_uuid"] != "TEST-VOLUME" {
+	if drive := before["drive"].(map[string]any); drive["name"] != "this Mac’s internal disk" || drive["volume_uuid"] != "TEST-VOLUME" {
 		t.Fatalf("before the checks: %#v", drive)
 	}
 	if len(*calls) != 0 {

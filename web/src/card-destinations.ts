@@ -13,7 +13,7 @@ import { windowedChart } from "./card-windows";
 type DailyChart = { period: "day"; rollingPeriods: number; display: "interval"; scale: "linear"; seriesLimit: number; nonzero: boolean };
 // Versioned chart states keep source filters as the dashboard population.
 export type CardDashboard = { topic: UsageTopic; chart: AnalysisState & { v: number } };
-export type CardDestination = CardDashboard & { dataset: UsageDataset; detailAction?: string };
+export type CardDestination = CardDashboard & { dataset: UsageDataset };
 
 // A card's chart keeps its zeroes, as its cover does, unless both leave
 // them out; the dashboards' own defaults do.
@@ -223,11 +223,11 @@ export function refineCardDestination(recipe: QueryRecipe): QueryRecipe {
         groupBy: [...split !== "none" ? scatterAnalysisCatalog.breakdowns[split].fields : [], "entity_id"], groupLimit: 2000, label: title,
         display: { kind: "scatter", xLabel: x.label, yLabel: y.label, xScale: { mode: "log" }, yScale: { mode: "log" }, xFormat: x.format, yFormat: y.format } }],
       cover: { mode: "source", metricId, kind: "scatter", maxGroups: 2000, showLegend: split !== "none" },
-      destination: { ...dashboard, dataset: "scatter", detailAction: "Inspect scatter plot points" }, action: "Explore Scatter Plots",
-      note: `${x.note} ${y.note} Values are computed independently and matched by entity identity. Points need both values.`,
+      destination: { ...dashboard, dataset: "scatter" }, action: "Explore Scatter Plots",
+      note: `${x.note} ${y.note} Each point is one ${unit === "work" ? "workspace" : "conversation"}, shown only when both values are recorded and above zero.`,
     };
   }
-  return { ...recipe, destination: { ...dashboard, dataset: usageTopicDatasets[dashboard.topic], detailAction: recipe.action }, action: `Explore ${usageTopics[dashboard.topic].label}` };
+  return { ...recipe, destination: { ...dashboard, dataset: usageTopicDatasets[dashboard.topic] }, action: `Explore ${usageTopics[dashboard.topic].label}` };
 }
 
 // The Parallelism ribbon's view on entry from a link: the defaults, less the

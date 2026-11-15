@@ -51,8 +51,8 @@ var safetyRules = map[string]safetyRule{
 	"permissions":     {"Permissions broadened", "A command made a path writable by everyone or setuid, or gave a path outside the checkout a new owner.", []string{"Which resource and mode or owner were selected?", "Does this broaden access, repair permissions, or protect sensitive content?"}, safetyMedium, "Use the narrowest mode that works (u+x, 600, 700) on paths the task owns; or forbid world-writable modes, setuid and ownership changes."},
 	"delete":          {"Checkout or ignored files deleted", "A command deleted the checkout itself, its Git directory, or ignored files such as local configuration and data.", []string{"Which exact paths were selected?", "Was the content created for this task or preserved elsewhere, and what does the result establish?"}, safetyMedium, "Preview with git clean -n, exclude local data (-e .env), or remove named build outputs only; or forbid git clean -x and deleting .git or the checkout."},
 	"publication":     {"Published release deleted or replaced", "A command deleted a release, or replaced assets others may already have downloaded.", []string{"Which repository and release were selected?", "What request covered the operation, and who may already depend on the release?"}, safetyMedium, "Publish a new version rather than replacing or deleting one others may depend on; or require confirmation for release deletion."},
-	"local-history":   {"Shared Git work discarded", "A command force-deleted a shared branch, or dropped a stash entry by position. Every worktree shares one stash.", []string{"Which refs or saved work were selected?", "Was the work preserved, and whose work was it?"}, safetyLow, "Stash with a message and drop that entry by name, or keep a backup branch; or forbid positional stash drops and force-deleting shared branches."},
-	"process":         {"Every instance of a program stopped", "A process signal matched a program by name, so it can stop other tasks' processes too.", []string{"What could the selector match?", "Is there launch or ownership evidence, and was unrelated work affected?"}, safetyLow, "Record the PID the task started and signal only it, or match a task-specific path or port; or forbid program-wide pkill and killall."},
+	"local-history":   {"Shared Git work discarded", "A command force-deleted a shared branch, dropped a stash entry by position, or cleared the stash. Every worktree shares one stash.", []string{"Which refs or saved work were selected?", "Was the work preserved, and whose work was it?"}, safetyLow, "Stash with a message and drop that entry by name, or keep a backup branch; or forbid positional stash drops and force-deleting shared branches."},
+	"process":         {"Program stopped by name", "A process signal matched a program by name, so it can stop other tasks’ processes too.", []string{"What could the selector match?", "Is there launch or ownership evidence, and was unrelated work affected?"}, safetyLow, "Record the PID the task started and signal only it, or match a task-specific path or port; or forbid program-wide pkill and killall."},
 	"api":             {"Remote service changed by an API request", "An HTTP request with a mutating method went to a service that is not local.", []string{"Which endpoint, method, account, and resource were selected?", "Was this a test or a consequential change, and what does the response establish?"}, safetyLow, "Use a sandbox or test account, or a dry-run endpoint; or require confirmation before changing remote services."},
 }
 
@@ -784,9 +784,9 @@ func safetyCommands(call safetyCall) []safetyCommand {
 	_ = json.Unmarshal([]byte(call.Input), &envelope)
 	input := envelope["input"]
 	object := mapValueDefault(input)
-	cwd, basis := firstString(object["workdir"], object["cwd"], object["Cwd"], object["working_directory"]), "tool input"
+	cwd, basis := firstString(object["workdir"], object["cwd"], object["Cwd"], object["working_directory"]), "From the tool call’s input"
 	if cwd == "" {
-		cwd, basis = call.Root, "workspace metadata fallback; verify in archived context"
+		cwd, basis = call.Root, "Not recorded in the call; this is the workspace’s folder, so check the conversation to confirm"
 	}
 	if command := shellCommandText(input); command != "" {
 		return []safetyCommand{{command, cwd, basis}}
@@ -796,10 +796,10 @@ func safetyCommands(call safetyCall) []safetyCommand {
 		if len(commands) > 0 {
 			// A single literal directory can be associated; multiple execution
 			// objects need investigation rather than borrowing a sibling's cwd.
-			cwd, basis = "", "Code Mode working directory unresolved"
+			cwd, basis = "", "The script does not say which folder it ran in"
 			matches := safetyScriptCWD.FindAllStringSubmatch(script, -1)
 			if len(commands) == 1 && len(matches) == 1 && json.Unmarshal([]byte(matches[0][1]), &cwd) == nil {
-				basis = "literal Code Mode workdir"
+				basis = "The folder the script names"
 			}
 			out := []safetyCommand{}
 			for _, command := range commands {
@@ -855,7 +855,7 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 					target, label = "machine:"+call.Host, call.HostLabel
 				}
 				if call.Repository == "" && call.Host == "" {
-					target, label = "workspace:"+call.Workspace, "Work with unknown machine"
+					target, label = "workspace:"+call.Workspace, "Workspace on an unknown machine"
 				}
 				identity := subject
 				if !resolved {
@@ -877,11 +877,11 @@ func selectSafetyCall(call safetyCall) []safetyCandidate {
 				}
 				basis := command.basis
 				if cwd == "" {
-					basis += "; shell directory unresolved"
+					basis += "; the shell’s folder could not be worked out"
 				} else if cwd != command.cwd {
-					basis += "; directory selected by a successful cd path"
+					basis += "; after a successful cd in the same command"
 				}
-				result = append(result, safetyCandidate{ID: id, Rule: rule, Target: target, Label: defaultString(nilIfEmpty(label), "Repository"), Subject: subject, Repository: call.Repository, Completion: completed,
+				result = append(result, safetyCandidate{ID: id, Rule: rule, Target: target, Label: safetyTargetLabel(target, label), Subject: subject, Repository: call.Repository, Completion: completed,
 					Evidence: []safetyEvidence{{ID: stableID("safety-evidence", call.ID, segment.Text, cwd), CallID: call.ID, Workspace: call.Workspace, Conversation: call.Conversation, Message: call.Message, ResultMessage: call.ResultMessage, At: call.At,
 						Command: clipText(safetyRedact(segment.Text), 1000), CWD: safetyRedact(cwd), CWDBasis: basis, Status: call.Status, Outcome: outcome, Conditional: conditional, Path: "/work/" + call.Workspace + params}}})
 			}
@@ -1348,4 +1348,16 @@ func (c *Catalog) refreshSafety(ctx context.Context) error {
 		}
 		return nil
 	})
+}
+
+// safetyTargetLabel names a notice's place when its repository or machine
+// has no recorded name.
+func safetyTargetLabel(target, label string) string {
+	if label != "" {
+		return label
+	}
+	if strings.HasPrefix(target, "machine:") {
+		return "Unnamed machine"
+	}
+	return "Unnamed repository"
 }

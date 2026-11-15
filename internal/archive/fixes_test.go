@@ -176,7 +176,7 @@ func TestFixesGroupingAndDestination(t *testing.T) {
 		{members("codex", "claude"), nil, "~/.claude/CLAUDE.md (empty today)"},
 		{members("cline"), rules, "~/Documents/Cline/Rules/"},
 		{members("cline"), opencode, "~/Documents/Cline/Rules/ (empty today)"},
-		{members("cursor"), nil, "Cursor's User Rules (Cursor Settings → Rules)"},
+		{members("cursor"), nil, "Cursor’s User Rules (Cursor Settings → Rules)"},
 		{members("gemini"), nil, "~/.gemini/GEMINI.md (empty today)"},
 	} {
 		if got := fixesGlobalFile(test.events, test.global); got != test.want {

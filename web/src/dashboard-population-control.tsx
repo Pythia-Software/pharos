@@ -41,17 +41,17 @@ export function PopulationControl({ catalog, schema, where, terms, subjects, onF
         <button type="button" className="dashboard-population-edit" aria-expanded={editing} aria-controls={editing ? id : undefined} onClick={() => setEditing(open => !open)}>{terms.length ? "Edit" : "Filter"}</button>
       </div>
     </div>
-    {editing ? <PopulationEditor id={id} fields={fields} population={population} onApply={next => { set(next); setEditing(false); }} onCancel={() => setEditing(false)} /> : null}
+    {editing ? <PopulationEditor id={id} subjects={subjects} fields={fields} population={population} onApply={next => { set(next); setEditing(false); }} onCancel={() => setEditing(false)} /> : null}
   </>;
 }
 
 // A draft of the population's terms, applied whole so a half-written
 // condition never queries.
-function PopulationEditor({ id, fields, population, onApply, onCancel }: { id: string; fields: FieldSchema<any>["fields"]; population: WhereTerm[]; onApply: (where: WhereTerm[]) => void; onCancel: () => void }) {
+function PopulationEditor({ id, subjects, fields, population, onApply, onCancel }: { id: string; subjects: string; fields: FieldSchema<any>["fields"]; population: WhereTerm[]; onApply: (where: WhereTerm[]) => void; onCancel: () => void }) {
   const [draft, setDraft] = useState(population);
   const issue = filterIssue(fields, draft);
   return <div id={id} className="dashboard-population-editor" role="group" aria-label="Edit population">
-    <p className="usage-dashboard-note">Every view, breakdown and panel counts only these records. A legend value's menu adds one too.</p>
+    <p className="usage-dashboard-note">Every view, breakdown and panel counts only the {subjects} that match these conditions. You can also add a condition from a legend value’s menu.</p>
     <SearchFilters fields={fields} where={draft} onChange={setDraft} lead="where" />
     <AddFieldCondition fields={fields} onAdd={clause => setDraft([...draft, clause])} />
     {issue ? <p className="query-table-error" role="alert">{issue}</p> : null}

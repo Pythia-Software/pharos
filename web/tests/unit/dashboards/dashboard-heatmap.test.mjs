@@ -69,9 +69,10 @@ test("a bin, a cell and a card's grid say what they hold", () => {
   assert.match(heatmapCellText(heatmap, 0, 0, options), /Messages 10–11\n3 sessions \(75% of 4\)/);
   assert.match(heatmapCellText(heatmap, 0, 1, options), /No sessions in this period/);
   // Hovering says what the lines are and where they stand.
-  assert.match(heatmapCellText(heatmap, 0, 0, options), /Median line: [\d.]+\n90th %ile line: [\d.]+$/);
+  assert.match(heatmapCellText(heatmap, 0, 0, options), /Median line: [\d.]+\n90th percentile line: [\d.]+$/);
   assert.match(heatmapColumnText(heatmap, 0, options), /4 sessions\nMedian line/);
-  assert.match(heatmapCellText(heatmap, 0, 0, { ...options, rollingPeriods: 7 }), /7-period average/);
+  assert.match(heatmapCellText(heatmap, 0, 0, { ...options, rollingPeriods: 7 }), /, a 7-day average/);
+  assert.match(heatmapColumnText(heatmap, 0, { ...options, period: "days", rollingPeriods: 7 }), /, a 7-period average/, "a multiple period is named as a period");
   const grid = heatmapGrid(heatmap, options);
   assert.deepEqual(grid.rows, ["12–14", "10–11"]);
   assert.deepEqual(grid.cells, [[Math.log(2) / Math.log(4), null], [1, null]]);

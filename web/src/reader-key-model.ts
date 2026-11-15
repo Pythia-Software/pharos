@@ -31,5 +31,5 @@ export function readerLineOptionLabel(action: LegendAction, category: string | u
   if (action === "only") return `Show only ${target}`;
   if (action === "show") return visible && hidden ? `Show ${hidden} hidden ${hidden === 1 ? "label" : "labels"} in ${target}` : `Show ${target}`;
   if (action === "hide") return visible && hidden ? `Hide ${visible} visible ${visible === 1 ? "label" : "labels"} in ${target}` : `Hide ${target}`;
-  return "Show All";
+  return "Show all";
 }

@@ -243,10 +243,10 @@
   ],
   "choices": [
     {
-      "id": "choices:repository_name",
+      "id": "choices:project_name",
       "op": "count",
       "groupBy": [
-        "repository_name"
+        "project_name"
       ]
     },
     {

@@ -48,7 +48,7 @@ export function WorkFilesSection({ workspace }: { workspace: string }) {
   const value = loaded.value!, outcome = outcomeDisplay(value.outcome_label), project = value.files.find(file => file.project_ref)?.project_ref ?? value.commits[0]?.project_ref;
   return <div className="work-files">
     <p><strong title={outcome.description}>{outcome.label}</strong>{value.outcome_why ? <span className="muted"> · {value.outcome_why}</span> : null}</p>
-    <p className="muted">{workFilesSummary(value)}. Each edit opens its call in the transcript; each file opens its page, with every workspace whose agents edited it and its commits.</p>
+    <p className="muted">{workFilesSummary(value)}. Select an edit to see its tool call in the transcript. Select a file to see every workspace whose agents edited it, and its commits.</p>
     {value.files.length ? <ol className="file-history-list">{value.files.map(file => <li key={file.file_key} className="file-session">
       <div className="file-session-head">
         <PageLink href={file.url} title="Every workspace whose agents edited this file, and its commits"><code>{file.relative_path ?? file.path}</code></PageLink>
@@ -57,14 +57,14 @@ export function WorkFilesSection({ workspace }: { workspace: string }) {
       </div>
       <div className="file-places" aria-label={`Edits of ${file.path}`}>
         {file.places.map((place, index) => <PageLink key={index} className="file-place" href={place.url} title={`Open this edit in the transcript${place.path ? `: ${place.path}` : ""}`}>{placeText(place, index)}</PageLink>)}
-        {file.places_truncated ? <PageLink className="file-place" href={file.url}>More on the file's page…</PageLink> : null}
+        {file.places_truncated ? <PageLink className="file-place" href={file.url}>More on the file’s page</PageLink> : null}
       </div>
       {file.reworked_by.length ? <p className="file-rework">Later workspaces removed its lines: {file.reworked_by.map((other, index) => <React.Fragment key={other.workspace_id}>{index ? "; " : ""}
         <PageLink href={other.url}>{other.title || other.workspace_id}</PageLink> {reworkText(other, "by")}</React.Fragment>)}</p> : null}
       {file.reworked.length ? <p className="file-rework">It removed lines earlier workspaces added: {file.reworked.map((other, index) => <React.Fragment key={other.workspace_id}>{index ? "; " : ""}
         <PageLink href={other.url}>{other.title || other.workspace_id}</PageLink> {reworkText(other, "of")}</React.Fragment>)}</p> : null}
-    </li>)}</ol> : <p className="muted">Its agents edited no file through their tool calls.</p>}
-    {value.files_truncated ? <p className="muted">More files are not shown.</p> : null}
+    </li>)}</ol> : <p className="muted">No agent in this workspace edited a file with a tool call.</p>}
+    {value.files_truncated ? <p className="muted">Only the first {value.files.length.toLocaleString("en-US")} files are shown.</p> : null}
     <h3>Commits</h3>
     {value.commits.length ? <ol className="file-history-list">{value.commits.map(commit => {
       const state = commitState({ hash: commit.hash, on_mainline: commit.on_mainline, reverted_by: commit.reverted_by, sessions: [] });
@@ -75,7 +75,7 @@ export function WorkFilesSection({ workspace }: { workspace: string }) {
         {commit.place_url ? <PageLink href={commit.place_url}>Where in the transcript</PageLink> : null}
       </li>;
     })}</ol> : <p className="muted">{value.git.status === "checked" ? "Local Git linked no commit to this workspace." : value.git.reason || (value.git.status === "not_applicable" ? "Not in a Git repository: no commits to link." : "Local Git has not checked this workspace.")}</p>}
-    {project ? <p className="muted"><PageLink href={filePageURL({ project })}>Browse the project's files</PageLink></p> : null}
+    {project ? <p className="muted"><PageLink href={filePageURL({ project })}>Browse the project’s files</PageLink></p> : null}
   </div>;
 }
 

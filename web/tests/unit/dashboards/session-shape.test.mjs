@@ -117,6 +117,12 @@ test("durations read as people say them", () => {
   assert.equal(formatSeconds(42), "42 s");
   assert.equal(formatSeconds(720), "12 min");
   assert.equal(formatSeconds(4800), "1 h 20 min");
+  // A value that rounds up to the next unit carries into it.
+  assert.equal(formatSeconds(59.6), "1 min");
+  assert.equal(formatSeconds(3590), "1 h");
+  assert.equal(formatSeconds(7190), "2 h");
+  assert.equal(formatSeconds(3629), "1 h");
+  assert.equal(formatSeconds(3631), "1 h 1 min");
 });
 
 test("the signal table compares the last seven days with the eight weeks before and says no detectable change inside them", () => {

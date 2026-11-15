@@ -136,7 +136,8 @@ function update() {
   syncDismissButtons(dismissTargets);
   if(highlights.length || reveal) {
     if(!status){status=document.createElement("aside");status.className="pharos-attention-status";status.setAttribute("aria-label","Linked highlights");statusText=document.createElement("span");statusText.setAttribute("role","status");const clear=document.createElement("button");clear.type="button";clear.textContent="Clear highlights";clear.onclick=clearAttention;status.append(statusText,clear);document.body.append(status);}
-    const message=missing.length ? `Targets not available in this view yet: ${missing.join(", ")}` : "Linked highlights";
+    const missingNouns=[...new Set(missing.map(reference=>attentionTargetNoun(reference).toLowerCase()))].join(", ");
+    const message=missing.length ? `${missing.length} linked ${missing.length===1?"item is":"items are"} not on this page yet (${missingNouns}).` : "Linked highlights";
     if(statusText!.textContent!==message)statusText!.textContent=message;
   }else{status?.remove();status=statusText=undefined;}
   // The pending list is observable without blocking the rest of the page.

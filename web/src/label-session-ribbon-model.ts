@@ -22,7 +22,9 @@ export function harnessWaitText(mark:Pick<ActivityMark,'start'|'end'|'end_known'
  const status=mark.wait_status?waitStatuses[mark.wait_status]??mark.wait_status:'';
  return [waitKinds[mark.wait_kind]??'Machine wait',end===null?'end not recorded':`waited ${minutes(end-mark.start)}`,status,mark.wait_events?`${mark.wait_events} event${mark.wait_events===1?'':'s'}`:''].filter(Boolean).join(' · ');
 }
-const activityNames:Record<string,string>={read:'Read',write:'Write',run:'Run',git:'Git',network:'Network',delegate:'Delegation',wait:'Wait',poll:'Poll',other:'Other',model:'Model / orchestration · inferred'};
+const activityNames:Record<string,string>={read:'Read',write:'Write',run:'Run',git:'Git',network:'Network',delegate:'Delegation',wait:'Wait',poll:'Poll',other:'Other',model:'Inferred orchestration'};
+// A message's row name: what it is to the reader, not its stored role and kind.
+const messageRowName=(m:LabelMessage)=>{const name=isThinking(m)?'Thinking':m.role==='user'?'Prompt':m.role==='assistant'?'Reply':m.role?m.role.charAt(0).toUpperCase()+m.role.slice(1):'Message';return !isThinking(m)&&m.kind&&m.kind!=='message'?`${name} · ${m.kind.replace(/_/g,' ')}`:name;};
 const group=(id:string,title:string,children:RibbonNode[]):RibbonNode=>({id,title,children,items:children.flatMap(child=>child.items)});
 
 
@@ -77,7 +79,7 @@ export function sessionRibbonTree(messages:LabelMessage[],marks:ActivityMark[],i
  const intervals=labelIntervals(messages,boundaryMarks,30*60*1000,neighbors);
  const labels:RibbonObservation[]=intervals.flatMap(({message,start,end,attribution})=>{if(start>range[1]||end<range[0])return [];const ids=functionStates(message,detail?'label':'family');return (ids.length?ids:['?']).map(label=>({id:JSON.stringify(['label',message.id,label]),start,end,attribution,title:shortLabel(label,taxonomy),color:stateColor(label),thinking:isThinking(message),label,message}));});
  const activities:RibbonObservation[]=[...marks.flatMap(mark=>{const end=Math.max(mark.start,mark.end_known?mark.end:mark.start,harnessWaitEnd(mark)??-Infinity);return mark.start>range[1]||end<range[0]?[]:[{id:JSON.stringify(['activity',mark.message_id,mark.tool_id,mark.name,mark.start,mark.end,mark.category]),start:mark.start,end,title:mark.name,color:mark.error?'var(--activity-error)':`var(--activity-${mark.category})`,thinking:false,mark}];}),...inferred.filter(span=>span.start<=range[1]&&span.end>=range[0]).map(span=>({id:JSON.stringify(['inferred',span.start,span.end]),...span,title:'Inferred orchestration',color:'var(--activity-model)',thinking:false,inferred:true}))];
- const leaves=(items:RibbonObservation[],path:string):RibbonNode[]=>items.map(item=>({id:path+':'+item.id,title:item.message?`${item.message.role} · ${item.message.kind} · ${new Date(item.start).toLocaleTimeString()}`:item.title,items:[item],children:[]}));
+ const leaves=(items:RibbonObservation[],path:string):RibbonNode[]=>items.map(item=>({id:path+':'+item.id,title:item.message?`${messageRowName(item.message)} · ${new Date(item.start).toLocaleTimeString()}`:item.title,items:[item],children:[]}));
  function taxonomyNode(id:string,items:RibbonObservation[],path:string):RibbonNode{
   const exact=items.filter(item=>item.label===id),childIDs=[...new Set(items.filter(item=>item.label!==id).map(item=>item.label!.split('.').slice(0,id.split('.').length+1).join('.')))].sort(compareStates);
   const children=childIDs.map(child=>taxonomyNode(child,items.filter(item=>item.label===child||item.label!.startsWith(child+'.')),path+':'+child));
@@ -98,9 +100,9 @@ export function sessionRibbonTree(messages:LabelMessage[],marks:ActivityMark[],i
   const ids=functionStates(message,detail?'label':'family'),labels=ids.length?ids:['?'],path='authorship:'+message.id;
   const tracks=labels.map(label=>ribbonOriginParts({id:'',start,end,title:'',color:stateColor(label),thinking:false,label,message}));
   const parts=tracks[0].map((part,index)=>({id:path+':'+index,title:part.title,items:tracks.map(track=>track[index]),children:[]}));
-  return [group(path,`${message.role} · ${new Date(start).toLocaleTimeString()}`,parts)];
+  return [group(path,`${messageRowName(message)} · ${new Date(start).toLocaleTimeString()}`,parts)];
  }):[];
- const authorship=group('authorship','Text origin',originMessages);
+ const authorship=group('authorship','Text source',originMessages);
  // Agent events decompose like Tool actions: group, then kind, then each event.
  // They draw through the event overlay (shapes and arcs), not as ribbon glyphs.
  const clock=agentEventClock(messages,boundaryMarks,neighbors);

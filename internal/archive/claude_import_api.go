@@ -198,7 +198,7 @@ func (s *Server) postClaudeImports(w http.ResponseWriter, r *http.Request, body 
 	}
 	if !s.acquireManualIngest() {
 		s.claudeImports.mu.Unlock()
-		writeError(w, errors.New("a capture or index is already running"), 409)
+		writeError(w, errors.New("Another capture or index is running. Try again when it finishes."), 409)
 		return
 	}
 	panelCtx, cancel := context.WithCancel(s.life.ctx)
@@ -377,7 +377,7 @@ func (s *Server) claudeImportLibrary() claudeImportLibrary {
 		}
 	}
 	if err != nil {
-		result.Error = "Workspace status is temporarily unavailable."
+		result.Error = "Could not load imported conversations right now."
 	}
 	return result
 }
@@ -406,7 +406,7 @@ func (s *Server) postClaudeWatch(w http.ResponseWriter, body map[string]any) {
 	browser, hasBrowser := body["browser"].(string)
 	// Profiles are read only once the watch is on, as for the document.
 	if hasBrowser && browser != "" && !loadClaudeWatchSetting(config).Enabled {
-		writeError(w, errors.New("turn on Import Claude exports from Downloads before choosing a browser"), 400)
+		writeError(w, errors.New("Turn on Import Claude exports from Downloads first, then choose a browser."), 400)
 		return
 	}
 	if hasBrowser && !claudeBrowserKnown(browser) {

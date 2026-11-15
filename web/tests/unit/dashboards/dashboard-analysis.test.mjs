@@ -186,10 +186,15 @@ test("a cycle query reads the ledger's hourly or daily totals", () => {
 });
 
 test("notes say what one observation is", () => {
-  assert.match(analysisNote(catalog, { view: "compare", unit: "conversation", metric: "cost", split: "model_family", reduce: "mean", minSamples: 5 }), /One observation is one conversation.*mean conversation.*fewer than 5 conversations are hidden/);
+  assert.match(analysisNote(catalog, { view: "compare", unit: "conversation", metric: "cost", split: "model_family", reduce: "mean", minSamples: 5 }), /One observation is one top-level conversation.*mean top-level conversation.*fewer than 5 top-level conversations are hidden/);
   assert.match(analysisNote(catalog, { view: "distribution", metric: "tokens", split: "provider" }), /One observation is one usage record\./);
+  // A label inside a sentence keeps its acronyms and units.
+  const costNote = analysisNote(catalog, { view: "compare", unit: "conversation", metric: "cost", split: "model_family", reduce: "mean" });
+  assert.match(costNote, /its API cost \(USD\) over all its matching records/);
+  assert.match(costNote, / with no API cost \(USD\) value are left out\./);
+  assert.doesNotMatch(costNote, /api cost|\(usd\)/);
   assert.match(analysisNote(catalog, { view: "compare", metric: "tokens", split: "provider", compareAs: "share" }), /Shares divide/);
-  assert.equal(analysisEmptyLabel(catalog, { view: "distribution", unit: "conversation", metric: "cost", split: "model_family", minSamples: 5 }), "No groups with at least 5 conversations");
+  assert.equal(analysisEmptyLabel(catalog, { view: "distribution", unit: "conversation", metric: "cost", split: "model_family", minSamples: 5 }), "No groups with at least 5 top-level conversations");
   assert.equal(analysisEmptyLabel(catalog, { view: "compare", metric: "cost", split: "none" }), "No matching usage records");
 });
 
@@ -235,7 +240,7 @@ test("units pool a ratio's parts for a total, and never add distinct counts", ()
   const records = evaluate(analysisQuery(catalog, { view: "compare", metric: "cache_read_share", split: "none" }, [{ field: "root_model_family", op: "=", value: "opus" }]).query);
   assert.equal(pooled.buckets.find(bucket => bucket.keys[0] === "opus").value, records.buckets[0].value, "the ratio of summed parts over the group's records");
   assert.ok(pooled.buckets.every(bucket => bucket.value > 0 && bucket.value < 1));
-  assert.match(analysisNote(catalog, state), /pool the conversations/);
+  assert.match(analysisNote(catalog, state), /pool the top-level conversations/);
   const mean = normalizeAnalysis(catalog, { ...state, reduce: "mean" });
   assert.match(analysisNote(catalog, mean), /weighted equally/);
   assert.equal(normalizeAnalysis(catalog, { ...state, metric: "agent_sessions" }).reduce, "mean", "distinct counts have no unit total");
@@ -315,7 +320,7 @@ test("weekdays fold the recorded dates, whatever the viewer's time zone", () => 
     assert.equal(box.result.buckets[0].distribution.summary.max, 7, `${zone}: 2026-10-05 is a Monday`);
     assert.equal(box.slots, 7, zone);
   }
-  assert.match(analysisNote(catalog, { view: "cycle", cycle: "weekday", metric: "tokens", split: "none" }), /dates the recording Mac assigned in its own time zone/);
+  assert.match(analysisNote(catalog, { view: "cycle", cycle: "weekday", metric: "tokens", split: "none" }), /dates the recording machine assigned in its own time zone/);
 });
 
 test("a cycle totals only additive measures, and says when a mean is unweighted", () => {

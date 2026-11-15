@@ -541,7 +541,7 @@ func TestFreshnessAfterAutomaticIndexSchedulesAnalyses(t *testing.T) {
 		}
 	}
 	group := summaryGroup(t, summarizeFreshness(rows), "analyses")
-	if group.State != freshBehind || group.Short != shortManual || group.Text != "behind, "+nextManualIndex || !group.Shown || !strings.Contains(group.Tooltip, "waits for Update everything now") {
+	if group.State != freshBehind || group.Short != shortManual || group.Text != "behind, "+nextManualIndex || !group.Shown || !strings.Contains(group.Tooltip, "waits for Index changes now") {
 		t.Fatalf("the summary says analyses wait for the next manual index: %+v", group)
 	}
 

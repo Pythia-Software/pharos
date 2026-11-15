@@ -589,7 +589,7 @@ test("cost history shares identical loads, preserves mixed windows, and refetche
 test("partial cost history is rejected instead of manufacturing a total", async t => {
  fixture(t,(path,request)=>path.endsWith('/usage/query-v3')?response({metrics:[{id:request.metrics[0].id,coverage:'partial',buckets:[],processedRows:0}]}):undefined);
  const recipe=queryRecipes.find(r=>r.id==='api-cost-total'),item=instantiateRecipe(recipe,7);
- await assert.rejects(loadQueryPreview('usage',item.query,schemas.usage,{recipe:item,window:item.window,cover:item.cover}),/Complete API cost history/);
+ await assert.rejects(loadQueryPreview('usage',item.query,schemas.usage,{recipe:item,window:item.window,cover:item.cover}),/Could not load complete API cost history/);
 });
 
 test("model tail previews apply task-count support before the visible point budget and keep sparse tasks in destinations", async t => {
@@ -665,13 +665,29 @@ test("grouped cards with link columns execute without sending the links", async 
   assert.equal(measured.total, 10);
 });
 
-test("parallel hours by day headline is the share of active hours with several agents", async t => {
+test("parallel hours by day headline is the share of active hours with several workspaces or conversations", async t => {
   const population = [["2026-10-19", "1", 6], ["2026-10-19", "2", 2], ["2026-10-20", "3", 1], ["2026-10-20", "4+", 1]].map(([day, level_band, elapsed_hours], i) => ({ id: String(i), day, level_band, elapsed_hours }));
   fixture(t, (path, request) => path.endsWith("/query-v3") ? response(core.evaluateMetrics(population, query(request.metrics, request.result), schemas.parallelism)) : undefined);
   const recipe = queryRecipes.find(recipe => recipe.id === "parallel-days");
   const preview = await loadQueryPreview("parallelism", query(recipe.measures), schemas.parallelism, { recipe });
   assert.equal(preview.headlineMetric.value, "40%");
-  assert.match(preview.headlineMetric.label, /2\+ agents/);
+  assert.match(preview.headlineMetric.label, /2\+ workspaces at once/, "the default setting counts workspaces");
+  const priorWindow = global.window;
+  global.window = { pharosPrefs: { get: (key, fallback) => key === "pharos-concurrency-v1" ? { ...fallback, counting: "agent" } : fallback, set() {}, remove() {}, keys: () => [] } };
+  t.after(() => { global.window = priorWindow; });
+  clearPreviewCache();
+  const conversations = await loadQueryPreview("parallelism", query(recipe.measures), schemas.parallelism, { recipe });
+  assert.match(conversations.headlineMetric.label, /2\+ conversations at once/, "counting conversations names them");
+});
+
+import { unitFor } from "../../../src/query-previews";
+test("card counts name a singular unit for exactly one", () => {
+  assert.equal(unitFor(1, "calls"), "call");
+  assert.equal(unitFor(2, "calls"), "calls");
+  assert.equal(unitFor(1, "messages read"), "message read");
+  assert.equal(unitFor(1, "model requests"), "model request");
+  assert.equal(unitFor(1, "activities"), "activity");
+  for (const unit of ["USD", "ms", "kg CO₂e", "percent"]) assert.equal(unitFor(1, unit), unit);
 });
 
 // Card covers can be shown from a prior visit while canonical queries refresh.

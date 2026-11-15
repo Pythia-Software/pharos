@@ -40,12 +40,12 @@ const modelName = (model: string) => model.replace(/-20\d{6}$/, "");
 export function workPreviewView(preview: WorkPreview, now = Date.now()): WorkPreviewView {
   const scope = preview.conversation ?? preview.workspace;
   const specs = new Map(preview.metrics.map(spec => [spec.id, spec]));
-  // A noun names a count ("3 files"); without one the value stands alone.
-  const measure = (id: string, noun?: string): WorkPreviewPart[] => {
+  // A noun names a count ("3 files edited"); without one the value stands alone.
+  const measure = (id: string, noun?: string, plural = noun + "s"): WorkPreviewPart[] => {
     const metric = scope.totals[id], spec = specs.get(id);
     if (metric?.value == null || !spec) return [];
     const shown = `${formatted(metric.value, spec.unit)}${metric.quality === "partial" ? "+" : ""}`;
-    return [{ text: noun ? `${shown} ${metric.value === 1 && metric.quality !== "partial" ? noun : noun + "s"}` : shown, title: cellTitle(metric, spec) }];
+    return [{ text: noun ? `${shown} ${metric.value === 1 && metric.quality !== "partial" ? noun : plural}` : shown, title: cellTitle(metric, spec) }];
   };
   // Each line truncates at its end, so the least distinctive part goes last.
   const where: WorkPreviewPart[] = [];
@@ -58,10 +58,10 @@ export function workPreviewView(preview: WorkPreview, now = Date.now()): WorkPre
   if (place) where.push({ text: place });
   const models = scope.models.slice(0, 2).map(model => modelName(model.model));
   const what: WorkPreviewPart[] = [];
-  // Subagents are sessions another session in scope launched; independent
-  // top-level conversations in the same work are not subagents.
-  what.push(...measure("children", "subagent"));
-  if (models.length) what.push({ text: models.join(", ") + (scope.models.length > 2 ? ` +${scope.models.length - 2}` : ""), title: scope.models.map(model => `${model.model} (${model.provider}): ${model.sessions} ${model.sessions === 1 ? "session" : "sessions"}`).join("\n") });
-  what.push(...measure("turns", "turn"), ...measure("files", "file"), ...measure("cost"));
+  // Sub-agents are sessions another session in scope launched; independent
+  // top-level conversations in the same work are not sub-agents.
+  what.push(...measure("children", "sub-agent"));
+  if (models.length) what.push({ text: models.join(", ") + (scope.models.length > 2 ? ` +${scope.models.length - 2}` : ""), title: scope.models.map(model => `${model.model} (${model.provider}): ${model.sessions} ${model.sessions === 1 ? "agent session" : "agent sessions"}`).join("\n") });
+  what.push(...measure("turns", "turn"), ...measure("files", "file edited", "files edited"), ...measure("cost", "API cost", "API cost"));
   return { where, what };
 }

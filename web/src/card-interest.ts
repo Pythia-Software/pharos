@@ -80,5 +80,5 @@ export const showsCard = (preview: QueryPreview | undefined, options?: CardInter
 export function catalogSparseNote(sparse: number, shown: number, showAll: boolean): string | undefined {
   if (!sparse || !shown) return undefined;
   const subject = sparse === 1 ? "1 card has" : `${sparse.toLocaleString()} cards have`;
-  return `${subject} little or no data in this window${showAll ? sparse === 1 ? " and is shown anyway" : " and are shown anyway" : ""}.`;
+  return `${subject} little or no data in ${sparse === 1 ? "its window" : "their windows"}${showAll ? sparse === 1 ? " and is shown anyway" : " and are shown anyway" : ""}.`;
 }

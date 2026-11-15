@@ -294,8 +294,8 @@ Parallelism retains its occupancy view.
 
 Dashboard controls use four columns by default on desktop, shrinking to fewer
 columns on narrow screens. Shared controls follow Metric, Breakdown, Display,
-Range, Scale, Time Bucket, Smoothing; dashboards omit controls they do not use.
-Custom hour/day inputs stay beside the consistently named Time Bucket selector.
+Range, Scale, Time bucket, Smoothing; dashboards omit controls they do not use.
+Custom hour/day inputs stay beside the consistently named Time bucket selector.
 Tools and Pharos MCP put Compare groups, Per interval and Cumulative into one
 Display control, retaining the existing view/display URL settings. Carbon keeps
 Repository and Provider in its filter section and places Range with the chart

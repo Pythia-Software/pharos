@@ -17,9 +17,9 @@ const sessions: SummaryColumn = { id: "ss_sessions", op: "count", label: "Sessio
 const hours: SummaryColumn = { id: "ss_active_hours", op: "sum", field: "active_hours", label: "Active hours" };
 const notEqual = (field: string, value: string): WhereTerm => ({ field, op: "!=", value });
 const coverage = {
-  tool: "Only sessions the tool ledger covers count.",
+  tool: "Only sessions the tool index covers count.",
   authored: "Only sessions whose prompts are all classified count.",
-  both: "Only sessions the tool ledger covers and whose prompts are all classified count.",
+  both: "Only sessions the tool index covers and whose prompts are all classified count.",
   window: "Only sessions whose model's context window is known count.",
 };
 
@@ -104,15 +104,15 @@ const box = (metricId: string, minSamples: number, maxGroups = 6) => ({ mode: "s
 
 export const sessionShapeCardRecipes: QueryRecipe[] = [
   // Usage kinds: who starts sessions, and what kind your own are.
-  session({ id: "session-sources", title: "Where sessions come from", description: "Sessions started in the last {days} days, by the app that ran them.", action: "Compare harnesses",
-    note: "A harness is the app that ran the session: an interactive client, an SDK or a batch runner. Delegated runs count as their own sessions.",
-    exploration: { keys: ["harness"], summaries: [sessions], valueField: sessions.id, unit: "sessions", subjects: "harnesses", action: "Compare harnesses", labelFields: ["harness"] },
+  session({ id: "session-sources", title: "Sessions by agent app", description: "Sessions started in the last {days} days, by the agent app that ran them.", action: "Compare agent apps",
+    note: "The agent app is the software that ran the session: an interactive client, an SDK or a batch runner. Delegated runs count as their own sessions.",
+    exploration: { keys: ["harness"], summaries: [sessions], valueField: sessions.id, unit: "sessions", subjects: "agent apps", action: "Compare agent apps", labelFields: ["harness"] },
     cover: { mode: "result", metricId: sessions.id, kind: "bar-horizontal", maxGroups: 10, showOther: true } }),
   daily("session-archetype-mix", "Your sessions by kind", "Your sessions each day by the messages you typed in them, over the last {days} days.", "archetype",
     `${archetypeNote} ${steeredNote}`, { where: [steered] }),
   daily("session-length-mix", "How long your sessions are", "Your sessions each day by their message count, over the last {days} days.", "length_band",
     `${lengthNote} ${steeredNote}`, { where: [steered] }),
-  session({ id: "session-active-time", title: "Active time by session kind", description: "Each session's active time over the last {days} days, by archetype; log axis.", idea: "rhythm-05", unit: "seconds", action: "Compare session active time", ...activeTime,
+  session({ id: "session-active-time", title: "Active time by session kind", description: "Each session's active time over the last {days} days, by session kind; log axis.", idea: "rhythm-05", unit: "seconds", action: "Compare session active time", ...activeTime,
     note: "Active time adds the gaps between consecutive messages of 300 seconds or less; a longer gap counts as zero. Only sessions with some active time count; kinds with fewer than three are left out.",
     cover: box("ss_active_time", 3) }),
   session({ id: "session-turn-cycle", title: "Turn cycle by provider", description: "Each session's median wait from your message to the agent's next one, over the last {days} days; log axis.", idea: "rhythm-07", unit: "seconds", action: "Compare turn cycles", ...turnCycle,
@@ -122,7 +122,7 @@ export const sessionShapeCardRecipes: QueryRecipe[] = [
     category: "tools", ...autonomy, where: [...autonomy.where, steered], note: `${coverage.both} Sessions without a tool call are left out. ${steeredNote} Providers with fewer than three sessions are left out.`, cover: box("ss_autonomy", 3) }),
   // Failures: by model, by session kind, over time.
   rate("session-model-failure-rates", "Failure rate by model", "Failed tool calls divided by all tool calls, by model, over the last {days} days.", "failure_rate", "model_family", "model failure rates", ["Failed calls", "Tool calls"],
-    `${failureNote} Synthetic placeholder turns are left out; the dashboard opens with that filter.`, 20, { category: "errors", idea: "tools-01", where: [...toolData, notEqual("model_family", "<synthetic>")] }),
+    `${failureNote} Sessions recorded under the synthetic placeholder model are left out; the dashboard opens with that filter.`, 20, { category: "errors", idea: "tools-01", where: [...toolData, notEqual("model_family", "<synthetic>")] }),
   rate("session-kind-failure-rates", "Failure rate by session kind", "Failed tool calls divided by all tool calls, automated runs against the sessions you typed in, over the last {days} days.", "failure_rate", "archetype", "failure rates by session kind", ["Failed calls", "Tool calls"],
     `${archetypeNote} ${failureNote}`, 10, { category: "errors", idea: "tools-01" }),
   session({ id: "session-failure-trend", category: "errors", title: "Failure rate over time", description: "Failed tool calls divided by all tool calls over each trailing seven complete days, across the last 30 days.", idea: "tools-06", unit: "percent", days: [30], action: "Explore failure rate over time", where: [...toolData],
@@ -136,12 +136,12 @@ export const sessionShapeCardRecipes: QueryRecipe[] = [
     exploration: { keys: ["repository_name"], summaries: [hours, sessions], valueField: hours.id, unit: "hours", subjects: "repositories", action: "Compare repositories", labelFields: ["repository_name"],
       context: [{ field: sessions.id, label: "sessions" }] },
     cover: { mode: "result", metricId: hours.id, kind: "bar-horizontal", maxGroups: 10, showOther: true } }),
-  rate("session-repository-verification", "Verified handbacks by repository", "Handbacks after an edit with a test or build after the last edit, over the last {days} days.", "verification", "repository_name", "verified handbacks", ["Verified handbacks", "Handbacks after an edit"],
+  rate("session-repository-verification", "Verified handbacks by repository", "Handbacks after an edit with a test, build or lint command after the last edit, over the last {days} days.", "verification", "repository_name", "verified handbacks", ["Verified handbacks", "Handbacks after an edit"],
     `Verified handbacks divided by handbacks after an edit, pooled. Read-only commands are not verification. ${coverage.both}`, 20, { category: "tools", idea: "verification-03" }),
   // Your sessions over time, without a breakdown.
-  sparkline("session-count-trend", "Your sessions a day", "Sessions you typed in, a day, averaged over each trailing seven complete days.", "sessions", { value: "sessions a day", point: "sessions a day" },
+  sparkline("session-count-trend", "Your sessions a day", "Sessions you typed in per day, averaged over each trailing seven complete days.", "sessions", { value: "sessions a day", point: "sessions a day" },
     "A session counts on the day it starts."),
-  sparkline("session-hours-trend", "Your active hours a day", "Active hours of the sessions you typed in, a day, averaged over each trailing seven complete days.", "active_hours", { value: "active hours a day", point: "active hours a day" },
+  sparkline("session-hours-trend", "Your active hours a day", "Active hours per day of the sessions you typed in, averaged over each trailing seven complete days.", "active_hours", { value: "active hours a day", point: "active hours a day" },
     "Active time adds the gaps between consecutive messages of 300 seconds or less, on the day the session starts."),
   // Per-session measures over time, as their distributions.
   bands("session-autonomy-trend", "Tool calls per typed message over time", "Your sessions each day by tool calls per typed message, over the last {days} days.", "autonomy",

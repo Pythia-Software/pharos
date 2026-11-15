@@ -5,7 +5,7 @@ import { outcomeDisplay } from "./outcomes";
 import { useViewEntry, useViewState } from "./view-state";
 import { ViewDisclosure } from "./view-disclosure";
 import {
-  age, blameRows, changeText, checkoutText, commitState, commitsByDay, directoryTab, directoryTabs, directoryViewLabels, fileBreadcrumbs, fileHistoryNotice, fileHistoryRoute,
+  age, blameRows, changeText, commitState, commitsByDay, directoryTab, directoryTabs, directoryViewLabels, fileBreadcrumbs, fileHistoryNotice, fileHistoryRoute,
   filePageURL, fileTab, fileTabs, fileTreeKey, fileViewLabels, keepFilesView, linesText, linkText, notInTreeText, parentDir, parseUnifiedDiff, placeText,
   reworkText, sessionCommits, treeAncestors, treeText,
   type CommitGit, type DiffLine, type FileBlame, type FileChanges, type FileCommitDetail, type FileContent, type FileDiff, type FileFind,
@@ -259,7 +259,7 @@ function FilesHeader({ project, name, path, git, kind, children }: { project: st
       {path ? <button type="button" className="files-button" onClick={() => {
         // ui.py installs the shell clipboard wrapper, the shared host clipboard owner.
         void window.pharosCopyText?.(path).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {});
-      }} title={`Copy ${kind === "dir" ? "the directory's" : "the file's"} path`}>{copied ? "Copied" : "Copy path"}</button> : null}
+      }} title={`Copy ${kind === "dir" ? "the directory’s" : "the file’s"} path`}>{copied ? "Copied" : "Copy path"}</button> : null}
       {children}
     </div>
   </div>;
@@ -271,7 +271,18 @@ function CheckoutSetup({ checkout, onDone }: { checkout: RepositoryCheckout; onD
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  // Forgetting asks in place first: focus moves to Cancel, and back to the
+  // button that asked when the question goes away.
+  const [forgetting, setForgetting] = useState(false);
+  const forget = useRef<HTMLButtonElement>(null), keep = useRef<HTMLButtonElement>(null), asked = useRef(false);
+  useEffect(() => {
+    if (forgetting) { asked.current = true; keep.current?.focus(); }
+    else if (asked.current) { asked.current = false; forget.current?.focus(); }
+  }, [forgetting]);
+  const inFlight = useRef(false);
   const post = async (body: Record<string, unknown>) => {
+    if (inFlight.current) return false;
+    inFlight.current = true;
     setSaving(true); setError("");
     try {
       const response = await fetch(`/api/repositories/${encodeURIComponent(checkout.repository_id)}/checkout`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -279,14 +290,24 @@ function CheckoutSetup({ checkout, onDone }: { checkout: RepositoryCheckout; onD
       if (!response.ok) throw new Error(answer.error ?? `HTTP ${response.status}`);
       onDone?.();
       refreshFiles();
+      return true;
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
-    } finally { setSaving(false); }
+      return false;
+    } finally { inFlight.current = false; setSaving(false); }
+  };
+  // The question stays, with focus in it, until the request answers. The
+  // Forget button goes away with the checkout, so focus moves to the folder
+  // field; a failure leaves the question open under its error.
+  const forgetCheckout = async () => {
+    if (!await post({ clear: true })) return;
+    asked.current = false; setForgetting(false);
+    document.getElementById(`checkout-${checkout.repository_id}`)?.focus();
   };
   const candidates = (checkout.candidates ?? []).filter(path => path !== checkout.path);
   return <section className="files-checkout" aria-label="Repository checkout">
-    <h2>{checkout.status === "set" ? "Change this repository's checkout" : `See ${checkout.name ?? "this repository"}'s code, blame and history`}</h2>
-    <p>{checkout.status === "unavailable" ? `${checkout.reason} ` : ""}Choose where {checkout.name ?? "this repository"} is checked out on this Mac. When you open its code, blame, history or a commit's diff, Pharos runs read-only Git there, and stores nothing it reads. Workspaces and their agents' edits show without one.</p>
+    <h2>{checkout.status === "set" ? "Change this repository’s checkout" : `See ${checkout.name ?? "this repository"}’s code, blame and history`}</h2>
+    <p>{checkout.status === "unavailable" ? `${checkout.reason} ` : ""}Choose where {checkout.name ?? "this repository"} is checked out on this Mac. Pharos then runs read-only Git there to show code, blame, history and commit diffs, and stores nothing it reads. Workspaces and their agents’ edits show without a checkout.</p>
     {candidates.length ? <ul className="files-checkout-candidates">{candidates.map(path => <li key={path}>
       <button type="button" className="files-button" disabled={saving} onClick={() => void post({ path })}>Use <code>{path}</code></button>
     </li>)}</ul> : null}
@@ -294,8 +315,15 @@ function CheckoutSetup({ checkout, onDone }: { checkout: RepositoryCheckout; onD
       <label htmlFor={`checkout-${checkout.repository_id}`}>{candidates.length ? "Or a folder" : "Folder"}</label>
       <input id={`checkout-${checkout.repository_id}`} type="text" value={draft} spellCheck={false} placeholder="~/code/project" onChange={event => setDraft(event.target.value)} />
       <button type="submit" className="files-button" disabled={saving || !draft.trim()}>Use this folder</button>
-      {checkout.status === "set" ? <button type="button" className="files-button" disabled={saving} onClick={() => void post({ clear: true })}>Forget the checkout</button> : null}
+      {checkout.status === "set" ? <button ref={forget} type="button" className="files-button" disabled={saving || forgetting} onClick={() => setForgetting(true)}>Forget the checkout…</button> : null}
     </form>
+    {forgetting ? <div className="files-checkout-confirm" role="group" aria-label="Forget checkout" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (!inFlight.current) setForgetting(false); } }}>
+      <p>Forget this checkout? Pharos stops showing code, blame, history and commit diffs for {checkout.name ?? "this repository"} until you choose a folder again. Nothing in the folder changes.</p>
+      <div className="files-checkout-form">
+        <button type="button" className="files-button" aria-disabled={saving} onClick={() => void forgetCheckout()}>Forget checkout</button>
+        <button ref={keep} type="button" className="files-button" aria-disabled={saving} onClick={() => { if (!inFlight.current) setForgetting(false); }}>Cancel</button>
+      </div>
+    </div> : null}
     {error ? <Failure error={error} /> : null}
   </section>;
 }
@@ -305,7 +333,7 @@ function CheckoutLine({ checkout }: { checkout?: RepositoryCheckout }) {
   const [changing, setChanging] = useState(false);
   if (!checkout || checkout.status !== "set") return null;
   return <>
-    <p className="files-checkout-line muted">Read by Git from <code>{checkout.path}</code> · <button type="button" className="files-link-button" aria-expanded={changing} onClick={() => setChanging(value => !value)}>{changing ? "Keep it" : "Change"}</button></p>
+    <p className="files-checkout-line muted">Read by Git from <code>{checkout.path}</code> · <button type="button" className="files-link-button" aria-expanded={changing} onClick={() => setChanging(value => !value)}>{changing ? "Cancel" : "Change"}</button></p>
     {changing ? <CheckoutSetup checkout={checkout} onDone={() => setChanging(false)} /> : null}
   </>;
 }
@@ -396,15 +424,15 @@ function FileView({ file, view }: { file: FileHistoryFile; view: string }) {
     <p className="muted files-summary">
       {file.sessions.length ? `Edited in ${plural(file.sessions.length, "workspace")}${file.sessions_truncated ? "+" : ""}` : "No agent edited this file through its tool calls"}
       {file.in_tree === false && file.git.tree_commit ? ` · ${notInTreeText(file.git)}` : ""}
-      {!repository ? " · a folder, not a Git repository: its history is its agents' edits" : ""}
+      {!repository ? " · a folder, not a Git repository: its history is its agents’ edits" : ""}
     </p>
     {repository ? <CheckoutLine checkout={checkout} /> : null}
     <Tabs tabs={fileTabs(repository)} labels={fileViewLabels} current={tab} target={view => ({ project, file: relative, view })} />
     {tab === "code" ? <NeedsCheckout checkout={checkout}><CodeView project={project} path={relative} /></NeedsCheckout>
       : tab === "blame" ? <NeedsCheckout checkout={checkout}><BlameView project={project} path={relative} /></NeedsCheckout>
       : tab === "history" ? <HistoryView project={project} path={relative} checkout={checkout} stored={file} />
-      : tab === "changes" ? <ChangesView project={project} path={relative} />
-      : <SessionsView file={file} />}
+      : tab === "changes" ? <ChangesView project={project} path={relative} repository={repository} />
+      : <SessionsView file={file} repository={repository} />}
   </section>;
 }
 
@@ -417,7 +445,7 @@ function CodeView({ project, path }: { project: string; path: string }) {
   if (content.note || content.text == null) return <p className="muted">{content.note ?? (content.binary ? "A binary file." : "Git did not read this file.")}</p>;
   const lines = content.text.replace(/\n$/, "").split("\n");
   return <div className="files-blob">
-    <div className="files-blob-head muted">{plural(lines.length, "line")} · {content.size != null ? sizeText(content.size) : ""}{content.ref === "HEAD" ? " · the checkout's HEAD" : ""}{content.truncated ? " · cut short" : ""}</div>
+    <div className="files-blob-head muted">{plural(lines.length, "line")} · {content.size != null ? sizeText(content.size) : ""}{content.ref === "HEAD" ? " · the checkout’s HEAD" : ""}{content.truncated ? " · cut short" : ""}</div>
     <div className="files-code"><pre className="files-gutter" aria-hidden="true">{lines.map((_, index) => index + 1).join("\n")}</pre><pre className="files-lines"><code><CodeRuns runs={codeRuns(lines.join("\n"), path)} /></code></pre></div>
   </div>;
 }
@@ -468,7 +496,7 @@ function HistoryView({ project, path, checkout, stored }: { project: string; pat
     <CheckoutSetup checkout={checkout} />
     {stored?.commits.length ? <>
       <h2 className="files-subheading">Commits Pharos recorded</h2>
-      <p className="muted">The commits local Git found since the repository's first recorded edit; the full history needs the checkout.</p>
+      <p className="muted">The commits local Git found since the repository’s first recorded edit; the full history needs the checkout.</p>
       <ol className="files-commits">{stored.commits.map(commit => <li key={commit.hash}>
         <div className="files-commit-main">
           <FilesLink to={{ project, commit: commit.hash, file: path || undefined }}><code>{commit.hash.slice(0, 7)}</code></FilesLink>
@@ -518,29 +546,29 @@ function LogCommit({ project, path, commit }: { project: string; path: string; c
 
 // ChangesView is the file's edits as their calls made them, newest first,
 // each opening at its place in the transcript.
-function ChangesView({ project, path }: { project: string; path: string }) {
+function ChangesView({ project, path, repository }: { project: string; path: string; repository: boolean }) {
   const [pages, setPages] = useState(1);
   useEffect(() => setPages(1), [project, path]);
-  return <>{Array.from({ length: pages }, (_, page) => <ChangesPage key={page} project={project} path={path} offset={page * 30} last={page === pages - 1} onMore={() => setPages(pages + 1)} />)}</>;
+  return <>{Array.from({ length: pages }, (_, page) => <ChangesPage key={page} project={project} path={path} repository={repository} offset={page * 30} last={page === pages - 1} onMore={() => setPages(pages + 1)} />)}</>;
 }
 
-function ChangesPage({ project, path, offset, last, onMore }: { project: string; path: string; offset: number; last: boolean; onMore: () => void }) {
+function ChangesPage({ project, path, repository, offset, last, onMore }: { project: string; path: string; repository: boolean; offset: number; last: boolean; onMore: () => void }) {
   const loaded = useFiles<FileChanges>(`/api/file-changes?${query({ project, path, offset: offset || undefined })}`);
   if (!loaded) return <Loading />;
   if (loaded.error) return <Failure error={loaded.error} />;
   const value = loaded.value!;
   if (value.choices) return <Choices choices={value.choices} target={{ file: path, view: "changes" }} />;
   const changes = value.changes ?? [];
-  if (!changes.length && !offset) return <p className="muted">{value.note ?? "No agent edited this file with an edit tool. Workspaces whose agents changed it another way (a script, a generator) show in its history, through the commits."}</p>;
+  if (!changes.length && !offset) return <p className="muted">{value.note ?? (repository ? "No agent edited this file with an edit tool. Workspaces whose agents changed it another way (a script, a generator) show in its history, through the commits." : "No agent edited this file with an edit tool. Without Git, edits made another way (a script, a generator) are not recorded.")}</p>;
   return <>
-    {offset ? null : <p className="muted files-summary">Each edit as the agent's call made it, read from its transcript. Replacements do not know the file's line numbers.</p>}
+    {offset ? null : <p className="muted files-summary">Each edit as the agent’s tool call made it, read from its conversation. Replacements show no line numbers.</p>}
     {changes.map((change, index) => <article key={`${offset}-${index}`} className="files-change">
       <div className="files-change-head">
         <PageLink href={change.session_url} className="files-change-session">{change.title || change.workspace_id}</PageLink>
         <span className="muted">{changeText(change)}</span>
         <span className="muted" title={change.at ?? undefined}>{change.at ? new Date(change.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</span>
         <Outcome label={change.outcome_label} />
-        <PageLink href={change.url} className="files-change-open">Open in transcript</PageLink>
+        <PageLink href={change.url} className="files-change-open">Open in conversation</PageLink>
       </div>
       {change.hunks.length ? <DiffTable hunks={change.hunks.map(hunk => ({ header: hunk.header ?? "", lines: hunk.lines.map(([kind, text]) => ({ kind: kind as DiffLine["kind"], text })) }))} path={path} numbered={false} />
         : <p className="muted files-change-note">{change.note ?? (change.kind === "listed" ? "The call named this file without its lines." : "No lines to show.")}</p>}
@@ -575,8 +603,8 @@ function DiffTable({ hunks, path, numbered }: { hunks: { header: string; lines: 
   </div>;
 }
 
-function SessionsView({ file }: { file: FileHistoryFile }) {
-  if (!file.sessions.length) return <p className="muted">No agent edited this file through its tool calls. Workspaces whose agents changed it another way (a script, a generator) are linked to its commits, where local Git found them.</p>;
+function SessionsView({ file, repository }: { file: FileHistoryFile; repository: boolean }) {
+  if (!file.sessions.length) return <p className="muted">{repository ? "No agent edited this file through its tool calls. Workspaces whose agents changed it another way (a script, a generator) are linked to its commits, where local Git found them." : "No agent edited this file through its tool calls. Without Git, edits made another way (a script, a generator) are not recorded."}</p>;
   return <>
     <ol className="file-history-list file-sessions">
       {file.sessions.map(session => <SessionEntry key={session.workspace_id} file={file} session={session} />)}
@@ -594,9 +622,9 @@ function SessionEntry({ file, session }: { file: FileHistoryFile; session: FileH
       <span className="muted">{plural(session.edits ?? 0, "edit")} · {linesText(session.lines_added, session.lines_removed)}{session.rewrote ? " · rewrote the file" : ""}</span>
     </div>
     <Outcome label={session.outcome_label} why={session.outcome_why} />
-    {places.length ? <div className="file-places" aria-label="Edits in the transcript">
-      {places.map((place, index) => <PageLink key={index} className="file-place" href={place.url} title={`Open this edit in the transcript${place.path ? `: ${place.path}` : ""}`}>{placeText(place, index)}</PageLink>)}
-      {session.places_truncated ? <PageLink className="file-place" href={`/work/${encodeURIComponent(session.workspace_id)}`}>More edits in the workspace…</PageLink> : null}
+    {places.length ? <div className="file-places" aria-label="Edits in the conversation">
+      {places.map((place, index) => <PageLink key={index} className="file-place" href={place.url} title={`Open this edit in the conversation${place.path ? `: ${place.path}` : ""}`}>{placeText(place, index)}</PageLink>)}
+      {session.places_truncated ? <PageLink className="file-place" href={`/work/${encodeURIComponent(session.workspace_id)}`}>More edits in the workspace</PageLink> : null}
     </div> : null}
     {session.reworked_by?.length ? <p className="file-rework">Later workspaces removed its lines: {session.reworked_by.map((other, index) => <React.Fragment key={other.workspace_id}>{index ? "; " : ""}
       <PageLink href={other.url}>{other.title || other.workspace_id}</PageLink> {reworkText(other, "by")}</React.Fragment>)}</p> : null}
@@ -710,7 +738,7 @@ function CommitPane({ project, commit, focus }: { project: string; commit: strin
         <h2 className="files-subheading">Workspaces</h2>
         {sessions.length ? <ul className="files-commit-session-list">{sessions.map(link => <li key={link.workspace_id}>
           <PageLink href={link.url ?? `/work/${encodeURIComponent(link.workspace_id)}`}>{link.title || link.workspace_id}</PageLink>
-          <span className="muted"> {linkText(link)} · confidence {link.confidence.toFixed(2)}</span>
+          <span className="muted"> · {linkText(link)} · confidence {link.confidence.toFixed(2)}</span>
         </li>)}</ul> : <p className="muted">No workspace is linked to this commit: it was made outside the workspaces this library holds, or their agents left no trace of it.</p>}
       </div>
     </div>
@@ -725,7 +753,7 @@ function CommitPane({ project, commit, focus }: { project: string; commit: strin
         const known = storedFiles.get(file.path);
         const summary = <span className="files-commit-file">
           <FilesLink to={{ project, file: file.path }}><code>{file.path}</code></FilesLink>
-          <span className="muted">{file.binary ? "binary" : linesText(file.lines_added, file.lines_removed)}{known?.sessions ? ` · edited in ${plural(known.sessions, "workspace")}` : ""}{known && !known.in_tree ? ` · ${notInTreeText(value.git)}` : ""}</span>
+          <span className="muted">{file.binary ? "binary" : linesText(file.lines_added, file.lines_removed)}{known?.sessions ? ` · edited by agents in ${plural(known.sessions, "workspace")} (all time)` : ""}{known && !known.in_tree ? ` · ${notInTreeText(value.git)}` : ""}</span>
         </span>;
         return checkout?.status === "set" && fromGit?.value?.commit
           ? <CommitFile key={file.path} project={project} commit={hash} path={file.path} summary={summary} open={file.path === focus || (!focus && files.length <= 5)} />

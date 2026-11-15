@@ -30,7 +30,7 @@ func init() {
 	safetyRules["safeguard-test"] = safetyRule{"Agent weakened, skipped or removed a test or check", "An agent said it relaxed, skipped or deleted a test, assertion or check to get past it.",
 		[]string{"Did the test or check fail because the work was wrong, or because the test was?", "Did the agent say so in its reply, and did the person agree?", "Did the weakened check reach a merged change?"}, safetyMedium,
 		"A rule in the agent instructions that a failing test is reported, not relaxed or removed, unless the person agrees; or a review step that flags deleted assertions."}
-	safetyRules["safeguard-restriction"] = safetyRule{"Agent got around a harness or tool restriction", "An agent said it worked around a sandbox, permission, blocked tool or similar restriction.",
+	safetyRules["safeguard-restriction"] = safetyRule{"Agent got around an agent app or tool restriction", "An agent said it worked around a sandbox, permission, blocked tool or similar restriction.",
 		[]string{"Which restriction was it, and was the agent's need legitimate (an explicit request, a required output)?", "Did the workaround achieve what the restriction was meant to prevent?"}, safetyMedium,
 		"Either make the restriction workable (allow the legitimate case explicitly) or state the prohibition so the workaround is ruled out too."}
 	safetyRules["safeguard-gate"] = safetyRule{"Agent bypassed a product rule, gate or policy", "An agent said it bypassed, overrode or disabled a rule, gate or policy of the product it was working on.",
@@ -81,14 +81,14 @@ func safetySafeguardCandidates(ctx context.Context, read *sql.Tx, since string) 
 			target, label = "machine:"+host, hostLabel
 		}
 		if repository == "" && host == "" {
-			target, label = "workspace:"+workspace, "Work with unknown machine"
+			target, label = "workspace:"+workspace, "Workspace on an unknown machine"
 		}
 		where := "In a reply"
 		if source == "thinking" {
 			where = "In the agent's thinking"
 		}
 		quote := clipText(safetyRedact(sentence), 1000)
-		candidate := safetyCandidate{ID: stableID("safety", rule, target, "agent-event", message, start), Rule: rule, Target: target, Label: defaultString(nilIfEmpty(label), "Repository"),
+		candidate := safetyCandidate{ID: stableID("safety", rule, target, "agent-event", message, start), Rule: rule, Target: target, Label: safetyTargetLabel(target, label),
 			Subject: clipText(fixesTitle(safetyRedact(sentence)), 160), Repository: repository,
 			Evidence: []safetyEvidence{{ID: fmt.Sprintf("e%d", id), Workspace: workspace, Conversation: conversation, Message: message, At: at, Command: quote,
 				CWDBasis: "The agent's own words, found by the agent events pass; no command is implied", Status: source, Outcome: where, Quote: true,

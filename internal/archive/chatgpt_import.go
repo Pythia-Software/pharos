@@ -213,7 +213,7 @@ func (d *chatGPTImports) Check(ctx context.Context) (bool, error) {
 		if j.ID == job.ID && j.Revision == job.Revision {
 			if err != nil {
 				if errors.Is(err, errClaudeImportBusy) {
-					job.State, job.Phase, job.Message = "fetching", "queued", "Waiting for the library's capture or index to finish."
+					job.State, job.Phase, job.Message = "fetching", "queued", "Waiting for another capture or index to finish."
 				} else {
 					job.State, job.Message = "paused", err.Error()
 				}
@@ -519,7 +519,7 @@ func (s *Server) chatGPTImportsDocument() map[string]any {
 	library := claudeImportLibrary{Recent: []claudeImportWorkspace{}}
 	err := s.Catalog.reader().QueryRow(`SELECT COUNT(DISTINCT w.id),COUNT(DISTINCT c.id) FROM workspace_sightings s JOIN workspaces w ON w.id=s.workspace_id LEFT JOIN conversations c ON c.workspace_id=w.id WHERE s.host_id=? AND s.source_name=?`, currentHost().ID, chatGPTImportSource).Scan(&library.Workspaces, &library.Conversations)
 	if err != nil {
-		library.Error = "Library status is temporarily unavailable."
+		library.Error = "Could not load imported conversations right now."
 	} else {
 		rows, _ := queryMaps(s.Catalog.reader(), `SELECT w.id,w.title FROM workspace_sightings s JOIN workspaces w ON w.id=s.workspace_id WHERE s.host_id=? AND s.source_name=? ORDER BY w.activity_at DESC,w.id LIMIT 5`, currentHost().ID, chatGPTImportSource)
 		for _, r := range rows {

@@ -157,9 +157,9 @@ test('effort levels use a sequential palette that darkens with effort and keeps 
 });
 
 test('concurrency bands stack with the busiest at the bottom and warm toward red', () => {
-  const labels = ['1 active', '2 at once', '3 at once', '4+ at once'];
+  const labels = ['1 at once', '2 at once', '3 at once', '4+ at once'];
   const { series } = fold(labels, 4, [], 'level_band');
-  assert.deepEqual(series.map(item => item.label), ['4+ at once', '3 at once', '2 at once', '1 active']);
+  assert.deepEqual(series.map(item => item.label), ['4+ at once', '3 at once', '2 at once', '1 at once']);
   assert.equal(new Set(series.map(item => item.color)).size, 4);
   assert.equal(chartSeriesStyle('level_band', '4+ at once').color, chartSeriesStyle('level_band', '4+').color);
   const red = color => parseInt(color.slice(1, 3), 16) - parseInt(color.slice(3, 5), 16);

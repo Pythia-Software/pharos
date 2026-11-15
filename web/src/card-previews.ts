@@ -21,7 +21,7 @@ function incompletePreview(preview: QueryPreview): boolean {
   if (preview.incompleteWithoutMissing) return false;
   return Boolean(preview.incompleteReason || preview.note?.includes("Session statistics are updating across the library.") ||
     preview.note?.includes("Some events are waiting to be rebuilt.") || preview.note?.includes("Conversations changed since the last events run.") ||
-    /Events for \d[\d,]* conversations? are left out until they are rebuilt/.test(preview.note ?? "") ||
+    /Events for \d[\d,]* conversations? are left out until/.test(preview.note ?? "") ||
     /\d[\d,]* conversations? (?:is|are) waiting for events to be rebuilt/.test(preview.note ?? ""));
 }
 const savedBaselineMaxAge = 60 * 60 * 1000;
@@ -110,7 +110,7 @@ export async function loadCardPreviews(jobs: PreviewJob[], publish: (id: string,
       // Keep completed work even if a large catalog load is interrupted.
       saveSoon(store);
     } else if (previous.has(id)) {
-      const shown = { ...previous.get(id)!, refreshing: false, savedReason: undefined, refreshError: String(error) };
+      const shown = { ...previous.get(id)!, refreshing: false, savedReason: undefined, refreshError: error instanceof Error ? error.message : String(error) };
       previous.set(id, shown); publish(id, shown);
     } else publish(id, undefined, error);
   };

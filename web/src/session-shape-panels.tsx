@@ -92,7 +92,7 @@ export function SessionsToRead({ where }: { where: WhereTerm[] }) {
         {sessionSignals.map(id => <option key={id} value={id}>{sessionSignalLabels[id]}</option>)}
       </select></label>
     </header>
-    {result.error ? <p className="query-table-error" role="alert">{result.error}</p> : !result.loading && !rows.length ? <p className="muted">No sessions in this range have {signal === "all" ? "a forensic event" : sessionSignalLabels[signal].toLowerCase()}.</p>
+    {result.error ? <p className="query-table-error" role="alert">{result.error}</p> : !result.loading && !rows.length ? <p className="muted">No sessions in this range have {signal === "all" ? "a forensic event" : `a nonzero value for ${sessionSignalLabels[signal].toLowerCase()}`}.</p>
       : <div className="session-shape-table-scroll"><table className="session-shape-sessions">
         <thead><tr><th scope="col">Session</th><th scope="col">Started</th><th scope="col">Repository</th><th scope="col">{signal === "all" ? "Forensic events" : sessionSignalLabels[signal]}</th><th scope="col">Messages</th><th scope="col">Active time</th></tr></thead>
         <tbody>{rows.map(row => {
@@ -124,7 +124,7 @@ const definitionMeasures = ["failed_calls", "rejections", "interrupts", "hook_bl
 export function SessionShapeDefinitions() {
   return <section className="session-shape-panel session-shape-definitions" id={definitionsSection}>
     <header><h3>Definitions</h3>
-      <p className="muted">Every value is counted from what Pharos already indexes; there is no score. A signal is empty, not zero, when a session lacks the evidence it needs: tool data, timestamps, your classified prompts or a known context window. See docs/session-shape.md for each rule's origin and limits.</p></header>
+      <p className="muted">Every value is counted from what Pharos already indexes; there is no score. A signal is empty, not zero, when a session lacks the evidence it needs: tool data, timestamps, your classified prompts or a known context window.</p></header>
     <dl>{definitionMeasures.map(id => <React.Fragment key={id}><dt>{catalog.measures[id].label}</dt><dd>{catalog.measures[id].note}</dd></React.Fragment>)}</dl>
   </section>;
 }

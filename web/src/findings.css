@@ -371,7 +371,7 @@ button.findings-tile[aria-pressed="true"] { border-color: var(--accent); box-sha
   .findings-card-body > .findings-impact { align-items: flex-start; max-width: none; text-align: left; }
   .findings-card-body > .findings-impact .findings-impact-rest { align-items: flex-start; }
   .findings-tiles, .findings-tiles.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .findings-rank { margin-left: 0; }
+  .findings-rank { flex-wrap: wrap; margin-left: 0; min-width: 0; }
   .findings-evidence button, .findings-evidence li > div { grid-template-columns: 50px minmax(0, 1fr); }
   .findings-evidence-where { grid-column: 2; }
   .findings-evidence-did, .findings-evidence-happened { grid-column: 1 / -1; }

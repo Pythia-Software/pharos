@@ -33,11 +33,11 @@ func askToolActivity(tool string) string {
 	case "list_outcomes":
 		return "Reading session outcomes"
 	case "get_file_history":
-		return "Reading a file's history"
+		return "Reading a file’s history"
 	case "get_branch_spend":
 		return "Reading spend by branch"
 	case "search_conversations", "search_work":
-		return "Searching archived work"
+		return "Searching past work"
 	case "list_metrics", "query_statistics":
 		return "Reading usage statistics"
 	default:

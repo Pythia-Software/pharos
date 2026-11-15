@@ -223,18 +223,19 @@ function paint() {
   for (const element of marked.keys()) if (!counts.has(element)) { element.removeAttribute("data-pharos-find"); element.removeAttribute("data-pharos-find-count"); }
   for (const [element, count] of counts) {
     if (element.dataset.pharosFind !== "container") element.dataset.pharosFind = "container";
-    const text = count >= FIND_LIMIT ? `${count}+` : String(count);
+    const text = count >= FIND_LIMIT ? `${count.toLocaleString()}+` : String(count);
     if (element.dataset.pharosFindCount !== text) element.dataset.pharosFindCount = text;
   }
   marked = firsts;
   if (!bar) return;
   const collapsed = matches.length - visible.length, more = matches.length >= FIND_LIMIT ? "+" : "";
   const status = compiled.status === "short" ? `Type ${FIND_MINIMUM}+ characters or press Enter`
-    : compiled.status === "invalid" ? compiled.error
+    : compiled.status === "invalid" ? "Not a valid regular expression"
     : compiled.status === "empty" ? ""
     : !matches.length ? "No matches"
-    : `${current >= 0 ? `${current + 1} of ` : ""}${matches.length}${more}${current >= 0 ? "" : ` match${matches.length === 1 ? "" : "es"}`}${collapsed ? ` · ${collapsed}${more} collapsed` : ""}`;
+    : `${current >= 0 ? `${(current + 1).toLocaleString()} of ` : ""}${matches.length.toLocaleString()}${more}${current >= 0 ? "" : ` match${matches.length === 1 ? "" : "es"}`}${collapsed ? ` · ${collapsed.toLocaleString()}${more} collapsed` : ""}`;
   if (statusText.textContent !== status) statusText.textContent = status;
+  statusText.title = compiled.status === "invalid" ? compiled.error : "";
   bar.classList.toggle("invalid", compiled.status === "invalid");
   previousButton.disabled = nextButton.disabled = !matches.length;
   expandButton.hidden = !collapsed;
@@ -383,7 +384,7 @@ function draggable(grip: HTMLButtonElement) {
 function showBar(state: FindState) {
   if (!bar) {
     bar = document.createElement("aside"); bar.className = "pharos-find"; bar.setAttribute("role", "search"); bar.setAttribute("aria-label", "Find on this page");
-    const grip = button("", "Move Find (drag, or arrow keys; Home resets)", () => {}, "grip"); grip.classList.add("pharos-find-grip");
+    const grip = button("", "Move Find: drag or use arrow keys; double-click or Home resets", () => {}, "grip"); grip.classList.add("pharos-find-grip");
     draggable(grip);
     input = document.createElement("input"); input.type = "search"; input.placeholder = "Find on page"; input.setAttribute("aria-label", "Find on this page"); input.spellcheck = false;
     const toggle = (name: "caseSensitive" | "regex") => () => { const now = readFind(); if (now) writeFind({ ...now, text: input.value, [name]: !now[name] }); input.focus(); };

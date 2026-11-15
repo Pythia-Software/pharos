@@ -1,6 +1,7 @@
 import React from "react";
 import type { AggregationClause, AggregationResultEntry } from "@pythia-software/query-table-core";
 import { metricSeriesColor, otherSeriesColor } from "./chart-colors";
+import { unitFor } from "./query-previews";
 
 type Role = "root" | "singleton" | "parent" | "subagent";
 const roleLabels: Record<Role, string> = { root: "Main agent", singleton: "Standalone agent", parent: "Parent agent", subagent: "Sub-agent" };
@@ -26,21 +27,21 @@ export function stackedRoleRows(clause: AggregationClause, result: AggregationRe
 
 export function CompactStackedBars({ clause, result, splitBy, budget }: { clause: AggregationClause; result: AggregationResultEntry; splitBy: string; budget: number }) {
   const chart = stackedRoleRows(clause, result, splitBy);
-  if (!chart) return <span className="query-pie-empty">Role shares require complete session counts.</span>;
+  if (!chart) return <span className="query-pie-empty">Role shares need complete agent session counts.</span>;
   const percent = (value: number) => value.toLocaleString(undefined, { style: "percent", maximumFractionDigits: 1 });
   return <div className="query-role-bars">
     {chart.rows.slice(0, budget).map(row => {
       const label = row.keys.map(key => String(key ?? "Unspecified")).join(" · "), color = metricSeriesColor(chart.fields, row.keys);
       const paint = (role: Role) => role === "root" || role === "singleton" ? otherSeriesColor : role === "parent" ? `color-mix(in srgb, ${color} 55%, white)` : color;
       return <div className="query-role-row" key={row.key} data-total={row.total}>
-        <div className="query-role-label"><span>{label}</span><small>{row.total.toLocaleString()} sessions</small></div>
+        <div className="query-role-label"><span>{label}</span><small>{row.total.toLocaleString()} {unitFor(row.total, "agent sessions")}</small></div>
         <div className="query-role-track">{chart.roles.map(role => {
           const share = row[role] / row.total;
-          return <i key={role} className="qt-metric-mark" data-role={role} data-share={share} style={{ width: `${share * 100}%`, background: paint(role) }} data-chart-colors={JSON.stringify([paint(role)])} data-chart-tooltip={`${label}\n${roleLabels[role]}: ${percent(share)}\n${row[role].toLocaleString()} of ${row.total.toLocaleString()} active sessions`} />;
+          return <i key={role} className="qt-metric-mark" data-role={role} data-share={share} style={{ width: `${share * 100}%`, background: paint(role) }} data-chart-colors={JSON.stringify([paint(role)])} data-chart-tooltip={`${label}\n${roleLabels[role]}: ${percent(share)}\n${row[role].toLocaleString()} of ${row.total.toLocaleString()} active ${unitFor(row.total, "agent sessions")}`} />;
         })}</div>
         <div className="query-role-values">{chart.roles.map(role => <span key={role}><i style={{ background: paint(role) }} />{roleLabels[role]} {percent(row[role] / row.total)}</span>)}</div>
       </div>;
     })}
-    {chart.rows.length > budget ? <small className="query-box-key">{budget} of {chart.rows.length} models · ranked by active sessions</small> : null}
+    {chart.rows.length > budget ? <small className="query-box-key">{budget} of {chart.rows.length} groups · ranked by active agent sessions</small> : null}
   </div>;
 }

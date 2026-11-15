@@ -178,13 +178,13 @@
 @media(max-width:760px){.carbon-controls{display:grid;gap:8px}.carbon-controls>.carbon-control:not(:first-child){flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 12px}.carbon-segmented button{min-height:30px}.carbon-table th:first-child,.carbon-table td:first-child{white-space:normal}.carbon-method .carbon-table{display:block;overflow-x:auto}.carbon-comparison{max-width:100%;flex-wrap:wrap;white-space:normal}.carbon-table .carbon-share{display:none}.carbon-controls select{min-width:0;width:100%}}`;
 
   const CATEGORY_LABELS = {
-    uncached_input: ['Uncached input', 'Prompt tokens processed in full'],
-    cache_write: ['Cache writes', 'Input processed and stored for reuse'],
-    cache_read: ['Cache reads', 'Input served from a prompt cache'],
-    output: ['Output', 'Generated tokens, including reasoning'],
+    uncached_input: 'Uncached input',
+    cache_write: 'Cache writes',
+    cache_read: 'Cache reads',
+    output: 'Output',
   };
   const SCENARIOS = [['low', 'Low'], ['central', 'Central'], ['high', 'High']];
-  const INPUT_SENSITIVITIES = [['current', 'Labs'], ['third', 'Watershed']];
+  const INPUT_SENSITIVITIES = [['current', 'Price ratio'], ['third', 'Watershed']];
   const VEHICLES = [['car_miles', 'Gas car'], ['car_hybrid', 'Hybrid'], ['car_electric', 'Electric car'], ['car_pickup', 'Pickup']];
   // Representative airport locations, rounded to four decimals (FAA airport reference points).
   const CITIES = [
@@ -237,6 +237,8 @@
     return `${sig(w)} Wh`;
   };
   const tokens = value => pharosTokens.formatTokens(Number(value) || 0);
+  // A rounded count with its unit, singular when it rounds to exactly 1.
+  const counted = (value, one, many) => { const text = sig(value); return `${text} ${text === '1' ? one : many}`; };
   const pick = (range, scenario) => Number(range?.[scenario]) || 0;
   // Tiers are listed in match order; show them smallest first.
   const bySize = tiers => [...tiers].sort((a, b) => pick(a.output_wh_per_mtok, 'central') - pick(b.output_wh_per_mtok, 'central'));
@@ -295,14 +297,14 @@
       grid, gridValue, pue: pick(factors.pue, pueScenario)};
   }
 
-  function segmented(label, options, current, onChange) {
+  function segmented(label, options, current, onChange, control = label.toLowerCase()) {
     const group = node('div', 'carbon-segmented');
     group.setAttribute('role', 'group');
     group.setAttribute('aria-label', label);
     for (const [key, text] of options) {
       const choice = node('button', '', text);
       choice.type = 'button';
-      choice.dataset.carbonControl = label.toLowerCase();
+      choice.dataset.carbonControl = control;
       choice.dataset.carbonValue = key;
       choice.setAttribute('aria-pressed', String(key === current));
       choice.onclick = () => onChange(key);
@@ -314,57 +316,29 @@
   const INFO = {
     assumptions: {
       title: 'Calculation assumptions',
-      lead: 'Dotted boxes contain assumptions. Click any box to see the selected factor, its rationale, and the research sources behind it.',
-      sections: [['Reading the calculation', 'Reported token counts come from reconciled usage logs. Output-equivalence ratios, model-tier energy, facility overhead, and grid intensity are assumptions. Solid boxes identify the defined output normalization; Wh-to-kWh is an exact unit conversion. Calculated quantities are estimates.']],
+      lead: 'Dotted boxes contain assumptions. Select a box to see the value, why it was chosen and its sources.',
+      sections: [['Reading the calculation', 'Token counts are reported, from reconciled usage logs. Four factors are assumptions, shown in dotted boxes: token-type ratios, model-tier energy, facility overhead (PUE) and grid carbon intensity. The solid box marks output, the 1× reference by definition. Wh to kWh is an exact unit conversion. Everything calculated from these is an estimate.']],
     },
-    grid: {
-      title: 'Electricity grid', lead: 'The grid factor converts facility electricity into estimated operational CO₂e.',
-      sections: [
-        ['The calculation', 'Facility kWh × grid grams CO₂e per kWh gives grams CO₂e. Changing the grid changes emissions, not electricity use.'],
-        ['Location and accounting', 'The default US average is a location-based proxy because the serving region is generally undisclosed. Regional factors describe the electricity mix in a place; the Google contracts option is a market-based example and should only be used for comparable procurement.'],
-      ],
-      example: 'At 350 g CO₂e/kWh, 1 kWh of facility electricity gives 350 g CO₂e.',
-      sources: [['EPA eGRID summary data', 'https://www.epa.gov/egrid/summary-data'], ['Watershed on grid accounting', 'https://watershed.com/en-GB/blog/ai-emissions-by-region']],
-    },
-    customGrid: {
-      title: 'Custom grid intensity', lead: 'Enter a carbon intensity in grams of CO₂e per kilowatt-hour of electricity.',
-      sections: [
-        ['Use a documented factor', 'A location-based figure should match the actual serving region where possible. A market-based figure should reflect the provider’s qualifying electricity contracts. This app cannot determine either from token logs.'],
-      ],
-      sources: [['EPA eGRID summary data', 'https://www.epa.gov/egrid/summary-data']],
-    },
-    pue: {
-      title: 'Data-center overhead (PUE)', lead: 'Power usage effectiveness is facility electricity divided by IT equipment electricity.',
-      sections: [
-        ['Why it matters', 'A PUE of 1.15 adds 15% to the estimated server energy for cooling, power distribution, and other facility overhead. It is applied after token energy is calculated.'],
-        ['The choices', 'Low, central, and high come from the cited data-center factors. This setting is independent of the estimate range so you can test overhead separately.'],
-      ],
-      example: '100 Wh of server electricity × 1.15 PUE = 115 Wh at the facility.',
-      sources: [['Google data-center efficiency', 'https://datacenters.google/efficiency/']],
-    },
-    estimate: {
-      title: 'Energy scenario', lead: 'Select the low, central, or high published-model assumptions used for token energy.',
-      sections: [
-        ['What changes', 'The switch changes model-tier energy and token-type ratios together.'],
-        ['How to read the range', 'The low–high span combines the factor extremes. It is a sensitivity range, not a statistical confidence interval or a direct measurement of the provider’s servers.'],
-      ],
-    },
+    // Their dialogs show factorEvidence, so only the title is used.
+    grid: {title: 'Electricity grid'},
+    customGrid: {title: 'Custom grid carbon intensity'},
+    pue: {title: 'Facility overhead (PUE)'},
+    estimate: {title: 'Energy scenario'},
     inputSensitivity: {
       title: 'Input sensitivity',
       sections: [
-        ['What it measures', 'Prefill processes fresh prompt tokens, often in parallel; decode generates output tokens sequentially. At the central estimate, Labs treats one output token as using 5× the energy of one fresh input token. Watershed uses 3×. The ratio can vary with model, context length, and serving conditions.'],
-        ['Labs · 5:1', 'This estimate uses Anthropic’s published input-to-output API price ratio as an energy proxy. Prices can reflect different serving costs, but also include commercial choices; they are not direct electricity measurements.'],
+        ['What it measures', 'Prefill processes fresh prompt tokens, often in parallel; decode generates output tokens sequentially. At the central estimate, the Price ratio option treats one output token as using 5× the energy of one fresh input token. Watershed uses 3×. The ratio can vary with model, context length, and serving conditions.'],
+        ['Price ratio · 5:1', 'This estimate uses Anthropic’s published input-to-output API price ratio as an energy proxy. Prices can reflect different serving costs, but also include commercial choices; they are not direct electricity measurements.'],
         ['Watershed · 3:1', 'Watershed’s Activity Tier lists 0.32 Wh per 1,000 input tokens and 0.96 Wh per 1,000 output tokens. It derives its input factor from Google’s measured typical prompt energy, an assumed prompt length, and a 3:1 decode-to-prefill ratio. Google did not publish that prompt’s token split, so the per-token factors remain modeled estimates.'],
-        ['Why both are useful', 'The Labs proxy follows a provider’s observed pricing; Watershed starts from published prompt electricity data and a phase-energy model. Neither directly measures per-token energy for the proprietary models in this card. Selecting either ratio keeps output energy and the relative cache discounts fixed; the low and high estimates retain their spread.'],
+        ['Why both are useful', 'The price-ratio proxy follows a provider’s observed pricing; Watershed starts from published prompt electricity data and a phase-energy model. Neither directly measures per-token energy for the proprietary models in this card. Selecting either ratio keeps output energy and the relative cache discounts fixed; the low and high estimates retain their spread.'],
       ],
-      example: 'In this card, a large model at Central counts fresh input at 180 Wh per million tokens with Labs or 300 Wh with Watershed. Cache reads are 18 or 30 Wh per million tokens, respectively; output remains 900 Wh.',
       sources: [['Watershed AI emissions framework, Table 2', 'https://cdn.sanity.io/files/3ogo9b9g/production/a5c1f64ca5864e61b47e6384ee4d0ed31bc861f4.pdf#page=24'], ['Anthropic pricing', 'https://platform.claude.com/docs/en/about-claude/pricing']],
     },
     vehicle: {
       title: 'Vehicle comparison', lead: 'This comparison divides the current CO₂e estimate by emissions per mile for the chosen vehicle.',
       sections: [
         ['What changes', 'Only the comparison in miles changes. It does not change the AI electricity or CO₂e estimate.'],
-        ['Boundaries', 'Gasoline examples use stated miles-per-gallon assumptions. The electric-car example uses a fixed US-average grid rather than the grid selected for AI. Vehicle manufacture and upstream fuel emissions are excluded.'],
+        ['Boundaries', 'The gas car uses EPA’s average gasoline passenger vehicle; the hybrid and pickup assume 40 and 20 mpg. The electric-car example uses a fixed US-average grid rather than the grid selected for AI. Vehicle manufacture and upstream fuel emissions are excluded.'],
       ],
       sources: [['EPA greenhouse-gas equivalencies', 'https://www.epa.gov/energy/greenhouse-gas-equivalencies-calculator-calculations-and-references'], ['EPA electric-vehicle comparison', 'https://www.epa.gov/greenvehicles/comparison-your-car-vs-electric-vehicle']],
     },
@@ -379,12 +353,12 @@
   };
 
   function openInfo(topic, trigger, key = '') {
-    const info = INFO[topic] || (topic === 'tier' ? {title: factorsData?.tiers.find(tier => tier.key === key)?.label} : topic === 'ratio' ? {title: `${CATEGORY_LABELS[key]?.[0]} relative energy`} : null);
+    const info = INFO[topic] || (topic === 'tier' ? {title: factorsData?.tiers.find(tier => tier.key === key)?.label} : topic === 'ratio' ? {title: `${CATEGORY_LABELS[key]} relative energy`} : null);
     if (!info) return;
     const dialog = node('dialog', 'carbon-info-dialog');
     dialog.setAttribute('aria-labelledby', 'carbon-info-title');
     const head = node('div', 'carbon-info-head'), titleBlock = node('div');
-    titleBlock.append(node('p', 'carbon-info-eyebrow', 'Carbon footprint · guide'), node('h2', '', info.title));
+    titleBlock.append(node('p', 'carbon-info-eyebrow', 'Carbon Impact · guide'), node('h2', '', info.title));
     titleBlock.querySelector('h2').id = 'carbon-info-title';
     const close = node('button', 'carbon-info-close', '×');
     close.type = 'button';
@@ -440,9 +414,9 @@
     return button;
   }
 
-  function controlTitle(label, topic) {
+  function controlTitle(label, topic, infoLabel = label) {
     const title = node('div', 'carbon-control-title');
-    title.append(node('span', '', label), infoButton(topic, label));
+    title.append(node('span', '', label), infoButton(topic, infoLabel));
     return title;
   }
 
@@ -518,9 +492,9 @@
       title = `${tier.label} · server energy`;
       value = `${precise(pick(tier.output_wh_per_mtok, setup.scenario))} Wh per 1M output tokens`;
       basis = tier.basis; range = tier.output_wh_per_mtok; sources = tier.sources;
-      section.append(node('p', '', `Model-name matches: ${tier.match.join(', ')}. This size tier is a proxy for the logged model, not a measurement of its serving hardware.${tier.key === factors.default_tier ? ' Models with unknown size use this tier by default.' : ''}`));
+      section.append(node('p', '', `Model-name matches: ${tier.match.join(', ')}. This size tier is a proxy for the logged model, not a measurement of its serving hardware.${tier.key === factors.default_tier ? ' Models of unknown size use this tier by default.' : ''}`));
     } else if (kind === 'ratio') {
-      title = `${CATEGORY_LABELS[key][0]} · relative energy`;
+      title = `${CATEGORY_LABELS[key]} · relative energy`;
       defined = key === 'output';
       if (defined) {
         value = '1× output energy';
@@ -534,18 +508,19 @@
       }
     } else if (kind === 'pue') {
       title = 'Facility overhead (PUE)'; value = `${precise(setup.pue)}× server electricity`;
+      const pueLabel = SCENARIOS.find(([key]) => key === setup.pueScenario)[1];
       basis = factors.pue.basis; range = factors.pue; sources = factors.pue.sources;
-      section.append(node('p', '', `Selected PUE setting: ${setup.pueScenario}. This is an assumed facility overhead for this usage.`));
+      section.append(node('p', '', `Selected PUE setting: ${pueLabel}. This is an assumed facility overhead for this usage.`));
     } else if (kind === 'grid' || kind === 'customGrid') {
-      title = 'Electricity emissions factor'; value = `${precise(setup.gridValue)} g CO₂e per kWh`;
-      basis = setup.grid?.basis || 'This factor was entered by you. No research source is attached to a custom value.';
+      title = 'Grid carbon intensity'; value = `${precise(setup.gridValue)} g CO₂e per kWh`;
+      basis = setup.grid?.basis || 'You entered this value. It has no cited source.';
       sources = setup.grid?.sources || [];
-      section.append(node('p', '', setup.grid?.key === 'google_market'
+      if (setup.grid) section.append(node('p', '', setup.grid.key === 'google_market'
         ? 'Market-based accounting: this factor credits electricity contracts. Applying it to this usage is an assumption about comparable procurement.'
-        : setup.grid ? `${setup.grid.label} is the selected proxy for the electricity serving this usage; the actual inference location is generally undisclosed.` : 'User-supplied assumption.'));
+        : `${setup.grid.label} is the selected proxy for the electricity serving this usage; the actual inference location is generally undisclosed.`));
     } else if (kind === 'inputSensitivity') {
-      title = 'Input sensitivity'; value = setup.inputSensitivity === 'third' ? 'Watershed · 5/3× all non-output ratios' : 'Labs · 1× base ratios';
-      basis = 'The Labs base ratios use pricing as an energy proxy. Watershed’s central input-to-output ratio is 1:3; scaling the Labs 1:5 ratio by 5/3 gives 1:3. The same multiplier applies to cache writes and reads in every energy scenario.';
+      title = 'Input sensitivity'; value = setup.inputSensitivity === 'third' ? 'Watershed · 5/3× all non-output ratios' : 'Price ratio · 1× base ratios';
+      basis = 'The base ratios use pricing as an energy proxy. Watershed’s central input-to-output ratio is 1:3; scaling the price ratio’s 1:5 by 5/3 gives 1:3. The same multiplier applies to cache writes and reads in every energy scenario.';
       for (const [label, text] of INFO.inputSensitivity.sections) {
         const part = node('div'); part.append(node('h4', '', label), node('p', '', text)); section.append(part);
       }
@@ -557,7 +532,7 @@
       section.append(links);
     } else {
       title = 'Energy scenario'; value = SCENARIOS.find(([key]) => key === setup.scenario)[1];
-      basis = 'Low, Central, and High select model-tier energy and non-output ratios together. PUE, electricity factor, and input sensitivity retain their separate settings. These are alternative assumptions, not statistical confidence bounds.';
+      basis = 'Low, Central, and High select model-tier energy and non-output ratios together. Facility overhead (PUE), grid carbon intensity, and input sensitivity keep their own settings. These are alternative assumptions, not statistical confidence bounds.';
     }
     const head = node('div', 'carbon-factor-heading');
     if (heading) head.append(node('h4', '', title));
@@ -576,7 +551,7 @@
     const button = node('button', 'carbon-factor-link');
     button.append(text);
     button.type = 'button'; button.dataset.carbonControl = `factor:${kind}:${key}`;
-    button.setAttribute('aria-label', kind === 'assumptions' ? 'How assumption boxes work' : `Explain ${kind === 'tier' ? key + ' model-tier energy' : kind === 'ratio' ? CATEGORY_LABELS[key][0] + ' relative energy' : kind === 'pue' ? 'facility overhead' : 'electricity emissions factor'}`);
+    button.setAttribute('aria-label', kind === 'assumptions' ? 'How assumption boxes work' : `Explain ${kind === 'tier' ? key + ' model-tier energy' : kind === 'ratio' ? CATEGORY_LABELS[key] + ' relative energy' : kind === 'pue' ? 'facility overhead (PUE)' : 'grid carbon intensity'}`);
     if (kind === 'ratio' && key === 'output') button.classList.add('carbon-defined-box');
     else if (kind === 'assumptions' || text instanceof Node) button.classList.add('carbon-assumption-box');
     button.onclick = () => openInfo(kind, button, key);
@@ -607,8 +582,8 @@
 
   function emissionsCells(row, result, setup, wh) {
     ledgerCell(row, 'Facility overhead (PUE)', factorLink('pue', '', ledgerFraction(`${precise(setup.pue)} fWh`, '1 sWh', `${precise(setup.pue)} facility Wh divided by 1 server Wh`)), '×');
-    ledgerCell(row, 'Watt-hours to kilowatt-hours', ledgerFraction('1 kWh', '1k fWh', '1 kWh divided by 1,000 facility Wh'), '×');
-    ledgerCell(row, 'Electricity emissions factor', factorLink('grid', '', ledgerFraction(`${sig(setup.gridValue)} g`, '1 kWh', `${precise(setup.gridValue)} g CO₂e divided by 1 kWh`)), '×');
+    ledgerCell(row, 'Watt-hours to kilowatt-hours', ledgerFraction('1 kWh', '1K fWh', '1 kWh divided by 1,000 facility Wh'), '×');
+    ledgerCell(row, 'Grid carbon intensity', factorLink('grid', '', ledgerFraction(`${sig(setup.gridValue)} g`, '1 kWh', `${precise(setup.gridValue)} g CO₂e divided by 1 kWh`)), '×');
     const grams = result.grams(wh), amount = quantity(mass(grams), '');
     amount.title = `${precise(grams)} g CO₂e`; amount.setAttribute('aria-label', amount.title);
     ledgerCell(row, 'Estimated CO₂e', amount, '=');
@@ -625,7 +600,7 @@
       equation([`${precise(term.wh)} server Wh`, '×', unitFraction(`${precise(setup.pue)} facility Wh`, '1 server Wh'), '≈', `${precise(term.wh * setup.pue)} facility Wh`]),
       equation([`${precise(term.wh * setup.pue)} facility Wh`, '×', unitFraction('1 kWh', '1,000 Wh'), '×', unitFraction(`${precise(setup.gridValue)} g CO₂e`, '1 kWh'), '≈', `${precise(term.wh * setup.pue * setup.gridValue / 1000)} g CO₂e`]),
       node('p', 'carbon-note', 'The divisions convert tokens to million-token units and Wh to kWh exactly. Estimates use full precision; displayed decimals may be rounded.'));
-    if (term.category === 'uncached_input' && data.unclassified_tokens) block.append(node('p', 'carbon-note', `${tokens(data.unclassified_tokens)} unclassified tokens are already included in uncached input across this selection. Their category assignment is assumed; do not add them again.`));
+    if (term.category === 'uncached_input' && data.unclassified_tokens) block.append(node('p', 'carbon-note', `${tokens(data.unclassified_tokens)} unclassified tokens in this selection are counted as uncached input (an assumption); they are not counted twice.`));
     const evidence = node('div', 'carbon-row-factors');
     evidence.append(factorEvidence(factors, setup, 'tier', term.tier), factorEvidence(factors, setup, 'ratio', term.category));
     block.append(evidence);
@@ -634,9 +609,9 @@
 
   function calculationLedger(factors, result, setup, terms) {
     const scroll = node('div', 'carbon-ledger-scroll'), table = node('table', 'carbon-ledger'), head = node('tr');
-    scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', 'Token category calculation details'); scroll.tabIndex = 0;
+    scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', 'Calculation details by token type'); scroll.tabIndex = 0;
     const columns = node('colgroup'); for (let index = 0; index < 10; index++) columns.append(node('col'));
-    const caption = node('caption', '', 'Contributions by token category · Each tier shows the full equation. Click a tier for precise math; dotted factors for assumptions.');
+    const caption = node('caption', '', 'Contributions by token type. Select a tier for the exact arithmetic, or a dotted box for the assumption behind it.');
     table.append(caption, columns);
     for (const [title, note] of [['Tier', 'Model size tier'], ['Tokens', 'Reported tokens from reconciled logs'], ['Equivalence', 'Output-equivalent tokens per reported token'], ['OE', 'Modeled output-equivalent tokens'], ['Tier energy', 'Server Wh per million output-equivalent tokens'], ['Server', 'Estimated server electricity in Wh'], ['PUE', 'Facility Wh per server Wh'], ['Wh → kWh', 'Exact watt-hour to kilowatt-hour conversion'], ['Grid', 'Grams of CO₂e per kilowatt-hour'], ['CO₂e', 'Estimated emissions']]) {
       const cell = node('th', '', title); cell.scope = 'col'; cell.title = note; cell.setAttribute('aria-label', note); head.append(cell);
@@ -644,7 +619,7 @@
     table.createTHead().append(head);
     const tiers = bySize(factors.tiers), tierLabel = tier => tier.key === 'medium' ? 'Mid' : tier.label.replace(/ models$/i, '');
     const sumRow = (counts, wh, outputEquivalent) => {
-      const row = node('tr', 'carbon-grand-total'), heading = node('th', '', 'Σ Total'); heading.scope = 'row'; heading.title = 'Sum of all categories'; row.append(heading);
+      const row = node('tr', 'carbon-grand-total'), heading = node('th', '', 'Σ Total'); heading.scope = 'row'; heading.title = 'Sum of all token types'; row.append(heading);
       ledgerCell(row, 'Total reported tokens', ledgerQuantity(counts, 'tok', 'reported tokens'));
       ledgerCell(row, 'Output equivalence', null);
       ledgerCell(row, 'Total output-equivalent tokens', ledgerQuantity(outputEquivalent, 'OE', 'output-equivalent tokens'));
@@ -656,7 +631,7 @@
     for (const category of Object.keys(CATEGORY_LABELS)) {
       if (!terms.some(term => term.category === category && term.count > 0)) continue;
       const groupBody = node('tbody'); groupBody.dataset.category = category;
-      const group = node('tr', 'carbon-ledger-group'), heading = node('th', '', CATEGORY_LABELS[category][0]);
+      const group = node('tr', 'carbon-ledger-group'), heading = node('th', '', CATEGORY_LABELS[category]);
       heading.colSpan = 10; heading.scope = 'rowgroup'; group.append(heading); groupBody.append(group);
       for (const tier of tiers) {
         const term = terms.find(term => term.tier === tier.key && term.category === category);
@@ -666,7 +641,7 @@
         const detailRow = node('tr', 'carbon-term-evidence'), detailCell = node('td'); detailCell.colSpan = 10;
         detailRow.id = `carbon-row-${tier.key}-${term.category}`; detailRow.hidden = window.pharosView?.read('disclosures', {})['carbon:' + key] !== true;
         const toggle = node('button', 'carbon-row-trigger', tierLabel(tier)); toggle.type = 'button';
-        toggle.setAttribute('aria-label', `Explain ${CATEGORY_LABELS[category][0]} · ${tier.label}`);
+        toggle.setAttribute('aria-label', `Explain ${CATEGORY_LABELS[category]} · ${tier.label}`);
         toggle.append(node('small', '', 'Details'));
         toggle.dataset.carbonControl = key; toggle.setAttribute('aria-expanded', String(!detailRow.hidden)); toggle.setAttribute('aria-controls', detailRow.id);
         toggle.dataset.viewKey = 'carbon:' + key; toggle.dataset.viewDefault = 'false';
@@ -675,7 +650,7 @@
         name.append(toggle); row.append(name);
         const ratio = Number(term.ratio.toPrecision(4));
         const ratioLink = factorLink('ratio', category, ledgerFraction(`${ratio === term.ratio ? '' : '≈ '}${precise(ratio)} OE`, '1 tok', `${precise(term.ratio)} OE tokens divided by 1 ${categoryUnit(category)} token`));
-        const energyLink = factorLink('tier', tier.key, ledgerFraction(`${tokens(term.perMillion)} sWh`, '1M OE', `${precise(term.perMillion)} server Wh divided by 1M OE tokens`));
+        const energyLink = factorLink('tier', tier.key, ledgerFraction(`${sig(term.perMillion)} sWh`, '1M OE', `${precise(term.perMillion)} server Wh divided by 1M OE tokens`));
         ledgerCell(row, 'Reported tokens', ledgerQuantity(term.count, 'tok', `${categoryUnit(category)} tokens`));
         ledgerCell(row, 'Output equivalence', ratioLink, '×');
         ledgerCell(row, 'Modeled output-equivalent tokens', ledgerQuantity(term.outputEquivalent, 'OE', 'output-equivalent tokens'), '=');
@@ -702,7 +677,7 @@
     const content = node('div', 'carbon-calculation-body');
     content.append(node('p', 'carbon-calculation-scope', usageScope || usageLabel));
     const legend = node('div', 'carbon-calculation-legend');
-    legend.append(badge('Reported · token logs', 'reported'), factorLink('assumptions', '', 'Assumption'), badge('Defined · constants', 'defined'), badge('Estimated · results', 'estimated'));
+    legend.append(badge('Reported · token logs', 'reported'), factorLink('assumptions', '', 'Assumed · factors'), badge('Defined · constants', 'defined'), badge('Estimated · results', 'estimated'));
     content.append(legend);
     const overview = node('section', 'carbon-calculation-overview');
     overview.append(node('h4', '', 'Calculation at a glance'), equation([
@@ -717,17 +692,17 @@
     if (fallbackCount) {
       const fallback = disclosure('fallback', 'Why some models use the default tier', 'carbon-evidence-disclosure');
       const tier = factors.tiers.find(item => item.key === factors.default_tier);
-      fallback.append(node('p', '', `Assigned to ${tier.label} by default; size unknown. This assignment is an assumption.`));
+      fallback.append(node('p', '', `Models of unknown size are assigned to ${tier.label} by default. This assignment is an assumption.`));
       const list = node('ul');
       for (const model of data.default_tier_models || []) list.append(node('li', '', `${model.model}: ${tokens(model.tokens)} tokens`));
-      if (data.default_tier_unknown_tokens) list.append(node('li', '', `Model not reported: ${tokens(data.default_tier_unknown_tokens)} tokens`));
+      if (data.default_tier_unknown_tokens) list.append(node('li', '', `Model not recorded: ${tokens(data.default_tier_unknown_tokens)} tokens`));
       fallback.append(list, factorEvidence(factors, setup, 'tier', factors.default_tier)); content.append(fallback);
     }
-    if (data.unclassified_tokens) content.append(node('p', 'carbon-note', `${tokens(data.unclassified_tokens)} unclassified tokens are already included in uncached input. This category assignment is assumed; they are not added a second time.`));
+    if (data.unclassified_tokens) content.append(node('p', 'carbon-note', `${tokens(data.unclassified_tokens)} unclassified tokens in this selection are counted as uncached input (an assumption); they are not counted twice.`));
     const one = node('section', 'carbon-calculation-step');
     one.append(node('h3', '', '1 · Calculate each contribution'),
       node('p', 'carbon-ledger-key', 'Key: tok = tokens · OE = output-equivalent tokens · sWh / fWh = server / facility watt-hours · kWh = kilowatt-hours · g / kg / t = grams / kilograms / tonnes CO₂e'),
-      node('p', 'carbon-ledger-key', 'k = thousand · M = million · B = billion · T = trillion. CO₂e results scale to g / kg / t. Values are rounded; hover for precision or open tier details. Energy factors apply within each tier before summing.'));
+      node('p', 'carbon-ledger-key', 'K = thousand · M = million · B = billion · T = trillion. Values are rounded; the exact value is in each cell’s tooltip and in the tier details. Each tier’s energy factor is applied before the tiers are summed.'));
     if (counts) one.append(calculationLedger(factors, result, setup, result.terms));
     one.append(equation(['Sum of all category contributions', '≈', `${precise(result.outputEquivalent)} modeled output-equivalent tokens`, 'and', `${precise(result.wh)} server Wh`]), badge('Estimated', 'estimated'));
     const two = node('section', 'carbon-calculation-step');
@@ -748,13 +723,13 @@
       const item = node('span', scenario === setup.scenario ? 'selected' : '');
       item.append(`${label} `, node('strong', '', `${mass(alternative.co2)} CO₂e`)); scenarios.append(item);
     }
-    sensitivity.append(scenarios, node('p', 'carbon-note', `Alternative energy assumptions, not confidence bounds. PUE ${precise(setup.pue)}, grid ${precise(setup.gridValue)} g CO₂e/kWh, and ${setup.inputSensitivity === 'third' ? 'Watershed' : 'Labs'} input sensitivity stay fixed.`));
+    sensitivity.append(scenarios, node('p', 'carbon-note', `Alternative energy assumptions, not confidence bounds. PUE ${precise(setup.pue)}, grid ${precise(setup.gridValue)} g CO₂e/kWh, and ${setup.inputSensitivity === 'third' ? 'Watershed' : 'Price ratio'} input sensitivity stay fixed.`));
     if (counts && !result.terms.some(term => term.category !== 'output' && term.count > 0)) sensitivity.append(node('p', 'carbon-note', 'Input sensitivity does not change this estimate: no non-output tokens are reported.'));
     content.append(sensitivity);
     const scope = disclosure('scope', 'Scope, bookkeeping, and limitations', 'carbon-evidence-disclosure');
-    scope.append(node('p', '', 'This estimates inference electricity and operational emissions. Model training, embodied hardware emissions, water, networking, and your computer are outside this estimate. Only retained, reconciled token usage is included; linked mirror workspaces are removed.'),
+    scope.append(node('p', '', 'This estimates inference electricity and operational emissions. Model training, embodied hardware emissions, water, networking, and your computer are outside this estimate. Only retained, reconciled token usage is included; a conversation recorded by more than one source is counted once.'),
       node('p', '', 'The calculation uses filtered totals. Chart interval and breakdown change the display only. Output includes reasoning; unclassified tokens are charged as uncached input.'));
-    if (data.undated_tokens) scope.append(node('p', '', `${tokens(data.undated_tokens)} undated tokens are included in the total but cannot be placed on the chart.`));
+    if (data.undated_tokens) scope.append(node('p', '', `${tokens(data.undated_tokens)} tokens have no usage date. They are included in the total but cannot be placed on the chart.`));
     const caveats = node('ul'); for (const text of factors.caveats || []) caveats.append(node('li', '', text)); scope.append(caveats);
     content.append(scope, comparisonCalculation(factors, result), methodology(factors, result, setup));
     details.append(content);
@@ -763,18 +738,18 @@
 
   function comparisonCalculation(factors, result) {
     const details = disclosure('comparisons', 'Everyday comparison math and sources', 'carbon-evidence-disclosure');
-    if (!result.wh) { details.append(node('p', '', 'No comparison quantities are calculated for empty usage.')); return details; }
-    const {vehicle, phone, from, to, miles, flight} = comparisonSettings(factors);
+    if (!result.wh) { details.append(node('p', '', 'No comparisons: no token usage matches these filters.')); return details; }
+    const {vehicleKey, vehicle, phone, from, to, miles, flight} = comparisonSettings(factors);
     details.append(node('p', '', 'These comparisons give context to the estimate. Their factors and boundaries are separate from the assumptions about AI electricity.'));
-    if (vehicle) details.append(node('h4', '', vehicle.label),
-      equation([`${precise(result.co2)} g CO₂e`, '÷', `${precise(vehicle.g_co2e_per_unit)} g CO₂e/mile`, '≈', `${sig(result.co2 / vehicle.g_co2e_per_unit)} miles`]),
+    if (vehicle) details.append(node('h4', '', VEHICLES.find(([key]) => key === vehicleKey)[1]),
+      equation([`${precise(result.co2)} g CO₂e`, '÷', `${precise(vehicle.g_co2e_per_unit)} g CO₂e/mile`, '≈', counted(result.co2 / vehicle.g_co2e_per_unit, 'mile', 'miles')]),
       badge('Assumed · comparison factor', 'assumed'), sourceEvidence(factors, vehicle.sources));
     if (phone) details.append(node('h4', '', 'Smartphone charges'),
-      equation([`${precise(result.co2)} g CO₂e`, '÷', `${precise(phone.g_co2e_per_unit)} g CO₂e/charge`, '≈', `${sig(result.co2 / phone.g_co2e_per_unit)} charges`]),
-      sourceEvidence(factors, phone.sources));
+      equation([`${precise(result.co2)} g CO₂e`, '÷', `${precise(phone.g_co2e_per_unit)} g CO₂e/charge`, '≈', counted(result.co2 / phone.g_co2e_per_unit, 'charge', 'charges')]),
+      badge('Assumed · comparison factor', 'assumed'), sourceEvidence(factors, phone.sources));
     if (flight) details.append(node('h4', '', `One-way flight: ${from.label} → ${to.label}`),
       equation([`≈ ${precise(miles)} passenger-miles`, '×', `${precise(flight.g_co2e_per_unit)} g CO₂e/passenger-mile`, '≈', `${precise(miles * flight.g_co2e_per_unit)} g CO₂e/flight`]),
-      equation([`${precise(result.co2)} g CO₂e`, '÷', `${precise(miles * flight.g_co2e_per_unit)} g CO₂e/flight`, '≈', `${sig(result.co2 / (miles * flight.g_co2e_per_unit))} flights`]),
+      equation([`${precise(result.co2)} g CO₂e`, '÷', `${precise(miles * flight.g_co2e_per_unit)} g CO₂e/flight`, '≈', counted(result.co2 / (miles * flight.g_co2e_per_unit), 'flight', 'flights')]),
       badge('Assumed · passenger-mile emissions factor', 'assumed'), sourceEvidence(factors, [...flight.sources, 'faa-airports']));
     details.append(node('p', '', 'Flight distance is computed between reference airports, not an actual route. Flight comparisons exclude seat-class differences, upstream fuel emissions, and non-CO₂ effects at altitude. Vehicle comparisons exclude manufacture and fuel production; the electric-car factor uses a fixed US-average grid rather than the selected AI grid.'));
     return details;
@@ -788,7 +763,7 @@
     details.append(summary);
     const formula = node('p');
     formula.append('For each model tier and token type: ', node('code', '', 'tokens ÷ 1M × Wh per 1M output tokens × token-type ratio × PUE ÷ 1,000 × grid g CO₂e/kWh'),
-      `. Energy shown includes data-center overhead (PUE). This estimates inference electricity emissions, not a direct measurement; providers do not publish per-token energy. Model training, embodied hardware emissions, water, networking, and your own computer are outside this estimate. The estimate switch selects the model energy and token-type ratios; the PUE and grid can be selected separately. Input sensitivity: ${setup.inputSensitivity === 'third' ? 'Watershed (3:1 at Central)' : 'Labs (5:1 at Central)'}.`);
+      `. The headline electricity includes data-center overhead (PUE); server Wh figures do not. This is an estimate, not a direct measurement; providers do not publish per-token energy. The energy scenario selects the model energy and token-type ratios; facility overhead (PUE) and the grid are set separately. Input sensitivity: ${setup.inputSensitivity === 'third' ? 'Watershed (3:1 at Central)' : 'Price ratio (5:1 at Central)'}.`);
     details.append(node('h4', '', 'Formula'), formula);
 
     details.append(node('h4', '', 'Model tiers · server energy per 1M output tokens'));
@@ -797,7 +772,7 @@
     tiers.createTHead().append(tierHead);
     for (const tier of bySize(factors.tiers)) {
       const tr = node('tr'), name = node('td', '', tier.label), basis = node('td', 'carbon-basis', tier.basis);
-      name.append(node('span', 'carbon-sub', `Matches: ${tier.match.join(', ')}${tier.key === factors.default_tier ? ' · and unrecognized models' : ''}`));
+      name.append(node('span', 'carbon-sub', `Matches: ${tier.match.join(', ')}${tier.key === factors.default_tier ? ' · and models of unknown size' : ''}`));
       basis.append(cite(factors, tier.sources));
       tr.append(name, ...['low', 'central', 'high'].map(key => node('td', '', `${sig(tier.output_wh_per_mtok[key])} Wh`)), basis);
       tierBody.append(tr);
@@ -805,16 +780,16 @@
     tiers.append(tierBody);
     details.append(tiers);
 
-    details.append(node('h4', '', 'Base token-type ratios · before input sensitivity'));
+    details.append(node('h4', '', 'Base token-type ratios (before input sensitivity) and facility overhead (PUE)'));
     const ratios = node('table', 'carbon-table'), ratioHead = node('tr'), ratioBody = node('tbody');
     for (const text of ['Token type', 'Low', 'Central', 'High', 'Basis']) ratioHead.append(node('th', '', text));
     ratios.createTHead().append(ratioHead);
-    const ratioRows = [...Object.keys(CATEGORY_LABELS).filter(key => factors.ratios[key]).map(key => [CATEGORY_LABELS[key][0], factors.ratios[key]]),
-      ['PUE (data-center overhead)', factors.pue]];
+    const ratioRows = [...Object.keys(CATEGORY_LABELS).filter(key => factors.ratios[key]).map(key => [CATEGORY_LABELS[key], factors.ratios[key]]),
+      ['Facility overhead (PUE)', factors.pue]];
     for (const [label, ratio] of ratioRows) {
       const tr = node('tr'), basis = node('td', 'carbon-basis', ratio.basis);
       basis.append(cite(factors, ratio.sources));
-      tr.append(node('td', '', label), ...['low', 'central', 'high'].map(key => node('td', '', label.startsWith('PUE') ? sig(ratio[key]) : `${sig(ratio[key])}×`)), basis);
+      tr.append(node('td', '', label), ...['low', 'central', 'high'].map(key => node('td', '', ratio === factors.pue ? sig(ratio[key]) : `${sig(ratio[key])}×`)), basis);
       ratioBody.append(tr);
     }
     ratios.append(ratioBody);
@@ -888,7 +863,7 @@
     gridSelect.dataset.carbonControl = 'grid';
     gridSelect.setAttribute('aria-label', 'Electricity grid');
     for (const grid of factors.grids) {
-      const option = node('option', '', `${grid.label} · ${sig(grid.g_co2e_per_kwh)} g/kWh`);
+      const option = node('option', '', `${grid.label} · ${sig(grid.g_co2e_per_kwh)} g CO₂e/kWh`);
       option.value = grid.key;
       gridSelect.append(option);
     }
@@ -912,11 +887,11 @@
       controls.append(customLabel);
     }
     const pueLabel = node('div', 'carbon-control');
-    pueLabel.append(controlTitle(`PUE · ${sig(setup.pue)}`, 'pue'));
-    pueLabel.append(segmented('PUE', SCENARIOS, setup.pueScenario, key => update({pueScenario: key})));
+    pueLabel.append(controlTitle(`Facility overhead (PUE) · ${sig(setup.pue)}`, 'pue', 'Facility overhead (PUE)'));
+    pueLabel.append(segmented('Facility overhead (PUE)', SCENARIOS, setup.pueScenario, key => update({pueScenario: key}), 'pue'));
     const scenarioLabel = node('div', 'carbon-control');
     scenarioLabel.append(controlTitle('Energy scenario', 'estimate'));
-    scenarioLabel.append(segmented('Estimate', SCENARIOS, setup.scenario, key => update({scenario: key})));
+    scenarioLabel.append(segmented('Energy scenario', SCENARIOS, setup.scenario, key => update({scenario: key}), 'estimate'));
     const inputLabel = node('div', 'carbon-control');
     inputLabel.append(controlTitle('Input sensitivity', 'inputSensitivity'),
       segmented('Input sensitivity', INPUT_SENSITIVITIES, setup.inputSensitivity, key => update({inputSensitivity: key})));
@@ -932,7 +907,7 @@
     const focused = active && [root, summary, assumptionsRoot].some(element => element.contains(active))
       ? {control: active.dataset.carbonControl, value: active.dataset.carbonValue} : null;
     if (factorsData) assumptionsRoot.replaceChildren(assumptionControls(factorsData));
-    else assumptionsRoot.replaceChildren(node('h3', '', 'Estimate assumptions'), node('p', 'muted', error ? 'Assumption factors are unavailable.' : 'Loading assumption factors…'));
+    else assumptionsRoot.replaceChildren(node('h3', '', 'Estimate assumptions'), node('p', 'muted', error ? 'Could not load token usage. Assumptions appear once it loads.' : 'Loading token usage…'));
     if (!data) {
       const title = node('div', 'carbon-title');
       title.append(node('div', 'meta', 'Estimated CO₂e'), node('div', 'big', error ? 'Unavailable' : '…'));
@@ -954,7 +929,7 @@
     title.append(node('div', 'meta', `Estimated CO₂e · ${usageLabel}`),
       node('div', 'big', `${mass(result.co2)} CO₂e`));
     const electricity = node('div', 'carbon-electricity');
-    electricity.append(node('div', 'meta', 'Electricity'), node('div', 'big', energy(result.facilityWh)));
+    electricity.append(node('div', 'meta', 'Estimated electricity'), node('div', 'big', energy(result.facilityWh)));
     const facts = node('div', 'carbon-facts');
     const fact = (value, text) => { const span = node('span'); span.append(node('b', '', value), ` ${text}`); facts.append(span); };
     const {vehicleKey, vehicle, phone, from, to, miles, flight} = comparisonSettings(factors);
@@ -968,10 +943,10 @@
       vehicleSelect.value = vehicleKey;
       vehicleSelect.title = vehicle.label;
       vehicleSelect.onchange = () => update({vehicle: vehicleSelect.value});
-      row.append(node('b', '', `≈ ${sig(result.co2 / vehicle.g_co2e_per_unit)} miles`), 'in', vehicleSelect, infoButton('vehicle', 'vehicle comparison'));
+      row.append(node('b', '', `≈ ${counted(result.co2 / vehicle.g_co2e_per_unit, 'mile', 'miles')}`), 'in', vehicleSelect, infoButton('vehicle', 'vehicle comparison'));
       facts.append(row);
     }
-    if (result.wh && phone) fact(`≈ ${sig(result.co2 / phone.g_co2e_per_unit)}`, phone.label);
+    if (result.wh && phone) { const charges = sig(result.co2 / phone.g_co2e_per_unit); fact(`≈ ${charges}`, charges === '1' ? 'smartphone charge' : 'smartphone charges'); }
     if (result.wh && flight) {
       const row = node('div', 'carbon-comparison');
       const citySelect = (label, current, other, key) => {
@@ -989,7 +964,7 @@
       const route = node('span', 'carbon-flight-route');
       route.append(citySelect('Flight from', from, to, 'flightFrom'), ' → ',
         citySelect('Flight to', to, from, 'flightTo'), infoButton('flight', 'flight comparison'));
-      row.append(node('b', '', `≈ ${sig(result.co2 / (miles * flight.g_co2e_per_unit))} one-way flights`), route);
+      row.append(node('b', '', `≈ ${counted(result.co2 / (miles * flight.g_co2e_per_unit), 'one-way flight', 'one-way flights')}`), route);
       facts.append(row);
     }
     titleRow.append(title, electricity);

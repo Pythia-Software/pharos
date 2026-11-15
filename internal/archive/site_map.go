@@ -131,10 +131,10 @@ type siteAnalyze struct {
 	// ReadableVersions are the chart versions the page opens; one before
 	// Version is an older link, which the page migrates.
 	ReadableVersions []int          `json:"readable_versions"`
-	FillDefaults map[string]any `json:"fill_defaults"`
-	Absent       string         `json:"absent"`
-	Fallback     string         `json:"fallback"`
-	Labels       struct {
+	FillDefaults     map[string]any `json:"fill_defaults"`
+	Absent           string         `json:"absent"`
+	Fallback         string         `json:"fallback"`
+	Labels           struct {
 		View        map[string]string `json:"view"`
 		Reduce      map[string]string `json:"reduce"`
 		Percentiles map[string]string `json:"percentiles"`
