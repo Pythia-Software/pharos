@@ -701,7 +701,8 @@ END;
 CREATE TRIGGER IF NOT EXISTS tool_command_fts_delete AFTER DELETE ON tool_calls BEGIN
   DELETE FROM tool_command_fts WHERE rowid=old.rowid;
 END;
-CREATE TRIGGER IF NOT EXISTS tool_command_fts_update AFTER UPDATE OF command,program,subcommand ON tool_calls BEGIN
+CREATE TRIGGER IF NOT EXISTS tool_command_fts_update AFTER UPDATE OF command,program,subcommand ON tool_calls
+WHEN old.command IS NOT new.command OR old.program IS NOT new.program OR old.subcommand IS NOT new.subcommand BEGIN
   DELETE FROM tool_command_fts WHERE rowid=old.rowid;
   INSERT INTO tool_command_fts(rowid,command,program,subcommand,command_name)
     SELECT new.rowid,new.command,new.program,new.subcommand,TRIM(COALESCE(new.program,'')||' '||COALESCE(new.subcommand,''))
@@ -1659,7 +1660,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS tool_query_text_delete AFTER DELETE ON tool_calls BEGIN
  DELETE FROM tool_query_text_fts WHERE rowid=old.rowid;
 END;
-CREATE TRIGGER IF NOT EXISTS tool_query_text_update AFTER UPDATE OF command ON tool_calls BEGIN
+CREATE TRIGGER IF NOT EXISTS tool_query_text_update AFTER UPDATE OF command ON tool_calls WHEN old.command IS NOT new.command BEGIN
  DELETE FROM tool_query_text_fts WHERE rowid=old.rowid;
  INSERT INTO tool_query_text_fts(rowid,body) SELECT new.rowid,qt_lower(new.command) WHERE new.command IS NOT NULL AND new.command<>'';
 END;
@@ -1673,7 +1674,7 @@ CREATE TRIGGER IF NOT EXISTS human_query_text_update AFTER UPDATE OF message_id 
  DELETE FROM human_query_text_fts WHERE rowid=old.rowid;
  INSERT INTO human_query_text_fts(rowid,body) SELECT new.rowid,qt_lower(text) FROM messages WHERE id=new.message_id AND text IS NOT NULL AND text<>'';
 END;
-CREATE TRIGGER IF NOT EXISTS human_query_text_body_update AFTER UPDATE OF text ON messages BEGIN
+CREATE TRIGGER IF NOT EXISTS human_query_text_body_update AFTER UPDATE OF text ON messages WHEN old.text IS NOT new.text BEGIN
  DELETE FROM human_query_text_fts WHERE rowid IN (SELECT rowid FROM message_authorship WHERE message_id=new.id);
  INSERT INTO human_query_text_fts(rowid,body) SELECT rowid,qt_lower(new.text) FROM message_authorship WHERE message_id=new.id AND new.text IS NOT NULL AND new.text<>'';
 END;
@@ -1698,7 +1699,9 @@ END;
 CREATE TRIGGER IF NOT EXISTS tool_query_facts_delete AFTER DELETE ON tool_calls BEGIN
  DELETE FROM tool_query_facts WHERE rowid=old.rowid;
 END;
-CREATE TRIGGER IF NOT EXISTS tool_query_facts_update AFTER UPDATE OF id,workspace_id,started_at,duration_ms,provider,tool_category,command_category,tool_name,mcp_server,program ON tool_calls BEGIN
+CREATE TRIGGER IF NOT EXISTS tool_query_facts_update AFTER UPDATE OF id,workspace_id,started_at,duration_ms,provider,tool_category,command_category,tool_name,mcp_server,program ON tool_calls
+WHEN (old.id,old.workspace_id,old.started_at,old.duration_ms,old.provider,old.tool_category,old.command_category,old.tool_name,old.mcp_server,old.program)
+ IS NOT (new.id,new.workspace_id,new.started_at,new.duration_ms,new.provider,new.tool_category,new.command_category,new.tool_name,new.mcp_server,new.program) BEGIN
  DELETE FROM tool_query_facts WHERE rowid=old.rowid;
  INSERT INTO tool_query_facts(rowid,id,workspace_id,started_at,duration_ms,provider,activity,tool_category,day)
  VALUES(new.rowid,new.id,new.workspace_id,new.started_at,new.duration_ms,new.provider,machine_activity(new.tool_category,new.command_category,new.tool_name,new.mcp_server,new.program),new.tool_category,date(new.started_at,'localtime'));
