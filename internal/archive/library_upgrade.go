@@ -528,24 +528,72 @@ type upgradeCount struct {
 	Build     string        `json:"build"`
 	StartedAt string        `json:"started_at"`
 	Steps     []upgradeStep `json:"steps"`
+	// Inputs is upgradeInputs read before the count: while it is unchanged,
+	// counting again would give the same answer.
+	Inputs string `json:"inputs,omitempty"`
 }
 
 const upgradeCountKey = "upgrade_count"
 
+// upgradeInputs is what can change the count without a build change: the
+// rows the steps count (a new conversation, workspace or repository, or a
+// removal), how many conversations and workspaces carry each step's current
+// marker (set by ingest or a repair, or cleared to mark work), and the meta
+// versions the steps set. The steps' own versions change only with the
+// build, which is part of the inputs too. Each part is a small count.
+func (c *Catalog) upgradeInputs(ctx context.Context) (string, error) {
+	var value string
+	err := c.reader().QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM meta WHERE key=?1),'')
+		||':'||(SELECT COUNT(*)||'/'||COALESCE(MAX(rowid),0) FROM conversations)
+		||':'||(SELECT COUNT(*)||'/'||COALESCE(MAX(rowid),0) FROM workspaces)
+		||':'||(SELECT COUNT(*)||'/'||COALESCE(MAX(rowid),0) FROM repositories)
+		||':'||(SELECT COUNT(*) FROM usage_attribution_state WHERE version=?2)
+		||':'||(SELECT COUNT(*) FROM reasoning_extraction_state WHERE version=?3)
+		||':'||(SELECT COUNT(*) FROM message_search_state WHERE version=?4)
+		||':'||(SELECT COUNT(*) FROM tool_ledger_state WHERE version=?5)
+		||':'||(SELECT COUNT(*) FROM conversation_instructions_state WHERE version=?6)
+		||':'||COALESCE((SELECT group_concat(key||'='||value) FROM (SELECT key,value FROM meta
+			WHERE key IN ('repository_merge_version','harness_version_upgrade','agent_session_model_version') ORDER BY key)),'')`,
+		initializedBuildKey, usageAttributionVersion, reasoningExtractionVersion, messageSearchVersion, toolLedgerVersion, instructionsVersion).Scan(&value)
+	return value, err
+}
+
+// refreshUpgradeCount counts again unless the stored count was taken with
+// the inputs there are now. The analysis chain calls it after every full
+// run, nearly always with nothing new to count.
+func (c *Catalog) refreshUpgradeCount(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	var count upgradeCount
+	if stored, err := c.metaValue(ctx, upgradeCountKey); err == nil && json.Unmarshal([]byte(stored), &count) == nil && count.Inputs != "" {
+		if inputs, err := c.upgradeInputs(ctx); err == nil && inputs == count.Inputs {
+			return
+		}
+	}
+	c.storeUpgradeCount(ctx)
+}
+
 // storeUpgradeCount counts the upgrade's steps and stores the answer, unless
 // a count that started later is already stored. It is best effort: it runs
-// at the end of the analysis chain, after an upgrade, and on open.
+// after an upgrade, on open, and at the end of the analysis chain when its
+// inputs changed (refreshUpgradeCount).
 func (c *Catalog) storeUpgradeCount(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
 	started := formatTime(time.Now())
 	build, _ := c.metaValue(ctx, initializedBuildKey)
+	// Read before counting, so a write during the count leaves them stale.
+	inputs, err := c.upgradeInputs(ctx)
+	if err != nil {
+		inputs = ""
+	}
 	steps, err := c.UpgradeSteps(ctx)
 	if err != nil {
 		return
 	}
-	data, _ := json.Marshal(upgradeCount{Build: build, StartedAt: started, Steps: steps})
+	data, _ := json.Marshal(upgradeCount{Build: build, StartedAt: started, Steps: steps, Inputs: inputs})
 	_ = c.writeTransaction(ctx, "upgrade count", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value
 			WHERE COALESCE(json_extract(meta.value,'$.started_at'),'')<=?`, upgradeCountKey, string(data), started)

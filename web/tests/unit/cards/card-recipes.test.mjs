@@ -771,6 +771,14 @@ test("saved cards migrate to the full dashboard mapping while preserving their s
   assert.deepEqual(saved.query, original.query);
   assert.deepEqual(saved.cover, original.cover);
   migrateSavedQueries(); assert.deepEqual(readBookmarks(), [saved], "migration is idempotent");
+  // A card saved before its recipe gained a breakdown key keeps its saved
+  // grouping; the cover must not group the saved result by the new key.
+  const words = queryRecipes.find(recipe => recipe.id === "human-words"), current = instantiateRecipe(words, 7, clock).query;
+  assert.ok(current.grouping.keys.some(key => core.groupKeyFields([key])[0] === "estimate"));
+  const older = { ...current, grouping: { ...current.grouping, keys: current.grouping.keys.filter(key => core.groupKeyFields([key])[0] !== "estimate") } };
+  const [metric] = cardCoverQuery(older, words, defaultCardCover(words)).query.aggregations;
+  assert.deepEqual(metric.groupBy, core.groupKeyFields(older.grouping.keys));
+  assert.deepEqual(cardCoverQuery(current, words, defaultCardCover(words)).query.aggregations[0].groupBy, core.groupKeyFields(current.grouping.keys));
 });
 
 

@@ -89,13 +89,20 @@ three areas scoring 0.3 or more whose pages have never been visited.
 The Background Processing item Ask Pharos suggestions (`ask.suggestions`)
 exists only where Ask Pharos is enabled. It runs Hourly by default and is
 adaptive. Its inputs are:
-- the completed generation of each analysis-chain stage;
-- the safety and findings build markers;
-- the local day, since every window moves daily.
+- the local day, since every window moves daily, and its quarter (00–06,
+  06–12, 12–18, 18–24), so new activity shows within six hours;
+- the safety build marker and the findings review generation.
+
+Analysis stages completing and findings measure passes are not inputs: they
+follow every index, and re-reading every signal several times an hour (about
+a minute with a cold page cache) bought nothing for questions that change over
+days.
 
 When the inputs change, the item runs every signal, each with a 30 s deadline.
-A failed signal is recorded in the row's `errors` and leaves only its own
-areas out. The result is written as one `meta` row (`ask_suggestions`), with
+A failed signal is recorded in the row's `errors` and logged, and leaves only
+its own areas out. A signal that hits its deadline keeps its previous score
+instead (its error says so), so a cold page cache does not drop an area. The
+result is written as one `meta` row (`ask_suggestions`), with
 each signal's time in `timingsMs`. Enabling Ask Pharos requests a run, and so
 does the first suggestions request before any run.
 

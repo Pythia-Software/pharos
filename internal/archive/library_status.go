@@ -209,11 +209,11 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 }
 
 // libraryPending counts workspaces whose Library row maintainLibrary has yet
-// to recompute, up to limit.
+// to recompute, whole or one changed column of it, up to limit.
 func (c *Catalog) libraryPending(limit int) (int, error) {
-	var count int
-	err := c.reader().QueryRow("SELECT COUNT(*) FROM (SELECT 1 FROM workspace_library_dirty LIMIT ?)", limit).Scan(&count)
-	return count, err
+	var marked, columns int
+	err := c.reader().QueryRow("SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM workspace_library_dirty LIMIT ?)),("+libraryColumnWorkspacesSQL+")", limit, limit).Scan(&marked, &columns)
+	return min(marked+columns, limit), err
 }
 
 // libraryDir is the directory the service holds: the one with library.toml,

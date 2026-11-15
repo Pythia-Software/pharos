@@ -33,6 +33,9 @@ var queryCacheTables = []string{
 	"session_files",
 	"cost_changes", "model_aliases", "summaries", "semantic_documents",
 	"change_sets", "change_files", "pull_requests", "work_pr_links",
+	// What forges said of workspaces' pull requests: a pull request read
+	// again unchanged writes only pull_request_fetches, which no view reads.
+	"pull_request_details", "pull_request_workspaces",
 	"metrics", "metric_ledger", "text_search_documents", "reasoning_extraction_state",
 	"tl1_installations", "tl1_flavors", "tl1_tasks", "tl1_attempts", "tl1_candidates",
 	"tl1_events", "tl1_review_findings", "tl1_human_touches", "tl1_configuration_health",
@@ -51,6 +54,9 @@ var queryCacheTables = []string{
 	"session_shape_facts", "session_shape_dirty",
 	// What each conversation holds beside its words, which searches filter by.
 	"conversation_content",
+	// The Library counts compactions here. A message's boundary is written
+	// with the message, but a reclassification writes boundaries alone.
+	"compaction_boundaries",
 }
 
 // queryCacheDomains are the tables only some cached views read: what the
@@ -220,7 +226,7 @@ func (c *Catalog) projectionReadiness(ctx context.Context) (map[string]any, erro
 	var textReady bool
 	var queryTextReady bool
 	err := c.DB.QueryRowContext(ctx, `SELECT
- (SELECT COUNT(*) FROM workspace_library_dirty),
+ (SELECT COUNT(*) FROM workspace_library_dirty)+(SELECT COUNT(*) FROM workspace_library_column_pending),
  (SELECT COUNT(*) FROM mcp_metric_dirty),
  EXISTS(SELECT 1 FROM meta WHERE key='text_search_documents_version' AND value='1'),
  (SELECT COUNT(*) FROM meta WHERE key IN ('human_query_text_fts_ready','tool_query_text_fts_ready') AND value='1')=2 AND

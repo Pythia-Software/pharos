@@ -60,22 +60,13 @@ func (c *Catalog) ensureBranchUsage() error {
 // version changes, but only when the stage runs: a library that indexes
 // nothing new would otherwise wait for the next index or a manual run.
 func (c *Catalog) scheduleToolDerivations() error {
-	estimator := usageEstimationStoreVersion + ":" + usageEstimationIdentity()
-	want := outcomesVersion + ":" + outcomeGitVersion + ":" + branchUsageVersion + ":" + estimator
-	stored, err := c.metaValue(context.Background(), "tool_derivations_version")
-	if err != nil {
-		return err
-	}
-	installedEstimator, err := c.metaValue(context.Background(), "usage_estimation_derivation_version")
+	estimator, want := toolDerivationVersions()
+	stored, installedEstimator, err := storedToolDerivationVersions(context.Background(), c.DB)
 	if err != nil {
 		return err
 	}
 	if stored == want && installedEstimator == estimator {
 		return nil
-	}
-	// Migrate the old combined marker without clearing compatible predictions.
-	if installedEstimator == "" && strings.HasSuffix(stored, ":"+estimator) {
-		installedEstimator = estimator
 	}
 	tx, err := c.DB.Begin()
 	if err != nil {
@@ -109,6 +100,40 @@ func (c *Catalog) scheduleToolDerivations() error {
 	}
 	return tx.Commit()
 }
+
+// toolDerivationVersions are the usage estimator's identity and the tools
+// stage's derivation versions with it.
+func toolDerivationVersions() (estimator, want string) {
+	estimator = usageEstimationStoreVersion + ":" + usageEstimationIdentity()
+	return estimator, outcomesVersion + ":" + outcomeGitVersion + ":" + branchUsageVersion + ":" + estimator
+}
+
+// storedToolDerivationVersions are the versions the catalog last derived
+// with, the old combined marker read as the estimator it names.
+func storedToolDerivationVersions(ctx context.Context, db *sql.DB) (stored, estimator string, err error) {
+	for key, value := range map[string]*string{"tool_derivations_version": &stored, "usage_estimation_derivation_version": &estimator} {
+		if err := db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key=?", key).Scan(value); err != nil && err != sql.ErrNoRows {
+			return "", "", err
+		}
+	}
+	current, _ := toolDerivationVersions()
+	// Migrate the old combined marker without clearing compatible predictions.
+	if estimator == "" && strings.HasSuffix(stored, ":"+current) {
+		estimator = current
+	}
+	return stored, estimator, nil
+}
+
+// usageEstimatorChanged is whether scheduleToolDerivations will clear every
+// stored usage estimate, reading usageEstimateTables.
+func usageEstimatorChanged(ctx context.Context, db *sql.DB) (bool, error) {
+	current, _ := toolDerivationVersions()
+	_, installed, err := storedToolDerivationVersions(ctx, db)
+	return err == nil && installed != current, err
+}
+
+// usageEstimateTables are the tables clearUsageEstimatesSQL("") reads whole.
+var usageEstimateTables = []string{"model_requests", "agent_session_usage", "agent_sessions", "tool_calls"}
 
 // branchEvent is one stored event of a conversation that kept its source
 // record: its session, hour, model and the record itself.

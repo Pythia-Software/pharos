@@ -78,11 +78,16 @@ this way their solid pairs were 0.83.
 
 A full rebuild of read links takes 3–5.5 minutes on that library (copies
 0.3–1.3 s, TL1 0.4 s), so only a new rules version rebuilds everything. Later
-runs derive again the readers with diff calls from `peerRecheck` (3 hours)
-before the earliest new tool call, prompt or reply, or call whose output
-arrived late; a day of new work takes 2–11 seconds (every affected reader is
-read again in full). A prompt alone can confirm a review that read nothing
-new, and links whose work joined another family are dropped.
+runs derive again only the readers that new evidence could link. Each
+conversation with a new tool call, or a new prompt or reply at the top level
+of work that edits files or looks at changes, opens a span from `peerRecheck` (3 hours) before its
+earliest new item to `peerWindow` after its latest; the readers are that
+work's own and those with diff or read calls inside a span. A call whose
+output arrived late leaves its span open-ended. Messages in work that never
+edits or reads a diff (an imported chat, whatever its date) open nothing. A
+day of new work takes 2–11 seconds (every affected reader is read again in
+full). A prompt alone can confirm a review that read nothing new, and links
+whose work joined another family are dropped.
 
 **Storage**: `work_peer_links`, directed edges between the mirror
 representatives of each family's root workspace, with message anchors and

@@ -122,12 +122,16 @@ func fixesFingerprint(ctx context.Context, q queryer, today string) (string, err
 	return stableID("fixes-input", fixesVersion, integer(row["events"]), integer(row["last_event"]), integer(row["messages"]), localDay(firstString(row["latest"])), today), nil
 }
 
-// fixesChainInterval spaces rebuilds the analysis chain asks for: events
-// arrive with every update, and a day's grouping barely moves in an hour.
-// The daily Findings pass and a manual refresh always check.
-var fixesChainInterval = time.Hour
+// fixesChainInterval spaces the rebuilds agent events passes ask for. Events
+// arrive with every update, so the fingerprint differs after nearly every
+// pass, and a rebuild regroups the whole window (ten minutes of one core and
+// gigabytes on a large library) to move a ninety-day grouping by an hour's
+// events. Once a day keeps it as current as the daily Findings pass does,
+// which always checks; the page says when it was built (fixes_built_at).
+var fixesChainInterval = 24 * time.Hour
 
-// refreshFixesSoon rebuilds after new events unless a rebuild ran recently.
+// refreshFixesSoon rebuilds after new events unless a rebuild ran within
+// fixesChainInterval. A library with no projection yet builds its first.
 func (c *Catalog) refreshFixesSoon(ctx context.Context) error {
 	if built, _ := c.metaValue(ctx, "fixes_built_at"); built != "" {
 		if at, ok := parseTime(built); ok && c.clock().Sub(at) < fixesChainInterval {

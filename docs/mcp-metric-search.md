@@ -97,7 +97,7 @@ usage accounting in the initial draft as well.
 | `total_tokens` | tokens | Reconciled token consumption. Finds large runs; cumulative checkpoints and request totals must not be added together. |
 | `user_turn_count` | count | Retained user messages of kind `message`, assigned to the selected scope. A measure of interaction length, including harness-generated user prompts. |
 | `tool_call_count` | count | Classified calls in the tool ledger, including delegation calls. One call counts once even when it contains multiple shell commands. |
-| `tool_error_count` | count | Calls whose ledger status is `error`. This measures tool failures, not whether the task failed. |
+| `tool_error_count` | count | Calls whose ledger status is `error`: a result the tool flagged as an error, a nonzero exit, a timeout, a rejected or blocked call. This measures tool failures, not whether the task failed. An exit status of 1 from a program that uses it to report "nothing found" (`rg`, `grep`, `diff`, `cmp`, `test`) is not a failure when the command runs that one program; a chained or piped command ending that way still counts. The Library's Tool errors and Tool calls columns use the same ledger, which holds a call once even when a resumed or forked session's transcript repeats it. |
 | `compaction_count` | count | Attributed compaction events, using the existing Claude boundary and Codex trigger rules, without counting replayed events twice. |
 | `wall_clock_span_seconds` | seconds | Valid recorded start-to-end span for the selected scope. Includes idle time; an unfinished or invalid interval is unknown. |
 | `input_tokens` | tokens | Reconciled input, including cached input. Explains high total consumption. |

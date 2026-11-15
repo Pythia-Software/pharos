@@ -29,6 +29,11 @@ const messageLabelMaskIndexSQL = "CREATE INDEX IF NOT EXISTS message_labels_mask
 
 var messageLabelDataset = messageLabelLiveDataset("")
 
+// messageLabelNotDirtySQL holds a conversation's labels back from a reader
+// while its dirty mark stands. Stored query facts are built without it
+// (messageLabelFactsSource): their readers apply the mark instead.
+const messageLabelNotDirtySQL = " AND NOT EXISTS(SELECT 1 FROM message_labels_dirty dirty WHERE dirty.conversation_id=m.conversation_id)"
+
 // messageLabelLiveDataset is messageLabelLiveDatasetFor with the unmarked
 // fallback, for SQL read without the catalog (executionUnmarkedFallbackSQL).
 func messageLabelLiveDataset(conversations string) sqlDataset {
@@ -49,7 +54,7 @@ func messageLabelLiveDatasetFor(conversations, unmarked string) sqlDataset {
  JOIN conversations c ON c.id=m.conversation_id
  LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories repo ON repo.id=w.repository_id` + projectJoin("w") + `
  LEFT JOIN message_authorship ma ON ma.message_id=m.id
- LEFT JOIN message_labels l ON l.message_id=m.id AND EXISTS(SELECT 1 FROM message_labels_conversations complete WHERE complete.conversation_id=m.conversation_id) AND NOT EXISTS(SELECT 1 FROM message_labels_dirty dirty WHERE dirty.conversation_id=m.conversation_id)
+ LEFT JOIN message_labels l ON l.message_id=m.id AND EXISTS(SELECT 1 FROM message_labels_conversations complete WHERE complete.conversation_id=m.conversation_id)` + messageLabelNotDirtySQL + `
  ` + unmarked + `
  LEFT JOIN message_labels_models lm ON lm.model=l.model
  LEFT JOIN (

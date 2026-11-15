@@ -203,7 +203,7 @@
     return {mode, pause: mode === 'paused' ? pauseLength(document.settings?.paused_until || view.paused_until, now) : '',
       settings: document.settings || {}, columns, unscheduled, unscheduledRunnable, everything: view.everything?.text || '',
       rule: document.rule || null, headline: view.headline || null, battery: batteryModel(document), labels: document.labels || null,
-      agentEvents: document.agent_events || null};
+      agentEvents: document.agent_events || null, pullRequestReviews: document.pull_request_reviews || null};
   }
 
   // Which pause choice a pause is: one that ends within the hour is the
@@ -646,6 +646,7 @@
     if (item.sources?.length) detail.append(sourcePicker(item.sources));
     if (item.id === 'labels' && model.labels) detail.append(renderLabelSettings(model.labels));
     if (item.id === 'agent_events' && model.agentEvents) detail.append(renderAgentEventSettings(model.agentEvents));
+    if (item.id === 'pull-request-reviews' && model.pullRequestReviews) detail.append(renderPullRequestReviewSettings(model.pullRequestReviews));
     const row = node('div', 'bg-row');
     if (item.choices.length && item.state !== 'disabled') {
       const label = node('label', '', item.temporary ? 'Normally ' : 'Run ');
@@ -749,8 +750,10 @@
     card.append(mode, renderColumns(model));
     if (model.rule) {
       const rule = node('div', 'bg-rule');
-      rule.append(node('strong', '', 'How work is placed:'), ...[`usually under ${duration(model.rule.frequent_seconds)} → Frequently`,
-        `under ${duration(model.rule.hourly_seconds)} → Hourly`, 'longer → Daily', 'Select an item to see its cost, change its schedule or run it. Drag it to another column to move it for a week.'].map(text => node('span', '', text)));
+      // A run's own length, and what a day of its runs' fixed cost adds up to.
+      const aDay = seconds => seconds ? `, and under ${duration(seconds)} a day of repeated work` : '';
+      rule.append(node('strong', '', 'How work is placed:'), ...[`runs usually under ${duration(model.rule.frequent_seconds)}${aDay(model.rule.frequent_day_seconds)} → Frequently`,
+        `under ${duration(model.rule.hourly_seconds)}${aDay(model.rule.hourly_day_seconds)} → Hourly`, 'longer → Daily', 'Choose an item for its cost, or to change or run it; drag one to another schedule for a week.'].map(text => node('span', '', text)));
       card.append(rule);
     }
     content.append(card);
@@ -818,6 +821,14 @@
         return call('/api/background');
       },
       threads => call('/api/labels/settings', {agent_events_threads: threads}));
+  }
+
+  // Reading reviews asks a forge over the network, so it is off until chosen.
+  function renderPullRequestReviewSettings(reviews) {
+    return labelSwitch('pullRequestReviewsEnabled', 'pullRequestReviews', 'Pull request reviews',
+      'Ask GitHub, through the gh tool’s login on this Mac, for the reviews and comments on pull requests your workspaces opened or committed to, and keep them in this library. Turning this off keeps what was read.', reviews,
+      enabled => call('/api/pull-request-reviews/settings', {enabled}),
+      async () => call('/api/background'));
   }
 
   // Each model keeps its effective CPU control and returns the next document.

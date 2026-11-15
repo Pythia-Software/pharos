@@ -19,9 +19,15 @@ func TestProjectColorsKeepDefaultsAndEditsWithIdentity(t *testing.T) {
 	c, config := testCatalog(t)
 	root := t.TempDir()
 	writeSourceFile(t, filepath.Join(root, "manifest.json"), `{"theme_color":"#174ee8"}`)
+	// A busy repository's locations list is large; its brand hint must still
+	// come from the one checkout that has a manifest.
+	locations := []string{root}
+	for n := range 2000 {
+		locations = append(locations, fmt.Sprintf("relative/checkout-%04d", n))
+	}
 	tx := seedTx(t, c.DB)
 	for _, id := range []string{"app", "twin"} {
-		if _, err := tx.Exec(`INSERT INTO repositories(id,display_name,local_locations_json,created_at,updated_at) VALUES(?, 'app', ?, '2026-01-01', '2026-01-01')`, id, jsonText([]string{root})); err != nil {
+		if _, err := tx.Exec(`INSERT INTO repositories(id,display_name,local_locations_json,created_at,updated_at) VALUES(?, 'app', ?, '2026-01-01', '2026-01-01')`, id, jsonText(locations)); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,repository_id,title,indexed_at) VALUES(?, 'canonical','local',?,?,'Workspace','2026-01-01')`, id, id, id); err != nil {

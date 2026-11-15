@@ -1,7 +1,9 @@
 package archive
 
 import (
+	"bufio"
 	"context"
+	"io"
 	"slices"
 	"strings"
 )
@@ -94,9 +96,12 @@ func readGitSignals(ctx context.Context, clones []*gitClone, sessions map[string
 		if len(held) == 0 {
 			continue
 		}
-		if output, err := outcomeGitCommand(ctx, clone.Dir, outcomeGitLogTimeout, []byte(strings.Join(held, "\n")+"\n"),
-			append([]string{"-c", "core.quotePath=false", "log", "--no-walk=unsorted", "--stdin", "-p", "--no-prefix", "--no-renames", "--no-color", "--format=%x1e%H"}, gitRawDiff...)...); err == nil {
-			for hash, files := range readAddedLines(string(output)) {
+		var added map[string]map[string]lineSet
+		if err := outcomeGitStream(ctx, clone.Dir, outcomeGitLogTimeout, strings.NewReader(strings.Join(held, "\n")+"\n"), func(output io.Reader) (err error) {
+			added, err = readAddedLines(output)
+			return err
+		}, append([]string{"-c", "core.quotePath=false", "log", "--no-walk=unsorted", "--stdin", "-p", "--no-prefix", "--no-renames", "--no-color", "--format=%x1e%H"}, gitRawDiff...)...); err == nil {
+			for hash, files := range added {
 				if wanted[hash] {
 					signals.Added[hash] = files
 				}
@@ -108,11 +113,19 @@ func readGitSignals(ctx context.Context, clones []*gitClone, sessions map[string
 }
 
 // readAddedLines reads `git log -p --no-prefix --format=%x1e%H` into each
-// commit's added lines per file, as fingerprints.
-func readAddedLines(output string) map[string]map[string]lineSet {
+// commit's added lines per file, as fingerprints, holding one commit's diff
+// at a time.
+func readAddedLines(output io.Reader) (map[string]map[string]lineSet, error) {
 	added := map[string]map[string]lineSet{}
-	for _, record := range strings.Split(output, "\x1e") {
-		hash, body, _ := strings.Cut(record, "\n")
+	records := bufio.NewReader(output)
+	for done := false; !done; {
+		record, err := records.ReadString('\x1e')
+		if err == io.EOF {
+			done = true
+		} else if err != nil {
+			return nil, err
+		}
+		hash, body, _ := strings.Cut(strings.TrimSuffix(record, "\x1e"), "\n")
 		if !gitCommitID.MatchString(hash) {
 			continue
 		}
@@ -138,7 +151,7 @@ func readAddedLines(output string) map[string]map[string]lineSet {
 		}
 		added[hash] = files
 	}
-	return added
+	return added, nil
 }
 
 // lineMargin is how many times the runner-up's matching lines the session

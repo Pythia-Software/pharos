@@ -301,8 +301,20 @@ func (c compressCandidate) unchanged(now capturedVersion) bool {
 	return now.Encoding == "" && now.Size == c.v.Size && now.CapturedAt == c.v.CapturedAt && now.MTimeNS == c.v.MTimeNS && (c.v.SHA256 == "" || now.SHA256 == c.v.SHA256)
 }
 
-// eligible is whether the candidate may be stored encoded now.
-func (c compressCandidate) eligible(dir string, manifest *captureManifest, policy compressPolicy) bool {
+// capturedFiles indexes a manifest's files by captured path, keeping the last
+// entry for a path as a scan of manifest.Files would.
+func capturedFiles(manifest *captureManifest) map[string]*capturedFile {
+	files := make(map[string]*capturedFile, len(manifest.Files))
+	for _, f := range manifest.Files {
+		files[f.Captured] = f
+	}
+	return files
+}
+
+// eligible is whether the candidate may be stored encoded now. files is
+// capturedFiles(manifest), or nil to build it: a pass over every entry
+// passes one index rather than scanning the manifest once per entry.
+func (c compressCandidate) eligible(dir string, manifest *captureManifest, files map[string]*capturedFile, policy compressPolicy) bool {
 	switch c.kind {
 	case "generation":
 		return compressible(dir, manifest, c.database, c.v)
@@ -310,12 +322,10 @@ func (c compressCandidate) eligible(dir string, manifest *captureManifest, polic
 		// Superseded, so cold by definition; no parse reads it again.
 		return c.v.Encoding == "" && strings.HasPrefix(c.v.Captured, captureHistoryDir+"/") && c.v.Size >= compressMinBytes && !pinnedOrUnknown(dir, c.v.Captured)
 	case "file":
-		var file *capturedFile
-		for _, f := range manifest.Files {
-			if f.Captured == c.v.Captured {
-				file = f
-			}
+		if files == nil {
+			files = capturedFiles(manifest)
 		}
+		file := files[c.v.Captured]
 		return file != nil && coldLatest(dir, manifest, file, policy)
 	case "snapshot":
 		for _, snapshot := range manifest.Snapshots {
@@ -451,12 +461,13 @@ func compressSourceFiles(ctx context.Context, target captureTarget, policy compr
 	}
 	outcomes := loadCompressionOutcomes(target.Dir)
 	candidates := []compressCandidate{}
+	files := capturedFiles(manifest)
 	for _, candidate := range compressCandidates(manifest) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		generation := candidate.v
-		if outcomes.settled(target.Dir, generation) || !candidate.eligible(target.Dir, manifest, policy) {
+		if outcomes.settled(target.Dir, generation) || !candidate.eligible(target.Dir, manifest, files, policy) {
 			continue
 		}
 		candidates = append(candidates, candidate)
@@ -674,7 +685,7 @@ func compressEntry(ctx context.Context, target captureTarget, manifest *captureM
 		return abandon(err)
 	}
 	now, record, ok := candidate.locate(current)
-	if !ok || !candidate.unchanged(now) || !(compressCandidate{kind: candidate.kind, database: candidate.database, v: now}).eligible(target.Dir, current, policy) {
+	if !ok || !candidate.unchanged(now) || !(compressCandidate{kind: candidate.kind, database: candidate.database, v: now}).eligible(target.Dir, current, nil, policy) {
 		return abandon(nil)
 	}
 	if same, err := os.Stat(file); err != nil || !os.SameFile(same, original) {

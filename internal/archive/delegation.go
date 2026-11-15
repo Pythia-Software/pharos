@@ -549,11 +549,28 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		// does not decide whether their reported usage overlaps.
 		reporting := 0
 		missingInput := false
-		for _, row := range rows {
+		reports := func(row map[string]any) bool {
 			usage := firstString(row["usage_status"])
-			if usage == "" || usage == "unavailable" || usage == "in-child-conversation" || row["id"] != lead["id"] && integer(row["total_tokens"]) == 0 {
+			return !(usage == "" || usage == "unavailable" || usage == "in-child-conversation" || row["id"] != lead["id"] && integer(row["total_tokens"]) == 0)
+		}
+		// A mirrored launch reports the same work again (Conductor records each
+		// agent's usage on its copy of the call): it counts only when no other
+		// stream here reports, and then only once.
+		primary, secondary := false, false
+		for _, row := range rows {
+			primary = primary || reports(row) && !res.MirroredLaunch(firstString(row["id"]))
+		}
+		for _, row := range rows {
+			if !reports(row) {
 				continue
 			}
+			if res.MirroredLaunch(firstString(row["id"])) {
+				if primary || secondary {
+					continue
+				}
+				secondary = true
+			}
+			usage := firstString(row["usage_status"])
 			reporting++
 			estimated := estimateFlag(row["is_estimate"])
 			// An estimate carries input only when its row says so.
@@ -679,7 +696,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		}
 		var launch sourceRef
 		n.ParentID = p.nodeID(x.Parent.ParentID)
-		n.ParentEvidence, launch = p.parentEvidence(x)
+		n.ParentEvidence, launch = p.parentEvidence(x, workspace)
 		n.ParentCertainty = x.Parent.Certainty.String()
 		switch {
 		case launch.Kind == sourceSession:

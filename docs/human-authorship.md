@@ -12,7 +12,7 @@ Quick classifications are marked **provisional** in the reader and Writing dashb
 
 Completion is recorded per message as counted, suppressed mirror, ineligible, or deferred to refinement. Suppressed copies retain their representative identity even though they have no counting row. Upgrade initialization uses those outcomes and known mirror relationships instead of treating intentionally absent counting rows as unfinished work. Changes to mirror relationships or the chosen representative requeue the affected copies, including a formerly suppressed copy that becomes eligible. Source edits and queue acknowledgements retain revision guards across interruptions and restarts.
 
-The daily pass applies the complete existing classifier to retained history when refinement is pending, then saves its exact incremental checkpoint. It reconciles mirrors, headless launches, copied/re-sent text, reused lines and template session/day counts. Its durable completion receipt covers the relevant input revision, classifier/checkpoint version and local calendar; elapsed days alone do not require another pass. Provisional or deferred messages, a pending queue or missing completion evidence keep it eligible. The scheduler and the worker use the same eligibility check, repeated under the shared classifier lease before execution. Explicit full-rebuild callers can still force classification.
+The daily pass applies the complete classifier when refinement is pending. It starts from the checkpoint the last classifier pass saved, which quick estimates leave in place, and classifies only the messages sent since then when that suffix reaches every queued message and provisional estimate and nothing earlier changed. Otherwise it classifies retained history: after an identity, mirror or launch change, a historical edit or backfill, a prompt that became a template, and at least every seven days as a check on the suffixes. The pass's progress names the reason (`daily refinement, <reason>`), so the run history shows why a full pass ran. Either way it writes only rows whose classification changed, and saves the checkpoint. A full pass reconciles mirrors, headless launches, copied/re-sent text, reused lines and template session/day counts. Its durable completion receipt covers the relevant input revision, classifier/checkpoint version and local calendar; elapsed days alone do not require another pass. Provisional or deferred messages, a pending queue or missing completion evidence keep it eligible. The scheduler and the worker use the same eligibility check, repeated under the shared classifier lease before execution. Explicit full-rebuild callers can still force classification.
 
 Source edits and deletions enter a durable queue in the source transaction; estimate writes acknowledge only the revisions they read. Cancellation, a deadline, a restart or a concurrent source edit retains unfinished work. Refinement's completion receipt and timestamp are published only after all output/state chunks succeed and the input revision remains current. The exact generation, visible estimate generation and last complete historical-pass timestamp are separate, so cheap updates cannot postpone pending refinement. Downstream labels and findings are marked pending transactionally when their classification inputs actually change; identical refinement results do not reschedule them.
 
@@ -145,10 +145,19 @@ For explicit exact rebuilds, the full classifier remains the fallback for
 missing/old/interrupted state,
 identity or mirror changes, launch overlap, historical edits/deletions or
 backfills, equal-time additions, and suffixes exceeding 2,000 user messages.
-A template crossing its threshold, or changing an existing template's session
-or day counts, also takes the full path: older messages' category or displayed
-reason can change. Frequent estimates defer these cases to the daily pass;
-explicit exact rebuilds retain the full fallback. In the exact classifier,
+A template crossing its threshold also takes the full path: its earlier uses
+change category. Another use of a prompt that already is a template does not.
+Its session and day counts are not stored with the span (the stored reason is
+the rule, `Repeated prompt`); the reader looks them up when it shows the
+message. Rows stored with the counts in their reason compare as the same
+classification and are left as they are until the message is classified
+differently, so upgrading rewrites nothing. A suffix also needs every queued
+message and provisional estimate to be one of its messages (or a queued
+message from its span that is no longer counted, whose rows it removes); a
+reconsidered mirror's messages or an old message's estimate take the full
+path. Frequent estimates defer these cases to the daily pass, and remember a
+checkpoint that could not take their suffix until a classifier pass replaces
+it; explicit exact rebuilds retain the full fallback. In the exact classifier,
 stream-local launch replay and targeted historical template replay are not
 implemented. Classification `authorship-v11` recognizes structured question
 replies, preserves their selected-option provenance, and recognizes scheduled

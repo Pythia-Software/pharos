@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -660,6 +662,23 @@ func TestFingerprintSharedBlobCleanup(t *testing.T) {
 		t.Fatalf("workspace PNGs not deduplicated: %d %v", blobs, err)
 	}
 	execTx(t, c.DB, `DELETE FROM conversations WHERE id='fp-a'`)
+	// With nothing due, the per-minute prune looks without taking the writer.
+	held, release := make(chan struct{}), make(chan struct{})
+	holder := make(chan error, 1)
+	go func() {
+		holder <- c.writeTransaction(t.Context(), "hold the writer", func(*sql.Tx) error { close(held); <-release; return nil })
+	}()
+	<-held
+	quick, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	pruned, err := c.pruneFingerprintBlobs(quick)
+	cancel()
+	close(release)
+	if err != nil || pruned {
+		t.Fatalf("prune with nothing due waited for the writer: %v %v", pruned, err)
+	}
+	if err := <-holder; err != nil {
+		t.Fatal(err)
+	}
 	if _, err := c.pruneFingerprintBlobs(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -700,7 +719,7 @@ func TestFingerprintSharedBlobCleanup(t *testing.T) {
 			renderFingerprintTestEntity(t, c, "conversation", "fp-b")
 			execTx(t, c.DB, `DELETE FROM conversations WHERE id='fp-a';
 UPDATE fingerprint_entities SET dirty=0;
-UPDATE conversations SET provider='other' WHERE id='fp-b';
+UPDATE fingerprint_entities SET dirty=1,revision='changed' WHERE entity='conversation' AND id='fp-b';
 UPDATE fingerprint_entities SET dirty=0 WHERE entity='workspace';
 UPDATE fingerprint_entities SET next_attempt=0;
 UPDATE fingerprint_orphans SET not_before=0;
@@ -788,10 +807,10 @@ func TestFingerprintInvalidationAndRecovery(t *testing.T) {
 			t.Fatalf("unchanged input rendered after restart: %d calls", calls)
 		}
 		// Reuse must obey the same publication guard as a fresh render.
-		execTx(t, reopened.DB, `UPDATE conversations SET agent_nickname='before reuse' WHERE id='fp-a'`)
+		execTx(t, reopened.DB, `UPDATE messages SET text='before reuse' WHERE id='fp-m1'`)
 		func() {
 			override(t, &fingerprintInputReadHook, func() {
-				execTx(t, reopened.DB, `UPDATE conversations SET agent_nickname='during reuse' WHERE id='fp-a'`)
+				execTx(t, reopened.DB, `UPDATE messages SET text='during reuse' WHERE id='fp-m1'`)
 			})
 			defer func() { fingerprintInputReadHook = nil }()
 			renderFingerprintTestEntity(t, reopened, "conversation", "fp-a")
@@ -986,6 +1005,320 @@ UPDATE agent_event_messages SET imported_at='after'`)
 	c.DB.QueryRow(`SELECT COUNT(*) FROM fingerprint_blobs`).Scan(&count)
 	if count != 0 {
 		t.Fatal("orphan PNGs not pruned")
+	}
+}
+
+// seedFingerprintSources gives fp-a a row in every table an image is drawn
+// from: a session tree, a tool call, current labels and a two-sided event
+// whose target is resolved from fp-m1's text. fp-b (same workspace) has a
+// pending labels mark.
+func seedFingerprintSources(t *testing.T) *Catalog {
+	t.Helper()
+	c, _ := seedFingerprintLibrary(t)
+	if err := c.ensureLabelsSchema(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ensureAgentEventsSchema(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ensureAgentEventsLedger(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	reply := `I read "private user" as the user's own words.`
+	execTx(t, c.DB, `UPDATE messages SET text='Please keep the private user text.' WHERE id='fp-m1';
+UPDATE messages SET text='`+strings.ReplaceAll(reply, "'", "''")+`' WHERE id='fp-m2';
+INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,depth,provider,model,input_tokens,output_tokens,parent_id) VALUES
+ ('fp-main','fp-w','fp-a','main','root',0,'test','model',10,5,NULL),('fp-child','fp-w','fp-a','child','subagent',1,'test','model',3,2,'fp-main');
+INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES('fp-child','fp-m2',2);
+INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_message_id,sequence,provider,kind,tool_name,tool_category,command_category,status,started_at,ended_at,duration_ms,input_bytes) VALUES
+ ('fp-tool','fp-w','fp-a','fp-child','fp-m2',1,'test','call','Bash','command','vcs','error','2026-01-01T12:01:10Z','2026-01-01T12:01:20Z',10000,40);
+INSERT INTO message_labels_models(model,labels_json) VALUES('fp-model','["P","P.request","C","C.report"]');
+INSERT INTO message_labels_conversations(conversation_id,structure,units,built_at) VALUES('fp-a','structure',2,'2026-01-01');
+INSERT INTO agent_events_conversations(conversation_id,structure,built_at) VALUES('fp-a','structure','2026-01-01');
+INSERT INTO agent_event_messages(message_id,conversation_id,source,candidates,events,model,lexicon,imported_at) VALUES('fp-m2','fp-a','reply',1,1,'t','t','2026-01-01');
+INSERT INTO agent_events(id,message_id,conversation_id,source,occurred_at,day,family,probability,sentence_start,sentence_end,sentence,subject,response,subject_ranges,response_ranges,model) VALUES
+ (7,'fp-m2','fp-a','reply','2026-01-01T12:01:00Z','2026-01-01','assumption',0.9,0,`+fmt.Sprint(len(reply))+`,'`+strings.ReplaceAll(reply, "'", "''")+`','','','[]','[]','t');
+DELETE FROM message_labels_dirty;
+INSERT INTO message_labels_dirty(conversation_id,token) VALUES('fp-b','pending')`)
+	for _, message := range []struct {
+		id   string
+		mask int
+	}{{"fp-m1", 3}, {"fp-m2", 12}} {
+		if _, err := c.DB.Exec(`INSERT INTO message_labels(message_id,conversation_id,segment,labels,probs,chunks,tokens,input_hash,model,contract,labeled_at) VALUES(?,'fp-a','H',?,?,1,7,'hash','fp-model','contract','2026-01-01')`, message.id, message.mask, encodeLabelProbs([]float32{.9, .8, .7, .6})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settleFingerprintSources(t, c)
+	return c
+}
+
+// settleFingerprintSources records the current execution evidence on the
+// ledgers, as a labels and an events run do, so labels and events are drawn.
+func settleFingerprintSources(t *testing.T, c *Catalog) {
+	t.Helper()
+	digests, err := executionDependencyDigestsFor(t.Context(), c.DB, []string{"fp-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB, `UPDATE message_labels_conversations SET execution_digest='`+digests["fp-a"]+`';
+UPDATE agent_events_conversations SET execution_digest='`+digests["fp-a"]+`'`)
+}
+
+// Every column an image can be drawn from must be watched by its source
+// trigger, and nothing else: upgrades and re-indexes rewrite token, model and
+// bookkeeping columns across the library. Change each column the triggers
+// leave out and check that the queue and both entities' renderer input stay
+// as they were. A loader that starts reading such a column fails here until
+// fingerprintSources names it.
+func TestFingerprintSourceColumns(t *testing.T) {
+	c := seedFingerprintSources(t)
+	type state struct{ revisions, conversation, workspace string }
+	read := func(t *testing.T) state {
+		t.Helper()
+		rows, err := queryMapsContext(t.Context(), c.reader(), `SELECT entity,id,revision,dirty FROM fingerprint_entities ORDER BY entity,id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash := func(id string, workspace bool) string {
+			input, err := c.messageLabelFingerprintInput(t.Context(), id, workspace, 0, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input["events"] = input["agent_events"]
+			value, err := fingerprintInputHash(input, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return value
+		}
+		return state{jsonText(rows), hash("fp-a", false), hash("fp-w", true)}
+	}
+	// The fixture draws labels, an event with a quoted target, tools and a branch.
+	input, err := c.messageLabelFingerprintInput(t.Context(), "fp-a", false, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := decodeFingerprintInput(map[string]any{"conversation": input["conversation"], "events": input["agent_events"]})
+	if err != nil || len(source.Events) != 1 || source.Events[0].Target == nil || len(source.Conversation.Messages) != 2 || len(source.Conversation.Messages[0].Labels) == 0 || len(source.Conversation.Activity) != 1 || len(source.Conversation.Sessions) != 2 {
+		t.Fatalf("fixture does not exercise the renderer's input: %+v %v", source, err)
+	}
+	// Columns other code writes with their own invariants; each still reaches
+	// the image through a watched column.
+	alternatives := map[string]string{"workspace_id": "'fp-other'"}
+	for _, table := range fingerprintSources {
+		columns, err := queryMapsContext(t.Context(), c.reader(), `SELECT name FROM pragma_table_info(?)`, table.table)
+		if err != nil || len(columns) == 0 {
+			t.Fatalf("%s: %v", table.table, err)
+		}
+		if table.fields == nil {
+			continue
+		}
+		for _, column := range columns {
+			name := firstString(column["name"])
+			if slices.Contains(table.fields, name) {
+				continue
+			}
+			t.Run(table.table+"."+name, func(t *testing.T) {
+				if countRows(t, c, `SELECT COUNT(*) FROM `+sqlIdentifier(table.table)) == 0 {
+					t.Fatalf("no %s row to change", table.table)
+				}
+				before := read(t)
+				var generation int64
+				generation, _, _ = executionSourceGeneration(t.Context(), c.reader())
+				column := sqlIdentifier(name)
+				changes := []string{`CASE WHEN ` + column + ` IS NULL THEN '1' WHEN typeof(` + column + `) IN ('integer','real') THEN ` + column + `+1 WHEN typeof(` + column + `)='blob' THEN ` + column + `||X'01' ELSE ` + column + `||'x' END`, "NULL"}
+				if value, ok := alternatives[name]; ok {
+					changes = append([]string{value}, changes...)
+				}
+				var problem error
+				for _, change := range changes {
+					if _, problem = c.DB.Exec(`UPDATE ` + sqlIdentifier(table.table) + ` SET ` + column + `=` + change); problem == nil {
+						break
+					}
+				}
+				if problem != nil {
+					t.Fatalf("cannot change %s.%s: %v", table.table, name, problem)
+				}
+				if marked := countRows(t, c, `SELECT (SELECT COUNT(*) FROM message_labels_dirty WHERE conversation_id='fp-a')+(SELECT COUNT(*) FROM agent_events_dirty WHERE conversation_id='fp-a')`); marked != 0 {
+					// Labels or events are rebuilt from this column: their
+					// pending mark requeues the images, and the rebuild
+					// requeues them again with what it wrote.
+					execTx(t, c.DB, `DELETE FROM message_labels_dirty WHERE conversation_id='fp-a'; DELETE FROM agent_events_dirty WHERE conversation_id='fp-a'`)
+					settleFingerprintSources(t, c)
+					return
+				}
+				after := read(t)
+				if after.revisions != before.revisions {
+					t.Errorf("an unread column queued images")
+				}
+				if moved, _, _ := executionSourceGeneration(t.Context(), c.reader()); moved != generation {
+					// Execution evidence: its mark (message_labels_dirty,
+					// agent_events_execution_stale) requeues the images.
+					settleFingerprintSources(t, c)
+					return
+				}
+				if after.conversation != before.conversation || after.workspace != before.workspace {
+					t.Errorf("the renderer reads %s.%s: add it to fingerprintSources", table.table, name)
+				}
+			})
+		}
+	}
+	// A newly recorded labels model queues only the conversations whose
+	// labels it decodes: none, until its labels are written.
+	before := read(t)
+	execTx(t, c.DB, `INSERT INTO message_labels_models(model,labels_json) VALUES('fp-next','["P"]')`)
+	if read(t).revisions != before.revisions {
+		t.Fatal("a new labels model queued the library")
+	}
+	execTx(t, c.DB, `UPDATE message_labels_models SET labels_json='["C","C.report","P","P.request"]' WHERE model='fp-model'`)
+	if dirty := countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1 AND id IN ('fp-a','fp-w')`); dirty != 2 || countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1 AND id='fp-other'`) != 0 {
+		t.Fatalf("a changed label order queued %d of fp-a and its workspace, or another entity", dirty)
+	}
+}
+
+// A large workspace checks its conversations' labels against the shared
+// catalog-wide execution digests, with the same input as walking each.
+func TestFingerprintWorkspaceSharesExecutionDigests(t *testing.T) {
+	c := seedFingerprintSources(t)
+	// Without built events, nothing else reads the catalog-wide digests.
+	execTx(t, c.DB, `DROP TABLE agent_events_conversations`)
+	read := func() string {
+		t.Helper()
+		input, err := c.messageLabelFingerprintInput(t.Context(), "fp-w", true, 0, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if messages := input["conversation"].(map[string]any)["messages"].([]map[string]any); len(messages) == 0 || len(messages[0]["labels"].([]any)) == 0 {
+			t.Fatal("workspace labels not drawn", messages)
+		}
+		return jsonText(input)
+	}
+	clear := func() {
+		dependencyDigestCache.Lock()
+		dependencyDigestCache.entries = nil
+		dependencyDigestCache.Unlock()
+	}
+	clear()
+	walked := read()
+	if digests, err := cachedExecutionDependencyDigests(t.Context(), c.reader()); err != nil || digests != nil {
+		t.Fatalf("a small workspace read the catalog-wide digests: %v", err)
+	}
+	override(t, &fingerprintSharedDigestsFrom, 1)
+	clear()
+	if shared := read(); shared != walked {
+		t.Fatalf("shared digests changed the input:\n%s\n%s", shared, walked)
+	}
+	if digests, err := cachedExecutionDependencyDigests(t.Context(), c.reader()); err != nil || digests == nil {
+		t.Fatalf("a large workspace walked each conversation: %v", err)
+	}
+}
+
+// A workspace with one conversation, or none, draws images already drawn: it
+// shares them without a load or a render, and they are the bytes its own
+// render would produce.
+func TestFingerprintWorkspaceSharing(t *testing.T) {
+	c, _ := seedFingerprintLibrary(t)
+	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('fp-one','test','test','fp-one','One','2026-01-01'),('fp-empty','test','test','fp-empty','Empty','2026-01-01');
+INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('fp-c','fp-one','test','test','c');
+INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('fp-c1','fp-c','c1','user','message','question','c1','2026-01-02T12:00:00Z'),('fp-c2','fp-c','c2','assistant','message','answer','c2','2026-01-02T12:05:00Z');
+INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status,started_at,ended_at) VALUES('fp-ct','fp-one','fp-c',1,'test','call','Bash','command','error','2026-01-02T12:01:00Z','2026-01-02T12:03:00Z')`)
+	renderer, err := newFingerprintRenderer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	c.fingerprints.renderer = fingerprintRenderFunc(func(ctx context.Context, input any, mask int) (fingerprintRendered, error) {
+		calls++
+		return renderer.Render(ctx, input, mask)
+	})
+	images := func(entity, id string) string {
+		t.Helper()
+		rows, err := queryMapsContext(t.Context(), c.reader(), `SELECT profile,theme,events,hash FROM fingerprint_images WHERE entity=? AND entity_id=? ORDER BY profile,theme,events`, entity, id)
+		if err != nil || len(rows) == 0 {
+			t.Fatalf("%s %s: no images %v", entity, id, err)
+		}
+		return jsonText(rows)
+	}
+	// What the workspace's own render draws, for the comparison.
+	ownRender := func(id string, mask int) string {
+		t.Helper()
+		input, err := c.messageLabelFingerprintInput(t.Context(), id, true, 0, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input["events"] = input["agent_events"]
+		result, err := renderer.Render(t.Context(), input, mask)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows := []map[string]any{}
+		for _, image := range result.Images {
+			rows = append(rows, map[string]any{"profile": image.Profile, "theme": image.Theme, "events": map[bool]int{true: 1}[image.Events], "hash": image.Hash})
+		}
+		return jsonText(rows)
+	}
+	sameHashes := func(a, b string) bool {
+		var left, right []map[string]any
+		_ = json.Unmarshal([]byte(a), &left)
+		_ = json.Unmarshal([]byte(b), &right)
+		hashes := func(rows []map[string]any) map[string]any {
+			out := map[string]any{}
+			for _, row := range rows {
+				out[fmt.Sprint(row["profile"], row["theme"], row["events"])] = row["hash"]
+			}
+			return out
+		}
+		return len(left) > 0 && jsonText(hashes(left)) == jsonText(hashes(right))
+	}
+	renderFingerprintTestEntity(t, c, "conversation", "fp-c")
+	renderFingerprintTestEntity(t, c, "workspace", "fp-one")
+	if calls != 1 || !sameHashes(images("workspace", "fp-one"), images("conversation", "fp-c")) || !sameHashes(images("workspace", "fp-one"), ownRender("fp-one", 1)) {
+		t.Fatalf("one-conversation workspace: calls=%d workspace=%s conversation=%s", calls, images("workspace", "fp-one"), images("conversation", "fp-c"))
+	}
+	if m, err := c.fingerprintMetadata(t.Context(), fingerprintRequest{"workspace", "fp-one", "wide"}, true); err != nil || m.State != "ready" {
+		t.Fatal("shared workspace images not ready", m, err)
+	}
+	// The first empty workspace renders; the next shares its images.
+	renderFingerprintTestEntity(t, c, "workspace", "fp-other")
+	renderFingerprintTestEntity(t, c, "workspace", "fp-empty")
+	if calls != 2 || !sameHashes(images("workspace", "fp-empty"), images("workspace", "fp-other")) || !sameHashes(images("workspace", "fp-empty"), ownRender("fp-empty", 1)) {
+		t.Fatalf("empty workspace: calls=%d", calls)
+	}
+	// A change queues both; the workspace waits for its conversation, which
+	// goes first at the workspace's priority, then shares its new images.
+	execTx(t, c.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('fp-c3','fp-c','c3','user','message','more','c3','2026-01-02T12:09:00Z');
+UPDATE fingerprint_entities SET dirty=0 WHERE id NOT IN ('fp-c','fp-one');
+UPDATE fingerprint_entities SET next_attempt=0,priority=CASE entity WHEN 'workspace' THEN 100 ELSE 0 END WHERE id IN ('fp-c','fp-one')`)
+	if more, err := c.refreshFingerprintImages(t.Context()); err != nil || !more || calls != 2 {
+		t.Fatalf("workspace did not wait for its conversation: more=%v calls=%d %v", more, calls, err)
+	}
+	if waiting := countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE entity='workspace' AND id='fp-one' AND dirty=1 AND next_attempt>unixepoch() AND attempts=0`); waiting != 1 || countRows(t, c, `SELECT priority FROM fingerprint_entities WHERE entity='conversation' AND id='fp-c'`) != 100 {
+		t.Fatal("waiting workspace or its conversation's priority not recorded")
+	}
+	if more, err := c.refreshFingerprintImages(t.Context()); err != nil || !more || calls != 3 {
+		t.Fatalf("conversation did not go first: more=%v calls=%d %v", more, calls, err)
+	}
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET next_attempt=0 WHERE entity='workspace' AND id='fp-one'`)
+	if more, err := c.refreshFingerprintImages(t.Context()); err != nil || !more || calls != 3 {
+		t.Fatalf("workspace did not share its conversation's new images: more=%v calls=%d %v", more, calls, err)
+	}
+	if !sameHashes(images("workspace", "fp-one"), images("conversation", "fp-c")) || !sameHashes(images("workspace", "fp-one"), ownRender("fp-one", 1)) || countRows(t, c, `SELECT COUNT(*) FROM fingerprint_entities WHERE dirty=1`) != 0 {
+		t.Fatal("workspace images differ from its conversation's after a change")
+	}
+	// A conversation whose render failed leaves its workspace to render alone.
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=1,attempts=1,next_attempt=unixepoch()+300,revision='failed' WHERE entity='conversation' AND id='fp-c';
+UPDATE fingerprint_entities SET revision='changed' WHERE entity='workspace' AND id='fp-one'`)
+	renderFingerprintTestEntity(t, c, "workspace", "fp-one")
+	if calls != 4 {
+		t.Fatalf("workspace waited for a failing conversation: calls=%d", calls)
+	}
+	// A second conversation makes the workspace its own drawing.
+	execTx(t, c.DB, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('fp-d','fp-one','test','test','d');
+INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('fp-d1','fp-d','d1','user','message','other','d1','2026-01-03T12:00:00Z')`)
+	renderFingerprintTestEntity(t, c, "conversation", "fp-d")
+	renderFingerprintTestEntity(t, c, "workspace", "fp-one")
+	if calls != 6 {
+		t.Fatalf("multi-conversation workspace was not rendered: calls=%d", calls)
 	}
 }
 
@@ -1399,21 +1732,39 @@ func TestFingerprintRendererVersion(t *testing.T) {
 }
 
 func TestFingerprintWorkersShareOnePass(t *testing.T) {
-	c := &Catalog{ops: newOpRegistry("service")}
+	c, _ := seedFingerprintLibrary(t)
+	c.ops = newOpRegistry("service")
+	// Three eligible entities; a fourth waits in retry backoff.
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=1,next_attempt=0;
+UPDATE fingerprint_entities SET next_attempt=unixepoch()+300 WHERE entity='workspace' AND id='fp-other'`)
 	shared := &c.fingerprints.pass
 	first, second := shared.join(t.Context(), c), shared.join(t.Context(), c)
 	if first != second || len(c.ops.running()) != 1 {
 		t.Fatal("workers opened separate operations")
 	}
-	shared.worked(2)
-	shared.worked(3)
+	step := func() opStep {
+		t.Helper()
+		for _, view := range c.ops.views() {
+			return view.Step
+		}
+		t.Fatal("no pass")
+		return opStep{}
+	}
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=0 WHERE entity='conversation' AND id='fp-a'`)
+	shared.worked(t.Context(), c, 1)
+	// The total is the work done plus what is eligible.
+	if s := step(); s.Done != 1 || s.Total != 3 {
+		t.Fatalf("pass total: %+v", s)
+	}
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=0 WHERE id IN ('fp-b','fp-w')`)
+	shared.worked(t.Context(), c, 2)
 	shared.leave(nil)
 	if len(c.ops.running()) != 1 {
 		t.Fatal("the first worker to finish ended the other's pass")
 	}
 	shared.leave(nil)
-	if views := c.ops.views(); len(c.ops.running()) != 0 || len(views) != 1 || views[0].Step.Done != 5 {
-		t.Fatalf("one pass with both workers' count: %+v", views)
+	if views := c.ops.views(); len(c.ops.running()) != 0 || len(views) != 1 || views[0].Step.Done != 3 || views[0].Step.Total != 3 {
+		t.Fatalf("one pass with both workers' count and its total: %+v", views)
 	}
 }
 

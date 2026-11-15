@@ -485,7 +485,13 @@ func TestAskConversationPersistenceAndSelection(t *testing.T) {
 	}
 	input := askInput()
 	input["currentURI"] = pageURI
+	before := upgradePending(t, s.Catalog)
 	askOK(t, s, "send", input)
+	// A saved chat records what ingest records, so it leaves no Library
+	// upgrade step pending.
+	if after := upgradePending(t, s.Catalog); !reflect.DeepEqual(after, before) {
+		t.Fatalf("a saved chat left upgrade work: %v, before %v", after, before)
+	}
 	session, err := s.askSession(t.Context(), "chat-1")
 	if err != nil || len(session.Conversation) != 1 || len(session.Conversation[0].Cards) != 2 {
 		t.Fatalf("session: %+v %v", session, err)

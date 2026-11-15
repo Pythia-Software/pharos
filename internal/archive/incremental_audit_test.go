@@ -296,6 +296,62 @@ func TestAutomaticAuditFallsBackAndPersistsLargerChecks(t *testing.T) {
 		})
 	}
 
+	// An input that keeps running out of room is retried ever less often and
+	// yields the batch to inputs tried less; changing it starts afresh.
+	t.Run("backoff", func(t *testing.T) {
+		server, units := stableCodexDirectory(t, 2)
+		stuck, other := units[0], units[1]
+		wait := func(unit syncUnit) time.Duration {
+			t.Helper()
+			var next string
+			if err := server.Catalog.DB.QueryRow("SELECT next_at FROM sync_verification_progress WHERE unit=? AND heavy=1", unit.ID).Scan(&next); err != nil {
+				t.Fatal(err)
+			}
+			at, _ := parseTime(next)
+			return time.Until(at).Round(time.Minute)
+		}
+		if err := server.Catalog.recordVerification(stuck, auditResult{Outcome: "deferred", Reason: "evidence_size"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := wait(stuck); got > 0 {
+			t.Fatalf("a newly heavy input waits %s for the queued pass", got)
+		}
+		waits := []time.Duration{}
+		for range 9 {
+			if err := server.Catalog.recordVerification(stuck, auditResult{Outcome: "deferred", Reason: "time_budget"}); err != nil {
+				t.Fatal(err)
+			}
+			waits = append(waits, wait(stuck))
+		}
+		if want := []time.Duration{15 * time.Minute, 30 * time.Minute, time.Hour, 2 * time.Hour}; !slices.Equal(waits[:4], want) || waits[8] != auditBackoffMax {
+			t.Fatalf("time-boxed retries waited %v", waits)
+		}
+		changed := stuck
+		changed.Parts = append(slices.Clone(stuck.Parts), sourcePart{item: "changed"})
+		if err := server.Catalog.recordVerification(changed, auditResult{Outcome: "deferred", Reason: "time_budget"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := wait(changed); got > 0 {
+			t.Fatalf("a changed input kept its backoff: %s", got)
+		}
+		// Both due: the batch of one takes the input tried less.
+		if err := server.Catalog.recordVerification(other, auditResult{Outcome: "deferred", Reason: "evidence_size"}); err != nil {
+			t.Fatal(err)
+		}
+		execTx(t, server.Catalog.DB, `UPDATE sync_verification_progress SET next_at='2000-01-01T00:00:00.000Z',attempts=CASE WHEN unit='`+other.ID+`' THEN 1 ELSE 9 END WHERE heavy=1`)
+		override(t, &heavyAuditBatch, 1)
+		_, op := server.begin(t.Context(), OperationSpec{Kind: "index.verify", Trigger: triggerUser})
+		err := server.verifyQueued(t.Context(), op)
+		op.Finish(err)
+		if err != nil || countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_verification_progress WHERE heavy=1 AND unit='"+other.ID+"'") != 0 {
+			t.Fatalf("the input tried less was not verified first: %v", err)
+		}
+		// Acquisition reports its own work; the pass still ends counting inputs.
+		if op.step.Name != "Verify queued inputs" || op.step.Done != 1 || op.step.Total != 1 {
+			t.Fatalf("queued verification progress: %+v", op.step)
+		}
+	})
+
 	for _, kind := range []string{"codex", "antigravity", "conductor"} {
 		t.Run("retained-"+kind, func(t *testing.T) {
 			root := t.TempDir()

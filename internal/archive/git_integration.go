@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -336,6 +337,105 @@ func integrationTip(ctx context.Context, location string) (string, error) {
 	return "", nil
 }
 
+// integrationTipEntry is a common directory's last tip read and the stat
+// signature of the ref files that tip came from. Catalog.gitMainTips holds
+// them by common directory, under gitMainMu.
+type integrationTipEntry struct{ signature, tip string }
+
+// integrationTipRefs are the ref files integrationTip reads, relative to the
+// common directory; origin/HEAD's target is added when it names another ref.
+var integrationTipRefs = []string{"packed-refs", "refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master"}
+
+// integrationRefSignature describes the files integrationTip's answer depends
+// on: each one's size and modification time, or its absence. ok is false when
+// that cannot be told from files (a reftable store, an unreadable file), so
+// the caller asks Git.
+func integrationRefSignature(common string) (signature string, ok bool) {
+	if _, err := os.Lstat(filepath.Join(common, "reftable")); !os.IsNotExist(err) {
+		return "", false
+	}
+	refs := slices.Clone(integrationTipRefs)
+	if data, err := os.ReadFile(filepath.Join(common, "refs/remotes/origin/HEAD")); err == nil {
+		if target, symbolic := strings.CutPrefix(strings.TrimSpace(string(data)), "ref: "); symbolic {
+			if !strings.HasPrefix(target, "refs/") || strings.Contains(target, "..") {
+				return "", false
+			}
+			refs = append(refs, target)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", false
+	}
+	var out strings.Builder
+	for _, ref := range refs {
+		info, err := os.Stat(filepath.Join(common, ref))
+		switch {
+		case os.IsNotExist(err):
+			fmt.Fprintf(&out, "%s:-|", ref)
+		case err != nil || !info.Mode().IsRegular():
+			return "", false
+		default:
+			fmt.Fprintf(&out, "%s:%d:%d|", ref, info.Size(), info.ModTime().UnixNano())
+		}
+	}
+	return out.String(), true
+}
+
+// integrationRefsDir is the Git directory whose refs Git reads for a checkout
+// with this common directory. Usually that is common itself. A leftover .git
+// folder without HEAD is not a repository, so Git keeps looking in the
+// folders above, as for a Conductor workspace folder inside its repository's
+// checkout; this follows that search. answerable is false only when no folder
+// above can hold a repository, so Git would fail. refs is "" when the search
+// is unsure: the caller asks Git without caching.
+func integrationRefsDir(common string) (refs string, answerable bool) {
+	if _, err := os.Stat(filepath.Join(common, "HEAD")); err == nil {
+		return common, true
+	} else if !os.IsNotExist(err) || filepath.Base(common) != ".git" {
+		return "", true
+	}
+	for dir := filepath.Dir(filepath.Dir(common)); ; dir = filepath.Dir(dir) {
+		// A bare repository, or any .git entry, is something Git may use.
+		if _, err := os.Stat(filepath.Join(dir, "HEAD")); !os.IsNotExist(err) {
+			return "", true
+		}
+		if _, err := os.Lstat(filepath.Join(dir, ".git")); !os.IsNotExist(err) {
+			found, err := integrationCommonDir(dir)
+			if err != nil {
+				return "", true
+			}
+			return integrationRefsDir(found)
+		}
+		if filepath.Dir(dir) == dir {
+			return "", false
+		}
+	}
+}
+
+// cachedIntegrationTip is integrationTip, remembered per common directory
+// while the ref files in refs are unchanged, so a pass over unmoved
+// repositories starts no Git process. A failed read is not remembered.
+func (c *Catalog) cachedIntegrationTip(ctx context.Context, location, common, refs string) (string, error) {
+	// Stat before reading, so a ref moving in between leaves a stale signature
+	// and the next pass reads again.
+	signature, ok := "", false
+	if refs != "" {
+		signature, ok = integrationRefSignature(refs)
+	}
+	if entry, hit := c.gitMainTips[common]; ok && hit && entry.signature == signature {
+		return entry.tip, nil
+	}
+	tip, err := integrationTip(ctx, location)
+	if err != nil || !ok {
+		delete(c.gitMainTips, common)
+		return tip, err
+	}
+	if c.gitMainTips == nil {
+		c.gitMainTips = map[string]integrationTipEntry{}
+	}
+	c.gitMainTips[common] = integrationTipEntry{signature, tip}
+	return tip, nil
+}
+
 // refreshMainIntegrations only runs Git in paths this host recorded. Another
 // Mac's path may not exist here, or may be an unrelated checkout: Conductor
 // reuses workspace directory names.
@@ -404,7 +504,14 @@ func (c *Catalog) lookUpMainIntegrations(ctx context.Context) error {
 				r, probed = repositories[common]
 				if !probed {
 					repositories[common] = nil
-					tip, err := integrationTip(ctx, location)
+					// A leftover .git folder with no repository in it and none
+					// above it: Git would only fail, and a failure is never
+					// evidence.
+					refs, answerable := integrationRefsDir(common)
+					if !answerable {
+						continue
+					}
+					tip, err := c.cachedIntegrationTip(ctx, location, common, refs)
 					if err != nil {
 						continue
 					}

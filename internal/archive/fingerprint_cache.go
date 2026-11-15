@@ -97,9 +97,54 @@ WHERE dirty=1 AND (events_mask&1=0 OR `+complete(1)+`) AND (events_mask&2=0 OR `
 	return err
 }
 
+type fingerprintSource struct {
+	table, key string
+	fields     []string
+}
+
+// fingerprintSources are the tables an image is drawn from and, for an
+// update, the columns that can change the drawing: those
+// messageLabelFingerprintInput reads into the renderer's projection
+// (fingerprintInput), or that decide whether labels or events are pending or
+// withheld. Columns the loader never reads (token counts, models, titles,
+// timestamps) stay out, so an upgrade or re-index that rewrites them does not
+// queue the library. A change to execution evidence reaches the images through
+// the marks it causes (message_labels_dirty, agent_events_execution_stale),
+// not through these columns. TestFingerprintSourceColumns changes every column
+// left out and checks that neither the input nor the queue moves.
+var fingerprintSources = []fingerprintSource{
+	{"conversations", "id", []string{"id", "workspace_id"}},
+	{"workspaces", "id", []string{"id"}},
+	// role, kind and text resolve event targets (agentEventLinksForMessages).
+	{"messages", "conversation_id", []string{"id", "conversation_id", "selected", "kind", "role", "text", "created_at", "source_order"}},
+	{"tool_calls", "conversation_id", []string{"id", "conversation_id", "agent_session_id", "call_message_id", "tool_name", "tool_category", "command_category", "status", "started_at", "ended_at", "duration_ms", "sequence"}},
+	{"agent_sessions", "conversation_id", []string{"id", "conversation_id", "parent_id", "depth", "native_id"}},
+	{"agent_session_messages", "(SELECT conversation_id FROM messages WHERE id=%s.message_id)", []string{"agent_session_id", "message_id"}},
+	{"agent_events", "conversation_id", []string{"id", "message_id", "conversation_id", "family", "probability", "sentence_start", "sentence_end", "sentence", "subject", "response"}},
+	{"agent_event_messages", "conversation_id", []string{"message_id", "conversation_id", "source", "occurred_at", "day", "candidates", "events", "model", "lexicon", "input_hash"}},
+	// Marking a conversation's events stale, the run that clears the
+	// mark, and its events build stamp (whose execution digest decides
+	// whether they are withheld) change what its ribbon may draw
+	// (fingerprintExecutionPending); message_labels_conversations is the
+	// labels' stamp.
+	{"agent_events_execution_stale", "conversation_id", nil},
+	// Completion timestamps alone do not change the drawing or freshness.
+	{"agent_events_conversations", "conversation_id", []string{"conversation_id", "structure", "since", "execution_digest"}},
+	// model names the label order the stored bits are decoded with.
+	{"message_labels", "conversation_id", []string{"message_id", "conversation_id", "labels", "probs", "chunks", "model"}},
+	{"message_labels_conversations", "conversation_id", []string{"conversation_id", "structure", "units", "execution_digest"}},
+	// A row's presence is the pending state; a renewed token is not a change.
+	{"message_labels_dirty", "conversation_id", []string{"conversation_id"}},
+	// A model's label order decodes the labels stored under it: only those
+	// labels' conversations (normally none, when a model is first recorded).
+	{"message_labels_models", "model", []string{"model", "labels_json"}},
+}
+
 // Invalidation is in the source transaction, including writes by another
 // process. Random generation tokens also protect deletion/recreation of an ID.
 // Optional labeling tables get these triggers when their ledger is created.
+// Reinstalling them queues nothing: an existing entity is marked only by a
+// later source write.
 func fingerprintSourceTriggers(ctx context.Context, tx *sql.Tx) error {
 	var exists int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE name='fingerprint_entities'`).Scan(&exists); err != nil || exists == 0 {
@@ -113,33 +158,7 @@ func fingerprintSourceTriggers(ctx context.Context, tx *sql.Tx) error {
 		return `INSERT INTO fingerprint_entities(entity,id,revision) SELECT 'conversation',id,lower(hex(randomblob(16))) FROM conversations WHERE id=` + id + upsert +
 			workspace(`(SELECT workspace_id FROM conversations WHERE id=`+id+`)`)
 	}
-	type source struct {
-		table, key string
-		fields     []string
-	}
-	sources := []source{
-		{"conversations", "id", []string{"id", "workspace_id", "provider", "started_at", "agent_depth", "agent_nickname", "parent_id"}},
-		{"workspaces", "id", []string{"id", "title"}},
-		{"messages", "conversation_id", []string{"id", "conversation_id", "selected", "kind", "role", "text", "content_hash", "created_at", "source_order"}},
-		{"tool_calls", "conversation_id", []string{"id", "conversation_id", "agent_session_id", "call_message_id", "tool_name", "tool_category", "command_category", "status", "started_at", "ended_at", "duration_ms", "sequence"}},
-		{"agent_sessions", "conversation_id", nil},
-		{"agent_session_messages", "(SELECT conversation_id FROM messages WHERE id=%s.message_id)", nil},
-		{"agent_events", "conversation_id", nil},
-		{"agent_event_messages", "conversation_id", []string{"message_id", "conversation_id", "source", "occurred_at", "day", "candidates", "events", "model", "lexicon", "input_hash"}},
-		// Marking a conversation's events stale, the run that clears the
-		// mark, and its events build stamp (whose execution digest decides
-		// whether they are withheld) change what its ribbon may draw
-		// (fingerprintExecutionPending); message_labels_conversations is the
-		// labels' stamp.
-		{"agent_events_execution_stale", "conversation_id", nil},
-		// Completion timestamps alone do not change the drawing or freshness.
-		{"agent_events_conversations", "conversation_id", []string{"conversation_id", "structure", "since", "execution_digest"}},
-		{"message_labels", "conversation_id", []string{"message_id", "conversation_id", "segment", "labels", "probs", "chunks", "tokens", "input_hash", "model", "contract"}},
-		{"message_labels_conversations", "conversation_id", []string{"conversation_id", "structure", "units", "execution_digest"}},
-		{"message_labels_dirty", "conversation_id", nil},
-		{"message_labels_models", "*", nil},
-	}
-	for _, source := range sources {
+	for _, source := range fingerprintSources {
 		columns, err := queryMapsContext(ctx, tx, `PRAGMA table_info(`+sqlIdentifier(source.table)+`)`)
 		if err != nil {
 			return err
@@ -193,7 +212,10 @@ func fingerprintSourceTriggers(ctx context.Context, tx *sql.Tx) error {
 					case "workspaces":
 						body += workspace(key)
 					case "message_labels_models":
-						body += `UPDATE fingerprint_entities SET revision=lower(hex(randomblob(16))),dirty=1,attempts=0,next_attempt=0,last_error='';`
+						labelled := `SELECT conversation_id FROM message_labels WHERE model=` + key
+						requeue := `UPDATE fingerprint_entities SET revision=lower(hex(randomblob(16))),dirty=1,attempts=0,next_attempt=0,last_error='' WHERE entity=`
+						body += requeue + `'conversation' AND id IN (` + labelled + `);` +
+							requeue + `'workspace' AND id IN (SELECT workspace_id FROM conversations WHERE id IN (` + labelled + `));`
 					default:
 						body += conversation(key)
 					}
@@ -219,6 +241,11 @@ var fingerprintPruneBatchSize = 100
 // Report processed orphan markers, including those still referenced, so a
 // scheduled/manual pass can drain the backlog in bounded transactions.
 func (c *Catalog) pruneFingerprintBlobs(ctx context.Context) (bool, error) {
+	// Look on a reader first: most minutes nothing is due, and the writer is
+	// the catalog's one shared lock.
+	if due, err := catalogExists(ctx, c, `SELECT 1 FROM fingerprint_orphans WHERE not_before<=unixepoch()`); err != nil || !due {
+		return false, err
+	}
 	var removed int64
 	err := c.writeTransaction(ctx, "prune fingerprint cache", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM fingerprint_blobs WHERE hash IN (SELECT hash FROM fingerprint_orphans WHERE not_before<=unixepoch() LIMIT ?) AND NOT EXISTS(SELECT 1 FROM fingerprint_images i WHERE i.hash=fingerprint_blobs.hash)`, fingerprintPruneBatchSize); err != nil {

@@ -137,7 +137,9 @@ func TestAuthorshipDetectsTemplatesButNotOneDayBroadcasts(t *testing.T) {
 	}
 	c := newClassifier(inputs)
 	for _, input := range inputs[:5] {
-		if spans := c.classify(input); categoryText(input.Text, spans, spanTyped) != "" || !strings.Contains(spans[0].Reason, "5 conversations on 5 days") {
+		// The counts grow with every later use, so they are not part of what
+		// is stored; the rule is.
+		if spans := c.classify(input); categoryText(input.Text, spans, spanTyped) != "" || spans[0].Reason != "Repeated prompt" || spanRule(spans[0]) != "Repeated prompt" {
 			t.Fatalf("template spans = %#v", spans)
 		}
 	}
@@ -498,8 +500,12 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	if len(started) != 1 {
 		t.Fatal("page read started historical refinement")
 	}
+	// The generation moved with the tool ledger alone: nothing is queued and
+	// the mirrors stand, so the refresh publishes it without a pass.
 	c.refreshAuthorship()
-	started[1](t.Context())
+	if len(started) != 1 {
+		t.Fatal("an index that queued no writing started an estimates pass")
+	}
 	if c.ensureAuthorship() {
 		t.Fatal("estimates did not catch up")
 	}
@@ -510,30 +516,78 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	execTx(t, c.DB, `UPDATE meta SET value='1/authorship-v0' WHERE key='authorship_quick_generation'`, `DELETE FROM meta WHERE key='authorship_quick_version'`)
 	c.authorship.estimatesAttempted = false
 	c.ensureAuthorship()
-	if len(started) != 3 {
+	if len(started) != 2 {
 		t.Fatal("older estimates did not start a bounded update")
 	}
-	started[2](t.Context())
+	started[1](t.Context())
+	// Writing that arrives while this process indexes gets a pass, and a
+	// follow-up when the ingest ends.
 	c.ingestStarted()
-	if err := bumpToolLedgerGeneration(c.DB); err != nil {
-		t.Fatal(err)
-	}
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','c')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('m','c','m','user','message','Please fix the parser','2026-09-01T12:00:00.000Z','m')`)
 	c.refreshAuthorship()
-	started[3](t.Context())
-	if !c.authorship.deferred.Load() {
+	if len(started) != 3 {
+		t.Fatal("queued writing did not start an estimates pass")
+	}
+	started[2](t.Context())
+	if !c.authorship.deferred.Load() || c.authorshipQuickPending() {
 		t.Fatal("update during indexing did not remember its follow-up")
 	}
 	c.ingestEnded(true)
-	if len(started) != 4 {
+	if len(started) != 3 {
 		t.Fatal("stopped ingest started another pass")
 	}
+	// So does a generation published without a pass.
+	c.authorship.deferred.Store(false)
+	if err := bumpToolLedgerGeneration(c.DB); err != nil {
+		t.Fatal(err)
+	}
 	c.ingestStarted()
+	c.refreshAuthorship()
+	if !c.authorship.deferred.Load() || len(started) != 3 {
+		t.Fatal("a generation published during indexing did not remember its follow-up")
+	}
 	c.ingestEnded(false)
 	if c.authorship.deferred.Load() {
 		t.Fatal("normal ingest end did not consume its follow-up")
 	}
-	if len(started) != 4 {
+	if len(started) != 3 {
 		t.Fatal("current estimates were rebuilt again")
+	}
+	// That publish holds the classifier lease, so it counts as running: a
+	// pass arriving meanwhile is turned away and records no failure.
+	if err := bumpToolLedgerGeneration(c.DB); err != nil {
+		t.Fatal(err)
+	}
+	override(t, &authorshipIdleBudget, time.Minute)
+	writer, err := c.beginWrite(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback()
+	published := make(chan struct{})
+	go func() {
+		defer close(published)
+		c.refreshAuthorship()
+	}()
+	waitUntil(t, 10*time.Second, "the publish to hold the lease", c.authorshipRunning)
+	if err := c.refineAuthorship(t.Context(), false); err == nil {
+		t.Fatal("a pass ran beside the publish")
+	}
+	c.authorship.mu.Lock()
+	failure := c.authorship.lastError
+	c.authorship.mu.Unlock()
+	if failure != "" {
+		t.Fatalf("a pass turned away by the publish recorded a failure: %s", failure)
+	}
+	if err := writer.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	<-published
+	if c.authorshipRunning() || c.ensureAuthorship() || len(started) != 3 {
+		t.Fatal("the publish did not finish as idle")
 	}
 }
 
@@ -2248,6 +2302,36 @@ func TestAuthorshipQuickUpgradeRetainsExcludedMirrors(t *testing.T) {
 	}
 	check("native", authorshipSuppressed, false)
 	check("mirror", authorshipCounted, true)
+	// The frequent pass alone reconsiders both copies when the representative
+	// changes back, and a refinement then records the excluded one.
+	execTx(t, c.DB,
+		`UPDATE workspaces SET source_kind='codex' WHERE id='native'`,
+		`UPDATE workspaces SET source_kind='conductor' WHERE id='mirror'`)
+	update()
+	check("native", authorshipCounted, true)
+	check("mirror", authorshipSuppressed, false)
+	execSQL(t, c.DB, `DELETE FROM authorship_message_state WHERE message_id='mirror'`)
+	if err := c.RefineAuthorship(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	check("native", authorshipCounted, true)
+	check("mirror", authorshipSuppressed, false)
+	// A mirror pair without user messages changes the map and queues nothing.
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('quiet','codex','local','quiet','Quiet','2026-09-01'),('quiet-mirror','conductor','local','quiet-mirror','Quiet mirror','2026-09-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('quiet','quiet','codex','local','quiet'),('quiet-mirror','quiet-mirror','codex','local','quiet-mirror')`,
+		`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('quiet','quiet-mirror','mirror',1,'{}')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('quiet-reply','quiet-mirror','quiet-reply','assistant','message','Nothing was asked here','2026-09-01T12:00:00.000Z','quiet-reply')`)
+	representatives, err := c.authorshipRepresentatives(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.refreshAuthorshipMirrors(t.Context(), representatives, ""); err != nil {
+		t.Fatal(err)
+	}
+	if stored, _ := c.metaValue(t.Context(), "authorship_mirrors"); stored != jsonText(representatives) || len(representatives) != 2 || c.authorshipQuickPending() {
+		t.Fatalf("a mirror without writing: stored=%s pending=%v", stored, c.authorshipQuickPending())
+	}
 }
 
 func TestAuthorshipQuickLanesProgressUnderNewWriting(t *testing.T) {
@@ -2274,8 +2358,18 @@ func TestAuthorshipQuickLanesProgressUnderNewWriting(t *testing.T) {
 			message(fmt.Sprintf("live%d-%d", pass, i), at.Add(time.Duration(pass)*time.Minute))
 		}
 		want, _, _ := c.authorshipGenerations()
-		if err := c.UpdateAuthorship(t.Context(), want); err != nil {
+		// Progress is the pass's, across both lanes' batches.
+		var last activityWork
+		ctx := withWorkProgress(t.Context(), func(work activityWork) {
+			if work.Phase == "estimating your writing" {
+				last = work
+			}
+		})
+		if err := c.UpdateAuthorship(ctx, want); err != nil {
 			t.Fatal(err)
+		}
+		if last.Done != 5 || last.Total != 5 {
+			t.Fatalf("pass %d reported %v of %v messages, want its 5", pass, last.Done, last.Total)
 		}
 		var historical, all int
 		if err := c.DB.QueryRow(`SELECT COUNT(*),SUM(message_id LIKE 'history%') FROM message_authorship`).Scan(&all, &historical); err != nil {
@@ -2399,5 +2493,172 @@ func TestAuthorshipEstimatesForSelectedConversations(t *testing.T) {
 	c.authorship.rebuild.Unlock()
 	if !errors.Is(err, errWorkDomainBusy) {
 		t.Fatalf("a held lease: %v", err)
+	}
+}
+
+// The daily pass refines from the checkpoint quick estimates leave in place:
+// it classifies the day's messages only, rewrites no earlier row for a
+// template's growing counts, and still takes all history when a prompt
+// becomes a template, since that reclassifies its earlier uses.
+func TestAuthorshipDailyRefinementClassifiesOnlyNewWriting(t *testing.T) {
+	c, _ := testCatalog(t)
+	clock := authorAt(40 * 24 * 60)
+	c.now = func() time.Time { return clock }
+	// Frequent passes here only estimate, as when a suffix is not available.
+	override(t, &authorshipExactBudget, -time.Second)
+	statements := []string{`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`}
+	for i := range 8 {
+		statements = append(statements, fmt.Sprintf(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,started_at) VALUES('c%d','w','codex','local','c%d','codex','%s')`, i, i, formatTime(authorAt(0))))
+	}
+	execTx(t, c.DB, statements...)
+	saved, rising := "Please review the changes in this workspace and report every problem", "Summarize what changed on this branch since the last release"
+	send := func(id string, conversation, day int, text string) {
+		t.Helper()
+		if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES(?,?,?,'user','message',?,?,?)`, id, fmt.Sprintf("c%d", conversation), id, text, formatTime(authorAt(day*24*60+conversation)), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 5 {
+		send(fmt.Sprintf("saved%d", i), i, i, saved) // a template: 5 sessions on 5 days
+	}
+	for i := range 4 {
+		send(fmt.Sprintf("rising%d", i), i, 5+i/2, rising) // one session short of one
+	}
+	estimate := func() {
+		t.Helper()
+		want, _, _ := c.authorshipGenerations()
+		if err := c.UpdateAuthorship(t.Context(), want); err != nil {
+			t.Fatal(err)
+		}
+		if c.authorshipQuickPending() {
+			t.Fatal("estimates left a queue")
+		}
+	}
+	// refine runs the scheduled pass and reports its mode and what it wrote.
+	refine := func(force bool) (mode, wrote string) {
+		t.Helper()
+		ctx := withWorkProgress(t.Context(), func(work activityWork) {
+			if rest, ok := strings.CutPrefix(work.Phase, "authorship mode: "); ok {
+				mode = rest
+			} else if _, counts, ok := strings.Cut(work.Phase, "; messages="); ok && strings.HasPrefix(work.Phase, "authorship ") {
+				wrote = "messages=" + counts
+			}
+		})
+		if err := c.refineAuthorship(ctx, force); err != nil {
+			t.Fatal(err)
+		}
+		if pending, err := c.authorshipRefinementPending(t.Context()); err != nil || pending {
+			t.Fatalf("refinement left work pending: %v %v", pending, err)
+		}
+		// Whatever it classified, the result is the full classifier's.
+		inputs, launches, err := c.authorshipInputs(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		results, err := c.classifyInputs(t.Context(), inputs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan, err := c.planAuthorship(t.Context(), results, launches); err != nil || len(plan) != 0 {
+			t.Fatalf("%s differs from the full classifier: %v %v", mode, plan, err)
+		}
+		return mode, wrote
+	}
+	words := func(id, category string) (n int) {
+		t.Helper()
+		if err := c.DB.QueryRow(`SELECT `+category+`_words FROM message_authorship WHERE message_id=?`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	consumersPending := func() (n int) {
+		t.Helper()
+		if err := c.DB.QueryRow(`SELECT COUNT(*) FROM sync_deferred WHERE name IN ('labels','findings') AND generation>completed_generation`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	settle := func() {
+		t.Helper()
+		execSQL(t, c.DB, `UPDATE sync_deferred SET completed_generation=generation WHERE name IN ('labels','findings')`)
+	}
+	estimate()
+	if mode, _ := refine(false); !strings.HasPrefix(mode, "daily refinement") {
+		t.Fatalf("first refinement was %q", mode)
+	}
+	if words("saved0", "template") == 0 || words("rising0", "template") != 0 {
+		t.Fatal("fixture: saved is a template and rising is not yet")
+	}
+
+	// A day's writing: a new message and one more use of the template. Their
+	// estimates keep the checkpoint, so refinement classifies those two and
+	// rewrites nothing earlier, although the template's counts grew.
+	send("new", 6, 10, "Now look into why the importer drops the last row")
+	send("saved5", 5, 10, saved)
+	estimate()
+	var provisional int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM authorship_message_state WHERE provisional=1`).Scan(&provisional); err != nil || provisional != 2 {
+		t.Fatalf("estimates were not provisional: %d %v", provisional, err)
+	}
+	settle()
+	if mode, wrote := refine(false); mode != "suffix" || !strings.HasPrefix(wrote, "messages=0 ") {
+		// The estimates already hold what the full rules give these two.
+		t.Fatalf("a day's writing ran %q and wrote %q", mode, wrote)
+	}
+	if consumersPending() != 0 {
+		t.Fatal("refinement that changed no classification rescheduled labels or findings")
+	}
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM authorship_message_state WHERE provisional=1`).Scan(&provisional); err != nil || provisional != 0 {
+		t.Fatalf("refined messages stayed provisional: %d %v", provisional, err)
+	}
+	// The reader shows the counts as they now are.
+	rows := []map[string]any{{"id": "saved0", "text": saved}}
+	if err := c.attachAuthorship("c0", rows); err != nil {
+		t.Fatal(err)
+	}
+	shown := jsonText(rows[0]["authorship"])
+	if !strings.Contains(shown, "Repeated prompt: sent in 6 sessions on 6 days") {
+		t.Fatalf("reader reason: %s", shown)
+	}
+
+	// Rows stored before the counts left the reason read as the same
+	// classification: a full pass rewrites none of them, and marks nothing.
+	execTx(t, c.DB,
+		`UPDATE message_authorship SET spans_json=replace(spans_json,'"reason":"Repeated prompt"','"reason":"Repeated prompt: sent in 2 sessions on 2 days"')`,
+		`UPDATE message_authorship_spans SET reason='Repeated prompt: sent in 2 sessions on 2 days' WHERE reason='Repeated prompt'`)
+	settle()
+	if _, wrote := refine(true); !strings.HasPrefix(wrote, "messages=0 spans=0 ") || consumersPending() != 0 {
+		t.Fatalf("a full pass rewrote rows for their old reason text: %q, %d consumers pending", wrote, consumersPending())
+	}
+	var legacy int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM message_authorship_spans WHERE reason LIKE 'Repeated prompt: %'`).Scan(&legacy); err != nil || legacy != 6 {
+		t.Fatalf("old reasons kept: %d %v", legacy, err)
+	}
+
+	// The fifth session makes rising a template, for its four earlier
+	// messages too. That is history, so the pass classifies all of it.
+	send("rising4", 7, 11, rising)
+	estimate()
+	if words("rising4", "template") != 0 {
+		t.Fatal("fixture: the estimate cannot know the prompt crossed the threshold")
+	}
+	if mode, _ := refine(false); mode != "daily refinement, a repeated prompt became a template" {
+		t.Fatalf("a new template ran %q", mode)
+	}
+	for i := range 5 {
+		if id := fmt.Sprintf("rising%d", i); words(id, "template") == 0 || words(id, "typed") != 0 {
+			t.Fatalf("%s was not reclassified as a template", id)
+		}
+	}
+	if consumersPending() == 0 {
+		t.Fatal("reclassified messages left labels and findings current")
+	}
+
+	// A suffix is checked against all history once in a while.
+	send("later", 6, 12, "And check the exporter while you are there")
+	estimate()
+	clock = clock.Add(authorshipFullEvery)
+	if mode, _ := refine(false); mode != "daily refinement, periodic full pass" {
+		t.Fatalf("an overdue check ran %q", mode)
 	}
 }

@@ -236,13 +236,9 @@ type freshnessCapture struct {
 // freshnessMetaKeys are the meta rows the ledger reads, in one query.
 var freshnessMetaKeys = []string{"message_trigram_version", toolOutputMergedKey, "text_search_documents_version", "text_search_documents_cursor", "tool_command_fts_version",
 	"human_query_text_fts_ready", "tool_query_text_fts_ready", "tool_query_facts_ready", "workspace_library_version",
-	"tool_ledger_generation", "tool_rollup_generation", "tool_rollup_day", "tool_rollup_timezone", "tool_rollup_full_revision", "tool_rollup_built_full_revision",
+	"tool_ledger_generation", "tool_rollup_generation", "tool_rollup_day", "tool_rollup_timezone", "tool_rollup_full_revision", "tool_rollup_built_full_revision", "tool_rollup_price_revision", "tool_rollup_built_price_revision",
 	"authorship_inputs_generation", "authorship_generation", "authorship_built_at", "authorship_quick_generation", "authorship_quick_at", "authorship_complete_at", "authorship_refined_at", "findings_generation", "findings_built_at",
 	"findings_inputs_generation", "analysis_inputs:identities", "analysis_inputs:git", upgradeCountKey, initializedBuildKey}
-
-// libraryVersionOnce is libraryVersion, which hashes the projection's
-// definition, computed once.
-var libraryVersionOnce = sync.OnceValue(libraryVersion)
 
 // freshnessCap bounds a dirty-table count, so a large backlog costs no more
 // than this many index entries.
@@ -691,18 +687,22 @@ func (l *ledger) captures() {
 	}
 }
 
-// view is the Search view: workspaces waiting in workspace_library_dirty.
+// view is the Search view: workspaces waiting in workspace_library_dirty, and
+// stored ones still showing a changed column's earlier value
+// (workspace_library_column_pending).
 func (l *ledger) view(ctx context.Context, c *Catalog, meta map[string]string, metaErr error) {
 	entry := domainEntry{domain: "view", group: "search", label: "Search view", running: "refreshing", unit: "workspace", next: nextOnItsOwn}
-	var dirty int64
-	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM (SELECT 1 FROM workspace_library_dirty LIMIT ?)", freshnessCap).Scan(&dirty); err != nil {
+	var dirty, columns int64
+	if err := c.reader().QueryRowContext(ctx, "SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM workspace_library_dirty LIMIT ?)),("+libraryColumnWorkspacesSQL+")",
+		freshnessCap, freshnessCap).Scan(&dirty, &columns); err != nil {
 		entry.state = freshUnknown
 		l.add(entry)
 		return
 	}
+	dirty = min(dirty+columns, freshnessCap)
 	entry.count, entry.countKnown = dirty, true
 	switch {
-	case metaErr == nil && meta["workspace_library_version"] != libraryVersionOnce():
+	case metaErr == nil && meta["workspace_library_version"] != libraryVersion():
 		// Every workspace is rebuilt; the dirty set does not count them.
 		entry.state, entry.reason, entry.countKnown = freshBehind, "version", false
 	case dirty == 0:
@@ -852,7 +852,8 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 	changedAt, isDeferred := pendingDeferral("tools")
 	layout := strings.HasSuffix(built, "/"+toolRollupVersion)
 	stale := built != meta["tool_ledger_generation"]+"/"+toolRollupVersion || dirty > 0 ||
-		meta["tool_rollup_timezone"] != toolRollupTimezone() || meta["tool_rollup_full_revision"] != meta["tool_rollup_built_full_revision"]
+		meta["tool_rollup_timezone"] != toolRollupTimezone() || meta["tool_rollup_full_revision"] != meta["tool_rollup_built_full_revision"] ||
+		meta["tool_rollup_price_revision"] != meta["tool_rollup_built_price_revision"]
 	switch {
 	case metaErr != nil || deferredErr != nil || dirtyErr != nil:
 		tools.state = freshUnknown

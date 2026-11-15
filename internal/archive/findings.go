@@ -576,8 +576,11 @@ func (env *findingEnv) loadUsage() error {
 			conv.CostUSD += *priced.cost
 		}
 	}
+	// CROSS JOIN pins conversations as the outer loop: the window keeps about
+	// a quarter of all model requests, so walking every request first reads
+	// three times the pages for the same rows.
 	requests, err := queryMapsContext(env.ctx, env.db, `SELECT m.conversation_id,COUNT(*) requests,SUM(m.compacted_before) compactions,MAX(m.input_tokens) peak
-		FROM model_requests m JOIN conversations c ON c.id=m.conversation_id WHERE m.is_estimate=0 AND c.started_at>=? GROUP BY 1`, env.fromUTC)
+		FROM conversations c CROSS JOIN model_requests m ON m.conversation_id=c.id WHERE c.started_at>=? AND m.is_estimate=0 GROUP BY 1`, env.fromUTC)
 	if err != nil {
 		return err
 	}

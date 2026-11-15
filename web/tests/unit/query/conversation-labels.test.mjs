@@ -72,14 +72,14 @@ import {timelinePreviewText,trimTimelineSnippet} from '../../../src/timeline-pre
 
 import {nativeTimelineLabels} from '../../../src/label-timeline-overlay.tsx';
 
-import {timelineModeGroups,timelineLegendWindow,timelineLegendDomains,timelineLegendCounts} from '../../../src/timeline-legend.tsx';
+import {timelineKeyContent,timelineModeGroups,timelineLegendWindow,timelineLegendDomains,timelineLegendCounts} from '../../../src/timeline-legend.tsx';
 import {timelineValueVisible,timelineSectionVisible,timelineEventVisible,updateTimelineVisibility,visibleTimelineTree} from '../../../src/timeline-visibility';
 
 import {workflowSessions} from '../../../src/conversation-labels.ts';
 
 import {conversationRibbon,fingerprintMessageAt} from '../../../src/conversation-fingerprint-model.ts';
 
-import {agentEventClock,textTime,sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,toolVisualEnd,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
+import {ribbonMarkMessage,agentEventClock,textTime,sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,toolVisualEnd,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
 import {overlapping} from '../../../src/ribbon-marks';
 
 import {labelIntervals,recordedToolMarks,activityCategory} from '../../../src/label-session-ribbon-model.ts';
@@ -168,7 +168,7 @@ test('timeline Show and Hide preserve independent hidden values and Show all res
  assert.equal(timelineValueVisible(state,'tools','read'),true);
  assert.equal(timelineValueVisible(state,'tools','error'),false,'showing one value in a hidden section leaves its siblings hidden');
  assert.deepEqual(updateTimelineVisibility(state,'tools',[],'clear'),{});
- const domains=timelineLegendDomains([message('a','C.report.finding'),message('b',null)],[],[],{read:'Read'},false,[]);
+ const domains=timelineLegendDomains(timelineKeyContent({messages:[message('a','C.report.finding'),message('b',null)],origins:[],tools:['read'],unknownTools:[],error:false}));
  state={};
  for(const [section,values] of Object.entries(domains))for(const value of values){
   assert.ok(timelineLegendCounts(state,domains).visible>0,'the remaining key values keep the timeline visible');
@@ -507,6 +507,24 @@ test('timeline legends follow drawn intervals, errors and the visible portion of
  const slice=range=>timelineLegendWindow([{caller:true,messages:[caller],marks:[end]}],range);
  assert.deepEqual(slice([50,450]).origins,['typed']);assert.deepEqual(slice([550,750]).origins,['pasted']);assert.deepEqual(slice([850,950]).origins,['harness']);assert.deepEqual(slice([1200,1400]).messages,[]);
  assert.equal(slice([50,450]).tools.length,0,'caller boundary tools are not themselves drawn in the caller ribbon');
+});
+
+test('every timeline builds its key the same way from what its ribbons draw',()=>{
+ const at=n=>new Date(n).toISOString(),marks=[{start:10,end:20,end_known:true,category:'run',name:'Run',error:false},{start:30,end:40,end_known:true,category:'custom',name:'Custom',error:false},{start:50,end:60,end_known:false,category:'read',name:'Read',error:true}];
+ // A session lane on the Timeline and the same session in the conversation reader.
+ const drawn=timelineLegendWindow([{messages:[message('a','C.report.finding',{at:at(0)})],marks}],[0,100]);
+ const human=[{id:'tone',name:'Tone',className:'eng-tone'}],content=timelineKeyContent(drawn,{human});
+ assert.deepEqual(Object.entries(content.tools),[['run','Run / build / test'],['custom','custom']],'known tool actions keep the Key\'s order; an unknown category is named as recorded');
+ assert.deepEqual(timelineLegendDomains(content),{modes:['C.report.finding'],events:[],tools:['run','custom','error'],origins:[],human:['tone']});
+ assert.deepEqual(content.unknownTools,['error']);
+ assert.deepEqual(timelineLegendDomains(timelineKeyContent({...drawn,tools:['read','run','git']})).tools,['read','run','git','error']);
+});
+
+test('a click on a mark goes to its message',()=>{
+ const call={id:'call',start:0,end:1,title:'Read',color:'',thinking:false,mark:{message_id:'m-tool',tool_id:'t'}},loose={...call,id:'loose',mark:{tool_id:'u'}};
+ const said={id:'event',start:0,end:0,title:'Obstacle',color:'',thinking:false,event:{id:'e',message_id:'m-event'}};
+ assert.equal(ribbonMarkMessage([call]),'m-tool');assert.equal(ribbonMarkMessage([loose,said]),'m-event');
+ assert.equal(ribbonMarkMessage([loose]),undefined,'a call without a retained message leaves the click to its time');
 });
 
 test('timeline previews unwrap content and nested arguments without losing domain JSON or literal caller text',()=>{

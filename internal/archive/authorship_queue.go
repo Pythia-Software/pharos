@@ -2,7 +2,9 @@ package archive
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -18,8 +20,15 @@ const (
 	authorshipDeferred   = "deferred"
 )
 
+// linkedWorkspacesSQL selects the workspaces an identity link joins. Only
+// they can mirror one another, so they decide the representatives; reading
+// every workspace instead was most of an idle estimates pass.
+const linkedWorkspacesSQL = `SELECT id,source_kind,activity_at FROM workspaces WHERE id IN (
+ SELECT a.workspace_id FROM conversation_identity_links l JOIN conversations a ON a.id=l.left_id
+ UNION SELECT b.workspace_id FROM conversation_identity_links l JOIN conversations b ON b.id=l.right_id)`
+
 func (c *Catalog) authorshipRepresentatives(ctx context.Context) (map[string]string, error) {
-	workspaces, err := queryMapsContext(ctx, c.reader(), `SELECT id,source_kind,activity_at FROM workspaces`)
+	workspaces, err := queryMapsContext(ctx, c.reader(), linkedWorkspacesSQL)
 	if err != nil {
 		return nil, err
 	}
@@ -30,29 +39,151 @@ func (c *Catalog) authorshipRepresentatives(ctx context.Context) (map[string]str
 	return mirrorRepresentatives(workspaces, links), nil
 }
 
+// authorshipMirrorSignature digests everything the representatives are chosen
+// from (the linked workspaces' kinds and activity, and the links), streamed
+// without building the map, so a pass can tell that the mirrors it stored
+// still stand.
+func (c *Catalog) authorshipMirrorSignature(ctx context.Context) (string, error) {
+	digest := sha256.New()
+	// One read of the links with both ends' workspaces: each lookup is a
+	// seek into a wide row, and they are the whole cost of an idle pass.
+	rows, err := c.reader().QueryContext(ctx, `SELECT l.left_workspace,l.right_workspace,
+ COALESCE(a.source_kind,''),COALESCE(a.activity_at,''),COALESCE(b.source_kind,''),COALESCE(b.activity_at,'')
+ FROM (`+identityLinkWorkspacesSQL+`) l LEFT JOIN workspaces a ON a.id=l.left_workspace LEFT JOIN workspaces b ON b.id=l.right_workspace ORDER BY 1,2`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	fields := make([]sql.RawBytes, 6)
+	targets := make([]any, len(fields))
+	for i := range fields {
+		targets[i] = &fields[i]
+	}
+	for rows.Next() {
+		if err := rows.Scan(targets...); err != nil {
+			return "", err
+		}
+		for _, field := range fields {
+			digest.Write(field)
+			digest.Write([]byte{0})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+// authorshipIdleBudget bounds the wait for the writer when a pass has only a
+// generation to publish: the next pass publishes it as well.
+var authorshipIdleBudget = time.Second
+
+// publishIdleAuthorship publishes generation as estimated when nothing is
+// queued and the mirrors are the ones already reconsidered, and reports
+// whether it did. The estimates' generation includes the tool ledger's, which
+// moves with nearly every index, so most passes have only this to do; it
+// costs two small reads and one metadata write instead of loading every
+// workspace, and gives up rather than wait out the pass's budget behind
+// another writer.
+//
+// idle reports that there was nothing else to do, published that the
+// generation is now the estimates'.
+func (c *Catalog) publishIdleAuthorship(parent context.Context, generation string) (idle, published bool, err error) {
+	pending, err := c.authorshipPending(parent)
+	if err != nil || pending {
+		return false, false, err
+	}
+	signature, err := c.authorshipMirrorSignature(parent)
+	if err != nil {
+		return false, false, err
+	}
+	stored, err := c.metaValue(parent, "authorship_mirrors_signature")
+	if err != nil || stored != signature {
+		return false, false, err
+	}
+	ctx, cancel := context.WithTimeout(parent, authorshipIdleBudget)
+	defer cancel()
+	if err := c.publishAuthorshipEstimates(ctx, generation); err != nil {
+		if parent.Err() == nil && ctx.Err() == context.DeadlineExceeded {
+			return true, false, nil
+		}
+		return false, false, err
+	}
+	quick, err := c.metaValue(parent, "authorship_quick_generation")
+	return true, quick == generation, err
+}
+
 // Suppression depends on workspace identity, not text. This metadata-only
 // upsert also covers pre-estimates libraries whose excluded copies never had
 // a counting row. Existing counting rows must go through the normal diff.
-func recordAuthorshipSuppressed(ctx context.Context, tx *sql.Tx, representatives map[string]string) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO authorship_message_state(message_id,source_hash,version,provisional,disposition,representative_id)
- SELECT m.id,'',?,0,'suppressed',j.value FROM json_each(?) j
- JOIN conversations c ON c.workspace_id=j.key JOIN messages m ON m.conversation_id=c.id
+//
+// The scan runs before the writer is taken and returns only the messages
+// whose outcome is missing or out of date, usually none: as one statement
+// inside the checkpoint's transaction it held the writer for 20 to 30 seconds
+// on a large library. The map is materialized so each user message looks its
+// workspace up; joined directly, json_each is scanned whole for every one.
+func (c *Catalog) authorshipSuppressedChanges(ctx context.Context, representatives map[string]string) ([][2]string, error) {
+	rows, err := c.reader().QueryContext(ctx, `WITH representatives AS MATERIALIZED (SELECT key,value FROM json_each(?))
+ SELECT m.id,j.value FROM messages m JOIN conversations c ON c.id=m.conversation_id JOIN representatives j ON j.key=c.workspace_id
+ LEFT JOIN authorship_message_state s ON s.message_id=m.id
  WHERE m.role='user' AND m.kind='message' AND NOT EXISTS(SELECT 1 FROM message_authorship a WHERE a.message_id=m.id)
+ AND (s.message_id IS NULL OR s.disposition IS NOT 'suppressed' OR s.representative_id IS NOT j.value OR s.version IS NOT ?2)`, jsonText(representatives), authorshipVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	changes := [][2]string{}
+	for rows.Next() {
+		var change [2]string
+		if err := rows.Scan(&change[0], &change[1]); err != nil {
+			return nil, err
+		}
+		changes = append(changes, change)
+	}
+	return changes, rows.Err()
+}
+
+// recordAuthorshipSuppressed stores the outcomes authorshipSuppressedChanges
+// read. A message that gained a counting row meanwhile keeps its own outcome.
+func recordAuthorshipSuppressed(ctx context.Context, tx *sql.Tx, changes [][2]string) error {
+	if len(changes) == 0 {
+		return nil
+	}
+	statement, err := tx.PrepareContext(ctx, `INSERT INTO authorship_message_state(message_id,source_hash,version,provisional,disposition,representative_id)
+ SELECT ?1,'',?2,0,'suppressed',?3 WHERE NOT EXISTS(SELECT 1 FROM message_authorship a WHERE a.message_id=?1)
  ON CONFLICT(message_id) DO UPDATE SET disposition=excluded.disposition,representative_id=excluded.representative_id,version=excluded.version,provisional=0
- WHERE authorship_message_state.disposition IS NOT excluded.disposition OR authorship_message_state.representative_id IS NOT excluded.representative_id OR authorship_message_state.version IS NOT excluded.version`, authorshipVersion, jsonText(representatives))
-	return err
+ WHERE authorship_message_state.disposition IS NOT excluded.disposition OR authorship_message_state.representative_id IS NOT excluded.representative_id OR authorship_message_state.version IS NOT excluded.version`)
+	if err != nil {
+		return err
+	}
+	defer statement.Close()
+	for _, change := range changes {
+		if _, err := statement.ExecContext(ctx, change[0], authorshipVersion, change[1]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // A previously suppressed copy may become the representative, and a counted
 // copy may stop being one. Persist the map and queue both sides atomically.
-func (c *Catalog) refreshAuthorshipMirrors(ctx context.Context, representatives map[string]string) error {
+//
+// signature is authorshipMirrorSignature read before representatives; stored
+// with them, it lets later passes skip this while the mirrors' inputs stand.
+// A change between the two reads only makes the next pass look again.
+func (c *Catalog) refreshAuthorshipMirrors(ctx context.Context, representatives map[string]string, signature string) error {
 	stored, err := c.metaValue(ctx, "authorship_mirrors")
 	if err != nil {
 		return err
 	}
 	current := jsonText(representatives)
 	if stored == current {
-		return nil
+		if noted, err := c.metaValue(ctx, "authorship_mirrors_signature"); err != nil || signature == "" || noted == signature {
+			return err
+		}
+		return c.writeTransaction(ctx, "note writing mirrors", func(tx *sql.Tx) error {
+			return setMeta(tx, "authorship_mirrors_signature", signature)
+		})
 	}
 	previous := map[string]string{}
 	if stored != "" {
@@ -71,16 +202,44 @@ func (c *Catalog) refreshAuthorshipMirrors(ctx context.Context, representatives 
 			changed[id] = true
 		}
 	}
-	ids := sortedNameIDs(changed)
-	return c.writeTransaction(ctx, "reconsider writing mirrors", func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO authorship_pending(message_id,revision,sent_at,queued_at)
- SELECT m.id,hex(randomblob(16)),m.created_at,? FROM conversations c JOIN messages m ON m.conversation_id=c.id
- WHERE c.workspace_id IN (SELECT value FROM json_each(?)) AND m.role='user' AND m.kind='message'
- ON CONFLICT(message_id) DO UPDATE SET revision=excluded.revision,sent_at=excluded.sent_at`, now(), jsonText(ids)); err != nil {
+	// Find the affected messages before taking the writer, from the changed
+	// workspaces' conversations: the unary + keeps SQLite off the prose index,
+	// which walks every user message in the library (5 s of writer hold a
+	// time on a large one). A message that arrives meanwhile queues itself.
+	rows, err := c.reader().QueryContext(ctx, `SELECT m.id,m.created_at FROM conversations c JOIN messages m ON m.conversation_id=c.id
+ WHERE c.workspace_id IN (SELECT value FROM json_each(?)) AND +m.role='user' AND +m.kind='message'`, jsonText(sortedNameIDs(changed)))
+	if err != nil {
+		return err
+	}
+	type queued struct {
+		id   string
+		sent sql.NullString
+	}
+	messages := []queued{}
+	for rows.Next() {
+		var message queued
+		if err := rows.Scan(&message.id, &message.sent); err != nil {
+			rows.Close()
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('authorship_mirrors',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, current)
+		messages = append(messages, message)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
 		return err
+	}
+	return c.writeTransaction(ctx, "reconsider writing mirrors", func(tx *sql.Tx) error {
+		at := now()
+		for _, message := range messages {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO authorship_pending(message_id,revision,sent_at,queued_at) VALUES(?,hex(randomblob(16)),?,?)
+ ON CONFLICT(message_id) DO UPDATE SET revision=excluded.revision,sent_at=excluded.sent_at`, message.id, message.sent, at); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('authorship_mirrors',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, current); err != nil {
+			return err
+		}
+		return setMeta(tx, "authorship_mirrors_signature", signature)
 	})
 }
 
@@ -127,6 +286,10 @@ func (c *Catalog) ensureQuickAuthorshipState() error {
 	if err != nil {
 		return err
 	}
+	suppressed, err := c.authorshipSuppressedChanges(context.Background(), representatives)
+	if err != nil {
+		return err
+	}
 	return c.writeTransaction(context.Background(), "initialize writing estimates", func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`UPDATE authorship_pending SET sent_at=(SELECT created_at FROM messages m WHERE m.id=message_id),queued_at=? WHERE queued_at=''`, now()); err != nil {
 			return err
@@ -137,7 +300,7 @@ func (c *Catalog) ensureQuickAuthorshipState() error {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO authorship_message_state(message_id,source_hash,version,provisional,disposition,representative_id) SELECT message_id,'',?,0,'counted','' FROM message_authorship`, authorshipVersion); err != nil {
 			return err
 		}
-		if err := recordAuthorshipSuppressed(context.Background(), tx, representatives); err != nil {
+		if err := recordAuthorshipSuppressed(context.Background(), tx, suppressed); err != nil {
 			return err
 		}
 		// Re-evaluate exclusions whose relationship changed before an interrupted
@@ -201,6 +364,14 @@ func (c *Catalog) runAuthorshipLanes(ctx context.Context, representatives map[st
 	limit := max(1, authorshipQuickLimit)
 	recentLimit := limit - limit/5
 	cutoff := formatTime(c.clock().Add(-authorshipRecentWindow))
+	// Report the pass, not each 25-message batch: the run history showed
+	// "N of 25" for a pass that handled up to the whole limit.
+	progress := &authorshipQuickProgress{}
+	if err := c.reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM authorship_pending LIMIT ?)`, limit).Scan(&progress.total); err != nil {
+		return err
+	}
+	ctx = context.WithValue(ctx, authorshipQuickProgressKey{}, progress)
+	reportWork(ctx, "estimating your writing", "message", 0, progress.total)
 	deadline, _ := ctx.Deadline()
 	recentCtx, stop := context.WithTimeout(ctx, time.Until(deadline)*3/4)
 	recent, err := c.runAuthorshipLane(recentCtx, representatives, recentLimit, cutoff, true)
@@ -215,6 +386,10 @@ func (c *Catalog) runAuthorshipLanes(ctx context.Context, representatives map[st
 	}
 	if remaining := limit - recent - historical; remaining > 0 {
 		_, err = c.runAuthorshipLane(ctx, representatives, remaining, cutoff, true)
+	}
+	if err == nil {
+		// The queue may have held less than was counted: end on what was done.
+		reportWork(ctx, "estimating your writing", "message", progress.done, progress.done)
 	}
 	return err
 }

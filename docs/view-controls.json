@@ -116,15 +116,7 @@
       "field": "disclosures"
     },
     {
-      "file": "web/src/label-session-ribbon.tsx",
-      "field": "disclosures"
-    },
-    {
       "file": "web/src/logs-page.tsx",
-      "field": "disclosures"
-    },
-    {
-      "file": "web/src/reader-navigator.tsx",
       "field": "disclosures"
     },
     {
@@ -133,6 +125,10 @@
     },
     {
       "file": "web/src/timeline-legend.tsx",
+      "field": "disclosures"
+    },
+    {
+      "file": "web/src/timeline-rows.tsx",
       "field": "disclosures"
     },
     {
@@ -448,11 +444,7 @@
       "field": "timeline_visibility"
     },
     {
-      "file": "web/src/delegation.tsx",
-      "field": "timeline_visibility"
-    },
-    {
-      "file": "web/src/reader-navigator.tsx",
+      "file": "web/src/timeline-legend.tsx",
       "field": "timeline_visibility"
     }
   ],
@@ -5988,16 +5980,6 @@
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
     },
     {
-      "key": "46ad0a24f3ebacd4:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "ParallelActivity",
-      "tag": "TimelineLegend",
-      "control": "onOpenTimeline={openOverview} data-view-field=\"timeline_visibility\" onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))}",
-      "binding": "timeline_visibility",
-      "contract": "view.timeline_visibility",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
       "key": "7263f034d81132be:0",
       "file": "web/src/delegation.tsx",
       "owner": "ParallelActivity",
@@ -6026,6 +6008,16 @@
       "control": "aria-label=\"Open full-width timeline\" onPointerDown={event=>{if(event.button===0)event.currentTarget.setPointerCapture(event.pointerId);}} onClick={openOverview}",
       "contract": "navigation",
       "reason": "Returns to the canonical workspace overview through openOverview, clearing the reader selection and preserving timeline view state. The split-pane overview is static presentation, not a second persisted view."
+    },
+    {
+      "key": "fe75b9f0f9257aaf:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "ParallelActivity",
+      "tag": "TimelineLegend",
+      "control": "onOpenTimeline={openOverview} data-view-field=\"timeline_visibility\" onSelect={selectTimelineKey}",
+      "binding": "timeline_visibility",
+      "contract": "view.timeline_visibility",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "ff63ef509697c36b:0",
@@ -7655,38 +7647,6 @@
       "reason": "The inspection popup owns only hover, focus and click-pinning. Its event boundary prevents source links from starting a brush or activating the containing row."
     },
     {
-      "key": "b9c25eb96156da02:0",
-      "file": "web/src/label-session-ribbon.tsx",
-      "owner": "LaneHumanEvents",
-      "tag": "ViewDisclosure",
-      "control": "viewKey={viewKey}",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "487e42bdd4ef7739:0",
-      "file": "web/src/label-session-ribbon.tsx",
-      "owner": "RecursiveRibbonRow",
-      "tag": "ViewDisclosure",
-      "control": "viewKey={viewKey}",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "743453f66bfd77ad:0",
-      "file": "web/src/label-session-ribbon.tsx",
-      "owner": "RecursiveRibbonRow",
-      "tag": "button",
-      "control": "data-view-field=\"delegation_event\" onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} eventHref={props.eventHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}",
-      "binding": "delegation_event",
-      "contract": "view.delegation_event",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
       "key": "0af056f356d1207b:0",
       "file": "web/src/label-session-ribbon.tsx",
       "owner": "SourceContent",
@@ -8076,6 +8036,15 @@
       "reason": "Bound directly to the registered view field."
     },
     {
+      "key": "0f22ee7c41739666:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "button",
+      "control": "onClick={event => { event.stopPropagation(); // ui.py installs the shell clipboard wrapper, the shared host clipboard owner. const report = `Pharos card \"${title}\" (${id}) couldn't load.\\n${error}`; void (window.pharosCopyText?.(report) ?? Promise.reject()).then(() => \"copied\" as const, () => \"failed\" as const).then(result => { setCopied(result); setTimeout(() => setCopied(\"\"), 2000); }); }}",
+      "contract": "action",
+      "reason": "Copies the card's load error to the clipboard; changes no view state."
+    },
+    {
       "key": "502369976da84683:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",
@@ -8121,6 +8090,15 @@
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
     {
+      "key": "a44b2f8e128d6e66:0",
+      "file": "web/src/query-card.tsx",
+      "owner": "QueryCard",
+      "tag": "button",
+      "control": "aria-label={`Reload ${title}`} onClick={event => { event.stopPropagation(); onReload(); requestAnimationFrame(() => card.current?.querySelector<HTMLAnchorElement>(\".query-card-open\")?.focus({ preventScroll: true })); }}",
+      "contract": "editing",
+      "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
+    },
+    {
       "key": "a7dc844b99e1b790:0",
       "file": "web/src/query-card.tsx",
       "owner": "QueryCard",
@@ -8137,15 +8115,6 @@
       "control": "aria-label=\"Call to action\" value={actionLabel ?? \"\"} onChange={event => editing.onAction!(event.target.value)}",
       "contract": "editing",
       "reason": "The card editor's call to action, edited in place on the card. An unapplied authoring draft saved only with the card."
-    },
-    {
-      "key": "d09bdc3a13ea798d:0",
-      "file": "web/src/query-card.tsx",
-      "owner": "QueryCard",
-      "tag": "button",
-      "control": "aria-label={`Reload preview for ${title}`} onClick={event => { event.stopPropagation(); onReload(); requestAnimationFrame(() => card.current?.querySelector<HTMLAnchorElement>(\".query-card-open\")?.focus({ preventScroll: true })); }}",
-      "contract": "editing",
-      "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
     {
       "key": "d75f3d3c712a91c0:0",
@@ -8302,72 +8271,13 @@
       "reason": "Show All writes reader_hidden_tags through the classic transcript tag filter."
     },
     {
-      "key": "42699c5a07610bb1:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "HumanEventsRows",
-      "tag": "span",
-      "control": "aria-label=\"Human events. Click a marker to reveal its text.\" onClick={reveal}",
-      "contract": "transient",
-      "reason": "Clicking empty space on a Human events track scrolls to and highlights the nearest message; scroll position is transient and the row's fold uses ViewDisclosure."
-    },
-    {
-      "key": "c99c793200b1315c:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "HumanEventsRows",
-      "tag": "ViewDisclosure",
-      "control": "viewKey={viewKey}",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "eb6d693c1018c74f:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "HumanEventsRows",
-      "tag": "span",
-      "control": "aria-label={`Human events · ${dimension.name}`} onClick={reveal}",
-      "contract": "transient",
-      "reason": "Clicking empty space on a Human events track scrolls to and highlights the nearest message; scroll position is transient and the row's fold uses ViewDisclosure."
-    },
-    {
-      "key": "442d5f3a17af7e2c:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "ReaderNavigator",
-      "tag": "TimelineLegend",
-      "control": "data-view-field=\"timeline_visibility\" onSelect={(section,values,action)=>{setVisibility(previous=>updateTimelineVisibility(previous,section,values,action));panel.dispatchEvent(new Event('pharos:reader-key-edit'));}}",
-      "binding": "timeline_visibility",
-      "contract": "view.timeline_visibility",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "5c536168277a2959:0",
+      "key": "1bc3bb0dbb7d6ad9:0",
       "file": "web/src/reader-navigator.tsx",
       "owner": "ReaderNavigator",
       "tag": "button",
-      "control": "aria-label=\"Browse session timeline\" onFocus={event=>{const band=host.current?.querySelector<HTMLElement>('.reader-navigator-window');event.currentTarget.dataset.position=band?.dataset.position||'0';}} onClick={event=>{event.stopPropagation();jump(Number(event.currentTarget.dataset.position??0));}} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const button=event.currentTarget,previous=Number(button.dataset.position??0),next=event.key==='Home'?0:event.key==='End'?1:Math.max(0,Math.min(1,previous+(event.key==='ArrowLeft'?-.02:.02)));button.dataset.position=String(next);jump(next);}}",
+      "control": "aria-label=\"Browse session timeline\" onFocus={event=>{const band=host.current?.querySelector<HTMLElement>('.reader-navigator-window');event.currentTarget.dataset.position=band?.dataset.position||'0';}} onClick={event=>{event.stopPropagation();reveal({fraction:Number(event.currentTarget.dataset.position??0)});}} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const button=event.currentTarget,previous=Number(button.dataset.position??0),next=event.key==='Home'?0:event.key==='End'?1:Math.max(0,Math.min(1,previous+(event.key==='ArrowLeft'?-.02:.02)));button.dataset.position=String(next);reveal({fraction:next});}}",
       "contract": "transient",
-      "reason": "Source navigation scrolls and highlights through the existing reader materialization handlers without taking keyboard focus. Keyboard browsing and the automatic window are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
-    },
-    {
-      "key": "801ecdacaf583a50:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "ReaderNavigator",
-      "tag": "ViewDisclosure",
-      "control": "viewKey={sessionKey}",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "9fe41ec88adacc4c:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "ReaderNavigator",
-      "tag": "div",
-      "control": "aria-label=\"Session timeline. Click to reveal a message.\" onClick={event=>{if(expandable){event.preventDefault();event.stopPropagation();}const track=event.currentTarget,rect=track.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width,{track,x:event.clientX,y:event.clientY});}}",
-      "contract": "transient",
-      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
+      "reason": "Source navigation scrolls and highlights through the existing reader materialization handlers without taking keyboard focus. Keyboard browsing and the automatic window are transient scroll state; turns and measured context are always shown when available. The timeline's visibility is the Key's timeline_visibility and its fold uses ViewDisclosure in the shared timeline rows."
     },
     {
       "key": "b9b2caa37ad6a44e:0",
@@ -8388,23 +8298,13 @@
       "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
     },
     {
-      "key": "5c3f71ba014e64e4:0",
+      "key": "ead6e580fbe6230a:0",
       "file": "web/src/reader-navigator.tsx",
-      "owner": "ReaderRibbonSection",
-      "tag": "span",
-      "control": "onClick={event=>{event.preventDefault();event.stopPropagation();const track=event.currentTarget,rect=track.getBoundingClientRect();jump((event.clientX-rect.left)/rect.width,{track,x:event.clientX,y:event.clientY});}}",
-      "contract": "transient",
-      "reason": "Clicking a ribbon scrolls and highlights its source message; scroll position is transient and the accordion uses ViewDisclosure."
-    },
-    {
-      "key": "e14ad9c01a55f876:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "ReaderRibbonSection",
-      "tag": "ViewDisclosure",
-      "control": "viewKey={viewKey}",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
+      "owner": "ReaderNavigator",
+      "tag": "TimelineLegend",
+      "control": "data-view-field=\"timeline_visibility\" onSelect={selectKey}",
+      "binding": "timeline_visibility",
+      "contract": "view.timeline_visibility",
       "reason": "Bound directly to the registered view field."
     },
     {
@@ -9623,6 +9523,56 @@
       "binding": "timeline_visibility",
       "contract": "view.timeline_visibility",
       "reason": "The embedded timeline master toggle updates timeline_visibility for the sections represented by this conversation."
+    },
+    {
+      "key": "095357abc17cfada:0",
+      "file": "web/src/timeline-rows.tsx",
+      "owner": "TimelineHumanRows",
+      "tag": "span",
+      "control": "aria-label={`Human events · ${dimension.name}`} onClick={reveal}",
+      "contract": "transient",
+      "reason": "Clicking empty space on a Human events track scrolls to and highlights the nearest message where the surface reveals in place (the conversation reader); on the Timeline's lanes it does nothing. Scroll position is transient and the row's fold uses ViewDisclosure."
+    },
+    {
+      "key": "86d619f1ef56ae93:0",
+      "file": "web/src/timeline-rows.tsx",
+      "owner": "TimelineHumanRows",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={viewKey}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "f6a63700ee3f35e5:0",
+      "file": "web/src/timeline-rows.tsx",
+      "owner": "TimelineHumanRows",
+      "tag": "span",
+      "control": "aria-label={`Human events. ${human.href?'Open a marker to read its text in the conversation.':'Click a marker to reveal its text.'}`} onClick={reveal}",
+      "contract": "transient",
+      "reason": "Clicking empty space on a Human events track scrolls to and highlights the nearest message where the surface reveals in place (the conversation reader); on the Timeline's lanes it does nothing. Scroll position is transient and the row's fold uses ViewDisclosure."
+    },
+    {
+      "key": "a6ad36d439263d33:0",
+      "file": "web/src/timeline-rows.tsx",
+      "owner": "TimelineRow",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={viewKey}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "c071ac8e8557193c:0",
+      "file": "web/src/timeline-session-lane.tsx",
+      "owner": "laneSurface",
+      "tag": "button",
+      "control": "data-view-field=\"delegation_event\" onClick={event=>{if(props.sourceHref)inspector.pin(event.currentTarget,<ObservationCard items={node.items} sourceHref={props.sourceHref} eventHref={props.eventHref} close={inspector.close}/>,undefined,event.detail===0);else props.select(node.items[0],event.currentTarget);}} onFocus={event=>inspector.show(event.currentTarget,<ObservationCard items={node.items}/>)} onBlur={inspector.leave}",
+      "binding": "delegation_event",
+      "contract": "view.delegation_event",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "c2ef28fbea4ddd0a:0",
