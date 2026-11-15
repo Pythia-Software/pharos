@@ -1,5 +1,5 @@
 {
-  "index_version": "claude:message-model-v19-codex-continuations+claude-v4-queued-task-notices",
+  "index_version": "claude:message-model-v19-codex-continuations+claude-v4-queued-input",
   "records": [
     {
       "SourceID": "claude-session",

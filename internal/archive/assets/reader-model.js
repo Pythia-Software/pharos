@@ -815,7 +815,7 @@ function transcriptActivityPresentation(message){
   else if(message.kind==='attachment'){keyPath=[group('attachments','Attachments','read')];icon='read'}
   else if(message.kind==='context'||raw?.type==='claude_ai_conversation'){
     keyPath=[group('context','Context','context')];
-    icon=raw?.type==='claude_ai_conversation'?'chat':/agent_listing/.test(raw?.source||'')?'agent':/tools|mcp/.test(raw?.source||'')?'tool':raw?.source==='date_note'?'history':'context';
+    icon=raw?.type==='claude_ai_conversation'?'chat':/agent_listing/.test(raw?.source||'')?'agent':/tools|mcp/.test(raw?.source||'')?'tool':raw?.source==='date_note'||raw?.source==='scheduled_wakeup'?'history':'context';
   }else if(message.kind!=='tool_call'&&message.kind!=='delegation')keyPath=[group('events','System events','event')];
   else if(/^(toolsearch|tool_search|search_tools|list_tools)$/i.test(name)){keyPath=[group('discovery','Tool discovery','search')];icon='search'}
   else if(/^skill$/i.test(name)){keyPath=[group('skills','Skills','read')];icon='read'}
