@@ -62,6 +62,8 @@ func TestMain(m *testing.M) {
 	os.Setenv("PHAROS_SUPPORT_DIR", support)
 	// Tests of the lookup point githubCLI at a stub.
 	githubCLI, githubPause = "pharos-test-no-gh", time.Millisecond
+	// Web images are fetched only by the tests of that, from their own server.
+	remoteAssetsEnabled = false
 	// GPU telemetry must not invoke ioreg in ordinary tests.
 	processGPU = &gpuSampler{now: time.Now}
 	// Tests of the drive checks stub the tools (see stubDriveTool).

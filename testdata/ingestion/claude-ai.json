@@ -1,5 +1,5 @@
 {
-  "index_version": "claude-ai-v7",
+  "index_version": "claude-ai-v8",
   "records": [
     {
       "SourceID": "conv-1",
@@ -238,6 +238,31 @@
               "RawText": "{\"text\":\"A shorter plan\",\"type\":\"text\"}",
               "SourceOrder": 0,
               "Selected": true
+            }
+          ],
+          "Assets": [
+            {
+              "MessageNativeID": "m1",
+              "AttachmentNativeID": "m1:attachment:0",
+              "Ref": "m1:attachment:0",
+              "Kind": "document",
+              "Name": "dates.txt",
+              "Relation": "uploaded",
+              "Availability": "text_only",
+              "MimeType": "text/plain",
+              "SizeBytes": 12
+            },
+            {
+              "MessageNativeID": "m1",
+              "AttachmentNativeID": "m1:files",
+              "Ref": "f1",
+              "Kind": "document",
+              "Name": "notes.pdf",
+              "Relation": "uploaded",
+              "Availability": "not_exported",
+              "Details": {
+                "listed": 1
+              }
             }
           ]
         }

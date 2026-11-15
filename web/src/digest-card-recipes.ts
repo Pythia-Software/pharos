@@ -64,6 +64,6 @@ export const digestCardRecipes: QueryRecipe[] = [
     measures: [{ id: "friction_by_week", op: "sum", expression: agentEventsPerThousand, groupBy: ["week"], groupLimit: 200, sort: [{ key: "group0", dir: "asc" }], minCount: agentEventFloor, label: "Friction events per 1,000 messages read",
       display: { kind: "bar-horizontal", format: { kind: "number", decimals: 1 } } }],
     cover: { mode: "source", metricId: "friction_by_week", kind: "bar-horizontal", maxGroups: 14, showOther: false, showLegend: false, showHeadline: false, height: 300 },
-    action: "Compare weeks", emptyLabel: agentEventsEmpty,
+    action: "Compare weeks", emptyLabel: agentEventsEmpty, emptyIsSetup: true,
     note: `Weeks start on Monday, in local time. The first and latest weeks are partial: the window starts mid-week, and this week is still under way, so its rate can move. Plain obstacles are left out, as on Where agents hit friction. A week under 200 messages read is hidden. ${agentEventsRead}` },
 ];

@@ -1050,12 +1050,11 @@
           item.append(fullTime(value));
           facts.append(node('dt', '', label), item);
         }
-        facts.append(node('dt', '', 'Coverage'), node('dd', '', source.coverage || 'not-indexed'),
-          node('dt', '', 'Account'), node('dd', '', source.account || ''));
         const captured = node('div', 'pharos-card-capture');
         captured.append(node('span', 'pharos-sub', 'Captured '), when(source.captured_at));
         if (source.captured_at && !source.capture_finished) captured.append(node('span', 'pharos-warn', ' · interrupted'));
         captured.append(node('span', source.needs_index ? 'pharos-warn' : 'pharos-sub', source.needs_index ? ` · needs index (${source.index_reason || 'new data'})` : ' · indexed'));
+        captured.append(...sourceAccount(source.account));
         card.append(head, path, facts, captured);
         if (source.error) card.append(node('div', 'sync-note badtext', source.error));
         grid.append(card);
@@ -1239,14 +1238,19 @@
         card.insertBefore(line, card.querySelector('.source-removal'));
       }
       line.replaceChildren();
+      const traits = sourceAccount(card.dataset.account);
       if (!source) {
-        line.append(node('span', 'pharos-sub', `Not captured to ${driveName() === 'the drive' ? 'the library' : driveName()} yet`));
+        line.append(node('span', 'pharos-sub', `Not captured to ${driveName() === 'the drive' ? 'the library' : driveName()} yet`), ...traits);
         continue;
       }
       line.append(node('span', 'pharos-sub', 'Captured '), when(source.captured_at));
-      line.append(node('span', source.needs_index ? 'pharos-warn' : 'pharos-sub', source.needs_index ? ` · needs index (${source.index_reason || 'new data'})` : ' · indexed'));
+      line.append(node('span', source.needs_index ? 'pharos-warn' : 'pharos-sub', source.needs_index ? ` · needs index (${source.index_reason || 'new data'})` : ' · indexed'), ...traits);
     }
   }
+
+  // A source's account follows its capture state on one line. Its coverage is
+  // left out: "needs index" already covers an incomplete index.
+  function sourceAccount(account) { return account ? [node('span', 'pharos-sub', ` · Account: ${account}`)] : []; }
 
   // ---- Settings → Health and Backups
   const CHECK_TITLES = {encryption: 'Encryption', spotlight: 'Spotlight', filesystem: 'File system', location: 'Location', free_space: 'Free space', volume_pin: 'Volume pin', backup: 'Backup'};

@@ -841,7 +841,8 @@ const log = (scale?: ChartScale) => ({ mode: scale === "logarithmic" ? "log" as 
 export const measureExpression = (measure: AnalysisMeasure) => measure.ratio ? `${partExpression(measure.ratio[0])}/NULLIF(${partExpression(measure.ratio[1])},0)` : measure.expression;
 // Grouped rows show a measure in its own format: a duration as a duration.
 const cellDisplay = (format: MetricValueFormat): Pick<SummaryColumn, "display"> => format.kind === "duration" && format.sourceUnit === "milliseconds" ? { display: { kind: "duration", sourceUnit: "milliseconds" } }
-  : format.kind === "number" || format.kind === "percent" ? { display: { kind: format.kind, ...format.decimals !== undefined ? { decimals: format.decimals } : {} } }
+  : format.kind === "number" ? { display: { kind: "number", ...format.decimals !== undefined ? { decimals: format.decimals } : {}, ...format.notation ? { notation: format.notation } : {} } }
+  : format.kind === "percent" ? { display: { kind: "percent", ...format.decimals !== undefined ? { decimals: format.decimals } : {} } }
   : format.kind === "currency" && format.currency ? { display: currencyDisplay(format) } : {};
 function summary(id: string, measure: AnalysisMeasure): SummaryColumn {
   const expression = measureExpression(measure);

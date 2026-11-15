@@ -215,6 +215,24 @@ test("marks that engagement splits out of one stretch of writing keep that stret
   const withEngagement = numbers(reader.engagementMask(text, view, writing)), without = numbers(writing);
   assert.ok(new Set(without).size > 2, "the message has several stretches of writing");
   assert.deepEqual(withEngagement, without);
+  // Citation chips set into the words (citedText) cut the mask as they cut the text: each annotated stretch still reads as its own text, no mark holds a chip, and the numbers are again the same with engagement or without.
+  const points = part => Array.from(text.slice(0, range(part).end)).length;
+  const notes = { citations: [{ start: 0, end: points("Don't open"), url: "https://a.example/one" }, { start: 0, end: points("show me the"), url: "https://b.example/two" }] };
+  const chipped = mask => {
+    const shown = reader.citedText(text, reader.eventTargetMask(text, targets, mask), notes), parts = reader.markdownText(shown.text, shown.mask), marks = [];
+    parts.forEach((part, at) => { if (typeof part !== "string" && part.className.split(" ").includes("human-written")) marks.push({ className: part.className, text: part.children[0], joined: marks.length > 0 && parts[at - 1] === marks.at(-1).part, part }); });
+    const indexes = plain(reader.writingMarkIndexes(marks));
+    return { shown, marks, numbers: marks.flatMap((item, at) => Array.from(item.text, () => indexes[at])) };
+  };
+  const on = chipped(reader.engagementMask(text, view, writing)), off = chipped(writing), segments = reader.engagementSegments(view);
+  assert.equal(on.shown.cites.length, 2);
+  assert.deepEqual(on.numbers, off.numbers);
+  assert.equal(on.marks.some(mark => /[\uE000\uE001]/.test(mark.text)), false, "no highlight or underline covers a chip");
+  const drawn = new Map();
+  for (const mark of on.marks) { const name = mark.className.split(" ").find(name => /^eng-at-\d+$/.test(name)); if (name) drawn.set(name, (drawn.get(name) ?? "") + mark.text); }
+  assert.ok(drawn.size > 3);
+  // A segment's marks hold the characters of it the person typed, in order (the reader marks nothing else).
+  for (const [name, value] of drawn) { const segment = segments[Number(name.slice(7))]; let typedText = ""; for (let at = segment.start; at < segment.end; at++) if (writing[at] === "1") typedText += text[at]; assert.equal(value, typedText, name); }
 });
 
 test("the page shows a label only from the display threshold up", () => {

@@ -132,7 +132,7 @@ const dashboards: Record<string, CardDashboard> = {
   "model-cost-share": tokens("cost", "provider_model", { view: "compare", compareAs: "share" }),
   "repository-cost-share": tokens("cost", "project_name", { view: "compare", compareAs: "share" }),
   // Human Words: messages (writing_messages).
-  "human-words": human("typed", "none"),
+  "human-words": human("typed", "estimate"),
   "human-word-total": human("typed", "none", { rollingPeriods: 7, rollingOp: "sum", percentiles: ["mean"] }),
   "explaining-repos": human("typed", "project_name", { view: "compare", compareAs: "share" }),
   "human-word-mix": human("typed_share", "project_name", { view: "compare" }),

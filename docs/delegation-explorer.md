@@ -87,7 +87,8 @@ for all visible metrics and their rankings; the default is Self + children. A co
 reorder them. Order and visibility are saved independently. Messages and Agent events appear beside Tool calls;
 Files read counts distinct successful read paths and excludes directory listings and searches.
 Each row's Timeline button opens that session's own evidence span with its immediate event groups visible and deeper groups closed.
-Large absolute values use K/M/B with three significant digits; metric tooltips
+Large absolute values use K/M/B with three significant digits (token counts
+follow the shared [token rule](ui-vocabulary.md#amounts)); metric tooltips
 retain exact values. A global tint control replaces per-cell percentages. Tint uses a
 softened logarithmic curve and each column's fixed, whole-workspace maximum.
 Pagination and collapsed branches do not change those maxima or spend totals.

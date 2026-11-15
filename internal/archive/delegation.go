@@ -556,12 +556,14 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			}
 			reporting++
 			estimated := estimateFlag(row["is_estimate"])
-			missingInput = missingInput || estimated
+			// An estimate carries input only when its row says so.
+			withoutInput := estimated && !estimateFlag(row["input_tokens_available"])
+			missingInput = missingInput || withoutInput
 			if n.Usage == "unavailable" || usage == "reported-partial" {
 				n.Usage = usage
 			}
 			for key, field := range tokenFields {
-				if estimated && key != "tokens" && key != "output" && key != "reasoning" {
+				if withoutInput && key != "tokens" && key != "output" && key != "reasoning" {
 					continue // Estimated output says nothing about input or cache usage.
 				}
 				v := float64(integer(row[field]))

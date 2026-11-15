@@ -24,7 +24,7 @@ func TestRecentConversationSelection(t *testing.T) {
 	items[13].RepositoryID, items[13].Provider, items[13].Model = "other", "claude", "opus"
 	items[22].LabelsReady, items[22].EventsReady = true, true
 	selected := selectRecentConversations(items)
-	if len(selected) != 10 || selected[0].ID != "22" {
+	if len(selected) != recentConversationCount || selected[0].ID != "22" {
 		t.Fatalf("size/enrichment preference: %+v", selected)
 	}
 	seen, repos, providers, depths := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[int]bool{}

@@ -43,6 +43,7 @@
     "@pythia-software/query-table-react": "1.0.9",
     "@pythia-software/query-table-ui": "1.0.9",
     "@types/markdown-it": "14.1.2",
+    "chart.js": "4.4.1",
     "html-to-image": "1.11.13",
     "markdown-it": "15.0.2",
     "react": "18.3.1",

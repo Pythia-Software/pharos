@@ -43,7 +43,17 @@ func publishCanonicalUsageEstimates(ctx context.Context, tx *sql.Tx, conversatio
 	if err != nil {
 		return err
 	}
-	var outputTotal, thinkingTotal int64
+	// Input is published only when every estimated response has one, so a
+	// session total never mixes counted and missing input.
+	inputAvailable := len(report.Responses) > 0
+	for _, response := range report.Responses {
+		inputAvailable = inputAvailable && response.Input != nil
+	}
+	scope, attribution, available := "output_only", "estimated-output", 0
+	if inputAvailable {
+		scope, attribution, available = "input_and_output", "estimated", 1
+	}
+	var outputTotal, thinkingTotal, inputTotal, readTotal, creationTotal int64
 	for sequence, response := range report.Responses {
 		output := int64(math.Round(response.Output.Expected))
 		thinking := min(output, int64(math.Round(response.Thinking.Expected)))
@@ -56,25 +66,37 @@ func publishCanonicalUsageEstimates(ctx context.Context, tx *sql.Tx, conversatio
 			stamp = defaultString(at.String, started)
 		}
 		requestID := stableID("model-request", conversation, "estimate:"+response.NativeID)
-		payload := map[string]any{"estimator_key": key, "scope": "output_only", "input_tokens_available": false, "estimate": response}
+		// The cache division is a scenario; the two parts always sum to the
+		// estimated input, and no estimated token is called uncached.
+		var input, read, creation int64
+		if inputAvailable {
+			input = int64(math.Round(response.Input.Tokens.Expected))
+			read = min(input, int64(math.Round(response.Input.CacheRead)))
+			creation = input - read
+		}
+		payload := map[string]any{"estimator_key": key, "scope": scope, "input_tokens_available": inputAvailable, "estimate": response}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,effort,speed,speed_source,
- output_tokens,reasoning_output_tokens,total_tokens,source_message_id,final_message_id,is_estimate,input_tokens_available,usage_estimate_json)
- VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,?)`, requestID, conversation, session, response.NativeID, sequence, nilIfEmpty(stamp), nilIfEmpty(response.Model), nilIfEmpty(response.Effort), response.Speed, response.SpeedSource,
-			output, thinking, output, response.MessageID, response.MessageID, jsonText(payload)); err != nil {
+ input_tokens,cache_read_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,source_message_id,final_message_id,is_estimate,input_tokens_available,usage_estimate_json)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)`, requestID, conversation, session, response.NativeID, sequence, nilIfEmpty(stamp), nilIfEmpty(response.Model), nilIfEmpty(response.Effort), response.Speed, response.SpeedSource,
+			input, read, creation, output, thinking, input+output, response.MessageID, response.MessageID, available, jsonText(payload)); err != nil {
 			return err
 		}
 		// The estimated row can carry a saved selection as an explicit pricing
 		// assumption; source messages and measured requests remain unchanged.
 		model := defaultString(response.Model, "Unknown model")
-		usageMetadata := map[string]any{"estimator_key": key, "scope": "output_only"}
+		usageMetadata := map[string]any{"estimator_key": key, "scope": scope}
 		if response.ModelSource != "" {
 			usageMetadata["model_source"] = response.ModelSource
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,effort,attribution,output_tokens,reasoning_output_tokens,total_tokens,is_estimate,input_tokens_available,usage_estimate_json)
- VALUES(?,?,?,?,'estimated-output',?,?,?,1,0,?)
- ON CONFLICT(agent_session_id,usage_hour,model,effort,attribution) DO UPDATE SET output_tokens=output_tokens+excluded.output_tokens,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,effort,attribution,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,cache_creation_5m_input_tokens,
+ output_tokens,reasoning_output_tokens,total_tokens,is_estimate,input_tokens_available,usage_estimate_json)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)
+ ON CONFLICT(agent_session_id,usage_hour,model,effort,attribution) DO UPDATE SET input_tokens=input_tokens+excluded.input_tokens,
+ cache_read_input_tokens=cache_read_input_tokens+excluded.cache_read_input_tokens,cache_creation_input_tokens=cache_creation_input_tokens+excluded.cache_creation_input_tokens,
+ cache_creation_5m_input_tokens=cache_creation_5m_input_tokens+excluded.cache_creation_5m_input_tokens,output_tokens=output_tokens+excluded.output_tokens,
  reasoning_output_tokens=reasoning_output_tokens+excluded.reasoning_output_tokens,total_tokens=total_tokens+excluded.total_tokens,
- usage_estimate_json=CASE WHEN json_extract(excluded.usage_estimate_json,'$.model_source') IS NOT NULL THEN excluded.usage_estimate_json ELSE usage_estimate_json END`, session, usageHour(stamp), model, response.Effort, output, thinking, output, jsonText(usageMetadata)); err != nil {
+ usage_estimate_json=CASE WHEN json_extract(excluded.usage_estimate_json,'$.model_source') IS NOT NULL THEN excluded.usage_estimate_json ELSE usage_estimate_json END`, session, usageHour(stamp), model, response.Effort, attribution,
+			input, read, creation, creation, output, thinking, input+output, available, jsonText(usageMetadata)); err != nil {
 			return err
 		}
 		for _, tool := range response.Tools {
@@ -88,12 +110,15 @@ func publishCanonicalUsageEstimates(ctx context.Context, tx *sql.Tx, conversatio
 		}
 		outputTotal += output
 		thinkingTotal += thinking
+		inputTotal, readTotal, creationTotal = inputTotal+input, readTotal+read, creationTotal+creation
 	}
 	if len(report.Responses) == 0 {
 		return nil
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE agent_sessions SET output_tokens=?,reasoning_output_tokens=?,total_tokens=?,is_estimate=1,input_tokens_available=0,
- usage_status='estimated-output',usage_estimate_json=? WHERE id=? AND (usage_status='unavailable' OR is_estimate=1)`, outputTotal, thinkingTotal, outputTotal, jsonText(map[string]any{"estimator_key": key, "scope": "output_only"}), session)
+	_, err = tx.ExecContext(ctx, `UPDATE agent_sessions SET input_tokens=?,cache_read_input_tokens=?,cache_creation_input_tokens=?,cache_creation_5m_input_tokens=?,
+ output_tokens=?,reasoning_output_tokens=?,total_tokens=?,is_estimate=1,input_tokens_available=?,
+ usage_status=?,usage_estimate_json=? WHERE id=? AND (usage_status='unavailable' OR is_estimate=1)`, inputTotal, readTotal, creationTotal, creationTotal,
+		outputTotal, thinkingTotal, inputTotal+outputTotal, available, attribution, jsonText(map[string]any{"estimator_key": key, "scope": scope}), session)
 	return err
 }
 

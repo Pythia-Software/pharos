@@ -25,6 +25,10 @@
   "bindings": [
     {
       "file": "web/src/card-library.tsx",
+      "field": "card_all"
+    },
+    {
+      "file": "web/src/card-library.tsx",
       "field": "card_filters"
     },
     {
@@ -326,6 +330,10 @@
     {
       "file": "internal/archive/assets/ui.py",
       "field": "overlay"
+    },
+    {
+      "file": "web/src/project-color-settings.tsx",
+      "field": "project_color_sort"
     },
     {
       "file": "web/src/data-taxonomy.tsx",
@@ -1747,9 +1755,9 @@
       "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
-      "key": "616c1fc1bbab6521:0",
+      "key": "e01457ab83ea326f:0",
       "file": "internal/archive/assets/data-guide.js",
-      "owner": "lf",
+      "owner": "Zh",
       "tag": "aria-expanded",
       "control": "document.getElementById(\"dataGuideToggle\")",
       "disclosure": true,
@@ -2393,11 +2401,11 @@
       "reason": "Library setup, backup/storage configuration, or read-only operational diagnostics; explicitly excluded from content view URLs."
     },
     {
-      "key": "aa053c6ea5d6f456:0",
+      "key": "9a06636fa9fcff23:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "renderChatGPTWatch",
       "tag": "button",
-      "control": "'button', '', 'Check Downloads now'",
+      "control": "'button', 'claude-watch-button', 'Check Downloads now'",
       "contract": "action",
       "reason": "Per-Mac opt-in Downloads setting, or explicit immediate check; saved outside library content view URLs."
     },
@@ -2420,6 +2428,15 @@
       "reason": "Per-Mac browser profile that opens Claude export download links; saved outside the library and independent of URL view state."
     },
     {
+      "key": "79518f97bf8cdd75:0",
+      "file": "internal/archive/assets/onboarding.js",
+      "owner": "renderClaudeWatch",
+      "tag": "button",
+      "control": "'button', 'claude-watch-button', 'Check Downloads now'",
+      "contract": "action",
+      "reason": "Asks the service to check Downloads for a Claude export now; an immediate command with no view state."
+    },
+    {
       "key": "8d9ed6b2fb0f0f79:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "renderClaudeWatch",
@@ -2427,15 +2444,6 @@
       "control": "'button', 'toggle'",
       "contract": "settings",
       "reason": "Per-Mac opt-in to watch Downloads for Claude export manifests; saved outside the library and independent of URL view state."
-    },
-    {
-      "key": "fdbb6f776b362556:0",
-      "file": "internal/archive/assets/onboarding.js",
-      "owner": "renderClaudeWatch",
-      "tag": "button",
-      "control": "'button', '', 'Check Downloads now'",
-      "contract": "action",
-      "reason": "Asks the service to check Downloads for a Claude export now; an immediate command with no view state."
     },
     {
       "key": "8165dad42aa683a0:0",
@@ -2510,20 +2518,20 @@
       "reason": "Disclosure is inside the source/library creation or recovery wizard and exposes an unapplied setup action or its instructions."
     },
     {
-      "key": "5634aeb0adbdf213:0",
+      "key": "6f9742ae10c071e2:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "showChatGPTWatch",
       "tag": "button",
-      "control": "'button', '', action==='retry'?'Try again':'Stop'",
+      "control": "'button', 'claude-watch-button', action==='retry'?'Try again':'Stop'",
       "contract": "action",
       "reason": "Retry or stop a managed import job; operational action without content view state."
     },
     {
-      "key": "7390be4d645bfa9a:0",
+      "key": "5de8066b5da3743f:0",
       "file": "internal/archive/assets/onboarding.js",
       "owner": "showClaudeWatch",
       "tag": "button",
-      "control": "'button', '', action==='retry'?'Try again':'Stop'",
+      "control": "'button', 'claude-watch-button', action==='retry'?'Try again':'Stop'",
       "contract": "action",
       "reason": "Retries or stops one watched Claude export's downloads; an immediate command with no view state."
     },
@@ -3504,6 +3512,15 @@
       "reason": "Reader expansion is bound by stable message/call/section identity through reader_content or reader_expanded/reader_collapsed."
     },
     {
+      "key": "b6d06cb0239d735d:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "assetWidget",
+      "tag": "button",
+      "control": "'button', 'asset-widget-open', 'Open'",
+      "contract": "transient",
+      "reason": "Opens the temporary attachment viewer on a widget already shown in the reply; it does not change view or query state."
+    },
+    {
       "key": "60980fd60c4b63b2:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "attachMessageRaw",
@@ -3745,6 +3762,26 @@
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
     },
     {
+      "key": "8bfa05a0358ec457:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "messageAssetsView",
+      "tag": "summary",
+      "control": "'summary', '', `${spares.length} more image${spares.length===1?'':'s'} found, not shown in the reply`",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Summary of the spare images disclosure; the shared classic disclosure runtime owns its open state through data-view-key."
+    },
+    {
+      "key": "f433208de4bab81f:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "messageAssetsView",
+      "tag": "details",
+      "control": "'details', 'asset-spares'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Shared classic disclosure binding uses the stable message identity in data-view-key; opening shows the images a search found that the reply did not show."
+    },
+    {
       "key": "1ac1d20bf5578b50:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "messageBody",
@@ -3781,6 +3818,26 @@
       "reason": "Clipboard actions are transient; Highlight Link writes the canonical reveal attention target before copying the URL."
     },
     {
+      "key": "96a822324255483c:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "messageSourcesView",
+      "tag": "details",
+      "control": "'details', 'message-sources'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Shared classic disclosure binding uses the stable message identity in data-view-key; opening lists the sources the message already carries."
+    },
+    {
+      "key": "e38c391cb38960f4:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "messageSourcesView",
+      "tag": "summary",
+      "control": "'summary', ''",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Summary of the message sources disclosure; the shared classic disclosure runtime owns its open state through data-view-key."
+    },
+    {
       "key": "3f6f4aa5f5684795:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "mount",
@@ -3788,6 +3845,51 @@
       "control": "'select', 'conversation-selector'",
       "contract": "action",
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
+    },
+    {
+      "key": "4f179deebd5cf692:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "openAssetDialog",
+      "tag": "button",
+      "control": "'button', 'asset-dialog-button', 'Show this page'",
+      "contract": "action",
+      "reason": "Consent to render one exported page a person or website wrote, for this opening of the viewer only; nothing is remembered."
+    },
+    {
+      "key": "85cd8451b963d6fd:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "openAssetDialog",
+      "tag": "button",
+      "control": "'button', 'asset-dialog-button', label",
+      "contract": "transient",
+      "reason": "Zoom controls of the temporary attachment viewer; zoom and pan are not view or query state."
+    },
+    {
+      "key": "db7d7e47307abbea:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "openAssetDialog",
+      "tag": "button",
+      "control": "'button', 'asset-dialog-button', 'Comments'",
+      "contract": "transient",
+      "reason": "Shows or hides the comments beside an artifact in the temporary attachment viewer; nothing outside this opening of the viewer changes."
+    },
+    {
+      "key": "e9fa6606430bcce8:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "openAssetDialog",
+      "tag": "button",
+      "control": "'button', 'asset-dialog-close', '×'",
+      "contract": "transient",
+      "reason": "Closes the temporary attachment viewer; it does not change view or query state."
+    },
+    {
+      "key": "81ba1be63f5cd631:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "picker",
+      "tag": "select",
+      "control": "'select', 'asset-dialog-button asset-dialog-select'",
+      "contract": "transient",
+      "reason": "Chooses which version or page of an artifact the temporary attachment viewer shows; the viewer is not view or query state and opens on the current version."
     },
     {
       "key": "3943396b6748787d:0",
@@ -4332,6 +4434,15 @@
       "reason": "Restores hidden annotations for this conversation through the registered reader_highlight_hidden field."
     },
     {
+      "key": "5d68c5a5a964104a:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "voiceLineButton",
+      "tag": "button",
+      "control": "'button', 'voice-line-play'",
+      "contract": "transient",
+      "reason": "Starts or pauses audio playback from one line; playback position is transient media state, like scroll."
+    },
+    {
       "key": "33619209c2062df5:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "workSection",
@@ -4519,38 +4630,20 @@
       "reason": "Canonical destination URLs; sidebar presentation uses nav_collapsed/nav_expanded. Navigation menu openness is transient."
     },
     {
-      "key": "0c419029d3ec5074:0",
-      "file": "web/src/ask-pharos.tsx",
-      "owner": "AskPharosSettings",
-      "tag": "input",
-      "control": "checked={status.settings.showInvitation} onChange={event => void save({ showInvitation: event.target.checked })}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "4fcf1e47ebac374f:0",
-      "file": "web/src/ask-pharos.tsx",
-      "owner": "AskPharosSettings",
-      "tag": "select",
-      "control": "aria-label=\"Default AI CLI\" value={selection.provider} onChange={event => setSelection({ provider: event.target.value, model: \"\", effort: \"Default\" })}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "520a65860d7ba9d2:0",
-      "file": "web/src/ask-pharos.tsx",
-      "owner": "AskPharosSettings",
-      "tag": "button",
-      "control": "onClick={() => { void refresh(); setModelGeneration(value => value + 1); }}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
       "key": "93f96a0d1bd49d78:0",
       "file": "web/src/ask-pharos.tsx",
       "owner": "AskPharosSettings",
       "tag": "button",
       "control": "onClick={() => consent.current?.close()}",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
+      "key": "9734238f092e57d4:0",
+      "file": "web/src/ask-pharos.tsx",
+      "owner": "AskPharosSettings",
+      "tag": "button",
+      "control": "onClick={() => enabled ? void save({ enabled: false }) : consent.current?.showModal()}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -4564,13 +4657,15 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "b0c69306456e8575:0",
+      "key": "a97f0235e6da80b7:0",
       "file": "web/src/ask-pharos.tsx",
       "owner": "AskPharosSettings",
-      "tag": "select",
-      "control": "aria-label=\"Default AI effort\" value={selection.effort} onChange={event => setSelection(current => ({ ...current, effort: event.target.value }))}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"askPharosSettings\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "b899d5cfdf4f17f7:0",
@@ -4582,29 +4677,20 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "cdfaf734a56e89d7:0",
+      "key": "bf70573576227d4d:0",
       "file": "web/src/ask-pharos.tsx",
       "owner": "AskPharosSettings",
       "tag": "button",
-      "control": "onClick={() => void save({ selection })}",
+      "control": "onClick={() => void save({ showInvitation: !status?.settings.showInvitation })}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "edaa0c9060202214:0",
+      "key": "d08369b3929ce467:0",
       "file": "web/src/ask-pharos.tsx",
       "owner": "AskPharosSettings",
-      "tag": "select",
-      "control": "aria-label=\"Default AI model\" value={selection.model} onChange={event => setSelection(current => ({ ...current, model: event.target.value, effort: \"Default\" }))}",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "fafb900519cbc2b5:0",
-      "file": "web/src/ask-pharos.tsx",
-      "owner": "AskPharosSettings",
-      "tag": "input",
-      "control": "checked={status.settings.enabled} onChange={event => event.target.checked ? consent.current?.showModal() : void save({ enabled: false })}",
+      "tag": "button",
+      "control": "onClick={() => void refreshCLIs()}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
@@ -4765,6 +4851,16 @@
       "reason": "Dataset filter uses the existing card_dataset URL field; its label distinguishes query datasets from imported history sources."
     },
     {
+      "key": "7e1e74049ce65e47:0",
+      "file": "web/src/card-library.tsx",
+      "owner": "CardLibrary",
+      "tag": "button",
+      "control": "data-view-field=\"card_all\" onClick={() => setShowAll(!showAll)}",
+      "binding": "card_all",
+      "contract": "view.card_all",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "8dab89eb60a6517d:0",
       "file": "web/src/card-library.tsx",
       "owner": "CardLibrary",
@@ -4781,6 +4877,16 @@
       "control": "aria-label=\"Card kind\" value={kind} onChange={event => filter(setKind)(event.target.value)}",
       "contract": "cards",
       "reason": "card_* filters/sort/topic plus card_window/card_filters; navigation and collection actions use their existing contracts."
+    },
+    {
+      "key": "9611ce37b3e1053f:0",
+      "file": "web/src/card-library.tsx",
+      "owner": "CardLibrary",
+      "tag": "button",
+      "control": "data-view-field=\"card_all\" onClick={() => setShowAll(true)}",
+      "binding": "card_all",
+      "contract": "view.card_all",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "a18356ac232f8563:0",
@@ -7779,13 +7885,13 @@
       "reason": "Edits a persistent provider/model color preference. Draft input affects only the live comparison until the provider header Save action commits the palette."
     },
     {
-      "key": "faa5d716e2934161:0",
+      "key": "68a53d71b84d8664:0",
       "file": "web/src/model-color-settings.tsx",
       "owner": "ColorEditor",
       "tag": "button",
-      "control": "onClick={reset} aria-label={`Restore ${kind === \"provider\" ? \"brand color\" : \"recommended shade\"} for ${label}`}",
+      "control": "onClick={() => { reset(); input.current?.focus({ preventScroll: true }); }} aria-label={`Restore ${kind === \"provider\" ? \"brand color\" : \"recommended shade\"} for ${label}`}",
       "contract": "settings",
-      "reason": "Stages removal of a saved provider/model color override. Restore brand and Use recommended affect the preview until the provider header Save action commits the palette."
+      "reason": "Stages removal of a saved provider/model color override. Shown only when the proposed color differs from the brand or recommended shade; Restore brand and Use recommended affect the preview until the provider header Save action commits the palette."
     },
     {
       "key": "ea540ed463e58650:0",
@@ -7797,13 +7903,13 @@
       "reason": "Saved and Preview swatches toggle the same transient inline model-color editor. This local editing selection is not a shared view input."
     },
     {
-      "key": "111d4cff6702abe0:0",
+      "key": "50e54805026894bd:0",
       "file": "web/src/model-color-settings.tsx",
       "owner": "ProviderColorCard",
       "tag": "button",
-      "control": "onClick={() => setDrafts({})}",
+      "control": "onClick={discard}",
       "contract": "settings",
-      "reason": "Discards unapplied local provider/model color drafts without changing saved preferences or the current view."
+      "reason": "Discards unapplied local provider/model color drafts without changing saved preferences or the current view. Shown only while the provider's palette has pending drafts."
     },
     {
       "key": "eed1fdb113187def:0",
@@ -8023,6 +8129,16 @@
       "control": "onClick={() => void save(project, draft)} aria-label={`Save color for ${project.name}`}",
       "contract": "settings",
       "reason": "Edits or restores a persistent library project-color preference; the picker holds an unapplied draft until Save color."
+    },
+    {
+      "key": "dab03572559c7656:0",
+      "file": "web/src/project-color-settings.tsx",
+      "owner": "ProjectColorSettings",
+      "tag": "select",
+      "control": "data-view-field=\"project_color_sort\" value={sort} onChange={event => setSort(event.target.value as ProjectColorSort)}",
+      "binding": "project_color_sort",
+      "contract": "view.project_color_sort",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "502369976da84683:0",
@@ -8355,6 +8471,24 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "0e16829cc0b46e54:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderVoiceRow",
+      "tag": "button",
+      "control": "aria-label={`Play from line ${span.index+1}`} onClick={()=>voice.playFrom(line.id)}",
+      "contract": "transient",
+      "reason": "Starts audio playback from one line of the conversation; playback position is transient media state, like scroll."
+    },
+    {
+      "key": "9fbce86d5d39b924:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderVoiceRow",
+      "tag": "button",
+      "control": "onClick={voice.toggle}",
+      "contract": "transient",
+      "reason": "Starts or pauses audio playback of the conversation; playback is transient media state, like scroll."
     },
     {
       "key": "110c067b8fa806e8:0",
@@ -9721,24 +9855,6 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "11a26aa66851a5e0:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "select",
-      "control": "value={draft.kind} onChange={e => { const kind = e.target.value as Draft[\"kind\"]; update({ kind }); if (!proposal && kind === \"bug\" && !logs) void includeLogs(true); }}",
-      "contract": "editing",
-      "reason": "Edits the type of an unsent feedback report; changing type never grants send consent."
-    },
-    {
-      "key": "21c546ddb1da3f5d:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "details",
-      "control": "",
-      "contract": "editing",
-      "reason": "Settings/diagnostic or feedback-editing disclosure, explicitly excluded from view URLs."
-    },
-    {
       "key": "22fa336466ad9c3b:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
@@ -9831,15 +9947,6 @@
       "reason": "Reopens an unsent feedback editor or saved receipt inside the conversation; it cannot grant submission consent."
     },
     {
-      "key": "b3dfbcb52d181747:0",
-      "file": "web/src/uifeedback/pharos-client.tsx",
-      "owner": "Composer",
-      "tag": "summary",
-      "control": "",
-      "contract": "editing",
-      "reason": "Expands editable logs attached to an unapplied feedback submission."
-    },
-    {
       "key": "bc04d601aade6832:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
@@ -9867,6 +9974,15 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "e9dac1711efd5ac2:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => void discardReport()}",
+      "contract": "action",
+      "reason": "Explicitly discards the unsent manual feedback report (comment, review, annotations and screenshots) and closes the dialog; it never submits feedback."
+    },
+    {
       "key": "eed418951773758d:0",
       "file": "web/src/uifeedback/pharos-client.tsx",
       "owner": "Composer",
@@ -9883,6 +9999,16 @@
       "control": "checked={logs} onChange={e => void includeLogs(e.target.checked)}",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
+      "key": "fe65e6179495ab56:0",
+      "file": "web/src/uifeedback/pharos-client.tsx",
+      "owner": "Composer",
+      "tag": "button",
+      "control": "onClick={() => setReviewingLogs(open => !open)}",
+      "disclosure": true,
+      "contract": "editing",
+      "reason": "Shows the attached diagnostic logs for editing in an unsent feedback report; feedback editing is excluded from URL view state."
     },
     {
       "key": "57c08b857d8535fe:0",

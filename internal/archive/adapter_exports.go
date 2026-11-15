@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // chatGPTAdapter reads a ChatGPT data export (ChatGPT → Settings → Data
@@ -29,7 +30,7 @@ type chatGPTAdapter struct {
 }
 
 // chatGPTExtractor versions the parser; bump it when parsing changes.
-const chatGPTExtractor = "chatgpt-v3"
+const chatGPTExtractor = "chatgpt-v4"
 
 func (a *chatGPTAdapter) indexVersion() string { return chatGPTExtractor }
 
@@ -314,6 +315,8 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 	children := chatGPTChildren(conversation.Mapping)
 	selected := chatGPTSelected(conversation, children)
 	messages := []MessageRecord{}
+	assets, sources := []AssetRecord{}, []SourceRecord{}
+	var notes []NoteRecord
 	// read is the message each node, or the nearest node above it, was
 	// read as; calls and tools are the call each call or reply node
 	// belongs to, and its tool; replies marks the replies.
@@ -498,6 +501,15 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 			}
 			attached.Kind, attached.Text, attached.RawText = "attachment", jsonText(attachment), jsonText(attachment)
 			add(attached)
+			assets = append(assets, chatGPTAssetRecord(attachment, role, read[nodeID], attached.NativeID))
+		}
+		if role == "assistant" {
+			cited, images, marks := chatGPTSources(metadata, read[nodeID], messageText(content["parts"]))
+			sources, assets = append(sources, cited...), append(assets, images...)
+			assets = append(assets, chatGPTWidgets(messageText(content["parts"]), read[nodeID])...)
+			if len(marks) > 0 {
+				notes = append(notes, NoteRecord{MessageNativeID: read[nodeID], Details: map[string]any{"marks": marks}})
+			}
 		}
 	}
 	active, model := []MessageRecord{}, ""
@@ -543,6 +555,32 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 			}
 			seen[key] = true
 			record.Conversations[0].Messages = append(record.Conversations[0].Messages, MessageRecord{NativeID: nativeID + ":library:" + firstString(f["file_id"]), Role: "system", Kind: "attachment", Text: jsonText(asset), RawText: jsonText(asset), CreatedAt: iso(f["created_at"]), Selected: true, EvidenceLocator: origin + ":library:" + firstString(f["file_id"])})
+			// The Library names the message a file was made for. That is
+			// often a step the export leaves out, and then the file belongs
+			// with the reply that stood when it was made: the last one
+			// before it, or else the conversation's first.
+			owner, made, madeOK := "", time.Time{}, false
+			if at := iso(f["created_at"]); at != "" {
+				made, madeOK = parseTime(at)
+			}
+			for _, m := range messages {
+				if m.Kind != "message" {
+					continue
+				}
+				if m.NativeID == firstString(f["origination_message_id"]) {
+					owner = m.NativeID
+					break
+				}
+				if m.Selected && m.Role == "assistant" {
+					if said, ok := parseTime(m.CreatedAt); owner != "" && madeOK && ok && said.After(made) {
+						continue
+					}
+					owner = m.NativeID
+				}
+			}
+			if owner != "" {
+				assets = append(assets, chatGPTAssetRecord(asset, "library", owner, nativeID+":library:"+firstString(f["file_id"])))
+			}
 		}
 	}
 	context := map[string]any{"source": "chatgpt_export", "settings": conversation.Metadata}
@@ -551,6 +589,37 @@ func (a *chatGPTAdapter) record(conversation chatGPTConversation, origin string,
 	}
 	evidence := MessageRecord{NativeID: nativeID + ":export-context", Role: "system", Kind: "metadata", Text: jsonText(context), RawText: jsonText(context), CreatedAt: created, Selected: true, EvidenceLocator: origin + ":settings"}
 	record.Conversations[0].Messages = append([]MessageRecord{evidence}, record.Conversations[0].Messages...)
+	// A message that is only a file, such as a photo sent between spoken
+	// lines, has no words to show the file with: it is shown with the
+	// same speaker's message before it, or else their next.
+	for index := range assets {
+		at := slices.IndexFunc(messages, func(m MessageRecord) bool { return m.NativeID == assets[index].MessageNativeID })
+		if at < 0 || messages[at].Kind == "message" {
+			continue
+		}
+		spoke := func(m MessageRecord) bool { return m.Kind == "message" && m.Selected && m.Role == messages[at].Role }
+		for before := at - 1; before >= 0; before-- {
+			if spoke(messages[before]) {
+				assets[index].MessageNativeID = messages[before].NativeID
+				break
+			}
+		}
+		if assets[index].MessageNativeID == messages[at].NativeID {
+			for after := at + 1; after < len(messages); after++ {
+				if spoke(messages[after]) {
+					assets[index].MessageNativeID = messages[after].NativeID
+					break
+				}
+			}
+		}
+	}
+	if len(assets) > 0 {
+		record.Conversations[0].Assets = assets
+	}
+	if len(sources) > 0 {
+		record.Conversations[0].Sources = sources
+	}
+	record.Conversations[0].Notes = notes
 	return record
 }
 

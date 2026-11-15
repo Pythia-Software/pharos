@@ -478,6 +478,18 @@ final class HeaderTestWindow: NSWindow {
         page.willOpenMenu(clearedMenu, with: event)
         expect(clearedMenu.item(withTitle: "Clear Highlights") == nil, "clear highlights is offered only when attention exists")
         page.didCloseMenu(clearedMenu, with: event)
+        evaluate("window.toggled = []; window.pharosView.contextTarget = element => element.id === 'other' ? {reference: 'card:other', noun: 'Card', highlighted: false} : null; window.pharosView.toggleAttention = reference => window.toggled.push(reference)")
+        rightClick("#other")
+        let highlightMenu = NSMenu()
+        page.willOpenMenu(highlightMenu, with: event)
+        guard let highlight = highlightMenu.item(withTitle: "Highlight Card"), let highlightAction = highlight.action else { fatalError("the Highlight Card item is missing") }
+        // AppKit closes the menu before it sends the chosen item's action.
+        page.didCloseMenu(highlightMenu, with: event)
+        _ = NSApp.sendAction(highlightAction, to: highlight.target, from: highlight)
+        var toggled = ""
+        page.evaluateJavaScript("window.toggled.join(',')") { result, _ in toggled = result as? String ?? "?" }
+        until("the highlight action did not reach the page") { !toggled.isEmpty }
+        expect(toggled == "card:other", "Highlight toggles the right-clicked target after the menu closes: \(toggled)")
         page.stopLoading()
         print("Real WKWebView main-document and same-origin iframe sender checks passed")
     }

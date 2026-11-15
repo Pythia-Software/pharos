@@ -557,14 +557,14 @@ PY
     .cloud-beta{color:var(--muted);font-size:12px;line-height:1.3}.cloud-ongoing{margin-top:20px;min-width:0}.cloud-ongoing article{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin:12px 0;min-width:0}.cloud-ongoing h4{margin:0 0 8px}.cloud-schedule-settings{margin-top:12px}.cloud-schedule-settings .cloud-fields{margin:12px 0;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr))}.cloud-history-select{display:block;max-width:100%;margin:12px 0}.cloud-saved{border-top:1px solid var(--line);padding:18px 20px}.cloud-saved-item{padding:10px 0;border-bottom:1px solid var(--line)}.cloud-saved-item strong{display:block;overflow-wrap:anywhere}.cloud-saved-item p{margin:5px 0}.cloud-saved-item .cloud-actions{margin-top:7px}
     .cloud-fields.cloud-protection-fields{grid-template-columns:1fr;max-width:520px;margin:0}.cloud-command-stage{border-top:1px solid var(--line);padding:18px 0}.cloud-command-stage h4{margin-bottom:8px}.cloud-command-stage .cloud-note{max-width:760px}
     .cloud-run-layout{margin-top:20px;display:grid;grid-template-columns:minmax(0,1.3fr) minmax(230px,.7fr);gap:24px;align-items:start}.cloud-run-block{border-top:1px solid var(--line);padding:18px 0 0;margin-top:18px}.cloud-run-block h4{margin-bottom:6px}.cloud-run-block>.cloud-field{margin:12px 0}.cloud-run-layout .cloud-fields{grid-template-columns:1fr}.cloud-run-layout pre{max-height:220px}.cloud-preview-banner{padding:10px 12px;border:1px dashed var(--line);border-radius:6px;font-size:12px;color:var(--muted);margin:12px 0 18px}.cloud-run-result{padding:12px;border:1px solid var(--line);border-radius:6px;font-size:13px;margin-top:12px}.cloud-run-result.success{border-color:var(--sea)}.cloud-run-result.error{border-color:var(--bad)}.cloud-run-result strong{display:block;margin-bottom:5px}.cloud-run-checks{list-style:none;padding:0;margin:12px 0;display:grid;gap:9px;font-size:12px}.cloud-run-checks li{padding-left:18px;position:relative}.cloud-run-checks li::before{content:'○';position:absolute;left:0;color:var(--muted)}.cloud-run-checks li.complete::before{content:'✓';color:var(--sea)}.cloud-run-metadata{background:var(--bg);padding:16px;border-radius:8px;min-width:0}.cloud-run-metadata h4{margin-bottom:8px}.cloud-preview-scenarios{max-width:500px}.cloud-preview-scenarios select{font:inherit}.cloud-setup-check{display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:16px 0}.cloud-setup-check input{margin-top:4px;flex-shrink:0}
-    .cloud-cost-tooltip[hidden]{display:none}.cloud-cost-tooltip{box-sizing:border-box;min-width:min(220px,calc(100vw - 16px))}.cloud-cost-tooltip .chart-tooltip-row{align-items:center}.cloud-cost-tooltip-value{margin-left:auto;padding-left:16px;white-space:nowrap}.cloud-cost-tooltip-total{border-top:1px solid var(--line);padding-top:5px;margin-top:2px;font-weight:600}.cloud-cost-tooltip-context{color:var(--muted)}
+    .cloud-cost-tooltip[hidden]{display:none}.usage-chart-tip.chart-tooltip.cloud-cost-tooltip{min-width:min(220px,calc(100vw - 16px))}
     @media(max-width:1100px){.cloud-steps{grid-template-columns:repeat(3,minmax(0,1fr))}.cloud-steps button{padding:10px 6px}}
     @media(max-width:850px){.cloud-layout{flex-direction:column;gap:16px;padding:16px}.cloud-main,.cloud-aside{flex:0 1 auto;width:100%}.cloud-aside{border-left:0;border-top:1px solid var(--line);padding:16px 0 0}.cloud-footer{padding:12px 16px}.cloud-run-layout{grid-template-columns:1fr}}
     @media(max-width:440px){.cloud-fields.cloud-calculator-fields{grid-template-columns:1fr}.cloud-card-header{padding:0 8px;gap:0;flex-wrap:wrap}.cloud-steps{flex-basis:100%}.cloud-steps button{padding:11px 3px;gap:4px;font-size:12px}.cloud-steps span{width:15px;height:15px;font-size:10px}.cloud-header-actions{margin-left:auto;padding:6px 0}.cloud-layout{padding:12px}.cloud-saved{padding:12px}.cloud-totals strong{font-size:21px}}
   `);
   document.head.append(sheet);
   // Share the other charts' tooltip styling and portal outside clipped cards.
-  const chartTooltip=node('div',null,'chart-tooltip cloud-cost-tooltip');chartTooltip.id='cloudBackupCostTooltip';chartTooltip.setAttribute('role','tooltip');chartTooltip.hidden=true;document.body.append(chartTooltip);
+  const chartTooltip=node('div',null,'usage-chart-tip chart-tooltip cloud-cost-tooltip');chartTooltip.id='cloudBackupCostTooltip';chartTooltip.setAttribute('role','tooltip');chartTooltip.hidden=true;document.body.append(chartTooltip);
   function hideChartTooltip(){chartTooltip.hidden=true;}
   window.addEventListener('scroll',hideChartTooltip,true);window.addEventListener('resize',hideChartTooltip);window.addEventListener('blur',hideChartTooltip);
   window.addEventListener('keydown',event=>{if(event.key==='Escape')hideChartTooltip();});
@@ -885,11 +885,12 @@ PY
     function reveal(i,scenario,anchor){
       show(i);tipScenario=scenario;
       const month=scenario==='flat'?flat[selected]:months[selected];
-      chartTooltip.replaceChildren(node('strong',month.label),node('span',`${scenario==='flat'?'No growth':'With growth'} · ${month.days} forecast days`,'chart-tooltip-context cloud-cost-tooltip-context'));
+      // The shared chart popover rows (chart-popover.css): swatch and label left, value right, total below a rule.
+      chartTooltip.replaceChildren(node('div',month.label,'usage-chart-tip-head'),node('div',`${scenario==='flat'?'No growth':'With growth'} · ${month.days} forecast days`,'usage-chart-tip-more'));
       for(const[key,name,cls]of [...components,['cost','Total',null]]){
-        const row=node('span',null,'chart-tooltip-row'+(key==='cost'?' cloud-cost-tooltip-total':''));
-        if(cls){const swatch=node('i',null,'chart-tooltip-swatch cloud-legend-'+cls);swatch.setAttribute('aria-hidden','true');row.append(swatch);}
-        row.append(node('span',name),node('span',formatCost(month[key]),'cloud-cost-tooltip-value'));chartTooltip.append(row);
+        const row=node('div',null,'usage-chart-tip-row'+(key==='cost'?' usage-chart-tip-total':''));
+        if(cls){const swatch=node('i',null,'usage-swatch cloud-legend-'+cls);swatch.setAttribute('aria-hidden','true');row.append(swatch);}
+        row.append(node('span',name,'usage-chart-tip-label'),node('span',formatCost(month[key]),'usage-chart-tip-value'));chartTooltip.append(row);
       }
       chartTooltip.hidden=false;
       const rect=svg.getBoundingClientRect(),bounds=chartTooltip.getBoundingClientRect();

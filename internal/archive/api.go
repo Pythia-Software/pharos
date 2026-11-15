@@ -385,6 +385,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/menu-bar.js":          {"menu-bar.js", "text/javascript; charset=utf-8"},
 	"/assets/quick-stats.js":       {"quick-stats.js", "text/javascript; charset=utf-8"},
 	"/assets/currency.js":          {"currency.js", "text/javascript; charset=utf-8"},
+	"/assets/token-count.js":       {"token-count.js", "text/javascript; charset=utf-8"},
 	"/assets/header.js":            {"header.js", "text/javascript; charset=utf-8"},
 	"/assets/ask-pharos.html":      {"ask-pharos.html", "text/html; charset=utf-8"},
 	"/assets/ask-pharos.css":       {"ask-pharos.css", "text/css; charset=utf-8"},
@@ -425,6 +426,10 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.chatGPTImportsDocument(), 200)
 	case strings.HasPrefix(path, "/api/chatgpt-assets/"):
 		s.chatGPTAsset(w, r)
+	case strings.HasPrefix(path, "/api/assets/"):
+		s.asset(w, r)
+	case strings.HasPrefix(path, "/api/speech/"):
+		s.speech(w, r)
 	case path == "/api/claude-imports":
 		s.getClaudeImports(w, r)
 	case path == "/api/markdown-link":
@@ -1159,7 +1164,7 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 }
 
 func searchOptions(query url.Values) (SearchOptions, error) {
-	options := SearchOptions{Query: query.Get("q"), Repository: query.Get("repository"), Project: query.Get("project"), Source: query.Get("source"), File: query.Get("file"), Owner: query.Get("owner"), Provider: query.Get("provider"), Channel: query.Get("channel"), MachineID: query.Get("machine_id"), ExecutionMachineID: query.Get("execution_machine_id"), Model: query.Get("model"), Effort: query.Get("effort"), From: query.Get("from"), To: query.Get("to"), Flavor: query.Get("flavor"), Version: query.Get("version"), Outcome: query.Get("outcome"), Error: query.Get("error"), Metric: query.Get("metric"), ChangedOnly: query.Get("changed") == "1", Substring: query.Get("substring") == "1", Limit: 50}
+	options := SearchOptions{Has: strings.Join(query["has"], ","), Query: query.Get("q"), Repository: query.Get("repository"), Project: query.Get("project"), Source: query.Get("source"), File: query.Get("file"), Owner: query.Get("owner"), Provider: query.Get("provider"), Channel: query.Get("channel"), MachineID: query.Get("machine_id"), ExecutionMachineID: query.Get("execution_machine_id"), Model: query.Get("model"), Effort: query.Get("effort"), From: query.Get("from"), To: query.Get("to"), Flavor: query.Get("flavor"), Version: query.Get("version"), Outcome: query.Get("outcome"), Error: query.Get("error"), Metric: query.Get("metric"), ChangedOnly: query.Get("changed") == "1", Substring: query.Get("substring") == "1", Limit: 50}
 	if query.Get("limit") != "" {
 		value, err := strconv.Atoi(query.Get("limit"))
 		if err != nil {

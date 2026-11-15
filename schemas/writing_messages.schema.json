@@ -220,6 +220,41 @@
       }
     },
     {
+      "name": "estimate",
+      "label": "Estimate",
+      "type": "enum",
+      "group": "Message",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "editor": "set",
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "refined",
+              "label": "Refined"
+            },
+            {
+              "value": "provisional",
+              "label": "Provisional"
+            }
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "estimate",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"estimate\""
+        }
+      },
+      "description": "Provisional: classified by the frequent Update writing estimates pass with its per-message rules; the daily Refine writing history pass can still change it. Refined: classified with the complete rules (copied and re-sent text, templates, launches)."
+    },
+    {
       "name": "categories",
       "label": "Categories",
       "type": "textarray",

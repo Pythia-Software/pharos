@@ -19,7 +19,7 @@ import (
 type claudeAIAdapter struct{ baseAdapter }
 
 // claudeAIExtractor versions the parser; bump it when parsing changes.
-const claudeAIExtractor = "claude-ai-v7"
+const claudeAIExtractor = "claude-ai-v8"
 
 // claudeAIRoot is the parent a conversation's first message names.
 const claudeAIRoot = "00000000-0000-4000-8000-000000000000"
@@ -128,24 +128,7 @@ func (a *claudeAIAdapter) Discover(emit func(WorkspaceRecord) error) error {
 		if err := a.readSupplement(input, func(record WorkspaceRecord) error {
 			key := input.snapshot + "\x00" + record.SourceID
 			if previous := supplements[key]; previous != nil {
-				known := map[string]bool{}
-				for _, message := range previous.Conversations[0].Messages {
-					known[message.NativeID] = true
-				}
-				for _, message := range record.Conversations[0].Messages {
-					if !known[message.NativeID] {
-						previous.Conversations[0].Messages = append(previous.Conversations[0].Messages, message)
-						known[message.NativeID] = true
-					}
-				}
-				previous.Observed = max(previous.Observed, record.Observed)
-				previous.Conversations[0].Observed = previous.Observed
-				if record.ActivityAt > previous.ActivityAt {
-					previous.ActivityAt = record.ActivityAt
-				}
-				if !strings.HasPrefix(record.Title, "Claude.ai export · ") {
-					previous.Title = record.Title
-				}
+				mergeClaudeSupplementRecord(previous, record)
 			} else {
 				supplements[key] = &record
 				supplementOrder = append(supplementOrder, key)
@@ -295,6 +278,7 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 			Text:            jsonText(map[string]any{"type": "claude_ai_conversation", "text": conversation.Summary, "details": conversation.Fields}), RawText: jsonText(map[string]any{"claude_ai_conversation": conversation.Fields})})
 	}
 	toolNames, delegated := map[string]string{}, map[string]bool{}
+	referred := &claudeAssetReader{files: map[string]string{}, edits: map[string]int{}}
 	for _, message := range conversation.Messages {
 		start := len(messages)
 		id := firstString(message["uuid"])
@@ -451,6 +435,7 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 		}
 		raw["claude_ai_message"] = envelope
 		messages[start].RawText = jsonText(raw)
+		referred.message(message, id, role, messages[start:])
 		if role == "assistant" {
 			model := firstString(message["model"], mapValue(message["metadata"])["model"])
 			for i := start; i < len(messages); i++ {
@@ -475,7 +460,7 @@ func (a *claudeAIAdapter) record(conversation claudeAIConversation, origin strin
 	title := defaultString(conversation.Name, "Claude.ai "+short(conversation.UUID))
 	created, updated := iso(conversation.CreatedAt), iso(conversation.UpdatedAt)
 	return WorkspaceRecord{Observed: version, SourceID: conversation.UUID, SourceKind: "claude-ai", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Metadata: claudeConversationMetadata(conversation),
-		Conversations: []ConversationRecord{{NativeID: conversation.UUID, Provider: "claude", Account: a.config.Account, Origin: "user-export", Harness: "claude-ai-export", Coverage: "unknown", Messages: messages, StartedAt: created, EndedAt: updated, Observed: version}}}
+		Conversations: []ConversationRecord{{NativeID: conversation.UUID, Provider: "claude", Account: a.config.Account, Origin: "user-export", Harness: "claude-ai-export", Coverage: "unknown", Messages: messages, Assets: referred.found(), Sources: referred.sources, Notes: referred.notes, StartedAt: created, EndedAt: updated, Observed: version}}}
 }
 
 func claudeAIToolPayload(block map[string]any, name string) map[string]any {

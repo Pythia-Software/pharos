@@ -1,10 +1,28 @@
 {
   "version": 4,
-  "revision": "2026-11-12.4",
-  "published_at": "2026-11-12",
+  "revision": "2026-11-13.1",
+  "published_at": "2026-11-13",
   "provider": "claude",
   "methodology": "docs/claude-estimation-report.md",
-  "notes": "Published estimates, not provider telemetry or billing. Native thinking intervals take precedence. Source-gated response models refine missing-trace estimates; explicit summary/block and unknown-setting fallbacks remain available. Coding records calibrate model/effort rates and nonthinking output conversion, including a per-tool unrendered-output allowance. Ranges are sensitivity scenarios, not calibrated chat confidence intervals. No input-token or API-cost estimates. Local refinements remain in the user library. V3 separates argument generation from post-argument execution, adds complete-native-clock gap inference, and respects explicit visible thinking as a conservative estimated contribution floor. Text throughput does not identify a model or establish thinking throughput. V4 adds a separately validated complete-visible/unclocked thinking model and end-to-end scalar replay evaluation. Native timing and incomplete/hidden trace fallbacks keep precedence. A learned provider-wide body prior follows supported exact body models for complete tool-bearing responses without usable timing. Visible unclocked duration is independently predicted from native chat character/stream clocks; token and duration models remain independent.",
+  "notes": "Published estimates, not provider telemetry or billing. Native thinking intervals take precedence. Source-gated response models refine missing-trace estimates; explicit summary/block and unknown-setting fallbacks remain available. Coding records calibrate model/effort rates and nonthinking output conversion, including a per-tool unrendered-output allowance. Ranges are sensitivity scenarios, not calibrated chat confidence intervals. Processed input is estimated separately from generated output: each inferred model request re-reads the retained visible conversation, at a per-character rate fitted on recorded coding input growth. Hidden system prompts and tool definitions are unobserved and enter only the upper sensitivity bound. The cache read/write division is a pricing scenario, not a measurement. Local refinements remain in the user library. V3 separates argument generation from post-argument execution, adds complete-native-clock gap inference, and respects explicit visible thinking as a conservative estimated contribution floor. Text throughput does not identify a model or establish thinking throughput. V4 adds a separately validated complete-visible/unclocked thinking model and end-to-end scalar replay evaluation. Native timing and incomplete/hidden trace fallbacks keep precedence. A learned provider-wide body prior follows supported exact body models for complete tool-bearing responses without usable timing. Visible unclocked duration is independently predicted from native chat character/stream clocks; token and duration models remain independent.",
+  "input": {
+    "context_tokens_per_character": {
+      "expected": 0.3907,
+      "lower": 0.28,
+      "upper": 0.47
+    },
+    "request_overhead_tokens": {
+      "expected": 0,
+      "lower": 0,
+      "upper": 51000
+    },
+    "lower_bound_context_window_tokens": 200000,
+    "cache_ttl_seconds": 300,
+    "basis": "coding-study",
+    "donor_requests": 113298,
+    "donor_families": 2848,
+    "notes": "Context rate: marginal recorded input growth per character of tool results of at most 10,000 characters, family-held-out coding requests; the range spans supported model families. Chat system prompts and tool definitions cannot be observed, so the expected overhead is zero and the estimate is a floor on that component; the upper bound uses the per-request overhead that reconciles this rule with recorded coding input. The lower bound caps retained context at the stated window. Cache division assumes standard prompt caching with the stated lifetime."
+  },
   "profiles": {
     "claude-default": {
       "thinking_tokens_per_second": {

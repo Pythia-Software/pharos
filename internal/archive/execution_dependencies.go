@@ -548,9 +548,11 @@ func duplicateArgs(args []any, times int) []any {
 }
 
 // componentDigest hashes a component's evidence rows and the keys its claims
-// name that no member answers to, with the versions that interpret them.
+// name that no member answers to, with the versions that interpret them. The
+// rows already hold the occurrence facts as decided, so only their encoding
+// is named, not the rules' version (occurrenceDependencyVersion).
 func componentDigest(members []*dependencyConversation) string {
-	lines := []string{executionResolverVersion, executionEvidenceVersion, occurrenceDependencyVersion}
+	lines := []string{executionResolverVersion, executionEvidenceVersion, occurrenceDependencyEncoding}
 	answered := map[string]bool{}
 	for _, c := range members {
 		for _, key := range c.keys {
@@ -1514,9 +1516,10 @@ type executionPropagation struct {
 	tracked             bool
 	generation, through int64
 	// whole: no cursor (a catalog that has never marked, or an upgraded
-	// one), or one recorded under other resolver or evidence versions, whose
-	// every digest may differ with no source change. Every derivative is then
-	// compared with the whole catalog's digests.
+	// one), or one recorded under other resolver, evidence or occurrence
+	// versions, whose digests may differ with no source change. Every
+	// derivative is then compared with the whole catalog's digests, and one
+	// whose digest still holds stays current.
 	whole bool
 }
 

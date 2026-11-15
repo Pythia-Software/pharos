@@ -385,7 +385,7 @@
       "label": "Cache read share (%)",
       "type": "number",
       "group": "Tokens and Cost",
-      "description": "Cache reads divided by all input, cache writes included, weighted by tokens rather than averaging per-record percentages.",
+      "description": "Cache reads divided by all input, cache writes included, weighted by tokens rather than averaging per-record percentages. Recorded usage only: an estimate's cache division is assumed.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"tokens_cache_read_share\"",

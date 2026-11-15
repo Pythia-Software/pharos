@@ -1192,6 +1192,9 @@ final class ArchiveWKWebView: WKWebView {
         copy.isEnabled = Self.shareableLink(url) != nil
         let highlight = NSMenuItem(title: contextTarget?.title ?? "Highlight", action: contextTarget == nil ? nil : #selector(toggleHighlight(_:)), keyEquivalent: "")
         highlight.target = self
+        // AppKit closes the menu, and so clears the context, before it sends
+        // the chosen item's action: the item carries its own target.
+        highlight.representedObject = contextTarget?.reference
         var index = menu.items.firstIndex { $0.identifier?.rawValue == "WKMenuItemIdentifierReload" }.map { $0 + 1 } ?? menu.items.count
         let actions = [("Open Logs", "logs"), ("Send Feedback…", "feedback"), ("Annotate…", "annotate")].map { title, action in
             let item = NSMenuItem(title: title, action: pageActions ? #selector(runPageAction(_:)) : nil, keyEquivalent: "")
@@ -1328,8 +1331,8 @@ final class ArchiveWKWebView: WKWebView {
         NSPasteboard.general.setString(link, forType: .string)
     }
 
-    @objc private func toggleHighlight(_ sender: Any?) {
-        guard let reference = contextTarget?.reference,
+    @objc private func toggleHighlight(_ sender: NSMenuItem) {
+        guard let reference = sender.representedObject as? String,
               let data = try? JSONSerialization.data(withJSONObject: [reference]),
               let json = String(data: data, encoding: .utf8) else { return }
         evaluateJavaScript("window.pharosView?.toggleAttention(\(json)[0])")

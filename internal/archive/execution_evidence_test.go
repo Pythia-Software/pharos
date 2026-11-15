@@ -2270,6 +2270,12 @@ func TestDerivativesExposeEvidenceChangedElsewhere(t *testing.T) {
 				`UPDATE agent_events_conversations SET execution_digest='older'||execution_digest`)
 			forgetDependencyCaches()
 		}},
+		// The occurrence rules change in a way that leaves c-events' facts
+		// as they were: what was built on them stays current.
+		{name: "occurrence rules changed", unchanged: true, change: func(t *testing.T, catalog *Catalog) {
+			override(t, &occurrenceDependencyVersion, "occurrence-dependency/later")
+			forgetDependencyCaches()
+		}},
 		// Derivatives from before digests were recorded, with no source
 		// change: the rebuild must read current again although the
 		// propagation state never moves.

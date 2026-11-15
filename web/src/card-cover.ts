@@ -76,11 +76,12 @@ export function cardChart(query: QueryState, options: { recipe?: QueryRecipe; co
 }
 
 // A card split by a key draws its leading groups, plus Other where that is
-// exact. Time buckets and fixed sets, such as weekdays, are drawn whole.
+// exact. Time buckets and fixed sets, such as weekdays or the refined and
+// provisional writing estimates, are drawn whole.
 // Paired axes and histograms have no groups to limit.
 export type CardGroups = { noun: string; max: number; fallback?: number };
 export const cardGroupsMax = 100;
-const wholeKeys = new Set(["day", "hour", "week", "month", "hour_of_day", "weekday", "level_band"]);
+const wholeKeys = new Set(["day", "hour", "week", "month", "hour_of_day", "weekday", "level_band", "estimate"]);
 export function cardGroups(clause: AggregationClause | undefined, fields: FieldDef[] = [], subjects?: string): CardGroups | undefined {
   if (!clause || clause.expressionY || clause.distribution?.kind === "histogram" || clause.display?.kind === "value") return;
   const keys = clause.groupBy.filter(field => !wholeKeys.has(field) && field !== clause.dateGrouping?.field);

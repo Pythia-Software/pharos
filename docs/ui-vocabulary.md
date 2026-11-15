@@ -161,6 +161,32 @@ identifies the workspace route, `harness` still stores the agent app, and the
 Parallelism setting `counting=agent` still selects conversation counting.
 Display labels must not become a migration of stored data or URLs.
 
+## Amounts
+
+Dollar amounts and token counts each have one shared formatter, used by the
+classic page scripts, the React bundle, server-written text and the native
+menu bar. Calculations, exports, editable inputs and hover titles keep full
+precision. Only the displayed text is rounded.
+
+- **Dollars** (`internal/archive/assets/currency.js`, `formatUSD`): cents below
+  $100, then whole dollars. A value that rounds up to $100 already shows
+  whole dollars: `$0.12`, `$99.99`, `$100`, `$1,235`.
+- **Tokens** (`internal/archive/assets/token-count.js`, `formatTokens`; Go
+  `formatTokens`; Swift `MenuBarController.compact`): three significant
+  figures. Below 1,000 the count is exact, with at most one decimal for
+  averages. From 1,000 it uses K, M, B and T, with trailing zeros dropped.
+  A value that rounds up to the next unit already shows in it: `847`,
+  `1.23K`, `12.3K`, `123K`, `999K`, then `1M` for 999,500. Lower bounds
+  are floored, not rounded (`≥116K` for 116,837). Estimates that carry two
+  significant figures keep them (`~1.4K`).
+  [`testdata/token-count-cases.json`](../testdata/token-count-cases.json)
+  holds the cases JavaScript and Go share.
+- **Query Table cards and charts** format token measures with
+  `tokenMetricFormat` (`web/src/token-count.ts`). Query Table's compact
+  notation counts fraction digits rather than significant figures, so those
+  surfaces read `1.2K`, `12.3K` and `123.4K` until an upstream option exists
+  ([handoff](handoffs/query-table-significant-digits.md)).
+
 ## Repository audit (November 2026)
 
 The audit discovered potential text in all 344 first-party frontend/model,

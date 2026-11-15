@@ -12,6 +12,7 @@ import { Icon } from "./icons";
 import "./home.css";
 import { AskPharosHome } from "./ask-pharos";
 import { cardTemplates } from "./card-library-model";
+import { cardInterestOptions, showsCard } from "./card-interest";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { batchPreviewArrivals, loadCardPreviews, invalidateCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
@@ -120,7 +121,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   // card in the middle, then stages pairs around it without shifting that anchor.
   const eligible = Object.keys(previews).flatMap(id => {
     const item = poolById.get(id);
-    return item && previews[id]?.state === "ready" && !errors[id] && !collectedTemplates.has(item.id) ? [item] : [];
+    return item && previews[id]?.state === "ready" && !errors[id] && showsCard(previews[id], cardInterestOptions(item)) && !collectedTemplates.has(item.id) ? [item] : [];
   });
   useEffect(() => {
     if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(timeWindowValue(queryFromURL(editing.url, editing.query))); const metricId = editing.coverMetricId ?? editing.cover?.metricId ?? ""; setEditCover(coverChoices.some(choice => choice.id === metricId) ? metricId : ""); setEditGroups(editing.maxGroups === undefined ? "" : String(editing.maxGroups));

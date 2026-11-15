@@ -46,11 +46,12 @@ The app estimates three quantities separately:
   to result observation. That wait includes execution, transport and harness
   overhead; it is not a pure server execution measurement.
 
-Input/context tokens and total turn latency are outside this release's
-estimate contract. Reported usage, including reported zero, always takes
-precedence. Estimates fill ordinary usage records with a boolean flag and an
-asterisk in the reader and analysis tables. Known models receive partial output
-API price equivalents; missing input/cache usage remains unavailable. These
+Total turn latency is outside the estimate contract. Processed input is
+estimated separately, as [its own report](claude-input-estimation.md)
+describes; the rest of this report covers generated output and timing.
+Reported usage, including reported zero, always takes precedence. Estimates
+fill ordinary usage records with a boolean flag and an asterisk in the reader
+and analysis tables. Known models receive partial API price equivalents. These
 amounts are not subscription bills.
 
 ## How the models work
@@ -243,8 +244,8 @@ published manifest or learns from the app's own chat estimates.
 Existing imports also receive a resumable stored backfill through Tools
 processing. Predictions fill ordinary request/session/hourly usage and tool
 duration records with explicit estimate flags and provenance. Ordinary views
-mark estimates with `*`; known models also receive partial output cost through
-the standard price book. Missing input/cache usage remains unavailable. Any
+mark estimates with `*`; known models also receive partial cost through
+the standard price book. Estimated input carries an assumed cache division. Any
 authoritative usage, including zero, excludes the whole conversation. A model update schedules the backfill even without new source indexing.
 The [shipping and backfill guide](../estimation/README.md#shipping-and-backfilling-existing-imports)
 describes automatic scheduling, cancellation/resume and completion status.

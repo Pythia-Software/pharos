@@ -1,11 +1,13 @@
 import type { MetricDisplay, MetricValue, MetricValueFormat } from "@pythia-software/query-table-core";
-import { chartSeriesStyle } from "./chart-colors";
+import { chartSeriesStyle, colorFields, hasAssignedPalette, seriesColorField } from "./chart-colors";
 import { orderedValues } from "./session-shape-bands";
 import { denseBoxGroups, fittedCoverHeight } from "./card-loading-model";
 import type { QueryPreview } from "./query-previews";
+import { isTokenExpression, isTokenField, tokenMetricFormat } from "./token-count";
 
-function compactAxisFormat(format: MetricValueFormat | undefined, values: (MetricValue | undefined)[]): MetricValueFormat {
+function compactAxisFormat(format: MetricValueFormat | undefined, values: (MetricValue | undefined)[], tokens = false): MetricValueFormat {
   if (format) return format;
+  if (tokens) return tokenMetricFormat;
   const numeric = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const span = numeric.length ? Math.max(...numeric) - Math.min(...numeric) : 0;
   const scale = span || Math.max(0, ...numeric.map(Math.abs));
@@ -45,13 +47,15 @@ export function compactMetricPresentation(preview: QueryPreview) {
   const ranked = !preview.buckets && !scalar && (["auto", "list", "table", "bar-horizontal"].includes(kind) || Boolean(preview.groupSummary));
   const longLabels = result.buckets.slice(0, budget).some(bucket => (preview.groupLabels?.[JSON.stringify(bucket.keys)] ?? bucket.keys.map(key => String(key ?? "Unspecified")).join(" · ")).length > 20);
   const listOptions: MetricDisplay["list"] = ranked && ["auto", "list"].includes(kind) ? { ...clause.display?.list, barPosition: clause.display?.list?.barPosition ?? (longLabels ? "below" : "inline") } : clause.display?.list;
-  if (listOptions && clause.groupBy.some(field => field === "model_family" || field === "root_model_family") && listOptions.useGroupColors === undefined) listOptions.useGroupColors = true;
+  // A list keyed by a repository, model, provider, effort, band or agent
+  // event kind draws each row in that key's colour, as dashboards do.
+  if (listOptions && hasAssignedPalette(seriesColorField(colorFields(clause))) && listOptions.useGroupColors === undefined) listOptions.useGroupColors = true;
   if (ranked && ["auto", "list"].includes(kind) && listOptions?.barPosition === "below" && listOptions.maxLabelLines === undefined) listOptions.maxLabelLines = 2;
   let summary = scalar || ranked ? undefined : preview.summary;
   const headlineMetric = scalar || ranked ? undefined : preview.headlineMetric;
   const axisFormats = kind === "scatter" ? {
-    xFormat: compactAxisFormat(clause.display?.xFormat, result.buckets.slice(0, budget).map(bucket => bucket.value)),
-    yFormat: compactAxisFormat(clause.display?.yFormat, result.buckets.slice(0, budget).map(bucket => bucket.y)),
+    xFormat: compactAxisFormat(clause.display?.xFormat, result.buckets.slice(0, budget).map(bucket => bucket.value), clause.expression ? isTokenExpression(clause.expression) : isTokenField(clause.field) && !["count", "count_distinct"].includes(clause.op)),
+    yFormat: compactAxisFormat(clause.display?.yFormat, result.buckets.slice(0, budget).map(bucket => bucket.y), isTokenExpression(clause.expressionY)),
   } : {};
   const axisScales: Pick<MetricDisplay, "xScale" | "yScale"> = {
     xScale: { ...clause.display?.xScale, mode: kind === "scatter" || preview.preserveScale ? clause.display?.xScale?.mode ?? "linear" : "linear" },

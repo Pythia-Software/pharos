@@ -114,7 +114,7 @@ var askSections = sync.OnceValue(func() []askCard {
 		{ID: "settings", Title: "App preferences", Description: "Configure Pharos", Href: "/settings/preferences"},
 		{ID: "sources", Title: "Conversation sources", Description: "Configure the sources Pharos indexes", Href: "/settings/sources"},
 		{ID: "sync", Title: "Capture and index", Description: "Refresh sources, automatic schedules and sync history", Href: "/settings/sync"},
-		{ID: "ask-settings", Title: "Ask Pharos settings", Description: "Enable Ask Pharos, choose its default model, and manage invitations", Href: "/settings/ask"},
+		{ID: "ask-settings", Title: "Ask Pharos settings", Description: "Turn Ask Pharos on or off, refresh available CLIs, and manage its invitation", Href: "/settings/preferences?reveal=section:askPharosSettings"},
 	}
 	// A section's kind is its page's section, as it is for the same page
 	// reached by url (askSiteCard).

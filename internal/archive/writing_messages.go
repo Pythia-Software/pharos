@@ -47,6 +47,9 @@ var writingMessageDataset = func() sqlDataset {
 		"other_words":   "(ma.words-ma.typed_words)",
 		"typed_share":   "CASE WHEN ma.words>0 THEN round(ma.typed_words*100.0/ma.words,1) END",
 		"main_category": "ma.main_category", "categories": "ma.categories", "rules": "ma.rules",
+		// A quick estimate is provisional until the daily refinement; rows
+		// without a state row predate the queue and were refined.
+		"estimate": "CASE WHEN ae.provisional=1 THEN 'provisional' ELSE 'refined' END",
 		"correction_cue": authoredCueSQL(correctionCuePhrases),
 		"positive_cue":   authoredCueSQL(positiveCuePhrases),
 		"has_source":     "EXISTS(SELECT 1 FROM message_authorship_spans s WHERE s.message_id=ma.message_id AND s.source_conversation_id IS NOT NULL)",
@@ -56,7 +59,7 @@ var writingMessageDataset = func() sqlDataset {
 	}
 	return sqlDataset{
 		from: `FROM message_authorship ma JOIN messages m ON m.id=ma.message_id JOIN conversations c ON c.id=ma.conversation_id
-			LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id) LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w") + ` LEFT JOIN conversation_origins o ON o.conversation_id=ma.conversation_id`,
+			LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id) LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w") + ` LEFT JOIN conversation_origins o ON o.conversation_id=ma.conversation_id LEFT JOIN authorship_message_state ae ON ae.message_id=ma.message_id`,
 		countFrom: "FROM message_authorship ma", countAlias: "ma",
 		lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "work_id": true, "day": true},
 		columns:    columns,
@@ -68,6 +71,7 @@ var writingMessageDataset = func() sqlDataset {
 			"w":  "LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id)",
 			"r":  " LEFT JOIN repositories r ON r.id=w.repository_id",
 			"pj": projectJoin("w"),
+			"ae": " LEFT JOIN authorship_message_state ae ON ae.message_id=ma.message_id",
 		},
 		pageFrom:    "FROM message_authorship ma",
 		pageIndexes: map[string]string{"sent_at": "message_authorship_page_idx"},

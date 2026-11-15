@@ -4467,7 +4467,7 @@
       "category": "human",
       "idea": "human-01",
       "title": "{lastDays} of writing",
-      "description": "Human-written words sent during the last {days} days, grouped by the day they were sent.",
+      "description": "Human-written words sent during the last {days} days, by the day they were sent; provisional estimates are shaded lighter until the daily refinement.",
       "dataset": "writing_messages",
       "field": "sent_at",
       "unit": "words",
@@ -4480,18 +4480,20 @@
       ],
       "measures": [
         {
-          "id": "sum:typed_words:day",
+          "id": "sum:typed_words:day,estimate",
           "op": "sum",
           "field": "typed_words",
           "groupBy": [
-            "day"
+            "day",
+            "estimate"
           ],
           "label": "Your words per day"
         }
       ],
       "exploration": {
         "keys": [
-          "day"
+          "day",
+          "estimate"
         ],
         "summaries": [
           {
@@ -4511,11 +4513,12 @@
         "action": "Explore daily word counts",
         "unit": "words",
         "coverMetric": {
-          "id": "sum:typed_words:day",
+          "id": "sum:typed_words:day,estimate",
           "op": "sum",
           "field": "card_typed_words",
           "groupBy": [
-            "day"
+            "day",
+            "estimate"
           ],
           "label": "Your words per day"
         }
@@ -4527,7 +4530,7 @@
           "v": 3,
           "view": "trend",
           "metric": "typed",
-          "split": "none",
+          "split": "estimate",
           "period": "day",
           "scale": "linear",
           "nonzero": false
@@ -5052,7 +5055,7 @@
         7
       ],
       "action": "Explore daily cached input",
-      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens), weighted by tokens rather than averaging row percentages. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.",
+      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens) over recorded usage, weighted by tokens rather than averaging row percentages. Estimated usage is left out, because its cache division is assumed. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.",
       "cover": {
         "mode": "result",
         "metricId": "card_cache_read_input_tokens",
@@ -6826,7 +6829,7 @@
           {
             "id": "cc_share",
             "op": "formula",
-            "expression": "SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)",
+            "expression": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[input_tokens])),0)",
             "label": "Cache-read share of all input"
           },
           {
@@ -6878,7 +6881,7 @@
         "showOther": false
       },
       "action": "Explore Tokens and Cost",
-      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens), weighted by tokens rather than averaging row percentages. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.",
+      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens) over recorded usage, weighted by tokens rather than averaging row percentages. Estimated usage is left out, because its cache division is assumed. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.",
       "where": [
         {
           "field": "input_tokens",
@@ -10896,7 +10899,8 @@
             },
             "yFormat": {
               "kind": "number",
-              "decimals": 0
+              "notation": "compact",
+              "decimals": 1
             }
           }
         }
@@ -11462,7 +11466,8 @@
             },
             "xFormat": {
               "kind": "number",
-              "decimals": 0
+              "notation": "compact",
+              "decimals": 1
             },
             "yFormat": {
               "kind": "currency",
@@ -11552,11 +11557,13 @@
             },
             "xFormat": {
               "kind": "number",
-              "decimals": 0
+              "notation": "compact",
+              "decimals": 1
             },
             "yFormat": {
               "kind": "number",
-              "decimals": 0
+              "notation": "compact",
+              "decimals": 1
             }
           }
         }
@@ -12199,7 +12206,7 @@
         {
           "id": "mc_cache_scatter",
           "op": "count",
-          "expression": "SUM([cache_read_input_tokens])/NULLIF(SUM([cache_read_input_tokens])+SUM([uncached_input_tokens]),0)",
+          "expression": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[cache_read_input_tokens]+[uncached_input_tokens])),0)",
           "expressionY": "1000000*SUM([cost_usd])/NULLIF(SUM([total_tokens]),0)",
           "groupBy": [
             "provider",
@@ -12235,7 +12242,7 @@
           {
             "id": "mc_cache_share",
             "op": "formula",
-            "expression": "SUM([cache_read_input_tokens])/NULLIF(SUM([cache_read_input_tokens])+SUM([uncached_input_tokens]),0)",
+            "expression": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[cache_read_input_tokens]+[uncached_input_tokens])),0)",
             "label": "Cached input share"
           },
           {
@@ -12309,7 +12316,7 @@
           {
             "id": "cc_share",
             "op": "formula",
-            "expression": "SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)",
+            "expression": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[input_tokens])),0)",
             "label": "Cache-read share of all input"
           },
           {
@@ -12360,7 +12367,7 @@
         "showOther": false
       },
       "action": "Explore Tokens and Cost",
-      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens), weighted by tokens rather than averaging row percentages. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.",
+      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens) over recorded usage, weighted by tokens rather than averaging row percentages. Estimated usage is left out, because its cache division is assumed. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.",
       "where": [
         {
           "field": "input_tokens",
@@ -12409,7 +12416,7 @@
           "id": "cc_cache_workload",
           "op": "sum",
           "expression": "SUM([input_tokens])",
-          "expressionY": "SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)",
+          "expressionY": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[input_tokens])),0)",
           "groupBy": [
             "root_provider",
             "root_model_family",
@@ -12462,7 +12469,7 @@
           {
             "id": "cc_share",
             "op": "formula",
-            "expression": "SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)",
+            "expression": "SUM(IF([is_estimate],0,[cache_read_input_tokens]))/NULLIF(SUM(IF([is_estimate],0,[input_tokens])),0)",
             "label": "Cache-read share of all input"
           },
           {
@@ -12511,7 +12518,7 @@
         "height": 300
       },
       "action": "Explore conversation input reuse",
-      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens), weighted by tokens rather than averaging row percentages. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality. Each point sums a whole top-level conversation, including recorded delegated work, linked launches, and continuations, and uses its top-level recorded model color. Missing/cyclic parent links is excluded. Up to 2,000 conversations ranked by input are drawn; all remain in the destination. Only X is logarithmic: the linear percentage axis preserves zero-cache conversations. Large total input does not mean a large individual context window.",
+      "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens) over recorded usage, weighted by tokens rather than averaging row percentages. Estimated usage is left out, because its cache division is assumed. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality. Each point sums a whole top-level conversation, including recorded delegated work, linked launches, and continuations, and uses its top-level recorded model color. Missing/cyclic parent links is excluded. Up to 2,000 conversations ranked by input are drawn; all remain in the destination. Only X is logarithmic: the linear percentage axis preserves zero-cache conversations. Large total input does not mean a large individual context window.",
       "where": [
         {
           "field": "input_tokens",
@@ -23448,6 +23455,7 @@
       },
       "action": "Explore Agent Events",
       "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
+      "emptyIsSetup": true,
       "note": "Each repository's rate divides by its own messages read, so a busy repository does not rank high for volume alone. Plain obstacles, most of the friction everywhere, are left out; the dashboard shows them. Open a bar for the sentences behind it; Fixes groups the recurring ones into changes to docs, checks, environment or tools. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages, in turns a person or a delegating agent started: scripted runs are left out. Opening the dashboard does not run the pass.",
       "destination": {
         "topic": "agent_event_rates",
@@ -23536,6 +23544,7 @@
       },
       "action": "Explore Agent Events",
       "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
+      "emptyIsSetup": true,
       "note": "A review or audit that reads docs against the code reports more of these, so read the sentences before the rate: each one names a doc, comment or instruction to fix. Fixes collects the ones named more than once into an update you can hand to an agent. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages, in turns a person or a delegating agent started: scripted runs are left out. Opening the dashboard does not run the pass.",
       "destination": {
         "topic": "agent_event_rates",
@@ -23624,6 +23633,7 @@
       },
       "action": "Explore Agent Events",
       "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
+      "emptyIsSetup": true,
       "note": "A failure every agent steps around costs each of them the time to rule it out. Open a bar for the sentences; Fixes lists the checks that keep failing. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages, in turns a person or a delegating agent started: scripted runs are left out. Opening the dashboard does not run the pass.",
       "destination": {
         "topic": "agent_event_rates",
@@ -23718,6 +23728,7 @@
       },
       "action": "Explore Agent Events",
       "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
+      "emptyIsSetup": true,
       "note": "These are decisions an agent stated in a reply, such as a check it did not run or a step it did by hand, that are easy to read past. Replies only: in thinking the same kinds mostly narrate ordinary steps, at about three times the rate. Open a bar to review them in their conversations. Risky actions lists the risky commands themselves. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages, in turns a person or a delegating agent started: scripted runs are left out. Opening the dashboard does not run the pass.",
       "destination": {
         "topic": "agent_event_rates",
@@ -24109,6 +24120,7 @@
       },
       "action": "Explore Agent Events",
       "emptyLabel": "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.",
+      "emptyIsSetup": true,
       "note": "Weeks start on Monday, in local time. The first and latest weeks are partial: the window starts mid-week, and this week is still under way, so its rate can move. Plain obstacles are left out, as on Where agents hit friction. A week under 200 messages read is hidden. Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages, in turns a person or a delegating agent started: scripted runs are left out. Opening the dashboard does not run the pass.",
       "destination": {
         "topic": "agent_event_rates",

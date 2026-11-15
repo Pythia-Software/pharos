@@ -3,6 +3,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import assert from "node:assert/strict";
 import { compactMetricPresentation } from "../../../src/card-presentation";
+import { tokenMetricFormat } from "../../../src/token-count";
 import { compactTimelineBuckets, compactTimelineScale, CompactColumns } from "../../../src/column-marks";
 
 test("cumulative card covers start at the selected range, fill idle days and normalize only accumulated amounts", () => {
@@ -55,8 +56,10 @@ test("compact scatter ticks remove excessive precision and retain declared units
   clause.display = { kind: "scatter", xFormat: { kind: "duration", sourceUnit: "milliseconds" } };
   result.buckets = [{ keys: ["Read"], value: 2500, y: 11, count: 2 }, { keys: ["Bash"], value: 5000, y: 7742.5942, count: 3 }];
   const before = structuredClone(input);
-  assert.deepEqual(compactMetricPresentation(input).axisFormats, { xFormat: clause.display.xFormat, yFormat: { kind: "number", decimals: 0 } });
+  assert.deepEqual(compactMetricPresentation(input).axisFormats, { xFormat: clause.display.xFormat, yFormat: tokenMetricFormat }, "a token mean reads in token units");
   assert.deepEqual(input, before);
+  clause.expressionY = "AVG([result_bytes])";
+  assert.deepEqual(compactMetricPresentation(input).axisFormats.yFormat, { kind: "number", decimals: 0 });
   result.buckets[0].y = .0123; result.buckets[1].y = .0246;
   assert.equal(compactMetricPresentation(input).axisFormats.yFormat.decimals, 4, "small ranges keep distinct ticks");
   clause.display.yFormat = { kind: "percent", decimals: 1 };
@@ -156,6 +159,15 @@ test("model lists opt into group colors and compound pies/scatters retain displa
   }
   input.metrics[0].clause.display = { kind: "bar-horizontal", list: { useGroupColors: false } };
   assert.equal(compactMetricPresentation(input).listOptions.useGroupColors, false);
+  // Repositories, providers, bands and agent event kinds have their own
+  // colours too; a key with only hashed colours keeps the card's one tone.
+  for (const [groupBy, colored] of [[["repository_name"], true], [["root_project_name"], true], [["provider"], true], [["archetype"], true],
+    [["repository_name", "family"], true], [["harness"], false], [["harness", "channel"], false]]) {
+    input.metrics[0].clause.groupBy = groupBy;
+    input.metrics[0].result.buckets = [{ keys: groupBy.map(() => "one"), value: 10, count: 1 }, { keys: groupBy.map(() => "two"), value: 20, count: 1 }];
+    input.metrics[0].clause.display = { kind: "bar-horizontal" };
+    assert.equal(compactMetricPresentation(input).listOptions.useGroupColors, colored || undefined, groupBy.join(" · "));
+  }
 });
 
 
@@ -192,6 +204,10 @@ test("dashboard covers retain the chart's logarithmic axes", () => {
 });
 
 
+// The period popovers a rendered timeline carries for the hover bubble.
+const popovers = html => [...html.matchAll(/data-chart-popover="([^"]*)"/g)].map(([, value]) => JSON.parse(value.replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&")));
+const rowValues = popover => popover.rows.map(row => `${row.label} ${row.value}`);
+
 test("percentage timeline labels retain percentage units across scales while shares keep a fixed axis", () => {
   const buckets = [.25, .5, 1].map((value, index) => ({ key: String(index), date: new Date(2026, 9, index + 1), values: { rate: value } }));
   const series = [{ key: "rate", label: "Failure rate", color: "red" }];
@@ -206,14 +222,13 @@ test("percentage timeline labels retain percentage units across scales while sha
     const text = html.replace(/<[^>]*>/g, " ");
     assert.match(text, /0%/);
     assert.match(text, /100%/);
-    assert.match(html, /Failure rate: 50%/);
+    assert.deepEqual(popovers(html).map(rowValues), [["Failure rate 25%"], ["Failure rate 50%"], ["Failure rate 100%"]]);
   }
   const outliers = [.01, .01, .01, .01, .01, 1].map((value, index) => ({ key: String(index), date: new Date(2026, 9, index + 1), values: { rate: value } }));
   const compressed = compactTimelineScale(outliers, series, { scale: "half" });
   assert.ok(compressed.y(.01) > linear.y(.01), "extreme percentage peaks still allow compression");
   const compressedHTML = renderToStaticMarkup(React.createElement(CompactColumns, { buckets: outliers, series, unit: "percent", scale: "half", prepared: true }));
-  assert.match(compressedHTML, /Failure rate: 1%/);
-  assert.match(compressedHTML, /Failure rate: 100%/);
+  assert.deepEqual(popovers(compressedHTML).map(rowValues).flat().filter((row, index, all) => all.indexOf(row) === index), ["Failure rate 1%", "Failure rate 100%"]);
   const partial = buckets.slice(0, 2);
   const shares = compactTimelineScale(partial, series, { percent: true, scale: "logarithmic" });
   assert.equal(shares.y(.5), 50, "share-of-total charts keep the whole 0–100% axis");
@@ -226,11 +241,16 @@ test("timeline hover totals the displayed additive series using their units", ()
   const render = (changes = {}, options = {}) => renderToStaticMarkup(React.createElement(CompactColumns, {
     buckets: [{ ...bucket, ...changes }], series, prepared: true, unit: "calls", ...options,
   }));
-  const html = render();
-  assert.match(html, /Alpha: 1,200 calls\nBeta: 300 calls\nTotal: 1,500 calls\nCoverage note/);
-  assert.match(html, /data-chart-colors="\[null,&quot;#aabbcc&quot;,&quot;#ddeeff&quot;,null,null\]"/);
-  assert.doesNotMatch(render({ values: { a: 1200, b: 0 } }), /Total:/, "one contributing series has no redundant total");
-  assert.doesNotMatch(render({}, { additive: false, grouped: true }), /Total:/, "non-additive series cannot be summed");
-  assert.match(render({ values: { a: .25, b: .75 } }, { percent: true }), /Total: 100%/);
-  assert.match(render({ values: { a: 1, b: 2 } }, { unit: "USD", grouped: true }), /Total: \$3/);
+  const [popover] = popovers(render());
+  assert.deepEqual(popover, { heading: "Oct 1, 2026", rows: [{ label: "Alpha", value: "1,200 calls", color: "#aabbcc" }, { label: "Beta", value: "300 calls", color: "#ddeeff" }], totals: [["Total", "1,500 calls"]], detail: "Coverage note" });
+  assert.deepEqual(rowValues(popovers(render({ values: { a: 300, b: 1200 } }))[0]), ["Beta 1,200 calls", "Alpha 300 calls"], "rows list the largest first, as dashboard popovers do");
+  const single = popovers(render({ values: { a: 1200, b: 0 } }))[0];
+  assert.deepEqual(rowValues(single), ["Alpha 1,200 calls"], "an amount of zero is nothing to list");
+  assert.equal(single.totals, undefined, "one contributing series has no redundant total");
+  assert.equal(popovers(render({}, { additive: false, grouped: true }))[0].totals, undefined, "non-additive series cannot be summed");
+  assert.deepEqual(rowValues(popovers(render({ values: { a: 0, b: 2 } }, { additive: false, grouped: true }))[0]), ["Beta 2 calls", "Alpha 0 calls"], "a ratio of zero is still a value");
+  assert.equal(popovers(render({ values: {} }))[0].empty, "Nothing in this period");
+  assert.deepEqual(popovers(render({ values: { a: .25, b: .75 } }, { percent: true }))[0].totals, [["Total", "100%"]]);
+  assert.deepEqual(popovers(render({ values: { a: 1, b: 2 } }, { unit: "USD", grouped: true }))[0].totals, [["Total", "$3.00"]]);
+  assert.deepEqual(popovers(render({}, { references: [{ value: 900, level: "p90" }] }))[0].totals.at(-1)[1], "900 calls", "percentile levels follow the total, as on dashboards");
 });

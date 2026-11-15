@@ -7,12 +7,14 @@ priors, not provider-reported consumption. The authenticated
 `GET /api/estimation/assumptions` endpoint exposes this exact manifest, its
 digest and the estimator version. It needs no network service or local model.
 
-Estimator `claude-output-v4.2` (manifest schema 4) estimates generated output for Claude.ai exported
+Estimator `claude-usage-v5` (manifest schema 4) estimates generated output for Claude.ai exported
 responses without reported usage, and durations of completed tool calls whose
-native completion clocks are missing. The reader aggregates response estimates
-within its existing turns. Input/cache tokens and total turn latency remain unavailable.
-For a priced model, estimated output also contributes a partial API price
-equivalent; it is not a full-request cost or subscription charge. When the
+native completion clocks are missing. It also estimates processed input, the
+context each inferred model request re-read, as a separate quantity with an
+assumed cache division ([method](../docs/claude-input-estimation.md)). The
+reader aggregates response estimates within its existing turns. Total turn
+latency remains unavailable. For a priced model, estimated usage contributes a
+partial API price equivalent; it is not a subscription charge. When the
 response model was not recorded, the estimator can assume a saved Claude Chat
 conversation selection, retaining its observation time and marking the model
 as an assumption. It never promotes the selection to a reported request model.
@@ -37,8 +39,10 @@ Completed conversations are not repeated when a pass resumes.
 Predictions fill the existing `model_requests`, `agent_session_usage`, and
 `agent_sessions` records with `is_estimate=true`. Missing tool durations use
 `tool_calls.duration_ms` with `duration_is_estimate=true`; no end timestamp is
-invented. `input_tokens_available=false` preserves missing input/cache data at
-read boundaries. `usage_estimate_json` and `duration_estimate_json` retain model,
+invented. Estimated processed input fills the input and cache columns with
+`input_tokens_available=true` ([method](../docs/claude-input-estimation.md));
+an output-only row keeps `input_tokens_available=false`, which preserves
+missing input/cache data at read boundaries. `usage_estimate_json` and `duration_estimate_json` retain model,
 manifest, and sensitivity provenance. There are no separate estimate collections.
 
 The existing Usage, Library and Tool Calls views consume these
@@ -384,7 +388,7 @@ repairs existing estimate dates through ordinary Tools backfill without reimport
 
 | Reader | Policy |
 | --- | --- |
-| Usage, Library, transcript reader, token dashboards and previews | Include predictions, mark affected values with `*`, preserve missing input/cache and partial output cost. Count-only groups need no estimate reduction. |
+| Usage, Library, transcript reader, token dashboards and previews | Include predictions, mark affected values with `*`, show estimated input where the row has it, preserve missing input/cache otherwise, and keep cost partial. Count-only groups need no estimate reduction. |
 | Home/Quick Stats, recent conversations, menu bar and pricing health | Include estimates with window-specific provenance; costs remain partial. Unpriced amounts do not become zero. |
 | MCP metrics | `is_estimate` travels with values, evidence, row details and aggregates. Default `complete` quality excludes partial predictions; `available` includes qualified values. Entirely missing input/cache is unavailable, and a mixed sum is partial. |
 | Model Requests/thinking, Session Shape/context, Findings, TL1, instruction/Ask signals, delegation/execution accounting and usage reconciliation | Use authoritative rows only. One estimated response can contain several actual model requests, so it cannot count as one measured request or supply measured context. |

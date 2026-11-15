@@ -5,6 +5,7 @@ import { emptyTextSearch, newRule, ruleLabels, readTextSearch } from "./text-sea
 import { safetyRanks } from "./safety-dashboard-model";
 import { fixesKinds, fixesRanks } from "./fixes-model";
 import { logSourceIds } from "./logs-model";
+import { projectColorSorts } from "./project-color-order";
 import { sessionSignals } from "./session-shape-model";
 import {validTimelineVisibility} from "./timeline-visibility";
 import { dataGuideSelectionKeys, dataSources } from "./data-taxonomy-model";
@@ -61,6 +62,7 @@ export const viewFields: Record<string, ViewField> = {
   delegation_page: field("delegation_page", ["work"], "text", "Zero-based session page number, 0–250 (site_link accepts a number or decimal string). Replays current cursors on open; does not store expiring server cursors."),
   card_window: field("card_window", ["cards"], "enum", "Preview lookback; moving windows remain relative. Numeric day values are also accepted by site_link.", ["default", "today", "1", "7", "30", "90"], "default"),
   card_filters: field("card_filters", ["cards"], "boolean", "Show the card filters.", undefined, false),
+  card_all: field("card_all", ["cards"], "boolean", "Also show cards with little or no data in this window; they are left out by default.", undefined, false),
   findings_rank: field("findings_rank", ["findings", "findings/table"], "enum", "Linked rank override; restoring a URL does not save settings. Manual Rank by changes also save the library default.", ["", "usd", "tokens", "minutes", "failures"]),
   optimize_area: field("optimize_area", ["findings", "findings/*"], "enum", "Optimize section. Efficiency measures improvements; Risky actions raises notices for an agent to investigate; Fixes lists recurring agent problems a change to guidance, environment, tools or docs could prevent. Each has its own prompts.", ["efficiency", "safety", "fixes"], "efficiency"),
   fixes_list: field("fixes_list", ["findings/fixes"], "enum", "Fix lifecycle. Copying a prompt moves selected fixes to handed_off, and one that recurs afterwards opens again; dismissed is shown as Closed.", ["open", "handed_off", "dismissed"], "open"),
@@ -73,6 +75,7 @@ export const viewFields: Record<string, ViewField> = {
   safety_place: field("safety_place", ["findings/safety"], "text", "Filter risky action notices by their stable repository, machine, or unresolved workspace target.", undefined, ""),
   safety_rank: field("safety_rank", ["findings/safety"], "enum", "Order the risky action check cards by danger, latest activity, call count, or notices with new execution evidence. Ties use danger, then latest activity.", safetyRanks, "danger"),
   safety_case: field("safety_case", ["findings/safety","findings/safety/table"], "text", "Open a risky action notice by stable ID; evidence and source links live inside Details.", undefined, ""),
+  project_color_sort: field("project_color_sort", ["settings/projects"], "enum", "Order Settings → Colors → Project colors by conversation count (most first), latest conversation (newest first), or name.", projectColorSorts, "conversations"),
   log_source: field("log_source", ["settings/logs"], "enum", "Settings → Logs source: overview (what to read first, and a report to copy for an agent), page (errors the page hit), requests (slow and failed requests, and those running now), service (this library's service output by run), app (the app's output by launch), background (failed or interrupted background work), crashes (macOS crash and resource reports).", logSourceIds, "overview"),
   delegation_columns: field("delegation_columns", ["work"], "strings", "Visible metric column IDs in display order."),
   delegation_scope: field("delegation_scope", ["work"], "enum", "Session metric scope in the hierarchy and ranking: self or self plus all children.", ["all", "self"], "all"),

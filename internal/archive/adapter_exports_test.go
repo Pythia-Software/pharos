@@ -531,3 +531,55 @@ func TestChatGPTExportDamageIsReported(t *testing.T) {
 		t.Fatalf("a damaged shard in a ZIP: read %v, error %v", ids, err)
 	}
 }
+
+// A file is shown with a message that has words: a Library file whose
+// originating step the export leaves out goes with the reply that stood
+// when it was made, and a photo sent as a message of its own goes with what
+// its sender said before it.
+func TestChatGPTFilesBelongWithTheMessageTheyCameWith(t *testing.T) {
+	dir := t.TempDir()
+	conversation := map[string]any{"id": "birds", "title": "Birds", "create_time": 1789670000, "update_time": 1789670400, "current_node": "a3", "mapping": map[string]any{
+		"u1":    chatGPTNodeOf("u1", "", []string{"a1"}, "user", 1789670001, chatGPTText("Draw a bird. Here's a photo"), nil),
+		"a1":    chatGPTNodeOf("a1", "u1", []string{"photo"}, "assistant", 1789670100, chatGPTText("First drawings"), nil),
+		"photo": chatGPTNodeOf("photo", "a1", []string{"a2"}, "user", 1789670150, map[string]any{"content_type": "multimodal_text", "parts": []any{map[string]any{"content_type": "image_asset_pointer", "asset_pointer": "sediment://file_photo", "width": 4, "height": 3}}}, nil),
+		"a2":    chatGPTNodeOf("a2", "photo", []string{"a3"}, "assistant", 1789670200, chatGPTText("Simpler drawings"), nil),
+		// The reply's text holds a marker where its app drew a citation, a
+		// map and a page it made; the pages cited are listed beside it.
+		"a3": chatGPTNodeOf("a3", "a2", nil, "assistant", 1789670300, chatGPTText("Recolored \ue200cite\ue202turn0search2\ue201 \ue200genui\ue202{\"map_widget\":{\"points\":[{\"name\":\"Heron Lake\",\"category\":\"Wetland\"}],\"answer\":\"Where to look\"}}\ue201 \ue200visualize\ue202{\"path\":\"/workspace/pick.html\"}\ue201"),
+			map[string]any{"metadata": map[string]any{"content_references": []any{
+				map[string]any{"type": "grouped_webpages", "items": []any{map[string]any{"url": "https://birds.example/a?utm_source=chatgpt.com", "title": "Birds", "attribution": "Birds"}}},
+				map[string]any{"type": "client_defined_widget"}, map[string]any{"type": "client_defined_widget"},
+				map[string]any{"type": "sources_footnote", "sources": []any{map[string]any{"url": "https://birds.example/a?utm_source=chatgpt.com", "title": "Birds"}, map[string]any{"url": "https://notes.example/b", "title": "Notes", "attribution": "Notes"}}}}}}),
+	}}
+	library := []any{}
+	for file, made := range map[string]string{"file_first": "2026-09-17T18:35:05Z", "file_second": "2026-09-17T18:36:45Z", "file_third": "2026-09-17T18:38:25Z"} {
+		library = append(library, map[string]any{"file_id": file, "file_name": file + ".png", "mime_type": "image/png", "origination_thread_id": "birds", "origination_message_id": "a-step-the-export-left-out", "created_at": made})
+	}
+	for name, data := range map[string]string{"conversations.json": jsonText([]any{conversation}), "library_files.json": jsonText(library),
+		"file_first.dat": "\x89PNG1", "file_second.dat": "\x89PNG2", "file_third.dat": "\x89PNG3", "file_photo.dat": "\xff\xd8\xff"} {
+		writeSourceFile(t, filepath.Join(dir, name), data)
+	}
+	owners, drawn := map[string]string{}, map[string]AssetRecord{}
+	read := chatGPTRecords(t, dir)["birds"].Conversations[0]
+	for _, asset := range read.Assets {
+		owners[asset.Ref] = asset.MessageNativeID
+		drawn[asset.Name] = asset
+	}
+	if owners["file_first"] != "a1" || owners["file_second"] != "a2" || owners["file_third"] != "a3" || owners["file_photo"] != "u1" || len(owners) != 6 {
+		t.Fatalf("owners = %v", owners)
+	}
+	// A map is kept as the places it showed, and a page the export does not
+	// hold by where it was made.
+	if places, page := drawn["Map.md"], drawn["pick.html"]; places.MessageNativeID != "a3" || places.Content != "Where to look\n\n- **Heron Lake** · Wetland\n" || places.Availability != assetStored ||
+		page.MessageNativeID != "a3" || page.Availability != assetNotExported || page.Details["path"] != "/workspace/pick.html" {
+		t.Fatalf("widgets = %+v, %+v", places, page)
+	}
+	// A page in the list under the reply is a source once, and each
+	// marker in the text has the addresses cited there, in the text's order.
+	if sources := read.Sources; len(sources) != 2 || sources[0].URL != "https://birds.example/a" || !sources[0].Cited || sources[1].URL != "https://notes.example/b" || sources[1].Site != "Notes" || !sources[1].Cited {
+		t.Fatalf("sources = %+v", sources)
+	}
+	if notes := read.Notes; len(notes) != 1 || notes[0].MessageNativeID != "a3" || jsonText(notes[0].Details) != `{"marks":[["https://birds.example/a"],null,null]}` {
+		t.Fatalf("notes = %+v", notes)
+	}
+}

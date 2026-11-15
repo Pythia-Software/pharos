@@ -2,6 +2,7 @@ import { fitQueryToScreen } from "./query-fit";
 import { EMPTY_QUERY, ITEM_DETAILS_COLUMN, applyPatch, groupKeyFields, matchPatch, type AggregationClause, type QueryState, type WhereClause, type WhereTerm, type SummaryColumn } from "@pythia-software/query-table-core";
 import { usageGroupPresets, usageComparisonPresets, usageTablePresetPatch, type UsageTablePreset } from "./usage-queries";
 import type { UsageDataset } from "./usage-workspace-model";
+import { cacheWritesPerReadExpression } from "./usage-estimate-model";
 
 export type GroupedQueryIdea = UsageTablePreset & { id: string; section: string; metrics?: AggregationClause[]; where?: WhereTerm[] };
 export type RecordQueryIdea = { id: string; section: string; label: string; title: string; query: QueryState };
@@ -228,7 +229,7 @@ const tokenTotals = usageGroupPresets[0].grouping.summaries;
 usageQueryIdeas.usage.push(
   idea("usage", "cache-churn", "Compare", "Cache churn", "Compare weighted cache reuse and cache writes per read, with the underlying token totals", ["provider", "model_family"], [
     ...tokenTotals, sum("cache_creation_input_tokens", "Cache writes"), sum("cache_read_input_tokens", "Cache reads"),
-    ratio("idea_write_per_read", "SUM([cache_creation_input_tokens])/NULLIF(SUM([cache_read_input_tokens]),0)", "Writes per cached read"),
+    ratio("idea_write_per_read", cacheWritesPerReadExpression, "Writes per cached read"),
   ], "idea_write_per_read"),
   idea("usage", "delegation", "Compare", "Delegation by top-level model", "Compare root and delegated run roles under their top-level provider and model", ["root_provider", "root_model_family", "run_role"], tokenTotals, "usage_cost_usd"),
   { ...idea("usage", "root-tasks", "Explore", "Top-level conversations", "Compare total usage across each top-level conversation and its delegated work, then inspect contributing facts or the top-level conversation", ["root_conversation_id"], [

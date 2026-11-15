@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -115,7 +116,32 @@ func TestWritingMessagesFilterBySpanAndSplitText(t *testing.T) {
 	if byWork := query(querytable.WhereTerm{Field: "work_id", Op: "=", Value: firstString(all[0]["work_id"])}); len(byWork) != 3 {
 		t.Fatalf("work filter kept %d rows", len(byWork))
 	}
+	// A full rebuild refines every message; a quick estimate stays
+	// provisional until the next refinement, and a breakdown splits on it.
+	if refined := query(querytable.WhereTerm{Field: "estimate", Op: "=", Value: "refined"}); len(refined) != 3 {
+		t.Fatalf("refined rows = %d", len(refined))
+	}
+	if _, err := catalog.DB.Exec(`UPDATE authorship_message_state SET provisional=1 WHERE message_id=?`, code[0]["id"]); err != nil {
+		t.Fatal(err)
+	}
+	if provisional := query(querytable.WhereTerm{Field: "estimate", Op: "=", Value: "provisional"}); len(provisional) != 1 || provisional[0]["id"] != code[0]["id"] || provisional[0]["estimate"] != "provisional" {
+		t.Fatalf("provisional rows = %#v", provisional)
+	}
 	server := testServer(t, config, catalog)
+	split := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Result: qt.WireQuery{Select: []string{"id"}, Limit: 1},
+		Metrics: []qt.AggSpec{{ID: "split", Op: "sum", Field: "typed_words", GroupBy: []string{"estimate"}, GroupLimit: 10}}}
+	var splitResult qt.QueryResultV3
+	if w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/writing_messages/query-v3", split); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &splitResult) != nil || len(splitResult.Metrics) != 1 {
+		t.Fatalf("estimate breakdown: %d %s", w.Code, w.Body.String())
+	}
+	byEstimate := map[string]float64{}
+	for _, bucket := range splitResult.Metrics[0].Buckets {
+		value, _ := bucket.Value.(float64)
+		byEstimate[fmt.Sprint(bucket.Keys[0])] = value
+	}
+	if byEstimate["provisional"] != 7 || len(byEstimate) != 2 {
+		t.Fatalf("typed words by estimate = %v", byEstimate)
+	}
 	// The Human Words heatmap first asks for each conversation's words per
 	// local day. Exercise the real V3 calendar grouping used by the chart.
 	heatmap := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(),

@@ -1,6 +1,6 @@
 import {shortLabel,stateColor} from "./conversation-labels";
 import catalog from "../../pricing/model_colors.json";
-import { modelColorKey, modelColorOrder, modelProvider, modelSeriesColor, knownModels, knownSources, modelProviders } from "./model-colors";
+import { modelColorKey, modelColorOrder, modelEffortSeriesColor, modelProvider, modelSeriesColor, knownModels, knownSources, modelProviders } from "./model-colors";
 export { modelColorKey } from "./model-colors";
 import { activities, activityPresentation } from "./machine-activity-data";
 import { orderedValues } from "./session-shape-bands";
@@ -32,6 +32,16 @@ export type SeriesStyle = { color: string; group?: string; groupPath?: string[];
 const models = catalog.models as Record<string, ModelStyle>;
 const sources = catalog.sources as Record<string, SourceStyle>;
 const effortLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max"];
+// A model + effort series takes its model's color at an effort step: medium
+// (and none) is the model's own color, minimal/low one step lighter, high,
+// xhigh and ultra/max one, two and three steps darker. Providers offer
+// minimal or low and ultra or max, never both, so each pair shares a shade.
+// Unrecorded effort is drawn like minimal/low.
+const effortSteps: Record<string, number> = { none: 0, minimal: -1, low: -1, medium: 0, high: 1, xhigh: 2, ultra: 3, max: 3 };
+function effortStep(effort: string): number {
+  const level = effort.trim().toLowerCase();
+  return Object.hasOwn(effortSteps, level) ? effortSteps[level] : -1;
+}
 const providerOrder: Provider[] = ["anthropic", "google", "openai", "other"];
 export const otherSeriesColor = "#85909b";
 const allocated = new Map<string, string>();
@@ -81,9 +91,13 @@ export const hourOfDayColors = [
 ];
 export const hourOfDayColor = (hour: number) => Number.isInteger(hour) && hour >= 0 && hour < 24 ? hourOfDayColors[hour] : otherSeriesColor;
 
+// queryCategories.human.tone (query-card.css), named here to keep this module's imports light.
+const humanTone = "var(--query-human-tone)";
+const estimateOrder = ["refined", "provisional"], estimateColors = [humanTone, `color-mix(in srgb, ${humanTone} 50%, white)`];
+
 // Scopes whose series follow their palette's order rather than their size:
 // legends, stacks and slices then read lowest to highest.
-const sortedScopes = new Set(["level_band", "model_family", "provider", "effort", "model_effort", ...Object.keys(orderedValues)]);
+const sortedScopes = new Set(["level_band", "model_family", "provider", "effort", "model_effort", "estimate", ...Object.keys(orderedValues)]);
 export const orderedScope = (scope: string) => sortedScopes.has(scope.startsWith("root_") ? scope.slice(5) : scope);
 // Scopes whose values are steps of one scale (a ramp, low to high), so
 // slices and bars keep that order too, unlike models or providers.
@@ -96,6 +110,13 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
       groupPath:[group,...scope==='label'?parts.slice(1,-1).map((_,index)=>shortLabel(parts.slice(0,index+2).join('.'))):[]]};
   }
   if (scope.startsWith("root_")) scope = scope.slice(5);
+  // Writing estimates keep Human Words' green: refined words in its tone at
+  // the bottom of each stack, provisional words above in a lighter tint.
+  // Cards key series by label (Refined), dashboards by value (refined).
+  if (scope === "estimate") {
+    const index = estimateOrder.indexOf(name.toLowerCase());
+    return index < 0 ? { color: otherSeriesColor, order: `9:${name}` } : { color: estimateColors[index], order: String(index) };
+  }
   if (projectColorFields.includes(scope)) return { color: projectSeriesColor(name, generatedColor(`project:${name}`)) };
   if (scope === "family_group" && Object.hasOwn(eventGroupHues, name)) return { color: eventGroupHues[name], order: String(agentEventKinds.groups.indexOf(name)) };
   if (scope === "family" && eventKindStyles.has(name)) return eventKindStyles.get(name)!;
@@ -107,11 +128,7 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
     const model = separator < 0 ? name : name.slice(0, separator);
     const effort = separator < 0 ? "" : name.slice(separator + 3);
     const modelStyle = chartSeriesStyle("model_family", model), effortStyle = chartSeriesStyle("effort", effort);
-    const level = effortLevels.indexOf(effort.trim().toLowerCase());
-    // Higher recorded effort keeps more of the model's color. Every supported
-    // level has its own weight; missing/unrecognized effort has a separate one.
-    const weight = level < 0 ? 25 : 35 + level * 9;
-    return { color: `color-mix(in srgb, ${modelStyle.color} ${weight}%, var(--bg))`, group: modelStyle.group, order: `${modelStyle.order}:${effortStyle.order}` };
+    return { color: modelEffortSeriesColor(modelColorKey(model), effortStep(effort)), group: modelStyle.group, order: `${modelStyle.order}:${effortStyle.order}` };
   }
   if (scope === "effort") {
     const colors = ["#eee7fa", "#dac9f2", "#c3a7e7", "#a982d8", "#8d60c3", "#7443a9", "#5c2e8c", "#45206d"];
@@ -183,9 +200,20 @@ export function chartMetricTheme(clauses: Pick<AggregationClause, "id" | "groupB
 // Compound metric groups retain their model palette even when their first key
 // is provider, repository, or a display label flattened for the native renderer.
 export function metricSeriesColor(fields: string[], keys: unknown[]): string {
-  const field = keyColorFields.find(field => fields.includes(field)) ?? fields[0];
+  const field = seriesColorField(fields);
   return chartSeriesStyle(field ?? "generic", String(keys[fields.indexOf(field)] ?? "Unspecified")).color;
 }
+
+// The key whose palette colours a group of these keys.
+export const seriesColorField = (fields: string[]): string => keyColorFields.find(field => fields.includes(field)) ?? fields[0];
+
+// Keys whose values have assigned colours: a project's or repository's saved
+// colour, a model's, a provider's, an effort's or band's step, an agent event
+// kind's hue. Other keys only get colours hashed from their values, which
+// carry no meaning, so ranked lists by them stay in the card's one tone.
+const assignedPaletteFields = new Set(["activity", "function_role"]);
+export const hasAssignedPalette = (field: string | undefined): boolean => Boolean(field)
+  && (keyColorFields.includes(field!) || orderedScope(field!) || assignedPaletteFields.has(field!.replace(/^root_/, "")));
 
 // A Query Table theme that colours each bar, box or list row of a grouping by
 // several keys by that palette key (Query Table's colorBy), so the chart

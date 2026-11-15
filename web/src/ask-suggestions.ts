@@ -40,7 +40,7 @@ export const askAreas: AskArea[] = [
   { id: "mcp", label: "MCP servers", pages: ["analyze/mcp", "analyze/query/mcp_calls", "settings/mcp"], signals: ["mcp.calls"] },
   { id: "carbon", label: "Carbon impact", pages: ["analyze/carbon"], signals: ["carbon.usage"] },
   { id: "recall", label: "Past work", pages: ["library", "work", "files"], signals: ["recall.history"] },
-  { id: "ask-history", label: "Earlier Ask chats", pages: ["settings/ask"], signals: ["pharos.ask_history"] },
+  { id: "ask-history", label: "Earlier Ask chats", pages: ["settings/preferences"], signals: ["pharos.ask_history"] },
   { id: "library-health", label: "Library health", pages: ["settings", "settings/sync", "settings/sources", "settings/logs", "settings/libraries"], signals: ["pharos.freshness"] },
   { id: "backups", label: "Backups", pages: ["settings/backups"], signals: ["pharos.backups"] },
   // Scored when suggestions are chosen, from the page visits on this Mac.
@@ -51,7 +51,6 @@ export const askAreas: AskArea[] = [
 export const askExcludedPages: Record<string, string> = {
   "ask": "Ask Pharos full screen: the chat itself, not a subject of its questions.",
   "settings/layout": "Header and navigation layout preferences.",
-  "settings/preferences": "Display preferences, including agent event markers and arcs in fingerprints.",
   "settings/models": "Persistent model and provider color preferences, with automatic model shades; no analytical data or agent action is needed.",
   "settings/projects": "Persistent project color preferences; no analytical data or agent action is needed.",
   "analyze/query/tl1_attempts": "TL1 is mothballed; its attempts stay queryable without being promoted.",

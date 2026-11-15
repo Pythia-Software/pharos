@@ -31,6 +31,8 @@
 .card-library-entry>.card-library-collected { padding:8px 4px 0; font-size:10px; }
 .card-library-collected svg { width:12px; height:12px; }
 .card-library-empty { padding:35px; text-align:center; color:var(--muted); }
+.card-library-sparse { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; color:var(--muted); font-size:12px; margin:0 0 16px; }
+.card-library-sparse button { padding:0; border:0; background:none; color:var(--accent, inherit); font:inherit; text-decoration:underline; cursor:pointer; }
 
 
 .card-library-feedback { margin:0 0 16px; color:var(--gold); font-size:12px; }

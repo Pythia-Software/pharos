@@ -455,7 +455,7 @@ final class MenuFixture: URLProtocol {
         }
         precondition(MenuBarPreferences(["enabled": 0])["enabled"], "Numbers are not booleans")
         precondition(MenuBarController.mass(1234) == "1.23 kg")
-        for (input, expected) in [(999.0, "999"), (999.7, "1k"), (999400.0, "999k"), (999700.0, "1M"), (999700000.0, "1B"), (999700000000.0, "1T")] {
+        for (input, expected) in [(999.0, "999"), (999.7, "1K"), (1234.0, "1.23K"), (999400.0, "999K"), (999700.0, "1M"), (1234567.0, "1.23M"), (999700000.0, "1B"), (999700000000.0, "1T")] {
             precondition(MenuBarController.compact(input) == expected)
         }
         for (input, expected) in [(999.4, "999 g"), (999.7, "1 kg"), (999700.0, "1 t"), (999700000.0, "1000 t"), (0.0000001, "0.0000001 g")] {

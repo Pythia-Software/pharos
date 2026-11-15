@@ -381,6 +381,10 @@ func (s *Server) finishDeferredSync(ctx context.Context) error {
 // The chain is an analysis.chain stage of the run ctx carries, and each of
 // its stages a child of it (docs/background-work.md §2.4).
 func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings bool, runPhase func(string, func() error) error) (err error) {
+	// Web images the indexed exports name are fetched last, for a bounded
+	// time, so no stage waits on an image host: what is left, or failed,
+	// stays shown as not fetched and a later pass takes it up.
+	defer func() { _, _ = s.Catalog.fetchRemoteAssets(ctx) }()
 	findings := findingsAuto
 	if forceFindings {
 		findings = findingsForce

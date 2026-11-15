@@ -4,6 +4,7 @@ import { FingerprintImage } from "./fingerprint-image";
 import { formatConcurrencyDuration } from "./concurrency-data";
 import { PageLink } from "./nested-pages";
 import { Icon } from "./icons";
+import { formatTokens } from "./token-count";
 
 type RecentConversation = {
   id: string; workspace_id: string; title: string; repository?: string;
@@ -40,19 +41,19 @@ export function RecentConversations({ active, generation }: { active: boolean; g
       {items.map(item => {
         const href = `/work/${encodeURIComponent(item.workspace_id)}/conversation/${encodeURIComponent(item.id)}`;
         const cost = item.cost_usd == null ? null : item.cost_usd < 0.01 && item.cost_usd > 0 ? "< $0.01" : item.cost_usd.toLocaleString(undefined, { style: "currency", currency: "USD" });
+        // The fingerprint and the exchange are full-width bands at the card's
+        // top and bottom edges; only the header between them is inset.
         return <article className="home-recent-card" key={item.id}>
+          {item.labels_ready ? <div className="home-recent-fingerprint"><FingerprintImage id={item.id} /></div> : null}
           <div className="home-recent-card-header">
-            <div className="home-recent-identity">
-              <h3><PageLink className="home-recent-title" href={href}>{item.title || "Untitled conversation"}<Icon name="arrow-right" /></PageLink></h3>
-              <div className="home-recent-meta">{[item.repository, item.provider, item.model, item.effort].filter(Boolean).join(" · ")}</div>
-            </div>
-            {item.labels_ready ? <div className="home-recent-fingerprint"><FingerprintImage id={item.id} /></div> : null}
+            <h3><PageLink className="home-recent-title" href={href}>{item.title || "Untitled conversation"}<Icon name="arrow-right" /></PageLink></h3>
+            <div className="home-recent-meta">{[item.repository, item.provider, item.model, item.effort].filter(Boolean).join(" · ")}</div>
             <div className="home-recent-facts">
               {item.activity_at && Number.isFinite(Date.parse(item.activity_at)) ? <time dateTime={item.activity_at}>{new Date(item.activity_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</time> : null}
               {item.subagent_depth > 0 ? <span>Sub-agents · Depth {item.subagent_depth}</span> : null}
               {item.duration_ms != null ? <span>{formatConcurrencyDuration(item.duration_ms)} elapsed</span> : null}
               {item.tool_calls != null ? <span>{item.tool_calls.toLocaleString()} tool calls</span> : null}
-              {item.tokens != null ? <span title={item.is_estimate?estimateExplanation:undefined}>{item.tokens.toLocaleString()} tokens{item.is_estimate?"*":""}</span> : null}
+              {item.tokens != null ? <span title={item.is_estimate?estimateExplanation:undefined}>{formatTokens(item.tokens)} tokens{item.is_estimate?"*":""}</span> : null}
               {cost ? <span title={item.is_estimate ? estimateExplanation : item.price_status && item.price_status !== "complete" ? `Pricing: ${item.price_status}` : "Estimated API list-price equivalent"}>{cost}{item.is_estimate?"*":""} {item.price_status === "unpriced" || item.price_status === "partial" ? "known " : ""}API cost{item.price_status === "assumed" ? " (estimated)" : ""}</span> : null}
             </div>
           </div>

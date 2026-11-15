@@ -118,9 +118,10 @@ test("the query keeps the measure's population and smoothing history off the use
   start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - 6);
   assert.equal(shifted.getTime(), start.getTime(), "six days of history before the range's first day");
   const ratio = trendQuery(catalog, { ...base, metric: "cache_read_share", split: "provider_model" }, [...range, { field: "provider", op: "=", value: "claude" }], { now });
-  assert.deepEqual(ratio.query.aggregations.map(clause => [clause.op, clause.field, clause.groupBy]), [["sum", "cache_read_input_tokens", ["day", "provider", "model_family"]], ["sum", "input_tokens", ["day", "provider", "model_family"]]]);
+  // Both parts read recorded usage only: an estimate's cache division is assumed.
+  assert.deepEqual(ratio.query.aggregations.map(clause => [clause.op, /is_estimate/.test(clause.expression ?? ""), clause.groupBy]), [["sum", true, ["day", "provider", "model_family"]], ["sum", true, ["day", "provider", "model_family"]]]);
   assert.ok(ratio.query.where.some(term => term.field === "provider"), "a filter stays the population");
-  assert.match(ratio.supporting.aggregations[0].expression, /SUM\(\[cache_read_input_tokens\]\)\/NULLIF/);
+  assert.match(ratio.supporting.aggregations[0].expression, /cache_read_input_tokens.*\/NULLIF/);
   const whole = trendQuery(catalog, { ...base, metric: "tokens", split: "none", completePeriods: true }, range, { now });
   const first = new Date(whole.range.find(term => term.op === ">=").value), midnight = new Date(now - 30 * 86400000);
   midnight.setHours(24, 0, 0, 0);

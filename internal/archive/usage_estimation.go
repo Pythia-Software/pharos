@@ -42,6 +42,7 @@ type usageResponseEstimate struct {
 	Fallback                  string               `json:"fallback"`
 	Basis                     string               `json:"basis"`
 	Output                    estimationRange      `json:"output_tokens"`
+	Input                     *usageInputEstimate  `json:"input,omitempty"`
 	Thinking                  estimationRange      `json:"thinking_tokens"`
 	ThinkingSeconds           estimationRange      `json:"thinking_seconds"`
 	ThinkingDurationModel     string               `json:"thinking_duration_model,omitempty"`
@@ -62,6 +63,8 @@ type conversationUsageEstimates struct {
 	Scope                string                  `json:"scope"`
 	RangeKind            string                  `json:"range_kind"`
 	Output               *estimationRange        `json:"output_tokens,omitempty"`
+	Input                *estimationRange        `json:"input_tokens,omitempty"`
+	InputRequests        int                     `json:"input_requests,omitempty"`
 	Responses            []usageResponseEstimate `json:"responses"`
 	ReportedResponses    int                     `json:"reported_responses"`
 	UnsupportedResponses int                     `json:"unsupported_responses"`
@@ -87,6 +90,8 @@ type usageEstimationResponse struct {
 	modelAssumed                                          bool
 	sender, nativeCreated, usageAt                        string
 	nontext                                               bool
+	inputUncounted                                        bool // an image or file whose content the input estimate could not count
+	contextCharacters                                     int // injected prompts and extracted attachment text
 	blocks                                                []usageEstimationBlock
 }
 type usageEstimationBuilder struct {
@@ -178,6 +183,13 @@ func (b *usageEstimationBuilder) observe(m map[string]any) {
 	}
 	r.order = min(r.order, integer(m["source_order"]))
 	r.nontext = r.nontext || attachment
+	if attachment {
+		// Pasted text arrives as an attachment with its text extracted, and is
+		// counted. Only an attachment without text is left out of input.
+		extracted := utf8.RuneCountInString(firstString(raw["extracted_content"]))
+		r.contextCharacters += extracted
+		r.inputUncounted = r.inputUncounted || extracted == 0
+	}
 	if firstString(raw["type"]) == "token_usage" && firstString(m["kind"]) == "metadata" && firstString(m["role"]) == "system" && strings.HasSuffix(firstString(m["native_id"]), ":usage") && normalizeTokenCounts(mapValue(raw["usage"])) != nil {
 		r.reported = true
 	}
@@ -225,15 +237,19 @@ func (b *usageEstimationBuilder) observe(m map[string]any) {
 		// The adapter preserves flattened replies from text-only exports as
 		// {text, claude_ai_message?}, without inventing a content-block type.
 		// Only a stored assistant message can use this representation.
-		if _, typed := raw["type"]; typed || firstString(m["kind"]) != "message" || firstString(m["role"]) != "assistant" {
+		// A person's flattened message is context later requests read.
+		if _, typed := raw["type"]; typed || firstString(m["kind"]) != "message" || (firstString(m["role"]) != "assistant" && firstString(m["role"]) != "user") {
 			return
 		}
 		if _, text := raw["text"].(string); !text {
 			return
 		}
 		v.kind, v.characters = "text", utf8.RuneCountInString(asString(m["text"]))
-	case "text":
-		v.characters = utf8.RuneCountInString(firstString(raw["text"]))
+	case "text", "voice_note":
+		v.kind, v.characters = "text", utf8.RuneCountInString(firstString(raw["text"]))
+	case "injected_prompt_block":
+		r.contextCharacters += utf8.RuneCountInString(firstString(raw["prompt"]))
+		return
 	case "thinking":
 		v.summaries = len(reasoningList(raw["summaries"]))
 		if hidden, explicit := raw["thinking_hidden"].(bool); explicit && !hidden {
@@ -248,10 +264,14 @@ func (b *usageEstimationBuilder) observe(m map[string]any) {
 		}
 	case "tool_result":
 		v.call = firstString(raw["tool_use_id"])
-		_, images := toolResultText(raw["content"])
+		// Only the size is kept: result text is input to the requests after it.
+		text, images := toolResultText(raw["content"])
+		v.characters = utf8.RuneCountInString(text)
 		r.nontext = r.nontext || images > 0
+		r.inputUncounted = r.inputUncounted || images > 0
 	default:
 		r.nontext = r.nontext || v.kind == "image" || v.kind == "document" || v.kind == "file"
+		r.inputUncounted = r.inputUncounted || v.kind == "image" || v.kind == "document" || v.kind == "file"
 		return
 	}
 	r.blocks = append(r.blocks, v)
@@ -339,7 +359,7 @@ func (b *usageEstimationBuilder) estimate(manifest estimationManifest, calibrati
 		return nil
 	}
 	report := &conversationUsageEstimates{Version: usageEstimatorVersion, ManifestRevision: manifest.Revision, ManifestDigest: digest,
-		CalibrationBuiltAt: calibration.BuiltAt, Scope: "selected_branch_unreported_output", RangeKind: "sensitivity_not_confidence", Responses: []usageResponseEstimate{}}
+		CalibrationBuiltAt: calibration.BuiltAt, Scope: "selected_branch_unreported_usage", RangeKind: "sensitivity_not_confidence", Responses: []usageResponseEstimate{}}
 	ordered := []*usageEstimationResponse{}
 	for _, r := range b.responses {
 		if r.assistant {
@@ -483,6 +503,23 @@ func (b *usageEstimationBuilder) estimate(manifest estimationManifest, calibrati
 			report.Output = &estimationRange{}
 		}
 		*report.Output = report.Output.plus(out.Output)
+	}
+	// Input follows output: the thinking a response is estimated to have
+	// generated is context its later requests re-read.
+	thinking := map[string]estimationRange{}
+	for _, response := range report.Responses {
+		thinking[response.NativeID] = response.Thinking
+	}
+	inputs := b.estimateInputs(manifest, thinking)
+	for index := range report.Responses {
+		if input := inputs[report.Responses[index].NativeID]; input != nil {
+			report.Responses[index].Input = input
+			if report.Input == nil {
+				report.Input = &estimationRange{}
+			}
+			*report.Input = report.Input.plus(input.Tokens)
+			report.InputRequests += input.Requests
+		}
 	}
 	return report
 }

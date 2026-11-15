@@ -71,13 +71,15 @@ func (c *Catalog) workOverviewWithPeers(id string, includeUncertain bool) (map[s
 	if result["files"], err = c.workFileTargets(id); err != nil {
 		return nil, err
 	}
-	// A session that only committed, through a shell, has commits but no
-	// file targets; the page's Files and commits section shows them too.
-	var linked int
-	if err := c.reader().QueryRow(`SELECT COUNT(*) FROM session_commit_links WHERE workspace_id=?`, id).Scan(&linked); err != nil {
+	// The page shows its Files and commits section only when it has
+	// something to list (WorkFiles): an edited file or a linked commit. File
+	// targets include reads, and a session that only committed, through a
+	// shell, has commits but no file targets.
+	var edited, linked int
+	if err := c.reader().QueryRow(`SELECT (SELECT COUNT(*) FROM session_files WHERE workspace_id=?),(SELECT COUNT(*) FROM session_commit_links WHERE workspace_id=?)`, id, id).Scan(&edited, &linked); err != nil {
 		return nil, err
 	}
-	result["linked_commits"] = linked
+	result["edited_files"], result["linked_commits"] = edited, linked
 	// Related top-level work (peer_reader.go).
 	peers, err := c.workPeers(context.Background(), id)
 	if err != nil {
@@ -170,6 +172,16 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 			conversation["selected_settings"] = map[string]any{"scope": "observed_conversation_selection", "observations": observations[:min(500, len(observations))], "truncated": len(observations) > 500}
 		}
 	}
+	if firstString(conversation["harness"]) == "claude-export-document" {
+		// The conversations that made an exported artifact (message_assets.go).
+		origins, err := c.artifactOrigins(ctx, conversationID)
+		if err != nil {
+			return nil, err
+		}
+		if origins != nil {
+			conversation["made_in"] = origins
+		}
+	}
 	sessions, err := queryMaps(c.reader(), `SELECT * FROM agent_sessions WHERE workspace_id=? AND conversation_id=? AND usage_status<>'in-child-conversation'`, workspaceID, conversationID)
 	if err != nil {
 		return nil, err
@@ -197,6 +209,11 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 	if err != nil {
 		return nil, err
 	}
+	// Files and sources its messages refer to (message_assets.go).
+	attachAssets, err := c.messageAssetsAttacher(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
 	// With ledger usage, whole bodies are only needed while attaching authorship
 	// and clipping a row. Do that before retaining it, rather than keeping every
 	// original output alive until the entire conversation has been read.
@@ -218,6 +235,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		attachEvents(message)
 		attachEngagement(message)
 		attachPeers(message)
+		attachAssets(message)
 		if previewRows {
 			clipReaderMessage(message)
 		}
@@ -247,6 +265,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 	for _, message := range messages {
 		delete(message, "source_order")
 	}
+	showPublishedArtifacts(messages)
 	linkEvents(messages)
 	if labels, err := labelsSummary(); err != nil {
 		return nil, err
@@ -264,18 +283,20 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		conversation["engagement"] = engagement
 	}
 	usage := tokenCounts{}
-	isEstimate := false
+	isEstimate, inputMissing := false, false
 	for _, session := range sessions {
 		if status := firstString(session["usage_status"]); status == "" || status == "unavailable" {
 			continue
 		}
 		isEstimate = isEstimate || estimateFlag(session["is_estimate"])
+		inputMissing = inputMissing || estimateFlag(session["is_estimate"]) && !estimateFlag(session["input_tokens_available"])
 		for _, key := range []string{"input_tokens", "uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_5m_input_tokens", "cache_creation_1h_input_tokens", "output_tokens", "reasoning_output_tokens", "unclassified_tokens", "total_tokens"} {
 			usage[key] += float64(integer(session[key]))
 		}
 	}
 	conversation["token_usage_is_estimate"] = isEstimate
-	if isEstimate {
+	conversation["token_usage_input_estimated"] = isEstimate && !inputMissing
+	if inputMissing {
 		for _, field := range usageInputFields {
 			delete(usage, field)
 		}
@@ -302,7 +323,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 	}
 
 	// Join canonical usage onto messages without rewriting retained source bodies.
-	estimated, err := queryMapsContext(ctx, c.reader(), `SELECT source_message_id,output_tokens,reasoning_output_tokens,total_tokens FROM model_requests WHERE conversation_id=? AND is_estimate=1`, conversationID)
+	estimated, err := queryMapsContext(ctx, c.reader(), `SELECT source_message_id,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,input_tokens_available,output_tokens,reasoning_output_tokens,total_tokens FROM model_requests WHERE conversation_id=? AND is_estimate=1`, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +333,13 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 	}
 	for _, message := range messages {
 		if row := byID[firstString(message["id"])]; row != nil {
-			message["usage"] = map[string]any{"output_tokens": row["output_tokens"], "reasoning_output_tokens": row["reasoning_output_tokens"], "total_tokens": row["total_tokens"]}
+			usage := map[string]any{"output_tokens": row["output_tokens"], "reasoning_output_tokens": row["reasoning_output_tokens"], "total_tokens": row["total_tokens"]}
+			if estimateFlag(row["input_tokens_available"]) {
+				for _, field := range []string{"input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"} {
+					usage[field] = row[field]
+				}
+			}
+			message["usage"] = usage
 			message["usage_is_estimate"] = true
 		}
 	}
@@ -334,6 +361,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		if authoritative || report.ReportedResponses > 0 {
 			report.Responses = []usageResponseEstimate{}
 			report.Output = nil
+			report.Input, report.InputRequests = nil, 0
 		}
 		conversation["usage_estimates"] = report
 		byMessage := map[string]usageToolEstimate{}

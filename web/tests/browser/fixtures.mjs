@@ -820,8 +820,8 @@ const filesDiff = ["diff --git a/internal/archive/api.go b/internal/archive/api.
   "@@ -1,4 +1,5 @@ package archive", " package archive", " ", "-// ServeHTTP answers.", "+" + filesCode[2], "+func (s *Server) ServeHTTP() {", " \treturn", ""].join("\n");
 
 export const projectColorFixture = [
-  { id: "repository:pharos", key: "a".repeat(64), name: "pharos", kind: "repository", default_color: "#2a83a4", source: "public/favicon.svg" },
-  { id: "folder:~/notes", key: "b".repeat(64), name: "~/notes", kind: "folder", default_color: "#b27430", source: "Automatic palette" },
+  { id: "repository:pharos", key: "a".repeat(64), name: "pharos", kind: "repository", default_color: "#2a83a4", source: "public/favicon.svg", conversations: 42, latest_conversation_at: "2026-10-20T12:00:00Z" },
+  { id: "folder:~/notes", key: "b".repeat(64), name: "~/notes", kind: "folder", default_color: "#b27430", source: "Automatic palette", conversations: 7, latest_conversation_at: "2026-10-21T09:00:00Z" },
 ];
 
 export const defaultApi = {
@@ -906,6 +906,8 @@ export const defaultApi = {
     ["Check background recovery", "observatory", "claude", "claude-sonnet-4", 1, "Test what happens when indexing stops halfway through a batch.", "The next pass picks up the remaining records safely."],
     ["Understand token patterns", "pharos", "codex", "gpt-5", 0, "Compare shorter conversations with the deeper delegated work.", "The comparison separates main-agent and helper activity."],
     ["Plan the next iteration", "observatory", "claude", "claude-opus-4-1", 1, "Review the open questions and choose the next small improvement.", "The next iteration starts with clearer navigation and a smaller scope."],
+    ["Tidy the settings page", "pharos", "codex", "gpt-5", 0, "Group the color settings and drop the actions nobody uses.", "Colors now sit together and only useful palette actions remain."],
+    ["Measure the cold start", "atlas", "claude", "claude-sonnet-4", 1, "Time the first page load after the service restarts.", "Most of the cold start is the first catalog read, not the bundle."],
   ].map(([title, repository, provider, model, subagent_depth, first_input, last_response], index) => ({
     id: index ? `recent-${index}` : rootConversation, workspace_id: workID, title, repository, provider, model, effort: "high", subagent_depth, first_input, last_response,
     activity_at: new Date(now - index * day).toISOString(), labels_ready: index < 7, events_ready: index < 4, duration_ms: 4980000, tool_calls: 34, tokens: 123456, cost_usd: 2.34, is_estimate: index === 1, price_status: index === 1 ? "partial" : "priced",

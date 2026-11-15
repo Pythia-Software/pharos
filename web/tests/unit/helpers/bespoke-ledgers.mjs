@@ -32,6 +32,8 @@ export function writingMessages() {
       message_count: 1, conversation_id: `conversation-${conversation}`, work_id: `work-${work}`, workspace_id: `work-${work}`, repository_name: repositories[work % 3], project_name: repositories[work % 3],
       provider: conversation % 2 ? "claude" : "codex", source_kind: conversation % 2 ? "claude" : "codex", channel: conversation % 3 ? "desktop" : "cli",
       correction_cue: typed > 0 && index % 4 === 1, positive_cue: typed > 0 && index % 8 === 3, has_source: copied > 0, main_category: typed ? "typed" : pasted ? "pasted" : "harness",
+      // The last two days' quick estimates wait for the daily refinement.
+      estimate: index % 40 < 2 ? "provisional" : "refined",
     };
   });
 }

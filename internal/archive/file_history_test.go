@@ -281,6 +281,9 @@ func TestFileHistoryWithGit(t *testing.T) {
 		work["outcome_label"] != "landed" {
 		t.Fatalf("second's files: %#v", work)
 	}
+	if overview, err := f.catalog.WorkOverview("second"); err != nil || integer(overview["edited_files"]) != 1 {
+		t.Fatalf("second's overview counts its edited file: %v, %v", overview["edited_files"], err)
+	}
 	// The reader links each call's files to their pages, a patch's every file.
 	conversation, err := f.catalog.WorkConversation("patcher", "patcher-c")
 	if err != nil {

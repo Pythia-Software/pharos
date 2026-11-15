@@ -465,7 +465,8 @@ const ROUTES = [
     nativeHost:"window.webkit={messageHandlers:{pharosDictation:{postMessage:async body=>body.action==='status'?{available:true}:true}}};"},
   {name:"Ask Pharos clarification",url:"/?ask_chat=saved-chat",ready:"#pharos-ask .pharos-clarification:not([hidden])",api:{...askAPI,"GET /api/ask/session":askClarificationSession}},
   {name:"Ask Pharos opt-in",url:"/",ready:"#pharos-ask .pharos-invitation:not([hidden])",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:true},providers:askProviders}},open:page=>page.locator("#pharos-ask .pharos-try").click(),shown:"#pharos-ask .pharos-consent[open]"},
-  {name:"Ask Pharos settings",url:"/settings/ask",ready:"#askSettingsPage .ask-settings select",api:askAPI},
+  // The old Ask Pharos page redirects to its card in App preferences.
+  {name:"Ask Pharos settings",url:"/settings/ask",ready:"#askSettingsPage .ask-preferences-disclosure",api:askAPI,open:page=>page.locator("#askSettingsPage .ask-preferences-disclosure>summary").click(),shown:"#askSettingsPage .ask-preferences-body button"},
 
   ].map(route=>({...route,preferences:{"pharos-theme":"dark"}})),
   { name: "Messages dataset query", url: "/analyze?analyze_mode=query&analyze_data=messages", ready: ".usage-workspace-table .qt-row" },
@@ -593,12 +594,12 @@ const ROUTES = [
     assert.match(await tokens.locator('strong').innerText(),/\d.*\*$/);
     const cost=stats.locator('span').filter({has:page.locator('small', {hasText:'API cost'})});
     assert.match(await cost.locator('strong').innerText(),/^\$.*\*$/);
-    assert.match(await cost.getAttribute('title'),/estimated output only/i);
+    assert.match(await cost.getAttribute('title'),/cost.*is partial/i);
     await stats.scrollIntoViewIfNeeded();await app.shot('estimated-workspace-totals');
     const info=tokens.getByRole('button',{name:'About token estimates'});await info.click();
     const dialog=page.getByRole('dialog',{name:'How estimates work'});await dialog.waitFor();
     const text=await dialog.innerText();
-    assert.match(text,/Selected conversation.*1,400 estimated output tokens.*400–5,000 sensitivity range/s);
+    assert.match(text,/Selected conversation.*1.4K estimated output tokens.*400–5K sensitivity range/s);
     assert.match(text,/estimation and API pricing assume claude-opus-5-5 from saved conversation settings/i);
     assert.match(text,/Tool timing.*Writing/s);
     assert.equal(await dialog.getByRole('link',{name:'View published assumptions'}).getAttribute('href'),'/api/estimation/assumptions');
@@ -614,7 +615,7 @@ const ROUTES = [
     await turnMarker.scrollIntoViewIfNeeded();await app.shot('turn-estimate-marker');
     const wasOpen=await turn.evaluate(el=>el.open);await turnMarker.click();await dialog.waitFor();
     assert.equal(await turn.evaluate(el=>el.open),wasOpen,'the estimate marker does not toggle its turn');
-    assert.match(await dialog.innerText(),/Selected turn.*1,400 estimated output tokens.*400–5,000 sensitivity range/s);
+    assert.match(await dialog.innerText(),/Selected turn.*1.4K estimated output tokens.*400–5K sensitivity range/s);
     await page.keyboard.press('Escape');await dialog.waitFor({state:'detached'});
     assert.equal(await turnMarker.evaluate(el=>document.activeElement===el),true);
     await page.keyboard.press('Enter');await dialog.waitFor();
@@ -1064,7 +1065,7 @@ const ROUTES = [
   { name: "Mac menu with all items", url: "/settings/layout", ready: "#showMacMenuBar", open: page => page.locator('#menuBarExpand').click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, api: tokenEvidenceAPI, ready: ".delegation-table tbody tr" },
   { name: "Workspace files and commits", url: `${work}?disclosures=${encodeURIComponent(JSON.stringify({ [`work:${workID}:files`]: true }))}`, ready: ".work-files .file-place",
-    api: { "GET /api/work/:id": request => ({ ...defaultApi["GET /api/work/:id"](request), files: [{ conversation_id: rootConversation, path: "internal/archive/api.go" }] }) } },
+    api: { "GET /api/work/:id": request => ({ ...defaultApi["GET /api/work/:id"](request), files: [{ conversation_id: rootConversation, path: "internal/archive/api.go" }], edited_files: 1 }) } },
   { name: "Workspace Timeline", url: `${work}?explorer=timeline`, ready: ".lt-session-root" },
   { name: "Workspace Timeline compact key", url: `${work}?explorer=timeline&disclosures=${encodeURIComponent(JSON.stringify({'timeline-key':false}))}`, ready: ".lt-session-root", api: {
     "GET /api/work/:id/parallel": request => {
@@ -1967,10 +1968,19 @@ test("clipped labels reveal hidden text and stop repeating it when they fit", { 
     const item = legend.locator("[data-chart-tooltip-label]").filter({hasText: name});
     await item.hover();
     await page.waitForFunction(name => document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])')?.textContent.includes(name), name);
-    await page.locator('[role="tooltip"] .chart-tooltip-swatch').first().waitFor({ state: "visible" });
+    await page.locator('[role="tooltip"] .usage-swatch').first().waitFor({ state: "visible" });
   }
-  await page.locator(".query-cover-columns > [data-chart-tooltip]").first().hover();
-  await page.locator('[role="tooltip"] .chart-tooltip-swatch').first().waitFor({ state: "visible" });
+  // A clipped path or id with no break opportunity wraps inside the bubble.
+  const unbroken = `repository/${"unbrokenbranchname".repeat(4)}`, first = legend.locator("[data-chart-tooltip-label]").first();
+  const relabel = label => first.evaluate((element, label) => { element.setAttribute("data-chart-tooltip-label", label); element.querySelector("[data-chart-label]").textContent = label; }, label);
+  await relabel(unbroken);
+  await first.hover();
+  await page.waitForFunction(label => document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])')?.textContent.includes(label), unbroken);
+  assert.ok(await page.locator('[role="tooltip"].chart-tooltip .usage-chart-tip-head').evaluate(head =>
+    head.scrollWidth <= head.clientWidth && head.getBoundingClientRect().right <= head.closest(".chart-tooltip").getBoundingClientRect().right), "a long unbroken label wraps inside the bubble");
+  await relabel(names[0]);
+  await page.locator(".query-cover-columns > [data-chart-popover]").first().hover();
+  await page.locator('[role="tooltip"] .usage-swatch').first().waitFor({ state: "visible" });
   await legend.evaluate(element => {element.style.width = "100%";element.style.gridTemplateColumns = "1fr";});
   await legend.locator("[data-chart-tooltip-label]").first().hover();
   await page.waitForFunction(() => !document.querySelector('[role="tooltip"].chart-tooltip:not([hidden])'));
@@ -2321,7 +2331,8 @@ test("model color editors preview and save inline while retaining focus", { skip
   await page.locator("label").filter({hasText:/^gpt-6-sol$/}).click();
   await model.waitFor({state:"detached"});
   await page.getByRole("button", {name:"Save palette for OpenAI",exact:true}).click();
-  await page.waitForFunction(() => document.querySelector('[aria-label="Restore brand color for OpenAI"]')?.disabled === true);
+  // Saved at the brand color with nothing pending: neither reset nor Save/Discard is offered.
+  await page.waitForFunction(() => !document.querySelector('[aria-label="Restore brand color for OpenAI"]') && !document.querySelector('[aria-label="Save palette for OpenAI"]'));
   await provider.fill("#ffffff");
   await page.getByRole("status", {name: "OpenAI color warnings", exact: true}).waitFor();
   await card.scrollIntoViewIfNeeded();

@@ -1051,6 +1051,12 @@ func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord
 		if err := recordReasoningState(tx, conversationID, conversation.Messages); err != nil {
 			return 0, 0, err
 		}
+		if err := replaceConversationAssets(tx, conversationID, conversation.Assets, conversation.Sources, conversation.Notes); err != nil {
+			return 0, 0, err
+		}
+		if err := refreshConversationContent(tx, conversationID); err != nil {
+			return 0, 0, err
+		}
 		if force {
 			if err := deleteConversationFTS(tx, conversationID); err != nil {
 				return 0, 0, err

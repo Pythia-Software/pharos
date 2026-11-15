@@ -27,6 +27,9 @@ type projectColorRecord struct {
 	Name string `json:"name"`
 	Kind string `json:"kind"`
 	projectColorChoice
+	// Settings sorts by these, so the projects people edit most come first.
+	Conversations      int64  `json:"conversations"`
+	LatestConversation string `json:"latest_conversation_at,omitempty"`
 }
 
 func projectColorKey(id string) string {
@@ -68,7 +71,8 @@ func projectColorRows(ctx context.Context, q queryer, predicate string, args ...
 	// Select affected project identities first, then count conversations across
 	// all of each project's workspaces, not just those in the input predicate.
 	return queryMapsContext(ctx, q, `SELECT `+projectIDSQL("w")+` id,`+projectNameSQL("w")+` name,`+projectKindSQL("w")+` kind,
-		MAX(pj.local_locations_json) locations FROM workspaces w`+projectJoin("w")+`
+		MAX(pj.local_locations_json) locations, COUNT(cv.id) conversations,
+		MAX(COALESCE(cv.ended_at,cv.started_at)) latest FROM workspaces w`+projectJoin("w")+`
 		JOIN conversations cv ON cv.workspace_id=w.id
 		WHERE `+projectIDSQL("w")+` IN (SELECT `+projectIDSQL("w")+` FROM workspaces w`+projectJoin("w")+` WHERE (`+predicate+`))
 		GROUP BY 1 HAVING COUNT(cv.id)>3 ORDER BY 1`, args...)
@@ -128,7 +132,8 @@ func (c *Catalog) projectColors(ctx context.Context) ([]projectColorRecord, erro
 	for _, row := range rows {
 		id := firstString(row["id"])
 		if choice, ok := choices[projectColorKey(id)]; ok {
-			result = append(result, projectColorRecord{id, strings.TrimPrefix(projectColorKey(id), projectColorPrefix), firstString(row["name"]), firstString(row["kind"]), choice})
+			conversations, _ := row["conversations"].(int64)
+			result = append(result, projectColorRecord{id, strings.TrimPrefix(projectColorKey(id), projectColorPrefix), firstString(row["name"]), firstString(row["kind"]), choice, conversations, firstString(row["latest"])})
 		}
 	}
 	return result, nil

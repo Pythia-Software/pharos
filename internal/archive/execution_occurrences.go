@@ -35,11 +35,22 @@ func (r *executionResolution) Occurrences(ctx context.Context, q queryer, conver
 	return loadOccurrenceIndex(ctx, q, r, conversations)
 }
 
-// occurrenceDependencyVersion names the facts occurrenceDependencyLines
-// returns and how they are written; a derivative's dependency digest that
-// includes them records it, so a change to either supersedes every digest.
+// occurrenceDependencyVersion names the rules that decide the facts
+// occurrenceDependencyLines returns. It is not part of any digest: the facts
+// themselves are, so a rule change supersedes only the derivatives of
+// conversations whose facts it changes. Recorded with the marking cursor
+// (executionDependentsVersions), a change makes the next mark compare every
+// derivative with its conversation's facts under the new rules. A variable
+// so tests can stand in a later version.
 // v4: a provider read without a history declaration is not partial by itself.
-const occurrenceDependencyVersion = "occurrence-dependency/v4-undeclared-history"
+var occurrenceDependencyVersion = "occurrence-dependency/v4-undeclared-history"
+
+// occurrenceDependencyEncoding names how occurrenceDependencyLines writes
+// its facts, and is part of every digest that includes them. Change it only
+// when the lines' format changes: that supersedes every stored digest, and
+// so rebuilds every conversation's labels and agent events. Its value is the
+// rules version it was split from, which keeps the digests stored under it.
+const occurrenceDependencyEncoding = "occurrence-dependency/v4-undeclared-history"
 
 // occurrenceDependencyLines returns, per conversation (the copy's
 // transcript), the occurrence facts Lookup and Partial decide its

@@ -38,6 +38,14 @@ export function gamutChroma(l: number, h: number): number {
   }
   return low;
 }
+// A model's shade for an effort step: step 0 is the model's own color, each
+// step below is lighter and a little greyer, each step above darker and a
+// little richer. Hue never moves, so every step still reads as its model.
+export function effortShade(color: string, step: number): string {
+  if (!step) return color;
+  const [l, c, h] = lch(color), lower = step < 0, size = Math.abs(step);
+  return fromLCH(Math.max(.08, Math.min(.97, l + (lower ? .06 : -.045) * size)), c * Math.max(0, 1 + (lower ? -.08 : .08) * size), h);
+}
 export function fromLCH(l: number, c: number, h: number): string {
   return "#" + rgb(l, Math.min(c, gamutChroma(l, h)), h).map(value => {
     const encoded = value <= .0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - .055;

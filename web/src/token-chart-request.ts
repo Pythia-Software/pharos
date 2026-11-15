@@ -1,4 +1,5 @@
 import type { AggregationClause } from "@pythia-software/query-table-core";
+import { recordedCacheLookups, recordedCacheReads } from "./usage-estimate-model";
 import type { ChartSeries } from "./chart-series";
 
 // The Tokens and Cost summary's metrics, and the token types its trend
@@ -21,6 +22,9 @@ export const tokenSummaryMetrics: AggregationClause[] = [
   sum("cost_usd", "API cost"),
   sum("uncached_input_tokens", "Uncached input"),
   sum("cache_read_input_tokens", "Cache reads"),
+  // The hit rate reads recorded usage only; see usage-estimate-model.
+  { id: "recorded_cache_reads", op: "sum", expression: `SUM(${recordedCacheReads})`, groupBy: [], label: "Recorded cache reads" },
+  { id: "recorded_cache_lookups", op: "sum", expression: `SUM(${recordedCacheLookups})`, groupBy: [], label: "Recorded cached and uncached input" },
   sum("output_tokens", "Output tokens"),
   { id: "agent_sessions", op: "count_distinct", field: "agent_session_id", groupBy: [], label: "Agent sessions" },
 ];

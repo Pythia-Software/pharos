@@ -1,4 +1,5 @@
 import type { AggregationClause, SummaryColumn, WhereTerm } from "@pythia-software/query-table-core";
+import { cacheReadShareExpression } from "./usage-estimate-model";
 import type { QueryRecipe } from "./curiosity-data";
 
 const sum = (id: string, field: string, label: string): SummaryColumn => ({ id, op: "sum", field, label });
@@ -13,12 +14,12 @@ const input = sum("cc_input", "input_tokens", "All recorded input tokens");
 const reads = sum("cc_reads", "cache_read_input_tokens", "Cache-read input tokens");
 const fresh = sum("cc_fresh", "uncached_input_tokens", "Fresh input tokens");
 const writes = sum("cc_writes", "cache_creation_input_tokens", "Cache-write input tokens");
-const shareExpression = "SUM([cache_read_input_tokens])/NULLIF(SUM([input_tokens]),0)";
+const shareExpression = cacheReadShareExpression;
 const share = formula("cc_share", shareExpression, "Cache-read share of all input");
 const toolKeys = ["tool_name", "result_tokens_source"];
 const attribution = "Result tokens are attributed additions to context, not model output tokens. ‘Measured’ allocates the next request’s positive prompt growth across incoming content; ‘estimated’ uses retained result size. Neither is exact per-tool tokenization. Attribution sources remain separate. Zero or missing result sizes do not establish an empty original output.";
 const carriage = "Carriage is result_tokens × later recorded requests before compaction in the same stream. The window selects calls by start time; those later requests can fall outside it. These are recorded lifetime token-exposures for selected calls, not input consumed during the period, extra unique content, billed tokens, or cache savings.";
-const caching = "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens), weighted by tokens rather than averaging row percentages. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.";
+const caching = "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens) over recorded usage, weighted by tokens rather than averaging row percentages. Estimated usage is left out, because its cache division is assumed. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-record time placement, not exact request timestamps, unique text, saved money, or model quality.";
 
 function card(id: string, title: string, description: string, keys: string[], summaries: SummaryColumn[], unit: string, action: string, extra: Partial<QueryRecipe> = {}): QueryRecipe {
   return { id, title, description, category: "context", idea: "context-02", dataset: "tool_calls", field: "started_at", days: [7], unit, measures: [],

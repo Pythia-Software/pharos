@@ -158,14 +158,17 @@ test("human-words and human-repository-words-trend: typed words a day, and a 7-d
     const built = trendSeries(human, state, query, core.evaluateMetrics(cardRows.writing_messages, query.query, schemas.writing_messages, { now }).metrics, { now });
     assert.equal(built.error, undefined);
     assert.deepEqual(built.buckets.map(bucket => bucket.key), card.map(bucket => bucket.key), `${id}: the same days`);
-    // Series match by their raw values; the card's preview keys a missing
-    // repository "Unspecified", the dashboard "".
-    const labels = series => Object.fromEntries(series.map(item => [item.key, item.value === "Unspecified" ? "" : item.value ?? ""]));
+    // Series match by their values; the card's preview keys a missing
+    // repository "Unspecified", the dashboard "", and the card names a
+    // labelled value (Refined) that the dashboard keeps raw (refined).
+    const names = human.breakdowns[state.split]?.values ?? {};
+    const labels = series => Object.fromEntries(series.map(item => [item.key, item.value === "Unspecified" ? "" : names[item.value] ?? item.value ?? ""]));
     const named = (values, names) => Object.fromEntries(Object.entries(values).filter(([, value]) => value).map(([key, value]) => [names[key], round(value)]));
     // A single series is the total, whatever each names it.
     const single = series => series.length === 1 ? { [series[0].key]: "total" } : labels(series);
     card.forEach((bucket, index) => assert.deepEqual(named(built.buckets[index].values, single(built.series)), named(bucket.values, single(preview.series)), `${id} ${bucket.key}`));
     assert.ok(card.some(bucket => Object.values(bucket.values).some(value => value > 0)));
+    if (id === "human-words") assert.deepEqual(preview.series.map(item => item.value).sort(), ["Provisional", "Refined"], "the card splits refined from provisional estimates");
   }
 });
 
@@ -175,7 +178,9 @@ test("a message recorded on another Mac's day: the day trend files it as the car
   const where = withTimeRange([], human.time, undefined, undefined, "7d"), state = { metric: "typed", split: "none" };
   const query = trendQuery(human, state, where, { now, zone }), built = trendSeries(human, state, query, core.evaluateMetrics(cardRows.writing_messages, query.query, schemas.writing_messages, { now }).metrics, { now });
   const card = core.evaluateMetrics(cardRows.writing_messages, cardCoverQuery(instantiateRecipe(recipeById("human-words"), 7, new Date(now)).query, recipeById("human-words")).query, schemas.writing_messages, { now }).metrics[0];
-  const recorded = Object.fromEntries(card.buckets.map(bucket => [bucket.keys[0], bucket.value]));
+  // The card splits each day into refined and provisional estimates.
+  const recorded = {};
+  for (const bucket of card.buckets) recorded[bucket.keys[0]] = (recorded[bucket.keys[0]] ?? 0) + bucket.value;
   assert.equal(built.buckets.find(bucket => bucket.key === message.day).values.total, recorded[message.day], "the recorded day holds the message on both");
   const cycle = analysisQuery(human, { view: "cycle", cycle: "weekday", metric: "typed", split: "none" }, where, { now, zone });
   // The daily totals the weekday boxes summarise: its supporting query.

@@ -21,8 +21,8 @@ test("estimated output stays distinct from a measured lower bound", () => {
   assert.match(workspaceTotalText({...estimate, value: .021}, "usd"), /^\$.*\*$/);
   assert.equal(workspaceTotalText(metric(10200, "partial"), "tokens"), "10.2K+");
   assert.equal(workspaceTotalText({...estimate, value: null}, "usd"), workspaceTotalText(metric(null), "usd"));
-  assert.match(cellTitle(estimate, spec("tokens", "tokens")), /estimated output.*input and cache usage are unavailable/i);
-  assert.match(cellTitle(estimate, spec("cost", "usd")), /cost.*estimated output only/i);
+  assert.match(cellTitle(estimate, spec("tokens", "tokens")), /estimated usage.*hidden system prompts are not counted/i);
+  assert.match(cellTitle(estimate, spec("cost", "usd")), /cost.*is partial/i);
   assert.equal(metricText(metric(10200, "partial"), "tokens"), "10.2K+");
 });
 
@@ -220,8 +220,9 @@ test("saved Parallel activity routes use Timeline while retaining navigation and
 
 
 test("token observations distinguish minima, unallocated branches and missing prices",()=>{
-  assert.equal(metricText(metric(116837,"reported-minimum")),"≥116.8K");
-  assert.equal(tableMetricText(metric(116837,"reported-minimum")),"≥116.8K*");
+  assert.equal(metricText(metric(116837,"reported-minimum")),"≥116K");
+  assert.equal(metricText(metric(999999,"reported-minimum")),"≥999K","a lower bound never rounds up into the next unit");
+  assert.equal(tableMetricText(metric(116837,"reported-minimum")),"≥116K*");
   assert.equal(tableMetricText(metric(1000,"reported")),"1K");
   assert.equal(tableMetricText(metric(1000,"partial")),"1K+");
   assert.equal(tableMetricText(metric(null,"reported-minimum")),formatted(null));

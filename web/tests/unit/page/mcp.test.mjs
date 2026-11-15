@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMCPMonitor } from "../../../src/mcp-monitor";
 import { loadMCPCall, mcpDetailNumber } from "../../../src/mcp-call-details";
+import { formatTokens } from "../../../src/token-count";
 
 const status = { enabled: true, command: "pharos", args: ["mcp"], note: "Ready" };
 
@@ -120,4 +121,6 @@ test("unavailable MCP detail numbers remain unknown and recorded zeroes stay vis
   for (const value of [undefined, null, NaN, Infinity, "", {}, false]) assert.equal(mcpDetailNumber(value), "—");
   assert.equal(mcpDetailNumber(0), "0");
   assert.equal(mcpDetailNumber(7109), (7109).toLocaleString());
+  assert.equal(mcpDetailNumber(7109, formatTokens), "7.11K", "estimated output tokens use token precision");
+  assert.equal(mcpDetailNumber(null, formatTokens), "—");
 });

@@ -1,6 +1,7 @@
 import {  type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type DerivedTotals } from "./dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { projectLegacy } from "./project-analysis";
+import { tokenMetricFormat } from "./token-count";
 
 // Carbon over the usage ledger: one record is one agent session's usage of
 // one model and effort on one recorded day, as in Tokens and Cost. Its
@@ -43,12 +44,12 @@ export function deriveCarbon(assumptions: CarbonAssumptions | undefined, totals:
   }));
 }
 
-const grams = { kind: "number", decimals: 1 } as const, tokens = { kind: "number", decimals: 0 } as const;
+const grams = { kind: "number", decimals: 1 } as const;
 const assumptionsNote = "Estimated with your Carbon Impact assumptions (estimate range, facility overhead, grid and input sensitivity); token counts are reported, energy and CO₂e are modeled. Models are assigned to size tiers by name; unmatched models use the default tier.";
 const measures: Record<string, AnalysisMeasure> = {
   co2: { label: "Estimated CO₂e (g)", unit: "g CO₂e", format: grams, op: "sum", field: "co2e_g", value: "co2e_g", additive: true, note: assumptionsNote },
   energy: { label: "Estimated electricity (Wh)", unit: "Wh", format: grams, op: "sum", field: "energy_wh", value: "energy_wh", additive: true, note: `Facility electricity: IT energy times facility overhead (PUE). ${assumptionsNote}` },
-  tokens: { label: "Tokens", unit: "tokens", format: tokens, op: "sum", field: "total_tokens", value: "total_tokens", additive: true, note: "Reported tokens behind the estimates, including cached input and reported reasoning output." },
+  tokens: { label: "Tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "total_tokens", value: "total_tokens", additive: true, note: "Reported tokens behind the estimates, including cached input and reported reasoning output." },
 };
 
 // The old chart's model tier split.
