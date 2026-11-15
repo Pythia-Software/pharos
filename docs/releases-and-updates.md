@@ -155,8 +155,10 @@ Macs. Source paths are disabled until you opt in. More libraries can be created,
 opened or switched in **Settings → Libraries** (see
 [Libraries and application setup](library-management.md)).
 
-To update, quit Pharos, drag `Pharos.app` from the image onto Applications,
-choose **Replace**, then open the new app and approve macOS access prompts.
+To update, choose **Pharos → Check for Updates…** (see [In-app updates](#in-app-updates)).
+To replace the app by hand instead, quit Pharos, drag `Pharos.app` from the image
+onto Applications, choose **Replace**, then open the new app and approve macOS
+access prompts.
 Libraries, including those on drives, are separate folders, so an app update
 never touches them. If macOS blocks an ad hoc signed build, use **System
 Settings → Privacy & Security → Open Anyway** after trying to open it.

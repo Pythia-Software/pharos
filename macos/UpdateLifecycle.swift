@@ -67,7 +67,7 @@ final class AppUpdateLock {
             do { modified = try pendingURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? now }
             catch where (error as? CocoaError)?.code == .fileReadNoSuchFile { return }
             if now.timeIntervalSince(modified) < 300 {
-                throw UpdateFailure(message: "Pharos's last update was interrupted. Reopen Pharos in five minutes to recover.")
+                throw UpdateFailure(message: "The last Pharos update was interrupted. Reopen Pharos in five minutes to recover.")
             }
         }
         try openLock()
@@ -77,7 +77,7 @@ final class AppUpdateLock {
             // acquiring its shared lease. Its live connection need not block
             // the new GUI from opening the same, already replaced bundle.
             if !FileManager.default.fileExists(atPath: pendingURL.path) { return }
-            throw UpdateFailure(message: "Another Pharos process is still using this app. Quit its Pharos connection and reopen the app.")
+            throw UpdateFailure(message: "A Pharos command from this copy, such as an agent’s MCP server, is still running. Stop it, then reopen Pharos.")
         }
         if FileManager.default.fileExists(atPath: pendingURL.path) {
             try FileManager.default.removeItem(at: pendingURL)
@@ -136,7 +136,7 @@ final class AppUpdateLock {
         try FileManager.default.createDirectory(at: base.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                attributes: [.posixPermissions: 0o700])
         descriptor = open(base.appendingPathExtension("lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
-        guard descriptor >= 0 else { throw UpdateFailure(message: "Could not open Pharos's update lock: \(String(cString: strerror(errno))).") }
+        guard descriptor >= 0 else { throw UpdateFailure(message: "Could not open the Pharos update lock: \(String(cString: strerror(errno))).") }
     }
 }
 
@@ -166,7 +166,7 @@ enum UpdateProcesses {
                let flag = argv.firstIndex(of: "--application"), flag + 1 < argv.count,
                canonicalPath(URL(fileURLWithPath: argv[flag + 1])) == canonicalPath(app) { continue }
             guard process.path == cli, let argv = arguments(process.pid), ["mcp", "mcp-app"].contains(DriveProcesses.command(in: argv) ?? "") else {
-                throw UpdateFailure(message: "Another Pharos command or app is running from this copy (PID \(process.pid)). Let it finish before installing the update.")
+                throw UpdateFailure(message: "Another Pharos command or app is running from this copy (PID \(process.pid)). Let it finish, then install the update.")
             }
             mcp.append(process.pid)
         }
@@ -174,7 +174,7 @@ enum UpdateProcesses {
         mcp.forEach(signal)
         let watched = Set(candidates.map(\.pid))
         guard wait({ !processes().contains { watched.contains($0.pid) && ($0.path == cli || $0.path == wrapper) } }) else {
-            throw UpdateFailure(message: "Pharos is still finishing work. The update has been deferred; try again after its processes stop. Agent clients may need to reconnect.")
+            throw UpdateFailure(message: "Pharos stopped its library service and agent connections, but some of its processes did not exit within 10 seconds, so the update was not installed. Agent clients may need to reconnect.")
         }
     }
 }

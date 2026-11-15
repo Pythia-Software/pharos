@@ -236,7 +236,7 @@ func updateRefusal(v ejectVerdict) string {
 			labels = append(labels, blocker.Label)
 		}
 	}
-	return "The update waits for " + lowerFirst(joinLabels(labels)) + ", which cannot stop in time."
+	return "Pharos is running work that cannot stop in time: " + lowerFirst(joinLabels(labels)) + ". Install the update when it has finished."
 }
 
 // leaseLabel names a lease's work for people: "Capture (Terminal), in

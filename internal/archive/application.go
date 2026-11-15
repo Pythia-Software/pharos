@@ -481,7 +481,7 @@ func (m *applicationManager) updateRefusal(ctx context.Context) string {
 // it (GET /api/release?for=update). A service that cannot say refuses.
 func libraryUpdateRefusal(ctx context.Context, client *http.Client, library brokerLibrary) string {
 	unanswered := func(err error) string {
-		return fmt.Sprintf("The update waits for %s, whose service did not say whether it can stop (%v).", library.Name, err)
+		return fmt.Sprintf("The service of the library %s did not say whether its work can stop (%v).", library.Name, err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, library.Child.URL+"/api/release?for=update", nil)
 	if err != nil {
@@ -582,7 +582,7 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !m.operationMu.TryLock() {
-			writeError(w, fmt.Errorf("a library operation is still running"), 503)
+			writeError(w, fmt.Errorf("A library operation is still running."), 503)
 			return
 		}
 		defer m.operationMu.Unlock()
@@ -602,7 +602,7 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		m.mu.Unlock()
 		if remaining > 0 {
-			writeError(w, fmt.Errorf("libraries are still closing"), 503)
+			writeError(w, fmt.Errorf("Libraries are still closing."), 503)
 			return
 		}
 		writeJSON(w, map[string]any{"released": true}, 200)

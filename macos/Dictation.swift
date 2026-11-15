@@ -16,7 +16,7 @@ struct DictationFailure: LocalizedError {
 
 enum DictationSupport {
     static let unsupportedSystem = "Dictation in Pharos needs macOS 26 or later."
-    static let microphoneDenied = "Pharos does not have microphone access. Turn on Pharos in System Settings › Privacy & Security › Microphone, then try again."
+    static let microphoneDenied = "Pharos does not have microphone access. Turn on Pharos in System Settings → Privacy & Security → Microphone, then try again."
 
     /// Whether this Mac can offer the microphone button at all. Permission is
     /// not part of this: a denied microphone is reported when dictation starts,
@@ -189,7 +189,7 @@ final class MicrophoneDictation: DictationRecording {
         let node = engine.inputNode
         let format = node.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
-            throw DictationFailure("No microphone is available. Connect one or choose an input in System Settings › Sound.")
+            throw DictationFailure("No microphone is available. Connect one or choose an input in System Settings → Sound.")
         }
         node.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in transcription.feed(buffer) }
         tapped = true
