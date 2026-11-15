@@ -22,7 +22,7 @@ const MENU_BAR_TOOLS = [
   {id: 'finder', label: 'Show library in Finder', on: true, group: 'manage', description: 'Reveal the connected library folder in Finder.'},
   {id: 'logs', label: 'Logs & crash reports', on: true, group: 'manage', description: 'Open recent page errors, slow requests, service output and crash reports, marking the ones to read first.'},
   {id: 'settings', label: 'Settings…', required: true, group: 'settings'},
-  {id: 'eject', label: 'Eject library…', on: true, group: 'quit', description: 'Safely eject the library. Appears when its drive is ejectable.'},
+  {id: 'eject', label: 'Eject library', on: true, group: 'quit', description: 'Safely eject the library. Appears when its drive is ejectable.'},
   {id: 'quit', label: 'Quit Pharos', required: true, group: 'quit'},
 ];
 const MENU_BAR_SEPARATOR = {id: 'separator', label: 'Separator', separator: true, group: 'separator',
@@ -120,7 +120,7 @@ function editMenuBarSettings(saved, id, destination) {
       case 'agent_streak': return metric('Agent streak', usage?.streaks?.agents);
       case 'backup': return metric('Last backup', snapshot && (ago(snapshot.backup_at) ?? 'Never'));
       case 'space': return metric('Library size', bytes(storage?.sizes?.library_bytes));
-      case 'eject': return [`Eject ${drive?.name ?? 'library'}…`];
+      case 'eject': return [`Eject ${drive?.name ?? 'library'}`];
       default: return [definition(id).label];
     }
   }
