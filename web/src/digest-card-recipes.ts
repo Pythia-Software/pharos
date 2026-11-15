@@ -15,11 +15,11 @@ const sum = (id: string, field: string, label: string): SummaryColumn => ({ id, 
 const row = (id: string, field: string, label: string): SummaryColumn => ({ id, op: "row", field, label });
 const equal = (field: string, value: string): WhereClause => ({ field, op: "=", value });
 
-// ----- Fixes: one row per fix, ranked by the work items it came up in -------
+// ----- Fixes: one row per fix, ranked by the workspaces it came up in -------
 
-const workItems = sum("dg_work_items", "work_items", "Work items");
+const workItems = sum("dg_work_items", "work_items", "Workspaces");
 const fixRows = (subjects: string, action: string): CardExploration => ({
-  keys: ["id"], valueField: workItems.id, unit: "work items", subjects, action, labelFields: ["dg_title"],
+  keys: ["id"], valueField: workItems.id, unit: "workspaces", subjects, action, labelFields: ["dg_title"],
   summaries: [workItems, row("dg_title", "title", "Problem"), sum("dg_events", "events", "Events"), sum("dg_conversations", "conversations", "Conversations"), row("dg_first_seen", "first_seen", "First seen"), row("dg_last_seen", "last_seen", "Last seen")],
   context: [{ field: "dg_events", label: "events" }, { field: "dg_conversations", label: "conversations" }],
   // One fix per group; its row columns read that fix.
@@ -27,8 +27,8 @@ const fixRows = (subjects: string, action: string): CardExploration => ({
 });
 // What Open lists: open fixes your Fixes settings do not hide.
 const openFixes = [equal("state", "open"), equal("shown", "shown")];
-const fixes = { category: "digest" as const, dataset: "fixes" as const, unit: "work items", measures: [] };
-const fixesNote = "Fixes record days, not times, so a problem counts from the start of the local day it was seen. Open fixes only, as Open lists them: fixes your Fixes settings hide (seen in too few work items, quiet too long, or covered by guidance) are left out. A work item is a task the source recorded, so one long task counts once however many conversations it took.";
+const fixes = { category: "digest" as const, dataset: "fixes" as const, unit: "workspaces", measures: [] };
+const fixesNote = "Fixes record days, not times, so a problem counts from the start of the local day it was seen. Open fixes only, as Open lists them: fixes your Fixes settings hide (seen in too few workspaces, quiet too long, or covered by guidance) are left out. A workspace counts once however many conversations it held.";
 const fixCover = (metricId: string) => ({ mode: "result" as const, metricId, kind: "bar-horizontal" as const, maxGroups: 5, showOther: false });
 
 // ----- Risky actions: safeguard notices --------------------------------------
@@ -38,7 +38,7 @@ const notices = sum("dg_notices", "review_count", "Notices");
 
 export const digestCardRecipes: QueryRecipe[] = [
   { ...fixes, id: "digest-new-fixes", idea: "learning-07", field: "first_seen_at", days: [7, 30], title: "New problems to fix",
-    description: "Open Fixes first seen in the last {days} days, by the work items they came up in.", where: openFixes,
+    description: "Open Fixes first seen in the last {days} days, by the workspaces they came up in.", where: openFixes,
     exploration: fixRows("new problems", "Review new problems"), cover: fixCover(workItems.id), action: "Review new problems",
     emptyLabel: "No new problems to fix: agents reported nothing new that Fixes lists.",
     note: `Each is a problem agents reported for the first time in this window, such as an environment step that failed or a doc that was out of date; open one for what agents said and the change that would prevent it. ${fixesNote}` },
@@ -46,11 +46,11 @@ export const digestCardRecipes: QueryRecipe[] = [
   // in the where, so this card keeps one window: a relative date in a where
   // is fixed, while the card's window control moves only the rolling range.
   { ...fixes, id: "digest-returning-fixes", idea: "conversation-05", field: "last_seen_at", days: [7], title: "Problems that keep coming back",
-    description: "Open Fixes agents reported again in the last {days} days that were first seen before them, by the work items they came up in.",
+    description: "Open Fixes agents reported again in the last {days} days that were first seen more than 7 days ago, by the workspaces they came up in.",
     where: [...openFixes, { field: "first_seen_at", op: "<", value: "-7d" }],
     exploration: fixRows("returning problems", "Review returning problems"), cover: fixCover(workItems.id), action: "Review returning problems",
     emptyLabel: "No older problems came back: agents reported none of them again.",
-    note: `A problem that comes back has outlasted the work that met it: a change to docs, checks, environment or tools would stop it for every agent. Work items counts every work item it came up in, not only this week's. ${fixesNote}` },
+    note: `A problem that comes back has outlasted the work that met it: a change to docs, checks, environment or tools would stop it for every agent. Workspaces counts every workspace it came up in, not only this week’s. ${fixesNote}` },
   { id: "digest-safeguards", category: "digest", idea: "verification-06", dataset: "safety", field: "last_seen_at", days: [7, 30], unit: "notices", title: "Safeguards agents got around",
     description: "Risky actions notices from the last {days} days where an agent weakened a test or check, or got around a restriction, gate or instruction, by kind.",
     where: [{ any: safeguardRules.map(rule => equal("rule", rule)) }], measures: [],

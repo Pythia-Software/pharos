@@ -38,48 +38,48 @@ const machineRecipes: QueryRecipe[] = [
     exploration: compare(["operation_name", "activity"], [machineTime, machineCalls, perTimedCall], "ms", "operations", "Inspect slow operations", { labelFields: ["operation_name"], context: machineContext }),
     cover: { mode: "result", metricId: "mt_time", kind: "bar-horizontal", maxGroups: 6, showOther: false } }),
   machine({ id: "machine-call-trend", title: "Tool calls per day", description: "Daily tool calls averaged over each trailing seven complete days, across the last 30 days.", days: [30], unit: "calls", action: "Explore daily tool calls",
-    note: "Counts every recorded tool call, including errors and calls without a duration, by its local start day. Each point divides seven days' calls by seven, including idle days; today is excluded until it is complete.",
+    note: "Counts every recorded tool call, including errors and calls without a duration, by its local start day. Each point divides seven days’ calls by seven, including idle days; today is excluded until it is complete.",
     measures: [daily("mt_daily_calls", "count", "", "Tool calls per day")], cover: trendCover("mt_daily_calls"),
-    trend: { dataset: "tools", value: { op: "sum", field: "call_count" }, count: { op: "sum", field: "call_count" }, perDay: true, lookback: 7, completeDays: true, valueLabel: "calls a day · 7-day average", pointValueLabel: "calls a day", trendLabel: "7d avg", sample: "calls",
-      detail: "Each point: tool calls in its trailing seven complete local days ÷ 7. The norm is the mean of the prior 30 endpoints." } }),
+    trend: { dataset: "tools", value: { op: "sum", field: "call_count" }, count: { op: "sum", field: "call_count" }, perDay: true, lookback: 7, completeDays: true, valueLabel: "calls a day · 7-day average", pointValueLabel: "calls a day", trendLabel: "7-day average", sample: "calls",
+      detail: "Each point: tool calls in its trailing seven complete local days ÷ 7. The reference is the mean of the previous 30 points." } }),
   machine({ id: "machine-latency-trend", title: "Average tool call time", description: "Mean recorded duration per tool call over each trailing seven complete days, across the last 30 days.", days: [30], action: "Inspect daily call times",
     note: "Total recorded duration ÷ calls with a recorded duration, pooled over each seven-day window (not an average of daily averages). Long-running calls such as waits and watches pull the mean up; Longest-running operations names them. Windows without timed calls are gaps.",
     measures: [daily("mt_daily_mean", "avg", "duration_ms", "Mean recorded call time by day")], cover: trendCover("mt_daily_mean"),
-    trend: { dataset: "tools", value: { op: "sum", field: "total_duration_ms" }, per: { op: "sum", field: "timed_count" }, count: { op: "sum", field: "timed_count" }, scale: 1 / 1000, lookback: 7, completeDays: true, valueLabel: "seconds per call · 7-day mean", pointValueLabel: "seconds per timed call", trendLabel: "7d mean", sample: "timed calls",
-      detail: "Each point: recorded duration ÷ timed calls over its trailing seven complete local days. The norm is the mean of the prior 30 endpoints." } }),
+    trend: { dataset: "tools", value: { op: "sum", field: "total_duration_ms" }, per: { op: "sum", field: "timed_count" }, count: { op: "sum", field: "timed_count" }, scale: 1 / 1000, lookback: 7, completeDays: true, valueLabel: "seconds per call · 7-day mean", pointValueLabel: "seconds per timed call", trendLabel: "7-day mean", sample: "timed calls",
+      detail: "Each point: recorded duration ÷ timed calls over its trailing seven complete local days. The reference is the mean of the previous 30 points." } }),
 ];
 
 // ----- Parallel agents (parallelism) -----------------------------------------
 
-const parallelNote = "Counts workspaces or top-level conversations (your Parallelism counting setting) with an active conversation: observed prompt-to-response turns joined across gaps up to your Parallelism gap setting. Linked sub-agent activity stays with its initiating conversation. Timing is estimated from transcript timestamps.";
+const parallelNote = "Counts workspaces or top-level conversations (Parallelism → Count by) with an active conversation: observed prompt-to-response turns joined across gaps up to the Parallelism → Turn gap setting. Linked sub-agent activity stays with its initiating conversation. Timing is estimated from transcript timestamps.";
 const parallel = (recipe: Omit<QueryRecipe, "category" | "idea" | "dataset" | "field" | "unit"> & Partial<QueryRecipe>): QueryRecipe => ({ category: "machines", idea: "rhythm-03", dataset: "parallelism", field: "started_at", unit: "hours", note: parallelNote, ...recipe });
 
 const parallelRecipes: QueryRecipe[] = [
-  parallel({ id: "parallel-days", title: "Parallel hours by day", description: "Hours with one, two, three, or four or more agents active, for each day of the last {days} days.", days: [7, 30], action: "See each day's timeline",
-    note: `${parallelNote} Each hour of wall time is counted once, at the number of agents active then. The headline is the share of those hours with two or more agents active.`,
-    measures: [{ ...daily("pl_daily", "sum", "elapsed_hours", "Active hours by agents at once"), groupBy: ["day", "level_band"] }],
+  parallel({ id: "parallel-days", title: "Parallel hours by day", description: "Hours with one, two, three, or four or more workspaces or conversations active at once, for each day of the last {days} days.", days: [7, 30], action: "See each day’s timeline",
+    note: `${parallelNote} Each hour of wall time is counted once, at the number of workspaces or conversations active then. The headline is the share of those hours with two or more active.`,
+    measures: [{ ...daily("pl_daily", "sum", "elapsed_hours", "Active hours by number active at once"), groupBy: ["day", "level_band"] }],
     cover: { mode: "source", metricId: "pl_daily", kind: "auto", maxGroups: 4, showOther: false, showLegend: true, height: 228 } }),
-  parallel({ id: "parallel-trend", title: "Agents at once", description: "Average number of agents running together while any is active, over each trailing seven days.", days: [30], unit: "agents", action: "Open the parallelism view",
-    note: `${parallelNote} Each point weights concurrency by time: agent-hours ÷ hours with any agent active.`,
-    measures: [daily("pl_daily_concurrency", "sum", "unit_ms", "Agents at once while active", { expression: "SUM([unit_ms])/NULLIF(SUM([elapsed_ms]),0)" })], cover: trendCover("pl_daily_concurrency"),
-    trend: { value: { op: "sum", field: "unit_ms" }, per: { op: "sum", field: "elapsed_ms" }, lookback: 7, completeDays: true, valueLabel: "agents at once while active · 7-day average", pointValueLabel: "agents at once", trendLabel: "7d avg", sample: "agent-hour records",
+  parallel({ id: "parallel-trend", title: "Running at once", description: "Average number of workspaces or conversations active at once while any is active, over each trailing seven days.", days: [30], unit: "at once", action: "Open the parallelism view",
+    note: `${parallelNote} Each point weights concurrency by time: summed active hours ÷ hours with any active.`,
+    measures: [daily("pl_daily_concurrency", "sum", "unit_ms", "Active at once while any is active", { expression: "SUM([unit_ms])/NULLIF(SUM([elapsed_ms]),0)" })], cover: trendCover("pl_daily_concurrency"),
+    trend: { value: { op: "sum", field: "unit_ms" }, per: { op: "sum", field: "elapsed_ms" }, lookback: 7, completeDays: true, valueLabel: "active at once while any is active · 7-day average", pointValueLabel: "active at once", trendLabel: "7-day average", sample: "hourly activity records",
       detail: "Each point: summed workspace or conversation time ÷ clock time with any active, over its trailing seven complete local days. Windows with no activity are gaps." } }),
   // Summed active hours, not an average: a per-day average would bake the lookback
   // into the formula, and a collected card's window can change later.
-  parallel({ id: "parallel-hours", title: "When agents overlap", description: "Summed active hours at each hour of the day over the last {days} days, counting parallel agents separately.", days: [7, 30], action: "Find your parallel hours",
-    note: `${parallelNote} Taller hours had more agents running at once, more often. Hours with no activity are omitted.`,
+  parallel({ id: "parallel-hours", title: "When activity overlaps", description: "Summed active hours at each hour of the day over the last {days} days, counting each workspace or conversation separately.", days: [7, 30], action: "Find your parallel hours",
+    note: `${parallelNote} Taller hours had more workspaces or conversations active at once, more often. Hours with no activity are omitted.`,
     measures: [{ id: "pl_hours", op: "sum", field: "unit_hours", groupBy: ["hour_of_day"], groupLimit: 24, sort: [{ key: "group0", dir: "asc" }], label: "Summed active hours by local hour",
       display: { kind: "bar-vertical", xLabel: "Local hour", yLabel: "Summed active hours", format: { kind: "number", decimals: 1 } } }],
     cover: { mode: "source", metricId: "pl_hours", kind: "bar-vertical", maxGroups: 24, height: 170 } }),
-  parallel({ id: "parallel-repositories", title: "Summed active hours by project", description: "Active agent hours per project over the last {days} days, counting parallel agents separately.", days: [7, 30], action: "Compare projects", measures: [],
-    exploration: compare(["project_name"], [sum("pl_agent_hours", "unit_hours", "Summed active hours"), sum("pl_elapsed", "repo_elapsed_hours", "Hours with any active"), { id: "pl_together", op: "formula", expression: "SUM([unit_hours])/NULLIF(SUM([repo_elapsed_hours]),0)", label: "At once while active" }, { id: "pl_units", op: "count_distinct", field: "unit_id", label: "Agents" }],
-      "hours", "projects", "Compare projects", { context: [{ field: "pl_elapsed", label: "h with any active" }, { field: "pl_units", label: "agents" }] }),
+  parallel({ id: "parallel-repositories", title: "Summed active hours by project", description: "Summed active hours per project over the last {days} days, counting each workspace or conversation separately.", days: [7, 30], action: "Compare projects", measures: [],
+    exploration: compare(["project_name"], [sum("pl_agent_hours", "unit_hours", "Summed active hours"), sum("pl_elapsed", "repo_elapsed_hours", "Hours with any active"), { id: "pl_together", op: "formula", expression: "SUM([unit_hours])/NULLIF(SUM([repo_elapsed_hours]),0)", label: "At once while active" }, { id: "pl_units", op: "count_distinct", field: "unit_id", label: "Workspaces or conversations" }],
+      "hours", "projects", "Compare projects", { context: [{ field: "pl_elapsed", label: "h with any active" }, { field: "pl_units", label: "workspaces or conversations" }] }),
     cover: { mode: "result", metricId: "pl_agent_hours", kind: "bar-horizontal", maxGroups: 6, showOther: true } }),
 ];
 
 // ----- Carbon (usage) --------------------------------------------------------
 
-const carbonNote = "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier.";
+const carbonNote = "Uses your Carbon Impact settings: energy scenario, facility overhead (PUE), electricity grid and input sensitivity. Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; models with no matching tier use the default tier.";
 const carbonWhere = [positive("total_tokens")];
 const co2 = sum("cb_co2", "co2e_kg", "Estimated CO₂e (kg)"), energy = sum("cb_energy", "energy_kwh", "Estimated energy (kWh)"), tokens = sum("cb_tokens", "total_tokens", "Recorded tokens");
 const carbonContext = [{ field: "cb_tokens", label: "tokens" }, { field: "cb_energy", label: "kWh" }];
@@ -93,8 +93,8 @@ const carbonRecipes: QueryRecipe[] = [
   { id: "carbon-trend", title: "Estimated CO₂e", description: "Modeled emissions from recorded tokens over each trailing {days}-day period, across the last 30 days.", category: "carbon", idea: "cost-01", dataset: "usage", field: "first_usage_at", days: [7, 30], unit: "kg CO₂e",
     where: carbonWhere, action: "Explore carbon impact", note: `${carbonNote} Daily endpoints use local calendar days, so the latest point includes today so far.`,
     measures: [daily("cb_daily", "sum", "co2e_kg", "Estimated CO₂e by day (kg)")], cover: trendCover("cb_daily"),
-    trend: { value: { op: "sum", field: "co2e_kg" }, valueLabel: "kg CO₂e · past {days} days", pointValueLabel: "kg CO₂e", sample: "usage records",
-      detail: "Each point: estimated CO₂e over its trailing {days} local days, including today so far. The norm is the mean of the prior 30 endpoints." } },
+    trend: { value: { op: "sum", field: "co2e_kg" }, valueLabel: "kg CO₂e · last {days} days", pointValueLabel: "kg CO₂e", sample: "usage records",
+      detail: "Each point: estimated CO₂e over its trailing {days} local days, including today so far. The reference is the mean of the previous 30 points." } },
   carbon("carbon-tiers", "CO₂e by model size", "Share of estimated emissions from small, mid-size and large models over the last {days} days.", ["carbon_tier"], "Compare model tiers", true, { cover: { mode: "result", metricId: co2.id, kind: "pie", maxGroups: 3, showOther: false, showLegend: true, legendColumns: 2, height: 230 } }),
   carbon("carbon-repositories", "CO₂e by project", "Projects with the largest estimated emissions from recorded tokens over the last {days} days.", ["project_name"], "Compare projects", false),
   carbon("carbon-models", "CO₂e by model", "Models with the largest estimated emissions from recorded tokens over the last {days} days.", ["model_family"], "Compare models", false),
@@ -105,8 +105,8 @@ const carbonRecipes: QueryRecipe[] = [
 
 // ----- Findings and pricing (current state) ----------------------------------
 
-const likely = sum("fd_likely", "likely_usd", "Likely saving / month (USD)");
-const findingsNote = "Likely saving = what the pattern cost × the share a change can remove × how often a change takes × how often the pattern persists untreated. Monthly estimates in USD from the latest Findings analysis.";
+const likely = sum("fd_likely", "likely_usd", "Likely saving per 28 days (USD)");
+const findingsNote = "Likely saving = what the pattern cost × the share a change can remove × how often a change takes × how often the pattern persists untreated. Estimates per 28 days, in USD, from the latest Findings analysis.";
 const finding = (recipe: Omit<QueryRecipe, "category" | "idea" | "dataset" | "field" | "unit" | "period"> & Partial<QueryRecipe>): QueryRecipe => ({ category: "findings", idea: "learning-03", dataset: "findings", field: "first_seen_at", unit: "USD", period: "current", note: findingsNote, ...recipe });
 const openFindings = [equal("state", "open"), positive("likely_usd")];
 
@@ -116,18 +116,18 @@ const findingRecipes: QueryRecipe[] = [
       { labelFields: ["fd_title"], representative: { orderBy: [{ field: "first_seen_at", dir: "desc", nulls: "last" }] }, context: [{ field: "fd_at_stake", label: "at stake", unit: "USD" }] }),
     cover: { mode: "result", metricId: likely.id, kind: "bar-horizontal", maxGroups: 3, showOther: false } }),
   finding({ id: "findings-fixes", title: "Savings by kind of fix", description: "Likely monthly savings across open findings, by where the suggested change is made.", action: "Compare kinds of fix", where: openFindings, measures: [],
-    note: `${findingsNote} Each open finding counts once, under the kind of change its prompt makes: repository instructions, repository tools and skills, harness settings, automation prompts or your global instructions.`,
+    note: `${findingsNote} Each open finding counts once, under the kind of change its prompt makes: repository instructions, repository tools and skills, agent app settings, automation prompts or your global instructions.`,
     exploration: share(compare(["lever_label"], [likely, count("fd_count", "Open findings")], "USD", "kinds of fix", "Compare kinds of fix", { context: [{ field: "fd_count", label: "open findings" }] }), "Likely saving by kind of fix"),
     cover: { mode: "result", metricId: likely.id, kind: "pie", maxGroups: 5, showOther: true, showLegend: true, height: 300 } }),
   finding({ id: "findings-results", title: "Net savings from findings", description: "What copied finding prompts have saved after their added context cost, across verified results.", action: "See your wins", emptyLabel: "No verified results yet",
-    note: "Copying a prompt starts its measurement. Savings come from each finding's fixed before/after plan, net of the added context cost.", where: [positive("wins")],
+    note: "Copying a prompt starts its measurement. Savings come from each finding’s fixed before/after plan, net of the added context cost.", where: [positive("wins")],
     measures: [{ id: "fd_net", op: "sum", field: "saved_net_usd", groupBy: [], label: "Saved, net of added context (USD)" }, { id: "fd_saved", op: "sum", field: "saved_usd", groupBy: [], label: "Saved before added context (USD)" }],
     cover: { mode: "source", metricId: "fd_net", kind: "value", height: 170 } }),
 ];
 
 const pricingRecipes: QueryRecipe[] = [
   { id: "models-needing-prices", title: "Models needing prices", description: "Models whose tokens are unpriced or priced by assumption, by all-time recorded token volume.", category: "cost", idea: "cost-01", dataset: "usage", field: "first_usage_at", unit: "tokens", period: "all", action: "Review model pricing",
-    note: "All-time token volume. Assumed models borrow a sibling model's price; unpriced models have no retained price on their usage day. Placeholder model names are excluded.",
+    note: "All-time token volume. Assumed models use a related model’s price; unpriced models have no retained price on their usage day. Placeholder model names are excluded.",
     where: [positive("total_tokens"), { any: [equal("price_status", "unpriced"), equal("price_status", "assumed")] }, { field: "model", op: "!=", value: "Unknown model" }, { field: "model", op: "starts_with", value: "<", negated: true }], measures: [],
     exploration: compare(["model", "price_status"], [sum("pr_tokens", "total_tokens", "Recorded tokens"), { id: "pr_last", op: "max", field: "day", label: "Last used" }, { id: "pr_providers", op: "count_distinct", field: "provider", label: "Providers" }], "tokens", "models", "Review model pricing"),
     cover: { mode: "result", metricId: "pr_tokens", kind: "bar-horizontal", maxGroups: 5, showOther: false } },

@@ -22,6 +22,16 @@ export function QueryChip({ title, description, active, onClick }: { title: stri
   return <button type="button" className="query-chip" title={description} aria-pressed={active} onClick={onClick}><Icon name="compass" /><span>{title}</span><Icon name="arrow-right" /></button>;
 }
 
+// The window chip's hover says what kind of window its label names.
+export function windowChipTitle(label: string): string | undefined {
+  if (label === "Saved" || label === "Saved range") return "The date range saved with this card";
+  if (label === "All time") return "All recorded history";
+  if (label === "Now") return "Current state; not limited to a date range";
+  if (label === "Today") return "Since local midnight, through now";
+  if (/^(Last|Past) /.test(label)) return "Rolling window, measured back from now each time the card runs";
+  return undefined;
+}
+
 // Daily covers chart durations in hours (see previewOf) and carbon in kilograms.
 const columnUnit = (field = "") => field.includes("cost") ? "USD" : field.includes("words") ? "words" : field === "duration_ms" || field.endsWith("_hours") ? "h" : field === "co2e_kg" ? "kg" : field === "call_count" ? "calls" : "tokens";
 // Homepage and collected cards share the same compact presentation.
@@ -92,7 +102,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
           {(Object.keys(queryCategories) as QueryCategory[]).map(key => <option key={key} value={key}>{queryCategories[key].label}</option>)}
         </select> : <span className="query-category">{style.label}</span>}{preview?.refreshError ? <span className="query-preview-refresh is-error" role="status" aria-label="Showing saved preview; refresh failed"
           title={`Could not refresh: ${preview.refreshError}${preview.updatedAt ? `. Last updated ${new Date(preview.updatedAt).toLocaleString()}` : ""}`}><Icon name="severity-high" /></span> : savedLabel ? <span className="query-preview-saved" role="status" aria-label={savedLabel} title={savedLabel}>Saved</span> : preview?.refreshing ? <span className="query-preview-refresh is-refreshing" role="status"
-          aria-label="Refreshing preview" title={`Refreshing${preview.updatedAt ? `. Last updated ${new Date(preview.updatedAt).toLocaleString()}` : ""}`}><Icon name="refresh" /></span> : null}<span className="query-window" title={windowLabel === "Saved" ? "The time range saved with this query" : "Rolling lookback; evaluated when the query runs"}>{windowLabel}</span></span>
+          aria-label="Refreshing preview" title={`Refreshing${preview.updatedAt ? `. Last updated ${new Date(preview.updatedAt).toLocaleString()}` : ""}`}><Icon name="refresh" /></span> : null}<span className="query-window" title={windowChipTitle(windowLabel)}>{windowLabel}</span></span>
         {error ? <span className="query-preview-unavailable" role="status">
           <svg className="query-unavailable-symbol" viewBox="0 0 56 56" aria-hidden="true" focusable="false">
             {["  ###  ", " #   # ", "#     #", "#     #", "#     #", " #   # ", "  ###  "].flatMap((row, y) => [...row].flatMap((cell, x) => cell === "#" ? [<rect key={`${x}:${y}`} x={x * 8 + 1} y={y * 8 + 1} width="6" height="6" rx="1" />] : []))}
@@ -105,7 +115,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
           }}><Icon name="refresh" />Reload preview</button> : null}
         </span> : preview?.state === "ready" ? <>
           <CardVisualization preview={preview} />
-        </> : preview ? <span className="query-preview-status">{preview.emptyLabel ?? "No recent matches"}</span> : <CardLoading spec={loadingSpec} />}
+        </> : preview ? <span className="query-preview-status">{preview.emptyLabel ?? "No matches"}</span> : <CardLoading spec={loadingSpec} />}
       </span></ChartTooltip>;
   const caption = <span className="query-caption">{editing ? <>
           <input className="query-title" aria-label="Title" placeholder="Name this card" required maxLength={200} value={title} onChange={event => editing.onTitle(event.target.value)} />
@@ -122,7 +132,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
     {editing ? null : error ? <div className="query-card-unavailable">{cover}<a className="query-card-open" {...linkProps}>{caption}</a></div>
       : <a className="query-card-open" {...linkProps}>{cover}{caption}</a>}
     {editing ? null : xray ? onReveal ? <button type="button" className="query-xray-open" aria-label={`Bring ${title} into view`} title="Bring into view" onClick={onReveal} /> : null : <>
-      <span className="query-card-tools">{!discovery && onReload ? <button type="button" aria-label={`Refresh ${title}`} title="Refresh this card" onClick={onReload}><Icon name="refresh" /></button> : null}<DataReadinessIndicator id={`card:${id}`} title={title} dataset={readiness.dataset} query={readiness.query} empty={preview?.state==="empty"} updatedAt={preview?.updatedAt} refreshing={preview?.refreshing} refreshError={preview?.refreshError} className="query-card-readiness" />{!discovery ? <><button type="button" aria-label={`Edit ${title}`} title="Edit saved view" onClick={onEdit}><Icon name="edit" /></button><button type="button" aria-label={`Remove ${title}`} title="Remove from collection" onClick={onRemove}><Icon name="close" /></button></> : null}</span>
+      <span className="query-card-tools">{!discovery && onReload ? <button type="button" aria-label={`Refresh ${title}`} title="Refresh this card" onClick={onReload}><Icon name="refresh" /></button> : null}<DataReadinessIndicator id={`card:${id}`} title={title} dataset={readiness.dataset} query={readiness.query} empty={preview?.state==="empty"} updatedAt={preview?.updatedAt} refreshing={preview?.refreshing} refreshError={preview?.refreshError} className="query-card-readiness" />{!discovery ? <><button type="button" aria-label={`Edit ${title}`} title="Edit card" onClick={onEdit}><Icon name="edit" /></button><button type="button" aria-label={`Remove ${title}`} title="Remove from collection" onClick={onRemove}><Icon name="close" /></button></> : null}</span>
       {discovery && onKeep ? <button className="query-keep" type="button" aria-label={`Collect ${title}`} title="Add to your collection" onClick={onKeep}><Icon name="plus" /></button> : null}
     </>}
   </article>;
