@@ -139,6 +139,12 @@ export function ribbonPointerHits<T extends RibbonHitTarget>(items:RibbonObserva
  return {items:ribbonHits(items.filter(item=>!item.mark&&!item.event),at,tolerance),target:null};
 }
 
+/** The message a click on a tool dot or event marker goes to: the call's or the event's own. */
+export function ribbonMarkMessage(items:RibbonObservation[]):string|undefined{
+ for(const item of items){const id=item.mark?.message_id??item.event?.message_id;if(id)return id;}
+ return undefined;
+}
+
 /** Common modes form the backdrop. Rarer modes sit above them, then tool rails
  * (placed by ribbonToolPlacement).
  * Counts use distinct messages, so coexisting labels do not inflate support. */
