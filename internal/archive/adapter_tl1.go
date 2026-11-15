@@ -881,6 +881,13 @@ func (s sourceFiles) parseCodexExec(path, origin string, initialEffort ...string
 	}
 	line := 0
 	turns := 0
+	// A resumed run appends to the same file and numbers its items from
+	// item_0 again. An item keeps the stream's ID where no earlier part of
+	// the file used it, and otherwise adds the part it is in (item_3~4), so
+	// a later call never replaces an earlier one or takes its result. Both
+	// depend only on the lines before the item, which a growing file keeps.
+	part := 0
+	itemParts := map[string]int{}
 	add := func(id, role, kind, text, callID string, raw string) {
 		messages = append(messages, MessageRecord{NativeID: id, Role: role, Kind: kind, Text: text, Effort: effort, CallID: callID, RawText: raw, EvidenceLocator: fmt.Sprintf("%s:%d", origin, line), Selected: true})
 	}
@@ -906,8 +913,10 @@ func (s sourceFiles) parseCodexExec(path, origin string, initialEffort ...string
 		switch firstString(event["type"]) {
 		case "thread.started":
 			threadID = defaultString(event["thread_id"], threadID)
+			part++
 		case "turn.started":
 			turns++
+			part++
 		case "turn.completed":
 			add(fmt.Sprintf("turn-%d:usage", turns), "system", "metadata", jsonText(map[string]any{"type": "token_usage", "usage": event["usage"]}), "", jsonText(event))
 		case "turn.failed", "error":
@@ -916,6 +925,11 @@ func (s sourceFiles) parseCodexExec(path, origin string, initialEffort ...string
 		case "item.completed":
 			item := mapValue(event["item"])
 			id := defaultString(item["id"], fmt.Sprintf("line-%d", line))
+			if first, used := itemParts[id]; !used {
+				itemParts[id] = part
+			} else if first != part {
+				id = fmt.Sprintf("%s~%d", id, part)
+			}
 			switch firstString(item["type"]) {
 			case "agent_message":
 				add(id, "assistant", "message", firstString(item["text"]), "", "")
