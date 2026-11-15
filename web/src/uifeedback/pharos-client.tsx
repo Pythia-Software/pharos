@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from "react";
+import "../modal";
 import { createRoot } from "react-dom/client";
 import { toJpeg } from "html-to-image";
 import { boundedLog, errorText, pendingSubmission, safeURL, type Annotation, type Diagnostics, type Screenshot, type Submission } from "./model";
@@ -165,8 +166,9 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
   const sentHere = useRef(false), wasCollapsed = useRef(false), receiptMessage = useRef<HTMLParagraphElement>(null);
   const busyRef = useRef(busy); busyRef.current = busy;
   const closeRef = useRef<() => void>(() => close?.()); closeRef.current = () => { void keepDraft(); };
-  useEffect(() => { if (proposal) return; const el = dialog.current!, previous = document.activeElement, header = document.getElementById("feedbackSubmitToggle"); el.showModal(); header?.setAttribute("aria-expanded", "true"); const cancel = (e: Event) => { e.preventDefault(); if (!busyRef.current) closeRef.current(); }; el.addEventListener("cancel", cancel);
-    return () => { el.removeEventListener("cancel", cancel); el.close(); header?.setAttribute("aria-expanded", "false"); if (previous instanceof HTMLElement) restoreFocus(previous); };
+  useEffect(() => { if (proposal) return; const el = dialog.current!, previous = document.activeElement, header = document.getElementById("feedbackSubmitToggle"); // Escape keeps the draft and closes, except while sending; the owner restores focus.
+    window.pharosModal!.open(el, { backdrop: false, restoreFocus: false, dismiss: () => { if (!busyRef.current) closeRef.current(); } }); header?.setAttribute("aria-expanded", "true");
+    return () => { el.close(); header?.setAttribute("aria-expanded", "false"); if (previous instanceof HTMLElement) restoreFocus(previous); };
   }, []);
   useEffect(() => {
     let mounted = true;

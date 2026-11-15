@@ -6,6 +6,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { QueryBuilder, QueryFilterRow, type QueryBuilderProps } from "@pythia-software/query-table-ui";
 import type { QueryFilterApi } from "@pythia-software/query-table-react";
 import { Icon } from "./icons";
+import { Modal, ModalClose } from "./modal";
 import { dataEntities, dataEntityGroups, dataGuideSelectionKeys, dataSources, describeDataSource, resolveGuideEntity, type DataEntity, type DataGuideSelection, type DataSource } from "./data-taxonomy-model";
 import { DataGuideExample, guideSceneForEntity } from "./data-guide-examples";
 import { readConcurrencySettings } from "./concurrency-settings";
@@ -62,6 +63,7 @@ export function DataTaxonomyModal() {
   const termNavigation = useRef<HTMLElement>(null);
   const termPicker = useRef<HTMLLabelElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
+  const invoker = useRef<HTMLElement | null>(null);
   const [,setSourceDataset]=useViewState<DataSource>("guide_dataset","library");
   const [selection, setEntity] = useViewState<DataGuideSelection>("guide_entity", "conversations");
   const entity = resolveGuideEntity(selection);
@@ -96,10 +98,8 @@ export function DataTaxonomyModal() {
       if (document.activeElement === target) break;
     }
   }, [entity, conversation]);
-  useEffect(()=>{const element=dialog.current!;if(shown&&!element.open)element.showModal();else if(!shown&&element.open)element.close();document.getElementById("dataGuideToggle")?.setAttribute("aria-expanded",String(shown));},[shown]);
+  useEffect(()=>{document.getElementById("dataGuideToggle")?.setAttribute("aria-expanded",String(shown));},[shown]);
   useEffect(() => {
-    const element = dialog.current!;
-    let invoker: HTMLElement | null = null;
     const show = (event: Event) => {
       const context = (event as CustomEvent<{ dataset?: string; entity?: DataGuideSelection; invoker?: HTMLElement }>).detail;
       const requested = context?.dataset;
@@ -107,13 +107,11 @@ export function DataTaxonomyModal() {
       setSourceDataset(next ?? "library");
       setEntity(context?.entity && dataGuideSelectionKeys.includes(context.entity) ? context.entity : next ? describeDataSource(next, readConcurrencySettings().counting).entity : "conversations");
       setConversation("implementation");
+      if (!dialog.current?.open) invoker.current = context?.invoker ?? document.activeElement as HTMLElement;
       setShown(true);
-      if (!element.open) { invoker = context?.invoker ?? document.activeElement as HTMLElement; element.showModal(); }
     };
-    const close = () => { previousFocus.current = null; setShown(false); if (invoker?.isConnected) invoker.focus(); };
     window.addEventListener("pharos:open-data-guide", show);
-    element.addEventListener("close", close);
-    return () => { window.removeEventListener("pharos:open-data-guide", show); element.removeEventListener("close", close); };
+    return () => window.removeEventListener("pharos:open-data-guide", show);
   }, []);
   useEffect(() => { dialog.current!.dataset.ready = "true"; window.dispatchEvent(new Event("pharos:data-guide-ready")); }, []);
   useEffect(() => { content.current?.scrollTo({ top: 0 }); }, [scene]);
@@ -136,14 +134,12 @@ export function DataTaxonomyModal() {
     target?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [entity, shown]);
   const selected = dataEntities[entity];
-  return <dialog id="dataGuideDialog" data-view-field="guide_open" ref={dialog} className="data-guide" aria-labelledby="dataGuideTitle" onClick={event => {
-    if (event.target !== event.currentTarget) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.currentTarget.close();
-  }}>
+  // Restoring the open guide from the URL has no invoker, so focus stays put on close.
+  return <Modal open={shown} dialogRef={dialog} id="dataGuideDialog" data-view-field="guide_open" className="data-guide" aria-labelledby="dataGuideTitle"
+    opener={invoker.current} onClose={() => { previousFocus.current = null; invoker.current = null; setShown(false); }}>
     <header className="data-guide-header">
       <h2 id="dataGuideTitle">Data Guide</h2>
-      <button type="button" className="data-guide-close" aria-label="Close Data Guide" onClick={() => dialog.current?.close()}><Icon name="close" /></button>
+      <ModalClose className="data-guide-close" label="Close Data Guide" onClick={() => dialog.current?.close()} />
     </header>
     <div className="data-guide-body">
       <nav ref={termNavigation} className="data-guide-terms app-navigation-list" aria-label="Data Guide terms">
@@ -160,5 +156,5 @@ export function DataTaxonomyModal() {
         {scene !== "machines" ? <p className="muted data-guide-detail">{selected.detail}</p> : null}
       </div>
     </div>
-  </dialog>;
+  </Modal>;
 }

@@ -99,8 +99,7 @@
     #syncDashboard fieldset{border:0;padding:0;margin:14px 0 0}
     #syncDashboard legend{font-size:var(--fs-sm);color:var(--muted);margin-bottom:8px}
     .sync-warning{border:1px solid var(--warn);padding:14px;border-radius:6px;overflow-wrap:anywhere}
-    .sync-dialog{max-width:620px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:24px}
-    .sync-dialog::backdrop{background:#0008}
+    .sync-dialog{max-width:620px;padding:24px;}
     .header-sync[aria-busy=true] svg{animation:sync-spin 1.5s linear infinite}
     #syncDashboard [hidden]{display:none}
     @media(max-width:760px){.sync-panel{padding:14px}}
@@ -136,9 +135,7 @@
       dialog.close();
     }));
     dialog.append(actions);
-    dialog.addEventListener('close', () => dialog.remove());
-    document.body.append(dialog);
-    dialog.showModal();
+    window.pharosModal.open(dialog, {remove: true});
   }
 
   const verify = (repair, sources) => call('/api/sync/verify', {all: true, repair, sources});
@@ -246,7 +243,7 @@
           finally { copying = false; copy.removeAttribute('aria-disabled'); }
         };
         dialog.append(node('h2', 'Index integrity issue'), node('pre', JSON.stringify(details, null, 2)), copy, copyStatus, button('Close', () => dialog.close()));
-        dialog.addEventListener('close', () => dialog.remove()); document.body.append(dialog); dialog.showModal();
+        window.pharosModal.open(dialog, {remove: true});
       }), recapture);
       warning.append(issueActions);
       dashboard.prepend(warning);

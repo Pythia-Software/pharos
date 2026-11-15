@@ -3,9 +3,8 @@
 .data-source-link:hover { color: var(--gold); text-decoration-style: solid; }
 .data-source-link:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 3px; border-radius: 2px; }
 .data-source-link .app-icon { width: 12px; height: 12px; color: var(--qt-muted); }
-.data-guide { --guide-radius: 12px; box-sizing: border-box; width: min(1080px, calc(100vw - 40px)); max-width: none; height: min(940px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); padding: 0; margin: auto; border: 1px solid var(--line); border-radius: var(--guide-radius); background: var(--panel); color: var(--ink); box-shadow: 0 32px 120px #0007; overflow: auto; overscroll-behavior: contain; font-family: var(--sans); }
+.data-guide { --guide-radius: var(--modal-radius, 10px); box-sizing: border-box; width: min(1080px, calc(100vw - 40px)); max-width: none; height: min(940px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); padding: 0; margin: auto; overflow: auto; overscroll-behavior: contain; font-family: var(--sans); }
 .data-guide[open] { display: flex; flex-direction: column; }
-.data-guide::backdrop { background: #071713a8; backdrop-filter: blur(4px); }
 .data-guide * { box-sizing: border-box; }
 .data-guide button { cursor: pointer; }
 .data-guide button:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }

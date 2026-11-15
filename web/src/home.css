@@ -114,8 +114,7 @@ main > #home { padding-bottom:28px; }
 .home-discovery-empty { color:var(--muted); font-size:13px; max-width:520px; margin:20px auto; text-align:center; }
 .home-discovery-empty a { display:flex; align-items:center; justify-content:center; gap:6px; color:var(--gold); margin-top:14px; }
 .home-discovery-empty svg { width:13px; height:13px; }
-.home-editor { width:370px; max-width:calc(100vw - 32px); margin:18vh auto auto; padding:22px; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:9px; box-shadow:0 20px 70px #0007; }
-.home-editor::backdrop { background:#0007; }
+.home-editor { width:370px; max-width:calc(100vw - 32px); margin:18vh auto auto; padding:22px; }
 /* Create card sits beside a chart's title: inline after a trend's heading,
    and over the top-right corner of a Query Table metric, whose head it pads. */
 .dashboard-card-actions { display:inline-flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:var(--fs-sm); font-weight:400; }
