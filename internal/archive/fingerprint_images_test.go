@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -661,6 +662,23 @@ func TestFingerprintSharedBlobCleanup(t *testing.T) {
 		t.Fatalf("workspace PNGs not deduplicated: %d %v", blobs, err)
 	}
 	execTx(t, c.DB, `DELETE FROM conversations WHERE id='fp-a'`)
+	// With nothing due, the per-minute prune looks without taking the writer.
+	held, release := make(chan struct{}), make(chan struct{})
+	holder := make(chan error, 1)
+	go func() {
+		holder <- c.writeTransaction(t.Context(), "hold the writer", func(*sql.Tx) error { close(held); <-release; return nil })
+	}()
+	<-held
+	quick, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	pruned, err := c.pruneFingerprintBlobs(quick)
+	cancel()
+	close(release)
+	if err != nil || pruned {
+		t.Fatalf("prune with nothing due waited for the writer: %v %v", pruned, err)
+	}
+	if err := <-holder; err != nil {
+		t.Fatal(err)
+	}
 	if _, err := c.pruneFingerprintBlobs(t.Context()); err != nil {
 		t.Fatal(err)
 	}

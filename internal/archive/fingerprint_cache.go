@@ -241,6 +241,11 @@ var fingerprintPruneBatchSize = 100
 // Report processed orphan markers, including those still referenced, so a
 // scheduled/manual pass can drain the backlog in bounded transactions.
 func (c *Catalog) pruneFingerprintBlobs(ctx context.Context) (bool, error) {
+	// Look on a reader first: most minutes nothing is due, and the writer is
+	// the catalog's one shared lock.
+	if due, err := catalogExists(ctx, c, `SELECT 1 FROM fingerprint_orphans WHERE not_before<=unixepoch()`); err != nil || !due {
+		return false, err
+	}
 	var removed int64
 	err := c.writeTransaction(ctx, "prune fingerprint cache", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM fingerprint_blobs WHERE hash IN (SELECT hash FROM fingerprint_orphans WHERE not_before<=unixepoch() LIMIT ?) AND NOT EXISTS(SELECT 1 FROM fingerprint_images i WHERE i.hash=fingerprint_blobs.hash)`, fingerprintPruneBatchSize); err != nil {
