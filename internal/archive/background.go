@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"slices"
 	"sort"
 	"strings"
@@ -340,6 +341,61 @@ type itemCost struct {
 	Slow        float64 `json:"slow_seconds"`
 	PerUnit     float64 `json:"unit_seconds"`
 	UnitsPerDay float64 `json:"units_per_day"`
+	// What the item's runs used beside their time (runsUse), for what each
+	// schedule would cost a day (scheduleCosts).
+	itemUse
+}
+
+// itemUse is what an item's measured runs say of its CPU and memory. A nil
+// figure is not measured yet.
+type itemUse struct {
+	// CPUPerSecond is the CPU time a second of running uses, the service's
+	// share and the workers' together; GPUPerSecond the workers' GPU time.
+	CPUPerSecond, GPUPerSecond *float64
+	// PeakBytes is the most memory Pharos held during any of the runs.
+	PeakBytes *int64
+	// Counted is whether the item counts its work, so that its cost at
+	// another schedule can be worked out rather than only bounded; RunsAt is
+	// the cadence most of the runs were made at.
+	Counted bool
+	RunsAt  string
+}
+
+// runsUse reads the latest modelRuns of runs, newest first. CPU needs
+// placementRuns runs that measured it.
+func runsUse(runs []itemRun) itemUse {
+	use := itemUse{Counted: len(runs) > 0}
+	seconds, cpu, gpu, measured, at := 0.0, 0.0, (*float64)(nil), 0, map[string]int{}
+	for _, run := range runs[:min(len(runs), modelRuns)] {
+		use.Counted = use.Counted && run.Units != nil
+		if run.Cadence != "requested" {
+			at[run.Cadence]++
+		}
+		if run.Use.Peak != nil && (use.PeakBytes == nil || *run.Use.Peak > *use.PeakBytes) {
+			use.PeakBytes = run.Use.Peak
+		}
+		total := run.Use.total()
+		if total == nil {
+			continue
+		}
+		measured++
+		seconds, cpu = seconds+run.Seconds, cpu+*total
+		if run.Use.GPU != nil {
+			addTo(&gpu, *run.Use.GPU)
+		}
+	}
+	for _, cadence := range cadences {
+		if at[cadence] > at[use.RunsAt] {
+			use.RunsAt = cadence
+		}
+	}
+	if measured >= placementRuns && seconds > 0 {
+		use.CPUPerSecond = new(cpu / seconds)
+		if gpu != nil {
+			use.GPUPerSecond = new(*gpu / seconds)
+		}
+	}
+	return use
 }
 
 // typicalRange is the middle of sorted run times: the median and the runs
@@ -372,6 +428,9 @@ type itemRun struct {
 	Seconds float64
 	// Units is nil for an item that does not count its work.
 	Units *int64
+	// Use is the CPU, memory and GPU time the run used, each nil where it
+	// was not measured (background_cpu.go); its Seconds is not read.
+	Use cpuUse
 }
 
 // worked is whether the run had work, as far as it says: a run that does
@@ -396,8 +455,13 @@ func insertItemRuns(ctx context.Context, tx *sql.Tx, runs []itemRun) error {
 		if run.Units != nil {
 			units = *run.Units
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO background_item_runs(host_id,item,cadence,started_at,seconds,units) VALUES(?,?,?,?,?,?)",
-			currentHost().ID, run.Item, run.Cadence, formatTime(run.Started), run.Seconds, units); err != nil {
+		var peak any
+		if run.Use.Peak != nil {
+			peak = *run.Use.Peak
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO background_item_runs(host_id,item,cadence,started_at,seconds,units,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes)
+			VALUES(?,?,?,?,?,?,?,?,?,?)`, currentHost().ID, run.Item, run.Cadence, formatTime(run.Started), run.Seconds, units,
+			nullFloat(run.Use.CPU), nullFloat(run.Use.Worker), nullFloat(run.Use.GPU), peak); err != nil {
 			return err
 		}
 	}
@@ -409,8 +473,8 @@ func insertItemRuns(ctx context.Context, tx *sql.Tx, runs []itemRun) error {
 // the table (an older one opened read-only) has none.
 func (c *Catalog) itemRuns(ctx context.Context) map[string][]itemRun {
 	runs := map[string][]itemRun{}
-	rows, err := c.reader().QueryContext(ctx, "SELECT item,cadence,started_at,seconds,units FROM background_item_runs WHERE host_id=? AND started_at>=? ORDER BY id DESC",
-		currentHost().ID, formatTime(time.Now().Add(-itemRunsKept)))
+	rows, err := c.reader().QueryContext(ctx, `SELECT item,cadence,started_at,seconds,units,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes
+		FROM background_item_runs WHERE host_id=? AND started_at>=? ORDER BY id DESC`, currentHost().ID, formatTime(time.Now().Add(-itemRunsKept)))
 	if err != nil {
 		return runs
 	}
@@ -418,9 +482,21 @@ func (c *Catalog) itemRuns(ctx context.Context) map[string][]itemRun {
 	for rows.Next() {
 		var run itemRun
 		var started string
-		var units sql.NullInt64
-		if rows.Scan(&run.Item, &run.Cadence, &started, &run.Seconds, &units) != nil {
+		var units, peak sql.NullInt64
+		var cpu, worker, gpu sql.NullFloat64
+		if rows.Scan(&run.Item, &run.Cadence, &started, &run.Seconds, &units, &cpu, &worker, &gpu, &peak) != nil {
 			continue
+		}
+		for _, pair := range []struct {
+			to   **float64
+			from sql.NullFloat64
+		}{{&run.Use.CPU, cpu}, {&run.Use.Worker, worker}, {&run.Use.GPU, gpu}} {
+			if pair.from.Valid {
+				*pair.to = &pair.from.Float64
+			}
+		}
+		if peak.Valid {
+			run.Use.Peak = &peak.Int64
 		}
 		run.Started, _ = parseTime(started)
 		if units.Valid {
@@ -527,6 +603,7 @@ func frequentRunsPerDay(own map[string][]itemRun, at time.Time) float64 {
 // that does not count its work is all fixed cost.
 func ownCost(runs []itemRun, at time.Time) itemCost {
 	cost := typicalCost(runs)
+	cost.itemUse = runsUse(runs)
 	recent := runs[:min(len(runs), modelRuns)]
 	counted, work, plain := true, []itemRun{}, []float64{}
 	for _, run := range recent {
@@ -734,11 +811,17 @@ func (c *Catalog) backgroundRuns(ctx context.Context) map[string]backgroundRunRo
 // (backgroundWithdrawn) finishes with neither: it did not fail, and its
 // work is still pending. measured are the item runs to keep for the costs.
 func (c *Catalog) recordBackgroundRun(ctx context.Context, item string, started time.Time, finished bool, failure error, measured ...itemRun) {
-	_ = c.writeTransaction(ctx, "background run", func(tx *sql.Tx) error {
+	var used map[cpuDayKey]*cpuDay
+	if finished {
+		used = c.takeCPU()
+	}
+	err := c.writeTransaction(ctx, "background run", func(tx *sql.Tx) error {
 		// The pass's measured item runs ride this write rather than taking
 		// one of their own. A measurement that cannot be kept is a missing
 		// one; the run's outcome is still recorded.
 		_ = insertItemRuns(ctx, tx, measured)
+		// What work used since the last write rides this one too.
+		_ = storeCPUDays(ctx, tx, used)
 		if !finished {
 			_, err := tx.ExecContext(ctx, `INSERT INTO background_runs(host_id,item,started_at) VALUES(?,?,?)
 				ON CONFLICT(host_id,item) DO UPDATE SET started_at=excluded.started_at`, currentHost().ID, item, formatTime(started))
@@ -754,6 +837,9 @@ func (c *Catalog) recordBackgroundRun(ctx context.Context, item string, started 
 			nilIfEmpty(problem), time.Since(started).Seconds())
 		return err
 	})
+	if err != nil {
+		c.restoreCPU(used)
+	}
 }
 
 // backgroundWithdrawn reports an item whose only outcome is work a Stop
@@ -1553,7 +1639,13 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			next(id)
 			started := time.Now()
 			s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
-			err := s.runBackgroundItem(ctx, op, id)
+			itemCtx, span := beginItemSpan(ctx, id)
+			var err error
+			// A CPU profile says which item its samples belong to.
+			span.measure(func() {
+				pprof.Do(itemCtx, pprof.Labels("item", id), func(ctx context.Context) { err = s.runBackgroundItem(ctx, op, id) })
+			})
+			use := span.end(true)
 			if id == "fingerprints" {
 				if cancellationOnly(err) && errors.Is(context.Cause(ctx), errAutomaticPreempted) {
 					// Manual indexing owns the ingest lock next. Keep this pass's
@@ -1573,7 +1665,7 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			}
 			measured := []itemRun{}
 			if err == nil {
-				measured = append(measured, itemRun{Item: id, Cadence: cadence, Started: passStarted, Seconds: time.Since(started).Seconds()})
+				measured = append(measured, itemRun{Item: id, Cadence: cadence, Started: passStarted, Seconds: time.Since(started).Seconds(), Use: use})
 			}
 			record(id, started, err, measured...)
 			if err != nil && failure == nil && !backgroundWithdrawn(err) {
@@ -1663,7 +1755,9 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 	// Each stage's own time and, where its item counts work, how much it
 	// found (the stage's operation says, classic engine only).
 	stageSeconds, stageUnits := map[string]float64{}, map[string]int64{}
+	stageUse := map[string]cpuUse{}
 	ctx = withStageUnits(ctx, func(name string, units int64) { stageUnits[name] = units })
+	ctx = withStageUse(ctx, func(name string, use cpuUse) { stageUse[name] = use })
 	started := time.Now()
 	for _, id := range chainItems {
 		s.Catalog.recordBackgroundRun(ctx, id, started, false, nil)
@@ -1680,7 +1774,8 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			}
 		}
 		began := time.Now()
-		err := work()
+		var err error
+		pprof.Do(ctx, pprof.Labels("item", stageItem(name)), func(context.Context) { err = work() })
 		stageSeconds[name] += time.Since(began).Seconds()
 		outcome[name] = err
 		return err
@@ -1709,6 +1804,7 @@ func (s *Server) runBackgroundItems(ctx context.Context, op *Op, runID, cadence 
 			result, done := outcome[name]
 			ran, ok = true, ok && done && result == nil
 			run.Seconds += stageSeconds[name]
+			run.Use.add(stageUse[name])
 			if units, counted := stageUnits[name]; counted && itemUnitStage[item.ID] == name {
 				run.Units = &units
 			}
@@ -1755,6 +1851,22 @@ var stageItems = map[string]string{"identities": "repositories", "git": "reposit
 func (c *Catalog) findingsFullDue(ctx context.Context) bool {
 	built, _ := c.metaValue(ctx, "findings_generation")
 	return built != c.findingsGeneration()
+}
+
+// stageUseKey carries a background pass's reader of what each chain stage
+// used (background_cpu.go).
+type stageUseKey struct{}
+
+func withStageUse(ctx context.Context, report func(stage string, use cpuUse)) context.Context {
+	return context.WithValue(ctx, stageUseKey{}, report)
+}
+
+// reportStageUse tells the pass, if one is listening, what the finished
+// stage's operation and the work inside it used.
+func reportStageUse(ctx context.Context, name string, stage *Op) {
+	if report, ok := ctx.Value(stageUseKey{}).(func(string, cpuUse)); ok && stage != nil && stage.cpu != nil {
+		report(name, stage.cpu.used())
+	}
 }
 
 // stageUnitsKey carries a background pass's reader of how much each chain

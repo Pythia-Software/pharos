@@ -1042,6 +1042,8 @@ const ROUTES = [
     await page.locator('[data-view-key="background:labels"]').click();
     await page.locator('[data-view-key="background:agent_events"]').click();
   }, shown: '#background-detail-labels:not([hidden])' },
+  { name: "Background Processing CPU time table", url: "/settings/sync", ready: "#backgroundSchedule [data-card=usage] .bg-bar",
+    open: page => page.locator('#backgroundSchedule [data-view-key="background:usage:table"] summary').click(), shown: '#backgroundSchedule [data-view-key="background:usage:table"][open] tbody tr' },
   { name: "Background Processing temporary schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: { "GET /api/background": temporaryBackgroundDocument }, open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing work", url: "/settings/sync", ready: "#backgroundSchedule [data-card=work] .bg-work-row", api: { "GET /api/background": workBackgroundDocument, "GET /api/work": workInspection },
     open: page => page.locator('#backgroundSchedule [data-view-key="background:work:details"] summary').click(), shown: '#backgroundSchedule [data-view-key="background:work:details"][open] .bg-work-row' },

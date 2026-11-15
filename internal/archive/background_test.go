@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -823,6 +825,18 @@ func TestBackgroundPassRunsDueStagesAndRecordsThem(t *testing.T) {
 	}
 	if _, ran := runs["writing"]; ran {
 		t.Fatalf("an item that was not due has no run: %+v", runs)
+	}
+	// What the run used is kept with it, and the day's totals ride the same
+	// write: one run of the item, not one for each operation inside it.
+	if own := catalog.itemRuns(ctx)["tools"][0]; func() bool { _, _, ok := threadCPUTime(); return ok }() && own.Use.CPU == nil {
+		t.Fatalf("the run's CPU time was not measured: %+v", own.Use)
+	}
+	var counted int
+	if err := catalog.DB.QueryRow("SELECT COALESCE(SUM(runs),0) FROM background_cpu_days WHERE source='item:tools'").Scan(&counted); err != nil || counted != 1 {
+		t.Fatalf("the day counts one run of the item: %d, %v", counted, err)
+	}
+	if server.ops.cpu.flushDue() || server.ops.cpu.runsPending {
+		t.Fatal("the pass's runs ask for a write of their own after riding the pass's")
 	}
 	if server.backgroundPass(ctx, time.Now()) {
 		t.Fatal("a pass with nothing due ran something")
@@ -1771,5 +1785,318 @@ func TestBackgroundWritingEstimatesAndRefinementHaveIndependentSchedules(t *test
 	reopened := reopenCatalog(t, catalog.Path)
 	if pending, err := reopened.authorshipRefinementPending(t.Context()); err != nil || pending {
 		t.Fatalf("refinement completion did not survive reopening: %v %v", pending, err)
+	}
+}
+
+// The ledger divides the process's CPU time among the work that was running
+// when it was used: the innermost span takes it, work running side by side
+// shares it by what each uses alone, waiting work takes none, and what no
+// work was running for is kept as the rest.
+func TestCPULedgerMeasuresEachSpansThread(t *testing.T) {
+	at := time.Date(2026, 11, 14, 12, 0, 0, 0, time.Local)
+	cpu, memory := 0.0, int64(1<<30)
+	threads, thread, threadOK := map[uint64]float64{}, uint64(1), true
+	workers := map[int]processUsage{}
+	gpu := map[int]uint64{}
+	ledger := &cpuLedger{now: func() time.Time { return at }, readCPU: func() (float64, bool) { return cpu, true }, readMemory: func() (int64, bool) { return memory, true },
+		readThread: func() (float64, uint64, bool) { return threads[thread], thread, threadOK },
+		readProcess: func(pid int) (processUsage, error) {
+			usage, ok := workers[pid]
+			if !ok {
+				return usage, errors.New("gone")
+			}
+			return usage, nil
+		},
+		readGPU: func() (gpuSnapshot, error) {
+			snapshot := gpuSnapshot{supported: true}
+			for pid, ns := range gpu {
+				snapshot.clients = append(snapshot.clients, gpuClient{id: uint64(pid), pid: pid, ns: ns, known: true})
+			}
+			return snapshot, nil
+		},
+		spans: map[*cpuSpan]struct{}{}, leases: map[*cpuLease]struct{}{}, scopes: map[uint64]*cpuScope{}, pending: map[cpuDayKey]*cpuDay{}}
+	// spend is time passing while the process uses CPU on threads nothing
+	// measures; work is the current thread using it.
+	spend := func(seconds, used float64) { at, cpu = at.Add(time.Duration(seconds*float64(time.Second))), cpu+used }
+	work := func(seconds, used float64) { spend(seconds, used); threads[thread] += used }
+	source := func(name string) func(*cpuSpan) string { return func(*cpuSpan) string { return name } }
+	near := func(got *float64, want float64) bool { return got != nil && *got > want-1e-6 && *got < want+1e-6 }
+
+	ledger.begin(nil, source("kind:warmup"), false).end(false)
+	spend(10, 2)
+	pass := ledger.begin(nil, source(cpuSourcePass), false)
+	// An operation the pass starts from its own context while the item runs
+	// is the item's too.
+	ctx, item := beginItemSpan(withCPUSpan(context.Background(), pass), "tools")
+	if cpuSpanFrom(ctx) != item {
+		t.Fatal("the item's context does not carry its span")
+	}
+	beside := ledger.begin(nil, source("item:fingerprints"), false)
+	waiting := ledger.begin(nil, source("kind:maintenance.checkpoint"), true)
+	var searchUse cpuUse
+	item.measure(func() {
+		work(4, 8)
+		child := ledger.begin(pass, func(parent *cpuSpan) string { return cpuSourceFor("maintenance.cache-warm", "", parent) }, false)
+		if child.parent != item || child.source != "item:tools" {
+			t.Fatalf("an operation started during the item belongs to %q under %v", child.source, child.parent)
+		}
+		memory = 3 << 30
+		// A body inside the item's, on its thread, is not counted twice.
+		child.measure(func() { work(2, 2) })
+		child.end(true)
+		// Another item's work inside this one is counted to that item.
+		search := ledger.begin(item, source("item:search"), false)
+		search.measure(func() { work(1, 3) })
+		searchUse = search.end(true)
+		// Other work on its own thread at the same time, and a helper
+		// thread nothing measures, take nothing from the item.
+		thread = 2
+		beside.measure(func() { work(0, 5) })
+		thread = 1
+		spend(0, 4)
+	})
+	waiting.setPaused(false)
+	waiting.end(true)
+	if use := beside.end(true); !near(use.CPU, 5) {
+		t.Fatalf("work beside the item used its own thread's CPU: %v", use.CPU)
+	}
+	if !near(searchUse.CPU, 3) {
+		t.Fatalf("the work inside the item: %v", searchUse.CPU)
+	}
+	// A worker process the item leased: its own counters, GPU time apart.
+	workers[41], gpu[41] = processUsage{CPUSeconds: 100, Footprint: 2 << 30, Started: 7, Known: counterOwnCPU | counterMemory}, 5e9
+	release := leaseWorkers(ctx, func() []int { return []int{41, 42} }, true)
+	workers[41], gpu[41] = processUsage{CPUSeconds: 130, Footprint: 2 << 30, Started: 7, Known: counterOwnCPU | counterMemory}, 9e9
+	// One the pool started during the lease: everything it used.
+	workers[42] = processUsage{CPUSeconds: 5, Footprint: 1 << 30, Started: 9, Known: counterOwnCPU | counterMemory}
+	spend(5, 1)
+	release()
+	release()
+	use := item.end(true)
+	if !near(use.CPU, 8+2+3) || !near(use.Worker, 35) || !near(use.GPU, 4) || use.Seconds != 12 {
+		t.Fatalf("the item used %+v CPU %v worker %v GPU %v", use, *use.CPU, *use.Worker, *use.GPU)
+	}
+	if use.Peak == nil || *use.Peak != 6<<30 {
+		t.Fatalf("the item's peak is the service and the workers it held: %v", use.Peak)
+	}
+	if whole := pass.end(true); !near(whole.CPU, *use.CPU) {
+		t.Fatalf("the pass reports its items' work: %v", *whole.CPU)
+	}
+	day := at.Format("2006-01-02")
+	pending := ledger.snapshot()
+	// The sources sum to what the process used: 2 before, 4 by the helper
+	// and 1 during the lease were no measured thread's.
+	if other := pending[cpuDayKey{day, cpuSourceOther}]; !near(other.CPU, 2+4+1) || other.runs != 0 {
+		t.Fatalf("CPU no measured thread used is the rest: %+v", other)
+	}
+	if tools := pending[cpuDayKey{day, "item:tools"}]; tools.runs != 1 || !near(tools.CPU, 10) || !near(tools.Worker, 35) {
+		t.Fatalf("the item's day: %+v", tools)
+	}
+	if search := pending[cpuDayKey{day, "item:search"}]; search.runs != 1 || !near(search.CPU, 3) {
+		t.Fatalf("the other item's day: %+v", search)
+	}
+	if checkpoint := pending[cpuDayKey{day, "kind:maintenance.checkpoint"}]; checkpoint.runs != 1 || checkpoint.CPU != nil {
+		t.Fatalf("work with no measured body has no CPU figure: %+v", checkpoint)
+	}
+	// A clock that cannot be read leaves the figure unmeasured, not zero.
+	threadOK = false
+	blind := ledger.begin(nil, source("kind:blind"), false)
+	blind.measure(func() { work(3, 1) })
+	if use := blind.end(true); use.CPU != nil || use.Seconds != 3 {
+		t.Fatalf("an unreadable clock: %+v", use)
+	}
+	threadOK = true
+	// The real clock: a locked thread that spins has used about that long.
+	if _, _, ok := threadCPUTime(); ok {
+		real := newCPULedger()
+		spin := real.begin(nil, source("kind:spin"), false)
+		spin.measure(func() {
+			for start := time.Now(); time.Since(start) < 50*time.Millisecond; {
+			}
+		})
+		if use := spin.end(true); use.CPU == nil || *use.CPU < 0.02 || *use.CPU > 0.2 {
+			t.Fatalf("50 ms of spinning measured as %v", use.CPU)
+		}
+	}
+	// Every way an operation ends closes its span: one left open would be
+	// counted as running, and take a share, for as long as the service runs.
+	registry := newOpRegistry("service")
+	registry.cpu = ledger
+	open := len(ledger.spans)
+	_, finished := registry.begin(context.Background(), OperationSpec{Kind: "maintenance.checkpoint"})
+	finished.Finish(nil)
+	_, skipped := registry.begin(context.Background(), OperationSpec{Kind: "maintenance.checkpoint"})
+	skipped.Skip("nothing-to-do")
+	_, failed := registry.begin(context.Background(), OperationSpec{Kind: "maintenance.checkpoint"})
+	failed.Finish(errors.New("failed"))
+	_, discarded := registry.beginTentative(context.Background(), OperationSpec{Kind: "maintenance.checkpoint"})
+	discarded.discard()
+	parentCtx, parent := registry.begin(context.Background(), OperationSpec{Kind: "analysis.chain"})
+	_, inner := registry.begin(parentCtx, OperationSpec{Kind: "analysis.tools", Queued: true})
+	if inner.cpu.parent != parent.cpu || !inner.cpu.paused || inner.cpu.source != "item:tools" {
+		t.Fatalf("a queued operation inside another waits there: %+v", inner.cpu)
+	}
+	inner.Run()
+	if inner.cpu.paused {
+		t.Fatal("a queued operation that starts is running")
+	}
+	restore := inner.waitFor("catalog-busy", "the catalog writer")
+	if !inner.cpu.paused {
+		t.Fatal("an operation waiting for the catalog writer is not running")
+	}
+	restore()
+	inner.SkipWith("nothing-to-do", "detail")
+	parent.Finish(nil)
+	if len(ledger.spans) != open {
+		t.Fatalf("%d spans left open by ended operations", len(ledger.spans)-open)
+	}
+	for kind, want := range map[string]string{"analysis.tools": "item:tools", "analysis.findings/full": "item:review", "analysis.findings/measure": "item:findings",
+		"analysis.labels/backlog": "item:labels", "index.changes.automatic": "item:conversations", "maintenance.library-view": "item:search", "maintenance.checkpoint": "kind:maintenance.checkpoint"} {
+		name, variant, _ := strings.Cut(kind, "/")
+		if got := cpuSourceFor(name, variant, nil); got != want {
+			t.Fatalf("%s is counted to %s, want %s", kind, got, want)
+		}
+	}
+}
+
+// The chart reads each source's use a day over the days measured, stored and
+// not yet stored, largest first with the unnamed rest last.
+func TestCPUUsageAveragesTheDaysMeasured(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	ctx := context.Background()
+	at := time.Now()
+	day := func(back int) string { return at.Local().AddDate(0, 0, -back).Format("2006-01-02") }
+	f := func(value float64) *float64 { return &value }
+	peak := int64(2 << 30)
+	store := func(totals map[cpuDayKey]*cpuDay) {
+		t.Helper()
+		if err := catalog.writeTransaction(ctx, "cpu days", func(tx *sql.Tx) error { return storeCPUDays(ctx, tx, totals) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store(map[cpuDayKey]*cpuDay{
+		{day(2), "item:labels"}:                 {cpuUse: cpuUse{Seconds: 600, CPU: f(300), Worker: f(900), GPU: f(60), Peak: &peak}, runs: 3},
+		{day(0), "item:labels"}:                 {cpuUse: cpuUse{Seconds: 300, CPU: f(150)}, runs: 1},
+		{day(1), "kind:maintenance.checkpoint"}: {cpuUse: cpuUse{Seconds: 30, CPU: f(6)}, runs: 9},
+		{day(1), cpuSourceOther}:                {cpuUse: cpuUse{CPU: f(9000)}},
+		// Before the window, and too old to keep.
+		{day(12), "item:tools"}: {cpuUse: cpuUse{Seconds: 5, CPU: f(5)}, runs: 1},
+		{at.Add(-2 * cpuDaysKept).Local().Format("2006-01-02"), "item:tools"}: {cpuUse: cpuUse{Seconds: 5, CPU: f(5)}, runs: 1},
+	})
+	// A second write adds to the day rather than replacing it.
+	store(map[cpuDayKey]*cpuDay{{day(0), "item:labels"}: {cpuUse: cpuUse{Seconds: 300, CPU: f(150)}, runs: 1}})
+	var kept int
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM background_cpu_days").Scan(&kept); err != nil || kept != 5 {
+		t.Fatalf("days past the kept window are dropped: %d kept, %v", kept, err)
+	}
+	// What has not been stored yet is read too.
+	catalog.ops = newOpRegistry("service")
+	catalog.ops.cpu = newCPULedger()
+	catalog.ops.cpu.pending[cpuDayKey{day(0), "item:tools"}] = &cpuDay{cpuUse: cpuUse{Seconds: 9}, runs: 1}
+	usage := cpuUsage(catalog.cpuDays(ctx, at.AddDate(0, 0, -cpuWindowDays)), at)
+	rows := usage["rows"].([]cpuSourceRow)
+	if usage["measured_days"] != 3 || len(rows) != 4 || rows[0].Source != "item:labels" || rows[len(rows)-1].Source != cpuSourceOther {
+		t.Fatalf("three measured days, labels first and the rest last: %v days, %+v", usage["measured_days"], rows)
+	}
+	labels := rows[0]
+	if labels.Label != "Message labels" || labels.Item != "labels" || *labels.CPUSeconds != 500 || *labels.WorkerCPUSeconds != 300 || *labels.GPUSeconds != 20 ||
+		labels.Seconds != 400 || labels.Runs != 5.0/3 || *labels.PeakBytes != peak {
+		t.Fatalf("labels a day over three days: %+v", labels)
+	}
+	if len(labels.Days) != 3 || labels.Days[0].Day != day(2) || *labels.Days[0].CPUSeconds != 1200 || labels.Days[1].CPUSeconds != nil || *labels.Days[2].CPUSeconds != 300 {
+		t.Fatalf("each day's own figure, and none for a day without runs: %+v", labels.Days)
+	}
+	// A source whose CPU was never read is listed without a figure.
+	if tools := rows[2]; tools.Source != "item:tools" || tools.CPUSeconds != nil || tools.Seconds != 3 {
+		t.Fatalf("unmeasured CPU is not zero: %+v", tools)
+	}
+	if empty := cpuUsage(map[cpuDayKey]cpuDay{}, at); empty["measured_days"] != 0 || empty["cpu_seconds"] != nil {
+		t.Fatalf("nothing measured: %+v", empty)
+	}
+}
+
+// Settings says what each schedule choice would cost an item a day, from its
+// own measured runs: time, CPU and memory, and nothing where a figure has
+// not been measured.
+func TestScheduleCostsProjectEachCadenceFromMeasuredRuns(t *testing.T) {
+	at := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	units := func(n int64) *int64 { return &n }
+	f := func(value float64) *float64 { return &value }
+	peak := int64(3 << 30)
+	perDay := map[string]float64{cadenceFrequent: 40, cadenceHourly: hourlyRunsPerDay, cadenceDaily: 1}
+	settings := backgroundSettings{Overrides: map[string]string{}, Placements: map[string]string{}, Temporary: map[string]temporaryCadence{}}
+	byCadence := func(rows []scheduleCost) map[string]scheduleCost {
+		out := map[string]scheduleCost{}
+		for _, row := range rows {
+			out[row.Cadence] = row
+		}
+		return out
+	}
+	// Two days of hourly runs: 60 s whenever anything changed plus 1 s a
+	// conversation, 10 conversations each; half a core, and a worker's two.
+	runs := []itemRun{}
+	for hour := range 48 {
+		run := itemRun{Item: "labels", Cadence: cadenceHourly, Started: at.Add(-time.Duration(hour+1) * time.Hour), Seconds: 70, Units: units(10),
+			Use: cpuUse{CPU: f(35), Worker: f(140), GPU: f(7), Peak: &peak}}
+		runs = append(runs, run)
+	}
+	labels, _ := backgroundItemByID("labels")
+	cost := ownCost(runs, at)
+	rows := byCadence(scheduleCosts(labels, settings, cost, true, perDay, nil))
+	if len(rows) != 4 || !rows[cadenceHourly].Current || rows[cadenceDaily].Current {
+		t.Fatalf("every schedule, with the current one marked: %+v", rows)
+	}
+	// The day's 240 conversations cost the same anywhere; only the fixed
+	// part repeats with the runs.
+	for cadence, want := range map[string]float64{cadenceFrequent: 40*cost.Fixed + 240*cost.PerUnit, cadenceHourly: 24*cost.Fixed + 240*cost.PerUnit, cadenceDaily: cost.Fixed + 240*cost.PerUnit} {
+		row := rows[cadence]
+		if row.Seconds == nil || math.Abs(*row.Seconds-want) > 1 || row.Bound != "about" || row.Per != "day" {
+			t.Fatalf("%s: %+v, want about %v s a day", cadence, row, want)
+		}
+		if row.CPUSeconds == nil || math.Abs(*row.CPUSeconds-2.5**row.Seconds) > 1e-6 || row.GPUSeconds == nil || math.Abs(*row.GPUSeconds-0.1**row.Seconds) > 1e-6 || *row.PeakBytes != peak {
+			t.Fatalf("%s: CPU and GPU follow the running time at the runs' rate, memory is their peak: %+v", cadence, row)
+		}
+	}
+	if *rows[cadenceFrequent].Seconds <= *rows[cadenceHourly].Seconds || *rows[cadenceHourly].Seconds <= *rows[cadenceDaily].Seconds {
+		t.Fatalf("a more frequent schedule repeats the fixed cost more often: %+v", rows)
+	}
+	if asked := rows[cadenceManual]; asked.Per != "run" || *asked.Seconds != 70 || *asked.CPUSeconds != 175 {
+		t.Fatalf("only when asked is one run's cost: %+v", asked)
+	}
+	// An item that does not count its work: away from the cadence its runs
+	// were measured at, the figure is a bound.
+	tools, _ := backgroundItemByID("tools")
+	plain := ownCost([]itemRun{{Cadence: cadenceHourly, Seconds: 30, Started: at}, {Cadence: cadenceHourly, Seconds: 30, Started: at}, {Cadence: cadenceHourly, Seconds: 30, Started: at}}, at)
+	settings.Placements["tools"] = cadenceHourly
+	rows = byCadence(scheduleCosts(tools, settings, plain, true, perDay, nil))
+	if rows[cadenceFrequent].Bound != "up_to" || rows[cadenceHourly].Bound != "about" || rows[cadenceDaily].Bound != "at_least" || *rows[cadenceDaily].Seconds != 30 {
+		t.Fatalf("an uncounted item's other schedules are bounds: %+v", rows)
+	}
+	// Runs that did not measure CPU say nothing about it.
+	if row := rows[cadenceHourly]; row.CPUSeconds != nil || row.PeakBytes != nil || row.GPUSeconds != nil {
+		t.Fatalf("CPU and memory not measured yet: %+v", row)
+	}
+	for _, row := range scheduleCosts(tools, settings, itemCost{}, false, perDay, nil) {
+		if row.Seconds != nil || row.CPUSeconds != nil || row.PeakBytes != nil {
+			t.Fatalf("an item with no measured runs has no figures: %+v", row)
+		}
+	}
+	// A fixed item has its own schedule only, with the day that was measured.
+	conversations, _ := backgroundItemByID("conversations")
+	measured := &cpuSourceRow{Seconds: 900, CPUSeconds: f(400), PeakBytes: &peak, Runs: 96}
+	fixed := scheduleCosts(conversations, settings, itemCost{}, false, perDay, measured)
+	if len(fixed) != 1 || !fixed[0].Current || !fixed[0].Measured || *fixed[0].Seconds != 900 || *fixed[0].CPUSeconds != 400 || fixed[0].GPUSeconds != nil {
+		t.Fatalf("a fixed item's measured day: %+v", fixed)
+	}
+	if fixed = scheduleCosts(conversations, settings, itemCost{}, false, perDay, nil); len(fixed) != 1 || fixed[0].Seconds != nil || fixed[0].Measured {
+		t.Fatalf("a fixed item not measured yet: %+v", fixed)
+	}
+	// Why it runs where it does.
+	if reason := placementReason(tools, settings, plain, true, perDay); !strings.Contains(reason, "Frequently") {
+		t.Fatalf("an adaptive item's reason names what measurement found: %q", reason)
+	}
+	settings.Overrides["tools"] = cadenceDaily
+	if reason := placementReason(tools, settings, plain, true, perDay); !strings.Contains(reason, "You chose Daily") || !strings.Contains(reason, "Hourly") {
+		t.Fatalf("a chosen schedule says so, and where measurement would put it: %q", reason)
 	}
 }

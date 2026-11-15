@@ -601,7 +601,36 @@ const busyBackground = backgroundView([
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
   backgroundItem("backup", "Back up to /Users/someone/PharosBackup", "manual", "manual", { column: "daily", state_label: "Only when you ask", as_of: iso(26 * 3600000), next_at: null }),
 ], { tone: "busy", title: "Updating your writing", text: "Human Words cards, and Analyze → Writing update when this finishes.", tech: null });
+// What each schedule would cost an item a day, and CPU time a day by
+// analysis: a projected item with a GPU figure, one whose CPU is not measured
+// yet, a long source name, a source with no CPU figure, and the rest.
+const scheduleCostRows = (current, figures) => ["frequent", "hourly", "daily", "manual"].map((cadence, index) => ({
+  cadence, label: { frequent: "Frequently", hourly: "Hourly", daily: "Daily", manual: "Only when you ask" }[cadence], current: cadence === current,
+  per: cadence === "manual" ? "run" : "day", bound: figures ? ["up_to", "about", "at_least", "about"][index] : "about", runs_per_day: [40, 24, 1, null][index],
+  seconds: figures ? [2460, 1500, 62, 62][index] : null, cpu_seconds: figures?.cpu ? [720, 440, 18, 18][index] : null,
+  gpu_seconds: figures?.gpu ? [90, 55, 2, 2][index] : null, peak_bytes: figures?.cpu ? 1.2e9 : null, measured: false,
+}));
+const usageRow = (source, label, cpu, changes = {}) => ({ source, label, cpu_seconds: cpu, worker_cpu_seconds: null, gpu_seconds: null, seconds: cpu === null ? 40 : cpu * 0.8, runs: 12.5,
+  peak_bytes: 2.4e9, days: [1, 0].map(back => ({ day: new Date(now - back * day).toISOString().slice(0, 10), cpu_seconds: cpu === null ? null : cpu * (back ? 1.3 : 0.7), seconds: 60 })), ...changes });
+const backgroundCosts = {
+  schedule_costs: {
+    conversations: { reason: null, rows: [{ ...scheduleCostRows("frequent", { cpu: true })[0], bound: "about", measured: true }] },
+    writing: { reason: "Runs Frequently: its measured runs fit there, under 1 min a run and 30 min a day of repeated work.", rows: scheduleCostRows("frequent", { cpu: true, gpu: true }) },
+    findings: { reason: "Runs Hourly at most: its results would be no better for running more often.", rows: scheduleCostRows("hourly", {}) },
+    preserve: { reason: null, rows: scheduleCostRows("daily", null) },
+  },
+  usage: { window_days: 7, measured_days: 2, cpu_seconds: 5321, since: new Date(now - day).toISOString().slice(0, 10), days: [1, 0].map(back => new Date(now - back * day).toISOString().slice(0, 10)), rows: [
+    usageRow("item:agent_events", "Agent events", 2900, { item: "agent_events", worker_cpu_seconds: 2400, gpu_seconds: 310 }),
+    usageRow("item:conversations", "New conversations", 1100, { item: "conversations" }),
+    usageRow("kind:library.rebuild", "Full recapture & reindex / Reindex from stored messages", 640),
+    usageRow("item:tools", "Tools & usage", 71, { item: "tools" }),
+    usageRow("kind:maintenance.checkpoint", "Save the catalog", 0.3, { peak_bytes: null }),
+    usageRow("kind:maintenance.cache-warm", "Warm page caches", null, { peak_bytes: null }),
+    usageRow("other", "Pages and everything else", 610, { seconds: 0, runs: 0, peak_bytes: null }),
+  ] },
+};
 export const backgroundDocument = {
+  ...backgroundCosts,
   labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.', notice:'', execution: {device:'gpu', status:'GPU · Automatic', detail:'Confirmed by the last worker. GPU capacity is managed automatically.', confirmed:true}, threads: 4, threads_can_change: false },
   agent_events: { enabled: false, can_change: true, status: 'Off. Turn on to find agent events in this library.', notice:'', execution: {device:'cpu', status:'CPU · GPU unavailable', detail:'Confirmed by the last worker. Automatic GPU selection fell back to CPU.', confirmed:true}, threads: 4, threads_can_change: true, thread_choices: [1, 2, 4, 8, 16, 28] },
   pull_request_reviews: { enabled: false, can_change: true, status: 'Off. Turn on to read reviews and comments on your workspaces’ pull requests from GitHub.', notice:'', execution: {device:'forge', status:'No pull request read yet'} },
