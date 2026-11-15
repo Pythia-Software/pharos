@@ -537,6 +537,7 @@ const ROUTES = [
     },
   },
   { name: "Home", url: "/", ready: ".home-recent-grid .home-recent-card" },
+  { name: "Home card that couldn't load", url: "/", ready: ".home-collection .query-preview-error", preferences: { "pharos-bookmarks-v1": [{ id: "broken-card", dashboard: true, title: "A saved card whose definition is invalid", url: "/analyze?analyze_mode=dashboards&analyze_chart=not-json" }] } },
   { name: "Home without recent conversations", url: "/", ready: ".home-recent-empty", api: { "GET /api/library/recent-conversations": { items: [] } } },
   { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).focus(); await page.keyboard.press("Enter"); }, shown: ".home-search-disclosure.is-expanded",
     check: page => page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input")) },
