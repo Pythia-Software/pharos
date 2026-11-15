@@ -44,6 +44,7 @@ rebuild the same index; read both before starting either.
 | Handoff | Problem |
 |---|---|
 | [plugins-design-review.md](plugins-design-review.md) | Review the importer and exporter plugin design, its public contracts and implementation plan before anything is built |
+| [plugin-importers.md](plugin-importers.md) | Take over the import side of the plugin design: pull transcripts from SSH hosts, sandboxes and buckets on a cadence, revised against master |
 
 ## Capture compression
 
