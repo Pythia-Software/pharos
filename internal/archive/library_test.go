@@ -743,18 +743,36 @@ Please fix the parser' WHERE id='m1'`)
 	if _, last := preview(); last != "Shipped it" || stored() != 0 {
 		t.Fatalf("after an older build's refresh: %q, stored %d", last, stored())
 	}
-	// Large workspaces are filled in; small ones are quick to preview without.
+	// Large workspaces are filled in; small ones are quick to preview without,
+	// and leave the queue that refresh put them on.
 	if filled, err := catalog.refreshPreviews(ctx, 25); err != nil || filled != 0 {
 		t.Fatalf("filled %d small workspaces (%v)", filled, err)
 	}
-	if _, err := catalog.DB.Exec("UPDATE workspace_library SET turn_count=1000 WHERE workspace_id='c'"); err != nil {
-		t.Fatal(err)
+	if queued := countRows(t, catalog, "SELECT COUNT(*) FROM workspace_previews_pending"); queued != 0 {
+		t.Fatalf("%d small workspaces stay queued", queued)
 	}
+	// With none queued, a pass does not take the catalog writer.
+	writes := catalog.writers.next
+	if filled, err := catalog.refreshPreviews(ctx, 25); err != nil || filled != 0 || catalog.writers.next != writes {
+		t.Fatalf("idle pass: filled %d, took the writer %v (%v)", filled, catalog.writers.next != writes, err)
+	}
+	// The older build refreshes it again once it has grown.
+	execSQL(t, catalog.DB, "UPDATE workspace_library SET turn_count=1000 WHERE workspace_id='c'",
+		"INSERT INTO workspace_library_dirty(workspace_id) VALUES('c')", "DELETE FROM workspace_library_dirty")
 	if filled, err := catalog.refreshPreviews(ctx, 25); err != nil || filled != 1 || stored() != 1 {
 		t.Fatalf("filled %d, stored %d (%v)", filled, stored(), err)
 	}
 	if _, last := preview(); last != "Shipped it" {
 		t.Fatalf("filled preview %q", last)
+	}
+	// A catalog from before the queue has its large workspaces without
+	// previews queued once, when the queue is created.
+	execSQL(t, catalog.DB, "DROP TABLE workspace_previews_pending", "DELETE FROM workspace_previews")
+	if err := catalog.ensureLibrary(); err != nil {
+		t.Fatal(err)
+	}
+	if filled, err := catalog.refreshPreviews(ctx, 25); err != nil || filled != 1 || stored() != 1 || dirtyCount(t, catalog) != 0 {
+		t.Fatalf("upgrade: filled %d, stored %d, %d marked (%v)", filled, stored(), dirtyCount(t, catalog), err)
 	}
 	for _, stamp := range []struct {
 		at   string

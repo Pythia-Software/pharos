@@ -259,6 +259,9 @@ func (c *Catalog) ensureLibrary() error {
 		workspace_id TEXT PRIMARY KEY, token TEXT NOT NULL, claimed_at INTEGER NOT NULL) WITHOUT ROWID`); err != nil {
 		return err
 	}
+	if err := c.ensurePreviewQueue(); err != nil {
+		return err
+	}
 	triggers, err := libraryTriggerDDL(c.DB)
 	if err != nil {
 		return err
@@ -513,14 +516,19 @@ func (c *Catalog) refreshLibraryBatch(ctx context.Context, batch int, workspaces
 			}
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_library_dirty WHERE workspace_id IN (SELECT workspace_id FROM workspace_library_claims WHERE token=?)`, token); err != nil {
-		return 0, 0, err
-	}
+	// Previews go in before the mark is cleared: clearing the mark of a
+	// workspace without them queues it for refreshPreviews.
 	for _, row := range previews {
 		if id, _ := row[0].(string); still[id] {
 			if _, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO workspace_previews(workspace_id,first_input_id,last_response_id) VALUES(?,?,?)", row...); err != nil {
 				return 0, 0, err
 			}
+		}
+	}
+	for _, statement := range []string{`DELETE FROM workspace_previews_pending WHERE workspace_id IN (SELECT workspace_id FROM workspace_library_claims WHERE token=?)`,
+		`DELETE FROM workspace_library_dirty WHERE workspace_id IN (SELECT workspace_id FROM workspace_library_claims WHERE token=?)`} {
+		if _, err := tx.ExecContext(ctx, statement, token); err != nil {
+			return 0, 0, err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_library_claims WHERE token=?`, token); err != nil {
@@ -563,29 +571,72 @@ func queryValues(ctx context.Context, q queryer, statement string, args ...any) 
 	return out, rows.Err()
 }
 
-// refreshPreviews stores the preview IDs of up to batch large workspaces
-// without them, largest first, and reports how many it stored. After an
-// upgrade that is every workspace, and a small one is quick to preview
-// without, so only large ones are filled in. The IDs are found before the
-// write lock is taken, since a large workspace takes seconds to read, and
-// stored only for workspaces nothing has changed since: a change marks the
-// workspace dirty, and RefreshLibrary stores its previews.
+// A refresh stores a workspace's previews with its row, so one is without
+// them only when something else cleared its mark: a build that predates
+// previews, or one that does not store them. workspace_previews_pending is
+// the queue of those, kept by a trigger, so that finding none costs one
+// probe of an empty table rather than a scan of every stored row.
+const (
+	// previewsQueuedSQL selects queued workspaces a pass can settle now. A
+	// marked one waits for its refresh, which stores its previews.
+	previewsQueuedSQL = `FROM workspace_previews_pending p WHERE p.workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)`
+	// previewsLargeSQL narrows them to those worth storing previews for.
+	previewsLargeSQL = previewsQueuedSQL + ` AND p.workspace_id NOT IN (SELECT workspace_id FROM workspace_previews)
+		AND p.workspace_id IN (SELECT l.workspace_id FROM workspace_library l WHERE l.turn_count+l.tool_use_count>200)`
+)
+
+// ensurePreviewQueue creates the queue and, the first time, fills it with
+// the large workspaces already without previews (one scan of the stored rows).
+func (c *Catalog) ensurePreviewQueue() error {
+	var existed, stored int
+	if err := c.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workspace_previews_pending'),
+		(SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workspace_library')`).Scan(&existed, &stored); err != nil {
+		return err
+	}
+	if _, err := c.DB.Exec(`CREATE TABLE IF NOT EXISTS workspace_previews_pending (workspace_id TEXT PRIMARY KEY) WITHOUT ROWID;
+		CREATE TRIGGER IF NOT EXISTS workspace_previews_unstored AFTER DELETE ON workspace_library_dirty
+		WHEN NOT EXISTS(SELECT 1 FROM workspace_previews WHERE workspace_id=OLD.workspace_id)
+			AND EXISTS(SELECT 1 FROM workspaces WHERE id=OLD.workspace_id)
+		BEGIN INSERT INTO workspace_previews_pending(workspace_id) SELECT OLD.workspace_id
+			WHERE OLD.workspace_id NOT IN (SELECT workspace_id FROM workspace_previews_pending); END`); err != nil {
+		return err
+	}
+	if existed == 0 && stored == 1 {
+		_, err := c.DB.Exec(`INSERT OR IGNORE INTO workspace_previews_pending(workspace_id) SELECT l.workspace_id FROM workspace_library l
+			WHERE l.turn_count+l.tool_use_count>200 AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_previews)`)
+		return err
+	}
+	return nil
+}
+
+// refreshPreviews stores the preview IDs of up to batch queued large
+// workspaces, largest first, and reports how many it stored. A small one is
+// quick to preview without, so it only leaves the queue. The IDs are found
+// before the write lock is taken, since a large workspace takes seconds to
+// read, and stored only for workspaces nothing has changed since: a change
+// marks the workspace dirty, and RefreshLibrary stores its previews.
 func (c *Catalog) refreshPreviews(ctx context.Context, batch int) (int, error) {
-	const pending = `FROM workspace_library l WHERE l.turn_count+l.tool_use_count>200
-		AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_previews)
-		AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)`
-	selected, err := queryMapsContext(ctx, c.DB, "SELECT l.workspace_id "+pending+" ORDER BY l.turn_count+l.tool_use_count DESC LIMIT ?", batch)
-	if err != nil || len(selected) == 0 {
+	// Idle: the queue is empty.
+	queued, err := queryMapsContext(ctx, c.reader(), "SELECT 1 "+previewsQueuedSQL+" LIMIT 1")
+	if err != nil || len(queued) == 0 {
 		return 0, err
 	}
-	completed := maintenanceBatch(ctx, c.DB, "Filling in previews", "workspace", len(selected), "SELECT count(*) "+pending)
+	selected, err := queryMapsContext(ctx, c.reader(), `SELECT p.workspace_id `+previewsLargeSQL+`
+		ORDER BY (SELECT l.turn_count+l.tool_use_count FROM workspace_library l WHERE l.workspace_id=p.workspace_id) DESC LIMIT ?`, batch)
+	if err != nil {
+		return 0, err
+	}
+	completed := func(error) {}
 	ids := make([]any, len(selected))
-	for i, row := range selected {
-		ids[i] = row["workspace_id"]
-	}
-	rows, err := queryMapsContext(ctx, c.DB, libraryPreviewSelect("w.id IN ("+placeholders(len(ids))+")"), ids...)
-	if err != nil || len(rows) == 0 {
-		return 0, err
+	rows := []map[string]any{}
+	if len(selected) > 0 {
+		completed = maintenanceBatch(ctx, c.reader(), "Filling in previews", "workspace", len(selected), "SELECT count(*) "+previewsLargeSQL)
+		for i, row := range selected {
+			ids[i] = row["workspace_id"]
+		}
+		if rows, err = queryMapsContext(ctx, c.reader(), libraryPreviewSelect("w.id IN ("+placeholders(len(ids))+")"), ids...); err != nil {
+			return 0, err
+		}
 	}
 	tx, finish, err := c.beginTrackedWrite(ctx, "library-previews")
 	if err != nil {
@@ -599,6 +650,14 @@ func (c *Catalog) refreshPreviews(ctx context.Context, batch int) (int, error) {
 			ON CONFLICT(workspace_id) DO NOTHING`, id, row["first_input_id"], row["last_response_id"], id, id); err != nil {
 			return 0, err
 		}
+	}
+	// What is settled leaves the queue: workspaces with previews (those
+	// just stored among them), too small to want them, or gone. One marked
+	// meanwhile stays for its refresh.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_previews_pending WHERE workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)
+		AND (workspace_id IN (SELECT workspace_id FROM workspace_previews)
+			OR workspace_id NOT IN (SELECT l.workspace_id FROM workspace_library l WHERE l.turn_count+l.tool_use_count>200))`); err != nil {
+		return 0, err
 	}
 	err = tx.Commit()
 	completed(err)

@@ -371,9 +371,7 @@ func (s *Server) maintenanceWorkDefinitions(_ *workAuthority) ([]workDefinition,
 			step: libraryStep(func(ctx context.Context) (int, error) { return c.refreshMetricProjections(ctx, metricProjectionBatch) })},
 		{kind: kindPreviews, phase: "fill", hold: projectionHold, loop: true,
 			probe: func(ctx context.Context) (bool, error) {
-				return catalogExists(ctx, c, `SELECT 1 FROM workspace_library l WHERE l.turn_count+l.tool_use_count>200
-					AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_previews)
-					AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)`)
+				return catalogExists(ctx, c, "SELECT 1 "+previewsQueuedSQL)
 			},
 			step: libraryStep(func(ctx context.Context) (int, error) { return c.refreshPreviews(ctx, 25) })},
 		{kind: kindNames, phase: "name", hold: projectionHold, loop: true,
