@@ -629,6 +629,20 @@ func TestOperationForecastPersistsWorkerSnapshotsAndEvaluatesOnlyCompletedRuns(t
 	if got := calibrationRatios(older, "launch"); len(got) != 0 {
 		t.Fatalf("another estimator's snapshot calibrated this one: %v", got)
 	}
+	// A plan covers every stage the deferred chain will run, so the forecast
+	// is not "complete" while related conversations or labels are running.
+	s.configMu.Lock()
+	s.config.Labels.Enabled = true
+	s.configMu.Unlock()
+	op := s.beginOperation(s.startRunNamed(indexRunKind, nil).ID, indexRunKind)
+	addAnalysisForecast(op, false)
+	ids := []string{}
+	for _, step := range op.steps {
+		ids = append(ids, strings.TrimPrefix(step.ID, "analysis:"))
+	}
+	if !slices.Equal(ids, s.deferredAnalysisNames(t.Context())) || !slices.Contains(ids, "peers") || !slices.Contains(ids, "labels") || slices.Contains(ids, "engagement") {
+		t.Fatalf("planned analyses: %v", ids)
+	}
 	accuracy := forecastAccuracy(history)["launch"].(map[string]any)
 	if accuracy["attempts"] != 3 || accuracy["predicted"] != 2 || accuracy["evaluated"] != 1 || accuracy["covered"] != 1 {
 		t.Fatalf("availability/error denominators: %+v", accuracy)

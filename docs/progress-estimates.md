@@ -140,7 +140,10 @@ indexing, projections, verification, and the selected analysis steps. Capture &
 index also includes capture. Full rebuilds, updates and retained repairs have
 separate operation histories. Explicit capture indexing now waits for Git,
 tools, authorship and findings through the same coordinator as manual indexing;
-reporting complete means those required analyses have finished. Scheduled
+reporting complete means those required analyses have finished. The plan lists
+every stage that chain runs, including related conversations and, where they
+are turned on, labels, agent events and engagement labels, so the forecast is
+not "complete" while they run. Scheduled
 incremental runs continue to defer them, so their forecast covers only the work
 that the scheduled operation actually performs. Later optional upgrades remain
 separate activities.

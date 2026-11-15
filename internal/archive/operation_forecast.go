@@ -126,9 +126,26 @@ func analysisForecastModel(name string) string {
 	}
 }
 
+// deferredAnalysisNames lists the stages finishDeferredStages runs, in its
+// order, so a plan covers the whole chain instead of reporting "complete"
+// while related conversations, labels or agent events are still running.
+func (s *Server) deferredAnalysisNames(ctx context.Context) []string {
+	names := []string{"github", "identities", "git", "tools", "authorship", "peers", "findings"}
+	if s.Config().Labels.Enabled {
+		names = append(names, "labels")
+	}
+	if s.Catalog != nil && s.agentEventsEnabled(ctx) {
+		names = append(names, "agent_events")
+	}
+	if s.Config().Engagement.Enabled {
+		names = append(names, "engagement")
+	}
+	return names
+}
+
 func addAnalysisForecast(op *operationForecast, forceFindings bool) {
 	features := op.server.analysisForecastFeatures()
-	for _, name := range []string{"github", "identities", "git", "tools", "authorship", "findings"} {
+	for _, name := range op.server.deferredAnalysisNames(context.Background()) {
 		f := op.server.analysisStepFeatures(context.Background(), name, features, forceFindings, false)
 		// Before source discovery a currently reusable result can be invalidated
 		// by incoming work. Don't classify it as a guaranteed cache hit yet.
@@ -168,7 +185,7 @@ func (op *operationForecast) reviseAnalyses(ctx context.Context, forceFindings, 
 		return
 	}
 	features := op.server.analysisForecastFeatures()
-	for _, name := range []string{"github", "identities", "git", "tools", "authorship", "findings"} {
+	for _, name := range op.server.deferredAnalysisNames(ctx) {
 		op.revise("analysis:"+name, "", op.server.analysisStepFeatures(ctx, name, features, forceFindings, willWrite), true)
 	}
 }
