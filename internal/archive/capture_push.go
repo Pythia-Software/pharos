@@ -40,6 +40,9 @@ import (
 
 const pushContract = "pharos-push/1"
 
+// pushKeyTime is <time> in an export's key.
+const pushKeyTime = "20060102T150405Z"
+
 var (
 	// pushMinInterval separates the starts of two background passes.
 	pushMinInterval = 30 * time.Second
@@ -806,7 +809,14 @@ func (r *pushRun) pushSource(ctx context.Context, host string, source SourceConf
 		}
 		doc.Members = append(doc.Members, member)
 	}
-	at := pushNow().UTC()
+	// Keys order a pusher's exports, so each is later than the one before
+	// even when two passes share a second or the clock steps back.
+	at := pushNow().UTC().Truncate(time.Second)
+	if stamp, _, ok := strings.Cut(known.LastKey, "-"); ok {
+		if previous, err := time.Parse(pushKeyTime, stamp); err == nil && !at.After(previous) {
+			at = previous.Add(time.Second)
+		}
+	}
 	doc.PushedAt = at.Format(time.RFC3339)
 	if known.LastKey != "" {
 		doc.Previous = &known.LastKey
@@ -815,7 +825,7 @@ func (r *pushRun) pushSource(ctx context.Context, host string, source SourceConf
 	if err != nil {
 		return result, err
 	}
-	name := at.Format("20060102T150405Z") + "-" + envelope.ID + ".json"
+	name := at.Format(pushKeyTime) + "-" + envelope.ID + ".json"
 	key := pushKey(r.identity.Prefix, "exports", r.state.Pusher, source.Name, name)
 	// Its chunks are all in the bucket by now, so a reader that sees this
 	// export can assemble it.
@@ -828,7 +838,9 @@ func (r *pushRun) pushSource(ctx context.Context, host string, source SourceConf
 
 // assemblePushExport rebuilds, in the empty folder dir, the capture export
 // a pushed export describes, fetching each chunk with get, and verifies it.
-func assemblePushExport(ctx context.Context, get func(ctx context.Context, key string) ([]byte, error), prefix string, doc pushExportDoc, dir string) (CaptureExport, error) {
+// local, when set, may name a file already holding a member's bytes; the
+// verification that follows checks it like any other.
+func assemblePushExport(ctx context.Context, get func(ctx context.Context, key string) ([]byte, error), local func(CaptureExportFile) string, prefix string, doc pushExportDoc, dir string) (CaptureExport, error) {
 	if doc.Contract != pushContract || doc.Chunking != pushChunking {
 		return CaptureExport{}, fmt.Errorf("a pushed export of contract %q and chunking %q cannot be read", doc.Contract, doc.Chunking)
 	}
@@ -843,6 +855,11 @@ func assemblePushExport(ctx context.Context, get func(ctx context.Context, key s
 		target := filepath.Join(dir, filepath.FromSlash(member.Path))
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return CaptureExport{}, err
+		}
+		if local != nil {
+			if have := local(file); have != "" && copyFileDurably(have, target) == nil {
+				continue
+			}
 		}
 		out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {

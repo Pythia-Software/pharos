@@ -324,6 +324,11 @@
                     "workload_identity_provider",
                     "identity_token"
                   ]
+                },
+                {
+                  "required": [
+                    "access_token"
+                  ]
                 }
               ],
               "properties": {
@@ -355,6 +360,10 @@
                   "type": "string"
                 },
                 "identity_token": {
+                  "$ref": "#/$defs/identity_token"
+                },
+                "access_token": {
+                  "description": "Where a Google access token comes from, for a machine already signed in by other means (for example the command `gcloud auth print-access-token`). It is asked for again every few minutes.",
                   "$ref": "#/$defs/identity_token"
                 }
               }

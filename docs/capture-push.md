@@ -21,8 +21,8 @@ pharos capture-push [--config FILE] [--state DIR] [--wait | --watch | --check | 
 | `capture-push --check` | Writes this machine's `hello` to the bucket and prints what it resolved. Proves the configuration before any conversation exists |
 | `capture-push --status` | Prints the last pass, the sources found, and whether pushes are paused |
 
-The library side that reads the bucket (`bucket-import/1`) is not built yet;
-see [the import design](plugin-imports.md#order-of-work).
+A library collects what was pushed with
+[`pharos bucket-import`](#collecting-into-a-library).
 
 Code: `internal/archive/capture_push.go` (passes, state, modes),
 `capture_push_store.go` (configuration and destinations) and
@@ -57,7 +57,7 @@ a relative file is read from the configuration's folder.
 | Destination | Stored credential | Keyless |
 |---|---|---|
 | `s3` (and S3-compatible stores, with `endpoint`) | `access_key_id`, `secret_access_key` | `role_arn` and `identity_token` |
-| `gcs` | `service_account_key`, or an HMAC key as `access_key_id` and `secret_access_key` | `workload_identity_provider`, `identity_token`, and optionally `service_account` to act as |
+| `gcs` | `service_account_key`, an HMAC key as `access_key_id` and `secret_access_key`, or `access_token` (where a token comes from, such as the command `gcloud auth print-access-token`) | `workload_identity_provider`, `identity_token`, and optionally `service_account` to act as |
 | `azure` | `sas_url` for the container | `account`, `container`, `tenant_id`, `client_id` and `identity_token` |
 | `http` | `url_template` containing `{key}`, and optionally one `header` | |
 
@@ -68,8 +68,11 @@ access and trades it for short-lived credentials: AWS
 `AssumeRoleWithWebIdentity`, Google workload identity federation, or a
 Microsoft Entra federated credential.
 
-Pushing needs permission to create objects under the prefix and nothing
-else. The pusher never reads, lists or deletes.
+Pushing needs permission to create and replace objects under the prefix.
+The pusher never reads, lists or deletes. On S3 that is `s3:PutObject`. On
+Google Cloud Storage replacing an object needs `storage.objects.delete` as
+well as `storage.objects.create`, so a create-only role fails the first
+time a chunk is sent again; on Azure a SAS needs create and write.
 
 Other fields:
 
@@ -183,7 +186,59 @@ happens, so it cannot slow or fail a turn. Where a platform owns the
 agents' settings files (Niteshift does), use `--watch` as a supervised
 service instead of editing them.
 
+## Collecting into a library
+
+```text
+pharos --config LIBRARY_CONFIG bucket-import --from pharos-read.json
+pharos --config LIBRARY_CONFIG index --host HOST
+```
+
+`pharos-read.json` is the same contract with `"access": "read"`, a
+credential that can list and read, and a prefix naming one owner's folder
+(no `{owner}`). `bucket-import` runs as the `capture.import` operation,
+variant `bucket`:
+
+1. Lists `exports/` and takes each pusher's newest export per source. Each
+   export holds everything its predecessors did, so the ones between two
+   runs are skipped.
+2. Rebuilds the export in a scratch folder, fetching chunks, and verifies
+   it whole with the capture-export verifier. A file the previous export
+   already brought unchanged is copied from the capture root instead of
+   fetched.
+3. Merges it into `<capture root>/<host>/<source>`: the pushing machine is
+   one more captured host. Files are written first and the manifest last.
+4. Prints what it collected and the hosts to index. Indexing is the
+   ordinary capture index; the app's background capture-and-index pass
+   already indexes every host under the capture root.
+
+Collection only adds. An export that fails verification changes nothing.
+An export that lacks a file the library already holds from that machine is
+refused whole and reported. A host folder that was not collected from a
+bucket (a Mac's own capture) is never merged into, and an export claiming
+to be this Mac is refused. The cursor is in
+`<capture root>/.bucket-imports/<destination>/state.json`; a host collected
+this way has a `.bucket-import.json` recording its pusher, owner, pool and
+platform.
+
+Code: `internal/archive/capture_bucket_import.go`; tests beside it.
+
 ## Limits
+
+- `bucket-import` reads Google Cloud Storage and S3 (and S3-compatible
+  stores). Azure and plain-URL destinations can be pushed to but not yet
+  imported from.
+- It is a command, not yet a scheduled background item, and has no setup
+  screen. The platform, owner and pool an export carries are recorded
+  beside the host but do not yet set the conversation's Channel or the
+  machine's pool.
+- The operation's recorded holds are those of `capture.import` (this Mac's
+  capture); it writes another host's. `docs/background-work.md` needs its
+  own row for the variant when it becomes a scheduled item.
+- It follows each pusher's newest export only. An export that the newest
+  does not descend from (two machines sharing one pusher ID) is not yet
+  found.
+- An interrupted merge can leave a file newer than the manifest describes
+  until the next run completes it.
 
 - Only kinds that can travel as a capture export are pushed: Claude Code
   and Codex. Codex SQLite record capture is not included.

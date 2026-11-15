@@ -170,7 +170,7 @@ func (f *pushFixture) rebuilt(key string) string {
 	doc := f.bucket.export(key)
 	dir := f.t.TempDir()
 	prefix, _, _ := strings.Cut(key, "/exports/")
-	envelope, err := assemblePushExport(context.Background(), f.bucket.get, prefix, doc, dir)
+	envelope, err := assemblePushExport(context.Background(), f.bucket.get, nil, prefix, doc, dir)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -356,11 +356,10 @@ func TestCapturePushServesARequestMadeDuringAPass(t *testing.T) {
 		t.Fatalf("exports: %v", exports)
 	}
 	final, _ := os.ReadFile(f.transcript)
-	// Keys order a pusher's exports only to the second; the chain says which
-	// came last.
-	newest := exports[0]
-	if f.bucket.export(newest).Previous == nil {
-		newest = exports[1]
+	// Keys order a pusher's exports even within one second.
+	newest := exports[1]
+	if previous := f.bucket.export(newest).Previous; previous == nil || !strings.HasSuffix(exports[0], "/"+*previous) {
+		t.Fatalf("the later key does not follow the earlier: %v", exports)
 	}
 	if got := f.rebuilt(newest); got != string(final) {
 		t.Fatal("the last pass does not hold the last turn")

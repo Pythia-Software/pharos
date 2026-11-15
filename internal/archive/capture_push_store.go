@@ -65,6 +65,9 @@ type pushDestination struct {
 	ServiceAccountKey        pushSecret `json:"service_account_key,omitempty"`
 	WorkloadIdentityProvider string     `json:"workload_identity_provider,omitempty"`
 	ServiceAccount           string     `json:"service_account,omitempty"`
+	// AccessToken supplies a Google access token directly, for a machine
+	// already signed in by other means.
+	AccessToken *pushIdentityToken `json:"access_token,omitempty"`
 	// azure.
 	SASURL    pushSecret `json:"sas_url,omitempty"`
 	Account   string     `json:"account,omitempty"`
@@ -217,13 +220,13 @@ func (c pushConfig) validate() error {
 		}
 	case "gcs":
 		ways := 0
-		for _, way := range []bool{stored, d.ServiceAccountKey.set(), d.WorkloadIdentityProvider != "" && d.IdentityToken != nil} {
+		for _, way := range []bool{stored, d.ServiceAccountKey.set(), d.WorkloadIdentityProvider != "" && d.IdentityToken != nil, d.AccessToken != nil} {
 			if way {
 				ways++
 			}
 		}
 		if d.Bucket == "" || ways != 1 {
-			return errors.New("a gcs destination needs a bucket and one of an HMAC key, a service account key, or a workload identity provider with an identity token")
+			return errors.New("a gcs destination needs a bucket and one of an HMAC key, a service account key, an access token, or a workload identity provider with an identity token")
 		}
 	case "azure":
 		keyless := d.Account != "" && d.Container != "" && d.TenantID != "" && d.ClientID != "" && d.IdentityToken != nil
@@ -283,7 +286,7 @@ func pushDo(ctx context.Context, build func() (*http.Request, error), ok ...int)
 			last = err
 			continue
 		}
-		body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+		body, err := io.ReadAll(io.LimitReader(response.Body, pushObjectLimit))
 		response.Body.Close()
 		if err != nil {
 			last = err
@@ -441,7 +444,9 @@ type pushGCS struct {
 }
 
 const (
-	pushGCSScope = "https://www.googleapis.com/auth/devstorage.read_write"
+	pushGCSScope  = "https://www.googleapis.com/auth/devstorage.read_write"
+	pushGCSObject = "https://storage.googleapis.com/storage/v1/b/%s/o/%s?alt=media"
+	pushGCSList   = "https://storage.googleapis.com/storage/v1/b/%s/o?prefix=%s&fields=items/name,nextPageToken&pageToken=%s"
 	// Endpoints, as variables only so that their hosts are in one place.
 	pushGCSUpload      = "https://storage.googleapis.com/upload/storage/v1/b/%s/o?uploadType=media&name=%s"
 	pushGoogleSTS      = "https://sts.googleapis.com/v1/token"
@@ -451,6 +456,14 @@ const (
 
 func (g *pushGCS) prepare() error {
 	g.once.Do(func() {
+		if g.d.AccessToken != nil {
+			// Whatever made the token knows when it ends; ask again soon.
+			g.bearer = &pushBearer{renew: func(ctx context.Context) (string, time.Time, error) {
+				token, err := g.d.AccessToken.read(ctx, g.base)
+				return token, time.Now().Add(5 * time.Minute), err
+			}}
+			return
+		}
 		if !g.d.ServiceAccountKey.set() {
 			g.bearer = &pushBearer{renew: g.federate}
 			return
@@ -668,4 +681,99 @@ func (p *pushPlain) put(ctx context.Context, key string, body []byte) error {
 		return request, err
 	}, http.StatusOK, http.StatusCreated, http.StatusNoContent)
 	return err
+}
+
+// Reading, for the library that imports what was pushed.
+
+// pushReadStore lists and fetches objects. A reader's credential may read
+// and list and need not write.
+type pushReadStore interface {
+	// list returns every key beginning with prefix, in order.
+	list(ctx context.Context, prefix string) ([]string, error)
+	get(ctx context.Context, key string) ([]byte, error)
+}
+
+func newPushReadStore(config pushConfig, base string) (pushReadStore, error) {
+	store, err := newPushStore(config, base)
+	if err != nil {
+		return nil, err
+	}
+	if reader, ok := store.(pushReadStore); ok {
+		return reader, nil
+	}
+	return nil, fmt.Errorf("a %s destination cannot be imported from yet", config.Destination.Type)
+}
+
+// pushObjectLimit bounds one fetched object: a chunk is at most 256 KiB and
+// an export lists a capture's members.
+const pushObjectLimit = 256 << 20
+
+func (g *pushGCS) authorized(ctx context.Context, method, target string) ([]byte, error) {
+	if err := g.prepare(); err != nil {
+		return nil, err
+	}
+	token, err := g.bearer.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return pushDo(ctx, func() (*http.Request, error) {
+		request, err := http.NewRequest(method, target, nil)
+		if err == nil {
+			request.Header.Set("Authorization", "Bearer "+token)
+		}
+		return request, err
+	}, http.StatusOK)
+}
+
+func (g *pushGCS) get(ctx context.Context, key string) ([]byte, error) {
+	return g.authorized(ctx, http.MethodGet, fmt.Sprintf(pushGCSObject, url.PathEscape(g.d.Bucket), url.PathEscape(key)))
+}
+
+func (g *pushGCS) list(ctx context.Context, prefix string) ([]string, error) {
+	var keys []string
+	for page := ""; ; {
+		body, err := g.authorized(ctx, http.MethodGet, fmt.Sprintf(pushGCSList, url.PathEscape(g.d.Bucket), url.QueryEscape(prefix), url.QueryEscape(page)))
+		if err != nil {
+			return nil, err
+		}
+		var answer struct {
+			Items         []struct{ Name string }
+			NextPageToken string
+		}
+		if err := json.Unmarshal(body, &answer); err != nil {
+			return nil, err
+		}
+		for _, item := range answer.Items {
+			keys = append(keys, item.Name)
+		}
+		if page = answer.NextPageToken; page == "" {
+			slices.Sort(keys)
+			return keys, nil
+		}
+	}
+}
+
+func (s *pushS3) get(ctx context.Context, key string) ([]byte, error) {
+	object, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
+	if err != nil {
+		return nil, err
+	}
+	defer object.Body.Close()
+	return io.ReadAll(io.LimitReader(object.Body, pushObjectLimit))
+}
+
+func (s *pushS3) list(ctx context.Context, prefix string) ([]string, error) {
+	var keys []string
+	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{Bucket: aws.String(s.bucket), Prefix: aws.String(prefix)})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, object := range page.Contents {
+			keys = append(keys, aws.ToString(object.Key))
+		}
+	}
+	slices.Sort(keys)
+	return keys, nil
 }
