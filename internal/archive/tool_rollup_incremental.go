@@ -113,25 +113,34 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	// in the same transaction (the partition triggers live in the catalog, so
 	// older executables fire them too), and the generation also moves for
 	// authorship-only inputs. The mirrors below are still recomputed.
-	workspaces, err := queryMapsContext(ctx, snapshot, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w
- WHERE EXISTS(SELECT 1 FROM tool_calls t WHERE t.workspace_id=w.id)`)
+	links, err := queryMapsContext(ctx, snapshot, `SELECT a.workspace_id left_workspace,b.workspace_id right_workspace FROM conversation_identity_links l
+ JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id`)
 	if err != nil {
 		return build, err
 	}
-	links, err := queryMapsContext(ctx, snapshot, `SELECT a.workspace_id left_workspace,b.workspace_id right_workspace FROM conversation_identity_links l
- JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id`)
+	// Only a linked workspace can be a mirror, so only those are read.
+	linked := map[string]bool{}
+	for _, link := range links {
+		linked[firstString(link["left_workspace"])], linked[firstString(link["right_workspace"])] = true, true
+	}
+	linkedIDs := make([]string, 0, len(linked))
+	for id := range linked {
+		linkedIDs = append(linkedIDs, id)
+	}
+	workspaces, err := queryMapsContext(ctx, snapshot, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w
+ WHERE w.id IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM tool_calls t WHERE t.workspace_id=w.id)`, jsonText(linkedIDs))
 	if err != nil {
 		return build, err
 	}
 	if _, err := snapshot.ExecContext(ctx, "CREATE TEMP TABLE tool_mirror_build(workspace_id TEXT PRIMARY KEY)"); err != nil {
 		return build, err
 	}
+	mirrors := []string{}
 	for _, row := range suppressMirrorRows(workspaces, links) {
-		for _, id := range row["mirrored_workspace_ids"].([]string) {
-			if _, err := snapshot.ExecContext(ctx, "INSERT INTO temp.tool_mirror_build VALUES(?)", id); err != nil {
-				return build, err
-			}
-		}
+		mirrors = append(mirrors, row["mirrored_workspace_ids"].([]string)...)
+	}
+	if _, err := snapshot.ExecContext(ctx, "INSERT INTO temp.tool_mirror_build SELECT value FROM json_each(?)", jsonText(mirrors)); err != nil {
+		return build, err
 	}
 	// A representative change suppresses/restores entire workspaces, even if
 	// the changed call belongs only to the other member of the mirror group.
