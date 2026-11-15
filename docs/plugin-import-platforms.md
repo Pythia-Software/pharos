@@ -242,12 +242,22 @@ task. No secret is entered anywhere.
 - `cleanupPeriodDays` is 30 there, so a transcript not pushed within a
   month is gone; the watcher pushes within seconds.
 
-**Still to check:** where a Codex task writes its rollouts (Niteshift runs
-Codex through its app server, and `~/.codex/sessions` did not exist in the
-Claude task); that a supervised service may run `ns oidc-token`; what
-`NITESHIFT_USER_ID` and the token's `user_id` hold for a task an automation
-started and for one started from Slack or Linear; and that the capture root
-is absent from the snapshot new tasks start from.
+- Codex, checked in a running Codex task the same day, is driven through
+  `codex app-server` by the same wrapper and writes the ordinary layout
+  under `/root/.codex`: `sessions/<year>/<month>/<day>/rollout-….jsonl`
+  and `state_5.sqlite`. The `codex` kind's globs match as they are.
+
+**Still to check, once `capture-push` exists:** that a supervised service
+may run `ns oidc-token`, and that the capture root is absent from the
+snapshot new tasks start from.
+
+**Deferred:** what `NITESHIFT_USER_ID` and the token's `user_id` hold for a
+task started from Slack or Linear, or by an automation. The owner is
+`NITESHIFT_USER_ID` whenever it is set, which covers tasks people start in
+Niteshift itself. Until the other cases are checked the recipe does not
+claim to recognize an ownerless task: a task with no user ID is refused
+with a message, not filed under `shared`, and the first team that connects
+those integrations is when the `shared` rule for Niteshift gets written.
 
 Niteshift also offers an MCP server that reads task transcripts. That is a
 different, lossier source (its rendering, not the agent's files) and is not
