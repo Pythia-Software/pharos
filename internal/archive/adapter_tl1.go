@@ -349,7 +349,9 @@ func tl1ReadsTranscriptFile(name string) bool {
 	return false
 }
 
-func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v6-execution-model" }
+// v7 keeps every item of a Codex exec file whose item numbering restarts
+// (parseCodexExec), which earlier versions stored under one ID.
+func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v7-codex-item-ids" }
 
 func (a *tl1Adapter) Discover(emit func(WorkspaceRecord) error) error {
 	a.snapshots = nil
