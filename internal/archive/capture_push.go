@@ -49,6 +49,10 @@ var (
 	pushMinInterval = 30 * time.Second
 	// pushWatchPoll is how often --watch looks at the transcript folders.
 	pushWatchPoll = 2 * time.Second
+	// A watcher tries a failed pass again after pushWatchRetry, doubling up
+	// to pushWatchRetryLimit.
+	pushWatchRetry      = 30 * time.Second
+	pushWatchRetryLimit = 10 * time.Minute
 	// After pushRefusalLimit passes in a row that the destination refused,
 	// background passes run once per pushRefusalBackoff.
 	pushRefusalLimit   = 5
@@ -697,7 +701,17 @@ func preparePush(options pushOptions) (*pushRun, error) {
 		state.Machine, state.HelloAt, state.Sources, state.Refusals = machine, "", map[string]*pushSourceState{}, 0
 	}
 	d := config.Destination
-	if destination := stableID("push-destination", d.Type, d.Bucket, d.Endpoint, d.Account, d.Container, d.URLTemplate, identity.Prefix); state.Destination != destination {
+	where := []any{d.Type, d.Bucket, d.Endpoint, d.Account, d.Container, d.URLTemplate, identity.Prefix}
+	if d.SASURL.set() {
+		// The account and container are inside the SAS URL. Its signature
+		// rotates and is left out.
+		location, err := pushSASLocation(d, filepath.Dir(options.ConfigPath))
+		if err != nil {
+			return nil, err
+		}
+		where = append(where, location)
+	}
+	if destination := stableID("push-destination", where...); state.Destination != destination {
 		// Nothing recorded about another bucket or prefix holds here.
 		state.Destination, state.HelloAt, state.Sources, state.Chunks, state.Refusals = destination, "", map[string]*pushSourceState{}, map[string]int64{}, 0
 	}
@@ -782,6 +796,18 @@ func (r *pushRun) pass(ctx context.Context) pushPassRecord {
 	for _, problem := range summary.Errors {
 		record.Warnings = append(record.Warnings, fmt.Sprintf("%s: %s", problem.Path, problem.Error))
 	}
+	// A source that could not be read is reported by its own result. What
+	// was captured is still pushed, but the pass did not preserve everything
+	// and must not say it did.
+	var failed error
+	for _, source := range summary.Sources {
+		for _, problem := range source.Errors {
+			failed = errors.Join(failed, fmt.Errorf("capturing %s: %s: %s", source.Name, problem.Path, problem.Error))
+		}
+	}
+	if failed == nil && !summary.OK && len(summary.Errors) == 0 {
+		failed = errors.New("capture did not finish")
+	}
 	if r.state.HelloAt == "" {
 		if err := r.hello(ctx, sources); err != nil {
 			return fail(err)
@@ -797,7 +823,6 @@ func (r *pushRun) pass(ctx context.Context) pushPassRecord {
 			}
 		}
 	}
-	var failed error
 	for _, source := range sources {
 		if _, err := os.Stat(filepath.Join(r.options.captureRoot(), host.ID, source.Name, captureManifestName)); err != nil {
 			continue
@@ -1111,6 +1136,19 @@ func spawnPushWorker(options pushOptions) error {
 	return worker.Process.Release()
 }
 
+// pushSASLocation is the account and container a SAS URL writes to.
+func pushSASLocation(d pushDestination, base string) (string, error) {
+	raw, err := d.SASURL.read(base)
+	if err != nil {
+		return "", err
+	}
+	sas, err := url.Parse(raw)
+	if err != nil || sas.Host == "" {
+		return "", errors.New("the SAS URL is not an https URL with a signature")
+	}
+	return strings.ToLower(sas.Host) + strings.TrimSuffix(sas.Path, "/"), nil
+}
+
 // watchPush stays running: a pass now, then one whenever a transcript has
 // changed and stopped changing, or has kept changing for a whole interval.
 func watchPush(ctx context.Context, options pushOptions) error {
@@ -1121,8 +1159,26 @@ func watchPush(ctx context.Context, options pushOptions) error {
 		}
 		return pushSignature(pushSources(config))
 	}
+	// A pass that failed is tried again without waiting for another
+	// transcript change: after a short while, then less often.
+	var retryAt time.Time
+	failures := 0
+	drain := func() {
+		record, err := drainPush(ctx, options, false)
+		switch {
+		case errors.Is(err, errPushRunning):
+			// Whoever holds the lock may have started before this change.
+			_ = requestPush(options)
+		case ctx.Err() != nil:
+		case err != nil || !record.OK:
+			failures++
+			retryAt = pushNow().Add(min(pushWatchRetry<<min(failures-1, 16), pushWatchRetryLimit))
+			return
+		}
+		retryAt, failures = time.Time{}, 0
+	}
 	pushed := sources()
-	_, _ = drainPush(ctx, options, false)
+	drain()
 	seen, since := pushed, time.Time{}
 	for {
 		if err := sleepContext(ctx, pushWatchPoll); err != nil {
@@ -1131,6 +1187,9 @@ func watchPush(ctx context.Context, options pushOptions) error {
 		current := sources()
 		if current == pushed && !pushPending(options) {
 			seen, since = current, time.Time{}
+			if !retryAt.IsZero() && !pushNow().Before(retryAt) {
+				drain()
+			}
 			continue
 		}
 		if since.IsZero() {
@@ -1141,10 +1200,7 @@ func watchPush(ctx context.Context, options pushOptions) error {
 			continue
 		}
 		pushed, seen, since = current, current, time.Time{}
-		if _, err := drainPush(ctx, options, false); errors.Is(err, errPushRunning) {
-			// Whoever holds the lock may have started before this change.
-			_ = requestPush(options)
-		}
+		drain()
 	}
 }
 

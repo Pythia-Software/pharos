@@ -137,10 +137,14 @@ def candidates(kind, root, listed, since, after, databases):
         if relative.endswith("-wal") or not wanted(kind, relative):
             continue
         if DATABASE.fullmatch(relative):
-            # A database changes through its WAL before the file itself.
-            mtime = max(mtime, listed.get(path + "-wal", (0, 0))[0])
+            # A database changes through its WAL before the file itself, and
+            # a snapshot holds the WAL's pages too: both count toward its size.
+            # An empty WAL holds no change; reading a database can leave one.
+            wal_mtime, wal_size = listed.get(path + "-wal", (0, 0))
+            if wal_size:
+                mtime = max(mtime, wal_mtime)
             if mtime > databases.get(relative, -1):
-                chosen.append((mtime, size, relative))
+                chosen.append((mtime, size + wal_size, relative))
         elif since is None or mtime > since or mtime == since and (after is None or relative > after):
             chosen.append((mtime, size, relative))
     return sorted(chosen, key=lambda item: (item[0], item[2]))
@@ -183,25 +187,36 @@ def transfer_files(run, remote, root, drop_dir, batch):
 def transfer_database(run, remote, root, drop_dir, relative, mtime):
     """Copy a consistent snapshot of a live SQLite database.
 
-    Returns the newest of the database's and its WAL's mtimes just after the
-    snapshot, which the snapshot itself may have advanced.
+    Returns the stamp to remember: the newest of the database's and its WAL's
+    mtimes just after the snapshot, which the snapshot itself may have
+    advanced; an empty WAL, which reading can leave behind, holds no change. Mtimes are whole seconds, so a stamp at or after the second the
+    snapshot began could hide a write the snapshot missed; it is held to the
+    second before, and the next run takes the database once more.
     """
     database = quote(root + "/" + relative)
     script = (f"set -e\ntmp=$(mktemp -d)\ntrap 'rm -rf \"$tmp\"' EXIT\n"
+              f"echo \"began $(date +%s)\" >&2\n"
               f"sqlite3 {database} \".backup '$tmp/db'\"\n"
               f"case \"$(uname -s)\" in Darwin|*BSD|DragonFly) fmt=f; spec=%m;; *) fmt=c; spec=%Y;; esac\n"
-              f"for file in {database} {database}-wal; do [ -f \"$file\" ] && stat -$fmt \"stamp $spec\" \"$file\" >&2; done\n"
+              f"stat -$fmt \"stamp $spec\" {database} >&2\n"
+              f"if [ -s {database}-wal ]; then stat -$fmt \"stamp $spec\" {database}-wal >&2; fi\n"
               f"cat \"$tmp/db\"\n")
     process = remote.stream(script, stderr=subprocess.PIPE)
 
     def chunks():
+        written = 0
         while data := process.stdout.read(1 << 20):
             run.transferred_bytes += len(data)
+            written += len(data)
+            if not run.fits(written):
+                # The listed sizes are an estimate; the budget is not.
+                process.kill()
+                raise RuntimeError("snapshot is larger than the bytes this run has left")
             yield data
         # Failing here, before the rename, leaves no partial snapshot behind.
         if process.wait() != 0:
             said = [line for line in process.stderr.read().decode(errors="replace").splitlines()
-                    if line.strip() and not line.startswith("stamp ")]
+                    if line.strip() and not line.startswith(("stamp ", "began "))]
             reason = f": {said[-1].strip()[:200]}" if said else ""
             raise RuntimeError(f"snapshot failed with exit status {process.returncode}{reason}")
 
@@ -210,9 +225,11 @@ def transfer_database(run, remote, root, drop_dir, relative, mtime):
     finally:
         process.stdout.close()
         process.wait()
-    stamps = [int(line.split()[1]) for line in process.stderr.read().decode().splitlines()
-              if line.startswith("stamp ")]
-    return max(stamps, default=mtime)
+    said = process.stderr.read().decode(errors="replace").splitlines()
+    stamps = [int(line.split()[1]) for line in said if line.startswith("stamp ")]
+    began = [int(line.split()[1]) for line in said if line.startswith("began ")]
+    stamp = max(stamps, default=mtime)
+    return min(stamp, began[0] - 1) if began else stamp
 
 
 def pull(run):

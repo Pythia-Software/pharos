@@ -147,6 +147,19 @@ func TestBucketImportOnlyAdds(t *testing.T) {
 		t.Fatalf("after an interrupted merge: %+v, %v", result, err)
 	}
 
+	// A capture keeps only so many superseded database snapshots. One the
+	// pusher has since pruned stays here and does not block collection.
+	pruned := filepath.Join(config.CaptureRoot, sandbox, "claude", captureHistoryDir, "20260101T000000Z", "state_5.sqlite")
+	writeSourceFile(t, pruned, "an earlier snapshot")
+	f.appendTranscript(pushLines(8000, 8010))
+	f.push()
+	if result, err := importBucket(context.Background(), config.CaptureRoot, read); err != nil || len(result.Exports) != 1 {
+		t.Fatalf("after the pusher pruned a snapshot: %+v, %v", result, err)
+	}
+	if readText(t, pruned) != "an earlier snapshot" {
+		t.Fatal("the library's copy of a pruned snapshot changed")
+	}
+
 	// A later export that lacks a file the library holds is refused whole.
 	extra := filepath.Join(config.CaptureRoot, sandbox, "claude", captureFilesDir, "-work-api", "earlier.jsonl")
 	writeSourceFile(t, extra, "{}\n")

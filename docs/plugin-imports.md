@@ -337,6 +337,14 @@ no `CaptureTables`, so its database snapshot needs no filter today; a kind
 that declares them is filtered by Pharos on capture, and its importer should
 fetch only those tables where the remote `sqlite3` allows.
 
+A database is snapshotted again when its file, or a WAL that holds
+changes, is newer than the stamp saved after its last snapshot. Mtimes are
+whole seconds, so a stamp from the second the snapshot began is held to the
+second before and the database is taken once more on the next run. A
+snapshot is budgeted at the size of the file and its WAL together, and
+stops if it would pass the run's byte limit. One that fails is skipped with
+its reason and tried again on the next run.
+
 ### Pushing from a machine that runs Pharos
 
 **A prebuilt Linux CLI.** Releases gain a static `pharos` binary for Linux

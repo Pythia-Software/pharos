@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -550,6 +551,79 @@ func TestCapturePushWatchesTranscripts(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A pass that failed is tried again by the watcher itself: the last turn of
+// a task must not wait for a transcript change that never comes.
+func TestCapturePushWatcherRetriesAFailedPass(t *testing.T) {
+	f := newPushFixture(t, "")
+	override(t, &pushWatchPoll, 5*time.Millisecond)
+	override(t, &pushWatchRetry, 5*time.Millisecond)
+	var outage atomic.Bool
+	outage.Store(true)
+	var refusedWrites atomic.Int64
+	f.bucket.before = func(string) int {
+		if outage.Load() {
+			refusedWrites.Add(1)
+			return http.StatusServiceUnavailable
+		}
+		return 0
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- watchPush(ctx, f.options) }()
+	wait := func(what string, reached func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(30 * time.Second); !reached(); time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				cancel()
+				t.Fatalf("the watcher never %s", what)
+			}
+		}
+	}
+	wait("tried during the outage", func() bool { return refusedWrites.Load() > 0 })
+	outage.Store(false)
+	wait("pushed after the outage", func() bool { return len(f.bucket.keys("/exports/")) == 1 })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A source that could not be captured fails the pass, so --wait and the
+// status do not report transcripts as preserved when they were not.
+func TestCapturePushReportsASourceItCouldNotCapture(t *testing.T) {
+	f := newPushFixture(t, "")
+	missing := filepath.Join(f.home, "nowhere")
+	writeSourceFile(t, f.options.ConfigPath, `{"contract":"pharos-push-config/1","access":"write","prefix":"team","sources":[{"name":"claude","kind":"claude","path":"`+missing+`"}],"destination":{"type":"http","url_template":"https://bucket.test/{key}"}}`)
+	record, err := drainPush(context.Background(), f.options, true)
+	if err == nil || record.OK || !strings.Contains(record.Error, "claude") {
+		t.Fatalf("a pass over a missing source: %+v, %v", record, err)
+	}
+}
+
+// Two SAS URLs with the same prefix are two destinations; a new signature
+// for the same container is not.
+func TestCapturePushTellsSASContainersApart(t *testing.T) {
+	t.Setenv("PUSH_TEST_SAS", "https://acct.blob.core.windows.net/box?sv=1&sig=first")
+	f := newPushFixture(t, `{"contract":"pharos-push-config/1","access":"write","prefix":"team","destination":{"type":"azure","sas_url":{"env":"PUSH_TEST_SAS"}}}`)
+	destination := func() string {
+		t.Helper()
+		run, err := preparePush(f.options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return run.state.Destination
+	}
+	first := destination()
+	t.Setenv("PUSH_TEST_SAS", "https://acct.blob.core.windows.net/box?sv=1&sig=rotated")
+	if destination() != first {
+		t.Fatal("a rotated signature made a new destination")
+	}
+	t.Setenv("PUSH_TEST_SAS", "https://acct.blob.core.windows.net/other?sv=1&sig=first")
+	if destination() == first {
+		t.Fatal("another container kept the first one's upload state")
 	}
 }
 

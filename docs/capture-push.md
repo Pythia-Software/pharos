@@ -16,7 +16,7 @@ pharos capture-push [--config FILE] [--state DIR] [--wait | --watch | --check | 
 | Form | What it does |
 |---|---|
 | `capture-push` | Asks for a push and returns at once; a detached worker does the work. This is what an agent hook runs after every turn. It always exits 0 |
-| `capture-push --watch` | Stays running. Pushes when it starts, then whenever a transcript changes. For platforms that supervise a long-running process |
+| `capture-push --watch` | Stays running. Pushes when it starts, then whenever a transcript changes. A pass that fails is tried again after 30 seconds, then less often, up to every 10 minutes. For platforms that supervise a long-running process |
 | `capture-push --wait` | Pushes in the foreground and prints the pass as JSON. Exits non-zero if the pass failed. For the last step of a job |
 | `capture-push --check` | Writes this machine's `hello` to the bucket and prints what it resolved. Proves the configuration before any conversation exists |
 | `capture-push --status` | Prints the last pass, the sources found, and whether pushes are paused |
@@ -113,6 +113,11 @@ The state folder is `~/.pharos/push`, or `--state` or `PHAROS_PUSH_STATE`:
 | `push.lock`, `pending` | One pass at a time, and a request made during one |
 | `push.log` | One JSON line per pass; `--status` shows the last |
 
+What the state records holds for one bucket and prefix. For an Azure
+`sas_url` that is the account and container inside the URL, so pointing it
+at another container starts over there, and a new signature for the same
+container does not.
+
 Removing the folder is safe. The next pass captures and uploads again as a
 new pusher, and the library reads both as copies of the same conversations.
 
@@ -138,6 +143,10 @@ pusher ID. Its label is `PHAROS_HOST_LABEL`, or the hostname.
 4. Writes the export, `exports/<pusher>/<source>/<time>-<id>.json`, after
    its chunks. It holds the capture-export envelope, each file's chunk
    list, and the export it follows.
+
+A source that could not be captured (a named folder that is missing, a
+file that could not be read) fails the pass with its reason. What was
+captured is still pushed, but the pass is not reported as successful.
 
 A source whose transcripts have not changed makes no export and writes
 nothing. A pass that fails partway leaves only chunks, which the next pass
@@ -233,7 +242,9 @@ variant `bucket`:
 
 Collection only adds. An export that fails verification changes nothing.
 An export that lacks a file the library already holds from that machine is
-refused whole and reported. A host folder that was not collected from a
+refused whole and reported. Superseded database snapshots under `history/`
+are the exception: a capture keeps only its newest, so a later export
+rightly lacks older ones, and the library keeps the copies it has. A host folder that was not collected from a
 bucket (a Mac's own capture) is never merged into, and an export claiming
 to be this Mac is refused. The marker that says a host folder came from a
 bucket is written before its first file, so a first collection that stops

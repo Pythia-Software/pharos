@@ -154,6 +154,59 @@ class SSHPullTests(unittest.TestCase):
         self.assertIn("more than max_bytes", result["message"])
         self.assertIsNone(result["cursor"])
 
+    def rename_thread(self, name, mtime):
+        database = self.source("codex") / "state_5.sqlite"
+        connection = sqlite3.connect(database)
+        with connection:
+            connection.execute("UPDATE threads SET name = ?", (name,))
+        connection.close()
+        os.utime(database, (mtime, mtime))
+
+    def thread_name(self, delivered):
+        connection = sqlite3.connect(delivered[("codex", "state_5.sqlite")])
+        try:
+            return connection.execute("SELECT name FROM threads").fetchone()[0]
+        finally:
+            connection.close()
+
+    def test_a_database_written_in_the_second_it_was_snapshotted_is_taken_again(self):
+        first, _ = self.pull()
+        # Mtimes are whole seconds: a write at or after the second a snapshot
+        # began looks the same as one the snapshot already holds.
+        second_of_snapshot = int(time.time()) + 5
+        self.rename_thread("Renamed before the snapshot", second_of_snapshot)
+        second, delivered = self.pull(first["cursor"])
+        self.assertEqual(self.thread_name(delivered), "Renamed before the snapshot")
+        self.rename_thread("Renamed in the same second", second_of_snapshot)
+        third, delivered = self.pull(second["cursor"])
+        self.assertEqual(third["status"], "complete", third)
+        self.assertEqual(self.thread_name(delivered), "Renamed in the same second")
+        # Once its last write is in an earlier second than a snapshot, a
+        # database left alone is not sent again.
+        database = self.source("codex") / "state_5.sqlite"
+        os.utime(database, (HOUR_AGO + 60, HOUR_AGO + 60))
+        fourth, delivered = self.pull(third["cursor"])
+        self.assertEqual((fourth["status"], delivered), ("complete", {}))
+
+    def test_a_snapshot_counts_its_write_ahead_log_against_the_budget(self):
+        # A small database file whose changes are still in a large WAL: the
+        # snapshot is as large as both together.
+        database = self.source("codex") / "state_5.sqlite"
+        writer = sqlite3.connect(database)
+        self.addCleanup(writer.close)
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        with writer:
+            writer.execute("CREATE TABLE blobs (body BLOB)")
+            writer.execute("INSERT INTO blobs VALUES (randomblob(2000000))")
+        self.assertLess(database.stat().st_size, 100_000)
+        budget = RESULT_RESERVE + 1_000_000
+        result, delivered = self.pull(max_bytes=budget)
+        self.assertEqual(result["status"], "partial", result)
+        self.assertNotIn(("codex", "state_5.sqlite"), delivered)
+        self.assertLessEqual(sum(path.stat().st_size for path in delivered.values()), budget - RESULT_RESERVE)
+        again, delivered = self.pull(result["cursor"])
+        self.assertEqual((again["status"], set(delivered)), ("complete", {("codex", "state_5.sqlite")}))
+
     def test_a_new_destination_starts_over(self):
         first, _ = self.pull()
         result, delivered = self.pull(first["cursor"], destination="alice@other-box")

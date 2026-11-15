@@ -261,7 +261,8 @@ var errCaptureImportRegression = errors.New("the export lacks files this library
 // mergeCaptureExport adds the verified export in exportDir to captureRoot
 // as its host's capture of its source, and returns how many files it wrote.
 // It never removes a file: an export that lacks one the capture holds is
-// refused whole. The manifest is written last, so an interrupted merge
+// refused whole, except a superseded version under history/, which the
+// pusher's capture prunes and the library keeps. The manifest is written last, so an interrupted merge
 // leaves files the old manifest does not yet describe and the next run
 // completes it.
 func mergeCaptureExport(ctx context.Context, captureRoot, exportDir string, envelope CaptureExport, marker bucketImportedHost) (int, error) {
@@ -326,6 +327,11 @@ func mergeCaptureExport(ctx context.Context, captureRoot, exportDir string, enve
 		rel, err := filepath.Rel(hostDir, file)
 		if err != nil {
 			return err
+		}
+		// A capture keeps only so many superseded database snapshots, so a
+		// later export rightly lacks the oldest. The library keeps its copy.
+		if strings.HasPrefix(filepath.ToSlash(rel), source+"/"+captureHistoryDir+"/") {
+			return nil
 		}
 		if _, ok := incoming[filepath.ToSlash(rel)]; !ok {
 			return fmt.Errorf("%w: %s", errCaptureImportRegression, filepath.ToSlash(rel))
