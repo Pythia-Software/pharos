@@ -25,6 +25,9 @@ func processUsageOf(pid int) (processUsage, error) {
 	return goRuntimeUsage(), nil
 }
 
+// threadCPUTime has no thread clock to read here.
+func threadCPUTime() (seconds float64, thread uint64, ok bool) { return 0, 0, false }
+
 // processResourceUsage has no OS counters to read here.
 func processResourceUsage() processResources { return processResources{} }
 

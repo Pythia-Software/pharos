@@ -837,7 +837,7 @@ function toolFailed(message,results){const category=toolCategory(message);return
 function readerTimelineCategory(message){
   const payload=toolPayload(message),name=String(payload.name||'').toLowerCase(),category=toolCategory(message);
   if(['wait_agent','wait','taskoutput'].includes(name))return 'wait';
-  if(/sleep|poll/.test(name)||name==='write_stdin')return 'poll';
+  if(/sleep|poll/.test(name)||['write_stdin','monitor','schedulewakeup'].includes(name))return 'poll';
   if(category==='agent'||/delegate|spawn/.test(name)||name==='task')return 'delegate';
   if(['read','search'].includes(category)||/read|search|glob/.test(name))return 'read';
   if(['edit','write'].includes(category)||/patch|write/.test(name)||name==='edit')return 'write';
@@ -874,7 +874,7 @@ function transcriptActivityPresentation(message){
   else if(message.kind==='attachment'){keyPath=[group('attachments','Attachments','read')];icon='read'}
   else if(message.kind==='context'||raw?.type==='claude_ai_conversation'){
     keyPath=[group('context','Context','context')];
-    icon=raw?.type==='claude_ai_conversation'?'chat':/agent_listing/.test(raw?.source||'')?'agent':/tools|mcp/.test(raw?.source||'')?'tool':raw?.source==='date_note'?'history':'context';
+    icon=raw?.type==='claude_ai_conversation'?'chat':/agent_listing/.test(raw?.source||'')?'agent':/tools|mcp/.test(raw?.source||'')?'tool':raw?.source==='date_note'||raw?.source==='scheduled_wakeup'?'history':'context';
   }else if(message.kind!=='tool_call'&&message.kind!=='delegation')keyPath=[group('events','System events','event')];
   else if(/^(toolsearch|tool_search|search_tools|list_tools)$/i.test(name)){keyPath=[group('discovery','Tool discovery','search')];icon='search'}
   else if(/^skill$/i.test(name)){keyPath=[group('skills','Skills','read')];icon='read'}
@@ -977,8 +977,17 @@ function readerNavigatorMarks(model,describe=message=>({name:toolPayload(message
     return{start,end:start!==null&&Number.isFinite(end)?Math.max(start,end):null,
       end_known:start!==null&&Number.isFinite(end)&&end>=start,
       category:readerTimelineCategory(message),
-      count:1,error:toolFailed(message,results),message_id:message.id,tool_id:message.call_id||message.native_id,...describe(message)};
+      count:1,error:toolFailed(message,results),message_id:message.id,tool_id:message.call_id||message.native_id,...readerHarnessWait(message),...describe(message)};
   });
+}
+// A background command, Monitor watch or scheduled wakeup the call started
+// (harness_wait, from the tool index): its kind and recorded end, which is
+// null when the transcript does not show one.
+function readerHarnessWait(message){
+  const wait=message.harness_wait;
+  if(!wait||typeof wait.kind!=='string'||!wait.kind)return{};
+  const end=Date.parse(wait.ended_at);
+  return{wait_kind:wait.kind,wait_end:Number.isFinite(end)?end:null,wait_status:typeof wait.status==='string'?wait.status:undefined,wait_events:Number(wait.events)||0};
 }
 
 // File paths

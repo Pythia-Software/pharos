@@ -219,6 +219,11 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 	if err != nil {
 		return nil, err
 	}
+	// Background commands, watches and wakeups (harness_waits.go).
+	attachWaits, err := c.harnessWaitAttacher(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
 	// With ledger usage, whole bodies are only needed while attaching authorship
 	// and clipping a row. Do that before retaining it, rather than keeping every
 	// original output alive until the entire conversation has been read.
@@ -241,6 +246,7 @@ func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conv
 		attachEngagement(message)
 		attachPeers(message)
 		attachAssets(message)
+		attachWaits(message)
 		if previewRows {
 			clipReaderMessage(message)
 		}

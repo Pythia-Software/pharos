@@ -446,6 +446,18 @@
     {
       "file": "web/src/timeline-legend.tsx",
       "field": "timeline_visibility"
+    },
+    {
+      "file": "web/src/delegation.tsx",
+      "field": "timeline_waits"
+    },
+    {
+      "file": "web/src/reader-navigator.tsx",
+      "field": "timeline_waits"
+    },
+    {
+      "file": "web/src/timeline-legend.tsx",
+      "field": "timeline_waits"
     }
   ],
   "controls": [
@@ -1383,6 +1395,26 @@
       "sharedDisclosure": true,
       "contract": "settings",
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
+    },
+    {
+      "key": "cc5416da788f1ae5:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderUsage",
+      "tag": "details",
+      "control": "'details', 'bg-usage-table'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "The CPU time chart's table alternative uses the stable background:usage:table key in the shared disclosures map."
+    },
+    {
+      "key": "e9623f885cb8435b:0",
+      "file": "internal/archive/assets/background.js",
+      "owner": "renderUsage",
+      "tag": "summary",
+      "control": "'summary', '', 'Show as a table'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "The CPU time chart's table alternative uses the stable background:usage:table key in the shared disclosures map."
     },
     {
       "key": "7a822cb5e10acecd:0",
@@ -6064,6 +6096,16 @@
       "control": "aria-label=\"Pan selected timeline window\" onKeyDown={(e) => key(e, \"pan\")}",
       "contract": "delegation",
       "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+    },
+    {
+      "key": "c434aae0170ba5a2:0",
+      "file": "web/src/delegation.tsx",
+      "owner": "TimelineOverview",
+      "tag": "input",
+      "control": "data-view-field=\"timeline_waits\" checked={idle.skipWaits} onChange={event=>idle.setWaits(event.currentTarget.checked)}",
+      "binding": "timeline_waits",
+      "contract": "view.timeline_waits",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "df5344bae4c12578:0",

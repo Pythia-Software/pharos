@@ -442,10 +442,20 @@ func (c *Catalog) Initialize() error {
 		{"tool_calls", "error_signature", "ALTER TABLE tool_calls ADD COLUMN error_signature TEXT"},
 		{"tool_calls", "test_failure", "ALTER TABLE tool_calls ADD COLUMN test_failure INTEGER NOT NULL DEFAULT 0"},
 		{"tool_calls", "repo_path", "ALTER TABLE tool_calls ADD COLUMN repo_path TEXT"},
+		{"tool_calls", "wait_kind", "ALTER TABLE tool_calls ADD COLUMN wait_kind TEXT"},
+		{"tool_calls", "wait_ended_at", "ALTER TABLE tool_calls ADD COLUMN wait_ended_at TEXT"},
+		{"tool_calls", "wait_status", "ALTER TABLE tool_calls ADD COLUMN wait_status TEXT"},
+		{"tool_calls", "wait_end_source", "ALTER TABLE tool_calls ADD COLUMN wait_end_source TEXT"},
+		{"tool_calls", "wait_events", "ALTER TABLE tool_calls ADD COLUMN wait_events INTEGER NOT NULL DEFAULT 0"},
 		{"tool_calls", "path_repository", "ALTER TABLE tool_calls ADD COLUMN path_repository TEXT"},
 		{"tool_calls", "path_repository_id", "ALTER TABLE tool_calls ADD COLUMN path_repository_id TEXT"},
 		{"tool_calls", "path_scope", "ALTER TABLE tool_calls ADD COLUMN path_scope TEXT"},
 		{"tool_calls", "path_absolute", "ALTER TABLE tool_calls ADD COLUMN path_absolute TEXT"},
+		// A catalog whose background_item_runs predates its resource columns.
+		{"background_item_runs", "cpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN cpu_seconds REAL"},
+		{"background_item_runs", "worker_cpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN worker_cpu_seconds REAL"},
+		{"background_item_runs", "gpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN gpu_seconds REAL"},
+		{"background_item_runs", "peak_bytes", "ALTER TABLE background_item_runs ADD COLUMN peak_bytes INTEGER"},
 	} {
 		has, err := c.hasColumn(migration.table, migration.column)
 		if err != nil {
