@@ -579,7 +579,9 @@ func (c *Catalog) RunLabels(ctx context.Context, settings LabelerSettings, opts 
 			return stats, err
 		}
 	}
-	builder, err := newLabelsItemBuilder(dctx, c.reader())
+	// The catalog's execution snapshot: in the service it is usually already
+	// resolved for this generation, so a run does not resolve it again.
+	builder, err := c.newLabelsItemBuilderFor(dctx, c.reader())
 	if err != nil {
 		return stats, err
 	}

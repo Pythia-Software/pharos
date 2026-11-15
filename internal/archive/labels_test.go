@@ -259,9 +259,15 @@ func TestLabelsLedgerLabelsEveryUnitOnceAndThenOnlyChanges(t *testing.T) {
 	}
 
 	// Nothing changed: nothing is rebuilt or labeled.
+	// The run plans from the catalog's execution snapshot, which the first run
+	// (or any reader) already resolved, instead of resolving the catalog again.
+	resolved := catalog.execution.stats.fullLoads
 	again, err := catalog.RunLabels(t.Context(), settings, LabelsRunOptions{})
 	if err != nil || again.ConversationsBuilt != 0 || again.MessagesLabeled != 0 || !again.Complete {
 		t.Fatalf("second run: %+v %v", again, err)
+	}
+	if resolved == 0 || catalog.execution.stats.fullLoads != resolved {
+		t.Fatalf("a run with nothing to do resolved every execution again: %d full loads, then %d", resolved, catalog.execution.stats.fullLoads)
 	}
 
 	// A new message in one conversation: that conversation is rebuilt, with
