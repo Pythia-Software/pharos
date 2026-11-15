@@ -7,7 +7,7 @@ import { sessionShapeAnalysisCatalog as catalog, toolData } from "./session-shap
 import { bandBins } from "./session-shape-bands";
 
 // Session Shape cards (session_shape: one row per agent session). Each card
-// opens the Session Shape dashboard on the state its cover draws
+// opens its subject dashboard on the state its cover draws
 // (card-destinations.ts). A rate counts only the sessions with the evidence
 // it needs, so its card's population is that measure's own coverage, which
 // the dashboard shows as its filters.
@@ -45,7 +45,7 @@ function daily(id: string, title: string, description: string, split: keyof type
 function bands(id: string, title: string, description: string, metric: string, note: string): QueryRecipe {
   const measure = catalog.measures[metric];
   return daily(id, title, description, measure.band as keyof typeof bandBins, `${note} ${steeredNote}`,
-    { action: `Explore ${measure.label.toLowerCase()} over time`, unit: "sessions", where: [steered, ...measure.where ?? []] });
+    { action: `Explore ${measure.label.toLowerCase()} over time`, category: metric === "autonomy" ? "tools" : metric === "context_peak" ? "context" : "sessions", unit: "sessions", where: [steered, ...measure.where ?? []] });
 }
 
 // The dashboard's own distribution clause and population, so the cover is
@@ -119,13 +119,13 @@ export const sessionShapeCardRecipes: QueryRecipe[] = [
     note: "A session's turn cycle is the median gap from a typed human message to the agent's next message, leaving out gaps over 1,800 seconds. Only sessions with a turn cycle count; providers with fewer than three are left out.",
     cover: box("ss_turn_cycle", 3) }),
   session({ id: "session-autonomy", title: "Tool calls per typed message, by provider", description: "Each session's tool calls divided by the messages you typed in it, over the last {days} days; log axis.", idea: "models-02", unit: "calls per typed message", action: "Compare tool calls per typed message",
-    ...autonomy, where: [...autonomy.where, steered], note: `${coverage.both} Sessions without a tool call are left out. ${steeredNote} Providers with fewer than three sessions are left out.`, cover: box("ss_autonomy", 3) }),
+    category: "tools", ...autonomy, where: [...autonomy.where, steered], note: `${coverage.both} Sessions without a tool call are left out. ${steeredNote} Providers with fewer than three sessions are left out.`, cover: box("ss_autonomy", 3) }),
   // Failures: by model, by session kind, over time.
   rate("session-model-failure-rates", "Failure rate by model", "Failed tool calls divided by all tool calls, by model, over the last {days} days.", "failure_rate", "model_family", "model failure rates", ["Failed calls", "Tool calls"],
-    `${failureNote} Synthetic placeholder turns are left out; the dashboard opens with that filter.`, 20, { idea: "tools-01", where: [...toolData, notEqual("model_family", "<synthetic>")] }),
+    `${failureNote} Synthetic placeholder turns are left out; the dashboard opens with that filter.`, 20, { category: "errors", idea: "tools-01", where: [...toolData, notEqual("model_family", "<synthetic>")] }),
   rate("session-kind-failure-rates", "Failure rate by session kind", "Failed tool calls divided by all tool calls, automated runs against the sessions you typed in, over the last {days} days.", "failure_rate", "archetype", "failure rates by session kind", ["Failed calls", "Tool calls"],
-    `${archetypeNote} ${failureNote}`, 10, { idea: "tools-01" }),
-  session({ id: "session-failure-trend", title: "Failure rate over time", description: "Failed tool calls divided by all tool calls over each trailing seven complete days, across the last 30 days.", idea: "tools-06", unit: "percent", days: [30], action: "Explore failure rate over time", where: [...toolData],
+    `${archetypeNote} ${failureNote}`, 10, { category: "errors", idea: "tools-01" }),
+  session({ id: "session-failure-trend", category: "errors", title: "Failure rate over time", description: "Failed tool calls divided by all tool calls over each trailing seven complete days, across the last 30 days.", idea: "tools-06", unit: "percent", days: [30], action: "Explore failure rate over time", where: [...toolData],
     note: `Each point pools seven complete local days: their failed calls over their tool calls. Today is left out until it is complete. Rejections, interrupts and hook blocks are not failures. ${coverage.tool}`,
     measures: [{ id: "ss_daily_failure_rate", op: "sum", field: "failed_calls", expression: "SUM([failed_calls])/NULLIF(SUM([tool_calls]),0)", groupBy: ["day"], groupLimit: 10000, label: "Failure rate by day" }], cover: trendCover("ss_daily_failure_rate"),
     trend: { value: { op: "sum", field: "failed_calls" }, per: { op: "sum", field: "tool_calls" }, count: { op: "sum", field: "tool_calls" }, lookback: 7, completeDays: true, format: "percent", valueLabel: "failure rate · 7 days", pointValueLabel: "failure rate", trendLabel: "7d", sample: "tool calls",
@@ -137,7 +137,7 @@ export const sessionShapeCardRecipes: QueryRecipe[] = [
       context: [{ field: sessions.id, label: "sessions" }] },
     cover: { mode: "result", metricId: hours.id, kind: "bar-horizontal", maxGroups: 10, showOther: true } }),
   rate("session-repository-verification", "Verified handbacks by repository", "Handbacks after an edit with a test or build after the last edit, over the last {days} days.", "verification", "repository_name", "verified handbacks", ["Verified handbacks", "Handbacks after an edit"],
-    `Verified handbacks divided by handbacks after an edit, pooled. Read-only commands are not verification. ${coverage.both}`, 20, { idea: "verification-03" }),
+    `Verified handbacks divided by handbacks after an edit, pooled. Read-only commands are not verification. ${coverage.both}`, 20, { category: "tools", idea: "verification-03" }),
   // Your sessions over time, without a breakdown.
   sparkline("session-count-trend", "Your sessions a day", "Sessions you typed in, a day, averaged over each trailing seven complete days.", "sessions", { value: "sessions a day", point: "sessions a day" },
     "A session counts on the day it starts."),
@@ -156,9 +156,9 @@ export const sessionShapeCardRecipes: QueryRecipe[] = [
   daily("session-length-hours", "Active hours by session length", "Active hours of your sessions each day by the session's message count, over the last {days} days.", "length_band",
     `Active time adds the gaps between consecutive messages of 300 seconds or less. ${lengthNote} ${steeredNote}`, { unit: "hours", action: "Explore active hours by session length", where: [steered] }, { field: "active_hours", label: "Active hours" }),
   daily("session-length-tool-calls", "Tool calls by session length", "Tool calls of your sessions each day by the session's message count, over the last {days} days.", "length_band",
-    `${lengthNote} ${coverage.tool} ${steeredNote}`, { unit: "calls", action: "Explore tool calls by session length", where: [steered, ...toolData] }, { field: "tool_calls", label: "Tool calls" }),
+    `${lengthNote} ${coverage.tool} ${steeredNote}`, { category: "tools", unit: "calls", action: "Explore tool calls by session length", where: [steered, ...toolData] }, { field: "tool_calls", label: "Tool calls" }),
   // Context, and when you work.
-  session({ id: "session-model-context", title: "Peak context by model", description: "Each session's largest request as a share of its model's context window, over the last {days} days.", idea: "context-02", unit: "percent", action: "Compare peak context", ...contextPeak,
+  session({ id: "session-model-context", category: "context", title: "Peak context by model", description: "Each session's largest request as a share of its model's context window, over the last {days} days.", idea: "context-02", unit: "percent", action: "Compare peak context", ...contextPeak,
     note: `${coverage.window} Models with fewer than ten sessions are left out.`, cover: box("ss_context_peak", 10, 8) }),
   weekday("session-weekday", "When you start sessions", "Sessions you typed in, started each day, by weekday, over the last {days} days, including idle days.", "sessions / day", { id: "ss_weekday_sessions", op: "count", groupBy: [], label: "Sessions per day" },
     { dataset: "session_shape", field: "started_at", category: "sessions", idea: "rhythm-01", where: [steered], action: "Explore when sessions start",
