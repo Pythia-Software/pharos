@@ -25,6 +25,10 @@
   "bindings": [
     {
       "file": "web/src/card-library.tsx",
+      "field": "card_all"
+    },
+    {
+      "file": "web/src/card-library.tsx",
       "field": "card_filters"
     },
     {
@@ -4731,6 +4735,16 @@
       "reason": "Dataset filter uses the existing card_dataset URL field; its label distinguishes query datasets from imported history sources."
     },
     {
+      "key": "7e1e74049ce65e47:0",
+      "file": "web/src/card-library.tsx",
+      "owner": "CardLibrary",
+      "tag": "button",
+      "control": "data-view-field=\"card_all\" onClick={() => setShowAll(!showAll)}",
+      "binding": "card_all",
+      "contract": "view.card_all",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "8dab89eb60a6517d:0",
       "file": "web/src/card-library.tsx",
       "owner": "CardLibrary",
@@ -4747,6 +4761,16 @@
       "control": "aria-label=\"Card kind\" value={kind} onChange={event => filter(setKind)(event.target.value)}",
       "contract": "cards",
       "reason": "card_* filters/sort/topic plus card_window/card_filters; navigation and collection actions use their existing contracts."
+    },
+    {
+      "key": "9611ce37b3e1053f:0",
+      "file": "web/src/card-library.tsx",
+      "owner": "CardLibrary",
+      "tag": "button",
+      "control": "data-view-field=\"card_all\" onClick={() => setShowAll(true)}",
+      "binding": "card_all",
+      "contract": "view.card_all",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "a18356ac232f8563:0",
