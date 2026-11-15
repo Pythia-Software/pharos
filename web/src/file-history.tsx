@@ -5,7 +5,7 @@ import { outcomeDisplay } from "./outcomes";
 import { useViewEntry, useViewState } from "./view-state";
 import { ViewDisclosure } from "./view-disclosure";
 import {
-  age, blameRows, changeText, checkoutText, commitState, commitsByDay, directoryTab, directoryTabs, directoryViewLabels, fileBreadcrumbs, fileHistoryNotice, fileHistoryRoute,
+  age, blameRows, changeText, commitState, commitsByDay, directoryTab, directoryTabs, directoryViewLabels, fileBreadcrumbs, fileHistoryNotice, fileHistoryRoute,
   filePageURL, fileTab, fileTabs, fileTreeKey, fileViewLabels, keepFilesView, linesText, linkText, notInTreeText, parentDir, parseUnifiedDiff, placeText,
   reworkText, sessionCommits, treeAncestors, treeText,
   type CommitGit, type DiffLine, type FileBlame, type FileChanges, type FileCommitDetail, type FileContent, type FileDiff, type FileFind,
@@ -270,6 +270,14 @@ function CheckoutSetup({ checkout, onDone }: { checkout: RepositoryCheckout; onD
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  // Forgetting asks in place first: focus moves to Cancel, and back to the
+  // button that asked when the question goes away.
+  const [forgetting, setForgetting] = useState(false);
+  const forget = useRef<HTMLButtonElement>(null), keep = useRef<HTMLButtonElement>(null), asked = useRef(false);
+  useEffect(() => {
+    if (forgetting) { asked.current = true; keep.current?.focus(); }
+    else if (asked.current) { asked.current = false; forget.current?.focus(); }
+  }, [forgetting]);
   const post = async (body: Record<string, unknown>) => {
     setSaving(true); setError("");
     try {
@@ -293,8 +301,15 @@ function CheckoutSetup({ checkout, onDone }: { checkout: RepositoryCheckout; onD
       <label htmlFor={`checkout-${checkout.repository_id}`}>{candidates.length ? "Or a folder" : "Folder"}</label>
       <input id={`checkout-${checkout.repository_id}`} type="text" value={draft} spellCheck={false} placeholder="~/code/project" onChange={event => setDraft(event.target.value)} />
       <button type="submit" className="files-button" disabled={saving || !draft.trim()}>Use this folder</button>
-      {checkout.status === "set" ? <button type="button" className="files-button" disabled={saving} onClick={() => void post({ clear: true })}>Forget the checkout</button> : null}
+      {checkout.status === "set" ? <button ref={forget} type="button" className="files-button" disabled={saving || forgetting} onClick={() => setForgetting(true)}>Forget the checkout…</button> : null}
     </form>
+    {forgetting ? <div className="files-checkout-confirm" role="group" aria-label="Forget checkout" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setForgetting(false); } }}>
+      <p>Forget this checkout? Pharos stops showing code, blame, history and commit diffs for {checkout.name ?? "this repository"} until you choose a folder again. Nothing in the folder changes.</p>
+      <div className="files-checkout-form">
+        <button type="button" className="files-button" onClick={() => { setForgetting(false); void post({ clear: true }); }}>Forget checkout</button>
+        <button ref={keep} type="button" className="files-button" onClick={() => setForgetting(false)}>Cancel</button>
+      </div>
+    </div> : null}
     {error ? <Failure error={error} /> : null}
   </section>;
 }
