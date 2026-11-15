@@ -1301,12 +1301,28 @@ CREATE TABLE IF NOT EXISTS background_runs (
 -- are measured from (background.go, itemRun). background_runs keeps only the
 -- last run. started_at is the pass's start, shared by its items; units is
 -- NULL for an item that does not count its work. Rows older than two weeks
--- are dropped as new ones arrive.
+-- are dropped as new ones arrive. cpu_seconds is the service's CPU time
+-- attributed to the run and shared_cpu_seconds the part of it divided with
+-- other work running at the same time (an estimate); worker_cpu_seconds and
+-- gpu_seconds are its worker processes', measured; peak_bytes the most
+-- memory Pharos held while it ran. Each is NULL where it was not measured
+-- (background_cpu.go).
 CREATE TABLE IF NOT EXISTS background_item_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, host_id TEXT NOT NULL, item TEXT NOT NULL, cadence TEXT NOT NULL,
-  started_at TEXT NOT NULL, seconds REAL NOT NULL, units INTEGER
+  started_at TEXT NOT NULL, seconds REAL NOT NULL, units INTEGER,
+  cpu_seconds REAL, shared_cpu_seconds REAL, worker_cpu_seconds REAL, gpu_seconds REAL, peak_bytes INTEGER
 );
 CREATE INDEX IF NOT EXISTS background_item_runs_host ON background_item_runs(host_id,started_at);
+-- What background work used on this Mac, per local day and source: a
+-- background item ("item:labels"), another operation kind
+-- ("kind:maintenance.checkpoint"), or "other" for the service's CPU while
+-- none ran. Totals are added as runs end, never per sample; a NULL figure
+-- was not measured. Days older than five weeks are dropped.
+CREATE TABLE IF NOT EXISTS background_cpu_days (
+  host_id TEXT NOT NULL, day TEXT NOT NULL, source TEXT NOT NULL, runs INTEGER NOT NULL DEFAULT 0,
+  seconds REAL NOT NULL DEFAULT 0, cpu_seconds REAL, shared_cpu_seconds REAL, worker_cpu_seconds REAL,
+  gpu_seconds REAL, peak_bytes INTEGER, PRIMARY KEY(host_id,day,source)
+);
 CREATE TABLE IF NOT EXISTS background_temporary_cadences (
   host_id TEXT NOT NULL, item TEXT NOT NULL, cadence TEXT NOT NULL, expires_at TEXT NOT NULL,
   PRIMARY KEY(host_id,item)

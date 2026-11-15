@@ -443,6 +443,7 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 		stage.RunIO(func() { err = measure(name, func() error { return work(stageCtx) }) })
 		reportStageUnits(ctx, name, stage)
 		stage.Finish(err)
+		reportStageUse(ctx, name, stage)
 		return err
 	}
 	op := operationOf(ctx)

@@ -141,6 +141,7 @@ type Op struct {
 	ctx               context.Context
 	resources         *taskResources
 	resourceSummary   *taskResourceView
+	cpu               *cpuSpan
 	neededBy          []OpID
 	sharedWork        []OpID
 	sharedWorkOmitted int
@@ -347,6 +348,9 @@ type opRegistry struct {
 	// Classic pruning is unchanged without it.
 	executorRoots  bool
 	resourceLedger *taskResourceLedger
+	// cpu divides the process's CPU time among its running operations
+	// (background_cpu.go). The service sets it; nil keeps no account.
+	cpu *cpuLedger
 }
 
 func newOpRegistry(process string) *opRegistry {
@@ -514,6 +518,14 @@ func (r *opRegistry) register(ctx context.Context, spec OperationSpec, tentative
 			Batch: batch, Priority: op.spec.Priority, Trigger: op.spec.Trigger}, r.clock)
 		op.ctx = withTaskResources(op.ctx, op.resources)
 	}
+	if r.cpu != nil {
+		within := cpuSpanFrom(ctx)
+		if within == nil && op.parent != nil {
+			within = op.parent.cpu
+		}
+		op.cpu = r.cpu.begin(within, func(parent *cpuSpan) string { return cpuSourceFor(spec.Kind, spec.Variant, parent) }, op.state != opRunning)
+		op.ctx = withCPUSpan(op.ctx, op.cpu)
+	}
 	r.ops[op.id] = op
 	r.pruneLocked()
 	if tentative {
@@ -562,6 +574,7 @@ func (op *Op) discard() {
 		op.parent.children = slices.DeleteFunc(op.parent.children, func(child *Op) bool { return child == op })
 	}
 	op.state = opSkipped
+	op.cpu.end(false)
 	op.reg.mu.Unlock()
 }
 
@@ -668,6 +681,11 @@ func (op *Op) transitionLocked(state string) bool {
 		return false
 	}
 	op.state = state
+	if opTerminal(state) {
+		op.cpu.end(state != opSkipped)
+	} else {
+		op.cpu.setPaused(state != opRunning && state != opStopping)
+	}
 	if state == opRunning && op.runningSince.IsZero() {
 		op.runningSince = op.reg.clock()
 		if op.reg.resourceHistory != nil {
@@ -1096,6 +1114,7 @@ func (op *Op) finishLocked(state, reason, text string) {
 	}
 	if state == opSkipped {
 		op.state, op.reason, op.ended = opSkipped, reason, op.reg.clock()
+		op.cpu.end(false)
 		op.finishResourcesLocked()
 		return
 	}
