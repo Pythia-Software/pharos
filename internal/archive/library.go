@@ -149,23 +149,62 @@ func libraryTableDDL() string {
 	return "CREATE TABLE workspace_library (\n  " + strings.Join(columns, ",\n  ") + "\n)"
 }
 
-func libraryTriggerDDL() []string {
+// libraryViewStatements are the statements the projection evaluates: each
+// stored column for a workspace w, and the preview IDs.
+func libraryViewStatements() []string {
+	statements := make([]string, 0, len(libraryColumns)+1)
+	for _, column := range libraryColumns {
+		statements = append(statements, "SELECT "+column.expr+" FROM workspaces w")
+	}
+	return append(statements, libraryPreviewSelect("1"))
+}
+
+// libraryTriggerDDL marks the workspaces a write can change. An insert or a
+// delete always can. An update can only when it changes a column the view
+// reads (projectionChangeCondition), so a writer that stores a row again
+// unchanged, or advances a column the view never reads, marks nothing.
+func libraryTriggerDDL(q queryer) ([]string, error) {
+	statements := []string{}
+	view := libraryViewStatements()
+	for _, dependency := range libraryDependencies {
+		name := "workspace_library_" + dependency.table
+		statements = append(statements, fmt.Sprintf("CREATE TRIGGER %s_insert AFTER INSERT ON %s BEGIN %s END", name, dependency.table, dependency.mark("NEW")))
+		if dependency.insertOnly {
+			continue
+		}
+		changed, err := projectionChangeCondition(q, dependency.table, append(slices.Clone(view), dependency.workspaces("NEW")))
+		if err != nil {
+			return nil, err
+		}
+		statements = append(statements,
+			fmt.Sprintf("CREATE TRIGGER %s_update AFTER UPDATE ON %s WHEN %s BEGIN %s %s END", name, dependency.table, changed, dependency.mark("OLD"), dependency.mark("NEW")),
+			fmt.Sprintf("CREATE TRIGGER %s_delete AFTER DELETE ON %s BEGIN %s END", name, dependency.table, dependency.mark("OLD")))
+	}
+	return statements, nil
+}
+
+// An outer INSERT OR REPLACE/ABORT would override a trigger's OR IGNORE,
+// so insert only unmarked IDs and never raise a conflict at all.
+func (d libraryDependency) mark(row string) string {
+	return "INSERT INTO workspace_library_dirty(workspace_id) SELECT DISTINCT id FROM (" +
+		d.workspaces(row) + ") WHERE id IS NOT NULL AND id NOT IN (SELECT workspace_id FROM workspace_library_dirty);"
+}
+
+// libraryVersionTriggerDDL is the trigger text libraryVersion has always
+// hashed: every update marks. The installed triggers have their own version
+// (see ensureLibrary), because when a workspace is marked does not change
+// what is stored for it, and a catalog must not be rebuilt for it.
+func libraryVersionTriggerDDL() []string {
 	statements := []string{}
 	for _, dependency := range libraryDependencies {
-		// An outer INSERT OR REPLACE/ABORT would override a trigger's OR IGNORE,
-		// so insert only unmarked IDs and never raise a conflict at all.
-		mark := func(row string) string {
-			return "INSERT INTO workspace_library_dirty(workspace_id) SELECT DISTINCT id FROM (" +
-				dependency.workspaces(row) + ") WHERE id IS NOT NULL AND id NOT IN (SELECT workspace_id FROM workspace_library_dirty);"
-		}
 		name := "workspace_library_" + dependency.table
-		statements = append(statements, fmt.Sprintf("CREATE TRIGGER %s_insert AFTER INSERT ON %s BEGIN %s END", name, dependency.table, mark("NEW")))
+		statements = append(statements, fmt.Sprintf("CREATE TRIGGER %s_insert AFTER INSERT ON %s BEGIN %s END", name, dependency.table, dependency.mark("NEW")))
 		if dependency.insertOnly {
 			continue
 		}
 		statements = append(statements,
-			fmt.Sprintf("CREATE TRIGGER %s_update AFTER UPDATE ON %s BEGIN %s %s END", name, dependency.table, mark("OLD"), mark("NEW")),
-			fmt.Sprintf("CREATE TRIGGER %s_delete AFTER DELETE ON %s BEGIN %s END", name, dependency.table, mark("OLD")))
+			fmt.Sprintf("CREATE TRIGGER %s_update AFTER UPDATE ON %s BEGIN %s %s END", name, dependency.table, dependency.mark("OLD"), dependency.mark("NEW")),
+			fmt.Sprintf("CREATE TRIGGER %s_delete AFTER DELETE ON %s BEGIN %s END", name, dependency.table, dependency.mark("OLD")))
 	}
 	return statements
 }
@@ -190,7 +229,7 @@ func libraryVersion() string {
 }
 
 func libraryProjectionDefinition() string {
-	return libraryTableDDL() + "\n" + libraryDerivedSelect("1") + "\n" + strings.Join(libraryTriggerDDL(), "\n")
+	return libraryTableDDL() + "\n" + libraryDerivedSelect("1") + "\n" + strings.Join(libraryVersionTriggerDDL(), "\n")
 }
 
 // ensureLibrary creates or rebuilds the stored projection and its triggers.
@@ -200,10 +239,13 @@ func (c *Catalog) ensureLibrary() error {
 		workspace_id TEXT PRIMARY KEY) WITHOUT ROWID`); err != nil {
 		return err
 	}
-	triggers := libraryTriggerDDL()
+	triggers, err := libraryTriggerDDL(c.DB)
+	if err != nil {
+		return err
+	}
 	version := libraryVersion()
 	var current string
-	err := c.DB.QueryRow("SELECT value FROM meta WHERE key='workspace_library_version'").Scan(&current)
+	err = c.DB.QueryRow("SELECT value FROM meta WHERE key='workspace_library_version'").Scan(&current)
 	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
@@ -229,36 +271,75 @@ func (c *Catalog) ensureLibrary() error {
 		if _, err := c.DB.Exec("DROP TABLE IF EXISTS workspace_query_stats"); err != nil {
 			return err
 		}
-		return nil
+		// The stored rows stand. Only when a workspace is marked may have
+		// changed, and that never needs them computed again.
+		var installed string
+		err = c.DB.QueryRow("SELECT value FROM meta WHERE key=?", libraryTriggersKey).Scan(&installed)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if installed == version+":"+triggerDigest(triggers) {
+			return nil
+		}
+		tx, err := c.beginWrite(context.Background())
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := installLibraryTriggers(tx, version, triggers); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	tx, err := c.beginWrite(context.Background())
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	names, err := queryMaps(tx, "SELECT name FROM sqlite_master WHERE type='trigger' AND (name LIKE 'workspace_library_%' OR name LIKE 'workspace_query_stats_%')")
-	if err != nil {
-		return err
-	}
-	statements := []string{}
-	for _, row := range names {
-		statements = append(statements, `DROP TRIGGER IF EXISTS "`+firstString(row["name"])+`"`)
-	}
 	// workspace_query_stats held token_count before workspace_library did.
-	statements = append(statements, "DROP TABLE IF EXISTS workspace_query_stats",
+	for _, statement := range []string{"DROP TABLE IF EXISTS workspace_query_stats",
 		"DELETE FROM meta WHERE key='workspace_query_stats_version'",
-		"DROP TABLE IF EXISTS workspace_library", libraryTableDDL())
-	statements = append(statements, triggers...)
-	statements = append(statements, "INSERT OR IGNORE INTO workspace_library_dirty(workspace_id) SELECT id FROM workspaces")
-	for _, statement := range statements {
+		"DROP TABLE IF EXISTS workspace_library", libraryTableDDL()} {
 		if _, err := tx.Exec(statement); err != nil {
 			return fmt.Errorf("rebuild library projection: %w", err)
 		}
+	}
+	if err := installLibraryTriggers(tx, version, triggers); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("INSERT OR IGNORE INTO workspace_library_dirty(workspace_id) SELECT id FROM workspaces"); err != nil {
+		return fmt.Errorf("rebuild library projection: %w", err)
 	}
 	if _, err := tx.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES('workspace_library_version',?)", version); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// libraryTriggersKey holds the digest of the installed marking triggers.
+// workspace_library_version covers what is stored, and a build that predates
+// this key leaves both alone when that version is its own.
+const libraryTriggersKey = "workspace_library_triggers"
+
+// installLibraryTriggers replaces the projection's triggers, including an
+// earlier build's, and records which are installed. It marks nothing.
+func installLibraryTriggers(tx *sql.Tx, version string, triggers []string) error {
+	names, err := queryMaps(tx, "SELECT name FROM sqlite_master WHERE type='trigger' AND (name LIKE 'workspace_library_%' OR name LIKE 'workspace_query_stats_%')")
+	if err != nil {
+		return err
+	}
+	for _, row := range names {
+		if _, err := tx.Exec(`DROP TRIGGER IF EXISTS "` + firstString(row["name"]) + `"`); err != nil {
+			return fmt.Errorf("rebuild library projection: %w", err)
+		}
+	}
+	for _, statement := range triggers {
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("rebuild library projection: %w", err)
+		}
+	}
+	_, err = tx.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", libraryTriggersKey, version+":"+triggerDigest(triggers))
+	return err
 }
 
 // RefreshLibrary recomputes up to batch dirty workspaces' Search view rows and

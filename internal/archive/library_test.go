@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -160,6 +161,166 @@ func TestLibraryReflectsEveryDependencyBeforeAndAfterRefresh(t *testing.T) {
 		if !reflect.DeepEqual(before, after) {
 			t.Fatalf("%s: refreshed rows differ:\nbefore %#v\nafter  %#v", change.name, before, after)
 		}
+	}
+}
+
+// projectionTriggerCases are the stored projections whose UPDATE triggers
+// mark only when a column their statements read has changed.
+func projectionTriggerCases() []struct {
+	name, trigger, dirty string
+	statements           []string
+	lookups              map[string]func(string) string
+} {
+	library := map[string]func(string) string{}
+	for _, dependency := range libraryDependencies {
+		if !dependency.insertOnly {
+			library[dependency.table] = dependency.workspaces
+		}
+	}
+	return []struct {
+		name, trigger, dirty string
+		statements           []string
+		lookups              map[string]func(string) string
+	}{
+		{"Search view", "workspace_library_", "workspace_library_dirty", libraryViewStatements(), library},
+		{"workspace metrics", "mcp_metric_", "mcp_metric_dirty", metricProjectionStatements, metricDependencies},
+	}
+}
+
+func projectionTableColumns(t *testing.T, q queryer, table string) []string {
+	t.Helper()
+	rows, err := queryMaps(q, "SELECT name FROM pragma_table_info(?)", table)
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("%s columns: %d %v", table, len(rows), err)
+	}
+	columns := []string{}
+	for _, row := range rows {
+		columns = append(columns, firstString(row["name"]))
+	}
+	return columns
+}
+
+// SQLite's own name resolution says which columns a projection reads: a
+// statement no longer compiles against a table that lacks a column it reads.
+// Every such column must be one its table's UPDATE trigger compares, or a
+// change to it would leave stored rows stale with nothing marked.
+func TestProjectionTriggersWatchEveryColumnRead(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	for _, projection := range projectionTriggerCases() {
+		for table, lookup := range projection.lookups {
+			var trigger string
+			if err := catalog.DB.QueryRow("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", projection.trigger+table+"_update").Scan(&trigger); err != nil {
+				t.Fatalf("%s: %s update trigger: %v", projection.name, table, err)
+			}
+			// The trigger's own expression reads the changed row as NEW.
+			statements := append(slices.Clone(projection.statements),
+				"SELECT EXISTS("+strings.ReplaceAll(lookup("NEW"), "NEW.", "changed_row.")+") FROM "+table+" changed_row")
+			columns := projectionTableColumns(t, catalog.DB, table)
+			indexes, err := queryMaps(catalog.DB, `SELECT l.name,i.name column_name FROM pragma_index_list(?) l JOIN pragma_index_info(l.name) i
+				WHERE l.name NOT LIKE 'sqlite_%' AND i.name IS NOT NULL ORDER BY l.name,i.seqno`, table)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Only a statement that names the table can read it, and only a
+			// column it names (none here selects a bare *).
+			reading := slices.DeleteFunc(statements, func(statement string) bool { return !strings.Contains(statement, table) })
+			// A temporary table of the same name, without the column, is the
+			// one the statements then name. Its indexes keep their names for
+			// INDEXED BY, less the column.
+			reads := func(column string) bool {
+				tx, err := catalog.DB.Begin()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				kept := slices.DeleteFunc(slices.Clone(columns), func(name string) bool { return name == column })
+				shadow := []string{`CREATE TEMP TABLE "` + table + `" AS SELECT "` + strings.Join(kept, `","`) + `" FROM main."` + table + `" WHERE 0`}
+				indexed := map[string][]string{}
+				for _, row := range indexes {
+					if name := firstString(row["column_name"]); name != column {
+						indexed[firstString(row["name"])] = append(indexed[firstString(row["name"])], name)
+					}
+				}
+				for name, on := range indexed {
+					shadow = append(shadow, `CREATE INDEX temp."`+name+`" ON "`+table+`"("`+strings.Join(on, `","`)+`")`)
+				}
+				for _, statement := range shadow {
+					if _, err := tx.Exec(statement); err != nil {
+						t.Fatalf("%s without %s: %v", table, column, err)
+					}
+				}
+				for _, statement := range reading {
+					rows, err := tx.Query("EXPLAIN "+statement, make([]any, strings.Count(statement, "?"))...)
+					if err == nil {
+						rows.Close()
+						continue
+					}
+					// A named index that held only this column is gone too.
+					if !strings.Contains(err.Error(), "no such column") && !strings.Contains(err.Error(), "no such index") {
+						t.Fatalf("%s without %s.%s: %v", projection.name, table, column, err)
+					}
+					return true
+				}
+				return false
+			}
+			watched := []string{}
+			for _, column := range columns {
+				if strings.Contains(trigger, `OLD."`+column+`" IS NOT NEW."`+column+`"`) {
+					watched = append(watched, column)
+				} else if strings.Contains(strings.Join(reading, "\n"), column) && reads(column) {
+					t.Errorf("%s reads %s.%s, which its update trigger does not compare", projection.name, table, column)
+				}
+			}
+			// The check itself must still see a read where there is one.
+			if !slices.ContainsFunc(watched, reads) {
+				t.Errorf("%s: none of the columns %s's trigger compares (%v) is seen to be read", projection.name, table, watched)
+			}
+		}
+	}
+}
+
+// A writer that stores rows again unchanged, as an upgrade's recomputation
+// and a repeated index do, leaves both projections alone.
+func TestProjectionsIgnoreRowsRewrittenUnchanged(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	execTx(t, catalog.DB, `INSERT INTO tool_ledger_state(conversation_id,version,updated_at) VALUES('cc','v','x')`,
+		`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,attribution,total_tokens) VALUES('sc','2026-09-23T02','opus','reported',5)`,
+		`INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES('sc1','m2',1)`,
+		`INSERT INTO conversation_group_membership(conversation_id,workspace_id,active) VALUES('cc','c',1)`,
+		`INSERT INTO claude_chat_settings_observations(host_id,source_name,account,organization_uuid,conversation_uuid,observed_at,time_basis,cache_entry,snapshot_id,model)
+			VALUES('h','s','local','o','cc','2026-09-23T02:00:00Z','observed','e','snap','opus')`)
+	if err := catalog.refreshAllLibrary(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rewritten := 0
+	for _, projection := range projectionTriggerCases() {
+		for table := range projection.lookups {
+			if countRows(t, catalog, "SELECT COUNT(*) FROM "+table) == 0 {
+				continue
+			}
+			rewritten++
+			assignments := []string{}
+			for _, column := range projectionTableColumns(t, catalog.DB, table) {
+				assignments = append(assignments, `"`+column+`"="`+column+`"`)
+			}
+			execSQL(t, catalog.DB, "UPDATE "+table+" SET "+strings.Join(assignments, ","))
+			if marked := countRows(t, catalog, "SELECT COUNT(*) FROM "+projection.dirty); marked != 0 {
+				t.Errorf("%s: rewriting %s unchanged marked %d workspaces", projection.name, table, marked)
+			}
+		}
+	}
+	if rewritten < 20 {
+		t.Fatalf("the fixture rewrote only %d dependency tables", rewritten)
+	}
+	// Columns neither projection reads: when a row was observed or indexed.
+	execSQL(t, catalog.DB, `UPDATE pull_requests SET observed_at='later'`, `UPDATE workspaces SET indexed_at='later',title='Renamed'`)
+	if library, metrics := dirtyCount(t, catalog), countRows(t, catalog, "SELECT COUNT(*) FROM mcp_metric_dirty"); library != 0 || metrics != 0 {
+		t.Fatalf("unread columns marked %d Search view and %d metric workspaces", library, metrics)
+	}
+	// One they read still marks, in a statement that also rewrites others.
+	execSQL(t, catalog.DB, `UPDATE messages SET kind=kind,role='assistant' WHERE id='m1'`)
+	if library, metrics := dirtyCount(t, catalog), countRows(t, catalog, "SELECT COUNT(*) FROM mcp_metric_dirty"); library != 1 || metrics != 1 {
+		t.Fatalf("a changed message marked %d Search view and %d metric workspaces, want 1 and 1", library, metrics)
 	}
 }
 
