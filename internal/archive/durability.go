@@ -122,7 +122,7 @@ var errCheckpointBusy = errors.New("catalog checkpoint incomplete: the WAL is st
 // second if a reader of an older snapshot or another writer is still active.
 // Readers are never blocked.
 func (c *Catalog) Checkpoint() error {
-	return c.checkpointWith(nil)
+	return c.checkpointWith(nil, -1)
 }
 
 // checkpointTruncating runs just before the truncating pass; tests replace
@@ -133,7 +133,13 @@ var checkpointTruncating = func() {}
 // passive pass only: the WAL bound runs that bulk copy, which takes no
 // writer lock, at its operation's priority class (§10). The truncating
 // pass holds writers off, so it always runs at the default tier.
-func (c *Catalog) checkpointWith(passive func(func())) error {
+//
+// pinnedAt is where the last busy checkpoint stopped copying (nBackfill), or
+// -1. When the passive pass stops at that same frame with frames still to
+// copy, the reader that pinned the log is still reading, and a truncating
+// pass would only hold writers off for checkpointWaitMS before giving up: it
+// is skipped, and the error says so (checkpointBusyError.pinned).
+func (c *Catalog) checkpointWith(passive func(func()), pinnedAt int64) error {
 	cliWriteCheck("checkpoint")
 	// Don't wait indefinitely for a pooled connection either, e.g. in Close
 	// while long queries still hold every connection.
@@ -150,9 +156,17 @@ func (c *Catalog) checkpointWith(passive func(func())) error {
 	if passive == nil {
 		passive = func(fn func()) { fn() }
 	}
-	passive(func() { _, err = conn.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)") })
+	// busy, the frames in the log and how many are in the database; -1 when
+	// another connection held the checkpoint lock.
+	var passiveBusy, passiveLog, passiveCopied int64
+	passive(func() {
+		err = conn.QueryRowContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)").Scan(&passiveBusy, &passiveLog, &passiveCopied)
+	})
 	if err != nil {
 		return err
+	}
+	if pinnedAt >= 0 && passiveCopied == pinnedAt && passiveCopied < passiveLog {
+		return &checkpointBusyError{frames: passiveLog, backfilled: passiveCopied, pinned: true}
 	}
 	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", checkpointWaitMS)); err != nil {
 		return err
@@ -171,8 +185,13 @@ func (c *Catalog) checkpointWith(passive func(func())) error {
 
 // checkpointBusyError is errCheckpointBusy with what the truncating pass
 // reported: the frames in the log (mxFrame) and how many of them are in
-// the database (nBackfill); -1 when unknown.
-type checkpointBusyError struct{ frames, backfilled int64 }
+// the database (nBackfill); -1 when unknown. pinned is set when the
+// truncating pass was not tried because the passive one found the log
+// still pinned where the last busy checkpoint stopped.
+type checkpointBusyError struct {
+	frames, backfilled int64
+	pinned             bool
+}
 
 func (e *checkpointBusyError) Error() string        { return errCheckpointBusy.Error() }
 func (e *checkpointBusyError) Is(target error) bool { return target == errCheckpointBusy }
@@ -236,10 +255,25 @@ func (c *Catalog) boundWALAt(ctx context.Context, limit int64, priority string) 
 	}
 	// Not cancelled with its caller: a checkpoint is short and not
 	// interruptible.
-	_, op := c.beginOp(context.WithoutCancel(ctx), spec)
+	ctx = context.WithoutCancel(ctx)
+	// While a stall lasts (the last busy checkpoint stopped with frames
+	// left to copy), the attempt starts unpublished: one that finds the
+	// same reader still pinning the log is forgotten rather than journaled
+	// every walRetryDelay, so a pinned episode leaves the attempt that found
+	// it and the one that first diagnosed it.
+	pinnedAt := int64(-1)
+	var op *Op
+	if !c.wal.stall.backfillSince.IsZero() {
+		pinnedAt = c.wal.stall.backfill
+	}
+	if pinnedAt >= 0 && c.ops != nil {
+		_, op = c.ops.beginTentative(ctx, spec)
+	} else {
+		_, op = c.beginOp(ctx, spec)
+	}
 	// Only the passive pass at the operation's class; the truncating pass,
 	// which blocks writers, at the default tier.
-	err := c.checkpointWith(op.RunIO)
+	err := c.checkpointWith(op.RunIO, pinnedAt)
 	if err != nil {
 		c.wal.retryAt = time.Now().Add(walRetryDelay)
 	} else {
@@ -251,13 +285,22 @@ func (c *Catalog) boundWALAt(ctx context.Context, limit int64, priority string) 
 		detail := ""
 		frames, backfilled := int64(-1), int64(-1)
 		var counts *checkpointBusyError
+		pinned := false
 		if errors.As(err, &counts) {
-			frames, backfilled = counts.frames, counts.backfilled
+			frames, backfilled, pinned = counts.frames, counts.backfilled, counts.pinned
 		}
+		diagnosed := c.walPinned() != nil
+		var pin *walPin
 		if info, statErr := os.Stat(c.Path + "-wal"); statErr == nil {
-			if pin := c.noteWALBusy(info.Size(), frames, backfilled, c.clock()); pin != nil {
+			if pin = c.noteWALBusy(info.Size(), frames, backfilled, c.clock()); pin != nil {
 				detail = pin.String()
 			}
+		}
+		if pinned && (pin == nil || diagnosed) {
+			// Nothing new: the same pin, already recorded (or too small to
+			// diagnose). The truncating pass was not tried.
+			op.discard()
+			return
 		}
 		op.SkipWith("catalog-busy", detail)
 		return
