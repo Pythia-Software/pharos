@@ -205,7 +205,7 @@ func (c *Catalog) RefreshPeerLinks(ctx context.Context) error {
 	// (months of chats, which hold no tool call) rescan every reader since.
 	var calls, turns []peerEvidence
 	if !full {
-		if calls, err = c.peerEvidence(ctx, `SELECT conversation_id,MIN(started_at),MAX(started_at) FROM tool_calls WHERE rowid>? AND started_at IS NOT NULL GROUP BY conversation_id`, lastRow); err != nil {
+		if calls, err = c.peerEvidence(ctx, `SELECT conversation_id,MIN(started_at),MAX(started_at) FROM tool_calls WHERE rowid>? AND started_at IS NOT NULL GROUP BY +conversation_id`, lastRow); err != nil {
 			return err
 		}
 	}
@@ -227,7 +227,7 @@ func (c *Catalog) RefreshPeerLinks(ctx context.Context) error {
 		if err := c.reader().QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid),0) FROM messages WHERE rowid>?`, lastMessage).Scan(&maxMessage); err != nil {
 			return err
 		}
-		if turns, err = c.peerEvidence(ctx, `SELECT conversation_id,MIN(created_at),MAX(created_at) FROM messages WHERE rowid>? AND +kind='message' AND created_at IS NOT NULL GROUP BY conversation_id`, lastMessage); err != nil {
+		if turns, err = c.peerEvidence(ctx, `SELECT conversation_id,MIN(created_at),MAX(created_at) FROM messages WHERE rowid>? AND +kind='message' AND created_at IS NOT NULL GROUP BY +conversation_id`, lastMessage); err != nil {
 			return err
 		}
 	} else if err := c.reader().QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid),0) FROM messages`).Scan(&maxMessage); err != nil {
