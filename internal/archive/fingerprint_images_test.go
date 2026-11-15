@@ -1732,21 +1732,39 @@ func TestFingerprintRendererVersion(t *testing.T) {
 }
 
 func TestFingerprintWorkersShareOnePass(t *testing.T) {
-	c := &Catalog{ops: newOpRegistry("service")}
+	c, _ := seedFingerprintLibrary(t)
+	c.ops = newOpRegistry("service")
+	// Three eligible entities; a fourth waits in retry backoff.
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=1,next_attempt=0;
+UPDATE fingerprint_entities SET next_attempt=unixepoch()+300 WHERE entity='workspace' AND id='fp-other'`)
 	shared := &c.fingerprints.pass
 	first, second := shared.join(t.Context(), c), shared.join(t.Context(), c)
 	if first != second || len(c.ops.running()) != 1 {
 		t.Fatal("workers opened separate operations")
 	}
-	shared.worked(2)
-	shared.worked(3)
+	step := func() opStep {
+		t.Helper()
+		for _, view := range c.ops.views() {
+			return view.Step
+		}
+		t.Fatal("no pass")
+		return opStep{}
+	}
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=0 WHERE entity='conversation' AND id='fp-a'`)
+	shared.worked(t.Context(), c, 1)
+	// The total is the work done plus what is eligible.
+	if s := step(); s.Done != 1 || s.Total != 3 {
+		t.Fatalf("pass total: %+v", s)
+	}
+	execTx(t, c.DB, `UPDATE fingerprint_entities SET dirty=0 WHERE id IN ('fp-b','fp-w')`)
+	shared.worked(t.Context(), c, 2)
 	shared.leave(nil)
 	if len(c.ops.running()) != 1 {
 		t.Fatal("the first worker to finish ended the other's pass")
 	}
 	shared.leave(nil)
-	if views := c.ops.views(); len(c.ops.running()) != 0 || len(views) != 1 || views[0].Step.Done != 5 {
-		t.Fatalf("one pass with both workers' count: %+v", views)
+	if views := c.ops.views(); len(c.ops.running()) != 0 || len(views) != 1 || views[0].Step.Done != 3 || views[0].Step.Total != 3 {
+		t.Fatalf("one pass with both workers' count and its total: %+v", views)
 	}
 }
 

@@ -38,7 +38,9 @@ type fingerprintPass struct {
 	mu    sync.Mutex
 	pass  *daemonPass
 	users int
-	err   error
+	// estimate is the running pass's total, one per pass.
+	estimate *fingerprintEstimate
+	err      error
 }
 
 func (p *fingerprintPass) join(ctx context.Context, c *Catalog) *daemonPass {
@@ -46,15 +48,62 @@ func (p *fingerprintPass) join(ctx context.Context, c *Catalog) *daemonPass {
 	defer p.mu.Unlock()
 	if p.users == 0 {
 		p.pass, p.err = c.beginPass(ctx, "maintenance.fingerprints", triggerSchedule), nil
+		p.estimate = &fingerprintEstimate{}
 	}
 	p.users++
 	return p.pass
 }
 
-func (p *fingerprintPass) worked(n int) {
+func (p *fingerprintPass) worked(ctx context.Context, c *Catalog, n int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.pass.worked(n, "fingerprint")
+	if p.pass.active() {
+		_, total := p.estimate.add(ctx, c, n)
+		p.pass.op.SetTotal(total)
+	}
+}
+
+// fingerprintRecount is how often a pass counts the images still eligible:
+// triggers keep adding work while it runs.
+var fingerprintRecount = 30 * time.Second
+
+// fingerprintEstimate is a pass's total: the units it did plus the dirty
+// entities eligible now (fingerprintSelectionSQL without its LIMIT, read from
+// fingerprint_pending), recounted every fingerprintRecount or when the done
+// count reaches it. Retry backoff and entities waiting for analysis are not
+// in it until they are eligible.
+type fingerprintEstimate struct {
+	mu        sync.Mutex
+	done      int64
+	remaining int64 // at counted
+	atCount   int64 // done at counted
+	counted   time.Time
+}
+
+func (e *fingerprintEstimate) add(ctx context.Context, c *Catalog, n int) (done, total int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.done += int64(n)
+	total = e.atCount + e.remaining
+	if e.counted.IsZero() || time.Since(e.counted) >= fingerprintRecount || e.done >= total {
+		if remaining, err := c.fingerprintsEligible(ctx); err == nil {
+			e.remaining, e.atCount, e.counted = remaining, e.done, time.Now()
+		}
+		total = e.atCount + e.remaining
+	}
+	return e.done, max(total, e.done)
+}
+
+// fingerprintsEligible counts the dirty entities a worker could select now.
+func (c *Catalog) fingerprintsEligible(ctx context.Context) (int64, error) {
+	query, err := c.fingerprintSelectionSQL(ctx, "1")
+	if err != nil {
+		return 0, err
+	}
+	var count int64
+	err = c.reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM (`+query+`)`).Scan(&count)
+	return count, err
 }
 
 func (p *fingerprintPass) leave(err error) {
@@ -217,14 +266,14 @@ func (s *Server) runFingerprintPass(ctx context.Context) error {
 	if s.work.declares(kindFingerprints) {
 		err = s.work.runLibraryMode(ctx, []string{kindFingerprints}, backgroundExplicit(ctx), triggerChained, workModePass)
 	} else {
-		checked := 0
+		estimate := &fingerprintEstimate{}
 		err = c.runSearchBatches(ctx, []searchBatch{
 			{"maintenance.fingerprints", c.pruneFingerprintBlobs},
 			{"maintenance.fingerprints", func(ctx context.Context) (bool, error) {
 				did, err := c.refreshFingerprintImages(ctx)
 				if did && err == nil {
-					checked++
-					reportWork(ctx, "Checking fingerprints", "fingerprint", checked, -1)
+					checked, total := estimate.add(ctx, c, 1)
+					reportWork(ctx, "Checking fingerprints", "fingerprint", int(checked), int(total))
 				}
 				return did, err
 			}},
@@ -681,7 +730,7 @@ func (s *Server) maintainFingerprintImagesLoop(ctx context.Context, secondary bo
 		var more bool
 		pass.runIO(ctx, func(ctx context.Context) { more, err = c.refreshFingerprintImages(s.fingerprintContext(ctx)) })
 		if more {
-			shared.worked(1)
+			shared.worked(s.fingerprintContext(ctx), c, 1)
 		}
 		if !more || err != nil {
 			shared.leave(err)

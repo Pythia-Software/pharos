@@ -796,6 +796,16 @@ func (op *Op) SetDone(n int64) {
 	op.unlock(false)
 }
 
+// SetTotal sets the current step's total (negative: unknown), for work whose
+// size is counted while it runs.
+func (op *Op) SetTotal(total int64) {
+	if !op.lock() {
+		return
+	}
+	op.step.Total = float64(total)
+	op.unlock(false)
+}
+
 // progress mirrors a measured progress report (an activityWork, a SyncRun's
 // phase) into the operation: a new phase or source starts a new step, and
 // the same one updates its counts. It allocates nothing when nothing changed.
