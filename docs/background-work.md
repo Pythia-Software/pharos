@@ -1845,6 +1845,88 @@ the same schedule from one declaration (`backgroundItems`):
   item's line in Settings says what keeps it from the next faster schedule,
   with the numbers used. Placements are stored in
   `background_settings.placements_json`.
+- **What the work costs.** Beside its time, each run records the CPU time and
+  memory it used (`background_cpu.go`), and Settings shows them two ways.
+  - *Measurement.* Go work shares the service process and the runtime keeps
+    no CPU time per goroutine, but the kernel keeps it per thread. Every
+    operation and every background item's run is a span, and the body of
+    its work (`Op.RunIO`, and the pass's call of an item) runs locked to its
+    thread with the thread's CPU clock (`CLOCK_THREAD_CPUTIME_ID`) read at
+    each end. A measured body inside another on the same thread counts to
+    its own source and is taken out of the outer one's own figure; an item's
+    run still reports everything inside it. The process's CPU time
+    (getrusage) less everything measured is kept as `other` ("Pages and
+    everything else"), so the sources sum to what the process used. Worker
+    processes are read directly: the labeling worker's CPU time and memory
+    (`proc_pid_rusage`) and its GPU time (`IOAccelerator`
+    `accumulatedGPUTime`, read once at each end of a lease that may use the
+    GPU) go to the span that leased it. GPU time is never added to CPU
+    time. Running time is the time a span was running (not queued or
+    blocked, with no span running inside it). Memory is the most the
+    service held while the span ran, plus the workers it was leasing: a
+    high-water mark of the whole process, not memory the run alone
+    allocated.
+  - *What it cannot see.* Only the body's own thread is counted to it.
+    Goroutines the work starts, and the runtime's memory management on its
+    behalf, run on other threads and land in `other`, with requests and
+    with loops that are not an operation's body; so an item's figure is a
+    little under its full cost and `other` a little over. An operation
+    whose work is not inside `RunIO` has no CPU figure (shown as not
+    measured). Short-lived commands the service starts (`git`) are not
+    counted anywhere. Model loading happens before the worker's lease and
+    is not counted to it. Only the service is measured: Terminal commands
+    and the app's broker are not. A crash loses at most the totals not yet
+    stored.
+  - *Measured error.* On a clone of a real library (2026-11-15), items were
+    run by `POST /api/background/run` under back-to-back 20 s CPU profiles,
+    and each run's recorded CPU time compared with the profile's samples
+    for that item (by its `item` label, or by its stack for Findings
+    review), scaled so the profile's total equals the process's CPU time by
+    `ps` (the profiler recorded 88–89% of it). With only the service's own
+    maintenance beside them: Repositories & merges 2.9 s against 2.8 s
+    (+4%), Tools & usage 2.6 against 2.7 (−5%), writing estimates 1.4
+    against 1.4 (−3%), Findings review 607.7 against 573.9 (+6%). With a
+    client requesting pages throughout (the process used 117 CPU-seconds in
+    81 s): Repositories 3.1 against 2.7 (+15%), suggestions 3.6 against
+    3.6 (+1%), Tools & usage 3.5 against 3.2 (+10%). Against the unscaled
+    samples the same runs read 9–29% high, which is the profiler's
+    undercount. The labeling worker's figures were not checked this way:
+    the clone's labeling run never reached the worker. An earlier design
+    that divided the process's CPU among the operations registered as
+    running was 190–520% high on the same items, because blocked operations
+    and requests use CPU too; it was dropped.
+  - *Storage.* One row per item run in `background_item_runs`
+    (`cpu_seconds`, `worker_cpu_seconds`, `gpu_seconds`, `peak_bytes`; each
+    NULL where it was not measured), and one row per local day and source
+    in `background_cpu_days` (kept five weeks), where a source is a
+    background item (`item:labels`), another operation kind
+    (`kind:maintenance.checkpoint`) or `other`. Operation kinds count to
+    the item that owns them (`backgroundItem.Kinds`; the Library view and
+    search-index kinds count to Search). Totals are kept in memory and
+    stored with a background run's own write, or by one small write once
+    finished runs have waited 5 min; nothing is written per sample, and no
+    request writes.
+  - *Each schedule's cost.* An item's details in Settings compare the
+    schedules it can be given (`scheduleCosts`, `schedule_costs` in
+    `GET /api/background`): running time, CPU time and memory a day at
+    Frequently, Hourly and Daily, and a run's cost for Only when you ask,
+    with the current schedule marked and the reason it runs there. A day at
+    a cadence is its runs there (the same counts placement uses) times the
+    run's fixed cost, plus the day's work at its per-unit cost. An item that
+    does not count its work is all fixed cost as far as its runs say, so its
+    figure away from the cadence its runs were measured at is a bound: "at
+    least" for a slower schedule, "up to" for a faster one. CPU and GPU time
+    follow the running time at the rate of the item's latest runs that
+    measured them (at least 3); memory is the most any of them held. A fixed
+    or continuous item has one row, the day the ledger measured for it. A
+    figure with no measured runs behind it reads "not measured yet".
+  - *CPU time by analysis.* The card under the schedule charts CPU time a
+    day by source over the last 7 local days, averaged over the days from
+    the first one measured (`cpuUsage`, `usage` in `GET /api/background`):
+    the service's part and the workers' together, largest first, with
+    `other` last, at most 12 named bars (the rest fold into one), hover
+    detail in the shared chart popover, and every source and measure in the
+    table under it (`background:usage:table` in the disclosures map).
 - **Overrides** may permanently move an item to a slower cadence or to only
   when you ask, using its existing schedule picker. Every item also has
   **Move to … for a week** actions for all three other columns. Dragging any
