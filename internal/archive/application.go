@@ -819,14 +819,15 @@ try {
 }
 
 // pickerPurposes are what a picker can be opened to choose, and what it says.
-// The native app's NSOpenPanel says the same (PharosApp.swift).
+// The native app's NSOpenPanel says the same, and for an export also
+// accepts its folder (PharosApp.swift).
 var pickerPurposes = map[string]struct {
 	Prompt string
 	File   bool
 }{
 	"library": {Prompt: "Choose a Pharos library or a parent folder for a new library."},
 	"source":  {Prompt: "Choose the folder that holds this tool’s conversations."},
-	"export":  {Prompt: "Choose the export you downloaded: its ZIP, or its conversations.json.", File: true},
+	"export":  {Prompt: "Choose the export you downloaded: its ZIP, conversations.json or manifest.", File: true},
 }
 
 func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {

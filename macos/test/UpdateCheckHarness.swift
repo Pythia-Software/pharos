@@ -393,7 +393,7 @@ final class HeaderTestWindow: NSWindow {
         expect(recorder.results[true]?["pharosClipboard"] == "Error: Clipboard content must be text.", "the main document keeps clipboard payload validation without writing")
         expect(recorder.results[true]?["pharosDictation"] == "Error: Unknown dictation action.", "the main document keeps dictation payload validation without recording")
         for error in recorder.results[false]!.values {
-            expect(error.contains("main window document"), "every iframe reply reports a native sender rejection: \(error)")
+            expect(error.contains("main Pharos window"), "every iframe reply reports a native sender rejection: \(error)")
         }
         expect(recorder.results[true]?["chooseFolder"] == "ok" && pickerCount == 1, "only the real main-document sender creates a picker")
         expect(recorder.replies[true] == 5 && recorder.replies[false] == 5, "each real WebKit reply finishes once")
