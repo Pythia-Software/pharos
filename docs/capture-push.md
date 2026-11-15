@@ -119,7 +119,9 @@ new pusher, and the library reads both as copies of the same conversations.
 Do not bake a state folder into a machine image. If one is found on a
 machine it was not made on, it takes a new pusher ID and a new host before
 it pushes. On a recognized platform "machine" means the platform's task; on
-others it is `/etc/machine-id` together with the hostname.
+a Mac it is the hardware UUID, so a hostname that follows the network does
+not make a new pusher; elsewhere it is `/etc/machine-id` together with the
+hostname.
 
 The captured host is `PHAROS_HOST_ID` when set, and otherwise follows the
 pusher ID. Its label is `PHAROS_HOST_LABEL`, or the hostname.
@@ -151,7 +153,9 @@ always in the last pass. Background passes start at least 30 seconds apart.
 If the destination refuses five passes in a row (a revoked key, a removed
 bucket), background pushes drop to one attempt a day and `--status` says
 so. `--wait` and `--check` always try, and a successful `--check` ends the
-pause. Network failures are not refusals and are retried on the next pass.
+pause. Network failures are not refusals and are retried on the next pass;
+that includes a sign-in host (the token exchange of keyless access) that
+cannot be reached or answers 5xx or 429.
 
 ## Whose work it is
 
@@ -231,7 +235,9 @@ Collection only adds. An export that fails verification changes nothing.
 An export that lacks a file the library already holds from that machine is
 refused whole and reported. A host folder that was not collected from a
 bucket (a Mac's own capture) is never merged into, and an export claiming
-to be this Mac is refused. The cursor is in
+to be this Mac is refused. The marker that says a host folder came from a
+bucket is written before its first file, so a first collection that stops
+partway is completed by the next run. The cursor is in
 `<capture root>/.bucket-imports/<destination>/state.json`; a host collected
 this way has a `.bucket-import.json` recording its pusher, owner, pool and
 platform.

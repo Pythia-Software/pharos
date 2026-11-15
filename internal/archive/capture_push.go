@@ -397,18 +397,37 @@ func newPusherID() (string, error) {
 }
 
 // pushMachine identifies the machine a state belongs to: the platform's
-// instance where there is one, else the operating system's machine ID and
-// the hostname, which between them differ for a container and a clone.
-func pushMachine(identity pushIdentity) string {
+// instance where there is one; else this Mac's hardware UUID, which outlives
+// the hostname changes a Mac makes as it moves between networks; else the
+// operating system's machine ID and the hostname, which between them differ
+// for a container and a clone. earlier is what a Mac was known by before
+// its hardware UUID was used, so that a state made then is kept.
+func pushMachine(identity pushIdentity) (machine, earlier string) {
 	if identity.instance != "" {
-		return stableID("push-machine", identity.instance)
+		return stableID("push-machine", identity.instance), ""
 	}
 	id, _ := os.ReadFile(pushMachineIDFile)
-	hostname, _ := os.Hostname()
-	return stableID("push-machine", strings.TrimSpace(string(id)), hostname)
+	hostname, _ := pushHostname()
+	named := stableID("push-machine", strings.TrimSpace(string(id)), hostname)
+	if hardware := pushHardwareID(); hardware != "" {
+		return stableID("push-machine", "hardware", hardware), named
+	}
+	return named, ""
 }
 
-var pushMachineIDFile = filepath.Join(string(filepath.Separator)+"etc", "machine-id")
+var (
+	pushMachineIDFile = filepath.Join(string(filepath.Separator)+"etc", "machine-id")
+	pushHostname      = os.Hostname
+	// pushHardwareID is the Mac's hardware UUID, and empty elsewhere or when
+	// ioreg does not answer.
+	pushHardwareID = func() string {
+		if runtime.GOOS != "darwin" {
+			return ""
+		}
+		id, _ := platformUUID([]time.Duration{2 * time.Second, 5 * time.Second})
+		return id
+	}
+)
 
 // Options and the folders they name.
 
@@ -665,7 +684,11 @@ func preparePush(options pushOptions) (*pushRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	if machine := pushMachine(identity); state.Pusher == "" || state.Machine != machine {
+	machine, earlier := pushMachine(identity)
+	if state.Pusher != "" && earlier != "" && state.Machine == earlier {
+		state.Machine = machine
+	}
+	if state.Pusher == "" || state.Machine != machine {
 		// A new root, or one copied here from another machine: a new pusher
 		// with its own chain of exports. The chunks stay where they are.
 		if state.Pusher, err = newPusherID(); err != nil {

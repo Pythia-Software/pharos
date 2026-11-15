@@ -534,8 +534,12 @@ func (g *pushGCS) federate(ctx context.Context) (string, time.Time, error) {
 	if err := pushJSON(ctx, pushGoogleSTS, "", map[string]any{
 		"grantType": "urn:ietf:params:oauth:grant-type:token-exchange", "audience": "//iam.googleapis.com/" + strings.TrimPrefix(g.d.WorkloadIdentityProvider, "//iam.googleapis.com/"),
 		"scope": scope, "requestedTokenType": "urn:ietf:params:oauth:token-type:access_token",
-		"subjectToken": subject, "subjectTokenType": "urn:ietf:params:oauth:token-type:jwt"}, &federated); err != nil || federated.AccessToken == "" {
-		return "", time.Time{}, fmt.Errorf("trading the identity token for Google Cloud access: %w", errors.Join(err, errPushRefused))
+		"subjectToken": subject, "subjectTokenType": "urn:ietf:params:oauth:token-type:jwt"}, &federated); err != nil {
+		// pushDo has already told a refusal from a network that could not be
+		// reached; only an answer without a token is a refusal of its own.
+		return "", time.Time{}, fmt.Errorf("trading the identity token for Google Cloud access: %w", err)
+	} else if federated.AccessToken == "" {
+		return "", time.Time{}, fmt.Errorf("trading the identity token for Google Cloud access: %w: the answer held no token", errPushRefused)
 	}
 	expires := time.Now().Add(time.Duration(federated.ExpiresIn) * time.Second)
 	if g.d.ServiceAccount == "" {
@@ -546,8 +550,10 @@ func (g *pushGCS) federate(ctx context.Context) (string, time.Time, error) {
 		ExpireTime  time.Time `json:"expireTime"`
 	}
 	if err := pushJSON(ctx, fmt.Sprintf(pushGoogleIAM, url.PathEscape(g.d.ServiceAccount)), federated.AccessToken,
-		map[string]any{"scope": []string{pushGCSScope}}, &impersonated); err != nil || impersonated.AccessToken == "" {
-		return "", time.Time{}, fmt.Errorf("acting as %s: %w", g.d.ServiceAccount, errors.Join(err, errPushRefused))
+		map[string]any{"scope": []string{pushGCSScope}}, &impersonated); err != nil {
+		return "", time.Time{}, fmt.Errorf("acting as %s: %w", g.d.ServiceAccount, err)
+	} else if impersonated.AccessToken == "" {
+		return "", time.Time{}, fmt.Errorf("acting as %s: %w: the answer held no token", g.d.ServiceAccount, errPushRefused)
 	}
 	return impersonated.AccessToken, impersonated.ExpireTime, nil
 }

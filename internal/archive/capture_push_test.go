@@ -128,6 +128,7 @@ func newPushFixture(t *testing.T, config string) *pushFixture {
 		t.Fatal(err)
 	}
 	override(t, &pushMachineIDFile, machine)
+	override(t, &pushHardwareID, func() string { return "" })
 	f := &pushFixture{t: t, home: home, bucket: usePushBucket(t), transcript: filepath.Join(home, ".claude", "projects", "-work-api", "session.jsonl"),
 		options: pushOptions{ConfigPath: filepath.Join(home, ".pharos", "pharos-push.json"), StateDir: filepath.Join(home, ".pharos", "push")}}
 	if config == "" {
@@ -460,6 +461,26 @@ func TestCapturePushTakesANewPusherOnAnotherMachine(t *testing.T) {
 	if got, _ := os.ReadFile(f.transcript); f.rebuilt(second.Sources[0].Export) != string(got) {
 		t.Fatal("the new pusher's export does not rebuild the transcript")
 	}
+
+	// A Mac has no machine ID file and its hostname follows the network. Its
+	// hardware UUID identifies it: a state made under the hostname is kept
+	// when the UUID is first used, and a hostname change after that is the
+	// same machine.
+	override(t, &pushHostname, func() (string, error) { return "macbook.local", nil })
+	named := f.push()
+	override(t, &pushHardwareID, func() string { return "11111111-2222-3333-4444-555555555555" })
+	if adopted := f.push(); adopted.Pusher != named.Pusher {
+		t.Fatalf("the hardware UUID made a new pusher: %s, then %s", named.Pusher, adopted.Pusher)
+	}
+	override(t, &pushHostname, func() (string, error) { return "macbook.guest-network.example", nil })
+	if moved := f.push(); moved.Pusher != named.Pusher {
+		t.Fatalf("a hostname change made a new pusher: %s, then %s", named.Pusher, moved.Pusher)
+	}
+	// Another Mac's hardware is still another machine.
+	override(t, &pushHardwareID, func() string { return "99999999-2222-3333-4444-555555555555" })
+	if other := f.push(); other.Pusher == named.Pusher {
+		t.Fatal("a state copied to another Mac kept its pusher")
+	}
 }
 
 func TestCapturePushBacksOffAfterRepeatedRefusals(t *testing.T) {
@@ -680,6 +701,57 @@ func TestCapturePushDestinations(t *testing.T) {
 			c.check(t, requests)
 			if printed, _ := json.Marshal(config); strings.Contains(string(printed), `"secret"`) || strings.Contains(string(printed), "sig=s") {
 				t.Fatalf("the configuration prints its secret: %s", printed)
+			}
+		})
+	}
+}
+
+// A sign-in host that cannot be reached, or is overloaded, is not the
+// destination saying no: only a refusal counts toward the daily back-off.
+func TestCapturePushTellsAnUnreachableSignInFromARefusal(t *testing.T) {
+	dir := t.TempDir()
+	writeSourceFile(t, filepath.Join(dir, "token"), "signed.identity.token")
+	path := filepath.Join(dir, "push.json")
+	writeSourceFile(t, path, `{"contract":"pharos-push-config/1","access":"write","prefix":"p","destination":{"type":"gcs","bucket":"box","workload_identity_provider":"projects/1/locations/global/workloadIdentityPools/p/providers/n","service_account":"push@example.iam.gserviceaccount.com","identity_token":{"file":"token"}}}`)
+	config, err := readPushConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	override(t, &pushRetryDelay, 0)
+	federated := `{"access_token":"federated","expires_in":3600}`
+	for _, c := range []struct {
+		name        string
+		host        string
+		status      int
+		answer      string
+		unreachable bool
+		refused     bool
+	}{
+		{"sign-in overloaded", "sts.googleapis.com", http.StatusServiceUnavailable, "", false, false},
+		{"sign-in rate limited", "sts.googleapis.com", http.StatusTooManyRequests, "", false, false},
+		{"sign-in unreachable", "sts.googleapis.com", 0, "", true, false},
+		{"sign-in refuses", "sts.googleapis.com", http.StatusForbidden, "", false, true},
+		{"sign-in answers without a token", "sts.googleapis.com", http.StatusOK, `{}`, false, true},
+		{"service account step overloaded", "iamcredentials.googleapis.com", http.StatusBadGateway, "", false, false},
+		{"service account step refuses", "iamcredentials.googleapis.com", http.StatusForbidden, "", false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			override(t, &pushHTTP, &http.Client{Transport: cloudRoundTripper(func(r *http.Request) (*http.Response, error) {
+				status, answer := http.StatusOK, federated
+				if r.URL.Host == c.host {
+					if c.unreachable {
+						return nil, errors.New("dial tcp: no route to host")
+					}
+					status, answer = c.status, c.answer
+				}
+				return &http.Response{StatusCode: status, Status: http.StatusText(status), Body: io.NopCloser(strings.NewReader(answer)), Header: http.Header{}, Request: r}, nil
+			})})
+			store, err := newPushStore(config, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.put(context.Background(), "p/chunks/abc", []byte("bytes")); err == nil || pushRefused(err) != c.refused {
+				t.Fatalf("refused %v, want %v: %v", pushRefused(err), c.refused, err)
 			}
 		})
 	}

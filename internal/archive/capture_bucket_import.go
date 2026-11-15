@@ -290,6 +290,16 @@ func mergeCaptureExport(ctx context.Context, captureRoot, exportDir string, enve
 	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
 		return 0, err
 	}
+	// The marker says whose host folder this is, not that a merge finished,
+	// so it is written before any file: a merge that stops partway leaves a
+	// folder the next run recognizes and completes.
+	data, err := json.MarshalIndent(marker, "", "  ")
+	if err != nil {
+		return 0, err
+	}
+	if err := writeFileAtomic(markerPath, append(data, '\n'), 0o600); err != nil {
+		return 0, err
+	}
 	lock, err := lockCaptureTarget(ctx, sourceDir)
 	if err != nil {
 		return 0, err
@@ -356,11 +366,7 @@ func mergeCaptureExport(ctx context.Context, captureRoot, exportDir string, enve
 		}
 		written++
 	}
-	data, err := json.MarshalIndent(marker, "", "  ")
-	if err != nil {
-		return written, err
-	}
-	return written, writeFileAtomic(markerPath, append(data, '\n'), 0o600)
+	return written, nil
 }
 
 // copyFileDurably puts a copy of source at target, replacing it at once.

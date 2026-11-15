@@ -116,7 +116,8 @@ func TestBucketImportCollectsPushedCapturesAsTheirHost(t *testing.T) {
 
 func TestBucketImportOnlyAdds(t *testing.T) {
 	f := newPushFixture(t, "")
-	first := f.push().Sources[0]
+	pushed := f.push()
+	first := pushed.Sources[0]
 	doc := f.bucket.export(first.Export)
 	sandbox := doc.Envelope.HostID
 	_, config, read := f.library("team")
@@ -133,8 +134,17 @@ func TestBucketImportOnlyAdds(t *testing.T) {
 		t.Fatalf("a refused export left %v in the capture root", err)
 	}
 	f.bucket.objects[chunk] = genuine
-	if _, err := importBucket(context.Background(), config.CaptureRoot, read); err != nil {
-		t.Fatal(err)
+
+	// A first merge that stops partway (here, its files are gone before they
+	// are copied) leaves a host folder the next run recognizes and completes.
+	if _, err := mergeCaptureExport(context.Background(), config.CaptureRoot, t.TempDir(), doc.Envelope, bucketImportedHost{Pusher: pushed.Pusher}); err == nil {
+		t.Fatal("a merge without its files succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(config.CaptureRoot, sandbox)); err != nil {
+		t.Fatalf("the interrupted merge left no host folder to recover: %v", err)
+	}
+	if result, err := importBucket(context.Background(), config.CaptureRoot, read); err != nil || len(result.Exports) != 1 {
+		t.Fatalf("after an interrupted merge: %+v, %v", result, err)
 	}
 
 	// A later export that lacks a file the library holds is refused whole.
