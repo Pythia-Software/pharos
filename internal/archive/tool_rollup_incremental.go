@@ -236,7 +236,11 @@ func (c *Catalog) publishToolPartitions(ctx context.Context, conn *sql.Conn, bui
 	if publication != build.publication {
 		return errToolPublicationChanged
 	}
-	statements := []string{"DELETE FROM tool_mirror_workspaces", "INSERT INTO tool_mirror_workspaces SELECT * FROM temp.tool_mirror_build"}
+	// Mirrors publish as a difference: each written row marks the request
+	// exclusions stale and invalidates cached queries, and nearly every build
+	// keeps the same mirrors.
+	statements := []string{"DELETE FROM tool_mirror_workspaces WHERE workspace_id NOT IN (SELECT workspace_id FROM temp.tool_mirror_build)",
+		"INSERT INTO tool_mirror_workspaces SELECT workspace_id FROM temp.tool_mirror_build WHERE workspace_id NOT IN (SELECT workspace_id FROM main.tool_mirror_workspaces)"}
 	if build.full {
 		statements = append(statements, "DROP TABLE IF EXISTS main.tool_call_cube", "CREATE TABLE main.tool_call_cube AS SELECT * FROM temp.tool_cube_build",
 			"CREATE INDEX tool_call_cube_workspace_idx ON tool_call_cube(workspace_id)", "CREATE INDEX tool_call_cube_day_idx ON tool_call_cube(day)", "CREATE INDEX tool_call_cube_count_idx ON tool_call_cube(call_count)", "DELETE FROM tool_usage_daily")

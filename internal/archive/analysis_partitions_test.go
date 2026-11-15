@@ -326,6 +326,27 @@ func TestToolRollupMirrorsPricesAndRollover(t *testing.T) {
 		}
 		assertToolReference(t, c)
 	}
+	// Unchanged mirrors are not rewritten, so a build leaves the request
+	// exclusions, which read them, current.
+	if _, err := c.DB.Exec(strings.Replace(link, "conv-1", "conv-2", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ensureToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if countRows(t, c, "SELECT COUNT(*) FROM tool_mirror_workspaces") == 0 || countRows(t, c, "SELECT COUNT(*) FROM meta WHERE key='model_request_exclusions_stale'") != 0 {
+		t.Fatal("fixture has no mirror or stale exclusions")
+	}
+	if _, err := c.DB.Exec("UPDATE tool_calls SET result_tokens=result_tokens+1 WHERE conversation_id='conv-3'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.updateStaleToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if countRows(t, c, "SELECT COUNT(*) FROM meta WHERE key='model_request_exclusions_stale'") != 0 {
+		t.Fatal("a build with unchanged mirrors marked the request exclusions stale")
+	}
+	assertToolReference(t, c)
 	current = current.AddDate(0, 0, 1)
 	if err := c.ensureToolRollup(t.Context()); err != nil {
 		t.Fatal(err)
