@@ -17,21 +17,21 @@ import './reader-navigator.css';
 
 const chevron=<svg className="reader-section-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="m4 2 4 4-4 4"/></svg>;
 /** How the reader frames the shared timeline rows (timeline-rows.tsx): a label
- * and a track, whose click reveals a message in the transcript below. With
- * `top`, the session's own row is the navigator's "Timeline" row, holding
- * `top` (its keyboard control) over the ribbon, and the rows under it start at
- * the margin. Otherwise the session's row is named as a section. */
-function readerSurface(sessionID:string,top?:React.ReactNode):TimelineSurface{
-  const indent=(level:number)=>Math.min(Math.max(0,top?level-1:level),6)*10;
+ * and a track, whose click reveals a message in the transcript below. The
+ * session's own row is the navigator's top row, named `title` and holding
+ * `top` (its keyboard control) over the ribbon; it folds out into the rows
+ * under it, which start at the margin. */
+function readerSurface(sessionID:string,title:string,top:React.ReactNode):TimelineSurface{
+  const indent=(level:number)=>Math.min(Math.max(0,level-1),6)*10;
   return {
     interaction:'reveal',
     viewKey:row=>`reader-timeline:${sessionID}:${row}`,
-    classes:{node:root=>root&&top?'reader-navigator-timeline-disclosure':'reader-section-node',leaf:root=>root&&top?'reader-navigator-row':'reader-section-leaf',human:'reader-human-events',dimension:'reader-section-leaf reader-human-dimension',humanTrack:'reader-section-track reader-human-track'},
+    classes:{node:root=>root?'reader-navigator-timeline-disclosure':'reader-section-node',leaf:root=>root?'reader-navigator-row':'reader-section-leaf',human:'reader-human-events',dimension:'reader-section-leaf reader-human-dimension',humanTrack:'reader-section-track reader-human-track'},
     labels:true,
-    label:({root,level,expands})=>root&&top&&!expands?{className:'reader-navigator-label'}:{className:'reader-section-label',style:{paddingLeft:indent(level)}},
-    rootLabel:(node,{count,expands})=>top&&!expands?'Timeline':<><strong>{top?'Timeline':node.title}</strong><small>{count}</small></>,
+    label:({root,level,expands})=>root&&!expands?{className:'reader-navigator-label'}:{className:'reader-section-label',style:{paddingLeft:indent(level)}},
+    rootLabel:(_node,{count,expands})=>expands?<><strong>{title}</strong><small>{count}</small></>:title,
     caret:expands=>expands?chevron:null,
-    track:(ribbon,root)=>root&&top?<div className="reader-navigator-track reader-navigator-timeline" role="group" aria-label="Session timeline. Click to reveal a message.">{ribbon}{top}</div>:<span className="reader-section-track">{ribbon}</span>,
+    track:(ribbon,root)=>root?<div className="reader-navigator-track reader-navigator-timeline" role="group" aria-label={`${title}. Click to reveal a message.`}>{ribbon}{top}</div>:<span className="reader-section-track">{ribbon}</span>,
   };
 }
 /** The hover card of a turn on the Turns row: what the turn's header says. */
@@ -87,17 +87,15 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
   const reveal=({message,fraction}:RibbonReveal)=>{const id=message??nearestReaderMessage(clock.byID,scale.time(Math.max(0,Math.min(1,fraction))));if(id)data.jumpMessage(id);};
   const available=availableReaderNavigators(data,clock.byID),hasContext=available.includes('context'),hasTurns=available.includes('turns'),hasVoice=!!data.voice,hasBars=timelineVisible||hasContext||hasTurns||hasVoice,contextNote=useId();
   const keyboard=<button type="button" className="reader-navigator-keyboard" aria-label="Browse session timeline" title="Left / right: move through the session · Home / End: first / last message" onFocus={event=>{const band=host.current?.querySelector<HTMLElement>('.reader-navigator-window');event.currentTarget.dataset.position=band?.dataset.position||'0';}} onClick={event=>{event.stopPropagation();reveal({fraction:Number(event.currentTarget.dataset.position??0)});}} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const button=event.currentTarget,previous=Number(button.dataset.position??0),next=event.key==='Home'?0:event.key==='End'?1:Math.max(0,Math.min(1,previous+(event.key==='ArrowLeft'?-.02:.02)));button.dataset.position=String(next);reveal({fraction:next});}}/>;
-  // One lane, framed twice when the reader shows several sessions: the navigator's Timeline row alone, then this session as a section that folds out. A conversation of one session folds out of its Timeline row.
-  const lane:Omit<TimelineLane,'surface'>={visibility,range:clock.range,scale,events:eventLayer,showUnknownTail:clock.timed,onReveal:reveal,
+  // The reader zooms to this session's span, so a workspace timeline above it would draw the same thing: one row, named for the session when the workspace has several.
+  const lane:TimelineLane={surface:readerSurface(data.sessionID,singleSession?'Timeline':'Session Timeline',keyboard),visibility,range:clock.range,scale,events:eventLayer,showUnknownTail:clock.timed,onReveal:reveal,
     human:humanGroups.length?{groups:humanGroups,layout:{slots:humanLayout.slots,trackPx},jump:event=>data.jumpHumanEvent?data.jumpHumanEvent(event):data.jumpMessage(event.message_id),revealAt:fraction=>reveal({fraction})}:undefined};
-  const timelineRow={...lane,surface:readerSurface(data.sessionID,keyboard)},sessionRows={...lane,surface:readerSurface(data.sessionID)};
   useEffect(()=>{if(host.current&&hasBars)return trackReaderViewport(panel,host.current,data,clock.byID,scale);},[panel,data,clock,scale,hasBars]);
   useEffect(()=>{const track=host.current?.querySelector<HTMLElement>('.reader-navigator-window-track');if(!track||typeof ResizeObserver==='undefined')return;const measure=()=>{const width=Math.round(track.clientWidth/8)*8;if(width>0)setTrackPx(width);};const observer=new ResizeObserver(measure);observer.observe(track);measure();return()=>observer.disconnect();},[hasBars]);
   return <><aside ref={host} className="reader-navigator" aria-label="Session navigator" data-range={clock.range.join(',')}>
     {hasBars?<>
       <div className="reader-navigator-bars">
-        {timelineVisible?<TimelineRow node={visibleTree!} lane={timelineRow} flat={!singleSession}/>:null}
-        {timelineVisible&&!singleSession&&(visibleTree!.children.length||lane.human)?<TimelineRow node={visibleTree!} lane={sessionRows}/>:null}
+        {timelineVisible?<TimelineRow node={visibleTree!} lane={lane}/>:null}
         {hasContext||hasTurns?<div className={`reader-navigator-row${hasContext?'':' is-turns'}`}>
           <span className="reader-navigator-label">{hasContext?'Turns · context':'Turns'}</span>
           <div className={`reader-navigator-track reader-navigator-turns${hasContext?' reader-navigator-context':''}`} role="group" aria-label={hasContext?'Conversation turns and context growth':'Conversation turns'} aria-describedby={hasContext?contextNote:undefined}>
