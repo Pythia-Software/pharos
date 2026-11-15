@@ -200,7 +200,10 @@ def transfer_database(run, remote, root, drop_dir, relative, mtime):
             yield data
         # Failing here, before the rename, leaves no partial snapshot behind.
         if process.wait() != 0:
-            raise RuntimeError(f"snapshot of {relative} failed with exit status {process.returncode}")
+            said = [line for line in process.stderr.read().decode(errors="replace").splitlines()
+                    if line.strip() and not line.startswith("stamp ")]
+            reason = f": {said[-1].strip()[:200]}" if said else ""
+            raise RuntimeError(f"snapshot failed with exit status {process.returncode}{reason}")
 
     try:
         run.write_file(drop_dir, relative, chunks(), mtime)

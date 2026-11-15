@@ -171,7 +171,9 @@ class SSHPullTests(unittest.TestCase):
         self.assertEqual(result["status"], "complete", result)
         expected = {(kind, relative) for kind, files in self.files.items() for relative in files}
         self.assertEqual(set(delivered), expected)
-        self.assertTrue(any("state_5.sqlite skipped" in warning for warning in result["warnings"]), result["warnings"])
+        # The warning carries sqlite3's own reason, so a failure that persists can be diagnosed.
+        self.assertTrue(any("state_5.sqlite skipped" in warning and "not a database" in warning
+                            for warning in result["warnings"]), result["warnings"])
         self.assertEqual(result["cursor"]["sources"]["codex"]["databases"], {})
         database.write_bytes(good)
         os.utime(database, (HOUR_AGO, HOUR_AGO))
