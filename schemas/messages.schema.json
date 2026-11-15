@@ -250,7 +250,7 @@
     },
     {
       "name": "main_category",
-      "label": "Mostly",
+      "label": "Main category",
       "type": "enum",
       "group": "Message",
       "render": "authorship_category",
@@ -272,7 +272,7 @@
             },
             {
               "value": "quoted",
-              "label": "Copied"
+              "label": "Copied or quoted"
             },
             {
               "value": "resent",
@@ -331,7 +331,7 @@
             },
             {
               "value": "quoted",
-              "label": "Copied"
+              "label": "Copied or quoted"
             },
             {
               "value": "resent",
@@ -1341,7 +1341,7 @@
           "expr": "r.\"channel_status\""
         }
       },
-      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+      "description": "How the channel was established."
     },
     {
       "name": "machine_status",
@@ -1363,7 +1363,7 @@
           "expr": "r.\"machine_status\""
         }
       },
-      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+      "description": "How the machine was established."
     },
     {
       "name": "execution_machine_status",
@@ -1385,7 +1385,7 @@
           "expr": "r.\"execution_machine_status\""
         }
       },
-      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+      "description": "How the execution machine was established."
     },
     {
       "name": "origin_conversation_id",
@@ -1407,7 +1407,7 @@
           "expr": "r.\"origin_conversation_id\""
         }
       },
-      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+      "description": "The conversation the channel and machine were inherited from."
     },
     {
       "name": "origin_evidence",
@@ -1429,7 +1429,7 @@
           "expr": "r.\"origin_evidence\""
         }
       },
-      "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."
+      "description": "The recorded evidence for how the channel or machine was established."
     },
     {
       "name": "channels",

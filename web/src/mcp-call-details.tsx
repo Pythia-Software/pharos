@@ -25,7 +25,7 @@ export function MCPCallDetails({ id, onClose }: { id: string; onClose: () => voi
   useEffect(() => {
     const controller = new AbortController();
     loadMCPCall(id, controller.signal).then(value => { if (!controller.signal.aborted) setCall(value); })
-      .catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "MCP call unavailable"); });
+      .catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "Could not load this MCP call."); });
     return () => controller.abort();
   }, [id]);
   useEffect(() => {
@@ -40,7 +40,7 @@ export function MCPCallDetails({ id, onClose }: { id: string; onClose: () => voi
   }}>
     <div className="mcp-card-heading"><div><h2>{call?.tool_name ?? "MCP call"}</h2>{call ? <p className="muted">{new Date(call.called_at).toLocaleString()} · {call.status}</p> : null}</div><button type="button" onClick={onClose}>Close</button></div>
     {error ? <p className="query-table-error" role="alert">{error}</p> : !call ? <p role="status">Loading call details…</p> : <>
-      <p className="muted">{mcpDetailNumber(call.estimated_output_tokens, formatTokens)} estimated output tokens · {mcpDetailNumber(call.response_bytes)} bytes · {mcpDetailNumber(call.duration_ms)} ms{call.result_count == null ? "" : ` · ${mcpDetailNumber(call.result_count)} results`}{call.truncated ? " · truncated" : ""}</p>
+      <p className="muted">{mcpDetailNumber(call.estimated_output_tokens, formatTokens)} estimated output tokens · {mcpDetailNumber(call.response_bytes)} bytes · {mcpDetailNumber(call.duration_ms)} ms{call.result_count == null ? "" : ` · ${mcpDetailNumber(call.result_count)} ${call.result_count === 1 ? "result" : "results"}`}{call.truncated ? " · truncated" : ""}</p>
       <h3>Sanitized arguments</h3><pre className="mcp-code">{call.arguments_json}</pre>
       {call.error_text ? <><h3>Error</h3><pre className="mcp-code badtext">{call.error_text}</pre></> : null}
     </>}

@@ -40,7 +40,7 @@ test("a failed or missing metric fails the read instead of reading as zero", () 
   const failed = { metrics: [ok.metrics[1], { id: "b", buckets: [], error: "group population exceeds host budget", errorCode:"resource_limit" }] };
   assert.throws(() => metricResults(failed, clauses), error => error instanceof MetricRequestError && error.resourceLimit && /group population/.test(error.message));
   assert.throws(() => metricResults({ metrics: [{ id: "b", buckets: [], error: "type_error" }, ok.metrics[1]] }, clauses), error => error instanceof MetricRequestError && !error.resourceLimit);
-  assert.throws(() => metricResults({ metrics: [ok.metrics[1]] }, clauses), /omitted the metric b/);
+  assert.throws(() => metricResults({ metrics: [ok.metrics[1]] }, clauses), /did not return every result this chart needs \(metric b\)/);
   assert.throws(() => metricResults({ metrics: [ok.metrics[1], { id: "b", buckets: [], error: "group population exceeds the 50,000-group host budget" }] }, clauses), error => !error.resourceLimit, "Machine Time's own budget is not one a larger executor answers");
 });
 

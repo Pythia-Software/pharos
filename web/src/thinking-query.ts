@@ -127,7 +127,7 @@ export function thinkingPeriods(interval: Interval, zone: string, range: { from?
   const start = range.from ?? observed.first, end = range.to !== undefined ? range.to - 1 : observed.last;
   if (observed.first === undefined || start === undefined || end === undefined) return { keys, bounds };
   for (let t = metricDateFloor(start, interval.interval, zone, interval.every); t <= end; t = metricDateNext(t, interval.interval, zone, interval.every)) {
-    if (keys.length >= maxPeriods) throw new Error("more than 5,000 time buckets; choose a coarser Time Bucket or shorter Range");
+    if (keys.length >= maxPeriods) throw new Error("This range needs more than 5,000 time buckets. Choose a larger time bucket or a shorter range.");
     const name = key(t), next = metricDateNext(t, interval.interval, zone, interval.every);
     keys.push(name);
     bounds[name] = { From: thinkingStamp(range.from !== undefined && t < range.from ? range.from : t), To: thinkingStamp(range.to !== undefined && next > range.to ? range.to : next) };
@@ -274,7 +274,7 @@ export type ThinkingFit = Pick<ThinkingResponse, "Adjusted" | "timezone" | "fact
 
 export async function loadThinkingFit(url: string, signal?: AbortSignal): Promise<ThinkingFit> {
   const response = await fetch(url, { signal }), body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? "Unable to load request timing.");
+  if (!response.ok) throw new Error(body.error ?? "Could not load model request timing.");
   return body;
 }
 

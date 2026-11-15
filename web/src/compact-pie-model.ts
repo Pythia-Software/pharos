@@ -2,10 +2,10 @@ import type { AggregationResultEntry } from "@pythia-software/query-table-core";
 
 export function compactPieSlices(result: AggregationResultEntry, limit: number, showOther = true) {
   const all = [...result.buckets, ...(result.other ? [result.other] : [])];
-  if (result.coverage === "partial" || result.groupCount && result.groupCount > result.buckets.length && !result.other) return { error: "Pie requires a complete, exact denominator.", slices: [], total: 0 };
-  if (all.some(bucket => bucket.error || typeof bucket.value !== "number" || !Number.isFinite(bucket.value) || bucket.value < 0)) return { error: "Pie requires nonnegative additive values.", slices: [], total: 0 };
+  if (result.coverage === "partial" || result.groupCount && result.groupCount > result.buckets.length && !result.other) return { error: "A pie chart needs every group, so it cannot show a partial result.", slices: [], total: 0 };
+  if (all.some(bucket => bucket.error || typeof bucket.value !== "number" || !Number.isFinite(bucket.value) || bucket.value < 0)) return { error: "A pie chart needs a value for every group and cannot show negative values.", slices: [], total: 0 };
   const total = all.reduce((sum, bucket) => sum + Number(bucket.value), 0);
-  if (!(total > 0) || !Number.isFinite(total)) return { error: "No positive values to display.", slices: [], total: 0 };
+  if (!(total > 0) || !Number.isFinite(total)) return { error: "Nothing to show: every value is zero.", slices: [], total: 0 };
   const slices = result.buckets.slice(0, limit).map(bucket => ({ bucket, value: Number(bucket.value), other: false }));
   const remainder = result.buckets.slice(limit).reduce((sum, bucket) => sum + Number(bucket.value), 0) + Number(result.other?.value ?? 0);
   if (showOther && remainder > 0) slices.push({ bucket: { keys: ["Other"], value: remainder, count: 0 }, value: remainder, other: true });

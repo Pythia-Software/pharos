@@ -176,7 +176,7 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     return result(id).map(bucket => [plotted(bucket.keys[0]), name(bucket.keys.slice(1)), Number(bucket.value) || 0]);
   };
   const byKey = (buckets: ChartBucket[]) => new Map(buckets.map(bucket => [bucket.key, bucket]));
-  const valueLabel = (field: string, value: unknown) => value === null || value === undefined || value === "" ? breakdown?.empty ?? "Unknown" : breakdown?.values?.[String(value)] ?? catalog.labels?.[field]?.(String(value)) ?? label(field, value);
+  const valueLabel = (field: string, value: unknown) => value === null || value === undefined || value === "" ? breakdown?.empty ?? "No value" : breakdown?.values?.[String(value)] ?? catalog.labels?.[field]?.(String(value)) ?? label(field, value);
   const seriesLabel = (text: string) => breakdown!.fields.length === 1 ? valueLabel(breakdown!.fields[0], text) : (JSON.parse(text) as unknown[]).map((value, index) => valueLabel(breakdown!.fields[index], value)).join(" · ");
   const chosen = state.selection ?? { values: [], excluded: false };
   const picked = chosen.values;
@@ -319,6 +319,8 @@ export function trendTitle(catalog: AnalysisCatalog, input: AnalysisState): stri
   // bins hold: "Sessions per day by messages per session".
   const heatmap = state.display === "heatmap" ? heatmapAxis(catalog, state) : undefined;
   if (heatmap) return `${heatmap.unit ? catalog.units[heatmap.unit].plural : heatmap.counted ? catalog.records.plural : measure.label} per ${periodLabel(state.period, trendPeriodCount(state))} by ${heatmap.bins.label.toLowerCase()}`;
-  const cumulative = state.display === "cumulative", name = state.share ? `Share of ${measure.label.replace(/ \(USD\)$/, "").replace(/^(?!API)\w/, letter => letter.toLowerCase())}` : measure.label;
-  return `${cumulative ? "Cumulative " : ""}${cumulative ? name[0].toLowerCase() + name.slice(1) : name}${cumulative ? "" : ` per ${periodLabel(state.period, trendPeriodCount(state))}`}${split ? ` by ${split.toLowerCase()}` : ""}`;
+  // Lowercase a label's first letter, but keep an acronym ("API", "MCP", "CO₂e") intact.
+  const lower = (text: string) => /^[A-Z]{2}/.test(text) ? text : text.slice(0, 1).toLowerCase() + text.slice(1);
+  const cumulative = state.display === "cumulative", name = state.share ? `Share of ${lower(measure.label.replace(/ \(USD\)$/, ""))}` : measure.label;
+  return `${cumulative ? "Cumulative " : ""}${cumulative ? lower(name) : name}${cumulative ? "" : ` per ${periodLabel(state.period, trendPeriodCount(state))}`}${split ? ` by ${split.toLowerCase()}` : ""}`;
 }

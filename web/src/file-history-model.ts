@@ -176,7 +176,7 @@ export function entryText(entry: Pick<FileTreeEntry, "sessions" | "commits">, gi
 export function treeText(git: FileHistoryGit | undefined): string {
   if (!git || git.status === "not_applicable") return "A folder, not a Git repository: these are the files agents edited in it.";
   if (git.status === "checked" && git.tree_commit) return `The tree at ${git.tree_ref || "HEAD"} (${git.tree_commit.slice(0, 7)}), read by local Git, with files agents edited that it does not hold.`;
-  if (git.status === "checked") return "Local Git did not read this repository's tree (too large or no commit), so these are the files agents edited and commits changed.";
+  if (git.status === "checked") return "Local Git did not read this repository’s tree (too large or no commit), so these are the files agents edited and commits changed.";
   return `${git.reason || "Local Git has not checked this repository."} These are the files agents edited in it.`;
 }
 
@@ -246,11 +246,11 @@ export function commitState(commit: FileHistoryCommit): string {
 }
 
 const linkMethods: Record<string, string> = {
-  transcript: "printed in its transcript",
-  message: "its git command wrote the message",
-  window: "its git command ran then",
-  rewrite: "a rebase or amend of its commit",
-  landed: "its branch commit landed in this squash",
+  transcript: "printed the commit in its conversation",
+  message: "its git command wrote the commit message",
+  window: "its git command ran when the commit was made",
+  rewrite: "this commit rebases or amends one of its commits",
+  landed: "its branch commit was squashed into this one",
   inferred: "inferred from its edits",
 };
 
@@ -300,7 +300,7 @@ export type FileFind = { project?: FileProject; choices?: FileProject[]; files: 
 export function checkoutText(checkout: Pick<RepositoryCheckout, "status" | "path" | "reason"> | undefined): string {
   if (!checkout) return "";
   if (checkout.status === "set") return `Reading code, blame and history from ${checkout.path}.`;
-  return checkout.reason || "Choose this repository's checkout on this Mac to see its code, blame and history.";
+  return checkout.reason || "Choose this repository’s checkout on this Mac to see its code, blame and history.";
 }
 
 // A unified diff, file by file and hunk by hunk, each line with its number

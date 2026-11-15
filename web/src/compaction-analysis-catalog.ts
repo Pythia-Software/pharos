@@ -8,7 +8,7 @@ export const compactionAnalysisCatalog: AnalysisCatalog = {
   records: { label: "Compaction", plural: "Compactions", note: "One recorded context compaction boundary. Replayed Codex boundaries, mirrored transcripts and inactive conversation versions are excluded." },
   measures: {
     compactions: { label: "Compactions", unit: "compactions", format: { kind: "number", decimals: 0 }, op: "count", additive: true,
-      note: "Counts boundary events, including consecutive compactions and boundaries without later usage. Human means manual; machine means automatic. Claude records the trigger; Codex infers it from turn position. Unknown triggers remain separate." },
+      note: "Counts boundary events, including consecutive compactions and boundaries without later usage. Claude records the trigger; Codex infers it from turn position. Unknown triggers remain separate." },
     conversations: { label: "Conversations with compactions", unit: "conversations", format: { kind: "number", decimals: 0 }, op: "count_distinct", field: "conversation_id", additive: false,
       note: "Distinct recorded conversations with a compaction. A conversation may appear under several triggers, so groups do not add up to the total." },
   },
@@ -26,7 +26,7 @@ export const compactionAnalysisCatalog: AnalysisCatalog = {
     trigger_evidence: { label: "Trigger evidence", fields: ["trigger_evidence"], order: ["recorded", "inferred", "unknown"] },
   },
   labels: {
-    trigger: value => ({ human: "Human triggered", machine: "Machine triggered", unknown: "Unknown trigger" })[value] ?? value,
+    trigger: value => ({ human: "Manual", machine: "Automatic", unknown: "Unknown trigger" })[value] ?? value,
     trigger_evidence: value => ({ recorded: "Recorded", inferred: "Inferred", unknown: "Unknown" })[value] ?? value,
     channel: value => originLabel("channel", value), machine_id: value => originLabel("machine_id", value), execution_machine_id: value => originLabel("execution_machine_id", value),
   },

@@ -45,10 +45,10 @@ export function deriveCarbon(assumptions: CarbonAssumptions | undefined, totals:
 }
 
 const grams = { kind: "number", decimals: 1 } as const;
-const assumptionsNote = "Estimated with your Carbon Impact assumptions (estimate range, facility overhead, grid and input sensitivity); token counts are reported, energy and CO₂e are modeled. Models are assigned to size tiers by name; unmatched models use the default tier.";
+const assumptionsNote = "Estimated with your Carbon Impact assumptions (energy scenario, facility overhead (PUE), electricity grid and input sensitivity); token counts are as recorded; energy and CO₂e are estimates. Models are assigned to size tiers by name; models with no matching tier use the default tier.";
 const measures: Record<string, AnalysisMeasure> = {
   co2: { label: "Estimated CO₂e (g)", unit: "g CO₂e", format: grams, op: "sum", field: "co2e_g", value: "co2e_g", additive: true, note: assumptionsNote },
-  energy: { label: "Estimated electricity (Wh)", unit: "Wh", format: grams, op: "sum", field: "energy_wh", value: "energy_wh", additive: true, note: `Facility electricity: IT energy times facility overhead (PUE). ${assumptionsNote}` },
+  energy: { label: "Estimated electricity (Wh)", unit: "Wh", format: grams, op: "sum", field: "energy_wh", value: "energy_wh", additive: true, note: `Facility electricity: server energy times facility overhead (PUE). ${assumptionsNote}` },
   tokens: { label: "Tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "total_tokens", value: "total_tokens", additive: true, note: "Reported tokens behind the estimates, including cached input and reported reasoning output." },
 };
 

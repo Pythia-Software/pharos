@@ -38,7 +38,7 @@ const filtered = (dataset: UsageDataset, where: WhereTerm[], current: URLSearchP
 export function usageRowLinks(dataset: UsageDataset, row: Row, current = new URLSearchParams()): UsageRowLink[] {
   const links: UsageRowLink[] = [];
   const source = primaryUsageSource(dataset, row);
-  if (source) links.push({ kind: "source", label: source.startsWith("/library?") ? "Workspaces at this checkout" : new URL(source, "https://pharos.invalid").searchParams.has("message") ? dataset === "tool_calls" ? "Call message" : "Evidence message" : new URL(source, "https://pharos.invalid").searchParams.has("at") ? "Conversation near this time" : "Open workspace", href: source });
+  if (source) links.push({ kind: "source", label: source.startsWith("/library?") ? "Workspaces at this checkout" : new URL(source, "https://pharos.invalid").searchParams.has("message") ? dataset === "tool_calls" ? "Call message" : "Evidence message" : new URL(source, "https://pharos.invalid").searchParams.has("at") ? "Conversation near this time" : source.startsWith("/conversation/") ? "Open conversation" : "Open workspace", href: source });
   if (dataset === "mcp_calls") {
     // These are request targets, never inferred caller identity or response data.
     try {
