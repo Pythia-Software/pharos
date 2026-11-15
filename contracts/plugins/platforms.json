@@ -1,0 +1,28 @@
+{
+  "contract": "pharos-platforms/1",
+  "platforms": [
+    {
+      "name": "niteshift",
+      "label": "Niteshift",
+      "markers": [
+        "NITESHIFT_TASK_ID",
+        "NITESHIFT_SANDBOX_ID"
+      ],
+      "identity": {
+        "instance": "NITESHIFT_TASK_ID",
+        "task": "NITESHIFT_TASK_ID",
+        "task_url": "NITESHIFT_TASK_URL",
+        "owner": "NITESHIFT_USER_ID",
+        "environment_segment": 2
+      },
+      "identity_token": [
+        "ns",
+        "oidc-token",
+        "--audience",
+        "{audience}"
+      ],
+      "ownerless": "refused",
+      "checked": "2026-11-15"
+    }
+  ]
+}

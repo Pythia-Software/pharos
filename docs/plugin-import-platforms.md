@@ -178,8 +178,11 @@ A single person's bucket has no `{owner}` and nothing changes.
 
 ## Recipes
 
-A recipe is a checked-in data file per platform (`pharos-platform/1`, in
-`contracts/plugins/platforms/`), read by both ends:
+A recipe is checked-in data per platform, read by both ends. The part
+`capture-push` reads is built into it and published as
+[`contracts/plugins/platforms.json`](../contracts/plugins/platforms.json)
+(`pharos-platforms/1`), which a test holds equal to the code; the setup
+answers join it when setup is built.
 
 - `capture-push` uses its **markers** (how to recognize the platform) and
   **identity** (where environment, task, link and owner come from);
@@ -247,7 +250,7 @@ task. No secret is entered anywhere.
   under `/root/.codex`: `sessions/<year>/<month>/<day>/rollout-….jsonl`
   and `state_5.sqlite`. The `codex` kind's globs match as they are.
 
-**Still to check, once `capture-push` exists:** that a supervised service
+**Still to check, now that `capture-push` exists ([capture-push.md](capture-push.md)):** that a supervised service
 may run `ns oidc-token`, and that the capture root is absent from the
 snapshot new tasks start from.
 
@@ -258,6 +261,8 @@ Niteshift itself. Until the other cases are checked the recipe does not
 claim to recognize an ownerless task: a task with no user ID is refused
 with a message, not filed under `shared`, and the first team that connects
 those integrations is when the `shared` rule for Niteshift gets written.
+Meanwhile an environment that only runs an automation says so itself, with
+`PHAROS_PUSH_AUTOMATION` naming it, and its runs go to `shared`.
 
 Niteshift also offers an MCP server that reads task transcripts. That is a
 different, lossier source (its rendering, not the agent's files) and is not

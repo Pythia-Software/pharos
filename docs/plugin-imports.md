@@ -387,7 +387,7 @@ things push at once, and nothing may be lost or counted twice.
 ```text
 <prefix>/chunks/<sha256>                              a piece of a member, named by its content
 <prefix>/exports/<pusher>/<source>/<time>-<id>.json   one envelope: export.json plus each member's chunk list
-<prefix>/hello/<pusher>.json                          written by `capture-push --check`
+<prefix>/hello/<pusher>.json                          written by `capture-push --check`; the one object a pusher rewrites
 ```
 
 - **A pusher is one capture root.** It gets a random ID when the root is
@@ -614,7 +614,8 @@ checked examples.
 4. The envelope importer: one-off under `.imports/`, streams added to the
    pusher's capture.
 5. `capture-push` with the bucket layout, chunking and the four
-   destinations, on the Mac first; then `bucket-import/1`.
+   destinations (built: [capture-push.md](capture-push.md), with keyless
+   credentials, `--watch` and the Niteshift recipe); then `bucket-import/1`.
 6. Setup: the recommended bucket path, both command sets, the four-step
    check; integration states, automatic pause and guided removal.
 7. The Linux CLI: build, release artifact, native lifecycle tests on Linux,

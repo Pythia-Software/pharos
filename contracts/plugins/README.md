@@ -14,6 +14,7 @@ service yet. Where the docs and a schema disagree, the schema is the contract.
 | `usage-records/1` | [usage-record.schema.json](usage-record.schema.json) | usage importer, one JSON line per record | Pharos |
 | `pharos-push/1` exports and hello | [push.schema.json](push.schema.json) | `pharos capture-push`, in a bucket | Pharos's `bucket-import/1` |
 | `pharos-push-config/1` | [push.schema.json](push.schema.json) (`config`) | bucket setup: `pharos-push.json`, `pharos-read.json` | `pharos capture-push`; Pharos |
+| `pharos-platforms/1` | [platforms.json](platforms.json) | `capture-push`'s platform recipes (a Go test rewrites it) | `capture-push`; setup |
 | `pharos-plugin-kinds/1` | [kinds.json](kinds.json) | Pharos's provider registry (a Go test rewrites it) | importers; these schemas |
 | `connector/v1` API | [connector-api.openapi.json](connector-api.openapi.json), bodies in [connector.schema.json](connector.schema.json) | Pharos, on loopback during a run | plugin |
 | `pharos-report/1` batch | [report.schema.json](report.schema.json) | exporter | receiver |
@@ -52,7 +53,7 @@ timestamps, durations, byte sizes, machines, drops, tokens and the error body.
   `output_dir`.
 - **Nothing in a bucket is overwritten.** Every `pharos-push/1` key is under
   its pusher's ID or named by its content, and an export is written after its
-  chunks. Plain-URL destinations can be pushed to but not imported from.
+  chunks. A pusher's `hello` is the one object it rewrites. Plain-URL destinations can be pushed to but not imported from.
 - **Spend and estimates are different fields.** A usage record's `cost.usd` is
   required when its status is `priced`, `assumed` or `partial`; `estimate` is never cost.
 - **A receiver can ask for changes, everything, or particular items and

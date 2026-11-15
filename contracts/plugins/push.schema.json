@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pharos.pythia.software/contracts/plugins/push.schema.json",
   "title": "Pushed captures (pharos-push/1)",
-  "description": "What `pharos capture-push` writes to a bucket and `bucket-import/1` reads. Keys under the prefix: chunks/<sha256 hex> (a piece of a member, named by its content), exports/<pusher>/<source>/<time>-<id>.json (an export, written after its chunks) and hello/<pusher>.json. No key is ever written with different bytes, so nothing is overwritten.",
+  "description": "What `pharos capture-push` writes to a bucket and `bucket-import/1` reads. Keys under the prefix: chunks/<sha256 hex> (a piece of a member, named by its content), exports/<pusher>/<source>/<time>-<id>.json (an export, written after its chunks) and hello/<pusher>.json. No chunk or export key is ever written with different bytes, so nothing a reader depends on is overwritten; a pusher's hello is the one object it rewrites.",
   "$defs": {
     "pusher": {
       "description": "One capture root. Random, made with the root, and replaced when the root is found on another machine.",
@@ -117,7 +117,7 @@
       }
     },
     "hello": {
-      "description": "Written by `capture-push --check` and by a pusher's first push, so setup can show that a machine reached the bucket before any conversation exists.",
+      "description": "Written by `capture-push --check` and by a pusher's first push, so setup can show that a machine reached the bucket before any conversation exists. The one object a pusher rewrites.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -207,6 +207,42 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 80
+        },
+        "owner": {
+          "description": "Whose work this machine holds, for a prefix with {owner}. The environment variable PHAROS_PUSH_OWNER does the same; without either, the platform's identifier for the person who started the task is used.",
+          "$ref": "#/$defs/owner"
+        },
+        "automation": {
+          "description": "Declares that nobody started this machine's runs: the name of the automation that does, such as \"Sentry autofix\". The owner is then shared unless one is given. PHAROS_PUSH_AUTOMATION does the same.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "sources": {
+          "description": "Folders to capture, instead of the usual folders of every kind that can be pushed.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "kind",
+              "path"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+              },
+              "kind": {
+                "$ref": "common.schema.json#/$defs/transcript_kind"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
         },
         "destination": {
           "oneOf": [
