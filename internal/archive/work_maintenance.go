@@ -348,7 +348,7 @@ func (s *Server) maintenanceWorkDefinitions(_ *workAuthority) ([]workDefinition,
 			}},
 		{kind: kindLibraryView, phase: "refresh", hold: projectionHold, loop: true,
 			probe: func(ctx context.Context) (bool, error) {
-				return catalogExists(ctx, c, "SELECT 1 FROM workspace_library_dirty")
+				return catalogExists(ctx, c, "SELECT 1 FROM workspace_library_dirty UNION ALL SELECT 1 FROM workspace_library_column_pending")
 			},
 			step: libraryStep(func(ctx context.Context) (int, error) {
 				count, err := c.refreshLibrary(ctx, 10, nil)

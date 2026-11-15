@@ -26,8 +26,10 @@ import (
 //   - RefreshLibrary recomputes dirty workspaces in small write batches.
 //
 // To add a derived column, add it to libraryColumns; if it reads a table not
-// in libraryDependencies, add that table too. The stored table and triggers are
-// rebuilt automatically when either list changes.
+// in libraryDependencies, add that table too. Each column is versioned on its
+// own (see ensureLibrary): adding one, or changing one's expression, computes
+// that column again for every stored workspace in the background, and leaves
+// the other columns' stored values and the marks alone.
 
 type libraryColumn struct{ name, expr string }
 
@@ -38,9 +40,15 @@ func currentGroupConversation(alias string) string {
 // libraryColumns are evaluated per workspace with the workspace aliased as w.
 var libraryColumns = []libraryColumn{
 	{"conversation_count", "(SELECT COUNT(*) FROM conversations cx WHERE cx.workspace_id=w.id AND " + currentGroupConversation("cx") + ")"},
-	// A unary + on role keeps a workspace's messages found through its
-	// conversations, not messages_prose_idx (see libraryPreviewSelect).
-	{"turn_count", "(SELECT COUNT(*) FROM conversations tx JOIN messages tm INDEXED BY messages_conversation_idx ON tm.conversation_id=tx.id WHERE tx.workspace_id=w.id AND " + currentGroupConversation("tx") + " AND +tm.role='user' AND tm.kind='message')"},
+	// Every user message, including one on a branch since abandoned: it was
+	// sent. Both indexes cover what is read of them, so no message row is
+	// fetched: each of the conversation's messages is looked up, by time and
+	// rowid, among the user messages in messages_prose_idx.
+	// messages_label_conversation_idx would be one read, but it leaves out
+	// abandoned branches.
+	{"turn_count", `(SELECT COUNT(*) FROM conversations tx JOIN messages tm INDEXED BY messages_conversation_idx ON tm.conversation_id=tx.id
+		WHERE tx.workspace_id=w.id AND ` + currentGroupConversation("tx") + `
+		AND EXISTS(SELECT 1 FROM messages tu INDEXED BY messages_prose_idx WHERE tu.role='user' AND tu.kind='message' AND tu.created_at IS tm.created_at AND tu.rowid=tm.rowid))`},
 	{"changed_file_count", "(SELECT COUNT(*) FROM change_sets csx JOIN change_files cfx ON cfx.change_set_id=csx.id WHERE csx.workspace_id=w.id)"},
 	// A unary + on name keeps metrics found through their workspace, not
 	// metrics_name_value_idx, which holds every workspace's metric of that name.
@@ -48,17 +56,24 @@ var libraryColumns = []libraryColumn{
 	{"token_count", `COALESCE(
 		(SELECT MAX(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name='total_tokens'),
 		(SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name IN ('input_tokens','output_tokens','cache_tokens')), CASE WHEN EXISTS(SELECT 1 FROM agent_sessions ax WHERE ax.workspace_id=w.id AND ax.is_estimate=1) THEN 0 END) + COALESCE((SELECT SUM(ax.total_tokens) FROM agent_sessions ax JOIN conversations cx ON cx.id=ax.conversation_id WHERE ax.workspace_id=w.id AND ` + currentGroupConversation("cx") + ` AND ax.is_estimate=1),0)`},
+	// Tool calls and their failures are the tool ledger's (tool_calls), as
+	// in the workspace metrics. It holds each call once, where a transcript
+	// that replays earlier entries (a resumed or forked Codex session) holds
+	// the call's messages again. A failure is a call the ledger gave the
+	// status error: a result flagged as an error, a nonzero exit, a timeout,
+	// a rejection. It excuses an exit status of 1 that only reports nothing
+	// found (rg, grep, diff) for a command that runs one program, so a
+	// chained command ending that way still counts.
 	{"tool_use_count", `MAX(
-		(SELECT COUNT(*) FROM conversations tc JOIN messages tm ON tm.conversation_id=tc.id WHERE tc.workspace_id=w.id AND ` + currentGroupConversation("tc") + ` AND tm.kind IN ('tool_call','delegation')),
+		(SELECT COUNT(*) FROM conversations tc JOIN tool_calls tl ON tl.conversation_id=tc.id WHERE tc.workspace_id=w.id AND ` + currentGroupConversation("tc") + `),
 		COALESCE((SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name='tool_calls' AND mx.extractor_version<>'core-v1'),0))`},
 	{"tool_error_count", `MAX(
-		(SELECT COUNT(*) FROM conversations ec JOIN messages em ON em.conversation_id=ec.id WHERE ec.workspace_id=w.id AND ` + currentGroupConversation("ec") + ` AND em.kind IN ('tool_result','delegation_result') AND json_extract(CASE WHEN json_valid(em.text) THEN em.text ELSE '{}' END,'$.is_error')=1),
+		(SELECT COUNT(*) FROM conversations ec JOIN tool_calls el ON el.conversation_id=ec.id WHERE ec.workspace_id=w.id AND ` + currentGroupConversation("ec") + ` AND el.status='error'),
 		COALESCE((SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name='tool_errors' AND mx.extractor_version<>'core-v1'),0))`},
-	// Claude marks a compaction with a compact_boundary event. Codex replays
-	// earlier compactions when a session resumes or forks, so only those the
-	// adapter attributed to a turn (compaction_trigger) are counted.
-	{"compaction_count", `(SELECT COUNT(*) FROM conversations kc JOIN messages km ON km.conversation_id=kc.id WHERE kc.workspace_id=w.id AND ` + currentGroupConversation("kc") + ` AND km.kind='metadata'
-		AND (km.text LIKE '%"subtype":"compact_boundary"%' OR km.text LIKE '%"compaction_trigger":"%'))`},
+	// compaction_boundaries holds the compactions that count (compactions.go):
+	// Claude's compact_boundary events, and of Codex's, which replays earlier
+	// ones when a session resumes or forks, those attributed to a turn.
+	{"compaction_count", `(SELECT COUNT(*) FROM conversations kc JOIN compaction_boundaries kb ON kb.conversation_id=kc.id WHERE kc.workspace_id=w.id AND ` + currentGroupConversation("kc") + `)`},
 	// A child conversation's main session replaces its linked delegation in
 	// this count. Unlinked children may belong to another workspace or still
 	// have a delegation without a result.
@@ -116,6 +131,11 @@ type libraryDependency struct {
 
 func workspaceColumn(row string) string { return "SELECT " + row + ".workspace_id AS id" }
 
+// conversationWorkspace finds the workspace of the conversation a row is in.
+func conversationWorkspace(row string) string {
+	return "SELECT workspace_id AS id FROM conversations WHERE id=" + row + ".conversation_id"
+}
+
 var libraryDependencies = []libraryDependency{
 	// Workspace columns are read live; a new workspace only needs a stored row.
 	{table: "workspaces", workspaces: func(row string) string { return "SELECT " + row + ".id AS id" }, insertOnly: true},
@@ -124,9 +144,10 @@ var libraryDependencies = []libraryDependency{
 		return "SELECT workspace_id AS id FROM conversations WHERE harness='claude-ai-export' AND account=" + row + ".account AND native_id=" + row + ".conversation_uuid"
 	}},
 	{table: "conversation_group_membership", workspaces: workspaceColumn},
-	{table: "messages", workspaces: func(row string) string {
-		return "SELECT workspace_id AS id FROM conversations WHERE id=" + row + ".conversation_id"
-	}},
+	{table: "messages", workspaces: conversationWorkspace},
+	// Both are counted through their conversations, as messages are.
+	{table: "tool_calls", workspaces: conversationWorkspace},
+	{table: "compaction_boundaries", workspaces: conversationWorkspace},
 	{table: "change_sets", workspaces: workspaceColumn},
 	{table: "change_files", workspaces: func(row string) string {
 		return "SELECT workspace_id AS id FROM change_sets WHERE id=" + row + ".change_set_id"
@@ -208,25 +229,6 @@ func (d libraryDependency) mark(row string) string {
 		d.workspaces(row) + ") WHERE id IS NOT NULL AND id NOT IN (SELECT workspace_id FROM workspace_library_dirty);"
 }
 
-// libraryVersionTriggerDDL is the trigger text libraryVersion has always
-// hashed: every update marks. The installed triggers have their own version
-// (see ensureLibrary), because when a workspace is marked does not change
-// what is stored for it, and a catalog must not be rebuilt for it.
-func libraryVersionTriggerDDL() []string {
-	statements := []string{}
-	for _, dependency := range libraryDependencies {
-		name := "workspace_library_" + dependency.table
-		statements = append(statements, fmt.Sprintf("CREATE TRIGGER %s_insert AFTER INSERT ON %s BEGIN %s END", name, dependency.table, dependency.mark("NEW")))
-		if dependency.insertOnly {
-			continue
-		}
-		statements = append(statements,
-			fmt.Sprintf("CREATE TRIGGER %s_update AFTER UPDATE ON %s BEGIN %s %s END", name, dependency.table, dependency.mark("OLD"), dependency.mark("NEW")),
-			fmt.Sprintf("CREATE TRIGGER %s_delete AFTER DELETE ON %s BEGIN %s END", name, dependency.table, dependency.mark("OLD")))
-	}
-	return statements
-}
-
 // libraryDerivedSelect computes stored-column values for workspaces matching
 // filter, in workspace_library's column order.
 func libraryDerivedSelect(filter string) string {
@@ -237,26 +239,155 @@ func libraryDerivedSelect(filter string) string {
 	return "SELECT " + strings.Join(columns, ",\n\t") + "\n\tFROM workspaces w WHERE " + filter
 }
 
-// libraryVersion identifies the projection's table, columns, and triggers.
-func libraryVersion() string {
-	// The conversation index hint changes the plan of COUNT(*), not its values.
-	// Keep existing projections valid across this performance-only change.
-	definition := strings.ReplaceAll(libraryProjectionDefinition(), " INDEXED BY messages_conversation_idx", "")
-	digest := sha256.Sum256([]byte(definition))
+// libraryVersion identifies how the projection is stored: a row per workspace
+// with a column per libraryColumns entry, each versioned on its own in
+// workspace_library_columns. It changes only with that layout, which rebuilds
+// the whole projection. What a column holds is not part of it.
+func libraryVersion() string { return "columns-v1" }
+
+// digest identifies what a stored column holds: its expression.
+func (column libraryColumn) digest() string {
+	digest := sha256.Sum256([]byte(column.expr))
 	return hex.EncodeToString(digest[:])
 }
 
-func libraryProjectionDefinition() string {
-	return libraryTableDDL() + "\n" + libraryDerivedSelect("1") + "\n" + strings.Join(libraryVersionTriggerDDL(), "\n")
+// libraryLegacyVersion is workspace_library_version as the last build that
+// versioned the projection as a whole wrote it, and libraryLegacyDigests are
+// the digests of the column expressions its rows were computed with. A
+// catalog arriving from that build keeps its rows; only the columns defined
+// differently since are computed again. Both record that build: a later
+// change to a column never updates them.
+const libraryLegacyVersion = "09dc2efccd6c2ead41b28d3c71c3504554c7fb1fd3477d1c749fb38f75aa9076"
+
+var libraryLegacyDigests = map[string]string{
+	"conversation_count": "24e4d417eb3baf5c00d369f554c0e4112c116aa2a01cfb6d5c43617f38ed51ce",
+	"turn_count":         "9d7f7c01d9c0197b3064be8037ebff9b4d7710700149b4bb2ee10dd253532d8d",
+	"changed_file_count": "138a616e3b3a8087be3a3fec888a81d3f20fa7fd6a6bbb61ca4a32ba567e92f8",
+	"is_estimate":        "92872124b8438365cd9c292f88dc080f4a4dd34f17ddb42bcd46058e64f3ecd2",
+	"token_count":        "81c97a35bddaa8f04cdcf12bdd8eaa048d1eef68a418ba62698ef3ea691a4c37",
+	"tool_use_count":     "7609f0781f32aa3b775acfbba3dbf9a429c26fe3e3d433eb177b5eb9b544eac4",
+	"tool_error_count":   "998d6827cad7fdc762c7ec7082e7f631ce9262dcc6770536afb239cd8a3f530f",
+	"compaction_count":   "b0abd79c3e85809cbc9d1f2d30e6bbca30eb51a2aae98b61408b81ed16d94e00",
+	"subagent_count":     "8c4ec8801328d282b4a4dd91f0d69582c783827c442ea79b13819be351792323",
+	"subagent_depth":     "a19ed465b756a9577a02b6054c40b7f3a5468d2031455188dd5e82336d0f22da",
+	"pr_count":           "490e27e8f761d10de18f666bb3c92cdd055dcce8eb9911e1b49099d16e4a63ed",
+	"pr_numbers":         "ffb71300867c29ad1296940959bcc1dea47bb0740d4819e1653ac18d56ad7f6e",
+	"pr_details":         "b6754efb3a8acec9a4d000633c821bf9f05310800b03f2fedf1ed075aba7d894",
+	"providers":          "2bbaefd531ed1695a2d55b2cd021620dbdedd212c2d29ef852b97a3c1b7cd88f",
+	"models":             "a4ab57cc013c8953b0b7e9ca0b26abda3450d05976432e86eb70d4c0d72edc3c",
+	"efforts":            "3fdf4037d3219579baee939eeb5f03400d7208b465866493dee863689cbbb9fe",
+	"model_efforts":      "8c11c78436c24654e41857b1211f6042044c60226778c6d922d8f0e639d90c0f",
+	"harnesses":          "ff968fa662e89be091d1fcd45b4d8148e952fe45115c692957df3771addb010b",
+	"harness_versions":   "059bb443383b660bb704a8183a7b88bf58878e222e7642eb082b76d41c90662c",
+	"changed_files":      "422a0d7056134dd1a43e1f6a1769062364292fa53cf2ce04307438be79a9ec34",
+	"error_types":        "a0a08940774e4f1c7ff8251323fb6d0df52eaa534d338e9cfbd23b317f73be0d",
+	"summary_initiation": "5027be95de2d774e9dd07465c2eace2b5a1299d689aa5a6bde63487aaf235350",
+	"summary_outcome":    "b0104d3734d03a0d3ffcbe5c584e41cd5a233572c73a5dc7eb23e18cbe5f835a",
 }
 
-// ensureLibrary creates or rebuilds the stored projection and its triggers.
-// A rebuild marks every workspace dirty; reads stay correct meanwhile.
+// libraryChanges is how the stored projection differs from this build's.
+type libraryChanges struct {
+	// rebuild: nothing stored is usable. The table is created again and
+	// every workspace marked.
+	rebuild bool
+	// legacy: the rows were stored by libraryLegacyVersion.
+	legacy bool
+	// add are columns the table lacks; compute are those and the columns
+	// stored under another definition; remove are stored columns no longer
+	// defined.
+	add, compute []libraryColumn
+	remove       []string
+	// triggers: the installed marking triggers are not this build's.
+	triggers bool
+}
+
+func (l libraryChanges) none() bool {
+	return !l.rebuild && !l.legacy && !l.triggers && len(l.add)+len(l.compute)+len(l.remove) == 0
+}
+
+func findLibraryChanges(q queryer, triggers []string) (libraryChanges, error) {
+	var changes libraryChanges
+	version := libraryVersion()
+	meta := map[string]string{}
+	rows, err := queryMaps(q, "SELECT key,value FROM meta WHERE key IN ('workspace_library_version',?)", libraryTriggersKey)
+	if err != nil {
+		return changes, err
+	}
+	for _, row := range rows {
+		meta[firstString(row["key"])] = firstString(row["value"])
+	}
+	changes.triggers = meta[libraryTriggersKey] != version+":"+triggerDigest(triggers)
+	if rows, err = queryMaps(q, "SELECT name FROM pragma_table_info('workspace_library')"); err != nil {
+		return changes, err
+	}
+	stored := map[string]bool{}
+	for _, row := range rows {
+		stored[firstString(row["name"])] = true
+	}
+	digests := map[string]string{}
+	switch current := meta["workspace_library_version"]; {
+	case len(stored) == 0:
+		changes.rebuild = true
+	case current == version:
+		if rows, err = queryMaps(q, "SELECT name,digest FROM workspace_library_columns"); err != nil {
+			return changes, err
+		}
+		for _, row := range rows {
+			digests[firstString(row["name"])] = firstString(row["digest"])
+		}
+	case current == libraryLegacyVersion:
+		changes.legacy, digests = true, libraryLegacyDigests
+	default:
+		changes.rebuild = true
+	}
+	if changes.rebuild {
+		return changes, nil
+	}
+	defined := map[string]bool{}
+	for _, column := range libraryColumns {
+		defined[column.name] = true
+		if !stored[column.name] {
+			changes.add = append(changes.add, column)
+		}
+		if !stored[column.name] || digests[column.name] != column.digest() {
+			changes.compute = append(changes.compute, column)
+		}
+	}
+	for name := range stored {
+		if name != "workspace_id" && !defined[name] {
+			changes.remove = append(changes.remove, name)
+		}
+	}
+	slices.Sort(changes.remove)
+	return changes, nil
+}
+
+// ensureLibrary creates the stored projection and its triggers, and brings
+// stored rows to this build's column definitions without computing whole rows
+// again:
+//
+//   - A column whose expression changed keeps its stored values, and every
+//     stored workspace is queued in workspace_library_column_pending to have
+//     that one column computed again (refreshLibraryColumns). Readers see the
+//     earlier value until then.
+//   - A new column is added empty, NULL meaning not yet known, and queued the
+//     same way. A removed one is dropped.
+//   - Changed triggers are replaced. When a workspace is marked does not
+//     change what is stored for it.
+//
+// None of these marks a workspace. Only a catalog with no rows this build can
+// account for (new, or from before libraryLegacyVersion) is rebuilt, which
+// marks every workspace; reads stay correct meanwhile.
 func (c *Catalog) ensureLibrary() error {
 	if _, err := c.DB.Exec(`CREATE TABLE IF NOT EXISTS workspace_library_dirty (
 		workspace_id TEXT PRIMARY KEY) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS workspace_library_claims (
-		workspace_id TEXT PRIMARY KEY, token TEXT NOT NULL, claimed_at INTEGER NOT NULL) WITHOUT ROWID`); err != nil {
+		workspace_id TEXT PRIMARY KEY, token TEXT NOT NULL, claimed_at INTEGER NOT NULL) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS workspace_library_columns (
+		name TEXT PRIMARY KEY, digest TEXT NOT NULL) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS workspace_library_column_pending (
+		column_name TEXT NOT NULL, workspace_id TEXT NOT NULL, PRIMARY KEY(column_name,workspace_id)) WITHOUT ROWID;
+		CREATE INDEX IF NOT EXISTS workspace_library_column_pending_workspace ON workspace_library_column_pending(workspace_id)`); err != nil {
 		return err
 	}
 	if err := c.ensurePreviewQueue(); err != nil {
@@ -266,82 +397,97 @@ func (c *Catalog) ensureLibrary() error {
 	if err != nil {
 		return err
 	}
-	version := libraryVersion()
-	var current string
-	err = c.DB.QueryRow("SELECT value FROM meta WHERE key='workspace_library_version'").Scan(&current)
-	if err != nil && err != sql.ErrNoRows {
+	// Nearly every open finds nothing to change, without waiting for the writer.
+	if changes, err := findLibraryChanges(c.DB, triggers); err != nil || changes.none() {
 		return err
-	}
-	// Development builds that briefly hashed the equivalent index hint already
-	// rebuilt the same columns. Retag them without another whole-library scan.
-	withHint := sha256.Sum256([]byte(libraryProjectionDefinition()))
-	if current == hex.EncodeToString(withHint[:]) && current != version {
-		if _, err := c.DB.Exec("UPDATE meta SET value=? WHERE key='workspace_library_version'", version); err != nil {
-			return err
-		}
-		current = version
-	}
-	if current == version {
-		legacy, err := queryMaps(c.DB, "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'workspace_query_stats_%'")
-		if err != nil {
-			return err
-		}
-		for _, row := range legacy {
-			if _, err := c.DB.Exec(`DROP TRIGGER IF EXISTS "` + firstString(row["name"]) + `"`); err != nil {
-				return err
-			}
-		}
-		if _, err := c.DB.Exec("DROP TABLE IF EXISTS workspace_query_stats"); err != nil {
-			return err
-		}
-		// The stored rows stand. Only when a workspace is marked may have
-		// changed, and that never needs them computed again.
-		var installed string
-		err = c.DB.QueryRow("SELECT value FROM meta WHERE key=?", libraryTriggersKey).Scan(&installed)
-		if err != nil && err != sql.ErrNoRows {
-			return err
-		}
-		if installed == version+":"+triggerDigest(triggers) {
-			return nil
-		}
-		tx, err := c.beginWrite(context.Background())
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-		if err := installLibraryTriggers(tx, version, triggers); err != nil {
-			return err
-		}
-		return tx.Commit()
 	}
 	tx, err := c.beginWrite(context.Background())
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	// workspace_query_stats held token_count before workspace_library did.
-	for _, statement := range []string{"DROP TABLE IF EXISTS workspace_query_stats",
-		"DELETE FROM meta WHERE key='workspace_query_stats_version'",
-		"DROP TABLE IF EXISTS workspace_library", libraryTableDDL()} {
-		if _, err := tx.Exec(statement); err != nil {
-			return fmt.Errorf("rebuild library projection: %w", err)
-		}
-	}
-	if err := installLibraryTriggers(tx, version, triggers); err != nil {
+	changes, err := findLibraryChanges(tx, triggers)
+	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec("INSERT OR IGNORE INTO workspace_library_dirty(workspace_id) SELECT id FROM workspaces"); err != nil {
-		return fmt.Errorf("rebuild library projection: %w", err)
+	exec := func(statement string, args ...any) error {
+		if _, err := tx.Exec(statement, args...); err != nil {
+			return fmt.Errorf("update library projection: %w", err)
+		}
+		return nil
 	}
-	if _, err := tx.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES('workspace_library_version',?)", version); err != nil {
+	record := func(name, digest string) error {
+		return exec("INSERT INTO workspace_library_columns(name,digest) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET digest=excluded.digest", name, digest)
+	}
+	// workspace_query_stats held token_count before workspace_library did.
+	statements := []string{"DROP TABLE IF EXISTS workspace_query_stats", "DELETE FROM meta WHERE key='workspace_query_stats_version'"}
+	if changes.rebuild || changes.legacy {
+		statements = append(statements, "DELETE FROM workspace_library_columns", "DELETE FROM workspace_library_column_pending")
+	}
+	if changes.rebuild {
+		statements = append(statements, "DROP TABLE IF EXISTS workspace_library", libraryTableDDL())
+	}
+	for _, statement := range statements {
+		if err := exec(statement); err != nil {
+			return err
+		}
+	}
+	switch {
+	case changes.rebuild:
+		for _, column := range libraryColumns {
+			if err := record(column.name, column.digest()); err != nil {
+				return err
+			}
+		}
+	case changes.legacy:
+		for name, digest := range libraryLegacyDigests {
+			if err := record(name, digest); err != nil {
+				return err
+			}
+		}
+	}
+	for _, column := range changes.add {
+		if err := exec(`ALTER TABLE workspace_library ADD COLUMN "` + column.name + `"`); err != nil {
+			return err
+		}
+	}
+	for _, column := range changes.compute {
+		if err := record(column.name, column.digest()); err != nil {
+			return err
+		}
+		// A marked workspace has every column computed by its refresh.
+		if err := exec(`INSERT OR IGNORE INTO workspace_library_column_pending(column_name,workspace_id)
+			SELECT ?,workspace_id FROM workspace_library WHERE workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)`, column.name); err != nil {
+			return err
+		}
+	}
+	for _, name := range changes.remove {
+		for _, statement := range []string{"DELETE FROM workspace_library_columns WHERE name=?", "DELETE FROM workspace_library_column_pending WHERE column_name=?"} {
+			if err := exec(statement, name); err != nil {
+				return err
+			}
+		}
+		// Nothing reads a column that is not defined, so one that SQLite
+		// will not drop only stays.
+		_, _ = tx.Exec(`ALTER TABLE workspace_library DROP COLUMN "` + name + `"`)
+	}
+	if changes.triggers || changes.rebuild {
+		if err := installLibraryTriggers(tx, libraryVersion(), triggers); err != nil {
+			return err
+		}
+	}
+	if changes.rebuild {
+		if err := exec("INSERT OR IGNORE INTO workspace_library_dirty(workspace_id) SELECT id FROM workspaces"); err != nil {
+			return err
+		}
+	}
+	if err := exec("INSERT OR REPLACE INTO meta(key,value) VALUES('workspace_library_version',?)", libraryVersion()); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 // libraryTriggersKey holds the digest of the installed marking triggers.
-// workspace_library_version covers what is stored, and a build that predates
-// this key leaves both alone when that version is its own.
 const libraryTriggersKey = "workspace_library_triggers"
 
 // installLibraryTriggers replaces the projection's triggers, including an
@@ -406,13 +552,27 @@ func (c *Catalog) refreshLibrary(ctx context.Context, batch int, workspaces []st
 }
 
 // refreshLibraryBatch is refreshLibrary, also reporting how many workspaces
-// it stored. Computing a workspace reads all its messages, seconds for a
-// large one on a busy drive, so that happens on a read snapshot. The catalog
-// writer is held twice, briefly: to claim the workspaces, and to store what
-// was computed for those still claimed. A workspace stays marked meanwhile,
-// so reads keep computing it live; a write to it releases its claim (see
-// libraryTriggerDDL), and it stays marked for the next pass.
+// it stored. Marked workspaces come first. With none left to refresh, it
+// brings stored rows to changed column definitions instead
+// (refreshLibraryColumns), so every caller that keeps the view current
+// finishes that too.
 func (c *Catalog) refreshLibraryBatch(ctx context.Context, batch int, workspaces []string) (attempted, stored int, err error) {
+	attempted, stored, err = c.refreshMarkedLibraryBatch(ctx, batch, workspaces)
+	if err != nil || attempted > 0 || workspaces != nil {
+		return attempted, stored, err
+	}
+	pass, err := c.refreshLibraryColumns(ctx, libraryColumnBatch)
+	return pass.workspaces, pass.workspaces, err
+}
+
+// refreshMarkedLibraryBatch stores the rows of up to batch marked workspaces.
+// Computing a workspace reads all its messages, seconds for a large one on a
+// busy drive, so that happens on a read snapshot. The catalog writer is held
+// twice, briefly: to claim the workspaces, and to store what was computed for
+// those still claimed. A workspace stays marked meanwhile, so reads keep
+// computing it live; a write to it releases its claim (see
+// libraryTriggerDDL), and it stays marked for the next pass.
+func (c *Catalog) refreshMarkedLibraryBatch(ctx context.Context, batch int, workspaces []string) (attempted, stored int, err error) {
 	// A workspace another refresh has claimed (the service's loop and a
 	// command's overlap) is that refresh's to store.
 	abandoned := time.Now().Add(-libraryClaimAbandoned).Unix()
@@ -525,7 +685,9 @@ func (c *Catalog) refreshLibraryBatch(ctx context.Context, batch int, workspaces
 			}
 		}
 	}
+	// Every column was just computed as now defined, so none is still owed.
 	for _, statement := range []string{`DELETE FROM workspace_previews_pending WHERE workspace_id IN (SELECT workspace_id FROM workspace_library_claims WHERE token=?)`,
+		`DELETE FROM workspace_library_column_pending WHERE workspace_id IN (SELECT workspace_id FROM workspace_library_claims WHERE token=?)`,
 		`DELETE FROM workspace_library_dirty WHERE workspace_id IN (SELECT workspace_id FROM workspace_library_claims WHERE token=?)`} {
 		if _, err := tx.ExecContext(ctx, statement, token); err != nil {
 			return 0, 0, err
@@ -543,6 +705,102 @@ func (c *Catalog) refreshLibraryBatch(ctx context.Context, batch int, workspaces
 	// Workspaces written to meanwhile stay marked and count as attempted, so
 	// the caller comes back for them.
 	return len(ids), len(still), nil
+}
+
+// libraryColumnBatch is how many workspaces one pass computes a column for.
+// One column of a workspace is far cheaper than its row, and a pass that is
+// stopped loses only its batch.
+var libraryColumnBatch = 50
+
+const (
+	// libraryColumnsOwedSQL selects the column values a pass can compute
+	// now. A marked workspace waits for its refresh, which computes them all.
+	libraryColumnsOwedSQL = `FROM workspace_library_column_pending p WHERE p.workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)`
+	// libraryColumnWorkspacesSQL counts, up to a limit, the stored workspaces
+	// with a column still to compute.
+	libraryColumnWorkspacesSQL = `SELECT COUNT(*) FROM (SELECT DISTINCT p.workspace_id ` + libraryColumnsOwedSQL + ` LIMIT ?)`
+)
+
+// libraryColumnPass is what one refreshLibraryColumns pass did.
+type libraryColumnPass struct {
+	column string
+	// workspaces had the column computed, changed of them stored a
+	// different value, and held is how long the catalog writer was held.
+	workspaces, changed int
+	held                time.Duration
+}
+
+// refreshLibraryColumns computes one changed or new column for up to batch
+// stored workspaces queued for it (see ensureLibrary), and no other column.
+// The values are computed on a read snapshot and the writer is held only to
+// store them. The queue is the progress: a pass that is stopped, or a service
+// that restarts, carries on from what is left.
+//
+// A workspace written to meanwhile is marked, and one refreshed meanwhile
+// has left the queue; neither is stored here, since the refresh computes
+// every column from what is there now.
+func (c *Catalog) refreshLibraryColumns(ctx context.Context, batch int) (libraryColumnPass, error) {
+	var pass libraryColumnPass
+	// Idle: the queue is empty.
+	owed, err := queryMapsContext(ctx, c.reader(), `SELECT p.column_name,p.workspace_id `+libraryColumnsOwedSQL+` ORDER BY p.column_name,p.workspace_id LIMIT ?`, batch)
+	if err != nil || len(owed) == 0 {
+		return pass, err
+	}
+	pass.column = firstString(owed[0]["column_name"])
+	ids := []string{}
+	for _, row := range owed {
+		if firstString(row["column_name"]) == pass.column {
+			ids = append(ids, firstString(row["workspace_id"]))
+		}
+	}
+	index := slices.IndexFunc(libraryColumns, func(column libraryColumn) bool { return column.name == pass.column })
+	var values [][]any
+	completed := func(error) {}
+	if index >= 0 {
+		completed = maintenanceBatch(ctx, c.reader(), "Updating Search view columns", "column value", len(ids), "SELECT count(*) FROM workspace_library_column_pending")
+		// Deleted workspaces produce no row; their stored rows cascaded away.
+		if values, err = queryValues(ctx, c.reader(), "SELECT w.id,"+libraryColumns[index].expr+" FROM workspaces w WHERE w.id IN (SELECT value FROM json_each(?))", jsonText(ids)); err != nil {
+			return pass, err
+		}
+	}
+	tx, finish, err := c.beginTrackedWrite(ctx, "library-columns")
+	if err != nil {
+		return pass, err
+	}
+	started := time.Now()
+	defer func() { _ = tx.Rollback(); finish() }()
+	const unmarked = ` AND workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)`
+	store := `UPDATE workspace_library SET "` + pass.column + `"=?2 WHERE workspace_id=?1 AND "` + pass.column + `" IS NOT ?2
+		AND EXISTS(SELECT 1 FROM workspace_library_column_pending WHERE column_name=?3 AND workspace_id=?1)` + unmarked
+	for _, row := range values {
+		result, err := tx.ExecContext(ctx, store, row[0], row[1], pass.column)
+		if err != nil {
+			return pass, err
+		}
+		changed, _ := result.RowsAffected()
+		pass.changed += int(changed)
+	}
+	// A column this build does not define (another build queued it) is not
+	// one to compute: its entries only leave.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_library_column_pending WHERE column_name=? AND workspace_id IN (SELECT value FROM json_each(?))`+unmarked,
+		pass.column, jsonText(ids)); err != nil {
+		return pass, err
+	}
+	// Requests cache what they read of the view, and a stored value that
+	// changes is not a write any cache trigger sees.
+	if pass.changed > 0 {
+		if _, err := tx.ExecContext(ctx, "UPDATE query_cache_generation SET value=value+1 WHERE id=1"); err != nil {
+			return pass, err
+		}
+	}
+	err = tx.Commit()
+	pass.held = time.Since(started)
+	completed(err)
+	if err != nil {
+		return pass, err
+	}
+	pass.workspaces = len(ids)
+	return pass, nil
 }
 
 // queryValues reads a statement's rows as the driver returns them, in column
