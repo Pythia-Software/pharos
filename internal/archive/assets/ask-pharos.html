@@ -83,14 +83,14 @@
         <span class="pharos-idea-announcement" role="status" aria-live="polite"></span>
       </section>
       <div class="pharos-invitation" hidden><button type="button" class="pharos-try cursor-interaction"><span>Try Ask Pharos</span></button><button type="button" class="pharos-plain pharos-dismiss cursor-interaction">Not now</button></div>
-      <dialog class="pharos-modal pharos-consent" aria-labelledby="pharos-consent-title" aria-describedby="pharos-consent-intro pharos-consent-cli pharos-consent-quota pharos-consent-choice">
+      <dialog class="pharos-modal pharos-consent" aria-labelledby="pharos-consent-title" aria-describedby="pharos-consent-intro pharos-consent-cli pharos-consent-sent pharos-consent-quota pharos-consent-choice">
         <h3 id="pharos-consent-title">Ask in your own words</h3>
         <p id="pharos-consent-intro">Ask Pharos finds pages for you from questions in plain language.</p>
         <p id="pharos-consent-cli">It runs an agent CLI you already use: Codex, Claude or Antigravity, installed and signed in on this Mac. It also needs the Pharos MCP server turned on in Settings &#8594; MCP.</p>
         <label class="pharos-connect-label" for="pharos-connect-provider">Start with <select id="pharos-connect-provider"></select></label>
         <p id="pharos-consent-quota">Each question uses your agent account&#8217;s quota, and each chat is saved in your library like other conversations.</p>
-        <p>The agent can read your Pharos page visits and earlier Ask Pharos chats. Other MCP clients cannot see your page visits.</p>
-        <p id="pharos-consent-choice">This is optional. Nothing else in Pharos sends your history to an AI provider. While Ask Pharos is off, Pharos never runs your agent CLIs.</p>
+        <p id="pharos-consent-sent">To answer, the agent reads your library through the Pharos MCP tools. It can search and open your conversations and usage, your Pharos page visits and earlier Ask Pharos chats. Your question, anything you attach and whatever the agent reads are sent to the company behind that CLI (OpenAI, Anthropic or Google), under your account with them. Other MCP clients cannot see your page visits.</p>
+        <p id="pharos-consent-choice">This is optional. While Ask Pharos is off, Pharos never runs your agent CLIs and sends none of your history to an AI provider.</p>
         <div class="pharos-consent-actions"><button type="button" class="pharos-solid pharos-enable cursor-interaction" autofocus>Enable Ask Pharos</button><button type="button" class="pharos-modal-secondary pharos-cancel cursor-interaction">Not right now</button><button type="button" class="pharos-plain pharos-never cursor-interaction">No, and don&#8217;t show this again</button></div>
       </dialog>
       <dialog class="pharos-modal pharos-context-review" aria-labelledby="pharos-context-review-title">
