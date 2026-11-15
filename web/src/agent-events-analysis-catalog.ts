@@ -2,6 +2,7 @@ import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 import { projectBreakdown, projectLegacy, projectsReached } from "./project-analysis";
 import kinds from "./agent-event-kinds.json";
+import { modelNotRecorded } from "./model-label";
 
 // Agent Experience over agent_events: one record is one event, a sentence in
 // an agent's visible reply or thinking that a model judged to express one kind
@@ -42,7 +43,7 @@ export const agentEventsAnalysisCatalog: AnalysisCatalog = {
     project_name: projectBreakdown(),
     family_project: { label: "Kind + project", fields: ["family", "project_name"] },
     provider: { label: "Provider", fields: ["provider"], order: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"] },
-    model: { label: "Model", fields: ["model"], empty: "Unknown model" },
+    model: { label: "Model", fields: ["model"], empty: modelNotRecorded },
     title: { label: "Conversation", fields: ["title"] },
   },
   labels: {

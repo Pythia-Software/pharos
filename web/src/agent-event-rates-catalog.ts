@@ -2,6 +2,7 @@ import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure, RatioPart } from "./dashboard-analysis-model";
 import { agentEventGroups, agentEventKindLabel, agentEventKinds } from "./agent-events-analysis-catalog";
 import { projectBreakdown } from "./project-analysis";
+import { modelNotRecorded } from "./model-label";
 
 // Agent Events: how often agents run into each kind of event, over time and
 // across breakdowns, over agent_event_rates. One record is one agent message
@@ -104,7 +105,7 @@ export const agentEventRatesCatalog: AnalysisCatalog = {
       note: "Prompt length counts the words a person typed in the prompt that started the turn, so it covers turns a person prompted only." },
     agent_role: { label: "Main agent or sub-agent", fields: ["agent_role"], order: ["main", "subagent"], values: { main: "Main agent", subagent: "Sub-agent" },
       note: `Most of a sub-agent’s messages read are thinking, a main agent’s less so. ${narrates}` },
-    model: { label: "Model", fields: ["model"], empty: "Unknown model", note: byModel },
+    model: { label: "Model", fields: ["model"], empty: modelNotRecorded, note: byModel },
     model_effort: { label: "Model and effort", fields: ["model_effort"], note: byModel },
     effort: { label: "Effort", fields: ["effort"], empty: "Effort not recorded" },
     provider: { label: "Provider", fields: ["provider"], order: ["claude", "codex", "antigravity", "chatgpt", "tl1", "canonical"], note: byModel },

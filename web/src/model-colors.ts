@@ -24,7 +24,6 @@ export function modelClass(name: string): string | undefined {
   return Object.hasOwn(models, key) ? models[key].class : matchModelClass(key, rules.providers)?.class ?? inferModelClass(key);
 }
 export const sourceProvider = (name: string): ModelProvider => Object.hasOwn(sources, name) ? sources[name].provider : Object.hasOwn(providerBrands, name) ? name as ModelProvider : "other";
-export const sourceLabel = (name: string) => ({ claude: "Claude", codex: "Codex", antigravity: "Antigravity", chatgpt: "ChatGPT", tl1: "TL1", canonical: "Canonical export" }[name] ?? name);
 const catalogDates = modelCatalogDates(prices.changes), dates = modelTimelineDates(prices.changes, rules.observed_dates);
 export const modelTimelineDate = (name: string) => dates.get(modelColorKey(name));
 export const modelDateLabel = (name: string) => {

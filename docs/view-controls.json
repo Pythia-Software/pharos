@@ -320,10 +320,6 @@
       "field": "optimize_area"
     },
     {
-      "file": "internal/archive/assets/library.js",
-      "field": "overlay"
-    },
-    {
       "file": "internal/archive/assets/status-panel.js",
       "field": "overlay"
     },
@@ -1755,9 +1751,9 @@
       "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
-      "key": "2bd69fd66fdd1e72:0",
+      "key": "c52ca0d734dc8b0a:0",
       "file": "internal/archive/assets/data-guide.js",
-      "owner": "ef",
+      "owner": "tf",
       "tag": "aria-expanded",
       "control": "document.getElementById(\"dataGuideToggle\")",
       "disclosure": true,
@@ -1782,26 +1778,6 @@
       "control": "'textarea'",
       "contract": "transient",
       "reason": "Temporary clipboard transfer field for a copy action; removed immediately, with focus and selection restored."
-    },
-    {
-      "key": "bd6425e4b2a8db96:0",
-      "file": "internal/archive/assets/library.js",
-      "owner": "activityLine",
-      "tag": "details",
-      "control": "'details', 'pharos-sub pharos-activity-details'",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Durable status and diagnostic sections use shared disclosure keys, including stable activity, cadence and operation-run identities."
-    },
-    {
-      "key": "e7b12e0499163d89:0",
-      "file": "internal/archive/assets/library.js",
-      "owner": "activityLine",
-      "tag": "summary",
-      "control": "'summary'",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Durable status and diagnostic sections use shared disclosure keys, including stable activity, cadence and operation-run identities."
     },
     {
       "key": "5435ab726331dea0:0",
@@ -1831,16 +1807,6 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
-      "key": "17e55420b92f9603:0",
-      "file": "internal/archive/assets/library.js",
-      "owner": "closePanel",
-      "tag": "aria-expanded",
-      "control": "chip",
-      "disclosure": true,
-      "contract": "view.overlay",
-      "reason": "Library health uses library:drive-health; opening the drive panel uses overlay=drive."
-    },
-    {
       "key": "1ceec9b6cccae43e:0",
       "file": "internal/archive/assets/library.js",
       "owner": "ensureChip",
@@ -1867,16 +1833,6 @@
       "control": "'button', 'combo-icon header-sync'",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "c79c0ddbbedec09d:0",
-      "file": "internal/archive/assets/library.js",
-      "owner": "openPanel",
-      "tag": "aria-expanded",
-      "control": "chip",
-      "disclosure": true,
-      "contract": "view.overlay",
-      "reason": "Library health uses library:drive-health; opening the drive panel uses overlay=drive."
     },
     {
       "key": "18a567b333d8cb01:0",
@@ -3955,6 +3911,24 @@
       "reason": "Dismissible card reuses the existing disclosure owner: conversation source uses reader_expanded/reader_collapsed; workspace archive binds its stable work ID with data-view-key. Its summary is hidden and menu actions open it."
     },
     {
+      "key": "ddfbe9fe8a4d2993:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "removalQuestion",
+      "tag": "button",
+      "control": "'button', 'source-remove danger', confirm",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
+      "key": "e44f15185fb33da0:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "removalQuestion",
+      "tag": "button",
+      "control": "'button', 'source-remove', 'Cancel'",
+      "contract": "settings",
+      "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
+    },
+    {
       "key": "a65df4c0bf7b66d9:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renameBookmark",
@@ -4326,11 +4300,11 @@
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
     {
-      "key": "9d9e2fb4316a3327:0",
+      "key": "72884a653d246412:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "sourceRemoval",
       "tag": "button",
-      "control": "'button', 'source-remove danger', 'Remove'",
+      "control": "'button', 'source-remove danger', 'Remove source'",
       "contract": "settings",
       "reason": "Settings/actions in the shell; static shell inputs include configuration and draft editors."
     },
@@ -4517,24 +4491,6 @@
       "control": "'details', 'xml-node'",
       "contract": "reader",
       "reason": "Content disclosure identity is supplied by bindReaderView, messageCard content keys or the work archive data-view-key. Diagnostics in source payloads follow their containing view."
-    },
-    {
-      "key": "1c7a12e0cd278d62:0",
-      "file": "internal/archive/assets/upgrade.js",
-      "owner": "mergeSection",
-      "tag": "button",
-      "control": "'button', '', 'Preview repository merges'",
-      "contract": "action",
-      "reason": "Library upgrade/migration preview or mutation action, not an applied content query."
-    },
-    {
-      "key": "ac0239f17c553a54:0",
-      "file": "internal/archive/assets/upgrade.js",
-      "owner": "render",
-      "tag": "button",
-      "control": "'button', '', status.running || !status.needed ? 'Close' : 'Later'",
-      "contract": "action",
-      "reason": "Library upgrade/migration preview or mutation action, not an applied content query."
     },
     {
       "key": "103123ac664d233e:0",
@@ -4752,20 +4708,20 @@
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
     {
+      "key": "985644eb75bcd5e9:0",
+      "file": "web/src/authored.tsx",
+      "owner": "AuthoredText",
+      "tag": "mark",
+      "control": "aria-label={`${categoryLabel(segment.category)}: ${authorshipRuleLabel(segment.reason || segment.rule || \"\")}`} onMouseEnter={event => show(segment, event.currentTarget, event.clientX, event.clientY)} onMouseLeave={leave} onFocus={event => show(segment, event.currentTarget)} onBlur={leave} onClick={event => { const element = event.currentTarget; setTip(current => current?.segment === segment && current.pinned ? null : { segment, anchor: anchorAt(element, event.clientX, event.clientY), pinned: true }); }}",
+      "contract": "legacy",
+      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
+    },
+    {
       "key": "d5b0696b47446ffc:0",
       "file": "web/src/authored.tsx",
       "owner": "AuthoredText",
       "tag": "button",
       "control": "onClick={event => { event.stopPropagation(); setUnfolded(current => new Set(current).add(index)); }}",
-      "contract": "legacy",
-      "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
-    },
-    {
-      "key": "f831d8cb425bd30d:0",
-      "file": "web/src/authored.tsx",
-      "owner": "AuthoredText",
-      "tag": "mark",
-      "control": "aria-label={`${categoryLabel(segment.category)}: ${segment.reason || segment.rule || \"\"}`} onMouseEnter={event => show(segment, event.currentTarget, event.clientX, event.clientY)} onMouseLeave={leave} onFocus={event => show(segment, event.currentTarget)} onBlur={leave} onClick={event => { const element = event.currentTarget; setTip(current => current?.segment === segment && current.pinned ? null : { segment, anchor: anchorAt(element, event.clientX, event.clientY), pinned: true }); }}",
       "contract": "legacy",
       "reason": "Legacy analysis/Tools surfaces are explicitly deferred."
     },
@@ -6042,22 +5998,15 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "52ca64201b490bd9:0",
+      "key": "7263f034d81132be:0",
       "file": "web/src/delegation.tsx",
       "owner": "ParallelActivity",
-      "tag": "button",
-      "control": "aria-label={`${collapsed.has(n.id) ? \"Expand\" : \"Collapse\"} ${n.label}`} onClick={() => toggle(n)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "7f941cc59b40ccf4:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "ParallelActivity",
-      "tag": "div",
-      "control": "onClick={(event) => { if (!(event.target as HTMLElement).closest(\"button, a\")) openNode(n); }}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
+      "tag": "ViewDisclosure",
+      "control": "viewKey=\"delegation:activity-periods\"",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
     },
     {
       "key": "8ff4a1dc5fc9d64e:0",
@@ -6070,16 +6019,6 @@
       "reason": "Session hierarchy folding uses the existing delegation_collapsed route owner. Recursive event-tree disclosures use the shared ViewDisclosure URL owner independently of session nesting."
     },
     {
-      "key": "9aa8ac00532e8750:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "ParallelActivity",
-      "tag": "button",
-      "control": "aria-label={`${detailed ? \"Collapse\" : \"Expand\"} activity for ${n.label}`} onClick={() => { closeMark(); setExpanded((old) => { const next = new Set(old); next.has(n.id) ? next.delete(n.id) : next.add(n.id); return next; }); }}",
-      "disclosure": true,
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
       "key": "a5e91fac135f0937:0",
       "file": "web/src/delegation.tsx",
       "owner": "ParallelActivity",
@@ -6087,37 +6026,6 @@
       "control": "aria-label=\"Open full-width timeline\" onPointerDown={event=>{if(event.button===0)event.currentTarget.setPointerCapture(event.pointerId);}} onClick={openOverview}",
       "contract": "navigation",
       "reason": "Returns to the canonical workspace overview through openOverview, clearing the reader selection and preserving timeline view state. The split-pane overview is static presentation, not a second persisted view."
-    },
-    {
-      "key": "a6d6a44845c403c4:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "ParallelActivity",
-      "tag": "button",
-      "control": "data-view-field=\"delegation_event\" aria-label={`${m.name}, ${m.count} call${m.count === 1 ? \"\" : \"s\"}${m.error ? \", error\" : \"\"}`} onClick={(event) => { setEventID(event.currentTarget.dataset.eventId!); setMark({ node: n, mark: m, anchor: event.currentTarget }); }}",
-      "binding": "delegation_event",
-      "disclosure": true,
-      "contract": "view.delegation_event",
-      "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "d2d69e646540a24c:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "ParallelActivity",
-      "tag": "button",
-      "control": "onClick={() => openNode(n)}",
-      "contract": "delegation",
-      "reason": "delegation_* parameters carry applied scope/layout/page/event/disclosure choices; pointer brushing and hover are transient."
-    },
-    {
-      "key": "fc61e8560d5b5a10:0",
-      "file": "web/src/delegation.tsx",
-      "owner": "ParallelActivity",
-      "tag": "ViewDisclosure",
-      "control": "viewKey=\"delegation:definitions\"",
-      "binding": "disclosures",
-      "sharedDisclosure": true,
-      "contract": "view.disclosures",
-      "reason": "Bound by the shared view-state primitive."
     },
     {
       "key": "ff63ef509697c36b:0",
@@ -6267,6 +6175,15 @@
       "reason": "Saves the typed folder as the repository's checkout on this Mac (POST /api/repositories/{id}/checkout), a stored setting, not view state."
     },
     {
+      "key": "5c9e8227112df133:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "CheckoutSetup",
+      "tag": "button",
+      "control": "onClick={() => setForgetting(true)}",
+      "contract": "settings",
+      "reason": "Confirmation step before forgetting the repository's checkout on this Mac (POST /api/repositories/{id}/checkout with clear), a stored setting; the open question is a transient action, not view state."
+    },
+    {
       "key": "8061597aab085cb1:0",
       "file": "web/src/file-history.tsx",
       "owner": "CheckoutSetup",
@@ -6274,6 +6191,15 @@
       "control": "onClick={() => void post({ path })}",
       "contract": "settings",
       "reason": "Chooses a recorded checkout as the repository's checkout on this Mac (POST /api/repositories/{id}/checkout), a stored setting, not view state."
+    },
+    {
+      "key": "a7236aaa0d3f20be:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "CheckoutSetup",
+      "tag": "button",
+      "control": "onClick={() => { setForgetting(false); void post({ clear: true }); }}",
+      "contract": "settings",
+      "reason": "Confirmation step before forgetting the repository's checkout on this Mac (POST /api/repositories/{id}/checkout with clear), a stored setting; the open question is a transient action, not view state."
     },
     {
       "key": "b07b1cc95273027b:0",
@@ -6285,13 +6211,22 @@
       "reason": "Draft folder for the repository's checkout; saving it writes the per-Mac setting, so the draft itself is excluded."
     },
     {
-      "key": "bfc9caedfc77a5be:0",
+      "key": "c45f0e5082952e0b:0",
       "file": "web/src/file-history.tsx",
       "owner": "CheckoutSetup",
       "tag": "button",
-      "control": "onClick={() => void post({ clear: true })}",
+      "control": "onClick={() => setForgetting(false)}",
       "contract": "settings",
-      "reason": "Forgets the repository's checkout on this Mac (POST /api/repositories/{id}/checkout), a stored setting, not view state."
+      "reason": "Confirmation step before forgetting the repository's checkout on this Mac (POST /api/repositories/{id}/checkout with clear), a stored setting; the open question is a transient action, not view state."
+    },
+    {
+      "key": "f6451e63518b5a7d:0",
+      "file": "web/src/file-history.tsx",
+      "owner": "CheckoutSetup",
+      "tag": "div",
+      "control": "aria-label=\"Forget checkout\" onKeyDown={event => { if (event.key === \"Escape\") { event.preventDefault(); event.stopPropagation(); setForgetting(false); } }}",
+      "contract": "settings",
+      "reason": "Confirmation step before forgetting the repository's checkout on this Mac (POST /api/repositories/{id}/checkout with clear), a stored setting; the open question is a transient action, not view state."
     },
     {
       "key": "8672278ecbeb7404:0",
@@ -8895,15 +8830,6 @@
       "owner": "WrappingInput",
       "tag": "textarea",
       "control": "value={value} onChange={event => onValue(event.target.value.replace(/[\\r\\n]+/g, \" \"))} onKeyDown={event => { onKeyDown?.(event); if (event.key !== \"Enter\" || event.nativeEvent.isComposing || event.defaultPrevented) return; event.preventDefault(); const form = event.currentTarget.form; if (form && !form.querySelector<HTMLButtonElement>('button[type=\"submit\"]')?.disabled) form.requestSubmit(); }}",
-      "contract": "host-search",
-      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
-    },
-    {
-      "key": "008fd313c97661bd:0",
-      "file": "web/src/search-order.tsx",
-      "owner": "SearchOrder",
-      "tag": "SearchOrderControl",
-      "control": "onChange={api.setSort}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },

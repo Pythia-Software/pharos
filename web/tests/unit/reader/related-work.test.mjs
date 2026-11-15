@@ -10,13 +10,14 @@ const { peerChip, peerReasonText, peersByAge, handoffMarkers, peerRoleLabel, con
 const now = Date.parse("2026-11-07T12:00:00Z");
 
 test("a chip names the peer's role, title, provider and age, and explains itself from the page's side", () => {
-  const review = { workspace_id: "w/2", title: "Review sorting", provider: "codex", started_at: "2026-11-07T10:00:00Z", role: "reviewer", confidence: "high",
+  const review = { workspace_id: "w/2", title: "Review sorting", provider: "codex", provider_name: "Codex", started_at: "2026-11-07T10:00:00Z", role: "reviewer", confidence: "high",
     evidence: [
       { kind: "read_written_by", confidence: "high", from_workspace_id: "w1", to_workspace_id: "w/2", details: { basis: "diff", lines: 12, timing: "return" } },
       { kind: "copied_into", confidence: "high", from_workspace_id: "w/2", to_workspace_id: "w1", details: { words: 40 } },
     ] };
   const chip = peerChip(review, { page: "w1" }, now);
-  assert.equal(chip.label, "Reviewer · Review sorting · codex · 2h ago");
+  assert.equal(chip.label, "Reviewer · Review sorting · Codex · 2h ago", "the chip shows the provider's display name");
+  assert.equal(peerChip({ ...review, provider_name: "" }, { page: "w1" }, now).label, "Reviewer · Review sorting · codex · 2h ago", "a provider without a display name keeps its stored key");
   assert.equal(chip.href, "/work/w%2F2");
   assert.equal(chip.certain, true);
   assert.deepEqual(plain(chip.reasons), [

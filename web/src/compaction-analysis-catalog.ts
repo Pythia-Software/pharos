@@ -1,6 +1,7 @@
 import type { AnalysisCatalog } from "./dashboard-analysis-model";
 import { originLabel } from "./origin-dimensions";
 import { projectBreakdown } from "./project-analysis";
+import { modelNotRecorded } from "./model-label";
 
 // One boundary is one observation, even without a following model request.
 export const compactionAnalysisCatalog: AnalysisCatalog = {
@@ -17,7 +18,7 @@ export const compactionAnalysisCatalog: AnalysisCatalog = {
     provider: { label: "Provider", fields: ["provider"], empty: "Unknown provider" },
     trigger_provider: { label: "Trigger + provider", fields: ["trigger", "provider"] },
     harness: { label: "Agent app", fields: ["harness"], empty: "Unknown agent app" },
-    model: { label: "Model", fields: ["model"], empty: "Unknown model" },
+    model: { label: "Model", fields: ["model"], empty: modelNotRecorded },
     repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
     project_name: projectBreakdown(),
     channel: { label: "Channel", fields: ["channel"], empty: "Unknown channel" },

@@ -28,7 +28,7 @@ export const carbonUsageMetrics: AggregationClause[] = [
 
 // The filters offer every value in the retained usage, so one filter cannot
 // hide another's options or strand a selection that now matches nothing.
-export const carbonChoiceFields = ["repository_name", "provider", "channel", "machine_id", "execution_machine_id"] as const;
+export const carbonChoiceFields = ["project_name", "provider", "channel", "machine_id", "execution_machine_id"] as const;
 export const carbonChoiceMetrics: AggregationClause[] = carbonChoiceFields.map(field => ({ id: `choices:${field}`, op: "count", groupBy: [field] }));
 
 export type CarbonTokens = { key?: string; tokens: CarbonCounts };

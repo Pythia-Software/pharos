@@ -184,6 +184,6 @@ test("Carbon Impact reads its usage through query-v3 with the requests Go runs",
   set("dated:default_models", [bucket(["mystery"], 40)]);
   results.find(metric => metric.id === "dated:default_models").groupCount = 2;
   assert.throws(() => carbonUsage(results), /Could not read complete carbon usage/);
-  const choices = carbonChoices(carbonRequests.choices.map(({ id }) => ({ id, buckets: id === "choices:repository_name" ? [bucket(["b/repo"], 1), bucket([null], 2), bucket(["a/repo"], 1)] : [] })));
-  assert.deepEqual(choices.repository_name, ["", "a/repo", "b/repo"]);
+  const choices = carbonChoices(carbonRequests.choices.map(({ id }) => ({ id, buckets: id === "choices:project_name" ? [bucket(["b/repo"], 1), bucket([null], 2), bucket(["a/repo"], 1)] : [] })));
+  assert.deepEqual(choices.project_name, ["", "a/repo", "b/repo"]);
 });

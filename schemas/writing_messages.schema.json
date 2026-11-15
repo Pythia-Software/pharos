@@ -353,7 +353,10 @@
             "Environment context",
             "Project instructions",
             "Plugin recommendations",
-            "Harness context",
+            {
+              "value": "Harness context",
+              "label": "App instructions"
+            },
             "Launched by a command",
             "Sent by a headless claude -p run",
             "Sent by a codex exec run",

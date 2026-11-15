@@ -2,6 +2,7 @@ import type { WhereTerm } from "@pythia-software/query-table-core";
 import { type AnalysisCatalog, type AnalysisMeasure, type RatioPart } from "./dashboard-analysis-model";
 import { archetypes, bandBins, bandBreakdowns } from "./session-shape-bands";
 import { projectBreakdown } from "./project-analysis";
+import { modelNotRecorded } from "./model-label";
 
 // Session shape over the session_shape dataset: one record is one agent
 // session (one conversation; a delegated run is its own session), with its
@@ -74,7 +75,7 @@ const sessionBreakdowns: AnalysisCatalog["breakdowns"] = {
   archetype: { label: "Archetype", fields: ["archetype"], order: [...archetypes.order], values: archetypes.values, empty: notEnough, bins: bandBins.archetype },
   provider: { label: "Provider", fields: ["provider"], order: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"] },
   harness: { label: "Agent app", fields: ["harness"], empty: "No agent app" },
-  model_family: { label: "Model", fields: ["model_family"], empty: "Unknown model" },
+  model_family: { label: "Model", fields: ["model_family"], empty: modelNotRecorded },
   effort: { label: "Effort", fields: ["effort"], empty: "No effort" },
   repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
   project_name: projectBreakdown(),

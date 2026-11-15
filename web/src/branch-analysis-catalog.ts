@@ -2,6 +2,7 @@ import type { AggregationClause, WhereTerm } from "@pythia-software/query-table-
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 import { projectBreakdown, projectLegacy } from "./project-analysis";
 import { tokenMetricFormat } from "./token-count";
+import { modelNotRecorded } from "./model-label";
 
 // Spend by branch over the branch_usage dataset: one record is one workspace's
 // priced usage on one branch, with one model, in one hour. Only workspaces
@@ -29,7 +30,7 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
     note: "Unknown branch: usage before the first recorded branch, on a detached HEAD, or not tied to a turn. No branch data: usage in a workspace that recorded no branch." },
   project_name: projectBreakdown(),
   provider: { label: "Provider", fields: ["provider"], order: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"] },
-  model_family: { label: "Model", fields: ["model_family"], empty: "Unknown model" },
+  model_family: { label: "Model", fields: ["model_family"], empty: modelNotRecorded },
   source_kind: { label: "Source", fields: ["source_kind"],
     note: "The retained history source. Linked copies count once, so work started in Conductor can have a native Claude or Codex source." },
   channel: { label: "Channel", fields: ["channel"], empty: "Unknown channel",

@@ -442,7 +442,8 @@ async function pickFolder(id,button){
   for(const [el]of controls)el.disabled=true;
   notice('');
   try{
-    const path=window.pharosHost.capabilities.folders.available?await window.pharosHost.folders.chooseLibraryFolder():(await call('choose-folder',{})).path;
+    const purpose={backup:'backup','recover-path':'restore'}[id];
+    const path=window.pharosHost.capabilities.folders.available?await window.pharosHost.folders.chooseLibraryFolder(purpose):(await call('choose-folder',purpose?{purpose}:{})).path;
     if(current()&&path){field.value=path+(id==='recover-path'?'/Recovered Library':'');if(id==='path')updateLibraryProposal()}
   }catch(error){if(current())notice(error.message,true)}
   finally{for(const [el,disabled]of controls)el.disabled=disabled;if(current())button.focus()}

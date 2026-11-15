@@ -303,8 +303,9 @@ async function changePharosLibrary(operation, {flush, navigate, destination = '/
   };
   for (const button of page.querySelectorAll('[data-library-pick]')) button.onclick = async () => {
     await action(async () => {
-      const result = await call('choose-folder', {});
       const target = button.dataset.libraryPick;
+      const purpose = {'library-settings-backup': 'backup', 'library-settings-recover-path': 'restore'}[target];
+      const result = await call('choose-folder', purpose ? {purpose} : {});
       if (result.path) document.getElementById(target).value = result.path + (target === 'library-settings-recover-path' ? '/Recovered Library' : '');
       proposal();
     });

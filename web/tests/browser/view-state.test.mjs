@@ -21,7 +21,7 @@ test('a pending background history save does not hold up navigation',{skip},asyn
  await activateHeaderTool(page,'navigatorToggle');
  await page.locator('#historyToggle').click();
  const cleared=page.waitForResponse(response=>response.url().endsWith('/api/preferences')&&response.request().postDataJSON()?.set?.[managedSession.preferences+'pharos-history-v1']==='[]');
- await page.locator('#historyClear').click();await cleared;await page.locator('#historyClose').click();
+ await page.locator('#historyClear').click();await page.locator('#historyDrawer').getByRole('button',{name:'Clear history',exact:true}).click();await cleared;await page.locator('#historyClose').click();
  block=true;
  await page.evaluate(()=>localStorage.setItem('pharos-history-v1','[]'));
  await requested;

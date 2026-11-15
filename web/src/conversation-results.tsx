@@ -7,6 +7,7 @@ import { ViewDisclosure } from "./view-disclosure";
 import { formatConcurrencyDuration } from "./concurrency-data";
 import { findMatches, findTest } from "./page-find-model";
 import { scrollRange } from "./page-find";
+import { rowProviderName } from "./provider-names";
 
 type Row = Record<string, any>;
 
@@ -281,7 +282,7 @@ export function ResultConversationBrowser({ workspaceID, readJSON, target }: { w
       const id = String(conversation.id), data = loaded[id];
       const turnCount = data?.entries.filter(item => item.human).length ?? 0;
       return <li key={id}><ViewDisclosure viewKey={`search:${workspaceID}:conversation:${id}`} defaultOpen={id === String(forest[0]?.conversation.id) || id === currentID}
-        summary={<span title="A conversation contains a sequence of prompts and replies. Select a turn below to preview it.">{conversation.parent_id ? "Sub-agent conversation" : "Conversation"} · {conversation.provider || "Agent"}{data && !data.loading && !data.error ? ` · ${turnCount} turn${turnCount === 1 ? "" : "s"}` : ""}</span>}>
+        summary={<span title="A conversation contains a sequence of prompts and replies. Select a turn below to preview it.">{conversation.parent_id ? "Sub-agent conversation" : "Conversation"} · {rowProviderName(conversation, "Agent")}{data && !data.loading && !data.error ? ` · ${turnCount} turn${turnCount === 1 ? "" : "s"}` : ""}</span>}>
         <p className="conversation-outline-session" data-overflow-title="">{conversation.title || conversation.first_prompt || id}</p>
         {data?.loading ? <p role="status">Loading turns…</p> : data?.error ? <p role="alert">{data.error} <button type="button" onClick={() => void load(id)}>Retry</button></p> : data ? data.entries.length ? entryList(id, data.entries) : <p>No retained turns are available.</p> : null}
         {children.length ? branchList(children) : null}
@@ -297,7 +298,7 @@ export function ResultConversationBrowser({ workspaceID, readJSON, target }: { w
       {overview.loading || selection.pending || state?.loading ? <p role="status">Loading turns…</p> : overview.error || selection.error || state?.error ? <p role="alert">{overview.error || selection.error || state?.error} <button type="button" onClick={() => overview.error || selection.error ? setReload(value => value + 1) : void load(currentID)}>Retry</button></p> : entry ? <div key={currentID} className="result-exchange show-writing">
         {entry.human ? <ResultMessage workspaceID={workspaceID} label={entry.kind === "agent" || current?.parent_id ? "Assignment" : entry.writing ? "You" : "Prompt"} message={entry.human} kind="human" reveal={revealOf(entry.human)} full={entry.human === selected} /> : null}
         {matched ? <ResultMessage workspaceID={workspaceID} label="Match" message={matched} kind={matched.role === "user" ? "human" : "assistant"} reveal={revealOf(matched)} full /> : null}
-        <ResultMessage workspaceID={workspaceID} label={entry.kind === "agent" ? entry.label : current?.provider || "Agent"} message={entry.response ?? { role: "assistant", text: "No retained response for this turn." }} kind="assistant" reveal={revealOf(entry.response)} full={entry.response === selected} />
+        <ResultMessage workspaceID={workspaceID} label={entry.kind === "agent" ? entry.label : rowProviderName(current, "Agent")} message={entry.response ?? { role: "assistant", text: "No retained response for this turn." }} kind="assistant" reveal={revealOf(entry.response)} full={entry.response === selected} />
       </div> : <p className="muted">No retained turns are available.</p>}
     </section>
   </div>;

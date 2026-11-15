@@ -5,6 +5,7 @@ import { formatConcurrencyDuration } from "./concurrency-data";
 import { PageLink } from "./nested-pages";
 import { Icon } from "./icons";
 import { formatTokens } from "./token-count";
+import { rowProviderName } from "./provider-names";
 
 type RecentConversation = {
   id: string; workspace_id: string; title: string; repository?: string;
@@ -54,7 +55,7 @@ export function RecentConversations({ active, generation }: { active: boolean; g
           {item.labels_ready ? <div className="home-recent-fingerprint"><FingerprintImage id={item.id} /></div> : null}
           <div className="home-recent-card-header">
             <h3><PageLink className="home-recent-title" href={href}>{item.title || "Untitled conversation"}<Icon name="arrow-right" /></PageLink></h3>
-            <div className="home-recent-meta">{[item.repository, item.provider, item.model, item.effort].filter(Boolean).join(" · ")}</div>
+            <div className="home-recent-meta">{[item.repository, rowProviderName(item), item.model, item.effort].filter(Boolean).join(" · ")}</div>
             <div className="home-recent-facts">
               {item.activity_at && Number.isFinite(Date.parse(item.activity_at)) ? <time dateTime={item.activity_at}>{new Date(item.activity_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</time> : null}
               {item.subagent_depth > 0 ? <span>Sub-agents {item.subagent_depth} level{item.subagent_depth === 1 ? "" : "s"} deep</span> : null}

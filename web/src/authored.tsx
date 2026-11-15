@@ -46,7 +46,11 @@ const ruleHelp: Record<string, string> = {
   "Sent by automation": "Conductor recorded an API key as its sender.",
 };
 // These are stored classifier identities; vocabulary changes belong in the
-// displayed explanation, never in the lookup keys.
+// displayed explanation and label, never in the lookup keys.
+const ruleLabels: Record<string, string> = { "Harness context": "App instructions" };
+/** A stored rule or reason as people read it. The Rules filter's options in
+ * the schemas carry the same labels. */
+export const authorshipRuleLabel = (rule: string) => Object.hasOwn(ruleLabels, rule) ? ruleLabels[rule] : rule;
 const harnessRules = new Set(["Conductor system instruction", "System reminder", "Environment context", "Project instructions", "Plugin recommendations", "Harness context"]);
 export function explainAuthorshipRule(rule: string | undefined, category: string | undefined): string {
   if (rule && ruleHelp[rule]) return ruleHelp[rule];
@@ -99,7 +103,7 @@ function SpanTip({ tip, onEnter, onLeave, onClose }: { tip: Tip; onEnter: () => 
       <strong>{category?.label ?? "Unclassified"}</strong>
       <span className="muted">{words.toLocaleString()} word{words === 1 ? "" : "s"}</span>
     </div>
-    <div className="authored-tip-reason">{segment.reason || segment.rule || "No other rule matched"}</div>
+    <div className="authored-tip-reason">{authorshipRuleLabel(segment.reason || segment.rule || "No other rule matched")}</div>
     <p className="authored-tip-help">{explainAuthorshipRule(segment.rule, segment.category)}</p>
     {source?.workspace_id ? <button type="button" className="authored-tip-source" onClick={() => { onClose(); openMessage(source.workspace_id, source.conversation_id, source.message_id); }}>
       Open the matching text in {source.title || "its conversation"}
@@ -150,7 +154,7 @@ export function AuthoredText({ segments }: { segments: Segment[] }) {
   return <div className="authored-text">
     {segments.map((segment, index) => segment.category
       ? <mark key={index} className={`authored-span${tip?.segment === segment ? " active" : ""}`} data-category={segment.category} tabIndex={0}
-        aria-label={`${categoryLabel(segment.category)}: ${segment.reason || segment.rule || ""}`}
+        aria-label={`${categoryLabel(segment.category)}: ${authorshipRuleLabel(segment.reason || segment.rule || "")}`}
         onMouseEnter={event => show(segment, event.currentTarget, event.clientX, event.clientY)} onMouseLeave={leave}
         onFocus={event => show(segment, event.currentTarget)} onBlur={leave}
         onClick={event => {
@@ -251,7 +255,7 @@ export const authoredRenderers = {
       const text = !detail && segment.category === "harness" ? "[App instructions] " : segment.text.slice(0, limit - used);
       used += text.length;
       shown.push(segment.category
-        ? <mark key={index} className="authored-span" data-category={segment.category} title={`${categoryLabel(segment.category)} · ${segment.reason || segment.rule || ""}${segment.words ? ` · ${wordCount(segment.words)}` : ""}`}>{text}</mark>
+        ? <mark key={index} className="authored-span" data-category={segment.category} title={`${categoryLabel(segment.category)} · ${authorshipRuleLabel(segment.reason || segment.rule || "")}${segment.words ? ` · ${wordCount(segment.words)}` : ""}`}>{text}</mark>
         : <React.Fragment key={index}>{text}</React.Fragment>);
     }
     const Content = detail ? "div" : "span";
@@ -264,7 +268,7 @@ export const authoredRenderers = {
     return Array.isArray(value) ? <span className="authored-pills">{value.map(category => <CategoryPill key={category} category={category} />)}</span> : "";
   },
   authorship_rules({ value }: CellContext<Row>) {
-    return Array.isArray(value) ? <span>{value.join(", ")}</span> : "";
+    return Array.isArray(value) ? <span>{value.map(rule => authorshipRuleLabel(String(rule))).join(", ")}</span> : "";
   },
 };
 

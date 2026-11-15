@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import vm from 'node:vm';
 import {assets} from '../helpers/classic-script.mjs';
 import registry from '../../../../testdata/providers.json';
+import {providerName,rowProviderName,sourceName} from '../../../src/provider-names';
 const source=readFileSync(join(assets,'onboarding.js'),'utf8').split('// Source setup UI.')[0];
 const [makeWizard,capabilityRows,captureSettings]=vm.runInNewContext(source+';[createPharosSourceWizard,pharosCapabilityRows,captureClaudeSettings]');
 const create=()=>makeWizard(registry.providers);
@@ -273,4 +274,16 @@ test('source limitations use provider notes and fall back to the source lists',(
   assert.deepEqual(fallback.missing.map(item=>item.label),['Model']);
   assert.deepEqual(fallback.varying.map(item=>item.label),['Title']);
   assert.equal(limits({kind:'unknown'},[]).missing.length,0);
+});
+
+test('pages name sources and providers as the registry does, and keep an unknown key as stored',()=>{
+  for(const provider of registry.providers)assert.equal(sourceName(provider.kind),provider.display_name,provider.kind);
+  for(const [provider,name] of Object.entries(registry.provider_names))assert.equal(providerName(provider),name,provider);
+  // A provider is not its source: Claude Code and Claude.ai are both sources of the provider Claude.
+  assert.deepEqual([providerName('claude'),sourceName('claude'),sourceName('claude-ai')],['Claude','Claude Code','Claude.ai']);
+  assert.deepEqual([providerName('somebody-else'),sourceName('toString'),providerName('')],['somebody-else','toString','']);
+  assert.equal(rowProviderName({provider:'codex',provider_name:'Codex CLI'}),'Codex CLI','the name a response sends wins');
+  assert.equal(rowProviderName({provider:'vscode-copilot'}),'VS Code Copilot');
+  assert.equal(rowProviderName({provider:''},'Agent'),'Agent');
+  assert.equal(rowProviderName(undefined,'Agent'),'Agent');
 });
