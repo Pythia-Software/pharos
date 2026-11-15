@@ -376,7 +376,7 @@ func (s *Server) maintenanceWorkDefinitions(_ *workAuthority) ([]workDefinition,
 			step: libraryStep(func(ctx context.Context) (int, error) { return c.refreshPreviews(ctx, 25) })},
 		{kind: kindNames, phase: "name", hold: projectionHold, loop: true,
 			probe: func(ctx context.Context) (bool, error) {
-				return catalogExists(ctx, c, "SELECT 1 FROM conversation_names_state WHERE dirty=1")
+				return c.conversationNamesQueued(ctx)
 			},
 			step: libraryStep(func(ctx context.Context) (int, error) { return c.refreshConversationNames(ctx, 25) })},
 		{kind: kindSubstring, phase: "build", once: true, loop: true, step: cursorStep(c.indexSubstringBatch)},
