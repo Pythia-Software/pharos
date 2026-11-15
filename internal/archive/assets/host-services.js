@@ -11,10 +11,12 @@
   const kind = () => window.webkit?.messageHandlers ? 'legacy-webkit' : 'browser';
   const failure = (code, message) => Object.assign(new Error(message), {code});
   const nativeFailure = error => failure('native-failure', error?.message ?? String(error));
+  // What each host action does, for the messages people may see.
+  const actions = {clipboard: 'copy', folders: 'choose a folder', updates: 'check for updates', menu: 'update the menu bar', eject: 'eject', dictation: 'start dictation'};
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   function dispatch(name, payload) {
     const target = handler(name);
-    if (!target) throw failure('unsupported', `Host ${name} is unavailable.`);
+    if (!target) throw failure('unsupported', `Could not ${actions[name]}: this needs the Pharos Mac app.`);
     try { return target.postMessage(payload); }
     catch (error) { throw nativeFailure(error); }
   }
@@ -24,7 +26,7 @@
     const reply = dispatch(name, payload);
     let value;
     try { value = await reply; } catch (error) { throw nativeFailure(error); }
-    if (!valid(value)) throw failure('native-failure', `Invalid reply from host ${name}.`);
+    if (!valid(value)) throw failure('native-failure', `Could not ${actions[name]}: the Pharos Mac app sent an unexpected reply.`);
     return value;
   }
   function textareaCopy(text) {
@@ -75,7 +77,7 @@
     const supported = name === 'clipboard' || kind() === 'legacy-webkit';
     const available = Boolean(handler(name)) || name === 'clipboard' && kind() === 'browser'
       && (typeof navigator.clipboard?.writeText === 'function' || typeof document.execCommand === 'function');
-    return {supported, available, ...(!available ? {reason: supported ? `Host ${name} is unavailable.` : `Host ${name} is unsupported in the browser.`} : {})};
+    return {supported, available, ...(!available ? {reason: supported ? `Could not ${actions[name]}: this version of the Pharos app does not offer it.` : `Could not ${actions[name]} in a browser: this needs the Pharos Mac app.`} : {})};
   }});
   window.pharosHost = {
     protocolVersion: 1,

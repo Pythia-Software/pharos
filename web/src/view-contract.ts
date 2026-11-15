@@ -208,7 +208,7 @@ export function parseViewValue(field: ViewField, raw: string): unknown {
     }
     if (field.param.startsWith("record_")) {
       if(typeof value.field!=="string"||!value.field)throw new Error("Record keyword needs a field.");
-      const restored=readTextSearch(new URLSearchParams({text_builder:JSON.stringify(value.draft)}));if(restored.error||!restored.active||restored.draft.fuzzy)throw new Error("Invalid record keyword search.");
+      const restored=readTextSearch(new URLSearchParams({text_builder:JSON.stringify(value.draft)}));if(restored.error||!restored.active||restored.draft.fuzzy)throw new Error("This keyword filter is not valid. Edit or remove it.");
       const scope=restored.draft.scope;
       if(Object.entries(emptyTextSearch().scope).some(([key,value])=>Array.isArray(value)?scope[key as keyof typeof scope].length!==0:scope[key as keyof typeof scope]!==value))throw new Error("Record keywords cannot carry message scope filters.");
     }
@@ -216,7 +216,7 @@ export function parseViewValue(field: ViewField, raw: string): unknown {
     if(field.param==="thinking"&&!validateThinking(value))throw new Error("Invalid Thinking dashboard state.");
     return value;
   }
-  if(field.param==="delegation_page" && (!/^\d+$/.test(raw)||Number(raw)>250))throw new Error("Choose a session page from 0 to 250.");
+  if(field.param==="delegation_page" && (!/^\d+$/.test(raw)||Number(raw)>250))throw new Error("The page number must be a whole number from 0 to 250.");
   if(field.param==="window_timezone") {try {new Intl.DateTimeFormat("en",{timeZone:raw});}catch {throw new Error("Choose an IANA timezone.");}}
   if(field.param==="sidebar_width" && (!/^\d+$/.test(raw)||Number(raw)<300||Number(raw)>5000))throw new Error("Sidebar width must be 300 to 5000 pixels.");
   return raw;

@@ -36,11 +36,11 @@ function bounded(value: string, what: string): string {
 }
 // Exactly one value per parameter, and only parameters this table owns.
 function readParams(state: HostQueryState, owned: readonly string[]): Map<string, string> {
-  if (state.version !== HOST_STATE_VERSION) throw new Error(`This query's search state has an unsupported version (${state.version}).`);
+  if (state.version !== HOST_STATE_VERSION) throw new Error(`This query’s search state has an unsupported version (${state.version}).`);
   const params = new Map<string, string>();
   for (const [name, values] of Object.entries(state.params)) {
-    if (!owned.includes(name)) throw new Error(`This query's search state has an unknown setting "${name}".`);
-    if (values.length !== 1) throw new Error(`This query's search state repeats "${name}".`);
+    if (!owned.includes(name)) throw new Error(`This query’s search state has an unknown setting "${name}".`);
+    if (values.length !== 1) throw new Error(`This query’s search state repeats "${name}".`);
     params.set(name, values[0]);
   }
   return params;
@@ -79,7 +79,7 @@ export function messageKeyword(token: string): RecordKeywordSearch {
   const unsupported = !["user", "prose"].includes(surface) ? `searches only ${scopes.find(scope => scope.surface === surface)?.label.toLowerCase() ?? surface}`
     : JSON.stringify(rest) !== JSON.stringify(empty) ? "limits its own dates or sources"
     : text.draft.fuzzy ? "uses fuzzy matching" : "";
-  if (unsupported) throw new Error(`This saved Human messages search ${unsupported}, which a keyword filter on the message text cannot keep. Remove the search and add a keyword filter instead.`);
+  if (unsupported) throw new Error(`This saved Human messages search ${unsupported}, so it cannot become a keyword filter on the message text. Remove it and add a keyword filter instead.`);
   return { field: "text", draft: { ...text.draft, scope: emptyScope(), dateWindow: undefined } };
 }
 export function canonicalRecordKeyword(search: RecordKeywordSearch): string {
@@ -136,7 +136,7 @@ export const libraryHostQuery: HostQueryOptions = {
     const kind = params.get("kind") ?? "text", view = params.get("view") ?? "conversation";
     if (!["text", "file", "url"].includes(kind)) throw new Error("This search has an unknown kind.");
     if (!["table", "conversation"].includes(view)) throw new Error("This search has an unknown result view.");
-    if (params.has("case") && !["0", "1"].includes(params.get("case")!)) throw new Error("This search's case setting could not be read.");
+    if (params.has("case") && !["0", "1"].includes(params.get("case")!)) throw new Error("Could not read this search’s case setting.");
     if (kind === "text" && (params.has("text_builder") || params.has("search"))) {
       const text = readTextSearch(new URLSearchParams([...params]));
       if (text.error) throw new Error(text.error);

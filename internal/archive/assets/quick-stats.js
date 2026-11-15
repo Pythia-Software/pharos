@@ -5,23 +5,23 @@ const QUICK_STATS_DEFAULT_METRICS = ['human_words', 'tokens', 'co2e_g', 'cost_us
 const QUICK_STATS_WINDOWS = [['1h', '1h'], ['6h', '6h'], ['today', 'Today'], ['24h', '24h'], ['7d', '7d'], ['30d', '30d'], ['all', 'All time'], ['5m', '5m'], ['15m', '15m'], ['yesterday', 'Yesterday'], ['week', 'This week'], ['month', 'This month']];
 function quickStatsMetrics(concurrency = false) {
   const rows = [
-    ['Human words', 'human_words', 'Words you typed yourself: not pasted, quoted, templated, or sent by a tool', '', 'writing'],
+    ['Human words', 'human_words', 'Words you wrote yourself, typed or dictated: not pasted, quoted, templated, or sent by a tool', '', 'writing'],
     ['Tokens', 'tokens', 'All tokens, cache reads and writes included', '', 'tokens', 'tokens'],
     ['CO₂e', 'co2e_g', 'Estimated inference emissions using the settings in Analyze → Carbon Impact', '', 'carbon'],
-    ['API cost', 'cost_usd', 'API-equivalent cost at list prices', '$', 'tokens', 'usd'],
+    ['API cost', 'cost_usd', 'Estimated API cost at list prices', '$', 'tokens', 'usd'],
   ];
   rows.push(
-    ['Conversations active', 'active_conversations', 'Distinct top-level conversations with recorded activity in this window. Continuations and delegated work belong to their top-level conversation.', '', 'conversations'],
+    ['Active conversations', 'active_conversations', 'Distinct top-level conversations with recorded activity in this window. Continuations and delegated work belong to their top-level conversation.', '', 'conversations'],
     ['Messages', 'message_count', 'User and assistant messages, including delegated work. Tool events and system instructions are excluded.', '', 'conversations'],
     ['Your messages', 'user_messages', 'User-role messages in top-level conversations, including pasted text. Delegated agents’ prompts are excluded.', '', 'writing'],
     ['Agent replies', 'assistant_messages', 'Assistant messages, including delegated agents. Tool events and system instructions are excluded.', '', 'conversations'],
     ['Tool calls', 'tool_calls', 'Individual recorded tool invocations, including delegated work. Mirrored transcripts count once.', '', 'tools'],
-    ['Estimated agent time', 'agent_time_ms', 'Estimated top-level conversation time, using the saved turn gap. Parallel conversations count separately; linked sub-agent activity belongs to its initiating conversation. Timing coverage is required for the full window.', '', 'parallelism', 'duration'],
-    ['Estimated active time', 'active_time_ms', 'Estimated wall-clock time with at least one top-level conversation active, using the saved turn gap. Overlapping conversations count once.', '', 'parallelism', 'duration'],
+    ['Estimated agent time', 'agent_time_ms', 'Sum of each top-level conversation’s active time, using the saved turn gap. Parallel conversations each count, and linked sub-agent activity counts with its conversation. Shown only when timing covers the whole period.', '', 'parallelism', 'duration'],
+    ['Estimated active time', 'active_time_ms', 'Wall-clock time with at least one top-level conversation active, using the saved turn gap. Overlapping conversations count once.', '', 'parallelism', 'duration'],
     ['Delegated runs', 'delegated_runs', 'Distinct delegated executions with recorded activity or a start in this window. Linked handles, child transcripts and continuations count once.', '', 'conversations'],
     ['Failed tool calls', 'failed_tool_calls', 'Tool calls marked as errors. A non-zero shell exit can be expected, such as a search with no matches.', '', 'tools'],
     ['Tool failure rate', 'tool_failure_rate', 'Failed tool calls divided by all tool calls in the window. No calls means no rate.', '', 'tools', 'percent'],
-    ['Repositories active', 'active_repositories', 'Distinct known repositories with conversation or tool activity. Unknown repositories are excluded.', '', 'conversations'],
+    ['Active repositories', 'active_repositories', 'Distinct known repositories with conversation or tool activity. Unknown repositories are excluded.', '', 'conversations'],
     ['Recorded tool time', 'tool_time_ms', 'Sum of recorded durations for calls started in the window. Durations can overlap and include approval waits. Untimed calls contribute no duration.', '', 'tools', 'duration'],
   );
   if (concurrency) rows.push(['Parallelism', 'parallelism', 'Average concurrent workspaces or conversations over the full time window, including idle time, using the saved counting choice, turn gap and repository.', '', 'parallelism']);
@@ -53,10 +53,10 @@ function quickStatsOccurrenceCoverage(field, bucket) {
   if (!observations || bucket?.occurrence_coverage !== 'partial') return null;
   const raw = Number(bucket[observations]), unresolved = Number(bucket.unresolved_occurrences) || 0, transcripts = Number(bucket.occurrence_partial_conversations) || 0;
   const kind = observations === 'message_observations' ? 'messages' : 'tool calls';
-  const retained = Number.isFinite(raw) ? ` ${raw.toLocaleString()} ${kind} are retained, including copies.` : '';
+  const retained = Number.isFinite(raw) ? ` Including copies, ${raw.toLocaleString()} ${raw === 1 ? kind.replace(/s$/, '') : kind} ${raw === 1 ? 'is' : 'are'} recorded.` : '';
   const reasons = [
-    unresolved ? `${unresolved.toLocaleString()} retained observation${unresolved === 1 ? '' : 's'} could not be told apart from copied history, so ${unresolved === 1 ? 'it is' : 'they are'} counted.` : '',
-    transcripts ? `${transcripts.toLocaleString()} transcript${transcripts === 1 ? '' : 's'} may include copied history the evidence cannot account for.` : '',
+    unresolved ? `${unresolved.toLocaleString()} ${unresolved === 1 ? kind.replace(/s$/, '') : kind} could not be told apart from history copied from an earlier conversation, so ${unresolved === 1 ? 'it is' : 'they are'} counted.` : '',
+    transcripts ? `${transcripts.toLocaleString()} agent session${transcripts === 1 ? '' : 's'} may include copied history Pharos cannot identify.` : '',
   ].filter(Boolean).join(' ') || 'Copied history could not be fully told apart.';
   return {mark: '≈', note: `Approximate: ${reasons}${retained}`};
 }
@@ -83,9 +83,9 @@ function quickStatsAncestryCoverage(field, bucket) {
   if (!QUICK_STATS_ANCESTRY_FIELDS.includes(field) || (coverage !== 'partial' && coverage !== 'qualified')) return null;
   const count = (key, one, many) => { const n = Number(bucket[key]) || 0; return n ? `${n.toLocaleString()} ${n === 1 ? one : many}` : ''; };
   const notes = [
-    count('unrooted_conversations', 'active transcript has no known top-level conversation and is not counted.', 'active transcripts have no known top-level conversation and are not counted.'),
-    count('identity_uncertain_conversations', 'transcript has unresolved execution identity, so distinct counts that include it are not exact.', 'transcripts have unresolved execution identity, so distinct counts that include them are not exact.'),
-    count('ancestry_qualified_conversations', 'transcript is counted under a top-level conversation reached only through an inferred or unverified link.', 'transcripts are counted under a top-level conversation reached only through an inferred or unverified link.'),
+    count('unrooted_conversations', 'active agent session has no known top-level conversation and is not counted.', 'active agent sessions have no known top-level conversation and are not counted.'),
+    count('identity_uncertain_conversations', 'agent session has conflicting records of the run it belongs to, so distinct counts that include it are not exact.', 'agent sessions have conflicting records of the run they belong to, so distinct counts that include them are not exact.'),
+    count('ancestry_qualified_conversations', 'agent session is counted under a top-level conversation reached only through an inferred or unverified link.', 'agent sessions are counted under a top-level conversation reached only through an inferred or unverified link.'),
   ].filter(Boolean);
   return coverage === 'partial' ? {mark: '≈', note: `Approximate: ${notes.join(' ')}`} : {mark: '?', note: `Not verified: ${notes.join(' ')}`};
 }
@@ -258,7 +258,7 @@ function initQuickStatsEditor(metrics, initial, changed, buildTable) {
     if (!active) { button.onclick = () => change(group, entry.id); return button; }
     button.append(glyph('grip')); button.setAttribute('popovertarget', menu.id);
     const [before, after] = group === 'metrics' ? ['ArrowUp', 'ArrowDown'] : ['ArrowLeft', 'ArrowRight'];
-    button.title = `Drag to move. Click for actions. Alt+${group === 'metrics' ? '↑/↓' : '←/→'} to reorder; Delete to remove.`;
+    button.title = `Drag to move. Click for actions. ⌥${group === 'metrics' ? '↑/↓' : '←/→'} to reorder; Delete to remove.`;
     button.onclick = () => actions(group, entry, button, index);
     button.onkeydown = event => {
       if (event.altKey && [before, after].includes(event.key)) {
@@ -355,7 +355,7 @@ function initQuickStatsEditor(metrics, initial, changed, buildTable) {
   // Refresh only value cells. Handles, active drags and keyboard focus stay
   // in place while the API or carbon/concurrency assumptions update.
   function refresh(error = '') {
-    previewNote.textContent = error || ('Live library values. Arrange rows and columns just as they will appear in your card.' + (layout.windows.some(key => ['5m', '15m'].includes(key)) ? ' Token, cost and CO₂e totals are estimated from hourly usage.' : ''));
+    previewNote.textContent = error || ('Live library values. Arrange rows and columns just as they will appear in your card.' + (layout.windows.some(key => ['5m', '15m'].includes(key)) ? ' Token, API cost and CO₂e totals are estimates from hourly usage buckets.' : ''));
     for (const {table, selection} of frames) {
       const fresh = buildTable(selection);
       const marker = table.querySelector('.estimate-marker-button'), freshMarker = fresh.querySelector('.estimate-marker-button');

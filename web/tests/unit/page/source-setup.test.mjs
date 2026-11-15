@@ -216,7 +216,7 @@ test('a watched Claude export offers retrying only once Pharos has stopped openi
   assert.deepEqual(plain(indexing.actions),['stop']);
   assert.match(watchLine({state:'fetching',phase:'indexing',ingestion:{stage:'capturing'}}).text,/Preserving/);
   assert.match(watchLine({state:'fetching',phase:'indexing',ingestion:{stage:'waiting for catalog'}}).text,/Waiting to save/);
-  assert.equal(watchLine({state:'paused',phase:'indexing',ingestion:{stage:'failed'}}).text,'Ingestion paused');
+  assert.equal(watchLine({state:'paused',phase:'indexing',ingestion:{stage:'failed'}}).text,'Indexing paused');
   assert.equal(watchLine({state:'imported'}).text,'Ready in your library');
   const paused=watchLine({state:'paused',message:'No file arrived.',collected:3,expected:7});
   assert.deepEqual(plain(paused.actions),['retry','stop']);assert.equal(paused.attention,true);assert.equal(paused.detail,'No file arrived.');

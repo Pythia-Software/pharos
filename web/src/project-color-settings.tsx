@@ -47,7 +47,7 @@ export function ProjectColorSettings() {
   }
   return <div className="project-color-settings">
     <h2>Project colors</h2>
-    <p className="muted">Projects with more than 3 conversations keep one color across charts, cards, and dashboards, in light and dark themes. Smaller projects use fallback colors. Colors save with your library. Automatic colors use repository hints when available and keep apart from existing assignments.</p>
+    <p className="muted">Projects with more than 3 conversations keep one color across charts, cards, and dashboards, in light and dark themes. Smaller projects use fallback colors. Colors save with your library. An automatic color comes from a theme color in the repository’s files when Pharos finds one; otherwise Pharos picks a color distinct from those already in use.</p>
     {error ? <p role="alert">{error}</p> : null}
     {!projects.length ? <p className="muted">Projects appear here when they have more than 3 conversations.</p> : <>
       <label className="project-color-sort">Sort by <select data-view-field="project_color_sort" value={sort} onChange={event => setSort(event.target.value as ProjectColorSort)}>{projectColorSorts.map(option => <option key={option} value={option}>{sortLabels[option]}</option>)}</select></label>

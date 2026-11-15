@@ -112,7 +112,7 @@ test("captures, indexes, upgrades and an index's follow-up form the library upda
   const upgrading = { kind: "maintenance", label: "Upgrading the library", work: { phase: "Building tool ledger", unit: "conversation", done: 1, total: 50 } };
   const substring = { kind: "maintenance", label: "Building substring search", detail: "50 of 100 conversations", progress: 0.5 };
   const tools = { kind: "maintenance", label: "Building the tool index", detail: "10 of 20 conversations", progress: 0.5 };
-  const libraryView = { kind: "maintenance", label: "Indexing the Library view", detail: "5 workspaces to index", progress: null };
+  const libraryView = { kind: "maintenance", label: "Indexing the Search view", detail: "5 workspaces to index", progress: null };
   const firstScan = { kind: "git", label: "Looking up merges in Git", detail: "first scan of this catalog", progress: null };
   const lastIndex = { id: "recent-index", kind: "capture-index", state: "complete", started_at: new Date(now - 10_000).toISOString(), completed_at: new Date(now).toISOString() };
   const followUp = { kind: "git", label: "Looking up merges in Git", detail: "Main-branch merges of indexed work, after the last index", started_at: lastIndex.started_at, progress: null };
@@ -169,7 +169,7 @@ test("the page's own upgrade status decides whether the Tools ledger is part of 
 });
 
 test("the overview groups background work under sync and keeps the current step's progress", () => {
-  const refresh = {kind: 'maintenance', label: 'Indexing the Library view', detail: '2 workspaces to index',
+  const refresh = {kind: 'maintenance', label: 'Indexing the Search view', detail: '2 workspaces to index',
     progress: .4, stoppable: true, stop_path: '/api/library/refresh/stop'};
   const findings = {kind: 'maintenance', label: 'Updating findings', detail: 'Measuring watched findings'};
   const git = {kind: 'git', label: 'Looking up merges in Git'};
@@ -177,7 +177,7 @@ test("the overview groups background work under sync and keeps the current step'
   const upgrade = {kind: 'maintenance', label: 'Upgrading the library'};
   const background = library.overviewActivities([refresh, findings, git, backup, upgrade]);
   assert.equal(background.length, 3);
-  assert.equal(background[0].label, 'Automatic sync in progress');
+  assert.equal(background[0].label, 'Automatic index in progress');
   assert.equal(library.activityPresentation(background[0]).title, refresh.label);
   assert.equal(library.activityProgress(background[0]), .4);
   assert.equal(library.activityOverallProgress(background[0]), null);
@@ -186,7 +186,7 @@ test("the overview groups background work under sync and keeps the current step'
   assert.match(library.activityPresentation(background[0]).details.join('\n'), /Updating findings.*Measuring watched findings/);
   assert.ok(library.activityPresentation(background[0]).details.includes(git.label));
 
-  const sync = {kind: 'sync', label: 'Manual sync in progress', work: {phase: 'indexing', unit: 'conversation', done: 3, total: 4},
+  const sync = {kind: 'sync', label: 'Manual index in progress', work: {phase: 'indexing', unit: 'conversation', done: 3, total: 4},
     forecast: {state: 'provisional', current_step: 4, total_steps: 8, progress: .6}, stoppable: true, stop_path: '/api/index/cancel'};
   const activities = [refresh, sync, findings];
   const grouped = library.overviewActivities(activities);
@@ -196,9 +196,9 @@ test("the overview groups background work under sync and keeps the current step'
   assert.equal(library.activityPresentation(grouped[0]).stepLabel, 'Step 4/8');
   assert.equal(library.activityProgress(grouped[0]), .75);
   assert.equal(library.activityOverallProgress(grouped[0]), .6);
-  assert.match(library.activityPresentation(grouped[0]).details.join('\n'), /Indexing the Library view.*2 workspaces to index/);
+  assert.match(library.activityPresentation(grouped[0]).details.join('\n'), /Indexing the Search view.*2 workspaces to index/);
   assert.equal(activities.length, 3);
-  assert.equal(refresh.label, 'Indexing the Library view');
+  assert.equal(refresh.label, 'Indexing the Search view');
   assert.equal(library.stopTargets(activities).length, 2);
   assert.equal(library.overviewActivities([]).length, 0);
 });

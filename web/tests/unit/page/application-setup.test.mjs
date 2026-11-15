@@ -220,7 +220,7 @@ test('library settings resolves local and external destinations and rejects inva
   assert.equal(pharosLibraryProposal('Research','~/Libraries','mac').path,'~/Libraries/Research');
   for(const name of ['', '.', '..', 'a/b', 'a\\b', 'é'.repeat(81)])assert.throws(()=>pharosLibraryProposal(name,'','mac'),/name/);
   assert.throws(()=>pharosLibraryProposal('Research','','ssd'),/parent folder/);
-  assert.throws(()=>pharosLibraryProposal('Research','relative/path','mac'),/absolute/);
+  assert.throws(()=>pharosLibraryProposal('Research','relative/path','mac'),/full folder path/);
   assert.throws(()=>pharosLibraryProposal('Research','','network'),/store/);
 });
 

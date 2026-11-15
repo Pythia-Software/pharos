@@ -7,7 +7,7 @@ import { DataTable, QueryBuilder, MetricsPanel, ModalSurface, defaultRenderers, 
 import { clientTableStorageAdapter } from "./storage";
 import { useLocationRevision } from "./nested-pages";
 import { useViewEntry } from "./view-state";
-import { syncTables, runTables, runKey, resultLabel, operationLabels, operationHistoryTable, type SyncRecord, type SyncTable } from "./sync-table-model";
+import { syncTables, runTables, runKey, resultLabel, operationLabels, operationHistoryTable, operationStates, operationTriggers, operationReasons, verificationOutcomes, type SyncRecord, type SyncTable } from "./sync-table-model";
 
 declare global {
   interface Window {
@@ -20,6 +20,7 @@ declare global {
   }
 }
 const format = (key: keyof Window["pharosSync"]["format"], value: unknown) => window.pharosSync.format[key](value);
+const plural = (count: number, unit: string) => `${format("number", count)} ${unit}${count === 1 ? "" : "s"}`;
 const verificationReasons: Record<string, string> = { evidence_size: "Selected evidence exceeds the check’s size limit", time_budget: "Verification time limit reached", source_changed: "Selected inputs changed", cancelled: "Stopped", unsupported_capture: "Required source capture is unavailable", source_unavailable: "Waiting for the source to be available", no_eligible_input: "Inputs are changing, queued or waiting for retry", read_error: "Could not read selected evidence" };
 function Timestamp({ value }: { value: unknown }) {
   if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) return <span className="muted">Not yet</span>;
@@ -31,7 +32,7 @@ const renderers: RenderRegistry<SyncRecord> = {
   sync_seconds: ({ value }) => value == null ? "—" : Number(value) < 0 ? `−${format("seconds", -Number(value))}` : format("seconds", value),
   sync_memory: ({ value }) => format("memory", value),
   sync_percent: ({ value }) => format("percent", value),
-  sync_result: ({ value }) => <span className={`sync-result${["Failed", "Stopped", "Needs attention", "Success without verification", "Verification failed", "Verification incomplete", "Error", "Needs capture"].includes(String(value)) ? " attention" : ""}`}>{String(value ?? "—")}</span>,
+  sync_result: ({ value }) => <span className={`sync-result${["Failed", "Stopped", "Needs attention", "Indexed; verification postponed", "Verification failed", "Verification incomplete", "Error", "Needs capture"].includes(String(value)) ? " attention" : ""}`}>{String(value ?? "—")}</span>,
 };
 
 function SyncQueryTable({ table, label, onInspect }: { table: SyncTable; label: string; onInspect?: (id: string) => void }) {
@@ -58,7 +59,7 @@ function SyncQueryTable({ table, label, onInspect }: { table: SyncTable; label: 
     }} />
     <DataTable fields={api.visibleFields} rows={api.rows} query={api.query} onQueryChange={api.setQuery} renderers={renderers} rowId={api.rowId} columnDrag={api.columnDrag} total={api.total} loading={loading}
       emptyMessage={loading ? "Loading results…" : table.rows.length ? "No rows match these filters." : table.empty}
-      {...(onInspect && !api.query.grouping ? { trailing: (row: SyncRecord) => <button type="button" className="sync-detail-button" onClick={() => onInspect(String(row.id))}>Details</button>, trailingLabel: "Run details" } : {})} />
+      {...(onInspect && !api.query.grouping ? { trailing: (row: SyncRecord) => <button type="button" className="sync-detail-button" onClick={() => onInspect(String(row.id))}>Details</button>, trailingLabel: "Details" } : {})} />
     {api.error ? <p className="query-table-error" role="alert">{api.error.message}</p> : null}
   </div>;
 }
@@ -66,9 +67,9 @@ const HistoryQueryTable = React.memo(SyncQueryTable);
 
 function OperationDetails({ operation, onClose }: { operation: SyncRecord; onClose: () => void }) {
   return <ModalSurface title={operation.label || operation.kind} onClose={onClose} className="qt-modal sync-run-dialog"><div className="qt-overlay-body">
-    <p><Timestamp value={operation.started_at} /> · {operation.state}{operation.reason ? ` · ${operation.reason}` : ""}</p>
+    <p><Timestamp value={operation.started_at} /> · {operationStates[operation.state] || operation.state}{operation.reason ? ` · ${operationReasons[operation.reason] || operation.reason}` : ""}</p>
     {operation.subject ? <p>Subject: {operation.subject}</p> : null}
-    <p>Started by: {operation.trigger || "Unknown"}{operation.process ? ` · ${operation.process}` : ""}</p>
+    <p>Started by: {operation.trigger ? operationTriggers[operation.trigger] || operation.trigger : "Unknown"}{operation.process ? ` · ${operation.process}` : ""}</p>
     {operation.step_name ? <p>Last step: {operation.step_name}{operation.step_unit ? ` · ${format("number", operation.step_done)} ${operation.step_unit}` : ""}</p> : null}
     {operation.error ? <p role="alert">{operation.error}</p> : null}
     {operation.ended_at ? <p>Finished <Timestamp value={operation.ended_at} /></p> : null}
@@ -80,36 +81,37 @@ function RunDetails({ run, onClose }: { run: SyncRecord; onClose: () => void }) 
   return <ModalSurface title="Index run details" onClose={onClose} className="qt-modal sync-run-dialog">
     <div className="qt-overlay-body">
     <p><Timestamp value={run.finished_at} /> · {resultLabel(run)}</p>
-    {resultLabel(run) === "Success without verification" ? <p>Indexing finished, but the verification check was postponed. Inputs may still be changing or exceed the automatic check’s time or size limit.</p> : null}
-    {run.audit ? <p>Verification: {run.audit.outcome || "Unknown"} · {format("number", run.audit.discovered_units)} discoverable units · {format("number", run.audit.deferred_units)} deferred. {run.audit.detail}</p> : null}
-    {run.audit?.evidence_bytes > 0 ? <p>Selected verification evidence: {format("number", run.audit.evidence_bytes)} bytes.</p> : null}
+    {resultLabel(run) === "Indexed; verification postponed" ? <p>Indexing finished, but the verification check was postponed. Inputs may still be changing or exceed the automatic check’s time or size limit.</p> : null}
+    {run.audit ? <p>Verification: {run.audit.outcome ? verificationOutcomes[run.audit.outcome] || run.audit.outcome : "Unknown"} · {format("number", run.audit.discovered_units)} inputs found · {format("number", run.audit.deferred_units)} deferred. {run.audit.detail}</p> : null}
+    {run.audit?.evidence_bytes > 0 ? <p>Selected verification evidence: {format("memory", run.audit.evidence_bytes)}.</p> : null}
     {run.audit?.attempts?.length ? <><h3>Verification attempts</h3><ul>{run.audit.attempts.map((attempt: SyncRecord, index: number) => <li key={`${attempt.source}:${attempt.unit}:${index}`}>
-      {attempt.source} · {({passed: "Verified", mismatch: "Mismatch", deferred: "Skipped", read_error: "Could not verify"} as Record<string,string>)[attempt.outcome] || attempt.outcome}
+      {attempt.source} · {verificationOutcomes[attempt.outcome] || attempt.outcome}
       {attempt.reason ? ` · ${verificationReasons[attempt.reason] || attempt.reason}` : ""} · {format("seconds", attempt.seconds)}
-      {attempt.evidence_bytes > 0 ? ` · ${format("number", attempt.evidence_bytes)} evidence bytes` : ""}
+      {attempt.evidence_bytes > 0 ? ` · ${format("memory", attempt.evidence_bytes)} of evidence` : ""}
     </li>)}</ul></> : null}
     <h3>Indexed by source</h3><SyncQueryTable table={tables.sourceResults} label="Source breakdown" />
     {tables.phases.rows.length ? <><h3>Time by phase</h3><SyncQueryTable table={tables.phases} label="Time by phase" /></> : null}
     {tables.stages.rows.length ? <><h3>Stage measurements</h3><SyncQueryTable table={tables.stages} label="Stage measurements" /></> : null}
     {tables.forecasts.rows.length ? <><h3>Forecast accuracy</h3><SyncQueryTable table={tables.forecasts} label="Forecast accuracy for run" /></> : null}
-    {run.trigger ? <p className="muted">{run.trigger === "manual" ? "Manual sync · includes analysis refreshes" : "Automatic indexing · analyses deferred"}</p> : null}
+    {run.trigger ? <p className="muted">{run.trigger === "manual" ? "Manual index · includes analysis refreshes" : "Automatic index · analyses deferred"}</p> : null}
     <p className="muted">CPU: {format("percent", run.cpu_percent_one_core)} of one core · RAM at start: {format("memory", run.rss_baseline_bytes)} · Allocated: {format("memory", run.allocated_bytes)}</p>
     </div>
   </ModalSurface>;
 }
 
 function Diagnostics({ status, tables }: { status: SyncRecord; tables: ReturnType<typeof syncTables> }) {
+  const queued: number = (status.verification?.pending ?? []).reduce((total: number, row: SyncRecord) => total + Number(row.units || 0), 0);
   return <ViewDisclosure viewKey="sync:diagnostics" className="sync-panel sync-disclosure" summary="Performance & verification details">
     {status.verification?.available ? <>
       <p>Last completed verification: <Timestamp value={status.verification.last_verified_at} />.</p>
-      <p>{format("number", (status.verification.pending ?? []).reduce((total: number, row: SyncRecord) => total + Number(row.units || 0), 0))} larger checks queued for Verify indexed data on the background schedule.</p>
+      {queued > 0 ? <p>{plural(queued, "input")} queued for larger checks by Verify indexed data, on its background schedule.</p> : null}
       {status.verification.pending?.length ? <ul>{status.verification.pending.map((row: SyncRecord) => <li key={`${row.source_name}:${row.reason}`}>{row.source_name} · {format("number", row.units)} inputs · {verificationReasons[row.reason] || row.reason}</li>)}</ul> : null}
     </> : null}
     <p className="muted">Measured cost by workload, across the last 200 runs. Median is the typical run; p95 covers 95% of runs.</p>
     <SyncQueryTable table={tables.costs} label="Measured indexing cost" />
     {tables.accuracy.rows.length ? <>
       <h3>Forecast accuracy</h3><SyncQueryTable table={tables.accuracy} label="Operation forecast accuracy" />
-      <p className="muted">Availability includes runs without an estimate. Errors and range coverage use completed runs only, with one prediction per run at each checkpoint. Ranges widen using previous errors; coverage is measured rather than guaranteed.</p>
+      <p className="muted">Attempts counts every run at each checkpoint; Available counts those that had an estimate. Median error and Within range use completed runs only, one prediction per run at each checkpoint. Ranges widen with past errors, so coverage is measured, not guaranteed.</p>
     </> : null}
     {(status.forecast_runs ?? []).filter((run: SyncRecord) => run.model?.startsWith("library-update:") || run.model === "capture-index").slice(0, 5).map((run: SyncRecord) => <ViewDisclosure key={runKey(run)} viewKey={`sync:forecast:${runKey(run)}`} className="sync-separate" summary={<>{operationLabels[run.model] || run.model} · {format("when", run.finished_at)} · {run.state}</>}>
       <SyncQueryTable table={runTables(run).forecasts} label="Operation forecasts" />
@@ -135,16 +137,16 @@ export function SyncTables() {
   const history = useMemo(() => operationHistoryTable(status?.operation_history), [status?.operation_history]);
   const selectedOperation = (status?.operation_history ?? []).find((operation: SyncRecord) => operation.id === selected);
   const selectedRun = selectedOperation?.legacy_ref && (status?.history ?? []).find((run: SyncRecord) => runKey(run) === selectedOperation.legacy_ref);
-  if (!status?.settings) return <p className="muted" role="status">Loading capture and index history…</p>;
+  if (!status?.settings) return <p className="muted" role="status">Loading recent background work…</p>;
   const current = live ?? status;
   return <>
-    <ViewDisclosure viewKey="sync:history" defaultOpen className="sync-panel sync-disclosure" summary="Recent runs">
-      <div className="sync-section-head"><p className="muted">Recorded asynchronous work on this Mac, including indexing, analyses, captures, backups, and maintenance.</p>
-        {current.busy ? <span className="sync-result">{current.pause_reason || "Indexing in progress"}</span> : null}</div>
+    <ViewDisclosure viewKey="sync:history" defaultOpen className="sync-panel sync-disclosure" summary="Recent background work">
+      <div className="sync-section-head"><p className="muted">Background work on this Mac: indexing, analyses, captures, backups and maintenance.</p>
+        {current.busy ? <span className="sync-result">{current.pause_reason && current.pause_reason !== "Off" ? current.pause_reason : "Indexing in progress"}</span> : null}</div>
       <p className="muted">These tables update only when you use Run Now or their auto-refresh.</p>
-      {status.operation_history_error ? <p role="alert">Could not load work history: {status.operation_history_error}</p> : null}
-      <HistoryQueryTable table={history} label="Recent run history" onInspect={setSelected} />
-      <p className="muted">History shows the most recent 50 recorded operations on this Mac. Short, unchanged automatic checks may not be recorded.</p>
+      {status.operation_history_error ? <p role="alert">Could not load recent background work: {status.operation_history_error}</p> : null}
+      <HistoryQueryTable table={history} label="Recent background work" onInspect={setSelected} />
+      <p className="muted">Shows the 50 most recent background work runs on this Mac. Short, unchanged automatic checks may not be recorded.</p>
     </ViewDisclosure>
     {createPortal(<ViewDisclosure viewKey="sync:sources" defaultOpen className="sync-panel sync-disclosure" summary="Source status"><SyncQueryTable table={tables.sources} label="Source status" /><p className="muted">Needs capture means changes have been indexed but the source files have not been captured yet.</p></ViewDisclosure>, document.getElementById("syncSourceTables")!)}
     {createPortal(<Diagnostics status={status} tables={tables} />, document.getElementById("syncDiagnosticTables")!)}

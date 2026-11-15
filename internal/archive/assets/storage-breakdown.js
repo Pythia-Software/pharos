@@ -99,7 +99,7 @@
   function table(shown, bytes) {
     const element = node('table', 'storage-table'), head = node('tr');
     const name = view === 'machines' ? 'Mac' : view === 'sources' ? 'Source' : 'Project';
-    for (const [label, className] of [[name, 'storage-name'], ['', 'storage-split-bar'], ['Originals', 'num storage-split'], ['Catalog', 'num storage-split'], ['Total', 'num']]) {
+    for (const [label, className] of [[name, 'storage-name'], ['', 'storage-split-bar'], ['Originals', 'num storage-split'], ['Catalog and caches', 'num storage-split'], ['Total', 'num']]) {
       const cell = node('th', className, label);
       cell.scope = 'col';
       head.append(cell);
@@ -118,7 +118,7 @@
       }
       const label = node('th', 'storage-name', row.label);
       label.scope = 'row';
-      label.title = `${row.label}: ${bytes(row.originals)} originals, ${bytes(row.catalog)} catalog`;
+      label.title = `${row.label}: ${bytes(row.originals)} originals, ${bytes(row.catalog)} catalog and caches`;
       const barCell = node('td');
       barCell.append(bar);
       line.append(label, barCell, node('td', 'num storage-split', bytes(row.originals)), node('td', 'num storage-split', bytes(row.catalog)), node('td', 'num', bytes(row.total)));
@@ -232,7 +232,7 @@
         render(root, data);
         return;
       }
-      root.replaceChildren(node('div', 'meta', 'Storage'), node('div', 'big', 'Measuring…'), node('div', 'meta health-detail', 'Sizing the catalog and each Mac’s captures'));
+      root.replaceChildren(node('div', 'meta', 'Storage'), node('div', 'big', 'Measuring…'), node('div', 'meta health-detail', 'Sizing the catalog and each Mac’s originals'));
       await new Promise(resolve => setTimeout(resolve, 2000));
       if (!current()) return;
     }

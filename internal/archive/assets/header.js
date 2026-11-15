@@ -3,9 +3,9 @@
 const HEADER_TOOLS = [
   { id: 'history', family: 'history', element: 'headerHistory', label: 'Back / forward', description: 'Move through pages visited in this window.', on: false },
   { id: 'back', family: 'history', element: 'headerBackOnly', label: 'Back only', description: 'Go back through pages visited in this window.', on: true },
-  { id: 'library', family: 'library', element: 'headerLibrary', label: 'Drive & sync status', description: 'Library activity, drive actions, and Index changes.', on: true },
-  { id: 'sync', family: 'library', element: 'headerSyncOnly', label: 'Sync only', description: 'Index changes without the drive name or status.', on: false },
-  { id: 'search', element: 'searchToggle', label: 'Search', description: 'Search the library. The ⌘K shortcut also works.', on: false },
+  { id: 'library', family: 'library', element: 'headerLibrary', label: 'Library status', description: 'Library activity, drive actions, and Index changes.', on: true },
+  { id: 'sync', family: 'library', element: 'headerSyncOnly', label: 'Index changes only', description: 'The Index changes button, without the library name or status.', on: false },
+  { id: 'search', element: 'searchToggle', label: 'Search past work', description: 'Search the library. The ⌘K shortcut also works.', on: false },
   { id: 'readiness', element: 'dataReadinessToggle', label: 'Data updates', description: 'See when this page was last updated and what is still waiting.', on: false },
   { id: 'summary', element: 'usageSummaryToggle', label: 'Quick Stats', description: 'Recent words, tokens, CO₂e, and API cost.', on: true, legacy: 'pharos-show-usage-summary-button' },
   { id: 'ask', element: 'askPharosToggle', label: 'Ask Pharos', description: 'Ask about the current page and browse while Pharos works.', on: true },
@@ -429,7 +429,7 @@ function initHeaderControls(close = {}) {
         handle.draggable = true;
         handle.append(glyph('grip'));
         handle.setAttribute('aria-label', `Arrange ${tool.label}`);
-        handle.title = tool.required ? 'Drag to move. Settings always stays in the header.' : 'Drag to move. Click for actions. Alt+←/→ to reorder; Delete to remove.';
+        handle.title = tool.required ? 'Drag to move. Settings always stays in the header.' : 'Drag to move. Click for actions. ⌥←/→ to reorder; Delete to remove.';
         handle.setAttribute('popovertarget', 'headerToolMenu');
         handle.onclick = () => prepareMenu(tool, handle, inHeader, index);
         handle.onkeydown = event => {

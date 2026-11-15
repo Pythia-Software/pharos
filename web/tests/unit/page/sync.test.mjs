@@ -33,7 +33,7 @@ test('issue diagnostics copy stays focusable, runs once while pending and settle
       fetch:async path=>{if(path==='/api/sync/status')refreshes++;return {ok:true,json:async()=>path==='/api/sync/status'?{settings:{},issues:[details]}:path==='/api/sync/issues'?{issues:[details]}:{runs:[]}};},
     });
     await new Promise(resolve=>setImmediate(resolve));
-    await elements(dashboard).find(el=>el.textContent==='View details / copy diagnostics').onclick();
+    await elements(dashboard).find(el=>el.textContent==='View details and diagnostics…').onclick();
     const dialog=body.children.find(el=>el.tagName==='DIALOG');
     const copy=elements(dialog).find(el=>el.textContent==='Copy diagnostics');
     const status=dialog.children.find(el=>el.tagName==='P');
@@ -62,7 +62,9 @@ test("verification summaries distinguish selective repairs from unresolved check
   assert.equal(pharosSync.verificationSummary(null), "");
   const verification = { checked: 5, passed: 2, reindexed: 1, mismatch: 1, deferred: 1, errors: 1 };
   const summary = pharosSync.verificationSummary({ state: "complete", verification });
-  for (const text of ["5 inputs checked", "2 passed", "1 reindexed", "1 still mismatch", "1 deferred", "1 errors"]) assert.ok(summary.includes(text));
+  for (const text of ["5 inputs checked", "2 passed", "1 reindexed", "1 still mismatches", "1 deferred", "1 error."]) assert.ok(summary.includes(text));
+  const several = pharosSync.verificationSummary({ state: "complete", verification: { ...verification, checked: 1, mismatch: 2, errors: 3 } });
+  for (const text of ["1 input checked", "2 still mismatch ·", "3 errors."]) assert.ok(several.includes(text), several);
   assert.match(pharosSync.verificationSummary({ state: "interrupted", verification }), /stopped/);
   assert.match(pharosSync.verificationSummary({ state: "running", verification }), /in progress/);
 });
@@ -120,10 +122,10 @@ test("maintenance actions yield scheduled work, while diagnostics remain availab
     const disabled = state.maintenance_busy ?? state.busy;
     const buttons = elements(dashboard).filter(el => el.tagName === "BUTTON");
     for (const button of buttons) {
-      assert.equal(Boolean(button.disabled), button.textContent === "View details / copy diagnostics" ? false : disabled, `${JSON.stringify(state)}: ${button.textContent}`);
+      assert.equal(Boolean(button.disabled), button.textContent === "View details and diagnostics…" ? false : disabled, `${JSON.stringify(state)}: ${button.textContent}`);
     }
     const before = detailsReads;
-    await buttons.find(el => el.textContent === "View details / copy diagnostics").onclick();
+    await buttons.find(el => el.textContent === "View details and diagnostics…").onclick();
     assert.ok(detailsReads > before);
     assert.ok(body.children.some(el => el.tagName === "DIALOG"));
   }
@@ -133,14 +135,14 @@ test("empty pages distinguish source setup, idle sources and a running sync", ()
   const message = status => emptyLibraryState(status)?.message ?? null;
   assert.equal(emptyLibraryState(null), null);
   assert.equal(emptyLibraryState({}), null);
-  assert.deepEqual(emptyLibraryState({ library_empty: true, has_sources: false, busy: false }), { message: "No sources configured yet", action: { label: "Configure", href: "/settings/sources" } });
+  assert.deepEqual(emptyLibraryState({ library_empty: true, has_sources: false, busy: false }), { message: "No sources configured yet", action: { label: "Add sources", href: "/settings/sources" } });
   // Configured sources alone do not mean anything is being pulled in: sync
   // may be off, or a source may have no sessions. Offer a way forward.
   const idle = emptyLibraryState({ library_empty: true, has_sources: true, busy: false });
   assert.doesNotMatch(idle.message, /^Pulling in conversations/);
   assert.equal(idle.action?.href, "/settings/sources");
   for (const status of [{ busy: true }, { has_sources: true, busy: true }]) {
-    assert.deepEqual(emptyLibraryState({ library_empty: true, ...status }), { message: "Pulling in conversations - this may take some time" });
+    assert.deepEqual(emptyLibraryState({ library_empty: true, ...status }), { message: "Pulling in conversations. This may take a while." });
   }
   for (const status of [{ has_sources: true }, { busy: true }, { has_sources: true, busy: true }]) {
     assert.equal(message({ library_empty: false, ...status }), null, "an existing library keeps its own results, including empty filtered results");
@@ -299,7 +301,7 @@ test('work history queries include analyses and backups alongside indexing', () 
   const operations = [
     { id: 'index', label: 'Index changes', kind: 'index.changes.manual', state: 'succeeded', started_at: new Date(reference - 20000).toISOString(), ended_at: new Date(reference).toISOString() },
     { id: 'analysis', label: 'Update findings', kind: 'analysis.findings', state: 'succeeded', started_at: new Date(reference - 120000).toISOString(), ended_at: new Date(reference - 60000).toISOString() },
-    { id: 'backup', label: 'Back up', kind: 'backup.local', state: 'failed', error: 'Drive unavailable', started_at: new Date(reference - 300000).toISOString(), ended_at: new Date(reference - 180000).toISOString() },
+    { id: 'backup', label: 'Back up', kind: 'backup.local', state: 'failed', error: 'Drive unavailable', trigger: 'schedule', started_at: new Date(reference - 300000).toISOString(), ended_at: new Date(reference - 180000).toISOString() },
   ];
   const history = operationHistoryTable(operations);
   for (const schema of Object.values(syncSchemas)) {
@@ -316,17 +318,21 @@ test('work history queries include analyses and backups alongside indexing', () 
   assert.deepEqual(result.rows.map(row => row.id), ['backup', 'analysis']);
   assert.equal(history.rows[2].result, 'Failed');
   assert.equal(history.rows[2].error, 'Drive unavailable');
+  // What started the work reads as a label; an unknown trigger stays as recorded.
+  assert.equal(history.rows[2].trigger, 'Schedule');
+  assert.equal(operationHistoryTable([{ id: 'x', state: 'interrupted', trigger: 'mystery' }]).rows[0].trigger, 'mystery');
+  assert.equal(operationHistoryTable([{ id: 'x', state: 'interrupted', trigger: 'user' }]).rows[0].trigger, 'You');
   const recent = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{field:'started_at',op:'>=',value:new Date(reference - 120000).toISOString()}] }, history.schema);
   assert.deepEqual(recent.rows.map(row => row.id), ['index', 'analysis']);
 });
 
 test('run results distinguish postponed verification from errors and indexing failures', () => {
-  for (const [outcome, label] of [["deferred", "Success without verification"], ["read_error", "Verification failed"], ["mismatch", "Needs attention"], ["unknown", "Verification incomplete"]]) {
+  for (const [outcome, label] of [["deferred", "Indexed; verification postponed"], ["read_error", "Verification failed"], ["mismatch", "Needs attention"], ["unknown", "Verification incomplete"]]) {
     const record = { state: "complete", conversations: 3, audit: { outcome } };
     assert.equal(resultLabel(record), label);
     assert.equal(syncTables({ history: [record] }).history.rows[0].result, label);
     assert.equal(resultLabel({ ...record, state: "failed" }), "Failed");
-    assert.equal(resultLabel({ ...record, state: "interrupted" }), "Stopped");
+    assert.equal(resultLabel({ ...record, state: "interrupted" }), "Interrupted");
   }
   assert.equal(resultLabel({ state: "complete", conversations: 3, audit: { outcome: "passed" } }), "Indexed");
   assert.equal(resultLabel({ state: "complete", conversations: 0, audit: { outcome: "passed" } }), "No changes");
@@ -361,6 +367,9 @@ test('diagnostic queries preserve separate numeric distributions and incomplete 
   assert.equal(tables.accuracy.rows[0].covered, null);
   assert.equal(tables.accuracy.rows[1].error_percent, 25);
   assert.equal(new Set(tables.coverage.rows.map(row => row.id)).size, 2);
+  // Checkpoints and verification results read as the same labels the run details use.
+  assert.deepEqual(tables.accuracy.rows.map(row => row.checkpoint), ['At launch', 'After discovery']);
+  assert.deepEqual(tables.coverage.rows.map(row => row.outcome), ['Verified', 'Skipped']);
   assert.equal(tables.deferred.rows[0].completed_at, null);
   for (const table of Object.values(syncTables({}))) assert.deepEqual(table.rows, []);
   // CPU and RSS this platform could not read arrive as null: missing, while
@@ -373,14 +382,17 @@ test('diagnostic queries preserve separate numeric distributions and incomplete 
 
 test('run detail queries distinguish unknown work totals and forecasts from measured zeroes', () => {
   const tables = runTables({ source_results: [{ source: 'codex', yielded: true }, { source: 'claude', error: 'Unavailable' }, { source: 'gemini', pending: true, deferred: true }],
-    phases: [{ name: 'audit', seconds: 3, work: [
+    phases: [{ name: 'projections', seconds: 1 }, { name: 'codex', seconds: 1 }, { name: 'audit', seconds: 3, work: [
       { phase: 'discover', unit: 'group', done: 0, total: 0, total_known: true, seconds: 0, features: { load_one_minute: 0 } },
       { phase: 'index', unit: 'byte', done: 1024, total: 0, features: { bytes: 1024, bytes_basis: 'message_text' } },
     ] }], forecasts: [{ reason: 'launch', estimate: { predicted_steps: 0, remaining_steps: 3 } },
       { reason: 'discovered', estimate: { point_seconds: 10, low_seconds: 0, high_seconds: 15 }, actual_remaining_seconds: 0 },
       { reason: 'checkpoint', estimate: { point_seconds: 10 }, actual_remaining_seconds: 12 }] });
   assert.deepEqual(tables.sourceResults.rows.map(row => row.status), ['Partial', 'Failed', 'Capture was running']);
-  assert.equal(tables.phases.rows[0].name, 'Verification');
+  // Index-run phases read as labels; a source's phase keeps the source name.
+  assert.deepEqual(tables.phases.rows.map(row => row.name), ['Search view', 'codex', 'Verification']);
+  assert.equal(tables.stages.rows[0].stage, 'Verification: discover');
+  assert.deepEqual(tables.forecasts.rows.map(row => row.checkpoint), ['At launch', 'After discovery', 'checkpoint']);
   assert.equal(tables.stages.rows[0].total, 0);
   assert.equal(tables.stages.rows[0].load_one_minute, 0);
   assert.equal(tables.stages.rows[1].total, null);
