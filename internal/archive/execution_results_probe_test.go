@@ -81,7 +81,7 @@ func TestExecutionResultsProbe(t *testing.T) {
 	evidenceProbeStep(t, "catalog-wide digests (committed snapshot)", func() (err error) { digests, err = executionDependencyDigests(ctx, c.reader()); return })
 	evidenceProbeStep(t, "results of held components (cached resolution + occurrences)", func() error { return c.primeExecutionResults(ctx, state) })
 	var plan *executionReconcilePlan
-	evidenceProbeStep(t, "plan (what readers hold back before the reconciliation)", func() (err error) {
+	evidenceProbeStep(t, "plan (what the reconciliation marks)", func() (err error) {
 		tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			return err
@@ -102,6 +102,7 @@ func TestExecutionResultsProbe(t *testing.T) {
 	c.primeDependencyInverse(ctx)
 	resolved := 0
 	executionResultResolveHook = func() { resolved++ }
+	defer func() { executionResultResolveHook = nil }()
 	var held time.Duration
 	evidenceProbeStep(t, "reconcile (write transaction, queueing included)", func() error {
 		return c.writeTransaction(ctx, "propagate execution evidence changes", func(tx *sql.Tx) error {
@@ -110,7 +111,7 @@ func TestExecutionResultsProbe(t *testing.T) {
 			return markExecutionDependentsIn(ctx, tx, true)
 		})
 	})
-	t.Logf("writer held %v; the writer resolved the catalog %d times", held.Round(time.Millisecond), resolved)
+	t.Logf("writer held %v; results were resolved %d more times", held.Round(time.Millisecond), resolved)
 	counts("after")
 	evidenceProbeStep(t, "propagateExecutionChanges again (nothing to do)", func() error { return c.propagateExecutionChanges(ctx) })
 	var usage syscall.Rusage

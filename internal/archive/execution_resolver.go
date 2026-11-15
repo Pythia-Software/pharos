@@ -952,8 +952,16 @@ func resolveExecutions(e *executionEvidence) *executionResolution {
 		}
 	}
 	r.Coverage.Attempts = len(r.Attempts)
+	if executionResolvedHook != nil {
+		executionResolvedHook(r)
+	}
 	return r
 }
+
+// executionResolvedHook, when set by a test, amends every resolution before
+// it is returned: a stand-in for an executable whose rules resolve the same
+// evidence differently.
+var executionResolvedHook func(*executionResolution)
 
 func firstClaim(claims []executionClaim) executionClaim {
 	if len(claims) == 0 {

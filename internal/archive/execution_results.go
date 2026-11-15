@@ -83,8 +83,14 @@ const executionResultStampsDDL = `CREATE TABLE IF NOT EXISTS execution_result_st
 // it, and the transcript's partial coverage), and what the usage lineage
 // projects from the resolution for a conversation and its sessions
 // (usageAttributionFrom: execution, parent, root, depth, their qualities and
-// conflicts, mirrors and children), which no stored derivative reads today
-// but the same pass carries.
+// conflicts, mirrors and children). The labels and agent events builders do
+// not read the lineage themselves, but authorship does
+// (authorshipContinuations, into stored message_authorship, which the
+// labels builder reads). Recording it here marks the labels of a
+// conversation whose lineage a rules change moves; it does not redo
+// authorship, whose own generation follows its inputs and authorshipVersion
+// and not the resolver's rules, so a rules change that flips a continuation
+// needs an authorshipVersion bump with it (as before results were recorded).
 //
 // Left out, because no builder of a stored derivative reads them: an
 // execution's label and its sibling order, its workspace and provider, and
@@ -222,40 +228,14 @@ func rememberExecutionResults(file string, results map[string]string) {
 	maps.Copy(entry, results)
 }
 
-// executionResultsFor returns the resolved results of the wanted component
-// digests at q's evidence: remembered ones, and for the rest one resolution
-// of the whole catalog through q. Callers with a resolution at hand remember
-// its results first (primeExecutionResults), so a write transaction resolves
-// here only when evidence committed since.
-func executionResultsFor(ctx context.Context, q queryer, digests map[string]string, want map[string]bool) (map[string]string, error) {
-	file, _, err := dependencyCacheKey(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	found, missing := rememberedExecutionResults(file, want)
-	if len(missing) == 0 {
-		return found, nil
-	}
-	if executionResultResolveHook != nil {
-		executionResultResolveHook()
-	}
-	resolution, err := resolveExecutionsFrom(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	occurrences, err := resolution.Occurrences(ctx, q, nil)
-	if err != nil {
-		return nil, err
-	}
-	fresh := executionComponentResults(digests, resolution, occurrences, missing)
-	rememberExecutionResults(file, fresh)
-	maps.Copy(found, fresh)
-	return found, nil
-}
-
-// executionResultResolveHook, when set by a test, runs before
-// executionResultsFor resolves the catalog itself.
+// executionResultResolveHook, when set by a test, runs each time results are
+// computed from a resolution of the whole catalog (primeExecutionResults,
+// the only place: neither a request nor a write transaction does).
 var executionResultResolveHook func()
+
+// executionPrimedHook, when set by a test, runs in propagateExecutionChanges
+// between its committed reads and its write transaction.
+var executionPrimedHook func()
 
 // heldExecutionDigests are the digests the ledgers' derivatives were built
 // at that still hold, with the rows read: conversation and stored digest.
@@ -310,8 +290,11 @@ type executionReconcilePlan struct {
 // and its component's result under this executable's rules differs from the
 // recorded one; and when the rules changed and no comparable result is
 // recorded (state is not comparable, or the digest has none), since what it
-// was built on is then unknown. It is read only: readers use its marks to
-// show exactly what the reconciliation will mark before it runs.
+// was built on is then unknown. It resolves nothing: the current results are
+// the ones primeExecutionResults remembered from a committed snapshot, and a
+// component that has none (its evidence, or a publication at it, committed
+// between that snapshot and q) is marked rather than resolved here, in the
+// writer.
 func planExecutionReconcile(ctx context.Context, q queryer, ledgers []string, state executionPropagation) (*executionReconcilePlan, error) {
 	plan := &executionReconcilePlan{marks: map[string]map[string]bool{}}
 	digests, err := executionDependencyDigests(ctx, q)
@@ -324,20 +307,16 @@ func planExecutionReconcile(ctx context.Context, q queryer, ledgers []string, st
 	}
 	consistent, comparable := state.consistent(), state.comparable()
 	recorded := map[string]string{}
-	switch {
-	case consistent:
-		// Nothing rests on a comparison: record the results the caller
-		// remembered (primeExecutionResults), and leave a component whose
-		// evidence committed since to its next publication.
+	if consistent || comparable {
+		// When consistent nothing rests on a comparison: a component without
+		// a remembered result is left to its next publication.
 		file, _, err := dependencyCacheKey(ctx, q)
 		if err != nil {
 			return nil, err
 		}
 		plan.results, _ = rememberedExecutionResults(file, held)
-	case comparable:
-		if plan.results, err = executionResultsFor(ctx, q, digests, held); err != nil {
-			return nil, err
-		}
+	}
+	if !consistent && comparable {
 		if recorded, err = storedExecutionResults(ctx, q); err != nil {
 			return nil, err
 		}
@@ -351,6 +330,7 @@ func planExecutionReconcile(ctx context.Context, q queryer, ledgers []string, st
 				plan.marks[ledger][id] = true
 			case consistent:
 			case comparable && recorded[stored] != "" && recorded[stored] == plan.results[stored]:
+				// (A missing recorded or current result compares unequal.)
 			default:
 				plan.marks[ledger][id] = true
 			}
@@ -476,8 +456,9 @@ func rememberBuilderResults(ctx context.Context, q queryer, digests map[string]s
 // primeExecutionResults remembers, from a committed snapshot and the
 // catalog's cached resolution of it, the results a reconciliation at state
 // will read: those of every component a derivative rests on. The writer then
-// finds them by digest, and resolves the catalog itself only for components
-// whose evidence committed in between. Nothing is read when the
+// finds them by digest, and marks a component it finds none for. This is the
+// one place a rules change resolves the whole catalog, and only background
+// work reaches it (propagateExecutionChanges). Nothing is read when the
 // reconciliation compares nothing (state is neither consistent nor
 // comparable: every derivative is marked).
 func (c *Catalog) primeExecutionResults(ctx context.Context, state executionPropagation) error {
@@ -512,6 +493,9 @@ func (c *Catalog) primeExecutionResults(ctx context.Context, state executionProp
 	_, missing := rememberedExecutionResults(file, held)
 	if len(missing) == 0 {
 		return nil
+	}
+	if executionResultResolveHook != nil {
+		executionResultResolveHook()
 	}
 	snapshot, err := c.executionSnapshotAt(ctx, tx)
 	if err != nil {

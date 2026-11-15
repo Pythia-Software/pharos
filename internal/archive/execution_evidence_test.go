@@ -2390,11 +2390,15 @@ func TestDerivativesExposeEvidenceChangedElsewhere(t *testing.T) {
 // A change of the resolver's or the evidence reading's rules resolves the
 // catalog again and compares each component's result with the one recorded
 // when its derivatives were built: labels and agent events are marked only
-// where the result differs, readers show exactly those as pending before
-// the reconciliation runs, and the recorded rules advance with it, so it
-// happens once. Interrupted, it leaves nothing behind and starts again.
+// where the result differs, and the recorded rules advance with it, so it
+// happens once. Until it has run readers hold every derivative back without
+// resolving anything: only the reconciliation (background work) resolves.
+// Interrupted, it leaves nothing behind and starts again.
 func TestRulesChangeMarksOnlyChangedResults(t *testing.T) {
 	ctx := t.Context()
+	// resolved counts the resolutions of the whole catalog made for results.
+	resolved := 0
+	override(t, &executionResultResolveHook, func() { resolved++ })
 	// Each step stands in another executable's rules; restored at the end.
 	override(t, &executionRulesVersion, executionRulesVersion)
 	catalog := agentEventsCatalog(t)
@@ -2474,14 +2478,24 @@ func TestRulesChangeMarksOnlyChangedResults(t *testing.T) {
 		if behind, err := executionDependentsBehind(ctx, catalog.reader()); err != nil || behind == 0 {
 			t.Fatalf("a rules change left nothing to reconcile (%d, %v)", behind, err)
 		}
-		if p := read(); !none(p) {
-			t.Fatalf("before the reconciliation, unchanged results read as pending: %+v", p)
+		// Readers cannot tell yet which results changed, and do not resolve
+		// the catalog to find out: everything is pending, nothing marked.
+		resolved = 0
+		want := pending{labelsRead: built, eventsRead: scored, labelsMarked: []string{}, eventsMarked: []string{}}
+		if p := read(); !reflect.DeepEqual(p, want) {
+			t.Fatalf("before the reconciliation readers hold back %+v, want %+v", p, want)
 		}
-		if current, err := labelsExecutionCurrent(ctx, catalog.reader(), "c-events"); err != nil || !current {
-			t.Fatalf("before the reconciliation, c-events' labels read as pending (%v)", err)
+		if current, err := labelsExecutionCurrent(ctx, catalog.reader(), "c-events"); err != nil || current {
+			t.Fatalf("before the reconciliation, c-events' labels read as current (%v)", err)
 		}
-		if stale, err := agentEventsExecutionStale(ctx, catalog.reader()); err != nil || stale != 0 {
-			t.Fatalf("before the reconciliation, %d conversations' agent events read as stale (%v)", stale, err)
+		if stale, err := agentEventsExecutionStale(ctx, catalog.reader()); err != nil || stale == 0 {
+			t.Fatalf("before the reconciliation, no conversation's agent events read as stale (%v)", err)
+		}
+		if _, err := agentEventsWithheld(ctx, catalog.reader()); err != nil {
+			t.Fatal(err)
+		}
+		if resolved != 0 {
+			t.Fatalf("readers resolved the catalog %d times while the rules change was pending", resolved)
 		}
 		// A writer's own mark leaves the rules to the reconciliation.
 		if err := catalog.writeTransaction(ctx, "ingest", func(tx *sql.Tx) error { return markExecutionDependents(ctx, tx) }); err != nil {
@@ -2509,6 +2523,12 @@ func TestRulesChangeMarksOnlyChangedResults(t *testing.T) {
 		}
 		if p := read(); !none(p) {
 			t.Fatalf("unchanged results were marked: %+v", p)
+		}
+		if resolved != 1 {
+			t.Fatalf("the reconciliation resolved the catalog %d times, want once", resolved)
+		}
+		if current, err := labelsExecutionCurrent(ctx, catalog.reader(), "c-events"); err != nil || !current {
+			t.Fatalf("after the reconciliation, c-events' labels read as pending (%v)", err)
 		}
 		if behind, err := executionDependentsBehind(ctx, catalog.reader()); err != nil || behind != 0 || recorded() != executionDependentsVersions() {
 			t.Fatalf("the rules did not advance: behind %d, recorded %q (%v)", behind, recorded(), err)
@@ -2540,12 +2560,9 @@ func TestRulesChangeMarksOnlyChangedResults(t *testing.T) {
 		before := recorded()
 		executionRulesVersion = "execution-changed/evidence-later"
 		forgetDependencyCaches()
-		want := pending{labelsRead: component, eventsRead: componentEvents, labelsMarked: []string{}, eventsMarked: []string{}}
+		want := pending{labelsRead: built, eventsRead: scored, labelsMarked: []string{}, eventsMarked: []string{}}
 		if p := read(); !reflect.DeepEqual(p, want) {
 			t.Fatalf("before the reconciliation readers hold back %+v, want %+v", p, want)
-		}
-		if current, err := labelsExecutionCurrent(ctx, catalog.reader(), "c-events"); err != nil || current {
-			t.Fatalf("before the reconciliation, c-events' labels read as current (%v)", err)
 		}
 		// Interrupted: nothing is marked and the rules stay as they were.
 		executionReconcileHook = func() error { return errors.New("interrupted") }
@@ -2557,19 +2574,20 @@ func TestRulesChangeMarksOnlyChangedResults(t *testing.T) {
 		if p := read(); !reflect.DeepEqual(p, want) || recorded() != before {
 			t.Fatalf("an interrupted reconciliation left %+v, recorded %q", p, recorded())
 		}
-		// It starts again, and resolves nothing while it holds the writer:
-		// what it compares was read before.
-		resolved := 0
-		override(t, &executionResultResolveHook, func() { resolved++ })
+		// It starts again.
 		if err := catalog.propagateExecutionChanges(ctx); err != nil {
 			t.Fatal(err)
-		}
-		if resolved != 0 {
-			t.Fatalf("the reconciliation resolved the catalog %d times in the writer", resolved)
 		}
 		want = pending{labelsRead: []string{}, eventsRead: []string{}, labelsMarked: component, eventsMarked: componentEvents}
 		if p := read(); !reflect.DeepEqual(p, want) || recorded() != executionDependentsVersions() {
 			t.Fatalf("the reconciliation left %+v, want %+v; recorded %q", p, want, recorded())
+		}
+		// The recorded results are these rules' before anything is rebuilt.
+		if stale := column(`SELECT digest FROM execution_result_stamps WHERE result='resolved otherwise'`); len(stale) != 0 {
+			t.Fatalf("the reconciliation kept the superseded result of %v", stale)
+		}
+		if missing := column(unrecorded); len(missing) != 0 {
+			t.Fatalf("the reconciliation left no result for %v", missing)
 		}
 		if behind, err := executionDependentsBehind(ctx, catalog.reader()); err != nil || behind != 0 {
 			t.Fatalf("behind %d after the reconciliation (%v)", behind, err)
@@ -2585,6 +2603,62 @@ func TestRulesChangeMarksOnlyChangedResults(t *testing.T) {
 		if stale := column(`SELECT digest FROM execution_result_stamps WHERE result='resolved otherwise'`); len(stale) != 0 {
 			t.Fatalf("the superseded result is still recorded for %v", stale)
 		}
+	})
+
+	// A component whose result was never recorded (its builder's publication
+	// found none remembered) cannot be compared: its derivatives are marked,
+	// and only they.
+	t.Run("no recorded result", func(t *testing.T) {
+		execTx(t, catalog.DB, `DELETE FROM execution_result_stamps WHERE digest=(SELECT execution_digest FROM message_labels_conversations WHERE conversation_id='c-events')`)
+		executionRulesVersion = "execution-unrecorded/evidence-later"
+		forgetDependencyCaches()
+		if err := catalog.propagateExecutionChanges(ctx); err != nil {
+			t.Fatal(err)
+		}
+		want := pending{labelsRead: []string{}, eventsRead: []string{}, labelsMarked: component, eventsMarked: componentEvents}
+		if p := read(); !reflect.DeepEqual(p, want) {
+			t.Fatalf("the reconciliation left %+v, want %+v", p, want)
+		}
+		run()
+		if missing := column(unrecorded); len(missing) != 0 {
+			t.Fatalf("rebuilt without a recorded result: %v", missing)
+		}
+	})
+
+	// Results recorded in another encoding under the same rules: nothing
+	// changed, so they are rewritten and nothing is marked. With a rules
+	// change as well nothing is comparable, and every derivative is marked.
+	t.Run("another encoding", func(t *testing.T) {
+		encoded := func() string {
+			t.Helper()
+			value, err := catalog.metaValue(ctx, executionResultEncodingKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return value
+		}
+		const other = `UPDATE meta SET value='execution-result/other' WHERE key='` + executionResultEncodingKey + `'`
+		execTx(t, catalog.DB, other, `UPDATE execution_result_stamps SET result='encoded otherwise'`)
+		forgetDependencyCaches()
+		if err := catalog.propagateExecutionChanges(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if p := read(); !none(p) || encoded() != executionResultEncoding {
+			t.Fatalf("an encoding change alone left %+v, encoding %q", p, encoded())
+		}
+		if stale := column(`SELECT digest FROM execution_result_stamps WHERE result='encoded otherwise'`); len(stale) != 0 {
+			t.Fatalf("results in the other encoding are still recorded for %v", stale)
+		}
+		execTx(t, catalog.DB, other)
+		executionRulesVersion = "execution-reencoded/evidence-later"
+		forgetDependencyCaches()
+		if err := catalog.propagateExecutionChanges(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if p := read(); !slices.Equal(p.labelsMarked, built) || !slices.Equal(p.eventsMarked, scored) || encoded() != executionResultEncoding {
+			t.Fatalf("an encoding and rules change marked %+v, want every derivative; encoding %q", p, encoded())
+		}
+		run()
 	})
 
 	// An executable that records no results marked under its own rules, and
@@ -2641,6 +2715,160 @@ func TestRulesChangeMarksOnlyChangedResults(t *testing.T) {
 	})
 }
 
+// Rules that resolve the same evidence differently for one conversation (its
+// stream becomes copied history): the reconciliation marks exactly that
+// conversation's component, the runs rebuild exactly it, and its stored
+// labels follow the new resolution while every other conversation's rows
+// stay as they were. Evidence that commits between the reconciliation's
+// committed reads and its write is marked by its digest, without resolving
+// in the writer.
+func TestRulesChangeRebuildsWhatResolvesOtherwise(t *testing.T) {
+	ctx := t.Context()
+	override(t, &executionRulesVersion, executionRulesVersion)
+	catalog := agentEventsCatalog(t)
+	labels, settings := agentEventsTestSettings(t)
+	run := func() (*LabelsRunStats, *AgentEventsRunStats) {
+		t.Helper()
+		labeled, err := catalog.RunLabels(ctx, labels, LabelsRunOptions{})
+		if err != nil || !labeled.Complete {
+			t.Fatalf("labels: %+v %v", labeled, err)
+		}
+		events, err := catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{})
+		if err != nil || !events.Complete {
+			t.Fatalf("agent events: %+v %v", events, err)
+		}
+		return labeled, events
+	}
+	column := func(query string) []string {
+		t.Helper()
+		rows, err := queryMapsContext(ctx, catalog.reader(), query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		for _, row := range rows {
+			for _, value := range row {
+				out = append(out, firstString(value))
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	// What is stored per conversation, without build times.
+	stored := func() map[string]string {
+		t.Helper()
+		out := map[string]string{}
+		for _, query := range []string{
+			`SELECT conversation_id, 'label '||message_id||' '||segment||' '||labels||' '||input_hash v FROM message_labels`,
+			`SELECT conversation_id, 'event '||message_id||' '||source||' '||family||' '||sentence_start v FROM agent_events`,
+			`SELECT conversation_id, 'scored '||message_id||' '||source||' '||candidates||' '||events||' '||input_hash v FROM agent_event_messages`,
+		} {
+			rows, err := queryMapsContext(ctx, catalog.reader(), query+` ORDER BY 1,2`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range rows {
+				out[firstString(row["conversation_id"])] += firstString(row["v"]) + "\n"
+			}
+		}
+		return out
+	}
+	anotherExecutable := func() {
+		forgetDependencyCaches()
+		catalog.execution.mu.Lock()
+		catalog.execution.current, catalog.execution.earlier = nil, nil
+		catalog.execution.mu.Unlock()
+	}
+	run()
+	before := stored()
+	const ofComponent = ` WHERE execution_digest=(SELECT execution_digest FROM message_labels_conversations WHERE conversation_id='c-events')`
+	built := column(`SELECT conversation_id FROM message_labels_conversations`)
+	component := column(`SELECT conversation_id FROM message_labels_conversations` + ofComponent)
+	componentEvents := column(`SELECT conversation_id FROM agent_events_conversations` + ofComponent)
+	if before["c-events"] == "" || len(component) == 0 || len(component) == len(built) || len(componentEvents) == 0 {
+		t.Fatalf("precondition: c-events' component is %v of %v (events %v), stored %q", component, built, componentEvents, before["c-events"])
+	}
+
+	// Later rules read c-events' own stream as a copied launch.
+	stream := sourceRef{sourceConversation, "c-events"}
+	override(t, &executionResolvedHook, func(r *executionResolution) {
+		if binding, ok := r.bindings[stream]; ok {
+			binding.State = bindingInherited
+			r.bindings[stream] = binding
+		}
+	})
+	resolved := 0
+	override(t, &executionResultResolveHook, func() { resolved++ })
+	executionRulesVersion = "execution-copied-launch/evidence-later"
+	anotherExecutable()
+	if err := catalog.propagateExecutionChanges(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if marked, events := column(`SELECT conversation_id FROM message_labels_dirty`), column(`SELECT conversation_id FROM agent_events_dirty`); !slices.Equal(marked, component) || !slices.Equal(events, componentEvents) {
+		t.Fatalf("marked labels %v and agent events %v, want %v and %v", marked, events, component, componentEvents)
+	}
+	labeled, events := run()
+	if labeled.ConversationsBuilt != len(component) || events.ConversationsBuilt != len(componentEvents) {
+		t.Fatalf("rebuilt labels %+v and agent events %+v, want %d and %d conversations", labeled, events, len(component), len(componentEvents))
+	}
+	after := stored()
+	for id := range before {
+		if changed := after[id] != before[id]; changed != (id == "c-events") {
+			t.Errorf("%s: stored rows changed: %v\nbefore:\n%safter:\n%s", id, changed, before[id], after[id])
+		}
+	}
+	// What a build of everything under these rules stores.
+	execTx(t, catalog.DB, `UPDATE message_labels_conversations SET execution_digest=''`, `UPDATE agent_events_conversations SET execution_digest=''`)
+	forgetDependencyCaches()
+	if labeled, _ := run(); labeled.ConversationsBuilt != len(built) {
+		t.Fatalf("the full rebuild built %+v, want %d conversations", labeled, len(built))
+	}
+	if full := stored(); !maps.Equal(full, after) {
+		t.Fatalf("a full rebuild under the new rules stores other rows:\n%v\n%v", full, after)
+	}
+
+	// Evidence commits after the reconciliation's committed reads.
+	resolved = 0
+	executionRulesVersion = "execution-copied-launch/evidence-latest"
+	forgetDependencyCaches()
+	override(t, &executionPrimedHook, func() {
+		markingWrite(t, catalog, `UPDATE conversations SET parent_id='c-root',agent_depth=1 WHERE id='c-events'`)
+	})
+	if err := catalog.propagateExecutionChanges(ctx); err != nil {
+		t.Fatal(err)
+	}
+	marked := column(`SELECT conversation_id FROM message_labels_dirty`)
+	if !slices.Contains(marked, "c-events") || len(marked) >= len(built) || resolved != 1 {
+		t.Fatalf("after evidence committed during the reconciliation: marked %v of %v, resolved %d times", marked, built, resolved)
+	}
+	run()
+	// A component the writer has no current result for (here: none at all)
+	// is marked, not taken as unchanged.
+	executionRulesVersion = "execution-copied-launch/evidence-last"
+	forgetDependencyCaches()
+	executionPrimedHook = func() {
+		executionResultMemo.Lock()
+		executionResultMemo.entries = nil
+		executionResultMemo.Unlock()
+	}
+	if err := catalog.propagateExecutionChanges(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if marked := column(`SELECT conversation_id FROM message_labels_dirty`); !slices.Equal(marked, built) {
+		t.Fatalf("without current results the reconciliation marked %v, want %v", marked, built)
+	}
+	executionPrimedHook = nil
+	run()
+	if left := column(`SELECT conversation_id FROM message_labels_dirty UNION SELECT conversation_id FROM agent_events_dirty`); len(left) != 0 {
+		t.Fatalf("still marked after the rebuild: %v", left)
+	}
+	for _, ledger := range []string{"message_labels_conversations", "agent_events_conversations"} {
+		if pending, err := executionUnmarked(ctx, catalog.reader(), ledger); err != nil || len(pending) != 0 {
+			t.Fatalf("%s: pending after the rebuild: %v (%v)", ledger, pending, err)
+		}
+	}
+}
+
 // A component's recorded result moves with each thing the labels and agent
 // events builders read from the resolution for its conversations (a
 // record's occurrence, its transcript's coverage, the binding of the stream
@@ -2650,6 +2878,8 @@ func TestExecutionResultCoversBuilderInputs(t *testing.T) {
 	ctx := t.Context()
 	catalog := agentEventsCatalog(t)
 	forkOfRoot(true)(t, catalog)
+	// A session of the fork: a stream of its own beside the conversation's.
+	execTx(t, catalog.DB, `INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider) VALUES('s-fork','ws-main','c-events','s-fork','subagent','claude')`)
 	digests, err := executionDependencyDigests(ctx, catalog.DB)
 	if err != nil {
 		t.Fatal(err)
@@ -2683,6 +2913,7 @@ func TestExecutionResultCoversBuilderInputs(t *testing.T) {
 	}
 	copied := sourceRef{sourceMessage, "m-ev-user"}
 	stream := sourceRef{sourceConversation, "c-events"}
+	session := sourceRef{sourceSession, "s-fork"}
 	for name, change := range map[string]func(*executionResolution, *occurrenceIndex){
 		"occurrence role": func(_ *executionResolution, o *occurrenceIndex) {
 			claim, ok := o.claims[copied]
@@ -2710,6 +2941,20 @@ func TestExecutionResultCoversBuilderInputs(t *testing.T) {
 			}
 			binding.State = bindingInherited
 			r.bindings[stream] = binding
+		},
+		// A record a session recorded is classified by that session's
+		// binding (a copied launch), not the conversation's.
+		"session stream binding": func(r *executionResolution, _ *occurrenceIndex) {
+			binding, ok := r.bindings[session]
+			if !ok || !slices.Contains(r.StreamsIn("c-events"), session) {
+				t.Fatalf("precondition: %s is not a stream of c-events: %v", session, r.StreamsIn("c-events"))
+			}
+			if binding.State == bindingInherited {
+				binding.State = bindingResolved
+			} else {
+				binding.State = bindingInherited
+			}
+			r.bindings[session] = binding
 		},
 		"depth": func(r *executionResolution, _ *occurrenceIndex) {
 			id := r.bindings[stream].ExecutionID

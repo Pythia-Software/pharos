@@ -1093,17 +1093,12 @@ func storedExecutionCurrent(ctx context.Context, q queryer, ledger, conversation
 	if stored == "" {
 		return false, nil
 	}
-	// Built under other rules and not reconciled yet: current only if the
-	// next mark would leave it (its digest and its resolved result hold).
+	// Built under other rules and not reconciled yet: pending until the
+	// reconciliation has compared its result (executionUnmarkedDependents).
 	if state, err := executionPropagationState(ctx, q); err != nil {
 		return false, err
 	} else if state.tracked && !state.consistent() {
-		unmarked, err := executionUnmarked(ctx, q, ledger)
-		if err != nil {
-			return false, err
-		}
-		_, pending := slices.BinarySearch(unmarked, conversation)
-		return !pending, nil
+		return false, nil
 	}
 	if digests, err := cachedExecutionDependencyDigests(ctx, q); err != nil || digests != nil {
 		return digests[conversation] == stored, err
@@ -1250,11 +1245,12 @@ var executionDependentLedgers = [][2]string{{"message_labels_conversations", "me
 // markExecutionDependents would mark. Writers that call it leave nothing
 // unmarked, but another writer, or another process's older executable,
 // leaves its changes past the cursor until the next mark; a catalog that has
-// never marked has every derivative's digest to compare, and one marked
-// under other rules has every derivative's resolved result to compare as
-// well (planExecutionReconcile). executionUnmarked computes that set exactly,
-// with the mark's own function (executionUnmarkedDependents), without
-// writing.
+// never marked has every derivative's digest to compare. executionUnmarked
+// computes that set exactly, with the mark's own function
+// (executionUnmarkedDependents), without writing. A catalog marked under
+// other rules has every derivative's resolved result to compare as well,
+// which only the reconciliation does: until then every derivative is in the
+// set.
 
 // executionUnmarkedFallbackSQL is a SQL subquery for readers that cannot
 // compute executionUnmarked: every conversation built in ledger while
@@ -1740,8 +1736,8 @@ func (p executionPropagation) behind() int64 {
 // What it marks is executionDigestStaleDependents. A rules change
 // (executionPropagation.consistent) is not reconciled here: that needs the
 // whole catalog's resolution, which propagateExecutionChanges reads outside
-// the writer. Until it has, this moves only the cursor, and readers work out
-// what the reconciliation will mark themselves (executionUnmarkedDependents).
+// the writer. Until it has, this moves only the cursor, and readers hold
+// every derivative back (executionUnmarkedDependents).
 func markExecutionDependents(ctx context.Context, tx *sql.Tx) error {
 	return markExecutionDependentsIn(ctx, tx, false)
 }
@@ -1871,16 +1867,27 @@ func markExecutionDependent(ctx context.Context, tx *sql.Tx, ledger [2]string, i
 }
 
 // executionUnmarkedDependents lists, per ledger, the derivatives state has
-// not marked that the next propagateExecutionChanges would mark: after a
-// rules change, what the reconciliation marks (planExecutionReconcile);
-// otherwise executionDigestStaleDependents.
+// not marked that readers hold back. After a rules change that is not
+// reconciled yet that is every derivative: which of them the reconciliation
+// will leave is known only from a resolution of the whole catalog, which a
+// reader (a request) never performs. They read as pending until the next
+// propagateExecutionChanges (background work) has compared them, and it then
+// marks only the ones whose result changed. Otherwise it is
+// executionDigestStaleDependents.
 func executionUnmarkedDependents(ctx context.Context, q queryer, ledgers []string, state executionPropagation) (map[string]map[string]bool, error) {
 	if state.tracked && !state.consistent() {
-		plan, err := planExecutionReconcile(ctx, q, ledgers, state)
-		if err != nil {
-			return nil, err
+		out := map[string]map[string]bool{}
+		for _, ledger := range ledgers {
+			rows, err := queryMapsContext(ctx, q, `SELECT conversation_id FROM `+ledger)
+			if err != nil {
+				return nil, err
+			}
+			out[ledger] = map[string]bool{}
+			for _, row := range rows {
+				out[ledger][firstString(row["conversation_id"])] = true
+			}
 		}
-		return plan.marks, nil
+		return out, nil
 	}
 	return executionDigestStaleDependents(ctx, q, ledgers, state)
 }
@@ -2078,6 +2085,9 @@ func (c *Catalog) propagateExecutionChanges(ctx context.Context) error {
 		if err := c.primeExecutionResults(ctx, state); err != nil {
 			return err
 		}
+	}
+	if executionPrimedHook != nil {
+		executionPrimedHook()
 	}
 	c.primeDependencyInverse(ctx)
 	// Work out what to mark from a committed snapshot; the writer walks the
