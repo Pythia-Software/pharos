@@ -652,7 +652,7 @@ func executionDependencyDigests(ctx context.Context, q queryer) (map[string]stri
 		if dependencyDigestCache.entries == nil || len(dependencyDigestCache.entries) >= dependencyCacheCatalogs {
 			dependencyDigestCache.entries = map[string]dependencyDigestEntry{}
 		}
-		dependencyDigestCache.entries[file] = dependencyDigestEntry{generation: generation, digests: out}
+		dependencyDigestCache.entries[file] = dependencyDigestEntry{generation: generation, digests: out, components: &dependencyDigestComponents{}}
 		dependencyDigestCache.Unlock()
 	}
 	return out, nil
@@ -724,6 +724,29 @@ var dependencyDigestCache struct {
 type dependencyDigestEntry struct {
 	generation int64
 	digests    map[string]string
+	// components lists each digest's conversations, built when a publication
+	// first asks for them (publicationDigests).
+	components *dependencyDigestComponents
+}
+
+type dependencyDigestComponents struct {
+	once    sync.Once
+	members map[string][]string
+}
+
+// members is the conversations of each component, by its digest.
+func (entry dependencyDigestEntry) members() map[string][]string {
+	if entry.components == nil {
+		return nil
+	}
+	entry.components.once.Do(func() {
+		members := make(map[string][]string, len(entry.digests))
+		for id, digest := range entry.digests {
+			members[digest] = append(members[digest], id)
+		}
+		entry.components.members = members
+	})
+	return entry.components.members
 }
 
 // committedReads is a read-only transaction: it sees only committed rows,
@@ -1079,16 +1102,52 @@ func storedExecutionCurrent(ctx context.Context, q queryer, ledger, conversation
 // cachedExecutionDependencyDigests is the cached catalog-wide digests at q's
 // generation, or nil: a lookup, safe from any reader, that reads no rows.
 func cachedExecutionDependencyDigests(ctx context.Context, q queryer) (map[string]string, error) {
+	entry, _, err := cachedDependencyDigestEntry(ctx, q)
+	return entry.digests, err
+}
+
+// cachedDependencyDigestEntry is the cached catalog-wide entry at q's
+// generation, if there is one.
+func cachedDependencyDigestEntry(ctx context.Context, q queryer) (dependencyDigestEntry, bool, error) {
 	file, generation, err := dependencyCacheKey(ctx, q)
 	if err != nil || file == "" {
-		return nil, err
+		return dependencyDigestEntry{}, false, err
 	}
 	dependencyDigestCache.Lock()
 	defer dependencyDigestCache.Unlock()
 	if entry, ok := dependencyDigestCache.entries[file]; ok && entry.generation == generation {
-		return entry.digests, nil
+		return entry, true, nil
 	}
-	return nil, nil
+	return dependencyDigestEntry{}, false, nil
+}
+
+// publicationDigests is executionDependencyDigestsFor for a publication
+// guard: the digests of ids and of the rest of their components at q's
+// evidence. When the catalog-wide digests are cached at q's generation (the
+// run's builder read them, and no evidence was written since, or
+// primeExecutionPublication brought them forward) they are those digests,
+// which the walk agrees with on the same evidence, so nothing is read: a
+// publishing transaction then holds the catalog's write lock for its own
+// rows only. Otherwise it walks the components.
+func publicationDigests(ctx context.Context, q queryer, ids []string) (map[string]string, error) {
+	entry, ok, err := cachedDependencyDigestEntry(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	members := entry.members()
+	if !ok || members == nil {
+		return executionDependencyDigestsFor(ctx, q, ids)
+	}
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		// Gone from the catalog: "", as the walk says.
+		digest := entry.digests[id]
+		out[id] = digest
+		for _, member := range members[digest] {
+			out[member] = digest
+		}
+	}
+	return out, nil
 }
 
 // agentEventsExecutionStale counts conversations whose agent events were
@@ -1471,7 +1530,7 @@ type executionPublication struct {
 // caller publishes the current ones, then calls finish.
 func publishExecutionDependents(ctx context.Context, tx *sql.Tx, ledger string, captured map[string]string) (*executionPublication, error) {
 	ids := slices.Sorted(maps.Keys(captured))
-	digests, err := executionDependencyDigestsFor(ctx, tx, ids)
+	digests, err := publicationDigests(ctx, tx, ids)
 	if err != nil {
 		return nil, err
 	}

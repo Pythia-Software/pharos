@@ -1525,6 +1525,9 @@ func (r *labelsRun) write(ctx context.Context, in <-chan *labelsJob) error {
 		started := time.Now()
 		labeledAt := now()
 		stale := 0
+		// As storeAgentEvents: the publication check's inputs are read before
+		// the writer is taken.
+		r.c.primeExecutionPublication(ctx)
 		if beforeDerivedPublication != nil {
 			beforeDerivedPublication()
 		}
