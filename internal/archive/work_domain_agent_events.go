@@ -172,7 +172,7 @@ func (s *agentEventsSession) Discover(ctx context.Context) error {
 		return err
 	}
 	s.discovered.Store(false)
-	builder, err := newLabelsItemBuilder(ctx, c.reader())
+	builder, err := c.newLabelsItemBuilderFor(ctx, c.reader())
 	if err != nil {
 		return err
 	}

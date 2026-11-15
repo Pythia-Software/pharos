@@ -405,7 +405,7 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 			return stats, err
 		}
 	}
-	builder, err := newLabelsItemBuilder(dctx, c.reader())
+	builder, err := c.newLabelsItemBuilderFor(dctx, c.reader())
 	if err != nil {
 		return stats, err
 	}
