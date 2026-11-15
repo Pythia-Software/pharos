@@ -1,5 +1,13 @@
 # Bring transcripts in from other places
 
+> **Status, 2026-11-15.** The design was revised and agreed with the owner:
+> [importer plugins](../plugin-imports.md) is the current design and lists
+> the decisions, including answers to every question below. The contracts,
+> `kinds.json` with the registry's `Import` declarations, and the
+> `ssh_pull.py` gaps are done on branch `gbdubs/plugin-importers`. Next is
+> step 2 of that document's order of work, the plugin runtime. The rest of
+> this file is the original brief.
+
 ## Goal
 
 People want Pharos to pull their agent transcripts in from places other than
