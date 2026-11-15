@@ -200,9 +200,20 @@ export function chartMetricTheme(clauses: Pick<AggregationClause, "id" | "groupB
 // Compound metric groups retain their model palette even when their first key
 // is provider, repository, or a display label flattened for the native renderer.
 export function metricSeriesColor(fields: string[], keys: unknown[]): string {
-  const field = keyColorFields.find(field => fields.includes(field)) ?? fields[0];
+  const field = seriesColorField(fields);
   return chartSeriesStyle(field ?? "generic", String(keys[fields.indexOf(field)] ?? "Unspecified")).color;
 }
+
+// The key whose palette colours a group of these keys.
+export const seriesColorField = (fields: string[]): string => keyColorFields.find(field => fields.includes(field)) ?? fields[0];
+
+// Keys whose values have assigned colours: a project's or repository's saved
+// colour, a model's, a provider's, an effort's or band's step, an agent event
+// kind's hue. Other keys only get colours hashed from their values, which
+// carry no meaning, so ranked lists by them stay in the card's one tone.
+const assignedPaletteFields = new Set(["activity", "function_role"]);
+export const hasAssignedPalette = (field: string | undefined): boolean => Boolean(field)
+  && (keyColorFields.includes(field!) || orderedScope(field!) || assignedPaletteFields.has(field!.replace(/^root_/, "")));
 
 // A Query Table theme that colours each bar, box or list row of a grouping by
 // several keys by that palette key (Query Table's colorBy), so the chart

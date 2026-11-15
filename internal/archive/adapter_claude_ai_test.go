@@ -3,10 +3,14 @@ package archive
 import (
 	"archive/zip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +121,131 @@ func TestClaudeAIExportKeepsTheActiveBranchAndWhatEachBlockIs(t *testing.T) {
 	if byID["m3b"].PreviousNativeID != "m2" || byID["m1"].PreviousNativeID != "" {
 		t.Fatal("parents are not kept")
 	}
+	// What the person attached points at the prompt it came with: the text the
+	// export kept, and a named file whose bytes it did not.
+	if assets := conversation.Assets; len(assets) != 2 || assets[0].MessageNativeID != "m1" || assets[0].AttachmentNativeID != "m1:attachment:0" || assets[0].Availability != assetTextOnly || assets[0].Name != "dates.txt" ||
+		assets[1].Name != "notes.pdf" || assets[1].Availability != assetNotExported || assets[1].Relation != "uploaded" {
+		t.Fatalf("assets = %+v", assets)
+	}
+	// What the reply made and drew on: a file rebuilt from the calls that wrote
+	// it, a widget, a file nothing wrote, and the pages it read and cited.
+	made := discoverClaudeAI(t, writeSourceFileAt(t, `[{"uuid":"conv-6","name":"Made","chat_messages":[
+ {"uuid":"p1","text":"Write it","sender":"human","created_at":"2026-10-03T10:00:00Z","content":[{"type":"text","text":"Write it"}]},
+ {"uuid":"p2","text":"Done","sender":"assistant","created_at":"2026-10-03T10:01:00Z","content":[
+  {"type":"tool_use","id":"t1","name":"create_file","input":{"path":"/out/plan.html","file_text":"<p>draft</p>"}},
+  {"type":"tool_use","id":"t2","name":"str_replace","input":{"path":"/out/plan.html","old_str":"draft","new_str":"final"}},
+  {"type":"tool_use","id":"t3","name":"present_files","input":{"filepaths":["/out/plan.html","/out/lost.csv"]}},
+  {"type":"tool_use","id":"t4","name":"visualize:show_widget","input":{"title":"cost_chart","widget_code":"<svg/>"}},
+  {"type":"tool_use","id":"t5","name":"web_search","input":{"query":"fares"}},
+  {"type":"tool_result","tool_use_id":"t5","content":[{"type":"knowledge","url":"https://fares.example/a","title":"Fares","text":"Cheap","metadata":{"site_name":"Fares"}},{"type":"knowledge","url":"https://other.example/b","title":"Other"}]},
+  {"type":"tool_use","id":"t6","name":"image_search","input":{"query":"lake"}},
+  {"type":"tool_result","tool_use_id":"t6","content":[{"type":"text","text":"Found 1"},{"type":"image_gallery","images":[{"url":"https://img.example/lake.jpg","thumbnail_url":"https://img.example/t.jpg","page_url":"https://img.example/p","source":"img.example","title":"Lake","width":800,"height":600}]}]},
+  {"type":"tool_use","id":"t7","name":"link_preview_display_v0","input":{"links":[{"url":"https://paper.example/x","title":"Paper","domain":"Journal","snippet":"Measured"}]}},
+  {"type":"text","text":"Done","citations":[{"details":{"url":"https://fares.example/a"}}]}]}]}]`))[0].Conversations[0]
+	found := map[string]AssetRecord{}
+	for _, asset := range made.Assets {
+		if asset.Relation == "web" {
+			// An image a search showed is an address until it is fetched.
+			if asset.Availability != assetRemote || asset.AgentAuthored || asset.Details["url"] != "https://img.example/lake.jpg" || asset.Details["page_url"] != "https://img.example/p" || asset.Width != 800 {
+				t.Fatalf("web image = %+v", asset)
+			}
+			continue
+		}
+		if asset.MessageNativeID != "p2" || !asset.AgentAuthored || asset.Relation != "generated" {
+			t.Fatalf("asset = %+v", asset)
+		}
+		found[asset.Name] = asset
+	}
+	if len(made.Assets) != 4 {
+		t.Fatalf("assets = %+v", made.Assets)
+	}
+	if plan, lost, widget := found["plan.html"], found["lost.csv"], found["cost chart.html"]; len(found) != 3 || plan.Content != "<p>final</p>" || plan.Availability != assetReconstructed || plan.MimeType != "text/html" ||
+		lost.Availability != assetNotExported || widget.Availability != assetStored || widget.Content != "<svg/>" {
+		t.Fatalf("assets = %+v", made.Assets)
+	}
+	if sources := made.Sources; len(sources) != 3 || sources[2].URL != "https://paper.example/x" || !sources[2].Cited || sources[2].Site != "Journal" || sources[0].URL != "https://fares.example/a" || !sources[0].Cited || sources[0].Site != "Fares" || sources[1].Cited || sources[0].MessageNativeID != "p2" {
+		t.Fatalf("sources = %+v", sources)
+	}
+	// A screenshot stays on the tool result that took it, and a file the
+	// reply kept rewriting is one card however often the message lists it.
+	listed := discoverClaudeAI(t, writeSourceFileAt(t, `[{"uuid":"conv-7","name":"Listed","chat_messages":[
+ {"uuid":"q1","text":"Look","sender":"human","created_at":"2026-10-04T10:00:00Z","content":[{"type":"text","text":"Look"}]},
+ {"uuid":"q2","text":"Seen","sender":"assistant","created_at":"2026-10-04T10:01:00Z",
+  "files":[{"file_uuid":"s1","file_name":"s1.jpg"},{"file_uuid":"d1","file_name":"page.html"},{"file_uuid":"d2","file_name":"page.html"},{"file_uuid":"d3","file_name":"page.html"}],"content":[
+  {"type":"tool_use","id":"t1","name":"computer","input":{"action":"screenshot"}},
+  {"type":"tool_result","tool_use_id":"t1","content":[{"type":"image","file_uuid":"s1"}]},
+  {"type":"text","text":"Seen"}]}]}]`))[0].Conversations[0].Assets
+	if len(listed) != 2 || listed[0].Relation != "tool_output" || listed[0].Ref != "s1" || !slices.Equal(listed[0].Also, []string{"q2:files"}) || listed[1].Name != "page.html" || listed[1].Details["listed"] != int64(3) {
+		t.Fatalf("listed files = %+v", listed)
+	}
+	// A file published as an artifact is the artifact: the card holds the
+	// file as the calls that wrote it left it, and stands for the file's
+	// line in the reply's list of files. Another file those calls wrote is
+	// rebuilt the same way.
+	published := discoverClaudeAI(t, writeSourceFileAt(t, `[{"uuid":"conv-8","name":"Published","chat_messages":[
+ {"uuid":"r1","text":"Publish","sender":"human","created_at":"2026-10-05T10:00:00Z","content":[{"type":"text","text":"Publish"}]},
+ {"uuid":"r2","text":"Published","sender":"assistant","created_at":"2026-10-05T10:01:00Z",
+  "files":[{"file_uuid":"h1","file_name":"page.html"},{"file_uuid":"h2","file_name":"page.html"},{"file_uuid":"n1","file_name":"notes.md"},{"file_uuid":"n2","file_name":"notes.md"}],"content":[
+  {"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/home/claude/page.html","content":"<p>a a</p>"}},
+  {"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"/home/claude/page.html","old_string":"a","new_string":"b","replace_all":true}},
+  {"type":"tool_use","id":"t3","name":"Write","input":{"file_path":"/home/claude/notes.md","content":"# Note"}},
+  {"type":"tool_use","id":"t5","name":"Edit","input":{"file_path":"/home/claude/notes.md","old_string":"Note","new_string":"Notes"}},
+  {"type":"tool_use","id":"t4","name":"Artifact","input":{"action":"publish","description":"A page","file_path":"/home/claude/page.html"}},
+  {"type":"text","text":"Published"}]}]}]`))[0].Conversations[0].Assets
+	if len(published) != 2 || published[0].Kind != "artifact" || published[0].Content != "<p>b b</p>" || published[0].Availability != assetReconstructed || published[0].MimeType != "text/html" ||
+		!slices.Contains(published[0].Also, "r2:files") || published[1].Name != "notes.md" || published[1].Content != "# Notes" || published[1].Availability != assetReconstructed || published[1].MimeType != "text/markdown" ||
+		// Listed twice, it is one card that still says how it was written.
+		published[1].Details["listed"] != int64(2) || published[1].Details["edits"] != 1 {
+		t.Fatalf("published = %+v", published)
+	}
+	// An artifact first published by its title alone, and named by its
+	// address in a later call that names no file, stays one card with what
+	// was published and its file's line.
+	identified := discoverClaudeAI(t, writeSourceFileAt(t, `[{"uuid":"conv-9","name":"Identified","chat_messages":[
+ {"uuid":"s1","text":"Publish","sender":"human","created_at":"2026-10-06T10:00:00Z","content":[{"type":"text","text":"Publish"}]},
+ {"uuid":"s2","text":"Published","sender":"assistant","created_at":"2026-10-06T10:01:00Z","files":[{"file_uuid":"k1","file_name":"deck.html"}],"content":[
+  {"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/home/claude/deck.html","content":"<p>deck</p>"}},
+  {"type":"tool_use","id":"t2","name":"Artifact","input":{"action":"publish","title":"Deck","file_path":"/home/claude/deck.html"}},
+  {"type":"text","text":"Published"}]},
+ {"uuid":"s3","text":"Rename","sender":"human","created_at":"2026-10-06T10:02:00Z","content":[{"type":"text","text":"Rename"}]},
+ {"uuid":"s4","text":"Renamed","sender":"assistant","created_at":"2026-10-06T10:03:00Z","content":[
+  {"type":"tool_use","id":"t3","name":"Artifact","input":{"action":"update","title":"Deck","url":"https://claude.ai/artifact/11111111-2222-4333-8444-555555555555"}},
+  {"type":"text","text":"Renamed"}]}]}]`))[0].Conversations[0].Assets
+	if len(identified) != 1 || identified[0].Ref != claudeArtifactRef("11111111-2222-4333-8444-555555555555") || identified[0].MessageNativeID != "s4" || identified[0].Content != "<p>deck</p>" ||
+		identified[0].Availability != assetReconstructed || identified[0].Details["file"] != "deck.html" || !slices.Contains(identified[0].Also, "s2:files") {
+		t.Fatalf("identified = %+v", identified)
+	}
+
+	// What the export says of a reply beside its words: where each citation
+	// stands, how much was read aloud, thinking that was cut off; the images
+	// a search found and did not show, and a search whose images it no
+	// longer holds; a file handed over, by where it was and its line in the
+	// message's list of files.
+	noted := discoverClaudeAI(t, writeSourceFileAt(t, `[{"uuid":"conv-10","name":"Noted","chat_messages":[
+ {"uuid":"n1","text":"Find","sender":"human","created_at":"2026-10-07T10:00:00Z","content":[{"type":"text","text":"Find"}]},
+ {"uuid":"n2","text":"Open","sender":"assistant","created_at":"2026-10-07T10:01:00Z","files":[{"file_uuid":"aaaaaaaa-1111-4222-8333-444444444444","file_name":"sheet.xlsx"}],"content":[
+  {"type":"thinking","thinking":"Looking","cut_off":true,"truncated":false},
+  {"type":"tool_use","id":"t1","name":"image_search","input":{"query":"lake"}},
+  {"type":"tool_result","tool_use_id":"t1","content":[{"type":"image_gallery","images":[{"url":"https://img.example/a.jpg"}],"spare_images":[{"url":"https://img.example/b.jpg","title":"Spare"}]}]},
+  {"type":"tool_use","id":"t2","name":"image_search","input":{"query":"old"}},
+  {"type":"tool_result","tool_use_id":"t2","content":[{"type":"image_gallery","images":[],"is_expired":true}]},
+  {"type":"tool_use","id":"t3","name":"SendUserFile","input":{"files":["/home/claude/sheet.xlsx"],"caption":"The tracker"}},
+  {"type":"tool_result","tool_use_id":"t3","name":"SendUserFile","content":[{"type":"text","text":"1 file delivered to user.\n  sheet.xlsx → file_uuid: aaaaaaaa-1111-4222-8333-444444444444"}]},
+  {"type":"text","text":"Café is open. Go.","voice_spoken_chars":5,"citations":[{"start_index":0,"end_index":13,"details":{"type":"web_search_citation","url":"https://cafe.example/hours"}}]}]}]}]`))[0].Conversations[0]
+	byName := map[string]AssetRecord{}
+	for _, asset := range noted.Assets {
+		byName[asset.Name] = asset
+	}
+	if sheet, spare, expired := byName["sheet.xlsx"], byName["Spare"], byName["Image results"]; len(noted.Assets) != 4 || sheet.Ref != "aaaaaaaa-1111-4222-8333-444444444444" || sheet.Details["path"] != "/home/claude/sheet.xlsx" ||
+		sheet.Details["description"] != "The tracker" || sheet.Availability != assetNotExported || !slices.Contains(sheet.Also, "n2:files") || spare.Details["spare"] != true || byName["Image"].Details["spare"] != nil ||
+		expired.Details["expired"] != true || expired.Availability != assetNotExported {
+		t.Fatalf("noted assets = %+v", noted.Assets)
+	}
+	if notes := noted.Notes; len(notes) != 2 || notes[0].MessageNativeID != "n2:block:0" || notes[0].Details["cut_off"] != true || notes[0].Details["truncated"] != nil || notes[1].MessageNativeID != "n2" || integer(notes[1].Details["spoken_chars"]) != 5 ||
+		jsonText(notes[1].Details["citations"]) != `[{"end":13,"start":0,"url":"https://cafe.example/hours"}]` {
+		t.Fatalf("notes = %+v", noted.Notes)
+	}
+
 	// An explicit current leaf wins over the newest one.
 	second := records[1].Conversations[0].Messages
 	if len(second) != 4 || !second[2].Selected || second[3].Selected || records[1].Title != "Claude.ai conv-2" {
@@ -255,12 +384,16 @@ func TestClaudeAIExportSupplementaryDocumentsAndCloudTranscripts(t *testing.T) {
 		"projects/p.json":                                    `{"uuid":"p","name":"Research notes","docs":[{"filename":"report.md","content":"An exported report\nwith two lines."}]}`,
 		"memories/account.json":                              `{"memory_files":[{"path":"profile.md","content":"Recorded preferences"}]}`,
 		"reflections/account.json":                           `{"reflections":[{"content":"Recorded reflection"}],"feedback":[]}`,
-		"artifacts/a/artifact.json":                          `{"id":"a","active_version":"v1","versions":[{"id":"v1","title":"A retained document"}]}`,
-		"artifacts/a/versions/v1/index.html":                 `<h1>Archived document</h1><script>neverExecute()</script>`,
+		"artifacts/a/artifact.json":                          `{"id":"a","active_version":"v1","versions":[{"id":"v1","title":"A retained document"},{"id":"v0","title":"A draft"},{"id":"gone","title":"Not kept"}]}`,
+		"artifacts/a/versions/v1/index.html":                 `<link rel="stylesheet" href="style.css"><h1>Archived document</h1><img alt="" src="photo.webp"><a href="more/page.html">More</a><script>neverExecute()</script>`,
+		"artifacts/a/versions/v1/style.css":                  `h1{color:teal}`,
+		"artifacts/a/versions/v1/more/page.html":             `<link rel=stylesheet href='../style.css'><p>Second page</p><img src="https://elsewhere.example/x.png">`,
+		"artifacts/a/versions/v0.html":                       `<h1>Draft</h1>`,
+		"artifacts/a/comments.json":                          `[{"quoted_text":"Archived","resolved":true,"tab":"Main","comments":[{"body":"Say more here","created_at":"2026-09-21T20:18:59.774Z"}]},{"quoted_text":"empty","comments":[]}]`,
 		"artifacts/a/download.zip":                           string(attachmentBytes),
 		"artifacts/b/download.ZIP":                           string(attachmentBytes),
 		"artifacts/a/versions/v1/photo.webp":                 "RIFF\x00binary-image",
-		"claude_code_cloud/channel_session_transcripts.json": `{"claude_code_cloud":[{"session_id":"cloud","role":"user","content":[{"type":"text","text":"Cloud question"}]},{"session_id":"cloud","role":"assistant","content":[{"type":"tool_use","tool_use_id":"tool","name":"Search","input":"{\"query\":\"history\"}"},{"type":"tool_result","tool_use_id":"tool","content":"A cloud result"},{"type":"text","text":"Cloud answer"}]}]}`,
+		"claude_code_cloud/channel_session_transcripts.json": `{"claude_code_cloud":[{"session_id":"cloud","role":"user","content":[{"type":"text","text":"Cloud question"}]},{"session_id":"cloud","role":"assistant","content":[{"type":"tool_use","tool_use_id":"tool","name":"Search","input":"{\"query\":\"history\"}"},{"type":"tool_result","tool_use_id":"tool","content":"A cloud result"},{"type":"tool_use","tool_use_id":"publish","name":"Artifact","input":"{\"file_path\":\"/tmp/draft.html\"}"},{"type":"tool_result","tool_use_id":"publish","content":"Published /tmp/draft.html at https://claude.ai/artifact/AbC123 (Version 1, version id v0) Icon: \"globe\"."},{"type":"text","text":"Cloud answer"}]}]}`,
 		"users.json":                                         `[{"email":"account-only@example.com"}]`,
 	})
 	records := discoverClaudeAI(t, file)
@@ -281,8 +414,27 @@ func TestClaudeAIExportSupplementaryDocumentsAndCloudTranscripts(t *testing.T) {
 			}
 		}
 	}
-	if len(records) != 8 || files != 9 || calls != 1 || results != 1 {
+	if len(records) != 8 || files != 13 || calls != 1 || results != 1 {
 		t.Fatalf("records=%d files=%d calls=%d results=%d", len(records), files, calls, results)
+	}
+	// An artifact is an asset with its versions, the pages of the current
+	// one, what was said about it, and the pictures its pages show.
+	for _, r := range records {
+		if r.SourceID != "claude-export:artifacts/a" {
+			continue
+		}
+		assets := r.Conversations[0].Assets
+		if len(assets) != 2 || assets[0].Kind != "artifact" || assets[0].Availability != assetStored || assets[0].AttachmentNativeID != "artifacts/a/versions/v1/index.html" ||
+			!reflect.DeepEqual(assets[0].Details["pages"], []string{"index.html", "more/page.html"}) || integer(assets[0].Details["files"]) != 4 ||
+			len(assets[0].Versions) != 3 || !assets[0].Versions[0].Stored || !assets[0].Versions[1].Stored || assets[0].Versions[2].Stored {
+			t.Fatalf("artifact = %+v", assets)
+		}
+		if threads := reasoningList(assets[0].Details["comments"]); len(threads) != 1 || mapValue(threads[0])["quoted_text"] != "Archived" || mapValue(threads[0])["resolved"] != true || mapValue(reasoningList(mapValue(threads[0])["comments"])[0])["body"] != "Say more here" {
+			t.Fatalf("comments = %+v", assets[0].Details["comments"])
+		}
+		if photo := assets[1]; photo.Kind != "image" || photo.MessageNativeID != "artifacts/a/versions/v1/photo.webp" || photo.Content != "RIFF\x00binary-image" || photo.Availability != assetStored {
+			t.Fatalf("picture = %+v", photo)
+		}
 	}
 	// Unzipping and capturing the same export keeps all files of an artifact
 	// together, even though source discovery visits them separately.
@@ -308,7 +460,7 @@ func TestClaudeAIExportSupplementaryDocumentsAndCloudTranscripts(t *testing.T) {
 		t.Fatalf("unzipped export: %d records, want %d", len(expanded), len(records))
 	} else {
 		for _, record := range expanded {
-			if record.SourceID == "claude-export:artifacts/a" && len(record.Conversations[0].Messages) != 4 {
+			if record.SourceID == "claude-export:artifacts/a" && len(record.Conversations[0].Messages) != 8 {
 				t.Fatal("artifact files were split across replacement records")
 			}
 		}
@@ -353,8 +505,121 @@ func TestClaudeAIExportSupplementaryDocumentsAndCloudTranscripts(t *testing.T) {
 	other, _ := testCatalog(t)
 	indexCaptures(t, other, config.CaptureRoot, "export-host")
 	var artifactFiles int
-	if err := other.DB.QueryRow(`SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id='claude-export:artifacts/a'`).Scan(&artifactFiles); err != nil || artifactFiles != 4 {
+	if err := other.DB.QueryRow(`SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id='claude-export:artifacts/a'`).Scan(&artifactFiles); err != nil || artifactFiles != 8 {
 		t.Fatalf("captured artifact files: %d, %v", artifactFiles, err)
+	}
+	// A page of the artifact is served whole: what it loads from beside it
+	// is put into it, since its frame may ask for nothing, and its links
+	// are told to the reader. Each kept version and page can be asked for,
+	// and nothing outside the version.
+	var artifact string
+	if err := other.DB.QueryRow(`SELECT id FROM message_assets WHERE kind='artifact'`).Scan(&artifact); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, other)
+	page := func(query string) (int, string) {
+		response := httptest.NewRecorder()
+		server.asset(response, httptest.NewRequest("GET", "/api/assets/"+artifact+query, nil))
+		return response.Code, response.Body.String()
+	}
+	if code, body := page(""); code != 200 || !strings.Contains(body, "<style>h1{color:teal}</style>") || !strings.Contains(body, `src="data:image/webp;base64,`+base64.StdEncoding.EncodeToString([]byte("RIFF\x00binary-image"))+`"`) ||
+		strings.Contains(body, `href="style.css"`) || !strings.Contains(body, "pharosAssetLink") || !strings.Contains(body, `<a href="more/page.html">`) {
+		t.Fatal(code, body)
+	}
+	if code, body := page("?file=more/page.html"); code != 200 || !strings.Contains(body, "<style>h1{color:teal}</style><p>Second page</p>") || !strings.Contains(body, `src="https://elsewhere.example/x.png"`) {
+		t.Fatal(code, body)
+	}
+	if code, body := page("?version=v0"); code != 200 || !strings.Contains(body, "<h1>Draft</h1>") {
+		t.Fatal(code, body)
+	}
+	for _, query := range []string{"?version=gone", "?file=../../artifact.json", "?file=missing.html", "?version=v1/../v0"} {
+		if code, body := page(query); code != 404 {
+			t.Fatal(query, code, body)
+		}
+	}
+	// The session whose agent published a version of the artifact shows it
+	// at that call, and the artifact's own document names the session.
+	var session, sessionWorkspace, document, documentWorkspace string
+	if err := other.DB.QueryRow(`SELECT id,workspace_id FROM conversations WHERE harness='claude-code-cloud-export'`).Scan(&session, &sessionWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.DB.QueryRow(`SELECT id,workspace_id FROM conversations WHERE native_id='claude-export:artifacts/a'`).Scan(&document, &documentWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	made, err := other.WorkConversation(sessionWorkspace, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// It is shown on the reply that follows the call, which a reader sees.
+	var publish string
+	for _, message := range made["messages"].([]map[string]any) {
+		shown := message["assets"]
+		if message["kind"] == "tool_call" && message["call_id"] == "publish" {
+			publish = firstString(message["id"])
+		}
+		if message["kind"] != "message" || message["role"] != "assistant" {
+			if shown != nil {
+				t.Fatalf("artifact shown away from the reply: %+v", message)
+			}
+			continue
+		}
+		if list, _ := shown.([]map[string]any); len(list) != 1 || list[0]["kind"] != "artifact" || list[0]["availability"] != assetStored || list[0]["url"] != "/api/assets/"+artifact ||
+			list[0]["version"] != "v1" || mapValue(list[0]["document"])["conversation_id"] != document {
+			t.Fatalf("published artifact = %+v", shown)
+		}
+	}
+	held, err := other.WorkConversation(documentWorkspace, document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if origins, _ := held["made_in"].([]map[string]any); publish == "" || len(origins) != 1 || origins[0]["conversation_id"] != session || origins[0]["workspace_id"] != sessionWorkspace || origins[0]["message_id"] != publish {
+		t.Fatalf("made in = %+v, publish %q", held["made_in"], publish)
+	}
+	// A document that is not an artifact was made by no conversation, and
+	// an artifact no conversation in the library made says so.
+	for native, want := range map[string]any{"claude-export:projects/p.json": nil, "claude-export:artifacts/b": nil} {
+		var id, workspace string
+		if err := other.DB.QueryRow(`SELECT id,workspace_id FROM conversations WHERE native_id=?`, native).Scan(&id, &workspace); err != nil {
+			t.Fatal(native, err)
+		}
+		if read, err := other.WorkConversation(workspace, id); err != nil || read["made_in"] != want {
+			t.Fatalf("%s made in = %+v, %v", native, read["made_in"], err)
+		}
+	}
+	// The session is found as one that made an artifact, by the publish alone.
+	if made, err := other.searchConversationsContext(context.Background(), map[string]any{"has": []any{"artifacts"}, "limit": 100}); err != nil || !strings.Contains(jsonText(made), session) || strings.Contains(jsonText(made), document) {
+		t.Fatalf("conversations with artifacts = %v, %v", made, err)
+	}
+	// Lists of conversations leave out the document of an artifact a
+	// conversation made, and keep it once nothing in the library made it.
+	listed := func() (bool, bool) {
+		t.Helper()
+		rows, err := other.searchRows(SearchOptions{}, libraryCompactFields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		workspaces := map[string]bool{}
+		for _, row := range rows {
+			workspaces[firstString(row["id"])] = true
+		}
+		if !workspaces[sessionWorkspace] {
+			t.Fatal("the session that made the artifact is not listed")
+		}
+		found, err := other.searchConversationsContext(context.Background(), map[string]any{"limit": 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return workspaces[documentWorkspace], strings.Contains(jsonText(found), document)
+	}
+	if rows, conversations := listed(); rows || conversations {
+		t.Fatalf("placed artifact document listed: rows %v, conversations %v", rows, conversations)
+	}
+	execSQL(t, other.DB, `DELETE FROM tool_calls WHERE tool_name='Artifact'`)
+	if rows, conversations := listed(); !rows || !conversations {
+		t.Fatalf("artifact document with no conversation not listed: rows %v, conversations %v", rows, conversations)
+	}
+	if held, err := other.WorkConversation(documentWorkspace, document); err != nil || held["made_in"] == nil || len(held["made_in"].([]map[string]any)) != 0 {
+		t.Fatalf("made in, with no conversation = %+v, %v", held["made_in"], err)
 	}
 	// Every supplementary JSON is validated before publishing any record.
 	chatGPTZip(t, file, map[string]string{"conversations.json": claudeAIExport, "projects/bad.json": `{`})

@@ -58,6 +58,15 @@ func bumpToolLedgerGeneration(tx execer) error {
 
 // replaceToolLedger rebuilds one conversation's model requests and tool calls.
 func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord) error {
+	if err := writeToolLedger(tx, workspaceID, conversationID, conversation); err != nil {
+		return err
+	}
+	// The calls that published an artifact are among those just written,
+	// whichever read, merge or repair wrote them (conversation_content.go).
+	return refreshConversationContent(tx, conversationID)
+}
+
+func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord) error {
 	var priorVersion string
 	if err := tx.QueryRow("SELECT version FROM tool_ledger_state WHERE conversation_id=?", conversationID).Scan(&priorVersion); err != nil && err != sql.ErrNoRows {
 		return err

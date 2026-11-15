@@ -51,3 +51,19 @@
 :is(.reader-section-node,.reader-navigator-timeline-disclosure)[open]>summary .reader-section-chevron{transform:rotate(90deg)}
 .reader-section-track{display:block;min-width:0;height:28px;cursor:pointer;background:var(--panel);border-bottom:1px solid var(--line)}
 .reader-section-track .lt-session-ribbon{height:28px;width:100%}
+.reader-navigator-row.is-voice{min-height:22px}
+.reader-voice-control{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden}
+.reader-voice-control small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums;color:var(--muted)}
+.reader-voice-play{font:inherit;font-size:10px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:0 7px;cursor:pointer;white-space:nowrap}
+.reader-voice-play:hover,.reader-voice-play[aria-pressed=true]{color:var(--voice);border-color:var(--voice)}
+/* The voice tape is red, apart from the yellow of the timeline above it:
+ * your lines in the upper lane, replies in the lower. */
+.reader-navigator-voice{height:20px;background:transparent;--voice:#e5686b}
+.reader-navigator-row.is-voice{--voice:#e5686b}
+.reader-voice-line{position:absolute;top:1px;height:8px;min-width:3px;padding:0;border:0;border-radius:1px;background:color-mix(in srgb,var(--voice) 45%,transparent);cursor:pointer;box-sizing:border-box}
+.reader-voice-line.is-assistant{top:11px;background:color-mix(in srgb,var(--voice) 28%,transparent)}
+.reader-voice-line.is-recorded{background:color-mix(in srgb,var(--voice) 75%,transparent)}
+.reader-voice-line.is-estimated{opacity:.6}
+.reader-voice-line:hover{background:var(--ink)}
+.reader-voice-line.is-current,.reader-voice-line.is-sounding{background:var(--voice);outline:1px solid var(--ink);z-index:1}
+.reader-voice-line:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-1px;z-index:2}

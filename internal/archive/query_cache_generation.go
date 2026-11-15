@@ -49,6 +49,8 @@ var queryCacheTables = []string{
 	// individual fact/membership writes are internal to that atomic refresh.
 	"message_label_facts_dirty",
 	"session_shape_facts", "session_shape_dirty",
+	// What each conversation holds beside its words, which searches filter by.
+	"conversation_content",
 }
 
 // queryCacheDomains are the tables only some cached views read: what the

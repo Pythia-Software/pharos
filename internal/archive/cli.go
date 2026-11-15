@@ -654,6 +654,7 @@ func runSearchCLI(catalog *Catalog, args []string) error {
 	outcome := flags.String("outcome", "", "")
 	errorType := flags.String("error", "", "")
 	metric := flags.String("metric", "", "")
+	has := flags.String("has", "", "Kinds of content a conversation must hold, separated by commas: "+strings.Join(contentFeatureNames(), ", "))
 	limit := flags.Int("limit", 20, "")
 	prText := flags.String("pr", "", "")
 	minimumText := flags.String("minimum", "", "")
@@ -664,7 +665,7 @@ func runSearchCLI(catalog *Catalog, args []string) error {
 	if query == "" && flags.NArg() > 0 {
 		query = flags.Arg(0)
 	}
-	options := SearchOptions{Query: query, Repository: *repository, Source: *source, File: *file, Owner: *owner, Provider: *provider, Model: *model, Effort: *effort, From: *from, To: *to, Flavor: *flavor, Version: *version, Outcome: *outcome, Error: *errorType, Metric: *metric, Limit: *limit}
+	options := SearchOptions{Has: *has, Query: query, Repository: *repository, Source: *source, File: *file, Owner: *owner, Provider: *provider, Model: *model, Effort: *effort, From: *from, To: *to, Flavor: *flavor, Version: *version, Outcome: *outcome, Error: *errorType, Metric: *metric, Limit: *limit}
 	if *prText != "" {
 		value, err := strconv.Atoi(*prText)
 		if err != nil {

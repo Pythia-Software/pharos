@@ -502,6 +502,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureCompactionBoundaries(); err != nil {
 		return fmt.Errorf("initialize compaction boundaries: %w", err)
 	}
+	if err := c.ensureConversationContent(); err != nil {
+		return fmt.Errorf("initialize conversation content: %w", err)
+	}
 	// Columns such as effort are added above when opening a legacy catalog.
 	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_analytics_time_idx
  ON tool_calls(started_at DESC,workspace_id,provider,tool_name,tool_category,model,effort,duration_ms,
@@ -1106,6 +1109,9 @@ func integer(value any) int64 {
 type SearchOptions struct {
 	Query, Repository, Project, Source, File, Owner, Provider, Model, Effort, From, To, Flavor, Version, Outcome, Error, Metric string
 	Channel, MachineID, ExecutionMachineID                                                                                      string
+	// Has names kinds of content, separated by commas, that one of the
+	// workspace's conversations must hold all of (conversation_content.go).
+	Has string
 	PR                                                                                                                          *int
 	Minimum, Maximum                                                                                                            *float64
 	ChangedOnly                                                                                                                 bool
@@ -1172,6 +1178,18 @@ func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields)
 	ctx := options.context()
 	where := []string{}
 	args := []any{}
+	// An exported artifact a conversation made is shown there (message_assets.go).
+	if placed, values, err := c.withoutPlacedArtifactDocuments(ctx, "w.id"); err != nil {
+		return nil, err
+	} else if placed != "" {
+		where, args = append(where, placed), append(args, values...)
+	}
+	if wanted, err := contentFilter(options.Has); err != nil {
+		return nil, err
+	} else if len(wanted) > 0 {
+		filter, values := contentWorkspaceSQL("w.id", wanted)
+		where, args = append(where, filter), append(args, values...)
+	}
 	for _, f := range []struct{ field, value string }{{"channel", options.Channel}, {"machine_id", options.MachineID}, {"execution_machine_id", options.ExecutionMachineID}} {
 		if f.value != "" {
 			where = append(where, "EXISTS(SELECT 1 FROM conversations oc JOIN conversation_origins oo ON oo.conversation_id=oc.id WHERE oc.workspace_id=w.id AND oo."+f.field+"=?)")

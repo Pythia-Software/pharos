@@ -54,6 +54,11 @@ type ConversationRecord struct {
 	// Instructions are the instruction files and skills the transcript
 	// recorded as loaded (see instructions.go).
 	Instructions []InstructionRecord `json:"Instructions,omitempty"`
+	// Assets and Sources are the files and references the source records
+	// its messages referring to (see message_assets.go).
+	Assets  []AssetRecord  `json:"Assets,omitempty"`
+	Sources []SourceRecord `json:"Sources,omitempty"`
+	Notes   []NoteRecord   `json:"Notes,omitempty"`
 	// Extractor, when set, versions the parser that read the conversation,
 	// so an unchanged record its current parser read need not be read
 	// again (recordUsesCurrentExtractor). Coverage stays a completeness word.

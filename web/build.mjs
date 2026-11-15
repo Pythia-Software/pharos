@@ -1,5 +1,5 @@
 import { build, context } from "esbuild";
-import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { updateModelColors } from "./generate-model-colors.mjs";
@@ -8,6 +8,9 @@ const check = process.argv.includes("--check"), watch = process.argv.includes("-
 const bundles = [["src/index.tsx", "../internal/archive/assets/query-tables.js"], ["src/data-guide-entry.tsx", "../internal/archive/assets/data-guide.js"], ["src/uifeedback/inbox.tsx", "../internal/uifeedback/assets/inbox.js"]];
 // Remove the retired VM bundle before Go embeds the asset directory.
 if (!check) rmSync(new URL("../internal/archive/assets/fingerprint-renderer.js", import.meta.url), {force: true});
+// The chart library exported widgets ask a CDN for. The viewer's frame has no
+// network, so the service hands them this pinned copy instead (widgetLibraries).
+if (!check) copyFileSync(new URL("node_modules/chart.js/dist/chart.umd.js", import.meta.url), new URL("../internal/archive/assets/widget-chart.js", import.meta.url));
 try {
   await updateModelColors({check});
   // The site map, its cases and the Ask suggestions: rendered when an input
