@@ -28,7 +28,7 @@ test("a chip names the peer's role, title, provider and age, and explains itself
   const second = peerChip({ workspace_id: "w3", title: "", role: "reviewer", confidence: "high", via: "w1",
     evidence: [{ kind: "read_written_by", confidence: "high", from_workspace_id: "w1", to_workspace_id: "w3", details: { basis: "diff", lines: 4, timing: "start" } }] },
   { page: "w/2", titles: { w1: "Sort the rows" } }, now);
-  assert.equal(second.label, "Reviewer · Untitled work");
+  assert.equal(second.label, "Reviewer · Untitled workspace");
   assert.deepEqual(plain(second.reasons), ["It saw 4 lines Sort the rows wrote, in a diff, starting as Sort the rows finished a turn", "Linked through Sort the rows"]);
 });
 

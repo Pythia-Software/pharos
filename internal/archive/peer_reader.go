@@ -207,7 +207,7 @@ func (c *Catalog) workPeers(ctx context.Context, workspace string) ([]workPeer, 
 		}
 		p.Role = role
 		var title, provider, started, ended sql.NullString
-		err := c.reader().QueryRowContext(ctx, `SELECT COALESCE(w.title,'Untitled work'),
+		err := c.reader().QueryRowContext(ctx, `SELECT COALESCE(w.title,'Untitled workspace'),
 			(SELECT provider FROM conversations WHERE workspace_id=w.id ORDER BY parent_id IS NOT NULL,started_at LIMIT 1),
 			(SELECT MIN(started_at) FROM conversations WHERE workspace_id=w.id),
 			(SELECT MAX(COALESCE(ended_at,started_at)) FROM conversations WHERE workspace_id=w.id)
@@ -264,7 +264,7 @@ func (c *Catalog) messagePeerAttacher(conversationID string) (func(map[string]an
 		for id := range targets {
 			ids = append(ids, id)
 		}
-		found, err := queryMaps(c.reader(), `SELECT m.id,m.conversation_id,c.workspace_id,COALESCE(w.title,'Untitled work') title FROM messages m
+		found, err := queryMaps(c.reader(), `SELECT m.id,m.conversation_id,c.workspace_id,COALESCE(w.title,'Untitled workspace') title FROM messages m
 			JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id WHERE m.id IN (`+placeholders(len(ids))+`)`, ids...)
 		if err != nil {
 			return nil, err

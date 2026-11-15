@@ -139,7 +139,7 @@ function messageNoteLines(message){
   return lines;
 }
 function displayText(message){const value=messageJSON(message);return commonEventText(value)||(value?eventDescription(value):String(message?.text??''))}
-function eventDescription(value){if(Array.isArray(value))return `${value.length} recorded items`;if(!value||typeof value!=='object')return String(value??'');return shortText([value.type||value.kind||'Recorded event',value.subtype,value.description||value.summary||value.status].filter(Boolean).join(' · '),180)}
+function eventDescription(value){if(Array.isArray(value))return `${value.length} recorded ${value.length===1?'item':'items'}`;if(!value||typeof value!=='object')return String(value??'');return shortText([value.type||value.kind||'Recorded event',value.subtype,value.description||value.summary||value.status].filter(Boolean).join(' · '),180)}
 
 // Claude exports keep citations beside the prose, not in its Markdown.
 // Link only web URLs; document citations retain their source label and quote.
@@ -156,10 +156,10 @@ function messageCitations(message){
 function attachmentSummary(message){
   const value=messageJSON(message)||{};
   if(value.file_name||value.title)return String(value.file_name||value.title);
-  if(Array.isArray(value.file_names))return value.file_names.filter(Boolean).join(', ')||`${value.file_names.length} files attached`;
+  if(Array.isArray(value.file_names))return value.file_names.filter(Boolean).join(', ')||`${value.file_names.length} ${value.file_names.length===1?'file':'files'} attached`;
   if(value.type==='image')return 'Image'+(value.file_uuid?' · '+value.file_uuid:'');
   if(value.file_uuid)return 'Document · '+value.file_uuid;
-  return `${value.count||1} ${value.count===1?'image':'images'} attached`;
+  const attached=value.count||1;return `${attached} ${attached===1?'image':'images'} attached`;
 }
 function exportDocumentSections(value){
   if(value?.type!=='export_file')return [];
@@ -311,7 +311,7 @@ function conversationTokenReports(messages){
       if(!hasRecords){const previous=cumulative.get(stream)??inherited.get(stream);total=running>=previous?running-previous:tokenTotal(info.last_token_usage);cumulative.set(stream,running);if(running<previous)label+=' (counter reset; last request only)'}
     }else if(type==='token_count'&&info.last_token_usage){usage=info.last_token_usage;total=hasRecords?null:tokenTotal(usage);label='Last request usage'}
     else if(value.subtype==='task_progress'||value.subtype==='task_notification'){
-      scope='task';label='Subagent cumulative usage';const key=canonical(value.tool_use_id||value.task_id||raw.parent_tool_use_id||'');
+      scope='task';label='Sub-agent cumulative usage';const key=canonical(value.tool_use_id||value.task_id||raw.parent_tool_use_id||'');
       const report={total:tokenTotal(usage),compact,label,scope,stream:key||stream,usage,breakdown:tokenBreakdown(usage)};
       const prior=seen.get('task:'+key);if(prior)prior.total=null;
       if(key)seen.set('task:'+key,report);reports[index]=report;return;
@@ -351,7 +351,7 @@ function conversationTokenReports(messages){
     if(details?.status!=='completed'||details.totalToolUseCount!==0||!breakdown||breakdown.total<=0||details.totalTokens!==breakdown.total)continue;
     const categorized=tokenBreakdown({...usage,total_tokens:undefined,totalTokens:undefined})?.total;
     if(categorized!==breakdown.total)continue;
-    reports[index]={total:breakdown.total,label:'Subagent result usage',scope:'task',stream,usage,breakdown};markAccounted(stream);
+    reports[index]={total:breakdown.total,label:'Sub-agent result usage',scope:'task',stream,usage,breakdown};markAccounted(stream);
   }
   // Reconcile subagent summaries with their retained request records. Keep
   // unallocated excess visible instead of assigning it to an arbitrary tool.
@@ -363,7 +363,7 @@ function conversationTokenReports(messages){
     if(['run','session'].includes(report.scope)&&report.reportedTotal!==null){const attributed=reports.slice(report.start,index).reduce((n,r)=>n+(r&&(report.stream==='main'||r.stream===report.stream)?r.total||0:0),0);report.total=Math.max(0,report.reportedTotal-attributed);report.attributed=attributed;report.conflict=report.reportedTotal<attributed}
   });
   for(const evidence of conversationTokenEvidence(messages)){
-    reports[evidence.index]??={total:null,scope:'observation',stream:evidence.stream,label:'Subagent token evidence'};
+    reports[evidence.index]??={total:null,scope:'observation',stream:evidence.stream,label:'Sub-agent token evidence'};
     reports[evidence.index].observedMinimum=evidence.total;
   }
   // Stored predictions use the ordinary consumption pathway. Their input,
@@ -517,11 +517,11 @@ function toolDurationEstimatePresentation(message){
   const execution=estimate.execution_seconds,argument=estimate.argument_generation_seconds;
   if(execution&&['observed','estimated'].includes(estimate.execution_status)&&['expected','lower','upper'].every(key=>Number.isFinite(execution[key])&&execution[key]>=0)){
     const recorded=estimate.execution_status==='observed';
-    return{label:`${recorded?'Recorded execution:':'Estimated execution: ~'}${recorded?' ':''}${usageEstimateNumber(execution.expected)} s${recorded?'':'*'}`,detail:`${usageEstimateNumber(execution.lower)}–${usageEstimateNumber(execution.upper)} s ${recorded?'native argument-stop to result-observation span':'execution sensitivity range'}. ${argument&&Number.isFinite(argument.expected)?`Argument generation: ${estimate.argument_generation_status==='observed'?'recorded':'estimated'} ${usageEstimateNumber(argument.expected)} s. `:''}Full call-to-result span: ${usageEstimateNumber(value.expected)} s. Execution can include transport and harness time; parallel calls can overlap.`};
+    return{label:`${recorded?'Recorded execution:':'Estimated execution: ~'}${recorded?' ':''}${usageEstimateNumber(execution.expected)} s${recorded?'':'*'}`,detail:`${usageEstimateNumber(execution.lower)}–${usageEstimateNumber(execution.upper)} s ${recorded?'native argument-stop to result-observation span':'execution sensitivity range'}. ${argument&&Number.isFinite(argument.expected)?`Argument generation: ${estimate.argument_generation_status==='observed'?'recorded':'estimated'} ${usageEstimateNumber(argument.expected)} s. `:''}Full call-to-result span: ${usageEstimateNumber(value.expected)} s. Execution can include transport and agent app time; parallel calls can overlap.`};
   }
-  if(estimate.status==='observed')return{label:`Recorded tool span: ${usageEstimateNumber(value.expected)} s`,detail:'Native call start to result observation; this can include transport and harness time.'};
+  if(estimate.status==='observed')return{label:`Recorded tool span: ${usageEstimateNumber(value.expected)} s`,detail:'Native call start to result observation; this can include transport and agent app time.'};
   if(estimate.status!=='estimated')return null;
-  return{label:`Estimated call-to-result span: ~${usageEstimateNumber(value.expected)} s*`,detail:`${usageEstimateNumber(value.lower)}–${usageEstimateNumber(value.upper)} s sensitivity range, including argument generation. Published tool assumptions; parallel calls can overlap. Following model work is separate.`};
+  return{label:`Estimated call-to-result span: ~${usageEstimateNumber(value.expected)} s*`,detail:`${usageEstimateNumber(value.lower)}–${usageEstimateNumber(value.upper)} s sensitivity range, including argument generation. Published tool assumptions; parallel calls can overlap. Model time after the result is not included.`};
 }
 // What the timeline's Turns row says about a turn on hover: the turn header's
 // own words (its number and who asked, the ask, and its counts).
@@ -540,7 +540,7 @@ function turnSummaryData(conversation){
     prompt:messageSummary(turn.human)||'Agent setup',
     outcome:messageSummary(turn.events.filter(message=>message.kind==='message').at(-1))||'',
     replies:turn.events.filter(message=>message.kind==='message').length,
-    activities:turn.events.filter(message=>message.kind!=='message').length,
+    activities:turnActivities(turn).length,
     tools:turn.events.filter(message=>message.kind==='tool_call').length,
     subagents:turn.events.filter(message=>message.kind==='delegation').length,
   }));
@@ -706,7 +706,7 @@ function mcpPresentation(message,results=[],artifactLinks={}){
     const data=records.find(r=>r.display_url)||{};if(/^https:\/\/(github\.com|api\.github\.com|raw\.githubusercontent\.com)\//.test(data.display_url||input.url||''))href=data.display_url||input.url;
     if(method==='fetch_file')add(input.path,data.content,'code');else resultText();
   }else if(family==='pharos'){
-    const labels={get_conversation_messages:'Read conversation messages',get_conversation_excerpt:'Read conversation excerpt',get_conversation_overview:'Read conversation overview',get_work_detail:'Read workspace',search_messages:'Search messages',search_conversations:'Search conversations',search_work:'Search workspaces',query_statistics:'Query statistics',archive_status:'Read archive status',site_link:'Resolve Pharos link'};
+    const labels={get_conversation_messages:'Read conversation messages',get_conversation_excerpt:'Read conversation excerpt',get_conversation_overview:'Read conversation overview',get_work_detail:'Read workspace',search_messages:'Search messages',search_conversations:'Search conversations',search_work:'Search workspaces',query_statistics:'Query statistics',get_archive_status:'Read library status',site_link:'Resolve Pharos link'};
     label=labels[method];if(!label)return null;category=/search|query/.test(method)?'search':'read';target=input.query||input.conversation_id||input.workspace_id||'Pharos';
     for(const [key,value] of Object.entries(input))if(value!=null&&typeof value!=='object')facts.push([key.replace(/_/g,' '),String(value)]);
     const data=records.find(r=>r.items||r.messages||r.rows||r.groups||r.overview||r.statistics||r.url)||records.at(-1)||{};
@@ -1510,9 +1510,9 @@ function eventLinkEnd(links,id,from){
 // cover the same text, the label's hue wins.
 const READER_HIGHLIGHTS=[
   {id:'writing',field:'reader_writing',pref:'pharos-reader-writing',fallback:true,label:'Human writing',title:'Text a person typed or dictated. Pasted, quoted, templated and re-sent text stays plain.'},
-  {id:'engagement',field:'reader_engagement',pref:'pharos-reader-engagement',fallback:true,label:'Engagement',title:'How the person works with the agent, read from what they typed (span classifier, preview): each span is underlined in its dimension\'s style. Hover an underlined span for its labels.'},
-  {id:'events',field:'reader_events',pref:'pharos-reader-events',fallback:true,label:'Agent events',title:'Sentences where an agent hit friction, learned something or made a choice you may not see (sentence classifier). Hover a highlighted sentence for its events.'},
-  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:true,label:'Message labels',title:'Tint each message card by what it does (message classifier). Hover the card for its labels.'}];
+  {id:'engagement',field:'reader_engagement',pref:'pharos-reader-engagement',fallback:true,label:'Engagement labels',title:'How the person works with the agent, read from what they typed (span classifier, preview): each span is underlined in its dimension’s style. Hover an underlined span for its labels.'},
+  {id:'events',field:'reader_events',pref:'pharos-reader-events',fallback:true,label:'Agent events',title:'Sentences where an agent hit friction, learned something, did something worth a second look or made a choice you may not see (sentence classifier). Hover a highlighted sentence for its events.'},
+  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:true,label:'Message labels',title:'Message cards tinted by what each message does (message classifier). Hover a card for its labels.'}];
 // The highlights a conversation offers, in READER_HIGHLIGHTS order: whether
 // each has anything to show (available, else why not in title), a status
 // note when needed, and a legend of the hues it uses here (label families or
@@ -1543,7 +1543,7 @@ const READER_KEY_PRESETS=[
   {id:'last',label:'Last',note:'Restore your last selection of content, timeline and highlights.'},
   {id:'all',label:'All',note:'Show all content, the full timeline and all text highlighting.',level:'all',highlights:true,timeline:true},
   {id:'content',label:'Content only',note:'Show all content. Hide the timeline and all text highlighting.',level:'all',highlights:false,timeline:false},
-  {id:'quiet',label:'Quiet',note:'Show the timeline, text highlighting and all content except other usage and quota entries.',level:'all-minus-usage',highlights:true,timeline:true}
+  {id:'quiet',label:'Quiet',note:'Show the timeline, text highlighting and all content except usage and quota entries.',level:'all-minus-usage',highlights:true,timeline:true}
 ];
 function readerKeyPresetValues(id){
   const preset=READER_KEY_PRESETS.find(preset=>preset.id===id);if(!preset||id==='last')return null;
@@ -1780,7 +1780,7 @@ function peerChip(peer,{page='',titles={}}={},now=Date.now()){
   const reasons=(peer.evidence||[]).map(reason=>peerReasonText(reason,names));
   if(peer.via)reasons.push(`Linked through ${titles[peer.via]||'other related work'}`);
   return{
-    label:[peerRoleLabel(peer.role),peer.title||'Untitled work',peer.provider,relativeAge(peer.started_at,now)].filter(Boolean).join(' · '),
+    label:[peerRoleLabel(peer.role),peer.title||'Untitled workspace',peer.provider,relativeAge(peer.started_at,now)].filter(Boolean).join(' · '),
     href:'/work/'+encodeURIComponent(peer.workspace_id),certain,reasons,
     title:[certain?'Related work':'Possibly related work · uncertain',...reasons].join('\n'),
   };
@@ -1800,7 +1800,7 @@ function handoffMarkers(message){
     const key=`${direction}:${h.message_id}`,certain=h.confidence==='high',known=markers.get(key);
     if(known&&(known.certain||!certain))continue;
     const params=new URLSearchParams({message:h.message_id});
-    markers.set(key,{label:`${verb} ${h.title||'Untitled work'}`,certain,
+    markers.set(key,{label:`${verb} ${h.title||'Untitled workspace'}`,certain,
       workspace:h.workspace_id,conversation:h.conversation_id,message:h.message_id,
       href:`/work/${encodeURIComponent(h.workspace_id)}/conversation/${encodeURIComponent(h.conversation_id)}?${params}`,
       title:certain?'Hand-off between related work':'Possible hand-off between related work · uncertain'});

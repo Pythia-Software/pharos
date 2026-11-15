@@ -346,7 +346,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	}
 	defer tx.Rollback()
 	var workspaceTitle string
-	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(title,'Untitled work') FROM workspaces WHERE id=?", workspace).Scan(&workspaceTitle); err == sql.ErrNoRows {
+	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(title,'Untitled workspace') FROM workspaces WHERE id=?", workspace).Scan(&workspaceTitle); err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
