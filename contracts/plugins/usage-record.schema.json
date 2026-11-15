@@ -28,13 +28,13 @@
     },
     "tokens": {"$ref": "common.schema.json#/$defs/tokens"},
     "cost": {
-      "description": "Spend. usd counts as cost only when status is priced or assumed; other statuses are unpriced usage.",
+      "description": "Spend. usd counts as cost only when status is priced or assumed; other statuses are unpriced usage. partial means only part of the usage could be priced: usd is a floor, not a cost.",
       "type": "object",
       "additionalProperties": false,
       "required": ["status"],
       "properties": {
         "usd": {"type": "number", "minimum": 0},
-        "status": {"enum": ["priced", "assumed", "unpriced", "unknown"]},
+        "status": {"enum": ["priced", "assumed", "partial", "unpriced", "unknown"]},
         "priced_model": {"description": "The price-book model used, when it differs from model.", "type": "string"}
       },
       "if": {"properties": {"status": {"enum": ["priced", "assumed"]}}},
@@ -53,7 +53,7 @@
     "duration_ms": {"type": "integer", "minimum": 0},
     "outcome": {"description": "ok, failed, invalid and so on. Failed requests with usage still count.", "type": "string"},
     "automation": {
-      "description": "Marks the usage as automation in the usage views. kind becomes the channel (for example Automated: labeling); the other labels become fields.",
+      "description": "Marks the usage as automation in the usage views. The records are a usage kind of their own, not a channel; kind (for example labeling) and the other labels become fields.",
       "type": "object",
       "additionalProperties": false,
       "required": ["kind"],

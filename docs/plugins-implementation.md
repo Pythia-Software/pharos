@@ -1,5 +1,10 @@
 # Plugins: implementation plan
 
+> The import parts of this plan (the `plugin.run/import` row, drop validation
+> and adoption, `plugin_imports`, `RLIMIT` limits and the order of work for
+> importers) are superseded by [importer plugins](plugin-imports.md), proposed
+> 2026-11-15. They are left in place until that proposal is agreed.
+
 Plan, 2026-11-02, revised after two design reviews, for
 [plugins](plugins.md). Nothing here is built. The public
 contracts are in [`contracts/plugins/`](../contracts/plugins/); this document is

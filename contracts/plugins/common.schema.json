@@ -97,12 +97,14 @@
       "pattern": "^chg_[0-9A-Za-z]+$"
     },
     "transcript_kind": {
-      "description": "Native transcript formats an importer can drop.",
+      "description": "Kinds an importer can drop, spelled as in the provider registry. chatgpt-export is the registry's alias of chatgpt. docs/plugin-imports.md proposes generating this list from the registry.",
       "enum": [
         "claude",
         "codex",
         "canonical",
-        "chatgpt-export"
+        "chatgpt",
+        "chatgpt-export",
+        "claude-ai"
       ]
     },
     "drop_kind": {

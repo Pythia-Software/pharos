@@ -14,7 +14,8 @@ Where this document and a schema disagree, the schema is the contract.
 Let users bring their own code to move data into and out of a library:
 
 - **Importers** bring transcripts from machines Pharos does not run on (Linux
-  and Windows boxes over SSH, buckets that laptops push to, one-off exports).
+  and Windows boxes over SSH, sandboxes, buckets that laptops push to, one-off
+  exports). Their design is in [importer plugins](plugin-imports.md).
 - **Exporters** send usage stats, conversation metadata or whole conversations
   to a destination: a company's AI-usage service such as Pythia's, a manager's
   dashboard, a public productivity page, a bucket another Pharos imports from.
@@ -838,27 +839,15 @@ back only its own cursor. A partial run's result:
 }
 ```
 
-- A drop mirrors the source's layout under `root`: `claude` takes `**/*.jsonl`
-  and `*/sessions-index.json` under `~/.claude/projects`; `codex` takes
-  `sessions/` and `archived_sessions/` JSONL, `session_index.jsonl`, and
-  consistent `state*.sqlite` snapshots under `~/.codex`; `canonical` takes
-  [canonical JSON](canonical-export.md); `chatgpt-export` takes
-  `conversations.json`. Other kinds are Mac-only and refused.
-- Validation: regular files only, no links or `..`, every file in a declared
-  drop and wanted by its kind, SQLite files intact and without WAL, and the
-  kind's adapter must parse the drop.
-- Pharos derives each machine's host ID from the plugin installation and the
-  machine `key`, so a script cannot write into an existing Mac's captures.
-- Adoption merges: a dropped file replaces its captured copy (a rewrite keeps
-  the previous one in `history/`); a missing file is left alone. Files become
-  durable first; then the run record and cursor commit together.
-
-**Does this look right?** An importer's first run, and the first run after any
-change, is held in staging. Pharos shows what came in: each machine and source,
-conversation counts (or, for usage, records, tokens and cost by model), date
-range, a few titles, and warnings. **Keep** adopts it
-and starts the triggers; **Discard** drops it, leaves the cursor, and offers the
-run's log.
+**This section is being revised.** [Importer plugins](plugin-imports.md) is
+the current import design, proposed on 2026-11-15 against master. It keeps the
+run contract above and changes what happens to a drop: Pharos collects raw
+files with its own capture and the provider registry's plan for the kind,
+takes [capture-export](capture-export.md) envelopes in place of `pharos-drop/1`
+bundles, hands provider export files to the export collector, maps remote
+accounts onto hosts and the machine registry, and runs importers as Background
+Processing items. Where the two documents disagree about imports, that one
+holds.
 
 ### Usage imports
 
@@ -920,12 +909,12 @@ per request and model, shown here pretty-printed:
 - **Cost and estimates stay apart.** `cost.usd` counts as spend only when
   `status` is `priced` or `assumed`; other statuses show as unpriced usage.
   `estimate` is exposure, never cost. Failed attempts with usage still count.
-  Pharos also prices the tokens itself, for "cost at today's prices".
-- **Marked as automation.** In Pharos's own usage views the records have their
-  own channel, **Automated: labeling**, with their job and dataset as fields,
-  so they never read as the person's own work or as a conversation. They join
-  no work item and appear in no Library list. Exporters see them only through
-  `automation-usage/1`, which a manifest must ask for.
+- **Marked as automation.** In Pharos's own usage views the records are a
+  usage kind of their own, **Automation**, with their kind (labeling), job and
+  dataset as fields, so they never read as the person's own work or as a
+  conversation. They are not a channel: channel says how work started. They
+  join no workspace and appear in no Library list. Exporters see them only
+  through `automation-usage/1`, which a manifest must ask for.
 - **The importer reads without disturbing.** Ledgers are written during runs
   (WAL), so the importer reads briefly or from a snapshot and never writes a
   dataset. Its parameters name dataset folders; nothing about them is committed
