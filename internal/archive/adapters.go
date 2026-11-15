@@ -571,7 +571,9 @@ func (a *jsonlAdapter) partExtractor() string { return a.provider + ":" + a.extr
 // not Codex's: v2 selects the active branch, counts once a reply several of a
 // session's transcripts hold, and counts advisor iterations. v3 keeps synthetic
 // errors out of the inherited execution model while retaining their evidence.
-const claudeExtractor = "claude-v3-execution-model"
+// v4 keeps a background task's notice delivered mid-turn (a queued_command
+// attachment) as task_notification context, as one delivered as a user event.
+const claudeExtractor = "claude-v4-queued-task-notices"
 
 func (a *jsonlAdapter) extractorVersion() string {
 	if a.provider == "claude" {
@@ -1142,6 +1144,14 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 		}
 		if firstString(event["type"]) == "attachment" && firstString(mapValue(event["attachment"])["type"]) == "invoked_skills" {
 			messages = append(messages, MessageRecord{NativeID: defaultString(event["uuid"], fmt.Sprintf("skills-%d", integer(event["_line"]))), Role: "system", Kind: "metadata", Text: jsonText(event), CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
+		}
+		// A background task's notice that arrives while the agent is mid-turn
+		// is delivered into that turn as a queued command, not a user event.
+		if attachment := mapValue(event["attachment"]); firstString(event["type"]) == "attachment" && firstString(attachment["type"]) == "queued_command" {
+			if prompt := firstString(attachment["prompt"]); strings.HasPrefix(strings.TrimSpace(prompt), "<task-notification>") {
+				base := MessageRecord{NativeID: defaultString(event["uuid"], fmt.Sprintf("queued-%d", integer(event["_line"]))), Model: model, Effort: effort, PreviousNativeID: firstString(event["parentUuid"]), CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
+				messages = append(messages, injectedContext(base, "task_notification", prompt))
+			}
 		}
 		message := mapValue(event["message"])
 		if message == nil {

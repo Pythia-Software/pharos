@@ -71,6 +71,11 @@ test('navigator compresses idle gaps before a caller resumes while retaining act
   const busyClock=readerNavigatorClock(messages,[{start:base+19*60000,end:base+39*60000,end_known:true,category:'delegate',count:1,error:false,name:'Subagent'}]);
   assert.equal(readerNavigatorScale(busyClock,['start','resume']).cuts.length,0,'a running subagent prevents a gap');
   assert.equal(readerNavigatorScale(clock,['start','resume'],true,[]).cuts.length,0,'workspace evidence also protects activity in other sessions');
+  // Machine waits are skipped only when chosen, from the Timeline's published wait gaps.
+  const waits=[{start:base+2*60000,end:base+19*60000,kind:'wait'}];
+  assert.equal(readerNavigatorScale(clock,['start','resume'],false,undefined,false,waits).cuts.length,0,'waits stay drawn by default');
+  assert.deepEqual(readerNavigatorScale(clock,['start','resume'],false,undefined,true,waits).cuts.map(cut=>[cut.start,cut.end,cut.kind]),[[base+2*60000,base+19*60000,'wait']]);
+  assert.equal(readerNavigatorScale(clock,['start','resume'],true,undefined,true,waits).cuts.length,2,'idle gaps and waits both cut');
   const untimed=readerNavigatorClock([message('start',0),{...message('end',1),at:null}].map(m=>({...m,at:null})),[]);
   assert.equal(readerNavigatorScale(untimed,['start','end']).compressed,false);
 });

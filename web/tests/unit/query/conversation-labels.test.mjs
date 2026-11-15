@@ -79,7 +79,7 @@ import {workflowSessions} from '../../../src/conversation-labels.ts';
 
 import {conversationRibbon,fingerprintMessageAt} from '../../../src/conversation-fingerprint-model.ts';
 
-import {ribbonMarkMessage,agentEventClock,textTime,sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,toolVisualEnd,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
+import {ribbonMarkMessage,agentEventClock,textTime,sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,toolVisualEnd,harnessWaitText,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
 import {overlapping} from '../../../src/ribbon-marks';
 
 import {labelIntervals,recordedToolMarks,activityCategory} from '../../../src/label-session-ribbon-model.ts';
@@ -328,6 +328,17 @@ test('tool dots take free lanes for overlapping calls, hit-test by position and 
  assert.equal(guide.x1-guide.x,50);
  const guideHit=ribbonPointerHits(visualItems,3.5,0,{x:35,y:guide.y},[{...guide,ids:[guide.id]}]);
  assert.equal(guideHit.items[0].mark.end_known,false);
+ // A harness wait reaches its recorded end; its observation spans the wait,
+ // so a window that holds only the wait still draws it. One whose end was
+ // not recorded gets the guide after its launch.
+ const wait={...known,start:2000,end:2003,name:'Bash',tool_id:'wait',wait_kind:'background_command',wait_end:9000,wait_status:'completed'};
+ assert.equal(toolVisualEnd(wait,10000),9000);
+ assert.equal(toolVisualEnd({...wait,wait_end:null},10000),7003);
+ assert.equal(sessionRibbonTree([],[wait],[],[],[5000,6000]).items[0].end,9000);
+ assert.deepEqual(sessionRibbonTree([],[{...wait,wait_end:null}],[],[],[5000,6000]).items,[]);
+ assert.equal(harnessWaitText({...wait,start:0,wait_end:43*60000}),'Background command · waited 43m · completed');
+ assert.equal(harnessWaitText({...wait,wait_kind:'monitor',wait_end:null,wait_status:'',wait_events:2}),'Monitor watch · end not recorded · 2 events');
+ assert.equal(harnessWaitText(known),'');
 });
 
 test('compressed fingerprint segments preserve every original message for informative inspection',()=>{

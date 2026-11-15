@@ -778,7 +778,7 @@ function toolFailed(message,results){const category=toolCategory(message);return
 function readerTimelineCategory(message){
   const payload=toolPayload(message),name=String(payload.name||'').toLowerCase(),category=toolCategory(message);
   if(['wait_agent','wait','taskoutput'].includes(name))return 'wait';
-  if(/sleep|poll/.test(name)||name==='write_stdin')return 'poll';
+  if(/sleep|poll/.test(name)||['write_stdin','monitor','schedulewakeup'].includes(name))return 'poll';
   if(category==='agent'||/delegate|spawn/.test(name)||name==='task')return 'delegate';
   if(['read','search'].includes(category)||/read|search|glob/.test(name))return 'read';
   if(['edit','write'].includes(category)||/patch|write/.test(name)||name==='edit')return 'write';

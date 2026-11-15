@@ -52,7 +52,7 @@ var delegationMetrics = []delegationMetricSpec{
 	{"toolSum", "Tool duration sum", "ms", "Sum of recorded call durations; overlapping calls accumulate."},
 	{"wait", "Blocking wait", "ms", "Requires explicit blocking boundaries. Launch acknowledgements and polling are excluded."},
 	{"modelTime", "Model processing", "ms", "Requires measured model start/end boundaries. Inferred timeline backgrounds are excluded."},
-	{"backgroundTime", "Background process", "ms", "Requires process lifecycle boundaries. A background launch is insufficient."},
+	{"backgroundTime", "Machine waits", "ms", "Clock time covered by background commands, Monitor watches and scheduled wakeups, from launch to the notice that ended them. Overlap counts once. Waits whose end was not recorded are excluded; agent apps that do not record these are unknown."},
 	{"episodes", "Activity periods", "count", "Groups of tool calls, model requests and first/last message timestamps separated by more than 30 minutes. These are estimated activity periods; they do not establish when an agent finished."},
 	{"children", "Children", "count", "Self counts directly delegated agent sessions; Self + children counts all delegated descendants once."},
 	{"leaves", "Agents without children", "count", "Included agent sessions with no known delegated children."}, {"depth", "Depth", "count", "Greatest number of delegation levels below the main agent among included agent sessions."},
@@ -189,6 +189,12 @@ type delegationTool struct {
 	Start     *float64 `json:"start"`
 	End       *float64 `json:"end"`
 	Duration  *float64 `json:"duration"`
+	// A harness wait the call started (harness_waits.go) runs on after End
+	// to WaitEnd, which is nil when the transcript does not show its end.
+	WaitKind   string   `json:"wait_kind,omitempty"`
+	WaitEnd    *float64 `json:"wait_end,omitempty"`
+	WaitStatus string   `json:"wait_status,omitempty"`
+	WaitEvents int      `json:"wait_events,omitempty"`
 }
 type delegationSnapshot struct {
 	ID       string
@@ -862,7 +868,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		}
 	}
 	// Only compact ledger fields are streamed; transcript bodies never enter the snapshot.
-	tools, err := tx.QueryContext(ctx, `SELECT id,agent_session_id,conversation_id,call_message_id,tool_name,tool_category,command_category,status,started_at,ended_at,duration_ms,file_path,path_absolute,repo_path,path_repository_id FROM tool_calls WHERE workspace_id=?`, workspace)
+	tools, err := tx.QueryContext(ctx, `SELECT id,agent_session_id,conversation_id,call_message_id,tool_name,tool_category,command_category,status,started_at,ended_at,duration_ms,file_path,path_absolute,repo_path,path_repository_id,wait_kind,wait_ended_at,wait_status,wait_events FROM tool_calls WHERE workspace_id=?`, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -874,9 +880,10 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			return nil, fmt.Errorf("workspace exceeds the 500,000-event analysis limit")
 		}
 		var id, cid, name, cat, status string
-		var sid, msg, command, start, end, file, absolute, repoPath, repoID sql.NullString
+		var sid, msg, command, start, end, file, absolute, repoPath, repoID, waitKind, waitEnd, waitStatus sql.NullString
 		var duration sql.NullFloat64
-		if err = tools.Scan(&id, &sid, &cid, &msg, &name, &cat, &command, &status, &start, &end, &duration, &file, &absolute, &repoPath, &repoID); err != nil {
+		var waitEvents int
+		if err = tools.Scan(&id, &sid, &cid, &msg, &name, &cat, &command, &status, &start, &end, &duration, &file, &absolute, &repoPath, &repoID, &waitKind, &waitEnd, &waitStatus, &waitEvents); err != nil {
 			tools.Close()
 			return nil, err
 		}
@@ -889,7 +896,13 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		if n == nil || !own(n, obs, sid.String, cid, "calls", "errors", "toolSum", "files", "filesRead") {
 			continue
 		}
-		t := delegationTool{ID: id, MessageID: msg.String, Name: name, Category: delegationCategory(name, cat, command.String), Status: status, Start: delegationTime(start.String), End: delegationTime(end.String)}
+		t := delegationTool{ID: id, MessageID: msg.String, Name: name, Category: delegationCategory(name, cat, command.String), Status: status, Start: delegationTime(start.String), End: delegationTime(end.String),
+			WaitKind: waitKind.String, WaitStatus: waitStatus.String, WaitEvents: waitEvents}
+		if t.WaitKind != "" {
+			if at := delegationTime(waitEnd.String); at != nil && t.Start != nil && *at >= *t.Start {
+				t.WaitEnd = at
+			}
+		}
 		if duration.Valid {
 			v := duration.Float64
 			t.Duration = &v
@@ -1280,6 +1293,13 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			n.Self["toolTime"] = delegationNumber(delegationUnion(spans), quality, known, len(n.tools))
 			n.Self["toolAgent"] = n.Self["toolTime"]
 		}
+		if waits, known, total := delegationWaitSpans(n.tools); total > 0 {
+			quality := "observed"
+			if known < total {
+				quality = "partial"
+			}
+			n.Self["backgroundTime"] = delegationNumber(delegationUnion(waits), quality, known, total)
+		}
 		v := n.Self["toolSum"]
 		v.Total = len(n.tools)
 		if v.Known < len(n.tools) {
@@ -1662,6 +1682,13 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 				}
 			}
 			value = delegationUnion(spans)
+		case "backgroundTime":
+			spans := []delegationSpan{}
+			for _, n := range nodes {
+				waits, _, _ := delegationWaitSpans(n.tools)
+				spans = append(spans, waits...)
+			}
+			value = delegationUnion(spans)
 		case "children":
 			value = float64(max(0, len(nodes)-1))
 		}
@@ -1674,6 +1701,22 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 	return result
 }
 
+// delegationWaitSpans lists the harness waits among tools with a recorded
+// end, from launch to that end, and how many waits there are in all.
+func delegationWaitSpans(tools []delegationTool) (spans []delegationSpan, known, total int) {
+	for _, t := range tools {
+		if t.WaitKind == "" {
+			continue
+		}
+		total++
+		if t.Start != nil && t.WaitEnd != nil {
+			spans = append(spans, delegationSpan{*t.Start, *t.WaitEnd})
+			known++
+		}
+	}
+	return spans, known, total
+}
+
 // delegationCategory groups a call by its tool, or for a shell call by what
 // its primary command does, so "cat" and "rg" read and "git" is Git.
 func delegationCategory(name, cat, commandCategory string) string {
@@ -1682,7 +1725,7 @@ func delegationCategory(name, cat, commandCategory string) string {
 	switch {
 	case name == "wait_agent" || name == "wait" || name == "taskoutput":
 		return "wait"
-	case strings.Contains(name, "sleep") || strings.Contains(name, "poll") || name == "write_stdin":
+	case strings.Contains(name, "sleep") || strings.Contains(name, "poll") || name == "write_stdin" || name == "monitor" || name == "schedulewakeup":
 		return "poll"
 	case cat == "agent" || strings.Contains(name, "delegate") || strings.Contains(name, "spawn") || name == "task":
 		return "delegate"
@@ -2006,6 +2049,12 @@ type delegationMark struct {
 	Preview          string  `json:"preview,omitempty"`
 	PreviewTruncated bool    `json:"preview_truncated,omitempty"`
 	Status           string  `json:"status,omitempty"`
+	// A harness wait runs on from End to WaitEnd (nil: not recorded). The
+	// call's own End stays its launch acknowledgement.
+	WaitKind   string   `json:"wait_kind,omitempty"`
+	WaitEnd    *float64 `json:"wait_end,omitempty"`
+	WaitStatus string   `json:"wait_status,omitempty"`
+	WaitEvents int      `json:"wait_events,omitempty"`
 }
 
 func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request, snapshot *delegationSnapshot) {
@@ -2082,13 +2131,18 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 			if t.End != nil && *t.End >= *t.Start {
 				stop = *t.End
 			}
-			if stop < start || *t.Start > end {
+			reach := stop
+			if t.WaitEnd != nil {
+				reach = max(reach, *t.WaitEnd)
+			}
+			if reach < start || *t.Start > end {
 				continue
 			}
 			knots = append(knots, *t.Start, stop)
-			mark := delegationMark{Start: *t.Start, End: stop, EndKnown: t.End != nil && *t.End >= *t.Start, Category: t.Category, Count: 1, Error: t.Status == "error", ToolID: t.ID, MessageID: t.MessageID, Name: t.Name}
-			// Small neighboring calls share a mark. Errors retain their own reference.
-			if q.Get("labels") != "1" && stop-*t.Start < bucket && len(marks) < 2000 && !mark.Error {
+			mark := delegationMark{Start: *t.Start, End: stop, EndKnown: t.End != nil && *t.End >= *t.Start, Category: t.Category, Count: 1, Error: t.Status == "error", ToolID: t.ID, MessageID: t.MessageID, Name: t.Name,
+				WaitKind: t.WaitKind, WaitEnd: t.WaitEnd, WaitStatus: t.WaitStatus, WaitEvents: t.WaitEvents}
+			// Small neighboring calls share a mark. Errors and waits retain their own reference.
+			if q.Get("labels") != "1" && stop-*t.Start < bucket && len(marks) < 2000 && !mark.Error && mark.WaitKind == "" {
 				key := fmt.Sprintf("%s:%d", t.Category, int((*t.Start-start)/bucket))
 				if existing := groups[key]; existing != nil {
 					existing.End = max(existing.End, stop)

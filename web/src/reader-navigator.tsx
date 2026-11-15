@@ -59,13 +59,16 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
   const keyEdited=useCallback(()=>{panel.dispatchEvent(new Event('pharos:reader-key-edit'));},[panel]);
   const [visibility,selectKey]=useTimelineVisibility(true,keyEdited);
   const [skipIdle]=useViewState<boolean>('timeline_idle',true);
+  const [skipWaits]=useViewState<boolean>('timeline_waits',false);
   const [singleSession,setSingleSession]=useState(()=>panel.parentElement?.dataset.readerSingleSession==='true');
   useEffect(()=>{const reader=panel.parentElement;if(!reader)return;const update=()=>setSingleSession(reader.dataset.readerSingleSession==='true');reader.addEventListener('pharos:reader-sessions',update);update();return()=>reader.removeEventListener('pharos:reader-sessions',update);},[panel]);
-  const [workspaceGaps,setWorkspaceGaps]=useState<IdleGap[]|undefined>(()=>(panel as HTMLElement&{pharosReaderIdleGaps?:IdleGap[]}).pharosReaderIdleGaps);
-  useEffect(()=>{const update=()=>setWorkspaceGaps((panel as HTMLElement&{pharosReaderIdleGaps?:IdleGap[]}).pharosReaderIdleGaps);panel.addEventListener('pharos:reader-idle',update);update();return()=>panel.removeEventListener('pharos:reader-idle',update);},[panel]);
+  type GapPanel=HTMLElement&{pharosReaderIdleGaps?:IdleGap[];pharosReaderWaitGaps?:IdleGap[]};
+  const [workspaceGaps,setWorkspaceGaps]=useState<IdleGap[]|undefined>(()=>(panel as GapPanel).pharosReaderIdleGaps);
+  const [waitGaps,setWaitGaps]=useState<IdleGap[]|undefined>(()=>(panel as GapPanel).pharosReaderWaitGaps);
+  useEffect(()=>{const update=()=>{setWorkspaceGaps((panel as GapPanel).pharosReaderIdleGaps);setWaitGaps((panel as GapPanel).pharosReaderWaitGaps);};panel.addEventListener('pharos:reader-idle',update);update();return()=>panel.removeEventListener('pharos:reader-idle',update);},[panel]);
   const host=useRef<HTMLElement>(null),turnInspector=useRibbonInspector();
   const clock=useMemo(()=>readerNavigatorClock(data.messages,data.marks),[data]);
-  const baseScale=useMemo(()=>readerNavigatorScale(clock,data.callerIDs,skipIdle,workspaceGaps),[clock,data.callerIDs,skipIdle,workspaceGaps]);
+  const baseScale=useMemo(()=>readerNavigatorScale(clock,data.callerIDs,skipIdle,workspaceGaps,skipWaits,waitGaps),[clock,data.callerIDs,skipIdle,workspaceGaps,skipWaits,waitGaps]);
   const [trackPx,setTrackPx]=useState(640);
   // The Timeline key's Human events chips choose the dimensions drawn here; the Highlights key's Engagement chips choose the underlines.
   const humanKeys=useMemo(()=>humanEventDimensions((data.humanEvents??[]).filter(event=>clock.byID.has(event.message_id))).map(({id,name,className})=>({id,name,className})),[data,clock]);
