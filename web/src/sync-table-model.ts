@@ -78,14 +78,9 @@ export function operationHistoryTable(operations: SyncRecord[] = []): SyncTable 
   }), empty: "No background work recorded yet. It will appear here after it runs." };
 }
 
-export function syncTables(status: SyncRecord): Record<"history" | "sources" | "costs" | "accuracy" | "coverage" | "deferred", SyncTable> {
+export function syncTables(status: SyncRecord): Record<"sources" | "costs" | "accuracy" | "coverage" | "deferred", SyncTable> {
   const table = (key: keyof typeof syncSchemas, rows: SyncRecord[], empty: string): SyncTable => ({ schema: syncSchemas[key], rows, empty });
   return {
-    history: table("history", (status.history ?? []).map((run: SyncRecord) => ({
-      id: runKey(run), finished_at: validDate(run.finished_at), result: resultLabel(run), sources: sourceNames(run).join(", ") || null,
-      ...Object.fromEntries(["conversations", "messages_in_changed_groups", "seconds", "cpu_seconds", "rss_observed_peak_bytes", "changed_groups", "cpu_percent_one_core", "rss_baseline_bytes", "allocated_bytes"].map(key => [key, measured(run[key])])),
-      state: run.state ?? null, trigger: run.trigger ?? null, class: run.class ?? null, verification: run.audit?.outcome ?? null,
-    })), "No runs yet. Use Index changes now to index your selected sources."),
     sources: table("sources", rows(status.source_states, source => source.source_name).map(source => ({ ...source,
       attempted_at: validDate(source.attempted_at), succeeded_at: validDate(source.succeeded_at), last_capture_at: validDate(source.last_capture_at), error: source.error || null,
       status: source.error ? "Error" : source.pending_preservation ? "Needs capture" : "Up to date",

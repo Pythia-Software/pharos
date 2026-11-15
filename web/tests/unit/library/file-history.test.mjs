@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  age, blameRows, changeText, checkoutText, commitState, commitsByDay, directoryTab, entryText, fileBreadcrumbs, fileHistoryNotice, fileHistoryURL, filePageURL, fileTab, fileTabs, fileTreeKey,
-  gitText, keepFilesView, linesText, linkText, notInTreeText, parentDir, parseUnifiedDiff, placeText, readFilePageRoute, reworkText, sessionCommits, treeAncestors, treeText,
+  age, blameRows, changeText, commitState, commitsByDay, directoryTab, entryText, fileBreadcrumbs, fileHistoryNotice, fileHistoryURL, filePageURL, fileTab, fileTabs, fileTreeKey,
+  keepFilesView, linesText, linkText, notInTreeText, parentDir, parseUnifiedDiff, placeText, readFilePageRoute, reworkText, sessionCommits, treeAncestors, treeText,
 } from "../../../src/file-history-model";
 import { workFilesSummary } from "../../../src/work-files";
 import { loadClassicScript } from "../helpers/classic-script.mjs";
@@ -15,16 +15,7 @@ test("a file history link reads back, with or without its project", () => {
   }
 });
 
-test("missing Git facts read as not applicable or not checked, never as none", () => {
-  assert.match(gitText({ status: "not_applicable" }, 0), /folder/);
-  assert.equal(gitText({ status: "not_checked", reason: "Local Git has not checked this repository on this Mac yet." }, 0), "Local Git has not checked this repository on this Mac yet.");
-  assert.match(gitText({ status: "checked" }, 0), /no commit/);
-  assert.match(gitText({ status: "checked" }, 2), /^2 commits/);
-  // A list cut at its bound counts only the commits shown.
-  assert.match(gitText({ status: "checked", commits_since: "2026-09-01T10:00:00Z", commits_truncated: true }, 200), /^The 200 commits that most recently changed this file/);
-  // Git is read from the first session edit: an empty list says since when.
-  assert.match(gitText({ status: "checked", commits_since: "2026-09-01T10:00:00Z" }, 0), /no commit of this file since 2026-09-01\. Earlier commits are not read/);
-  // A tool that recorded no counts is not a change of zero lines.
+test("a tool that recorded no line counts is not a change of zero lines", () => {
   assert.equal(linesText(null, null), "lines not recorded");
   assert.equal(linesText(1200, 0), "+1,200 −0");
 });
@@ -79,9 +70,6 @@ test("a file's tabs: Git's views for a repository file, its sessions' edits for 
   assert.equal(directoryTab("", true), "files");
   assert.equal(directoryTab("commits", false), "files");
   assert.equal(directoryTab("sessions", false), "sessions");
-  assert.match(checkoutText({ status: "set", path: "/Users/me/app" }), /from \/Users\/me\/app/);
-  assert.equal(checkoutText({ status: "unavailable", reason: "The checkout is gone from this Mac: /x" }), "The checkout is gone from this Mac: /x");
-  assert.match(checkoutText({ status: "unset" }), /Choose/);
 });
 
 test("a commit's diff reads file by file with each side's line numbers", () => {

@@ -6,7 +6,6 @@
   let activeRun = null;
   let verificationRun = null;
   let runningIds = new Set();
-  let openIssues = [];
   const node = (tag, text, className = '') => {
     const element = document.createElement(tag);
     element.textContent = text;
@@ -172,30 +171,12 @@
   }
 
   function renderHeader(activity) {
-    const action = document.getElementById('headerSync');
-    if (!action) return;
+    if (!document.getElementById('headerSync')) return;
     const active = runningRun(activity);
     const wasActive = Boolean(activeRun);
     activeRun = active || null;
     // status-panel.js owns the header's Index changes state.
-    if (window.pharosStatusStore?.enabled() === true) {
-      if (wasActive && !active) window.pharosLibrary?.refresh?.();
-      window.pharosLibrary?.refreshSyncControls?.();
-      return;
-    }
-    // A running sync is stopped from the drive panel, not the header.
-    if (active) {
-      action.disabled = true;
-      action.setAttribute('aria-busy', 'true');
-      const automatic = active.kind === 'automatic-sync';
-      action.title = automatic ? `Indexing changes: ${active.phase === 'verifying' ? 'verifying a conversation' : active.phase === 'checking' ? 'checking for changes' : `${active.conversations} conversations`}` : active.kind === 'manual-sync' ? `Manual index: ${active.phase}` : `${active.kind}: ${active.phase}`;
-      action.setAttribute('aria-label', action.title);
-    } else {
-      action.setAttribute('aria-busy', 'false');
-      action.title = 'Index changes';
-      action.setAttribute('aria-label', 'Index changes');
-      if (wasActive) window.pharosLibrary?.refresh?.();
-    }
+    if (wasActive && !active) window.pharosLibrary?.refresh?.();
     window.pharosLibrary?.refreshSyncControls?.();
   }
 
@@ -295,13 +276,6 @@
         renderDashboard();
         window.dispatchEvent(new Event('pharos:sync-status'));
       }
-      // Open mismatches turn the drive chip's dot red; the drive panel lists them.
-      const issues = await call('/api/sync/issues');
-      const open = issues.issues?.filter(issue => issue.state === 'open') || [];
-      if (JSON.stringify(open.map(issue => issue.id)) !== JSON.stringify(openIssues.map(issue => issue.id))) {
-        openIssues = open;
-        window.pharosLibrary?.renderAlerts?.();
-      }
     } catch (error) { if (!status) showError(error.message); }
     finally { busy = false; schedule(); }
   }
@@ -316,7 +290,7 @@
   }
   document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else refresh({automatic: true}); });
   window.addEventListener('pharos:route', () => refresh());
-  window.pharosSync = {status: () => status, tableStatus: () => tableStatus, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
+  window.pharosSync = {status: () => status, tableStatus: () => tableStatus, refresh, recovery,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.
     finishedRunsChanged, runningRun, preservationState, verificationSummary, format: {seconds, memory, when, number, percent}};
   refresh();

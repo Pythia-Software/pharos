@@ -218,24 +218,6 @@ export function linesText(added: number | null | undefined, removed: number | nu
   return `+${(added ?? 0).toLocaleString("en-US")} −${(removed ?? 0).toLocaleString("en-US")}`;
 }
 
-// gitText is what local Git contributes for a file: commits where it checked
-// the repository, and otherwise why there are none. It is never an error:
-// a folder's history comes from transcripts alone. Local Git is read from
-// the repository's first recorded edit, so commits are counted since then.
-// A list cut at its bound names only the commits shown.
-export function gitText(git: FileHistoryGit, commits: number): string {
-  if (git.status === "not_applicable") return "A folder, not a Git repository: this history comes from the agents' recorded edits.";
-  if (git.status === "checked") {
-    const since = git.commits_since ? ` since ${git.commits_since.slice(0, 10)}` : "";
-    const count = `${commits.toLocaleString("en-US")} commit${commits === 1 ? "" : "s"}`;
-    const found = !commits ? `Local Git found no commit of this file${since}.`
-      : git.commits_truncated ? `The ${count} that most recently changed this file, from local Git; older ones are not shown.`
-      : `${count} changed this file${since}, from local Git.`;
-    return since ? `${found} Earlier commits are not read.` : found;
-  }
-  return git.reason || "Local Git has not checked this repository.";
-}
-
 // commitState is where a commit stands: reverted, on mainline, or only on
 // a branch. Unknown mainline state is left unsaid.
 export function commitState(commit: FileHistoryCommit): string {
@@ -295,13 +277,6 @@ export type FileChange = {
 };
 export type FileChanges = { project?: FileProject; choices?: FileProject[]; path: string; changes?: FileChange[]; more?: boolean; offset?: number; note?: string };
 export type FileFind = { project?: FileProject; choices?: FileProject[]; files: { path: string; in_tree: boolean; url: string }[]; more?: boolean };
-
-// checkoutText says where Git views read from, or why they cannot yet.
-export function checkoutText(checkout: Pick<RepositoryCheckout, "status" | "path" | "reason"> | undefined): string {
-  if (!checkout) return "";
-  if (checkout.status === "set") return `Reading code, blame and history from ${checkout.path}.`;
-  return checkout.reason || "Choose this repository’s checkout on this Mac to see its code, blame and history.";
-}
 
 // A unified diff, file by file and hunk by hunk, each line with its number
 // on the old and new side.

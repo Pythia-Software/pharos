@@ -1290,7 +1290,6 @@ export function DelegationExplorer({
                 </>
               ) : range && data.start != null && data.end != null ? (
                 <ParallelActivity
-                  timeline
                   single={single}
                   compact={compact}
                   previewOnly={splitReader}
@@ -1658,10 +1657,10 @@ export function ParallelActivity({
   openNode,
   onSnapshotChanged,
   onSnapshotLoaded,
-  timeline=false,single=false,compact=false,previewOnly=false,openOverview,
+  single=false,compact=false,previewOnly=false,openOverview,
 }: {
   previewOnly?:boolean;openOverview?:()=>void;
-  timeline?:boolean;single?:boolean;compact?:boolean;
+  single?:boolean;compact?:boolean;
   endpoint: string;
   includeUncertain?: boolean;
   /** The explorer's loaded relatives; lanes must name the same snapshot. */
@@ -1691,19 +1690,16 @@ export function ParallelActivity({
   }, [rows, data.rows]);
   const ids = laneRows.map((n) => n.id).join(",");
   const nativeLabels=useMemo(()=>nativeTimelineLabels(activity?.snapshot===data.snapshot&&activity.sessions===ids&&activity.start===range[0]&&activity.end===range[1]?activity:null),[activity,data.snapshot,ids,range[0],range[1]]);
-  const labelData=nativeLabels;
   // Events per kind across every session (whole conversations, not the zoom window): a merged mark shows its rarest kind (event-merge.ts).
   const eventCounts=useMemo(()=>eventKindCounts([...nativeLabels.events.values()].flat()),[nativeLabels]);
-  const actors=useMemo(()=>timeline?splitTimelineCallers(nativeLabels.messages,rows):{caller:[],messages:labelData?.messages??new Map()},[timeline,nativeLabels,rows,labelData]);
+  const actors=useMemo(()=>splitTimelineCallers(nativeLabels.messages,rows),[nativeLabels,rows]);
   const allMessages=useMemo(()=>[...nativeLabels.messages.values()].flat(),[nativeLabels]);
-  const [timelineDisclosures]=useViewState<Record<string,boolean>>("disclosures",{},timeline);
-  const [timelineVisibility,setTimelineVisibility]=useViewState<TimelineVisibility>("timeline_visibility",{},timeline);
-  const recursive=timeline;
+  const [timelineDisclosures]=useViewState<Record<string,boolean>>("disclosures",{});
+  const [timelineVisibility,setTimelineVisibility]=useViewState<TimelineVisibility>("timeline_visibility",{});
   const [brush, setBrush] = useState<Range | null>(null);
-  const [workExpanded,setWorkExpanded]=useViewState<string[]>("delegation_expanded",[],location.pathname.startsWith("/work/"));
-  const expandedIDs=workExpanded,setExpandedIDs=setWorkExpanded;
-  const expanded = useMemo(() => new Set(expandedIDs), [expandedIDs]);
-  const setExpanded = (change: (value: Set<string>) => Set<string>) => setExpandedIDs(previous => [...change(new Set(previous))].sort());
+  // No control reads delegation_expanded since the detailed lanes went; the
+  // binding keeps the field in the view contract until it is retired there.
+  useViewState<string[]>("delegation_expanded",[],location.pathname.startsWith("/work/"));
   const gesture = useRef<{
     pointer: number;
     capture: HTMLElement;
@@ -1726,7 +1722,7 @@ export function ParallelActivity({
   const [pending, setPending] = useState(true);
   // Idle gaps are found over the whole workspace, so the overview and every
   // zoomed window share one clock; a zoomed window fetches the whole range once.
-  const [skipIdle, setSkipIdle] = useViewState<boolean>("timeline_idle", true, timeline && location.pathname.startsWith("/work/"));
+  const [skipIdle, setSkipIdle] = useViewState<boolean>("timeline_idle", true, location.pathname.startsWith("/work/"));
   const [wholeActivity, setWholeActivity] = useState<(Activity & { sessions: string }) | null>(null);
   const track = useRef<HTMLDivElement>(null);
   const clock = useRef<HTMLDivElement>(null);
@@ -1744,7 +1740,7 @@ export function ParallelActivity({
     if (track.current) observer.observe(track.current);
     if (clock.current) observer.observe(clock.current);
     return () => { clearTimeout(timer); observer.disconnect(); };
-  }, [timeline,recursive]);
+  }, []);
   useEffect(() => {
     setMark(null);
     setBrush(null);
@@ -1759,7 +1755,7 @@ export function ParallelActivity({
       end: String(range[1]),
       sessions: ids,
       width: String(trackWidth),
-      ...(timeline ? {labels:"1"} : {}),
+      labels: "1",
       ...(relatives ? {relatives} : {}),
       ...(includeUncertain ? {include_uncertain: "1"} : {}),
     });
@@ -1778,14 +1774,14 @@ export function ParallelActivity({
         if (!controller.signal.aborted) setPending(false);
       });
     return () => controller.abort();
-  }, [endpoint, relatives, includeUncertain, ids, data, range, trackWidth,timeline,onSnapshotChanged]);
+  }, [endpoint, relatives, includeUncertain, ids, data, range, trackWidth,onSnapshotChanged]);
   const visibleActivity =
     activity?.snapshot === data.snapshot && activity.sessions === ids && activity.start === range[0] && activity.end === range[1]
       ? activity
       : null;
   const wholeWindow = range[0] === full[0] && range[1] === full[1];
   useEffect(() => {
-    if (!timeline || !skipIdle || wholeWindow) return;
+    if (!skipIdle || wholeWindow) return;
     if (wholeActivity?.snapshot === data.snapshot && wholeActivity.start === full[0] && wholeActivity.end === full[1] && wholeActivity.sessions === ids) return;
     const controller = new AbortController();
     const params = new URLSearchParams({ snapshot: data.snapshot, start: String(full[0]), end: String(full[1]), sessions: ids, width: "1000", labels: "1", ...(relatives ? {relatives} : {}), ...(includeUncertain ? {include_uncertain: "1"} : {}) });
@@ -1798,17 +1794,17 @@ export function ParallelActivity({
       }
     });
     return () => controller.abort();
-  }, [timeline, skipIdle, wholeWindow, endpoint, relatives, includeUncertain, ids, data, full[0], full[1],onSnapshotChanged]);
+  }, [skipIdle, wholeWindow, endpoint, relatives, includeUncertain, ids, data, full[0], full[1],onSnapshotChanged]);
   const idleSource = wholeWindow ? visibleActivity : wholeActivity?.snapshot === data.snapshot && wholeActivity.sessions === ids && wholeActivity.start === full[0] && wholeActivity.end === full[1] ? wholeActivity : null;
   useEffect(() => {
     // Both reads must settle before recovery is rearmed: a successful visible
     // window must not fuel endless retries of a failing idle-window read.
-    if (visibleActivity && (!timeline || !skipIdle || wholeWindow || idleSource)) onSnapshotLoaded(data.snapshot);
-  }, [visibleActivity, timeline, skipIdle, wholeWindow, idleSource, data.snapshot, onSnapshotLoaded]);
+    if (visibleActivity && (!skipIdle || wholeWindow || idleSource)) onSnapshotLoaded(data.snapshot);
+  }, [visibleActivity, skipIdle, wholeWindow, idleSource, data.snapshot, onSnapshotLoaded]);
   const gaps = useMemo<IdleGap[]>(() => {
-    if (!timeline || !idleSource) return [];
+    if (!idleSource) return [];
     return timelineActivityGaps(idleSource,rows);
-  }, [timeline, idleSource, rows]);
+  }, [idleSource, rows]);
   const shownGaps = skipIdle ? gaps : [];
   const fullScale = useMemo(() => timeScale(full, shownGaps), [full[0], full[1], shownGaps]);
   const windowScale = useMemo(() => timeScale(range, shownGaps), [range[0], range[1], shownGaps]);
@@ -1822,8 +1818,7 @@ export function ParallelActivity({
   ],range),[actors,visibleActivity,shownLaneRows,nativeLabels,allMessages,range[0],range[1]]);
   const eventsExpanded=!previewOnly&&legend.populated.some(id=>timelineDisclosures[`delegation-labels:${id}:session`]);
   const hideEvents=compact || previewOnly;
-  const columns=useTimelineColumns(timeline,{eventsCollapsed:timeline&&!eventsExpanded});
-  const width = range[1] - range[0];
+  const columns=useTimelineColumns(true,{eventsCollapsed:!eventsExpanded});
   function change(next: Range) {
     setRange(clampRange(next, full));
   }
@@ -1892,14 +1887,6 @@ export function ParallelActivity({
     onPointerCancel: finishBrush,
     onLostPointerCapture:finishBrush,
   };
-  function style(span: Span): React.CSSProperties {
-    const left = Math.max(range[0], span.start),
-      right = Math.min(range[1], Math.max(span.start, span.end));
-    return {
-      left: `${((left - range[0]) / width) * 100}%`,
-      width: `${(Math.max(0, right - left) / width) * 100}%`,
-    };
-  }
   const ticks = timelineTickLabels(range,Math.max(2,Math.min(6,Math.floor((clockWidth||350)/100))),windowScale.compressed?windowScale.time:undefined);
   const cutLabels = cutAxisLabels(ticks.map((_,i)=>i/Math.max(1,ticks.length-1)),windowScale.cuts,clockWidth||350);
   const lanes = new Map(visibleActivity?.lanes.map((l) => [l.session, l]));
@@ -1907,11 +1894,11 @@ export function ParallelActivity({
   const eventsPendingStatus = timelineEventsPendingNote(timelineEventsPending(rows, lanes, shownLaneRows, data.events_pending_sessions));
   const sourceHref=(node:Session,item:RibbonObservation)=>ribbonSourceURL(item,{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href);
   // A Human events marker opens its message in the conversation.
-  const humanHref=(node:Session,e:HumanEvent)=>ribbonSourceURL({id:e.id,start:0,end:0,title:"",color:"",thinking:false,message:(labelData.messages.get(node.id)??[]).find(message=>message.id===e.message_id)??({id:e.message_id} as LabelMessage)},{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href);
+  const humanHref=(node:Session,e:HumanEvent)=>ribbonSourceURL({id:e.id,start:0,end:0,title:"",color:"",thinking:false,message:(nativeLabels.messages.get(node.id)??[]).find(message=>message.id===e.message_id)??({id:e.message_id} as LabelMessage)},{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href);
   const humanKeys=humanEventDimensions([...nativeLabels.human.values()].flat()).map(({id,name,className})=>({id,name,className}));
   const eventHref=(node:Session,e:AgentEventLink)=>withEventLink(ribbonSourceURL({id:e.id,start:0,end:0,title:"",color:"",thinking:false,message:{id:e.message_id} as LabelMessage},{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href),e);
   return (
-    <div className={`delegation-parallel ${previewOnly?"is-preview":""} ${recursive?"is-recursive":""} ${timeline?"is-timeline":""} ${hideEvents?"without-events":""}`} ref={track} style={timeline?columns.style:undefined}>
+    <div className={`delegation-parallel ${previewOnly?"is-preview":""} is-recursive is-timeline ${hideEvents?"without-events":""}`} ref={track} style={columns.style}>
       {previewOnly?<button type="button" className="lt-preview-activate" aria-label="Open full-width timeline" onPointerDown={event=>{if(event.button===0)event.currentTarget.setPointerCapture(event.pointerId);}} onClick={openOverview}><span>Open timeline to explore <Icon name="arrow-right"/></span></button>:null}
       <div>
       <TimelineOverview
@@ -1924,30 +1911,9 @@ export function ParallelActivity({
         change={change}
         pending={pending}
         scale={fullScale}
-        idle={timeline&&!previewOnly?{skip:skipIdle,set:setSkipIdle,gaps:gaps.length}:undefined}
+        idle={!previewOnly?{skip:skipIdle,set:setSkipIdle,gaps:gaps.length}:undefined}
       />
-      {timeline?<TimelineLegend previewOnly={previewOnly} onOpenTimeline={openOverview} data-view-field="timeline_visibility" visibility={timelineVisibility} onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))} messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error} unknownTools={legend.unknownTools} events={[...nativeLabels.events.values()].flat()} human={humanKeys}/>:<div className="delegation-legend">
-        {!timeline?<span>
-          <i className="model" />
-          Model / orchestration · inferred
-        </span>:null}
-        {Object.entries(categories).map(([key, text]) => (
-          <span key={key}>
-            <i className={key} />
-            {text}
-          </span>
-        ))}
-        <span>
-          <i className="error" />
-          Error
-        </span>
-      </div>}
-      {!timeline?<p className="delegation-evidence-note">
-        Dark violet is inferred activity between nearby observations. Tools
-        punctuate this background; blank time is unclassified. Width is
-        call-to-result elapsed time, not CPU time or process lifetime. Wait
-        calls and polling are distinct; blocking time needs explicit boundaries.
-      </p>:null}
+      <TimelineLegend previewOnly={previewOnly} onOpenTimeline={openOverview} data-view-field="timeline_visibility" visibility={timelineVisibility} onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))} messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error} unknownTools={legend.unknownTools} events={[...nativeLabels.events.values()].flat()} human={humanKeys}/>
       {error && (
         <p className="delegation-error" role="alert">
           {error}
@@ -1970,41 +1936,19 @@ export function ParallelActivity({
           }
         }}
       >
-        {timeline?<div className="delegation-axis lt-resizable-axis">
+        <div className="delegation-axis lt-resizable-axis">
           <span className="lt-column-heading">Session{columns.handle('execution')}</span>
           {!hideEvents && <span className="lt-column-heading">Events{columns.handle('events')}</span>}
           <div ref={clock} className="lt-clock-heading" {...brushHandlers}>{ticks.map((tick,i)=>cutLabels.hiddenTicks.has(i)?null:<small key={i} style={{left:`${i/(ticks.length-1)*100}%`}}><span className="delegation-tick-date">{tick.date}</span><time dateTime={new Date(tick.at).toISOString()} title={localTime(tick.at)}>{tick.time}</time></small>)}{windowScale.cuts.map((cut,i)=><span key={cut.end} className="lt-idle-cut" style={{left:`${cut.fraction*100}%`}} title={`Nothing ran for ${duration(cut.end-cut.start)}; resumed ${localTime(cut.end)}`}>{cutLabels.labelled.has(i)?<time dateTime={new Date(cut.end).toISOString()}><b>{resumeTime.format(new Date(cut.end))}</b>+{idleDuration(cut.end-cut.start)}</time>:null}</span>)}</div>
-        </div>:<div className="delegation-axis">
-          <span className={recursive?"lt-axis-names":undefined}>{recursive?<><span>Agent session</span><span>Events</span></>:"Agent session"}</span>
-          <div ref={clock} {...brushHandlers}>
-            {ticks.map((tick, i) => (
-              <small key={i} style={{ left: `${i/(ticks.length-1)*100}%` }}>
-                <span className="delegation-tick-date">{tick.date}</span>
-                <time dateTime={new Date(tick.at).toISOString()} title={localTime(tick.at)}>{tick.time}</time>
-              </small>
-            ))}
-            {brush && (
-              <div
-                className="delegation-brush"
-                style={style({ start: brush[0], end: brush[1] })}
-              />
-            )}
-          </div>
-        </div>}
-        {timeline?<div className="delegation-lane lt-recursive-lane lt-caller-row" data-session-id="caller">
+        </div>
+        <div className="delegation-lane lt-recursive-lane lt-caller-row" data-session-id="caller">
           <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} caller sessionID={`caller:${data.rows[0]?.workspace_id??endpoint}`} depth={0} name="Caller" metadata="Human & supplied input" messages={actors.caller} boundaryMessages={allMessages} boundaryMarks={visibleActivity?.lanes.flatMap(lane=>lane.marks)??[]} marks={[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
             sourceHref={item=>{const owner=rows.find(row=>row.id===item.message?.session_id);return owner?sourceHref(owner,item):null;}}
             foldControl={<Icon name="human"/>} restore={()=>{}}
             select={item=>{if(!item.message)return;const owner=rows.find(row=>row.id===item.message!.session_id);if(owner){setEventID('label:'+item.message.id);openNode(owner,item.message.id,item.message.conversation_id);}}}/>
-        </div>:null}
+        </div>
         {shownLaneRows.map((n) => {
           const lane = lanes.get(n.id);
-          const detailed = expanded.has(n.id);
-          const visible =
-            n.start != null &&
-            n.end != null &&
-            n.start <= range[1] &&
-            n.end >= range[0];
           // What this lane leaves out: an error icon beside the model opens these.
           const laneNotes=(()=>{
             if(!lane)return [];
@@ -2020,139 +1964,16 @@ export function ParallelActivity({
             if(lane.events_pending)notes.push(eventsPendingNote);
             return notes;
           })();
-          if(recursive&&labelData)return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
-            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${peerPrefix(n)}${n.provider} · ${n.model||"model not recorded"}${parentNote(n)?` · ${parentNote(n)}`:""}`} notes={laneNotes} messages={actors.messages.get(n.id)??[]} boundaryMessages={timeline?labelData.messages.get(n.id):undefined} marks={lane?.marks??[]} inferred={timeline?[]:lane?.model_inferred??[]} taxonomy={labelData.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
-              openSession={timeline?()=>openNode(n):undefined}
-              sourceHref={timeline?item=>sourceHref(n,item):undefined}
-              events={timeline?nativeLabels.events.get(n.id):undefined} eventCounts={eventCounts} eventHref={timeline?e=>eventHref(n,e):undefined}
-              human={timeline?nativeLabels.human.get(n.id):undefined} humanHref={timeline?e=>humanHref(n,e):undefined}
+          return <div key={n.id} data-session-id={n.id} data-session={n.id} className={`delegation-lane lt-recursive-lane ${selected===n.id?"delegation-lane-current":""}`}>
+            <RecursiveSessionRibbon visibility={timelineVisibility} collapsed={previewOnly} hideEvents={hideEvents} current={selected===n.id} sessionID={n.id} depth={n.depth} branch={sessionBranches.get(n.id)} name={n.label} metadata={`${peerPrefix(n)}${n.provider} · ${n.model||"model not recorded"}${parentNote(n)?` · ${parentNote(n)}`:""}`} notes={laneNotes} messages={actors.messages.get(n.id)??[]} boundaryMessages={nativeLabels.messages.get(n.id)} marks={lane?.marks??[]} inferred={[]} taxonomy={nativeLabels.taxonomy} range={range} scale={windowScale} detail brushHandlers={brushHandlers} preview={brush}
+              openSession={()=>openNode(n)}
+              sourceHref={item=>sourceHref(n,item)}
+              events={nativeLabels.events.get(n.id)} eventCounts={eventCounts} eventHref={e=>eventHref(n,e)}
+              human={nativeLabels.human.get(n.id)} humanHref={e=>humanHref(n,e)}
               foldControl={!n.child_count?null:previewOnly?<span className="lt-preview-fold"><Icon name="tree"/></span>:<button type="button" className="delegation-chevron" aria-label={`${collapsed.has(n.id)?"Expand":"Collapse"} child sessions of ${n.label}`} aria-expanded={!collapsed.has(n.id)} title={collapsed.has(n.id) ? "Expand sessions" : "Collapse sessions"} onClick={()=>toggle(n)}><Icon name={collapsed.has(n.id)?"chevron-right":"chevron-down"}/></button>}
               restore={(item,anchor)=>{if(item.mark&&!mark&&eventID===JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category])){anchor.scrollIntoView({block:"nearest",inline:"nearest"});setMark({node:n,mark:item.mark,anchor});}}}
               select={(item,anchor)=>{if(item.message){setEventID("label:"+item.message.id);openNode(n,item.message.id,item.message.conversation_id);}else if(item.mark){setEventID(JSON.stringify([n.id,item.mark.message_id||item.mark.tool_id||item.mark.name,item.mark.start,item.mark.end,item.mark.category]));setMark({node:n,mark:item.mark,anchor});}}}/>
           </div>;
-          return (
-            <div
-              key={n.id} data-session-id={n.id}
-              data-session={n.id}
-              className={`delegation-lane ${detailed ? "detailed" : ""} ${selected === n.id ? "delegation-lane-current" : ""} ${!visible ? "delegation-ancestor" : ""}`}
-              onClick={(event) => {
-                if (!(event.target as HTMLElement).closest("button, a"))
-                  openNode(n);
-              }}
-            >
-              <div
-                className="delegation-lane-label"
-                style={{ paddingLeft: Math.min(n.depth, 8) * 12 + 6 }}
-              >
-                <button
-                  className="delegation-chevron"
-                  aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} title={collapsed.has(n.id) ? "Expand sessions" : "Collapse sessions"}
-                  disabled={!n.child_count}
-                  onClick={() => toggle(n)}
-                >
-                  {n.child_count ? (
-                    <Icon
-                      name={
-                        collapsed.has(n.id) ? "chevron-right" : "chevron-down"
-                      }
-                    />
-                  ) : (
-                    "·"
-                  )}
-                </button>
-                <button
-                  className="delegation-name" data-overflow-title=""
-                  onClick={() => openNode(n)}
-                >
-                  <strong>{n.label}</strong>
-                  <small>
-                    {n.provider} · {n.model || "unknown model"}
-                    {` · ${n.effort || "unknown"}`}
-                  </small>
-                </button>
-                <button
-                  className="delegation-activity-toggle"
-                  title={detailed ? "Collapse activity lanes" : "Expand activity lanes"}
-                  aria-label={`${detailed ? "Collapse" : "Expand"} activity for ${n.label}`}
-                  aria-expanded={detailed}
-                  onClick={() => {
-                    closeMark();
-                    setExpanded((old) => {
-                      const next = new Set(old);
-                      next.has(n.id) ? next.delete(n.id) : next.add(n.id);
-                      return next;
-                    });
-                  }}
-                >
-                  Activity <Icon name={detailed ? "chevron-down" : "chevron-right"} />
-                </button>
-              </div>
-              <div className="delegation-lane-track" {...brushHandlers}>
-                {ticks.map((_, i) => (
-                  <i
-                    key={i}
-                    className="delegation-gridline"
-                    style={{ left: `${i * 20}%` }}
-                  />
-                ))}
-                {lane?.model_inferred.map((span, i) => (
-                  <div
-                    key={i}
-                    className="delegation-model-bg"
-                    style={style(span)}
-                    title="Inferred model / orchestration; not measured processing time"
-                  />
-                ))}
-                {detailed &&
-                  Object.keys(categories).map((category, i) => (
-                    <small
-                      key={category}
-                      className="delegation-category-label"
-                      style={{ top: i * 34 + 3 }}
-                    >
-                      {categories[category]}
-                    </small>
-                  ))}
-                {lane?.marks.map((m, i) => (
-                  <button data-view-field="delegation_event"
-                    key={i}
-                    className={`delegation-mark ${m.category} ${m.error ? "failed" : ""}`}
-                    style={{
-                      ...style(m),
-                      top: detailed
-                        ? Object.keys(categories).indexOf(m.category) * 34 + 20
-                        : m.error
-                          ? 25
-                          : 9,
-                    }}
-                    title={`${m.name}${m.count > 1 ? ` · ${m.count} grouped calls` : ""} · ${m.error ? "reported error · " : ""}${m.end_known ? duration(m.end - m.start) : "end unavailable"}\n${localTime(m.start)}${m.end_known ? ` → ${localTime(m.end)}` : ""}`}
-                    aria-label={`${m.name}, ${m.count} call${m.count === 1 ? "" : "s"}${m.error ? ", error" : ""}`}
-                    aria-haspopup="dialog"
-                    data-event-id={JSON.stringify([n.id,m.message_id||m.tool_id||m.name,m.start,m.end,m.category])}
-                    ref={anchor=>{if(anchor && !mark && eventID===anchor.dataset.eventId) setMark({node:n,mark:m,anchor});}}
-                    aria-expanded={mark?.mark === m && mark?.node.id === n.id}
-                    onClick={(event) => {
-                      setEventID(event.currentTarget.dataset.eventId!);
-                      setMark({ node: n, mark: m, anchor: event.currentTarget });
-                    }}
-                  >
-                    {m.count > 1 ? m.count : ""}
-                  </button>
-                ))}
-                {brush && (
-                  <div
-                    className="delegation-brush"
-                    style={style({ start: brush[0], end: brush[1] })}
-                  />
-                )}
-              </div>
-              {lane?.truncated && (
-                <small className="delegation-truncation">
-                  Showing first 2,400 marks; zoom in for remaining events.
-                </small>
-              )}
-            </div>
-          );
         })}
       </div>
       {eventsPendingStatus ? <small className="delegation-truncation" role="status">{eventsPendingStatus}</small> : null}
@@ -2174,7 +1995,7 @@ export function ParallelActivity({
         />
       )}
       {selected && !previewOnly && (
-        <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Selected agent session · estimated activity periods">
+        <ViewDisclosure viewKey="delegation:activity-periods" className="delegation-definitions" summary="Selected agent session · estimated activity periods">
           <p>
             Activity periods group tool calls, model requests and the session’s
             first and last messages; a gap over 30 minutes starts a new period.

@@ -249,8 +249,8 @@
   const running = operation => operation && !TERMINAL.has(operation.state);
   const RANK = {safe: 0, 'safe-in': 1, busy: 2, unsafe: 3};
   const VERDICT_DOT = {safe: '', 'safe-in': 'busy', busy: 'warn', unsafe: 'bad'};
-  // Work that the header's Index changes waits for, as headerBusy in
-  // library.js does for activities: captures, indexes and the upgrade.
+  // Work that the header's Index changes waits for: captures, indexes and
+  // the upgrade.
   const INDEX_KINDS = /^(index\.|capture\.|ingest\.|library\.(update|rebuild|upgrade)$|host\.add$)/;
 
   // One line per top-level operation. The primary part is label · the state
@@ -1350,7 +1350,6 @@
 
   function open({fromURL = false, focus = true} = {}) {
     if (!chip() || panel) return;
-    window.pharosLibrary?.closePanel?.({fromURL: true});
     if (!fromURL) window.pharosView?.write('overlay', 'drive');
     panel = node('section', 'pharos-drive-panel pharos-status-panel');
     panel.id = 'pharosStatusPanel';

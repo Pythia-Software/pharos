@@ -22,10 +22,6 @@
   // After this long on polling, the store tries the stream again.
   const RETRY_STREAM_MS = 30000;
 
-  // The unified activity panel is the only one now. library.js still asks,
-  // until its old drive panel is removed.
-  const enabled = () => true;
-
   // The endpoints: the broker's in the app, the service's otherwise.
   const endpoints = managed => managed
     ? {stream: '/api/app/status/stream', poll: '/api/app/status'}
@@ -325,7 +321,7 @@
   document.addEventListener('visibilitychange', () => store?.visibility());
 
   window.pharosStatusStore = {
-    enabled, start,
+    start,
     current: () => store?.current() || null,
     subscribe: listener => instance().subscribe(listener),
     fresh: () => instance().fresh(),
