@@ -77,6 +77,25 @@ func TestHarnessWaitsRunToTheNoticeThatEndsThem(t *testing.T) {
 	check("toolu_late", waitBackgroundCommand, "", "", "", 0)
 	check("toolu_stop", "", "", "", "", 0)
 
+	// The conversation reader gets each call's wait on its message.
+	conversations, err := queryMaps(catalog.DB, `SELECT id,workspace_id FROM conversations`)
+	if err != nil || len(conversations) != 1 {
+		t.Fatal(conversations, err)
+	}
+	detail, err := catalog.WorkConversationContext(t.Context(), firstString(conversations[0]["workspace_id"]), firstString(conversations[0]["id"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waits := map[string]map[string]any{}
+	for _, message := range detail["messages"].([]map[string]any) {
+		if wait, ok := message["harness_wait"].(map[string]any); ok {
+			waits[firstString(message["call_id"])] = wait
+		}
+	}
+	if wait := waits["toolu_monitor"]; len(waits) != 6 || wait["kind"] != waitMonitor || wait["ended_at"] != "2026-11-13T18:33:00.000Z" || wait["status"] != "expired" || wait["events"] != int64(1) {
+		t.Fatalf("reader waits: %v", waits)
+	}
+
 	// The session goes on in a later read: the old session's command is
 	// reported unfinished, so its end stays unknown, and a new command's
 	// completion is attached to its launch.

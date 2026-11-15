@@ -918,8 +918,17 @@ function readerNavigatorMarks(model,describe=message=>({name:toolPayload(message
     return{start,end:start!==null&&Number.isFinite(end)?Math.max(start,end):null,
       end_known:start!==null&&Number.isFinite(end)&&end>=start,
       category:readerTimelineCategory(message),
-      count:1,error:toolFailed(message,results),message_id:message.id,tool_id:message.call_id||message.native_id,...describe(message)};
+      count:1,error:toolFailed(message,results),message_id:message.id,tool_id:message.call_id||message.native_id,...readerHarnessWait(message),...describe(message)};
   });
+}
+// A background command, Monitor watch or scheduled wakeup the call started
+// (harness_wait, from the tool index): its kind and recorded end, which is
+// null when the transcript does not show one.
+function readerHarnessWait(message){
+  const wait=message.harness_wait;
+  if(!wait||typeof wait.kind!=='string'||!wait.kind)return{};
+  const end=Date.parse(wait.ended_at);
+  return{wait_kind:wait.kind,wait_end:Number.isFinite(end)?end:null,wait_status:typeof wait.status==='string'?wait.status:undefined,wait_events:Number(wait.events)||0};
 }
 
 // File paths

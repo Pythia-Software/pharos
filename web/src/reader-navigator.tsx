@@ -6,7 +6,7 @@ import type {RibbonReveal} from './label-session-ribbon';
 import {useRibbonInspector} from './label-ribbon-inspector';
 import type {IdleGap} from './timeline-idle-model';
 import {TimelineLegend,timelineKeyContent,timelineLegendCounts,timelineLegendDomains,timelineLegendWindow,useTimelineVisibility} from './timeline-legend';
-import {timelineSectionVisible,timelineValueVisible,visibleTimelineTree} from './timeline-visibility';
+import {timelineSectionVisible,timelineValueVisible,timelineWaitsVisible,visibleTimelineTree,visibleWaitMarks} from './timeline-visibility';
 import {TimelineRow,timelineEventLayer,type TimelineLane,type TimelineSurface} from './timeline-rows';
 import {useViewState} from './view-state';
 import {voiceClock,type ReaderVoice} from './reader-navigator-model';
@@ -75,7 +75,8 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
   const humanGroups=useMemo(()=>humanEventGroups(data.humanEvents??[],id=>clock.byID.get(id)?.[0],dimension=>timelineSectionVisible(visibility,'human')&&timelineValueVisible(visibility,'human',dimension)),[data,clock,visibility]);
   const humanLayout=useMemo(()=>humanEventLayout(baseScale,humanGroups,trackPx),[baseScale,humanGroups,trackPx]),scale=humanLayout.scale;
   const ribbonMessages=useMemo(()=>[...new Map(clock.messages.filter(message=>['message','reasoning','thinking'].includes(message.kind)).map(message=>[message.id,message])).values()],[clock]);
-  const tree=useMemo(()=>sessionRibbonTree(ribbonMessages,clock.marks,[],data.taxonomy,clock.range,true,false,clock.messages,clock.marks,data.events),[data,clock,ribbonMessages]);
+  const waitsShown=timelineWaitsVisible(visibility),marks=useMemo(()=>visibleWaitMarks(clock.marks,visibility),[clock,waitsShown]);
+  const tree=useMemo(()=>sessionRibbonTree(ribbonMessages,marks,[],data.taxonomy,clock.range,true,false,clock.messages,marks,data.events),[data,clock,ribbonMessages,marks]);
   const visibleTree=useMemo(()=>tree?visibleTimelineTree(tree,visibility):null,[tree,visibility]);
   const contexts=useMemo(()=>{const nextByStream=new Map<string,number>();return data.contexts.map(entry=>({...entry,end:0})).reverse().map(entry=>{const start=clock.byID.get(entry.message.id)?.[0]??clock.range[0],end=nextByStream.get(entry.sample.stream)??clock.range[1];nextByStream.set(entry.sample.stream,start);return {...entry,end:Math.max(start,end)};}).reverse();},[data,clock]);
   const eventClock=useMemo(()=>agentEventClock(clock.messages,clock.marks),[clock]);

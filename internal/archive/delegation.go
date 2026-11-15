@@ -1293,7 +1293,8 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			n.Self["toolTime"] = delegationNumber(delegationUnion(spans), quality, known, len(n.tools))
 			n.Self["toolAgent"] = n.Self["toolTime"]
 		}
-		if waits, known, total := delegationWaitSpans(n.tools); total > 0 {
+		// Waits none of whose ends were recorded are unknown, not 0 ms.
+		if waits, known, total := delegationWaitSpans(n.tools); total > 0 && known > 0 {
 			quality := "observed"
 			if known < total {
 				quality = "partial"
@@ -2138,7 +2139,11 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 			if reach < start || *t.Start > end {
 				continue
 			}
-			knots = append(knots, *t.Start, stop)
+			// Only a launch inside the window informs the model-activity
+			// guess; one hours earlier would invent orchestration at the window's edge.
+			if stop >= start {
+				knots = append(knots, *t.Start, stop)
+			}
 			mark := delegationMark{Start: *t.Start, End: stop, EndKnown: t.End != nil && *t.End >= *t.Start, Category: t.Category, Count: 1, Error: t.Status == "error", ToolID: t.ID, MessageID: t.MessageID, Name: t.Name,
 				WaitKind: t.WaitKind, WaitEnd: t.WaitEnd, WaitStatus: t.WaitStatus, WaitEvents: t.WaitEvents}
 			// Small neighboring calls share a mark. Errors and waits retain their own reference.

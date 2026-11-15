@@ -9,14 +9,13 @@ import {ChartTooltip} from './chart-tooltip';
 import {ViewDisclosure} from './view-disclosure';
 import {useViewEntry,useViewState} from './view-state';
 import {sliceGroupState,type LegendAction} from './chart-selection';
-import {timelineSelection,timelineSectionVisible,timelineGroupCounts,timelineValueVisible,updateTimelineVisibility,type TimelineVisibility,type TimelineVisibilitySection,type TimelineVisibilityKey} from './timeline-visibility';
+import {timelineSelection,timelineSectionVisible,timelineGroupCounts,timelineValueVisible,updateTimelineVisibility,timelineWaitKey,timelineWaitsVisible,type TimelineVisibility,type TimelineVisibilitySection,type TimelineVisibilityKey} from './timeline-visibility';
 import {eventGroup,type AgentEventLink} from './event-link-layout';
 import {useReaderKeyCompact} from './reader-key-compact';
 
 export const timelineToolCategories:Record<string,string>={read:'Read / search',write:'Edit / write',run:'Run / build / test',git:'Git',network:'Network',delegate:'Delegate / message',wait:'Wait call',poll:'Poll / delay',other:'Other tool'};
 
 function UnknownToolKey(){return <span className="lt-unknown-tail-key"><i className="lt-tool-swatch lt-unknown-tail" aria-hidden="true"/>End time unknown</span>}
-function WaitKey(){return <span className="lt-unknown-tail-key" title="A background command, Monitor watch or scheduled wakeup, from its launch to the notice that ended it."><i className="lt-tool-swatch lt-wait-tail" aria-hidden="true"/>Machine wait</span>}
 
 /** Use the same elapsed attribution and text composition as the drawn ribbons. */
 export function timelineLegendWindow(streams:{id?:string;messages:LabelMessage[];marks:ActivityMark[];neighbors?:LabelMessage[];caller?:boolean}[],range:TimeRange){
@@ -54,9 +53,9 @@ export function timelineKeyContent(drawn:Pick<ReturnType<typeof timelineLegendWi
   return {messages:drawn.messages,origins:drawn.origins,taxonomy,tools:Object.fromEntries([...known,...other].map(id=>[id,timelineToolCategories[id]??id])),error:drawn.error,unknownTools:drawn.unknownTools,waitTools:drawn.waitTools??[],events,human};
 }
 /** The Key and the timeline it filters use the same populated values. */
-export function timelineLegendDomains({messages,origins,taxonomy,tools,error,events,human}:TimelineKeyContent){
+export function timelineLegendDomains({messages,origins,taxonomy,tools,error,waitTools,events,human}:TimelineKeyContent){
   const modes=timelineModeGroups(messages,taxonomy);
-  return {modes:[...modes.flatMap(family=>[...(family.direct?[family.id]:[]),...family.labels]),...(messages.some(message=>!functionStates(message,'label').length)?['?']:[])],events:[...new Set(events.map(event=>eventGroup(event.group).key))],tools:[...Object.keys(tools),...(error?['error']:[])],origins:callerSources.filter(source=>origins.includes(source.id)).map(source=>source.id),human:human.map(key=>key.id)};
+  return {modes:[...modes.flatMap(family=>[...(family.direct?[family.id]:[]),...family.labels]),...(messages.some(message=>!functionStates(message,'label').length)?['?']:[])],events:[...new Set(events.map(event=>eventGroup(event.group).key))],tools:[...Object.keys(tools),...(error?['error']:[]),...(waitTools?.length?[timelineWaitKey]:[])],origins:callerSources.filter(source=>origins.includes(source.id)).map(source=>source.id),human:human.map(key=>key.id)};
 }
 
 export function timelineLegendCounts(visibility:TimelineVisibility,domains:ReturnType<typeof timelineLegendDomains>){
@@ -66,7 +65,12 @@ export function timelineLegendCounts(visibility:TimelineVisibility,domains:Retur
 /** The Key's choices: one `timeline_visibility` for every timeline, so what is hidden on the Timeline is hidden on a conversation's own. */
 export function useTimelineVisibility(enabled=true,onEdit?:()=>void){
   const [visibility,setVisibility]=useViewState<TimelineVisibility>('timeline_visibility',{},enabled);
-  const select=useCallback((section:TimelineVisibilityKey,values:string[],action:LegendAction)=>{setVisibility(previous=>updateTimelineVisibility(previous,section,values,action));onEdit?.();},[setVisibility,onEdit]);
+  const [,setSkipWaits]=useViewState<boolean>('timeline_waits',false,false);
+  // Hiding machine waits in the Key also skips them on the clock; showing them again stops skipping.
+  const select=useCallback((section:TimelineVisibilityKey,values:string[],action:LegendAction)=>{
+    const next=updateTimelineVisibility(visibility,section,values,action),before=timelineWaitsVisible(visibility),after=timelineWaitsVisible(next);
+    setVisibility(next);if(before!==after)setSkipWaits(!after);onEdit?.();
+  },[visibility,setVisibility,setSkipWaits,onEdit]);
   return [visibility,select] as const;
 }
 
@@ -107,7 +111,7 @@ export function TimelineLegend({content,visibility,onSelect,surface='timeline',o
   const populated=Object.entries(domains).filter(([,values])=>values.length>0) as [TimelineVisibilitySection,string[]][];
   const {visible,hidden}=timelineLegendCounts(visibility,domains);
   const unknownToolKey=unknownTools.some(id=>timelineSectionVisible(visibility,'tools')&&timelineValueVisible(visibility,'tools',id))?<UnknownToolKey/>:null;
-  const waitKey=waitTools.some(id=>timelineSectionVisible(visibility,'tools')&&timelineValueVisible(visibility,'tools',id))?<WaitKey/>:null;
+  const waitKey=waitTools.length?chip('tools',timelineWaitKey,'Machine wait',<i className="lt-tool-swatch lt-wait-tail" aria-hidden="true"/>,[timelineWaitKey],false,'A background command, Monitor watch or scheduled wakeup, from its launch to the notice that ended it. Hiding it also skips machine waits.'):null;
   const sections=<>
     {modes.length||uncategorized?section('modes','Message modes',[...modes.flatMap(modeKeys),...(uncategorized?['?']:[])],<div className="lt-mode-groups">{['P','C'].map(root=>{const families=modes.filter(family=>family.id===root||family.id.startsWith(root+'.'));return families.length?<div className="lt-ontology-role" role="group" aria-label={root==='P'?'Sender':'Receiver'} key={root}>
       {chip('modes',root,root==='P'?'Sender':'Receiver',null,families.flatMap(modeKeys),true)}

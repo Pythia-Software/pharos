@@ -73,7 +73,7 @@ import {timelinePreviewText,trimTimelineSnippet} from '../../../src/timeline-pre
 import {nativeTimelineLabels} from '../../../src/label-timeline-overlay.tsx';
 
 import {timelineKeyContent,timelineModeGroups,timelineLegendWindow,timelineLegendDomains,timelineLegendCounts} from '../../../src/timeline-legend.tsx';
-import {timelineValueVisible,timelineSectionVisible,timelineEventVisible,updateTimelineVisibility,visibleTimelineTree} from '../../../src/timeline-visibility';
+import {timelineValueVisible,timelineSectionVisible,timelineEventVisible,updateTimelineVisibility,visibleTimelineTree,visibleWaitMarks,timelineWaitsVisible} from '../../../src/timeline-visibility';
 
 import {workflowSessions} from '../../../src/conversation-labels.ts';
 
@@ -337,8 +337,22 @@ test('tool dots take free lanes for overlapping calls, hit-test by position and 
  assert.equal(sessionRibbonTree([],[wait],[],[],[5000,6000]).items[0].end,9000);
  assert.deepEqual(sessionRibbonTree([],[{...wait,wait_end:null}],[],[],[5000,6000]).items,[]);
  assert.equal(harnessWaitText({...wait,start:0,wait_end:43*60000}),'Background command · waited 43m · completed');
+ // Rounds to whole minutes before splitting off hours.
+ assert.deepEqual([59_600,59*60000+40000,119*60000+40000,3_600_000].map(ms=>harnessWaitText({...wait,start:0,wait_end:ms}).split(' · ')[1]),['waited 1m','waited 1h 0m','waited 2h 0m','waited 1h 0m']);
  assert.equal(harnessWaitText({...wait,wait_kind:'monitor',wait_end:null,wait_status:'',wait_events:2}),'Monitor watch · end not recorded · 2 events');
  assert.equal(harnessWaitText(known),'');
+ // The Key lists machine waits as a Tool actions chip. Hiding it leaves each
+ // launch, so a window that holds only the wait draws nothing.
+ const content=timelineKeyContent({messages:[],origins:[],tools:['run'],unknownTools:[],waitTools:['run'],error:false});
+ assert.deepEqual(timelineLegendDomains(content).tools,['run','wait']);
+ const hidden=updateTimelineVisibility({},'tools',['wait'],'hide');
+ assert.equal(timelineWaitsVisible({}),true);assert.equal(timelineWaitsVisible(hidden),false);
+ assert.equal(timelineWaitsVisible(updateTimelineVisibility({},'sections',['tools'],'hide')),false,'hiding all tool actions hides their waits');
+ const [stripped]=visibleWaitMarks([wait],hidden);
+ assert.equal(stripped.wait_kind,undefined);assert.equal(stripped.end,wait.end);
+ assert.equal(visibleWaitMarks([wait],{})[0],wait);
+ assert.deepEqual(sessionRibbonTree([],visibleWaitMarks([wait],hidden),[],[],[5000,6000]).items,[]);
+ assert.equal(timelineValueVisible(hidden,'tools','run'),true,'the launch keeps its category');
 });
 
 test('compressed fingerprint segments preserve every original message for informative inspection',()=>{

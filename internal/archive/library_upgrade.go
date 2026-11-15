@@ -161,7 +161,7 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 		{ID: "message-search", Label: "Repair message search", Unit: "conversation",
 			Detail: "Restores proven Claude parent/child links, makes delivered sub-agent reports readable, and repairs phrase matching in retained tool and context text. Keeps original evidence and resumes after interruption.", Pending: messageSearch},
 		{ID: "tools", Label: "Rebuild the tool index", Unit: "conversation",
-			Detail: "Re-reads retained messages to store error signatures, test failures, and repository-relative paths. The longest step.", Pending: tools},
+			Detail: "Re-reads retained messages to store error signatures, test failures, repository-relative paths, and how long background commands, Monitor watches, and scheduled wakeups kept the agent waiting. The longest step.", Pending: tools},
 		{ID: "session-models", Label: "Correct agent session models", Unit: "workspace",
 			Detail: "Uses each agent session's own retained model evidence to correct its summary label. Preserves usage and pricing.", Pending: sessionModels},
 	}

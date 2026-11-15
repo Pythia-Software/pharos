@@ -458,6 +458,10 @@
     {
       "file": "web/src/reader-navigator.tsx",
       "field": "timeline_waits"
+    },
+    {
+      "file": "web/src/timeline-legend.tsx",
+      "field": "timeline_waits"
     }
   ],
   "controls": [

@@ -18,7 +18,7 @@ export function harnessWaitEnd(mark:Pick<ActivityMark,'start'|'wait_kind'|'wait_
 /** One line about a harness wait: what kind, how long, how it ended. */
 export function harnessWaitText(mark:Pick<ActivityMark,'start'|'end'|'end_known'|'wait_kind'|'wait_end'|'wait_status'|'wait_events'>){
  if(!mark.wait_kind)return '';
- const end=harnessWaitEnd(mark),minutes=(ms:number)=>ms<60_000?`${Math.round(ms/1000)}s`:ms<3_600_000?`${Math.round(ms/60_000)}m`:`${Math.floor(ms/3_600_000)}h ${Math.round(ms%3_600_000/60_000)}m`;
+ const end=harnessWaitEnd(mark),minutes=(ms:number)=>{const seconds=Math.round(ms/1000),whole=Math.round(ms/60_000);return seconds<60?`${seconds}s`:whole<60?`${whole}m`:`${Math.floor(whole/60)}h ${whole%60}m`;};
  const status=mark.wait_status?waitStatuses[mark.wait_status]??mark.wait_status:'';
  return [waitKinds[mark.wait_kind]??'Machine wait',end===null?'end not recorded':`waited ${minutes(end-mark.start)}`,status,mark.wait_events?`${mark.wait_events} event${mark.wait_events===1?'':'s'}`:''].filter(Boolean).join(' · ');
 }

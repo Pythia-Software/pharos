@@ -119,6 +119,22 @@ test('untimed tools and delegations keep ordinal marks with unknown durations',(
   assert.equal(mixed.marks.length,0,'missing times never become ordinal positions on a real clock');
 });
 
+test('reader marks carry a call\'s recorded machine wait, which counts as activity unless skipped',()=>{
+  const ended=new Date(Date.UTC(2026,8,20,12,40,0)).toISOString();
+  const {events,graph}=render([human(),
+    event('call','tool_call',{name:'Bash',input:{command:'until done; do sleep 30; done',run_in_background:true}},1,{call_id:'c',harness_wait:{kind:'background_command',ended_at:ended,status:'completed',events:0}}),
+    event('result','tool_result',{content:'Command running in background with ID: b1'},2,{call_id:'c'}),
+    event('late','tool_call',{name:'Bash',input:{command:'sleep 9999',run_in_background:true}},3,{call_id:'d',harness_wait:{kind:'background_command',ended_at:null,status:'stopped',events:0}}),
+    event('reply','message','Done',2405),
+  ].map(message=>({...message,id:message.native_id})));
+  const marks=plain(reader.readerNavigatorMarks({...graph,messages:events}));
+  assert.deepEqual(marks.map(mark=>[mark.wait_kind,mark.wait_end,mark.wait_status]),[['background_command',Date.parse(ended),'completed'],['background_command',null,'stopped']]);
+  const clock=readerNavigatorClock(plain(events).map(message=>({...message,at:message.created_at,labels:[]})),marks);
+  assert.equal(readerNavigatorScale(clock,['human']).cuts.length,0,'the wait is activity');
+  const [cut]=readerNavigatorScale(clock,['human'],true,undefined,true).cuts;
+  assert.deepEqual([cut.start,cut.end,cut.kind],[Date.UTC(2026,8,20,12,0,3),Date.parse(ended),'wait'],'skipping waits cuts from the last other activity to its end');
+});
+
 test('reader tool categories match the timeline for tool calls',()=>{
   for(const [name,input,category] of [
     ['Read',{file_path:'/repo/a'},'read'],['Search',{query:'climate'},'read'],

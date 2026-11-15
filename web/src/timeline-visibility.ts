@@ -1,6 +1,6 @@
 import {updateSliceValues,sliceValueVisible,sliceSelectionActive,sliceGroupCounts,validHiddenSelection,type LegendAction,type SliceSelection} from './chart-selection';
 import {eventGroup,type AgentEventLink} from './event-link-layout';
-import {ribbonOriginParts,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
+import {ribbonOriginParts,type ActivityMark,type RibbonNode,type RibbonObservation} from './label-session-ribbon-model';
 
 export const timelineVisibilitySections=['modes','events','tools','origins','human'] as const;
 export type TimelineVisibilitySection=typeof timelineVisibilitySections[number];
@@ -53,6 +53,15 @@ export function validTimelineVisibility(value:unknown):value is TimelineVisibili
  return Object.entries(value).every(([key,selection])=>(key==='sections'||timelineVisibilitySections.includes(key as TimelineVisibilitySection))
   &&selection&&typeof selection==='object'&&!Array.isArray(selection)&&typeof selection.excluded==='boolean'
   &&Array.isArray(selection.values)&&selection.values.length<=1000&&selection.values.every((item:unknown)=>typeof item==='string')&&validHiddenSelection(selection));
+}
+/** The Key's Machine wait chip: a tools value beside the categories. Hiding
+ * it drops the waits from the marks a ribbon is built from (each launch
+ * stays, so a window holding only a wait shows nothing) and checks Skip
+ * machine waits (useTimelineVisibility). */
+export const timelineWaitKey='wait';
+export const timelineWaitsVisible=(visibility:TimelineVisibility)=>timelineSectionVisible(visibility,'tools')&&timelineValueVisible(visibility,'tools',timelineWaitKey);
+export function visibleWaitMarks<T extends ActivityMark>(marks:T[],visibility:TimelineVisibility):T[]{
+ return timelineWaitsVisible(visibility)||!marks.some(mark=>mark.wait_kind)?marks:marks.map(mark=>mark.wait_kind?{...mark,wait_kind:undefined,wait_end:undefined,wait_status:undefined,wait_events:undefined}:mark);
 }
 export const timelineEventVisible=(visibility:TimelineVisibility,event:AgentEventLink)=>timelineSectionVisible(visibility,'events')&&timelineValueVisible(visibility,'events',eventGroup(event.group).key);
 

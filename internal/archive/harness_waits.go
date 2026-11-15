@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"encoding/json"
 	"regexp"
 	"sort"
@@ -294,4 +295,28 @@ func resolveHarnessWaits(messages []MessageRecord, calls []toolCall) {
 			}
 		}
 	}
+}
+
+// harnessWaitAttacher adds each tool call message's recorded wait, as
+// harness_wait {kind, ended_at, status, events}, so the conversation reader's
+// timeline draws a wait to the same end as the Timeline does.
+func (c *Catalog) harnessWaitAttacher(ctx context.Context, conversationID string) (func(map[string]any), error) {
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT call_message_id,call_id,wait_kind,wait_ended_at,wait_status,wait_events FROM tool_calls
+		WHERE conversation_id=? AND wait_kind IS NOT NULL AND call_message_id IS NOT NULL`, conversationID)
+	if err != nil || len(rows) == 0 {
+		return func(map[string]any) {}, err
+	}
+	waits := map[string]map[string]any{}
+	for _, row := range rows {
+		wait := map[string]any{"kind": row["wait_kind"], "ended_at": row["wait_ended_at"], "status": row["wait_status"], "events": integer(row["wait_events"])}
+		waits[firstString(row["call_message_id"])+"\x1f"+firstString(row["call_id"])] = wait
+	}
+	return func(message map[string]any) {
+		if firstString(message["kind"]) != "tool_call" {
+			return
+		}
+		if wait := waits[firstString(message["id"])+"\x1f"+firstString(message["call_id"])]; wait != nil {
+			message["harness_wait"] = wait
+		}
+	}, nil
 }
