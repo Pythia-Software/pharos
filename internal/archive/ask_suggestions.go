@@ -1253,7 +1253,7 @@ func askSuggestionText(family askSuggestionFamily, signal askSignal, in askRankI
 	if signal.Repository != "" && in.Repositories >= 2 && askHash(in.Seed, family.ID, "scope") < 0.6 {
 		scope = " in the " + signal.Repository + " repository"
 	}
-	period := map[string]string{"week": "this week", "month": "this month"}[signal.Period]
+	period := map[string]string{"week": "in the last week", "month": "over the last four weeks"}[signal.Period]
 	if period == "" {
 		period = "lately"
 	}
