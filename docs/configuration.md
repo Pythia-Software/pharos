@@ -1038,7 +1038,9 @@ pharos capture claude codex # just these (a named source is captured even if dis
 ```
 
 A machine that does not run Pharos (a cloud sandbox, a CI runner) captures
-and uploads with [`pharos capture-push`](capture-push.md) instead.
+and uploads with [`pharos capture-push`](capture-push.md) instead, and
+**Settings → Sources → Collect from other machines** sets that up and
+connects the bucket to this library.
 
 The command prints a JSON summary, exits non-zero if anything failed, and never
 opens the catalog. The service offers the same as `POST /api/capture` (optional

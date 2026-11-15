@@ -1427,6 +1427,71 @@
       "reason": "Background-update scheduling, power/source preferences, run actions and their operational diagnostics are excluded from content view URLs."
     },
     {
+      "key": "6afe45c61f01d2f1:0",
+      "file": "internal/archive/assets/bucket-setup.js",
+      "owner": "block",
+      "tag": "button",
+      "control": "'button', 'claude-watch-button', label",
+      "contract": "action",
+      "reason": "Copies one visible command block or file of the bucket setup guide to the clipboard; it does not change the Pharos view."
+    },
+    {
+      "key": "775ef14765658f6e:0",
+      "file": "internal/archive/assets/bucket-setup.js",
+      "owner": "field",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "editing",
+      "reason": "Names typed into the bucket setup guide (project, bucket, organization, folder) are an unapplied setup draft that rewrites the visible commands; they are not saved or part of a content view."
+    },
+    {
+      "key": "63fb9d45f750c65b:0",
+      "file": "internal/archive/assets/bucket-setup.js",
+      "owner": "setup",
+      "tag": "summary",
+      "control": "'summary', '', 'Set up Niteshift with Google Cloud Storage'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "The bucket setup guide opens through the stable bucketSetup key in the shared disclosures map; the Background Processing item links to it."
+    },
+    {
+      "key": "8844b3ec73e42926:0",
+      "file": "internal/archive/assets/bucket-setup.js",
+      "owner": "setup",
+      "tag": "button",
+      "control": "'button', 'claude-watch-button', 'Connect'",
+      "contract": "action",
+      "reason": "Saves the read configuration for this library and Mac after reading the bucket once; it does not select a content view."
+    },
+    {
+      "key": "af1749ecd7549882:0",
+      "file": "internal/archive/assets/bucket-setup.js",
+      "owner": "setup",
+      "tag": "details",
+      "control": "'details', 'bucket-setup'",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "The bucket setup guide opens through the stable bucketSetup key in the shared disclosures map; the Background Processing item links to it."
+    },
+    {
+      "key": "cc1848d4287da710:0",
+      "file": "internal/archive/assets/bucket-setup.js",
+      "owner": "setup",
+      "tag": "textarea",
+      "control": "'textarea'",
+      "contract": "editing",
+      "reason": "The read configuration is an unapplied draft until Connect saves it."
+    },
+    {
+      "key": "e8ba8b360b9d505f:0",
+      "file": "internal/archive/assets/bucket-setup.js",
+      "owner": "show",
+      "tag": "button",
+      "control": "'button', 'claude-watch-button', 'Disconnect'",
+      "contract": "action",
+      "reason": "Forgets one saved bucket for this library and Mac; it does not select a content view."
+    },
+    {
       "key": "2b58de1373a6d0f4:0",
       "file": "internal/archive/assets/carbon.js",
       "owner": "assumptionControls",

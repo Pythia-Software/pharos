@@ -24,6 +24,20 @@ pharos capture-push [--config FILE] [--state DIR] [--wait | --watch | --check | 
 A library collects what was pushed with
 [`pharos bucket-import`](#collecting-into-a-library).
 
+On Linux it is one file with no dependencies. Every Pharos release carries
+it for both architectures, under names that match `uname -m`, each with a
+`.sha256` beside it:
+
+```sh
+curl -fsSL -o pharos "https://github.com/Pythia-Software/pharos/releases/latest/download/pharos-linux-$(uname -m)"
+chmod +x pharos
+```
+
+Replace `latest/download` with `download/vX.Y.Z` to stay on one version. On
+a Mac the same command is inside the app:
+`/Applications/Pharos.app/Contents/MacOS/pharos`. Only `capture-push` is
+supported on Linux; the rest of Pharos is a Mac program.
+
 Code: `internal/archive/capture_push.go` (passes, state, modes),
 `capture_push_store.go` (configuration and destinations) and
 `capture_push_chunks.go`. Tests: `capture_push_test.go`. Contract:
@@ -224,6 +238,42 @@ platform.
 
 Code: `internal/archive/capture_bucket_import.go`; tests beside it.
 
+## Setting up Niteshift with Google Cloud Storage
+
+**Settings → Sources → Collect from other machines** writes this setup from
+four names (the Google Cloud project, its number, a new bucket's name, and
+the Niteshift organization ID) and connects the library at the end. The
+**Collect from other machines** item on the Background Processing page
+links to it while nothing is connected. It is the one combination that has
+been run end to end; other clouds and platforms use the same pieces,
+configured by hand from the sections above.
+
+| Step | Where | What it does |
+|---|---|---|
+| 1. Create the bucket and its access | Terminal on the Mac, `gcloud` signed in as a project administrator | Creates a private bucket whose objects expire 90 days after their last upload; a custom role `pharosPusher` that may create and replace objects but not read or list them; a workload identity pool `pharos-push` with a provider `niteshift` that accepts only task tokens from the one Niteshift organization; and read access for the signed-in Google account. Prints the project number |
+| 2. Add three files to the repository | The default branch of each repository | `.niteshift/services.yaml` starts a supervised service in every task. `.niteshift/pharos-push.sh` downloads the release's Linux program if it is missing, checks its SHA-256, and runs `capture-push --watch`. `.niteshift/pharos-push.json` is the push configuration: prefix `pharos/{owner}`, keyless access with `ns oidc-token` |
+| 3. Check from a task | A Niteshift task's terminal | `ns services status`, then `sh .niteshift/pharos-push.sh --check`, which prints `"ok": true` and the task owner's `prefix` |
+| 4. Connect the library | Settings → Sources | Saves a read configuration for that prefix, with `gcloud auth print-access-token` as its credential, after reading the bucket once. A configuration that cannot read the bucket is refused |
+
+Nothing secret is stored anywhere: a sandbox trades its Niteshift identity
+token for short-lived Google access, and the Mac uses the person's own
+`gcloud` sign-in. Each person's tasks push under their own
+`pharos/<Niteshift user ID>` folder and each person connects their own
+folder. Any task in the organization can replace objects in the bucket,
+but cannot read them.
+
+The guide is `internal/archive/assets/bucket-setup.js`.
+`testdata/bucket-setup.json` holds the two configurations it writes; a
+JavaScript test holds the guide to that file and a Go test holds the file
+to `readPushConfig` and the connect check, so the screen cannot write a
+configuration the commands refuse. The read configuration in step 4 can be
+edited or replaced, which is how a bucket set up by hand (S3, or another
+platform) is connected from the same screen.
+
+A credential command such as `gcloud` is run by name. The Mac app does not
+inherit Terminal's `PATH`, so a name the service cannot find is looked up
+on the login shell's `PATH`.
+
 ### As a Background Processing item
 
 Connecting a bucket makes collection a scheduled item, **Collect from other
@@ -240,9 +290,13 @@ pharos --config LIBRARY_CONFIG bucket-import --remove ID
 ```
 
 The service does the same over its API: `GET /api/bucket-imports` lists
-the connected buckets without their credentials, and
+the connected buckets without their credentials, each with the number of
+machines collected from it and when it was last collected.
 `POST /api/bucket-imports` takes `{"config": READ_CONFIGURATION}` or
-`{"remove": ID}`. A connected configuration holds this Mac's credential, so
+`{"remove": ID}`. Connecting, from the command or the API, first lists the
+bucket's `hello` folder with the configuration; a failure is reported and
+nothing is saved. The API's answer says how many machines have checked in,
+and asks for a collection at once. A connected configuration holds this Mac's credential, so
 it is kept in this Mac's support folder (`bucket-imports/`), not in the
 library; files it names must be absolute paths. Removing one keeps what it
 collected.
@@ -262,8 +316,15 @@ the host's captures are indexed.
 - `bucket-import` reads Google Cloud Storage and S3 (and S3-compatible
   stores). Azure and plain-URL destinations can be pushed to but not yet
   imported from.
-- Settings has no screen for connecting a bucket yet; the command and the
-  API above do it.
+- The Settings guide writes one setup: Niteshift with Google Cloud Storage.
+  Other combinations are configured by hand and connected by pasting their
+  read configuration.
+- The release download in `.niteshift/pharos-push.sh` has not been run in a
+  sandbox yet: no release has carried the Linux program. A sandbox keeps
+  the program it downloaded; a new task downloads the newest.
+- A read credential that needs `gcloud` stops working when that sign-in
+  expires; the item then fails with the command's error until the person
+  signs in again.
 - The owner and initiator an export carries are recorded beside the host
   but not shown; an automation's runs are not yet marked with the
   `automation:<name>` sender.

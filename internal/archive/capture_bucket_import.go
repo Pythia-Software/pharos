@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // bucket-import collects what `pharos capture-push` uploaded
@@ -33,6 +34,10 @@ import (
 const bucketImportMarker = ".bucket-import.json"
 
 const bucketImportsDir = ".bucket-imports"
+
+// bucketImportCheckTimeout bounds the one read that proves a configuration
+// before it is saved.
+var bucketImportCheckTimeout = 30 * time.Second
 
 type bucketImportedHost struct {
 	Pusher      string         `json:"pusher"`
@@ -421,7 +426,7 @@ func runBucketImportCLI(config Config, args []string) error {
 			if err != nil {
 				return err
 			}
-			saved, err := saveBucketImport(config, raw)
+			saved, err := saveBucketImport(ctx, config, raw)
 			if err != nil {
 				return err
 			}
@@ -440,12 +445,38 @@ func runBucketImportCLI(config Config, args []string) error {
 // they live in its support folder, not in the library.
 
 type savedBucketImport struct {
-	ID          string `json:"id"`
-	Type        string `json:"type"`
-	Bucket      string `json:"bucket,omitempty"`
-	Prefix      string `json:"prefix"`
+	ID     string `json:"id"`
+	Type   string `json:"type"`
+	Bucket string `json:"bucket,omitempty"`
+	Prefix string `json:"prefix"`
+	// Machines counts the machines collected from so far, and CollectedAt is
+	// when the last collection finished; both come from the import's state.
+	Machines    int    `json:"machines"`
+	CollectedAt string `json:"collected_at,omitempty"`
+	// Waiting counts the machines that have checked in, known only when the
+	// configuration has just been checked against the bucket.
+	Waiting     *int `json:"checked_in,omitempty"`
 	path        string
 	destination string
+}
+
+// collected fills in what the import's state says about a saved bucket.
+func (saved *savedBucketImport) collected(captureRoot string) {
+	path := filepath.Join(captureRoot, bucketImportsDir, saved.ID, "state.json")
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	saved.CollectedAt = info.ModTime().UTC().Format(time.RFC3339)
+	var state bucketImportState
+	if data, err := os.ReadFile(path); err == nil && json.Unmarshal(data, &state) == nil {
+		machines := map[string]bool{}
+		for key := range state.Handled {
+			pusher, _, _ := strings.Cut(key, "/")
+			machines[pusher] = true
+		}
+		saved.Machines = len(machines)
+	}
 }
 
 func bucketImportStore(config Config) string {
@@ -466,14 +497,18 @@ func savedBucketImports(config Config) []savedBucketImport {
 			continue
 		}
 		d := read.Destination
-		saved = append(saved, savedBucketImport{ID: id, Type: d.Type, Bucket: firstString(d.Bucket, d.Container), Prefix: read.Prefix, path: path})
+		one := savedBucketImport{ID: id, Type: d.Type, Bucket: firstString(d.Bucket, d.Container), Prefix: read.Prefix, path: path}
+		one.collected(config.CaptureRoot)
+		saved = append(saved, one)
 	}
 	return saved
 }
 
-// saveBucketImport checks a read configuration and keeps it for the
-// background item. The same bucket and prefix replace their earlier entry.
-func saveBucketImport(config Config, raw []byte) (savedBucketImport, error) {
+// saveBucketImport checks a read configuration, reads the bucket with it
+// once, and keeps it for the background item. A configuration that cannot
+// read the bucket is not kept. The same bucket and prefix replace their
+// earlier entry.
+func saveBucketImport(ctx context.Context, config Config, raw []byte) (savedBucketImport, error) {
 	dir := bucketImportStore(config)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return savedBucketImport{}, err
@@ -511,15 +546,25 @@ func saveBucketImport(config Config, raw []byte) (savedBucketImport, error) {
 			return savedBucketImport{}, fmt.Errorf("give %s as an absolute path", token.File)
 		}
 	}
-	if _, err := newPushReadStore(read, dir); err != nil {
+	store, err := openPushReadStore(read, dir)
+	if err != nil {
 		return savedBucketImport{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, bucketImportCheckTimeout)
+	defer cancel()
+	hello := pushKey(read.Prefix, "hello") + "/"
+	greetings, err := store.list(ctx, hello)
+	if err != nil {
+		return savedBucketImport{}, fmt.Errorf("the bucket could not be read: %w", err)
 	}
 	id := stableID("push-destination", d.Type, d.Bucket, d.Endpoint, d.Account, d.Container, d.URLTemplate, read.Prefix)
 	path := filepath.Join(dir, id+".json")
 	if err := writeFileAtomic(path, raw, 0o600); err != nil {
 		return savedBucketImport{}, err
 	}
-	return savedBucketImport{ID: id, Type: d.Type, Bucket: firstString(d.Bucket, d.Container), Prefix: read.Prefix, path: path}, nil
+	saved := savedBucketImport{ID: id, Type: d.Type, Bucket: firstString(d.Bucket, d.Container), Prefix: read.Prefix, path: path, Waiting: &[]int{len(greetings)}[0]}
+	saved.collected(config.CaptureRoot)
+	return saved, nil
 }
 
 // removeBucketImport forgets a saved configuration. What it collected stays.
@@ -606,7 +651,7 @@ func (s *Server) getBucketImports(w http.ResponseWriter) {
 
 // postBucketImports saves a read configuration ({"config": {...}}) or
 // forgets one ({"remove": ID}), and asks for a collection.
-func (s *Server) postBucketImports(w http.ResponseWriter, body map[string]any) {
+func (s *Server) postBucketImports(ctx context.Context, w http.ResponseWriter, body map[string]any) {
 	config := s.Config()
 	if id, ok := body["remove"].(string); ok && id != "" {
 		if err := removeBucketImport(config, id); err != nil {
@@ -622,12 +667,14 @@ func (s *Server) postBucketImports(w http.ResponseWriter, body map[string]any) {
 		return
 	}
 	raw, err := json.MarshalIndent(read, "", "  ")
+	var saved savedBucketImport
 	if err == nil {
-		_, err = saveBucketImport(config, raw)
+		saved, err = saveBucketImport(ctx, config, raw)
 	}
 	if err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
-	s.getBucketImports(w)
+	s.requestBackground("bucket-import")
+	writeJSON(w, map[string]any{"buckets": savedBucketImports(config), "connected": saved}, http.StatusOK)
 }

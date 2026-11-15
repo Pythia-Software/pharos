@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/jwt"
+	"path/filepath"
 )
 
 // The push configuration, contract pharos-push-config/1
@@ -154,9 +155,9 @@ func (t *pushIdentityToken) read(ctx context.Context, base string) (string, erro
 	case len(t.Command) > 0:
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		output, err := exec.CommandContext(ctx, t.Command[0], t.Command[1:]...).Output()
+		output, err := exec.CommandContext(ctx, pushCommandPath(t.Command[0]), t.Command[1:]...).Output()
 		if err != nil {
-			return "", fmt.Errorf("%s did not provide an identity token: %w", t.Command[0], err)
+			return "", fmt.Errorf("%s did not provide a token: %w", t.Command[0], err)
 		}
 		token = string(output)
 	case t.Env != "":
@@ -172,6 +173,26 @@ func (t *pushIdentityToken) read(ctx context.Context, base string) (string, erro
 		return "", errors.New("the identity token is empty")
 	}
 	return token, nil
+}
+
+// pushCommandPath finds a credential command the way Terminal would. The Mac
+// app inherits launchd's PATH, which lacks Homebrew and the cloud SDKs, so a
+// bare name this process cannot find is looked up on the login shell's PATH.
+func pushCommandPath(name string) string {
+	if strings.ContainsRune(name, filepath.Separator) {
+		return name
+	}
+	if _, err := exec.LookPath(name); err == nil {
+		return name
+	}
+	values, _ := cachedLoginShellEnv([]string{"PATH"})
+	for _, dir := range filepath.SplitList(values["PATH"]) {
+		candidate := filepath.Join(dir, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return candidate
+		}
+	}
+	return name
 }
 
 // readPushConfig reads and checks a push configuration.

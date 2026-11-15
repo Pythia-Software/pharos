@@ -1790,7 +1790,7 @@ the same schedule from one declaration (`backgroundItems`):
 | Ask Pharos suggestions | the suggestion signals ([Ask suggestions](ask-suggestions.md)), only where Ask Pharos is enabled, when their inputs changed | Hourly, adaptive | `ask.suggestions` |
 | Findings review | the findings stage once today's full pass is due | Daily (fixed) | `analysis.findings` |
 | Library upgrade | `RunUpgrade`, when the stored count has pending steps | Daily (fixed) | `library.upgrade` |
-| Collect from other machines | transcripts that other machines pushed to a connected bucket (`pharos capture-push`), then an index of the hosts that received something | Hourly; unavailable until a bucket is connected | `capture.import` (variant `bucket`) |
+| Collect from other machines | transcripts that other machines pushed to a connected bucket (`pharos capture-push`), then an index of the hosts that received something | Hourly; unavailable until a bucket is connected, when the item links to its setup in Settings → Sources | `capture.import` (variant `bucket`) |
 | Back up | a local backup to the last destination, when connected | only when chosen (opt-in Daily) | `backup.local` |
 
 - **Cadences.** Frequently follows each scheduled index that wrote

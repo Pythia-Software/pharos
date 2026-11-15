@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -327,6 +328,11 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			"adaptive": item.Adaptive, "fixed": item.Fixed, "opt_in": item.OptIn, "override": settings.Overrides[item.ID],
 			"state": state, "state_label": stateLabels[state], "as_of": nullable(asOf), "next_at": nullableTime(plan.Next), "error": nullable(problem),
 			"choices": itemChoices(item, settings), "cost": nil, "note": nil}
+		// Where an item that is not set up yet is set up.
+		entry["setup"] = nil
+		if state == "unavailable" && item.ID == "bucket-import" {
+			entry["setup"] = map[string]any{"label": "Set up in Sources", "url": "/settings/sources?disclosures=" + url.QueryEscape(`{"bucketSetup":true}`) + "&reveal=" + url.QueryEscape("section:bucketSetup")}
+		}
 		entry["cadence_moves"] = itemCadenceMoves(item, settings)
 		// The running operation Stop ends, where it can be stopped.
 		entry["stop"] = nil

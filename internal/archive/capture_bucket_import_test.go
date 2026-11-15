@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -183,13 +184,13 @@ func TestBucketImportRunsAsABackgroundItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A push configuration, or one whose files would move, is refused.
-	if _, err := saveBucketImport(config, []byte(strings.Replace(string(raw), `"read"`, `"write"`, 1))); err == nil {
+	if _, err := saveBucketImport(context.Background(), config, []byte(strings.Replace(string(raw), `"read"`, `"write"`, 1))); err == nil {
 		t.Fatal("a write configuration was saved")
 	}
-	if _, err := saveBucketImport(config, []byte(strings.Replace(string(raw), `"secret"`, `{"file":"key.txt"}`, 1))); err == nil {
+	if _, err := saveBucketImport(context.Background(), config, []byte(strings.Replace(string(raw), `"secret"`, `{"file":"key.txt"}`, 1))); err == nil {
 		t.Fatal("a relative secret file was saved")
 	}
-	saved, err := saveBucketImport(config, raw)
+	saved, err := saveBucketImport(context.Background(), config, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +212,74 @@ func TestBucketImportRunsAsABackgroundItem(t *testing.T) {
 	if err := server.Catalog.DB.QueryRow(`SELECT COUNT(*) FROM conversations WHERE origin_host_id=?`, sandbox).Scan(&conversations); err != nil || conversations != 1 {
 		t.Fatalf("conversations from the sandbox: %d, %v", conversations, err)
 	}
+	// Settings shows what has come from the bucket.
+	if listed := savedBucketImports(config); listed[0].Machines != 1 || listed[0].CollectedAt == "" {
+		t.Fatalf("after collecting: %+v", listed[0])
+	}
 	if err := removeBucketImport(config, saved.ID); err != nil || len(savedBucketImports(config)) != 0 {
 		t.Fatalf("remove: %v", err)
+	}
+}
+
+// unreadableBucket refuses every read, as a bucket does without access.
+type unreadableBucket struct{}
+
+func (unreadableBucket) list(context.Context, string) ([]string, error) {
+	return nil, errors.New("403 Forbidden")
+}
+func (unreadableBucket) get(context.Context, string) ([]byte, error) {
+	return nil, errors.New("403 Forbidden")
+}
+
+// The setup guide in Settings (assets/bucket-setup.js) writes a push
+// configuration for sandboxes and a read configuration for this library.
+// testdata/bucket-setup.json is what it writes; its JavaScript test holds the
+// guide to that file, and this holds the file to the commands that read it.
+func TestBucketSetupGuideWritesConfigurationsTheCommandsAccept(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "bucket-setup.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var guide struct {
+		Prefix string          `json:"prefix"`
+		Push   json.RawMessage `json:"push"`
+		Read   json.RawMessage `json:"read"`
+	}
+	if err := json.Unmarshal(data, &guide); err != nil {
+		t.Fatal(err)
+	}
+	pushPath := filepath.Join(t.TempDir(), "pharos-push.json")
+	if err := os.WriteFile(pushPath, guide.Push, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	push, err := readPushConfig(pushPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if push.Access != "write" || !strings.Contains(push.Prefix, "{owner}") || push.Destination.IdentityToken == nil {
+		t.Fatalf("push configuration: %+v", push)
+	}
+
+	f := newPushFixture(t, "")
+	_, config, _ := f.library(guide.Prefix)
+	t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+	saved, err := saveBucketImport(context.Background(), config, guide.Read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Connecting read the bucket: nothing has checked in to this folder.
+	if saved.Prefix != guide.Prefix || saved.Type != "gcs" || saved.Waiting == nil || *saved.Waiting != 0 {
+		t.Fatalf("saved: %+v", saved)
+	}
+	// A configuration that cannot read the bucket is refused and not kept.
+	if err := removeBucketImport(config, saved.ID); err != nil {
+		t.Fatal(err)
+	}
+	override(t, &openPushReadStore, func(pushConfig, string) (pushReadStore, error) { return unreadableBucket{}, nil })
+	if _, err := saveBucketImport(context.Background(), config, guide.Read); err == nil || !strings.Contains(err.Error(), "could not be read") {
+		t.Fatalf("an unreadable bucket was saved: %v", err)
+	}
+	if listed := savedBucketImports(config); len(listed) != 0 {
+		t.Fatalf("kept: %+v", listed)
 	}
 }
