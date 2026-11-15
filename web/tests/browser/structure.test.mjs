@@ -564,7 +564,7 @@ const ROUTES = [
     await page.locator('.export-document').waitFor();
     await page.locator('.tool-event > summary').filter({hasText:'synthetic-doc'}).getByText('Details',{exact:true}).click();
     await page.locator('.mcp-presentation a.markdown-link').waitFor();
-    await page.locator('.tool-event > summary').filter({hasText:'Query statistics'}).click();
+    await page.locator('.tool-event > summary').filter({hasText:'Queried statistics'}).click();
     await page.locator('.mcp-presentation table').waitFor();
   }, shown: ".tool-event[open] .tool-output", check: async (page,app) => {
     const headingContext=page.locator('#detail .work-heading > .meta').first();
@@ -771,8 +771,8 @@ const ROUTES = [
         assert.equal(clipped, false, "the selected message's highlight has room outside its edges");
         return;
       }
-      await page.getByRole("button", selection === "summary" ? { name: /^Browse turns: / } : { name: "Browse", exact: true }).click();
-      if (selection === "summary") assert.ok(await page.getByRole("button", { name: "Collapse turns", exact: true }).evaluate(button => button === document.activeElement), "opening from the compact summary keeps keyboard focus on the collapse control");
+      await page.getByRole("button", selection === "summary" ? { name: /^Browse turns: / } : { name: "Browse turns", exact: true }).click();
+      if (selection === "summary") assert.ok(await page.getByRole("button", { name: "Hide turns", exact: true }).evaluate(button => button === document.activeElement), "opening from the compact summary keeps keyboard focus on the collapse control");
       const outline = page.getByRole("navigation", { name: "Conversation outline", exact: true });
       await outline.getByRole("button", { name: /^Turn 1/ }).first().waitFor();
       if (selection === "sub-agent") {
@@ -781,7 +781,7 @@ const ROUTES = [
       } else await outline.getByRole("button", { name: /^Turn 3/ }).first().click();
       await page.getByRole("region", { name: "Selected turn preview" }).locator(".result-message").first().waitFor();
       if (selection === "accordion") {
-        const toggle = page.getByRole("button", { name: /^(Browse|Collapse turns)$/ });
+        const toggle = page.getByRole("button", { name: /^(Browse turns|Hide turns)$/ });
         await toggle.focus();
         await page.keyboard.press("Enter");
         assert.equal(await toggle.getAttribute("aria-expanded"), "false");
@@ -791,7 +791,7 @@ const ROUTES = [
         await outline.getByRole("button", { name: /^Turn 3/ }).first().waitFor();
         assert.equal(await outline.getByRole("button", { name: /^Turn 3/ }).first().getAttribute("aria-current"), "true", "reopening preserves the selected turn");
         await page.reload();
-        await page.getByRole("button", { name: "Collapse turns", exact: true }).waitFor();
+        await page.getByRole("button", { name: "Hide turns", exact: true }).waitFor();
         await outline.getByRole("button", { name: /^Turn 3/ }).first().waitFor();
         assert.equal(await outline.getByRole("button", { name: /^Turn 3/ }).first().getAttribute("aria-current"), "true", "the URL restores the selected turn after reload");
       }
@@ -905,7 +905,7 @@ const ROUTES = [
     q_usage: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "first_usage_at", op: ">=", value: "-7d" }, { field: "first_usage_at", op: "<", value: "+0s" }] }), window_mode: "relative", window_days: "7", window_field: "first_usage_at", window_dataset: "usage",
     analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "first_usage_at", op: ">=", value: "-7d" }, { field: "first_usage_at", op: "<", value: "+0s" }] }), analyze_chart: JSON.stringify({ period: "day", metric: "cost", split: "repository_name" }) })}`,
     ready: ".usage-dashboard .usage-chart", open: async page => {
-      await page.getByRole("combobox", { name: "Time Bucket", exact: true }).selectOption("hour");
+      await page.getByRole("combobox", { name: "Time bucket", exact: true }).selectOption("hour");
       await page.getByRole("combobox", { name: "Range", exact: true }).selectOption("custom-times");
       await page.getByLabel("From date and time", { exact: true }).waitFor();
     }, shown: ".usage-dashboard .usage-chart" },
@@ -1029,7 +1029,7 @@ const ROUTES = [
   } },
   ...[false, true].map(details => ({ name: `Background Processing deferred verification${details ? ' details' : ''}`, url: "/settings/sync", ready: "#syncHistoryTables .qt-row", api: {
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [{ ...defaultApi["GET /api/sync/status"].history[0], audit: { outcome: "deferred", discovered_units: 10, deferred_units: 1, detail: "large group queued for manual verification" } }] },
-  }, ...(details ? { open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
+  }, ...(details ? { open: page => page.getByRole("region", { name: "Recent background work", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
   { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: {
     "GET /api/background": { ...defaultApi["GET /api/background"], labels: { enabled: true, can_change: true,
@@ -1047,10 +1047,10 @@ const ROUTES = [
   { name: "Background Processing sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
   { name: "Background Processing queued verification", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Verify indexed data" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
-  { name: "Background Processing run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
+  { name: "Background Processing run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent background work", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
   { name: "Background Processing empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
   { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
-  { name: "Layout Preferences", url: "/settings/layout", ready: "#headerExpand" },
+  { name: "Layout", url: "/settings/layout", ready: "#headerExpand" },
   { name: "Header settings", url: "/settings/layout", ready: "#headerExpand", open: page => page.locator('#headerExpand').click(), shown: '#headerActive .header-tool' },
   { name: "Quick Stats settings", url: "/settings/layout", ready: "#quickStatsExpand", open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsEditor button' },
   { name: "Quick Stats toolbox", url: "/settings/layout", ready: "#quickStatsExpand", preferences: { "pharos-quick-stats-v1": { metrics: ['human_words', 'tokens'], windows: ['today', '24h'] } }, open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsPreview td' },
@@ -1544,7 +1544,7 @@ test("Background Processing shares the busy switch across Hourly and Daily and s
   await settled();
   assert.equal(await hourly.isChecked(), true);
   assert.equal(calls.filter(call => call.method === 'POST' && call.path === '/api/background/settings' && 'hold_when_busy' in call.body).length, 2);
-  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
+  const history = page.getByRole('region', { name: 'Recent background work', exact: true });
   for (const work of ['Index changes', 'Update findings', 'Back up']) assert.ok(await history.getByText(work, { exact: true }).count());
   await history.getByRole('button', { name: 'Add filter', exact: true }).click();
   await page.getByRole('button', { name: /^Operation(?:\s|$)/ }).click();
@@ -1765,7 +1765,7 @@ test('Habits daily bars use the available width when the window and range change
   await page.setViewportSize({ width: 1920, height: 1050 });
   await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
   await activateHeaderTool(page, 'pharosDrive');
-  const panel = page.getByRole('dialog', { name: 'Library drive', exact: true });
+  const panel = page.getByRole('dialog', { name: 'Background Processing', exact: true });
   const settings = panel.getByRole('button', { name: 'Open Background Processing settings', exact: true });
   await settings.waitFor();
   await panel.getByRole('button', { name: 'Stop', exact: true }).waitFor();
@@ -1792,7 +1792,7 @@ test('pages without section menus use the full window', { skip }, async t => {
   await primary.getByRole('button', { name: 'Home', exact: true }).click();
   await page.locator('.home-belt-row .query-card').first().waitFor();
   await fillsWindow();
-  await page.getByRole('button', { name: 'All Cards', exact: true }).click();
+  await page.getByRole('button', { name: 'Open Card Library', exact: true }).click();
   await page.locator('.card-library-entry .query-card').first().waitFor();
   await fillsWindow();
   await primary.getByRole('button', { name: 'Search', exact: true }).click();
@@ -2181,11 +2181,11 @@ test('Tokens and Cost keeps missing pricing actionable across refresh, chart vie
   await notice.waitFor();
   assert.ok(await refresh.evaluate(element => document.activeElement === element), 'loading pricing moved focus');
   await page.evaluate(() => { window.pharosCopyText = async text => { window.copiedPricingPrompt = text; }; });
-  await notice.getByRole('button', { name: 'Copy refresh prices prompt' }).click();
+  await notice.getByRole('button', { name: 'Copy pricing prompt' }).click();
   await notice.getByRole('status').waitFor();
   assert.equal(await page.evaluate(() => window.copiedPricingPrompt), missingPrices.prompt);
   await notice.locator('summary').click();
-  const prompt = page.getByRole('textbox', { name: 'Pricing refresh prompt' });
+  const prompt = page.getByRole('textbox', { name: 'Pricing prompt' });
   assert.equal(await prompt.inputValue(), missingPrices.prompt);
   await page.waitForFunction(() => JSON.parse(new URLSearchParams(location.search).get('disclosures') || '{}')['tokens.pricing-prompt'] === true);
   await page.reload();

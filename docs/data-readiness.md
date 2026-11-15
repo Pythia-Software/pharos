@@ -2,7 +2,7 @@
 
 The header's **Data updates** tool and the icons on shared charts, native query
 tables and query cards open one read-only processing dialog. They use the normal
-header tool registry (including More and Layout Preferences), the Data Guide
+header tool registry (including More and Layout), the Data Guide
 modal shell, a database-and-clock glyph and the activity panel's progress tracks.
 The existing Background Processing page owns all schedule and run actions. Its
 new Now section reuses the activity panel model, showing current work and the

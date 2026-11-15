@@ -462,11 +462,11 @@
   ],
   "controls": [
     {
-      "key": "fragment:03c059d70f7c47ad:0",
+      "key": "fragment:4e8564ed22a1b9e5:0",
       "file": "internal/archive/assets/application-home.html",
       "owner": "<html:fragment>",
       "tag": "input",
-      "control": "<input placeholder=\"Search your history or ask Pharos…\" disabled tabindex=\"-1\">",
+      "control": "<input placeholder=\"Search past work…\" disabled tabindex=\"-1\">",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
@@ -825,6 +825,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:21b6530bffbff578:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "textarea",
+      "control": "<textarea rows=\"1\" placeholder=\"Other answer\" aria-label=\"Other answer\" maxlength=\"12000\">",
+      "contract": "editing",
+      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
       "key": "fragment:226ebb0b1ffcca38:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -971,6 +980,15 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
+      "key": "fragment:7b5526fe1e319f09:0",
+      "file": "internal/archive/assets/ask-pharos.html",
+      "owner": "<html:fragment>",
+      "tag": "button",
+      "control": "<button type=\"button\" class=\"pharos-icon-control pharos-search-mode cursor-interaction\" aria-label=\"Switch to regular search\" data-tooltip=\"Regular search\">",
+      "contract": "editing",
+      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
+    },
+    {
       "key": "fragment:82e2b4b4720b7440:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
@@ -1007,29 +1025,11 @@
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
     {
-      "key": "fragment:90557cc9934638aa:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "button",
-      "control": "<button type=\"button\" class=\"pharos-icon-control pharos-search-mode cursor-interaction\" aria-label=\"Switch to non-AI search\" data-tooltip=\"Regular search\">",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
       "key": "fragment:925cd27bd8f67e5a:0",
       "file": "internal/archive/assets/ask-pharos.html",
       "owner": "<html:fragment>",
       "tag": "details",
       "control": "<details class=\"pharos-activity\" hidden>",
-      "contract": "editing",
-      "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
-    },
-    {
-      "key": "fragment:9669fb9a199fe943:0",
-      "file": "internal/archive/assets/ask-pharos.html",
-      "owner": "<html:fragment>",
-      "tag": "textarea",
-      "control": "<textarea rows=\"1\" placeholder=\"other\" aria-label=\"Other answer\" maxlength=\"12000\">",
       "contract": "editing",
       "reason": "Ask composer/history remains on the private Ask chat protocol; draft/model/editor state and setup actions are explicitly excluded. Existing ask_chat restoration is preserved."
     },
@@ -1755,9 +1755,9 @@
       "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
-      "key": "e01457ab83ea326f:0",
+      "key": "2bd69fd66fdd1e72:0",
       "file": "internal/archive/assets/data-guide.js",
-      "owner": "Zh",
+      "owner": "ef",
       "tag": "aria-expanded",
       "control": "document.getElementById(\"dataGuideToggle\")",
       "disclosure": true,
@@ -2926,15 +2926,6 @@
       "reason": "Feedback/annotation/bookmark draft or mutation, explicitly excluded."
     },
     {
-      "key": "html:1de1d4b2a2c66535:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:shell>",
-      "tag": "button",
-      "control": "<button id=\"feedbackQuickCopy\" type=\"button\" title=\"Copy feedback\" aria-label=\"Copy feedback\" hidden>",
-      "contract": "editing",
-      "reason": "Feedback/annotation/bookmark draft or mutation, explicitly excluded."
-    },
-    {
       "key": "html:1ed8cef9028dffff:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
@@ -3009,16 +3000,6 @@
       "reason": "Feedback/annotation/bookmark draft or mutation, explicitly excluded."
     },
     {
-      "key": "html:4f457daf5e9970ac:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:shell>",
-      "tag": "button",
-      "control": "<button id=\"feedbackOpen\" title=\"Show UI feedback\" aria-expanded=\"false\" aria-controls=\"feedbackPanel\" hidden>",
-      "disclosure": true,
-      "contract": "editing",
-      "reason": "Feedback/annotation/bookmark draft or mutation, explicitly excluded."
-    },
-    {
       "key": "html:595016069c4467bc:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
@@ -3026,15 +3007,6 @@
       "control": "<button id=\"feedbackCancel\">",
       "contract": "editing",
       "reason": "Feedback/annotation/bookmark draft or mutation, explicitly excluded."
-    },
-    {
-      "key": "html:5b7dce59935217ed:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "<html:shell>",
-      "tag": "button",
-      "control": "<button id=\"searchToggle\" class=\"header-icon search-toggle\" type=\"button\" aria-label=\"Search library\" title=\"Search library (⌘K)\" aria-haspopup=\"dialog\" aria-controls=\"searchDialog\">",
-      "contract": "editing",
-      "reason": "Opens an unapplied composer or transient navigation/tools menu."
     },
     {
       "key": "html:5c1bc6f52155d4c5:0",
@@ -3183,6 +3155,15 @@
       "reason": "Feedback/annotation/bookmark draft or mutation, explicitly excluded."
     },
     {
+      "key": "html:a0d990cfb3e2b58f:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"feedbackQuickCopy\" type=\"button\" title=\"Copy annotations\" aria-label=\"Copy annotations\" hidden>",
+      "contract": "editing",
+      "reason": "Feedback/annotation/bookmark draft or mutation, explicitly excluded."
+    },
+    {
       "key": "html:a29548e3b4c8e647:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
@@ -3248,6 +3229,15 @@
       "reason": "Bound directly to the registered view field."
     },
     {
+      "key": "html:d75f2f9ca23ab98a:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"askPharosToggle\" class=\"header-icon ask-pharos-toggle\" type=\"button\" aria-label=\"Ask Pharos\" title=\"Ask Pharos\" aria-haspopup=\"dialog\" aria-controls=\"askPharosDialog\" disabled>",
+      "contract": "editing",
+      "reason": "Opens an unapplied composer or transient navigation/tools menu."
+    },
+    {
       "key": "html:d77e51aab8862932:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
@@ -3266,6 +3256,15 @@
       "disclosure": true,
       "contract": "view.overlay",
       "reason": "Read-only header overlay visibility is restored by restoreViewOverlay."
+    },
+    {
+      "key": "html:dea1bd94875eab8b:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "<html:shell>",
+      "tag": "button",
+      "control": "<button id=\"searchToggle\" class=\"header-icon search-toggle\" type=\"button\" aria-label=\"Search past work\" title=\"Search past work (⌘K)\" aria-haspopup=\"dialog\" aria-controls=\"searchDialog\">",
+      "contract": "editing",
+      "reason": "Opens an unapplied composer or transient navigation/tools menu."
     },
     {
       "key": "html:e239e0906db1a77b:0",
@@ -3305,13 +3304,14 @@
       "reason": "Feedback/annotation/bookmark draft or mutation, explicitly excluded."
     },
     {
-      "key": "html:f34b12d1a3f6d297:0",
+      "key": "html:f2f17b40a06f2fb3:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "<html:shell>",
       "tag": "button",
-      "control": "<button id=\"askPharosToggle\" class=\"header-icon ask-pharos-toggle\" type=\"button\" aria-label=\"Ask Pharos\" title=\"Ask Pharos about this page\" aria-haspopup=\"dialog\" aria-controls=\"askPharosDialog\" disabled>",
+      "control": "<button id=\"feedbackOpen\" title=\"Show annotations\" aria-expanded=\"false\" aria-controls=\"feedbackPanel\" hidden>",
+      "disclosure": true,
       "contract": "editing",
-      "reason": "Opens an unapplied composer or transient navigation/tools menu."
+      "reason": "Feedback/annotation/bookmark draft or mutation, explicitly excluded."
     },
     {
       "key": "html:f7a4636522ae6053:0",
@@ -3982,11 +3982,11 @@
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
     },
     {
-      "key": "1b4521b34ffa2048:0",
+      "key": "0f8ece18feff1fb2:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
       "tag": "button",
-      "control": "'button', 'conversation-actions-reading', 'Close All Turns'",
+      "control": "'button', 'conversation-actions-reading', 'Open all turns'",
       "contract": "reader",
       "reason": "Opens or closes each turn; the reader stores each turn disclosure by stable message identity in the URL."
     },
@@ -4000,20 +4000,11 @@
       "reason": "Conversation actions menu openness is transient; its actions use their existing reader and Find view state."
     },
     {
-      "key": "362d216ca13c8bb7:0",
+      "key": "347895dd78a3efd1:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "renderConversation",
       "tag": "button",
-      "control": "'button', 'conversation-actions-reading', 'Open All Turns'",
-      "contract": "reader",
-      "reason": "Opens or closes each turn; the reader stores each turn disclosure by stable message identity in the URL."
-    },
-    {
-      "key": "635c47252d4846ad:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "renderConversation",
-      "tag": "button",
-      "control": "'button', 'conversation-actions-details', 'Archive details'",
+      "control": "'button', 'conversation-actions-details', 'Preservation details'",
       "contract": "reader",
       "reason": "Opens the existing source or archive disclosure; the card uses the reader disclosure identity or shared workspace disclosure key."
     },
@@ -4025,6 +4016,15 @@
       "control": "'button', 'chip tool-summary-trigger', `${toolCount} tool call${toolCount===1?'':'s'}`",
       "contract": "reader",
       "reason": "Reader filters/search/disclosures and header overlays use the view contract; links navigate to canonical views. Editing, copy, refresh and menus are excluded actions."
+    },
+    {
+      "key": "7beac25fde3675f2:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "renderConversation",
+      "tag": "button",
+      "control": "'button', 'conversation-actions-reading', 'Close all turns'",
+      "contract": "reader",
+      "reason": "Opens or closes each turn; the reader stores each turn disclosure by stable message identity in the URL."
     },
     {
       "key": "88a82cb4ea6ef376:0",
@@ -4483,15 +4483,6 @@
       "reason": "Workspace actions menu openness is transient; its archive action uses the shared disclosure state."
     },
     {
-      "key": "9cccb1f8850606a4:0",
-      "file": "internal/archive/assets/ui.py",
-      "owner": "workspaceArchiveActions",
-      "tag": "button",
-      "control": "'button', 'conversation-actions-details', 'Archive details'",
-      "contract": "reader",
-      "reason": "Opens the archive card, which uses the shared disclosure runtime and the stable workspace archive key."
-    },
-    {
       "key": "ac3c3554d21cd89e:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "workspaceArchiveActions",
@@ -4499,6 +4490,15 @@
       "control": "'button', 'conversation-actions-trigger'",
       "contract": "transient",
       "reason": "Workspace actions menu openness is transient; its archive action uses the shared disclosure state."
+    },
+    {
+      "key": "efca4fe33097db07:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "workspaceArchiveActions",
+      "tag": "button",
+      "control": "'button', 'conversation-actions-details', 'Preservation details'",
+      "contract": "reader",
+      "reason": "Opens the archive card, which uses the shared disclosure runtime and the stable workspace archive key."
     },
     {
       "key": "0e18c887173fcc9b:0",
@@ -4983,11 +4983,11 @@
       "reason": "Immediate hover names are transient. Pointer, keyboard, scroll and Escape dismissal keep chart and compact Timeline Key tooltips separate from durable selections and disclosures."
     },
     {
-      "key": "acb2c88ae5fd36c5:0",
+      "key": "084fc6c08f31305c:0",
       "file": "web/src/concurrency.tsx",
       "owner": "ConcurrencyChart",
       "tag": "svg",
-      "control": "aria-label={`${mode === \"user\" ? \"Continuous conversations\" : \"Estimated model activity\"} stacked by ${counting === \"agent\" ? \"conversation\" : \"workspace\"}; drag to zoom`} onPointerMove={event => { const point = coordinates(event), current = dragRef.current;if (current) moveDrag({ ...current, current: point.time });else onHover(point); }} onPointerLeave={() => { if (!dragRef.current) onHover(null); }} onPointerDown={event => { if (event.button !== 0) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientY - rect.top < top || event.clientY - rect.top > bottom) return; event.preventDefault();const time = coordinates(event).time; moveDrag({ anchor: time, current: time, pointerId: event.pointerId });onHover(null);event.currentTarget.setPointerCapture(event.pointerId); }} onPointerUp={event => { const current = dragRef.current;if (!current || current.pointerId !== event.pointerId) return; const point = coordinates(event);cancelDrag(); if (Math.abs(x(point.time) - x(current.anchor)) > 6) onZoom([Math.min(current.anchor, point.time), Math.max(current.anchor, point.time)]); else if (point.unit) onSelect(point.unit); }} onPointerCancel={cancelDrag} onLostPointerCapture={() => { if (dragRef.current) cancelDrag(); }}",
+      "control": "aria-label={`${mode === \"user\" ? \"Threaded\" : \"Model activity (estimated)\"}, stacked by ${counting === \"agent\" ? \"conversation\" : \"workspace\"}; drag to zoom`} onPointerMove={event => { const point = coordinates(event), current = dragRef.current;if (current) moveDrag({ ...current, current: point.time });else onHover(point); }} onPointerLeave={() => { if (!dragRef.current) onHover(null); }} onPointerDown={event => { if (event.button !== 0) return; const rect = event.currentTarget.getBoundingClientRect(); if (event.clientY - rect.top < top || event.clientY - rect.top > bottom) return; event.preventDefault();const time = coordinates(event).time; moveDrag({ anchor: time, current: time, pointerId: event.pointerId });onHover(null);event.currentTarget.setPointerCapture(event.pointerId); }} onPointerUp={event => { const current = dragRef.current;if (!current || current.pointerId !== event.pointerId) return; const point = coordinates(event);cancelDrag(); if (Math.abs(x(point.time) - x(current.anchor)) > 6) onZoom([Math.min(current.anchor, point.time), Math.max(current.anchor, point.time)]); else if (point.unit) onSelect(point.unit); }} onPointerCancel={cancelDrag} onLostPointerCapture={() => { if (dragRef.current) cancelDrag(); }}",
       "contract": "view.parallelism",
       "reason": "Ribbon selection and zoom use analyze_parallelism. The updated accessible label names the counted conversation or workspace; hover and an unfinished drag remain transient."
     },
@@ -5611,11 +5611,11 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "e38f2db022ab5cbf:0",
+      "key": "fef5abab0ba153c2:0",
       "file": "web/src/data-guide-examples.tsx",
       "owner": "ExampleTerm",
       "tag": "button",
-      "control": "data-view-field=\"guide_entity\" aria-label={label ?? `Explain ${dataEntities[term].label.toLowerCase()}`} onClick={() => onSelect(term)}",
+      "control": "data-view-field=\"guide_entity\" aria-label={label ?? `Explain ${lowerLabel(dataEntities[term].label)}`} onClick={() => onSelect(term)}",
       "binding": "guide_entity",
       "contract": "view.guide_entity",
       "reason": "Bound directly to the registered view field."
@@ -5701,15 +5701,6 @@
       "reason": "Bound directly to the registered view field."
     },
     {
-      "key": "14a033ebe0d2b22e:0",
-      "file": "web/src/data-taxonomy.tsx",
-      "owner": "DataTaxonomyModal",
-      "tag": "button",
-      "control": "aria-label=\"Close data guide\" onClick={() => dialog.current?.close()}",
-      "contract": "view.guide_open",
-      "reason": "Guide visibility, entity and example are registered view fields."
-    },
-    {
       "key": "1e830d92a97c6ec1:0",
       "file": "web/src/data-taxonomy.tsx",
       "owner": "DataTaxonomyModal",
@@ -5727,6 +5718,15 @@
       "disclosure": true,
       "contract": "view.guide_open",
       "reason": "The header reflects the Data Guide dialog state owned by the shared guide_open view binding."
+    },
+    {
+      "key": "4b0a69bea17500a5:0",
+      "file": "web/src/data-taxonomy.tsx",
+      "owner": "DataTaxonomyModal",
+      "tag": "button",
+      "control": "aria-label=\"Close Data Guide\" onClick={() => dialog.current?.close()}",
+      "contract": "view.guide_open",
+      "reason": "Guide visibility, entity and example are registered view fields."
     },
     {
       "key": "66209fc099270fa0:0",
@@ -6221,20 +6221,20 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "516fcc8c2abc409c:0",
-      "file": "web/src/explore-search.tsx",
-      "owner": "ExploreSearch",
-      "tag": "button",
-      "control": "onClick={event => edit(event)} aria-label={`Edit ${label.toLowerCase()} search`}",
-      "contract": "host-search",
-      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
-    },
-    {
       "key": "6cf16be97d7d183f:0",
       "file": "web/src/explore-search.tsx",
       "owner": "ExploreSearch",
       "tag": "button",
       "control": "aria-label=\"Remove content search\" onClick={onClear}",
+      "contract": "host-search",
+      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
+    },
+    {
+      "key": "9275af0a21a5ce98:0",
+      "file": "web/src/explore-search.tsx",
+      "owner": "ExploreSearch",
+      "tag": "button",
+      "control": "onClick={event => edit(event)} aria-label={`Edit ${target.noun} search`}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -7684,22 +7684,22 @@
       "reason": "Query Table owns q_*; host search is mirrored in hostState; result browsing uses search_cards. Navigation, refreshing and draft composition are excluded actions."
     },
     {
-      "key": "324f4dc732c26954:0",
+      "key": "0bc9c480ab6079e6:0",
       "file": "web/src/label-compact-fingerprint.tsx",
       "owner": "CompactFingerprint",
       "tag": "g",
-      "control": "aria-label={`Ribbon segment ${i+1}, ${ribbonMessageTitle(first,last,conversation.messages.length)}, extra overlapping branches ${token.parallelism}`} onFocus={event=>inspector.show(event.currentTarget,segmentCard(i))} onBlur={inspector.leave} onKeyDown={event=>{if(!['Enter',' '].includes(event.key))return;event.preventDefault();event.stopPropagation();inspector.pin(event.currentTarget,segmentCard(i,true),undefined,true);}}",
-      "contract": "transient",
-      "reason": "Keyboard pinning opens transient fingerprint inspection without changing the URL; the source message is revealed only through its navigation link."
-    },
-    {
-      "key": "913a5acc7dd39995:0",
-      "file": "web/src/label-compact-fingerprint.tsx",
-      "owner": "CompactFingerprint",
-      "tag": "g",
-      "control": "aria-label={`${placed.length} agent events. Arrow keys browse events; Enter pins details.`} onFocus={onFocus} onBlur={onBlur} onKeyDown={onKeyDown}",
+      "control": "aria-label={`${plural(placed.length,'agent event','agent events')}. Arrow keys browse events; Enter pins details.`} onFocus={onFocus} onBlur={onBlur} onKeyDown={onKeyDown}",
       "contract": "transient",
       "reason": "One tab stop for the fingerprint's agent events, through the ribbons' shared useRibbonPointer: arrow keys browse events, Enter pins the card with its link focused. Hover and pinned inspection are transient; the durable selection lives in the reader (reader_event_link)."
+    },
+    {
+      "key": "5f6b4b26bd2d7f25:0",
+      "file": "web/src/label-compact-fingerprint.tsx",
+      "owner": "CompactFingerprint",
+      "tag": "g",
+      "control": "aria-label={`Ribbon segment ${i+1}, ${ribbonMessageTitle(first,last,conversation.messages.length)}, ${token.parallelism?sessionsAtOnce(token.parallelism):'no other agent session running'}`} onFocus={event=>inspector.show(event.currentTarget,segmentCard(i))} onBlur={inspector.leave} onKeyDown={event=>{if(!['Enter',' '].includes(event.key))return;event.preventDefault();event.stopPropagation();inspector.pin(event.currentTarget,segmentCard(i,true),undefined,true);}}",
+      "contract": "transient",
+      "reason": "Keyboard pinning opens transient fingerprint inspection without changing the URL; the source message is revealed only through its navigation link."
     },
     {
       "key": "890267854bf30643:0",
@@ -8075,6 +8075,15 @@
       "reason": "Opens the %ile menu; whether it is open is a transient menu, not view state. The levels it ticks are analyze_chart.percentiles."
     },
     {
+      "key": "0f3196624ed82e4e:0",
+      "file": "web/src/pricing-notice.tsx",
+      "owner": "PricingNotice",
+      "tag": "textarea",
+      "control": "aria-label=\"Pricing prompt\" value={pricing?.prompt ?? \"\"}",
+      "contract": "action",
+      "reason": "Read-only generated prompt provided for manual clipboard copying; its content comes from the pricing endpoint."
+    },
+    {
       "key": "26f74b7cb0ed5e94:0",
       "file": "web/src/pricing-notice.tsx",
       "owner": "PricingNotice",
@@ -8093,15 +8102,6 @@
       "control": "onClick={() => void copyPrompt()}",
       "contract": "action",
       "reason": "Copies the generated pricing research prompt to the clipboard; does not change the content view or dismiss missing prices."
-    },
-    {
-      "key": "5613c684de087e62:0",
-      "file": "web/src/pricing-notice.tsx",
-      "owner": "PricingNotice",
-      "tag": "textarea",
-      "control": "aria-label=\"Pricing refresh prompt\" value={pricing?.prompt ?? \"\"}",
-      "contract": "action",
-      "reason": "Read-only generated prompt provided for manual clipboard copying; its content comes from the pricing endpoint."
     },
     {
       "key": "08cee9b0edd96289:0",
@@ -8240,20 +8240,11 @@
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
     {
-      "key": "391c718c9cdb25e2:0",
-      "file": "web/src/query-conveyor.tsx",
-      "owner": "QueryConveyor",
-      "tag": "button",
-      "control": "aria-label={`Next ${counted(navigationStep)} suggestions`} onClick={() => step(1)}",
-      "contract": "view.conveyor_paused",
-      "reason": "Pause is URL state; animated movement and previous/next generated suggestions are transient content navigation."
-    },
-    {
-      "key": "7b95b99e3102ab11:0",
+      "key": "3372f59f7995e4ce:0",
       "file": "web/src/query-conveyor.tsx",
       "owner": "QueryConveyor",
       "tag": "section",
-      "control": "aria-label=\"Dashboard Catalog\" onKeyDown={event => { if (!event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && [\"ArrowLeft\", \"ArrowRight\"].includes(event.key)) { event.preventDefault(); if (canNavigate) { section.current?.focus({ preventScroll: true }); step(event.key === \"ArrowLeft\" ? -1 : 1); } } }}",
+      "control": "aria-label=\"From the Card Library\" onKeyDown={event => { if (!event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && [\"ArrowLeft\", \"ArrowRight\"].includes(event.key)) { event.preventDefault(); if (canNavigate) { section.current?.focus({ preventScroll: true }); step(event.key === \"ArrowLeft\" ? -1 : 1); } } }}",
       "contract": "view.conveyor_paused",
       "reason": "Pause is URL state; animated movement and previous/next generated suggestions are transient content navigation."
     },
@@ -8277,6 +8268,15 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
+      "key": "9b2e214721aa9e6a:0",
+      "file": "web/src/query-conveyor.tsx",
+      "owner": "QueryConveyor",
+      "tag": "button",
+      "control": "aria-label={navigationStep === 1 ? \"Previous suggestion\" : `Previous ${counted(navigationStep)} suggestions`} onClick={() => step(-1)}",
+      "contract": "view.conveyor_paused",
+      "reason": "Pause is URL state; animated movement and previous/next generated suggestions are transient content navigation."
+    },
+    {
       "key": "9c64a6e052dbf964:0",
       "file": "web/src/query-conveyor.tsx",
       "owner": "QueryConveyor",
@@ -8295,11 +8295,11 @@
       "reason": "Pause is URL state; animated movement and previous/next generated suggestions are transient content navigation."
     },
     {
-      "key": "cdcbfdf9a8046cc0:0",
+      "key": "f9ce596702aaee66:0",
       "file": "web/src/query-conveyor.tsx",
       "owner": "QueryConveyor",
       "tag": "button",
-      "control": "aria-label={`Previous ${counted(navigationStep)} suggestions`} onClick={() => step(-1)}",
+      "control": "aria-label={navigationStep === 1 ? \"Next suggestion\" : `Next ${counted(navigationStep)} suggestions`} onClick={() => step(1)}",
       "contract": "view.conveyor_paused",
       "reason": "Pause is URL state; animated movement and previous/next generated suggestions are transient content navigation."
     },
@@ -8574,24 +8574,6 @@
       "reason": "Bound by the shared view-state primitive."
     },
     {
-      "key": "0a853d8dd47f9c38:0",
-      "file": "web/src/safety.tsx",
-      "owner": "actions",
-      "tag": "button",
-      "control": "onClick={() => void act(card.id, { action: \"cart_remove\" }, \"Removed from risky action prompt.\")}",
-      "contract": "editing",
-      "reason": "Adds or removes a review from a persistent prompt basket; this is draft/action state, not a view filter."
-    },
-    {
-      "key": "2621838d3b1e866f:0",
-      "file": "web/src/safety.tsx",
-      "owner": "actions",
-      "tag": "button",
-      "control": "onClick={() => void act(card.id, { action: \"cart_add\" }, `Added to risky action prompt for ${card.target_label}.`)}",
-      "contract": "editing",
-      "reason": "Adds or removes a review from a persistent prompt basket; this is draft/action state, not a view filter."
-    },
-    {
       "key": "9f6fc49bad424044:0",
       "file": "web/src/safety.tsx",
       "owner": "actions",
@@ -8599,6 +8581,24 @@
       "control": "onClick={() => void act(card.id, { action: \"restore\" }, \"Brought back to Open.\")}",
       "contract": "editing",
       "reason": "Mutates persistent safety basket membership or review disposition; does not alter the current view."
+    },
+    {
+      "key": "c004f385a07aacef:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"cart_remove\" }, \"Removed from the prompt.\")}",
+      "contract": "editing",
+      "reason": "Adds or removes a review from a persistent prompt basket; this is draft/action state, not a view filter."
+    },
+    {
+      "key": "d4afc1085c5ac41a:0",
+      "file": "web/src/safety.tsx",
+      "owner": "actions",
+      "tag": "button",
+      "control": "onClick={() => void act(card.id, { action: \"cart_add\" }, `Added to the prompt for ${card.target_label}.`)}",
+      "contract": "editing",
+      "reason": "Adds or removes a review from a persistent prompt basket; this is draft/action state, not a view filter."
     },
     {
       "key": "dfe8fb9c955132b5:0",
@@ -8971,20 +8971,20 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "25fcb341aea73913:0",
+      "key": "47ae41a5cc032aa9:0",
       "file": "web/src/session-identity.tsx",
       "owner": "SessionIdentity",
       "tag": "button",
-      "control": "aria-label={`Open session ${name}`} onClick={open}",
+      "control": "aria-label={`Open agent session ${name}`} onClick={open}",
       "contract": "delegation",
       "reason": "Session navigation writes the canonical conversation route and delegation_session through the shared explorer openNode handler; the current session has no navigation control."
     },
     {
-      "key": "25fcb341aea73913:1",
+      "key": "47ae41a5cc032aa9:1",
       "file": "web/src/session-identity.tsx",
       "owner": "SessionIdentity",
       "tag": "button",
-      "control": "aria-label={`Open session ${name}`} onClick={open}",
+      "control": "aria-label={`Open agent session ${name}`} onClick={open}",
       "contract": "delegation",
       "reason": "Session navigation beside a SessionNotice writes the canonical conversation route and delegation_session through the shared explorer openNode handler."
     },
@@ -9133,11 +9133,11 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "da500d50623d2c23:0",
+      "key": "d5b880f46a5b9a09:0",
       "file": "web/src/text-search-editor.tsx",
       "owner": "GroupEditor",
       "tag": "SearchSelect",
-      "control": "id={`${prefix}${group.id}-join`} aria-label={`Match rules in group ${path}`} value={group.join} onChange={e => onChange({ ...group, join: e.target.value as \"all\" | \"any\" })}",
+      "control": "id={`${prefix}${group.id}-join`} aria-label={`Match conditions in group ${path}`} value={group.join} onChange={e => onChange({ ...group, join: e.target.value as \"all\" | \"any\" })}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -9160,20 +9160,20 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "77400955e6477210:0",
+      "key": "4852389102c2bc5f:0",
       "file": "web/src/text-search-editor.tsx",
       "owner": "renderConditions",
       "tag": "input",
-      "control": "aria-label={`Words between phrases in rule ${childPath}`} value={child.distance} onChange={e => edit(index, { ...child, distance: e.target.value })}",
+      "control": "aria-label={`Words between phrases in condition ${childPath}`} value={child.distance} onChange={e => edit(index, { ...child, distance: e.target.value })}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "95ff0d9964430270:0",
+      "key": "b9ccf1dfa1a1fbff:0",
       "file": "web/src/text-search-editor.tsx",
       "owner": "renderConditions",
       "tag": "SearchInput",
-      "control": "aria-label={`Second phrase for rule ${childPath}`} value={child.other} onChange={e => edit(index, { ...child, other: e.target.value })}",
+      "control": "aria-label={`Second phrase for condition ${childPath}`} value={child.other} onChange={e => edit(index, { ...child, other: e.target.value })}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -9187,11 +9187,11 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "da8db67eea60fd24:0",
+      "key": "f9ce72ecfae6fab0:0",
       "file": "web/src/text-search-editor.tsx",
       "owner": "renderConditions",
       "tag": "SearchSelect",
-      "control": "aria-label={`Match type for rule ${childPath}`} value={child.kind} onChange={e => edit(index, { ...child, kind: e.target.value as RuleKind })}",
+      "control": "aria-label={`Match type for condition ${childPath}`} value={child.kind} onChange={e => edit(index, { ...child, kind: e.target.value as RuleKind })}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -9279,15 +9279,6 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "5d23db2e36fef627:0",
-      "file": "web/src/text-search-editor.tsx",
-      "owner": "TextSearchEditor",
-      "tag": "button",
-      "control": "aria-label=\"Visual editor\" onClick={() => { if (draft.editor !== \"visual\") void editRules(); }}",
-      "contract": "host-search",
-      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
-    },
-    {
       "key": "60b9f84946428798:0",
       "file": "web/src/text-search-editor.tsx",
       "owner": "TextSearchEditor",
@@ -9311,6 +9302,15 @@
       "owner": "TextSearchEditor",
       "tag": "SearchSelect",
       "control": "id={id} aria-label={name} value={value} onChange={e => scope({ [field.key]: e.target.value })}",
+      "contract": "host-search",
+      "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
+    },
+    {
+      "key": "7ad5f163fcc05fa9:0",
+      "file": "web/src/text-search-editor.tsx",
+      "owner": "TextSearchEditor",
+      "tag": "button",
+      "control": "aria-label=\"Syntax editor\" onClick={() => { if (draft.editor !== \"syntax\") editSyntax(); }}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
@@ -9397,11 +9397,11 @@
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },
     {
-      "key": "ecf7fc3f312b2738:0",
+      "key": "ead73ff9fbf26251:0",
       "file": "web/src/text-search-editor.tsx",
       "owner": "TextSearchEditor",
       "tag": "button",
-      "control": "aria-label=\"Query syntax\" onClick={() => { if (draft.editor !== \"syntax\") editSyntax(); }}",
+      "control": "aria-label=\"Rules editor\" onClick={() => { if (draft.editor !== \"visual\") void editRules(); }}",
       "contract": "host-search",
       "reason": "Applied Search and record clauses/order/display delegate to Query Table hostState/q_*; popovers and unapplied editor drafts are excluded."
     },

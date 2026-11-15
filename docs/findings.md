@@ -65,9 +65,9 @@ a ladder of changes for successive attempts.
 | Fail-then-fix recoveries (D2) | The working command that followed each failure. A consistent change of flags, environment, or steps becomes the proposed change; a different target or script each time marks ordinary iteration | (evidence for D1) | |
 | Instruction drift (D9) | A provider searching for its own instruction file, or reading another harness's instructions or skills by hand; plus which instruction files the default branch tracks and which the harness recorded loading | That provider's conversations in the repository that looked for instructions | One shared instructions file, then a fallback setting, then a pointer file |
 | CLI friction (D7) | A command-line tool used mostly in one repository or automation, whose engagements (its calls within one conversation) read its help or fail on usage. Help the conversation's own prompt asked for doesn't count; general tools (git, gh, psql, …) are left out | Engagements with friction; a result also needs help and usage errors each to fall and engagements to keep ending in success | A skill, or the tool's usage in the automation's prompt |
-| Documentation hosts (D7) | A repository's agents fetching the same reference site again and again | Conversations that fetched it | A local copy of the reference |
-| Orientation tax (D3) | Non-documentation files read before the first edit in many conversations | Tokens read before the first edit | A map in the instructions, then smaller files |
-| Delegable exploration (D4) | 20 or more reads, searches, and commands before the first edit, re-read as context by every later request | Tokens carried from pre-edit exploration | A sub-agent instruction for the providers that do the work |
+| Reference lookups (D7) | A repository's agents fetching the same reference site again and again | Conversations that fetched it | A local copy of the reference |
+| Reading before the first edit (D3) | Non-documentation files read before the first edit in many conversations | Tokens read before the first edit | A map in the instructions, then smaller files |
+| Exploration a sub-agent could do (D4) | 20 or more reads, searches, and commands before the first edit, re-read as context by every later request | Tokens carried from pre-edit exploration | A sub-agent instruction for the providers that do the work |
 | Context-heavy commands (D5) | `rg` over everything, whole diffs and patch logs, `sed -n` ranges over 300 lines, generated files read in full | Tokens returned per call of that shape | A line in the instructions, then a hook |
 | Cost outliers (D6) | Conversations past 1,000 requests or 10 compactions, or with a request over 500k tokens of context | Share of the repository's tokens from those conversations | Handoff instructions; an earlier auto-compaction setting |
 | TL1 flavors | Error clusters, reruns on the same candidate, and runs costing three times the flavor's median | Runs of the flavor | The flavor's prompt, schema, budgets, or configuration |
@@ -93,7 +93,7 @@ remove about a sixth. Cards are ranked by the likely saving instead:
   | CLI friction | The engagement's help calls and usage errors, not its real work |
   | Instruction drift | The searches for the file; hand reads stay, since the harness loads the same text |
   | Context-heavy commands | For long `sed` ranges, all but the 180 lines a narrow reader reads of a file; for other shapes a fixed share (half for searches and diffs, 0.7 for patch logs, 0.8 for generated files) |
-  | Delegable exploration | What later requests carry after the exploration, less a 3k-token summary; a sub-agent pays the carry within the exploration too |
+  | Exploration a sub-agent could do | What later requests carry after the exploration, less a 3k-token summary; a sub-agent pays the carry within the exploration too |
   | Cost outliers | For runaway conversations, the context above the repository's typical request; for oversized ones, the context above 250k |
   | Orientation, documentation hosts, TL1 errors | Assumed: 0.3, 0.5, 0.5. TL1 repeat runs and the cost above a flavor's median count in full |
 
