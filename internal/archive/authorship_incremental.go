@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -95,12 +96,48 @@ func (c *Catalog) ensureAuthorshipState() error {
 				if event == "INSERT" && spec.table == "conversations" {
 					stamp, name = "COALESCE(NEW.started_at,'')", name+"_v2"
 				}
+				// A new link dates from the earlier start of the two conversations
+				// it joins: ingest writes it with the later-arriving copy, so when
+				// both are new it is new work too, and the checkpoint stands
+				// (authorshipGraph). Joining a conversation already classified
+				// still dates it as history. The trigger it replaces dated every
+				// link as all history, which made each day's first new session a
+				// full pass; replacing it leaves the dirty watermark as it is.
+				if event == "INSERT" && spec.table == "conversation_identity_links" {
+					stamp = `CASE WHEN (SELECT COUNT(*) FROM conversations WHERE id IN (NEW.left_id,NEW.right_id))=2
+ THEN (SELECT MIN(COALESCE(started_at,'')) FROM conversations WHERE id IN (NEW.left_id,NEW.right_id)) ELSE '' END`
+					name += "_v2"
+				}
 				if event == "INSERT" && spec.table == "workspaces" {
 					body += `UPDATE authorship_dirty SET revision=hex(randomblob(16)) WHERE id=1;`
 					name += "_v2"
 					continue
 				}
+				// A row without a time is one no classifier query reads: inputs
+				// need a sent time, replies and commands are read by time. It
+				// dates nothing. (Such rows used to date all history; app copies
+				// bring them, so each such session cost a full pass.) A tool call
+				// is read by its own start, whatever its message's time. A new
+				// undated message is read only through a tool call, written
+				// after it, that dates itself; a changed or removed one still
+				// dates all history.
+				undated := ""
+				switch {
+				case spec.table == "tool_calls":
+					undated = ref + ".started_at"
+				case spec.table == "tool_commands":
+					undated = "(SELECT started_at FROM tool_calls WHERE id=" + ref + ".tool_call_id)"
+				case spec.table == "messages" && event == "INSERT":
+					undated = "NEW.created_at"
+				}
+				if undated != "" {
+					body += `UPDATE authorship_dirty SET revision=hex(randomblob(16)),earliest=CASE WHEN ` + undated + ` IS NULL THEN earliest ELSE MIN(COALESCE(earliest,` + stamp + `),` + stamp + `) END WHERE id=1;`
+					continue
+				}
 				body += `UPDATE authorship_dirty SET revision=hex(randomblob(16)),earliest=MIN(COALESCE(earliest,` + stamp + `),` + stamp + `) WHERE id=1;`
+			}
+			if spec.table == "tool_calls" || spec.table == "tool_commands" || spec.table == "messages" && event == "INSERT" {
+				name += "_v2"
 			}
 			generationKey := "tool_ledger_generation"
 			if spec.table == "messages" {
@@ -146,73 +183,142 @@ type authorshipCheckpoint struct {
 // earlier one, is new work whose rows all date after the watermark, which a
 // replay classifies (and whose launch it checks). Its workspace counts once
 // it holds an earlier one. later reports a headless run among that new work.
-func (c *Catalog) authorshipGraph(ctx context.Context, watermark time.Time) (graph string, lastRun time.Time, later bool, err error) {
+//
+// An identity link is new work as well when both conversations it joins
+// started later: ingest writes a session's native transcript, its app copy and
+// their link together, and none of the three was history. The link keeps the
+// pair from being a headless run and makes one a mirror, which the replay
+// applies as the full classifier does (every claim and representative is read
+// for it); the hash leaves the link out, and still holds the representative of
+// every workspace with history, so a link that mirrors or restores one of
+// those, or joins a conversation already classified, changes it. A checkpoint
+// stored before this hashed every link and called a linked conversation
+// history; previous is that hash, for carrying such a checkpoint over.
+func (c *Catalog) authorshipGraph(ctx context.Context, watermark time.Time, legacy bool) (graph, previous string, lastRun time.Time, later bool, err error) {
 	workspaces, err := queryMapsContext(ctx, c.DB, `SELECT id,source_kind,location,activity_at FROM workspaces ORDER BY id`)
 	if err != nil {
-		return "", time.Time{}, false, err
+		return "", "", time.Time{}, false, err
 	}
-	links, err := queryMapsContext(ctx, c.DB, identityLinkWorkspacesSQL)
-	if err != nil {
-		return "", time.Time{}, false, err
-	}
-	representative := mirrorRepresentatives(workspaces, links)
 	identities, err := queryMapsContext(ctx, c.DB, `SELECT left_id,right_id,relationship FROM conversation_identity_links ORDER BY left_id,right_id,relationship`)
 	if err != nil {
-		return "", time.Time{}, false, err
+		return "", "", time.Time{}, false, err
 	}
 	conversations, err := queryMapsContext(ctx, c.DB, `SELECT id,workspace_id,parent_id,harness,origin_host_id,provider,account,native_id,started_at FROM conversations ORDER BY id`)
 	if err != nil {
-		return "", time.Time{}, false, err
+		return "", "", time.Time{}, false, err
 	}
-	claimed := map[string]bool{}
-	for _, link := range identities {
-		claimed[asString(link["left_id"])] = true
-		claimed[asString(link["right_id"])] = true
-	}
-	// An earlier conversation's parent is history too, whenever it started.
-	run := func(row map[string]any) bool {
-		return row["parent_id"] == nil && !claimed[asString(row["id"])] && headlessRun(asString(row["provider"]), asString(row["harness"])) != ""
-	}
-	isLater := func(row map[string]any) bool {
+	startsLater, workspace := map[string]bool{}, map[string]any{}
+	for _, row := range conversations {
 		at, ok := parseTime(asString(row["started_at"]))
-		return ok && at.After(watermark) && !claimed[asString(row["id"])]
+		id := asString(row["id"])
+		startsLater[id], workspace[id] = ok && at.After(watermark), row["workspace_id"]
 	}
-	parents := map[string]bool{}
-	for _, row := range conversations {
-		if !isLater(row) {
-			parents[asString(row["parent_id"])] = true
-		}
+	// newWork reports a link between two stored conversations that both
+	// started after the watermark.
+	newWork := func(link map[string]any) bool {
+		return startsLater[asString(link["left_id"])] && startsLater[asString(link["right_id"])]
 	}
-	historical, works := conversations[:0], map[string]bool{}
-	for _, row := range conversations {
-		if isLater(row) && !parents[asString(row["id"])] {
-			later = later || run(row)
-			continue
-		}
-		historical = append(historical, row)
-		works[asString(row["workspace_id"])] = true
-	}
-	conversations = historical
-	for _, row := range conversations {
-		if run(row) {
-			if at, ok := parseTime(asString(row["started_at"])); ok && latestLaunch(at).After(lastRun) {
-				lastRun = latestLaunch(at)
+	zone, offset := time.Now().In(time.Local).Zone()
+	// digest hashes the graph. before gives the hash a checkpoint stored when
+	// every link was history, for the graph without new work's links: the
+	// one that checkpoint saw, if those are all that has been linked since.
+	digest := func(before bool) (string, time.Time, bool) {
+		linked, rows := identities, workspaces
+		if before {
+			linked, rows = make([]map[string]any, 0, len(identities)), make([]map[string]any, 0, len(workspaces))
+			for _, link := range identities {
+				if !newWork(link) {
+					linked = append(linked, link)
+				}
+			}
+			for _, work := range workspaces {
+				rows = append(rows, maps.Clone(work))
 			}
 		}
-	}
-	held := workspaces[:0]
-	for _, work := range workspaces {
-		if id := asString(work["id"]); works[id] {
-			delete(work, "activity_at")
-			held = append(held, work)
-		} else {
-			delete(representative, id)
+		// identityLinkWorkspacesSQL, over these links.
+		pairs := make([]map[string]any, 0, len(linked))
+		claimed, joined := map[string]bool{}, map[string]bool{}
+		for _, link := range linked {
+			left, right := asString(link["left_id"]), asString(link["right_id"])
+			claimed[left], claimed[right] = true, true
+			if before || !newWork(link) {
+				joined[left], joined[right] = true, true
+			}
+			if workspace[left] != nil && workspace[right] != nil {
+				pairs = append(pairs, map[string]any{"left_workspace": workspace[left], "right_workspace": workspace[right]})
+			}
 		}
+		// Notes each group on its representative's row, which the earlier
+		// hash covered.
+		representatives := mirrorRepresentatives(rows, pairs)
+		run := func(row map[string]any) bool {
+			return row["parent_id"] == nil && !claimed[asString(row["id"])] && headlessRun(asString(row["provider"]), asString(row["harness"])) != ""
+		}
+		isLater := func(row map[string]any) bool {
+			id := asString(row["id"])
+			return startsLater[id] && !joined[id]
+		}
+		// An earlier conversation's parent is history too, whenever it started.
+		parents := map[string]bool{}
+		for _, row := range conversations {
+			if !isLater(row) {
+				parents[asString(row["parent_id"])] = true
+			}
+		}
+		var lastRun time.Time
+		later := false
+		historical, known, works := make([]map[string]any, 0, len(conversations)), map[string]bool{}, map[string]bool{}
+		for _, row := range conversations {
+			if isLater(row) && !parents[asString(row["id"])] {
+				later = later || run(row)
+				continue
+			}
+			historical = append(historical, row)
+			known[asString(row["id"])], works[asString(row["workspace_id"])] = true, true
+			if run(row) {
+				if at, ok := parseTime(asString(row["started_at"])); ok && latestLaunch(at).After(lastRun) {
+					lastRun = latestLaunch(at)
+				}
+			}
+		}
+		// A link is history when either conversation is.
+		kept := linked
+		if !before {
+			kept = make([]map[string]any, 0, len(linked))
+			for _, link := range linked {
+				if !newWork(link) || known[asString(link["left_id"])] || known[asString(link["right_id"])] {
+					kept = append(kept, link)
+				}
+			}
+		}
+		held, representative := make([]map[string]any, 0, len(rows)), map[string]string{}
+		for _, work := range rows {
+			id := asString(work["id"])
+			if !works[id] {
+				continue
+			}
+			if before {
+				delete(work, "activity_at")
+				held = append(held, work)
+			} else {
+				held = append(held, map[string]any{"id": work["id"], "source_kind": work["source_kind"], "location": work["location"]})
+			}
+			if standsFor := representatives[id]; standsFor != "" {
+				representative[id] = standsFor
+			}
+		}
+		return hashBytes([]byte(jsonText([]any{held, representative, kept, historical, time.Local.String(), zone, offset}))), lastRun, later
 	}
-	workspaces = held
-	zone, offset := time.Now().In(time.Local).Zone()
-	return hashBytes([]byte(jsonText([]any{workspaces, representative, identities, conversations, time.Local.String(), zone, offset}))), lastRun, later, nil
+	if legacy {
+		previous, _, _ = digest(true)
+	}
+	graph, lastRun, later = digest(false)
+	return authorshipGraphFormat + graph, previous, lastRun, later, nil
 }
+
+// authorshipGraphFormat marks a stored graph hash that leaves the links of
+// new work out (authorshipGraph). One without it hashed every link.
+const authorshipGraphFormat = "links-v2:"
 
 func (c *Catalog) authorshipCheckpoint(ctx context.Context) (authorshipCheckpoint, error) {
 	var state authorshipCheckpoint
@@ -319,11 +425,23 @@ func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncreme
 	if !ok {
 		return run, nil
 	}
-	graph, lastRun, newRuns, err := c.authorshipGraph(ctx, watermark)
+	carried := !strings.HasPrefix(checkpoint.graph, authorshipGraphFormat)
+	graph, previous, lastRun, newRuns, err := c.authorshipGraph(ctx, watermark, carried)
 	if err != nil {
 		return nil, err
 	}
-	if graph != checkpoint.graph {
+	if carried && previous == checkpoint.graph {
+		// A checkpoint from before the graph left new work's links out, and
+		// nothing it hashed has changed: the same graph in today's form is its
+		// hash too. Keep it, so the next new session does not cost the full
+		// pass an upgrade would otherwise bring.
+		if err := c.writeTransaction(ctx, "carry authorship checkpoint over", func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `UPDATE meta SET value=? WHERE key='authorship_state_graph' AND value=?`, graph, previous)
+			return err
+		}); err != nil {
+			return nil, err
+		}
+	} else if graph != checkpoint.graph {
 		run.reason = "identity or launch graph changed"
 		return run, nil
 	}
@@ -778,7 +896,7 @@ func (c *Catalog) storeAuthorshipState(ctx context.Context, run *authorshipIncre
 		watermark = formatTime(results[len(results)-1].Input.SentAt)
 	}
 	at, _ := parseTime(watermark)
-	graph, _, _, err := c.authorshipGraph(ctx, at)
+	graph, _, _, _, err := c.authorshipGraph(ctx, at, false)
 	if err != nil {
 		return err
 	}
