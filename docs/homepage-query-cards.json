@@ -7366,7 +7366,7 @@
     {
       "id": "batched-tools",
       "idea": "tools-01",
-      "category": "delegation",
+      "category": "tools",
       "title": "Calls issued together",
       "description": "Tool calls in multi-call model requests started in the last {days} days, grouped by tool.",
       "dataset": "tool_calls",
@@ -10585,7 +10585,7 @@
       "description": "Largest resolved delegation depth active in the last {days} days; top-level conversation is level zero.",
       "dataset": "usage",
       "field": "first_usage_at",
-      "category": "models",
+      "category": "delegation",
       "idea": "models-01",
       "unit": "levels",
       "where": [
@@ -10682,7 +10682,7 @@
       "description": "Most distinct delegated runs active in one conversation over the last {days} days, including nested agents.",
       "dataset": "usage",
       "field": "first_usage_at",
-      "category": "models",
+      "category": "delegation",
       "idea": "models-01",
       "unit": "delegated runs",
       "where": [
@@ -10892,7 +10892,7 @@
       "description": "Delegated runs among delegating conversations over the last {days} days; model/effort groups with three or more observations.",
       "dataset": "usage",
       "field": "first_usage_at",
-      "category": "models",
+      "category": "delegation",
       "idea": "models-01",
       "unit": "runs",
       "where": [
@@ -15215,7 +15215,7 @@
       "id": "origin-cost-channel",
       "title": "API cost by channel",
       "description": "Recorded API cost over the last {days} days, grouped by channel.",
-      "category": "usage",
+      "category": "cost",
       "idea": "cost-01",
       "dataset": "usage",
       "field": "first_usage_at",
@@ -15371,7 +15371,7 @@
       "id": "origin-cost-machine_id",
       "title": "API cost by machine",
       "description": "Recorded API cost over the last {days} days, grouped by machine.",
-      "category": "usage",
+      "category": "cost",
       "idea": "cost-01",
       "dataset": "usage",
       "field": "first_usage_at",
@@ -15527,7 +15527,7 @@
       "id": "origin-cost-execution_machine_id",
       "title": "API cost by execution machine",
       "description": "Recorded API cost over the last {days} days, grouped by execution machine.",
-      "category": "usage",
+      "category": "cost",
       "idea": "cost-01",
       "dataset": "usage",
       "field": "first_usage_at",
@@ -19006,7 +19006,7 @@
       "retired": true
     },
     {
-      "category": "machines",
+      "category": "tools",
       "idea": "tools-05",
       "dataset": "tool_calls",
       "field": "started_at",
@@ -19099,7 +19099,7 @@
       }
     },
     {
-      "category": "machines",
+      "category": "tools",
       "idea": "tools-05",
       "dataset": "tool_calls",
       "field": "started_at",
@@ -19202,7 +19202,7 @@
       }
     },
     {
-      "category": "machines",
+      "category": "tools",
       "idea": "tools-05",
       "dataset": "tool_calls",
       "field": "started_at",
@@ -19289,7 +19289,7 @@
       }
     },
     {
-      "category": "machines",
+      "category": "tools",
       "idea": "tools-05",
       "dataset": "tool_calls",
       "field": "started_at",
@@ -19358,7 +19358,7 @@
       }
     },
     {
-      "category": "machines",
+      "category": "tools",
       "idea": "tools-05",
       "dataset": "tool_calls",
       "field": "started_at",
@@ -20998,7 +20998,7 @@
       }
     },
     {
-      "category": "sessions",
+      "category": "tools",
       "idea": "models-02",
       "dataset": "session_shape",
       "field": "started_at",
@@ -21044,7 +21044,7 @@
       "id": "session-autonomy",
       "title": "Tool calls per typed message, by provider",
       "description": "Each session's tool calls divided by the messages you typed in it, over the last {days} days; log axis.",
-      "action": "Explore Session Shape",
+      "action": "Explore Tool Use",
       "where": [
         {
           "field": "has_tool_data",
@@ -21078,7 +21078,7 @@
         "density": "compact"
       },
       "destination": {
-        "topic": "session_shape",
+        "topic": "tool_use",
         "chart": {
           "v": 3,
           "view": "distribution",
@@ -21092,7 +21092,7 @@
       }
     },
     {
-      "category": "sessions",
+      "category": "errors",
       "idea": "tools-01",
       "dataset": "session_shape",
       "field": "started_at",
@@ -21105,7 +21105,7 @@
       "id": "session-model-failure-rates",
       "title": "Failure rate by model",
       "description": "Failed tool calls divided by all tool calls, by model, over the last {days} days.",
-      "action": "Explore Session Shape",
+      "action": "Explore Tool Use",
       "where": [
         {
           "field": "has_tool_data",
@@ -21182,7 +21182,7 @@
         "showOther": false
       },
       "destination": {
-        "topic": "session_shape",
+        "topic": "tool_use",
         "chart": {
           "v": 3,
           "view": "compare",
@@ -21195,7 +21195,7 @@
       }
     },
     {
-      "category": "sessions",
+      "category": "errors",
       "idea": "tools-01",
       "dataset": "session_shape",
       "field": "started_at",
@@ -21208,7 +21208,7 @@
       "id": "session-kind-failure-rates",
       "title": "Failure rate by session kind",
       "description": "Failed tool calls divided by all tool calls, automated runs against the sessions you typed in, over the last {days} days.",
-      "action": "Explore Session Shape",
+      "action": "Explore Tool Use",
       "where": [
         {
           "field": "has_tool_data",
@@ -21280,7 +21280,7 @@
         "showOther": false
       },
       "destination": {
-        "topic": "session_shape",
+        "topic": "tool_use",
         "chart": {
           "v": 3,
           "view": "compare",
@@ -21293,7 +21293,7 @@
       }
     },
     {
-      "category": "sessions",
+      "category": "errors",
       "idea": "tools-06",
       "dataset": "session_shape",
       "field": "started_at",
@@ -21317,7 +21317,7 @@
       "id": "session-failure-trend",
       "title": "Failure rate over time",
       "description": "Failed tool calls divided by all tool calls over each trailing seven complete days, across the last 30 days.",
-      "action": "Explore Session Shape",
+      "action": "Explore Tool Use",
       "where": [
         {
           "field": "has_tool_data",
@@ -21355,7 +21355,7 @@
         "detail": "Each point: failed calls ÷ tool calls over its trailing seven complete local days. The norm is the mean of the prior 30 endpoints."
       },
       "destination": {
-        "topic": "session_shape",
+        "topic": "tool_use",
         "chart": {
           "v": 3,
           "view": "trend",
@@ -21445,7 +21445,7 @@
       }
     },
     {
-      "category": "sessions",
+      "category": "tools",
       "idea": "verification-03",
       "dataset": "session_shape",
       "field": "started_at",
@@ -21458,7 +21458,7 @@
       "id": "session-repository-verification",
       "title": "Verified handbacks by repository",
       "description": "Handbacks after an edit with a test, build or lint command after the last edit, over the last {days} days.",
-      "action": "Explore Session Shape",
+      "action": "Explore Tool Use",
       "where": [
         {
           "field": "has_tool_data",
@@ -21535,7 +21535,7 @@
         "showOther": false
       },
       "destination": {
-        "topic": "session_shape",
+        "topic": "tool_use",
         "chart": {
           "v": 3,
           "view": "compare",
@@ -21726,7 +21726,7 @@
       }
     },
     {
-      "category": "sessions",
+      "category": "tools",
       "idea": "conversation-04",
       "dataset": "session_shape",
       "field": "started_at",
@@ -21754,7 +21754,7 @@
       "id": "session-autonomy-trend",
       "title": "Tool calls per typed message over time",
       "description": "Your sessions each day by tool calls per typed message, over the last {days} days.",
-      "action": "Explore Session Shape",
+      "action": "Explore Tool Use",
       "note": "Each session's tool calls divided by the messages you typed in it. Only sessions the tool index covers and whose prompts are all classified count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
       "cover": {
         "mode": "source",
@@ -21792,7 +21792,7 @@
         }
       ],
       "destination": {
-        "topic": "session_shape",
+        "topic": "tool_use",
         "chart": {
           "v": 3,
           "view": "trend",
@@ -21874,7 +21874,7 @@
       }
     },
     {
-      "category": "sessions",
+      "category": "context",
       "idea": "conversation-04",
       "dataset": "session_shape",
       "field": "started_at",
@@ -21902,7 +21902,7 @@
       "id": "session-context-trend",
       "title": "Peak context over time",
       "description": "Your sessions each day by their largest request as a share of the model's context window, over the last {days} days.",
-      "action": "Explore Session Shape",
+      "action": "Explore Context",
       "note": "Only sessions whose model's context window is known count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's sessions in one narrow range of the value over seven days.",
       "cover": {
         "mode": "source",
@@ -21935,7 +21935,7 @@
         }
       ],
       "destination": {
-        "topic": "session_shape",
+        "topic": "context",
         "chart": {
           "v": 3,
           "view": "trend",
@@ -22125,7 +22125,7 @@
       }
     },
     {
-      "category": "sessions",
+      "category": "tools",
       "idea": "conversation-04",
       "dataset": "session_shape",
       "field": "started_at",
@@ -22154,7 +22154,7 @@
       "id": "session-length-tool-calls",
       "title": "Tool calls by session length",
       "description": "Tool calls of your sessions each day by the session's message count, over the last {days} days.",
-      "action": "Explore Session Shape",
+      "action": "Explore Tool Use",
       "note": "Length counts every message of the session's own stream; a delegated run is its own session. Only sessions the tool index covers count. Automated sessions, with no typed human message, are left out; the dashboard opens with that filter. Each cell averages the day's tool calls of sessions in one narrow range of the value over seven days.",
       "cover": {
         "mode": "source",
@@ -22225,7 +22225,7 @@
         }
       },
       "destination": {
-        "topic": "session_shape",
+        "topic": "tool_use",
         "chart": {
           "v": 3,
           "view": "trend",
@@ -22238,7 +22238,7 @@
       }
     },
     {
-      "category": "sessions",
+      "category": "context",
       "idea": "context-02",
       "dataset": "session_shape",
       "field": "started_at",
@@ -22284,7 +22284,7 @@
       "id": "session-model-context",
       "title": "Peak context by model",
       "description": "Each session's largest request as a share of its model's context window, over the last {days} days.",
-      "action": "Explore Session Shape",
+      "action": "Explore Context",
       "where": [
         {
           "field": "has_context_window",
@@ -22308,7 +22308,7 @@
         "density": "compact"
       },
       "destination": {
-        "topic": "session_shape",
+        "topic": "context",
         "chart": {
           "v": 3,
           "view": "distribution",
@@ -22676,7 +22676,7 @@
       "description": "Stored labels on human input over the last {days} days.",
       "dataset": "message_labels",
       "field": "occurred_at",
-      "category": "views",
+      "category": "human",
       "idea": "labels-01",
       "unit": "messages",
       "days": [
@@ -22735,7 +22735,7 @@
       "description": "Stored labels on agent thinking over the last {days} days.",
       "dataset": "message_labels",
       "field": "occurred_at",
-      "category": "views",
+      "category": "thinking",
       "idea": "labels-01",
       "unit": "messages",
       "days": [

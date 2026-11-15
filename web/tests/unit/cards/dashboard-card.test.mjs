@@ -151,6 +151,13 @@ test('every dashboard creation target supplies bounded default copy from its own
     assert.match(dashboardCardMetadata(url, 'chart', schema).title, /codex/i);
     assert.match(dashboardCardMetadata(url, 'chart', schema).description, /codex/i);
   }
+  for (const [topic, first, next] of [['tool_use', 'tool_calls', 'failure_rate'], ['context', 'context_peak', 'context_pressure']]) {
+    const catalog = analysisCatalogs[topic];
+    const copy = metric => dashboardCardMetadata(dashboardCardURL(`/analyze?analyze_topic=${topic}`, catalog,
+      { ...dashboardDefaults[topic], metric, view: 'compare', split: 'provider' }, [{ field: 'provider', op: '=', value: 'codex' }]), 'chart', schemas.session_shape);
+    assert.notEqual(copy(first).title, copy(next).title, `${topic}: changing the measure changes creation defaults`);
+    assert.match(copy(next).title, /codex/i);
+  }
   for (const habits_view of ["calendar", "punchcard", "days"]) for (const actor of ["you", "agents", "automated"]) {
     check(pageCardURL('/analyze?' + new URLSearchParams({ analyze_topic: "habits", habits_view, habits_calendar: actor,
       habits_punchcard: actor, habits_weeks: "13", habits_shape_days: "7", habits_punchcard_days: "30" })), schemas.rhythm);

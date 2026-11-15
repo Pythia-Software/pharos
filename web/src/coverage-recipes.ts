@@ -20,7 +20,7 @@ const share = (view: CardExploration, label: string): CardExploration => ({ ...v
 // ----- Tool time (tool_calls) ------------------------------------------------
 
 const machineNote = "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Tool Time classification of commands and tools.";
-const machine = (recipe: Omit<QueryRecipe, "category" | "idea" | "dataset" | "field" | "unit"> & Partial<QueryRecipe>): QueryRecipe => ({ category: "machines", idea: "tools-05", dataset: "tool_calls", field: "started_at", unit: "ms", note: machineNote, ...recipe });
+const machine = (recipe: Omit<QueryRecipe, "category" | "idea" | "dataset" | "field" | "unit"> & Partial<QueryRecipe>): QueryRecipe => ({ category: "tools", idea: "tools-05", dataset: "tool_calls", field: "started_at", unit: "ms", note: machineNote, ...recipe });
 const machineTime = sum("mt_time", "duration_ms", "Recorded tool time"), machineCalls = count("mt_calls", "Calls");
 const perTimedCall: SummaryColumn = { id: "mt_per_call", op: "avg", field: "duration_ms", label: "Per timed call" };
 const machineContext = [{ field: "mt_calls", label: "calls" }, { field: "mt_per_call", label: "per timed call", unit: "ms" }];

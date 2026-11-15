@@ -19,10 +19,10 @@ export const askForms: AskForm[] = ["understand", "compare", "change", "find", "
 export const askAreas: AskArea[] = [
   {id:"message-labels",label:"Conversation functions",pages:["analyze/labels","analyze/query/message_labels"],signals:["labels.coverage"]},
   { id: "verification", label: "Tests and builds", pages: ["analyze/calls", "analyze/time"], signals: ["verification.failures", "verification.time"] },
-  { id: "tool-failures", label: "Failing tool calls", pages: ["analyze/calls", "analyze/tools", "analyze/query/tool_calls", "analyze/session_shape", "analyze/query/session_shape"], signals: ["tools.failures"] },
-  { id: "machine-time", label: "Where agent time goes", pages: ["analyze/time", "analyze/tools"], signals: ["tools.time"] },
+  { id: "tool-failures", label: "Failing tool calls", pages: ["analyze/tool_use", "analyze/calls", "analyze/tools", "analyze/query/tool_calls", "analyze/session_shape", "analyze/query/session_shape"], signals: ["tools.failures"] },
+  { id: "machine-time", label: "Where agent time goes", pages: ["analyze/time", "analyze/tools", "analyze/tool_use"], signals: ["tools.time"] },
   { id: "thinking", label: "Reasoning and waiting", pages: ["analyze/thinking-overview", "analyze/thinking-detail", "analyze/query/model_requests"], signals: ["thinking.reasoning"] },
-  { id: "context", label: "Context pressure", pages: ["analyze/compaction", "analyze/query/compactions", "analyze/tools", "analyze/thinking-detail", "analyze/query/model_requests"], signals: ["context.compaction", "context.output"] },
+  { id: "context", label: "Context pressure", pages: ["analyze/context", "analyze/compaction", "analyze/query/compactions", "analyze/tools", "analyze/thinking-detail", "analyze/query/model_requests"], signals: ["context.compaction", "context.output"] },
   { id: "spend", label: "Tokens and cost", pages: ["analyze/tokens", "analyze/scatter", "analyze/query/usage", "analyze/outcomes", "analyze/branches", "cards"], signals: ["spend.tokens", "spend.change"] },
   { id: "models", label: "Model choice", pages: ["analyze/tokens", "analyze/query/usage"], signals: ["models.mix"] },
   { id: "caching", label: "Cache reuse", pages: ["analyze/tokens", "analyze/query/usage"], signals: ["spend.cache"] },

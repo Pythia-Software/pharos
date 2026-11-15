@@ -143,7 +143,7 @@ import {  CategoryPill, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { startConcurrencySummary } from "./concurrency-store";
 import { HabitsDashboard } from "./habits";
-import { sessionShapeAnalysisCatalog } from "./session-shape-analysis-catalog";
+import { sessionShapeAnalysisCatalog, toolUseAnalysisCatalog, contextAnalysisCatalog } from "./session-shape-analysis-catalog";
 import { SessionShapeDefinitions, SessionsToRead, SignalTable, revealDefinitions } from "./session-shape-panels";
 import { formatSeconds } from "./session-shape-model";
 import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
@@ -1215,6 +1215,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "time") return <ToolTimeDashboard />;
   if (topic === "agent_experience") return <AgentExperienceDashboard />;
   if (topic === "agent_event_rates") return <AgentEventRatesDashboard />;
+  if (topic === "tool_use" || topic === "context") return <SessionSubjectDashboard topic={topic} />;
   if (topic === "session_shape") return <SessionShapeDashboard />;
   if (topic === "outcomes") return <OutcomesDashboard />;
   if (topic === "branches") return <BranchesDashboard />;
@@ -1505,6 +1506,12 @@ function AgentEventRatesDashboard() {
 // views are Card Library cards that open this chart. Durations in seconds
 // read as durations.
 const sessionShapeAmount: AmountFormat = (value, measure) => measure.format.kind === "duration" && measure.format.sourceUnit === "seconds" ? formatSeconds(value) : catalogAmount(value, measure);
+function SessionSubjectDashboard({ topic }: { topic: "tool_use" | "context" }) {
+  const note = sessionShapeFreshnessNote(useSessionShapeCoverage());
+  return <CatalogDashboard catalog={topic === "tool_use" ? toolUseAnalysisCatalog : contextAnalysisCatalog} dataset="session_shape"
+    name={topic === "tool_use" ? "tool-use" : "context"} defaults={dashboardDefaults[topic]} format={sessionShapeAmount}
+    before={note ? <p className="usage-dashboard-note" role="status">{note}</p> : undefined} />;
+}
 function SessionShapeDashboard() {
   const note = sessionShapeFreshnessNote(useSessionShapeCoverage());
   return <CatalogDashboard catalog={sessionShapeAnalysisCatalog} dataset="session_shape" name="session-shape" defaults={dashboardDefaults.session_shape} format={sessionShapeAmount}

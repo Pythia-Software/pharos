@@ -46,7 +46,13 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   if (dataset === "fixes") return "findings";
   if (dataset === "agent_events" || dataset === "agent_event_messages" || dataset === "agent_event_rates") return "agent_events";
   if (dataset === "parallelism" || dataset === "rhythm") return "machines";
-  if (dataset === "session_shape") return "sessions";
+  if (dataset === "session_shape") {
+    if (has("failed_calls", "failure_rate", "ended_on_failure")) return "errors";
+    if (has("context_peak_ratio", "context_pressure", "mid_task_compactions")) return "context";
+    if (has("corrections", "steering_load")) return "steering";
+    if (has("verified_handbacks", "edit_handbacks", "verification", "tool_calls", "autonomy", "autonomy_prompts", "identical_retries", "thrash_retries", "churned_files", "rejections", "interrupts", "hook_blocks", "long_unprompted_runs")) return "tools";
+    return "sessions";
+  }
   if ((dataset === "model_requests" || dataset === "compactions")) return "thinking";
   if (has("co2e_g", "co2e_kg", "energy_wh", "energy_kwh", "carbon_tier")) return "carbon";
   if (has("cost_usd")) return "cost";

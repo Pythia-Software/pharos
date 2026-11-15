@@ -747,6 +747,7 @@ const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
   agent_experience: { catalog: true },
   agent_event_rates: { catalog: true },
   session_shape: { catalog: true },
+  tool_use: { catalog: true }, context: { catalog: true },
   outcomes: { catalog: true }, branches: { catalog: true },
   "thinking-overview": { options: thinkingOptions(false), days: thinkingDaysOption },
   "thinking-detail": { options: thinkingOptions(true), days: thinkingDaysOption },

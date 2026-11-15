@@ -66,7 +66,7 @@ export function TrendHeatmap({ title, controls, action, titleSlot, heatmap, peri
               {heatmap.levels.map((level, index) => <path key={level} d={trace(index)} className="dashboard-heatmap-trace" data-level={level} vectorEffect="non-scaling-stroke" />)}
             </svg>
             {placed.map(guide => <span key={guide.value} className="dashboard-heatmap-guide-label" style={{ bottom: `${100 * guide.y}%` }}>{guide.label}</span>)}
-            {starts.map(start => <span key={start.level} className="dashboard-heatmap-trace-label" style={{ left: `${100 * start.x}%`, bottom: `${100 * start.y}%` }}>{percentileLabel(start.level)}</span>)}
+            {starts.map(start => <span key={start.level} className={`dashboard-heatmap-trace-label${start.x > 0.75 ? " is-end" : ""}`} style={{ left: `${100 * start.x}%`, bottom: `${100 * start.y}%` }}>{percentileLabel(start.level)}</span>)}
           </div>
           <div className="usage-chart-axis dashboard-heatmap-axis"><span>{heatmapPeriodLabel(columns[0].date, period)}</span><span>{middle && columns.length > 4 ? heatmapPeriodLabel(middle.date, period) : ""}</span><span>{heatmapPeriodLabel(columns[columns.length - 1].date, period)}</span></div>
         </div>
