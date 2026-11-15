@@ -3,6 +3,7 @@
   "access": "write",
   "prefix": "pharos/{owner}",
   "retention_days": 90,
+  "pool": "Niteshift · pharos",
   "destination": {
     "type": "gcs",
     "bucket": "pythia-pharos-push-test",
