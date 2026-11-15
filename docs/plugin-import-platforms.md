@@ -250,9 +250,24 @@ task. No secret is entered anywhere.
   under `/root/.codex`: `sessions/<year>/<month>/<day>/rollout-….jsonl`
   and `state_5.sqlite`. The `codex` kind's globs match as they are.
 
-**Still to check, now that `capture-push` exists ([capture-push.md](capture-push.md)):** that a supervised service
-may run `ns oidc-token`, and that the capture root is absent from the
-snapshot new tasks start from.
+**Checked with the supervised service on 2026-11-15** (a `pharos-push`
+entry in `.niteshift/services.yaml` on the default branch):
+
+- Niteshift starts the service by itself in a new task, and the service can
+  run `ns oidc-token`: it installed the CLI and pushed with keyless access.
+- A service's environment has `NITESHIFT_TASK_ID` and
+  `NITESHIFT_SANDBOX_ID` but **not** `NITESHIFT_USER_ID` or
+  `NITESHIFT_TASK_URL`, which the agent's terminal has. The pusher
+  therefore takes the owner from the identity token's `user_id` claim,
+  which holds the same value. The environment's name and the task link
+  are not available to a service, so the recipe's configuration names the
+  pool itself and a service-pushed export carries the task ID without a
+  link.
+- `.niteshift/` files take effect from the default branch; a task started
+  on `master` does not see a branch's copy.
+
+**Still to check:** that the state folder is absent from an environment
+cache once the environment has a setup script (this one has none).
 
 **Deferred:** what `NITESHIFT_USER_ID` and the token's `user_id` hold for a
 task started from Slack or Linear, or by an automation. The owner is

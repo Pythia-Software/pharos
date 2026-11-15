@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -89,6 +90,9 @@ type pushPlatformIdentity struct {
 	Task     string `json:"task,omitempty"`
 	TaskURL  string `json:"task_url,omitempty"`
 	Owner    string `json:"owner,omitempty"`
+	// OwnerClaim is the identity token's claim that names the same person,
+	// for processes the platform starts without Owner in their environment.
+	OwnerClaim string `json:"owner_claim,omitempty"`
 	// EnvironmentSegment counts from the end of the task link's path to the
 	// segment naming the environment.
 	EnvironmentSegment int `json:"environment_segment,omitempty"`
@@ -96,7 +100,7 @@ type pushPlatformIdentity struct {
 
 var pushPlatforms = []pushPlatformRecipe{{
 	Name: "niteshift", Label: "Niteshift", Markers: []string{"NITESHIFT_TASK_ID", "NITESHIFT_SANDBOX_ID"},
-	Identity:      pushPlatformIdentity{Instance: "NITESHIFT_TASK_ID", Task: "NITESHIFT_TASK_ID", TaskURL: "NITESHIFT_TASK_URL", Owner: "NITESHIFT_USER_ID", EnvironmentSegment: 2},
+	Identity:      pushPlatformIdentity{Instance: "NITESHIFT_TASK_ID", Task: "NITESHIFT_TASK_ID", TaskURL: "NITESHIFT_TASK_URL", Owner: "NITESHIFT_USER_ID", OwnerClaim: "user_id", EnvironmentSegment: 2},
 	IdentityToken: []string{"ns", "oidc-token", "--audience", "{audience}"},
 	Ownerless:     "refused", Checked: "2026-11-15",
 }}
@@ -134,6 +138,23 @@ type pushIdentity struct {
 	instance string
 }
 
+// pushTokenClaim reads one string claim of a signed token this machine was
+// just issued. The token is not verified here: the bucket's own exchange
+// verifies it, and its issuer is this machine's platform.
+func pushTokenClaim(token, claim string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	var claims map[string]any
+	if err != nil || json.Unmarshal(payload, &claims) != nil {
+		return ""
+	}
+	value, _ := claims[claim].(string)
+	return strings.TrimSpace(value)
+}
+
 var pushOwnerPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$`)
 
 const pushOwnerShared = "shared"
@@ -142,7 +163,7 @@ const pushOwnerShared = "shared"
 // this is. It never guesses a person: a prefix with {owner} and no owner is
 // refused, and shared is used only when the machine is declared to run an
 // automation.
-func resolvePushIdentity(config pushConfig) (pushIdentity, error) {
+func resolvePushIdentity(ctx context.Context, config pushConfig, base string) (pushIdentity, error) {
 	identity := pushIdentity{Prefix: config.Prefix, Pool: config.Pool}
 	var recipe *pushPlatformRecipe
 	for i := range pushPlatforms {
@@ -168,6 +189,21 @@ func resolvePushIdentity(config pushConfig) (pushIdentity, error) {
 			}
 		}
 		identity.Platform, platformOwner = block, env(recipe.Identity.Owner)
+		if platformOwner == "" && recipe.Identity.OwnerClaim != "" && strings.Contains(config.Prefix, "{owner}") {
+			// A supervised service may not be given the variable; the
+			// platform's signed token for this task names the same person.
+			source := config.Destination.IdentityToken
+			if source == nil && len(recipe.IdentityToken) > 0 {
+				command := slices.Clone(recipe.IdentityToken)
+				for i := range command {
+					command[i] = strings.ReplaceAll(command[i], "{audience}", "pharos")
+				}
+				source = &pushIdentityToken{Command: command}
+			}
+			if token, err := source.read(ctx, base); err == nil {
+				platformOwner = pushTokenClaim(token, recipe.Identity.OwnerClaim)
+			}
+		}
 		identity.instance = "platform:" + recipe.Name + ":" + env(recipe.Identity.Instance)
 		if identity.Pool == "" {
 			identity.Pool = truncateText(strings.TrimSuffix(recipe.Label+" · "+block.Environment, " · "), 79)
@@ -618,7 +654,7 @@ func preparePush(options pushOptions) (*pushRun, error) {
 	if config.Access != "write" {
 		return nil, fmt.Errorf("%s gives read access; a machine that pushes needs the write configuration", options.ConfigPath)
 	}
-	identity, err := resolvePushIdentity(config)
+	identity, err := resolvePushIdentity(context.Background(), config, filepath.Dir(options.ConfigPath))
 	if err != nil {
 		return nil, err
 	}
@@ -1116,7 +1152,7 @@ func readPushStatus(options pushOptions) pushStatus {
 		for _, source := range pushSources(config) {
 			status.Sources = append(status.Sources, pushStatusSource{Name: source.Name, Kind: source.Kind, Path: source.Path})
 		}
-		if _, err := resolvePushIdentity(config); err != nil {
+		if _, err := resolvePushIdentity(context.Background(), config, filepath.Dir(options.ConfigPath)); err != nil {
 			status.Problem = err.Error()
 		}
 	}

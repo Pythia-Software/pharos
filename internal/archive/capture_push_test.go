@@ -3,6 +3,7 @@ package archive
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -397,7 +399,15 @@ func TestCapturePushFilesWorkByOwner(t *testing.T) {
 	if _, err := drainPush(context.Background(), f.options, true); err == nil || !strings.Contains(err.Error(), "NITESHIFT_USER_ID") {
 		t.Fatalf("a Niteshift task without a user: %v", err)
 	}
-	t.Setenv("NITESHIFT_USER_ID", "user_42")
+	// A supervised service is not given the variable: the task's identity
+	// token names the same person.
+	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"user_id":"user_42","org_id":"org"}`))
+	recipes := slices.Clone(pushPlatforms)
+	recipes[0].IdentityToken = []string{"sh", "-c", "echo header." + claims + ".signature # {audience}"}
+	override(t, &pushPlatforms, recipes)
+	if status := readPushStatus(f.options); status.Problem != "" {
+		t.Fatalf("status with the owner in the token: %+v", status)
+	}
 	record := f.push()
 	if record.Prefix != "team/user_42" || record.Platform != "niteshift" || !strings.HasPrefix(record.Sources[0].Export, "team/user_42/exports/") {
 		t.Fatalf("Niteshift pass: %+v", record)

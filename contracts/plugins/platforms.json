@@ -13,6 +13,7 @@
         "task": "NITESHIFT_TASK_ID",
         "task_url": "NITESHIFT_TASK_URL",
         "owner": "NITESHIFT_USER_ID",
+        "owner_claim": "user_id",
         "environment_segment": 2
       },
       "identity_token": [

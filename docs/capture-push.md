@@ -168,7 +168,9 @@ which a Go test holds equal to `pushPlatforms`; run it with
 |---|---|---|---|
 | Niteshift | `NITESHIFT_TASK_ID` and `NITESHIFT_SANDBOX_ID` | `NITESHIFT_USER_ID` | `ns oidc-token --audience AUDIENCE` |
 
-A Niteshift task with no `NITESHIFT_USER_ID` is refused when the prefix
+Where the owner's variable is not set (Niteshift does not give it to a
+supervised service), the pusher reads the same person from the identity
+token's `user_id` claim. A Niteshift task with neither is refused when the prefix
 has `{owner}`, until `PHAROS_PUSH_OWNER` or `PHAROS_PUSH_AUTOMATION` says
 what it is. See [the platform design](plugin-import-platforms.md) for the
 reasons and for what is still unchecked.
