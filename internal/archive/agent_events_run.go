@@ -280,6 +280,11 @@ type AgentEventsRunOptions struct {
 	// Limit stops before a conversation once this many messages were scored
 	// (0: no limit); the rest stay pending.
 	Limit int
+	// LimitConversations and LimitElapsed stop it too, once this many
+	// conversations were prepared or preparation has run this long (0: no
+	// limit): conversations with nothing to score count toward no Limit.
+	LimitConversations int
+	LimitElapsed       time.Duration
 	// Full looks at every conversation; only messages whose inputs changed
 	// are scored again either way.
 	Full bool
@@ -956,8 +961,15 @@ func (s *Server) agentEventsEnabled(ctx context.Context) bool {
 }
 
 // agentEventsChainLimit is the chain stage's share: about this many messages
-// scored per pass; a backlog continues as its own run when plugged in.
-var agentEventsChainLimit = 1000
+// scored per pass; a backlog continues as its own run when plugged in. A
+// pass over conversations with little or nothing to score ends after
+// agentEventsChainConversations of them or agentEventsChainElapsed, so the
+// stages behind it never wait out a library-wide re-read.
+var (
+	agentEventsChainLimit         = 1000
+	agentEventsChainConversations = 2000
+	agentEventsChainElapsed       = 2 * time.Minute
+)
 
 // chainAgentEvents is the analysis chain's agent events stage, after labels:
 // the same power rules (labelsForPower) and the same backlog handling.
@@ -982,7 +994,7 @@ func (s *Server) chainAgentEvents(ctx context.Context, labels LabelerSettings, s
 		}
 	}
 	labels, bulk := labelsForPower(settings.labeler(labels), s.cachedPower(ctx))
-	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true), Progress: os.Stderr})
+	stats, err := s.Catalog.RunAgentEvents(ctx, labels, settings, AgentEventsRunOptions{Limit: agentEventsChainLimit, LimitConversations: agentEventsChainConversations, LimitElapsed: agentEventsChainElapsed, Since: settings.since(), ThreadTarget: s.labelerThreadSettings(ctx, true), Progress: os.Stderr})
 	if err == nil {
 		// Fixes group these events (fixes.go): rebuilt at most daily from
 		// here (fixesChainInterval), not after every pass.

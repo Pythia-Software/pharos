@@ -440,6 +440,22 @@ func TestAgentEventsRunsInLimitedSteps(t *testing.T) {
 	if err != nil || dry.MessagesScored != 0 || dry.MessagesUnchanged != first.MessagesScored+rest.MessagesScored {
 		t.Fatalf("a dry run of a current ledger: %+v %v", dry, err)
 	}
+	// Conversations with nothing to score count toward no message limit: a
+	// limited pass over them ends at its conversation or time bound instead.
+	if dry.ConversationsBuilt < 2 {
+		t.Fatalf("the fixture has %d conversations, want several", dry.ConversationsBuilt)
+	}
+	for name, bound := range map[string]AgentEventsRunOptions{"conversations": {LimitConversations: 1}, "elapsed": {LimitElapsed: time.Nanosecond}} {
+		bound.Full, bound.Limit = true, 1000
+		cut, err := catalog.RunAgentEvents(t.Context(), labels, settings, bound)
+		if err != nil || !cut.Cut || cut.Complete || cut.ConversationsBuilt != 1 || cut.MessagesScored != 0 {
+			t.Fatalf("a pass over unchanged conversations bounded by %s: %+v %v", name, cut, err)
+		}
+	}
+	whole, err := catalog.RunAgentEvents(t.Context(), labels, settings, AgentEventsRunOptions{Full: true, Limit: 1000, LimitConversations: dry.ConversationsBuilt, LimitElapsed: time.Hour})
+	if err != nil || whole.Cut || !whole.Complete || whole.ConversationsBuilt != dry.ConversationsBuilt {
+		t.Fatalf("a bounded pass that reaches its last conversation: %+v %v", whole, err)
+	}
 	// Unchanged conversations stored together keep what each alone keeps: the
 	// stored rows, and a dirty mark written after the run read its token.
 	rows := func() []map[string]any {

@@ -146,8 +146,10 @@ With the Settings switch on (preference `pharos-agent-events-v1`, read as a feat
 labels, its own background item (Agent events, hourly and adaptive). It uses the message labeler's worker, ONNX
 Runtime and budget (`labels_worker`, `labels_runtime`, `labels_thread_budget`, …) with its own threads per worker,
 `agent_events_threads` (Settings → Agent events → CPU threads, shown for CPU execution; unset, `labels_threads`), and the same power rules: each chain
-pass scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog continues as an `analysis.agent_events`
-`backlog` run when plugged in and stops if this Mac goes onto battery.
+pass scores about 1,000 messages (`agentEventsChainLimit`), and also ends after 2,000 conversations or two minutes of
+preparation (`agentEventsChainConversations`, `agentEventsChainElapsed`): conversations with nothing to score count
+toward no message limit, so a library-wide re-read of them would otherwise hold the chain for an hour. A larger
+backlog continues as an `analysis.agent_events` `backlog` run when plugged in and stops if this Mac goes onto battery.
 
 Either backlog run (this one and message labels') can be stopped: Stop in its Background Processing item, or in the
 status panel, cancels it (`Op.setStopper`). Committed conversations remain; unfinished conversations are read again

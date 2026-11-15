@@ -127,6 +127,7 @@ func (p *agentEventsPipeline) run(ctx context.Context, cancel context.CancelFunc
 		var result production
 		defer func() { close(built); produced <- result }()
 		messages := 0
+		producing := time.Now()
 		_ = prepareConversations(ctx, len(jobs), p.workers, func(ctx context.Context, worker, index int) agentEventsPrepared {
 			started := time.Now()
 			// Keep the backlog metadata-only; only the bounded preparation
@@ -158,7 +159,13 @@ func (p *agentEventsPipeline) run(ctx context.Context, cancel context.CancelFunc
 				release(ready)
 				return false
 			}
-			if p.opts.Limit > 0 && messages >= p.opts.Limit && index+1 < len(jobs) {
+			// A limited pass ends at whichever bound comes first: conversations
+			// with nothing to score count toward no message limit, and a
+			// library-wide re-read of them would otherwise run to its end.
+			cut := p.opts.Limit > 0 && messages >= p.opts.Limit ||
+				p.opts.LimitConversations > 0 && index+1 >= p.opts.LimitConversations ||
+				p.opts.LimitElapsed > 0 && time.Since(producing) >= p.opts.LimitElapsed
+			if cut && index+1 < len(jobs) {
 				result.cut = true
 				return false
 			}
