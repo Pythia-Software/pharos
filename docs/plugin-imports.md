@@ -509,6 +509,12 @@ prompt to hand to an agent.
 Setup also saves the non-secret plan of what was created, so removal can
 later print the exact commands that take it down.
 
+**Hosted agent platforms get a recipe.** "Where do your agents run?" offers
+Niteshift, dev containers, the vendors' agent clouds and others, each of
+which turns the generic steps into exactly what to commit and where to add
+a secret, or needs no secret at all. See
+[importing from agent platforms](plugin-import-platforms.md).
+
 **Setup shows which half is not working.** While it is open it checks the
 bucket every few seconds and ticks off:
 
