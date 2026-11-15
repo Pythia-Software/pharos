@@ -23,9 +23,10 @@
 .carbon-comparison select{width:50px;min-width:0;padding:0 15px 0 3px;border:1px solid var(--line,#ccc);border-radius:5px;background-color:var(--panel,#fff);background-position:calc(100% - 9px) center,calc(100% - 5px) center;background-size:4px 4px;color:var(--ink,#222);font:inherit}
 .carbon-comparison select[data-carbon-control="vehicle"]{width:110px}
 .carbon-comparison .carbon-info-button{margin-left:2px}
-.carbon-segmented{display:inline-flex;flex:none;border:1px solid var(--line,#ccc);border-radius:5px;overflow:hidden}
+.carbon-segmented{display:inline-flex;flex:none;border:1px solid var(--line,#ccc);border-radius:5px}
 .carbon-segmented button{border:0;border-radius:0;background:none;color:var(--muted,#666);padding:4px 10px}
 .carbon-segmented button+button{border-left:1px solid var(--line,#ccc)}
+.carbon-segmented button:first-child{border-radius:4px 0 0 4px}.carbon-segmented button:last-child{border-radius:0 4px 4px 0}.carbon-segmented button:only-child{border-radius:4px}
 .carbon-segmented button[aria-pressed="true"]{background:var(--accent,#315845);color:var(--panel,#fff)}
 .carbon-assumptions h3{margin:0;font-size:var(--fs-base,14px)}
 .carbon-controls{display:flex;flex-wrap:wrap;align-items:end;gap:12px 18px;margin:12px 0 4px}
@@ -235,11 +236,7 @@
     if (w >= 1e3) return `${sig(w / 1e3)} kWh`;
     return `${sig(w)} Wh`;
   };
-  const tokens = value => {
-    const n = Number(value) || 0;
-    for (const [size, unit] of [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'k']]) if (n >= size) return `${sig(n / size)}${unit}`;
-    return n.toLocaleString();
-  };
+  const tokens = value => pharosTokens.formatTokens(Number(value) || 0);
   const pick = (range, scenario) => Number(range?.[scenario]) || 0;
   // Tiers are listed in match order; show them smallest first.
   const bySize = tiers => [...tiers].sort((a, b) => pick(a.output_wh_per_mtok, 'central') - pick(b.output_wh_per_mtok, 'central'));
@@ -628,7 +625,7 @@
       equation([`${precise(term.wh)} server Wh`, '×', unitFraction(`${precise(setup.pue)} facility Wh`, '1 server Wh'), '≈', `${precise(term.wh * setup.pue)} facility Wh`]),
       equation([`${precise(term.wh * setup.pue)} facility Wh`, '×', unitFraction('1 kWh', '1,000 Wh'), '×', unitFraction(`${precise(setup.gridValue)} g CO₂e`, '1 kWh'), '≈', `${precise(term.wh * setup.pue * setup.gridValue / 1000)} g CO₂e`]),
       node('p', 'carbon-note', 'The divisions convert tokens to million-token units and Wh to kWh exactly. Estimates use full precision; displayed decimals may be rounded.'));
-    if (term.category === 'uncached_input' && data.unclassified_tokens) block.append(node('p', 'carbon-note', `${Number(data.unclassified_tokens).toLocaleString()} unclassified tokens are already included in uncached input across this selection. Their category assignment is assumed; do not add them again.`));
+    if (term.category === 'uncached_input' && data.unclassified_tokens) block.append(node('p', 'carbon-note', `${tokens(data.unclassified_tokens)} unclassified tokens are already included in uncached input across this selection. Their category assignment is assumed; do not add them again.`));
     const evidence = node('div', 'carbon-row-factors');
     evidence.append(factorEvidence(factors, setup, 'tier', term.tier), factorEvidence(factors, setup, 'ratio', term.category));
     block.append(evidence);
@@ -637,7 +634,7 @@
 
   function calculationLedger(factors, result, setup, terms) {
     const scroll = node('div', 'carbon-ledger-scroll'), table = node('table', 'carbon-ledger'), head = node('tr');
-    scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', 'Token category calculation ledger'); scroll.tabIndex = 0;
+    scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', 'Token category calculation details'); scroll.tabIndex = 0;
     const columns = node('colgroup'); for (let index = 0; index < 10; index++) columns.append(node('col'));
     const caption = node('caption', '', 'Contributions by token category · Each tier shows the full equation. Click a tier for precise math; dotted factors for assumptions.');
     table.append(caption, columns);
@@ -722,11 +719,11 @@
       const tier = factors.tiers.find(item => item.key === factors.default_tier);
       fallback.append(node('p', '', `Assigned to ${tier.label} by default; size unknown. This assignment is an assumption.`));
       const list = node('ul');
-      for (const model of data.default_tier_models || []) list.append(node('li', '', `${model.model}: ${Number(model.tokens).toLocaleString()} tokens`));
-      if (data.default_tier_unknown_tokens) list.append(node('li', '', `Model not reported: ${Number(data.default_tier_unknown_tokens).toLocaleString()} tokens`));
+      for (const model of data.default_tier_models || []) list.append(node('li', '', `${model.model}: ${tokens(model.tokens)} tokens`));
+      if (data.default_tier_unknown_tokens) list.append(node('li', '', `Model not reported: ${tokens(data.default_tier_unknown_tokens)} tokens`));
       fallback.append(list, factorEvidence(factors, setup, 'tier', factors.default_tier)); content.append(fallback);
     }
-    if (data.unclassified_tokens) content.append(node('p', 'carbon-note', `${Number(data.unclassified_tokens).toLocaleString()} unclassified tokens are already included in uncached input. This category assignment is assumed; they are not added a second time.`));
+    if (data.unclassified_tokens) content.append(node('p', 'carbon-note', `${tokens(data.unclassified_tokens)} unclassified tokens are already included in uncached input. This category assignment is assumed; they are not added a second time.`));
     const one = node('section', 'carbon-calculation-step');
     one.append(node('h3', '', '1 · Calculate each contribution'),
       node('p', 'carbon-ledger-key', 'Key: tok = tokens · OE = output-equivalent tokens · sWh / fWh = server / facility watt-hours · kWh = kilowatt-hours · g / kg / t = grams / kilograms / tonnes CO₂e'),
@@ -757,7 +754,7 @@
     const scope = disclosure('scope', 'Scope, bookkeeping, and limitations', 'carbon-evidence-disclosure');
     scope.append(node('p', '', 'This estimates inference electricity and operational emissions. Model training, embodied hardware emissions, water, networking, and your computer are outside this estimate. Only retained, reconciled token usage is included; linked mirror workspaces are removed.'),
       node('p', '', 'The calculation uses filtered totals. Chart interval and breakdown change the display only. Output includes reasoning; unclassified tokens are charged as uncached input.'));
-    if (data.undated_tokens) scope.append(node('p', '', `${Number(data.undated_tokens).toLocaleString()} undated tokens are included in the total but cannot be placed on the chart.`));
+    if (data.undated_tokens) scope.append(node('p', '', `${tokens(data.undated_tokens)} undated tokens are included in the total but cannot be placed on the chart.`));
     const caveats = node('ul'); for (const text of factors.caveats || []) caveats.append(node('li', '', text)); scope.append(caveats);
     content.append(scope, comparisonCalculation(factors, result), methodology(factors, result, setup));
     details.append(content);
@@ -868,7 +865,7 @@
   function syncSettingsURL() {
     if (typeof location === 'undefined' || typeof history === 'undefined') return;
     const url = new URL(location.href);
-    if (url.pathname !== '/analyze' || !(url.searchParams.get('analyze_topic') === 'carbon' || url.searchParams.get('analyze_view') === 'carbon')) return;
+    if (url.pathname !== '/analyze' || url.searchParams.get('analyze_topic') !== 'carbon') return;
     url.searchParams.set('analyze_carbon', JSON.stringify(settingsSnapshot()));
     if (url.href !== location.href) {
       history.replaceState(history.state, '', url);

@@ -1,4 +1,7 @@
+import { localeNumber } from "./locale-format";
+import { formatUSD } from "./currency";
 import type { AggregationBucket, AggregationResultEntry, MetricBoxSummary } from "@pythia-software/query-table-core";
+import { formatTokens } from "./token-count";
 
 export function filterBoxSamples(result: AggregationResultEntry, minimum?: number): AggregationResultEntry {
   if (!minimum) return result;
@@ -37,13 +40,13 @@ export function sharedBoxScale(buckets: AggregationBucket[], budget: number, req
 }
 
 export function boxCost(value: number): string {
-  return value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: value > 0 && value < .01 ? Math.min(8, 1 - Math.floor(Math.log10(value))) : 2 });
+  return formatUSD(value);
 }
 export function boxNumber(value: number): string {
-  return value.toLocaleString(undefined, { maximumFractionDigits: value !== 0 && Math.abs(value) < .01 ? Math.min(6, 1 - Math.floor(Math.log10(Math.abs(value)))) : 2 });
+  return localeNumber(value, { maximumFractionDigits: value !== 0 && Math.abs(value) < .01 ? Math.min(6, 1 - Math.floor(Math.log10(Math.abs(value)))) : 2 });
 }
 export function boxAxisNumber(value: number): string {
-  return Math.abs(value) >= 1000 ? value.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 }) : boxNumber(value);
+  return Math.abs(value) >= 1000 ? localeNumber(value, { notation: "compact", maximumFractionDigits: 1 }) : boxNumber(value);
 }
 export function boxDuration(value: number): string {
   return value >= 3600000 ? `${boxNumber(value / 3600000)}h` : value >= 60000 ? `${boxNumber(value / 60000)}min` : value >= 1000 ? `${boxNumber(value / 1000)}s` : `${boxNumber(value)}ms`;
@@ -58,12 +61,12 @@ export function boxWhiskerExtent(summary: MetricBoxSummary) {
   return { low: Math.min(summary.low, summary.q1), high: Math.max(summary.high, summary.q3) };
 }
 export function boxDetails(label: string, summary: MetricBoxSummary, unit = "USD", formatter?: (value: number) => string): string {
-  const format = formatter ?? (unit === "USD" ? boxCost : unit === "bytes" ? (value: number) => value >= 1024 ? `${boxBytes(value)} (${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} bytes)` : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} bytes` : unit === "ms" ? (value: number) => value >= 1000 ? `${boxDuration(value)} (${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ms)` : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ms` : boxNumber);
+  const format = formatter ?? (unit === "USD" ? boxCost : unit === "tokens" ? formatTokens : unit === "bytes" ? (value: number) => value >= 1024 ? `${boxBytes(value)} (${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} bytes)` : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} bytes` : unit === "ms" ? (value: number) => value >= 1000 ? `${boxDuration(value)} (${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ms)` : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ms` : boxNumber);
   return [label, ...(unit && unit !== "USD" ? [unit] : []), `Median: ${format(summary.median)} · Mean: ${format(summary.mean)}`, `Q1: ${format(summary.q1)} · Q3: ${format(summary.q3)}`, `Observed whisker range: ${format(summary.low)} – ${format(summary.high)}`, `Min: ${format(summary.min)} · Max: ${format(summary.max)}`, ...(summary.low > summary.q1 || summary.high < summary.q3 ? ["Interpolated quartile extends beyond observed inliers; whisker meets the box edge."] : []), `${summary.n.toLocaleString()} observations · ${summary.outlierCount.toLocaleString()} outliers (${boxOutliers(summary).length.toLocaleString()} retained markers)`].join("\n");
 }
 
 export function boxAxisCost(value: number): string {
-  return value.toLocaleString(undefined, { style: "currency", currency: "USD", notation: value >= 1000 ? "compact" : "standard", maximumFractionDigits: value > 0 && value < .01 ? Math.min(8, -Math.floor(Math.log10(value))) : value < 1 && value > 0 ? 2 : 0 });
+  return formatUSD(value);
 }
 export function boxOutliers(summary: MetricBoxSummary): number[] {
   return [...new Set([...summary.outliers, ...(summary.max > summary.high ? [summary.max] : []), ...(summary.min < summary.low ? [summary.min] : [])])];

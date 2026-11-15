@@ -70,7 +70,8 @@ func resolveAuthority(tx *sql.Tx, record WorkspaceRecord, workspaceID, host stri
 		claim := &authority.conversations[index]
 		claim.id = stored[index].id
 		carried[claim.id] = true
-		if claim.id == "" || (stored[index].writer == host && stored[index].origin == conversation.Origin) {
+		same := stored[index].writer == host && stored[index].origin == conversation.Origin
+		if claim.id == "" || same && conversation.Origin != "user-export" && !conversation.Copy {
 			claim.writer = true
 			continue
 		}
@@ -78,6 +79,15 @@ func resolveAuthority(tx *sql.Tx, record WorkspaceRecord, workspaceID, host stri
 		if err != nil {
 			return authority, err
 		}
+		// An export is a snapshot a person downloaded, and an older one, or a
+		// copy of one, lacks what came later. Whatever its file's time, it may
+		// replace this host's copy only if it holds every message stored;
+		// otherwise it only adds what is missing. Its own messages may differ,
+		// as a new parser reads them.
+		if same {
+			covered = holdsEvery(ids, conversation.Messages)
+		}
+		covered = covered && !conversation.Copy
 		claim.writer = covered
 		if !covered {
 			claim.stored = ids
@@ -106,6 +116,20 @@ func resolveAuthority(tx *sql.Tx, record WorkspaceRecord, workspaceID, host stri
 		}
 	}
 	return authority, nil
+}
+
+// holdsEvery reports whether messages include every stored native ID.
+func holdsEvery(stored map[string]bool, messages []MessageRecord) bool {
+	incoming := make(map[string]bool, len(messages))
+	for _, message := range messages {
+		incoming[message.NativeID] = true
+	}
+	for id := range stored {
+		if !incoming[id] {
+			return false
+		}
+	}
+	return true
 }
 
 // coverCheckHook observes each cover check, which reads every stored message

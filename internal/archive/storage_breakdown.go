@@ -9,11 +9,11 @@ import (
 
 // The Settings storage breakdown says where the library's space goes: the
 // captured originals (each Mac's raw copy of its sources) against Pharos's own
-// catalog, and both by Mac, source and repository.
+// catalog, and both by Mac, source and project.
 //
 // Directory sizes are measured with the drive checks (see measureLibrary), so
 // originals by Mac and source are exact. Nothing records how many bytes of the
-// catalog or of a capture belong to a repository, and measuring it reads the
+// catalog or of a capture belong to a project, and measuring it reads the
 // whole catalog (minutes on a large library), so those shares are estimated:
 // each Mac's capture of a source is divided among the conversations that Mac
 // saw in that source, and the catalog among all conversations, in proportion to
@@ -21,10 +21,10 @@ import (
 // the breakdown answers from memory and a sync does not make it wait.
 
 // storageShare is the message count of the conversations with one Mac, source
-// and repository (empty when the workspace has none).
+// and project (projectIDSQL; empty when the workspace has none).
 type storageShare struct {
-	Host, Source, Repository string
-	Messages                 float64
+	Host, Source, Project string
+	Messages              float64
 }
 
 type storageShares struct {
@@ -33,14 +33,14 @@ type storageShares struct {
 	// under the Mac and source whose copy the catalog holds.
 	Originals, Catalog []storageShare
 	Hosts              map[string]string // host ID to label
-	Repositories       map[string]string // repository ID to display name
+	Projects           map[string]string // project ID to name
 	// CatalogFree is the catalog's free pages: space deleted data left in
 	// the file, which only compacting gives back to the drive.
 	CatalogFree int64
 }
 
 func (c *Catalog) storageShares(ctx context.Context) (storageShares, error) {
-	shares := storageShares{Hosts: map[string]string{}, Repositories: map[string]string{}}
+	shares := storageShares{Hosts: map[string]string{}, Projects: map[string]string{}}
 	read := func(statement string, into *[]storageShare) error {
 		rows, err := c.reader().QueryContext(ctx, statement)
 		if err != nil {
@@ -49,7 +49,7 @@ func (c *Catalog) storageShares(ctx context.Context) (storageShares, error) {
 		defer rows.Close()
 		for rows.Next() {
 			var share storageShare
-			if err := rows.Scan(&share.Host, &share.Source, &share.Repository, &share.Messages); err != nil {
+			if err := rows.Scan(&share.Host, &share.Source, &share.Project, &share.Messages); err != nil {
 				return err
 			}
 			*into = append(*into, share)
@@ -57,8 +57,8 @@ func (c *Catalog) storageShares(ctx context.Context) (storageShares, error) {
 		return rows.Err()
 	}
 	// A sighting without a message count still holds something.
-	if err := read(`SELECT s.host_id,s.source_name,COALESCE(w.repository_id,''),SUM(MAX(COALESCE(s.messages,0),1))
-		FROM conversation_sightings s JOIN conversations c ON c.id=s.conversation_id JOIN workspaces w ON w.id=c.workspace_id
+	if err := read(`SELECT s.host_id,s.source_name,COALESCE(`+projectIDSQL("w")+`,''),SUM(MAX(COALESCE(s.messages,0),1))
+		FROM conversation_sightings s JOIN conversations c ON c.id=s.conversation_id JOIN workspaces w ON w.id=c.workspace_id`+projectJoin("w")+`
 		GROUP BY 1,2,3`, &shares.Originals); err != nil {
 		return shares, err
 	}
@@ -71,8 +71,8 @@ func (c *Catalog) storageShares(ctx context.Context) (storageShares, error) {
 	}
 	shares.CatalogFree = pages * pageSize
 	for statement, into := range map[string]map[string]string{
-		"SELECT id,label FROM hosts":               shares.Hosts,
-		"SELECT id,display_name FROM repositories": shares.Repositories,
+		"SELECT id,label FROM hosts": shares.Hosts,
+		"SELECT DISTINCT " + projectIDSQL("w") + " id," + projectNameSQL("w") + " display_name FROM workspaces w" + projectJoin("w") + " WHERE " + projectNameSQL("w") + " IS NOT NULL": shares.Projects,
 	} {
 		rows, err := queryMapsContext(ctx, c.reader(), statement)
 		if err != nil {
@@ -92,12 +92,12 @@ func (c *Catalog) storageShares(ctx context.Context) (storageShares, error) {
 // spread evenly across all its sightings. Its weight is the largest sighting's
 // message count, a lower bound for the union. A conversation never sighted
 // stays with its writer and its workspace's source kind.
-const storageCatalogSharesSQL = `WITH
+var storageCatalogSharesSQL = `WITH
 conversation AS (
-	SELECT c.id,c.origin,COALESCE(w.repository_id,'') repository,w.source_kind,
+	SELECT c.id,c.origin,COALESCE(` + projectIDSQL("w") + `,'') project,w.source_kind,
 		CASE WHEN c.origin_host_id IS NULL THEN COALESCE((SELECT value FROM meta WHERE key='` + legacyHostKey + `'),'')
 			WHEN c.origin_host_id='` + mergedWriter + `' THEN '' ELSE c.origin_host_id END host
-	FROM conversations c JOIN workspaces w ON w.id=c.workspace_id),
+	FROM conversations c JOIN workspaces w ON w.id=c.workspace_id` + projectJoin("w") + `),
 weight AS (
 	SELECT conversation_id id,MAX(MAX(COALESCE(messages,0),1)) messages FROM conversation_sightings GROUP BY conversation_id),
 writer AS (
@@ -112,11 +112,11 @@ owner AS (
 	SELECT c.id,c.host,c.source_kind FROM conversation c
 	WHERE NOT EXISTS(SELECT 1 FROM conversation_sightings s WHERE s.conversation_id=c.id)),
 owners AS (SELECT id,COUNT(*) n FROM owner GROUP BY id)
-SELECT o.host_id,o.source_name,c.repository,SUM(COALESCE(weight.messages,1)*1.0/owners.n)
+SELECT o.host_id,o.source_name,c.project,SUM(COALESCE(weight.messages,1)*1.0/owners.n)
 FROM owner o JOIN conversation c ON c.id=o.id JOIN owners ON owners.id=o.id LEFT JOIN weight ON weight.id=o.id
 GROUP BY 1,2,3`
 
-// storageRow is one Mac, source or repository: its share of the originals and
+// storageRow is one Mac, source or project: its share of the originals and
 // of the catalog.
 type storageRow struct {
 	ID        string `json:"id"`
@@ -131,9 +131,9 @@ type storagePart struct {
 	Bytes int64  `json:"bytes"`
 }
 
-// storageRepositoryLimit is how many repositories the breakdown names; the
-// rest are one row.
-var storageRepositoryLimit = 12
+// storageProjectLimit is how many projects the breakdown names; the rest
+// are one row.
+var storageProjectLimit = 12
 
 // storageBreakdown divides sizes by shares. current is this Mac's host ID.
 func storageBreakdown(sizes librarySizes, shares storageShares, current string) map[string]any {
@@ -163,9 +163,9 @@ func storageBreakdown(sizes librarySizes, shares storageShares, current string) 
 		total += part.Bytes
 	}
 
-	machines, sources, repositories := storageRows{}, storageRows{}, storageRows{}
+	machines, sources, projects := storageRows{}, storageRows{}, storageRows{}
 	// Originals: a capture's bytes go to its Mac and source exactly, and to
-	// repositories by the messages that Mac saw in that source.
+	// projects by the messages that Mac saw in that source.
 	weights := map[[2]string][]storageShare{}
 	for _, share := range shares.Originals {
 		key := [2]string{share.Host, share.Source}
@@ -177,8 +177,8 @@ func storageBreakdown(sizes librarySizes, shares storageShares, current string) 
 		if capture.Source != "" {
 			sources.add(capture.Source).Originals += bytes
 		}
-		for repository, part := range divide(bytes, weights[[2]string{capture.Host, capture.Source}]) {
-			repositories.add(repository).Originals += part
+		for project, part := range divide(bytes, weights[[2]string{capture.Host, capture.Source}]) {
+			projects.add(project).Originals += part
 		}
 	}
 	// The catalog has no per-Mac or per-source parts, so it is divided by
@@ -187,7 +187,7 @@ func storageBreakdown(sizes librarySizes, shares storageShares, current string) 
 		share := shares.Catalog[index]
 		machines.add(share.Host).Catalog += part
 		sources.add(share.Source).Catalog += part
-		repositories.add(share.Repository).Catalog += part
+		projects.add(share.Project).Catalog += part
 	}
 
 	label := func(names map[string]string, empty string, mark func(string) string) func(*storageRow) {
@@ -217,9 +217,9 @@ func storageBreakdown(sizes librarySizes, shares storageShares, current string) 
 			}
 			return ""
 		}), 0, ""),
-		"sources":      sources.list(label(nil, "Unknown source", nil), 0, ""),
-		"repositories": repositories.list(label(shares.Repositories, "No repository", nil), storageRepositoryLimit, "Other repositories"),
-		"estimated":    "Repository shares, and the catalog's division by Mac and source, are estimated from message counts.",
+		"sources":   sources.list(label(nil, "Unknown source", nil), 0, ""),
+		"projects":  projects.list(label(shares.Projects, "No project", nil), storageProjectLimit, "Other projects"),
+		"estimated": "Project shares, and the catalog's division by Mac and source, are estimated from message counts.",
 	}
 }
 
@@ -260,8 +260,8 @@ func (rows storageRows) list(label func(*storageRow), limit int, rest string) []
 	return list
 }
 
-// divide splits bytes among repositories by message count. With no
-// conversations to divide by, it all goes to no repository.
+// divide splits bytes among projects by message count. With no
+// conversations to divide by, it all goes to no project.
 func divide(bytes int64, shares []storageShare) map[string]int64 {
 	if bytes == 0 {
 		return nil
@@ -272,7 +272,7 @@ func divide(bytes int64, shares []storageShare) map[string]int64 {
 		return parts
 	}
 	for index, part := range divideShares(bytes, shares) {
-		parts[shares[index].Repository] += part
+		parts[shares[index].Project] += part
 	}
 	return parts
 }

@@ -281,6 +281,11 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
     setAddedFields(fields => [...new Set<MessageField>([...fields, "from", "to"])]);
     requestAnimationFrame(() => document.getElementById(`${filterID}-${key}`)?.focus());
   };
+  const searchAllTime = (field: "from" | "to") => {
+    patch(withSearchDateComparison(draft, field, "all"));
+    setAddedFields(fields => fields.filter(key => key !== "from" && key !== "to"));
+    requestAnimationFrame(() => form.current?.querySelector<HTMLElement>(".text-query-tools > .text-add-condition")?.focus());
+  };
   const targetDescription = textKind ? selectedScope?.description ?? `Saved message scope: ${draft.scope.surface}. Its role and message-type restrictions appear below.` : kind === "file" ? "Recorded paths and names of modified files, including old paths of renamed files. File contents are not searched." : "URLs recorded in tool activity, by URL or hostname. Page contents are not searched.";
   // The usual target needs no explanation; any other choice says what it covers.
   const defaultScope = allowedScopes?.[0] ?? "prose";
@@ -321,11 +326,12 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
           <label htmlFor={id}>{field.label} {!date ? <span className="text-filter-operator">{field.operator}</span> : null}</label>
           {field.key === "from" || field.key === "to" ? <SearchSelect aria-label={field.key === "from" ? "Date comparison" : "End date comparison"} value={relative?.duration === "today" ? "today" : relative ? "last" : field.key} onChange={event => {
             const comparison = event.target.value as SearchDateComparison;
+            if (comparison === "all") { searchAllTime(field.key); return; }
             const target = comparison === "last" || comparison === "today" ? "from" : comparison;
             patch(withSearchDateComparison(draft, field.key, comparison));
             setAddedFields(fields => [...fields.filter(key => key !== field.key), target]);
             requestAnimationFrame(() => document.getElementById(`${filterID}-${target}`)?.focus());
-          }}><option value="today">today (local time)</option><option value="last" disabled={dateWindow?.duration !== "today" && !!draft.scope[field.key === "from" ? "to" : "from"]}>last</option><option value="from" disabled={field.key !== "from" && !!draft.scope.from}>on or after</option><option value="to" disabled={dateWindow?.duration !== "today" && field.key !== "to" && !!draft.scope.to}>on or before</option></SearchSelect> : null}
+          }}><option value="all">all time</option><option value="today">today (local time)</option><option value="last" disabled={dateWindow?.duration !== "today" && !!draft.scope[field.key === "from" ? "to" : "from"]}>last</option><option value="from" disabled={field.key !== "from" && !!draft.scope.from}>on or after</option><option value="to" disabled={dateWindow?.duration !== "today" && field.key !== "to" && !!draft.scope.to}>on or before</option></SearchSelect> : null}
           {options && !choicesError ? <SearchSelect id={id} aria-label={name} value={value} onChange={e => scope({ [field.key]: e.target.value })}>
             <option value="">Any {field.label.toLowerCase()}</option>
             {Array.from(new Set([...options, ...(value ? [value] : [])])).map(v => <option key={v} value={v}>{sourceLabel(v)}</option>)}
@@ -334,7 +340,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
             : <WrappingInput id={id} aria-label={name} value={value} placeholder={field.placeholder} aria-invalid={date && issueList.some(i => i.id === "dates")} aria-describedby={date ? `${filterID}-dates ${id}-utc` : undefined} onValue={text => scope({ [field.key]: text })} />}
           {date && !relative ? <span className="text-filter-note" id={`${id}-utc`} title={utcNote}>UTC<span className="sr-only">: {utcNote}</span></span> : null}
           {date && dateWindow?.duration !== "today" && !visibleFields.some(other => other.key === (field.key === "from" ? "to" : "from")) ? <button type="button" onClick={() => addDateBound(field.key === "from" ? "to" : "from")}><Icon name="plus" />{field.key === "from" ? "Add end date" : "Add start date"}</button> : null}
-          {field.key === "from" && !draft.scope.to ? <button type="button" aria-label="Search all time" onClick={() => { scope({ from: "" }); setAddedFields(fields => fields.filter(key => key !== "from")); }}>All time<Icon name="close" /></button>
+          {field.key === "from" && !draft.scope.to ? <button type="button" className="text-all-time" aria-label="Search all time" onClick={() => searchAllTime(field.key)}>All time<Icon name="close" /></button>
             : <RemoveButton label={`Remove ${name.toLowerCase()} filter`} onRemove={() => { patch(dateWindow?.duration === "today" ? { ...draft, dateWindow: undefined, scope: { ...draft.scope, from: "", to: "" } } : { ...draft, scope: { ...draft.scope, [field.key]: "" } }); setAddedFields(fields => fields.filter(key => key !== field.key)); }} />}
         </div>
       </div>;

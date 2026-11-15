@@ -38,6 +38,10 @@ type cliOperations struct {
 	leaseStale atomic.Bool
 	// leaseWrites counts lease rewrites, for tests.
 	leaseWrites atomic.Int64
+	// authority is the process's CPU authority under the scheduled engine
+	// (cliWorkAuthority), which the command's leaves admit from; nil under
+	// classic, and for leases taken without a configuration.
+	authority *workAuthority
 }
 
 // cliFinalBudget bounds the final journal round at exit.
@@ -53,7 +57,26 @@ func beginCLIOperations(config Config, catalog *Catalog, command string, kinds .
 	if catalog != nil {
 		dir = dirs[0]
 	}
-	return beginCLIOperationsIn([]string{dir}, nil, catalog, command, kinds...)
+	ops, err := beginCLIOperationsIn([]string{dir}, nil, catalog, command, kinds...)
+	if err == nil {
+		ops.useAuthority(config, catalog)
+	}
+	return ops, err
+}
+
+// useAuthority attaches the process's CPU authority under the scheduled
+// engine (none under classic): to the command's operations, with their
+// resource telemetry, and to catalog, whose background work starts from
+// context.Background() rather than the command's ctx.
+func (o *cliOperations) useAuthority(config Config, catalog *Catalog) {
+	o.authority = cliWorkAuthority(config)
+	if o.authority != nil {
+		o.reg.telemetry = true
+		o.reg.resourceLedger = newTaskResourceLedger(20, 200)
+	}
+	if catalog != nil {
+		catalog.commandCPUs.Store(o.authority)
+	}
 }
 
 // beginCLIOperationsIn takes command's lease in each of dirs, naming the
@@ -260,7 +283,7 @@ func (ops *cliOperations) run(spec OperationSpec, work func(ctx context.Context,
 		spec.Trigger = triggerCLI
 	}
 	defer ops.close()
-	ctx, op := ops.begin(context.Background(), spec)
+	ctx, op := ops.begin(withWorkAuthority(context.Background(), ops.authority), spec)
 	func() {
 		defer func() {
 			if value := recover(); value != nil {
@@ -298,7 +321,8 @@ func runLeasedCatalog(config Config, command string, spec OperationSpec, open fu
 	if err != nil {
 		return err
 	}
-	ctx, op := ops.begin(context.Background(), spec)
+	ops.useAuthority(config, nil)
+	ctx, op := ops.begin(withWorkAuthority(context.Background(), ops.authority), spec)
 	initialize := op
 	if !read {
 		_, initialize = op.Child(OperationSpec{Kind: "catalog.initialize", Trigger: triggerCLI})
@@ -332,6 +356,7 @@ func runLeasedCatalog(config Config, command string, spec OperationSpec, open fu
 // attach starts journaling into catalog, once it is open.
 func (o *cliOperations) attach(catalog *Catalog) {
 	catalog.ops = o.reg
+	catalog.commandCPUs.Store(o.authority)
 	if o.journal = newJournalWriter(catalog, o.reg); o.journal == nil {
 		return
 	}

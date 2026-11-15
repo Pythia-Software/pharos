@@ -31,6 +31,7 @@ test("compact message excerpts keep prose beyond harness setup and flatten Markd
  const long = preview("Please review the parser and check its callers. ".repeat(20));
  assert.ok(long.length <= 640); assert.ok(long.endsWith("…"));
  assert.equal(preview(""), "");
+ assert.equal(preview("Swim at \uE200entity\uE202[\"t0\",\"Grand Lake\"]\uE201.\uE200cite\uE202t1\uE201"), "Swim at Grand Lake.");
 });
 
 test("agent Markdown renders structure without activating embedded HTML or unsafe links", () => {
@@ -99,7 +100,7 @@ test("Markdown links distinguish local files, local servers, websites and page a
   for (const href of ["https://github.com/org/repo", "https://localhost.example.com", "https://example.com:8443"])
     assert.equal(markdownLinkKind(href).kind, "web", href);
   assert.equal(markdownLinkKind("#notes").kind, "fragment");
-  for (const href of ["/", "/library", "/library?search=cache&view=conversation", "/work/work%2Fid", "/work/work-1/conversation/session-1?message=prompt", "/analyze?analyze_topic=tokens", "/settings/ask", "/conversation/legacy", "?search=cache"]) {
+  for (const href of ["/", "/library", "/library?search=cache&view=conversation", "/work/work%2Fid", "/work/work-1/conversation/session-1?message=prompt", "/analyze?analyze_topic=tokens", "/settings/ask", "/settings/projects", "/settings/models", "/conversation/legacy", "?search=cache"]) {
     assert.equal(markdownLinkKind(href).kind, "page", href);
     const link = elements(markdownTree(`[Pharos](${href})`)).find(item => item.tag === "a");
     assert.equal(link.href, href); assert.equal(link.target, undefined, "in-app navigation stays in the current tab");
@@ -174,7 +175,7 @@ test("human writing projects escaped JSON text and survives message normalizatio
   assert.equal(reader.humanWritingMask(ambiguous, display), '', 'ambiguous source text must not invent attribution');
 });
 
-test("local labels name a message's most specific labels and mark the text they describe", () => {
+test("local labels describe the whole message while writing and event marks keep their own spans", () => {
   const taxonomy = [{ id: 'P.control', name: 'Steer ongoing work' }, { id: 'P.control.continue', name: 'Continue', definition: 'Keep going.' },
     { id: 'P.request.work', name: 'Request work' }];
   const typed = 'Sync to main, then **continue**.', source = '<context>Pasted notes</context>\n' + typed;
@@ -185,19 +186,51 @@ test("local labels name a message's most specific labels and mark the text they 
   assert.equal(view.family, 'P.control', 'the likeliest specific label picks the hue');
   assert.deepEqual(plain(view.labels.map(label => [label.id, label.title, label.prob])), [['P.control.continue', 'Control · Continue', 0.98], ['P.request.work', 'Request work', 0.37]]);
   assert.equal(view.segmentName, 'Typed text');
-  // A person's typed pieces carry the labels; pasted context does not.
-  assert.equal(reader.labelMask(message, source), reader.humanWritingMask(message, source));
-  // An agent's message is labeled as a whole, through its formatting.
+  // Labels are card metadata; they do not create text-level marks.
+  assert.equal(reader.humanWritingMask(message, source).includes('1'), true);
   const reply = { role: 'assistant', kind: 'message', text: 'All **checks** pass.', labels: { segment: 'AR', ids: ['C', 'C.report', 'C.report.completion'], probs: {} } };
-  const marked = elements(reader.markdownTree(reply.text, 0, reader.labelMask(reply, reply.text))).filter(item => item.tag === 'mark');
-  assert.ok(marked.length && marked.every(item => item.className === 'labeled-text'));
-  assert.equal(marked.map(text).join(''), 'All checks pass.');
+  assert.equal(reader.humanWritingMask(reply, reply.text), '');
   assert.equal(reader.messageLabelView(reply).labels[0].title, 'Report · C.report.completion', 'unnamed labels fall back to their ids, prefixed by family');
   // Unlabeled messages mark nothing; a root alone has no family.
   assert.equal(reader.messageLabelView({ role: 'assistant', text: 'Done.' }), null);
-  assert.equal(reader.labelMask({ role: 'assistant', text: 'Done.' }, 'Done.'), '');
   const root = reader.messageLabelView({ labels: { ids: ['C'], probs: {} } });
   assert.deepEqual(plain([root.family, root.labels[0].title]), ['', 'Responds or reports']);
+});
+
+test("the reader offers each highlight the conversation has marks for, each shown on its own", () => {
+  const typed = 'Please fix it.', reply = 'The endpoint is down.';
+  const human = { role: 'user', kind: 'message', text: typed, authorship: { spans: [{ category: 'typed', start: 0, end: typed.length }] } };
+  const agent = { role: 'assistant', kind: 'message', text: reply, labels: { segment: 'AR', ids: ['C', 'C.report', 'C.report.completion'], probs: {} },
+    agent_events: [{ kind: 'obstacle', label: 'Obstacle', group: 'Friction', probability: 0.9, sentence: [0, reply.length], subject: [], response: [] }] };
+  const conversation = { labels: { labeled: true, pending: false }, agent_events: { messages_read: 1 } };
+  const options = reader.readerHighlightOptions(conversation, [human, agent]);
+  assert.deepEqual(plain(options.map(option => [option.id, option.field, option.available])),
+    [['writing', 'reader_writing', true], ['events', 'reader_events', true], ['labels', 'reader_labels', true]]);
+  assert.deepEqual(plain(options[1].legend), [{ name: 'Friction', className: 'event-friction' }]);
+  assert.equal(options[1].note, '');
+  // Events awaiting a rebuild stay inspectable here, but never read as current.
+  const rebuilding = reader.readerHighlightOptions({ ...conversation, agent_events: { messages_read: 1, pending: true } }, [human, agent]);
+  assert.match(rebuilding[1].note, /^Waiting to be rebuilt .* may change$/);
+  assert.deepEqual(plain(options[2].legend), [{ name: 'Report', family: 'C.report' }]);
+  // Writing and classifier marks are on by default; a link
+  // wins over the saved choice, which wins over the default.
+  const shown = (linked, saved) => [...reader.readerHighlightsShown(options, linked, saved)].sort();
+  assert.deepEqual(shown(), ['events', 'labels', 'writing']);
+  assert.deepEqual(shown(() => null, pref => pref === 'pharos-reader-events'), ['events']);
+  assert.deepEqual(shown(field => field === 'reader_labels' ? true : field === 'reader_writing' ? false : null), ['events', 'labels']);
+  // Human writing is offered only where there is some, and a classifier only
+  // once it has run; one with nothing here is offered but off.
+  const plainOptions = reader.readerHighlightOptions({ labels: { labeled: false, pending: true }, agent_events: { messages_read: 3 } }, [{ role: 'assistant', kind: 'message', text: 'Done.' }]);
+  assert.deepEqual(plain(plainOptions.map(option => [option.id, option.available, option.note])),
+    [['events', false, ''], ['labels', false, 'Not labeled yet']]);
+  assert.deepEqual(shown(() => true), ['events', 'labels', 'writing']);
+  const overlapping=[{group:'Friction',probability:.9},{group:'Reactions and learning',probability:.8}];
+  assert.deepEqual(plain(reader.readerEventHighlights(overlapping,new Set(['events:event-learning']))),[overlapping[1]],'hiding the strongest group leaves the other hue and hover content');
+  assert.equal(reader.readerEventHighlights(overlapping,new Set()).length,0);
+
+  assert.equal(reader.readerHighlightsShown(plainOptions, () => true).size, 0);
+  assert.deepEqual(plain(reader.readerHighlightOptions({}, [human]).map(option => option.id)), ['writing']);
+  assert.deepEqual(plain(reader.readerHighlightOptions({}, [agent])), []);
 });
 
 test("agent events mark each event's sentence by group and its context, in UTF-16 offsets", () => {
@@ -222,8 +255,9 @@ test("agent events mark each event's sentence by group and its context, in UTF-1
     ['agent-event event-friction event-at-0', "The 🚧 endpoint doesn't support pagination."],
     ['agent-event event-choices event-at-1', "I'll work around it by fetching one day at a time."],
   ]);
-  // Hovering a mark names the events of its own sentence, wherever Markdown
-  // cut it: a piece as short as "not" names no other sentence's events.
+  // Hovering a mark names the events of its own sentence, Markdown inside it
+  // included: "It is **not** done." is one mark around the bold, and names no
+  // other sentence's events.
   const [first, second] = marksOf(view);
   assert.deepEqual(plain(reader.eventsAtMark(view, first).map(event => event.kind)), ['missing_capability', 'obstacle']);
   assert.deepEqual(plain(reader.eventsAtMark(view, second).map(event => event.kind)), ['workaround']);
@@ -232,7 +266,8 @@ test("agent events mark each event's sentence by group and its context, in UTF-1
     { kind: 'unverified', label: 'Unchecked claim', group: 'Choices you may not see', probability: 0.8, sentence: [20, 35], subject: [], response: [] },
     { kind: 'deferred', label: 'Deferred', group: 'Choices you may not see', probability: 0.7, sentence: [0, 19], subject: [], response: [] }] });
   const notMarks = elements(reader.markdownTree(notMessage.text, 0, reader.eventMask(notMessage.text, notView, ''))).filter(item => item.tag === 'mark');
-  const notPiece = notMarks.find(item => text(item) === 'not');
+  const notPiece = notMarks.find(item => text(item) === 'It is not done.');
+  assert.ok(notPiece?.children.some(child => child.tag === 'strong'), 'the bold sits inside the mark');
   assert.deepEqual(plain(reader.eventsAtMark(notView, notPiece).map(event => event.kind)), ['deferred']);
   // Context that is no event's sentence is marked lighter and names the
   // events it is context of; the likelier of two events on a sentence picks
@@ -266,4 +301,101 @@ test("missing classification, automated prompts and invalid ranges do not imply 
     { role: 'user', text: 'Old spans.', authorship: { typed_words: 2, spans: [{ category: 'typed', excerpt: 'Old spans.' }] } },
     { role: 'user', text: 'Invalid.', authorship: { spans: [{ category: 'typed', start: -1, end: 200 }] } },
   ]) assert.equal(reader.hasHumanWriting(message), false, JSON.stringify(message));
+});
+
+// A highlight across inline code, emphasis or a link is one <mark>: an
+// element the highlight covers whole moves inside it; one it starts or ends
+// inside keeps its own piece.
+test("a highlight crossing inline markdown is one mark", () => {
+  const body = "Before. hello world `this is markdown` another *thing* [link](https://example.com) done. After.";
+  const said = "hello world `this is markdown` another *thing* [link](https://example.com) done.";
+  const event = { id: "x", kind: "obstacle", label: "Obstacle", group: "Friction", probability: 0.9, sentence: [body.indexOf(said), body.indexOf(said) + said.length], subject: [], response: [] };
+  const view = reader.messageEventView({ role: "assistant", kind: "message", text: body, agent_events: [event] });
+  const tree = markdownTree(body, 0, reader.eventMask(body, view, "")), marks = elements(tree).filter(element => element.tag === "mark");
+  assert.equal(marks.length, 1);
+  assert.equal(html(marks[0]), '<mark class="agent-event event-friction event-at-0">hello world <code>this is markdown</code> another <em>thing</em> <a class="markdown-link" href="https://example.com" rel="noreferrer noopener" target="_blank">link</a> done.</mark>');
+  // A target ending inside the code: the covered text is one piece, the code keeps its own.
+  const prompt = "Keep `the drawer only` path.", start = prompt.indexOf("Keep"), end = prompt.indexOf(" only");
+  const mask = reader.eventTargetMask(prompt, [{ range: [start, end], links: ["e"] }], "");
+  assert.equal(html(markdownTree(prompt, 0, mask)), '<div class="markdown-content"><p><mark class="event-target event-target-at-0">Keep </mark><code><mark class="event-target event-target-at-0">the drawer</mark> only</code> path.</p></div>');
+  // Adjacent different highlights stay apart.
+  const both = "one `two` three", split = "1".repeat(4) + "2".repeat(11);
+  assert.deepEqual(elements(markdownTree(both, 0, split)).filter(element => element.tag === "mark").map(mark => mark.className), ["human-written", "labeled-text"]);
+});
+
+test("an export's inline markers read as words, and highlights stay on theirs", () => {
+  const { exportMarkerText } = reader;
+  const E = "", P = "", X = "";
+  const text = `Go to ${E}entity${P}["turn0business0","Wellington Lake"]${X} today.${E}cite${P}turn1search2${X} ${E}genui${P}{"map_widget":{}}${X}`;
+  assert.deepEqual(plain(exportMarkerText(text)), { text: "Go to Wellington Lake today. [map widget]", mask: "" });
+  // The flag on "today" follows the word across the cut.
+  const at = text.indexOf("today"), mask = "0".repeat(at) + "11111" + "0".repeat(text.length - at - 5);
+  const shown = exportMarkerText(text, mask);
+  assert.equal(shown.mask.length, shown.text.length);
+  assert.equal(shown.mask.indexOf("11111"), shown.text.indexOf("today"));
+  assert.deepEqual(plain(exportMarkerText("No markers", "0100000000")), { text: "No markers", mask: "0100000000" });
+});
+
+test("an exported conversation links to its page on the web only where its ID is the address", () => {
+  const { conversationWebLink, artifactWebLink } = reader;
+  const id = "36f90712-7386-4005-b3de-c5020d8e1acd", url = (harness, native_id) => conversationWebLink({ harness, native_id })?.url;
+  assert.equal(url("claude-ai-export", id), "https://claude.ai/chat/" + id);
+  assert.equal(url("chatgpt-export", id), "https://chatgpt.com/c/" + id);
+  assert.equal(url("claude-code-cloud-export", "cse_01EHkcy5"), "https://claude.ai/code/cse_01EHkcy5");
+  assert.equal(url("claude-export-document", "claude-export:artifacts/" + id), "https://claude.ai/artifact/" + id);
+  assert.equal(url("claude-export-document", "claude-export:projects/" + id + ".json"), "https://claude.ai/project/" + id);
+  assert.equal(conversationWebLink({ harness: "chatgpt-export", native_id: id }).site, "chatgpt.com");
+  // Memories and reflections have no page; a session on this machine has none; an ID that is not one makes no address.
+  for (const [harness, native] of [["claude-export-document", "claude-export:memories/" + id + ".json"], ["claude-export-document", "claude-export:reflections/" + id + ".json"],
+    ["claude-export-document", "claude-export:projects/p.json"], ["claude-code/sdk-cli", id], ["claude-ai-export", "../settings?x=" + id], ["claude-code-cloud-export", "cse_1/../x"], ["", ""]]) {
+    assert.equal(url(harness, native), undefined, harness + " " + native);
+  }
+  assert.equal(artifactWebLink({ kind: "artifact", asset_key: "claude-artifact:" + id }).url, "https://claude.ai/artifact/" + id);
+  assert.equal(artifactWebLink({ kind: "artifact", asset_key: "claude-artifact-title:a deck" }), null);
+  assert.equal(artifactWebLink({ kind: "image", asset_key: "claude-artifact:" + id }), null);
+});
+
+test("a citation is marked in the words where the export says it stands", () => {
+  const { citedText, messageNoteLines } = reader;
+  const open = "\ue000", close = "\ue001", E = "\ue200", P = "\ue202", X = "\ue201";
+  // A Claude export counts the cited words in characters: the chip follows
+  // them, an astral character counts once, and two pages cited at one place
+  // stand together. A span past the text, or one that is no web address, is left out.
+  const claude = citedText("Caf\u00e9 \ud83c\udf0a is open. Go.", "", { citations: [
+    { start: 0, end: 15, url: "https://cafe.example/hours" }, { start: 5, end: 15, url: "https://sea.example/" }, { start: 0, end: 15, url: "https://cafe.example/hours" },
+    { start: 16, end: 19, url: "https://cafe.example/hours" }, { start: 0, end: 99, url: "https://far.example/" }, { start: 0, end: 4, url: "javascript:alert(1)" }] });
+  assert.equal(claude.text, `Caf\u00e9 \ud83c\udf0a is open.${open}0${close}${open}1${close} Go.${open}0${close}`);
+  assert.deepEqual(plain(claude.cites), ["https://cafe.example/hours", "https://sea.example/"]);
+  // A highlight stays on its words either side of a chip.
+  const text = "One. Two.", marked = citedText(text, "000001110", { citations: [{ start: 0, end: 4, url: "https://a.example/" }] });
+  assert.equal(marked.mask.length, marked.text.length);
+  assert.equal(marked.mask.indexOf("111"), marked.text.indexOf("Two"));
+  // A ChatGPT export's text holds a marker where each thing was drawn: the
+  // addresses cited at each are given beside the text, in the markers'
+  // order. A marker with none there reads as its words, and one whose
+  // drawing the export does not hold as nothing.
+  const chatgpt = citedText(`Swim at ${E}entity${P}["turn0business0","Heron Lake"]${X}.${E}cite${P}turn9search2${P}turn9news1${X} Then rest.${E}genui${P}{"citation":{"ref":"turn9search9"}}${X}${E}genui${P}eGi3${X}`, "",
+    { marks: [null, ["https://lakes.example/a", "https://parks.example/b", "https://lakes.example/a"], ["https://parks.example/b"], []] });
+  assert.equal(chatgpt.text, `Swim at Heron Lake.${open}0${close}${open}1${close} Then rest.${open}1${close}`);
+  assert.deepEqual(plain(chatgpt.cites), ["https://lakes.example/a", "https://parks.example/b"]);
+  // Without notes the words are as before, markers read as words.
+  assert.deepEqual(plain(citedText(`Lake${E}cite${P}turn0search2${X}`)), { text: "Lake", mask: "", cites: [] });
+  // What else the export says of a message is set under it in words.
+  assert.deepEqual(plain(messageNoteLines({ text: "x".repeat(100), notes: { spoken_chars: 96 } })), ["Read aloud"]);
+  assert.deepEqual(plain(messageNoteLines({ text: "x".repeat(200), notes: { spoken_chars: 22 } })), ["Read aloud in part: about 11% was spoken"]);
+  assert.deepEqual(plain(messageNoteLines({ text: "Never said", notes: { spoken_chars: 0 } })), ["Voice reply, not read aloud"]);
+  assert.deepEqual(plain(messageNoteLines({ text: "Thinking", notes: { cut_off: true, truncated: true } })), ["Thinking was cut off", "Thinking is shortened in the export"]);
+  assert.deepEqual(plain(messageNoteLines({ text: "Plain" })), []);
+});
+
+test("source text is cut into comments, strings, numbers and keywords by its extension", () => {
+  const { highlightCode } = reader, runs = (text, name) => plain(highlightCode(text, name)).filter(run => run.kind).map(run => [run.kind, run.text]);
+  const script = "// total\nconst sum = add(1, 'a//b'); /* done */";
+  assert.deepEqual(runs(script, "points.js"), [["comment", "// total"], ["keyword", "const"], ["number", "1"], ["string", "'a//b'"], ["comment", "/* done */"]]);
+  assert.deepEqual(runs("# note\ndef area(r):\n    return 3.14 * r  # pi", "shape.py"), [["comment", "# note"], ["keyword", "def"], ["keyword", "return"], ["number", "3.14"], ["comment", "# pi"]]);
+  assert.deepEqual(runs("SELECT id FROM t -- all", "q.sql"), [["keyword", "SELECT"], ["keyword", "FROM"], ["comment", "-- all"]]);
+  assert.deepEqual(runs('<p class="x">hi</p><!-- end -->', "page.html"), [["keyword", "<p"], ["string", '"x"'], ["keyword", ">"], ["keyword", "</p>"], ["comment", "<!-- end -->"]]);
+  // Every character is kept, in order, whatever the language; an unknown one is left plain.
+  for (const name of ["points.js", "shape.py", "q.sql", "page.html", "notes.txt"]) assert.equal(plain(highlightCode(script, name)).map(run => run.text).join(""), script);
+  assert.deepEqual(plain(highlightCode(script, "notes.txt")), [{ kind: "", text: script }]);
 });

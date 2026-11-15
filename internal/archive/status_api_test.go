@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -48,6 +47,8 @@ func getStatus(t *testing.T, server *Server, path string) statusSnapshot {
 // after its current unit. A Terminal command's lease makes the drive busy and
 // lists its work, which Pharos cannot stop.
 func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
+	gpuSampler, _ := readyGPU(os.Getpid(), 37)
+	override(t, &processGPU, gpuSampler)
 	override(t, &statusCoalesce, 10*time.Millisecond)
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
@@ -56,8 +57,11 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	// Load line; CPU from the second reading on.
 	override(t, &resourceSampleInterval, 0)
 	resources, _ := idle.raw["resources"].(map[string]any)
+	if gpu, _ := resources["gpu"].(map[string]any); gpu["utilization_percent"] != float64(37) || gpu["basis"] != gpuResourceBasis {
+		t.Fatalf("the service snapshot carries process GPU utilization: %#v", gpu)
+	}
 	processes, _ := resources["processes"].([]any)
-	if len(processes) != 1 || processes[0].(map[string]any)["pid"] != float64(os.Getpid()) || processes[0].(map[string]any)["role"] != "service" ||
+	if len(processes) == 0 || processes[0].(map[string]any)["pid"] != float64(os.Getpid()) || processes[0].(map[string]any)["role"] != "service" ||
 		!(resources["memory_bytes"].(float64) > 0) || resources["basis"] != resourceBasis || resources["sampled_at"] == nil ||
 		!strings.HasPrefix(firstString(resources["label"]), "Pharos is using ") {
 		t.Fatalf("the snapshot carries this service's resources: %#v", idle.raw["resources"])
@@ -163,7 +167,7 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	for _, process := range getStatus(t, server, "/api/status?fresh=1").raw["resources"].(map[string]any)["processes"].([]any) {
 		roles[process.(map[string]any)["pid"].(float64)] = firstString(process.(map[string]any)["role"])
 	}
-	if want := map[float64]string{float64(os.Getpid()): "service", float64(command.Process.Pid): "cli:ingest"}; runtime.GOOS == "darwin" && !maps.Equal(roles, want) {
+	if runtime.GOOS == "darwin" && (roles[float64(os.Getpid())] != "service" || roles[float64(command.Process.Pid)] != "cli:ingest" || roles[float64(os.Getppid())] != "") {
 		t.Fatalf("resources list the service and this Mac's Terminal command: %v", roles)
 	}
 	upload.Finish(nil)
@@ -183,11 +187,34 @@ func TestStatusSnapshotCarriesTheLastMeasuredStorage(t *testing.T) {
 	if _, ok := library()["storage_bytes"]; ok {
 		t.Fatal("storage before any drive check")
 	}
-	drives.cached(config)
-	drives.store(config, &driveState{sizes: librarySizes{LibraryBytes: 1_234_567}, checked: time.Now()})
+	if _, _, err := drives.cached(config); err != nil {
+		t.Fatal(err)
+	}
+	key, _, _ := driveKey(config)
+	drives.store(config, &driveState{identity: key, sizes: librarySizes{LibraryBytes: 1_234_567}, checked: time.Now()})
 	override(t, &statusCoalesce, 0)
 	if got := library()["storage_bytes"]; got != float64(1_200_000) {
 		t.Fatalf("storage from the last drive check, to two figures: %v", got)
+	}
+}
+
+func TestStatusSnapshotCarriesCatalogWALSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalog.sqlite3")
+	if got := catalogWALBytes(path); got == nil || *got != 0 {
+		t.Fatalf("a missing WAL is empty: %v", got)
+	}
+	if err := os.WriteFile(path+"-wal", make([]byte, 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := catalogWALBytes(path); got == nil || *got != 4096 {
+		t.Fatalf("WAL file size: %v", got)
+	}
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	want := catalogWALBytes(config.CatalogPath)
+	got := getStatus(t, server, "/api/status").Library["wal_bytes"]
+	if want == nil || got != float64(*want) {
+		t.Fatalf("WAL in service snapshot: got %v, want %v", got, want)
 	}
 }
 
@@ -850,9 +877,21 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 		return command.Process.Pid
 	}
 	servicePID, commandPID, stuckPID := sleeper(), sleeper(), sleeper()
+	gpuSampler, gpuReads := readyGPU(commandPID, 62)
+	override(t, &processGPU, gpuSampler)
+	var delegated atomic.Bool
+	var serviceVerdict atomic.Pointer[ejectVerdict]
 	answering := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"version": 1, "operations": []any{}, "eject": computeEjectVerdict(verdictInput{}), "attention": []any{},
-			"resources": map[string]any{"processes": []map[string]any{{"pid": servicePID, "role": "service"}, {"pid": commandPID, "role": "cli:ingest"}}}}, http.StatusOK)
+		var resources any = map[string]any{"processes": []map[string]any{{"pid": servicePID, "role": "service"}, {"pid": commandPID, "role": "cli:ingest"}}}
+		if delegated.Load() {
+			resources = nil
+		}
+		verdict := computeEjectVerdict(verdictInput{})
+		if own := serviceVerdict.Load(); own != nil {
+			verdict = *own
+		}
+		writeJSON(w, map[string]any{"version": 1, "operations": []any{}, "eject": verdict, "attention": []any{},
+			"resources": resources}, http.StatusOK)
 	}))
 	defer answering.Close()
 	stuck := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "busy", http.StatusServiceUnavailable) }))
@@ -876,13 +915,27 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 		return found
 	}
 	document := broker.statusDocument(context.Background())
-	if got, want := pids(document["resources"]), []int{os.Getpid(), servicePID, commandPID, stuckPID}; !slices.Equal(got, want) {
-		t.Fatalf("the machine's total: %v, want %v", got, want)
+	// The broker is this test process, so other tests' children still
+	// running in it are its workers, after the processes it was asked about.
+	total := document["resources"].(*resourceSummary)
+	if total.GPU == nil || total.GPU.UtilizationPercent == nil || *total.GPU.UtilizationPercent != 62 || *gpuReads != 1 {
+		t.Fatalf("one process GPU sample for the broker and library totals: %+v (%d reads)", total.GPU, *gpuReads)
 	}
-	if total := document["resources"].(*resourceSummary); !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == 0 {
+	want := []int{os.Getpid(), servicePID, commandPID, stuckPID}
+	if got := pids(total); len(got) < len(want) || !slices.Equal(got[:len(want)], want) ||
+		slices.ContainsFunc(total.Processes[len(want):], func(r resourceReading) bool { return !strings.HasPrefix(r.Role, "worker:") }) {
+		t.Fatalf("the machine's total: %v, want %v and any workers", got, want)
+	}
+	if !strings.HasPrefix(total.Label, "Pharos is using ") || total.MemoryBytes == nil || *total.MemoryBytes == 0 {
 		t.Fatalf("the total's line: %+v", total)
 	}
 	entries := document["libraries"].([]map[string]any)
+	for i, want := range []float64{62, 0} {
+		own := entries[i]["resources"].(*resourceSummary)
+		if own.GPU == nil || own.GPU.UtilizationPercent == nil || *own.GPU.UtilizationPercent != want {
+			t.Fatalf("library %d GPU is scoped to its own tree: %+v", i, own.GPU)
+		}
+	}
 	if got := pids(entries[0]["resources"]); !slices.Equal(got, []int{servicePID, commandPID}) {
 		t.Fatalf("Euclid's processes: %v", got)
 	}
@@ -897,6 +950,68 @@ func TestBrokerStatusCarriesResources(t *testing.T) {
 	}
 	if _, ok := broker.statusDocumentChecked(context.Background(), true)["resources"]; ok {
 		t.Fatal("the eject check carries no resources")
+	}
+	// Scheduled services delegate sampling to the broker. A newly started
+	// CLI must still appear in status before the collector's idle lease
+	// interval expires, even though the child's resource summary is nil.
+	at := time.Now()
+	dir := filepath.Join(t.TempDir(), "leases")
+	broker.leases.probe([]string{appLeaseDir()}, at)
+	broker.leases.probe([]string{dir}, at)
+	lease, err := acquireProcessLease(dir, leaseInfo{Instance: "new-command", PID: commandPID, HostID: currentHost().ID, Process: "cli:ingest", Holds: parseHolds("D:w"), Kinds: []string{"ingest.cli"}, StartedAt: now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(lease.release)
+	broker.libraries[0].LeaseDirs = []string{dir}
+	native := computeEjectVerdict(verdictInput{leases: probeLeases([]string{dir})})
+	if len(native.Blockers) != 1 {
+		t.Fatalf("expected one CLI blocker: %+v", native)
+	}
+	serviceVerdict.Store(&native)
+	delegated.Store(true)
+	broker.history = newResourceHistory(broker.resources, processGPU, nil)
+	broker.history.running = true // a cached collector frame, without a loop
+	broker.history.record(at, resourceHistoryFrame{Scopes: []resourceHistoryScope{{Summary: &resourceSummary{Processes: []resourceReading{
+		{PID: os.Getpid(), Role: "broker"}, {PID: servicePID, Role: "service"}, {PID: stuckPID, Role: "service"},
+	}}}}})
+	fresh := broker.statusDocument(context.Background())
+	if verdict := fresh["libraries"].([]map[string]any)[0]["eject"].(ejectVerdict); len(verdict.Blockers) != 1 {
+		t.Fatalf("resource ownership duplicated the service verdict: %+v", verdict)
+	}
+	if !slices.Contains(pids(fresh["resources"]), commandPID) || !broker.leases.stale.Load() {
+		t.Fatalf("a cached collector hid fresh CLI ownership: %+v", fresh["resources"])
+	}
+	// The first (app) key consumes the invalidation, but the library key
+	// must expire too, so the next history tick discovers the same CLI.
+	broker.leases.probe([]string{appLeaseDir()}, at.Add(time.Second))
+	if probes := broker.leases.probe([]string{dir}, at.Add(time.Second)); !slices.ContainsFunc(probes, func(p leaseProbe) bool { return p.Live && p.Info != nil && p.Info.PID == commandPID }) {
+		t.Fatalf("status invalidated only the first history lease key: %+v", probes)
+	}
+}
+
+func TestBrokerStatusTimeoutKeepsProcessResources(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("reading another process needs proc_pid_rusage")
+	}
+	command := exec.Command("sleep", "30")
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { command.Process.Kill(); command.Wait() })
+	unresponsive := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	defer unresponsive.Close()
+	broker := newBrokerOperations(filepath.Join(t.TempDir(), "operations.json"))
+	broker.client.Timeout = 20 * time.Millisecond
+	broker.publish([]brokerLibrary{{ID: "lib-a", Name: "Euclid", Selected: true,
+		Child: &applicationEndpoint{URL: unresponsive.URL, Token: "t", PID: command.Process.Pid}}})
+	entry := broker.statusDocument(context.Background())["libraries"].([]map[string]any)[0]
+	if entry["snapshot"] != nil || entry["error"] == nil {
+		t.Fatalf("the service snapshot should have timed out: %#v", entry)
+	}
+	summary, _ := entry["resources"].(*resourceSummary)
+	if summary == nil || len(summary.Processes) == 0 || summary.Processes[0].PID != command.Process.Pid {
+		t.Fatalf("broker still samples the service after its status request times out: %+v", summary)
 	}
 }
 

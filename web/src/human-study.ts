@@ -1,3 +1,5 @@
+import { postQueryRows } from "./query-transport";
+import type { QueryRequestV3 } from "@pythia-software/query-table-core";
 import { EMPTY_QUERY, applyQuery, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { queryURL } from "./query-links";
 
@@ -18,6 +20,16 @@ type EvidenceBatch = { rows: StudyMessage[]; now: number };
 const messageCache = new Map<string, { at: number; batch: EvidenceBatch }>();
 const directoryCache = new Map<string, { at: number; rows: StudyWorkspace[] }>();
 export function clearHumanStudyCache() { messageCache.clear(); directoryCache.clear(); }
+// A cached batch answers the studies of one page load: up to 20,000 whole
+// messages, reused for a minute. Past that it would only hold memory.
+const CACHE_LIFETIME = 60000;
+function keepBriefly<T extends { at: number }>(cache: Map<string, T>, key: string, entry: T) {
+  if (cache.size >= 2) cache.delete(cache.keys().next().value!);
+  cache.set(key, entry);
+  const timer = setTimeout(() => { if (cache.get(key) === entry) cache.delete(key); }, CACHE_LIFETIME);
+  // Node's test runner must not wait on it.
+  (timer as { unref?: () => void }).unref?.();
+}
 const positive = (message: StudyMessage) => message.typed_words > 0;
 const human = (message: StudyMessage) => message.typed_words > 0 || message.pasted_words > 0 || message.attachment_words > 0;
 export function ownText(message: StudyMessage): string {
@@ -157,10 +169,7 @@ async function postRows<T>(dataset: string, request: unknown, signal?: AbortSign
   if (signal?.aborted) abort();
   const timer = setTimeout(() => controller.abort(new Error("Contribution evidence timed out. Try a shorter window.")), 20000);
   try {
-    const response = await fetch(`/api/query/${dataset}/rows-v2`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 2, profile: "qt-sqlite-v1", ...request as object }), signal: controller.signal });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error?.message ?? body.error ?? "Contribution evidence could not be loaded.");
-    return body;
+    return await postQueryRows<T>(dataset, request as QueryRequestV3["result"], controller.signal);
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
 }
 export function createHumanStudyLoader(now: number, schema: FieldSchema, signal?: AbortSignal) {
@@ -192,8 +201,7 @@ export function createHumanStudyLoader(now: number, schema: FieldSchema, signal?
         if (unique.length !== first.total) throw new Error("Contribution evidence was incomplete. Refresh to try again; no partial score is shown.");
         const batch = { rows: unique.sort((a, b) => a.sent_at.localeCompare(b.sent_at) || a.id.localeCompare(b.id)), now };
         if (!signal?.aborted) {
-          if (messageCache.size >= 2) messageCache.delete(messageCache.keys().next().value!);
-          messageCache.set(key, { at: Date.now(), batch });
+          keepBriefly(messageCache, key, { at: Date.now(), batch });
         }
         return batch;
       })();
@@ -224,8 +232,7 @@ export function createHumanStudyLoader(now: number, schema: FieldSchema, signal?
             rows.push(...page.rows);
           } }));
           if (!signal?.aborted) {
-            if (directoryCache.size >= 2) directoryCache.delete(directoryCache.keys().next().value!);
-            directoryCache.set(key, { at: Date.now(), rows });
+            keepBriefly(directoryCache, key, { at: Date.now(), rows });
           }
           return rows;
         })();

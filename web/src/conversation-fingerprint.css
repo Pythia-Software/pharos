@@ -1,0 +1,10 @@
+/* Approved Thread Ribbon, shared by conversation cards and table cells. */
+.lt-label-colors{--lt-sender:#28bfdf;--lt-receiver:#f4b632;--label-request:#399bed;--label-frame:#36b4e9;--label-control:#ac62df;--label-input:#e6cd35;--label-feedback:#f28a30;--label-deliberation:#f16b52;--label-difficulty:#ed505d;--label-report:#efbb2b;--lt-soft:color-mix(in srgb,var(--muted) 7%,var(--panel))}
+.lt-emblem{display:block;width:100%;height:auto;max-height:60px;min-width:0;overflow:visible;--lt-soft:color-mix(in srgb,var(--muted) 7%,var(--panel))}
+.lt-emblem>svg{width:100%;height:auto;max-height:60px;display:block;overflow:visible}
+.lt-emblem-hit{stroke:transparent;stroke-width:1;outline:none}
+.lt-emblem g[tabindex]:focus{outline:none}
+.lt-emblem g[tabindex]:focus>.lt-emblem-hit{stroke:var(--ink);stroke-width:1.5}
+@media(max-width:700px){.lt-emblem{min-height:22px}}
+.lt-emblem.has-events{position:relative}
+.lt-fingerprint-source{display:block;flex-shrink:0;margin-top:10px;color:var(--accent);font-size:11px}

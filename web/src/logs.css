@@ -1,0 +1,36 @@
+/* Settings → Logs. Error and warning marks use --bad and --warn and always
+   come with words. */
+.logs-page { min-width: 0; }
+.logs-page code, .logs-page pre { font: var(--fs-sm)/1.45 ui-monospace, SFMono-Regular, monospace; }
+.logs-page code { overflow-wrap: anywhere; }
+.logs-toolbar { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 12px; }
+.logs-section { margin: 0 0 26px; }
+.logs-section h2 { margin: 0 0 10px; }
+.logs-level { display: inline-flex; flex: none; padding-top: 2px; color: var(--muted); }
+.logs-level .app-icon { width: 16px; height: 16px; }
+.logs-level.error { color: var(--bad); }
+.logs-level.warning { color: var(--warn); }
+.logs-cards, .logs-sources, .logs-events { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.logs-cards > li, .logs-sources > li, .logs-events > li { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 10px 12px; border-top: 1px solid var(--line); }
+.logs-cards > li:first-child, .logs-sources > li:first-child, .logs-events > li:first-child { border-top: 0; }
+.logs-cards > li > div, .logs-sources > li > div, .logs-events > li > div { flex: 1; min-width: 0; }
+.logs-cards p, .logs-sources p, .logs-events p { margin: 2px 0 0; overflow-wrap: anywhere; }
+.logs-card.error { box-shadow: inset 3px 0 0 var(--bad); }
+.logs-card.warning { box-shadow: inset 3px 0 0 var(--warn); }
+.logs-card-title { font-weight: 600; }
+.logs-headline { color: var(--ink); }
+.logs-count { flex: none; white-space: nowrap; }
+.logs-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0; }
+.logs-files { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.logs-banner { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow-wrap: anywhere; }
+.logs-banner.error { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }
+.logs-banner.warning { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.logs-error { color: var(--bad); }
+.logs-message { color: var(--ink); }
+.logs-detail { margin-top: 6px; }
+.logs-detail > summary, .logs-run > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-sm); }
+.logs-page pre { max-height: 420px; margin: 6px 0 0; padding: 8px 10px; overflow: auto; border-radius: 4px; background: color-mix(in srgb, var(--bg) 72%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; }
+.logs-run { margin-bottom: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.logs-run > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; color: var(--ink); font-size: var(--fs-md); }
+.logs-run.error { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }
+.logs-page pre.logs-output { max-height: 520px; }

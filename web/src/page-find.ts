@@ -25,7 +25,7 @@ type Entry = { node: Text; start: number; chain: Disclosure[] };
 type Index = { content: string; entries: Entry[]; pending: { element: Pending; chain: Disclosure[]; offset: number }[] };
 declare global { interface Window { pharosFind: { open: (text?: string) => void; next: () => void; previous: () => void; close: () => void; registerNote: (provider: NoteProvider) => () => void } } }
 
-const EXCLUDED = "script,style,template,noscript,textarea,input,select,svg,[inert],[aria-hidden='true'],.pharos-find,.pharos-attention-status";
+const EXCLUDED = "script,style,template,noscript,textarea,input,select,svg,[inert],[aria-hidden='true'],.pharos-find,.pharos-attention-status,.pharos-attention-dismiss";
 const notes = new Set<NoteProvider>();
 let bar: HTMLElement | undefined, input: HTMLInputElement, caseButton: HTMLButtonElement, regexButton: HTMLButtonElement;
 let previousButton: HTMLButtonElement, nextButton: HTMLButtonElement, expandButton: HTMLButtonElement, statusText: HTMLElement, noteList: HTMLElement;
@@ -295,7 +295,8 @@ function scrollParent(element: HTMLElement): HTMLElement | null {
   }
   return null;
 }
-function scrollRange(range: Range) {
+/** Scrolls a range's text to the middle of its scroller, without focus. */
+export function scrollRange(range: Range) {
   const element = range.startContainer.parentElement;
   if (!element) return;
   element.scrollIntoView({ block: "nearest", inline: "nearest" });

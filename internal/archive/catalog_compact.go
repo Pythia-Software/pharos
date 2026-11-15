@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // Compacting the catalog gives the drive back the free pages deleted data
@@ -39,7 +41,8 @@ const (
 var compactProgressEvery = 2 * time.Second
 
 // compactSpaceNeeded is the free space a copy of live bytes needs: VACUUM
-// INTO can write a little more than the pages it keeps.
+// INTO can write a little more than the pages it keeps. Storage shows it;
+// CompactLibrary adds the same parts with spaceNeeded, which cannot wrap.
 func compactSpaceNeeded(live int64) int64 {
 	return live + live/10 + compactMarginBytes
 }
@@ -48,10 +51,11 @@ func compactSpaceNeeded(live int64) int64 {
 // to end; tests shorten it.
 var compactLeaseWait = 10 * time.Second
 
-// compactDiskFree is the free space on path's volume; tests replace it.
-var compactDiskFree = func(path string) uint64 {
-	_, free := diskUsage(path)
-	return free
+// compactDiskFree is the space available on path's volume, or why it cannot
+// be observed; tests replace it.
+var compactDiskFree = func(path string) (uint64, error) {
+	space, err := diskCapacity(path)
+	return space.AvailableBytes, err
 }
 
 // compactFingerprint reads what the check compares, compactLink keeps the
@@ -61,6 +65,12 @@ var (
 	compactFingerprint = catalogFingerprint
 	compactLink        = os.Link
 	compactOpen        = openCompacted
+	// The cancellation test holds a partial copy here, without manufacturing
+	// a large catalog to race a progress poll against VACUUM.
+	compactVacuum = func(ctx context.Context, source *sql.DB, staging string) error {
+		_, err := source.ExecContext(ctx, "VACUUM INTO ?", staging)
+		return err
+	}
 )
 
 // compactionReceipt is what a compaction did.
@@ -132,8 +142,16 @@ func CompactLibrary(ctx context.Context, config Config, progress func(phase stri
 		return receipt, nil
 	}
 	live := (pages - free) * pageSize
-	if need := compactSpaceNeeded(live); compactDiskFree(filepath.Dir(path)) < uint64(need) {
-		return receipt, fmt.Errorf("compacting needs %s free on the library's drive for the new copy; free up space and compact again", humanBytes(need))
+	need, err := spaceNeeded(live, live/10, compactMarginBytes)
+	if err != nil {
+		return receipt, err
+	}
+	available, err := compactDiskFree(filepath.Dir(path))
+	if err != nil {
+		return receipt, fmt.Errorf("compacting cannot tell how much space is free on the library's drive: %w", err)
+	}
+	if available < need {
+		return receipt, fmt.Errorf("compacting needs %s free on the library's drive for the new copy; free up space and compact again", humanBytes(displayBytes(need)))
 	}
 
 	report("Recording what the catalog holds", 0, 0)
@@ -170,7 +188,8 @@ func CompactLibrary(ctx context.Context, config Config, progress func(phase stri
 // compactLease takes the library's use lock exclusively. While the service
 // is stopped, an agent's MCP call opens the catalog itself under a shared
 // lease for the call alone, so a busy lock is retried for a few seconds; a
-// Terminal command holds it until it ends.
+// Terminal command holds it until it ends. Every acquisition failure is
+// retried until the deadline; only contention is then reported as busy.
 func compactLease(ctx context.Context, config Config) (*os.File, error) {
 	deadline := time.Now().Add(compactLeaseWait)
 	for {
@@ -179,7 +198,10 @@ func compactLease(ctx context.Context, config Config) (*os.File, error) {
 			return lease, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("another Pharos process has this library open, such as a Terminal command or an agent's long Pharos MCP call; let it finish and compact again")
+			if errors.Is(err, filelock.ErrContended) {
+				return nil, fmt.Errorf("another Pharos process has this library open, such as a Terminal command or an agent's long Pharos MCP call; let it finish and compact again")
+			}
+			return nil, fmt.Errorf("lock the library to compact it: %w", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -233,7 +255,7 @@ func writeCompacted(ctx context.Context, source *sql.DB, staging string, live in
 			}
 		}
 	}()
-	_, err := source.ExecContext(ctx, "VACUUM INTO ?", staging)
+	err := compactVacuum(ctx, source, staging)
 	// No size report may land after the next step's.
 	close(done)
 	<-stopped

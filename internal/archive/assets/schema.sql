@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS sync_generations (
 );
 CREATE TABLE IF NOT EXISTS conversation_derivation_inputs (
   conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
-  fingerprint TEXT NOT NULL
+  fingerprint TEXT NOT NULL,
+  child_usage TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS repositories (
@@ -151,6 +152,7 @@ CREATE TABLE IF NOT EXISTS workspace_names (
 
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
+  session_bounds_json TEXT,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
   provider TEXT NOT NULL,
@@ -173,6 +175,10 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE INDEX IF NOT EXISTS conversations_workspace_idx ON conversations(workspace_id);
 CREATE INDEX IF NOT EXISTS conversations_parent_idx ON conversations(parent_id);
 CREATE INDEX IF NOT EXISTS conversations_native_alias_idx ON conversations(account,native_id);
+-- Home discovery bounds its pool through this index before consulting stored
+-- previews or optional enrichment ledgers.
+CREATE INDEX IF NOT EXISTS conversations_recent_idx ON conversations(COALESCE(ended_at,started_at) DESC,id)
+  WHERE parent_id IS NULL AND agent_depth=0;
 
 CREATE TABLE IF NOT EXISTS mcp_calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -220,6 +226,9 @@ CREATE TABLE IF NOT EXISTS messages (
   kind TEXT NOT NULL DEFAULT 'message',
   model TEXT,
   effort TEXT,
+  speed TEXT NOT NULL DEFAULT 'standard',
+  service_tier TEXT,
+  speed_source TEXT NOT NULL DEFAULT 'assumed_standard',
   text TEXT NOT NULL,
   raw_text TEXT,
   source_order INTEGER,
@@ -267,6 +276,8 @@ WHEN (old.role,old.kind,old.text,old.raw_text,old.reasoning_format,old.conversat
   DELETE FROM reasoning_extraction_state WHERE conversation_id IN (old.conversation_id,new.conversation_id);
 END;
 CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at);
+-- Browse the complete Messages dataset newest first without sorting message bodies.
+CREATE INDEX IF NOT EXISTS messages_page_idx ON messages(created_at DESC, id);
 -- Serves the human-authorship rebuild, which reads prose turns by role in send order.
 -- A query about one conversation or workspace that also filters on role would
 -- take it too and read every prose message in the catalog; write +role there.
@@ -339,6 +350,69 @@ CREATE TABLE IF NOT EXISTS conversation_launches (
   program TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS conversation_launches_parent_idx ON conversation_launches(parent_id);
+-- Typed execution evidence (docs/execution-evidence-backfill.md): what a
+-- provider asserted or a named parser rule derived about launches, parents
+-- and copied history, kept apart from the graph that resolution builds from
+-- it. origin is native, derived, legacy or synthesized; object is a lookup
+-- key (see executionNativeKey), so a claim can name a transcript not yet
+-- indexed. source says which writer owns the row: replace one source's
+-- claims, never another's.
+CREATE TABLE IF NOT EXISTS execution_claims (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  claim_key TEXT NOT NULL,
+  source TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  object TEXT NOT NULL DEFAULT '',
+  origin TEXT NOT NULL,
+  authority TEXT NOT NULL DEFAULT '',
+  rule TEXT NOT NULL,
+  namespace TEXT NOT NULL DEFAULT '',
+  id_kind TEXT NOT NULL DEFAULT '',
+  locator TEXT NOT NULL DEFAULT '',
+  detail_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY(conversation_id, claim_key)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS execution_claims_object_idx ON execution_claims(object) WHERE object<>'';
+-- Which extractor wrote a conversation's claims, and from what: 'ingest'
+-- read the provider record, 'retained' re-derived them from stored rows. A
+-- conversation without a row has only legacy evidence: its parent_id and
+-- links are materialized decisions of unknown provenance.
+CREATE TABLE IF NOT EXISTS execution_evidence_state (
+  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+  version TEXT NOT NULL,
+  input TEXT NOT NULL,
+  id_policy TEXT NOT NULL
+);
+INSERT OR IGNORE INTO meta(key,value) VALUES('execution_evidence_generation','0');
+CREATE TRIGGER IF NOT EXISTS execution_claims_insert AFTER INSERT ON execution_claims BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='execution_evidence_generation';
+END;
+CREATE TRIGGER IF NOT EXISTS execution_claims_delete AFTER DELETE ON execution_claims BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='execution_evidence_generation';
+END;
+CREATE TRIGGER IF NOT EXISTS execution_claims_update AFTER UPDATE ON execution_claims BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='execution_evidence_generation';
+END;
+-- Derived after authorship (peer_links.go): independently started work that
+-- worked on the same change, such as a review and the conversation it
+-- reviewed. Both sides are mirror representatives of top-level workspaces;
+-- left is the source (writer, quoted conversation), right the consumer.
+-- Messages anchor hand-offs; '' when a link has none.
+CREATE TABLE IF NOT EXISTS work_peer_links (
+  left_workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  right_workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  confidence TEXT NOT NULL,
+  left_message_id TEXT NOT NULL DEFAULT '',
+  right_message_id TEXT NOT NULL DEFAULT '',
+  at TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY(left_workspace_id, right_workspace_id, kind, left_message_id, right_message_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS work_peer_links_right_idx ON work_peer_links(right_workspace_id);
+CREATE INDEX IF NOT EXISTS work_peer_links_left_message_idx ON work_peer_links(left_message_id) WHERE left_message_id<>'';
+CREATE INDEX IF NOT EXISTS work_peer_links_right_message_idx ON work_peer_links(right_message_id) WHERE right_message_id<>'';
 -- Prose messages by role and time, for the human-authorship rebuild.
 CREATE INDEX IF NOT EXISTS messages_prose_idx ON messages(role, created_at) WHERE kind='message';
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(message_id UNINDEXED, text, tokenize='unicode61');
@@ -353,6 +427,9 @@ CREATE TABLE IF NOT EXISTS message_fts_rows (
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_trigram USING fts5(text, content='', contentless_delete=1, tokenize='trigram');
 
 CREATE TABLE IF NOT EXISTS agent_sessions (
+  is_estimate INTEGER NOT NULL DEFAULT 0,
+  input_tokens_available INTEGER NOT NULL DEFAULT 1,
+  usage_estimate_json TEXT,
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -367,6 +444,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   depth INTEGER NOT NULL DEFAULT 0,
   started_at TEXT,
   ended_at TEXT,
+  time_bounds_source TEXT NOT NULL DEFAULT 'unavailable',
   input_tokens INTEGER NOT NULL DEFAULT 0,
   uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
   cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
@@ -385,6 +463,19 @@ CREATE INDEX IF NOT EXISTS agent_sessions_delegation_message_idx ON agent_sessio
 -- The Library's subagent columns count sessions per workspace inside its
 -- maintenance write transactions; without this they scan the whole table.
 CREATE INDEX IF NOT EXISTS agent_sessions_workspace_idx ON agent_sessions(workspace_id, native_id);
+-- Inverse execution lookups (execution_dependencies.go): which launches name
+-- a child transcript, and which sessions a session parented. A publication
+-- guard walks them inside its write transaction.
+CREATE INDEX IF NOT EXISTS agent_sessions_child_idx ON agent_sessions(child_conversation_id);
+CREATE INDEX IF NOT EXISTS agent_sessions_parent_idx ON agent_sessions(parent_id);
+
+-- Observed request effort is independent of the strict session configuration
+-- and of all token/cost attribution. Absence means the projection is pending.
+CREATE TABLE IF NOT EXISTS agent_session_effort_summaries (
+  agent_session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  version TEXT NOT NULL,
+  summary_json TEXT NOT NULL
+);
 
 -- Hourly usage ledger beneath agent_sessions: each session's reconciled usage
 -- split by the UTC hour and model of the accounting events that reported it.
@@ -405,13 +496,39 @@ CREATE TABLE IF NOT EXISTS agent_session_usage (
   reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
   unclassified_tokens INTEGER NOT NULL DEFAULT 0,
   total_tokens INTEGER NOT NULL DEFAULT 0,
+  is_estimate INTEGER NOT NULL DEFAULT 0,
+  input_tokens_available INTEGER NOT NULL DEFAULT 1,
+  usage_estimate_json TEXT,
   PRIMARY KEY(agent_session_id, usage_hour, model, effort, attribution)
 );
 CREATE INDEX IF NOT EXISTS agent_session_usage_hour_idx ON agent_session_usage(usage_hour);
+-- Scoped observations that cannot enter the categorized/priced usage ledger.
+-- The same last-request counter may be repeated in result copies; consumers
+-- take its maximum per session, never sum it with overlapping request usage.
+CREATE TABLE IF NOT EXISTS agent_session_token_evidence (
+  agent_session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL,
+  total_tokens INTEGER NOT NULL CHECK(total_tokens > 0),
+  PRIMARY KEY(agent_session_id, message_id, scope)
+);
 CREATE TABLE IF NOT EXISTS usage_attribution_state (
   workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
   version TEXT NOT NULL
 );
+-- Each Claude Code conversation's replies, by account and message ID (with the
+-- request ID for a message ID not Anthropic's), with the conversation its records of each name as counting it (copy_of,
+-- '' for its own) and the most tokens one reports. Claude Code copies a reply
+-- into a resumed or forked session; of the conversations holding one, the
+-- fullest record counts, else the first to start (claude_usage_copies.go).
+CREATE TABLE IF NOT EXISTS claude_usage_copies (
+  usage_key TEXT NOT NULL,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  copy_of TEXT NOT NULL DEFAULT '',
+  tokens INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(usage_key, conversation_id)
+);
+CREATE INDEX IF NOT EXISTS claude_usage_copies_conversation_idx ON claude_usage_copies(conversation_id);
 
 -- API price history. Rows are imported from the checked-in pricing file
 -- (pricing/cost_changes.json); only 'confirmed' rows are used for cost.
@@ -467,6 +584,9 @@ FROM model_aliases WHERE status='confirmed';
 -- retained messages (see internal/archive/tool_ledger.go). Rebuilt with the
 -- conversation on ingest; tool_ledger_state records which derivation built it.
 CREATE TABLE IF NOT EXISTS model_requests (
+  is_estimate INTEGER NOT NULL DEFAULT 0,
+  input_tokens_available INTEGER NOT NULL DEFAULT 1,
+  usage_estimate_json TEXT,
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   agent_session_id TEXT,
@@ -475,6 +595,9 @@ CREATE TABLE IF NOT EXISTS model_requests (
   requested_at TEXT,
   model TEXT,
   effort TEXT,
+  speed TEXT NOT NULL DEFAULT 'standard',
+  service_tier TEXT,
+  speed_source TEXT NOT NULL DEFAULT 'assumed_standard',
   input_tokens INTEGER NOT NULL DEFAULT 0,
   uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
   cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
@@ -484,11 +607,18 @@ CREATE TABLE IF NOT EXISTS model_requests (
   total_tokens INTEGER NOT NULL DEFAULT 0,
   context_growth_tokens INTEGER,
   compacted_before INTEGER NOT NULL DEFAULT 0,
-  tool_call_count INTEGER NOT NULL DEFAULT 0
+  tool_call_count INTEGER NOT NULL DEFAULT 0,
+  -- The messages of the request's first and last usage events (joined
+  -- anonymous events keep the largest output's counts, which may be
+  -- neither's): what occurrence ownership classifies the request by.
+  source_message_id TEXT,
+  final_message_id TEXT
 );
 CREATE INDEX IF NOT EXISTS model_requests_conversation_idx ON model_requests(conversation_id, sequence);
 
 CREATE TABLE IF NOT EXISTS tool_calls (
+  duration_is_estimate INTEGER NOT NULL DEFAULT 0,
+  duration_estimate_json TEXT,
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -694,6 +824,7 @@ CREATE TABLE IF NOT EXISTS tool_usage_daily (
   nonzero_exit_count INTEGER NOT NULL DEFAULT 0,
   hook_blocked_count INTEGER NOT NULL DEFAULT 0,
   truncated_count INTEGER NOT NULL DEFAULT 0,
+  duration_is_estimate INTEGER NOT NULL DEFAULT 0,
   timed_count INTEGER NOT NULL DEFAULT 0,
   total_duration_ms INTEGER NOT NULL DEFAULT 0,
   avg_duration_ms REAL,
@@ -1154,6 +1285,12 @@ CREATE TABLE IF NOT EXISTS background_settings (
   hold_when_busy INTEGER NOT NULL DEFAULT 1, overrides_json TEXT NOT NULL DEFAULT '{}',
   placements_json TEXT NOT NULL DEFAULT '{}', battery_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT
 );
+-- The checkout of a repository the person chose on a Mac for the Files
+-- page to read contents, blame and diffs from (repository_checkout.go).
+CREATE TABLE IF NOT EXISTS repository_checkouts (
+  repository_id TEXT NOT NULL, host_id TEXT NOT NULL, path TEXT NOT NULL, set_at TEXT NOT NULL,
+  PRIMARY KEY(repository_id,host_id)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS background_runs (
   host_id TEXT NOT NULL, item TEXT NOT NULL, started_at TEXT, finished_at TEXT,
   succeeded_at TEXT, error TEXT, seconds REAL, PRIMARY KEY(host_id,item)
@@ -1371,11 +1508,8 @@ CREATE TRIGGER IF NOT EXISTS parallelism_messages_delete AFTER DELETE ON message
 WHEN old.role IN ('user','assistant') OR old.kind IN ('tool_result','delegation_result') BEGIN
  INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
 END;
-CREATE TRIGGER IF NOT EXISTS parallelism_messages_update AFTER UPDATE OF conversation_id,role,kind,created_at ON messages
-WHEN (old.conversation_id,old.role,old.kind,old.created_at) IS NOT (new.conversation_id,new.role,new.kind,new.created_at) BEGIN
- INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
- INSERT INTO parallelism_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
-END;
+-- parallelism_messages_update is installed by ensureParallelismActivity,
+-- which replaces an older definition on existing catalogs.
 -- Messages owned by an embedded sub-agent (not the 'main' session) are not
 -- the conversation's own timing. A cascaded delete finds its session gone.
 CREATE TRIGGER IF NOT EXISTS parallelism_session_messages_insert AFTER INSERT ON agent_session_messages
@@ -1392,6 +1526,126 @@ CREATE TRIGGER IF NOT EXISTS parallelism_sessions_update AFTER UPDATE OF native_
 WHEN (old.native_id,old.conversation_id) IS NOT (new.native_id,new.conversation_id) BEGIN
  INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
  INSERT INTO parallelism_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+
+-- Session shape (session_shape.go): each conversation's shape and forensic
+-- facts, derived from its messages, authorship, tool calls and requests, and
+-- the messages that triggered each signal. A change to any of those marks the
+-- conversation dirty with a fresh token; a build clears only the token it
+-- read, so a change made during the build is derived again.
+CREATE TABLE IF NOT EXISTS session_shape_facts (
+  conversation_id TEXT PRIMARY KEY,
+  facts TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS session_shape_evidence (
+  conversation_id TEXT NOT NULL,
+  signal TEXT NOT NULL,
+  message_ids TEXT NOT NULL,
+  PRIMARY KEY(conversation_id, signal)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS session_shape_dirty (
+  conversation_id TEXT PRIMARY KEY,
+  revision TEXT NOT NULL) WITHOUT ROWID;
+CREATE TRIGGER IF NOT EXISTS session_shape_messages_insert AFTER INSERT ON messages
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_messages_delete AFTER DELETE ON messages
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_messages_update AFTER UPDATE OF conversation_id,role,kind,created_at,content_hash ON messages
+WHEN (old.conversation_id,old.role,old.kind,old.created_at,old.content_hash) IS NOT (new.conversation_id,new.role,new.kind,new.created_at,new.content_hash) BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_insert AFTER INSERT ON message_authorship
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_delete AFTER DELETE ON message_authorship
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_update AFTER UPDATE ON message_authorship
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+-- Spans are published after their message_authorship rows, in their own
+-- transactions; corrections read them, so they mark the session too.
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_spans_insert AFTER INSERT ON message_authorship_spans
+BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id=new.message_id ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_spans_delete AFTER DELETE ON message_authorship_spans
+BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id=old.message_id ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_authorship_spans_update AFTER UPDATE OF message_id,category,start_byte,end_byte ON message_authorship_spans
+WHEN (old.message_id,old.category,old.start_byte,old.end_byte) IS NOT (new.message_id,new.category,new.start_byte,new.end_byte) BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id IN (old.message_id,new.message_id) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_tool_calls_insert AFTER INSERT ON tool_calls
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_tool_calls_delete AFTER DELETE ON tool_calls
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_tool_calls_update AFTER UPDATE OF conversation_id,call_message_id,sequence,tool_name,tool_category,command_category,status,error_type,interrupted,file_path ON tool_calls
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+-- The earliest start among tool calls whose result arrived after the call was
+-- stored. The ledger updates such calls in place, so their rowid is old and
+-- the related-work refresh would not see a diff's output otherwise.
+CREATE TABLE IF NOT EXISTS work_peer_links_dirty (
+  id INTEGER PRIMARY KEY CHECK(id=1),
+  since TEXT NOT NULL,
+  revision TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS work_peer_links_result_update AFTER UPDATE OF result_message_id ON tool_calls
+WHEN new.result_message_id IS NOT NULL AND old.result_message_id IS NOT new.result_message_id AND new.started_at IS NOT NULL BEGIN
+ INSERT INTO work_peer_links_dirty VALUES(1,new.started_at,hex(randomblob(8))) ON CONFLICT(id) DO UPDATE SET since=min(since,excluded.since),revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_requests_insert AFTER INSERT ON model_requests
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_requests_delete AFTER DELETE ON model_requests
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_requests_update AFTER UPDATE OF conversation_id,agent_session_id,requested_at,model,input_tokens ON model_requests
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_conversations_update AFTER UPDATE OF model ON conversations
+WHEN old.model IS NOT new.model BEGIN
+ INSERT INTO session_shape_dirty VALUES(new.id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_conversations_delete AFTER DELETE ON conversations
+BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_sessions_update AFTER UPDATE OF native_id,conversation_id ON agent_sessions
+WHEN (old.native_id,old.conversation_id) IS NOT (new.native_id,new.conversation_id) BEGIN
+ INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+-- Messages owned by an embedded sub-agent are not the conversation's own.
+CREATE TRIGGER IF NOT EXISTS session_shape_session_messages_insert AFTER INSERT ON agent_session_messages
+WHEN NOT EXISTS(SELECT 1 FROM agent_sessions WHERE id=new.agent_session_id AND native_id='main') BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id=new.message_id
+ ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS session_shape_session_messages_delete AFTER DELETE ON agent_session_messages
+WHEN NOT EXISTS(SELECT 1 FROM agent_sessions WHERE id=old.agent_session_id AND native_id='main') BEGIN
+ INSERT INTO session_shape_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id=old.message_id
+ ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
 END;
 
 -- Exact substring membership for Usage queries. Normalize with the same Unicode
@@ -1493,6 +1747,8 @@ CREATE TABLE IF NOT EXISTS copy_evidence (
  PRIMARY KEY(host_id,workspace_id,conversation_id,origin)
 );
 
+CREATE INDEX IF NOT EXISTS copy_evidence_identity_idx ON copy_evidence(host_id,identity);
+
 CREATE TABLE IF NOT EXISTS source_evidence (
  host_id TEXT NOT NULL,
  source_kind TEXT NOT NULL,
@@ -1554,3 +1810,102 @@ CREATE INDEX IF NOT EXISTS operation_journal_recent ON operation_journal(host_id
 CREATE INDEX IF NOT EXISTS operation_journal_root ON operation_journal(root_id);
 -- The freshness ledger reads each analysis stage's latest outcome (§5).
 CREATE INDEX IF NOT EXISTS operation_journal_kind ON operation_journal(host_id, kind, started_at DESC);
+
+-- Observed Claude Chat selections, independent of transcript or execution data.
+CREATE TABLE IF NOT EXISTS claude_chat_settings_observations (
+ host_id TEXT NOT NULL, source_name TEXT NOT NULL, account TEXT NOT NULL,
+ organization_uuid TEXT NOT NULL, conversation_uuid TEXT NOT NULL,
+ observed_at TEXT NOT NULL, time_basis TEXT NOT NULL, cache_entry TEXT NOT NULL,
+ snapshot_id TEXT NOT NULL, model TEXT, effort_level TEXT, thinking_mode TEXT,
+ PRIMARY KEY(host_id,source_name,account,snapshot_id,conversation_uuid)
+);
+CREATE INDEX IF NOT EXISTS claude_chat_settings_conversation_idx ON claude_chat_settings_observations(account,conversation_uuid,observed_at);
+
+-- Files and other objects a message refers to, as its source recorded them
+-- (message_assets.go). asset_key is the source's identity for the object,
+-- the same wherever it is referred to. availability is 'stored' (source_file
+-- and member locate the bytes in the captured source), 'text_only' or
+-- 'reconstructed' (content holds the text) or 'not_exported'.
+-- attachment_message_id is the attachment message that carries the same
+-- file's source descriptor, when one does.
+CREATE TABLE IF NOT EXISTS message_assets (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL,
+  attachment_message_id TEXT,
+  asset_key TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  relation TEXT NOT NULL,
+  agent_authored INTEGER NOT NULL DEFAULT 0,
+  availability TEXT NOT NULL,
+  mime_type TEXT,
+  size_bytes INTEGER,
+  width INTEGER,
+  height INTEGER,
+  duration_ms INTEGER,
+  offset_ms INTEGER,
+  version TEXT,
+  versions TEXT,
+  source_file TEXT,
+  member TEXT,
+  details TEXT,
+  -- Last, so reading the columns before it never walks a picture's bytes.
+  content BLOB
+);
+CREATE INDEX IF NOT EXISTS message_assets_conversation_idx ON message_assets(conversation_id, message_id, ordinal);
+CREATE INDEX IF NOT EXISTS message_assets_message_idx ON message_assets(message_id);
+CREATE INDEX IF NOT EXISTS message_assets_key_idx ON message_assets(asset_key);
+-- The few calls that published an artifact, among millions of tool calls:
+-- they tie an exported artifact to the conversation that made it.
+CREATE INDEX IF NOT EXISTS tool_calls_artifact_idx ON tool_calls(conversation_id) WHERE tool_name='Artifact';
+
+-- Web pages and other references a message drew on; cited is 0 for one the
+-- agent read without citing.
+CREATE TABLE IF NOT EXISTS message_sources (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  site TEXT NOT NULL DEFAULT '',
+  snippet TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'web',
+  cited INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(message_id, ordinal)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS message_sources_conversation_idx ON message_sources(conversation_id);
+
+-- What a source records about a message beside its text (message_assets.go):
+-- where in the text each citation stands, how much of a reply was spoken
+-- aloud, whether its thinking was cut off. details is a JSON object.
+CREATE TABLE IF NOT EXISTS message_notes (
+  message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  details TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS message_notes_conversation_idx ON message_notes(conversation_id);
+
+-- What a conversation holds beside its words, a row a kind with how many
+-- (conversation_content.go): derived from the three tables above and the
+-- calls that published an artifact, so a search can ask for conversations
+-- with voice, uploads or artifacts.
+CREATE TABLE IF NOT EXISTS conversation_content (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  feature TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  PRIMARY KEY(conversation_id, feature)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS conversation_content_feature_idx ON conversation_content(feature, conversation_id);
+
+-- Web images a source shows by address, fetched once after import and kept
+-- by that address: reindexing a conversation keeps what was fetched.
+CREATE TABLE IF NOT EXISTS remote_assets (
+  url TEXT PRIMARY KEY,
+  mime_type TEXT,
+  content BLOB,
+  fetched_at TEXT NOT NULL,
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 1
+);

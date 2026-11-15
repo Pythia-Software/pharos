@@ -1,10 +1,13 @@
 import type { MetricDisplay, MetricValue, MetricValueFormat } from "@pythia-software/query-table-core";
-import { chartSeriesStyle } from "./chart-colors";
+import { chartSeriesStyle, colorFields, hasAssignedPalette, seriesColorField } from "./chart-colors";
+import { orderedValues } from "./session-shape-bands";
 import { denseBoxGroups, fittedCoverHeight } from "./card-loading-model";
 import type { QueryPreview } from "./query-previews";
+import { isTokenExpression, isTokenField, tokenMetricFormat } from "./token-count";
 
-function compactAxisFormat(format: MetricValueFormat | undefined, values: (MetricValue | undefined)[]): MetricValueFormat {
+function compactAxisFormat(format: MetricValueFormat | undefined, values: (MetricValue | undefined)[], tokens = false): MetricValueFormat {
   if (format) return format;
+  if (tokens) return tokenMetricFormat;
   const numeric = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const span = numeric.length ? Math.max(...numeric) - Math.min(...numeric) : 0;
   const scale = span || Math.max(0, ...numeric.map(Math.abs));
@@ -18,7 +21,13 @@ function compactAxisFormat(format: MetricValueFormat | undefined, values: (Metri
 export function compactMetricPresentation(preview: QueryPreview) {
   let metric = preview.metrics?.find(item => item.clause.id === preview.coverMetricId);
   if (!metric) return;
-  if (metric.clause.groupBy.length === 1 && metric.clause.groupBy[0] === "effort" && ["pie", "donut"].includes(metric.clause.display?.kind ?? "")) metric = { ...metric, result: { ...metric.result, buckets: [...metric.result.buckets].sort((a, b) => chartSeriesStyle("effort", String(a.keys[0] ?? "Unspecified")).order!.localeCompare(chartSeriesStyle("effort", String(b.keys[0] ?? "Unspecified")).order!, undefined, { numeric: true })) } };
+  // Effort slices, and every chart of a session band or archetype, read in
+  // their scale's order, as their colours do.
+  const [stepped] = metric.clause.groupBy, drawn = metric.clause.display?.kind ?? "";
+  if (metric.clause.groupBy.length === 1 && (stepped === "effort" ? ["pie", "donut"].includes(drawn) : Object.hasOwn(orderedValues, stepped) && drawn !== "line")) {
+    const order = (bucket: { keys: unknown[] }) => chartSeriesStyle(stepped, String(bucket.keys[0] ?? "Unspecified")).order!;
+    metric = { ...metric, result: { ...metric.result, buckets: [...metric.result.buckets].sort((a, b) => order(a).localeCompare(order(b), undefined, { numeric: true })) } };
+  }
   if (metric.clause.display?.kind === "box" && metric.clause.groupBy.includes("run_role") && metric.clause.groupBy.includes("effort")) {
     const effort = metric.clause.groupBy.indexOf("effort"), role = metric.clause.groupBy.indexOf("run_role"), roles = ["standalone", "parent", "delegated"];
     metric = { ...metric, result: { ...metric.result, buckets: [...metric.result.buckets].sort((a, b) =>
@@ -26,9 +35,10 @@ export function compactMetricPresentation(preview: QueryPreview) {
   }
   const { clause, result } = metric;
   const originalKind = clause.display?.kind ?? "auto";
+  const timeline = originalKind === "line" || Boolean(clause.dateGrouping) || ["hour", "day", "week", "month"].includes(clause.groupBy[0]);
   const scalar = !preview.stackBy && result.coverage !== "partial" && (result.groupCount ?? result.buckets.length) === 1 && result.buckets.length === 1
     && typeof result.buckets[0].value === "number" && Number.isFinite(result.buckets[0].value) && !result.buckets[0].error && !result.buckets[0].yError
-    && !clause.distribution && !clause.expressionY && !clause.dateGrouping && clause.groupBy[0] !== "day";
+    && !clause.distribution && !clause.expressionY && !timeline;
   const compoundList = (clause.groupBy.length > 1 || Boolean(preview.groupLabels)) && ["auto", "table", "list", "bar-horizontal"].includes(originalKind);
   const kind = scalar ? "value" : compoundList || originalKind === "bar-horizontal" ? "list" : originalKind;
   const budget = clause.display?.maxGroups ?? (kind === "box" ? 3 : ["scatter", "line", "bar-vertical"].includes(kind) ? 24 : ["pie", "donut"].includes(kind) ? 8 : 4);
@@ -37,13 +47,15 @@ export function compactMetricPresentation(preview: QueryPreview) {
   const ranked = !preview.buckets && !scalar && (["auto", "list", "table", "bar-horizontal"].includes(kind) || Boolean(preview.groupSummary));
   const longLabels = result.buckets.slice(0, budget).some(bucket => (preview.groupLabels?.[JSON.stringify(bucket.keys)] ?? bucket.keys.map(key => String(key ?? "Unspecified")).join(" · ")).length > 20);
   const listOptions: MetricDisplay["list"] = ranked && ["auto", "list"].includes(kind) ? { ...clause.display?.list, barPosition: clause.display?.list?.barPosition ?? (longLabels ? "below" : "inline") } : clause.display?.list;
-  if (listOptions && clause.groupBy.some(field => field === "model_family" || field === "root_model_family") && listOptions.useGroupColors === undefined) listOptions.useGroupColors = true;
+  // A list keyed by a repository, model, provider, effort, band or agent
+  // event kind draws each row in that key's colour, as dashboards do.
+  if (listOptions && hasAssignedPalette(seriesColorField(colorFields(clause))) && listOptions.useGroupColors === undefined) listOptions.useGroupColors = true;
   if (ranked && ["auto", "list"].includes(kind) && listOptions?.barPosition === "below" && listOptions.maxLabelLines === undefined) listOptions.maxLabelLines = 2;
   let summary = scalar || ranked ? undefined : preview.summary;
   const headlineMetric = scalar || ranked ? undefined : preview.headlineMetric;
   const axisFormats = kind === "scatter" ? {
-    xFormat: compactAxisFormat(clause.display?.xFormat, result.buckets.slice(0, budget).map(bucket => bucket.value)),
-    yFormat: compactAxisFormat(clause.display?.yFormat, result.buckets.slice(0, budget).map(bucket => bucket.y)),
+    xFormat: compactAxisFormat(clause.display?.xFormat, result.buckets.slice(0, budget).map(bucket => bucket.value), clause.expression ? isTokenExpression(clause.expression) : isTokenField(clause.field) && !["count", "count_distinct"].includes(clause.op)),
+    yFormat: compactAxisFormat(clause.display?.yFormat, result.buckets.slice(0, budget).map(bucket => bucket.y), isTokenExpression(clause.expressionY)),
   } : {};
   const axisScales: Pick<MetricDisplay, "xScale" | "yScale"> = {
     xScale: { ...clause.display?.xScale, mode: kind === "scatter" || preview.preserveScale ? clause.display?.xScale?.mode ?? "linear" : "linear" },

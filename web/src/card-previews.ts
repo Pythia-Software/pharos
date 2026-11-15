@@ -1,6 +1,7 @@
 import { todayBounds } from "./day-window";
 import { browserCardPreviewStorage, createCardPreviewCache } from "./card-preview-cache";
 import { clearPreviewCache, loadQueryPreviews, type PreviewJob, type QueryPreview } from "./query-previews";
+import { followStale, staleRetryDelays, type ResultPolicy } from "./result-cache";
 
 declare global { interface Window { pharosPreviewScope?: string } }
 let scope: string | undefined, cache: ReturnType<typeof createCardPreviewCache> | undefined;
@@ -13,6 +14,36 @@ function currentCache() {
   return cache;
 }
 export function invalidateCardPreviews() { cache?.invalidate(); }
+
+// Covers saved by older versions carried their partial-data warning only in
+// the note. Do not mistake one of those for a complete baseline.
+function incompletePreview(preview: QueryPreview): boolean {
+  if (preview.incompleteWithoutMissing) return false;
+  return Boolean(preview.incompleteReason || preview.note?.includes("Session statistics are updating across the library.") ||
+    preview.note?.includes("Some events are waiting to be rebuilt.") || preview.note?.includes("Conversations changed since the last events run.") ||
+    /Events for \d[\d,]* conversations? are left out until they are rebuilt/.test(preview.note ?? "") ||
+    /\d[\d,]* conversations? (?:is|are) waiting for events to be rebuilt/.test(preview.note ?? ""));
+}
+const savedBaselineMaxAge = 60 * 60 * 1000;
+
+// Each save writes every cached cover to the browser's store. A catalog
+// loading in batches asks for one per batch, so they are combined: at most
+// one write every few seconds, and one when the page is left.
+let saveTimer: ReturnType<typeof setTimeout> | undefined, saving: ReturnType<typeof createCardPreviewCache> | undefined;
+function saveNow() {
+  clearTimeout(saveTimer); saveTimer = undefined;
+  const store = saving; saving = undefined;
+  if (store) void store.save();
+}
+function saveSoon(store: ReturnType<typeof createCardPreviewCache>) {
+  if (saving && saving !== store) saveNow();
+  saving = store;
+  if (saveTimer !== undefined) return;
+  saveTimer = setTimeout(saveNow, 4000);
+  // Node's test runner must not wait on it.
+  (saveTimer as { unref?: () => void }).unref?.();
+}
+if (typeof window !== "undefined") window.addEventListener("pagehide", saveNow);
 
 // IDs belong to the caller (saved cards, suggestions and catalog use different
 // IDs). Everything affecting the cover belongs to its key, including schema,
@@ -27,8 +58,15 @@ export async function cardPreviewKey(job: PreviewJob): Promise<string> {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function loadCardPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal) {
+// policy is how the server's result cache answers (result-cache.ts): a page
+// showing its cards asks "cached", a person refreshing asks "fresh" or
+// "live". A card answered with a stale result is published with its real
+// age and marked refreshing, then asked for again in the background (unless
+// follow is false: work that only prepares covers nobody is looking at).
+export async function loadCardPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal,
+  options: { policy?: ResultPolicy; follow?: boolean } = {}) {
   if (signal?.aborted) return;
+  const policy = options.policy ?? "cached";
   const store = currentCache();
   const keys = new Map(await Promise.all(jobs.map(async job => [job.id, await cardPreviewKey(job)] as const)));
   await store.ready;
@@ -41,20 +79,69 @@ export async function loadCardPreviews(jobs: PreviewJob[], publish: (id: string,
       const preview = { ...entry.preview, updatedAt: entry.at, refreshing: !entry.fresh };
       previous.set(job.id, preview); publish(job.id, preview);
     }
-    if (!entry?.fresh) pending.push(job);
+    if (!entry?.fresh || policy === "live") pending.push(job);
   }
   const generation = store.generation();
-  let lastSave = Date.now();
-  await loadQueryPreviews(pending, (id, preview, error) => {
+  const stale = new Map<string, PreviewJob>(), byID = new Map(jobs.map(job => [job.id, job]));
+  const receive = (final: boolean) => (id: string, preview?: QueryPreview, error?: unknown) => {
     if (signal?.aborted) return;
     if (preview) {
-      store.put(keys.get(id)!, preview, generation);
-      publish(id, { ...preview, updatedAt: Date.now() });
+      const waiting = preview.served?.state === "stale", at = preview.served?.built ?? Date.now();
+      if (waiting) stale.set(id, byID.get(id)!); else stale.delete(id);
+      const current = store.get(keys.get(id)!);
+      const prior = previous.get(id);
+      // Another load may have finished since this one started (for example,
+      // catalog prewarming). Prefer its newer complete snapshot.
+      const saved = current && !incompletePreview(current.preview) && (!prior || incompletePreview(prior) || current.at > (prior.updatedAt ?? 0))
+        ? { ...current.preview, updatedAt: current.at } : prior;
+      const older = saved?.updatedAt !== undefined && at < saved.updatedAt;
+      const recentBaseline = saved?.updatedAt !== undefined && Date.now() - saved.updatedAt < savedBaselineMaxAge;
+      const preservePartial = preview.incompleteReason && !preview.incompleteWithoutMissing && recentBaseline;
+      if ((preservePartial || older) && saved && !incompletePreview(saved)) {
+        // Retain a recent baseline during a rebuild, or any newer baseline
+        // against an older server snapshot. Its age remains the data's age.
+        const shown = { ...saved, refreshing: false, refreshError: undefined, savedReason: preview.incompleteReason ?? "A newer result is not available yet." };
+        previous.set(id, shown); publish(id, shown);
+        return;
+      }
+      store.put(keys.get(id)!, preview, generation, at);
+      const shown = { ...preview, updatedAt: at, refreshing: waiting && !final };
+      previous.set(id, shown); publish(id, shown);
       // Keep completed work even if a large catalog load is interrupted.
-      if (Date.now() - lastSave > 1000) { lastSave = Date.now(); void store.save(); }
+      saveSoon(store);
     } else if (previous.has(id)) {
-      publish(id, { ...previous.get(id)!, refreshing: false, refreshError: String(error) });
+      const shown = { ...previous.get(id)!, refreshing: false, savedReason: undefined, refreshError: String(error) };
+      previous.set(id, shown); publish(id, shown);
     } else publish(id, undefined, error);
+  };
+  await loadQueryPreviews(pending, receive(options.follow === false), signal, policy);
+  // A finished load is written at once, so a reload straight after finds it.
+  if (pending.length) { saveSoon(store); saveNow(); }
+  if (!stale.size || options.follow === false) return;
+  // Not awaited: the page's cards are all drawn; this only freshens them.
+  void followStale(async attempt => {
+    const last = attempt === staleRetryDelays.length - 1;
+    await loadQueryPreviews([...stale.values()], receive(last), signal, "cached");
+    saveSoon(store); saveNow();
+    return stale.size > 0;
   }, signal);
-  if (pending.length) void store.save();
+}
+
+// Covers arrive one at a time, each in its own task. A page holding many
+// cards re-renders all of them per state update, so it applies the arrivals
+// of a short interval together.
+export type PreviewArrival = { id: string; preview?: QueryPreview; error?: unknown };
+export function batchPreviewArrivals(apply: (arrivals: PreviewArrival[]) => void, delay = 80) {
+  let waiting: PreviewArrival[] = [], timer: ReturnType<typeof setTimeout> | undefined;
+  const flush = () => {
+    clearTimeout(timer); timer = undefined;
+    if (!waiting.length) return;
+    const arrivals = waiting; waiting = [];
+    apply(arrivals);
+  };
+  return {
+    publish(id: string, preview?: QueryPreview, error?: unknown) { waiting.push({ id, preview, error }); timer ??= setTimeout(flush, delay); },
+    flush,
+    cancel() { clearTimeout(timer); timer = undefined; waiting = []; },
+  };
 }

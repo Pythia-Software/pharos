@@ -4,22 +4,25 @@ const MENU_BAR_TOOLS = [
   {id: 'open', label: 'Open Pharos', required: true, group: 'open'},
   {id: 'status', label: 'Pharos status', required: true, group: 'status', description: 'Current work and errors always stay visible.'},
   {id: 'indexed', label: 'Last successful index', on: true, group: 'status', description: 'When this Mac last indexed successfully.'},
-  {id: 'index', label: 'Index changes now', group: 'status', description: 'Start indexing from the menu.'},
+  {id: 'index', label: 'Index changes now', on: true, group: 'status', description: 'Start indexing from the menu.'},
   {id: 'words', label: 'Words typed', on: true, group: 'usage', description: 'Estimated human words · last 24 hours.'},
   {id: 'tokens', label: 'Tokens used', on: true, group: 'usage', description: 'Combined token usage · last 24 hours.'},
-  {id: 'cost', label: 'Estimated API cost', group: 'usage', description: 'API-equivalent cost at list prices · last 24 hours.'},
+  {id: 'cost', label: 'Estimated API cost', on: true, group: 'usage', description: 'API-equivalent cost at list prices · last 24 hours.'},
   {id: 'carbon', label: 'Estimated CO₂e', on: true, group: 'usage', description: 'Carbon impact using your settings · last 24 hours.'},
-  {id: 'backup', label: 'Last backup', group: 'library', description: 'When the library was last fully backed up.'},
-  {id: 'space', label: 'Library size', group: 'library', description: 'Archive size and free space on its drive.'},
-  {id: 'search', label: 'Search conversations…', group: 'navigation', description: 'Find a conversation or search the archive.'},
-  {id: 'analyze', label: 'Analyze usage…', group: 'navigation', description: 'Open usage, cost, writing, and carbon analysis.'},
-  {id: 'optimize', label: 'Optimize…', group: 'navigation', description: 'Review findings and opportunities to improve agent work.'},
-  {id: 'capture', label: 'Background Processing…', group: 'manage', description: 'Open the background update schedule, capture and indexing controls, and recent runs.'},
-  {id: 'health', label: 'Library health & backups…', group: 'manage', description: 'Check storage and recent activity, or choose a backup destination.'},
-  {id: 'sources', label: 'Manage sources…', group: 'manage', description: 'Choose which conversation files Pharos reads on this Mac.'},
-  {id: 'finder', label: 'Show library in Finder', group: 'manage', description: 'Reveal the connected library folder in Finder.'},
+  {id: 'streak', label: 'Your streak', on: true, group: 'habits', description: 'Days in a row with a message you typed, and whether today counts yet.'},
+  {id: 'agent_streak', label: 'Agent streak', on: true, group: 'habits', description: 'Days in a row your agents worked, with you or unattended, and whether today counts yet.'},
+  {id: 'backup', label: 'Last backup', on: true, group: 'library', description: 'When the library was last fully backed up.'},
+  {id: 'space', label: 'Library size', on: true, group: 'library', description: 'Archive size and free space on its drive.'},
+  {id: 'search', label: 'Search conversations…', on: true, group: 'navigation', description: 'Find a conversation or search the archive.'},
+  {id: 'analyze', label: 'Analyze usage…', on: true, group: 'navigation', description: 'Open usage, cost, writing, and carbon analysis.'},
+  {id: 'optimize', label: 'Optimize…', on: true, group: 'navigation', description: 'Review findings and opportunities to improve agent work.'},
+  {id: 'capture', label: 'Background Processing…', on: true, group: 'manage', description: 'Open the background update schedule, capture and indexing controls, and recent runs.'},
+  {id: 'health', label: 'Library health & backups…', on: true, group: 'manage', description: 'Check storage and recent activity, or choose a backup destination.'},
+  {id: 'sources', label: 'Manage sources…', on: true, group: 'manage', description: 'Choose which conversation files Pharos reads on this Mac.'},
+  {id: 'finder', label: 'Show library in Finder', on: true, group: 'manage', description: 'Reveal the connected library folder in Finder.'},
+  {id: 'logs', label: 'Logs & crash reports', on: true, group: 'manage', description: 'Open recent page errors, slow requests, service output and crash reports, marking the ones to read first.'},
   {id: 'settings', label: 'Settings…', required: true, group: 'settings'},
-  {id: 'eject', label: 'Eject library…', group: 'quit', description: 'Safely eject the library. Appears when its drive is ejectable.'},
+  {id: 'eject', label: 'Eject library…', on: true, group: 'quit', description: 'Safely eject the library. Appears when its drive is ejectable.'},
   {id: 'quit', label: 'Quit Pharos', required: true, group: 'quit'},
 ];
 const MENU_BAR_SEPARATOR = {id: 'separator', label: 'Separator', separator: true, group: 'separator',
@@ -84,8 +87,7 @@ function editMenuBarSettings(saved, id, destination) {
   const active = get('menuBarActive'), toolbox = get('menuBarToolbox'), menu = get('menuBarToolMenu');
   let settings = normalizeMenuBarSettings(window.pharosPrefs.get(MENU_BAR_KEY, {})), dragId = null;
   let snapshot = null, usage = null, loading = false, lastUsage = 0, previewError = false;
-  const native = () => window.webkit?.messageHandlers?.pharosMenuBar;
-  const notify = () => { try { native()?.postMessage({...settings}); } catch {} };
+  const notify = () => { try { window.pharosHost.capabilities.menu.available && window.pharosHost.menu.applyPreferences({...settings}); } catch {} };
   const element = (tag, className = '', text = '') => {
     const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
   };
@@ -111,9 +113,11 @@ function editMenuBarSettings(saved, id, destination) {
       case 'status': return [`Pharos · ${status()}`];
       case 'indexed': return [snapshot ? (ago(snapshot.indexed_at) ? `Indexed ${ago(snapshot.indexed_at)}` : 'Not indexed yet') : 'Checking last index…'];
       case 'words': return metric('Words typed', usage?.human_words?.toLocaleString());
-      case 'tokens': return metric('Tokens used', usage && new Intl.NumberFormat(undefined, {notation: 'compact', maximumFractionDigits: 1}).format(usage.tokens));
-      case 'cost': return metric('Estimated API cost', usage && new Intl.NumberFormat(undefined, {style: 'currency', currency: 'USD'}).format(usage.cost_usd));
+      case 'tokens': return metric('Tokens used', usage && pharosTokens.formatTokens(usage.tokens));
+      case 'cost': return metric('Estimated API cost', usage && pharosCurrency.formatUSD(usage.cost_usd));
       case 'carbon': return metric('Estimated CO₂e', usage && `${new Intl.NumberFormat(undefined, {maximumSignificantDigits: 3}).format(usage.co2e_g >= 1000 ? usage.co2e_g / 1000 : usage.co2e_g)} ${usage.co2e_g >= 1000 ? 'kg' : 'g'}`);
+      case 'streak': return metric('Your streak', usage?.streaks?.you);
+      case 'agent_streak': return metric('Agent streak', usage?.streaks?.agents);
       case 'backup': return metric('Last backup', snapshot && (ago(snapshot.backup_at) ?? 'Never'));
       case 'space': return metric('Library size', bytes(storage?.sizes?.library_bytes));
       case 'eject': return [`Eject ${drive?.name ?? 'library'}…`];
@@ -141,7 +145,7 @@ function editMenuBarSettings(saved, id, destination) {
       const response = await fetch('/api/menu-bar/status');
       if (!response.ok) throw new Error('Preview unavailable');
       snapshot = await response.json(); previewError = false;
-      if (settings.order.some(id => definition(id).group === 'usage') && Date.now() - lastUsage >= 60000) {
+      if (settings.order.some(id => ['usage', 'habits'].includes(definition(id).group)) && Date.now() - lastUsage >= 60000) {
         lastUsage = Date.now();
         try {
           const response = await fetch('/api/menu-bar/usage?period='+period);
@@ -294,7 +298,7 @@ function editMenuBarSettings(saved, id, destination) {
     if (event.detail?.set?.[MENU_BAR_KEY]) { notify(); refreshPreview(); }
     if (event.detail?.set?.['pharos-carbon-v1']) {
       lastUsage = 0; refreshPreview();
-      try { native()?.postMessage({refreshUsage: true}); } catch {}
+      try { window.pharosHost.capabilities.menu.available && window.pharosHost.menu.refreshUsage(); } catch {}
     }
   });
   new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) refreshPreview(); }).observe(root);

@@ -3,7 +3,7 @@
 (() => {
   'use strict';
   const GB = 1e9, GiB = 2 ** 30, uploadPartMiB = 64, reviewed = '2026-10-22';
-  const formatCost = value => value > 0 && value < .000001 ? '<$0.000001' : new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:value>0&&value<.01?6:2}).format(value);
+  const formatCost = pharosCurrency.formatUSD;
   const providers = {
     aws: {name: 'Amazon S3', source: 'https://aws.amazon.com/s3/pricing/', permissions: 'Upload and resume this archive; no download, object listing or deletion of completed revisions.'},
     gcp: {name: 'Google Cloud Storage', source: 'https://cloud.google.com/storage/pricing', permissions: 'Create and delete objects in this bucket; no download or object listing.'},
@@ -523,7 +523,7 @@ PY
   if (!mount) return;
   const prefKey = 'pharos-cloud-backup-configurations-v2';
   const node = (tag, text, cls) => { const n = document.createElement(tag); if (text != null) n.textContent = text; if (cls) n.className = cls; return n; };
-  const money = value => new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(value);
+  const money = formatCost;
   const number = value => new Intl.NumberFormat('en-US',{maximumFractionDigits:1}).format(value);
   const size = value => `${number(value / GB)} GB`;
   function newDraft(){
@@ -543,7 +543,7 @@ PY
   const button = (label, click, cls = '') => { const b = node('button',label,'pharos-button '+cls); b.type = 'button'; b.onclick = click; return b; };
   const sheet = node('style',`
     .cloud-wizard{margin:24px 0;min-width:0}.cloud-wizard h3{font:700 23px var(--serif,serif);margin:0 0 8px}.cloud-wizard h4{margin:0 0 12px;font-size:15px}.cloud-intro{max-width:760px}
-    .cloud-card{border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden;min-width:0}.cloud-card-header{display:flex;align-items:center;border-bottom:1px solid var(--line);padding:0 12px;gap:10px}.cloud-header-actions{display:flex;gap:6px;flex-shrink:0}.cloud-header-actions button{font-size:12px;padding:6px 9px}
+    .cloud-card{border:1px solid var(--line);border-radius:12px;background:var(--panel);min-width:0}.cloud-card-header{display:flex;align-items:center;border-bottom:1px solid var(--line);padding:0 12px;gap:10px}.cloud-header-actions{display:flex;gap:6px;flex-shrink:0}.cloud-header-actions button{font-size:12px;padding:6px 9px}
     .cloud-steps{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));flex:1;min-width:0;margin:0;gap:0}.cloud-steps button{display:flex;align-items:center;justify-content:center;gap:7px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:14px 8px;font-size:12px;color:var(--muted)}.cloud-steps [aria-current=step]{border-bottom-color:var(--accent);color:var(--ink)}.cloud-steps span{display:inline-grid;place-content:center;width:18px;height:18px;border-radius:50%;border:1px solid currentColor;font-size:10px}.cloud-steps [aria-current=step] span{color:var(--accent)}
     .cloud-layout{display:flex;gap:24px;align-items:flex-start;padding:20px}.cloud-main{flex:1.2 1 0}.cloud-aside{flex:.8 1 0;padding-left:20px;border-left:1px solid var(--line)}.cloud-layout-wide .cloud-main{flex:1 1 100%}.cloud-main,.cloud-aside,.cloud-step{min-width:0}
     .cloud-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:14px;margin-top:14px}.cloud-fields.cloud-calculator-fields{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:0}.cloud-field{display:grid;gap:5px;align-content:start;min-width:0;font-size:12px}.cloud-field input,.cloud-field select{box-sizing:border-box;width:100%;min-width:0;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:8px;font:inherit}.cloud-field small{color:var(--muted);line-height:1.45}.cloud-field .cloud-error{color:var(--bad)}.cloud-field [aria-invalid=true]{border-color:var(--bad)}
@@ -557,14 +557,14 @@ PY
     .cloud-beta{color:var(--muted);font-size:12px;line-height:1.3}.cloud-ongoing{margin-top:20px;min-width:0}.cloud-ongoing article{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin:12px 0;min-width:0}.cloud-ongoing h4{margin:0 0 8px}.cloud-schedule-settings{margin-top:12px}.cloud-schedule-settings .cloud-fields{margin:12px 0;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr))}.cloud-history-select{display:block;max-width:100%;margin:12px 0}.cloud-saved{border-top:1px solid var(--line);padding:18px 20px}.cloud-saved-item{padding:10px 0;border-bottom:1px solid var(--line)}.cloud-saved-item strong{display:block;overflow-wrap:anywhere}.cloud-saved-item p{margin:5px 0}.cloud-saved-item .cloud-actions{margin-top:7px}
     .cloud-fields.cloud-protection-fields{grid-template-columns:1fr;max-width:520px;margin:0}.cloud-command-stage{border-top:1px solid var(--line);padding:18px 0}.cloud-command-stage h4{margin-bottom:8px}.cloud-command-stage .cloud-note{max-width:760px}
     .cloud-run-layout{margin-top:20px;display:grid;grid-template-columns:minmax(0,1.3fr) minmax(230px,.7fr);gap:24px;align-items:start}.cloud-run-block{border-top:1px solid var(--line);padding:18px 0 0;margin-top:18px}.cloud-run-block h4{margin-bottom:6px}.cloud-run-block>.cloud-field{margin:12px 0}.cloud-run-layout .cloud-fields{grid-template-columns:1fr}.cloud-run-layout pre{max-height:220px}.cloud-preview-banner{padding:10px 12px;border:1px dashed var(--line);border-radius:6px;font-size:12px;color:var(--muted);margin:12px 0 18px}.cloud-run-result{padding:12px;border:1px solid var(--line);border-radius:6px;font-size:13px;margin-top:12px}.cloud-run-result.success{border-color:var(--sea)}.cloud-run-result.error{border-color:var(--bad)}.cloud-run-result strong{display:block;margin-bottom:5px}.cloud-run-checks{list-style:none;padding:0;margin:12px 0;display:grid;gap:9px;font-size:12px}.cloud-run-checks li{padding-left:18px;position:relative}.cloud-run-checks li::before{content:'○';position:absolute;left:0;color:var(--muted)}.cloud-run-checks li.complete::before{content:'✓';color:var(--sea)}.cloud-run-metadata{background:var(--bg);padding:16px;border-radius:8px;min-width:0}.cloud-run-metadata h4{margin-bottom:8px}.cloud-preview-scenarios{max-width:500px}.cloud-preview-scenarios select{font:inherit}.cloud-setup-check{display:flex;align-items:flex-start;gap:8px;font-size:13px;margin:16px 0}.cloud-setup-check input{margin-top:4px;flex-shrink:0}
-    .cloud-cost-tooltip[hidden]{display:none}.cloud-cost-tooltip{box-sizing:border-box;min-width:min(220px,calc(100vw - 16px))}.cloud-cost-tooltip .chart-tooltip-row{align-items:center}.cloud-cost-tooltip-value{margin-left:auto;padding-left:16px;white-space:nowrap}.cloud-cost-tooltip-total{border-top:1px solid var(--line);padding-top:5px;margin-top:2px;font-weight:600}.cloud-cost-tooltip-context{color:var(--muted)}
+    .cloud-cost-tooltip[hidden]{display:none}.usage-chart-tip.chart-tooltip.cloud-cost-tooltip{min-width:min(220px,calc(100vw - 16px))}
     @media(max-width:1100px){.cloud-steps{grid-template-columns:repeat(3,minmax(0,1fr))}.cloud-steps button{padding:10px 6px}}
     @media(max-width:850px){.cloud-layout{flex-direction:column;gap:16px;padding:16px}.cloud-main,.cloud-aside{flex:0 1 auto;width:100%}.cloud-aside{border-left:0;border-top:1px solid var(--line);padding:16px 0 0}.cloud-footer{padding:12px 16px}.cloud-run-layout{grid-template-columns:1fr}}
     @media(max-width:440px){.cloud-fields.cloud-calculator-fields{grid-template-columns:1fr}.cloud-card-header{padding:0 8px;gap:0;flex-wrap:wrap}.cloud-steps{flex-basis:100%}.cloud-steps button{padding:11px 3px;gap:4px;font-size:12px}.cloud-steps span{width:15px;height:15px;font-size:10px}.cloud-header-actions{margin-left:auto;padding:6px 0}.cloud-layout{padding:12px}.cloud-saved{padding:12px}.cloud-totals strong{font-size:21px}}
   `);
   document.head.append(sheet);
   // Share the other charts' tooltip styling and portal outside clipped cards.
-  const chartTooltip=node('div',null,'chart-tooltip cloud-cost-tooltip');chartTooltip.id='cloudBackupCostTooltip';chartTooltip.setAttribute('role','tooltip');chartTooltip.hidden=true;document.body.append(chartTooltip);
+  const chartTooltip=node('div',null,'usage-chart-tip chart-tooltip cloud-cost-tooltip');chartTooltip.id='cloudBackupCostTooltip';chartTooltip.setAttribute('role','tooltip');chartTooltip.hidden=true;document.body.append(chartTooltip);
   function hideChartTooltip(){chartTooltip.hidden=true;}
   window.addEventListener('scroll',hideChartTooltip,true);window.addEventListener('resize',hideChartTooltip);window.addEventListener('blur',hideChartTooltip);
   window.addEventListener('keydown',event=>{if(event.key==='Escape')hideChartTooltip();});
@@ -659,17 +659,18 @@ PY
     return warning;
   });
   const codeDetails=node('details');codeDetails.open=true;const code=node('pre');codeDetails.append(node('summary','Prepared Bash commands'),code);panels[2].append(codeDetails);
-  async function copy(value){try{await navigator.clipboard.writeText(value);message('Copied to clipboard.');}catch{message('Clipboard unavailable. Select and copy the expanded commands.',true);}}
+  const pendingCopies=new WeakSet();
+  async function copy(value,control){if(control.disabled||pendingCopies.has(control))return;pendingCopies.add(control);control.setAttribute('aria-disabled','true');message('');try{await window.pharosHost.clipboard.writeText(value);message('Copied to clipboard.');}catch{message('Clipboard unavailable. Select and copy the expanded commands.',true);}finally{pendingCopies.delete(control);control.removeAttribute('aria-disabled');}}
   const protectedCommands=node('div',null,'cloud-protected-commands');protectedCommands.hidden=true;
   const commandStages=[
     ['1. Prepare locally','Copy and run this block first. It prepares private setup files and the password helper. It does not create cloud resources.','Copy preparation commands'],
     ['2. Set your password in Terminal','Paste only this command, then enter and confirm your password. Re-enter it once to verify recovery. Wait for the success message before copying the final block. Keep the password in your password manager; a forgotten password cannot be reset.','Copy password setup command'],
     ['3. Create the cloud destination','After password verification succeeds, copy and run this separate block. It checks the recovery bundle, then creates your cloud resources and upload credential.','Copy final commands']
   ].map(([title,description,label],i)=>{
-    const section=node('section',null,'cloud-command-stage'),pre=node('pre'),copyButton=button(label,()=>copy(setupStages(raw)[i].commands));
+    const section=node('section',null,'cloud-command-stage'),pre=node('pre'),copyButton=button(label,()=>copy(setupStages(raw)[i].commands,copyButton));
     section.append(node('h4',title),node('p',description,'cloud-note'),copyButton,pre);protectedCommands.append(section);return{pre,copyButton};
   });panels[2].append(protectedCommands);
-  const reviewActions=node('div',null,'cloud-actions'),copyCommands=button('Copy Bash commands',()=>copy(setup(raw)),'primary'),copyPrompt=button('Copy setup prompt',()=>copy(prompt(raw))),copyConfig=button('Copy configuration JSON',()=>copy(JSON.stringify(destination(raw),null,2))),save=button('Save configuration to Pharos',()=>savePlan());reviewActions.append(copyCommands,copyPrompt,copyConfig,save);panels[2].append(reviewActions,node('p','Setup uses your signed-in cloud administrator. If a command fails, repair that step using the private setup files rather than rerunning the whole script.','cloud-note'));
+  const reviewActions=node('div',null,'cloud-actions'),copyCommands=button('Copy Bash commands',()=>copy(setup(raw),copyCommands),'primary'),copyPrompt=button('Copy setup prompt',()=>copy(prompt(raw),copyPrompt)),copyConfig=button('Copy configuration JSON',()=>copy(JSON.stringify(destination(raw),null,2),copyConfig)),save=button('Save configuration to Pharos',()=>savePlan());reviewActions.append(copyCommands,copyPrompt,copyConfig,save);panels[2].append(reviewActions,node('p','Setup uses your signed-in cloud administrator. If a command fails, repair that step using the private setup files rather than rerunning the whole script.','cloud-note'));
   panels[2].append(node('p','After running the setup commands, continue to Test to connect the private setup folder. Pharos reads the credential locally and stores it directly in its database.','cloud-note'));
   let cloudState={destinations:[],runs:[],schedules:[]},cloudBusy=false,cloudError='',cloudPoll,setupPathEdited=false;
   const terminalCommands=new Map(),scheduleDrafts=new Map();let selectedRestore='';
@@ -737,8 +738,12 @@ PY
   async function loadCloud(){
     clearTimeout(cloudPoll);if(document.hidden)return;
     try{const response=await fetch('/api/cloud-backup');const result=await response.json();if(!response.ok)throw new Error(result.error||'Cloud backup status is unavailable');cloudState=result;cloudError='';renderSaved();}catch(error){cloudError=error.message;}
-    refresh();renderOngoing();const active=cloudActive();cloudPoll=setTimeout(loadCloud,active?1500:10000);
+    refresh();renderOngoing();const active=cloudActive();cloudLoadedAt=Date.now();cloudPoll=setTimeout(loadCloud,active?1500:onSettings()?10000:60000);
   }
+  // This is drawn only in Settings; other pages just keep it from going stale.
+  let cloudLoadedAt=0;
+  const onSettings=()=>Boolean(document.getElementById('settings')?.classList.contains('active'));
+  window.addEventListener('pharos:route',()=>{if(onSettings()&&Date.now()-cloudLoadedAt>10000)void loadCloud();});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)void loadCloud();});
   async function connectCloud(){
     cloudBusy=true;cloudError='';refresh();
@@ -763,13 +768,13 @@ PY
     const section=node('section',null,'cloud-run-block');section.append(node('h4',kind==='sample'?'Download the test file':'Download this backup revision'),node('p','Run this command using your cloud account with download access. It retrieves the exact uploaded revision. Pharos’s stored upload credential cannot download it.','cloud-note'));
     const wrap=node('label',null,'cloud-field'),input=node('input');input.type='text';input.spellcheck=false;input.value='~/Downloads/Pharos Restore/'+(kind==='sample'?'Test':'First backup');
     wrap.append(node('span','Download folder'),input,node('small','Choose an empty folder on this Mac. If you move the downloaded file, update this folder before verifying it.'));
-    const pre=node('pre'),copyButton=button('Copy download command',()=>copy(restoreDownload(raw,receiptFor(kind==='full'?restoreRun():latestRun(kind)),input.value)));
+    const pre=node('pre'),copyButton=button('Copy download command',()=>copy(restoreDownload(raw,receiptFor(kind==='full'?restoreRun():latestRun(kind)),input.value),copyButton));
     input.oninput=()=>{const run=kind==='full'?restoreRun():latestRun(kind);if(run)terminalCommands.delete(run.id);refresh();};
     const commands=node('details');commands.append(node('summary','View download command'),pre);section.append(wrap,copyButton,commands);parent.append(section);return{section,input,pre,copyButton};
   }
   function terminalSection(parent,kind){
     const block=node('section',null,'cloud-run-block');block.hidden=true;block.append(node('h4','Enter your password in Terminal'),node('p','Run this command on its own after the download finishes. Enter your recovery password when Terminal asks. It is never sent to this page or saved by Pharos.','cloud-note'));
-    const pre=node('pre'),copyButton=button('Copy password verification command',()=>copy(terminalCommands.get((kind==='full'?restoreRun():latestRun(kind))?.id)?.command||''));block.append(copyButton,pre);parent.append(block);return{block,pre};
+    const pre=node('pre'),copyButton=button('Copy password verification command',()=>copy(terminalCommands.get((kind==='full'?restoreRun():latestRun(kind))?.id)?.command||'',copyButton));block.append(copyButton,pre);parent.append(block);return{block,pre};
   }
   panels[3].append(node('h4','4. Test your cloud backup'),node('p','Connect the destination, upload a small test archive, then download it through your cloud account and verify a complete recovery round trip.','cloud-note'));
   const librarySourceNotes=[3,4,5].map(()=>node('p','','cloud-note cloud-limit'));
@@ -880,11 +885,12 @@ PY
     function reveal(i,scenario,anchor){
       show(i);tipScenario=scenario;
       const month=scenario==='flat'?flat[selected]:months[selected];
-      chartTooltip.replaceChildren(node('strong',month.label),node('span',`${scenario==='flat'?'No growth':'With growth'} · ${month.days} forecast days`,'chart-tooltip-context cloud-cost-tooltip-context'));
+      // The shared chart popover rows (chart-popover.css): swatch and label left, value right, total below a rule.
+      chartTooltip.replaceChildren(node('div',month.label,'usage-chart-tip-head'),node('div',`${scenario==='flat'?'No growth':'With growth'} · ${month.days} forecast days`,'usage-chart-tip-more'));
       for(const[key,name,cls]of [...components,['cost','Total',null]]){
-        const row=node('span',null,'chart-tooltip-row'+(key==='cost'?' cloud-cost-tooltip-total':''));
-        if(cls){const swatch=node('i',null,'chart-tooltip-swatch cloud-legend-'+cls);swatch.setAttribute('aria-hidden','true');row.append(swatch);}
-        row.append(node('span',name),node('span',formatCost(month[key]),'cloud-cost-tooltip-value'));chartTooltip.append(row);
+        const row=node('div',null,'usage-chart-tip-row'+(key==='cost'?' usage-chart-tip-total':''));
+        if(cls){const swatch=node('i',null,'usage-swatch cloud-legend-'+cls);swatch.setAttribute('aria-hidden','true');row.append(swatch);}
+        row.append(node('span',name,'usage-chart-tip-label'),node('span',formatCost(month[key]),'usage-chart-tip-value'));chartTooltip.append(row);
       }
       chartTooltip.hidden=false;
       const rect=svg.getBoundingClientRect(),bounds=chartTooltip.getBoundingClientRect();
@@ -989,7 +995,7 @@ PY
   function renderSaved(){
     savedPanel.replaceChildren(node('h4','Configured destinations'));if(!saved.length&&!cloudState.destinations.some(d=>d.connected)){savedPanel.hidden=true;return;}savedPanel.hidden=false;let total=0;
     const plans=[...saved];for(const d of cloudState.destinations.filter(d=>d.connected))if(!plans.some(p=>connectedDestination(p)?.id===d.id))plans.push({...normalize(d.config),id:d.id});
-    for(const plan of plans){const connected=connectedDestination(plan),activeSchedule=scheduleFor(connected),e=forecast(activeSchedule?.enabled?{...plan,...scheduleSpec(activeSchedule)}:plan),item=node('div',null,'cloud-saved-item');total+=e.year;item.append(node('strong',plan.name),node('p',`${providers[plan.provider].name} · ${plan.region} · ${money(e.year)} first year`,'cloud-note'),node('p',connected?`Connected · ${scheduleStatus(connected)}`:'Configured only · not connected','cloud-note'));const row=node('div',null,'cloud-actions');row.append(button('Edit',()=>{raw={...plan};editing=plan.id;editedSize=true;touched.clear();providerShown='';step=1;refresh();panels[1].focus();}),Object.assign(button(plan.passwordProtected?'View setup steps':'Copy commands',()=>{if(!plan.passwordProtected){copy(setup(plan));return;}raw={...plan};editing=plan.id;editedSize=true;touched.clear();submitted=false;step=2;refresh();panels[2].focus();}),{disabled:Object.keys(validation(plan)).length>0}),button('Remove',async()=>{try{const d=connectedDestination(plan);if(d)await cloudRequest('/disconnect',{destination_id:d.id});await persist(saved.filter(p=>p.id!==plan.id));await loadCloud();if(editing===plan.id)editing='';refresh();message('Configuration removed. Cloud resources were not changed.');}catch(error){message(error.message,true);}}));item.append(row);savedPanel.append(item);}
+    for(const plan of plans){const connected=connectedDestination(plan),activeSchedule=scheduleFor(connected),e=forecast(activeSchedule?.enabled?{...plan,...scheduleSpec(activeSchedule)}:plan),item=node('div',null,'cloud-saved-item');total+=e.year;item.append(node('strong',plan.name),node('p',`${providers[plan.provider].name} · ${plan.region} · ${money(e.year)} first year`,'cloud-note'),node('p',connected?`Connected · ${scheduleStatus(connected)}`:'Configured only · not connected','cloud-note'));const row=node('div',null,'cloud-actions');row.append(button('Edit',()=>{raw={...plan};editing=plan.id;editedSize=true;touched.clear();providerShown='';step=1;refresh();panels[1].focus();}),Object.assign(button(plan.passwordProtected?'View setup steps':'Copy commands',event=>{if(!plan.passwordProtected){void copy(setup(plan),event.currentTarget);return;}raw={...plan};editing=plan.id;editedSize=true;touched.clear();submitted=false;step=2;refresh();panels[2].focus();}),{disabled:Object.keys(validation(plan)).length>0}),button('Remove',async()=>{try{const d=connectedDestination(plan);if(d)await cloudRequest('/disconnect',{destination_id:d.id});await persist(saved.filter(p=>p.id!==plan.id));await loadCloud();if(editing===plan.id)editing='';refresh();message('Configuration removed. Cloud resources were not changed.');}catch(error){message(error.message,true);}}));item.append(row);savedPanel.append(item);}
     savedPanel.append(node('p',`Combined first-year forecast: ${money(total)}.`,'cloud-note'),button('Plan another backup',()=>{const suffix=Math.random().toString(36).slice(2,8);raw={...normalize(raw),name:'Cloud backup',bucket:'pharos-backup-'+suffix,account:'pharos'+suffix,identity:'pharos-backup-'+suffix,group:'pharos-backup-'+suffix};editing='';step=0;submitted=false;touched.clear();providerShown='';refresh();mount.scrollIntoView({block:'start'});}));
   }
   window.pharosCloudBackup.seedLibrary=(bytes,growth)=>{

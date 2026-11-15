@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 
 // The app icon's palette. `masthead` matches the top of the web header so the
@@ -15,15 +16,28 @@ enum Harbor {
 // The content runs under the transparent title bar so the web header and the
 // traffic lights share one band. AppKit keeps the lights 14pt from the top of
 // a 28pt title bar and resets them whenever it lays the title bar out again,
-// so they are re-centered in a header-height bar after each resize or focus
-// change. An empty toolbar would center them too, but it swallows the clicks
-// meant for the header's tabs and search.
+// so they are re-centered on the header's row after each resize or focus
+// change, and whenever AppKit resizes the title bar's container. A Light/Dark
+// appearance change (Auto switches at sunrise and sunset, usually while the
+// window sits in the background) shrinks the container back to its standard
+// height but leaves the buttons where they were, clipping their tops. An
+// empty toolbar would center them too, but it swallows the clicks
+// meant for the header's tabs and search. The page reports where its row's
+// center falls, in window points, so the lights follow it at any page zoom.
 struct WindowChrome: NSViewRepresentable {
     static let titlebarHeight: CGFloat = 52
     static let trafficLightInset: CGFloat = 19
+    /// Posted with the window as its object and the header row's center, in
+    /// points from the window's top, as `centerKey`.
+    static let headerCenterDidChange = Notification.Name("PharosHeaderCenterDidChange")
+    static let centerKey = "center"
 
     final class ChromeView: NSView {
         private var observers: [NSObjectProtocol] = []
+        private var headerCenter = WindowChrome.titlebarHeight / 2
+        /// The title bar container whose frame changes are observed.
+        private weak var observedContainer: NSView?
+        private var containerObserver: NSObjectProtocol?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -43,18 +57,41 @@ struct WindowChrome: NSViewRepresentable {
                     self?.placeTrafficLights()
                 })
             }
+            observers.append(NotificationCenter.default.addObserver(forName: WindowChrome.headerCenterDidChange, object: window, queue: .main) { [weak self] note in
+                guard let self, let center = note.userInfo?[WindowChrome.centerKey] as? CGFloat, center > 0 else { return }
+                self.headerCenter = center
+                self.placeTrafficLights()
+            })
             placeTrafficLights()
         }
 
-        deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+        deinit {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            containerObserver.map(NotificationCenter.default.removeObserver)
+        }
+
+        /// Re-places the lights after any title bar layout that resizes their
+        /// container, whatever caused it. The placement waits for AppKit to
+        /// finish that layout, which may move the buttons after the container.
+        private func observeContainer(_ container: NSView) {
+            guard container !== observedContainer else { return }
+            containerObserver.map(NotificationCenter.default.removeObserver)
+            observedContainer = container
+            container.postsFrameChangedNotifications = true
+            containerObserver = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: container, queue: .main) { [weak self] _ in
+                DispatchQueue.main.async { self?.placeTrafficLights() }
+            }
+        }
 
         private func placeTrafficLights() {
             // In full screen macOS owns the title bar that slides in on hover.
             guard let window, !window.styleMask.contains(.fullScreen),
                   let close = window.standardWindowButton(.closeButton),
                   let container = close.superview?.superview else { return }
-            let height = WindowChrome.titlebarHeight
-            container.frame = NSRect(x: container.frame.minX, y: window.frame.height - height, width: container.frame.width, height: height)
+            observeContainer(container)
+            let height = max(headerCenter * 2, close.frame.height)
+            let frame = NSRect(x: container.frame.minX, y: window.frame.height - height, width: container.frame.width, height: height)
+            if container.frame != frame { container.frame = frame }
             let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
             for (index, type) in buttons.enumerated() {
                 guard let button = window.standardWindowButton(type), let bar = button.superview else { continue }
@@ -133,6 +170,10 @@ final class ArchiveService: ObservableObject {
     private var pageWatch = 0
     /// The page that failed, which the web view loads when it comes back.
     private var pageTarget: URL?
+    /// Failures the page itself cannot see (its web process ended, a load
+    /// failed), kept here rather than in a web view, which the recovery screen
+    /// replaces. The next page that loads records them in Settings → Logs.
+    var unreportedPageFailures: [[String: Any]] = []
     @Published var status = "Starting local archive…"
     @Published var disconnected: Disconnection?
     /// The Eject button's release and eject are under way.
@@ -163,13 +204,16 @@ final class ArchiveService: ObservableObject {
     private var managedLibraryMonitors: [String: LibraryVolumeMonitor] = [:]
     private var managedLibraryStateTask: URLSessionDataTask?
     private var brokerOperationsTask: URLSessionDataTask?
-    private let releaseService: (URL, String) -> ServiceClient.Release
+    /// Releases a service or the broker: (URL, token, before an update).
+    private let releaseService: (URL, String, Bool) -> ServiceClient.Release
     var deferUpdate: (@escaping (Error?) -> Void) -> Void = { $0(nil) }
     var resumeUpdates: () -> Void = {}
     private(set) var menuBar: MenuBarController!
 
     init(plan: LaunchPlan? = nil,
-         releaseService: @escaping (URL, String) -> ServiceClient.Release = { ServiceClient.release($0, token: $1) }) {
+         releaseService: @escaping (URL, String, Bool) -> ServiceClient.Release = {
+             $2 ? ServiceClient.releaseForUpdate($0, token: $1) : ServiceClient.release($0, token: $1)
+         }) {
         self.releaseService = releaseService
         defer { menuBar = MenuBarController(service: self) }
         // Here rather than on a view: with its window closed, Pharos keeps
@@ -227,7 +271,7 @@ final class ArchiveService: ObservableObject {
         var environment = ProcessInfo.processInfo.environment
         environment["PHAROS_PARENT_PID"] = String(getpid())
         task.environment = environment
-        let log = ServiceLog()
+        let log = ServiceLog(file: ServiceLog.appLogFile())
         task.standardError = log.pipe
         serviceLog = log
         task.terminationHandler = { [weak self] process in
@@ -371,7 +415,11 @@ final class ArchiveService: ObservableObject {
     /// library (localRequest), so the broker passes it on to that library's
     /// service rather than answering for itself.
     func checkReady(_ completion: @escaping (Bool) -> Void) {
-        guard var request = localRequest("/api/ready") else { completion(false); return }
+        // The broker can be alive while the first navigation opens a library
+        // under its routing lock. /api/app/state cannot answer then either,
+        // so a selected-library header alone misses this first-launch wait.
+        let path = managedApplication ? "/api/ready?routing=1" : "/api/ready"
+        guard var request = localRequest(path) else { completion(false); return }
         // With no library connected the window shows the broker's own pages
         // (the chooser, its status): then the broker is what must answer.
         if !hasConnectedLibrary { request.setValue(nil, forHTTPHeaderField: "X-Pharos-Library") }
@@ -573,7 +621,7 @@ final class ArchiveService: ObservableObject {
             return (self.endpoint, self.service)
         }
         guard let endpoint else { return .approve }
-        let answer = releaseService(endpoint.url, endpoint.token)
+        let answer = releaseService(endpoint.url, endpoint.token, false)
         let (state, verdict) = ReleaseState.after(answer)
         lock.withLock { release = state }
         switch answer {
@@ -900,10 +948,14 @@ final class ArchiveService: ObservableObject {
 
     /// Stop only this app's service, wait for catalog closure, and (for an
     /// update) exclude every bundled CLI until the new app has launched.
-    func prepareToTerminate(installing: Bool, timeout: TimeInterval = 10, completion: @escaping (Error?) -> Void) {
+    /// `unlessBusy` (an explicit Install and Relaunch) first asks the service
+    /// to stop the way an eject does, and refuses, stopping nothing, while
+    /// its work cannot reach a safe point in time. Install on quit does not:
+    /// quitting stops that work anyway.
+    func prepareToTerminate(installing: Bool, unlessBusy: Bool = false, timeout: TimeInterval = 10, completion: @escaping (Error?) -> Void) {
         flushWebSession { [weak self] error in
             if let error { completion(error); return }
-            self?.prepareAfterSessionSave(installing: installing, timeout: timeout, completion: completion)
+            self?.prepareAfterSessionSave(installing: installing, unlessBusy: installing && unlessBusy, timeout: timeout, completion: completion)
         }
     }
 
@@ -917,17 +969,21 @@ final class ArchiveService: ObservableObject {
             finished = true
             completion(error)
         }
-        let failure = UpdateFailure(message: "Could not save the current UI session. Keep Pharos open and retry before quitting or ejecting.")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { finish(failure) }
+        let message = "Could not save the current UI session. Keep Pharos open and retry before quitting or ejecting."
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            finish(UpdateFailure(message: message + "\n\nThe page did not finish saving within 5 seconds."))
+        }
         webView.callAsyncJavaScript("await window.pharosSession?.flush(); await window.pharosPrefs?.flush?.(); return true;", arguments: [:], in: nil, in: .page) { result in
             switch result {
             case .success: finish(nil)
-            case .failure: finish(failure)
+            case .failure(let error):
+                let detail = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription
+                finish(UpdateFailure(message: message + "\n\n" + detail))
             }
         }
     }
 
-    private func prepareAfterSessionSave(installing: Bool, timeout: TimeInterval, completion: @escaping (Error?) -> Void) {
+    private func prepareAfterSessionSave(installing: Bool, unlessBusy: Bool, timeout: TimeInterval, completion: @escaping (Error?) -> Void) {
         shuttingDown = true
         let child = process
         let endpoint = lock.withLock { self.endpoint }
@@ -941,15 +997,20 @@ final class ArchiveService: ObservableObject {
                 try lease?.begin(version: version)
                 let stopService = {
                     if let child, child.isRunning {
-                        if self?.managedApplication == true { child.terminate(); return }
+                        // The broker stops its libraries itself on SIGTERM.
+                        // Before an explicit update it first releases them,
+                        // refusing while their work cannot stop in time.
+                        let managed = self?.managedApplication == true
+                        if managed && !unlessBusy { child.terminate(); return }
                         if let endpoint {
-                            switch releaseService(endpoint.url, endpoint.token) {
-                            case .released: break
+                            switch releaseService(endpoint.url, endpoint.token, unlessBusy) {
+                            case .released: if managed { child.terminate() }
                             case .notRunning:
                                 // The owned child may still be initializing,
                                 // before its HTTP listener has opened.
                                 if child.isRunning { child.terminate() }
-                            case .stopping: throw UpdateFailure(message: "Pharos is finishing a write. Wait a moment, then quit or install again.")
+                            case .stopping(let body):
+                                throw UpdateFailure(message: ServiceClient.reason(body) ?? "Pharos is finishing a write. Wait a moment, then quit or install again.")
                             case .failed(let reason): throw UpdateFailure(message: "Could not close Pharos's catalog: \(reason)")
                             }
                         } else { child.terminate() }
@@ -1026,7 +1087,13 @@ final class ArchiveService: ObservableObject {
 // to: the message arrives from the web process after the event has passed.
 final class ArchiveWKWebView: WKWebView {
     private(set) var lastMouseDown: NSEvent?
+    private var zoomedAtLastSingleClick: Bool?
     var onMoveToWindow: ((NSWindow) -> Void)?
+    var onPageZoom: (() -> Void)?
+
+    override var pageZoom: CGFloat {
+        didSet { if pageZoom != oldValue { onPageZoom?() } }
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -1035,7 +1102,21 @@ final class ArchiveWKWebView: WKWebView {
 
     override func mouseDown(with event: NSEvent) {
         lastMouseDown = event
+        if event.clickCount == 1 { zoomedAtLastSingleClick = window?.isZoomed }
         super.mouseDown(with: event)
+    }
+
+    func performHeaderDoubleClick(defaults: UserDefaults = .standard) {
+        guard let window, let wasZoomed = zoomedAtLastSingleClick else { return }
+        zoomedAtLastSingleClick = nil
+        // macOS 27 can zoom the transparent title bar itself before mouse-up
+        // reaches WebKit. Toggling again would restore the previous width.
+        guard window.isZoomed == wasZoomed, !window.isMiniaturized else { return }
+        switch defaults.string(forKey: "AppleActionOnDoubleClick") {
+        case "Minimize": window.performMiniaturize(nil)
+        case "None": break
+        default: window.performZoom(nil)
+        }
     }
 
     // View → Zoom In shows ⌘+, which needs Shift on most layouts; take ⌘=
@@ -1048,6 +1129,217 @@ final class ArchiveWKWebView: WKWebView {
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// The page's attention target under the last right-click, which the
+    /// page reports (`contextTarget` in `windowChromeScript`) before WebKit
+    /// opens the menu.
+    struct ContextTarget {
+        let reference: String
+        let noun: String
+        let highlighted: Bool
+
+        init?(_ body: Any?) {
+            guard let object = body as? [String: Any], let reference = object["reference"] as? String, !reference.isEmpty else { return nil }
+            self.reference = reference
+            noun = object["noun"] as? String ?? "Element"
+            highlighted = object["highlighted"] as? Bool == true
+        }
+
+        var title: String { highlighted ? "Remove Highlight" : "Highlight \(noun)" }
+    }
+    var contextTarget: ContextTarget?
+    var contextHasAttention = false
+
+    /// The local file a right-clicked Markdown link names, once the service
+    /// has found it (`data-file-path` on the link). `launchable` is the
+    /// service's verdict that opening it would run something.
+    struct ContextFile {
+        let url: URL
+        let launchable: Bool
+
+        init?(_ body: Any?) {
+            guard let object = body as? [String: Any], let path = object["path"] as? String, path.hasPrefix("/") else { return nil }
+            url = URL(fileURLWithPath: path)
+            launchable = object["launchable"] as? Bool != false
+        }
+    }
+    var contextFile: ContextFile?
+    /// The loading indicator's state when the Lighthouse or Home was clicked.
+    var contextLighthouseLoading: Bool?
+    /// Whether the page offers `window.pharosPageAction` (the main page does;
+    /// setup windows do not).
+    var pageActions = false
+
+    /// The page's link without the launch token, which the service already
+    /// trades for a cookie on arrival.
+    static func shareableLink(_ url: URL?) -> String? {
+        guard let url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        components.queryItems = components.queryItems?.filter { $0.name != "token" }
+        if components.queryItems?.isEmpty == true { components.queryItems = nil }
+        return components.string
+    }
+
+    /// Every page menu gets Copy Page Link and Highlight, then Open Logs, Send
+    /// Feedback and Annotate, after WebKit's own Back/Forward/Reload or at the
+    /// end of a menu without them. Highlight adds the target to the URL's
+    /// `highlight`/`reveal`, so the copied link brings attention to it.
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        if let file = contextFile, FileManager.default.fileExists(atPath: file.url.path) { insertFileItems(file, into: menu) }
+        let copy = NSMenuItem(title: "Copy Page Link", action: #selector(copyPageLink(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.isEnabled = Self.shareableLink(url) != nil
+        let highlight = NSMenuItem(title: contextTarget?.title ?? "Highlight", action: contextTarget == nil ? nil : #selector(toggleHighlight(_:)), keyEquivalent: "")
+        highlight.target = self
+        // AppKit closes the menu, and so clears the context, before it sends
+        // the chosen item's action: the item carries its own target.
+        highlight.representedObject = contextTarget?.reference
+        var index = menu.items.firstIndex { $0.identifier?.rawValue == "WKMenuItemIdentifierReload" }.map { $0 + 1 } ?? menu.items.count
+        let actions = [("Open Logs", "logs"), ("Send Feedback…", "feedback"), ("Annotate…", "annotate")].map { title, action in
+            let item = NSMenuItem(title: title, action: pageActions ? #selector(runPageAction(_:)) : nil, keyEquivalent: "")
+            item.target = self
+            item.representedObject = action
+            return item
+        }
+        var items = [copy, highlight]
+        if contextHasAttention {
+            let clear = NSMenuItem(title: "Clear Highlights", action: #selector(clearHighlights(_:)), keyEquivalent: "")
+            clear.target = self
+            items.append(clear)
+        }
+        if let enabled = contextLighthouseLoading {
+            let lighthouse = NSMenuItem(title: "Lighthouse Loading Indicator", action: #selector(runPageAction(_:)), keyEquivalent: "")
+            lighthouse.target = self
+            lighthouse.representedObject = "lighthouse-loading"
+            lighthouse.state = enabled ? .on : .off
+            items.append(lighthouse)
+        }
+        items += [.separator()] + actions
+        if index > 0 { items.insert(.separator(), at: 0) }
+        if index < menu.items.count, !menu.items[index].isSeparatorItem { items.append(.separator()) }
+        for item in items { menu.insertItem(item, at: index); index += 1 }
+    }
+
+    /// WebKit's link items would load or download the service's copy of the
+    /// file, so a file link gets Finder's items in their place.
+    static let fileLinkReplacedItems: Set<String> = ["WKMenuItemIdentifierOpenLink", "WKMenuItemIdentifierOpenLinkInNewWindow", "WKMenuItemIdentifierDownloadLinkedFile", "WKMenuItemIdentifierCopyLink"]
+
+    private func insertFileItems(_ file: ContextFile, into menu: NSMenu) {
+        let replaced = { (item: NSMenuItem) in Self.fileLinkReplacedItems.contains(item.identifier?.rawValue ?? "") }
+        var index = menu.items.firstIndex(where: replaced) ?? 0
+        for item in menu.items where replaced(item) { menu.removeItem(item) }
+        func item(_ title: String, _ action: Selector) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = file.url
+            return item
+        }
+        let openWith = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+        openWith.submenu = openWithMenu(file.url)
+        // A click never runs a script or installer; choosing an app is explicit.
+        var items = (file.launchable ? [] : [item("Open", #selector(openContextFile(_:)))]) + [openWith, item("Show in Finder", #selector(revealContextFile(_:))), item("Copy Path", #selector(copyContextFilePath(_:)))]
+        index = min(index, menu.items.count)
+        if index < menu.items.count, !menu.items[index].isSeparatorItem { items.append(.separator()) }
+        if index > 0, !menu.items[index - 1].isSeparatorItem { items.insert(.separator(), at: 0) }
+        for item in items { menu.insertItem(item, at: index); index += 1 }
+    }
+
+    /// Finder's Open With: the default app first, then the others that
+    /// claim the file's type, then Other… to choose any app.
+    private func openWithMenu(_ file: URL) -> NSMenu {
+        let menu = NSMenu()
+        let workspace = NSWorkspace.shared
+        let name = { (app: URL) in app.deletingPathExtension().lastPathComponent }
+        let preferred = workspace.urlForApplication(toOpen: file)
+        let others = workspace.urlsForApplications(toOpen: file).filter { $0 != preferred }
+            .sorted { name($0).localizedStandardCompare(name($1)) == .orderedAscending }
+        func item(_ app: URL, _ title: String) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: #selector(openContextFileWith(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = [file, app]
+            let icon = workspace.icon(forFile: app.path)
+            icon.size = NSSize(width: 16, height: 16)
+            item.image = icon
+            return item
+        }
+        if let preferred {
+            menu.addItem(item(preferred, "\(name(preferred)) (default)"))
+            if !others.isEmpty { menu.addItem(.separator()) }
+        }
+        for app in others { menu.addItem(item(app, name(app))) }
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        let other = NSMenuItem(title: "Other…", action: #selector(chooseContextFileApp(_:)), keyEquivalent: "")
+        other.target = self
+        other.representedObject = file
+        menu.addItem(other)
+        return menu
+    }
+
+    @objc private func openContextFile(_ sender: NSMenuItem) {
+        guard let file = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.open(file)
+    }
+
+    @objc private func openContextFileWith(_ sender: NSMenuItem) {
+        guard let urls = sender.representedObject as? [URL], urls.count == 2 else { return }
+        NSWorkspace.shared.open([urls[0]], withApplicationAt: urls[1], configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    @objc private func chooseContextFileApp(_ sender: NSMenuItem) {
+        guard let file = sender.representedObject as? URL else { return }
+        let picker = NSOpenPanel()
+        picker.directoryURL = URL(fileURLWithPath: "/Applications")
+        picker.allowedContentTypes = [.application]
+        picker.allowsMultipleSelection = false
+        picker.prompt = "Open"
+        picker.message = "Choose an application to open \"\(file.lastPathComponent)\"."
+        picker.begin { response in
+            guard response == .OK, let app = picker.url else { return }
+            NSWorkspace.shared.open([file], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+        }
+    }
+
+    @objc private func revealContextFile(_ sender: NSMenuItem) {
+        guard let file = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([file])
+    }
+
+    @objc private func copyContextFilePath(_ sender: NSMenuItem) {
+        guard let file = sender.representedObject as? URL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(file.path, forType: .string)
+    }
+
+    override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
+        super.didCloseMenu(menu, with: event)
+        contextTarget = nil
+        contextHasAttention = false
+        contextFile = nil
+        contextLighthouseLoading = nil
+        pageActions = false
+    }
+
+    @objc private func runPageAction(_ sender: NSMenuItem) {
+        guard let action = sender.representedObject as? String else { return }
+        evaluateJavaScript("window.pharosPageAction?.('\(action)')")
+    }
+
+    @objc private func copyPageLink(_ sender: Any?) {
+        guard let link = Self.shareableLink(url) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(link, forType: .string)
+    }
+
+    @objc private func toggleHighlight(_ sender: NSMenuItem) {
+        guard let reference = sender.representedObject as? String,
+              let data = try? JSONSerialization.data(withJSONObject: [reference]),
+              let json = String(data: data, encoding: .utf8) else { return }
+        evaluateJavaScript("window.pharosView?.toggleAttention(\(json)[0])")
+    }
+
+    @objc private func clearHighlights(_ sender: Any?) {
+        evaluateJavaScript("window.pharosView?.clearAttention()")
     }
 }
 
@@ -1073,6 +1365,57 @@ enum PageZoom {
     }
 }
 
+/// Bridge permission is narrower than navigation permission. Only WebKit's
+/// actual main-frame request at this application's HTTP(S) origin is trusted.
+/// Foundation-only so the native harness can exercise routing with fake effects.
+enum NativeBridgeSender {
+    enum Handler: String, CaseIterable {
+        case library = "pharosLibrary"
+        case updates = "pharosUpdates"
+        case clipboard = "pharosClipboard"
+        case menuBar = "pharosMenuBar"
+        case window = "pharosWindow"
+        case dictation = "pharosDictation"
+
+        var replies: Bool {
+            switch self {
+            case .library, .updates, .clipboard, .dictation: return true
+            case .menuBar, .window: return false
+            }
+        }
+    }
+
+    static func allows(expectedOrigin: URL, senderURL: URL?, isMainFrame: Bool) -> Bool {
+        guard isMainFrame, let senderURL,
+              let scheme = expectedOrigin.scheme, scheme == "http" || scheme == "https",
+              let host = expectedOrigin.host, !host.isEmpty,
+              expectedOrigin.port.map({ (1...65535).contains($0) }) ?? true else { return false }
+        return senderURL.scheme == scheme && senderURL.host == host && senderURL.port == expectedOrigin.port
+    }
+
+    /// Keep all effects behind this gate, including effects that finish later.
+    /// Rejections are synchronous; accepted actions own their existing replies.
+    static func dispatch(
+        name: String, expectedOrigin: URL, senderURL: URL?, isMainFrame: Bool,
+        replying: Bool, reject: (String) -> Void = { _ in }, receive: (Handler) -> Void
+    ) {
+        guard allows(expectedOrigin: expectedOrigin, senderURL: senderURL, isMainFrame: isMainFrame) else {
+            reject("Native actions must come from the Pharos app's main window document.")
+            return
+        }
+        guard let handler = Handler(rawValue: name), handler.replies == replying else {
+            reject("Unknown native message handler.")
+            return
+        }
+        receive(handler)
+    }
+}
+
+protocol ArchiveFolderPicker: AnyObject {
+    func begin(_ completion: @escaping (String?) -> Void)
+    func cancel()
+}
+
 struct ArchiveWebView: NSViewRepresentable {
     let url: URL
     let service: ArchiveService
@@ -1081,17 +1424,20 @@ struct ArchiveWebView: NSViewRepresentable {
     /// Native actions for the page. `pharosLibrary` takes {"action": "eject"};
     /// the page offers Eject only when this handler exists and otherwise says
     /// how to eject in Finder.
-    static let libraryHandler = "pharosLibrary"
-    static let updateHandler = "pharosUpdates"
+    static let libraryHandler = NativeBridgeSender.Handler.library.rawValue
+    static let updateHandler = NativeBridgeSender.Handler.updates.rawValue
+    static let dictationHandler = NativeBridgeSender.Handler.dictation.rawValue
 
     // WKWebView has no `-webkit-app-region`, so the page reports presses on
     // the app header's empty space and the window drags or zooms natively.
     // Only the app header (`body > header`) acts as the title bar; the page's
     // own <header>s, such as a workspace's heading and the drawers' and
     // panels' heads, are content, so pressing them never moves the window.
-    // The header is trimmed to `WindowChrome.titlebarHeight` so the traffic
-    // lights sit centered in it. Reserve their space from the window's left
-    // edge at every width; the web header spans the full window. In full
+    // The header is trimmed so the traffic lights sit centered on its row,
+    // and the page reports that row's center so they follow it. Reserve their
+    // space from the window's left edge at every width and zoom: the gap is
+    // in window points, divided by `--pharos-zoom` (the web view's page zoom,
+    // which `zoomScript` sets). The web header spans the full window. In full
     // screen macOS hides them, so the gap is removed. The page also reports its
     // background whenever the theme changes, so the area revealed by
     // rubber-band scrolling past either end matches it instead of showing
@@ -1100,7 +1446,7 @@ struct ArchiveWebView: NSViewRepresentable {
     (() => {
       const style = document.createElement('style');
       style.textContent = `
-        html.pharos-window body>header .bar{padding:5px 22px;padding-left:84px}
+        html.pharos-window body>header .bar{padding:5px 22px;padding-left:calc(84px / var(--pharos-zoom, 1))}
         html.pharos-window.pharos-fullscreen body>header .bar{padding-left:22px}`;
       document.head.append(style);
       document.documentElement.classList.add('pharos-window');
@@ -1118,20 +1464,80 @@ struct ArchiveWebView: NSViewRepresentable {
         if (event.target instanceof HTMLDialogElement) return !inside(box, x, y);
         return box.left <= bar.left && box.right >= bar.right && box.top <= bar.top && box.bottom >= bar.bottom;
       };
-      document.addEventListener('mousedown', event => {
+      const headerMouseEvent = event => {
         if (event.button !== 0 || !(event.target instanceof Element)) return;
         const onHeader = event.target.closest('body > header') && !event.target.closest(interactive);
         if (!onHeader && !backdropOverHeader(event)) return;
         event.preventDefault();
-        window.webkit.messageHandlers.\(windowMessageName).postMessage(event.detail === 2 ? 'doubleClick' : 'drag');
-      });
+        // Let AppKit finish its native title-bar action before the fallback.
+        if (event.type === 'mouseup') {
+          if (event.detail === 2) window.webkit.messageHandlers.\(windowMessageName).postMessage('doubleClick');
+        } else if (event.detail !== 2) {
+          window.webkit.messageHandlers.\(windowMessageName).postMessage('drag');
+        }
+      };
+      document.addEventListener('mousedown', headerMouseEvent);
+      document.addEventListener('mouseup', headerMouseEvent);
+      const header = document.querySelector('body > header');
+      if (header) {
+        const reportHeaderCenter = () => {
+          const row = (header.querySelector('.brand') || header).getBoundingClientRect();
+          window.webkit.messageHandlers.\(windowMessageName).postMessage({headerCenter: row.top + row.height / 2});
+        };
+        new ResizeObserver(reportHeaderCenter).observe(header);
+      }
       const reportBackground = () => window.webkit.messageHandlers.\(windowMessageName).postMessage({background: getComputedStyle(document.body).backgroundColor});
       new MutationObserver(reportBackground).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
       matchMedia('(prefers-color-scheme: dark)').addEventListener('change', reportBackground);
       reportBackground();
+      // The native context menu offers to highlight what was right-clicked,
+      // Open With for a local file, and the Lighthouse setting on Home.
+      document.addEventListener('contextmenu', event => {
+        const element = event.target instanceof Element ? event.target : null;
+        const target = element ? window.pharosView?.contextTarget?.(element) : null;
+        const link = element?.closest('.markdown-link[data-file-path]');
+        const file = link ? {path: link.dataset.filePath, launchable: link.dataset.fileLaunchable !== 'false'} : false;
+        const lighthouse = element?.closest('body > header .brand, body > header .tabs button[data-view="home"]');
+        const lighthouseLoading = lighthouse && typeof window.pharosLighthouseLoadingIndicator === 'function' ? window.pharosLighthouseLoadingIndicator() : null;
+        window.webkit.messageHandlers.\(windowMessageName).postMessage({contextTarget: target ?? false, contextHasAttention: window.pharosView?.hasAttention?.() === true, contextFile: file, lighthouseLoading, pageActions: typeof window.pharosPageAction === 'function'});
+      }, true);
     })();
     """
-    static let windowMessageName = "pharosWindow"
+    static let windowMessageName = NativeBridgeSender.Handler.window.rawValue
+
+    /// Sets the page's `--pharos-zoom` before it first draws; the web view
+    /// replaces it whenever the zoom changes.
+    static func zoomScript(_ zoom: Double) -> String {
+        "document.documentElement.style.setProperty('--pharos-zoom', '\(zoom)')"
+    }
+
+    final class NativeFolderPicker: ArchiveFolderPicker {
+        private let panel = NSOpenPanel()
+
+        init(purpose: String) {
+            // The purposes and messages match pickerPurposes in application.go.
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = purpose == "export"
+            panel.allowsMultipleSelection = false
+            panel.canCreateDirectories = purpose == "library"
+            switch purpose {
+            case "source":
+                panel.message = "Choose the folder that holds this tool’s conversations."
+            case "export":
+                panel.message = "Choose the export you downloaded: its ZIP, its conversations.json, or the folder it unzips to."
+            default:
+                panel.message = "Choose a Pharos library or a parent folder for a new library."
+            }
+        }
+
+        func begin(_ completion: @escaping (String?) -> Void) {
+            panel.begin { [weak self] response in
+                completion(response == .OK ? self?.panel.url?.path : nil)
+            }
+        }
+
+        func cancel() { panel.cancel(nil) }
+    }
 
     final class Coordinator: NSObject, WKScriptMessageHandlerWithReply, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate {
         let origin: URL
@@ -1140,12 +1546,40 @@ struct ArchiveWebView: NSViewRepresentable {
         weak var updates: UpdateNotice?
         private var publishedUpdateState: HeaderUpdateState?
         private var observers: [NSObjectProtocol] = []
+        /// The header row's center in CSS pixels, as the page last reported.
+        private var headerCenter: Double?
+        private var zoomUserScript: WKUserScript?
 
-        init(origin: URL) { self.origin = origin }
+        private final class PendingFolderPicker {
+            let picker: ArchiveFolderPicker
+            let reply: (Any?, String?) -> Void
+            init(picker: ArchiveFolderPicker, reply: @escaping (Any?, String?) -> Void) {
+                self.picker = picker
+                self.reply = reply
+            }
+        }
+        private let makeFolderPicker: (String) -> ArchiveFolderPicker
+        private var pendingFolderPicker: PendingFolderPicker?
+        /// Microphone sessions for the page's dictation buttons; see Dictation.swift.
+        lazy var dictation = DictationSessions(emit: { [weak self] detail in self?.publishDictation(detail) })
+
+        init(origin: URL, makeFolderPicker: @escaping (String) -> ArchiveFolderPicker = { NativeFolderPicker(purpose: $0) }) {
+            self.origin = origin
+            self.makeFolderPicker = makeFolderPicker
+        }
+
+        func cancelFolderPicker() {
+            guard let pending = pendingFolderPicker else { return }
+            // AppKit cancellation and the reply may both reenter the coordinator.
+            pendingFolderPicker = nil
+            pending.picker.cancel()
+            pending.reply(nil, nil)
+        }
 
         deinit { observers.forEach(NotificationCenter.default.removeObserver) }
 
         func observeFullScreen(of window: NSWindow) {
+            publishHeaderCenter()
             guard observers.isEmpty else { return }
             let center = NotificationCenter.default
             // Drop the traffic-light gap once they hide, and restore it before
@@ -1156,6 +1590,28 @@ struct ArchiveWebView: NSViewRepresentable {
                     self?.setFullScreenClass(fullScreen)
                 })
             }
+        }
+
+        /// Keeps the page's `--pharos-zoom` and the traffic lights in step
+        /// with the web view's page zoom.
+        func pageZoomChanged() {
+            guard let webView else { return }
+            let controller = webView.configuration.userContentController
+            let zoomScript = WKUserScript(source: ArchiveWebView.zoomScript(webView.pageZoom), injectionTime: .atDocumentStart, forMainFrameOnly: true)
+            let others = controller.userScripts.filter { $0 !== zoomUserScript }
+            controller.removeAllUserScripts()
+            (others + [zoomScript]).forEach(controller.addUserScript)
+            zoomUserScript = zoomScript
+            webView.evaluateJavaScript(ArchiveWebView.zoomScript(webView.pageZoom))
+            publishHeaderCenter()
+        }
+
+        private func publishHeaderCenter() {
+            guard let webView, let window = webView.window, let headerCenter else { return }
+            NotificationCenter.default.post(
+                name: WindowChrome.headerCenterDidChange, object: window,
+                userInfo: [WindowChrome.centerKey: CGFloat(headerCenter) * webView.pageZoom]
+            )
         }
 
         func setFullScreenClass(_ fullScreen: Bool) {
@@ -1169,6 +1625,8 @@ struct ArchiveWebView: NSViewRepresentable {
         private var navigations = 0
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            cancelFolderPicker()
+            dictation.cancelAll()
             navigations += 1
         }
         static let loadRetries = 4
@@ -1186,7 +1644,21 @@ struct ArchiveWebView: NSViewRepresentable {
             loadFailed(webView, error: error)
         }
 
+        private func noteFailure(_ message: String, page: URL?) {
+            guard let service else { return }
+            service.unreportedPageFailures = Array((service.unreportedPageFailures + [["kind": "webkit", "message": message, "page": page?.path ?? ""]]).suffix(10))
+        }
+
+        private func reportFailures(_ webView: WKWebView) {
+            guard let service, !service.unreportedPageFailures.isEmpty, let data = try? JSONSerialization.data(withJSONObject: service.unreportedPageFailures),
+                  let events = String(data: data, encoding: .utf8) else { return }
+            service.unreportedPageFailures = []
+            webView.evaluateJavaScript("window.pharosReportEvents?.(\(events))")
+        }
+
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            cancelFolderPicker()
+            noteFailure("The page's web process stopped unexpectedly (WebKit web content process terminated).", page: webView.url)
             if repeatedFailure(webView, reason: "The page stopped unexpectedly.") { return }
             loadFailed(webView, error: nil)
         }
@@ -1238,6 +1710,7 @@ struct ArchiveWebView: NSViewRepresentable {
                 return url
             }
             let target = servicePage(nsError?.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? servicePage(webView.url) ?? origin
+            if let nsError { noteFailure("The page did not load: \(nsError.localizedDescription) (\(nsError.domain) \(nsError.code)).", page: target) }
             failedLoads += 1
             let attempt = failedLoads
             let navigation = navigations
@@ -1260,6 +1733,7 @@ struct ArchiveWebView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             failedLoads = 0
             service?.pageLoading = false
+            reportFailures(webView)
             setFullScreenClass(webView.window?.styleMask.contains(.fullScreen) == true)
             service?.menuBar.navigationFinished()
             publishedUpdateState = nil
@@ -1276,31 +1750,51 @@ struct ArchiveWebView: NSViewRepresentable {
             webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('pharos:app-update', {detail: \(json)}))")
         }
 
+        func publishDictation(_ detail: [String: Any]) {
+            guard let webView, let page = webView.url,
+                  page.scheme == origin.scheme, page.host == origin.host, page.port == origin.port,
+                  let data = try? JSONSerialization.data(withJSONObject: detail),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('pharos:dictation', {detail: \(json)}))")
+        }
+
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard let webView else { return }
-            if message.name == "pharosMenuBar" {
-                guard message.frameInfo.isMainFrame, let page = message.frameInfo.request.url,
-                      page.scheme == origin.scheme, page.host == origin.host, page.port == origin.port,
-                      let settings = message.body as? [String: Any] else { return }
-                if settings["refreshUsage"] as? Bool == true { service?.menuBar.invalidateUsage(); return }
-                service?.menuBar.applyPreferences(settings)
-                return
-            }
-            if let background = (message.body as? [String: Any])?["background"] as? String {
-                if let color = Self.color(css: background) { webView.underPageBackgroundColor = color }
-                return
-            }
-            guard let window = webView.window, let action = message.body as? String else { return }
-            switch action {
-            case "drag":
-                if let event = webView.lastMouseDown { window.performDrag(with: event) }
-            case "doubleClick":
-                switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
-                case "Minimize": window.performMiniaturize(nil)
-                case "None": break
-                default: window.performZoom(nil)
+            NativeBridgeSender.dispatch(
+                name: message.name, expectedOrigin: origin, senderURL: message.frameInfo.request.url,
+                isMainFrame: message.frameInfo.isMainFrame, replying: false
+            ) { handler in
+                guard let webView else { return }
+                if handler == .menuBar {
+                    guard let settings = message.body as? [String: Any] else { return }
+                    if settings["refreshUsage"] as? Bool == true { service?.menuBar.invalidateUsage(); return }
+                    service?.menuBar.applyPreferences(settings)
+                    return
                 }
-            default: break
+                if let body = message.body as? [String: Any], body.keys.contains("contextTarget") {
+                    webView.contextTarget = ArchiveWKWebView.ContextTarget(body["contextTarget"])
+                    webView.contextHasAttention = body["contextHasAttention"] as? Bool == true
+                    webView.contextFile = ArchiveWKWebView.ContextFile(body["contextFile"])
+                    webView.contextLighthouseLoading = body["lighthouseLoading"] as? Bool
+                    webView.pageActions = body["pageActions"] as? Bool == true
+                    return
+                }
+                if let center = (message.body as? [String: Any])?["headerCenter"] as? Double {
+                    headerCenter = center
+                    publishHeaderCenter()
+                    return
+                }
+                if let background = (message.body as? [String: Any])?["background"] as? String {
+                    if let color = Self.color(css: background) { webView.underPageBackgroundColor = color }
+                    return
+                }
+                guard let window = webView.window, let action = message.body as? String else { return }
+                switch action {
+                case "drag":
+                    if let event = webView.lastMouseDown { window.performDrag(with: event) }
+                case "doubleClick":
+                    webView.performHeaderDoubleClick()
+                default: break
+                }
             }
         }
 
@@ -1323,54 +1817,62 @@ struct ArchiveWebView: NSViewRepresentable {
             didReceive message: WKScriptMessage,
             replyHandler: @escaping (Any?, String?) -> Void
         ) {
-            if message.name == ArchiveWebView.updateHandler {
-                guard message.frameInfo.isMainFrame, let page = message.frameInfo.request.url,
-                      page.scheme == origin.scheme, page.host == origin.host, page.port == origin.port,
-                      let updates else {
-                    replyHandler(nil, "Updates are available only from the Pharos app."); return
-                }
-                switch (message.body as? [String: Any])?["action"] as? String {
-                case "status": replyHandler(updates.headerState.dictionary, nil)
-                case "install":
-                    guard updates.installFromHeader() else {
-                        replyHandler(nil, "This update is no longer ready. Use Check for Updates in the Pharos menu."); return
+            NativeBridgeSender.dispatch(
+                name: message.name, expectedOrigin: origin, senderURL: message.frameInfo.request.url,
+                isMainFrame: message.frameInfo.isMainFrame, replying: true,
+                reject: { replyHandler(nil, $0) }
+            ) { handler in
+                switch handler {
+                case .updates:
+                    guard let updates else {
+                        replyHandler(nil, "Updates are available only from the Pharos app."); return
                     }
-                    replyHandler(updates.headerState.dictionary, nil)
-                default: replyHandler(nil, "Unknown update action.")
+                    switch (message.body as? [String: Any])?["action"] as? String {
+                    case "status": replyHandler(updates.headerState.dictionary, nil)
+                    case "install":
+                        guard updates.installFromHeader() else {
+                            replyHandler(nil, "This update is no longer ready. Use Check for Updates in the Pharos menu."); return
+                        }
+                        replyHandler(updates.headerState.dictionary, nil)
+                    default: replyHandler(nil, "Unknown update action.")
+                    }
+                case .library:
+                    library(message.body, replyHandler: replyHandler)
+                case .dictation:
+                    dictation.handle(message.body, reply: replyHandler)
+                case .clipboard:
+                    guard let text = message.body as? String else {
+                        replyHandler(nil, "Clipboard content must be text.")
+                        return
+                    }
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    if pasteboard.setString(text, forType: .string) {
+                        replyHandler(true, nil)
+                    } else {
+                        replyHandler(nil, "Could not write to the system clipboard.")
+                    }
+                case .menuBar, .window:
+                    // These names are registered only for one-way messages.
+                    break
                 }
-                return
-            }
-            if message.name == ArchiveWebView.libraryHandler {
-                guard message.frameInfo.isMainFrame, let page = message.frameInfo.request.url,
-                      page.scheme == origin.scheme, page.host == origin.host, page.port == origin.port else {
-                    replyHandler(nil, "Library actions must come from the Pharos window.")
-                    return
-                }
-                library(message.body, replyHandler: replyHandler)
-                return
-            }
-            guard let text = message.body as? String else {
-                replyHandler(nil, "Clipboard content must be text.")
-                return
-            }
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            if pasteboard.setString(text, forType: .string) {
-                replyHandler(true, nil)
-            } else {
-                replyHandler(nil, "Could not write to the system clipboard.")
             }
         }
 
-        private func library(_ body: Any, replyHandler: @escaping (Any?, String?) -> Void) {
+        func library(_ body: Any, replyHandler: @escaping (Any?, String?) -> Void) {
             if let object = body as? [String: Any], object["action"] as? String == "chooseFolder" {
-                let picker = NSOpenPanel()
-                picker.canChooseDirectories = true
-                picker.canChooseFiles = false
-                picker.allowsMultipleSelection = false
-                picker.canCreateDirectories = true
-                picker.message = "Choose a Pharos library or a parent folder for a new library."
-                picker.begin { response in replyHandler(response == .OK ? picker.url?.path : nil, nil) }
+                guard pendingFolderPicker == nil else {
+                    replyHandler(nil, "A folder picker is already open. Finish or cancel it before choosing another folder.")
+                    return
+                }
+                let purpose = object["purpose"] as? String ?? "library"
+                let pending = PendingFolderPicker(picker: makeFolderPicker(purpose), reply: replyHandler)
+                pendingFolderPicker = pending
+                pending.picker.begin { [weak self, weak pending] path in
+                    guard let self, let pending, self.pendingFolderPicker === pending else { return }
+                    self.pendingFolderPicker = nil
+                    pending.reply(path, nil)
+                }
                 return
             }
             guard (body as? [String: Any])?["action"] as? String == "eject" else {
@@ -1405,7 +1907,7 @@ struct ArchiveWebView: NSViewRepresentable {
             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
         ) {
             guard let url = navigationAction.request.url, !isArchivePage(url) else {
-                // A link with a `download` attribute, such as a conversation's Share.
+                // A link with a `download` attribute.
                 decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
                 return
             }
@@ -1505,6 +2007,11 @@ struct ArchiveWebView: NSViewRepresentable {
             contentWorld: .page,
             name: Self.updateHandler
         )
+        configuration.userContentController.addScriptMessageHandler(
+            context.coordinator,
+            contentWorld: .page,
+            name: Self.dictationHandler
+        )
         configuration.userContentController.add(context.coordinator, name: Self.windowMessageName)
         configuration.userContentController.add(context.coordinator, name: "pharosMenuBar")
         configuration.userContentController.addUserScript(
@@ -1514,6 +2021,8 @@ struct ArchiveWebView: NSViewRepresentable {
         context.coordinator.webView = view
         service.menuBar.webView = view
         view.pageZoom = service.pageZoom
+        view.onPageZoom = { [weak coordinator = context.coordinator] in coordinator?.pageZoomChanged() }
+        context.coordinator.pageZoomChanged()
         view.onZoomIn = { [weak service] in service?.zoomPage(1) }
         view.onMoveToWindow = { [weak coordinator = context.coordinator] in coordinator?.observeFullScreen(of: $0) }
         view.uiDelegate = context.coordinator
@@ -1530,7 +2039,10 @@ struct ArchiveWebView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ view: ArchiveWKWebView, coordinator: Coordinator) {
+        coordinator.cancelFolderPicker()
+        coordinator.dictation.cancelAll()
         view.configuration.userContentController.removeScriptMessageHandler(forName: updateHandler, contentWorld: .page)
+        view.configuration.userContentController.removeScriptMessageHandler(forName: dictationHandler, contentWorld: .page)
         view.configuration.userContentController.removeScriptMessageHandler(forName: windowMessageName)
         view.configuration.userContentController.removeScriptMessageHandler(forName: "pharosMenuBar")
         view.configuration.userContentController.removeScriptMessageHandler(

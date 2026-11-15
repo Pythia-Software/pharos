@@ -94,41 +94,32 @@ func TestImportAgentEventsChecksMessagesAndRanges(t *testing.T) {
 		t.Fatalf("message events = %d, %v", events, err)
 	}
 
-	// The live reader gets the message's events at the threshold, with ranges
-	// in UTF-16 code units (the ’ is three bytes and one unit); a shared
-	// export gets none.
-	for _, clip := range []bool{true, false} {
-		conversation, err := catalog.workConversation("w", "c", clip)
-		if err != nil {
-			t.Fatal(err)
+	// The reader gets the message's events at the threshold, with ranges in
+	// UTF-16 code units (the ’ is three bytes and one unit).
+	conversation, err := catalog.WorkConversation("w", "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]any
+	for _, message := range conversation["messages"].([]map[string]any) {
+		if message["id"] == "m1" && message["agent_events"] != nil {
+			got = message["agent_events"].([]map[string]any)
 		}
-		var got []map[string]any
-		for _, message := range conversation["messages"].([]map[string]any) {
-			if message["id"] == "m1" && message["agent_events"] != nil {
-				got = message["agent_events"].([]map[string]any)
-			}
-		}
-		if !clip {
-			if got != nil || conversation["agent_events"] != nil {
-				t.Fatalf("a shared export carries events: %v", got)
-			}
-			continue
-		}
-		start := len([]rune(text[:first+1])) // every character here is one UTF-16 unit
-		end := len([]rune(text))
-		if len(got) != 1 || got[0]["kind"] != "workaround" || got[0]["sentence"] != [2]int{start, end} ||
-			!reflect.DeepEqual(got[0]["subject"], [][2]int{{0, start - 1}}) || got[0]["group"] != "Choices you may not see" {
-			t.Fatalf("reader events = %v", got)
-		}
-		if summary, _ := conversation["agent_events"].(map[string]any); summary["messages_read"] != 1 || summary["messages_with_events"] != 1 {
-			t.Fatalf("reader summary = %v", conversation["agent_events"])
-		}
+	}
+	start := len([]rune(text[:first+1])) // every character here is one UTF-16 unit
+	end := len([]rune(text))
+	if len(got) != 1 || got[0]["kind"] != "workaround" || got[0]["sentence"] != [2]int{start, end} ||
+		!reflect.DeepEqual(got[0]["subject"], [][2]int{{0, start - 1}}) || got[0]["group"] != "Choices you may not see" {
+		t.Fatalf("reader events = %v", got)
+	}
+	if summary, _ := conversation["agent_events"].(map[string]any); summary["messages_read"] != 1 || summary["messages_with_events"] != 1 {
+		t.Fatalf("reader summary = %v", conversation["agent_events"])
 	}
 
 	// The reader leaves out an event whose sentence is no longer where it was
 	// found.
 	execTx(t, catalog.DB, `UPDATE agent_events SET sentence='Something else entirely.' WHERE message_id='m1'`)
-	conversation, err := catalog.workConversation("w", "c", true)
+	conversation, err = catalog.WorkConversation("w", "c")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,6 +257,17 @@ func TestAgentEventKindsAgreeEverywhere(t *testing.T) {
 	if stored, err := os.ReadFile(path); err != nil || string(stored) != string(data) {
 		t.Fatalf("%s is not agentEventFamilies; run with PHAROS_UPDATE_AGENT_EVENT_KINDS=1 (%v)", path, err)
 	}
+	for _, name := range []string{"agent_events", "agent_event_rates"} {
+		agentEventSchemaKindsAgree(t, name, want.Groups, func(yield func(key, label string)) {
+			for _, k := range want.Kinds {
+				yield(k.Key, k.Label)
+			}
+		})
+	}
+}
+
+func agentEventSchemaKindsAgree(t *testing.T, name string, groups []string, kinds func(func(key, label string))) {
+	t.Helper()
 	var schema struct {
 		Fields []struct {
 			Name   string `json:"name"`
@@ -276,10 +278,11 @@ func TestAgentEventKindsAgreeEverywhere(t *testing.T) {
 			} `json:"filter"`
 		} `json:"fields"`
 	}
-	raw, err := os.ReadFile(filepath.Join("..", "..", "schemas", "agent_events.schema.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "schemas", name+".schema.json"))
 	if err != nil || json.Unmarshal(raw, &schema) != nil {
-		t.Fatalf("read the schema: %v", err)
+		t.Fatalf("read the %s schema: %v", name, err)
 	}
+	seen := 0
 	for _, field := range schema.Fields {
 		var got, expected []string
 		for _, option := range field.Filter.Values.Options {
@@ -287,18 +290,20 @@ func TestAgentEventKindsAgreeEverywhere(t *testing.T) {
 		}
 		switch field.Name {
 		case "family":
-			for _, k := range want.Kinds {
-				expected = append(expected, k.Key+"="+k.Label)
-			}
+			kinds(func(key, label string) { expected = append(expected, key+"="+label) })
 		case "family_group":
-			for _, group := range want.Groups {
+			for _, group := range groups {
 				expected = append(expected, group+"="+group)
 			}
 		default:
 			continue
 		}
+		seen++
 		if !slices.Equal(got, expected) {
-			t.Errorf("schema %s options %v, want %v", field.Name, got, expected)
+			t.Errorf("%s schema %s options %v, want %v", name, field.Name, got, expected)
 		}
+	}
+	if seen != 2 {
+		t.Errorf("%s schema has %d of its kind and group fields", name, seen)
 	}
 }

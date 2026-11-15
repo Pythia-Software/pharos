@@ -17,9 +17,10 @@ import (
 // Manifest is a model directory's manifest.json, the parts the labeler reads
 // (docs/local-labeler.md, "The model artifact").
 type Manifest struct {
-	Name            string `json:"name"`
-	BaseModel       string `json:"base_model"`
-	FramingContract string `json:"framing_contract"`
+	MLX             *MLXArtifact `json:"mlx,omitempty"`
+	Name            string       `json:"name"`
+	BaseModel       string       `json:"base_model"`
+	FramingContract string       `json:"framing_contract"`
 	// InputContract names the model's inputs and how they are made
 	// (InputContracts). Exports before the field (kestrel-68m) are
 	// ids-attention-v1.
@@ -67,6 +68,7 @@ type Manifest struct {
 // file and SHA-256, the tokenizer, and the decision rule's tables.
 type Model struct {
 	Dir, Variant, Path string
+	MLXPath            string // verified companion, when the selected variant is FP32
 	// SHA256 is the model file's, TokenizerSHA256 the tokenizer's: together
 	// with the framing contract they identify what produced a label.
 	SHA256, TokenizerSHA256 string
@@ -193,6 +195,9 @@ func LoadFramedModel(dir, variant string, framing Framing) (*Model, error) {
 	if m.SHA256, err = verifyFile(m.Path, man.SHA256[file]); err != nil {
 		return nil, err
 	}
+	if _, m.MLXPath, err = VerifyMLX(m.Path, m.SHA256); err != nil {
+		return nil, err
+	}
 	tokenizerFile := man.Files["tokenizer"]
 	if tokenizerFile == "" {
 		tokenizerFile = "tokenizer.json"
@@ -249,8 +254,10 @@ const (
 
 // InputContracts are the input contracts this build implements.
 var InputContracts = map[string]InputContract{
-	InputContractIDsAttention:     {Inputs: DefaultInputs, PadMultiple: PadMultiple},
-	InputContractIDsAttentionPool: {Inputs: append(slices.Clone(DefaultInputs), InputSpec{Name: "pooling_mask", Role: RolePool}), PadMultiple: PadMultiple},
+	InputContractIDsAttention: {Inputs: DefaultInputs, PadMultiple: PadMultiple},
+	// Token labels (tokenlabels.go): the same inputs; the output is per token.
+	InputContractIDsAttentionTokenLabels: {Inputs: DefaultInputs, PadMultiple: PadMultiple},
+	InputContractIDsAttentionPool:        {Inputs: append(slices.Clone(DefaultInputs), InputSpec{Name: "pooling_mask", Role: RolePool}), PadMultiple: PadMultiple},
 	InputContractIDsAttentionPoolSegments: {Inputs: append(slices.Clone(DefaultInputs), InputSpec{Name: "pooling_mask", Role: RolePool},
 		InputSpec{Name: "segment_ids", Role: RoleSegment}), PadMultiple: PadMultiple},
 }

@@ -1,3 +1,73 @@
+# Freshness icon comparison
+
+Open [freshness-icons.html](freshness-icons.html) directly in a browser. This
+self-contained guide compares the original PR glyph with five alternatives
+drawn to [the interface icon standard](../iconography.md): a plain clock, clock
+with status mark, single gap to now, existing history symbol, and database with
+clock. All examples use simulated data; the reference is the original code-rendered
+glyph, not a photograph.
+
+Choose a direction to compare it with the reference in header and card contexts.
+Switch the freshness state, light/dark theme, matrix size (14–18px), and monochrome
+mode. The guide also shows hover, selected and disabled treatments, both surface
+colors, and the selected SVG source. Click a preview icon for example status
+details. Choices can be shared in the URL query string. This study does not change
+processing behavior. The approved database clock is also implemented in the app.
+
+The database-clock direction is selected by default. Its face fills clockwise as
+a pie on a 12-hour scale: 3h is a quarter, 6h a half, and 9h three quarters. At
+12h+ it stays full; exact age remains in the status text. Up-to-date data gets a
+checkmark instead of the clock. Unknown and missing states retain the database
+with unfilled question and dash badges. The enlarged sequence includes the
+earlier database-clock reference next to the new states. Only the quantitative
+pie is filled; the rest follows the repo's outline icon rules.
+
+# Analysis readiness prototype review
+
+Open [analysis-readiness.html](analysis-readiness.html), or run
+`python3 -m http.server ${CONDUCTOR_PORT:-8000} --bind 127.0.0.1 --directory docs/mocks`
+from the repository root. The prototype works offline with its adjacent CSS,
+model and UI scripts. Data, time, progress and resource capacities are simulated.
+
+Study 03 uses a nav freshness button and one icon on each result. Severity
+changes the icon's emphasis; hover or keyboard focus provides the one-sentence
+explanation. Try minutes, hours, days and Up to date in the example picker.
+
+- **Analysis page:** switch Chart/Table or add a Message label breakdown. The
+  breakdown adds label dependencies to the same writing result.
+- **Empty state:** see counts and progress for each prerequisite.
+- **Dashboard:** compare the card icons with the header. **Show only Tool calls**
+  removes writing/label dependencies from the header summary.
+- **Status modal:** read the gap, source-check interval and prerequisite progress.
+  It only explains status. **Update settings** opens the full
+  settings view, highlighting the relevant stage.
+- **Processing map:** click **View processing map** in the modal, or **Processing
+  map** in the sidebar. The direct link [#map-all](analysis-readiness.html#map-all)
+  opens the interactive graph immediately. Select nodes to inspect triggers,
+  gates, tasks and proposed CPU/GPU pools. Switch **This view / All processing**;
+  scroll larger graphs or view/copy the generated diagram text. The modal’s
+  **Preview example** picker updates the map in place, retaining its scope,
+  selected node and scroll position. The same picker updates the status modal;
+  Settings uses the page picker. The selected state is preserved on reload and
+  can be linked directly, for example `?state=cpu#map-all`.
+- **Settings:** the same snapshot shows the workload, other-library resource
+  holders, available capacity, automatic mode and analysis progress. All schedule
+  controls and **Update now** live here. A request includes unfinished analysis
+  across the library, including work outside the selected result. One-time
+  requests preserve paused/manual mode and still respect resource limits.
+- **Simulation:** in Settings, start a stage, report progress and finish it using
+  the separately marked prototype controls. Unknown totals use indeterminate
+  bars. **Finish competing work** rehearses contention; **New messages found**
+  demonstrates new work arriving during a run.
+- **New results ready; old results still shown:** return to the analysis page and choose
+  **Refresh these results**. Processing completion alone does not change
+  the receipt of the data already on screen. **Up to date** shows the last check time; activity since that check may not yet be included.
+
+The [contract proposal](../handoffs/analysis-readiness-contract.md) describes the
+existing server ledger/status stream, query-result receipts, scope registration,
+publication races and which graph capabilities are proposed. Production code,
+API contracts and dependency packages are unchanged by this experiment.
+
 # Onboarding prototype review
 
 Open [onboarding.html](onboarding.html) in a browser. The file is self-contained:

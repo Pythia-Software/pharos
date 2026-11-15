@@ -1,0 +1,85 @@
+.reader-navigator-host{position:relative;top:0;z-index:6;background:var(--bg);border-block:1px solid var(--line);isolation:isolate;transform:translateZ(0)}
+.reader-navigator-host:has(.reader-navigator-bars){position:sticky}
+.reader-navigator{position:relative;padding:7px var(--workspace-page-gutter,16px);font-size:var(--fs-xs);--navigator-label:190px}
+.reader-navigator-label{font-size:10px;color:var(--muted);white-space:nowrap}
+.reader-navigator-bars{position:relative}
+.reader-navigator-row{display:grid;grid-template-columns:var(--navigator-label) minmax(0,1fr);align-items:center;min-height:26px;gap:0}
+.reader-navigator-track{height:24px;position:relative;min-width:0;background:var(--panel);border-bottom:1px solid var(--line);overflow:hidden}
+.reader-navigator-row.is-turns{min-height:18px}
+.reader-navigator-turns{height:16px;background:transparent}
+.reader-navigator-turns.reader-navigator-context{height:24px}
+.reader-navigator-timeline{height:34px;cursor:pointer}
+.reader-navigator-timeline .lt-session-ribbon{height:34px;width:100%;margin-right:0}
+.reader-navigator-keyboard{position:absolute;inset:0;pointer-events:none;background:transparent;border:0;padding:0}
+.reader-navigator-keyboard:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+.reader-navigator-window-track{position:absolute;inset:-4px 0 -4px var(--navigator-label);pointer-events:none;overflow:hidden}
+.reader-navigator-window,.reader-navigator-boundary{position:absolute;inset:0;width:100%;transform-origin:left;will-change:transform;pointer-events:none}
+.reader-navigator-window{box-sizing:border-box;border-block:2px solid var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.reader-navigator-boundary{border-left:2px solid var(--accent);box-sizing:border-box}
+.reader-navigator-window[hidden],.reader-navigator-boundary[hidden]{display:none}
+.reader-navigator-turn,.reader-navigator-context .token-marker{position:absolute;top:0;bottom:0;min-width:3px;padding:0;border:0;border-radius:0}
+.reader-navigator-turn{background:transparent;color:var(--heat-1);font:9px var(--sans);overflow:hidden;text-align:left}
+/* Context profiles retain their pointer targets. Turn edges and numbers sit
+ * above them, while the transparent rest of each turn sits underneath. */
+.reader-navigator-turn::before{content:'';position:absolute;inset:0 auto 0 0;border-left:2px solid currentColor;z-index:2}
+.reader-navigator-turn>span{position:relative;z-index:2;display:block;width:max-content;padding-left:6px;text-shadow:0 1px 2px var(--bg),0 -1px 2px var(--bg)}
+.reader-navigator-turn:hover{color:var(--ink)}
+.reader-navigator-turn:focus-visible{z-index:3;outline:2px solid var(--focus-ring);outline-offset:-2px}
+.reader-navigator-context .token-marker{z-index:1;background:transparent;clip-path:var(--context-profile)}
+.reader-navigator-context .token-marker::before{content:'';position:absolute;inset:0;background:var(--token-color);opacity:.7;pointer-events:none}
+.reader-navigator-context .compaction-marker{width:2px!important}
+.reader-navigator-context .token-marker:hover,.reader-navigator-context .token-marker:focus-visible{outline:1px solid var(--ink);outline-offset:-1px}
+.reader-navigator-track>small{display:block;color:var(--muted);font-size:10px;padding:5px}
+.reader-navigator-note{display:block;font-size:10px;color:var(--muted);margin-top:4px}
+/* The context bar's explanation floats over the transcript while the bar is
+ * hovered or focused, so it neither takes a row nor moves the sticky rail. */
+.reader-navigator-context-note{display:none;position:absolute;top:calc(100% + 2px);left:calc(var(--workspace-page-gutter,16px) + var(--navigator-label));max-width:calc(100% - 2 * var(--workspace-page-gutter,16px) - var(--navigator-label));box-sizing:border-box;padding:4px 8px;font-size:10px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;box-shadow:0 4px 12px rgb(0 0 0/.25);pointer-events:none}
+.reader-navigator:has(.reader-navigator-context:hover,.reader-navigator-context :focus-visible) .reader-navigator-context-note{display:block}
+@media(max-width:580px){.reader-navigator{--navigator-label:110px;padding:5px 8px}.reader-navigator-context-note{left:8px;max-width:calc(100% - 16px)}}
+
+/* Expand the same session, message-mode, event and tool hierarchy as Timeline. */
+.reader-section-node>summary,.reader-section-leaf,.reader-navigator-timeline-disclosure>summary{display:grid;grid-template-columns:var(--navigator-label) minmax(0,1fr);align-items:center;list-style:none;min-height:28px}
+.reader-section-node>summary::-webkit-details-marker,.reader-navigator-timeline-disclosure>summary::-webkit-details-marker{display:none}
+.reader-section-node>summary,.reader-navigator-timeline-disclosure>summary{cursor:pointer}
+.reader-section-label{box-sizing:border-box;display:flex;align-items:center;min-width:0;min-height:22px;gap:3px;padding-right:8px;font-size:10px;color:var(--muted)}
+.reader-section-label>strong{font:inherit;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reader-section-label>small{margin-left:auto;font:9px ui-monospace,monospace;flex:none}
+.reader-section-label>.app-icon{width:11px;height:11px;flex:none}
+.reader-section-label>i{height:6px;width:6px;flex:none}
+.reader-section-chevron{flex:none;width:12px;height:12px;margin-left:auto;transition:transform .16s;fill:none;stroke:currentColor;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;opacity:.65}
+.reader-section-label>small+.reader-section-chevron{margin-left:0}
+:is(.reader-section-node,.reader-navigator-timeline-disclosure)[open]>summary .reader-section-chevron{transform:rotate(90deg)}
+.reader-section-track{display:block;min-width:0;height:28px;cursor:pointer;background:var(--panel);border-bottom:1px solid var(--line)}
+.reader-section-track .lt-session-ribbon{height:28px;width:100%}
+/* Human events: a marker per engagement annotation, placed by humanEventPlacement (x in its message's slot, y in a lane); folded out, a row per dimension. */
+.reader-human-track{position:relative;overflow:hidden;cursor:default}
+.reader-human-event{position:absolute;display:grid;place-items:center;width:10px;height:10px;margin:-5px 0 0 -5px;padding:0;border:0;background:none;cursor:pointer}
+.reader-human-event:is(:hover,:focus-visible){z-index:1}
+.reader-human-event:is(:hover,:focus-visible) .eng-glyph{filter:brightness(1.3)}
+.reader-section-label>i.eng-glyph{width:10px;height:10px}
+/* The size of an agent event's marker on its row: a 7px box, the letter's capital height filling it. */
+.reader-human-track .eng-glyph{width:7px;height:7px;font-size:9.5px;overflow:visible}
+.human-event-card blockquote{border-left-color:var(--eng-hue)}
+.reader-turn-card>small{display:block;margin-top:6px;color:var(--muted)}
+
+/* The workspace Timeline's lanes (LaneHumanEvents, label-session-ribbon.tsx) draw the same markers on their own rows. */
+.lt-human-track{display:block;position:relative;min-width:0;height:28px;overflow:hidden;border-bottom:1px solid var(--line)}
+.lt-human-events>summary .lt-session-row-label .app-icon:first-child{color:var(--muted)}
+.lt-human-dimension .lt-session-row-label>i.eng-glyph{width:10px;height:10px;background:none}
+a.reader-human-event{text-decoration:none}
+.reader-navigator-row.is-voice{min-height:22px}
+.reader-voice-control{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden}
+.reader-voice-control small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums;color:var(--muted)}
+.reader-voice-play{font:inherit;font-size:10px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:0 7px;cursor:pointer;white-space:nowrap}
+.reader-voice-play:hover,.reader-voice-play[aria-pressed=true]{color:var(--voice);border-color:var(--voice)}
+/* The voice tape is red, apart from the yellow of the timeline above it:
+ * your lines in the upper lane, replies in the lower. */
+.reader-navigator-voice{height:20px;background:transparent;--voice:#e5686b}
+.reader-navigator-row.is-voice{--voice:#e5686b}
+.reader-voice-line{position:absolute;top:1px;height:8px;min-width:3px;padding:0;border:0;border-radius:1px;background:color-mix(in srgb,var(--voice) 45%,transparent);cursor:pointer;box-sizing:border-box}
+.reader-voice-line.is-assistant{top:11px;background:color-mix(in srgb,var(--voice) 28%,transparent)}
+.reader-voice-line.is-recorded{background:color-mix(in srgb,var(--voice) 75%,transparent)}
+.reader-voice-line.is-estimated{opacity:.6}
+.reader-voice-line:hover{background:var(--ink)}
+.reader-voice-line.is-current,.reader-voice-line.is-sounding{background:var(--voice);outline:1px solid var(--ink);z-index:1}
+.reader-voice-line:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-1px;z-index:2}

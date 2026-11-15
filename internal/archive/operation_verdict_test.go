@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 func runningView(kind string, change func(*opView)) opView {
@@ -87,6 +90,30 @@ func TestEjectVerdictErrsTowardNotSafe(t *testing.T) {
 	}
 	if left := unnamedLocks(locks, []opView{runningView("backup.local", nil)}, nil); len(left) != 2 {
 		t.Fatalf("a backup does not take the exclusive locks: %+v", left)
+	}
+}
+
+// An update stops this process's work, as an eject does, but leaves the
+// drive mounted: another process's work does not hold it, and work that
+// stops at its next safe point lets it go ahead.
+func TestUpdateRefusesOnlyWorkItWouldInterrupt(t *testing.T) {
+	terminal := leaseProbe{Path: "/x/a.json", Live: true, Info: &leaseInfo{Instance: "a", Process: "cli:capture", Kinds: []string{"capture.cli"}, Holds: resolveHolds(parseHolds("D:w"))}}
+	foreign := runningView("index.captures", func(view *opView) { view.Foreign, view.SafePoint, view.SafePointSet = true, time.Minute, true })
+	for _, test := range []struct {
+		name, refusal string
+		in            verdictInput
+	}{
+		{"nothing", "", verdictInput{}},
+		{"a batch writer", "", verdictInput{ops: []opView{runningView("index.changes.manual", nil)}}},
+		{"another process", "", verdictInput{ops: []opView{foreign}, leases: []leaseProbe{terminal}, locks: []heldLock{{Kind: "capture", Path: "/c/.capture.lock"}}}},
+		{"a step-latency writer", "waits for prepare the catalog", verdictInput{ops: []opView{runningView("catalog.initialize", nil)}}},
+		{"a broker operation", "waits for copy library", verdictInput{ops: []opView{runningView("library.transfer", func(view *opView) { view.Spec.Variant = "copy" })}}},
+		{"unregistered work", "waits for indexing sources", verdictInput{unregistered: []string{"Indexing sources"}}},
+	} {
+		got := updateRefusal(computeEjectVerdict(updateInputs(test.in)))
+		if test.refusal == "" && got != "" || test.refusal != "" && !strings.Contains(got, test.refusal) {
+			t.Errorf("%s: %q; want %q", test.name, got, test.refusal)
+		}
 	}
 }
 
@@ -171,6 +198,62 @@ func TestFreshLockScanTreatsReadErrorsAsUnsafe(t *testing.T) {
 		if verdict := computeEjectVerdict(verdictInput{scanErrors: failures, fresh: true}); verdict.Verdict != verdictUnsafe || verdict.Checked != "fresh" {
 			t.Fatalf("verdict with an unreadable %s: %+v", path, verdict)
 		}
+	}
+	// Probes open existing lock files only: the source's missing index lock
+	// is not held, and the scan creates none.
+	index := filepath.Join(source, indexLockName)
+	scans, probes := lockScans.Load(), lockProbes.Load()
+	heldCaptureLocks(root)
+	if lockScans.Load()-scans != 1 || lockProbes.Load()-probes != 2 {
+		t.Fatalf("one scan counted %d scans, %d probes", lockScans.Load()-scans, lockProbes.Load()-probes)
+	}
+	if _, err := os.Stat(index); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the scan created %s: %v", index, err)
+	}
+	// Another process's lease is held, not a failure; its close frees it.
+	holder, err := fileLease(lock, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held, failures := heldCaptureLocks(root); len(held) != 1 || held[0].Path != lock || len(failures) != 0 {
+		t.Fatalf("a held capture lock: %v %v", held, failures)
+	}
+	holder.Close()
+	if held, failures := heldCaptureLocks(root); len(held) != 0 || len(failures) != 0 {
+		t.Fatalf("a released capture lock: %v %v", held, failures)
+	}
+	// Only contention is a held lock. A lock the probe cannot take for any
+	// other reason, a platform without locks included, is unsafe: the scan
+	// never takes it for free.
+	for _, tc := range leaseLockFailures() {
+		t.Run(tc.name, func(t *testing.T) {
+			override(t, &lockProbeFile, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+				if mode != filelock.Shared || wait != filelock.Try {
+					t.Errorf("probe lock: %v, %v", mode, wait)
+				}
+				return tc.err
+			})
+			locked, err := probeLockFile(lock)
+			held, failures := heldCaptureLocks(root)
+			if errors.Is(tc.err, filelock.ErrContended) {
+				if !locked || err != nil || len(held) != 1 || len(failures) != 0 {
+					t.Fatalf("contention: locked=%v err=%v held=%v failures=%v", locked, err, held, failures)
+				}
+				return
+			}
+			if locked || !errors.Is(err, tc.err) || !strings.Contains(err.Error(), lock) {
+				t.Fatalf("probe failure: locked=%v err=%v", locked, err)
+			}
+			if len(held) != 0 || len(failures) != 1 {
+				t.Fatalf("scan with a failing probe: %v %v", held, failures)
+			}
+			if verdict := computeEjectVerdict(verdictInput{scanErrors: failures, fresh: true}); verdict.Verdict != verdictUnsafe {
+				t.Fatalf("verdict with a failing probe: %+v", verdict)
+			}
+			if _, err := os.Stat(index); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a failing scan created %s: %v", index, err)
+			}
+		})
 	}
 }
 
@@ -482,6 +565,61 @@ func TestOperationsSnapshotAndStop(t *testing.T) {
 	}
 	if refused := serveTestBody(server, http.MethodPost, "/api/operations/stop", `{"id":"nope"}`); refused.Code != http.StatusNotFound {
 		t.Fatalf("stopping an unknown operation: %d", refused.Code)
+	}
+	// Work with its own stopper (a labels backlog): refused until the work
+	// has registered it, then it cancels the work's context.
+	workCtx, stopWork := context.WithCancel(context.Background())
+	defer stopWork()
+	_, backlog := server.begin(workCtx, OperationSpec{Kind: "analysis.labels", Variant: "backlog", Trigger: triggerChained, Priority: priorityBackground})
+	stop := func() int {
+		return serveTestBody(server, http.MethodPost, "/api/operations/stop", fmt.Sprintf(`{"id":%q}`, backlog.ID())).Code
+	}
+	if code := stop(); code != http.StatusConflict || backlog.State() != opRunning {
+		t.Fatalf("a stop before the work can stop: %d, state %q", code, backlog.State())
+	}
+	backlog.setStopper(stopWork)
+	if code := stop(); code != http.StatusOK || workCtx.Err() == nil || backlog.State() != opStopping {
+		t.Fatalf("the work's stopper did not run: %d, ctx %v, state %q", code, workCtx.Err(), backlog.State())
+	}
+	backlog.Finish(workCtx.Err())
+	if backlog.State() != opCancelled {
+		t.Fatalf("a stopped backlog ended %q", backlog.State())
+	}
+	// A pass can be several levels into its analysis chain. Keep the
+	// current rebuild and its measured progress in the public snapshot.
+	_, pass := server.begin(context.Background(), OperationSpec{Kind: "background.update", Trigger: triggerUser})
+	defer pass.Finish(nil)
+	_, upgrade := pass.Child(OperationSpec{Kind: "library.upgrade", Trigger: triggerChained})
+	upgrade.Finish(nil)
+	_, chain := pass.Child(OperationSpec{Kind: "analysis.chain", Trigger: triggerChained})
+	defer chain.Finish(nil)
+	_, authorship := chain.Child(OperationSpec{Kind: "analysis.authorship", Trigger: triggerChained})
+	defer authorship.Finish(nil)
+	_, rebuild := authorship.Child(OperationSpec{Kind: "analysis.authorship", Trigger: triggerChained})
+	defer rebuild.Finish(nil)
+	rebuild.Step("classifying authorship", "message", 100)
+	rebuild.SetDone(42)
+	if err := json.Unmarshal(serveTest(server, http.MethodGet, "/api/operations").Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	var nested map[string]any
+	for _, entry := range document.Operations {
+		if entry["id"] == string(pass.ID()) {
+			nested = entry
+		}
+	}
+	for _, id := range []OpID{chain.ID(), authorship.ID(), rebuild.ID()} {
+		children, _ := nested["children"].([]any)
+		if len(children) != 1 {
+			t.Fatalf("live child %s missing from snapshot: %#v", id, nested)
+		}
+		nested = children[0].(map[string]any)
+		if nested["id"] != string(id) || nested["stoppable"] != false {
+			t.Fatalf("nested stage: %#v", nested)
+		}
+	}
+	if step := nested["step"].(map[string]any); step["done"] != 42.0 || step["total"] != 100.0 {
+		t.Fatalf("nested rebuild progress: %#v", step)
 	}
 }
 

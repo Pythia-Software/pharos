@@ -406,29 +406,40 @@ func (c *Catalog) writeWALPinReport(pin walPin, now time.Time) string {
 	if err := pprof.Lookup("goroutine").WriteTo(&b, 2); err != nil {
 		fmt.Fprintf(&b, "(%v)\n", err)
 	}
-	dir := walPinReportDir()
-	path := filepath.Join(dir, fmt.Sprintf("%s%s-pid%d.txt", walPinReportPrefix, now.UTC().Format("20060102T150405.000Z"), os.Getpid()))
-	err := os.MkdirAll(dir, 0o700)
-	if err == nil {
-		err = os.WriteFile(path, b.Bytes(), 0o600)
-	}
+	path, err := writeDiagnosticReport(walPinReportPrefix, walPinReportsKept, now, b.Bytes())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Catalog WAL pinned: could not write the report: %v\n", err)
 		return ""
+	}
+	return path
+}
+
+// writeDiagnosticReport writes body to a new file named prefix, the time and
+// this process, beside the other reports, and removes all but the newest
+// kept files with that prefix.
+func writeDiagnosticReport(prefix string, kept int, now time.Time, body []byte) (string, error) {
+	dir := walPinReportDir()
+	path := filepath.Join(dir, fmt.Sprintf("%s%s-pid%d.txt", prefix, now.UTC().Format("20060102T150405.000Z"), os.Getpid()))
+	err := os.MkdirAll(dir, 0o700)
+	if err == nil {
+		err = os.WriteFile(path, body, 0o600)
+	}
+	if err != nil {
+		return "", err
 	}
 	// Names start with the time, so the oldest sort first.
 	if entries, err := os.ReadDir(dir); err == nil {
 		reports := []string{}
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), walPinReportPrefix) {
+			if strings.HasPrefix(entry.Name(), prefix) {
 				reports = append(reports, entry.Name())
 			}
 		}
-		for _, name := range reports[:max(0, len(reports)-walPinReportsKept)] {
+		for _, name := range reports[:max(0, len(reports)-kept)] {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
-	return path
+	return path, nil
 }
 
 // parseProcArgs reads kern.procargs2's layout: argc, the executable path,

@@ -1,3 +1,4 @@
+import { queryCapabilities } from '../../support/query-server.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EMPTY_QUERY, encodeQuery, normalizeQueryState, createQueryLinkService, httpQuerySnapshotStore, QuerySnapshotHttpError } from '@pythia-software/query-table-core';
@@ -5,12 +6,10 @@ import * as storageModule from '../../../src/storage';
 import * as bookmarksModule from '../../../src/bookmarks';
 import * as queryLinksModule from '../../../src/query-links';
 import { freshPageURL, tableRecoveryQuery } from '../../../src/query-recovery';
-import { core, schemas, execution, capabilities as queryCapabilities } from '../helpers/recipes.mjs';
+import { core, schemas, execution } from '../helpers/recipes.mjs';
 import { categoryForQuery } from '../../../src/query-categories';
 import { instantiateRecipe, queryRecipes } from '../../../src/curiosity-data';
-import { usageDatasets, usageWorkspaceURL } from '../../../src/usage-workspace-model';
-import { createQueryMetadataLoader } from '../../../src/query-metadata';
-import { matchingSelectionIDs } from '../../../src/query-selection';
+import { usageDatasets, usageTopics, readUsageWorkspace, usageWorkspaceURL } from '../../../src/usage-workspace-model';
 const m={...storageModule,...bookmarksModule,...queryLinksModule,encodeQuery,normalizeQueryState,createQueryLinkService,httpQuerySnapshotStore,QuerySnapshotHttpError};
 const prefs=new Map(),cache=new Map(),snapshots=new Map();
 let fail=false,writes=0;
@@ -29,60 +28,6 @@ globalThis.fetch=async (input,options)=>{
 };
 const query=m.normalizeQueryState({select:[{field:'tool_name'}],where:[{field:'status',op:'=',value:'error'}],orderBy:[],limit:25,offset:0});
 
-test('select all supports V2-only transports independently of the visible page', async () => {
- const schema=schemas.library,where=[{field:'source_kind',op:'=',value:'codex'}];
- const state={...EMPTY_QUERY,select:[{field:'title'}],where,limit:1,offset:2,aggregations:[{id:'n',op:'count',groupBy:[]}]};
- let sent;
- const ids=await matchingSelectionIDs(state,schema,execution,{fetchRowsV2:async request=>{
-  sent=request;
-  return {version:2,rows:[{id:'a'},{id:'b'}],total:2,computed:[],execution};
- }},200);
- assert.deepEqual(ids,['a','b']);
- assert.equal(sent.version,2);
- assert.deepEqual(sent.where,where);
- assert.ok(sent.select.includes(schema.idField));
- assert.equal(sent.limit,200);assert.equal(sent.offset,0);
- assert.equal(state.offset,2);assert.equal(state.select[0].field,'title');
-});
-
-test('select all rejects incomplete exports and row transport failures without replacing selection', async () => {
- const fetch=async result=>matchingSelectionIDs(EMPTY_QUERY,schemas.library,execution,{fetchRowsV2:async()=>({version:2,computed:[],execution,...result})},200);
- for(const result of [
-  {total:201,rows:[{id:'a'}]}, {total:2,rows:[{id:'a'}]},
-  {total:1,rows:[{}]}, {total:2,rows:[{id:'a'},{id:'a'}]},
- ]) await assert.rejects(fetch(result),/export|identit/);
- await assert.rejects(matchingSelectionIDs(EMPTY_QUERY,schemas.library,execution,{fetchRowsV2:async()=>{throw new Error('Offline');}},200),/Offline/);
-});
-
-test('select all uses negotiated V3 for derived canonical computed filters and validates the response', async () => {
- const name='@computed/active',schema={...schemas.library,fields:[...schemas.library.fields,{name,type:'number',source:{kind:'derived',computedId:'active'},filter:{enabled:false},sort:{enabled:false}}]};
- const handshake={...execution,planToken:'current',resolvedRevisions:{active:'2'},fields:{[name]:{type:'number',select:true,sort:true,filter:true,measure:true,group:true}}};
- const state={...EMPTY_QUERY,where:[{any:[{field:name,op:'>',value:'0'},{field:'source_kind',op:'=',value:'codex'}]}],orderBy:[{field:name,dir:'desc'}],limit:1,offset:1};
- let sent,v2Calls=0;
- const v2=async()=>{v2Calls++;throw new Error('filter_disabled: computed filtering requires host policy');};
- const fetch=async changes=>matchingSelectionIDs(state,schema,handshake,{
-  queryCapabilities,fetchRowsV2:v2,
-  fetchQueryV3:async request=>{
-   sent=request;
-   return {version:3,now:request.now,sourceTotal:3,rows:[{id:'a'},{id:'b'}],total:2,metrics:[],schema:{name:schema.name,idField:schema.idField,fields:[{name:schema.idField,type:'text'}]},execution:handshake,...changes};
-  },
- },200);
- assert.deepEqual(await fetch(),['a','b']);
- assert.equal(sent.version,3);assert.equal(sent.rows,true);assert.deepEqual(sent.diagnostics,[]);
- assert.deepEqual(sent.result.where,state.where);assert.deepEqual(sent.result.orderBy,state.orderBy);
- assert.deepEqual(sent.result.select,[schema.idField]);assert.equal(sent.result.limit,200);assert.equal(sent.result.offset,0);
- assert.deepEqual({...sent.expectedRevisions},{active:'2'});assert.equal(sent.planToken,'current');
- assert.equal(state.offset,1);assert.equal(schema.fields.at(-1).source.kind,'derived');
- await assert.rejects(fetch({execution:{...handshake,resolvedRevisions:{active:'3'}}}),/definitions changed/i);
- await assert.rejects(fetch({execution:{...handshake,planToken:'obsolete'}}),/mismatched/);
- await assert.rejects(fetch({total:201}),/export/);
- await assert.rejects(fetch({total:3}),/export/);
- await assert.rejects(fetch({rows:[{id:'a'},{id:'a'}]}),/identit/);
- await assert.rejects(fetch({schema:{name:schema.name,idField:schema.idField,fields:[]}}),/schema/);
- assert.equal(v2Calls,0);
- await assert.rejects(matchingSelectionIDs(state,schema,handshake,{fetchRowsV2:v2},200),/residual/);
- assert.equal(v2Calls,0,'a V2-only server must not receive a query with dropped predicates');
-});
 test('collecting a dashboard card preserves its destination and durable editable query',async t=>{
  const before=[...m.readBookmarks()];
  t.after(()=>m.writeBookmarks(before));
@@ -102,23 +47,7 @@ test('collecting a dashboard card preserves its destination and durable editable
  assert.deepEqual(loaded,normalizeQueryState(item.query));
  assert.deepEqual(m.queryFromURL(saved.url,saved.query).query,normalizeQueryState(item.query));
 });
-test('metadata shares stable results, queues scans and isolates subscriber cancellation', async()=>{
- let now=0,reads=0,finish;
- const load=createQueryMetadataLoader(()=>now,5),controller=new AbortController();
- const first=load('first',()=>{reads++;return new Promise(resolve=>{finish=resolve;});});
- const cancelled=load('first',()=>{throw Error('duplicate');},controller.signal);
- const second=load('second',async()=>{reads++;return {values:['second']};});
- await Promise.resolve();await Promise.resolve();
- assert.equal(reads,1);
- controller.abort();await assert.rejects(cancelled,{name:'AbortError'});
- const value={values:['first']};finish(value);
- assert.equal(await first,value);assert.deepEqual(await second,{values:['second']});
- assert.equal(await load('first',()=>{throw Error('cached');}),value);
- assert.equal(reads,2);
- now=6;assert.deepEqual(await load('first',async()=>({values:['updated']})),{values:['updated']});
- await assert.rejects(load('failed',async()=>{throw Error('retry');}),/retry/);
- assert.deepEqual(await load('failed',async()=>({values:[]})),{values:[]});
-});
+
 test('named saves create durable links, resolve on another Mac and keep defaults during updates',async()=>{
  const storage=m.libraryStorageAdapter();
  const saved=await storage.saveNamed('pharos_tool_calls','Errors',query,10);
@@ -189,19 +118,21 @@ test('page parameters choose the dataset, and every card URL opens its own datas
  assert.equal(m.queryFromURL('/tools?tools_view=skills&q_library=&q_skill_usages=').dataset,'skill_usages');
  for(const dataset of Object.keys(usageDatasets)) for(const mode of ['query','search']) {
   const url=usageWorkspaceURL({mode,dataset,query:EMPTY_QUERY});
-  assert.equal(m.queryFromURL(url)?.dataset,dataset,`${mode} bookmarks keep their record type`);
+  assert.equal(m.queryFromURL(url)?.dataset,dataset==='writing_messages'?'messages':dataset,`${mode} generated links keep their intended population`);
  }
  for(const dataset of Object.keys(usageDatasets)) {
   const url=new URL(m.queryURL(dataset,query),location.origin);
+  const target=dataset==='writing_messages'?'messages':dataset;
   assert.equal(url.pathname,'/analyze');
   assert.equal(url.searchParams.get('analyze_mode'),'query');
-  assert.equal(url.searchParams.get('analyze_data'),dataset);
+  assert.equal(url.searchParams.get('analyze_data'),target);
   assert.ok(![...url.searchParams.keys()].some(key=>key.startsWith('usage_')));
-  assert.deepEqual(m.queryFromURL(url.href),{dataset,query,window:undefined});
+  assert.deepEqual(m.queryFromURL(url.href),{dataset:target,query:dataset==='writing_messages'?{...query,where:[{field:'role',op:'=',value:'user'},{field:'has_authorship',op:'=',value:'true'},...query.where]}:query,window:undefined});
  }
  assert.equal(m.queryFromURL('/analyze?analyze_workspace=1&q_usage='),undefined,'A dashboard is not a token-table bookmark');
  const clock=new Date(2026,9,8,15);
- for(const recipe of queryRecipes)assert.equal(m.queryFromURL(instantiateRecipe(recipe,7,clock).url)?.dataset,recipe.dataset,recipe.id);
+ // Habits templates open, and are collected as, the Habits page (dashboard-card.test.mjs).
+ for(const recipe of queryRecipes.filter(recipe=>!recipe.habits))assert.equal(m.queryFromURL(instantiateRecipe(recipe,7,clock).url)?.dataset,recipe.dataset,recipe.id);
  const writing=new URL(instantiateRecipe(queryRecipes.find(item=>item.id==='human-words'),7,clock).url,location.origin);
  assert.equal(writing.pathname,'/analyze');
  assert.equal(writing.searchParams.get('analyze_data'),'writing_messages');
@@ -244,8 +175,8 @@ test('changing a saved range preserves query structure, indexed search context, 
  const query={...EMPTY_QUERY,offset:100,where:[
   {field:'activity_at',op:'>',value:'2025-01-01T00:00:00Z'},
   {field:'activity_at',op:'<=',value:'2025-12-31T00:00:00Z'},
-  {any:[{field:'repository_name',op:'=',value:'pharos'},{field:'repository_name',op:'=',value:'query-table'}]},
- ],aggregations:[{id:'cost',op:'sum',field:'cost_usd',groupBy:['repository_name']}]};
+  {any:[{field:'project_name',op:'=',value:'pharos'},{field:'project_name',op:'=',value:'query-table'}]},
+ ],aggregations:[{id:'cost',op:'sum',field:'cost_usd',groupBy:['project_name']}]};
  const original=`${m.queryURL('library',query)}&search=indexing&case=1&fuzzy=0&heat_grain=week#library`;
  const result=m.updateQueryWindowURL(original,30),spec=m.queryFromURL(result),url=new URL(result,location.origin);
  assert.deepEqual(spec.window,{days:30,field:'activity_at',mode:'relative'});
@@ -353,25 +284,40 @@ test('fresh page links bypass cached queries and named defaults, preserving the 
  assert.equal(await storage.loadDefaultSaved('pharos_tool_calls'),null);
  const url=new URL(freshPageURL('http://localhost/analyze?q_usage=invalid&analyze_topic=human&activity_repo=gone#chart'),location.origin);
  assert.equal(url.pathname,'/analyze');assert.equal(url.searchParams.get('fresh'),'1');
- assert.equal(url.searchParams.get('analyze_topic'),'tokens');assert.equal(url.searchParams.get('analyze_mode'),'dashboards');
+ assert.equal(url.searchParams.get('analyze_topic'),'human');assert.equal(url.searchParams.get('analyze_mode'),'dashboards');
  assert.equal(url.searchParams.has('activity_repo'),false);assert.equal(url.searchParams.has('q_usage'),false);assert.equal(url.hash,'');
  assert.equal(JSON.stringify(m.readBookmarks()),before);
- assert.equal(freshPageURL('http://localhost/tools?tools_view=skills&q_skill_usages=invalid'),'/tools?fresh=1');
+ const legacy=new URL(freshPageURL('http://localhost/tools?tools_view=skills&q_skill_usages=invalid'),location.origin);
+ assert.equal(legacy.pathname,'/analyze');assert.equal(legacy.searchParams.get('analyze_mode'),'query');assert.equal(legacy.searchParams.get('analyze_data'),'skill_usages');
  // Table reset starts from source-schema defaults even when the restored
  // baseline contains removed columns, metrics, grouping or invalid filters.
  for(const dataset of ['usage','tool_calls','mcp_calls']){
   const scope=dataset==='mcp_calls'?[]:[{field:'provider',op:'=',value:'codex'}];
   const schema=schemas[dataset],reset=tableRecoveryQuery(schema,scope);
-  const request=core.toServerQueryV2(reset,schema,execution);
-  assert.deepEqual(request.diagnostics,[]);
+  const request=core.toQueryRequestV3(reset,schema,queryCapabilities,execution);
+  assert.equal(request.version,3);
   assert.deepEqual(reset.where,scope);
   assert.equal(reset.offset,0);
   assert.equal(reset.limit,schema.defaultLimit);
   assert.equal(reset.grouping,undefined);
   assert.ok(!reset.aggregations?.length);
   assert.deepEqual(core.selectedFields(schema,reset).map(field=>field.name),schema.defaultSelect.map(column=>column.field));
-  assert.deepEqual(request.orderBy,schema.defaultSort);
+  assert.deepEqual(request.result.where,scope);
  }
+});
+
+test('reset page retains every Analyze dashboard and query dataset while clearing view options',()=>{
+ const options={analyze_days:'7',analyze_chart:'invalid',analyze_filters:'invalid',analyze_report:'old-report',analyze_search:'1',card_id:'saved-card',card_query:'invalid',activity_machine_id:'missing',disclosures:'invalid',highlight:'chart:old',reveal:'chart:old'};
+ const targets=[...Object.keys(usageTopics).map(topic=>({analyze_mode:'dashboards',analyze_topic:topic})),...Object.keys(usageDatasets).map(dataset=>({analyze_mode:'query',analyze_data:dataset}))];
+ for(const target of targets){
+  const params=new URLSearchParams({...options,...target,q_usage:'invalid'}),before=readUsageWorkspace(params);
+  const reset=new URL(freshPageURL(`http://localhost/analyze?${params}#chart`),location.origin),after=readUsageWorkspace(reset.searchParams);
+  assert.deepEqual({mode:after.mode,topic:after.topic,dataset:after.dataset},{mode:before.mode,topic:before.topic,dataset:before.dataset},JSON.stringify(target));
+  assert.deepEqual([...reset.searchParams.keys()].sort(),['analyze_data','analyze_mode','analyze_topic','fresh']);
+  assert.equal(reset.hash,'');assert.equal(reset.searchParams.get('fresh'),'1');
+  assert.equal(freshPageURL(reset.href),reset.pathname+reset.search,'resetting twice keeps the destination');
+ }
+ assert.equal(freshPageURL('http://localhost/library?q_library=invalid&find=word#row'),'/library?fresh=1');
 });
 
 
@@ -392,12 +338,13 @@ test('computed query links enable automatic fitting for every target without cha
   const source = { ...EMPTY_QUERY, fitToScreen: false, select: [{ field: 'id', width: 900 }], where: [{ field: 'id', op: '=', value: 'one' }] };
   for (const [dataset, target] of Object.entries(linkTargets)) {
     const url = new URL(target(source, {}), 'http://localhost');
-    const restored = core.decodeQueryStrict(url.searchParams.get(`q_${dataset}`));
-    assert.equal(restored.fitToScreen, true, dataset);
-    assert.deepEqual(restored.where, source.where, dataset);
-    assert.deepEqual(restored.select, source.select, dataset);
+    const restored = core.decodeQueryStrict(url.searchParams.get(`q_${dataset==='writing_messages'?'messages':dataset}`));
+    assert.equal(restored.fit, "screen", dataset);
+    assert.deepEqual(restored.where, dataset==='writing_messages'?[{field:'role',op:'=',value:'user'},{field:'has_authorship',op:'=',value:'true'},...source.where]:source.where, dataset);
+    assert.deepEqual(restored.select, [{ field: "id" }], `${dataset} releases pinned widths for the fitted destination`);
   }
   assert.equal(source.fitToScreen, false);
+  assert.deepEqual(source.select, [{ field: "id", width: 900 }]);
 });
 
 test('client table named queries and defaults survive remounting independently for each schema', async () => {

@@ -2,7 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import catalog from '../../../../pricing/model_colors.json';
 import prices from '../../../../pricing/cost_changes.json';
-import { chartSeriesStyle, metricSeriesColor, modelColorKey, otherSeriesColor } from '../../../src/chart-colors';
+import rules from '../../../../pricing/model_color_rules.json';
+import { lch } from '../../../src/model-color-math';
+import { modelTimelineDate, recommendedModelColor } from '../../../src/model-colors';
+import { chartSeriesStyle, colorFields, hourOfDayColors, keyColorTheme, metricSeriesColor, modelColorKey, otherSeriesColor } from '../../../src/chart-colors';
+import { orderedValues } from '../../../src/session-shape-bands';
 import { foldSeries } from '../../../src/chart-series';
 const bucketKey = '2026-10-01';
 const fold = (names, limit = 5, selected = [], scope = 'model_family') => {
@@ -10,45 +14,61 @@ const fold = (names, limit = 5, selected = [], scope = 'model_family') => {
   const series = foldSeries(names.map((name, index) => [bucketKey, name, names.length - index]), buckets, name => name, undefined, selected, limit, scope);
   return { series, bucket: buckets.get(bucketKey) };
 };
+// Measure visible separation independently of the palette's HSL construction.
+const perceptualColor = color => {
+  const [r, g, b] = color.slice(1).match(/../g).map(channel => parseInt(channel, 16) / 255)
+    .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+  const l = Math.cbrt(.4122214708 * r + .5363325363 * g + .0514459929 * b);
+  const m = Math.cbrt(.2119034982 * r + .6806995451 * g + .1073969566 * b);
+  const s = Math.cbrt(.0883024619 * r + .2817188376 * g + .6299787005 * b);
+  return [.2104542553 * l + .793617785 * m - .0040720468 * s, 1.9779984951 * l - 2.428592205 * m + .4505937099 * s, .0259040371 * l + .7827717662 * m - .808675766 * s];
+};
+const colorDistance = (a, b) => { const first = perceptualColor(a), second = perceptualColor(b); return Math.hypot(...first.map((value, index) => value - second[index])); };
 
-test('static catalog covers priced models, with unique colors for model versions and sources', () => {
+test('catalog covers priced models, with coordinated default colors for model versions and sources', () => {
   for (const price of prices.changes) {
+    if (price.status === 'rejected') continue;
     const key = modelColorKey(price.model);
-    assert.equal(catalog.models[key]?.provider, price.provider, price.model);
-    assert.equal(chartSeriesStyle('model_family', key).color, catalog.models[key].color);
+    const provider = catalog.models[key]?.provider;
+    assert.ok(provider === price.provider || rules.providers[provider]?.pricing_provider === price.provider, price.model);
+    assert.equal(chartSeriesStyle('model_family', key).color, recommendedModelColor(key, catalog.providers[provider].color));
   }
   for (const entries of [Object.values(catalog.models), Object.values(catalog.sources)]) {
     assert.equal(new Set(entries.map(entry => entry.color)).size, entries.length);
     assert.ok(entries.every(entry => /^#[0-9a-f]{6}$/.test(entry.color)));
     assert.ok(entries.every(entry => entry.color !== otherSeriesColor));
   }
+  for (const model of Object.values(catalog.models)) assert.ok(catalog.class_order[model.provider].includes(model.class), `${model.provider}: ${model.class} has a reviewed position`);
 });
 
-test('newer model versions use darker shades within each class', () => {
-  const luminance = color => color.slice(1).match(/../g)
-    .map(channel => parseInt(channel, 16) / 255)
-    .map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
-    .reduce((total, channel, index) => total + channel * [0.2126, 0.7152, 0.0722][index], 0);
-  const families = [
-    ['opus-4-1', 'opus-4-5', 'opus-4-6', 'opus-4-7', 'opus-4-8', 'opus-5', 'opus-5-5'],
-    ['sonnet-4', 'sonnet-4-5', 'sonnet-4-6', 'sonnet-5', 'sonnet-5-5'],
-    ['haiku', 'haiku-4-5', 'haiku-5-5'],
-    ['fable-5', 'fable-5-1'],
-    ['gpt-5.5', 'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol'],
-  ];
-  for (const versions of families) {
-    for (let index = 1; index < versions.length; index++) {
-      const older = chartSeriesStyle('model_family', versions[index - 1]);
-      const newer = chartSeriesStyle('model_family', versions[index]);
-      assert.ok(luminance(newer.color) < luminance(older.color), `${versions[index]} should be darker than ${versions[index - 1]}`);
+test('chart model colors progress toward vivid midtones and retain class families', () => {
+  const families = Map.groupBy(Object.keys(catalog.models), name => `${catalog.models[name].provider}:${catalog.models[name].class}`);
+  for (const versions of families.values()) {
+    const dated = [...new Map(versions.filter(modelTimelineDate).map(name => [modelTimelineDate(name), name])).values()]
+      .sort((a, b) => modelTimelineDate(a).localeCompare(modelTimelineDate(b)));
+    for (let index = 1; index < dated.length; index++) {
+      const older = chartSeriesStyle('model_family', dated[index - 1]), newer = chartSeriesStyle('model_family', dated[index]);
+      assert.ok(lch(older.color)[0] > lch(newer.color)[0], 'release lightness progresses consistently');
+      assert.ok(lch(older.color)[1] < lch(newer.color)[1], 'new releases gain chroma');
       assert.equal(newer.group, older.group);
+    }
+    if (dated.length) assert.ok(lch(chartSeriesStyle('model_family', dated.at(-1)).color)[0] > .6, 'frontier fills remain visible on dark backgrounds');
+  }
+  for (const [provider, rule] of Object.entries(rules.providers)) {
+    const latest = rule.ranked_classes.map(tier => Object.keys(catalog.models)
+      .filter(name => catalog.models[name].provider === provider && catalog.models[name].class === tier && modelTimelineDate(name))
+      .sort((a, b) => modelTimelineDate(a).localeCompare(modelTimelineDate(b))).at(-1)).filter(Boolean);
+    for (let index = 1; index < latest.length; index++) {
+      const first = chartSeriesStyle('model_family', latest[index - 1]).color, second = chartSeriesStyle('model_family', latest[index]).color;
+      assert.ok(lch(first)[0] > lch(second)[0]);
+      assert.ok(colorDistance(first, second) > .025, 'frontier tiers stay distinct');
     }
   }
 });
 
 test('model normalization keeps snapshots and context variants on the same static color', () => {
   for (const name of ['claude-opus-5-5', 'OPUS-5-5', 'opus-5-5-1m', 'claude-opus-5-5[1m]', 'claude-opus-5-5-20260928', 'claude-opus-5-5-20260928[1m]']) {
-    assert.equal(chartSeriesStyle('model_family', name).color, catalog.models['opus-5-5'].color);
+    assert.equal(chartSeriesStyle('model_family', name).color, chartSeriesStyle('model_family', 'opus-5-5').color);
   }
 });
 
@@ -65,12 +85,12 @@ test('expansion and ranking changes never recycle or change existing colors', ()
   assert.ok(!expanded.some(series => series.color === otherSeriesColor));
 });
 
-test('stacks group by provider, then class and version rather than token rank', () => {
-  const names = ['gpt-6-sol', 'sonnet-5-5', 'gemini-3.8-flash', 'opus-5-5', 'opus-4-8', 'gpt-5.3-codex'];
+test('stacks group by provider, then catalog tier and version rather than token rank', () => {
+  const names = ['gpt-6-sol', 'sonnet-5-5', 'gemini-3.8-flash', 'opus-5-5', 'opus-4-8', 'gpt-5.3-codex', 'haiku-4-5', 'fable-5-2', 'mythos-5-2', 'gpt-6-luna', 'gpt-6.1-terra', 'gpt-6-astra'];
   const { series, bucket } = fold(names, names.length);
-  assert.deepEqual(series.map(item => item.value), ['opus-4-8', 'opus-5-5', 'sonnet-5-5', 'gemini-3.8-flash', 'gpt-5.3-codex', 'gpt-6-sol']);
-  assert.deepEqual(series.map(item => item.group), ['Anthropic', 'Anthropic', 'Anthropic', 'Google', 'OpenAI', 'OpenAI']);
-  assert.equal(Object.values(bucket.values).reduce((total, value) => total + value, 0), 21);
+  assert.deepEqual(series.map(item => item.value), ['haiku-4-5', 'sonnet-5-5', 'opus-4-8', 'opus-5-5', 'fable-5-2', 'mythos-5-2', 'gemini-3.8-flash', 'gpt-6-luna', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-astra', 'gpt-5.3-codex']);
+  assert.deepEqual(series.map(item => item.group), [...Array(6).fill('Anthropic'), 'Google', ...Array(5).fill('OpenAI')]);
+  assert.equal(Object.values(bucket.values).reduce((total, value) => total + value, 0), 78);
 });
 
 test('Other retains totals and selected models stay visible, even without usage', () => {
@@ -86,7 +106,7 @@ test('Other retains totals and selected models stay visible, even without usage'
 
 test('sources share provider families without sharing colors', () => {
   const { series } = fold(['codex', 'tl1', 'chatgpt', 'claude', 'antigravity', 'canonical', 'new-source'], 10, [], 'provider');
-  assert.deepEqual(series.map(item => item.group), ['Anthropic', 'Google', 'OpenAI', 'OpenAI', 'Other providers', 'Other providers', 'Other providers']);
+  assert.deepEqual(series.map(item => item.group), ['Anthropic', 'Google', 'OpenAI', 'OpenAI', 'Unidentified', 'Unidentified', 'Unidentified']);
   assert.equal(series.find(item => item.value === 'antigravity').color, '#4285f4');
   assert.equal(series.find(item => item.value === 'codex').color, '#10a37f');
   assert.equal(new Set(series.map(item => item.color)).size, series.length);
@@ -116,6 +136,18 @@ test('compound model groups keep catalog model colors regardless of label or key
   assert.equal(metricSeriesColor(['effort'], ['high']), chartSeriesStyle('effort', 'high').color);
 });
 
+test('a grouping by several keys colours each bar by its palette key, an event kind before a repository', () => {
+  const buckets = [{ keys: ['alpha', 'env_friction'] }, { keys: ['beta', 'env_friction'] }, { keys: ['beta', 'stale_guidance'] }];
+  const theme = keyColorTheme(['repository_name', 'family'], buckets);
+  assert.equal(theme.colorBy, 'family');
+  assert.deepEqual(theme.dimensions.family.overrides, ['env_friction', 'stale_guidance'].map(value => ({ value, color: chartSeriesStyle('family', value).color })));
+  // The compact covers pick the same key.
+  assert.equal(metricSeriesColor(['repository_name', 'family'], ['beta', 'env_friction']), chartSeriesStyle('family', 'env_friction').color);
+  assert.equal(keyColorTheme(['repository_name', 'model_family'], [{ keys: ['repo', 'opus-5-5'] }]).colorBy, 'model_family');
+  assert.equal(keyColorTheme(['family'], buckets), undefined, 'event kinds keep their own colours');
+  assert.equal(keyColorTheme(['tool_name', 'agent_session_id'], buckets), undefined, 'no palette key keeps whole-group colours');
+});
+
 test('effort levels use a sequential palette that darkens with effort and keeps unknown neutral', () => {
   const levels = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'];
   const luminance = color => { const channels = color.slice(1).match(/../g).map(c => parseInt(c, 16)); return .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2]; };
@@ -132,4 +164,42 @@ test('concurrency bands stack with the busiest at the bottom and warm toward red
   assert.equal(chartSeriesStyle('level_band', '4+ at once').color, chartSeriesStyle('level_band', '4+').color);
   const red = color => parseInt(color.slice(1, 3), 16) - parseInt(color.slice(3, 5), 16);
   assert.ok(red(series[0].color) > red(series[3].color));
+});
+
+test('writing estimates stack refined under provisional in the Human Words green, keyed by label or value', () => {
+  // Provisional is the larger series here; the stack still puts refined first.
+  const { series } = fold(['Provisional', 'Refined'], 5, [], 'estimate');
+  assert.deepEqual(series.map(item => item.label), ['Refined', 'Provisional']);
+  assert.equal(series[0].color, 'var(--query-human-tone)');
+  assert.match(series[1].color, /color-mix\(in srgb, var\(--query-human-tone\) \d+%, white\)/, 'provisional is a lighter tint of the same green');
+  for (const name of ['refined', 'provisional']) assert.equal(chartSeriesStyle('estimate', name).color, chartSeriesStyle('estimate', name[0].toUpperCase() + name.slice(1)).color);
+});
+
+test('hours of the day take a distinct sky colour, whatever form their key takes', () => {
+  assert.equal(new Set(hourOfDayColors).size, 24);
+  for (const [hour, key] of [[7, '07:00'], [7, '7'], [21, '21']]) assert.equal(chartSeriesStyle('hour_of_day', key).color, hourOfDayColors[hour]);
+  assert.equal(chartSeriesStyle('hour_of_day', 'Unspecified').color, otherSeriesColor);
+  // An hour-of-day date grouping colors its timestamp field by hour.
+  const fields = colorFields({ groupBy: ['started_at'], dateGrouping: { interval: 'hourOfDay' } });
+  assert.equal(metricSeriesColor(fields, [5]), hourOfDayColors[5]);
+  assert.deepEqual(colorFields({ groupBy: ['started_at'], dateGrouping: { interval: 'day' } }), ['started_at']);
+});
+
+test('session bands and archetypes take ordered steps of one ramp, by value or label', () => {
+  for (const [field, ordered] of Object.entries(orderedValues)) {
+    const colors = ordered.order.map(value => chartSeriesStyle(field, value).color);
+    assert.equal(new Set(colors).size, colors.length, `${field}: a colour per step`);
+    for (const value of ordered.order) assert.deepEqual(chartSeriesStyle(field, ordered.labels[value]), chartSeriesStyle(field, value), `${field} ${value}`);
+    assert.deepEqual(ordered.order.map(value => Number(chartSeriesStyle(field, value).order)), ordered.order.map((_, index) => index), field);
+    assert.ok(!colors.includes(otherSeriesColor), field);
+  }
+  // Each ramp darkens as its values rise.
+  const lightness = color => { const [r, g, b] = [1, 3, 5].map(at => Number.parseInt(color.slice(at, at + 2), 16)); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const bands = orderedValues.length_band.order.map(value => lightness(chartSeriesStyle('length_band', value).color));
+  assert.ok(bands.every((value, index) => !index || value < bands[index - 1]));
+  assert.equal(chartSeriesStyle('archetype', 'Something else').color, otherSeriesColor);
+  // Legends and stacks follow the order, not the totals: the biggest band
+  // stays in its place.
+  assert.deepEqual(fold(['121+', '1-5', '31-60'], 5, [], 'length_band').series.map(item => item.value), ['1-5', '31-60', '121+']);
+  assert.deepEqual(fold(['Marathon', 'Automated', 'Quick'], 5, [], 'archetype').series.map(item => item.value), ['Automated', 'Quick', 'Marathon']);
 });

@@ -139,7 +139,9 @@ func (c *catalogConn) PrepareContext(ctx context.Context, query string) (driver.
 }
 
 func (c *catalogConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	timing, started := statementTiming(ctx)
 	result, err := c.sqliteConn.ExecContext(ctx, query, args)
+	timing.statementSince(started)
 	c.trace.exec(ctx, query, err)
 	return result, err
 }
@@ -161,7 +163,9 @@ type catalogStmt struct {
 }
 
 func (s *catalogStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	timing, started := statementTiming(ctx)
 	result, err := s.sqliteStmt.ExecContext(ctx, args)
+	timing.statementSince(started)
 	s.trace.exec(ctx, s.query, err)
 	return result, err
 }
@@ -183,12 +187,45 @@ type catalogRows struct {
 	sqliteRows
 	once  sync.Once
 	trace *catalogConnTrace
+	// timing is the request the cursor belongs to, if any, and spent the
+	// time it has taken in SQLite: SQLite computes rows as they are read.
+	timing *requestTiming
+	spent  time.Duration
+}
+
+func (r *catalogRows) Next(dest []driver.Value) error {
+	if r.timing == nil {
+		return r.sqliteRows.Next(dest)
+	}
+	started := time.Now()
+	err := r.sqliteRows.Next(dest)
+	r.spent += time.Since(started)
+	return err
 }
 
 func (r *catalogRows) Close() error {
 	err := r.sqliteRows.Close()
-	r.once.Do(r.trace.closeCursor)
+	r.once.Do(func() {
+		r.trace.closeCursor()
+		r.timing.statement(r.spent)
+	})
 	return err
+}
+
+// statementTiming is the request a statement run with ctx belongs to, and
+// when it began; both are zero for background work.
+func statementTiming(ctx context.Context) (*requestTiming, time.Time) {
+	timing := timingFrom(ctx)
+	if timing == nil {
+		return nil, time.Time{}
+	}
+	return timing, time.Now()
+}
+
+func (t *requestTiming) statementSince(started time.Time) {
+	if t != nil {
+		t.statement(time.Since(started))
+	}
 }
 
 type catalogTx struct {
@@ -264,16 +301,22 @@ func (t *catalogConnTrace) query(ctx context.Context, query string, run func() (
 		t.read.Statement = query // a transaction's first read
 	}
 	t.mu.Unlock()
+	timing, started := statementTiming(ctx)
 	rows, err := run()
 	if err == nil {
 		inner, ok := rows.(sqliteRows)
 		if ok {
-			return &catalogRows{sqliteRows: inner, trace: t}, nil
+			wrapped := &catalogRows{sqliteRows: inner, trace: t, timing: timing}
+			if timing != nil {
+				wrapped.spent = time.Since(started)
+			}
+			return wrapped, nil
 		}
 		rows.Close()
 		err = fmt.Errorf("the SQLite driver's rows are a %T", rows)
 	}
 	t.closeCursor()
+	timing.statementSince(started)
 	return nil, err
 }
 

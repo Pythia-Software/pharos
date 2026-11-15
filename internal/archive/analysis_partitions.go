@@ -45,12 +45,12 @@ INSERT INTO finding_tool_revisions VALUES(%s.conversation_id,hex(randomblob(16))
 	// upsert sets its columns whenever its row exists, so each trigger fires
 	// only for a value that changed.
 	for _, spec := range []struct{ name, table, columns, body string }{
-		{"workspace", "workspaces", "title,source_kind,repository_id,activity_at", `INSERT INTO tool_rollup_dirty VALUES(NEW.id,hex(randomblob(16))) ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision;`},
+		{"workspace", "workspaces", "title,source_kind,repository_id,activity_at,project_folder,folder_repository_id", `INSERT INTO tool_rollup_dirty VALUES(NEW.id,hex(randomblob(16))) ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision;`},
 		{"session", "agent_sessions", "depth,kind,conversation_id,workspace_id,child_conversation_id", `INSERT INTO tool_rollup_dirty VALUES(OLD.workspace_id,hex(randomblob(16))) ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision;
 INSERT INTO tool_rollup_dirty VALUES(NEW.workspace_id,hex(randomblob(16))) ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision;
 INSERT INTO finding_tool_revisions VALUES(OLD.conversation_id,hex(randomblob(16))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
 INSERT INTO finding_tool_revisions VALUES(NEW.conversation_id,hex(randomblob(16))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;`},
-		{"repository", "repositories", "display_name", `INSERT INTO tool_rollup_dirty SELECT id,hex(randomblob(16)) FROM workspaces WHERE repository_id=NEW.id
+		{"repository", "repositories", "display_name", `INSERT INTO tool_rollup_dirty SELECT id,hex(randomblob(16)) FROM workspaces WHERE repository_id=NEW.id OR folder_repository_id=NEW.id
 ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision;`},
 	} {
 		if _, err := c.DB.Exec(fmt.Sprintf("DROP TRIGGER IF EXISTS analysis_%s_update", spec.name)); err != nil {

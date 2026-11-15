@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { highlightParts, matchFindState, summaryEntries } from '../../../src/find-match-model';
+import { highlightParts, matchFindState, plainSnippetParts, summaryEntries } from '../../../src/find-match-model';
 
 test('a keyword snippet splits at its highlight spans', () => {
   assert.deepEqual(highlightParts('…Running the dashboard in a browser', [[1, 22], [28, 35]]), [
@@ -16,6 +16,18 @@ test('missing, overlapping or out-of-range spans still show the whole snippet', 
   const parts = highlightParts('abcdef', [[1, 4], [2, 5], [9, 12], 'x']);
   assert.equal(parts.map(part => part.text).join(''), 'abcdef');
   assert.deepEqual(parts.filter(part => part.match).map(part => part.text), ['bcd', 'e']);
+});
+
+test('a message snippet reads as prose, like the first ask and latest response, keeping its marks', () => {
+  const text = '…extreme.\n### Recorded **command** time (`slow-commands`)\nVerdict: drop\n- [Spread](https://example.com/a) *kept*';
+  const at = text.indexOf('command'), spread = text.indexOf('Spread');
+  assert.deepEqual(plainSnippetParts(text, [[at, at + 7], [spread, spread + 6]]), [
+    { text: '…extreme. Recorded ', match: false }, { text: 'command', match: true }, { text: ' time (slow-commands) Verdict: drop ', match: false },
+    { text: 'Spread', match: true }, { text: ' kept', match: false },
+  ]);
+  // Plain text, emphasis-like operators and identifiers stay as written.
+  assert.deepEqual(plainSnippetParts('a * b and snake_case_name', []), [{ text: 'a * b and snake_case_name', match: false }]);
+  assert.deepEqual(plainSnippetParts('', []), [{ text: '', match: false }]);
 });
 
 test('a card summary interleaves its messages with the counts between them', () => {

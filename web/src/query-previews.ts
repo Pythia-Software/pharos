@@ -1,7 +1,13 @@
+import { formatUSD } from "./currency";
+import { formatTokens } from "./token-count";
+import { combineServed, noteServed, resultPolicyHeaders, resultScope, resultServed, servedOf, type ResultPolicy, type ResultServed } from "./result-cache";
+import { reportSessionShapeCoverage, sessionShapeFreshnessNote, type SessionShapeCoverage } from "./session-shape-freshness";
+import { agentEventDatasetOf, agentEventsFreshnessMark, agentEventsFreshnessNote, reportQueryCoverage, type AgentEventsCoverage } from "./agent-events-freshness";
+import { cardQualification } from "./card-qualifier";
 import { isOriginDimension, originLabel, loadOriginMetadata } from "./origin-dimensions";
 import { apiCostTrendQuery, apiCostTrendFacts, buildApiCostTrend, usesApiCostTrend, type CostTimeBucket } from "./api-cost-trend";
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
-import { groupKeyFields, metricMinCountText, metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
+import { groupKeyFields, metricMinCountText, metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type QueryRequestV3, type QueryState } from "@pythia-software/query-table-core";
 import { categoryForQuery, queryCategories } from "./query-categories";
 import { chartBucketsWithHistory, foldSeries, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartSeries } from "./chart-series";
 import { earliestKey, parseDay, shiftPeriod } from "./chart-period";
@@ -9,18 +15,29 @@ import { resolveRollingQuery, rollingQueryMatches, rollingWindowField, type Quer
 import type { QueryRecipe } from "./curiosity-data";
 import { readTextSearch, textFindParameters } from "./text-search-model";
 import { readRecordKeywordSearch, recordKeywordParameter, recordKeywordRequest } from "./record-keyword-model";
-import { cardCoverQuery, humanStudyCoverMatches, type CardCover } from "./card-cover";
+import { cardCoverQuery, humanStudyCoverMatches, withCardGroups, type CardCover } from "./card-cover";
 import { filterBoxSamples } from "./compact-box-model";
 import { createHumanStudyLoader, clearHumanStudyCache, type HumanStudyPreview } from "./human-study";
 import { activityPresentation } from "./machine-activity-data";
 import { buildCardTrend, cardTrendDays, cardTrendQueries, trendSchemas, usesCardTrend } from "./card-trend";
 import { usesWeekdayCover, weekdayMetric } from "./weekday-cover";
 import { loadDashboardCardPreview } from "./dashboard-card-preview";
+import type { DashboardCardTarget } from "./dashboard-card-model";
+import type { HabitsCover } from "./habits-card";
+import { gridCoverHeight, type GridCover } from "./grid-cover";
+import { heatmapGrid, trendHeatmap } from "./dashboard-heatmap-model";
+import { binnedFields } from "./session-shape-bands";
+import { invalidateConcurrencyData } from "./concurrency-store";
 import type { CompactTimelineOptions } from "./column-marks";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
   refreshing?: boolean; refreshError?: string; updatedAt?: number;
+  // A partial dataset is usable when there is no complete saved preview. A
+  // saved preview's reason is transient and retains the saved result's age.
+  incompleteReason?: string; incompleteWithoutMissing?: boolean; savedReason?: string;
+  // What the server's result cache answered with (result-cache.ts).
+  served?: ResultServed;
   state: "ready" | "empty"; emptyLabel?: string; density?: "compact"; stackBy?: string; coverHeight?: number; legendColumns?: 1 | 2; total: number; summary: string; note?: string;
   headline?: string; action?: string; evidence?: string;
   headlineMetric?: { value: string; unit: string; label?: string };
@@ -35,36 +52,60 @@ export type QueryPreview = {
   dashboardTrend?: CompactTimelineOptions;
   preserveScale?: boolean;
   study?: HumanStudyPreview;
+  habits?: HabitsCover;
+  grid?: GridCover;
 };
-type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string };
+type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean; dashboard?: string; dashboardTarget?: DashboardCardTarget; groups?: number };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
-type Context = { schema: FieldSchema; execution: ComputedExecution; capabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3 };
-type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
+type Context = { schema: FieldSchema; execution: ComputedExecution; queryCapabilities: QueryCapabilitiesV3 };
+type Payload = { served?: ResultServed; now?: number; coverage?: AgentEventsCoverage & SessionShapeCoverage; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
 const cache = new Map<string, Cached>();
-export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); }
+// An answer is reused for a minute. After that it only holds memory: whole
+// result pages, for every cover a page prepared.
+const CACHE_LIFETIME = 60_000;
+let cacheSweep: ReturnType<typeof setTimeout> | undefined;
+function sweepPreviewCache() {
+  clearTimeout(cacheSweep); cacheSweep = undefined;
+  // Entries are kept in the order they were stored, oldest first.
+  for (const [key, entry] of cache) { if (Date.now() - entry.at < CACHE_LIFETIME) break; cache.delete(key); }
+  if (!cache.size) return;
+  cacheSweep = setTimeout(sweepPreviewCache, CACHE_LIFETIME);
+  (cacheSweep as { unref?: () => void }).unref?.();
+}
+export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); invalidateConcurrencyData(); }
 
 export function formatPreviewValue(value: number, unit: string): string {
   if (unit === "bytes") return value >= 1048576 ? `${(value / 1048576).toFixed(1)} MiB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value} B`;
   if (unit === "percent") return `${(value * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
-  if (unit === "USD") return value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: value >= 100 ? 0 : 2 });
+  if (unit === "USD") return formatUSD(value);
+  if (unit === "tokens") return formatTokens(value);
   if (unit === "ms") return value >= 3_600_000 ? `${(value / 3_600_000).toFixed(1)}h` : value >= 60_000 ? `${(value / 60_000).toFixed(1)}m` : value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}ms`;
   return Intl.NumberFormat(undefined, { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
+}
+
+// A stored answer was computed for the same request at an earlier clock, and
+// echoes that clock; it is checked against the request as it was asked then.
+function asServed(request: QueryRequestV3, result: { now?: number }): QueryRequestV3 {
+  const served = servedOf(result);
+  return served && served.state !== "live" && typeof result.now === "number" ? { ...request, now: result.now } : request;
 }
 
 class PreviewHTTPError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
-async function fetchPreview<T>(url: string, signal?: AbortSignal, request?: unknown): Promise<T> {
+async function fetchPreview<T>(url: string, signal?: AbortSignal, request?: unknown, policy?: ResultPolicy): Promise<T> {
   const controller = new AbortController(), abort = () => controller.abort(signal?.reason);
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   const timer = setTimeout(() => controller.abort(new Error("Preview timed out. Open the view to explore it directly.")), 15_000);
   try {
-    const response = await fetch(url, { signal: controller.signal, ...(request === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) }) });
+    const response = await fetch(url, { signal: controller.signal, ...(request === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json", ...resultPolicyHeaders(policy) }, body: JSON.stringify(request) }) });
     const body = await response.json();
     if (!response.ok) throw new PreviewHTTPError(typeof body.error === "string" ? body.error : body.error?.message ?? "Preview unavailable", response.status);
-    return body;
+    reportQueryCoverage(url, body);
+    reportSessionShapeCoverage(url, body);
+    return noteServed(body, resultServed(response.headers));
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
 }
 
@@ -122,7 +163,7 @@ function keyLabel(schema: FieldSchema, field: string): ((key: unknown) => string
   return key => { const option = values.options.find(option => typeof option === "object" && option.value === key); return typeof option === "object" ? option.label : String(key ?? "Unspecified"); };
 }
 
-const dailyColumns = (clause: AggregationClause) => !clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && clause.op === "sum";
+const dailyColumns = (clause: AggregationClause) => !clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && (clause.op === "sum" || clause.op === "count" && !clause.field);
 function smoothingPeriods(job: PreviewJob, query: QueryState): number {
   const options = job.options, clause = query.aggregations?.find(metric => metric.id === options?.coverMetricId) ?? query.aggregations?.[0];
   const periods = (options?.cover ?? options?.recipe?.cover)?.timeline?.rollingPeriods;
@@ -154,6 +195,32 @@ function smoothingQuery(job: PreviewJob, query: QueryState, now: number): QueryS
 }
 
 type SmoothingHistory = { query: QueryState; payload: Payload };
+// An agent-event card whose rows the server withheld or is rebuilding is not a
+// confirmed count: mark its summary and say why (agentEventsCoverage).
+export function withAgentEventsFreshness(preview: QueryPreview, dataset: string, payload: { coverage?: AgentEventsCoverage }): QueryPreview {
+  if (!agentEventDatasetOf(`/api/query/${dataset}/query-v3`)) return preview;
+  const note = agentEventsFreshnessNote(payload.coverage);
+  if (!note) return preview;
+  return { ...preview, incompleteReason: note, summary: `${agentEventsFreshnessMark(payload.coverage)}${preview.summary}`, note: [note, preview.note].filter(Boolean).join(" · ") };
+}
+
+export function withSessionShapeFreshness(preview: QueryPreview, dataset: string, payload: { coverage?: SessionShapeCoverage }): QueryPreview {
+  const note = dataset === "session_shape" ? sessionShapeFreshnessNote(payload.coverage) : "";
+  return note ? { ...preview, incompleteReason: note, incompleteWithoutMissing: payload.coverage?.state === "pending" && payload.coverage.missing_sessions === 0, summary: `≈${preview.summary}`, ...(preview.state === "empty" && payload.coverage?.missing_sessions ? { emptyLabel: "Session statistics are still being indexed" } : {}), note: [note, preview.note].filter(Boolean).join(" · ") } : preview;
+}
+
+function withCoverage(preview: QueryPreview, datasets: { dataset: string; coverage?: AgentEventsCoverage & SessionShapeCoverage }[]): QueryPreview {
+  // A chart assembled from several queries is incomplete if any part is.
+  const incomplete = datasets.filter(part => (part.dataset === "session_shape" || agentEventDatasetOf(`/api/query/${part.dataset}/query-v3`)) && part.coverage && part.coverage.state !== "current");
+  if (!incomplete.length) return preview;
+  const noMissing = (part: typeof incomplete[number]) => part.dataset === "session_shape" && part.coverage?.state === "pending" && part.coverage.missing_sessions === 0;
+  // Prefer a warning that describes missing or unknown data if one component
+  // has it, even when another component only has older statistics.
+  const first = incomplete.find(part => !noMissing(part)) ?? incomplete[0];
+  const marked = withSessionShapeFreshness(withAgentEventsFreshness(preview, first.dataset, first), first.dataset, first);
+  return { ...marked, incompleteWithoutMissing: incomplete.every(noMissing) };
+}
+
 function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema: FieldSchema, history?: SmoothingHistory): QueryPreview {
   const options = job.options ?? {}, recipe = options.recipe;
   const searchNote = payload.find?.search ? payload.find.search.complete ? "This search batch" : "Partial search batch; open the search to continue" : undefined;
@@ -193,11 +260,13 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   const { clause, result } = selected;
   if (result.error) throw new Error(result.error);
   // All-time clock-hour covers fold native hourly totals rather than loading
-  // every message's text into the bounded contribution study.
+  // every message's text into the bounded contribution study. A bucket of
+  // several hours would credit its later hours to its first, so only one-hour
+  // buckets fold.
   const hourly = recipe?.measures.find(metric => metric.id === clause.id);
   if (recipe?.humanStudy === "hours" && !options.window && humanStudyCoverMatches(recipe, options.cover, options.coverMetricId)
     && clause.op === "sum" && clause.field === "typed_words" && !clause.expression && !clause.distribution && !clause.expressionY
-    && JSON.stringify(clause.groupBy) === JSON.stringify(hourly?.groupBy) && clause.dateGrouping?.interval === "hour") {
+    && JSON.stringify(clause.groupBy) === JSON.stringify(hourly?.groupBy) && clause.dateGrouping?.interval === "hour" && (clause.dateGrouping.every ?? 1) === 1) {
     if (payload.find?.limited || payload.find?.search?.complete === false || result.coverage === "partial" || result.hiddenGroups || (result.groupCount ?? 0) > result.buckets.length || result.buckets.some(bucket => bucket.error || bucket.yError || typeof bucket.value !== "number")) throw new Error("Complete hourly totals are required for the clock-hour view.");
     const timeZone = clause.dateGrouping.timeZone ?? "UTC", format = new Intl.DateTimeFormat("en-US", { hour: "2-digit", hourCycle: "h23", timeZone });
     const hours = Array.from({ length: 24 }, (_, hour) => ({ label: `${String(hour).padStart(2, "0")}:00`, value: 0 }));
@@ -228,7 +297,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   // distribution medians or paired axes to manufacture a grand total.
   const additive = !clause.expression && !clause.expressionY && !clause.distribution && ["sum", "count"].includes(clause.op);
   const total = additive ? numeric.reduce((sum, bucket) => sum + Number(bucket.value), 0) : result.processedRows ?? values.reduce((sum, bucket) => sum + bucket.count, 0);
-  const countUnit = ({ tool_calls: "calls", writing_messages: "messages", skill_usages: "records", tl1_attempts: "attempts", findings: "findings" } as Partial<Record<QueryDataset, string>>)[job.dataset] ?? "rows";
+  const countUnit = ({ tool_calls: "calls", messages: "messages", writing_messages: "messages", skill_usages: "records", tl1_attempts: "attempts", findings: "findings" } as Partial<Record<QueryDataset, string>>)[job.dataset] ?? "rows";
   const unit = clause.display?.format ? "" : clause.op === "count" ? countUnit : clause.field?.includes("cost") ? "USD" : clause.field?.includes("tokens") ? "tokens" : clause.field?.includes("words") ? "words" : clause.field === "duration_ms" ? "ms" : clause.field?.endsWith("_count") ? countUnit : recipe?.unit ?? "";
   const scalar = !clause.groupBy.length && values.length === 1 && !clause.distribution;
   // Groups hidden by minCount are outside groupCount and Other, so the shown buckets are not the whole population.
@@ -249,9 +318,14 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     ready &&= eligible;
   }
   const preview: QueryPreview = { density: (options.cover ?? recipe?.cover)?.density, stackBy: (options.cover ?? recipe?.cover)?.stackBy, coverHeight: (options.cover ?? recipe?.cover)?.height, legendColumns: (options.cover ?? recipe?.cover)?.legendColumns, state: ready ? "ready" : "empty", total, summary, note: notes.filter(Boolean).join(" · ") || undefined, metrics, fields: schema.fields, coverMetricId: clause.id };
+  const qualified = query.grouping ? cardQualification(payload.rows, recipe?.exploration?.qualifier, (payload.rows?.length ?? 0) >= (Number(payload.total) || 0)) : null;
+  if (qualified) {
+    preview.summary = `${qualified.mark}${preview.summary}`;
+    preview.note = [qualified.note, preview.note].filter(Boolean).join(" · ");
+  }
   const minimum = (options.cover ?? recipe?.cover)?.minSamples;
   if (!ready && recipe?.emptyLabel) preview.emptyLabel = recipe.emptyLabel;
-  if (!ready && minimum && (clause.distribution?.kind === "box" || clause.expressionY)) preview.emptyLabel = `No cohorts with at least ${minimum} ${(options.cover ?? recipe?.cover)?.sampleUnit ?? (!query.grouping && ["tool_calls", "mcp_calls"].includes(job.dataset) ? "calls" : "conversations")}`;
+  if (!ready && minimum && (clause.distribution?.kind === "box" || clause.expressionY)) preview.emptyLabel = `No groups with at least ${minimum} ${(options.cover ?? recipe?.cover)?.sampleUnit ?? (!query.grouping && ["tool_calls", "mcp_calls"].includes(job.dataset) ? "calls" : "conversations")}`;
   if (query.grouping && recipe?.exploration?.context && payload.rows?.length) {
     preview.groupEvidence = Object.fromEntries(payload.rows.map(row => [JSON.stringify(groupKeyFields(query.grouping!.keys).map(key => row[key] ?? null)), recipe.exploration!.context!.map(item => typeof row[item.field] === "number" ? `${formatPreviewValue(row[item.field] as number, item.unit ?? "")} ${item.label}` : "").filter(Boolean).join(" · ")]));
   }
@@ -262,7 +336,13 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     }).filter(Boolean).join(" · ") || preview.groupEvidence?.[JSON.stringify(values[0].keys)];
   }
   if (query.grouping && recipe?.exploration?.labelFields && payload.rows?.length) {
-    preview.groupLabels = Object.fromEntries(payload.rows.map(row => [JSON.stringify(groupKeyFields(query.grouping!.keys).map(key => row[key] ?? null)), recipe.exploration!.labelFields!.map(field => keyLabel(schema, field)?.(row[field]) ?? String(row[field] ?? "Unspecified")).join(" · ")]));
+    // Only the groups a metric returned are ever drawn or looked up. A result
+    // page can hold thousands of others, and covers are cached by the hundred.
+    const drawn = new Set(metrics.flatMap(metric => metric.result.buckets.map(bucket => JSON.stringify(bucket.keys))));
+    preview.groupLabels = Object.fromEntries(payload.rows.flatMap(row => {
+      const key = JSON.stringify(groupKeyFields(query.grouping!.keys).map(key => row[key] ?? null));
+      return drawn.has(key) ? [[key, recipe.exploration!.labelFields!.map(field => keyLabel(schema, field)?.(row[field]) ?? String(row[field] ?? "Unspecified")).join(" · ")]] : [];
+    }));
   }
   // A ranked cover needs values and evidence as well as bars. Match companion
   // metrics by their actual group keys, never by bucket position.
@@ -315,6 +395,23 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     if (clause.display?.showOther === false) preview.series = preview.series.filter(item => !item.hiddenCount);
     if (clause.groupBy.length === 1 && preview.series[0]) preview.series[0].color = tone;
     if (!ready && eligible && periods && rollingAverageBuckets(chart, periods, { period: "day" }).some(bucket => !bucket.history && Object.values(bucket.values).some(value => value > 0))) preview.state = "ready";
+    // A heatmap cover draws the day's sessions by their value's fine bin, as
+    // the dashboard's heatmap does: every bin, none folded into Other.
+    const bins = preview.timeline?.display === "heatmap" ? binnedFields[clause.groupBy.at(-1) ?? ""] : undefined;
+    if (bins) {
+      const days = chart.map(bucket => ({ ...bucket, values: {} as Record<string, number> })), byDay = new Map(days.map(bucket => [bucket.key, bucket])), edges = new Set<number>();
+      for (const bucket of chartValues) {
+        const day = byDay.get(String(bucket.keys[0])), edge = Number(bucket.keys[1]);
+        if (!day || bucket.keys[1] === null || !Number.isFinite(edge)) continue;
+        day.values[`b:${edge}`] = (day.values[`b:${edge}`] ?? 0) + Number(bucket.value);
+        edges.add(edge);
+      }
+      const drawn = periods ? rollingAverageBuckets(days, periods, { period: "day" }).filter(bucket => !bucket.history) : days;
+      const value = (amount: number) => formatMetricOutput(amount, bins.format).text;
+      preview.grid = heatmapGrid(trendHeatmap(drawn, [...edges].map(edge => ({ key: `b:${edge}`, label: String(edge), value: String(edge), color: "" })), bins.scheme),
+        { period: "day", noun: recipe?.unit ?? countUnit, label: bins.label, format: value, rollingPeriods: periods ?? 0 });
+      preview.coverHeight = gridCoverHeight(preview.grid);
+    }
   }
   if (query.grouping && recipe?.exploration && !clause.distribution && !clause.expressionY && (!additive || !recipe.exploration.coverMetric)) {
     const count = result.groupCount ?? result.processedRows ?? values.length;
@@ -339,19 +436,34 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
 
 // Metadata lives for this execution only. A refresh always reads the current
 // canonical revisions; an aborted caller never lends its signal to another run.
-export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal): Promise<void> {
+export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string, preview?: QueryPreview, error?: unknown) => void, signal?: AbortSignal, policy?: ResultPolicy): Promise<void> {
   if (signal?.aborted) return;
+  // A Habits template draws as the dashboard card at its address.
+  jobs = jobs.map(job => job.options?.recipe?.habits && !job.options.dashboard ? { ...job, options: { ...job.options, dashboard: job.options.url, dashboardTarget: job.options.recipe.habits.target } } : job);
+  // A collected card's own group count joins its cover or chart.
+  jobs = jobs.map(job => {
+    if (job.options?.groups === undefined || job.options.dashboard) return job;
+    const { groups, ...options } = job.options, chart = withCardGroups(job.query, { recipe: options.recipe, cover: options.cover, metricId: options.coverMetricId }, groups);
+    return { ...job, query: chart.query, options: { ...options, cover: chart.cover } };
+  });
   const dashboards = jobs.filter(job => job.options?.dashboard);
   if (dashboards.length) {
     const pending = [...dashboards];
     const work = async () => {
       while (pending.length && !signal?.aborted) {
         const job = pending.shift()!;
-        try { const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, signal); if (!signal?.aborted) publish(job.id, preview); }
+        // The card's chart is drawn by the dashboard's own code, which only
+        // passes the signal down: the scope carries the policy with it.
+        const scope = policy ? resultScope(signal, policy) : undefined;
+        try {
+          const preview = await loadDashboardCardPreview(job.options!.dashboard!, job.schema, scope?.signal ?? signal, undefined, undefined, job.options!.dashboardTarget, undefined, undefined, undefined, job.options!.groups);
+          const served = scope?.served(), drawn = withCoverage(preview, scope?.coverage() ?? []);
+          if (!signal?.aborted) publish(job.id, served ? { ...drawn, served } : drawn);
+        }
         catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
       }
     };
-    await Promise.all([work(), work(), work(), loadQueryPreviews(jobs.filter(job => !job.options?.dashboard), publish, signal)]);
+    await Promise.all([work(), work(), work(), loadQueryPreviews(jobs.filter(job => !job.options?.dashboard), publish, signal, policy)]);
     return;
   }
   if (jobs.some(job => [...(job.query.grouping?.keys ?? []), ...(job.query.aggregations ?? []).flatMap(metric => metric.groupBy), ...(job.options?.recipe?.exploration?.keys ?? [])].some(field => field === "machine_id" || field === "execution_machine_id"))) await loadOriginMetadata();
@@ -361,15 +473,15 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     if (!pending) {
       pending = (async () => {
         const [handshake, definitions] = await Promise.all([
-          fetchPreview<{ metricCapabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3; computedExecution: ComputedExecution }>(`/api/query/${job.dataset}/capabilities`, signal),
+          fetchPreview<{ queryCapabilities: QueryCapabilitiesV3; computedExecution: ComputedExecution }>(`/api/query/${job.dataset}/capabilities`, signal),
           fetchPreview<ComputedColumn[]>(`/api/query-computed-columns?dataset=${encodeURIComponent(job.schema.name)}`, signal).then(raw => { if (!Array.isArray(raw)) throw new Error("Invalid computed column catalogue."); return raw.map(validateComputedColumn); }),
         ]);
-        if (handshake.metricCapabilities?.version !== 2 || !handshake.computedExecution?.profile) throw new Error("This dataset does not support metric previews.");
+        if (handshake.queryCapabilities?.version !== 3 || !handshake.computedExecution?.profile) throw new Error("This dataset does not support metric previews.");
         const fields = definitions.flatMap(definition => {
           const name = `@computed/${definition.id}`, cap = handshake.computedExecution.fields[name];
           return cap ? [{ name, label: definition.label, type: cap.type, source: { kind: "backend" as const }, filter: { enabled: false }, sort: { enabled: cap.sort }, aggregate: { measure: cap.measure, groupable: cap.group } }] : [];
         });
-        return { schema: { ...job.schema, fields: [...job.schema.fields, ...fields] }, execution: handshake.computedExecution, capabilities: handshake.metricCapabilities, queryCapabilities: handshake.queryCapabilities };
+        return { schema: { ...job.schema, fields: [...job.schema.fields, ...fields] }, execution: handshake.computedExecution, queryCapabilities: handshake.queryCapabilities };
       })();
       contexts.set(job.dataset, pending);
     }
@@ -388,19 +500,20 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const costJobs = jobs.filter(job => usesApiCostTrend(job) && !searchContext(job));
-  const costStudies = new Set(costJobs), costLoads = new Map<number, Promise<HumanStudyPreview>>();
+  // A study drawn from several answers is as stale and as old as its worst.
+  const costStudies = new Set(costJobs), costLoads = new Map<number, Promise<{ study: HumanStudyPreview; served?: ResultServed }>>();
   const costWork = Promise.all(costJobs.map(async job => {
     try {
       const days = job.options!.window!.days;
       let pending = costLoads.get(days);
       if (!pending) {
         pending = (async () => {
-          const ctx = await context(job);
+          const ctx = await context(job), answers: (ResultServed | undefined)[] = [];
           async function history(from: number, to: number): Promise<CostTimeBucket[]> {
             const query = apiCostTrendQuery(job.query.grouping!.source, from, to);
-            const request = toMetricQuery(query, ctx.schema, ctx.execution);
-            if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
-            const body = await fetchPreview<AggregationResult>("/api/query/usage/metrics", signal, request);
+            const request = toQueryRequestV3(query, sourceExecutionSchema(ctx.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { rows: false });
+            const body = await fetchPreview<AggregationResult>("/api/query/usage/query-v3", signal, request, policy);
+            answers.push(servedOf(body));
             const facts = apiCostTrendFacts(body.metrics.find(metric => metric.id === "cost-history"));
             if (facts) return facts;
             // Partition only truncated timestamp reductions; exact half-open
@@ -409,12 +522,13 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
             if (middle <= from || middle >= to) throw new Error("API cost history exceeds the timestamp group limit.");
             return [...await history(from, middle), ...await history(middle, to)];
           }
-          return buildApiCostTrend(await history(clock.getTime() - Math.max(37, days) * 86400000, clock.getTime()), days, clock.getTime());
+          const study = buildApiCostTrend(await history(clock.getTime() - Math.max(37, days) * 86400000, clock.getTime()), days, clock.getTime());
+          return { study, served: combineServed(...answers) };
         })();
         costLoads.set(days, pending);
       }
-      const study = await pending;
-      if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? job.options!.recipe!.cover)?.height, state: study.value === undefined ? "empty" : "ready", total: study.value ?? 0, summary: study.sampleLabel, note: [job.options!.recipe!.note, study.detail].filter(Boolean).join(" · "), action: job.options!.recipe!.action, study });
+      const { study, served } = await pending;
+      if (!signal?.aborted) publish(job.id, { served, coverHeight: (job.options!.cover ?? job.options!.recipe!.cover)?.height, state: study.value === undefined ? "empty" : "ready", total: study.value ?? 0, summary: study.sampleLabel, note: [job.options!.recipe!.note, study.detail].filter(Boolean).join(" · "), action: job.options!.recipe!.action, study });
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const trendJobs = jobs.filter(job => !costStudies.has(job) && usesCardTrend(job) && !searchContext(job));
@@ -423,13 +537,16 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     try {
       const recipe = job.options!.recipe!, trend = recipe.trend!, lookback = trend.lookback ?? job.options!.window!.days;
       const source = trend.dataset ? { ...job, dataset: trend.dataset, schema: trendSchemas[trend.dataset] } : job, ctx = await context(source);
+      const answers: (ResultServed | undefined)[] = [], coverage: { dataset: string; coverage?: AgentEventsCoverage & SessionShapeCoverage }[] = [];
       const results = await Promise.all(cardTrendQueries(recipe.where ?? [], trend, cardTrendDays(lookback, Boolean(trend.completeDays), clock.getTime()).days).map(async query => {
-        const request = toMetricQuery(query, ctx.schema, ctx.execution);
-        if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
-        return (await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/metrics`, signal, request)).metrics;
+        const request = toQueryRequestV3(query, sourceExecutionSchema(ctx.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { rows: false });
+        const body = await fetchPreview<AggregationResult & { coverage?: AgentEventsCoverage & SessionShapeCoverage }>(`/api/query/${source.dataset}/query-v3`, signal, request, policy);
+        answers.push(servedOf(body));
+        coverage.push({ dataset: source.dataset, coverage: body.coverage });
+        return body.metrics;
       }));
       const { study, observations } = buildCardTrend(trend, lookback, results, clock.getTime()), ready = observations > 0 && Boolean(study.points?.some(point => point !== null));
-      if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study });
+      if (!signal?.aborted) publish(job.id, withCoverage({ served: combineServed(...answers), coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study }, coverage));
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const resolved: { job: PreviewJob; query: QueryState; search: string }[] = [];
@@ -451,7 +568,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   function enqueue(item: Item) {
     if (signal?.aborted) return;
     const key = JSON.stringify([item.job.dataset, item.query, item.search]), cached = cache.get(key);
-    if (cached && Date.now() - cached.at < 60_000) {
+    if (cached && Date.now() - cached.at < CACHE_LIFETIME) {
       item.accept(cached);
       return;
     }
@@ -461,15 +578,17 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   }
   for (const item of resolved) {
     const cached = cache.get(JSON.stringify([item.job.dataset, item.query, item.search]));
-    const now = cached && Date.now() - cached.at < 60_000 ? cached.payload.now ?? clock.getTime() : clock.getTime();
+    const now = cached && Date.now() - cached.at < CACHE_LIFETIME ? cached.payload.now ?? clock.getTime() : clock.getTime();
     const historyQuery = smoothingQuery(item.job, item.query, now);
     let visible: Cached | undefined, history: Cached | undefined, done = false;
     const fail = (error: unknown) => { if (!done && !signal?.aborted) { done = true; publish(item.job.id, undefined, error); } };
     const complete = () => {
       if (done || signal?.aborted || !visible || historyQuery && !history) return;
       try {
-        const preview = previewOf(item.job, item.query, visible.payload, visible.schema, historyQuery && history ? { query: historyQuery, payload: history.payload } : undefined);
-        done = true; publish(item.job.id, preview);
+        const drawn = previewOf(item.job, item.query, visible.payload, visible.schema, historyQuery && history ? { query: historyQuery, payload: history.payload } : undefined);
+        const preview = withCoverage(drawn, [{ dataset: item.job.dataset, coverage: visible.payload.coverage }, ...history ? [{ dataset: item.job.dataset, coverage: history.payload.coverage }] : []]);
+        const served = combineServed(visible.payload.served, history?.payload.served);
+        done = true; publish(item.job.id, served ? { ...preview, served } : preview);
       } catch (error) { fail(error); }
     };
     enqueue({ ...item, now, fail, accept: data => { visible = data; complete(); } });
@@ -494,50 +613,38 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     if (signal?.aborted) return;
     try {
       const ctx = await context(items[0].job);
-      const valid: { item: Item; request: MetricQuery }[] = [];
+      const valid: { item: Item; request: QueryRequestV3 }[] = [];
       for (const item of items) {
         try {
-          // A metric filter or minimum group size the executor does not run fails its card, never silently dropped.
-          // The service runs record keyword clauses only through query-v3.
-          const grouped = Boolean(item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping) || /(^|[?&])record_search=/.test(item.search));
-          const support = grouped ? { filters: ctx.queryCapabilities?.metricFilters, minCount: ctx.queryCapabilities?.metricMinCount, minCountMeasures: ctx.queryCapabilities?.metricMinCountMeasures } : ctx.capabilities;
+          const support = { filters: ctx.queryCapabilities.metricFilters, minCount: ctx.queryCapabilities.metricMinCount, minCountMeasures: ctx.queryCapabilities.metricMinCountMeasures };
           const unsupported = item.query.aggregations?.map(metric => metricPopulationError(metric, support)).find(Boolean);
           if (unsupported) throw new Error(unsupported);
-          if (grouped) {
-            if (ctx.queryCapabilities?.version !== 3) throw new Error("Server grouping is unavailable. Refresh this view after updating the backend.");
-            const labels = Boolean(item.query.grouping && item.job.options?.recipe?.exploration?.labelFields);
-            const labelLimit = Math.max(12, ...(item.query.aggregations ?? []).map(metric => Math.max(metric.groupLimit ?? 0, metric.display?.maxGroups ?? 0)));
-            const query = labels ? { ...item.query, limit: labelLimit } : item.query.aggregations?.length ? item.query : { ...item.query, limit: Math.min(item.query.limit || 3, 3) };
-            const request = toQueryRequestV3(query, item.job.schema, ctx.queryCapabilities, ctx.execution, { now: item.now, rows: labels || !query.aggregations?.length });
-            if (request.diagnostics.length) throw new Error(request.diagnostics.join(" · "));
+          const labels = Boolean(item.query.grouping && item.job.options?.recipe?.exploration?.labelFields);
+          const labelLimit = Math.max(12, ...(item.query.aggregations ?? []).map(metric => Math.max(metric.groupLimit ?? 0, metric.display?.maxGroups ?? 0)));
+          const query = labels ? { ...item.query, limit: labelLimit } : item.query.aggregations?.length ? item.query : { ...item.query, limit: Math.min(item.query.limit || 3, 3) };
+          const request = toQueryRequestV3(query, sourceExecutionSchema(item.job.schema, ctx.execution), ctx.queryCapabilities, ctx.execution, { now: item.now, rows: labels || !query.aggregations?.length });
+          request.hostState = query.hostState;
+          if (query.grouping || request.rows || request.distinct) {
             const schema = query.grouping ? createGroupingModel(sourceExecutionSchema(item.job.schema, ctx.execution)).resultSchema(query.grouping.keys, query.grouping.summaries) : ctx.schema;
-            const result = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${item.job.dataset}/query-v3${item.search}`, signal, request);
-            validateQueryResultV3(result, request, schema);
+            const result = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${item.job.dataset}/query-v3${item.search}`, signal, request, policy);
+            validateQueryResultV3(result, asServed(request, result), schema);
             finish(item, result, schema);
-          } else if (item.query.aggregations?.length) {
-            const request = toMetricQuery(item.query, ctx.schema, ctx.execution);
-            if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
-            valid.push({ item, request });
-          } else {
-            const request = toServerQueryV2({ ...item.query, limit: Math.min(item.query.limit || 3, 3) }, ctx.schema, ctx.execution);
-            if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
-            finish(item, await fetchPreview<Payload>(`/api/query/${item.job.dataset}/rows-v2${item.search}`, signal, request), ctx.schema);
-          }
+          } else valid.push({ item, request });
         } catch (error) { item.fail(error); }
       }
       if (!valid.length || signal?.aborted) return;
       const request = { ...valid[0].request, expectedRevisions: Object.assign({}, ...valid.map(({ request }) => request.expectedRevisions)), metrics: valid.flatMap(({ request }, i) => request.metrics.map((metric, j) => ({ ...metric, id: `preview:${i}:${j}` }))) };
       try {
-        const body = await fetchPreview<AggregationResult & Pick<Payload, "find">>(`/api/query/${valid[0].item.job.dataset}/metrics${valid[0].item.search}`, signal, request);
+        const body = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${valid[0].item.job.dataset}/query-v3${valid[0].item.search}`, signal, request, policy);
+        validateQueryResultV3(body, asServed(request, body), ctx.schema);
         valid.forEach(({ item, request }, i) => {
           const metrics = request.metrics.map((metric, j) => {
             const result = body.metrics.find(result => result.id === `preview:${i}:${j}`);
             return result ? { ...result, id: metric.id } : undefined;
           }).filter((result): result is AggregationResultEntry => Boolean(result));
-          finish(item, { metrics, find: body.find }, ctx.schema);
+          finish(item, { ...body, metrics, served: servedOf(body) }, ctx.schema);
         });
       } catch (error) {
-        // A server-rejected formula must not take healthy siblings down with it.
         if (valid.length > 1 && error instanceof PreviewHTTPError && [400, 409, 422].includes(error.status)) {
           for (const { item } of valid) await run([item]);
         } else throw error;
@@ -547,8 +654,13 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   function finish(item: Item, payload: Payload, schema: FieldSchema) {
     if (signal?.aborted) return;
     if (cache.size >= 200) cache.delete(cache.keys().next().value!);
-    payload = { ...payload, now: payload.now ?? item.now };
-    cache.set(JSON.stringify([item.job.dataset, item.query, item.search]), { at: Date.now(), payload, schema });
+    payload = { ...payload, served: payload.served ?? servedOf(payload), now: payload.now ?? item.now };
+    // A stale answer is asked for again; holding it here would answer that.
+    if (payload.served?.state !== "stale") {
+      const key = JSON.stringify([item.job.dataset, item.query, item.search]);
+      cache.delete(key); cache.set(key, { at: Date.now(), payload, schema });
+      if (cacheSweep === undefined) sweepPreviewCache();
+    }
     item.accept({ at: Date.now(), payload, schema });
   }
   async function work() {

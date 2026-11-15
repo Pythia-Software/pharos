@@ -1,0 +1,281 @@
+{
+  "description": "Carbon Impact's query-v3 requests on the Usage dataset (web/src/carbon-usage.ts): the estimate's token counts under the page's filters, and the filters' choices over all usage. Go runs them in carbon_test.go.",
+  "usage": [
+    {
+      "id": "dated:uncached_input_tokens",
+      "op": "sum",
+      "field": "uncached_input_tokens",
+      "groupBy": [
+        "carbon_tier"
+      ],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "dated:unclassified_tokens",
+      "op": "sum",
+      "field": "unclassified_tokens",
+      "groupBy": [
+        "carbon_tier"
+      ],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "dated:cache_read_input_tokens",
+      "op": "sum",
+      "field": "cache_read_input_tokens",
+      "groupBy": [
+        "carbon_tier"
+      ],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "dated:cache_creation_input_tokens",
+      "op": "sum",
+      "field": "cache_creation_input_tokens",
+      "groupBy": [
+        "carbon_tier"
+      ],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "dated:output_tokens",
+      "op": "sum",
+      "field": "output_tokens",
+      "groupBy": [
+        "carbon_tier"
+      ],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "undated:uncached_input_tokens",
+      "op": "sum",
+      "field": "uncached_input_tokens",
+      "groupBy": [
+        "carbon_tier"
+      ],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_null",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "undated:unclassified_tokens",
+      "op": "sum",
+      "field": "unclassified_tokens",
+      "groupBy": [
+        "carbon_tier"
+      ],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_null",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "undated:cache_read_input_tokens",
+      "op": "sum",
+      "field": "cache_read_input_tokens",
+      "groupBy": [
+        "carbon_tier"
+      ],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_null",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "undated:cache_creation_input_tokens",
+      "op": "sum",
+      "field": "cache_creation_input_tokens",
+      "groupBy": [
+        "carbon_tier"
+      ],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_null",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "undated:output_tokens",
+      "op": "sum",
+      "field": "output_tokens",
+      "groupBy": [
+        "carbon_tier"
+      ],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_null",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "undated:total_tokens",
+      "op": "sum",
+      "field": "total_tokens",
+      "groupBy": [],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_null",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "id": "dated:default_models",
+      "op": "sum",
+      "field": "total_tokens",
+      "groupBy": [
+        "model"
+      ],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "carbon_tier_basis",
+          "op": "=",
+          "value": "default"
+        }
+      ]
+    },
+    {
+      "id": "undated:default_models",
+      "op": "sum",
+      "field": "total_tokens",
+      "groupBy": [
+        "model"
+      ],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_null",
+          "value": ""
+        },
+        {
+          "field": "carbon_tier_basis",
+          "op": "=",
+          "value": "default"
+        }
+      ]
+    },
+    {
+      "id": "dated:unreported",
+      "op": "sum",
+      "field": "total_tokens",
+      "groupBy": [],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "carbon_tier_basis",
+          "op": "=",
+          "value": "unreported"
+        }
+      ]
+    },
+    {
+      "id": "undated:unreported",
+      "op": "sum",
+      "field": "total_tokens",
+      "groupBy": [],
+      "where": [
+        {
+          "field": "hour",
+          "op": "is_null",
+          "value": ""
+        },
+        {
+          "field": "carbon_tier_basis",
+          "op": "=",
+          "value": "unreported"
+        }
+      ]
+    }
+  ],
+  "choices": [
+    {
+      "id": "choices:repository_name",
+      "op": "count",
+      "groupBy": [
+        "repository_name"
+      ]
+    },
+    {
+      "id": "choices:provider",
+      "op": "count",
+      "groupBy": [
+        "provider"
+      ]
+    },
+    {
+      "id": "choices:channel",
+      "op": "count",
+      "groupBy": [
+        "channel"
+      ]
+    },
+    {
+      "id": "choices:machine_id",
+      "op": "count",
+      "groupBy": [
+        "machine_id"
+      ]
+    },
+    {
+      "id": "choices:execution_machine_id",
+      "op": "count",
+      "groupBy": [
+        "execution_machine_id"
+      ]
+    }
+  ]
+}

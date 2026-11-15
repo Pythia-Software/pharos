@@ -1,0 +1,177 @@
+{
+  "index_version": "token-events-v6-inference-speed",
+  "records": [
+    {
+      "SourceID": "export-work",
+      "SourceKind": "tl1-export",
+      "Title": "Count README words",
+      "Account": "local",
+      "Purpose": "Count the words",
+      "Outcome": "74 words",
+      "ActivityAt": "2026-09-01T10:01:00.000Z",
+      "Location": "/work/app",
+      "Repository": null,
+      "Metadata": {
+        "branch": "main"
+      },
+      "Conversations": [
+        {
+          "NativeID": "export-main",
+          "Provider": "claude",
+          "Model": "claude-opus-4-5",
+          "Effort": "high",
+          "Account": "local",
+          "ParentNativeID": "",
+          "Origin": "$ROOT/002/export/export.json",
+          "Coverage": "complete",
+          "StartedAt": "2026-09-01T10:00:00.000Z",
+          "EndedAt": "2026-09-01T10:01:00.000Z",
+          "Harness": "claude-code/cli",
+          "HarnessVersionFirst": "2.1.3",
+          "HarnessVersionLast": "2.1.3",
+          "Aliases": [],
+          "Messages": [
+            {
+              "NativeID": "m1",
+              "Role": "user",
+              "Kind": "message",
+              "Text": "Count the words",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:00.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/export/export.json:0:0",
+              "Speed": "fast",
+              "SpeedSource": "speed",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "m2",
+              "Role": "assistant",
+              "Kind": "reasoning",
+              "Text": "Read the file first.",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:01.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/export/export.json:0:1",
+              "Speed": "fast",
+              "SpeedSource": "speed",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "m3",
+              "Role": "assistant",
+              "Kind": "tool_call",
+              "Text": "{\"tool\":\"Bash\",\"input\":{\"command\":\"wc -w README.md\"}}",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:02.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "c1",
+              "EvidenceLocator": "$ROOT/002/export/export.json:0:2",
+              "Speed": "fast",
+              "SpeedSource": "speed",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "m4",
+              "Role": "tool",
+              "Kind": "tool_result",
+              "Text": "74 README.md",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:03.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "c1",
+              "EvidenceLocator": "$ROOT/002/export/export.json:0:3",
+              "Speed": "fast",
+              "SpeedSource": "speed",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "m5",
+              "Role": "assistant",
+              "Kind": "message",
+              "Text": "README.md has 74 words.",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:04.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/export/export.json:0:4",
+              "Speed": "fast",
+              "SpeedSource": "speed",
+              "RawText": "{\"created_at\":\"2026-09-01T10:00:04Z\",\"id\":\"m5\",\"kind\":\"message\",\"message\":{\"id\":\"req-1\",\"usage\":{\"input_tokens\":100,\"output_tokens\":20}},\"role\":\"assistant\",\"text\":\"README.md has 74 words.\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            }
+          ]
+        },
+        {
+          "NativeID": "export-agent",
+          "Provider": "claude",
+          "Model": "claude-opus-4-5",
+          "Effort": "high",
+          "Account": "local",
+          "ParentNativeID": "export-main",
+          "Origin": "$ROOT/002/export/export.json",
+          "Coverage": "complete",
+          "StartedAt": "2026-09-01T10:00:00.000Z",
+          "EndedAt": "2026-09-01T10:01:00.000Z",
+          "Harness": "claude-code/cli",
+          "HarnessVersionFirst": "2.1.3",
+          "HarnessVersionLast": "2.1.3",
+          "Aliases": [],
+          "Messages": [
+            {
+              "NativeID": "a1",
+              "Role": "assistant",
+              "Kind": "message",
+              "Text": "74 words.",
+              "Model": "claude-opus-4-5",
+              "Effort": "high",
+              "CreatedAt": "2026-09-01T10:00:05.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/export/export.json:1:0",
+              "Speed": "fast",
+              "SpeedSource": "speed",
+              "RawText": "{\"created_at\":\"2026-09-01T10:00:05Z\",\"id\":\"a1\",\"kind\":\"message\",\"message\":{\"id\":\"req-2\",\"usage\":{\"input_tokens\":100,\"output_tokens\":20}},\"role\":\"assistant\",\"text\":\"74 words.\"}",
+              "SourceOrder": 0,
+              "Selected": true
+            }
+          ]
+        }
+      ],
+      "WorkItems": [],
+      "Attempts": [],
+      "Handoffs": [],
+      "Metrics": [
+        {
+          "name": "reported_cost",
+          "unit": "USD",
+          "value": 0.12
+        }
+      ],
+      "Changes": [],
+      "PRs": []
+    }
+  ]
+}

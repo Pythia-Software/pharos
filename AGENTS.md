@@ -8,6 +8,13 @@ others sit beside it). The Query Table frontend is TypeScript in `web/src`,
 bundled into the gitignored `internal/archive/assets/query-tables.{js,css}`. See
 [docs/technical-overview.md](docs/technical-overview.md) for the architecture.
 
+Main agent: delegate broad repository exploration to one read-only subagent
+(Claude Code: Explore; Codex: spawn_agent) when available. Request a short
+summary of relevant files, symbols, tests, and suggested edit points, then
+implement from it; reread only what editing or verification needs. Keep small
+lookups local; if delegation is unavailable, use targeted searches.
+Prefer a subagent with the same model and effort level as the main agent.
+
 Split long tasks. Past a few hundred requests, write a short handoff in
 `.context/` (what's done, what's next, where things are) and continue in a
 fresh session.
@@ -30,6 +37,14 @@ the release command fails, address that specific failure and resume publishing.
 Release-only tasks must never run release-machine setup or create/import signing
 keys. Missing deployment configuration or signing keys is a blocker to report;
 signing and publication belong on the separately configured deployment Mac.
+
+## User-facing vocabulary
+
+Use the Data Guide vocabulary in `web/src/data-taxonomy-model.ts` and the
+relationship/copy rules in [docs/ui-vocabulary.md](docs/ui-vocabulary.md).
+Name the actual counting unit: workspace, conversation, agent session, message
+or tool call. Work items are source-recorded tasks, not another name for
+workspace rows. Preserve source text, stored field keys and URL/API identities.
 
 ## Query Table dependency policy
 
@@ -63,13 +78,48 @@ drafts and transient menus require an explicit reviewed classification.
 
 `npm --prefix web run generate-view-controls` updates the source-discovered
 review ledger and fails on unclassified controls. Review each new/changed
-entry in `docs/view-controls.json`, then regenerate the site map. Agent help
-comes from the same contract. Keep browser restoration and cross-language
+entry in `docs/view-controls.json`; the build renders the site map from it.
+Agent help comes from the same contract. Keep browser restoration and cross-language
 round trips covered. Record unavailable dependency capabilities as blockers,
 not opt-outs. See `docs/url-view-state.md` and the JSON-inspector handoff.
 
 Do not build frontend bundles concurrently with Go compilation; Go embeds
 those files. Finish the build before starting Go checks.
+
+## Dashboard card defaults
+
+Dashboard card creation must derive its default title and context from the saved
+target's current controls and filters through `dashboardCardMetadata`. Catalog
+dashboards inherit `dashboard-card-copy.ts`; new bespoke targets must supply
+standalone names and describe the inputs their previews actually use. Keep the
+page heading and Card Library defaults on those same naming functions. Preserve
+author edits when switching targets or changing cover controls. Extend the
+discovered-target and control-change cases in `dashboard-card.test.mjs`; do not
+copy a static page heading or generic topic description into a creation path.
+
+## Portability boundaries
+
+Shared code owns policy; reviewed native helpers own OS mechanisms. Reuse the
+existing platform primitives and host-services adapter. Keep unsupported distinct
+from success, unknown liveness from absence, and missing measurements from zero.
+Preserve descriptor/process lifetimes and persisted identity encodings. See
+[the portability guide](docs/portability.md) and the
+[work-execution contract](docs/work-portability.md). Windows/Linux hosts,
+distributions and a Web product require a separate task.
+
+`go test ./internal/architecture` is a fast source-only boundary check, also
+included in the normal Go suite. Native leaves and legacy shared exceptions
+have exact reviewed entries in `internal/architecture/native_test.go`; a platform
+filename alone is not approval. New exceptions need a reason and cheap failure/
+lifetime contract coverage. `npm --prefix web run check-host-boundaries` discovers
+authored JS/TS and executable shell fragments; native transport and clipboard
+implementations belong only in the approved host adapter.
+
+The cross-compilation matrix is **opt-in only**:
+`go test -tags portability_compile -run '^TestCrossPlatformCompilation$' -timeout 15m ./internal/architecture`.
+It requires the built frontend from setup. Do not add it to setup, merge checks,
+npm checks, normal test commands or other common paths. It proves production
+compilation, not target runtime support. Run it only when explicitly requested.
 
 ## Running tests
 
@@ -108,8 +158,9 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 | Python tools | `python3 -m unittest discover -s tools` |
 | Plugin contracts and the SSH importer | `python3 -m unittest discover -s contracts/plugins` and `python3 -m unittest discover -s importers` (need `jsonschema`) |
 | Frontend bundle | `npm --prefix web run build` after any `web/src` or `pricing/*.json` change; outputs are gitignored |
+| Provider golden records | `PHAROS_UPDATE_GOLDEN=1 go test -vet=off -run TestProviderConformance ./internal/archive` after changing what an adapter reads; it rewrites `testdata/ingestion/<kind>.json`, and refuses a change without a new index version (`same-version` overrides) |
 | Recipe snapshot | `npm --prefix web run generate-recipes` after changing card recipes; it rewrites `implemented_recipes` in `docs/homepage-query-cards.json`, which Go's `TestHomeQueryRecipesV2` executes |
-| Site map | `npm --prefix web run generate-site-map` after changing pages, routes, analysis catalogs, dashboard defaults, schemas or card recipes; it rewrites `internal/archive/assets/site-map.json` and `testdata/site-map-cases.json` ([docs/site-map.md](docs/site-map.md)) |
+| Site map | Rendered by `npm --prefix web run build` (and before unit tests) when one of its inputs changed: `internal/archive/assets/site-map.json`, `testdata/site-map-cases.json` and the Ask suggestion catalog `internal/archive/assets/ask-suggestions.json`. They are gitignored build outputs, like the bundles; never commit them. `npm --prefix web run generate-site-map` forces a render ([docs/site-map.md](docs/site-map.md), [docs/ask-suggestions.md](docs/ask-suggestions.md)) |
 
 - **JS unit tests** live in `web/tests/unit/**` and import `web/src` and
   schema JSON directly. `web/tests/run.mjs` bundles them once with esbuild
@@ -189,7 +240,8 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   - `slowTest(t)` for a test that takes seconds, so that `-short` skips it.
 
   `TestMain` keeps tests off this Mac: no `ioreg`, `scutil`, `diskutil` or
-  GitHub, no user git configuration, and catalogs without drive flushes.
+  GitHub, no user git configuration, and disposable files and catalogs without
+  drive flushes.
   Tests of those opt back in, for example with `stubDriveTool` or
   `useDurableCatalog`.
 - **Go tests run in several processes, one test at a time in each.**
@@ -206,6 +258,18 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   `PHAROS_TEST_PROCESSES=1` runs everything in one process, for example
   under a debugger. Profiles, coverage, benchmarks, fewer than 16 tests and
   `-run` patterns with a `/` already run in one process.
+
+  Those processes take turns across every checkout on the machine: each
+  holds one of a shared pool of slots (a quarter of the CPUs, at least
+  four) while it runs. A run that seems to wait is queued behind other
+  agents' runs, and finishes sooner than it would by competing with them;
+  do not start a second copy. Halfway to `-timeout` a run stops queueing
+  and finishes without slots. `PHAROS_TEST_SLOTS` sets the pool's size
+  for one run; `0` removes the bound.
+- **Keep the fast tier cheap.** Many agents run it at once, and a handful
+  of tests can be a third of its CPU. When a test takes seconds, lower a
+  limit with `override`, shrink its fixture, or mark it `slowTest(t)`.
+  `go test -short -v ./internal/archive` prints each test's time.
 - **Keep data-safety tests**, even when slow. These include adopt, backup,
   capture, durability, and cross-host merges. Make their fixtures cheaper
   instead.

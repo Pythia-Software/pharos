@@ -177,5 +177,23 @@ func TestIncrementalWriterRowBudget(t *testing.T) {
 	record.Conversations[0].Messages = append(record.Conversations[0].Messages, MessageRecord{NativeID: "appended", Role: "user", Kind: "message", Text: "appended searchable message", Selected: true})
 	if rows := writeIncrementalFixture(t, catalog, record); rows > 80 {
 		t.Fatalf("single append exceeded 80-row budget: %d", rows)
+	} else {
+		t.Logf("single append: %d row changes", rows)
+	}
+	// Skipping unchanged facts must still persist a real usage/timing change.
+	stamp := "2026-10-01T10:05:00.000Z"
+	record.Conversations[0].Messages = append(record.Conversations[0].Messages, MessageRecord{
+		NativeID: "usage", Role: "system", Kind: "metadata", CreatedAt: stamp, Selected: true,
+		RawText: `{"type":"token_usage_record","response_id":"request","usage":{"input_tokens":100,"output_tokens":20}}`,
+	})
+	writeIncrementalFixture(t, catalog, record)
+	var input, output, total int
+	var start, end, bounds string
+	if err := catalog.DB.QueryRow(`SELECT input_tokens,output_tokens,total_tokens,started_at,ended_at,time_bounds_source
+ FROM agent_sessions WHERE native_id='main'`).Scan(&input, &output, &total, &start, &end, &bounds); err != nil {
+		t.Fatal(err)
+	}
+	if input != 100 || output != 20 || total != 120 || start != stamp || end != stamp || bounds != "message-span" {
+		t.Fatalf("changed session facts lost: input=%d output=%d total=%d bounds=%s/%s (%s)", input, output, total, start, end, bounds)
 	}
 }

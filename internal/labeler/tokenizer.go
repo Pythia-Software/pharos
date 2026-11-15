@@ -38,6 +38,9 @@ type Tokenizer struct {
 	// byteID is the vocabulary id of each single byte's symbol, or -1 when the
 	// vocabulary lacks it (BPE without an unknown token drops such bytes).
 	byteID [256]int32
+	// tokenBytes is each vocabulary id's length in bytes (0 when unknown):
+	// what EncodeOffsets turns a pre-token's ids back into ranges with.
+	tokenBytes []int32
 	// merges maps a pair of ids (left<<32 | right) to its merge.
 	merges map[uint64]bpeMerge
 	// whole maps a pre-token's bytes to its id when ignore_merges is set.
@@ -143,6 +146,12 @@ func LoadTokenizer(data []byte) (*Tokenizer, error) {
 		t.vocabSize = max(t.vocabSize, int(id)+1)
 	}
 
+	t.tokenBytes = make([]int32, t.vocabSize)
+	for s, id := range m.Vocab {
+		if raw, ok := byteLevelDecode(s); ok {
+			t.tokenBytes[id] = int32(len(raw))
+		}
+	}
 	for b := range 256 {
 		id, ok := m.Vocab[string(byteChar[b])]
 		if !ok {

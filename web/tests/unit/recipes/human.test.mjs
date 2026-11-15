@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { cardCoverQuery, core, recipeById, recipeHarness, schemas } from "../helpers/recipes.mjs";
 const schema = schemas.writing_messages;
 const now = Date.parse("2026-10-15T12:00:00Z"), { card } = recipeHarness(now);
-const row = (id, typed_words, conversation_id, work_id, repository_name = "one") => ({ id, typed_words, conversation_id, work_id, repository_name, title: "Same title", words: typed_words + 100, sent_at: now - 1000 });
+const row = (id, typed_words, conversation_id, work_id, project_name = "one") => ({ id, typed_words, conversation_id, work_id, project_name, title: "Same title", words: typed_words + 100, sent_at: now - 1000 });
 const population = [row("a1", 10, "a", "w1"), row("a2", 30, "a", "w1"), row("b", 100, "b", "w1"), row("c", 60, "c", "w2", "two"), row("d", 50, "d", null, "two"), row("auto", 0, "auto", "w3"), { ...row("old", 10000, "old", "old"), sent_at: now - 8 * 86400000 }];
 function value(id, metricId, rows = population) {
   const { recipe, query } = card(id);
@@ -19,7 +19,7 @@ test("word averages use windowed human messages and the intended identity denomi
   assert.equal(value("human-words-per-conversation", "human_conversations"), 4);
   const { query } = card("human-repo-conversation-depth");
   const result = core.applyQuery(population, query, schema, { now });
-  assert.deepEqual(result.rows.map(row => [row.repository_name, row.words_per_conversation, row.human_conversations]), [["one", 70, 2], ["two", 55, 2]]);
+  assert.deepEqual(result.rows.map(row => [row.project_name, row.words_per_conversation, row.human_conversations]), [["one", 70, 2], ["two", 55, 2]]);
 });
 
 test("message-length distribution samples are conversation word totals", () => {

@@ -18,8 +18,9 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // The labeler's downloadable assets (docs/local-labeler.md, "Model
@@ -32,8 +33,11 @@ import (
 // labelsAsset is one pinned download: a .tar.gz unpacked into
 // <support>/labeler/<name>-<version>/.
 type labelsAsset struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	// DefaultVariant chooses the canonical model in app-managed downloads.
+	// Older descriptors omit it and retain int8.
+	DefaultVariant string `json:"default_variant,omitempty"`
+	Name           string `json:"name"`
+	Version        string `json:"version"`
 	// URL may name {name} and {version}.
 	URL    string `json:"url"`
 	SHA256 string `json:"sha256"`
@@ -82,6 +86,15 @@ var labelsDownloadClient = &http.Client{Transport: &http.Transport{Proxy: http.P
 // transfer would hold the one-per-Mac download lock indefinitely.
 var labelsDownloadStall = time.Minute
 
+// modelVariant preserves custom model directories and explicit settings.
+// Only the app-managed download adopts its release descriptor's default.
+func (a labelsAsset) modelVariant(configuredDir string) string {
+	if configuredDir == "" && a.DefaultVariant != "" {
+		return a.DefaultVariant
+	}
+	return "int8"
+}
+
 func (a labelsAsset) url() string {
 	return strings.NewReplacer("{name}", a.Name, "{version}", a.Version).Replace(a.URL)
 }
@@ -117,6 +130,24 @@ func (a labelsAsset) present() bool {
 
 // partial is the download in progress, kept between attempts.
 func (a labelsAsset) partial() string { return a.dir() + ".download" }
+
+// failure records why the last download failed, until one succeeds, so
+// status can say so rather than read as not yet started.
+func (a labelsAsset) failure() string { return a.dir() + ".failed" }
+
+// lastFailure is when the last download failed and why ("" when the last
+// attempt did not fail).
+func (a labelsAsset) lastFailure() (time.Time, string) {
+	info, err := os.Stat(a.failure())
+	if err != nil {
+		return time.Time{}, ""
+	}
+	data, err := os.ReadFile(a.failure())
+	if err != nil {
+		return time.Time{}, ""
+	}
+	return info.ModTime(), strings.TrimSpace(string(data))
+}
 
 // downloaded is how many bytes of the download are on disk.
 func (a labelsAsset) downloaded() int64 {
@@ -242,7 +273,7 @@ func downloadLabelsAsset(ctx context.Context, asset labelsAsset, progress func(d
 			return fmt.Errorf("download %s: %w", asset.Name, err)
 		}
 	}
-	return file.Sync()
+	return syncToDrive(file)
 }
 
 // verifyLabelsDownload checks the download's size and SHA-256 against the
@@ -333,18 +364,23 @@ func untarGzip(path, dir string) error {
 // labels fetch), so one Mac downloads once; status asks whether it is held.
 func labelsFetchLock() string { return filepath.Join(pharosSupportDir(), "labeler", ".fetch.lock") }
 
+// Tests replace only labelsFetchActive's lock calls to exercise failures.
+var lockLabelsFetchProbe = filelock.Lock
+
 // labelsFetchActive reports whether some process is downloading. It only
-// opens an existing lock file, so a status read creates nothing.
+// opens an existing lock file, so a status read creates nothing. It is a
+// status hint, not a safety verdict: no lock file means no download, and a
+// lock it cannot take for any reason reads as downloading.
 func labelsFetchActive() bool {
 	file, err := os.Open(labelsFetchLock())
 	if err != nil {
 		return false
 	}
 	defer file.Close()
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+	if err := lockLabelsFetchProbe(file, filelock.Shared, filelock.Try); err != nil {
 		return true
 	}
-	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	_ = filelock.Unlock(file)
 	return false
 }
 
@@ -358,8 +394,11 @@ func fetchLabelsAssets(ctx context.Context, assets []labelsAsset, op *Op, progre
 		return err
 	}
 	lease, err := fileLease(labelsFetchLock(), true)
-	if err != nil {
+	if errors.Is(err, filelock.ErrContended) {
 		return errLabelsFetching
+	}
+	if err != nil {
+		return fmt.Errorf("lock the labeler download: %w", err)
 	}
 	defer lease.Close()
 	for _, asset := range assets {
@@ -371,15 +410,20 @@ func fetchLabelsAssets(ctx context.Context, assets []labelsAsset, op *Op, progre
 			}
 		})
 		if err != nil {
+			if ctx.Err() == nil {
+				_ = os.WriteFile(asset.failure(), []byte(err.Error()+"\n"), 0o600)
+			}
 			return err
 		}
+		os.Remove(asset.failure())
 	}
 	return nil
 }
 
 // labelsAssetStatus describes an asset for status: downloaded, downloading
-// (with progress), partly downloaded, or not yet downloaded.
+// (with progress), failed, partly downloaded, or not yet downloaded.
 func labelsAssetStatus(asset labelsAsset) string {
+	at, failed := asset.lastFailure()
 	switch {
 	case asset.present():
 		return "downloaded to " + asset.dir()
@@ -388,6 +432,12 @@ func labelsAssetStatus(asset labelsAsset) string {
 	case labelsFetchActive():
 		done := asset.downloaded()
 		return fmt.Sprintf("downloading: %d of %d MB (%.0f%%)", done>>20, asset.Size>>20, 100*float64(done)/float64(asset.Size))
+	case failed != "":
+		status := "the last download failed at " + at.Format("Jan 2 15:04") + " (" + failed + ")"
+		if done := asset.downloaded(); done > 0 {
+			status += fmt.Sprintf("; %d of %d MB kept", done>>20, asset.Size>>20)
+		}
+		return status + "; Pharos tries again later"
 	case asset.downloaded() > 0:
 		return fmt.Sprintf("partly downloaded (%d of %d MB, resumed on the next attempt)", asset.downloaded()>>20, asset.Size>>20)
 	}

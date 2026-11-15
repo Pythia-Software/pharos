@@ -804,6 +804,13 @@ func resolveGitHubRepositories(ctx context.Context, items []repositoryIdentity, 
 		FullName string `json:"full_name"`
 	}
 	cache := map[string]answer{}
+	total, completed := 0, 0
+	for _, item := range items {
+		if strings.HasPrefix(item.Normalized, "github.com/") && (want == nil || want(item)) {
+			total++
+		}
+	}
+	reportWork(ctx, "Checking GitHub repository names", "repository", 0, total)
 	for i := range items {
 		if ctx.Err() != nil {
 			return githubReady
@@ -831,6 +838,8 @@ func resolveGitHubRepositories(ctx context.Context, items []repositoryIdentity, 
 			items[i].Forge = fmt.Sprint(data.ID)
 			items[i].ForgeCanonical = "github.com/" + strings.ToLower(data.FullName)
 		}
+		completed++
+		reportWork(ctx, "Checking GitHub repository names", "repository", completed, total)
 	}
 	return githubReady
 }

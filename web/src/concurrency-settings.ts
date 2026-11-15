@@ -12,6 +12,7 @@ export function concurrencyWindowRange(days?: number | null): ConcurrencyRange {
   return concurrencyRangePresets.find(([, count]) => count === days)?.[0] ?? "all";
 }
 export type ConcurrencySettings = {
+  // repository holds a project name; the key predates projects.
   mode: ConcurrencyMode; gap: number; repository: string; day: string;
   counting: ConcurrencyCounting; agent: string;
   range: ConcurrencyRange; startDay: string; endDay: string;
@@ -86,15 +87,6 @@ export function readConcurrencySettings(overrides: Partial<ConcurrencySettings> 
     }
   }
   return normalizeConcurrencySettings({...normalizeConcurrencySettings(source),...overrides});
-}
-
-export function readMachineConcurrencySettings(): ConcurrencySettings {
-  const captured = new URLSearchParams(location.search).get("q_machine_parallelism");
-  if (captured !== null) {
-    try { return normalizeConcurrencySettings(JSON.parse(captured)); }
-    catch { return normalizeConcurrencySettings(null); }
-  }
-  return { ...readConcurrencySettings(), zoom: null, workspace: "", agent: "" };
 }
 
 export function saveConcurrencySettings(next: ConcurrencySettings): void {

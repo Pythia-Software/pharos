@@ -394,7 +394,7 @@ func (s *Server) startCloudRun(ctx context.Context, id, kind, trigger string, at
 func (s *Server) settleCloudRuns(ctx context.Context, at time.Time) (err error) {
 	pass := s.Catalog.beginPass(ctx, "cloud.reconcile", triggerSchedule)
 	defer func() { pass.end(err) }()
-	pass.runIO(func() { err = s.settleCloudRunsIn(ctx, pass, at) })
+	pass.runIO(ctx, func(ctx context.Context) { err = s.settleCloudRunsIn(ctx, pass, at) })
 	return err
 }
 

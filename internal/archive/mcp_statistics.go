@@ -179,13 +179,17 @@ func (c *Catalog) buildStatisticsSnapshot(ctx context.Context, r statisticsReque
 	if err != nil {
 		return snapshot, err
 	}
-	clauses, values := statisticsContext(r)
-	entityID, from, projectionID, entity := "w.id", `workspaces w LEFT JOIN repositories repo ON repo.id=w.repository_id`, "w.id", "workspace"
-	fields := `w.id workspace_id,w.source_kind source,w.activity_at,repo.display_name repository,w.indexed_at,
+	roots, err := fileFilterRoots(ctx, tx, r.File)
+	if err != nil {
+		return snapshot, err
+	}
+	clauses, values := statisticsContext(r, roots)
+	entityID, from, projectionID, entity := "w.id", `workspaces w LEFT JOIN repositories repo ON repo.id=w.repository_id`+projectJoin("w"), "w.id", "workspace"
+	fields := `w.id workspace_id,w.source_kind source,w.activity_at,repo.display_name repository,` + projectNameSQL("w") + ` project,` + outcomeLabelSQL("w") + ` outcome_label,w.indexed_at,
 	CASE WHEN EXISTS(SELECT 1 FROM conversations ac WHERE ac.workspace_id=w.id AND ac.coverage<>'complete') THEN 'partial' ELSE 'complete' END archive_coverage`
 	if r.Entity == "conversation" {
 		entityID = "c.id"
-		from = `conversations c JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories repo ON repo.id=w.repository_id`
+		from = `conversations c JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories repo ON repo.id=w.repository_id` + projectJoin("w")
 		fields += `,c.provider,c.model,c.effort,c.coverage,c.started_at,c.ended_at`
 		for _, f := range originFields {
 			fields += ",(SELECT oo." + f + " FROM conversation_origins oo WHERE oo.conversation_id=c.id) " + f
@@ -341,7 +345,9 @@ func (c *Catalog) buildStatisticsSnapshot(ctx context.Context, r statisticsReque
 	return snapshot, nil
 }
 
-func statisticsContext(r statisticsRequest) ([]string, []any) {
+// statisticsContext is the request's filters; roots resolve an absolute
+// file filter (fileFilterRoots).
+func statisticsContext(r statisticsRequest, roots []projectRoot) ([]string, []any) {
 	where := []string{"1=1"}
 	args := []any{}
 	if r.Entity == "conversation" {
@@ -350,6 +356,10 @@ func statisticsContext(r statisticsRequest) ([]string, []any) {
 	if r.Repository != "" {
 		where = append(where, repositoryNamePredicate("repo"))
 		args = append(args, r.Repository, r.Repository)
+	}
+	if r.Project != "" {
+		where = append(where, projectPredicate("w"))
+		args = append(args, projectArgs(r.Project)...)
 	}
 	for _, f := range []struct{ field, value string }{{"channel", r.Channel}, {"machine_id", r.MachineID}, {"execution_machine_id", r.ExecutionMachineID}} {
 		if f.value != "" {
@@ -370,6 +380,10 @@ func statisticsContext(r statisticsRequest) ([]string, []any) {
 			where = append(where, field.column+" LIKE ?")
 			args = append(args, "%"+field.value+"%")
 		}
+	}
+	if r.OutcomeLabel != "" {
+		where = append(where, outcomeLabelSQL("w")+"=?")
+		args = append(args, r.OutcomeLabel)
 	}
 	if r.Error != "" {
 		where = append(where, "EXISTS(SELECT 1 FROM metric_ledger ml WHERE ml.workspace_id=w.id AND ml.error_type LIKE ?)")
@@ -397,8 +411,8 @@ func statisticsContext(r statisticsRequest) ([]string, []any) {
 		}
 	}
 	if r.File != "" {
-		where = append(where, "EXISTS(SELECT 1 FROM change_sets cs JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=w.id AND cf.path LIKE ?)")
-		args = append(args, "%"+r.File+"%")
+		where = append(where, fileFilterSQL("w"))
+		args = append(args, fileFilterArgs(r.File, roots)...)
 	}
 	if r.PR != nil {
 		where = append(where, "EXISTS(SELECT 1 FROM work_pr_links l JOIN pull_requests pr ON pr.id=l.pr_id WHERE l.workspace_id=w.id AND pr.number=?)")
@@ -742,7 +756,7 @@ func statisticsMetricEvidence(row statisticsRow, r statisticsRequest) map[string
 		if r.Scope == "workspace" {
 			owner = row.Workspace
 		}
-		m[name] = map[string]any{"value": v.Value, "effective_value": v.effective(r.Quality), "status": v.Status, "scope": r.Scope, "owner_id": owner}
+		m[name] = map[string]any{"value": v.Value, "effective_value": v.effective(r.Quality), "status": v.Status, "scope": r.Scope, "owner_id": owner, "is_estimate": v.IsEstimate}
 		if name == "cost_usd" {
 			m[name].(map[string]any)["price_status"] = nilIfEmpty(v.PriceStatus)
 		}
@@ -789,8 +803,8 @@ func statisticsMetadataRow(row statisticsRow, r statisticsRequest, s statisticsS
 		if _, err := metricName(name); err == nil {
 			v := row.Metrics[name]
 			item[name] = v.effective(r.Quality)
-			if v.Status != "complete" {
-				details[name] = map[string]any{"value": v.Value, "status": v.Status}
+			if v.Status != "complete" || v.IsEstimate {
+				details[name] = map[string]any{"value": v.Value, "status": v.Status, "is_estimate": v.IsEstimate}
 				if name == "cost_usd" {
 					details[name].(map[string]any)["price_status"] = nilIfEmpty(v.PriceStatus)
 				}
@@ -897,7 +911,7 @@ func statisticsAggregatePage(s statisticsSnapshot, r statisticsRequest, position
 				values[a.ID] = len(groups[key])
 				continue
 			}
-			count := 0
+			count, estimated := 0, 0
 			total, low, high := 0.0, 0.0, 0.0
 			statuses := map[string]int{}
 			for _, row := range groups[key] {
@@ -914,6 +928,9 @@ func statisticsAggregatePage(s statisticsSnapshot, r statisticsRequest, position
 					high = n
 				}
 				total += n
+				if v.IsEstimate {
+					estimated++
+				}
 				count++
 			}
 			var value any
@@ -932,7 +949,7 @@ func statisticsAggregatePage(s statisticsSnapshot, r statisticsRequest, position
 				}
 			}
 			values[a.ID] = value
-			quality[a.ID] = map[string]any{"usable_values": count, "population": len(groups[key]), "statuses": statuses}
+			quality[a.ID] = map[string]any{"usable_values": count, "population": len(groups[key]), "statuses": statuses, "is_estimate": estimated > 0, "estimated_values": estimated}
 		}
 		items = append(items, map[string]any{"keys": keys[key], "values": values, "quality": quality})
 	}
@@ -974,6 +991,7 @@ func prepareStatisticsSnapshot(c *Catalog, s *statisticsSnapshot) {
 	s.Created = c.clock().UnixMilli()
 	s.Expires = s.Created + statisticsTTL.Milliseconds()
 }
+
 // statisticsSnapshotStore keeps query_statistics snapshots for continuation
 // in this process's memory, not the catalog: saving one would wait for any
 // sync holding the writer. A forwarded call always reaches the service, and a
@@ -1121,7 +1139,7 @@ func statisticsCursorPosition(s statisticsSnapshot, r statisticsRequest) (int, e
 
 func compatibleStatisticsRequest(original, r statisticsRequest, membership bool) error {
 	if original.Entity == "workspace" && r.Entity == "conversation" && membership && len(r.Metrics) == 0 && len(r.Filters) == 0 && r.Query == "" && r.Scope == "conversation" {
-		if r.Type != "rows" || r.Repository != "" || r.Source != "" || r.Model != "" || r.Provider != "" || r.Channel != "" || r.MachineID != "" || r.ExecutionMachineID != "" || r.Effort != "" || r.File != "" || r.PR != nil || r.From != "" || r.To != "" || r.Owner != "" || r.Flavor != "" || r.Version != "" || r.Outcome != "" || r.Error != "" {
+		if r.Type != "rows" || r.Repository != "" || r.Project != "" || r.Source != "" || r.Model != "" || r.Provider != "" || r.Channel != "" || r.MachineID != "" || r.ExecutionMachineID != "" || r.Effort != "" || r.File != "" || r.PR != nil || r.From != "" || r.To != "" || r.Owner != "" || r.Flavor != "" || r.Version != "" || r.Outcome != "" || r.OutcomeLabel != "" || r.Error != "" {
 			return fmt.Errorf("membership snapshot only supports IDs/coverage and workspace_ids selection")
 		}
 		return nil

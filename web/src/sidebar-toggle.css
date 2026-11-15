@@ -1,0 +1,5 @@
+.sidebar-toggle { display: grid; place-items: center; flex: none; width: 36px; height: 36px; padding: 0; color: var(--muted); border: 1px solid transparent; border-radius: 5px; background: transparent; }
+.sidebar-toggle:hover { color: var(--ink); background: var(--panel); border-color: var(--line); }
+.sidebar-toggle .app-icon { width: 18px; height: 18px; }
+.sidebar-toggle[aria-expanded="false"] { background: var(--panel); border-color: var(--line); }
+.sidebar-toggle[hidden] { display: none; }

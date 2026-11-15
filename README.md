@@ -153,17 +153,6 @@ or a cached excerpt of the first words classified as human-authored. See
 
 ![A conversation in Pharos: turns with prompt and outcome previews, an activity timeline of commands and reads with context-growth markers, and a context minimap on the right](docs/images/conversation.png)
 
-**Share** saves conversations as one standalone HTML file you can send or
-publish. On a work's page it shares that conversation; in the Library, tick
-the rows you want (or **Select all** for the current filters) and choose
-**Share N conversations**, up to 200 at a time. The file opens in any browser
-with the same reader (search, turn disclosure, tool details, the context rail,
-the token overview) and tables over those works' Library rows, tool use, tool
-calls, and token usage that filter, group, and chart in the page. It needs no
-Pharos, network, or server, and ends with a link back to this repository. It
-contains the full transcripts, tool output, and file paths, so read it before
-sharing.
-
 ### 5. See where the tokens go
 
 **Analyze → Machine Activity** has three views: **Machine Tokens**, **Machine

@@ -208,7 +208,8 @@
     applyRenames(status.repository_renames);
     if (wasRunning && !status.running) {
       toast(status.error ? 'The library upgrade stopped before finishing.' : 'The library upgrade finished.');
-      for (const dataset of ['library', 'usage', 'tools', 'tool_calls']) window.pharosQueryTables?.refresh(dataset);
+      // Cards follow; query tables rerun only through their own Run Now and auto-refresh.
+      for (const dataset of ['library', 'usage', 'tools', 'tool_calls']) window.pharosQueryTables?.refreshDashboards(dataset);
     }
     wasRunning = status.running;
     window.dispatchEvent(new CustomEvent('pharos:upgrade-status', {detail: status}));

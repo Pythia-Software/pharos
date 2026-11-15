@@ -4,7 +4,7 @@ import { cardCoverQuery, core, instantiateRecipe, recipeHarness, schemas } from 
 import { filterBoxSamples, boxDetails, sharedBoxScale } from "../../../src/compact-box-model";
 import { compactPieSlices } from "../../../src/compact-pie-model";
 const now = Date.parse("2026-10-15T12:00:00Z"), { card, table: destination, metric } = recipeHarness(now);
-const call = (id, extra = {}) => ({ id, started_at: now - 1000, ended_at: now - 500, tool_name: "Bash", tool_category: "command", command_name: "npm test", repository_name: "repo", conversation_id: "one", duration_ms: 1000, duration_source: "reported", provider: "codex", call_count: 1, error_count: 0, status: "ok", ...extra });
+const call = (id, extra = {}) => ({ id, started_at: now - 1000, ended_at: now - 500, tool_name: "Bash", tool_category: "command", command_name: "npm test", project_name: "repo", conversation_id: "one", duration_ms: 1000, duration_source: "reported", provider: "codex", call_count: 1, error_count: 0, status: "ok", ...extra });
 
 test("Pharos request sources count captured requests by caller origin, including failures and no-result calls", () => {
   const rows = [
@@ -90,13 +90,13 @@ test("tool mix includes error and no-result calls and preserves exact Other beyo
 
 test("calls-per-conversation boxes aggregate before sampling and retain sparse repositories in the destination", () => {
   const rows=[1,10,100].flatMap((n,c)=>Array.from({length:n},(_,i)=>call(`${c}-${i}`,{conversation_id:`c-${c}`,status:i%2?"error":"no_result"})));
-  rows.push(call("sparse-a",{repository_name:"sparse",conversation_id:"c-0"}),call("sparse-b",{repository_name:"sparse",conversation_id:"c-1"}),call("missing",{conversation_id:null}),call("blank",{conversation_id:""}));
+  rows.push(call("sparse-a",{project_name:"sparse",conversation_id:"c-0"}),call("sparse-b",{project_name:"sparse",conversation_id:"c-1"}),call("missing",{conversation_id:null}),call("blank",{conversation_id:""}));
   const table=destination("tool-calls-per-conversation",rows), result=filterBoxSamples(metric("tool-calls-per-conversation",rows),3);
   assert.equal(table.length,5);
   assert.equal(result.buckets.length,1);
   const summary=result.buckets[0].distribution.summary;
   assert.deepEqual([summary.n,summary.min,summary.median,summary.max],[3,1,10,100]);
-  assert.equal(table.filter(row=>row.repository_name==="repo").reduce((sum,row)=>sum+row.tf_calls,0),111);
+  assert.equal(table.filter(row=>row.project_name==="repo").reduce((sum,row)=>sum+row.tf_calls,0),111);
   assert.equal(card("tool-calls-per-conversation").recipe.exploration.coverMetric.groupLimit,10000);
 });
 

@@ -1,4 +1,5 @@
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
+import { tokenMetricFormat } from "./token-count";
 
 // Pharos MCP over mcp_calls: one record is one request Pharos's own MCP
 // server answered, distinct from external MCP tools observed in archived agent
@@ -11,9 +12,9 @@ const measures: Record<string, AnalysisMeasure> = {
   calls: { label: "Calls", unit: "calls", format: count, op: "sum", field: "call_count", additive: true, note: "Requests served by Pharos's MCP server." },
   failures: { label: "Failed calls", unit: "calls", format: count, op: "sum", field: "error_count", additive: true, note: "Requests recorded as errors, disabled, or oversized." },
   failure_rate: { label: "Failure rate", unit: "percent", format: percent, op: "sum", ratio: ["error_count", "call_count"], additive: false, note: "Failed calls divided by all calls, pooled over each group's requests." },
-  output: { label: "Estimated output tokens", unit: "tokens", format: count, op: "sum", field: "estimated_output_tokens", value: "estimated_output_tokens", additive: true, note: "Estimated from response size. Response text is not stored." },
-  mean_output: { label: "Mean output tokens", unit: "tokens", format: count, op: "sum", ratio: ["estimated_output_tokens", { op: "count", field: "estimated_output_tokens" }], additive: false, note: "Estimated output divided by requests with an estimate, failed calls included, pooled over each group's requests." },
-  largest_output: { label: "Largest output tokens", unit: "tokens", format: count, op: "max", field: "estimated_output_tokens", additive: false, note: "The largest estimated response in each group." },
+  output: { label: "Estimated output tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "estimated_output_tokens", value: "estimated_output_tokens", additive: true, note: "Estimated from response size. Response text is not stored." },
+  mean_output: { label: "Mean output tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", ratio: ["estimated_output_tokens", { op: "count", field: "estimated_output_tokens" }], additive: false, note: "Estimated output divided by requests with an estimate, failed calls included, pooled over each group's requests." },
+  largest_output: { label: "Largest output tokens", unit: "tokens", format: tokenMetricFormat, op: "max", field: "estimated_output_tokens", additive: false, note: "The largest estimated response in each group." },
   bytes: { label: "Response bytes", unit: "bytes", format: count, op: "sum", field: "response_bytes", value: "response_bytes", additive: true, note: "Recorded response size in bytes." },
   truncated: { label: "Truncated calls", unit: "calls", format: count, op: "sum", field: "truncated_count", additive: true, note: "Requests whose responses were marked truncated." },
   time: { label: "Request time", unit: "ms", format: duration, op: "sum", field: "duration_ms", value: "duration_ms", additive: true, note: "Recorded server durations. Concurrent requests can overlap, so totals are not elapsed time." },

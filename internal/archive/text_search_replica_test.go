@@ -154,12 +154,12 @@ func TestTextSearchReplica(t *testing.T) {
 			}
 		}
 		where := []qt.WhereTerm{{Field: sample.field, Op: sample.op, Value: sample.value}}
-		d := queryV2Dataset(sample.dataset, schema)
-		d.SourceSQL, d.SourceArgs = table.v2IndexedSource(schema, where, nil)
-		query := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Where: where, Select: []string{schema.IDField, sample.field}, OrderBy: qt.OrderBys{{Field: sample.order, Dir: "desc"}}, Limit: 50}}
+		d := queryFixtureFor(sample.dataset, schema)
+		d.SourceSQL, d.SourceArgs = table.indexedQuerySource(schema, where, nil)
+		query := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Where: where, Select: []string{schema.IDField, sample.field}, OrderBy: []qt.OrderBy{{Field: sample.order, Dir: "desc"}}, Limit: 50}}
 		ctx, cancel := context.WithTimeout(t.Context(), 2500*time.Millisecond)
 		started := time.Now()
-		_, err = d.ExecuteV2(ctx, db, &query, nil, qt.PlanOptions{})
+		_, err = d.executeFixture(ctx, db, &query, nil, qt.PlanOptions{})
 		cancel()
 		t.Logf("record dataset=%s op=%s value=%s elapsed_ms=%d error=%v", sample.dataset, sample.op, sample.value, time.Since(started).Milliseconds(), err)
 	}
@@ -171,11 +171,11 @@ func TestTextSearchReplica(t *testing.T) {
 			t.Fatal(err)
 		}
 		schema, _ := sqliteQuerySchema("writing_messages")
-		d := queryV2Dataset("writing_messages", schema)
-		d.SourceSQL = table.v2Source(schema)
-		q := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "text", "sent_at", "typed_words"}, OrderBy: qt.OrderBys{{Field: "sent_at", Dir: "desc"}}, Limit: 50}}
+		d := queryFixtureFor("writing_messages", schema)
+		d.SourceSQL = table.querySourceSQL(schema)
+		q := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "text", "sent_at", "typed_words"}, OrderBy: []qt.OrderBy{{Field: "sent_at", Dir: "desc"}}, Limit: 50}}
 		ctx, cancel := context.WithTimeout(t.Context(), 2500*time.Millisecond)
-		_, err = d.ExecuteV2(ctx, db, &q, nil, qt.PlanOptions{})
+		_, err = d.executeFixture(ctx, db, &q, nil, qt.PlanOptions{})
 		cancel()
 		elapsed := time.Since(started).Milliseconds()
 		t.Logf("message_composer mode=%s elapsed_ms=%d matches=%d search_ms=%d complete=%v error=%v", mode, elapsed, len(matches.search.Items), matches.search.ElapsedMS, matches.search.Complete, err)
@@ -233,7 +233,7 @@ func TestSearchPageReplica(t *testing.T) {
 	}
 	var defaults struct {
 		DefaultSelect []struct{ Field string }
-		DefaultSort   qt.OrderBys
+		DefaultSort   []qt.OrderBy
 	}
 	if err = json.Unmarshal(document, &defaults); err != nil {
 		t.Fatal(err)
@@ -303,12 +303,12 @@ func TestSearchPageReplica(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			started := time.Now()
-			q := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: selected, OrderBy: defaults.DefaultSort, Limit: 50}}
+			q := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: selected, OrderBy: defaults.DefaultSort, Limit: 50}}
 			body, err := json.Marshal(q)
 			if err != nil {
 				t.Fatal(err)
 			}
-			request := httptest.NewRequest(http.MethodPost, "/api/query/library/rows-v2?"+params.Encode(), bytes.NewReader(body)).WithContext(ctx)
+			request := queryFixtureHTTPRequest(http.MethodPost, "/api/query/library/rows-v2?"+params.Encode(), bytes.NewReader(body)).WithContext(ctx)
 			request.Header.Set("Authorization", "Bearer "+config.APIToken)
 			response := httptest.NewRecorder()
 			server.ServeHTTP(response, request)

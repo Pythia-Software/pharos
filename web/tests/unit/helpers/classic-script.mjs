@@ -93,6 +93,8 @@ export function loadClassicScript(name, globals = {}) {
   };
   sandbox.window = sandbox.self = sandbox;
   const context = vm.createContext(sandbox);
+  if (name !== "host-services.js" && !sandbox.pharosHost) vm.runInContext(readFileSync(join(assets, "host-services.js"), "utf8"), context, { filename: join(assets, "host-services.js") });
+  for (const shared of ["currency.js", "token-count.js"]) if (name !== shared) vm.runInContext(readFileSync(join(assets, shared), "utf8"), context, { filename: join(assets, shared) });
   vm.runInContext(source, context, { filename: join(assets, name) });
   const identifier = /^[A-Za-z_$][\w$]*$/;
   return new Proxy({ window: sandbox, events }, {

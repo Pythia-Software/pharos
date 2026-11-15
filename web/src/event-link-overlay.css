@@ -1,0 +1,29 @@
+/* Agent events inside a ribbon. Colours: --event-* (ui.py), the primaries
+   (red, yellow, green, blue), deep in light mode and pale in dark mode, while
+   tool dots take secondary hues. No halos, outlines or backing shapes: at a
+   zoomed-out timeline's density they distort more than they separate, so
+   marks keep apart by placement (ribbon-marks.ts) instead. The overlay takes
+   no pointer events; the ribbon under it hit-tests everything. */
+.event-link-overlay{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:1}
+.event-link-path{fill:none;stroke:var(--event-link);stroke-width:1.1;stroke-linecap:round;stroke-linejoin:round;opacity:.8}
+.event-link-anchor{fill:none;stroke:var(--event-link);stroke-width:2;stroke-linecap:round;paint-order:stroke}
+.event-link-marker.is-unlinked{stroke-linejoin:round}
+.event-link-arc,.event-link-marker{transition:opacity .12s}
+.event-link-overlay.has-focus .is-dim{opacity:.18}
+.event-link-arc.is-focus .event-link-path{stroke-width:2.2;opacity:1}
+.event-link-glyph{flex:none;overflow:visible;vertical-align:-1px}
+.event-link-cards>p{margin:0 0 8px}
+.event-link-card+.event-link-card{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.event-link-card-head{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.event-link-card-head small{color:var(--muted)}
+/* A merged mark: one chip per kind, then where it was said. */
+.event-link-card-kinds{display:flex;gap:4px 10px;align-items:center;flex-wrap:wrap}
+.event-link-card-kinds>small{color:var(--muted)}
+.event-link-card blockquote{margin:6px 0 0;padding:2px 0 2px 8px;border-left:3px solid var(--event-link);overflow-wrap:anywhere}
+.event-link-card blockquote b{display:block;font-size:var(--fs-2xs,10px);text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600}
+.event-link-card blockquote.is-observation{border-left-color:var(--event-hue,var(--event-link))}
+.event-link-card blockquote.is-target{border-left-style:dashed}
+.event-link-card blockquote small{display:block;margin-top:3px;color:var(--muted)}
+.event-link-source{display:block;margin-top:6px;font-size:var(--fs-xs,11px)}
+.event-link-band{fill:none;stroke:var(--event-link);stroke-width:1.5;stroke-dasharray:4 2}
+.event-link-band.is-observation{stroke-dasharray:none;stroke-width:1}

@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -52,7 +51,8 @@ func cachedLoginShellEnv(names []string) (map[string]string, error) {
 // loginShellEnv prints names from an interactive login shell between random
 // markers, tolerating whatever its startup files print. The shell runs in a
 // new session without a terminal, so it cannot stop on terminal I/O, and its
-// whole process group is killed at the deadline.
+// whole process group is killed at the deadline. Where that isolation is
+// unavailable the shell does not run.
 func loginShellEnv(shell string, names []string, timeout time.Duration) (map[string]string, error) {
 	marker := "__PHAROS_ENV_" + strings.NewReplacer("-", "", "_", "").Replace(randomToken())
 	script := "printf '\\n%s\\n' " + marker
@@ -63,8 +63,9 @@ func loginShellEnv(shell string, names []string, timeout time.Duration) (map[str
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, shell, "-l", "-i", "-c", script)
-	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	command.Cancel = func() error { return syscall.Kill(-command.Process.Pid, syscall.SIGKILL) }
+	if err := loginShellProcessConfig(command); err != nil {
+		return nil, fmt.Errorf("%s: %w", shell, err)
+	}
 	// Background jobs started by startup files may hold stdout open.
 	command.WaitDelay = 250 * time.Millisecond
 	output, err := command.Output()

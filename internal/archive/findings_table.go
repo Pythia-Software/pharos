@@ -36,10 +36,10 @@ func findingFixKind(lever, changeLabel string) string {
 
 var findingImpactUnits = []string{"usd", "tokens", "minutes", "failures"}
 
-// findingQueryRows backs the findings query table: one row per finding the
-// Findings view lists, valued as its card is. Unlike GET /api/findings it
-// never starts a build, so an unbuilt catalog simply has no rows. State
-// follows the clock (snoozes end), so the rows are not cached.
+// findingQueryRows backs the findings query table: visible findings and
+// inactive findings with verified results, valued as their cards are.
+// Unlike GET /api/findings it never starts a build, so an unbuilt catalog
+// simply has no rows. State follows the clock, so the rows are not cached.
 func (c *Catalog) findingQueryRows(ctx context.Context) ([]map[string]any, error) {
 	view, err := c.loadFindingView(ctx)
 	if err != nil {
@@ -49,7 +49,12 @@ func (c *Catalog) findingQueryRows(ctx context.Context) ([]map[string]any, error
 	rows := make([]map[string]any, 0, len(view.rows))
 	for _, row := range view.rows {
 		state := view.state(row)
-		if state == findingHidden {
+		var saved findingSavings
+		wins, regressed := 0, 0
+		if user := view.states[row.ID]; user != nil {
+			saved, wins, regressed = user.improved()
+		}
+		if state == findingHidden && wins == 0 {
 			continue
 		}
 		card := view.card(row, state)
@@ -68,11 +73,6 @@ func (c *Catalog) findingQueryRows(ctx context.Context) ([]map[string]any, error
 			item["at_stake_"+unit] = floatOr(row.Impact[unit])
 		}
 		item["likely_ranked"], item["at_stake_ranked"] = item["likely_"+rank], item["at_stake_"+rank]
-		var saved findingSavings
-		wins, regressed := 0, 0
-		if user := view.states[row.ID]; user != nil {
-			saved, wins, regressed = user.improved()
-		}
 		item["saved_usd"], item["saved_added_usd"], item["saved_net_usd"] = saved.USD, saved.AddedUSD, saved.USD-saved.AddedUSD
 		item["saved_tokens"], item["saved_added_tokens"], item["saved_minutes"], item["saved_failures"] = saved.Tokens, saved.AddedTokens, saved.Minutes, saved.Failures
 		item["saved_weeks"], item["wins"], item["regressed"] = saved.Weeks, wins, regressed > 0

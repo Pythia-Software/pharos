@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, parseHostQueryState, toMetricQuery } from '@pythia-software/query-table-core';
+import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, parseHostQueryState, toQueryRequestV3 } from '@pythia-software/query-table-core';
 import toolCalls from '../../../../schemas/tool_calls.schema.json';
-import { refreshTodayHost, canonicalDraft, changeLibrarySearch, emptyHostState, libraryFind, libraryHostQuery, libraryHostState, messageFind, messageHostQuery, readLibraryHost, readMessageSearchHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withMessageSearch, withRecordKeyword, withoutLibrarySearch } from '../../../src/host-query-state';
-import { hostQueryV3Transport } from '../../../src/host-query-transport';
+import writingMessages from '../../../../schemas/writing_messages.schema.json';
+import { refreshTodayHost, canonicalDraft, changeLibrarySearch, emptyHostState, libraryFind, libraryHostQuery, libraryHostState, readLibraryHost, readRecordKeyword, recordKeywordFind, recordKeywordHostQuery, sameHostState, withRecordKeyword, withoutLibrarySearch } from '../../../src/host-query-state';
 import { execution, queryCapabilities, answerQuery } from '../../support/query-server.mjs';
 import { freshRecordKeywordSearch } from '../../../src/record-keyword-model';
 import { withSearchDateWindow, chooseScope, emptyTextSearch, newGroup, newRule } from '../../../src/text-search-model';
@@ -79,8 +79,9 @@ test('a Search save keeps its phrase, user-message scope and Conversations view'
   draft.root.children = [{ ...newRule('lock this to another object'), kind: 'phrase' }];
   draft.scope = chooseScope(draft.scope, 'user');
   const state = normalized(libraryHostQuery, libraryHostState({ kind: 'text', text: draft, file: '', fileCase: false, view: 'conversation' }));
-  assert.deepEqual(Object.keys(state.params), ['text_builder', 'view']);
+  assert.deepEqual(Object.keys(state.params), ['text_builder'], 'Conversations is the default view');
   assert.deepEqual(normalized(libraryHostQuery, state), state);
+  assert.deepEqual(normalized(libraryHostQuery, { ...state, params: { ...state.params, view: ['conversation'] } }), state, 'older view=conversation links still read');
   const saved = decodeQueryStrict(encodeQuery({ ...EMPTY_QUERY, hostState: state }));
   const restored = readLibraryHost(normalized(libraryHostQuery, saved.hostState));
   assert.equal(restored.view, 'conversation');
@@ -92,7 +93,7 @@ test('a Search save keeps its phrase, user-message scope and Conversations view'
   assert.deepEqual(JSON.parse(find.get('find_where')), { op: 'phrase', text: 'lock this to another object' });
   // Clearing the search keeps the view; the default state has neither.
   assert.deepEqual(readLibraryHost(withoutLibrarySearch(state)), { kind: 'text', text: null, file: '', fileCase: false, view: 'conversation' });
-  assert.deepEqual(readLibraryHost(libraryHostQuery.defaults), { kind: 'text', text: null, file: '', fileCase: false, view: 'table' });
+  assert.deepEqual(readLibraryHost(libraryHostQuery.defaults), { kind: 'text', text: null, file: '', fileCase: false, view: 'conversation' });
   assert.equal(libraryFind(libraryHostQuery.defaults), '');
 });
 
@@ -106,17 +107,18 @@ test('adding a Search content search switches to Conversations; editing or remov
   assert.equal(readLibraryHost(changeLibrarySearch(table, { text: draft('browser') })).view, 'table');
   assert.equal(readLibraryHost(changeLibrarySearch(table, { text: null })).view, 'table');
   // No search added, no view change.
-  assert.equal(readLibraryHost(changeLibrarySearch(libraryHostQuery.defaults, { file: '' })).view, 'table');
+  const tableOnly = libraryHostState({ ...readLibraryHost(libraryHostQuery.defaults), view: 'table' });
+  assert.equal(readLibraryHost(changeLibrarySearch(tableOnly, { file: '' })).view, 'table');
 });
 
 test('Search file and URL searches, and older keyword links, normalize to their canonical parameters', () => {
-  const file = normalized(libraryHostQuery, { version: 1, params: { kind: ['file'], search: [' go.mod '], case: ['1'], view: ['table'] } });
+  const file = normalized(libraryHostQuery, { version: 1, params: { kind: ['file'], search: [' go.mod '], case: ['1'], view: ['conversation'] } });
   assert.deepEqual(file.params, { case: ['1'], kind: ['file'], search: ['go.mod'] });
   assert.deepEqual(Object.fromEntries(new URLSearchParams(libraryFind(file))), { find: 'go.mod', find_kind: 'file', find_case: '1' });
   assert.deepEqual(normalized(libraryHostQuery, { version: 1, params: { kind: ['url'], search: [''] } }), emptyHostState(), 'an empty file search is no search');
   // The live state (names sorted by Query Table) and a freshly built one
   // compare equal, so re-applying a case-sensitive search runs it again.
-  const built = libraryHostState({ kind: 'file', text: null, file: 'go.mod', fileCase: true, view: 'conversation' });
+  const built = libraryHostState({ kind: 'file', text: null, file: 'go.mod', fileCase: true, view: 'table' });
   assert.deepEqual(Object.keys(libraryHostQuery.normalize(built).params), ['case', 'kind', 'search', 'view']);
   assert.ok(sameHostState(libraryHostQuery.normalize(built), parseHostQueryState(built)));
   assert.ok(sameHostState({ version: 1, params: { search: ['a'], case: ['1'] } }, { version: 1, params: { case: ['1'], search: ['a'] } }));
@@ -131,19 +133,18 @@ test('Search file and URL searches, and older keyword links, normalize to their 
     assert.throws(() => normalized(libraryHostQuery, { version: 1, params }));
 });
 
-test('the older Human messages search keeps its definition and leaves its cursor out', () => {
-  const draft = emptyTextSearch();
-  draft.scope.surface = 'user';
-  draft.root.children = [newRule('deploy')];
-  const state = normalized(messageHostQuery, withMessageSearch(draft));
-  assert.deepEqual(Object.keys(state.params), ['message_query']);
-  assert.equal(readMessageSearchHost(state).root.children[0].text, 'deploy');
-  const find = new URLSearchParams(messageFind(state));
-  assert.equal(find.get('find_surface'), 'user');
-  assert.equal(find.has('find_cursor'), false);
-  assert.deepEqual(normalized(messageHostQuery, withMessageSearch(null)), emptyHostState());
-  assert.throws(() => normalized(messageHostQuery, { version: 1, params: { message_query: ['nope'] } }));
-  assert.throws(() => normalized(messageHostQuery, { version: 1, params: { message_cursor: ['abc'] } }), /unknown setting/);
+test('an older Human messages search opens as a keyword filter on the message text, or says why it cannot', () => {
+  const messages = recordKeywordHostQuery('writing_messages', loadSchema(writingMessages).fields);
+  const older = change => { const draft = emptyTextSearch(); draft.scope.surface = 'user'; draft.root.children = [newRule('deploy')]; change?.(draft); return { version: 1, params: { message_query: [canonicalDraft(draft)] } }; };
+  const state = normalized(messages, older());
+  assert.deepEqual(Object.keys(state.params), ['record_writing_messages']);
+  const keyword = readRecordKeyword(state, 'writing_messages', loadSchema(writingMessages).fields);
+  assert.deepEqual([keyword.field, keyword.draft.root.children[0].text, keyword.draft.scope], ['text', 'deploy', emptyTextSearch().scope]);
+  assert.deepEqual(normalized(messages, state), state);
+  for (const [change, reason] of [[draft => { draft.scope.surface = 'pasted'; }, /pasted text/], [draft => { draft.scope.from = '2026-10-01'; }, /dates/], [draft => { draft.fuzzy = true; }, /fuzzy/]])
+    assert.throws(() => normalized(messages, older(change)), reason);
+  assert.throws(() => normalized(messages, { version: 1, params: { message_cursor: ['abc'] } }), /unknown setting/);
+  assert.throws(() => normalized(host, older()), /unknown setting "message_query"/, 'only the messages table reads it');
 });
 
 test('query links mirror host state in its own parameters and keep it in the encoded query', () => {
@@ -160,7 +161,6 @@ test('Today host searches normalize stably and renew only at execution boundarie
   const draft = withSearchDateWindow(emptyTextSearch(), 'today', clock); draft.root.children[0].text = 'migration';
   for (const [host, initial, read] of [
     [libraryHostQuery, libraryHostState({ kind: 'text', text: draft, file: '', fileCase: false, view: 'table' }), state => readLibraryHost(state).text],
-    [messageHostQuery, withMessageSearch(draft), readMessageSearchHost],
   ]) {
     const state = normalized(host, initial);
     assert.deepEqual(normalized(host, state), state);
@@ -174,38 +174,16 @@ test('Today host searches normalize stably and renew only at execution boundarie
 });
 
 
-test('record host transport runs standalone metrics through the same V3 source as rows', async () => {
+test('record host metrics and clearing the keyword keep the V3 definition', async () => {
  const state = normalized(host, withRecordKeyword('tool_calls', syntaxKeyword('cache')));
- const where = [{field:'status',op:'=',value:'error'}], calls=[];
- const rows=[{id:'a',status:'error',duration_ms:10},{id:'b',status:'ok',duration_ms:20}];
- const transport=hostQueryV3Transport({queryCapabilities,fetchRowsV2(){throw Error('wrong protocol');},fetchMetrics(){throw Error('wrong protocol');},async fetchQueryV3(request,signal){calls.push({request,signal});return answerQuery("query-v3",request,rows,schema);}},schema,execution);
+ const where=[{field:'status',op:'=',value:'error'}], rows=[{id:'a',status:'error'},{id:'b',status:'ok'}];
  const query={...EMPTY_QUERY,where,hostState:state,aggregations:[{id:'calls',op:'count',groupBy:[]}]};
- const request={...toMetricQuery(query,schema,execution),hostState:state},signal=new AbortController().signal;
- request.snapshot='frozen';
- const result=await transport.fetchMetrics(request,signal);
- assert.equal(result.metrics[0].buckets[0].value,1);
- assert.equal(transport.fetchRowsV2,undefined,'record hosts must negotiate V3 even for an ungrouped query');
- assert.equal(calls[0].request.rows,false);
- assert.deepEqual(calls[0].request.hostState,state);
- assert.deepEqual(calls[0].request.result.where,where);
- assert.equal(calls[0].request.snapshot,'frozen');assert.equal(calls[0].signal,signal);
- const unsupported=hostQueryV3Transport({},schema,execution);
- await assert.rejects(unsupported.fetchMetrics(request),/cannot run record keyword/);
- request.diagnostics=[{message:'unavailable field'}];
- await assert.rejects(transport.fetchMetrics(request),/unavailable field/);
- assert.equal(calls.length,1,'unsupported predicates must never be dropped');
-});
-
-
-test('clearing a record keyword restores ordinary indexed execution', async () => {
- let current=emptyHostState();const sent=[];
- const ordinary={queryCapabilities,fetchRowsV2:async request=>{sent.push('rows-v2');return {rows:[],total:0};},fetchMetrics:async request=>{sent.push('metrics');return {metrics:[]};}};
- const transport=hostQueryV3Transport(ordinary,schema,execution,state=>Boolean((state??current).params.record_tool_calls));
- await transport.fetchRowsV2({hostState:current});
- await transport.fetchMetrics({hostState:current});
- current=withRecordKeyword('tool_calls',syntaxKeyword('cache'));
- assert.equal(transport.fetchRowsV2,undefined);
- current=emptyHostState();
- await transport.fetchRowsV2({hostState:current});
- assert.deepEqual(sent,['rows-v2','metrics','rows-v2']);
+ const request={...toQueryRequestV3(query,schema,queryCapabilities,execution,{rows:false}),hostState:state};
+ assert.deepEqual(request.hostState,state);
+ assert.deepEqual(request.result.where,where);
+ assert.equal(answerQuery('query-v3',request,rows,schema).metrics[0].buckets[0].value,1);
+ const cleared={...toQueryRequestV3({...query,hostState:emptyHostState()},schema,queryCapabilities,execution,{rows:false}),hostState:emptyHostState()};
+ assert.deepEqual(cleared.hostState,emptyHostState());
+ assert.equal(cleared.version,3);
+ assert.throws(()=>toQueryRequestV3({...query,where:[{field:'missing',op:'=',value:'x'}]},schema,queryCapabilities,execution),error=>error.code==="residual_query");
 });

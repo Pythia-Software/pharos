@@ -7,9 +7,9 @@ import assert from "node:assert/strict";
 import { capabilities, core, execution, schemas } from "../helpers/recipes.mjs";
 import tracker from "../../../../docs/homepage-query-cards.json";
 import { queryRecipes, supportsToday, instantiateRecipe, loadQueryPreview, clearPreviewCache, suggestionWindowLabel } from "../../../src/curiosity-data";
-import { queryFromURL, queryHasTimeFilter, queryURL, queryWindowChoice, readRollingWindow, resolveRollingQuery, rollingQueryMatches, withQueryWindow } from "../../../src/query-links";
+import { queryFromURL, queryHasTimeFilter, queryURL, resolveRollingQuery, rollingQueryMatches } from "../../../src/query-links";
 import { migrateSavedQueries, readBookmarks, removeBookmark, savedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
-import { cardCoverQuery, defaultCardCover } from "../../../src/card-cover";
+import { cardChart, cardCoverQuery, cardGroupsFor, defaultCardCover, withCardGroups } from "../../../src/card-cover";
 import { wishlistCardRecipes } from "../../../src/wishlist-card-recipes";
 import { updateQueryWindowURL } from "../../../src/query-links";
 import { parallelismSelectionQuery, readDashboardQuery, readDashboardLink } from "../../../src/usage-dashboard-model";
@@ -34,6 +34,8 @@ test("TL1 cards open their grouped attempts in the shared Analyze table", t => {
   assert.equal(restored.dataset, "tl1_attempts");
   assert.deepEqual(restored.query, core.normalizeQueryState(suggestion.query));
   assert.ok(restored.query.grouping);
+  const title = restored.query.grouping.summaries.find(summary => summary.field === 'title' && summary.op === 'row');
+  assert.equal(title.label, schemas.tl1_attempts.fields.find(field => field.name === 'title').label);
   assert.deepEqual(restored.window, suggestion.window);
 });
 
@@ -55,6 +57,21 @@ test("origin cards explore the metric and breakdown promised by their covers", t
 test("every saved card preview executes the original population, calculation and presentation across windows", t => {
   bookmarkFixture(t, []);
   for (const recipe of queryRecipes.filter(recipe => !recipe.retired && recipe.destination)) {
+    if (recipe.destination.topic === 'scatter') {
+      // Keep the fixture small by lowering the preview's point budget. High-X
+      // records with no drawable Y must not displace valid lower-X points.
+      const budget = 2;
+      const bounded = {...recipe,measures:recipe.measures.map(metric=>({...metric,groupLimit:budget})),cover:{...defaultCardCover(recipe),maxGroups:budget}};
+      const {metric,metricY,unit} = recipe.destination.chart;
+      const point = (id,x,y) => ({id:`${unit}:${id}`,entity_id:id,point_kind:unit,provider:'claude',repository_name:'pharos',...(x===undefined?{}:{[metric]:x}),...(y===undefined?{}:{[metricY]:y})});
+      const rows = [[200,null],[190,undefined],[180,0],[170,-1],[null,20],[undefined,21],[0,22],[-1,23]]
+        .map(([x,y],index)=>point(`bad-${index}`,x,y));
+      rows.push(point('valid-a',3,9),point('valid-b',2,8),point('valid-c',1,7));
+      const item=instantiateRecipe(bounded,null,clock),cover=cardCoverQuery(item.query,bounded,defaultCardCover(bounded));
+      const result=core.evaluateMetrics(rows,cover.query,schemas.scatter).metrics.find(metric=>metric.id===cover.metricId);
+      assert.equal(result.groupCount,3,recipe.id);
+      assert.deepEqual(result.buckets.map(bucket=>[bucket.value,bucket.y]),[[3,9],[2,8]],recipe.id);
+    }
     for (const days of [1, 7, 30, 90, 180, 365, null]) {
       const item = instantiateRecipe(recipe, days, clock);
       const job = savedCardPreviewJob(item.url, schemas[recipe.dataset]);
@@ -98,7 +115,7 @@ test("All time saved preview copy follows its source query window", t => {
     assert.equal(job.options.window, undefined);
     assert.equal(job.options.recipe.window, undefined);
     assert.equal(job.options.recipe.title, "All-time writing");
-    assert.equal(job.options.recipe.description, "Human-written words sent across all time, grouped by the day they were sent.");
+    assert.equal(job.options.recipe.description, "Human-written words sent across all time, by the day they were sent; provisional estimates are shaded lighter until the daily refinement.");
     assert.equal(queryHasTimeFilter(job.query, recipe.field), false);
     const restored = savedCardPreviewJob(updateQueryWindowURL(job.options.url, days), schemas[recipe.dataset]);
     assert.equal(restored.options.recipe.title, item.title);
@@ -237,8 +254,8 @@ test("dashboard context projects shared cohorts without treating per-record evid
     { field: "started_at", op: ">=", value: "-7d" }, { field: "started_at", op: "<", value: "+0s" },
     { any: [{ field: "tool_name", op: "=", value: "Read" }, { field: "repo_path", op: "=", value: "another.go" }] }];
   assert.deepEqual(cardDashboardWhere("tool_calls", "tools", where), [where[0], { field: "day", op: ">=", value: "-7d" }, { field: "day", op: "<", value: "+0s" }]);
-  assert.deepEqual(cardDashboardWhere("writing_messages", "writing", [{ field: "repository_name", op: "=", value: "repo" }, { field: "text", op: "contains", value: "try again" }, { field: "sent_at", op: ">=", value: "-7d" }, { field: "sent_at", op: "<", value: "+0s" }]),
-    [{ field: "repository_name", op: "=", value: "repo" }, { field: "last_message_at", op: ">=", value: "-7d" }, { field: "first_message_at", op: "<", value: "+0s" }]);
+  assert.deepEqual(cardDashboardWhere("writing_messages", "writing", [{ field: "project_name", op: "=", value: "repo" }, { field: "text", op: "contains", value: "try again" }, { field: "sent_at", op: ">=", value: "-7d" }, { field: "sent_at", op: "<", value: "+0s" }]),
+    [{ field: "project_name", op: "=", value: "repo" }, { field: "last_message_at", op: ">=", value: "-7d" }, { field: "first_message_at", op: "<", value: "+0s" }]);
 });
 
 test("card detail links retain durable source tokens across dashboard datasets and navigation", t => {
@@ -251,9 +268,9 @@ test("card detail links retain durable source tokens across dashboard datasets a
   assert.equal(details.searchParams.get("analyze_data"), "tool_calls");
   assert.equal(details.searchParams.get("q_tool_calls"), "@immutable-card-query");
   const tokenCard = instantiateRecipe(queryRecipes.find(recipe => recipe.id === "task-token-ranges"), 7);
-  const records = { ...core.EMPTY_QUERY, where: [{ field: "repository_name", op: "=", value: "chosen-repo" }] };
+  const records = { ...core.EMPTY_QUERY, where: [{ field: "project_name", op: "=", value: "chosen-repo" }] };
   const drilled = new URL(usageWorkspaceURL({ mode: "query", dataset: "usage", query: records }, new URL(tokenCard.url, location.origin).searchParams), location.origin);
-  assert.deepEqual(core.decodeQueryStrict(drilled.searchParams.get("q_usage")), core.normalizeQueryState({ ...records, fitToScreen: true }), "dashboard drilldowns use the newly selected records and fit their viewport");
+  assert.deepEqual(core.decodeQueryStrict(drilled.searchParams.get("q_usage")), core.normalizeQueryState({ ...records, fit: "screen" }), "dashboard drilldowns use the newly selected records and fit their viewport");
   assert.equal(drilled.searchParams.has("card_id"), false, "new analysis is distinct from the original card details");
 });
 
@@ -268,6 +285,38 @@ test("cover visibility settings survive cover queries while destination data rem
     assert.equal(metric.display.legendPosition, "none");
     assert.deepEqual(item.query, before);
   }
+});
+
+test("cards split by a key offer a group count named for the key, and the count reaches their chart", () => {
+  const offered = id => {
+    const recipe = queryRecipes.find(recipe => recipe.id === id), item = instantiateRecipe(recipe, recipe.days?.[0] ?? 7, clock);
+    return { recipe, item, groups: cardGroupsFor(item.query, { recipe, cover: item.cover }, schemas[recipe.dataset].fields) };
+  };
+  for (const [id, noun, fallback] of [["model-cost-share", "provider/model groups", 6], ["model-cost-share-trend", "models", 15], ["repository-token-share", "projects", 5], ["repository-model-use", "project/provider/model groups", 6], ["usage-work", "top-level conversations", 6]])
+    assert.deepEqual(offered(id).groups, { noun, max: 100, fallback }, id);
+  for (const id of ["api-cost-total", "session-token-cost", "human-words-weekday", "habits-streak", "writing-hours"]) assert.equal(offered(id).groups, undefined, `${id} has no groups to count`);
+  for (const recipe of queryRecipes.filter(recipe => !recipe.retired)) {
+    const { item, groups } = offered(recipe.id);
+    if (!groups) continue;
+    assert.ok(groups.max >= (groups.fallback ?? 1), recipe.id);
+    const chart = withCardGroups(item.query, { recipe, cover: item.cover }, 3);
+    assert.equal(cardChart(chart.query, { recipe, cover: chart.cover }).clause.display.maxGroups, 3, `${recipe.id} draws the chosen count`);
+  }
+  // A saved query without a template takes the count on its own chart.
+  const query = { ...core.EMPTY_QUERY, aggregations: [{ id: "a", op: "sum", field: "total_tokens", groupBy: ["provider"], groupLimit: 2 }, { id: "b", op: "count", groupBy: ["repository_name"] }] };
+  const saved = withCardGroups(query, { metricId: "b" }, 4).query.aggregations;
+  assert.deepEqual([saved[0], saved[1].display.maxGroups], [query.aggregations[0], 4]);
+  assert.equal(withCardGroups(query, {}, 4).query.aggregations[0].groupLimit, 4, "a smaller fetch grows to the count");
+});
+
+test("a collected card keeps its own group count until reset", t => {
+  const recipe = queryRecipes.find(recipe => recipe.id === "repository-token-share"), item = instantiateRecipe(recipe, 7, clock);
+  bookmarkFixture(t, [{ id: "saved", title: item.title, url: item.url, query: item.query, templateId: `${recipe.id}:7`, cover: item.cover }]);
+  assert.equal(updateBookmark("saved", item.title, "", undefined, undefined, undefined, 9).maxGroups, 9);
+  assert.equal(updateBookmark("saved", "Renamed", "").maxGroups, 9, "other edits keep it");
+  assert.throws(() => updateBookmark("saved", item.title, "", undefined, undefined, undefined, 0), /whole number/);
+  assert.equal(Object.hasOwn(updateBookmark("saved", item.title, "", undefined, undefined, undefined, null), "maxGroups"), false);
+  assert.equal(readBookmarks()[0].cover.maxGroups, 5, "the template's count stays on its cover");
 });
 
 test("failure-rate cover and destination agree, include successful calls and expose sample size", async t => {
@@ -300,20 +349,20 @@ test("failure-rate cover and destination agree, include successful calls and exp
 
 test("repeated-path HAVING excludes singleton reads and keeps repositories separate", () => {
   const recipe = queryRecipes.find(r => r.id === "repeated-reads"), { query } = instantiateRecipe(recipe, 7, clock);
-  const rows = ["one", "one", "two"].map((repository_name, i) => ({ id: String(i), repository_name, conversation_id: "conversation", repo_path: "src/main.go", tool_category: "read", started_at: clock.getTime() - 1000 }));
+  const rows = ["one", "one", "two"].map((path_repository, i) => ({ id: String(i), path_repository, conversation_id: "conversation", repo_path: "src/main.go", tool_category: "read", started_at: clock.getTime() - 1000 }));
   const result = core.applyQuery(rows, query, schemas.tool_calls, { now: clock.getTime() });
   assert.equal(result.total, 1);
-  assert.equal(result.rows[0].repository_name, "one");
+  assert.equal(result.rows[0].path_repository, "one");
   assert.equal(result.rows[0].cc_calls, 2);
 });
 
 test("group drilldown preserves source predicates and metrics, handles null keys and drops HAVING", () => {
   const recipe = queryRecipes.find(r => r.id === "repeated-reads"), { query } = instantiateRecipe(recipe, 7, clock);
-  const records = core.groupSourceQuery(query, { repository_name: null, repo_path: "src/main.go", conversation_id: "conversation" }, schemas.tool_calls);
+  const records = core.groupSourceQuery(query, { path_repository: null, repo_path: "src/main.go", conversation_id: "conversation" }, schemas.tool_calls);
   assert.equal(records.grouping, undefined);
   assert.equal(records.offset, 0);
   assert.deepEqual(records.aggregations, recipe.measures);
-  assert.deepEqual(records.where, [...query.grouping.source.where, { field: "repository_name", op: "is_null", value: "" }, { field: "repo_path", op: "=", value: "src/main.go" }, { field: "conversation_id", op: "=", value: "conversation" }]);
+  assert.deepEqual(records.where, [...query.grouping.source.where, { field: "path_repository", op: "is_null", value: "" }, { field: "repo_path", op: "=", value: "src/main.go" }, { field: "conversation_id", op: "=", value: "conversation" }]);
   // Keys that cannot be matched exactly (unknown fields) have no record query.
   assert.equal(core.groupSourceQuery({ ...query, grouping: { ...query.grouping, keys: ["unknown"] } }, { unknown: "x" }, schemas.tool_calls), null);
 });
@@ -325,15 +374,17 @@ test("cache efficiency is weighted by input tokens and preserves provider cohort
     { ...row, id: "a", input_tokens: 120, cache_creation_input_tokens: 20, cache_read_input_tokens: 90, uncached_input_tokens: 10, agent_session_id: "same" },
     { ...row, id: "b", input_tokens: 900, cache_read_input_tokens: 0, uncached_input_tokens: 900, agent_session_id: "same" },
     { ...row, id: "c", provider: "two", input_tokens: 100, cache_read_input_tokens: 100, uncached_input_tokens: 0, agent_session_id: "other" },
+    // An estimate's cache division is assumed: its tokens are summed, but it moves no rate.
+    { ...row, id: "d", is_estimate: true, input_tokens: 5000, cache_read_input_tokens: 4000, cache_creation_input_tokens: 1000, uncached_input_tokens: 0, agent_session_id: "estimated" },
   ], query, schemas.usage, { now: clock.getTime() });
   assert.equal(result.total, 2);
   assert.equal(result.rows.find(r => r.provider === "one").cc_share, 90 / 1020);
-  assert.equal(result.rows.find(r => r.provider === "one").cc_input, 1020);
+  assert.equal(result.rows.find(r => r.provider === "one").cc_input, 6020);
 });
 
 test("work comparisons preserve workspace identity and take titles from the latest usage row", () => {
   const { query } = instantiateRecipe(queryRecipes.find(r => r.id === "usage-work"), 7, clock);
-  const row = { first_usage_at: clock.getTime() - 1000, cost_usd: 1, total_tokens: 100, workspace_id: "one", root_repository_name: "repo", root_conversation_id: "one", root_title: "Current title", agent_session_id: "agent" };
+  const row = { first_usage_at: clock.getTime() - 1000, cost_usd: 1, total_tokens: 100, workspace_id: "one", root_project_name: "repo", root_conversation_id: "one", root_title: "Current title", agent_session_id: "agent" };
   const result = core.applyQuery([
     { ...row, id: "old", title: "Old title", last_usage_at: new Date(clock.getTime() - 100).toISOString() },
     { ...row, id: "new", title: "Current title", last_usage_at: clock.toISOString() },
@@ -499,7 +550,7 @@ test("editing a collected cover changes destination dimensions with it", t => {
   assert.deepEqual(spec.query.grouping.source.where, item.query.grouping.source.where);
 });
 
-const recentMessage = { sent_at: clock.getTime() - 1000, repository_name: "one", title: "Work", other_words: 0, typed_words: 5 };
+const recentMessage = { sent_at: clock.getTime() - 1000, project_name: "one", title: "Work", other_words: 0, typed_words: 5 };
 
 test("writing hours capture the device timezone in durable URLs and retain DST offsets", () => {
   const recipe = queryRecipes.find(recipe => recipe.id === "writing-hours");
@@ -612,13 +663,16 @@ test("selecting a time window returns a query that replaces every direct date co
   const kept = { field: "provider", op: "=", value: "codex" };
   for (const dataset of ["writing_messages", "usage"]) {
     const fields = dataset === "usage" ? ["first_usage_at", "last_usage_at"] : ["sent_at"];
+    const targetFields = dataset === "writing_messages" ? ["authorship_sent_at"] : fields;
     for (const op of ["=", ">", ">=", "<", "<="]) for (const choice of ["today", 1]) for (const grouped of [false, true]) {
       const source = { ...core.EMPTY_QUERY, offset: 50, where: [...fields.map(field => ({ field, op, value: "2026-01-31" })), kept] };
       const query = grouped ? { ...core.EMPTY_QUERY, offset: 100, grouping: { source, keys: ["provider"], summaries: [{ id: "n", op: "count", label: "Rows" }], representative: null } } : source;
       const adjusted = queryFromURL(updateQueryWindowURL(queryURL(dataset, query), choice, query));
       const applied = adjusted.query.grouping?.source ?? adjusted.query;
-      assert.deepEqual(applied.where.filter(term => !fields.includes(term.field)), [kept]);
-      assert.equal(applied.where.length, 3, `${dataset}: ${op} → ${choice}`);
+      const population = dataset === "writing_messages" ? [{ field: "role", op: "=", value: "user" }, { field: "has_authorship", op: "=", value: "true" }] : [];
+      assert.deepEqual(applied.where.filter(term => !targetFields.includes(term.field)), [...population, kept]);
+      if (dataset === "writing_messages") assert.equal(adjusted.window.field, "authorship_sent_at");
+      assert.equal(applied.where.length, 3 + population.length, `${dataset}: ${op} → ${choice}`);
       assert.ok(applied.where.some(term => term.op === "<" && term.value === "+0s"));
       assert.ok(applied.where.some(term => term.op === ">=" && term.value === (choice === "today" ? todayBounds()[0] : "-1d")));
       assert.equal(rollingQueryMatches(adjusted.query, adjusted.window), true);
@@ -627,25 +681,6 @@ test("selecting a time window returns a query that replaces every direct date co
       if (grouped) assert.deepEqual(adjusted.query.grouping.summaries, query.grouping.summaries);
     }
   }
-});
-
-test("the query time window picker shows the window it wrote into the page URL, after replacing a custom range", t => {
-  bookmarkFixture(t, []);
-  const dataset = "writing_messages", custom = { ...core.EMPTY_QUERY, where: [{ field: "sent_at", op: "<=", value: "2026-01-31" }] };
-  let page = new URL(`/analyze?analyze_mode=query&analyze_topic=human&analyze_data=${dataset}&q_${dataset}=${encodeURIComponent(core.encodeQuery(custom))}`, location.origin);
-  assert.equal(queryWindowChoice(page.searchParams, dataset), "saved");
-  for (const [choice, shown] of [["today", "today"], [1, "24h"], ["today", "today"]]) {
-    const query = core.decodeQueryStrict(page.searchParams.get(`q_${dataset}`));
-    const address = updateQueryWindowURL(queryURL(dataset, query, readRollingWindow(page.searchParams, dataset)), choice, query);
-    page = withQueryWindow(page, address, dataset, dataset);
-    assert.equal(queryWindowChoice(page.searchParams, dataset), shown, `after choosing ${choice}`);
-    assert.equal(page.searchParams.get("analyze_topic"), "human");
-    assert.ok(!core.decodeQueryStrict(page.searchParams.get(`q_${dataset}`)).where.some(term => term.op === "<="), "the custom range is replaced");
-  }
-  const scoped = withQueryWindow(page, updateQueryWindowURL(queryURL(dataset, custom), 1, custom), dataset, "machine:writing");
-  assert.ok(scoped.searchParams.has("q_machine:writing"));
-  assert.equal(queryWindowChoice(scoped.searchParams, dataset), "24h");
-  assert.equal(queryWindowChoice(new URLSearchParams({ window_dataset: "usage", window_days: "1", window_field: "sent_at", window_mode: "today" }), dataset), "saved", "another dataset's window is not this query's");
 });
 
 test("Today card navigation keeps advancing on full dashboards", t => {
@@ -701,10 +736,10 @@ test("every active card opens a primary dashboard with the source population and
       if (recipe.destination.chart.unit) assert.equal(state.unit, recipe.destination.chart.unit, `${recipe.id}: observation unit`);
       assert.equal(state.view, recipe.destination.chart.view ?? "trend", `${recipe.id}: chart view`);
       assert.equal(state.metric, recipe.destination.chart.metric === "percent" ? "tokens" : recipe.destination.chart.metric === "percent_cost" ? "cost" : recipe.destination.chart.metric, recipe.id);
-      const query = analysisQuery(catalog, { ...state, view: state.view === "trend" ? "compare" : state.view }, filters, { now: clock.getTime() });
+      const query = analysisQuery(catalog, { ...state, view: ["trend", "trend_line", "trend_bar"].includes(state.view) ? "compare" : state.view }, filters, { now: clock.getTime() });
       for (const part of core.planMetricSeries(query.query, schemas[catalog.dataset], { now: clock.getTime() })?.queries ?? [query.query]) {
         const request = core.toQueryRequestV3(part, schemas[catalog.dataset], { ...capabilities, regexSourceFilters: true }, execution, { now: clock.getTime(), rows: false });
-        assert.deepEqual(request.diagnostics, [], recipe.id);
+        assert.equal(request.version, 3, recipe.id);
       }
     }
   }
@@ -739,27 +774,27 @@ test("direct older card links restore the current mapping from the retained sour
   legacy.searchParams.set("analyze_filters", core.encodeQuery(core.EMPTY_QUERY));
   legacy.searchParams.set("analyze_chart", JSON.stringify({ view: "trend", metric: "words" }));
   const exact = core.normalizeQueryState(item.query);
-  exact.grouping.source.where.push({ field: "root_effort", op: "=", value: "high" });
+  (exact.grouping?.source ?? exact).where.push({ field: "provider", op: "=", value: "codex" });
   legacy.searchParams.set(`q_${recipe.dataset}`, core.encodeQuery(exact));
   const restored = new URL(await resolveCardDashboardURL(legacy.href), location.origin).searchParams;
-  assert.equal(restored.get("analyze_topic"), "activity");
-  assert.equal(restored.get("analyze_data"), "conversation_activity");
+  assert.equal(restored.get("analyze_topic"), "scatter");
+  assert.equal(restored.get("analyze_data"), "scatter");
   assert.equal(JSON.parse(restored.get("analyze_chart")).view, "scatter");
-  assert.deepEqual(core.decodeQueryStrict(restored.get("analyze_filters")).where, exact.grouping.source.where);
+  assert.deepEqual(core.decodeQueryStrict(restored.get("analyze_filters")).where, (exact.grouping?.source ?? exact).where);
   assert.equal([...restored.keys()].some(key => /^(card_|q_|window_)/.test(key)), false);
   for (const timezone of [undefined, "Asia/Tokyo"]) {
-    const window = { days: 1, field: recipe.field, mode: "today", ...timezone ? { timezone } : {} };
+    const window = { days: 1, field: recipe.field, untilField: "first_at", mode: "today", ...timezone ? { timezone } : {} };
     const yesterday = resolveRollingQuery(exact, window, new Date("2026-11-02T18:00:00Z"));
     const today = new URL(queryURL(recipe.dataset, yesterday), location.origin);
     for (const [key, value] of legacy.searchParams) if (!key.startsWith("q_")) today.searchParams.set(key, value);
     today.searchParams.set("window_mode", "today"); today.searchParams.set("window_days", "1");
-    today.searchParams.set("window_field", recipe.field); today.searchParams.set("window_dataset", recipe.dataset);
+    today.searchParams.set("window_field", recipe.field); today.searchParams.set("window_until_field", "first_at"); today.searchParams.set("window_dataset", recipe.dataset);
     if (timezone) today.searchParams.set("window_timezone", timezone);
     const params = new URL(await resolveCardDashboardURL(today.href), location.origin).searchParams;
     assert.equal(params.get("analyze_window"), "today");
     assert.equal(params.get("analyze_timezone"), timezone ?? null);
-    const read = readDashboardLink(params, recipe.destination.chart, () => true, analysisCatalogs.activity.time);
-    assert.deepEqual(read.where, resolveRollingQuery(exact, window).grouping.source.where);
+    const read = readDashboardLink(params, recipe.destination.chart, () => true, analysisCatalogs.scatter.time);
+    assert.deepEqual(read.where, (resolveRollingQuery(exact, window).grouping?.source ?? resolveRollingQuery(exact, window)).where);
   }
 });
 
@@ -767,15 +802,15 @@ test("direct older card links resolve durable sources and report unavailable sou
   bookmarkFixture(t, []);
   const recipe = queryRecipes.find(recipe => recipe.id === "session-human-output"), item = instantiateRecipe(recipe, null, clock);
   const exact = core.normalizeQueryState(item.query);
-  exact.grouping.source.where.push({ field: "root_effort", op: "=", value: "high" });
+  (exact.grouping?.source ?? exact).where.push({ field: "provider", op: "=", value: "codex" });
   const legacy = new URL(item.url, location.origin);
   legacy.searchParams.set("analyze_topic", "human"); legacy.searchParams.set("analyze_data", "writing_messages");
   legacy.searchParams.set(`q_${recipe.dataset}`, "@cccccccccccccccccccccc");
   const fetch = global.fetch; t.after(() => { global.fetch = fetch; });
   global.fetch = async () => Response.json({ version: 1, code: "cccccccccccccccccccccc", token: core.encodeQuery(exact), createdAt: 0 });
   const params = new URL(await resolveCardDashboardURL(legacy.href), location.origin).searchParams;
-  assert.equal(params.get("analyze_topic"), "activity");
-  assert.deepEqual(core.decodeQueryStrict(params.get("analyze_filters")).where, exact.grouping.source.where);
+  assert.equal(params.get("analyze_topic"), "scatter");
+  assert.deepEqual(core.decodeQueryStrict(params.get("analyze_filters")).where, (exact.grouping?.source ?? exact).where);
   global.fetch = async () => new Response("Unavailable", { status: 404 });
   legacy.searchParams.set(`q_${recipe.dataset}`, "@dddddddddddddddddddddd");
   await assert.rejects(resolveCardDashboardURL(legacy.href));

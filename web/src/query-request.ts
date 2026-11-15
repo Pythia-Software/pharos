@@ -1,3 +1,8 @@
+import { dashboardQuerySettings } from "./dashboard-query-settings";
+import { scopedRequest } from "./result-cache";
+import { QueryError, errorCodeForStatus, queryErrorFromBody, type QueryErrorOptions } from "@pythia-software/query-table-core";
+import { reportSessionShapeCoverage } from "./session-shape-freshness";
+import { reportQueryCoverage } from "./agent-events-freshness";
 import { normalizeConcurrencySettings } from "./concurrency-settings";
 // Linked assumptions apply to every request made by that view, including
 // dashboards, source tables, item details and computed metrics. Explicit
@@ -6,6 +11,8 @@ export function viewRequestURL(path: string, view = typeof location === "undefin
   if (!view) return path;
   const url=new URL(path,view.origin);
   if(url.origin!==view.origin)return path;
+  const dataset = /^\/api\/query\/([^/]+)(?:\/|$)/.exec(url.pathname)?.[1];
+  if (dataset) for (const [name, value] of Object.entries(dashboardQuerySettings(dataset, view.searchParams))) if (!url.searchParams.has(name)) url.searchParams.set(name, value);
   if(url.pathname.startsWith("/api/query/usage")&&!url.searchParams.has("carbon_settings")&&view.searchParams.has("analyze_carbon"))url.searchParams.set("carbon_settings",view.searchParams.get("analyze_carbon")!);
   if(url.pathname.startsWith("/api/query/parallelism")&&!url.searchParams.has("parallelism_settings")&&view.searchParams.has("analyze_parallelism")) {
     let linked: unknown;try{linked=JSON.parse(view.searchParams.get("analyze_parallelism")!);}catch{linked=null;}
@@ -19,8 +26,8 @@ export function viewRequestURL(path: string, view = typeof location === "undefin
 // response body that never finishes) must also stop showing Loading in the UI.
 export const queryRequestTimeoutMs = 45_000;
 
-export class QueryRequestError extends Error {
-  constructor(message: string, readonly status?: number) { super(message); }
+export class QueryRequestError extends QueryError {
+  constructor(message: string, status?: number, code = status === undefined ? "timeout" : "invalid_request", options: QueryErrorOptions = {}) { super(code, message, { ...options, status }); }
 }
 
 // Only query rejection or the client deadline implicates the query itself.
@@ -60,17 +67,20 @@ export const queryFetch: typeof fetch = (input, init = {}) => {
 export async function queryRequest<T>(url: string, init: RequestInit = {}, timeoutMs = queryRequestTimeoutMs): Promise<T> {
   const deadline = AbortSignal.timeout(timeoutMs);
   const signal = requestSignal(init.signal, deadline);
+  const scoped = scopedRequest(url, init);
   try {
-    const response = await fetch(viewRequestURL(url), { ...init, signal });
+    const response = await fetch(viewRequestURL(url), { ...scoped.init, signal });
+    scoped.note(response.headers);
     const body = await response.json().catch(error => {
       signal.throwIfAborted();
       if (response.ok) throw error;
       return {};
     });
     signal.throwIfAborted();
+    if (response.ok) { scoped.noteBody(body); reportQueryCoverage(url, body); reportSessionShapeCoverage(url, body); }
     if (!response.ok) {
-      const message = typeof body.error === "string" ? body.error : body.error?.message;
-      throw new QueryRequestError(message || `Request failed with HTTP ${response.status}`, response.status);
+      const issue = queryErrorFromBody(body, response.status) ?? new QueryError(errorCodeForStatus(response.status), (typeof body.error === "string" ? body.error : body.error?.message) || `Request failed with HTTP ${response.status}`, { status: response.status });
+      throw new QueryRequestError(issue.message, response.status, issue.code, issue);
     }
     return body as T;
   } catch (error) {

@@ -1,5 +1,7 @@
-import { canonicalState, validAnalysisState, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type DerivedTotals } from "./dashboard-analysis-model";
+import {  type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type DerivedTotals } from "./dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
+import { projectLegacy } from "./project-analysis";
+import { tokenMetricFormat } from "./token-count";
 
 // Carbon over the usage ledger: one record is one agent session's usage of
 // one model and effort on one recorded day, as in Tokens and Cost. Its
@@ -42,16 +44,16 @@ export function deriveCarbon(assumptions: CarbonAssumptions | undefined, totals:
   }));
 }
 
-const grams = { kind: "number", decimals: 1 } as const, tokens = { kind: "number", decimals: 0 } as const;
+const grams = { kind: "number", decimals: 1 } as const;
 const assumptionsNote = "Estimated with your Carbon Impact assumptions (estimate range, facility overhead, grid and input sensitivity); token counts are reported, energy and CO₂e are modeled. Models are assigned to size tiers by name; unmatched models use the default tier.";
 const measures: Record<string, AnalysisMeasure> = {
   co2: { label: "Estimated CO₂e (g)", unit: "g CO₂e", format: grams, op: "sum", field: "co2e_g", value: "co2e_g", additive: true, note: assumptionsNote },
   energy: { label: "Estimated electricity (Wh)", unit: "Wh", format: grams, op: "sum", field: "energy_wh", value: "energy_wh", additive: true, note: `Facility electricity: IT energy times facility overhead (PUE). ${assumptionsNote}` },
-  tokens: { label: "Tokens", unit: "tokens", format: tokens, op: "sum", field: "total_tokens", value: "total_tokens", additive: true, note: "Reported tokens behind the estimates, including cached input and reported reasoning output." },
+  tokens: { label: "Tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "total_tokens", value: "total_tokens", additive: true, note: "Reported tokens behind the estimates, including cached input and reported reasoning output." },
 };
 
 // The old chart's model tier split.
-const legacy = (state: AnalysisState): AnalysisState => state.split === "tier" ? { ...state, split: "carbon_tier" } : state;
+const legacy = projectLegacy((state: AnalysisState): AnalysisState => state.split === "tier" ? { ...state, split: "carbon_tier" } : state);
 
 // The catalog under the user's current assumptions. Without them (link
 // validation, chart comparison) it has the same measures and breakdowns and
@@ -60,7 +62,7 @@ export function carbonAnalysisCatalog(assumptions?: CarbonAssumptions): Analysis
   const { breakdowns } = tokenAnalysisCatalog;
   const availableBreakdowns = {
     carbon_tier: { label: "Model tier", fields: ["carbon_tier"], order: assumptions?.factors.tiers.map(tier => tier.key) },
-    provider: breakdowns.provider, repository_name: breakdowns.repository_name, model_family: breakdowns.model_family, provider_model: breakdowns.provider_model, effort: breakdowns.effort, model_effort: breakdowns.model_effort,
+    provider: breakdowns.provider, project_name: breakdowns.project_name, model_family: breakdowns.model_family, provider_model: breakdowns.provider_model, effort: breakdowns.effort, model_effort: breakdowns.model_effort,
     channel: breakdowns.channel, machine_id: breakdowns.machine_id, execution_machine_id: breakdowns.execution_machine_id, session_kind: breakdowns.session_kind,
   };
 
@@ -78,15 +80,3 @@ export function carbonAnalysisCatalog(assumptions?: CarbonAssumptions): Analysis
 }
 // For validation and comparison only.
 export const carbonCatalogShape = carbonAnalysisCatalog();
-
-// The legacy Carbon page's chart: a link's analyze_chart (written by the old
-// chart, CarbonView: metric co2 or energy, split type, tier, …) wins over the
-// saved chart, which wins over the default. Read in the catalog's terms.
-const legacyDefaults: AnalysisState = { metric: "co2", split: "type", period: "week" };
-export function legacyCarbonChart(encoded: string | null, saved: unknown): AnalysisState {
-  const valid = (value: unknown): value is AnalysisState => Boolean(value) && typeof value === "object" && !Array.isArray(value) && validAnalysisState(carbonCatalogShape, { ...legacyDefaults, ...value as AnalysisState, view: "trend" });
-  let linked: unknown;
-  try { linked = encoded ? JSON.parse(encoded) : undefined; } catch { linked = undefined; }
-  const chosen = valid(linked) ? linked : valid(saved) ? saved : {};
-  return canonicalState(carbonCatalogShape, { ...legacyDefaults, ...chosen });
-}

@@ -441,6 +441,10 @@ func (c *classifier) claimQuestionForms(l *labeler, input authorInput, bodyStart
 		}
 	}()
 	for _, q := range c.questions[input.ConversationID] {
+		// Estimate batches can preload questions newer than this input.
+		if !q.at.Before(input.SentAt) {
+			continue
+		}
 		for i, line := range lines {
 			if line[0] < bodyStart || strings.TrimSpace(input.Text[line[0]:line[1]]) != q.title || i+1 >= len(lines) {
 				continue

@@ -18,9 +18,11 @@ export function launchPlan() {
       : { skip: "WebKit is not installed. Install it with `npx playwright-core install webkit` in web/." };
   }
   if (engine !== "chromium") return { skip: `Unknown PHAROS_BROWSER "${engine}"; use chromium or webkit.` };
+  // Installed Chrome can leave macOS app clones behind after repeated test runs.
+  const options = { args: ["--disable-features=MacAppCodeSignClone"] };
   const chrome = [process.env.CHROME_PATH, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"].find(path => path && existsSync(path));
-  if (chrome) return { type: chromium, options: { executablePath: chrome } };
-  if (existsSync(chromium.executablePath())) return { type: chromium, options: {} };
+  if (chrome) return { type: chromium, options: { ...options, executablePath: chrome } };
+  if (existsSync(chromium.executablePath())) return { type: chromium, options };
   return { skip: "No Chromium found. Install Google Chrome, set CHROME_PATH, or run `npx playwright-core install chromium` in web/." };
 }
 

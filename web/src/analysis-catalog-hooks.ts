@@ -42,7 +42,7 @@ export function useParallelismCatalog(): { catalog: AnalysisCatalog; settings: P
     window.addEventListener("pharos:preferences-saved", saved);
     return () => window.removeEventListener("pharos:preferences-saved", saved);
   }, []);
-  const catalog = useMemo(() => analysisCatalogFor("parallelism", { parallelism: settings.counting })!, [settings.counting]);
+  const catalog = useMemo(() => ({ ...analysisCatalogFor("parallelism", { parallelism: settings.counting })!, request: { params: { parallelism_settings: JSON.stringify(settings) } } }), [settings.counting, settings.gap]);
   return { catalog, settings };
 }
 

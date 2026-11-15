@@ -4,5 +4,5 @@ package schemas
 
 import "embed"
 
-//go:embed *.schema.json
+//go:embed *.schema.json scatter-metrics.json
 var Documents embed.FS

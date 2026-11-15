@@ -116,3 +116,136 @@ Browser checks cover pagination by scrolling and context jumps, child links
 on newly rendered pages, rail navigation after resizing and opening/closing
 turns, and a single delegation request on a conversation deep link. These run
 in both Chrome and WebKit.
+
+## Toggling turns on a long page, 2026-11-02
+
+The conversation for this pass is a Codex workspace conversation with 46 turns
+and 4,239 messages. Opening or closing a turn was slow even though a turn
+holds little content. The toggle itself was cheap. The cost came from page-wide
+work that every small DOM change triggered, and it grew with the page.
+
+- **`:has()` on `<main>`.** Two app-shell rules placed the sidebar with
+  `main:has(...)`. In Chrome, the rule that styled `main>.view` marked every
+  descendant of `<main>` invalid, so each attribute change anywhere on the page
+  restyled about 14,000 elements, five to ten times per toggle. In WebKit, the
+  `#appNavigationRail:not([hidden])` argument made every `hidden` change in
+  `<main>` run `:has()` invalidation synchronously: the Context rail's marker
+  writes took 25 ms a frame. The navigation now writes `data-app-sidebar` on
+  `<main>`, and both rules select that attribute.
+- **`:has(.xml-chip[open])`.** In WebKit, every `open` change on the page paid
+  for this rule: Close turns spent 400 ms just setting `open` on 46 turns. Chip
+  rows now keep a `chip-open` class from a capturing `toggle` listener.
+- **Animated `box-shadow`.** The drive and status pulses animated `box-shadow`,
+  which WebKit can't run on the compositor. Each frame repainted and walked
+  every compositing layer on the page. With every turn open, the idle web
+  process used about 15% CPU; in the app after a long session, about half its
+  main thread. The pulses now animate opacity, with the ring on `::after`.
+  Indeterminate progress bars use `transform` instead of `margin-left` or
+  `left`.
+- **URL churn.** Each disclosure wrote `reader_expanded` and `reader_collapsed`
+  separately. Each write recorded a visit, which parses the history, posts it
+  to Ask and rebuilds the bookmark star. Each write also re-scanned the
+  document for classic disclosures. Both fields are now written together,
+  visits are recorded once per burst, and classic disclosures restore only when
+  their own parameter changes. The reader's disclosure observer now scans only
+  added content.
+
+Measured against the live service before and after the change. Times are
+until three quiet frames, so each includes about 50 ms of idle frames:
+
+| Interaction (all turns open) | Before | After |
+| --- | --- | --- |
+| Chrome, one toggle | 97–127 ms | under one frame |
+| Chrome, Open turns / Close turns | 684 / 521 ms | 248 / 73 ms |
+| Headless WebKit, one toggle | 130–149 ms | 54–61 ms |
+| Headless WebKit, Close turns / reopen | 1,055 / 600 ms | 143 / 214 ms |
+| WKWebView (app engine), one toggle | 263–272 ms | 99–124 ms |
+| WKWebView, idle CPU | ~19% | ~1–2% |
+
+Headless WebKit lacks the app's compositor, so it shows neither the idle cost
+nor the per-frame compositing walk. Use a WKWebView in a real window, or
+`sample` the app's WebContent process, for those.
+
+Keep `:has()` off ancestors of large content, such as `main`, `.view` and the
+transcript, and keep infinite animations to `opacity`, `transform` and
+`filter`.
+
+### Every animation on the site
+
+The same cost applied to every repeating animation of a property WebKit can't
+composite. Each one that ran made every frame update rendering and walk the
+page's compositing layers, so a small indicator cost more on a longer page.
+
+- **Header beacon sweep** (runs during every sync). This animated a
+  registered custom property that drove a `clip-path` and the gradient angle.
+  It now uses `transform` and `opacity` keyframes generated every 15°. The lit
+  name is revealed by two opposite translations, which cancel exactly, and the
+  lamp and halo are overlays with their own opacity. The static pose is the
+  same.
+- **Ask wait skeleton** animated `background-position`. A wider `::before`
+  now slides with `transform`.
+- **Ask working trace** still animates `stroke-dashoffset` on the glow's
+  outline. It runs only while Ask answers, and costs 2–4% CPU with every turn
+  open. A dash moving along a path has no compositor
+  equivalent.
+- **Ask prompt ideas** counted down by rewriting their label four times a
+  second on every page, even while hidden. They now write only changes.
+- `token-flash` is a single 2-second highlight and stays as it is.
+
+In WKWebView, with every turn of the same conversation open, the web process
+used about 13% CPU during the sweep. It now uses 1–2%, the same as with nothing
+animating. The skeleton uses 2–3%.
+
+## Sticky session navigators, 2026-11-08
+
+The session reader replaces its two independent vertical rails with optional
+horizontal Timeline, Context and Turns bars. They share an elapsed-time axis
+and one read-only viewport indicator. The timeline uses `SessionRibbon`, the
+same summary renderer and tool/event palette as the workspace timeline, with
+a compact `TimelineKey` below it. Navigator choices are `reader_navigator` URL
+state; scrolling never writes a URL.
+
+`reader-navigator-layout.ts` measures each distinct rendered target only after
+layout changes. Closed disclosures and lazy earlier/later pages retain their
+source ranges without rendering hidden records. Individual turn and ancestor
+ResizeObservers, plus disclosure, filter and materialization events, invalidate
+that cache. All geometry reads precede writes. A prefix-maximum index narrows
+scroll updates to visible cached spans, including overlapping/out-of-order
+subagent records. Scrolling changes only the shared indicator's transforms;
+its fill and two edges have separate compositor layers. The percentage readout
+updates its existing text node after scrolling settles, avoiding repeated text
+replacement and layout invalidation in long WebKit documents.
+
+Bulk disclosure saves also batch once per animation frame. The expanded
+fixture exposed WebKit's limit of 100 history writes per ten seconds when
+Open turns saved every native toggle separately.
+
+The performance case in `web/tests/browser/focus.test.mjs` uses **synthetic
+input**: 160 turns, 1,920 normalized messages and 960 context samples. The
+actual input construction is in that test: twelve records per turn, one-minute
+turn spacing, one-second record spacing, and alternating prose/token-count
+records. It checks all three bars, repeated expanded history, Timeline + Turns,
+Timeline alone, and no bars, with twenty scroll steps per configuration. It
+instruments transcript `getBoundingClientRect` calls, which must stay **zero**
+while scrolling in both collapsed and expanded states. A DOM-free unit case
+also checks that lookup work stays independent of 20,000 cached spans.
+
+Final local observations after compositing/readout changes:
+
+| Engine | Expanded, all bars | Repeated traversal, all bars | All bars hidden |
+| --- | ---: | ---: | ---: |
+| Chrome | 35 ms / 0 | 34 ms / 0 | 34 ms / 0 |
+| Headless WebKit | 65 ms / 1 | 35 ms / 0 | 34 ms / 0 |
+
+Each cell is **maximum time through two animation frames / number of those
+intervals over 50 ms**, not a single-frame duration or latency guarantee.
+Collapsed-history maxima were about 34 ms, with no intervals over 50 ms.
+These are short runs on a shared machine; earlier expanded WebKit runs were
+noisier. Zero transcript remeasurements is the stable assertion. Long-history
+painting can still stall, and headless WebKit does not prove WKWebView's real
+window/compositor performance.
+
+Browser checks additionally cover sticky placement below the header, narrow
+readers, fresh-load restoration of any/no navigator, no-focus message jumps,
+multiple normalized blocks sharing a source message, lazy context jumps,
+opening/closing turns and a preceding workspace overview changing height.

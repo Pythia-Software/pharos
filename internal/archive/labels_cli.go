@@ -19,7 +19,7 @@ import (
 )
 
 const labelsUsage = `usage:
-  pharos [--config PATH] labels run [--limit N] [--batch-tokens N] [--max-batch N] [--workers N] [--threads N] [--full] [--one-at-a-time] [--dry-run] [--json] [--export-items FILE [--export-text]]
+  pharos [--config PATH] labels run [--limit N] [--batch-tokens N] [--max-batch N] [--workers N] [--threads N] [--backend auto|cpu|mlx] [--full] [--one-at-a-time] [--dry-run] [--json] [--export-items FILE [--export-text]]
   pharos [--config PATH] labels status [--json]
   pharos [--config PATH] labels fetch
   pharos [--config PATH] labels explain MESSAGE_ID [--infer]`
@@ -52,6 +52,7 @@ func runLabelsCLI(ctx context.Context, config Config, catalog *Catalog, op *Op, 
 		flags.IntVar(&settings.BatchTokens, "batch-tokens", settings.BatchTokens, "padded tokens per batch")
 		flags.IntVar(&settings.MaxBatch, "max-batch", settings.MaxBatch, "items per batch")
 		flags.IntVar(&settings.Workers, "workers", settings.Workers, "worker processes")
+		flags.StringVar(&settings.Backend, "backend", settings.Backend, "auto, cpu or mlx")
 		flags.IntVar(&settings.Threads, "threads", settings.Threads, "threads per worker")
 		full := flags.Bool("full", false, "rebuild every conversation's items")
 		single := flags.Bool("one-at-a-time", false, "one item per batch, one batch at a time (a baseline)")
@@ -135,7 +136,8 @@ func runLabelsCLI(ctx context.Context, config Config, catalog *Catalog, op *Op, 
 		if err := flags.Parse(args[2:]); err != nil || flags.NArg() != 0 {
 			return errors.New(labelsUsage)
 		}
-		explanation, err := catalog.LabelsExplain(ctx, settings, args[1], *infer)
+		// --infer admits from this command's authority (nil: classic).
+		explanation, err := catalog.LabelsExplain(withWorkAuthority(ctx, cliWorkAuthority(config)), settings, args[1], *infer)
 		if err != nil {
 			return err
 		}
@@ -149,13 +151,13 @@ func runLabelsCLI(ctx context.Context, config Config, catalog *Catalog, op *Op, 
 // ensureAuthorshipForLabels brings the authorship ledger current first: the
 // labeler reads human pieces from it, as the chain runs labels after it.
 func (c *Catalog) ensureAuthorshipForLabels(ctx context.Context, stderr io.Writer) error {
-	want, built, err := c.authorshipGenerations()
+	want, built, err := c.authorshipEstimateGenerations()
 	if err != nil || want == built {
 		return err
 	}
-	fmt.Fprintln(stderr, "labels: classifying your writing first (the authorship ledger is behind)")
+	fmt.Fprintln(stderr, "labels: updating writing estimates first (historical refinement runs overnight)")
 	started := time.Now()
-	if err := c.RebuildAuthorship(ctx, want); err != nil {
+	if err := admitWorkCPU(ctx, c, 1, 1, func(ctx context.Context, _ workAllocation) error { return c.UpdateAuthorship(ctx, want) }); err != nil {
 		return fmt.Errorf("authorship: %w", err)
 	}
 	fmt.Fprintf(stderr, "labels: authorship took %s\n", time.Since(started).Round(time.Second))
@@ -169,6 +171,9 @@ func (c *Catalog) LabelsStatus(ctx context.Context, settings LabelerSettings) (m
 		"contract": labelsContract}
 	if waiting := settings.labelsWaiting(); waiting != "" {
 		status["waiting"] = waiting
+	}
+	if problem := settings.labelerProblem(); problem != "" {
+		status["problem"] = problem
 	}
 	identity := ""
 	if settings.ModelDir == "" {
@@ -194,7 +199,8 @@ func (c *Catalog) LabelsStatus(ctx context.Context, settings LabelerSettings) (m
 		"labeled_messages":    `SELECT COUNT(*) FROM message_labels`,
 		"units":               `SELECT COALESCE(SUM(units),0) FROM message_labels_conversations`,
 		"built_conversations": `SELECT COUNT(*) FROM message_labels_conversations`,
-		"dirty_conversations": `SELECT COUNT(*) FROM message_labels_dirty`,
+		// Dirty, or resting on execution changes not yet marked.
+		"dirty_conversations": `SELECT COUNT(*) FROM (SELECT conversation_id FROM message_labels_dirty UNION ` + executionUnmarkedSQL(ctx, c.DB, "message_labels_conversations") + `)`,
 		"other_model":         `SELECT COUNT(*) FROM message_labels WHERE model<>? OR contract<>?`,
 	} {
 		var value int64
@@ -219,7 +225,7 @@ func (c *Catalog) LabelsStatus(ctx context.Context, settings LabelerSettings) (m
 	status["segments"] = segments
 	generation, _ := c.metaValue(ctx, "labels_generation")
 	builtAt, _ := c.metaValue(ctx, "labels_built_at")
-	_, authorship, _ := c.authorshipGenerations()
+	_, authorship, _ := c.authorshipEstimateGenerations()
 	status["generation"], status["built_at"] = generation, builtAt
 	switch {
 	case generation == "":
@@ -307,35 +313,54 @@ func (c *Catalog) LabelsExplain(ctx context.Context, settings LabelerSettings, m
 		}
 	}
 	if infer {
-		runner, release, err := c.labelerManager(settings).Runner(ctx, model, labelrt.RunnerConfig{Worker: settings.Worker, Args: runtimeArgs(settings),
-			Workers: 1, Threads: settings.Threads, MaxBatch: max(1, settings.MaxBatch)})
-		if err != nil {
+		// A diagnostic, still admitted like every inference (§7.2): the
+		// worker's threads fit the grant, which waits for the allowance.
+		var result []labelrt.RowOutputs
+		var worker labelrt.WorkerInfo
+		if err := admitWorkCPU(ctx, c, 1, max(1, settings.Threads), func(ctx context.Context, allocation workAllocation) error {
+			admitted := admittedLabeler(ctx, settings)
+			runner, release, err := c.labelerRunner(ctx, admitted, model, labelrt.RunnerConfig{GPU: model.MayUseGPU(settings.Backend), Worker: settings.Worker, Args: runtimeArgs(settings),
+				Workers: 1, Threads: min(max(1, settings.Threads), allocation.CPUs), MaxBatch: max(1, settings.MaxBatch)})
+			if err != nil {
+				return err
+			}
+			defer release()
+			if result, err = runner.Run(ctx, rows, []string{"probs"}, settings.BatchTokens); err != nil {
+				return err
+			}
+			worker = runner.Pool().Ready().Worker
+			return nil
+		}); err != nil {
 			return nil, err
 		}
-		defer release()
-		result, err := runner.RunBatch(ctx, rows, []string{"probs"})
-		if err != nil {
-			return nil, err
-		}
-		probs := result.Tensor("probs").Float32
 		var mask uint64
 		chunks := []map[string]any{}
 		for row, item := range items {
-			p := probs[row*model.Labels() : (row+1)*model.Labels()]
+			p := result[row]["probs"]
+			if len(p) != model.Labels() {
+				return nil, fmt.Errorf("labeler worker returned %d probabilities for chunk %d; expected %d", len(p), row, model.Labels())
+			}
 			chunk := model.Decide(p, item.Segment)
 			mask |= chunk
 			chunks = append(chunks, map[string]any{"labels": model.LabelNames(chunk), "probs": labelProbMap(model, p)})
 		}
-		out["inferred"] = map[string]any{"labels": model.LabelNames(mask), "chunks": chunks, "worker": runner.Pool().Ready().Worker}
+		out["inferred"] = map[string]any{"labels": model.LabelNames(mask), "chunks": chunks, "worker": worker}
 	}
 	return out, nil
 }
 
 func runtimeArgs(settings LabelerSettings) []string {
-	if settings.Runtime == "" {
-		return nil
+	var args []string
+	if settings.Runtime != "" {
+		args = append(args, "--runtime", settings.Runtime)
 	}
-	return []string{"--runtime", settings.Runtime}
+	if settings.Backend != "" {
+		args = append(args, "--backend", settings.Backend)
+	}
+	if settings.MLXRuntime != "" {
+		args = append(args, "--mlx-runtime", settings.MLXRuntime)
+	}
+	return args
 }
 
 func thresholdRow(model *labelrt.Model, segment string) map[string]float32 {

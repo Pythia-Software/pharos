@@ -1,26 +1,32 @@
 import type { WhereTerm } from "@pythia-software/query-table-core";
+import { recordedCacheReads, recordedInput } from "./usage-estimate-model";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 import { tokenTypes } from "./token-chart-request";
+import { projectBreakdown, projectLegacy } from "./project-analysis";
+import { tokenMetricFormat } from "./token-count";
 
 // Tokens and Cost over the usage ledger. One record is one agent session's
 // usage of one model and effort on one recorded day.
 
-const tokens = { kind: "number", decimals: 0 } as const, usd = { kind: "number", decimals: 2 } as const, percent = { kind: "percent", decimals: 1 } as const;
+const tokens = { kind: "number", decimals: 0 } as const, usd = { kind: "currency", currency: "USD" } as const, percent = { kind: "percent", decimals: 1 } as const;
 const priced: WhereTerm[] = [{ field: "price_status", op: "=", value: "priced" }];
 const measures: Record<string, AnalysisMeasure> = {
-  tokens: { label: "Tokens", unit: "tokens", format: tokens, op: "sum", field: "total_tokens", value: "total_tokens", additive: true, note: "Tokens include cached input and reported reasoning output." },
+  tokens: { label: "Tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "total_tokens", value: "total_tokens", additive: true, note: "Tokens include cached input and reported reasoning output." },
   cost: { label: "API cost (USD)", unit: "USD", format: usd, op: "sum", field: "cost_usd", value: "cost_usd", additive: true, note: "API cost is the list-price equivalent, including assumed and partial prices; unpriced usage has no cost and adds nothing." },
   priced_cost: { label: "Fully priced API cost (USD)", unit: "USD", format: usd, op: "sum", field: "cost_usd", value: "cost_usd", additive: true, where: priced, note: "Only fully priced usage (price_status=priced) is included; assumed, partial and unpriced usage is left out of every measure in this view." },
-  input: { label: "Input tokens", unit: "tokens", format: tokens, op: "sum", field: "input_tokens", value: "input_tokens", additive: true, note: "Input includes cache reads and cache writes." },
-  output: { label: "Output tokens", unit: "tokens", format: tokens, op: "sum", field: "output_tokens", value: "output_tokens", additive: true, note: "Output includes reported reasoning output." },
-  cache_read_share: { label: "Cache-read share of input", unit: "percent", format: percent, op: "sum", ratio: ["cache_read_input_tokens", "input_tokens"], additive: false, note: "Cache reads divided by all input, cache writes included, weighted by tokens rather than averaging per-record percentages." },
+  input: { label: "Input tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "input_tokens", value: "input_tokens", additive: true, note: "Input includes cache reads and cache writes." },
+  output: { label: "Output tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "output_tokens", value: "output_tokens", additive: true, note: "Output includes reported reasoning output." },
+  cache_read_share: { label: "Cache-read share of input", unit: "percent", format: percent, op: "sum", ratio: [{ op: "sum", expression: recordedCacheReads, label: "recorded cache reads" }, { op: "sum", expression: recordedInput, label: "recorded input" }], additive: false, note: "Cache reads divided by all input, cache writes included, weighted by tokens rather than averaging per-record percentages. Recorded usage only: an estimate's cache division is assumed." },
   output_share: { label: "Output share of tokens", unit: "percent", format: percent, op: "sum", ratio: ["output_tokens", "total_tokens"], additive: false, note: "Output tokens divided by all recorded tokens, weighted by tokens." },
   delegating_share: { label: "Conversations using delegation", unit: "percent", format: percent, op: "sum", expression: "COUNT_DISTINCT(IF([delegated_run_depth]>0,[root_conversation_id],NULL))/NULLIF(COUNT_DISTINCT([root_conversation_id]),0)", additive: false, note: "Top-level conversations with an active delegated execution divided by all top-level conversations with matching usage. Over time computes each period separately; smoothing averages those period shares." },
-  delegated_share: { label: "Delegated share of tokens", unit: "percent", format: percent, op: "sum", ratio: [{ op: "sum", expression: "IF([delegated_run_depth]>0,[total_tokens],0)", label: "delegated tokens" }, "total_tokens"], additive: false, note: "Tokens from delegated runs divided by all matching tokens, grouped by their root conversation when a conversation unit is chosen." },
+  delegated_share: { label: "Delegated share of tokens", unit: "percent", format: percent, op: "sum", ratio: [{ op: "sum", expression: "IF([delegated_run_depth]>0,[total_tokens],0)", label: "delegated tokens" }, "total_tokens"], additive: false, note: "Tokens from delegated runs divided by all matching tokens, grouped by their top-level conversation when a conversation unit is chosen." },
   root_conversations: { label: "Top-level conversations", unit: "conversations", format: tokens, op: "count_distinct", field: "root_conversation_id", additive: false, note: "Distinct top-level conversations with matching usage, delegated runs folded into their roots." },
   conversations: { label: "Conversations reached", unit: "conversations", format: tokens, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct conversations with usage. A conversation using several groups counts once in each, so groups do not add up to the total." },
   agent_sessions: { label: "Agent sessions", unit: "sessions", format: tokens, op: "count_distinct", field: "agent_session_id", additive: false, note: "Distinct agent sessions with usage. A session using several groups counts once in each." },
   delegated_runs: { label: "Delegated runs", unit: "runs", format: tokens, op: "count_distinct", field: "delegated_session_id", additive: false, note: "Distinct delegated executions with usage; the top-level run is not one. Handles and child transcripts count once." },
+  average_fanout: { label: "Average direct child runs per delegating agent", unit: "runs per delegating agent", format: { kind: "number", decimals: 1 }, op: "sum", expression: "COUNT_DISTINCT([delegated_session_id])/NULLIF(COUNT_DISTINCT([delegated_parent_session_id]),0)", additive: false,
+    where: [{ field: "total_tokens", op: ">", value: "0" }, { field: "root_conversation_id", op: "is_not_null", value: "" }, { field: "root_conversation_id", op: "!=", value: "" }, { field: "delegated_run_depth", op: ">", value: "0" }, { field: "delegated_parent_session_id", op: "is_not_null", value: "" }, { field: "delegated_parent_session_id", op: "!=", value: "" }],
+    note: "Distinct direct child executions divided by their distinct recorded parents, including initiating agents and nested parents. Each parent has equal weight; only parents with matching positive-token child usage count. Repeated days and linked transcripts count once within each period. Periods with no delegation have no value. Smoothing, when selected, averages period means; it does not recalculate distinct counts across periods." },
 };
 
 const breakdowns: AnalysisCatalog["breakdowns"] = {
@@ -31,20 +37,20 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
   // several providers.
   provider_model: { label: "Provider + model", fields: ["provider", "model_family"] },
   ...Object.fromEntries(([
-    ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Root agent/subagent"], ["price_status", "Price status"], ["session_role", "Session role"], ["run_role", "Run role"], ["delegated_run_depth", "Delegation depth"], ["model", "Recorded model"],
+    ["model_effort", "Model + effort"], ["effort", "Effort"], ["session_kind", "Main agent / sub-agent"], ["price_status", "Price status"], ["session_role", "Session role"], ["run_role", "Run role"], ["delegated_run_depth", "Delegation depth"], ["model", "Recorded model"],
   ] as const).map(([name, label]) => [name, { label, fields: [name] }])),
 };
-breakdowns.root_repository_name = { label: "Top-level repository", fields: ["root_repository_name"] };
-breakdowns.repository_provider_model = { label: "Repository + provider + model", fields: ["repository_name", "provider", "model_family"] };
+breakdowns.project_name = projectBreakdown();
+breakdowns.root_project_name = { label: "Top-level project", fields: ["root_project_name"], empty: "No project" };
+breakdowns.project_provider_model = { label: "Project + provider + model", fields: ["project_name", "provider", "model_family"] };
 breakdowns.provider_model_role = { label: "Provider + model + role", fields: ["provider", "model_family", "session_role"] };
 breakdowns.provider_model_effort = { label: "Provider + model + effort", fields: ["provider", "model_family", "effort"] };
 // Providers and agent kinds keep one color and place whatever the filters.
 breakdowns.provider.order = ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"];
 breakdowns.session_kind.order = ["root", "subagent"];
-breakdowns.session_kind.values = { root: "Root agent", subagent: "Sub-agent" };
-breakdowns.repository_name.empty = "No repository";
+breakdowns.session_kind.values = { root: "Main agent", subagent: "Sub-agent" };
 
-const root = { provider: ["root_provider"], model_family: ["root_model_family"], provider_model: ["root_provider", "root_model_family"], effort: ["root_effort"], provider_model_effort: ["root_provider", "root_model_family", "root_effort"], repository_name: ["root_repository_name"], channel: ["channel"], machine_id: ["machine_id"] };
+const root = { provider: ["root_provider"], model_family: ["root_model_family"], provider_model: ["root_provider", "root_model_family"], effort: ["root_effort"], provider_model_effort: ["root_provider", "root_model_family", "root_effort"], project_name: ["root_project_name"], channel: ["channel"], machine_id: ["machine_id"] };
 const present = (name: string): WhereTerm[] => [{ field: name, op: "is_not_null", value: "" }, { field: name, op: "!=", value: "" }];
 
 export const tokenAnalysisCatalog: AnalysisCatalog = {
@@ -52,20 +58,23 @@ export const tokenAnalysisCatalog: AnalysisCatalog = {
   records: { label: "Usage record", plural: "Usage records", note: "A usage record is one agent session’s usage of one model and effort on one recorded day, so record sizes depend on how long sessions ran." },
   units: {
     conversation: { label: "Conversation", plural: "Conversations", key: "root_conversation_id", where: present("root_conversation_id"), breakdowns: root,
-      note: "A conversation is one top-level conversation including its delegated runs, linked launches and continuations, grouped by its top-level provider, model, effort and repository even where delegated runs used others. Usage with unresolved lineage is left out." },
+      note: "A conversation is one top-level conversation including its delegated runs, linked launches and continuations, grouped by its top-level provider, model, effort and project even where delegated runs used others. Usage with unresolved parent links is left out." },
     agent_session: { label: "Agent session", plural: "Agent sessions", key: "agent_session_id", where: present("agent_session_id"),
-      breakdowns: { provider: ["provider"], repository_name: ["repository_name"], session_kind: ["session_kind"], channel: ["channel"], machine_id: ["machine_id"], execution_machine_id: ["execution_machine_id"] },
-      note: "An agent session is one recorded root agent or subagent session. Model and effort can change within a session, so sessions are not split by them." },
-    repository: { label: "Top-level repository", plural: "Top-level repositories", key: "root_repository_name", where: present("root_conversation_id"), breakdowns: { root_repository_name: ["root_repository_name"] }, note: "One repository groups its top-level conversations and their delegated usage in the selected range." },
+      breakdowns: { provider: ["provider"], project_name: ["project_name"], session_kind: ["session_kind"], channel: ["channel"], machine_id: ["machine_id"], execution_machine_id: ["execution_machine_id"] },
+      note: "An agent session is one recorded root agent or sub-agent session. Model and effort can change within a session, so sessions are not split by them." },
+    project: { label: "Top-level project", plural: "Top-level projects", key: "root_project_name", where: present("root_conversation_id"), breakdowns: { root_project_name: ["root_project_name"] }, note: "One project (a repository or a folder) groups its top-level conversations and their delegated usage in the selected range." },
     run_effort: { label: "Run at one effort", plural: "Runs by effort", key: ["effort", "run_role", "root_conversation_id", "delegated_session_id"], where: present("root_conversation_id"),
       breakdowns: { effort: ["effort"], run_role: ["run_role"] }, note: "One root run or delegated execution at one effort, with usage in the selected range pooled. A run that changes effort contributes once to each effort used." },
     delegated_run: { label: "Delegated run", plural: "Delegated runs", key: "delegated_session_id", where: [...present("delegated_session_id"), { field: "delegated_run_depth", op: ">", value: "0" }], breakdowns: root,
-      note: "A delegated run is one delegated execution below a top-level conversation, nested and linked launches included, grouped by its top-level conversation’s provider, model, effort and repository." },
+      note: "A delegated run is one delegated execution below a top-level conversation, nested and linked launches included, grouped by its top-level conversation’s provider, model, effort and project." },
+    delegating_run: { label: "Delegating agent", plural: "Delegating agents", key: ["root_conversation_id", "delegated_parent_session_id"], where: [...present("root_conversation_id"), ...present("delegated_parent_session_id"), { field: "delegated_run_depth", op: ">", value: "0" }], breakdowns: root,
+      note: "One recorded parent execution, including initiating agents and nested parents, represented by its direct children's matching usage. Delegated runs counts its distinct active direct children; parent usage need not be in the window. Agents with no matching children are excluded. Provider, model, effort and project describe the top-level conversation." },
   },
   // Token type splits a token total into its parts. Cost is priced per
   // request, not per token type, so cost by type shows providers, as the
   // Usage chart always has.
-  components: { type: { label: "Token type", measures: ["tokens"], parts: tokenTypes.map(type => ({ key: type.key, label: type.label, field: type.key, color: type.color, optional: type.key === "unclassified_tokens" })), fallback: "provider" } },
+  components: { type: { label: "Token type", measures: ["tokens"], parts: tokenTypes.map(type => ({ key: type.key, label: type.label, field: type.key, color: type.color, optional: type.key === "unclassified_tokens" })), fallback: "provider" },
+    input_type: { label: "Input token type", measures: ["input"], parts: tokenTypes.filter(type => ["uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].includes(type.key)).map(type => ({ key: type.key, label: type.label, field: type.key, color: type.color })), fallback: "provider" } },
   cycle: { hour: { kind: "instant", field: "hour" }, weekday: { kind: "recorded-date", field: "day" } },
   // The hourly ledger answers hour; the others are recorded calendar dates.
   periods: { hour: "hour", day: "day", week: "week", month: "month" },
@@ -76,6 +85,6 @@ export const tokenAnalysisCatalog: AnalysisCatalog = {
   samples: { unit: "conversations", label: "Conversations", distinct: "root_conversation_id" },
   // The Usage chart's percentage metrics are a measure shown as shares.
   legacySlices: true,
-  legacy: state => state.metric === "percent" || state.metric === "percent_cost" ? { ...state, metric: state.metric === "percent" ? "tokens" : "cost", share: true } : state,
+  legacy: projectLegacy(state => state.metric === "percent" || state.metric === "percent_cost" ? { ...state, metric: state.metric === "percent" ? "tokens" : "cost", share: true } : state),
   scatter: ["tokens", "cost"],
 };

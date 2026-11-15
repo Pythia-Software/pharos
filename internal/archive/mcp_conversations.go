@@ -86,9 +86,20 @@ func (c *Catalog) searchConversationsContext(ctx context.Context, args map[strin
 	}
 	clauses := []string{"1=1"}
 	values := []any{}
+	// What the conversation must hold (conversation_content.go).
+	if wanted, err := contentFilter(args["has"]); err != nil {
+		return nil, err
+	} else if len(wanted) > 0 {
+		filter, held := contentConversationSQL("c.id", wanted)
+		clauses, values = append(clauses, filter), append(values, held...)
+	}
 	if repository := firstString(args["repository"]); repository != "" {
 		clauses = append(clauses, repositoryNamePredicate("r"))
 		values = append(values, repository, repository)
+	}
+	if project := firstString(args["project"]); project != "" {
+		clauses = append(clauses, projectPredicate("w"))
+		values = append(values, projectArgs(project)...)
 	}
 	if source := firstString(args["source"]); source != "" {
 		clauses = append(clauses, "w.source_kind=?")
@@ -104,8 +115,12 @@ func (c *Catalog) searchConversationsContext(ctx context.Context, args map[strin
 		values = append(values, filterArgs...)
 	}
 	if file := firstString(args["file"]); file != "" {
-		clauses = append(clauses, `EXISTS(SELECT 1 FROM change_sets cs JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=w.id AND cf.path LIKE ?)`)
-		values = append(values, "%"+file+"%")
+		roots, err := fileFilterRoots(ctx, c.reader(), file)
+		if err != nil {
+			return nil, err
+		}
+		clauses = append(clauses, fileFilterSQL("w"))
+		values = append(values, fileFilterArgs(file, roots)...)
 	}
 	if args["pr"] != nil {
 		clauses = append(clauses, `EXISTS(SELECT 1 FROM work_pr_links l JOIN pull_requests p ON p.id=l.pr_id WHERE l.workspace_id=w.id AND p.number=?)`)
@@ -119,18 +134,27 @@ func (c *Catalog) searchConversationsContext(ctx context.Context, args map[strin
 		clauses = append(clauses, "COALESCE(c.started_at,w.activity_at)<=?")
 		values = append(values, timeBound(to, true))
 	}
+	filtered := len(values) > 0
+	// An exported artifact a conversation made is shown there
+	// (message_assets.go). Which those are changes only with a commit, so
+	// the unfiltered list is kept with them left out.
+	if placed, held, err := c.withoutPlacedArtifactDocuments(ctx, "c.workspace_id"); err != nil {
+		return nil, err
+	} else if placed != "" {
+		clauses, values = append(clauses, placed), append(values, held...)
+	}
 	// Ranking reads a few columns of every conversation; the rest of a card,
 	// and its message count, are read only for the page (see conversationCards).
 	// Without filters, which is how agents usually search, the list is kept
 	// until the next commit.
-	candidates := func(context.Context) ([]map[string]any, error) {
-		return queryMaps(c.DB, `SELECT c.id conversation_id,c.started_at,w.activity_at,substr(w.title,1,101) title
+	candidates := func(ctx context.Context) ([]map[string]any, error) {
+		return queryMapsContext(ctx, c.DB, `SELECT c.id conversation_id,c.started_at,w.activity_at,substr(w.title,1,101) title
 			FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
 			LEFT JOIN repositories r ON r.id=w.repository_id WHERE `+strings.Join(clauses, " AND "), values...)
 	}
 	var rows []map[string]any
 	var err error
-	if len(values) == 0 {
+	if !filtered {
 		rows, err = cachedValue(ctx, c, "mcp-conversations", candidates)
 	} else {
 		rows, err = candidates(ctx)
@@ -255,8 +279,20 @@ func (c *Catalog) conversationCards(cards []map[string]any, parsed string) error
 	for _, row := range rows {
 		byID[firstString(row["conversation_id"])] = row
 	}
+	holds := make([]string, len(ids))
+	for index, id := range ids {
+		holds[index] = firstString(id)
+	}
+	contents, err := c.conversationContents(context.Background(), holds)
+	if err != nil {
+		return err
+	}
 	for _, card := range cards {
 		row := byID[firstString(card["conversation_id"])]
+		if held := contents[firstString(card["conversation_id"])]; held != nil {
+			// What it holds beside its words, a kind to how many.
+			card["has"] = held
+		}
 		for _, key := range []string{"workspace_id", "repository", "provider", "model", "effort", "ended_at", "message_count", "coverage", "indexed_at"} {
 			card[key] = row[key]
 		}
@@ -301,8 +337,8 @@ func (c *Catalog) collapseConversationMirrors(rows []map[string]any) []map[strin
 		}
 		return parent[id]
 	}
-	links, _ := cachedValue(context.Background(), c, "conversation-links", func(context.Context) ([]map[string]any, error) {
-		return queryMaps(c.DB, "SELECT left_id,right_id FROM conversation_identity_links")
+	links, _ := cachedValue(context.Background(), c, "conversation-links", func(ctx context.Context) ([]map[string]any, error) {
+		return queryMapsContext(ctx, c.DB, "SELECT left_id,right_id FROM conversation_identity_links")
 	})
 	for _, link := range links {
 		left, right := firstString(link["left_id"]), firstString(link["right_id"])
@@ -370,6 +406,12 @@ func (c *Catalog) conversationOverview(args map[string]any) (map[string]any, err
 		"workspace_outcome": clipText(firstString(row["outcome"]), 200),
 		"note":              "Extractive previews; inspect cited messages before treating an outcome as verified."}
 	copyOrigin(result, row)
+	if contents, err := c.conversationContents(context.Background(), []string{id}); err != nil {
+		return nil, err
+	} else if held := contents[id]; held != nil {
+		// What it holds beside its words, a kind to how many (conversation_content.go).
+		result["has"] = held
+	}
 	if args["include_metrics"] == true {
 		metrics, values, err := c.conversationMetrics(context.Background(), id, firstString(row["workspace_id"]))
 		if err != nil {

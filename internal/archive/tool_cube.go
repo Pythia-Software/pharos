@@ -10,17 +10,17 @@ import (
 // its numbers. It has a quarter of tool_calls' rows at a fraction of their
 // width, so the Tool calls table answers row counts, filter values and column
 // stats from it whenever a request reads only those fields (see sqlCube),
-// Machine Time's metrics are summed from it (see machineTimeMetricsV2), and
+// Domain summaries are published from these additive facts, and
 // tool_usage_daily is summed from it rather than from the calls.
 // Both are rebuilt together (see rebuildToolRollup) and leave out mirrored
 // workspaces.
 
 // toolCubeGroups are the cube's grouping columns and the values they hold,
-// over toolCallDataset's joins. Title, repository, and source follow from the
-// workspace, so they add no groups.
+// over toolCallDataset's joins. Title, repository, project, and source follow
+// from the workspace, so they add no groups.
 var toolCubeGroups = func() []struct{ column, expr string } {
 	groups := []struct{ column, expr string }{
-		{"workspace_id", "t.workspace_id"}, {"title", "w.title"}, {"repository_name", "r.display_name"},
+		{"workspace_id", "t.workspace_id"}, {"title", "w.title"}, {"repository_name", "r.display_name"}, {"project_name", projectNameSQL("w")},
 		{"source_kind", "w.source_kind"}, {"day", "date(t.started_at,'localtime')"},
 		{"session_kind", "COALESCE(a.kind,'root')"}, {"agent_depth", "COALESCE(a.depth,0)"},
 	}
@@ -29,7 +29,7 @@ var toolCubeGroups = func() []struct{ column, expr string } {
 	}
 	for _, column := range []string{"provider", "model", "effort", "kind", "tool_name", "tool_category", "mcp_server", "program", "subcommand",
 		"command_category", "status", "error_type", "test_failure", "path_repository", "path_scope", "exit_code", "interrupted", "truncated", "has_pipe", "has_redirect", "has_heredoc",
-		"backgrounded", "host", "duration_source", "result_tokens_source"} {
+		"backgrounded", "host", "duration_source", "duration_is_estimate", "result_tokens_source"} {
 		groups = append(groups, struct{ column, expr string }{column, "t." + column})
 	}
 	// Fields with too many values to group by are kept as present or absent.
@@ -75,7 +75,7 @@ func toolCubeSelect(mirrors string) string {
 }
 
 // toolRollupFromCube sums the cube into tool_usage_daily's groups and counts.
-const toolRollupFromCube = `SELECT day,repository_name,source_kind,provider,COALESCE(model,'') model,effort,session_kind,
+const toolRollupFromCube = `SELECT day,repository_name,project_name,source_kind,provider,COALESCE(model,'') model,effort,session_kind,
 		tool_name,tool_category,mcp_server,program,subcommand,command_category,channel,machine_id,machine,machine_kind,execution_machine_id,execution_machine,execution_machine_kind,
 		SUM(call_count) call_count,SUM(CASE WHEN status='error' THEN call_count ELSE 0 END) error_count,
 		SUM(CASE WHEN status='no_result' THEN call_count ELSE 0 END) no_result_count,
@@ -83,12 +83,12 @@ const toolRollupFromCube = `SELECT day,repository_name,source_kind,provider,COAL
 		SUM(CASE WHEN error_type='timeout' THEN call_count ELSE 0 END) timeout_count,
 		SUM(CASE WHEN error_type='nonzero_exit' THEN call_count ELSE 0 END) nonzero_exit_count,
 		SUM(CASE WHEN error_type='hook_blocked' THEN call_count ELSE 0 END) hook_blocked_count,SUM(truncated*call_count) truncated_count,
-		SUM(duration_ms_n) timed_count,COALESCE(SUM(duration_ms_sum),0) total_duration_ms,MAX(duration_ms_max) max_duration_ms,
+		MAX(duration_is_estimate) duration_is_estimate,SUM(duration_ms_n) timed_count,COALESCE(SUM(duration_ms_sum),0) total_duration_ms,MAX(duration_ms_max) max_duration_ms,
 		SUM(input_bytes_sum) input_bytes,SUM(result_bytes_sum) result_bytes,SUM(result_tokens_sum) result_tokens,
 		SUM(CASE WHEN result_tokens_source='measured' THEN call_count ELSE 0 END) measured_count,
 		SUM(carried_tokens_sum) carried_tokens,SUM(output_tokens_sum) output_tokens,
 		COALESCE(SUM(lines_added_sum),0) lines_added,COALESCE(SUM(lines_removed_sum),0) lines_removed,COUNT(DISTINCT workspace_id) work_count
-	FROM tool_call_cube GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20`
+	FROM tool_call_cube GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21`
 
 // toolCallCube describes tool_call_cube to the Tool calls table.
 var toolCallCube = func() *sqlCube {

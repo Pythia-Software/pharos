@@ -1,22 +1,37 @@
+import { habitsTargetParams, isHabitsCardTarget } from "./habits-card";
+import type { DashboardCardTarget } from "./dashboard-card-model";
 import { queryRecipes } from "./curiosity-data";
 import { cardDestination } from "./card-destinations";
 import type { WindowChoice } from "./day-window";
 import { encodeQuery, normalizeQueryState, type QueryState, type SavedQuery, createQueryLinkService, httpQuerySnapshotStore } from "@pythia-software/query-table-core";
-import type { CardCover } from "./card-cover";
+import { validCardGroups, type CardCover } from "./card-cover";
 import { preferences } from "./preferences";
 import { normalizedDashboardChart } from "./analysis-catalogs";
+import { queryCategories, type QueryCategory } from "./query-categories";
 import { queryDatasets, queryFromURL, queryURL, resolveRollingQuery, rollingQueryMatches, updateQueryWindowURL, type QueryDataset, type RollingWindow } from "./query-links";
 
 export const BOOKMARKS_KEY = "pharos-bookmarks-v1";
 export type Bookmark = {
   id: string; title: string; url: string; description?: string; savedAt?: number;
-  dashboard?: boolean;
+  dashboard?: boolean; dashboardTarget?: Exclude<DashboardCardTarget, "chart">; action?: string; category?: QueryCategory;
   query?: QueryState; dataset?: QueryDataset; savedQueryId?: string; templateId?: string; coverMetricId?: string; cover?: CardCover;
+  // The groups this card shows, when its owner chose a count. Otherwise it
+  // follows its cover or chart. Its destination keeps its own count.
+  maxGroups?: number;
 };
 
 export function readBookmarks(): Bookmark[] {
   const value = preferences().get<unknown>(BOOKMARKS_KEY, []);
-  return Array.isArray(value) ? value.filter(item => item && typeof item.id === "string" && typeof item.title === "string" && typeof item.url === "string") : [];
+  return Array.isArray(value) ? value.filter(item => item && typeof item.id === "string" && typeof item.title === "string" && typeof item.url === "string").map(item => {
+    if (!item.dashboard) return item;
+    try {
+      const url = new URL(item.url, location.origin);
+      if (url.origin !== location.origin || url.pathname !== "/analyze" || url.searchParams.get("analyze_topic") !== "habits") return item;
+      if (isHabitsCardTarget(item.dashboardTarget ?? "chart")) url.search = habitsTargetParams(item.dashboardTarget, url.searchParams).toString();
+      else url.searchParams.set("analyze_topic", "work_hours");
+      return { ...item, url: url.pathname + url.search + url.hash };
+    } catch { return item; }
+  }) : [];
 }
 
 export function writeBookmarks(items: Bookmark[]) {
@@ -63,7 +78,7 @@ export function migrateSavedQueries() {
     const old = preferences().get<unknown>(`query-table:saved:${key}`, []);
     if (Array.isArray(old)) for (const saved of old.slice(0, 100)) {
       if (!saved || typeof saved.id !== "string" || typeof saved.name !== "string" || !saved.query || typeof saved.savedAt !== "number") continue;
-      const url = queryURL(dataset, normalizeQueryState(saved.query));
+      const url = queryURL(dataset, normalizeQueryState(saved.query), undefined, { preserveSource: true });
       const found = items.find(item => item.url === url && (!item.dataset || item.dataset === dataset) && (!item.savedQueryId || item.savedQueryId === saved.id));
       if (found) { found.dataset = dataset; found.savedQueryId = saved.id; found.savedAt ??= saved.savedAt; }
       else items.push({ id: `query:${dataset}:${saved.id}`, title: saved.name, url, dataset, savedQueryId: saved.id, savedAt: saved.savedAt });
@@ -91,7 +106,7 @@ export function savedRollingWindow(dataset: QueryDataset, query: QueryState): Ro
 }
 
 export function collectQuery(dataset: QueryDataset, query: QueryState, title: string, options: { description?: string; templateId?: string; window?: RollingWindow; savedAt?: number; dedupe?: boolean; url?: string; cover?: CardCover } = {}): Bookmark {
-  const items = readBookmarks(), url = options.url ?? queryURL(dataset, query, options.window);
+  const items = readBookmarks(), url = options.url ?? queryURL(dataset, query, options.window, { preserveSource: true });
   const dashboardContext = (address: string) => {
     const params = new URL(address, location.origin).searchParams;
     return params.get("card_query") && params.get("analyze_mode") === "dashboards" ? JSON.stringify([params.get("analyze_topic"), normalizedDashboardChart(params.get("analyze_topic"), params.get("analyze_chart")), params.get("analyze_filters")]) : "";
@@ -120,12 +135,26 @@ export function collectQuery(dataset: QueryDataset, query: QueryState, title: st
   return item;
 }
 
-export function updateBookmark(id: string, title: string, description: string, days?: WindowChoice | null, coverMetricId?: string): Bookmark {
+// A card may name its own call to action and category. Each is stored only
+// when chosen; an absent one keeps the card's derived default.
+export type CardLabels = { action?: string; category?: QueryCategory };
+export function cardLabels(labels: CardLabels): CardLabels {
+  const action = labels.action?.trim();
+  if (action && action.length > 60) throw new Error("Use a call to action up to 60 characters.");
+  if (labels.category && !Object.hasOwn(queryCategories, labels.category)) throw new Error("Choose a category from the list.");
+  return { ...action ? { action } : {}, ...labels.category ? { category: labels.category } : {} };
+}
+
+// A null group count returns the card to its cover's or chart's own count.
+export function updateBookmark(id: string, title: string, description: string, days?: WindowChoice | null, coverMetricId?: string, labels?: CardLabels, groups?: number | null): Bookmark {
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
   const items = readBookmarks(), current = items.find(item => item.id === id), spec = current && queryFromURL(current.url, current.query);
   if (!current) throw new Error("This saved view is no longer in your collection.");
   if (spec && items.some(item => item.id !== id && item.title === title.trim() && queryFromURL(item.url, item.query)?.dataset === spec.dataset)) throw new Error("Another saved query in this table has that name.");
-  const updated = { ...current, title: title.trim(), description: description.trim() };
+  const updated: Bookmark & { description: string } = { ...current, title: title.trim(), description: description.trim() };
+  if (labels) { delete updated.action; delete updated.category; Object.assign(updated, cardLabels(labels)); }
+  if (groups !== undefined && groups !== null && !validCardGroups(groups)) throw new Error("Choose a whole number of groups to show.");
+  if (groups === null) delete updated.maxGroups; else if (groups !== undefined) updated.maxGroups = groups;
   if (coverMetricId !== undefined) {
     if (coverMetricId && !validCoverValue(spec?.query, coverMetricId)) throw new Error("Choose a metric from this saved view.");
     if (coverMetricId) {
@@ -184,7 +213,7 @@ export function moveBookmark(id: string, before?: string) {
 // collection. Keep its query alongside the link for synchronous cover editing.
 export async function collectDurableQuery(dataset: QueryDataset, query: QueryState, title: string, options: Parameters<typeof collectQuery>[3] = {}): Promise<Bookmark> {
   const service = createQueryLinkService(`pharos_${dataset}`, httpQuerySnapshotStore("/api/query-snapshots"));
-  const link = await service.durable(query, new URL(options.url ?? queryURL(dataset, query, options.window), location.origin).href, `q_${dataset}`);
+  const link = await service.durable(query, new URL(options.url ?? queryURL(dataset, query, options.window, { preserveSource: true }), location.origin).href, `q_${dataset}`);
   const url = new URL(link.url);
   return collectQuery(dataset, query, title, { ...options, url: `${url.pathname}${url.search}${url.hash}` });
 }

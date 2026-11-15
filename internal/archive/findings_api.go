@@ -31,6 +31,10 @@ func (s *Server) getFindings(w http.ResponseWriter, r *http.Request) {
 		s.getSafety(w, r)
 		return
 	}
+	if r.URL.Path == "/api/findings/fixes" || strings.HasPrefix(r.URL.Path, "/api/findings/fixes/") {
+		s.getFixes(w, r)
+		return
+	}
 	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/findings"), "/")
 	if path == "" {
 		value, err := s.Catalog.FindingsOverview(r.Context(), r.URL.Query().Get("state"))
@@ -51,6 +55,10 @@ func (s *Server) getFindings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) postFindings(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	if strings.HasPrefix(r.URL.Path, "/api/findings/safety/") {
 		s.postSafety(w, r, body)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/findings/fixes/") {
+		s.postFixes(w, r, body)
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/findings/")
@@ -87,6 +95,9 @@ func (s *Server) postFindings(w http.ResponseWriter, r *http.Request, body map[s
 		writeResult(w, map[string]any{"ok": err == nil}, err)
 	case path == "refresh":
 		started := s.start(OperationSpec{Kind: "analysis.findings", Trigger: triggerUser, Priority: priorityForeground}, func(ctx context.Context, op *Op) error {
+			if s.work != nil {
+				return s.work.runLibraryMode(ctx, []string{kindFindings}, true, triggerUser, "force")
+			}
 			err := s.Catalog.RefreshFindings(withWorkProgress(ctx, op.mirrorWork), true)
 			if err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Findings: %v\n", err)
@@ -160,6 +171,11 @@ func (view *findingView) state(row *findingRow) string {
 		if state.SnoozeWorse && !view.snoozeWoke(row, state) {
 			return findingSnoozed
 		}
+		if findingNeedsUndo(state) != nil {
+			// Undoing a harmful change remains actionable even when the
+			// pattern no longer qualifies for another recommendation.
+			return findingOpen
+		}
 		if latest := state.latest(); latest != nil {
 			switch {
 			case latest.Status == interventionWatching:
@@ -167,9 +183,8 @@ func (view *findingView) state(row *findingRow) string {
 			case latest.Status == interventionImproved && latest.RegressedAt == "":
 				return findingWon
 			}
-			// Unchanged, worse, inconclusive, and regressed findings reopen
-			// with their next attempt, whatever the gate says now.
-			return findingOpen
+			// A completed attempt does not establish that the problem is
+			// still happening. Reopen only through the current gate below.
 		}
 	}
 	if row.Hidden || !row.Active || view.detectorOff(row.Detector) || !row.Stats.passes(view.thresh) {
@@ -270,6 +285,13 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 	regressed := 0
 	newCount := 0
 	for _, row := range view.rows {
+		// Verified results belong to history, independently of whether
+		// the finding currently qualifies for a recommendation.
+		if user := view.states[row.ID]; user != nil {
+			won, _, back := user.improved()
+			saved.add(won)
+			regressed += back
+		}
 		state := view.state(row)
 		if state == findingHidden {
 			continue
@@ -283,11 +305,6 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 				newCount++
 				card["new"] = true
 			}
-		}
-		if user := view.states[row.ID]; user != nil {
-			won, _, back := user.improved()
-			saved.add(won)
-			regressed += back
 		}
 		if filter == "" || filter == state {
 			cards = append(cards, card)
@@ -316,8 +333,10 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 	summary := map[string]any{"saved": saved, "open": counts[findingOpen], "watching": counts[findingWatching], "won": counts[findingWon],
 		"dismissed": counts[findingDismissed], "snoozed": counts[findingSnoozed], "regressed": regressed, "at_stake_usd": atStake, "likely_usd": likely, "new": newCount,
 		"next_result_days": view.nextResult()}
+	// Risky actions count once per check with open notices, as the dashboard
+	// shows them: one card is one thing to look at, however many notices.
 	var safetyOpen int
-	if err := c.reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM safety_cases c LEFT JOIN safety_state s ON s.case_id=c.id WHERE COALESCE(s.state,'open')='open' OR (s.state='handed_off' AND c.completion>s.handled_completion)`).Scan(&safetyOpen); err != nil {
+	if err := c.reader().QueryRowContext(ctx, `SELECT COUNT(DISTINCT c.rule) FROM safety_cases c LEFT JOIN safety_state s ON s.case_id=c.id WHERE COALESCE(s.state,'open')='open' OR (s.state='handed_off' AND c.completion>s.handled_completion)`).Scan(&safetyOpen); err != nil {
 		return nil, err
 	}
 	summary["safety_open"] = safetyOpen
@@ -433,7 +452,8 @@ func (view *findingView) card(row *findingRow, state string) map[string]any {
 		copied, _ := parseTime(latest.CopiedAt)
 		day := int(view.now.Sub(copied).Hours()/24) + 1
 		card["watching"] = map[string]any{"copied_at": latest.CopiedAt, "day": day, "of_days": latest.Plan.AfterDays, "result_on": latest.Plan.AfterTo,
-			"before": ratePhrase(defaultString(latest.Plan.Metric.Kind, row.Metric.Kind), latest.Plan.BeforeRate), "change": latest.Change, "saved_usd": latest.Savings.USD, "target_label": view.cart.label(latest.Target)}
+			"before": ratePhrase(defaultString(latest.Plan.Metric.Kind, row.Metric.Kind), latest.Plan.BeforeRate), "change": latest.Change, "saved_usd": latest.Savings.USD, "target_label": view.cart.label(latest.Target),
+			"provisional": latest.Result["provisional"]}
 	case latest.RegressedAt != "":
 		card["regressed"] = map[string]any{"at": latest.RegressedAt, "change": latest.Change, "saved_usd": latest.Savings.USD}
 	case latest.Status == interventionUnchanged:

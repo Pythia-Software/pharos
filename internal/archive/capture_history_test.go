@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
+	"github.com/gbdubs/pharos/internal/platform/fsinfo"
 )
 
 func historyFixture(t *testing.T) (*Catalog, Config, string) {
@@ -101,6 +105,12 @@ func TestHistoryCatalogRecoveryOffline(t *testing.T) {
 	if _, err := tx.Exec(`INSERT INTO pull_requests(id,host,repository_id,number) VALUES('unlinked-pr','github.com','unrelated-repo',9)`); err != nil {
 		t.Fatal(err)
 	}
+	// Evidence an adapter retained before filtering (a Cursor echo, say) is
+	// not derivable from the restored rows, so recovery carries it.
+	if _, err := tx.Exec(`INSERT INTO execution_claims(conversation_id,claim_key,source,kind,subject,object,origin,rule)
+		SELECT id,'retained','adapter','suppressed_record','composer:echo','','native','cursor-echo-subagent/v1' FROM conversations WHERE native_id='session'`); err != nil {
+		t.Fatal(err)
+	}
 	commitSeed(t, tx)
 	expectedRepositories, err := queryMaps(c.DB, "SELECT * FROM repositories WHERE id<>'unrelated-repo' ORDER BY id")
 	if err != nil {
@@ -138,6 +148,10 @@ func TestHistoryCatalogRecoveryOffline(t *testing.T) {
 		prs, err := queryMaps(fresh.DB, "SELECT * FROM pull_requests ORDER BY id")
 		if err != nil || jsonText(prs) != jsonText(expectedPRs) {
 			t.Fatal("PR repository dependencies were not restored", prs, err)
+		}
+		var retained int
+		if err := fresh.DB.QueryRow(`SELECT COUNT(*) FROM execution_claims WHERE claim_key='retained' AND source='adapter'`).Scan(&retained); err != nil || retained != 1 {
+			t.Fatal("retained execution evidence was not recovered", retained, err)
 		}
 	})
 	expectedPositions, err := queryMaps(c.DB, "SELECT id,source_order FROM messages ORDER BY id")
@@ -327,12 +341,60 @@ func TestHistoryPlanPaginationAndStaleInputs(t *testing.T) {
 	if e != nil || len(next.Units) != 1 || next.Units[0].ID == page.Units[0].ID {
 		t.Fatal(next, e)
 	}
+	// The plan binds the capture root as persisted plans always have.
+	root := identityOf(t, config.CaptureRoot)
+	if want := fmt.Sprintf("%d:%d", root.device, root.inode); p.RootIdentity != want {
+		t.Fatalf("root identity %q, want %q", p.RootIdentity, want)
+	}
+	if again, e := planHistory(t.Context(), config, historyScope{}); e != nil || again.ID != p.ID || again.RootIdentity != p.RootIdentity {
+		t.Fatal("an unchanged root replanned differently", again.ID, p.ID, e)
+	}
+	noJobs := func(what string) {
+		t.Helper()
+		if _, e := os.Stat(filepath.Join(config.CaptureRoot, historyDir)); !errors.Is(e, os.ErrNotExist) {
+			t.Fatal(what+" wrote history state", e)
+		}
+	}
+	// A root that cannot be identified is neither planned nor protected:
+	// at planning (its second observation fails), between the fresh plan and
+	// protection (again the second), or in a plan that has no identity.
+	rootObservations := 0
+	hideIdentities(t, func(observed fileObservation) bool {
+		if observed.key != root || rootObservations < 0 {
+			return false
+		}
+		rootObservations++
+		return rootObservations > 1
+	})
+	if _, e := planHistory(t.Context(), config, historyScope{}); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := planHistory(t.Context(), config, historyScope{}); !errors.Is(e, errFileIdentityUnavailable) {
+		t.Fatal("planned an unidentified root:", e)
+	}
+	noJobs("an unidentified plan")
+	rootObservations = 0
+	if _, e = prepareHistory(t.Context(), config, p, dest, 128<<20, 128<<20); !errors.Is(e, errFileIdentityUnavailable) {
+		t.Fatal("protected an unidentified root:", e)
+	}
+	noJobs("an unidentified root")
+	rootObservations = -1
+	unbound := p
+	unbound.RootIdentity = ""
+	if _, e = prepareHistory(t.Context(), config, unbound, dest, 128<<20, 128<<20); e == nil {
+		t.Fatal("a plan without a root identity was accepted")
+	}
+	noJobs("a plan without a root identity")
 	execTx(t, c.DB, `UPDATE messages SET text='changed' WHERE native_id='one'`)
 	if _, e = prepareHistory(t.Context(), config, p, dest, 128<<20, 128<<20); e == nil {
 		t.Fatal("stale catalog accepted")
 	}
 	if _, e = os.Stat(filepath.Join(config.CaptureRoot, historyDir, "jobs", p.ID)); !errors.Is(e, os.ErrNotExist) {
 		t.Fatal("stale dry run wrote job state", e)
+	}
+	// A current plan with its identity still protects.
+	if j := prepareHistoryFixture(t, config, dest); j.Plan.RootIdentity != p.RootIdentity {
+		t.Fatal("root identity changed", j.Plan.RootIdentity)
 	}
 }
 func TestHistoryPublicationResumesAndKeepsPins(t *testing.T) {
@@ -515,7 +577,52 @@ func TestHistoryCancellationAndBudgets(t *testing.T) {
 	if _, e = prepareHistory(t.Context(), config, p, dest, 0, 1<<20); e == nil {
 		t.Fatal("unknown output budget accepted")
 	}
+	// Only a contended job lock is a running job; any other failure is an
+	// acquisition failure. Neither prepares, protects or runs anything.
+	jobDir, e := historyJobPath(p.CaptureRoot, p.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	lockFailed := func(e error, failure error, contended bool) bool {
+		running := strings.Contains(fmt.Sprint(e), "history job is already running")
+		return e != nil && running == contended && (contended || errors.Is(e, failure))
+	}
+	for _, failure := range captureLockFailures() {
+		t.Run("prepare-lock-"+failure.name, func(t *testing.T) {
+			calls := 0
+			override(t, &lockHistoryJob, failingCaptureLock(t, filelock.Exclusive, failure.err, &calls))
+			if _, e := prepareHistory(t.Context(), config, p, dest, 128<<20, 128<<20); calls != 1 || !lockFailed(e, failure.err, failure.contended) {
+				t.Fatalf("prepare with a failed job lock: %v", e)
+			}
+			if _, e := os.Stat(filepath.Join(jobDir, "job.json")); !errors.Is(e, os.ErrNotExist) {
+				t.Fatalf("a job that failed to lock was prepared: %v", e)
+			}
+		})
+	}
 	j := prepareHistoryFixture(t, config, dest)
+	before, e := os.ReadFile(filepath.Join(j.dir(), "job.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, failure := range captureLockFailures() {
+		override(t, &lockHistoryJob, failingCaptureLock(t, filelock.Exclusive, failure.err, nil))
+		if _, e := runHistory(t.Context(), config, j.ID); !lockFailed(e, failure.err, failure.contended) {
+			t.Fatalf("run with a failed job lock (%s): %v", failure.name, e)
+		}
+	}
+	override(t, &lockHistoryJob, filelock.Lock)
+	// A job another process runs, through the real lock.
+	held, e := historyJobLock(j.dir())
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e := runHistory(t.Context(), config, j.ID); !lockFailed(e, nil, true) {
+		t.Fatalf("run beside a running job: %v", e)
+	}
+	held.Close()
+	if after, e := os.ReadFile(filepath.Join(j.dir(), "job.json")); e != nil || !bytes.Equal(before, after) {
+		t.Fatalf("a job that failed to lock changed: %v", e)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, e = runHistory(ctx, config, j.ID); e == nil {
@@ -1255,5 +1362,23 @@ func TestHistoryBackfillsCompressedFiles(t *testing.T) {
 		if u.Kind == "orphan-native" || u.Gap != "" && u.Kind == "file" {
 			t.Fatal("planning after the backfill found an unrecognised copy", u)
 		}
+	}
+}
+
+// A plan's free space is informational: it is outside the plan's ID, and an
+// unknown capacity shows as zero rather than failing the plan.
+func TestHistoryPlanFreeBytesIsInformational(t *testing.T) {
+	_, config, _ := historyFixture(t)
+	override(t, &diskCapacity, func(string) (fsinfo.Space, error) {
+		return fsinfo.Space{TotalBytes: 1 << 40, AvailableBytes: 1 << 30}, nil
+	})
+	known, e := planHistory(t.Context(), config, historyScope{})
+	if e != nil || known.FreeBytes != 1<<30 {
+		t.Fatal(known.FreeBytes, e)
+	}
+	override(t, &diskCapacity, func(string) (fsinfo.Space, error) { return fsinfo.Space{}, fsinfo.ErrUnsupported })
+	unknown, e := planHistory(t.Context(), config, historyScope{})
+	if e != nil || unknown.FreeBytes != 0 || unknown.ID != known.ID {
+		t.Fatal(unknown.FreeBytes, unknown.ID, known.ID, e)
 	}
 }

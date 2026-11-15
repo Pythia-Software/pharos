@@ -237,7 +237,7 @@ function trailingCard(id, scale, catalog = catalogs[recipeById(id).destination.t
   const { days, ends } = cardTrendDays(trend.lookback, true, at);
   const card = buildCardTrend(trend, trend.lookback, cardTrendQueries([], trend, days).map(query => core.evaluateMetrics(rows[trend.dataset], query, schemas[trend.dataset], { now: at }).metrics), at).study;
   const where = withTimeRange([], catalog.time, undefined, undefined, "30d"), state = { ...recipe.destination.chart, view: "trend" };
-  assert.deepEqual([state.rollingPeriods, state.completePeriods, state.norm, state.split], [trend.lookback, true, true, "none"]);
+  assert.deepEqual([state.rollingPeriods, state.completePeriods, state.percentiles, state.split], [trend.lookback, true, ["mean"], "none"]);
   const query = trendQuery(catalog, state, where, { now: at });
   const built = trendSeries(catalog, state, query, core.evaluateMetrics(rows[catalog.dataset], query.query, schemas[catalog.dataset], { now: at }).metrics, { now: at });
   assert.equal(built.error, undefined);
@@ -249,7 +249,7 @@ function trailingCard(id, scale, catalog = catalogs[recipeById(id).destination.t
   });
   assert.ok(card.points.some(point => point > 0));
   assert.equal(built.normPoints, card.points.slice(0, -1).filter(point => point !== null).length);
-  assert.ok(Math.abs(built.norm * scale - card.baseline) < 1e-9 * Math.max(1, card.baseline), `norm ${built.norm * scale} != baseline ${card.baseline}`);
+  assert.ok(Math.abs(built.references?.[0]?.value * scale - card.baseline) < 1e-9 * Math.max(1, card.baseline), `norm ${built.references?.[0]?.value * scale} != baseline ${card.baseline}`);
 }
 
 test("machine-latency-trend: a pooled trailing mean call time over complete days, with its norm, on individual calls and on the rollup", () => {

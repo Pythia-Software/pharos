@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,6 +61,11 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 		if state := drives.peek(config); state != nil && state.sizes.LibraryBytes > 0 {
 			library["storage_bytes"] = roundedBytes(uint64(state.sizes.LibraryBytes))
 		}
+		// Stat the catalog's WAL on each snapshot. A missing file is a
+		// checkpointed (or not yet opened) log, not an unknown reading.
+		if size := catalogWALBytes(config.CatalogPath); size != nil {
+			library["wal_bytes"] = *size
+		}
 	}
 	document["attention"] = s.attention(ctx)
 	// The freshness ledger (§5), and its one-line summary for the panel.
@@ -77,6 +83,17 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 	// The words over Show all's two parts: the operations, and the domains.
 	document["headings"] = map[string]any{"work": "Work", "data": "Data"}
 	return document
+}
+
+func catalogWALBytes(catalogPath string) *int64 {
+	info, err := os.Stat(catalogPath + "-wal")
+	if err == nil {
+		return new(info.Size())
+	}
+	if os.IsNotExist(err) {
+		return new(int64(0))
+	}
+	return nil
 }
 
 // statusTag identifies a document's content apart from when it was made:

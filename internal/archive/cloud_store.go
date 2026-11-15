@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"filippo.io/age"
@@ -174,7 +173,7 @@ func readCloudSetup(dir, name string) ([]byte, error) {
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
 		return nil, fmt.Errorf("%s must be a regular setup file under 1 MiB", name)
 	}
-	file, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	file, err := openInputNonblockingIn(root, name)
 	if err != nil {
 		return nil, err
 	}

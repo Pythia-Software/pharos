@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,64 @@ func otherProcess(t *testing.T, catalog *Catalog) *Catalog {
 
 func sameRow(left, right map[string]any) bool {
 	return reflect.ValueOf(left).UnsafePointer() == reflect.ValueOf(right).UnsafePointer()
+}
+
+func TestLibraryCacheLoadsRequestedFields(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	read := func(fields ...string) []map[string]any {
+		t.Helper()
+		rows, err := catalog.cachedLibraryRows(t.Context(), libraryFieldsFor(fields...))
+		if err != nil || len(rows) == 0 {
+			t.Fatalf("read %v: %d rows, %v", fields, len(rows), err)
+		}
+		return rows
+	}
+	for _, row := range read("title") {
+		for _, unrequested := range []string{"tool_error_count", "compaction_count", "cost_usd", "purpose"} {
+			if _, ok := row[unrequested]; ok {
+				t.Fatalf("title query loaded unrequested %s", unrequested)
+			}
+		}
+	}
+	for _, row := range read("compaction_count") {
+		if _, ok := row["compaction_count"]; !ok {
+			t.Fatal("an explicitly requested statistic was omitted")
+		}
+		if _, ok := row["title"]; !ok {
+			t.Fatal("alternating fields dropped the current generation's title")
+		}
+	}
+	execTx(t, catalog.DB, `UPDATE workspaces SET title='Changed' WHERE id='c'`)
+	for _, row := range read("title") {
+		if _, ok := row["compaction_count"]; ok {
+			t.Fatal("a source change eagerly rebuilt a statistic this request did not need")
+		}
+	}
+}
+
+func TestLibraryCacheWaitHonorsCancellation(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	catalog.reader().SetMaxOpenConns(1)
+	held, err := catalog.reader().Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	started := catalog.reader().Stats().WaitCount
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := catalog.cachedLibraryRows(ctx, libraryFieldsFor("title")); done <- err }()
+	waitUntil(t, time.Second, "cache build to wait for its reader", func() bool { return catalog.reader().Stats().WaitCount > started })
+	waiting, stop := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer stop()
+	if _, err := catalog.cachedLibraryRows(waiting, libraryFieldsFor("title")); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("cache waiter ignored its deadline: %v", err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cache build ignored cancellation: %v", err)
+	}
 }
 
 func TestLibraryCacheSeesCommitsFromAnotherConnection(t *testing.T) {
@@ -74,23 +133,21 @@ func TestLibraryCacheSeesCommitsFromAnotherConnection(t *testing.T) {
 	}
 }
 
-func TestLibraryCacheRepricesOnPriceBookAndDateChanges(t *testing.T) {
+func TestLibraryCacheRepricesOnPriceBookAndRebuildsDaily(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	today := time.Date(2026, 9, 24, 12, 0, 0, 0, time.Local)
 	catalog.now = func() time.Time { return today }
 	ingestUsageFixture(t, catalog)
-	if _, err := catalog.DB.Exec(`UPDATE agent_sessions SET model='cache-probe-1'`); err != nil {
-		t.Fatal(err)
-	}
-	cost := func() (any, any) {
+	execTx(t, catalog.DB, `UPDATE agent_sessions SET model='cache-probe-1'`, `UPDATE agent_session_usage SET model='cache-probe-1'`)
+	cost := func() any {
 		t.Helper()
 		rows, err := catalog.searchRows(SearchOptions{}, nil)
 		if err != nil || len(rows) != 1 {
 			t.Fatalf("%v %v", rows, err)
 		}
-		return rows[0]["cost_usd"], rows[0]["cost_today_usd"]
+		return rows[0]["cost_usd"]
 	}
-	if total, _ := cost(); total != nil {
+	if total := cost(); total != nil {
 		t.Fatalf("unpriced model has cost %v", total)
 	}
 	doc := testPricing()
@@ -102,13 +159,38 @@ func TestLibraryCacheRepricesOnPriceBookAndDateChanges(t *testing.T) {
 	}
 	// Uncached 700 x $10, cache reads 2,300 x $1, output 50 x $100, per million.
 	want := (700*10 + 2300*1 + 50*100) / 1e6
-	total, beforeCut := cost()
-	if !near(ptr(total), want) || !near(ptr(beforeCut), want) {
-		t.Fatalf("after price-book change: cost %v today %v, want %v", total, beforeCut, want)
+	if total := cost(); !near(ptr(total), want) {
+		t.Fatalf("after price-book change: cost %v, want %v", total, want)
 	}
+	// Outcome labels follow each session's rework window, which closes with
+	// time rather than a commit, so the Library and Outcomes rows are rebuilt
+	// on a new day. Cached rows share their maps; rebuilt rows do not.
+	cached := func() (library, outcome map[string]any) {
+		t.Helper()
+		rows, err := catalog.cachedLibraryRows(context.Background(), libraryFieldsFor("outcome_label"))
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("library rows: %v %v", rows, err)
+		}
+		outcomes, err := catalog.outcomeRows(context.Background())
+		if err != nil || len(outcomes) != 1 {
+			t.Fatalf("outcome rows: %v %v", outcomes, err)
+		}
+		return rows[0], outcomes[0]
+	}
+	same := func(left, right map[string]any) bool {
+		return reflect.ValueOf(left).UnsafePointer() == reflect.ValueOf(right).UnsafePointer()
+	}
+	library, outcome := cached()
+	if nextLibrary, nextOutcome := cached(); !same(library, nextLibrary) || !same(outcome, nextOutcome) {
+		t.Fatal("rows were rebuilt without a commit or a new day")
+	}
+	// Usage keeps the price of the day it happened after a later price change.
 	today = time.Date(2026, 10, 2, 12, 0, 0, 0, time.Local)
-	if total, afterCut := cost(); !near(ptr(total), want) || !near(ptr(afterCut), 2*want) {
-		t.Fatalf("after date change: cost %v today %v, want %v and %v", total, afterCut, want, 2*want)
+	if total := cost(); !near(ptr(total), want) {
+		t.Fatalf("after date change: cost %v, want %v", total, want)
+	}
+	if nextLibrary, nextOutcome := cached(); same(library, nextLibrary) || same(outcome, nextOutcome) {
+		t.Fatalf("a new day reused rows: library %v, outcomes %v", same(library, nextLibrary), same(outcome, nextOutcome))
 	}
 }
 
@@ -171,7 +253,7 @@ func TestWarmCachesRebuildsWhatPagesUse(t *testing.T) {
 	catalog, _ := libraryFixture(t)
 	other := otherProcess(t, catalog)
 	ctx := context.Background()
-	if _, err := catalog.searchRows(SearchOptions{}, libraryCompactFields); err != nil {
+	if _, err := catalog.searchRows(SearchOptions{}, libraryFieldsFor("title")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := catalog.localUsageRows(ctx); err != nil {
@@ -193,6 +275,9 @@ func TestWarmCachesRebuildsWhatPagesUse(t *testing.T) {
 	renamed := false
 	for _, row := range rows {
 		renamed = renamed || row["title"] == "Renamed"
+		if _, ok := row["tool_error_count"]; ok {
+			t.Fatal("warming eagerly loaded an unrequested statistic")
+		}
 	}
 	if !renamed {
 		t.Fatal("the Library rows were not rebuilt after the commit")
@@ -200,10 +285,11 @@ func TestWarmCachesRebuildsWhatPagesUse(t *testing.T) {
 	catalog.derived.mu.Lock()
 	defer catalog.derived.mu.Unlock()
 	for key, entry := range catalog.derived.entries {
-		if strings.HasPrefix(key, "usage:") && entry.version != version {
-			t.Fatalf("usage rows were not rewarmed: version %d, want %d", entry.version, version)
+		// Usage follows the core generation, which leaves label and event commits out.
+		if want := catalog.derived.versions.generations.of(derivedKeyGeneration(key)); strings.HasPrefix(key, "usage:") && (entry.version != want || want > version) {
+			t.Fatalf("usage rows were not rewarmed: version %d, want %d of %d", entry.version, want, version)
 		}
-		if strings.HasPrefix(key, "writing:") {
+		if derivedKeyFamily(key) == "writing" {
 			t.Fatal("warmed a value no page asked for")
 		}
 	}

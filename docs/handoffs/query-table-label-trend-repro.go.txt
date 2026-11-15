@@ -1,0 +1,159 @@
+// Copy to main.go in a disposable module; see the accompanying handoff.
+// Uses generated data in memory. No Pharos code, files or service are needed.
+package main
+
+import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"time"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
+	"modernc.org/sqlite"
+)
+
+func main() {
+	messages := flag.Int("messages", 486149, "synthetic messages, each with two label observations")
+	repeat := flag.Int("repeat", 3, "repetitions, each checked against native SQL")
+	flag.Parse()
+	if *messages < 1 || *messages > 5000000 || *repeat < 1 {
+		panic("messages must be 1..5000000 and repeat must be positive")
+	}
+	registerFunctions()
+	db, err := sql.Open("sqlite", ":memory:")
+	must(err)
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	_, err = db.Exec(`PRAGMA temp_store=MEMORY;
+CREATE TABLE observations(id TEXT PRIMARY KEY,message_id TEXT,day TEXT,family TEXT,occurred_at TEXT);
+WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<?1), labels(j) AS (VALUES(0),(1))
+INSERT INTO observations
+SELECT printf('%064d:%d',i,j),printf('%064d',i),date('2026-08-13','+'||(i%90)||' days'),
+ 'P.family'||((i+j)%12),strftime('%Y-%m-%dT%H:%M:%SZ','2026-08-13','+'||(i%90)||' days')
+FROM n CROSS JOIN labels;`, *messages)
+	must(err)
+	_, err = db.Exec("CREATE INDEX observation_time ON observations(occurred_at,day,message_id,family)")
+	must(err)
+
+	schema := qt.Schema{Name: "distinct_repro", IDField: "id", Fields: map[string]qt.FieldSpec{},
+		DefaultSort:  []qt.OrderBy{{Field: "occurred_at", Dir: "desc", Nulls: "last"}},
+		TiebreakSort: []qt.OrderBy{{Field: "id", Dir: "asc"}}}
+	groupable := true
+	for _, name := range []string{"id", "message_id", "day", "family", "occurred_at"} {
+		kind := qt.FieldText
+		if name == "occurred_at" {
+			kind = qt.FieldDatetime
+		}
+		expr := `r."` + name + `"`
+		schema.Fields[name] = qt.FieldSpec{Name: name, Kind: kind, Expr: expr, SortExpr: expr,
+			Sortable: true, ServerFilter: true, Groupable: &groupable}
+	}
+	dataset := qt.QueryDatasetV3{Schema: schema, Dialect: "sqlite", Scope: "repro", Dataset: schema.Name,
+		MaxRows: 10000, MaxGroups: 100000, MaxPopulation: 10000000, MaxStagingBytes: 512 << 20,
+		SourceSQL: "SELECT id,message_id,day,family,occurred_at FROM observations"}
+	request, err := qt.DecodeQueryRequestV3([]byte(`{
+ "version":3,"profile":"qt-sqlite-v1","now":1794362816119,"rows":false,
+ "source":{"select":["id"],"limit":100,"offset":0},
+ "result":{"select":["id"],"limit":100,"offset":0,"orderBy":[],"where":[
+  {"field":"occurred_at","op":"<","value":"+0s"},
+  {"field":"occurred_at","op":">=","value":"2026-08-06T00:00:00-06:00"}]},
+ "metrics":[
+  {"id":"trend","op":"count_distinct","field":"message_id","groupBy":["day","family"]},
+  {"id":"trend:population","op":"count_distinct","field":"message_id","groupBy":["day"]}]
+}`))
+	must(err)
+	fmt.Printf("messages=%d observations=%d\n", *messages, 2**messages)
+	for attempt := 1; attempt <= *repeat; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		start := time.Now()
+		result, err := dataset.Execute(ctx, db, request, qt.PlanOptions{})
+		elapsed := time.Since(start)
+		must(err)
+		if result.Total != int64(2**messages) || result.SourceTotal != result.Total || len(result.Metrics) != 2 {
+			panic(fmt.Sprintf("unexpected source counts or metrics: %+v", result))
+		}
+		fmt.Printf("run=%d query_table=%s\n", attempt, elapsed)
+		for index, group := range []string{"day,family", "day"} {
+			metric := result.Metrics[index]
+			if metric.Error != "" {
+				panic(metric.Error)
+			}
+			start := time.Now()
+			// group is from the fixed list above, never user input.
+			rows, err := db.QueryContext(ctx, "SELECT "+group+",count(DISTINCT message_id) FROM observations "+
+				"WHERE julianday(occurred_at)>=julianday(?) AND julianday(occurred_at)<julianday(?) GROUP BY "+group,
+				"2026-08-06T00:00:00-06:00", time.UnixMilli(request.Now).UTC().Format(time.RFC3339Nano))
+			must(err)
+			columns, err := rows.Columns()
+			must(err)
+			expected := map[string]string{}
+			for _, bucket := range metric.Buckets {
+				if bucket.Error != "" {
+					panic(bucket.Error)
+				}
+				key, err := json.Marshal(bucket.Keys)
+				must(err)
+				if _, duplicate := expected[string(key)]; duplicate {
+					panic("duplicate metric bucket")
+				}
+				expected[string(key)] = fmt.Sprint(bucket.Value)
+			}
+			count := 0
+			for rows.Next() {
+				values := make([]any, len(columns))
+				pointers := make([]any, len(columns))
+				for i := range values {
+					pointers[i] = &values[i]
+				}
+				must(rows.Scan(pointers...))
+				key, err := json.Marshal(values[:len(values)-1])
+				must(err)
+				if expected[string(key)] != fmt.Sprint(values[len(values)-1]) {
+					panic("bucket value mismatch")
+				}
+				delete(expected, string(key))
+				count++
+			}
+			must(rows.Err())
+			must(rows.Close())
+			if len(expected) != 0 || count != len(metric.Buckets) {
+				panic("bucket keys mismatch")
+			}
+			fmt.Printf("run=%d native_group=%s elapsed=%s buckets=%d exact_match=true\n", attempt, group, time.Since(start), count)
+		}
+		cancel()
+	}
+}
+
+func registerFunctions() {
+	for _, fn := range append(qt.SQLiteFunctions(), qt.SQLiteV2Functions()...) {
+		must(sqlite.RegisterDeterministicScalarFunction(fn.Name, int32(fn.Arity),
+			func(_ *sqlite.FunctionContext, values []driver.Value) (driver.Value, error) { return fn.Call(values) }))
+	}
+	for _, descriptor := range qt.SQLiteV2Aggregates() {
+		must(sqlite.RegisterFunction(descriptor.Name, &sqlite.FunctionImpl{NArgs: int32(descriptor.Arity), Deterministic: true,
+			MakeAggregate: func(sqlite.FunctionContext) (sqlite.AggregateFunction, error) {
+				return &aggregate{fn: descriptor.New()}, nil
+			}}))
+	}
+}
+
+type aggregate struct{ fn qt.SQLiteAggregateFunction }
+
+func (a *aggregate) Step(_ *sqlite.FunctionContext, values []driver.Value) error {
+	return a.fn.Step(values)
+}
+func (a *aggregate) WindowValue(_ *sqlite.FunctionContext) (driver.Value, error) { return a.fn.Value() }
+func (a *aggregate) WindowInverse(_ *sqlite.FunctionContext, _ []driver.Value) error {
+	return errors.New("sliding windows are not used by this reproduction")
+}
+func (a *aggregate) Final(_ *sqlite.FunctionContext) { a.fn = nil }
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}

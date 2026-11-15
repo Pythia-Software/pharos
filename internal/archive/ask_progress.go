@@ -28,6 +28,14 @@ func askToolActivity(tool string) string {
 		return "Checking a destination link"
 	case "list_repositories":
 		return "Reading repositories"
+	case "list_projects":
+		return "Reading projects"
+	case "list_outcomes":
+		return "Reading session outcomes"
+	case "get_file_history":
+		return "Reading a file's history"
+	case "get_branch_spend":
+		return "Reading spend by branch"
 	case "search_conversations", "search_work":
 		return "Searching archived work"
 	case "list_metrics", "query_statistics":

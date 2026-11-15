@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,12 +19,17 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
+	"github.com/gbdubs/pharos/internal/platform/localidentity"
 )
 
 const testVolume = "uuid:TEST-VOLUME"
@@ -353,7 +360,12 @@ var faultSink byte
 func faultingAnswer(t *testing.T) func(*Catalog, map[string]any) map[string]any {
 	return func(catalog *Catalog, request map[string]any) map[string]any {
 		if strings.Contains(jsonText(request), "fault-now") {
-			touchVanishedMapping(t)
+			_, _ = cachedValue(context.Background(), catalog, "fault-now", func(ctx context.Context) (bool, error) {
+				return cachedValue(ctx, catalog, "fault-now-inner", func(context.Context) (bool, error) {
+					touchVanishedMapping(t)
+					return true, nil
+				})
+			})
 		}
 		return handleMCP(catalog, request)
 	}
@@ -364,16 +376,87 @@ func TestMCPAnswersAFaultedCallAndRestarts(t *testing.T) {
 	server := newMCPServer(config.Path)
 	server.identity = testIdentity
 	server.answer = faultingAnswer(t)
-	restarts := 0
-	server.restart = func([]byte) error { restarts++; return errors.New("no restart in this test") }
+	// The restart goes through restartMCP to a replacement that fails, as
+	// on a platform that cannot replace a process.
+	type replacement struct {
+		executable string
+		argv, env  []string
+	}
+	var replacements []replacement
+	override(t, &replaceProcess, func(executable string, argv, env []string) error {
+		replacements = append(replacements, replacement{executable, argv, env})
+		return errProcessReplaceUnsupported
+	})
+	executable := runningExecutable()
 	call := startMCP(t, server)
 	text, isError := toolText(t, call("tools/call", map[string]any{"name": "search_work", "arguments": map[string]any{"query": "fault-now"}}))
 	if !isError || !strings.Contains(text, "Pharos library disconnected") {
 		t.Fatalf("faulted call: %v %s", isError, text)
 	}
 	// Were the restart to fail, the process would still answer.
-	if text, isError := toolText(t, call("tools/call", map[string]any{"name": "search_work", "arguments": map[string]any{"query": "parser"}})); isError || !strings.Contains(text, "Parser maintenance") || restarts != 1 {
-		t.Fatalf("call after the fault: %v %s, %d restarts", isError, text, restarts)
+	if text, isError := toolText(t, call("tools/call", map[string]any{"name": "search_work", "arguments": map[string]any{"query": "parser"}})); isError || !strings.Contains(text, "Parser maintenance") || len(replacements) != 1 {
+		t.Fatalf("call after the fault: %v %s, %d restarts", isError, text, len(replacements))
+	}
+	// The replacement is this executable with these arguments and this
+	// environment plus the input read ahead: none here, one request a write.
+	got := replacements[0]
+	if got.executable != executable || !slices.Equal(got.argv, os.Args) || !slices.Equal(got.env, append(os.Environ(), mcpPendingEnv+"=")) {
+		t.Fatalf("replacement %q %q, environment ends %q", got.executable, got.argv, got.env[len(got.env)-1])
+	}
+
+	// Input read ahead of a faulted call reaches the replacement exactly.
+	request := func(id int, query string) string {
+		payload, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": "tools/call",
+			"params": map[string]any{"name": "search_work", "arguments": map[string]any{"query": query}}})
+		return string(payload) + "\n"
+	}
+	answers := func(output *bytes.Buffer) (ids []float64, texts []string) {
+		t.Helper()
+		for decoder := json.NewDecoder(output); decoder.More(); {
+			var response map[string]any
+			if err := decoder.Decode(&response); err != nil {
+				t.Fatal(err)
+			}
+			text, _ := toolText(t, response)
+			ids, texts = append(ids, response["id"].(float64)), append(texts, text)
+		}
+		return ids, texts
+	}
+	readAhead := request(2, "parser") + request(3, "parser")
+	replacements = nil
+	server = newMCPServer(config.Path)
+	server.identity = testIdentity
+	server.answer = faultingAnswer(t)
+	var output bytes.Buffer
+	if err := server.run(strings.NewReader(request(1, "fault-now")+readAhead), &output); err != nil {
+		t.Fatal(err)
+	}
+	// A failed replacement drops nothing: this process answers on.
+	if ids, texts := answers(&output); !slices.Equal(ids, []float64{1, 2, 3}) || !strings.Contains(texts[0], "Pharos library disconnected") || !strings.Contains(texts[2], "Parser maintenance") {
+		t.Fatalf("answers after a failed replacement: %v %q", ids, texts)
+	}
+	if len(replacements) != 1 {
+		t.Fatalf("%d replacements", len(replacements))
+	}
+	pending, ok := strings.CutPrefix(replacements[0].env[len(replacements[0].env)-1], mcpPendingEnv+"=")
+	if decoded, err := base64.StdEncoding.DecodeString(pending); !ok || err != nil || string(decoded) != readAhead {
+		t.Fatalf("pending input %q (%q, %v)", pending, decoded, err)
+	}
+	// Had it succeeded, the replacement starts from that environment and
+	// answers the read-ahead requests once, then the client's next input.
+	t.Setenv(mcpPendingEnv, pending)
+	replaced := newMCPServer(config.Path)
+	replaced.identity = testIdentity
+	replaced.answer = faultingAnswer(t)
+	output.Reset()
+	if err := replaced.run(strings.NewReader(request(4, "parser")), &output); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := answers(&output); !slices.Equal(ids, []float64{2, 3, 4}) {
+		t.Fatalf("replacement answered %v", ids)
+	}
+	if _, set := os.LookupEnv(mcpPendingEnv); set {
+		t.Fatal("the replacement passed its pending input on")
 	}
 }
 
@@ -861,6 +944,9 @@ func TestOpenCatalogForQuerySkipsInitialize(t *testing.T) {
 
 func TestInitializeRunsOneAtATime(t *testing.T) {
 	slowTest(t)
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("raw flock interoperability requires Darwin or Linux")
+	}
 	catalog, _ := testCatalog(t)
 	path := catalog.Path
 	catalog.Close()
@@ -901,9 +987,13 @@ f = open(sys.argv[1], "a"); fcntl.flock(f, fcntl.LOCK_EX); print("locked", flush
 	if err := holder.Start(); err != nil {
 		t.Skipf("python3: %v", err)
 	}
-	defer holder.Process.Kill()
+	// Reaped, or later tests in this process would see it among its children.
+	defer func() { holder.Process.Kill(); holder.Wait() }()
 	if line, err := bufio.NewReader(locked).ReadString('\n'); err != nil || line != "locked\n" {
 		t.Fatalf("lock holder: %q %v", line, err)
+	}
+	if !catalogInitializationInProgress(path) {
+		t.Fatal("startup watchdog did not recognize the running catalog upgrade")
 	}
 	setBuild("another build")
 	started := time.Now()
@@ -913,6 +1003,16 @@ f = open(sys.argv[1], "a"); fcntl.flock(f, fcntl.LOCK_EX); print("locked", flush
 	if build() != "another build" {
 		t.Fatal("a query open initialized the catalog alongside another process")
 	}
+	waiting := make(chan struct{})
+	override(t, &lockCatalogInitialization, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+		if wait == filelock.Wait {
+			if err := filelock.Lock(file, mode, filelock.Try); !errors.Is(err, filelock.ErrContended) {
+				return fmt.Errorf("expected contention before waiting: %v", err)
+			}
+			close(waiting)
+		}
+		return filelock.Lock(file, mode, wait)
+	})
 	opened := make(chan error, 1)
 	go func() {
 		full, err := OpenCatalog(path)
@@ -924,18 +1024,269 @@ f = open(sys.argv[1], "a"); fcntl.flock(f, fcntl.LOCK_EX); print("locked", flush
 	select {
 	case err := <-opened:
 		t.Fatalf("a full open did not wait for the other process: %v", err)
-	case <-time.After(300 * time.Millisecond):
+	case <-waiting:
+	case <-time.After(15 * time.Second):
+		t.Fatal("full open did not reach the held initialize lock")
 	}
 	release.Close()
 	if err := <-opened; err != nil || build() != buildDigest() {
 		t.Fatalf("full open once the lock was free: %v, build %q", err, build())
 	}
+	if catalogInitializationInProgress(path) || catalogInitializationInProgress(filepath.Join(t.TempDir(), "missing.sqlite3")) {
+		t.Fatal("startup watchdog reported an upgrade without an initialize lock")
+	}
+	probe, err := fileLease(filepath.Join(filepath.Dir(path), initializeLockName), true)
+	if err != nil {
+		t.Fatalf("startup watchdog retained the initialize lock: %v", err)
+	}
+	probe.Close()
 	setBuild("another build")
 	light, err := OpenCatalogForQuery(path)
 	if err != nil || build() != buildDigest() {
 		t.Fatalf("query open with the lock free: %v, build %q", err, build())
 	}
 	light.closeQuery()
+}
+
+func TestCatalogInitializationProbe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalog.sqlite3")
+	lockPath := filepath.Join(filepath.Dir(path), initializeLockName)
+	if catalogInitializationInProgress(path) {
+		t.Fatal("missing lock reported an upgrade")
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("probe created the initialize lock: %v", err)
+	}
+	if err := os.WriteFile(lockPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		failure error
+		busy    bool
+	}{
+		{"contended", fmt.Errorf("lock: %w", errors.Join(filelock.ErrContended, syscall.EWOULDBLOCK)), true},
+		{"unsupported", filelock.ErrUnsupported, false},
+		{"permission", fmt.Errorf("lock: %w", syscall.EACCES), false},
+		{"io", syscall.EIO, false},
+		{"interrupted", fmt.Errorf("lock: %w", syscall.EINTR), false},
+		{"errno without contention sentinel", syscall.EWOULDBLOCK, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var opened *os.File
+			override(t, &lockCatalogInitialization, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+				if mode != filelock.Shared || wait != filelock.Try {
+					t.Fatalf("probe lock: %v, %v", mode, wait)
+				}
+				opened = file
+				return test.failure
+			})
+			if got := catalogInitializationInProgress(path); got != test.busy {
+				t.Fatalf("probe=%v, want %v", got, test.busy)
+			}
+			if opened == nil {
+				t.Fatal("probe did not reach lock acquisition")
+			}
+			if _, err := opened.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("failed probe leaked its descriptor: %v", err)
+			}
+		})
+	}
+	t.Run("unlock before close", func(t *testing.T) {
+		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+			t.Skip("raw descriptor duplication requires Unix flock")
+		}
+		var opened, duplicate *os.File
+		override(t, &lockCatalogInitialization, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+			opened = file
+			if err := filelock.Lock(file, mode, wait); err != nil {
+				return err
+			}
+			fd, err := syscall.Dup(int(file.Fd()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// This copy keeps the open-file description alive after the probe
+			// closes its own descriptor, so Close alone cannot pass the test.
+			duplicate = os.NewFile(uintptr(fd), lockPath)
+			t.Cleanup(func() { duplicate.Close() })
+			return nil
+		})
+		if catalogInitializationInProgress(path) || duplicate == nil {
+			t.Fatal("unheld lock probe did not succeed")
+		}
+		if _, err := opened.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("successful probe leaked its descriptor: %v", err)
+		}
+		other, err := os.Open(lockPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer other.Close()
+		if err := filelock.Lock(other, filelock.Exclusive, filelock.Try); err != nil {
+			t.Fatalf("probe retained its shared lock: %v", err)
+		}
+	})
+}
+
+func TestCatalogInitializationLockFailures(t *testing.T) {
+	for _, wait := range []bool{false, true} {
+		for _, failure := range []error{filelock.ErrUnsupported, fmt.Errorf("lock: %w", syscall.EACCES), syscall.EIO, syscall.ENOLCK, syscall.EWOULDBLOCK} {
+			t.Run(fmt.Sprintf("wait=%v/%v", wait, failure), func(t *testing.T) {
+				catalog, _ := testCatalog(t)
+				execTx(t, catalog.DB, "UPDATE meta SET value='another build' WHERE key='"+initializedBuildKey+"'")
+				catalog.initialized = nil
+				var opened []*os.File
+				override(t, &lockCatalogInitialization, func(file *os.File, mode filelock.Mode, how filelock.WaitMode) error {
+					want := filelock.Try
+					if wait {
+						want = filelock.Wait
+					}
+					if mode != filelock.Exclusive || how != want {
+						t.Fatalf("initialize lock: %v, %v; want exclusive, %v", mode, how, want)
+					}
+					opened = append(opened, file)
+					if len(opened) == 1 {
+						return fmt.Errorf("lock: %w", syscall.EINTR)
+					}
+					return failure
+				})
+				if err := catalog.initializeLocked(wait); !errors.Is(err, failure) || errors.Is(err, errCatalogInitializing) {
+					t.Fatalf("lock failure was not retained: %v", err)
+				}
+				if len(opened) != 2 || opened[0] != opened[1] {
+					t.Fatalf("EINTR did not retry with the same descriptor: %v", opened)
+				}
+				if _, err := opened[0].Stat(); !errors.Is(err, os.ErrClosed) {
+					t.Fatalf("failed initialization leaked its descriptor: %v", err)
+				}
+				var build string
+				if err := catalog.DB.QueryRow("SELECT value FROM meta WHERE key=?", initializedBuildKey).Scan(&build); err != nil {
+					t.Fatal(err)
+				}
+				if catalog.initialized != nil || build != "another build" {
+					t.Fatalf("Initialize ran without its lock: record=%+v build=%q", catalog.initialized, build)
+				}
+			})
+		}
+	}
+}
+
+func TestCatalogInitializationLockRetries(t *testing.T) {
+	for _, wait := range []bool{false, true} {
+		t.Run(fmt.Sprintf("wait=%v", wait), func(t *testing.T) {
+			catalog, _ := testCatalog(t)
+			execTx(t, catalog.DB, "UPDATE meta SET value='another build' WHERE key='"+initializedBuildKey+"'")
+			// Initialize reads the digest before its migrations and records it
+			// when they finish. Both calls must retain the owning lock.
+			digest := buildDigest()
+			digestCalls := 0
+			override(t, &buildDigest, func() string {
+				digestCalls++
+				probe, err := os.Open(filepath.Join(filepath.Dir(catalog.Path), initializeLockName))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer probe.Close()
+				if err := filelock.Lock(probe, filelock.Exclusive, filelock.Try); !errors.Is(err, filelock.ErrContended) {
+					t.Fatalf("initialization released its lock before recording the build: %v", err)
+				}
+				return digest
+			})
+			var opened *os.File
+			attempts := 0
+			override(t, &lockCatalogInitialization, func(file *os.File, mode filelock.Mode, how filelock.WaitMode) error {
+				want := filelock.Try
+				if wait {
+					want = filelock.Wait
+				}
+				if mode != filelock.Exclusive || how != want {
+					t.Fatalf("retry changed lock mode: %v, %v", mode, how)
+				}
+				if opened != nil && opened != file {
+					t.Fatal("retry replaced its descriptor")
+				}
+				opened = file
+				attempts++
+				if attempts == 1 {
+					return fmt.Errorf("lock: %w", syscall.EINTR)
+				}
+				if attempts == 2 && !wait {
+					return fmt.Errorf("lock: %w", errors.Join(filelock.ErrContended, syscall.EWOULDBLOCK))
+				}
+				return filelock.Lock(file, mode, how)
+			})
+			if err := catalog.initializeLocked(wait); err != nil {
+				t.Fatal(err)
+			}
+			want := 3
+			if wait {
+				want = 2
+			}
+			if attempts != want || digestCalls < 2 || catalog.initialized == nil || catalog.initialized.err != nil {
+				t.Fatalf("initialization after retries: attempts=%d digest calls=%d record=%+v", attempts, digestCalls, catalog.initialized)
+			}
+			if _, err := opened.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("completed initialization leaked its descriptor: %v", err)
+			}
+			probe, err := os.Open(opened.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer probe.Close()
+			if err := filelock.Lock(probe, filelock.Exclusive, filelock.Try); err != nil {
+				t.Fatalf("completed initialization retained its lock: %v", err)
+			}
+		})
+	}
+}
+
+func TestCatalogInitializationQueryDeadline(t *testing.T) {
+	slowTest(t)
+	catalog, _ := testCatalog(t)
+	execTx(t, catalog.DB, "UPDATE meta SET value='another build' WHERE key='"+initializedBuildKey+"'")
+	var opened *os.File
+	var firstAttempt time.Time
+	interrupted, afterInterrupt := false, 0
+	override(t, &lockCatalogInitialization, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+		if mode != filelock.Exclusive || wait != filelock.Try {
+			t.Fatalf("query retry changed lock mode: %v, %v", mode, wait)
+		}
+		if opened == nil {
+			opened, firstAttempt = file, time.Now()
+		} else if opened != file {
+			t.Fatal("query retry replaced its descriptor")
+		}
+		// Let the consumer's own contention retries reach its deadline, then
+		// interrupt that attempt. EINTR must not restart the deadline.
+		if !interrupted && time.Since(firstAttempt) >= 2*time.Second {
+			interrupted = true
+			return fmt.Errorf("lock: %w", syscall.EINTR)
+		}
+		if interrupted {
+			afterInterrupt++
+			if afterInterrupt > 1 {
+				return errors.New("query retried contention after its original deadline")
+			}
+		}
+		return fmt.Errorf("lock: %w", errors.Join(filelock.ErrContended, syscall.EWOULDBLOCK))
+	})
+	if query, err := OpenCatalogForQuery(catalog.Path); query != nil || !errors.Is(err, errCatalogInitializing) {
+		if query != nil {
+			query.closeQuery()
+		}
+		t.Fatalf("query acquisition did not stop at its deadline: %v", err)
+	}
+	if !interrupted || afterInterrupt != 1 {
+		t.Fatalf("query did not retry EINTR at its deadline: interrupted=%v attempts after=%d", interrupted, afterInterrupt)
+	}
+	if _, err := opened.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("timed-out query leaked its descriptor: %v", err)
+	}
+	var build string
+	if err := catalog.DB.QueryRow("SELECT value FROM meta WHERE key=?", initializedBuildKey).Scan(&build); err != nil || build != "another build" {
+		t.Fatalf("timed-out query initialized the catalog: build=%q err=%v", build, err)
+	}
 }
 
 // openFiles lists the files this process has open.
@@ -1106,4 +1457,74 @@ func TestDirectMCPCallHoldsAnOperationLease(t *testing.T) {
 	if count := mcpCalls(t, reopenCatalog(t, config.CatalogPath)); count != 2 {
 		t.Fatalf("a call without its lease stored history: %d calls", count)
 	}
+}
+
+// The volume check is reused only while the library directory's identity,
+// the configuration path and the volume pin all match the last check that
+// passed. Without a directory identity there is nothing to reuse, so every
+// attempt runs the full check, which still opens a valid library.
+func TestMCPLibraryGuardReuseNeedsDirectoryIdentity(t *testing.T) {
+	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
+	checks, volume := 0, testVolume
+	server := &mcpServer{identity: func(string) string { checks++; return volume }}
+	check := func(config Config, want int) {
+		t.Helper()
+		before := checks
+		if err := server.checkLibrary(config); err != nil {
+			t.Fatal(err)
+		}
+		if checks-before != want {
+			t.Fatalf("checked the volume %d times, want %d", checks-before, want)
+		}
+	}
+	refused := func(config Config) {
+		t.Helper()
+		before := checks
+		if err := server.checkLibrary(config); err == nil || !strings.Contains(err.Error(), "refusing to open") || server.verified != "" || checks != before+1 {
+			t.Fatalf("a failed check was accepted, skipped or cached: %v, %q", err, server.verified)
+		}
+	}
+	check(config, 1)
+	check(config, 0)
+
+	override(t, &localIdentity, func(fs.FileInfo) (localidentity.Key, error) {
+		return localidentity.Key{}, localidentity.ErrUnsupported
+	})
+	for range 3 {
+		check(config, 1)
+		if server.verified != "" {
+			t.Fatalf("cached a check without an identity: %q", server.verified)
+		}
+	}
+	volume = "uuid:A-CLONE"
+	refused(config)
+	volume = testVolume
+
+	localIdentity = localidentity.Of
+	check(config, 1)
+	check(config, 0)
+	// Another directory's identity at the same path is a different library.
+	other := t.TempDir()
+	localIdentity = func(fs.FileInfo) (localidentity.Key, error) { return localidentity.Stat(other) }
+	check(config, 1)
+	check(config, 0)
+	localIdentity = localidentity.Of
+	check(config, 1)
+
+	repinned := config
+	repinned.VolumeID, volume = "uuid:TEST-VOLUME-2", "uuid:TEST-VOLUME-2"
+	check(repinned, 1)
+	check(repinned, 0)
+	volume = testVolume
+	renamed := config
+	renamed.Path = filepath.Join(filepath.Dir(config.Path), "renamed.toml")
+	check(renamed, 1)
+	check(config, 1)
+	check(config, 0)
+	// A pin the volume does not match is refused on every attempt.
+	mismatched := config
+	mismatched.VolumeID = "uuid:TEST-VOLUME-3"
+	refused(mismatched)
+	refused(mismatched)
+	check(config, 1)
 }

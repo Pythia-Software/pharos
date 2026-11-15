@@ -3,9 +3,8 @@
 // turns, file paths, the Show filter's categories, Find, harness XML blocks,
 // message summaries, local labels, agent events, and Markdown parsing.
 // It is a classic script whose top-level declarations are globals: ui.py loads
-// it before its inline script, which renders with them, and a shared export
-// inlines it (sharedPage in share.go). Node tests load it with vm
-// (web/tests/unit/reader). transcript_find.go and work_reader.go mirror parts
+// it before its inline script, which renders with them. Node tests load it
+// with vm (web/tests/unit/reader). transcript_find.go and work_reader.go mirror parts
 // of it for the service; testdata/ holds the fixtures both must agree on.
 
 // Wall-clock ages shared by the reader and the session hierarchy. Accept both
@@ -18,6 +17,9 @@ function relativeAge(value,now=Date.now()){
   const age=days?`${days}d${hours%24?` ${hours%24}h`:''}`:hours?`${hours}h${minutes%60?` ${minutes%60}m`:''}`:`${minutes}m`;
   return time>now?`in ${age}`:`${age} ago`;
 }
+
+// Chat exports have no repository context unless one was identified separately.
+function isChatImportSource(kind){return ['claude-ai','chatgpt','chatgpt-export'].includes(kind)}
 
 // Message bodies
 function parsedJSON(text){if(typeof text!=='string')return null;const trimmed=text.trim();if(!trimmed||(!trimmed.startsWith('{')&&!trimmed.startsWith('[')))return null;try{return JSON.parse(trimmed)}catch{return null}}
@@ -35,8 +37,192 @@ function messageJSON(message,raw=false){
 }
 function commonEventText(value){if(!value||typeof value!=='object'||Array.isArray(value))return'';const message=value.message,blocks=Array.isArray(message?.content)?message.content:Array.isArray(value.content)?value.content:[],texts=blocks.filter(block=>block&&['text','input_text','output_text'].includes(block.type)&&typeof block.text==='string').map(block=>block.text);if(texts.length)return texts.join('\n\n');if(typeof message==='string')return message;if(typeof message?.content==='string')return message.content;if(typeof value.text==='string')return value.text;if(typeof value.output_text==='string')return value.output_text;if(['agent_message','user_message','message'].includes(value.type)&&typeof value.content==='string')return value.content;return''}
 function shortText(value,limit=150){const text=String(value??'').replace(/\s+/g,' ').trim();return text.length>limit?text.slice(0,limit-1)+'…':text}
+// voiceSchedule lays a voice conversation's lines end to end, in
+// milliseconds from the start: each line plays after the one before it,
+// for its recorded or read-aloud length, or an estimate until that is known.
+// Lines are never placed by their timestamps: a line read aloud by the
+// system voice takes a different time than the reply the person heard, so
+// the source's overlaps cannot be reproduced.
+function voiceSchedule(lines){
+  let total=0;
+  const spans=lines.map((line,index)=>{const length=Math.max(1,line.duration||line.estimate||0),start=total;total+=length;return{line,index,start,length}});
+  return{total,spans};
+}
+// highlightCode cuts source text into runs for display: comments, strings,
+// numbers and keywords by the file's extension, and everything else plain.
+// It reads the text once with one pattern per family of languages and is
+// not a parser: it is for reading a file, a diff or a preview, not for
+// judging the code. An extension it does not know, or a very long text, is
+// one plain run.
+const CODE_WORDS={
+  c:'abstract as async await bool boolean break case catch chan char class const continue default defer delete do double else enum export extends false final finally float fn for from func function go if implements import in instanceof int interface let long map match mut new nil null package private protected pub public range return select self static string struct super switch this throw true try type typeof undefined use var void while yield',
+  hash:'False None True alias and as assert async await begin break case class continue def del do done echo elif else end esac except export false fi finally for from function global if import in is lambda local module nil not null or pass raise require rescue return self then true try unless until when while with yield',
+  sql:'add all alter and as asc begin between by case commit create default delete desc distinct drop else end exists from group having in index insert into is join key left limit not null on or order primary references right select set table then union unique update values view when where with',
+};
+const CODE_FAMILIES={c:'c cc cpp cs css go h hpp java js json jsonc jsx kt mjs cjs php rs scss swift ts tsx',hash:'bash py r rb sh toml yaml yml zsh pl',sql:'sql',markup:'htm html svg xml vue'};
+const CODE_PATTERNS={
+  c:/(\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|("(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?|`(?:\\[\s\S]|[^`\\])*`?)|(\b\d[\w.]*)|([A-Za-z_$][\w$]*)/g,
+  hash:/(#[^\n]*)|("""[\s\S]*?(?:"""|$)|'{3}[\s\S]*?(?:'{3}|$)|"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?)|(\b\d[\w.]*)|([A-Za-z_][\w]*)/g,
+  sql:/(--[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|('(?:''|[^'])*'?|"(?:[^"])*"?)|(\b\d[\w.]*)|([A-Za-z_][\w]*)/g,
+  markup:/(<!--[\s\S]*?(?:-->|$))|("[^"\n]*"?|'[^'\n]*'?)|()(<\/?[A-Za-z][\w:-]*|\/?>)/g,
+};
+const codeFamilyByExtension=(()=>{const found={};for(const [family,names]of Object.entries(CODE_FAMILIES))for(const name of names.split(' '))found[name]=family;return found})();
+const codeWordSets={};
+function codeFamily(name){const match=/\.([A-Za-z0-9]+)$/.exec(String(name||''));return match?codeFamilyByExtension[match[1].toLowerCase()]||'':''}
+function highlightCode(text,name){
+  text=String(text??'');const family=codeFamily(name);if(!family||text.length>400000)return[{kind:'',text}];
+  const words=family==='markup'?null:codeWordSets[family]||(codeWordSets[family]=new Set(CODE_WORDS[family].split(' '))),insensitive=family==='sql',runs=[];let at=0;
+  const push=(kind,value)=>{if(!value)return;const last=runs[runs.length-1];if(last&&last.kind===kind)last.text+=value;else runs.push({kind,text:value})};
+  for(const match of text.matchAll(CODE_PATTERNS[family])){
+    const kind=match[1]!==undefined?'comment':match[2]!==undefined?'string':match[3]?'number':family==='markup'||words.has(insensitive?match[0].toLowerCase():match[0])?'keyword':'';
+    if(!match[0])continue;push('',text.slice(at,match.index));push(kind,match[0]);at=match.index+match[0].length;
+  }
+  push('',text.slice(at));return runs;
+}
+// ChatGPT's export writes what its app drew inside a reply (a citation, a
+// named place, a widget) as private-use runs: U+E200 type U+E202 payload
+// U+E201. The reader shows the words: a named thing by its name, a widget
+// by what it was, and nothing for citations and image groups, which the
+// message's sources and attachments present. The mask (one flag per
+// character, or empty) is cut the same way, so highlights stay on their words.
+const EXPORT_MARKER=/([^-]*)(?:([^]*))?/g;
+function exportMarkerWords(type,payload){
+  if(type==='cite'||type==='filecite'||type==='imagegroup'||type==='image_group'||type==='visualize')return '';
+  let value=null;try{value=JSON.parse(payload)}catch{}
+  if(type==='entity')return Array.isArray(value)?String(value[1]??''):'';
+  const name=value&&typeof value==='object'&&!Array.isArray(value)?Object.keys(value)[0]:'';
+  return '['+String(name||type||'widget').replace(/_/g,' ')+']';
+}
+function exportMarkerText(text,mask='',mark=null){
+  text=String(text??'');if(!text.includes(''))return{text,mask};
+  let shown='',flags='',at=0;const keep=(from,to)=>{shown+=text.slice(from,to);if(mask)flags+=mask.slice(from,to).padEnd(to-from,'0')};
+  let count=0;
+  for(const match of text.matchAll(EXPORT_MARKER)){
+    keep(at,match.index);const words=mark?.(count++)??exportMarkerWords(match[1],match[2]??'');shown+=words;if(mask)flags+=(mask[match.index]||'0').repeat(words.length);at=match.index+match[0].length;
+  }
+  keep(at,text.length);return{text:shown,mask:flags};
+}
+// Where a reply cites a page, the reader sets a chip naming the site.
+// citedText puts each into the text as U+E000, a number, U+E001: the number
+// is the address's place in cites. A Claude export gives, beside the text,
+// the characters each citation covers (notes.citations), and the chip goes
+// after them; a ChatGPT export's text holds a marker where each thing was
+// drawn, and notes.marks gives, for each marker in turn, the addresses
+// cited there. The mask is cut the same way.
+function citedText(text,mask='',notes=null){
+  text=String(text??'');const cites=[],token=url=>{let at=cites.indexOf(url);if(at<0)at=cites.push(url)-1;return ''+at+''},web=url=>/^https?:\/\//.test(url||'');
+  const ends=new Map();
+  for(const span of Array.isArray(notes?.citations)?notes.citations:[]){const end=Number(span?.end),url=String(span?.url||'');if(!Number.isInteger(end)||end<=0||!web(url))continue;const list=ends.get(end)||[];if(!list.includes(url))list.push(url);ends.set(end,list)}
+  if(ends.size){
+    // The export counts characters; a string here counts UTF-16 units.
+    let shown='',flags='',from=0,points=0;const keep=to=>{shown+=text.slice(from,to);if(mask)flags+=mask.slice(from,to).padEnd(to-from,'0');from=to};
+    for(let at=0;;points++){
+      if(ends.has(points)){keep(at);const chips=ends.get(points).map(token).join('');shown+=chips;if(mask)flags+='0'.repeat(chips.length)}
+      if(at>=text.length)break;at+=text.codePointAt(at)>0xffff?2:1;
+    }
+    keep(text.length);text=shown;mask=flags;
+  }
+  const marks=Array.isArray(notes?.marks)?notes.marks:null;
+  const shown=exportMarkerText(text,mask,marks?at=>Array.isArray(marks[at])?[...new Set(marks[at].filter(web))].map(token).join(''):null:null);
+  return{text:shown.text,mask:shown.mask,cites};
+}
+// What a source says of a message beside its words (message.notes), as
+// lines to set under it.
+function messageNoteLines(message){
+  const notes=message?.notes,lines=[];if(!notes||typeof notes!=='object')return lines;
+  if(Number.isFinite(notes.spoken_chars)){
+    const length=[...String(message.text??'')].length,spoken=notes.spoken_chars;
+    lines.push(spoken<=0?'Voice reply, not read aloud':length&&spoken<length*.9?`Read aloud in part: about ${Math.max(1,Math.round(spoken/length*100))}% was spoken`:'Read aloud');
+  }
+  if(notes.cut_off)lines.push('Thinking was cut off');
+  if(notes.truncated)lines.push('Thinking is shortened in the export');
+  return lines;
+}
 function displayText(message){const value=messageJSON(message);return commonEventText(value)||(value?eventDescription(value):String(message?.text??''))}
 function eventDescription(value){if(Array.isArray(value))return `${value.length} recorded items`;if(!value||typeof value!=='object')return String(value??'');return shortText([value.type||value.kind||'Recorded event',value.subtype,value.description||value.summary||value.status].filter(Boolean).join(' · '),180)}
+
+// Claude exports keep citations beside the prose, not in its Markdown.
+// Link only web URLs; document citations retain their source label and quote.
+function messageCitations(message){
+  const value=messageJSON(message,true);
+  const citations=[...(Array.isArray(value?.citations)?value.citations:[])];
+  if(value?.display_content?.type==='rich_link'&&value.display_content.link)citations.push({details:value.display_content.link});
+  return citations.map(citation=>{
+    const details=citation.details||citation;let url='';
+    try{const parsed=new URL(details.url);if(['http:','https:'].includes(parsed.protocol))url=parsed.href}catch{}
+    return {title:details.title||details.file_name||details.document_title||url||details.type||'Recorded citation',url,quote:details.cited_text||citation.cited_text||''};
+  });
+}
+function attachmentSummary(message){
+  const value=messageJSON(message)||{};
+  if(value.file_name||value.title)return String(value.file_name||value.title);
+  if(Array.isArray(value.file_names))return value.file_names.filter(Boolean).join(', ')||`${value.file_names.length} files attached`;
+  if(value.type==='image')return 'Image'+(value.file_uuid?' · '+value.file_uuid:'');
+  if(value.file_uuid)return 'Document · '+value.file_uuid;
+  return `${value.count||1} ${value.count===1?'image':'images'} attached`;
+}
+function exportDocumentSections(value){
+  if(value?.type!=='export_file')return [];
+  if(/\.md(?:own)?$/i.test(value.file_name||'')&&typeof value.extracted_content==='string')return [{title:value.file_name,text:value.extracted_content}];
+  if(!String(value.file_name||'').endsWith('.json'))return [];
+  const document=parsedJSON(value.extracted_content),sections=[];
+  const visit=(item,label)=>{
+    if(Array.isArray(item)){item.forEach((entry,index)=>visit(entry,`${label} ${index+1}`));return}
+    if(!item||typeof item!=='object')return;
+    const title=item.filename||item.file_name||item.path||item.name||item.period||label;
+    for(const [key,text] of Object.entries(item)){
+      if(typeof text==='string'&&text.trim()&&['content','text','body','description','prompt_template','instructions','prompt'].includes(key))sections.push({title:key==='content'||key==='text'||key==='body'?String(title):`${title} · ${key.replace(/_/g,' ')}`,text});
+      else if(text&&typeof text==='object')visit(text,String(title));
+    }
+  };
+  visit(document,value.file_name);return sections;
+}
+
+// ChatGPT source context stays evidence: references are not invented tool calls,
+// and a saved voice choice is not proof of a retained assistant recording.
+function chatGPTMessageContext(message){
+  const raw=messageJSON(message,true);
+  if(!raw?.author||!raw?.content?.content_type)return message.source_provider==='chatgpt'&&message.raw_clipped?{references:[],directions:[],referenceKinds:[],model:'',clipped:true}:null;
+  const metadata=raw.metadata||{},references=[],seen=new Set();
+  const link=value=>{if(typeof value!=='string')return null;try{const url=new URL(value);return ['http:','https:'].includes(url.protocol)?url.href:null}catch{return null}};
+  const visit=(value,depth=0)=>{
+    if(!value||typeof value!=='object'||depth>12)return;
+    if(Array.isArray(value)){value.forEach(item=>visit(item,depth+1));return}
+    const url=link(value.url||value.href);
+    if(url&&!seen.has(url)){seen.add(url);references.push({url,title:String(value.title||value.name||url),snippet:typeof value.snippet==='string'?value.snippet:'',attribution:typeof value.attribution==='string'?value.attribution:''})}
+    // Never interpret widget declarations or compressed payloads as code.
+    for(const [key,child]of Object.entries(value))if(!['dil','widget','data','payload'].includes(key))visit(child,depth+1);
+  };
+  visit(metadata.content_references);visit(metadata.search_result_groups);visit(metadata.citations);
+  const parts=Array.isArray(raw.content.parts)?raw.content.parts:[],directions=[...new Set(parts.filter(part=>part?.content_type==='audio_transcription').map(part=>part.direction).filter(value=>typeof value==='string'))];
+  const referenceKinds=[...new Set((Array.isArray(metadata.content_references)?metadata.content_references:[]).map(value=>value?.type).filter(value=>typeof value==='string'))];
+  return {references,directions,referenceKinds,model:typeof metadata.model_slug==='string'?metadata.model_slug:'',clipped:!!message.raw_clipped};
+}
+// Where a conversation an export gave is on the web, for the kinds whose
+// address is its ID there: a chat, a cloud session, an artifact or a
+// project. The page needs the person's own sign-in, and may be gone.
+const webID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function conversationWebLink(conversation){
+  const id=String(conversation?.native_id||''),claude=(path,value)=>webID.test(value)?{url:'https://claude.ai/'+path+'/'+value,site:'claude.ai'}:null;
+  switch(conversation?.harness){
+    case 'claude-ai-export':return claude('chat',id);
+    case 'chatgpt-export':return webID.test(id)?{url:'https://chatgpt.com/c/'+id,site:'chatgpt.com'}:null;
+    case 'claude-code-cloud-export':return /^cse_[0-9A-Za-z]+$/.test(id)?{url:'https://claude.ai/code/'+id,site:'claude.ai'}:null;
+    case 'claude-export-document':{const [,kind,name]=/^claude-export:(artifacts|projects)\/([^/]+?)(?:\.json)?$/.exec(id)||[];return kind?claude(kind==='artifacts'?'artifact':'project',name):null}
+  }
+  return null;
+}
+// An artifact a conversation refers to by its ID has the same page.
+function artifactWebLink(asset){const id=String(asset?.asset_key||'').replace(/^claude-artifact:/,'');return asset?.kind==='artifact'&&webID.test(id)?{url:'https://claude.ai/artifact/'+id,site:'claude.ai'}:null}
+function chatGPTConversationContext(conversation){
+  if(conversation.provider!=='chatgpt')return null;
+  const evidence=(conversation.messages||[]).map(message=>messageJSON(message)).find(value=>value?.source==='chatgpt_export');
+  const settings=evidence?.settings||{},facts=[];
+  for(const [key,label]of [['default_model_slug','Recorded model label'],['voice','Saved voice'],['voice_name','Saved voice'],['memory_scope','Memory scope']])if(settings[key]!=null&&typeof settings[key]!=='object')facts.push([label,String(settings[key])]);
+  for(const [key,label]of [['is_archived','Archived'],['is_starred','Starred'],['is_do_not_remember','Do not remember'],['is_study_mode','Study mode'],['is_read_only','Read only']])if(typeof settings[key]==='boolean')facts.push([label,settings[key]?'Yes':'No']);
+  if(evidence?.sharing)facts.push(['Sharing record','Included in export']);
+  return {facts,settings};
+}
 
 // Token accounting
 // Cached input is part of Codex input; Claude reports it separately. Reasoning is
@@ -62,6 +248,30 @@ function tokenEnvelope(message){
   const record=value.latest_token_usage_record;
   return {raw,value,record,wrappers,type:value.type||raw.type,stream:String(value.agent_id||raw.parent_tool_use_id||message.parent_native_id||'main')};
 }
+// Whether a Codex session_meta says the rollout continues another thread's
+// history rather than starting its own.
+function continuesHistory(meta){
+  return Boolean(meta?.forked_from_id||(meta?.history_base&&typeof meta.history_base==='object')||meta?.subagent_history_start_ordinal>0);
+}
+// Harness counters have no categories and may cover only the last request.
+// Keep them as evidence; they never enter priced/spent totals or context size.
+function conversationTokenEvidence(messages){
+  const launches=new Map(messages.filter(m=>m.kind==='delegation'&&m.call_id&&['agent','task'].includes(String(messageJSON(m)?.tool||messageJSON(m)?.name||'').toLowerCase())).map(m=>[String(m.call_id),m]));
+  const evidence=[];
+  messages.forEach((message,index)=>{
+    const launch=launches.get(String(message.call_id||''));if(message.kind!=='delegation_result'||!launch)return;
+    const result=messageJSON(message),blocks=result?.content;if(result?.is_error||!Array.isArray(blocks)||!blocks.length)return;
+    const last=blocks.at(-1);if(last?.type!=='text'||typeof last.text!=='string')return;
+    const match=/^agentId: ([A-Za-z0-9_-]+) (.+)\n<usage>subagent_tokens: ([0-9]+)\ntool_uses: ([0-9]+)\nduration_ms: ([0-9]+)<\/usage>$/.exec(last.text);
+    if(!match||match[0]!==last.text)return;
+    const agent=match[1],total=Number(match[3]);
+    if(match[2]!==`(use SendMessage with to: '${agent}', summary: '<5-10 word recap>' to continue this agent)`||!Number.isSafeInteger(total)||total<=0)return;
+    const resume=messageJSON(launch)?.input?.resume,id=result.details?.agentId;
+    if(resume&&resume!==agent||id&&id!==agent)return;
+    if(blocks.reduce((n,b)=>n+(typeof b?.text==='string'?b.text.split('<usage>subagent_tokens:').length-1:0),0)!==1)return;
+    evidence.push({index,stream:String(message.call_id),total,scope:'last-request'});
+  });return evidence;
+}
 function conversationTokenReports(messages){
   const envelopes=messages.map(tokenEnvelope),reports=messages.map(()=>null),seen=new Map(),active=new Map(),cumulative=new Map(),runStarts=new Map(),modelCounters=new Map(),resultIDs=new Set();
   const streamAliases=new Map([['main','main']]);
@@ -72,8 +282,14 @@ function conversationTokenReports(messages){
   // New Codex records contain response IDs and exact per-request usage. Legacy
   // token_count snapshots of those same requests must not be charged again.
   const recordStreams=new Set(envelopes.filter(e=>e.raw.type==='token_usage_record'||e.type==='token_usage_record').map(e=>canonical(e.stream)));
+  // A transcript that continues another thread's history (a Codex fork, forked
+  // subagent or revert page) starts its counters at that thread's usage, which
+  // the other thread's transcript counts. inherited holds that start per
+  // stream, from its first counter or record.
+  const inherits=envelopes.some((e,i)=>messages[i].kind==='metadata'&&messages[i].role==='system'&&e.raw.type==='session_meta'&&continuesHistory(e.value)),inherited=new Map();
   const sum=(start,stream=null)=>reports.slice(start).reduce((total,r)=>total+(r&&(!stream||r.stream===stream)?r.total||0:0),0);
   messages.forEach((message,index)=>{
+    if(message.usage_is_estimate===true)return;
     const envelope=envelopes[index],{raw,value,type}=envelope,stream=canonical(envelope.stream),hasRecords=recordStreams.has(stream),info=envelope.record&&!hasRecords?{total_token_usage:envelope.record.thread_token_usage,last_token_usage:envelope.record.usage}:value.info||{};
     const compact=['compacted','compaction','context_compaction','compact_boundary'].includes(type)||raw.type==='compacted'||value.subtype==='compact_boundary'||message.kind==='compaction';
     const trigger=compact?compactionTrigger(raw,value):null;
@@ -90,7 +306,9 @@ function conversationTokenReports(messages){
     const running=tokenTotal(info.total_token_usage);
     if(running!==null){
       usage=info.total_token_usage;scope='thread';label='Thread usage checkpoint';
-      if(!hasRecords){const previous=cumulative.get(stream)||0;total=running>=previous?running-previous:tokenTotal(info.last_token_usage);cumulative.set(stream,running);if(running<previous)label+=' (counter reset; last request only)'}
+      const last=tokenTotal(info.last_token_usage);
+      if(!inherited.has(stream))inherited.set(stream,inherits&&last!==null?Math.max(0,running-last):0);
+      if(!hasRecords){const previous=cumulative.get(stream)??inherited.get(stream);total=running>=previous?running-previous:tokenTotal(info.last_token_usage);cumulative.set(stream,running);if(running<previous)label+=' (counter reset; last request only)'}
     }else if(type==='token_count'&&info.last_token_usage){usage=info.last_token_usage;total=hasRecords?null:tokenTotal(usage);label='Last request usage'}
     else if(value.subtype==='task_progress'||value.subtype==='task_notification'){
       scope='task';label='Subagent cumulative usage';const key=canonical(value.tool_use_id||value.task_id||raw.parent_tool_use_id||'');
@@ -98,7 +316,7 @@ function conversationTokenReports(messages){
       const prior=seen.get('task:'+key);if(prior)prior.total=null;
       if(key)seen.set('task:'+key,report);reports[index]=report;return;
     }else if(type==='result'||type==='turn.completed'||type==='cost-state'){
-      scope=type==='cost-state'?'session':'run';label=scope==='session'?'Session accounting checkpoint':'Run accounting checkpoint';
+      scope=type==='cost-state'?'session':'run';label=scope==='session'?'Agent usage checkpoint':'Run accounting checkpoint';
       const reported=tokenTotal(usage),aggregate=modelTotal===null?reported:Math.max(reported??0,modelTotal);
       const start=runStarts.get(stream)||0,attributed=sum(start,stream==='main'?null:stream);
       total=aggregate===null?null:Math.max(0,aggregate-attributed);
@@ -108,6 +326,11 @@ function conversationTokenReports(messages){
     const context=value.context_token_count??value.estimated_tokens??value.compact_metadata?.pre_tokens;
     if(total===null&&!compact&&running===null&&typeof context!=='number')return;
     const report={total,compact,trigger,label,scope,stream,usage,context,contextEstimated:value.estimated_tokens!==undefined,breakdown:tokenBreakdown(usage),reportedTotal:tokenTotal(usage),checkpoint:tokenTotal(value.thread_token_usage)};
+    // Codex writes each response's record before its counter, so a stream's
+    // first record reports where its thread usage started. After a counter, a
+    // record cannot tell inherited usage from earlier requests no record
+    // covers: the counter's start stands and checkpoints fill the rest.
+    if(inherits&&!inherited.has(stream)&&type==='token_usage_record'&&report.checkpoint!==null)inherited.set(stream,Math.max(0,report.checkpoint-(total||0)));
     if(requestID&&scope==='request'){
       const key=stream+':'+requestID,prior=seen.get(key);
       if(prior){report.usage={...prior.usage,...usage};report.breakdown=tokenBreakdown(report.usage);report.total=report.breakdown?.total??null;prior.total=null;prior.superseded=true}
@@ -116,7 +339,20 @@ function conversationTokenReports(messages){
     reports[index]=report;
   });
   const requestTotals=new Map();
-  for(const report of reports){if(report?.scope!=='request'||report.total===null||report.superseded)continue;const prior=requestTotals.get(report.stream)||0;if(report.checkpoint!==null&&report.checkpoint!==undefined){const gap=Math.max(0,report.checkpoint-prior-report.total);report.total+=gap;if(gap)report.label+=' + '+gap.toLocaleString()+' earlier unattributed tokens'}requestTotals.set(report.stream,prior+report.total)}
+  for(const report of reports){if(report?.scope!=='request'||report.total===null||report.superseded)continue;const prior=requestTotals.get(report.stream)??inherited.get(report.stream)??0;if(report.checkpoint!==null&&report.checkpoint!==undefined){const gap=Math.max(0,report.checkpoint-prior-report.total);report.total+=gap;if(gap)report.label+=' + '+gap.toLocaleString()+' earlier unattributed tokens'}requestTotals.set(report.stream,prior+report.total)}
+  // Agent results report the final request. Recover only completed runs with
+  // no tool calls, consistent counters, and no retained child accounting.
+  const accounted=new Set(),markAccounted=stream=>{while(stream&&!accounted.has(stream)){accounted.add(stream);stream=streamParents.get(stream)}};
+  for(const report of reports)if(report?.total>0)markAccounted(report.stream);
+  for(let index=messages.length-1;index>=0;index--){
+    const message=messages[index],stream=streamAliases.get(String(message.call_id||''));
+    if(message.kind!=='delegation_result'||!stream||accounted.has(stream)||message.usage_in_child_conversation)continue;
+    const details=messageJSON(message)?.details,usage=details?.usage,breakdown=tokenBreakdown(usage);
+    if(details?.status!=='completed'||details.totalToolUseCount!==0||!breakdown||breakdown.total<=0||details.totalTokens!==breakdown.total)continue;
+    const categorized=tokenBreakdown({...usage,total_tokens:undefined,totalTokens:undefined})?.total;
+    if(categorized!==breakdown.total)continue;
+    reports[index]={total:breakdown.total,label:'Subagent result usage',scope:'task',stream,usage,breakdown};markAccounted(stream);
+  }
   // Reconcile subagent summaries with their retained request records. Keep
   // unallocated excess visible instead of assigning it to an arbitrary tool.
   const tasks=reports.filter(report=>report?.scope==='task'&&report.total!==null).sort((a,b)=>depth(b.stream)-depth(a.stream));
@@ -126,6 +362,19 @@ function conversationTokenReports(messages){
     if(!report)return;
     if(['run','session'].includes(report.scope)&&report.reportedTotal!==null){const attributed=reports.slice(report.start,index).reduce((n,r)=>n+(r&&(report.stream==='main'||r.stream===report.stream)?r.total||0:0),0);report.total=Math.max(0,report.reportedTotal-attributed);report.attributed=attributed;report.conflict=report.reportedTotal<attributed}
   });
+  for(const evidence of conversationTokenEvidence(messages)){
+    reports[evidence.index]??={total:null,scope:'observation',stream:evidence.stream,label:'Subagent token evidence'};
+    reports[evidence.index].observedMinimum=evidence.total;
+  }
+  // Stored predictions use the ordinary consumption pathway. Their input,
+  // when present, is itself predicted and cannot create an input-context sample.
+  for(let index=0;index<messages.length;index++){
+    const message=messages[index];
+    if(message.usage_is_estimate===true&&!reports[index]){
+      const usage=message.usage,total=tokenTotal(usage);
+      if(total!==null)reports[index]={total,reportedTotal:total,scope:'request',stream:'main',label:Number.isFinite(usage?.input_tokens)?'Estimated input and output usage':'Estimated output usage',usage,breakdown:tokenBreakdown(usage),isEstimate:true};
+    }
+  }
   return reports;
 }
 // Claude records compactMetadata.trigger; the Codex adapter infers
@@ -147,8 +396,10 @@ function contextTokenReports(messages,reports){
   const windows=new Map();
   reports.forEach((report,index)=>{if(!report)return;const {value}=tokenEnvelope(messages[index]),window=value.info?.model_context_window??value.model_context_window,stream=report.stream||'main';if(typeof window==='number'&&window>0)windows.set(stream,Math.max(window,windows.get(stream)||0))});
   reports.forEach((report,index)=>{
-    if(!report||report.superseded)return;
+    if(!report||report.superseded||report.isEstimate)return;
     const {value}=tokenEnvelope(messages[index]),stream=report.stream||'main';
+    // An advisor's request has a context of its own.
+    if(value.advisor_of)return;
     let usage=report.scope==='request'?report.usage:value.info?.last_token_usage;
     const b=tokenBreakdown(usage),separate=usage&&['cache_read_input_tokens','cache_creation_input_tokens','cacheReadInputTokens','cacheCreationInputTokens','cache_creation'].some(key=>key in usage);
     let size=typeof report.context==='number'?report.context:b?.input===undefined?null:b.input+(separate?(b.cacheRead||0)+(b.cacheWrite||0):0);
@@ -217,7 +468,7 @@ function trimTrailingConversationNoise(messages){
 }
 // Normalizing parses every message, so each conversation does it once.
 const normalizedConversations=new WeakMap();
-function conversationMessages(conversation){const source=conversation.messages||[];let value=normalizedConversations.get(source);if(!value){value=trimTrailingConversationNoise(normalizeMessages(source));normalizedConversations.set(source,value)}return value}
+function conversationMessages(conversation){const source=conversation.messages||[];let value=normalizedConversations.get(source);if(!value){value=engagementAssignSlots(trimTrailingConversationNoise(normalizeMessages(source)));normalizedConversations.set(source,value)}return value}
 function messageFailed(message){if(message.kind==='error')return true;if(!['tool_call','tool_result'].includes(message.kind))return false;const payload=toolPayload(message);return Boolean(payload.raw?.is_error||Number(payload.raw?.exit_code)>0||message.kind==='tool_result'&&/^(?:Process exited with code|Exit code:)\s*[1-9]/im.test(readableValue(payload.content)))}
 // How the reader groups normalized events: sub-agents' events by parent,
 // results paired to their calls (consumed holds the paired results'
@@ -228,11 +479,75 @@ function conversationGraph(messages){
   messages.filter(message=>message.parent_native_id).forEach(message=>{if(!childrenByParent.has(message.parent_native_id))childrenByParent.set(message.parent_native_id,[]);childrenByParent.get(message.parent_native_id).push(message);});
   messages.filter(message=>message.call_id&&['delegation_result','tool_result','error'].includes(message.kind)).forEach(message=>{const delegation=delegationCalls.has(message.call_id),regular=(message.kind==='tool_result'||message.kind==='error')&&toolCalls.has(message.call_id),map=delegation?delegationResultsByCall:regular?toolResultsByCall:null;if(map){if(!map.has(message.call_id))map.set(message.call_id,[]);map.get(message.call_id).push(message);consumed.add(message.native_id)}});
   const parentIds=new Set(messages.filter(message=>message.kind==='delegation').flatMap(message=>[message.native_id,message.call_id]).filter(Boolean)),top=messages.filter(message=>(!message.parent_native_id||!parentIds.has(message.parent_native_id))&&!consumed.has(message.native_id)),turns=[];
+  // Export summaries and settings are archive metadata, not an extra setup turn.
+  // Keep them with the first recorded user turn when one exists.
+  const user=top.find(message=>message.role==='user'&&message.kind==='message');
+  if(user){const metadata=top.filter(message=>{if(message.kind!=='metadata')return false;const value=messageJSON(message);return value?.type==='claude_ai_conversation'||value?.source==='chatgpt_export'});for(const message of metadata)top.splice(top.indexOf(message),1);top.splice(top.indexOf(user)+1,0,...metadata)}
   let current=null;for(const message of top){if(message.role==='user'&&message.kind==='message'){if(current)turns.push(current);current={human:message,events:[]}}else{if(!current)current={human:null,events:[]};current.events.push(message)}}if(current)turns.push(current);
   return{childrenByParent,delegationResultsByCall,toolResultsByCall,consumed,turns};
 }
+// Diagnostic sensitivity ranges accompany canonical usage. The input context rail continues to
+// describe reported consumption. Sum uncertainty bounds as sensitivity, never
+// relabel the sum as a calibrated confidence interval.
+// Estimates keep two significant figures, in the shared token units.
+function usageEstimateNumber(value){return Number.isFinite(value)&&value>=0?pharosTokens.formatTokens(Number(value.toPrecision(2))):null}
+function usageEstimatePresentation(conversation,owned=null){
+  const report=conversation?.usage_estimates;
+  if(report?.range_kind!=='sensitivity_not_confidence'||!Array.isArray(report.responses))return null;
+  const ids=owned?new Set(owned.map(message=>message.id).filter(Boolean)):null;
+  const responses=report.responses.filter(response=>(!ids||ids.has(response.message_id))&&['expected','lower','upper'].every(key=>Number.isFinite(response.output_tokens?.[key])&&response.output_tokens[key]>=0));
+  if(!responses.length)return null;
+  const sum=responses.reduce((total,response)=>{for(const key of ['expected','lower','upper'])total[key]+=response.output_tokens[key];return total},{expected:0,lower:0,upper:0});
+  const local=responses.some(response=>response.local_weight>0),unknown=responses.some(response=>!response.model||!response.effort);
+  const assumedModels=[...new Set(responses.filter(response=>response.model_source==='observed_conversation_selection').map(response=>response.model).filter(Boolean))];
+  // Processed input is a separate estimate with its own range. It appears only
+  // when every listed response has one, so a sum never mixes counted and missing input.
+  const valid=value=>['expected','lower','upper'].every(key=>Number.isFinite(value?.[key])&&value[key]>=0);
+  const input=responses.every(response=>valid(response.input?.input_tokens)&&Number.isFinite(response.input.requests))?responses.reduce((total,response)=>{for(const key of ['expected','lower','upper'])total[key]+=response.input.input_tokens[key];total.requests+=response.input.requests;total.read+=response.input.cache_read_input_tokens||0;total.nontext=total.nontext||response.input.nontext_excluded===true;return total},{expected:0,lower:0,upper:0,requests:0,read:0,nontext:false}):null;
+  if(input)return{...sum,input,label:`~${usageEstimateNumber(input.expected)} estimated input + ~${usageEstimateNumber(sum.expected)} estimated output tokens`,
+    detail:`Input: ${usageEstimateNumber(input.lower)}–${usageEstimateNumber(input.upper)} sensitivity range across ${input.requests.toLocaleString()} inferred model request${input.requests===1?'':'s'}; each request re-reads the conversation so far, including tool results. It counts visible text only: the expected value leaves out hidden system prompts and tool definitions${input.nontext?', and images or files without extracted text':''}. About ${usageEstimateNumber(input.read)} of it is priced as cache reads under an assumed standard prompt cache. Output: ${usageEstimateNumber(sum.lower)}–${usageEstimateNumber(sum.upper)} sensitivity range. ${local?'Local coding calibration with published assumptions':'Published estimation assumptions'} (${report.manifest_revision}).${unknown?' Model or effort unreported; fallback assumptions apply.':''}${assumedModels.length?` Estimation and API pricing assume ${assumedModels.join(', ')} from saved conversation settings; the model used for each response was not recorded.`:''} For selected-branch responses in conversations without reported usage.`,
+    assumptions:'/api/estimation/assumptions'};
+  return{...sum,label:`~${usageEstimateNumber(sum.expected)} estimated output tokens`,
+    detail:`${usageEstimateNumber(sum.lower)}–${usageEstimateNumber(sum.upper)} sensitivity range. ${local?'Local coding calibration with published assumptions':'Published estimation assumptions'} (${report.manifest_revision}).${unknown?' Model or effort unreported; fallback assumptions apply.':''}${assumedModels.length?` Estimation and API pricing assume ${assumedModels.join(', ')} from saved conversation settings; the model used for each response was not recorded.`:''} Output only, for selected-branch responses in conversations without reported usage. Input and cache usage are unavailable; API cost, when priced, covers estimated output only.`,
+    assumptions:'/api/estimation/assumptions'};
+}
+function toolDurationEstimatePresentation(message){
+  const estimate=message?.duration_estimate,value=estimate?.seconds;
+  if(!value||!['expected','lower','upper'].every(key=>Number.isFinite(value[key])&&value[key]>=0))return null;
+  const execution=estimate.execution_seconds,argument=estimate.argument_generation_seconds;
+  if(execution&&['observed','estimated'].includes(estimate.execution_status)&&['expected','lower','upper'].every(key=>Number.isFinite(execution[key])&&execution[key]>=0)){
+    const recorded=estimate.execution_status==='observed';
+    return{label:`${recorded?'Recorded execution:':'Estimated execution: ~'}${recorded?' ':''}${usageEstimateNumber(execution.expected)} s${recorded?'':'*'}`,detail:`${usageEstimateNumber(execution.lower)}–${usageEstimateNumber(execution.upper)} s ${recorded?'native argument-stop to result-observation span':'execution sensitivity range'}. ${argument&&Number.isFinite(argument.expected)?`Argument generation: ${estimate.argument_generation_status==='observed'?'recorded':'estimated'} ${usageEstimateNumber(argument.expected)} s. `:''}Full call-to-result span: ${usageEstimateNumber(value.expected)} s. Execution can include transport and harness time; parallel calls can overlap.`};
+  }
+  if(estimate.status==='observed')return{label:`Recorded tool span: ${usageEstimateNumber(value.expected)} s`,detail:'Native call start to result observation; this can include transport and harness time.'};
+  if(estimate.status!=='estimated')return null;
+  return{label:`Estimated call-to-result span: ~${usageEstimateNumber(value.expected)} s*`,detail:`${usageEstimateNumber(value.lower)}–${usageEstimateNumber(value.upper)} s sensitivity range, including argument generation. Published tool assumptions; parallel calls can overlap. Following model work is separate.`};
+}
+// What the timeline's Turns row says about a turn on hover: the turn header's
+// own words (its number and who asked, the ask, and its counts).
+// A turn's activities, as its header and its hover card count them: every
+// event that is not a message, without the records the reader never shows.
+function turnActivities(turn){return(turn?.events||[]).filter(message=>message.kind!=='message'&&!transcriptUndisplayed(message))}
+function turnCardView(turn,index){
+  const events=turn?.events||[],count=(items,singular,plural)=>`${items.length} ${items.length===1?singular:plural}`,of=kind=>events.filter(message=>message.kind===kind);
+  return{title:`Turn ${index+1}${turn?.human?' · You':''}`,at:turn?.human?.created_at||events[0]?.created_at||null,prompt:shortText(messageSummary(turn?.human)||'Agent setup',160),
+    stats:[count(of('message'),'reply','replies'),count(turnActivities(turn),'activity','activities'),count(of('tool_call'),'tool call','tool calls'),count(of('delegation'),'sub-agent','sub-agents')]};
+}
+function turnSummaryData(conversation){
+  return conversationGraph(conversationMessages(conversation)).turns.map(turn=>({
+    human:turn.human,
+    response:turn.events.filter(message=>message.kind==='message').at(-1)||null,
+    prompt:messageSummary(turn.human)||'Agent setup',
+    outcome:messageSummary(turn.events.filter(message=>message.kind==='message').at(-1))||'',
+    replies:turn.events.filter(message=>message.kind==='message').length,
+    activities:turn.events.filter(message=>message.kind!=='message').length,
+    tools:turn.events.filter(message=>message.kind==='tool_call').length,
+    subagents:turn.events.filter(message=>message.kind==='delegation').length,
+  }));
+}
 // A compact outline for result cards, using the reader's normalized graph.
 // Inline delegations stay under their owning turn; paired results are not turns.
+// Each entry lists the messages it owns, so a search match opens its entry.
 function conversationOutline(conversation){
   const graph=conversationGraph(conversationMessages(conversation)),seen=new Set();
   const agents=events=>events.filter(message=>message.kind==='delegation'&&!seen.has(message)).map(message=>{
@@ -241,11 +556,11 @@ function conversationOutline(conversation){
     return {id:message.native_id||message.call_id||message.id,kind:'agent',label:String(input.subagent_type||input.agent_type||input.name||'Sub-agent'),
       prompt:String(input.description||input.prompt||input.task||messageSummary(message)||'Sub-agent'),
       human:{role:'user',text:input.prompt||input.description||input.task||messageSummary(message)},
-      response:replies.at(-1)||(results.length?{role:'assistant',text:readableValue(toolPayload(results.at(-1)).content)}:null),tools:children.filter(item=>item.kind==='tool_call').length,children:agents(children)};
+      response:replies.at(-1)||(results.length?{role:'assistant',text:readableValue(toolPayload(results.at(-1)).content)}:null),messages:ownedMessages([message],graph),tools:children.filter(item=>item.kind==='tool_call').length,children:agents(children)};
   });
   let turnNumber=0;
-  return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Session setup',
-    prompt:messageSummary(turn.human)||'Session setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,
+  return graph.turns.map((turn,index)=>({id:turn.human?.id||turn.human?.native_id||'setup-'+index,kind:'turn',label:turn.human?'Turn '+(++turnNumber):'Agent setup',
+    prompt:messageSummary(turn.human)||'Agent setup',human:turn.human,response:turn.events.filter(message=>message.kind==='message').at(-1)||null,messages:ownedMessages([turn.human,...turn.events],graph),
     tools:turn.events.filter(message=>message.kind==='tool_call').length,children:agents(turn.events)}));
 }
 // Publish the result-card model with the model script itself, independently of
@@ -259,10 +574,175 @@ function ownedMessages(roots,context,visited=new Set()){const owned=[],queue=roo
 // Tool calls
 function readableValue(value){if(typeof value==='string'){const parsed=parsedJSON(value);return parsed?readableValue(parsed):value}if(Array.isArray(value))return value.map(readableValue).filter(Boolean).join('\n');if(value&&typeof value==='object')return commonEventText(value)||value.text||value.content&&readableValue(value.content)||value.output&&readableValue(value.output)||JSON.stringify(value,null,2);return String(value??'')}
 function toolPayload(message){const parsed=messageJSON(message);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))return{raw:parsed,input:{value:message?.text??''},name:'',content:message?.text??''};let source=parsed.input??parsed.arguments??parsed;source=parsedJSON(source)||source;const input=conventionalInput(source&&typeof source==='object'&&!Array.isArray(source)?source:{value:source});return{raw:parsed,input,name:String(parsed.tool||parsed.name||''),content:parsed.content??parsed.output??parsed.result??''}}
+// MCP tool names have used both server__method and server.method. Match known
+// families explicitly; an arbitrary tool with “edit” in its name stays generic.
+function mcpIdentity(message){
+  const name=toolPayload(message).name,match=name.match(/^mcp__(.+)(?:__|\.)([^.]+)$/i);
+  if(!match)return null;
+  const server=match[1].toLowerCase(),method=match[2].toLowerCase();
+  const family=server==='claude_docs'?'docs':server==='memory'?'memory':server==='gmail'?'gmail':/^(?:remote_)?claude-in-chrome$|^(?:remote-devices__)?claude_browser$|^chrome$/.test(server)?'browser':server==='remote-devices'?'device':server==='pharos'?'pharos':server==='conductor'?'conductor':server==='codex_apps'&&method.startsWith('github_')?'github':server==='codex_apps__github'?'github':'';
+  return family?{family,method:family==='github'?method.replace(/^github_/,''):method}:null;
+}
+// Some Docs receipts append viewer instructions after their JSON. Decode only
+// the balanced first value; the rest remains accessible in the raw result.
+function mcpJSON(value){
+  if(typeof value!=='string')return value;
+  const parsed=parsedJSON(value);if(parsed!==null)return parsed;
+  const text=value.trimStart();if(!text.startsWith('{')&&!text.startsWith('['))return value;
+  let depth=0,quoted=false,escaped=false;
+  for(let i=0;i<text.length;i++){const c=text[i];if(quoted){if(escaped)escaped=false;else if(c==='\\')escaped=true;else if(c==='"')quoted=false;continue}if(c==='"')quoted=true;else if(c==='{'||c==='[')depth++;else if(c==='}'||c===']'){if(--depth===0)return parsedJSON(text.slice(0,i+1))??value}}
+  return value;
+}
+function mcpRecords(results){
+  const records=[];
+  const visit=(value,depth)=>{if(depth>10)return;const decoded=mcpJSON(value);if(decoded!==value){visit(decoded,depth+1);return}if(Array.isArray(value)){value.forEach(item=>visit(item,depth+1));return}if(!value||typeof value!=='object')return;records.push(value);for(const key of ['content','output','result','structuredContent','structured_content','acks','operation_results'])if(value[key]!=null)visit(value[key],depth+1);if(['text','input_text','output_text'].includes(value.type))visit(value.text,depth+1)};
+  results.forEach(result=>{visit(toolPayload(result).raw,0);visit(result.mcp_receipts,0)});return records;
+}
+// Outcome flags belong to MCP envelopes and Docs receipts. A fetched JSON
+// file or a web page containing an “error” field is still successful data.
+function mcpOutcome(results,family=''){
+  if(!results.length)return'missing';
+  let failed=results.some(r=>r.kind==='error'),applied=false,unknown=false;
+  const visit=(value,depth,envelope=false)=>{
+    if(depth>10)return;const decoded=mcpJSON(value);if(decoded!==value){visit(decoded,depth+1,envelope);return}
+    if(Array.isArray(value)){value.forEach(item=>visit(item,depth+1));return}if(!value||typeof value!=='object')return;
+    const wrapper=envelope||(Array.isArray(value.content)&&value.content.every(block=>block&&typeof block.type==='string'))||'structuredContent' in value||'structured_content' in value||('isError' in value&&Array.isArray(value.content))||('is_error' in value&&'content' in value);
+    if(wrapper&&(value.is_error===true||value.isError===true||value.error))failed=true;
+    if(family==='docs'){
+      if(['deny','denied','reject','rejected','error'].includes(value.verdict)||['failed','rejected'].includes(value.status))failed=true;
+      if(value.verdict==='allow'||value.status==='applied')applied=true;
+      if(value.status==='unknown'||value.commit_status==='unknown')unknown=true;
+      for(const key of ['acks','operation_results'])if(value[key])visit(value[key],depth+1);
+    }
+    for(const key of ['structuredContent','structured_content'])if(value[key])visit(value[key],depth+1,true);
+    if(wrapper)for(const key of ['content','output','result'])if(value[key]!=null)visit(value[key],depth+1);
+    if(['text','input_text','output_text'].includes(value.type))visit(value.text,depth+1);
+  };
+  results.forEach(result=>{visit(toolPayload(result).raw,0,true);visit(result.mcp_receipts,0)});
+  return failed?(applied?'partial':'failed'):unknown?'unknown':'recorded';
+}
+function mcpCategory(identity){
+  const {family,method}=identity;
+  if(family==='browser')return'web';
+  if(family==='device')return method==='device_bash'?'command':'tool';
+  if(family==='gmail')return'search';
+  if(family==='docs')return ['update','create','batch'].includes(method)?'edit':'read';
+  if(family==='memory')return /write|edit|delete/.test(method)?'edit':/search/.test(method)?'search':'read';
+  if(family==='conductor')return method==='diffcomment'?'edit':'read';
+  return /search|query/.test(method)?'search':'read';
+}
+function mcpTextSections(results){
+  const sections=[];
+  const visit=(value,depth=0)=>{if(depth>8||value==null)return;const decoded=mcpJSON(value);if(decoded!==value){visit(decoded,depth+1);return}if(typeof value==='string'){if(value.trim())sections.push({text:value,format:'text'});return}if(Array.isArray(value)){value.forEach(item=>visit(item,depth+1));return}if(typeof value!=='object')return;if(value.structuredContent??value.structured_content){visit(value.structuredContent??value.structured_content,depth+1);return}if(value.type==='text'||value.type==='input_text'||value.type==='output_text'){visit(value.text,depth+1);return}if(value.parsed?.body){sections.push({title:value.parsed.name||value.path,text:value.parsed.body,format:'markdown'});return}for(const key of ['content','output','result','text','body','markdown'])if(value[key]!=null){visit(value[key],depth+1);return}sections.push({text:JSON.stringify(value,null,2),format:'code'})};
+  results.forEach(result=>visit(toolPayload(result).raw));return sections;
+}
+function mcpXMLText(xml){
+  return String(xml||'').replace(/<gap\b[^>]*\/>/g,'\n[Excerpt: blocks omitted]\n').replace(/<\/(?:paragraph|list|row|doc)>/g,'\n').replace(/<[^>]*>/g,'').replace(/&(lt|gt|amp|quot|apos);/g,(_,entity)=>({lt:'<',gt:'>',amp:'&',quot:'"',apos:"'"})[entity]).trim();
+}
+function mcpMarkdownExport(data){
+  if(data?.format!=='markdown'||typeof data.bytes_b64!=='string'||data.bytes_b64.length>2_000_000)return'';
+  try{const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/',source=data.bytes_b64.replace(/\s/g,'');if(!/^[A-Za-z0-9+/]*={0,2}$/.test(source)||source.length%4)return'';let bits=0,buffer=0,encoded='';for(const c of source.replace(/=+$/,'')){buffer=(buffer<<6)|alphabet.indexOf(c);bits+=6;if(bits>=8){bits-=8;encoded+='%'+((buffer>>bits)&255).toString(16).padStart(2,'0')}}return decodeURIComponent(encoded)}catch{return''}
+}
+// A presentation is source evidence, never a reconstructed document version.
+// Unknown operations fall back to the original generic tool view.
+function mcpPresentation(message,results=[],artifactLinks={}){
+  if(message.kind!=='tool_call')return null;
+  const identity=mcpIdentity(message);if(!identity)return null;
+  const {family,method}=identity,{input}=toolPayload(message),records=mcpRecords(results),status=mcpOutcome(results,family),sections=[],facts=[];
+  const add=(title,text,format='text')=>{if(typeof text==='string'&&text.trim())sections.push({title,text,format})};
+  const resultText=()=>sections.push(...mcpTextSections(results));
+  let label='',target='',href='',category='tool';
+  if(family==='docs'){
+    const receipt=records.find(r=>r.verdict||r.frame||r.created)||{},payload=mcpJSON(input.payload)||{},create=input.container?.create;
+    const artifactId=input.container?.id||receipt.frame?.slug||receipt.created?.minted,link=artifactLinks[artifactId];
+    target=link?.title||create?.name||artifactId||'Claude document';href=link?.href||'';
+    const confirmed=status==='recorded'&&records.some(r=>r.verdict==='allow'),verb=(done,request)=>confirmed?done:request;
+    category=['update','create','batch'].includes(method)?'edit':'read';
+    if(method==='update'&&Array.isArray(payload.ops)){
+      if(payload.ops.some(op=>!op||!['replace','insert','append','prepend'].includes(op.op)||typeof op.with?.from?.content!=='string'))return null;
+      const notices=records.flatMap(r=>Array.isArray(r.data?.notices)?r.data.notices.filter(Boolean):[]);let additions=0;
+      payload.ops.forEach((op,index)=>{
+        const content=op.with?.from?.content;
+        const added=op.op==='replace'&&op.target?.ids?.length>0&&notices.some(n=>n.code==='pending_ended'&&n.as==='resolved'&&n.opIndex===index&&op.target?.ids?.every(id=>n.ids?.includes(id)));
+        if(added)additions++;
+        if(['replace','insert','append','prepend'].includes(op.op)&&typeof content==='string')add(added?'Added content':op.op==='replace'?'Replacement content':'New content',content,op.with?.as==='markdown'?'markdown':'text');
+        else add('Operation',JSON.stringify(op,null,2),'code');
+      });
+      label=additions===payload.ops.length&&additions?verb('Added to document','Requested addition to document'):verb('Updated document','Requested document update');
+    }else if((method==='batch'||method==='create')&&create){label=verb('Created document','Requested document creation');add('Initial content',create.doc?.markdown,'markdown')}
+    else if(method==='batch'&&Array.isArray(input.batch)){
+      const operations=input.batch.filter(Boolean),nodes=operations.filter(op=>op.verb==='create'&&op.object==='node'&&op.engine==='prose');
+      if(!nodes.length||operations.some(op=>!(op.verb==='create'&&['file','node'].includes(op.object)||op.verb==='update'&&['file','project'].includes(op.ref?.object))))return null;
+      for(const op of nodes){const source=op.payload?.source;if(source?.as!=='markdown'||typeof source.from?.content!=='string')return null;const parent=op.payload?.parent?.id;
+        const tab=operations.flatMap(item=>Array.isArray(item.payload?.patch)?item.payload.patch:[]).find(patch=>patch?.path?.[0]==='tabs'&&patch.path[1]===parent)?.value?.name;
+        add(tab?'New tab · '+tab:'New tab',source.from.content,'markdown');
+      }
+      label=verb('Added document tab','Requested document tab');
+    }
+    else if(method==='create'&&input.object==='utterance'&&payload.value?.body){label=verb('Commented on document','Requested document comment');add('Quoted passage',payload.value.parent?.anchor?.text);add('Comment',payload.value.body,'markdown')}
+    else if(method==='read'){label=payload.kind==='search'?'Searched document':'Read document';if(payload.text)facts.push(['Search',payload.text]);const data=records.find(r=>r.data?.xml)?.data;if(data)add('Recorded excerpt',mcpXMLText(data.xml));if(data?.complete===false)facts.push(['Coverage','Partial excerpt'])}
+    else if(method==='export'){label=verb('Exported document','Requested document export');const data=records.find(r=>r.data?.bytes_b64)?.data;add(data?.name||'Exported Markdown',mcpMarkdownExport(data),'markdown');if(input.format)facts.push(['Format',input.format])}
+    else if(method==='guide'){label='Read Claude Docs guide';target=input.topic||input.engine||'Claude Docs';resultText()}
+    else return null;
+    if(status==='partial')label='Partially updated document';
+    if(!sections.length)resultText();
+  }else if(family==='memory'&&/^memory_(read|write|edit|delete|list|search)$/.test(method)){
+    label=({memory_read:'Read memory',memory_write:'Write memory',memory_edit:'Edit memory',memory_delete:'Delete memory',memory_list:'List memories',memory_search:'Search memories'})[method];target=input.path||input.query||'Memory';category=/write|edit|delete/.test(method)?'edit':'read';
+    add('Content',input.content||input.body,'markdown');resultText();
+  }else if(family==='browser'){
+    label=/^(browser_)?batch$/.test(method)?'Browser actions':method==='javascript_tool'?'Run browser JavaScript':method.replace(/_/g,' ');category='web';target=input.url||input.action_summary||input.action||input.text||'Browser';
+    if(Array.isArray(input.actions))input.actions.filter(Boolean).forEach((action,index)=>{const args=action.input||{};add(`${index+1}. ${action.name||'Browser action'}`,args.action_summary||args.url||args.text||args.action||JSON.stringify(args),/javascript/.test(action.name)?'code':'text')});
+    else add('Action',input.action_summary||input.url||input.text||input.action,/javascript/.test(method)?'code':'text');resultText();
+  }else if(family==='gmail'&&method==='search_threads'){
+    label='Search email threads';category='search';target=input.query||'Gmail';const data=records.find(r=>Array.isArray(r.threads));
+    if(data){facts.push(['Threads retained',String(data.threads.length)]);if(data.resultCountEstimate!=null)facts.push(['Estimated matches',String(data.resultCountEstimate)]);for(const thread of data.threads)add(thread.subject||thread.id,thread.snippet||thread.body);if(data.nextPageToken)facts.push(['Coverage','More results available in source'])}else resultText();
+  }else if(family==='device'&&method==='device_bash'){
+    label='Run on device';category='command';target=input.description||input.command||'Device';add('Command',input.command,'code');resultText();
+  }else if(family==='conductor'&&['getworkspacediff','getdiffcomments','diffcomment','getterminaloutput'].includes(method)){
+    label=({getworkspacediff:'Read workspace diff',getdiffcomments:'Read review comments',diffcomment:'Leave review comments',getterminaloutput:'Read terminal output'})[method];category=method==='diffcomment'?'edit':'read';target=input.file||input.source||'Conductor';
+    for(const comment of Array.isArray(input.comments)?input.comments.filter(Boolean):[])add([comment.file,comment.lineNumber].filter(Boolean).join(':'),comment.body,'markdown');resultText();
+  }else if(family==='github'&&['fetch_file','fetch','get_pr_info','fetch_pr','fetch_issue','fetch_pr_comments','fetch_issue_comments','search','search_issues','search_prs'].includes(method)){
+    label=method==='fetch_file'?'Read GitHub file':/search/.test(method)?'Search GitHub':'Read GitHub';category='read';target=[input.repository_full_name||input.repo_full_name,input.path||input.pr_number||input.issue_number||input.query].filter(Boolean).join(' · ')||input.url||'GitHub';
+    const data=records.find(r=>r.display_url)||{};if(/^https:\/\/(github\.com|api\.github\.com|raw\.githubusercontent\.com)\//.test(data.display_url||input.url||''))href=data.display_url||input.url;
+    if(method==='fetch_file')add(input.path,data.content,'code');else resultText();
+  }else if(family==='pharos'){
+    const labels={get_conversation_messages:'Read conversation messages',get_conversation_excerpt:'Read conversation excerpt',get_conversation_overview:'Read conversation overview',get_work_detail:'Read workspace',search_messages:'Search messages',search_conversations:'Search conversations',search_work:'Search workspaces',query_statistics:'Query statistics',archive_status:'Read archive status',site_link:'Resolve Pharos link'};
+    label=labels[method];if(!label)return null;category=/search|query/.test(method)?'search':'read';target=input.query||input.conversation_id||input.workspace_id||'Pharos';
+    for(const [key,value] of Object.entries(input))if(value!=null&&typeof value!=='object')facts.push([key.replace(/_/g,' '),String(value)]);
+    const data=records.find(r=>r.items||r.messages||r.rows||r.groups||r.overview||r.statistics||r.url)||records.at(-1)||{};
+    const items=data.items||data.messages;
+    for(const item of method!=='query_statistics'&&Array.isArray(items)?items.filter(Boolean):[]){
+      const prose=item.snippet||item.text||item.body||item.content;
+      if(typeof prose==='string')add(item.title||item.role||'Recorded result',prose,'markdown');
+      else{add('Title',item.title);for(const key of ['purpose','outcome','first_input','last_response','description','assignment'])add(key.replace(/_/g,' '),item[key],'markdown')}
+    }
+    if(method==='get_conversation_overview'){
+      target=data.title||target;add('Request',data.request?.text,'markdown');add('Last response',data.last_response?.text,'markdown');add('Workspace outcome',data.workspace_outcome,'markdown');add('Source note',data.note);
+    }
+    add(data.title||'Summary',data.summary,'markdown');
+    if(method==='site_link'&&/^\/(?!\/)/.test(data.url||'')){href=data.url;target=data.title||target}
+    const rows=data.rows||(method==='query_statistics'?data.items||data.groups?.map(group=>({...group.keys,...group.values})):null);
+    if(Array.isArray(rows)&&rows.length){const columns=[...new Set(rows.flatMap(row=>Object.keys(row)))].filter(key=>rows.some(row=>row[key]==null||typeof row[key]!=='object'));sections.push({title:'Results',columns,rows:rows.map(row=>columns.map(key=>row[key]==null?'Unavailable':String(row[key])))})}
+    if(method==='query_statistics'&&data.population_complete===false)facts.push(['Population','Incomplete']);
+    if(typeof data.coverage==='string')facts.push(['Coverage',data.coverage]);
+    if(!sections.length)resultText();
+    if(data.truncated||data.has_more||data.next_cursor||data.next_offset!=null)facts.push(['Coverage','More results available in source']);
+    // Retain useful scalar statistics without turning provenance into prose.
+    if(!sections.length)for(const [key,value]of Object.entries(data))if(value!=null&&typeof value!=='object')facts.push([key.replace(/_/g,' '),String(value)]);
+  }else return null;
+  if(!label)return null;
+  if(status==='failed'||status==='partial'||status==='unknown'){
+    const error=records.find(r=>r.error||r.verdict==='deny'||r.verdict==='reject');
+    resultText();
+    add('Tool outcome',typeof error?.error==='string'?error.error:error?JSON.stringify(error,null,2):status==='unknown'?'The source did not confirm the outcome.':'The tool reported an error.');
+  }
+  return{family,label,target,href,category,status,sections,facts};
+}
+
 // Antigravity names tool arguments in PascalCase; the reader looks for the conventional names.
 const INPUT_ALIASES={CommandLine:'command',AbsolutePath:'file_path',TargetFile:'file_path',DirectoryPath:'path',SearchPath:'path',Url:'url',Query:'query',Prompt:'prompt'};
 function conventionalInput(input){if(!Object.keys(INPUT_ALIASES).some(key=>key in input))return input;const result={};for(const [key,value] of Object.entries(input)){const alias=INPUT_ALIASES[key];result[alias&&!(alias in input)&&!(alias in result)?alias:key]=value}return result}
-function toolCategory(message){const payload=toolPayload(message),name=payload.name.toLowerCase(),input=payload.input;if(message.kind==='error'||payload.raw?.is_error)return'error';if(message.kind==='reasoning')return'reasoning';if(message.kind==='metadata'||message.kind==='result')return'run';if(message.kind==='context'||message.kind==='attachment')return'context';if(message.kind.includes('delegation')||/^(task|agent)$|spawn_agent/.test(name))return'agent';if(/todo|task(create|update|delete|list|get)|update_plan/.test(name))return'todo';if(/patch|edit|write|replace/.test(name))return'edit';if(/exec|command|shell|terminal|bash/.test(name)||input.cmd||input.command)return'command';if(/grep|search|find|glob|query/.test(name))return'search';if(/browser|web|navigate|click/.test(name)||input.url)return'web';if(/read|open|view|list/.test(name))return'read';return'tool'}
+function toolCategory(message){const mcp=message.kind==='tool_call'?mcpIdentity(message):null;if(mcp)return mcpCategory(mcp);const payload=toolPayload(message),name=payload.name.toLowerCase(),input=payload.input;if(message.kind==='error'||payload.raw?.is_error)return'error';if(message.kind==='reasoning')return'reasoning';if(message.kind==='metadata'||message.kind==='result')return'run';if(message.kind==='context'||message.kind==='attachment')return'context';if(message.kind.includes('delegation')||/^(task|agent)$|spawn_agent/.test(name))return'agent';if(/todo|task(create|update|delete|list|get)|update_plan/.test(name))return'todo';if(/patch|edit|write|replace/.test(name))return'edit';if(/exec|command|shell|terminal|bash/.test(name)||input.cmd||input.command)return'command';if(/grep|search|find|glob|query/.test(name))return'search';if(/browser|web|navigate|click/.test(name)||input.url)return'web';if(/read|open|view|list/.test(name))return'read';return'tool'}
 function commandKind(message){if(toolCategory(message)!=='command')return toolCategory(message);const input=toolPayload(message).input,cmd=String(input.cmd||input.command||'');if(/(?:^|[\s/;&|])(tsc|typecheck|pyright|mypy)(?=$|[\s;&|])|--noEmit/.test(cmd))return'typecheck';if(/(?:^|[\s/;&|])(pytest|vitest|jest)(?=$|[\s;&|])|\b(?:npm|pnpm|yarn|go|cargo)\s+(?:run\s+)?test\b/.test(cmd))return'test';if(/(?:^|[\s/;&|])git(?=$|[\s;&|])/.test(cmd))return'git';if(/(?:^|[\s/;&|])python(?:3(?:\.\d+)?)?(?=$|[\s;&|])/.test(cmd))return'python';if(/\b(?:eslint|ruff|lint)\b/.test(cmd))return'lint';return'command'}
 function todoItems(message,results=[]){const {input}=toolPayload(message);let items=Array.isArray(input.todos)?input.todos:Array.isArray(input.plan)?input.plan:null;if(!items)for(const result of results){const payload=toolPayload(result),value=parsedJSON(readableValue(payload.content))||payload.raw;const candidates=value?.todos||value?.tasks||value?.items||(Array.isArray(value)?value:null);if(Array.isArray(candidates))items=candidates}return(items||[input]).map(item=>({...item,content:item.content||item.text,status:item.status||(item.completed?'completed':'pending')}))}
 function describeTodoChanges(messages,context){
@@ -292,7 +772,155 @@ function fileChanges(message,result){
   else if(fallbackPath)files.push({path:fallbackPath,diff:'',unknown:true});
   return files.length?files:null;
 }
-function toolFailed(message,results){const category=toolCategory(message);return Boolean(category==='error'||toolPayload(message).raw?.is_error||results.some(item=>item.kind==='error'||toolPayload(item).raw?.is_error||Number(toolPayload(item).raw?.exit_code)>0||(category==='command'&&/^(?:Process exited with code|Exit code:)\s*[1-9]/im.test(readableValue(toolPayload(item).content)))))}
+function toolFailed(message,results){const category=toolCategory(message);return Boolean(category==='error'||toolPayload(message).raw?.is_error||(mcpIdentity(message)&&['failed','partial'].includes(mcpOutcome(results,mcpIdentity(message).family)))||results.some(item=>item.kind==='error'||toolPayload(item).raw?.is_error||Number(toolPayload(item).raw?.exit_code)>0||(category==='command'&&/^(?:Process exited with code|Exit code:)\s*[1-9]/im.test(readableValue(toolPayload(item).content)))))}
+
+// The reader uses the same action categories as the timeline ribbon.
+function readerTimelineCategory(message){
+  const payload=toolPayload(message),name=String(payload.name||'').toLowerCase(),category=toolCategory(message);
+  if(['wait_agent','wait','taskoutput'].includes(name))return 'wait';
+  if(/sleep|poll/.test(name)||name==='write_stdin')return 'poll';
+  if(category==='agent'||/delegate|spawn/.test(name)||name==='task')return 'delegate';
+  if(['read','search'].includes(category)||/read|search|glob/.test(name))return 'read';
+  if(['edit','write'].includes(category)||/patch|write/.test(name)||name==='edit')return 'write';
+  if(name.includes('git'))return 'git';
+  if(category==='web'||/web|fetch/.test(name))return 'network';
+  return category==='command'||/exec|terminal/.test(name)||name==='bash'?'run':'other';
+}
+
+// Activity labels can coincide across timeline categories. Keep their URL
+// identities distinct and rebuild the index when a fuller result changes a label.
+function transcriptTagId(category,label){return 'tag:'+JSON.stringify([category,label])}
+function transcriptTagParts(id){if(typeof id!=='string'||!id.startsWith('tag:'))return null;try{const value=JSON.parse(id.slice(4));return Array.isArray(value)&&value.length===2&&value.every(item=>typeof item==='string')?value:null}catch{return null}}
+// Presentation groups refine the activity key without changing its saved tag
+// identities or the timeline's action categories. Unknown MCP servers belong
+// here too, even when they have no specialized rich tool presentation.
+function transcriptActivityPresentation(message){
+  const {name,raw}=toolPayload(message),category=toolCategory(message);
+  const group=(id,label,icon)=>({id,label,icon});
+  const icons={read:'read',search:'search',edit:'edit',command:'command',git:'git',python:'code',typecheck:'typecheck',test:'check',lint:'lint',web:'web',agent:'agent',todo:'todo',reasoning:'thought',context:'context',run:'event',error:'error',tool:'tool'};
+  let icon=icons[commandKind(message)]||'tool',keyPath=[];
+  const mcp=message.kind==='tool_call'&&name.match(/^mcp__(.+)(?:__|\.)([^.]+)$/i);
+  if(mcp){
+    let server=mcp[1];const method=mcp[2];
+    // Codex Apps records both service.method and service_method names.
+    if(server.toLowerCase()==='codex_apps'){
+      const service=method.match(/^(github|search_service|plugin_management|chatgpt_space|sites|pets|safety_settings|hotline)_(.+)$/i);
+      if(service)server+='__'+service[1];
+    }
+    const names={'remote-devices':'Remote devices','claude_browser':'Browser','remote-devices__claude_browser':'Browser (remote devices)','claude-in-chrome':'Browser (Chrome)','remote_claude-in-chrome':'Browser (Chrome)','chrome':'Browser (Chrome)','claude_docs':'Docs','gmail':'Gmail','google_sheets':'Google Sheets','google_drive':'Google Drive','codex_apps':'Codex apps','codex_apps__github':'GitHub','codex_apps__search_service':'Search service','codex_apps__plugin_management':'Plugin management','codex_apps__chatgpt_space':'Pages','codex_apps__sites':'Sites','conductor':'Conductor','pharos':'Pharos','memory':'Memory','cua_repl':'Computer','node_repl':'JavaScript'};
+    const id=server.toLowerCase(),label=names[id]||server;
+    const serverIcon=/browser|chrome/.test(id)?'web':id.endsWith('github')?'git':id==='remote-devices'?'command':/docs|sheets|drive|chatgpt_space/.test(id)?'read':/gmail|search_service/.test(id)?'search':id==='memory'?'context':'tool';
+    keyPath=[group('mcp','MCP','tool'),group('mcp:'+id,label,serverIcon)];
+  }else if(message.kind==='reasoning')keyPath=[group('thinking','Thinking','thought')];
+  else if(message.kind==='attachment'){keyPath=[group('attachments','Attachments','read')];icon='read'}
+  else if(message.kind==='context'||raw?.type==='claude_ai_conversation'){
+    keyPath=[group('context','Context','context')];
+    icon=raw?.type==='claude_ai_conversation'?'chat':/agent_listing/.test(raw?.source||'')?'agent':/tools|mcp/.test(raw?.source||'')?'tool':raw?.source==='date_note'?'history':'context';
+  }else if(message.kind!=='tool_call'&&message.kind!=='delegation')keyPath=[group('events','System events','event')];
+  else if(/^(toolsearch|tool_search|search_tools|list_tools)$/i.test(name)){keyPath=[group('discovery','Tool discovery','search')];icon='search'}
+  else if(/^skill$/i.test(name)){keyPath=[group('skills','Skills','read')];icon='read'}
+  else{
+    const groups={read:['reads','Reads & searches','read'],search:['reads','Reads & searches','read'],edit:['edits','File edits','edit'],command:['commands','Commands','command'],web:['browser','Browser','web'],todo:['planning','Planning','todo'],agent:['delegation','Delegation','agent'],tool:['tools','Other tools','tool']};
+    keyPath=[group(...(groups[category]||['events','System events','event']))];
+  }
+  return{keyPath,icon};
+}
+function transcriptTagIndex(messages,structure,describe){
+  const entries=new WeakMap(),tags=new Map();
+  const add=info=>{let existing=tags.get(info.id);if(!existing){existing={...info,count:0,presentations:new Map()};tags.set(info.id,existing)}existing.count++;const style=existing.presentations.get(info.presentationKey);if(style)style.count++;else existing.presentations.set(info.presentationKey,{keyPath:info.keyPath||[],icon:info.icon||'tool',contentKind:info.contentKind,count:1})};
+  const remove=info=>{const existing=tags.get(info.id);if(!existing)return;if(!--existing.count){tags.delete(info.id);return}const style=existing.presentations.get(info.presentationKey);if(style&&!--style.count)existing.presentations.delete(info.presentationKey)};
+  const refresh=message=>{const before=entries.get(message),description=describe(message),after=description?.label?{...description,id:transcriptTagId(description.category,description.label),contentKind:structure.pathOf(message)[0],presentationKey:JSON.stringify([structure.pathOf(message)[0],description.keyPath,description.icon])}:null;if(before?.id===after?.id&&before?.presentationKey===after?.presentationKey)return false;if(before)remove(before);if(after){add(after);entries.set(message,after)}else entries.delete(message);return true};
+  messages.forEach(message=>{if(!structure.consumed.has(message))refresh(message)});
+  return{refresh,tagOf:message=>entries.get(message)?.id||null,info:id=>tags.get(id)||null,all:()=>[...tags.keys()],group:category=>[...tags.values()].filter(tag=>tag.category===category).map(tag=>tag.id)};
+}
+// Rows and key leaves share the icon for the complete saved activity tag.
+// Equal labels can cover different tools; neither surface picks just one.
+function transcriptActivityIcon(info){
+  const styles=[...(info?.presentations.values()||[])],first=styles[0];
+  return first&&styles.every(style=>style.icon===first.icon)?first.icon:info?.category==='run'?'command':'tool';
+}
+function transcriptActivityKeys(index,labelOf=id=>index.info(id).label,contentKind=null){
+  const items=[],groups=new Map();
+  for(const id of index.all()){
+    const info=index.info(id),styles=[...info.presentations.values()].filter(style=>contentKind===null||style.contentKind===contentKind),first=styles[0];if(!first)continue;
+    // One saved tag can cover equal labels from several services. Put it at
+    // their common ancestor once, rather than duplicating a filter control.
+    const keyPath=[];
+    for(const [depth,part]of first.keyPath.entries()){if(!styles.every(style=>style.keyPath[depth]?.id===part.id))break;keyPath.push(part)}
+    let children=items,path='';
+    for(const part of keyPath){path+='/'+part.id;let parent=groups.get(path);if(!parent){parent={...part,id:'activity:'+path,values:[],children:[]};groups.set(path,parent);children.push(parent)}parent.values.push(id);children=parent.children}
+    children.push({id,label:labelOf(id),values:[id],icon:transcriptActivityIcon(info)});
+  }
+  const order=['context','thinking','attachments','skills','discovery','mcp','reads','edits','commands','browser','planning','delegation','events','tools'];
+  items.sort((a,b)=>{const rank=item=>{const position=order.indexOf(item.id.split('/')[1]);return position<0?order.length:position};return rank(a)-rank(b)});
+  for(const item of groups.values())item.children.sort((a,b)=>a.label.localeCompare(b.label));
+  return items;
+}
+// Content has one category control, with its recorded activities beneath it.
+// Entry IDs are presentation identities only; saved category and tag IDs stay unchanged.
+function transcriptContentKeys(index,present,labelOf=id=>index.info(id).label){
+  const items=[],entries=[],nodes=new Map(),icons={prompts:'human',response:'chat',replies:'chat',thinking:'thought',edits:'edit',commands:'command',reads:'read',tools:'tool',agents:'agent',events:'event',usage:'summary'};
+  const roots={thinking:'thinking',edits:'edits',commands:'commands',reads:'reads',tools:'tools',agents:'delegation',events:'events'};
+  for(const [kind,label,title]of TRANSCRIPT_CATEGORIES){
+    if(!present.has(kind))continue;
+    const activity=transcriptActivityKeys(index,labelOf,kind).flatMap(item=>item.id==='activity:/'+roots[kind]?item.children:[item]);
+    const tags=[...new Set(activity.flatMap(item=>item.values))],entry=tag=>'content:'+JSON.stringify([kind,tag]);
+    for(const tag of tags.length?tags:[null])entries.push({id:entry(tag),kind,tag});
+    const decorate=item=>{const result={...item,id:'content:'+JSON.stringify([kind,item.id]),kind,tags:item.values,values:item.values.map(entry),...(item.children?{children:item.children.map(decorate)}:{})};nodes.set(result.id,result);return result;};
+    const item={id:'kind:'+kind,kind,category:true,label,title,icon:icons[kind],tags,values:(tags.length?tags:[null]).map(entry),...(activity.length?{children:activity.map(decorate)}:{})};
+    nodes.set(item.id,item);items.push(item);
+  }
+  return{items,entries,nodes,all:entries.map(entry=>entry.id),tags:index.all()};
+}
+function transcriptContentShown(model,kinds,hidden){
+  return model.entries.filter(entry=>kinds.has(entry.kind)&&(!entry.tag||!transcriptTagHidden(hidden,entry.tag))).map(entry=>entry.id);
+}
+// Category actions retain dormant child choices when hidden. Showing a category
+// restores all of its current children; showing a child also enables its category.
+function transcriptContentSelection(model,kinds,hidden,node,action){
+  const allKinds=TRANSCRIPT_CATEGORIES.map(([kind])=>kind),next=new Set(kinds);
+  const tagsFor=kind=>model.items.find(item=>item.kind===kind)?.tags||[];
+  let exclusions=new Set(hidden);
+  if(!node||action==='clear')return{categories:action==='hide'?[]:allKinds,hidden:action==='hide'?[...exclusions]:[...transcriptTagSelection(exclusions,model.tags,model.tags)]};
+  const shown=new Set(transcriptContentShown(model,kinds,hidden));
+  if(action==='toggle')action=node.values.every(value=>shown.has(value))?'hide':'show';
+  if(action==='only'){
+    next.clear();next.add(node.kind);
+    exclusions=transcriptTagSelection(exclusions,tagsFor(node.kind),node.tags);
+  }else if(action==='exclude'){
+    allKinds.forEach(kind=>next.add(kind));
+    if(node.category)next.delete(node.kind);
+    else exclusions=transcriptTagSelection(exclusions,model.tags,model.tags.filter(tag=>!node.tags.includes(tag)));
+  }else if(action==='show'){
+    next.add(node.kind);exclusions=transcriptTagSelection(exclusions,node.tags,node.tags);
+  }else if(action==='hide'){
+    if(node.category)next.delete(node.kind);
+    else exclusions=transcriptTagSelection(exclusions,node.tags,[]);
+  }
+  return{categories:allKinds.filter(kind=>next.has(kind)),hidden:[...exclusions]};
+}
+// Unscoped label strings were emitted by earlier readers. A scoped show
+// override lets a user show one category while retaining that legacy hide for
+// other categories and conversations.
+function transcriptTagHidden(hidden,id){const parts=transcriptTagParts(id);return hidden.has(id)||Boolean(parts&&hidden.has(parts[1])&&!hidden.has('show:'+id))}
+function transcriptTagSelection(hidden,all,shown){
+  const next=new Set(hidden),selected=new Set(shown);
+  for(const id of all){const label=transcriptTagParts(id)?.[1],override='show:'+id;if(selected.has(id)){next.delete(id);if(label&&next.has(label))next.add(override);else next.delete(override)}else{next.add(id);next.delete(override)}}
+  return next;
+}
+
+// Retain calls with missing timestamps; the navigator chooses a real clock or
+// message order for the entire session before placing these marks.
+function readerNavigatorMarks(model,describe=message=>({name:toolPayload(message).name||'Tool'})){
+  return model.messages.filter(message=>['tool_call','delegation'].includes(message.kind)).map(message=>{
+    const parsedStart=Date.parse(message.created_at),start=Number.isFinite(parsedStart)?parsedStart:null;
+    const results=(message.kind==='delegation'?model.delegationResultsByCall:model.toolResultsByCall).get(message.call_id)||[],end=Date.parse(results.at(-1)?.created_at);
+    return{start,end:start!==null&&Number.isFinite(end)?Math.max(start,end):null,
+      end_known:start!==null&&Number.isFinite(end)&&end>=start,
+      category:readerTimelineCategory(message),
+      count:1,error:toolFailed(message,results),message_id:message.id,tool_id:message.call_id||message.native_id,...describe(message)};
+  });
+}
 
 // File paths
 // The directories a conversation's file paths are shown relative to: the
@@ -324,7 +952,7 @@ function readerDisclosureToggle(id,open,expanded,collapsed){
 function readerContentShown(state,key,fallback){return state&&Object.hasOwn(state,key)?state[key]===true:fallback}
 
 // Transcript filter and find
-const TRANSCRIPT_CATEGORIES=[['prompts','Prompts','Messages you, or a parent agent, sent'],['response','Final responses','The last reply of each turn'],['replies','Interim replies','Agent messages before the final reply of a turn'],['thinking','Thinking','Reasoning the agent recorded'],['edits','File edits','Edits and writes'],['commands','Commands','Shell commands'],['reads','Reads & searches','File reads, listings, and searches'],['tools','Other tools','Browser, todo, MCP, and other tool calls'],['agents','Sub-agents','Delegated agent runs'],['events','System events','Injected context, attachments, run events, and errors'],['usage','Token usage','Token usage events']];
+const TRANSCRIPT_CATEGORIES=[['prompts','Prompts','Messages you, or a parent agent, sent'],['response','Final responses','The last reply of each turn'],['replies','Interim replies','Agent messages before the final reply of a turn'],['thinking','Thinking','Reasoning the agent recorded'],['edits','File edits','Edits and writes'],['commands','Commands','Shell commands'],['reads','Reads & searches','File reads, listings, and searches'],['tools','Other tools','Browser, todo, MCP, and other tool calls'],['agents','Sub-agents','Delegated agent runs'],['events','System events','Injected context, attachments, run events, and errors'],['usage','Usage & quota','Token and quota checkpoints and cost bookkeeping']];
 const TRANSCRIPT_LEVELS=[['all','All','Every event',TRANSCRIPT_CATEGORIES.map(([key])=>key)],['all-minus-usage','All minus usage','Every event except token usage',TRANSCRIPT_CATEGORIES.map(([key])=>key).filter(key=>key!=='usage')],['thought','Chain of thought','Prompts, replies, and thinking; no tool activity',['prompts','response','replies','thinking']],['primary','Primary only','Prompts and each turn’s final response',['prompts','response']],['custom','Custom','Choose each kind of event',null]];
 // Named URL presets stand alone. A category list is required only for Custom;
 // older links with just a category list still select Custom.
@@ -342,9 +970,19 @@ function transcriptShown(state){return new Set(state.level==='custom'?state.cust
 function transcriptCategory(message,context){
   if(message.kind==='delegation')return'agents';if(message.kind==='reasoning')return'thinking';
   if(message.kind==='message')return['user','agent'].includes(message.role)?'prompts':context.finalReplies?.has(message)?'response':'replies';
-  const value=messageJSON(message);if((value?.payload||value)?.type==='token_usage')return'usage';
+  const value=messageJSON(message),payload=value?.payload||value;
+  if(payload?.type==='token_usage'||message.kind==='metadata'&&(['token_count','token_usage_record','cost-state'].includes(value?.type)||['token_count','token_usage_record','cost-state'].includes(payload?.type)||payload?.type==='system'&&payload?.subtype==='thinking_tokens'))return'usage';
   return{edit:'edits',command:'commands',read:'reads',search:'reads',error:'events',run:'events',context:'events'}[toolCategory(message)]||'tools'
 }
+// Never shown in the reader: the token usage and cost records a harness
+// writes between messages, which the Key listed as Usage & quota › System
+// events › Event (token_usage payloads; metadata of type token_count,
+// token_usage_record or cost-state; Claude's system thinking_tokens). What
+// they hold is already shown, in the Turns · context bar and in each turn's
+// token summary, both of which still read them. They get no row, no Key
+// entry and no count, and Find leaves them out. Other System events, and a
+// usage record that is an error, stay.
+function transcriptUndisplayed(message){return message?.kind!=='message'&&transcriptCategory(message,{})==='usage'&&toolCategory(message)==='run'}
 // The reader's grouping of normalized events: results paired to their calls,
 // each turn's final reply, and each event's category path (its own category,
 // then those of the sub-agents holding it). A paired result takes its call's
@@ -366,10 +1004,10 @@ function findableText(message){return message.findableText??=message.kind==='mes
 // Counts the events whose findable text matches pattern (a RegExp without the
 // g flag): shown ones, and hidden ones with the kinds hiding them. Results
 // count only when output is searched.
-function transcriptFind(messages,{pattern,shown,output}){
-  const structure=transcriptStructure(messages),kinds=new Set();let visible=0,hidden=0;
-  for(const message of messages){if(structure.consumed.has(message)&&!output||!pattern.test(findableText(message)))continue;const missing=structure.pathOf(message).filter(key=>!shown.has(key));if(missing.length){hidden++;missing.forEach(key=>kinds.add(key))}else visible++}
-  return{shown:visible,hidden,hidden_kinds:TRANSCRIPT_CATEGORIES.map(([key])=>key).filter(key=>kinds.has(key))};
+function transcriptFind(messages,{pattern,shown,output,hiddenTagOf}){
+  const structure=transcriptStructure(messages),kinds=new Set(),tags=new Set();let visible=0,hidden=0;
+  for(const message of messages){if(structure.consumed.has(message)&&!output||transcriptUndisplayed(message)||!pattern.test(findableText(message)))continue;const missing=structure.pathOf(message).filter(key=>!shown.has(key)),missingTags=hiddenTagOf?.(message)||[];if(missing.length||missingTags.length){hidden++;missing.forEach(key=>kinds.add(key));missingTags.forEach(tag=>tags.add(tag))}else visible++}
+  return{shown:visible,hidden,hidden_kinds:TRANSCRIPT_CATEGORIES.map(([key])=>key).filter(key=>kinds.has(key)),...(hiddenTagOf?{hidden_tags:[...tags]}:{})};
 }
 function transcriptFindPattern(term,regex,caseSensitive){return new RegExp(regex?term:term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),caseSensitive?'u':'iu')}
 
@@ -418,7 +1056,7 @@ function proseSummary(text){const segments=xmlSegments(text),prose=segments.filt
 function messageSummary(message){return proseSummary(displayText(message))}
 function compactMessageSummary(message){
   const inline=new Set(['a','span','strong','em','del','code']),text=item=>typeof item==='string'?item:(item.children||[]).map(text).join('')+(inline.has(item.tag)?'':' ');
-  return shortText(text(markdownTree(messageSummary(message))),640);
+  return shortText(text(markdownTree(exportMarkerText(messageSummary(message)).text)),640);
 }
 
 // Authorship offsets refer to UTF-8 bytes in the stored body. Keep that body
@@ -466,11 +1104,6 @@ function messageLabelView(message,taxonomy=[]){
   const segment=message.labels.segment||'';
   return{family:labels.find(label=>label.family)?.family||'',segment,segmentName:LABEL_SEGMENTS[segment]||segment,labels};
 }
-// The text a message's labels describe: a person's typed pieces when the
-// classification finds them, otherwise all of it. Typed text stays '1'
-// (human-written); the rest is '2'.
-function labelMask(message,text,mask=humanWritingMask(message,text)){return message?.labels?.ids?.length&&!mask.includes('1')?'2'.repeat(text.length):mask}
-
 // Agent events (agent_events.go, agentEventsAttacher): sentences of an agent
 // message where something happened (an obstacle, a discovery, a workaround),
 // with what it was about (subject) and what the agent did (response). Ranges
@@ -490,10 +1123,36 @@ function messageEventView(message,text=eventText(message)){
   const events=message?.agent_events;if(!Array.isArray(events)||!events.length||text!==String(message.text??''))return null;
   const fits=range=>Array.isArray(range)&&Number.isInteger(range[0])&&Number.isInteger(range[1])&&range[0]>=0&&range[0]<range[1]&&range[1]<=text.length;
   const slice=ranges=>ranges.filter(fits).map(range=>text.slice(range[0],range[1]).trim()).join(' ');
-  const view=events.filter(event=>fits(event.sentence)).map(event=>({kind:event.kind,label:event.label||event.kind,group:event.group||'',definition:event.definition||'',
+  const view=events.filter(event=>fits(event.sentence)).map(event=>({id:event.id??null,target:event.target?.message_id?event.target:null,kind:event.kind,label:event.label||event.kind,group:event.group||'',definition:event.definition||'',
     probability:typeof event.probability==='number'?event.probability:null,sentence:event.sentence,subject:(event.subject||[]).filter(fits),response:(event.response||[]).filter(fits),
     sentenceText:slice([event.sentence]),subjectText:slice(event.subject||[]),responseText:slice(event.response||[])}));
-  return view.length?view:null;
+  return view.length?mergeEventSentences(view,text):null;
+}
+// Two events on near-identical sentences show as one mark: their sentences
+// merge into the span covering both, and the mark's popover lists every
+// label with the text once (eventTipView). The rule (nearSameSpan,
+// eventSpanGroups) lives in event-spans.js, shared with the timeline and
+// fingerprint ribbons. Each event keeps its id (and its own range as
+// ownSentence), so a link to either still selects the merged mark.
+function mergeEventSentences(view,text){
+  const merged=[...view];
+  for(const group of eventSpanGroups(view.map(event=>event.sentence))){
+    const span=[Math.min(...group.map(index=>view[index].sentence[0])),Math.max(...group.map(index=>view[index].sentence[1]))];
+    for(const index of group){const event=view[index];if(span[0]!==event.sentence[0]||span[1]!==event.sentence[1])merged[index]={...event,ownSentence:event.sentence,sentence:span,sentenceText:text.slice(span[0],span[1]).trim()}}
+  }
+  return merged;
+}
+// What one mark's popover shows: each label once (the likelier, if a kind
+// repeats), then each distinct text once: what was said, what it was about,
+// what it did next (followUp picks the clause worth showing) and the earlier
+// text it points back at. Text already said is not repeated under another
+// heading.
+function eventTipView(events,followUp=event=>event.responseText){
+  const labels=new Map();for(const event of events){const key=event.group+'|'+event.kind,seen=labels.get(key);if(!seen||(event.probability??0)>(seen.probability??0))labels.set(key,{label:event.label,group:event.group,kind:event.kind,probability:event.probability})}
+  const once=values=>[...new Set(values.map(value=>String(value||'').trim()).filter(Boolean))];
+  const said=once(events.map(event=>event.sentenceText)),fresh=values=>once(values).filter(value=>!said.includes(value));
+  const fields=[['Said',said],['About',fresh(events.map(event=>event.subjectText))],['What it did next',fresh(events.map(followUp))],['Points back at',once(events.map(event=>event.target?.text?'“'+event.target.text+'”':''))]];
+  return {labels:[...labels.values()],fields:fields.filter(([,values])=>values.length)};
 }
 // The distinct sentences a message's events mark, in text order: the events'
 // own sentences, and their subject and response sentences (context).
@@ -526,11 +1185,420 @@ function eventsAtMark(events,mark){
   if(classes.includes('event-context')){const range=spans.context[span];return events.filter(event=>[...event.subject,...event.response].some(item=>same(item,range)))}
   const range=spans.sentences[span];return events.filter(event=>same(event.sentence,range));
 }
+// Engagement labels (engagement.go, engagementAttacher): spans of what a
+// person typed, each with a label of one dimension (label "bounds.scope" is
+// dimension "bounds") and the model's score. Ranges are UTF-16 offsets of the
+// message's stored text, so they apply only where the reader shows that text
+// unchanged. The reader underlines each span in its dimension's colour; a
+// colour is a slot of a palette of ENGAGEMENT_SLOTS. A slot is only a colour:
+// what identifies a dimension everywhere else (its Key chip, its hide key,
+// its timeline row and letter) is its id. The known dimensions keep this
+// order. One the reader has not met (a retrained model's) takes a colour by
+// its name, so it can share a known dimension's colour, never its chip or
+// its hide.
+const ENGAGEMENT_DIMENSIONS=['intent','grounding','bounds','acceptance','rights','evaluation','inquiry','authorship','register'],ENGAGEMENT_SLOTS=9;
+function engagementSlot(dimension){
+  const known=ENGAGEMENT_DIMENSIONS.indexOf(dimension);if(known>=0)return known;
+  let hash=0;for(const unit of String(dimension))hash=(hash*31+unit.charCodeAt(0))>>>0;return hash%ENGAGEMENT_SLOTS;
+}
+function engagementSpanDimension(span){return span?.dimension||String(span?.label??'').split('.')[0]}
+// The colours of the dimensions shown together (present, their ids): before
+// two share one, a dimension the reader has not met takes a palette slot
+// that none of them uses (the lowest, in id order); only when the palette is
+// used up does it share, by its name.
+function engagementSlots(present){
+  const ids=[...new Set((present||[]).map(String))],used=new Set(ids.map(id=>ENGAGEMENT_DIMENSIONS.indexOf(id)).filter(slot=>slot>=0)),slots=new Map();
+  for(const id of ids.sort()){
+    let slot=ENGAGEMENT_DIMENSIONS.indexOf(id);
+    if(slot<0){slot=Array.from({length:ENGAGEMENT_SLOTS},(_,at)=>at).find(at=>!used.has(at))??engagementSlot(id);used.add(slot)}
+    slots.set(id,slot);
+  }
+  return slots;
+}
+// Gives the spans of messages shown together (a conversation; a workspace's
+// lanes) their colours, as span.slot, when one of their dimensions is not a
+// known one; messageEngagementView reads it. Known dimensions need nothing.
+function engagementAssignSlots(messages){
+  const spans=(messages||[]).flatMap(message=>Array.isArray(message?.engagement)?message.engagement.filter(span=>span&&typeof span.label==='string'&&!ENGAGEMENT_UNDISPLAYED.has(span.label)):[]);
+  const present=[...new Set(spans.map(engagementSpanDimension))];
+  if(present.every(id=>ENGAGEMENT_DIMENSIONS.includes(id)))return messages;
+  const slots=engagementSlots(present);for(const span of spans)span.slot=slots.get(engagementSpanDimension(span));
+  return messages;
+}
+// A dimension's key among the hidden highlights (reader_highlight_hidden):
+// engagement:<dimension id>, as the Timeline's `human` section names it.
+function engagementKey(dimension){return 'engagement:'+dimension}
+// Hidden highlight keys as they are used now: an engagement hide saved by
+// colour slot (engagement:eng-slot-N, when the known dimensions were the
+// only ones) reads as that slot's known dimension.
+function readerHighlightHidden(keys){
+  return [...new Set((Array.isArray(keys)?keys:[]).map(key=>{const slot=/^engagement:eng-slot-(\d+)$/.exec(String(key));return slot&&ENGAGEMENT_DIMENSIONS[Number(slot[1])]?engagementKey(ENGAGEMENT_DIMENSIONS[Number(slot[1])]):key}))];
+}
+// What the page calls each dimension: one word, each with its own first
+// letter (the letter is its mark on the timeline). Display only: labels,
+// stored keys and the API keep the model's ids (acceptance.*, rights.*, ...).
+const ENGAGEMENT_DIMENSION_NAMES={intent:'Intent',grounding:'Grounding',bounds:'Bounds',acceptance:'Verification',rights:'Delegation',evaluation:'Evaluation',inquiry:'Questions',authorship:'Authorship',register:'Tone'};
+function engagementDimensionName(dimension){return ENGAGEMENT_DIMENSION_NAMES[dimension]||engagementName(dimension)}
+// Labels the page never shows: no underline, popover row, Key chip or
+// timeline marker. The pass still computes and stores them, and the API
+// still returns them (register.filler will tell typed from dictated text).
+const ENGAGEMENT_UNDISPLAYED=new Set(['register.filler']);
+function engagementName(id){const words=String(id??'').replace(/[._-]+/g,' ').trim();return words?words[0].toUpperCase()+words.slice(1):''}
+// The page shows a label only when the model's score reaches
+// ENGAGEMENT_MIN_SCORE; the pass stores more (engagement.go keeps 0.5 and
+// up), so this one number sets what underlines, popovers, the Key and the
+// timeline all show.
+const ENGAGEMENT_MIN_SCORE=0.7;
+const ENGAGEMENT_WORD=/[\p{L}\p{N}\p{M}_'\u2019]/u;
+// The word around text[at] within typed text ([start,end), or null between
+// words): the model labels word pieces, so a span can start or stop inside a
+// word. typed(at) says whether the person typed that character.
+function engagementWordAt(text,at,typed=()=>true){
+  const word=index=>{
+    if(index<0||index>=text.length||!typed(index))return false;
+    const unit=text.charCodeAt(index),low=unit>=0xDC00&&unit<=0xDFFF&&index>0;
+    return ENGAGEMENT_WORD.test(String.fromCodePoint(text.codePointAt(low?index-1:index)));
+  };
+  if(!word(at))return null;
+  let start=at,end=at+1;while(word(start-1))start--;while(word(end))end++;
+  return[start,end];
+}
+// A span as the page draws it: without the blanks around it, each edge that
+// falls inside a word moved to the nearer end of that word (outward on a
+// tie), and null when it is only part of one word or nothing is left.
+function engagementSnap(text,start,end,typed=()=>true){
+  const trim=()=>{while(start<end&&/\s/.test(text[start]))start++;while(end>start&&/\s/.test(text[end-1]))end--;return start<end};
+  if(!trim())return null;
+  const first=engagementWordAt(text,start,typed),last=engagementWordAt(text,end-1,typed);
+  if(first&&last&&first[0]===last[0]&&(start>first[0]||end<first[1]))return null;
+  if(first&&start>first[0])start=start-first[0]<=first[1]-start?first[0]:first[1];
+  if(last&&end<last[1])end=last[1]-end<=end-last[0]?last[1]:last[0];
+  return trim()?[start,end]:null;
+}
+function messageEngagementView(message,text=displayText(message),writing=humanWritingMask(message,text),min=ENGAGEMENT_MIN_SCORE){
+  const spans=message?.engagement;if(message?.role!=='user'||!Array.isArray(spans)||!spans.length||text!==String(message.text??'')||!writing.includes('1'))return null;
+  const typed=at=>writing[at]==='1',view=[];
+  for(const span of spans){
+    if(!(span&&typeof span.label==='string'&&span.label&&!ENGAGEMENT_UNDISPLAYED.has(span.label)&&Number.isInteger(span.start)&&Number.isInteger(span.end)&&span.start>=0&&span.start<span.end&&span.end<=text.length))continue;
+    const score=typeof span.score==='number'?span.score:null;if(score!==null&&score<min)continue;
+    const range=engagementSnap(text,span.start,span.end,typed);if(!range||!writing.slice(range[0],range[1]).includes('1'))continue;
+    const dimension=engagementSpanDimension(span),rest=span.label.startsWith(dimension+'.')?span.label.slice(dimension.length+1):span.label,slot=Number.isInteger(span.slot)&&span.slot>=0&&span.slot<ENGAGEMENT_SLOTS?span.slot:engagementSlot(dimension);
+    view.push({label:span.label,dimension,key:engagementKey(dimension),slot,className:'eng-slot-'+slot,name:engagementName(rest),dimensionName:engagementDimensionName(dimension),score,start:range[0],end:range[1]});
+  }
+  return view.length?view:null;
+}
+// The timeline's Human events: one marker for each annotation (a displayed
+// span) in a person's message, in text order. position is where it starts in
+// the message (0 to 1), text what it covers; className is its dimension's
+// slot, as in the Key, and title its label as the popover names it.
+function engagementTimeline(messages){
+  return(messages||[]).flatMap(message=>{
+    const view=messageEngagementView(message);if(!view)return[];
+    const text=String(message.text??''),length=Math.max(1,text.length);
+    return engagementEvents(message.id,view.map(span=>({span,position:span.start/length,text:text.slice(span.start,span.end)})));
+  });
+}
+// One message's markers from its annotations ({span, position, text}), in
+// text order, then colour, then as given.
+function engagementEvents(messageID,annotations){
+  return annotations.map((annotation,index)=>({...annotation,index})).sort((a,b)=>a.position-b.position||a.span.slot-b.span.slot||a.index-b.index).map(({span,position,text,index})=>({id:messageID+':'+index,message_id:messageID,slot:span.slot,className:span.className,dimension:span.dimension,name:span.dimensionName,
+    label:span.label,labelName:span.name||span.dimensionName,title:span.name&&span.name!==span.dimensionName?`${span.dimensionName} · ${span.name}`:span.dimensionName,score:span.score,start:span.start,end:span.end,position,text:shortText(text,180)}));
+}
+// The same markers for a workspace Timeline lane, whose messages carry no
+// text but an excerpt of it (engagement.go, attachLaneEngagement):
+// engagement_text, the parts of the text around the spans; engagement, the
+// spans, indexing the excerpt; engagement_typed, the ranges of the excerpt
+// the person typed; and engagement_at ([excerpt offset, message offset] of
+// each part) with engagement_length, the message's, to place a span in the
+// message. The excerpt stands in for the message, so every display rule
+// above applies as it does in the reader; start and end of a marker here
+// index the excerpt.
+function engagementLaneTimeline(messages){
+  return(messages||[]).flatMap(message=>{
+    const text=message?.engagement_text;if(typeof text!=='string')return[];
+    const writing=Array.from({length:text.length},()=>'0');
+    for(const range of Array.isArray(message.engagement_typed)?message.engagement_typed:[])for(let at=Math.max(0,range?.[0]|0);at<Math.min(text.length,range?.[1]|0);at++)writing[at]='1';
+    const view=messageEngagementView({role:message.role,text,engagement:message.engagement},text,writing.join(''));if(!view)return[];
+    const parts=Array.isArray(message.engagement_at)&&message.engagement_at.length?message.engagement_at:[[0,0]],length=Math.max(1,Number(message.engagement_length)||text.length);
+    const inMessage=at=>{let part=parts[0];for(const next of parts){if(next[0]>at)break;part=next}return part[1]+at-part[0]};
+    return engagementEvents(message.id,view.map(span=>({span,position:Math.max(0,Math.min(1,inMessage(span.start)/length)),text:text.slice(span.start,span.end)})));
+  });
+}
+// The Key hides engagement by dimension: a key is engagement:<dimension id>
+// (engagementKey), and shown (a set of keys; null is all) says which
+// dimensions are on.
+function engagementShown(spans,shown=null){return(spans||[]).filter(span=>!shown||shown.has(span.key??engagementKey(span.dimension)))}
+// The marks of a card an annotation covers: the eng-at-N class of each
+// segment within [start,end).
+function engagementSpanMarks(segments,start,end){
+  return(segments||[]).flatMap((segment,index)=>segment.start>=start&&segment.end<=end?['eng-at-'+index]:[]);
+}
+// The stretches of text under one set of spans, in text order: where spans
+// overlap, each stretch lists the spans (indexes into view) covering it.
+function engagementSegments(view){
+  const cuts=[...new Set((view||[]).flatMap(span=>[span.start,span.end]))].sort((a,b)=>a-b),segments=[];
+  for(let at=0;at+1<cuts.length;at++){
+    const start=cuts[at],end=cuts[at+1],spans=[];view.forEach((span,index)=>{if(span.start<=start&&span.end>=end)spans.push(index)});
+    if(spans.length)segments.push({start,end,spans});
+  }
+  return segments;
+}
+// engagementMask overlays the segments on mask (a flag per character), only
+// over human writing ('1'): text the person did not type is never marked.
+// Each segment has its own flag, so Markdown keeps it a mark of its own whose
+// class names it (eng-at-N).
+const ENGAGEMENT_FLAG_BASE=0xA000,ENGAGEMENT_FLAG_SPANS=4000;
+function engagementMask(text,view,mask=''){
+  if(!view?.length||!mask.includes('1'))return mask;
+  const flags=Array.from({length:text.length},(_,index)=>mask[index]||'0');
+  engagementSegments(view).slice(0,ENGAGEMENT_FLAG_SPANS).forEach((segment,index)=>{const flag=String.fromCharCode(ENGAGEMENT_FLAG_BASE+index);for(let at=segment.start;at<segment.end&&at<flags.length;at++)if(flags[at]==='1')flags[at]=flag});
+  return flags.join('');
+}
+function engagementFlag(flag){const code=String(flag||'').charCodeAt(0)-ENGAGEMENT_FLAG_BASE;return code>=0&&code<ENGAGEMENT_FLAG_SPANS}
+// The spans under a mark, by the segment its class names.
+function engagementAtMark(view,segments,className){
+  const at=String(className??'').split(/\s+/).find(name=>/^eng-at-\d+$/.test(name)),segment=at?segments?.[Number(at.slice(7))]:null;
+  return segment?segment.spans.map(index=>view[index]):[];
+}
+// One underline per dimension among spans whose dimensions are on, in slot
+// order (then by id, for dimensions sharing a colour), each with the best
+// score of its spans.
+function engagementLayers(spans,shown=null){
+  const layers=new Map();
+  for(const span of engagementShown(spans,shown)){const id=span.dimension??span.className,layer=layers.get(id);if(!layer)layers.set(id,{slot:span.slot,className:span.className,dimension:id,key:span.key??engagementKey(id),dimensionName:span.dimensionName,score:span.score??0});else layer.score=Math.max(layer.score,span.score??0)}
+  return [...layers.values()].sort((a,b)=>a.slot-b.slot||String(a.dimension).localeCompare(String(b.dimension)));
+}
+// A stretch of text draws at most ENGAGEMENT_STACK underlines: more run into
+// the line below and leave most sentences under a thicket. Of the layers
+// (engagementLayers, already without dimensions the Key hides), the
+// best-scoring are drawn, a lower slot winning a tie; the popover still lists
+// every label, and hiding a dimension in the Key lets the next one show.
+const ENGAGEMENT_STACK=2;
+function engagementDrawn(layers,limit=ENGAGEMENT_STACK){
+  return new Set([...(layers||[])].sort((a,b)=>(b.score??0)-(a.score??0)||a.slot-b.slot).slice(0,limit).map(layer=>layer.dimension));
+}
+// The text of one annotation, from its marks in reading order: each part is
+// a mark's text and the text lying between it and the mark before (gap).
+// Marks that touch join as they are; anything between them (a pasted block,
+// a chip) becomes one space, so the copy holds only what the person typed.
+function engagementCopyText(parts){
+  let text='';
+  for(const part of parts||[]){const next=String(part?.text??'');if(!next)continue;text=text&&part.gap?text.replace(/\s+$/,'')+' '+next.replace(/^\s+/,''):text+next}
+  return text.trim();
+}
+// What a mark's popover lists: each label once with its best score, the
+// likeliest first, leaving out dimensions that are switched off. A row keeps
+// the range of the annotation it stands for, which is what its copy button
+// copies (engagementSpanMarks, engagementCopyText).
+function engagementTipView(spans,shown=null){
+  const rows=new Map();
+  for(const span of engagementShown(spans,shown)){
+    const seen=rows.get(span.label);if(!seen||(span.score??0)>(seen.score??0))rows.set(span.label,{label:span.label,title:span.name&&span.name!==span.dimensionName?`${span.dimensionName} · ${span.name}`:span.dimensionName,className:span.className,score:span.score,start:span.start,end:span.end});
+  }
+  return [...rows.values()].sort((a,b)=>(b.score??0)-(a.score??0)||a.label.localeCompare(b.label));
+}
+// What lights up while the mark named by className is hovered: every
+// annotation (one span of view) over that stretch that the popover lists
+// (shown as in engagementTipView; the two-underline cap does not matter), end
+// to end. Each entry is a segment and the dimension slots to tint it with,
+// so where two such annotations overlap the segment carries both.
+function engagementHoverTints(view,segments,className,shown=null){
+  const at=String(className??'').split(/\s+/).find(name=>/^eng-at-\d+$/.test(name)),hovered=at?segments?.[Number(at.slice(7))]:null;if(!hovered)return[];
+  const lit=new Set(hovered.spans.filter(index=>!shown||shown.has(view[index].key??engagementKey(view[index].dimension))));
+  return segments.flatMap((segment,index)=>{const slots=[...new Set(segment.spans.filter(span=>lit.has(span)).map(span=>view[span].slot))].sort((a,b)=>a-b);return slots.length?[{segment:index,slots}]:[]});
+}
+// Human-writing marks are numbered so one can be hidden on its own. Marks
+// that engagement splits out of one stretch of writing keep that stretch's
+// number, so a stretch has the same number with or without engagement and a
+// saved hide (reader_highlight_hidden) stays on its text: a mark that
+// directly follows the last (joined) shares its number when either is an
+// engagement mark and both are plain writing or both are pieces of the same
+// event target.
+function writingMarkIndexes(marks){
+  const names=mark=>String(mark?.className??'').split(/\s+/),has=(mark,name)=>names(mark).includes(name),target=mark=>names(mark).find(name=>/^event-target-at-\d+$/.test(name))??null;let index=-1;
+  // Two marks side by side are one stretch when engagement alone divides them: both plain writing, or both pieces of the same target.
+  return marks.map((mark,at)=>{const last=marks[at-1];if(!(at&&mark.joined&&(has(mark,'engagement')||has(last,'engagement'))&&target(mark)===target(last)))index++;return index});
+}
 const MARK_CLASSES={'1':'human-written','2':'labeled-text'};
 function markClass(flag){
   if(MARK_CLASSES[flag])return MARK_CLASSES[flag];
+  if(engagementFlag(flag))return `human-written engagement eng-at-${flag.charCodeAt(0)-ENGAGEMENT_FLAG_BASE}`;
+  const both=flag.charCodeAt(0)-EVENT_TARGET_ENGAGEMENT_BASE;if(both>=0&&both<EVENT_TARGET_ENGAGEMENT_TARGETS*EVENT_TARGET_ENGAGEMENT_SEGMENTS)return `event-target event-target-at-${Math.floor(both/EVENT_TARGET_ENGAGEMENT_SEGMENTS)} human-written engagement eng-at-${both%EVENT_TARGET_ENGAGEMENT_SEGMENTS}`;
+  const target=flag.charCodeAt(0)-EVENT_TARGET_BASE;if(target>=0&&target<EVENT_TARGET_SPANS*2)return `event-target event-target-at-${target>>1}`+(target&1?' human-written':'');
   const code=flag.charCodeAt(0)-EVENT_FLAG_BASE;if(!(code>=0&&code<EVENT_FLAG_SPANS*8))return '';
   const span=code>>3,group=code&7;return group===EVENT_CONTEXT_GROUP?`event-context event-at-${span}`:`agent-event ${eventGroupClass(EVENT_GROUPS[group]?.[0])} event-at-${span}`;
+}
+// Two-sided events (agent_event_links.go): an event whose sentence points
+// back at earlier text (a quote of the person's words, a prompt sentence it
+// shares specific words with) carries a target: the message, UTF-16 offsets
+// into its stored text, and those words. The reader pairs both ends: the
+// observation (the event's sentence) and its target, numbered in reading
+// order. eventLinks lists the pairs whose target is in this conversation.
+function eventLinks(messages){
+  const present=new Set(messages.map(message=>message.id).filter(Boolean)),links=[],seen=new Set();
+  // Events on one (merged) sentence that point at the same text are one
+  // pair: one number, one arc, every label. ids lists them all; id is the
+  // first, the one the reader writes to reader_event_link.
+  const sameTarget=(a,b)=>a.message_id===b.message_id&&(Number.isInteger(a.start)&&Number.isInteger(b.start)&&Number.isInteger(a.end)&&Number.isInteger(b.end)?nearSameSpan([a.start,a.end],[b.start,b.end]):String(a.text??'')===String(b.text??''));
+  for(const message of messages){
+    const view=messageEventView(message);if(!view)continue;
+    for(const event of view)if(event.id&&event.target&&present.has(event.target.message_id)&&!seen.has(event.id)){seen.add(event.id);
+      const weak=event.target.method==='overlap'||!event.target.strong;
+      const pair=links.find(link=>link.message===message.id&&link.sentence[0]===event.sentence[0]&&link.sentence[1]===event.sentence[1]&&sameTarget(link.target,event.target));
+      if(pair){pair.ids.push(event.id);if(!pair.groups.includes(event.group))pair.groups.push(event.group);if(!pair.labels.includes(event.label))pair.labels.push(event.label);pair.weak=pair.weak&&weak;continue}
+      links.push({id:event.id,ids:[event.id],n:0,message:message.id,target:event.target,group:event.group,groups:[event.group],label:event.label,labels:[event.label],kind:event.kind,sentence:event.sentence,sentenceText:event.sentenceText,weak})}
+  }
+  links.forEach((link,index)=>{link.n=index+1});
+  return links;
+}
+// The pair an event id belongs to (any of its merged events' ids).
+function eventLinkFor(links,id){return links.find(link=>link.id===id||link.ids?.includes(id))||null}
+// A merged pair remains available while any of its event groups is visible.
+function eventLinkHighlightKeys(link){return (link.groups||[link.group]).map(group=>'events:'+eventGroupClass(group))}
+function eventLinkVisible(link,shown){return !!link&&eventLinkHighlightKeys(link).some(key=>shown.has(key))}
+// The spans a message's targets cover in the text the reader shows, each
+// with the links pointing at it. Offsets apply when the shown text is the
+// stored text there; otherwise (a prompt shown without its harness wrapper)
+// the target's words are found in it. A target whose words are not shown is
+// left out.
+function eventTargetSpans(text,links){
+  const spans=new Map();
+  for(const link of links){
+    const t=link.target,words=String(t.text??'');if(!words)continue;
+    let start=Number.isInteger(t.start)&&text.slice(t.start,t.end)===words?t.start:text.indexOf(words);
+    if(start<0){const at=text.toLowerCase().indexOf(words.toLowerCase());if(at<0)continue;start=at}
+    const key=start+':'+(start+words.length),span=spans.get(key)??{range:[start,start+words.length],links:[]};span.links.push(link.id);spans.set(key,span);
+  }
+  return [...spans.values()].sort((a,b)=>a.range[0]-b.range[0]||a.range[1]-b.range[1]);
+}
+// eventTargetMask paints target spans over mask (see eventMask): one flag per
+// span, keeping whether the text under it was the person's writing, so a
+// target in a prompt stays marked as human-written too. Where a target lies
+// over an engagement segment (engagementMask) the flag names both, so the
+// text is cut at the boundaries of either and each piece is a mark carrying
+// the target's classes and the segment's (eng-at-N): an annotation a target
+// splits still tints and copies whole, by its segments. Past the first
+// EVENT_TARGET_ENGAGEMENT_TARGETS targets or SEGMENTS segments of a message
+// the target alone is marked.
+const EVENT_TARGET_BASE=0xFA00,EVENT_TARGET_SPANS=400;
+const EVENT_TARGET_ENGAGEMENT_BASE=0x4000,EVENT_TARGET_ENGAGEMENT_TARGETS=32,EVENT_TARGET_ENGAGEMENT_SEGMENTS=512;
+// The engagement segment a flag names, alone or under a target; -1 for none.
+function engagementFlagSegment(flag){
+  const code=String(flag||'').charCodeAt(0);if(engagementFlag(flag))return code-ENGAGEMENT_FLAG_BASE;
+  const both=code-EVENT_TARGET_ENGAGEMENT_BASE;return both>=0&&both<EVENT_TARGET_ENGAGEMENT_TARGETS*EVENT_TARGET_ENGAGEMENT_SEGMENTS?both%EVENT_TARGET_ENGAGEMENT_SEGMENTS:-1;
+}
+function eventTargetMask(text,spans,mask=''){
+  if(!spans?.length)return mask;
+  const flags=Array.from({length:text.length},(_,index)=>mask[index]||'0');
+  spans.slice(0,EVENT_TARGET_SPANS).forEach((span,index)=>{for(let at=span.range[0];at<span.range[1]&&at<flags.length;at++){
+    const segment=engagementFlagSegment(flags[at]),written=flags[at]==='1'||segment>=0||(flags[at].charCodeAt(0)-EVENT_TARGET_BASE>=0&&flags[at].charCodeAt(0)-EVENT_TARGET_BASE<EVENT_TARGET_SPANS*2&&(flags[at].charCodeAt(0)-EVENT_TARGET_BASE)%2===1);
+    flags[at]=String.fromCharCode(segment>=0&&segment<EVENT_TARGET_ENGAGEMENT_SEGMENTS&&index<EVENT_TARGET_ENGAGEMENT_TARGETS?EVENT_TARGET_ENGAGEMENT_BASE+index*EVENT_TARGET_ENGAGEMENT_SEGMENTS+segment:EVENT_TARGET_BASE+index*2+(written?1:0));
+  }});
+  return flags.join('');
+}
+// The other end of a link: from an observation to its target, and back.
+function eventLinkEnd(links,id,from){
+  const link=eventLinkFor(links,id);if(!link)return null;
+  return from==='target'?{side:'observation',message:link.message,link}:{side:'target',message:link.target.message_id,link};
+}
+// Highlights: the kinds of marks the reader can show, each switched on or
+// off on its own. Each is a boolean view field, so a link keeps the choice,
+// with the last choice saved as the fallback for links without it. Human
+// writing and the classifiers' marks are shown unless turned off.
+// Showing a highlight only toggles a class on the panel (show-<id>); the
+// marks are always rendered. Where a message's labels and its human writing
+// cover the same text, the label's hue wins.
+const READER_HIGHLIGHTS=[
+  {id:'writing',field:'reader_writing',pref:'pharos-reader-writing',fallback:true,label:'Human writing',title:'Text a person typed or dictated. Pasted, quoted, templated and re-sent text stays plain.'},
+  {id:'engagement',field:'reader_engagement',pref:'pharos-reader-engagement',fallback:true,label:'Engagement',title:'How the person works with the agent, read from what they typed (span classifier, preview): each span is underlined in its dimension\'s style. Hover an underlined span for its labels.'},
+  {id:'events',field:'reader_events',pref:'pharos-reader-events',fallback:true,label:'Agent events',title:'Sentences where an agent hit friction, learned something or made a choice you may not see (sentence classifier). Hover a highlighted sentence for its events.'},
+  {id:'labels',field:'reader_labels',pref:'pharos-reader-labels',fallback:true,label:'Message labels',title:'Tint each message card by what it does (message classifier). Hover the card for its labels.'}];
+// The highlights a conversation offers, in READER_HIGHLIGHTS order: whether
+// each has anything to show (available, else why not in title), a status
+// note when needed, and a legend of the hues it uses here (label families or
+// event groups). Human writing is offered only where there is some; a
+// classifier only once it has run on the library, so its row can say why a
+// conversation has nothing to show.
+function readerHighlightOptions(conversation,messages,taxonomy=[]){
+  const options=[];
+  for(const option of READER_HIGHLIGHTS){
+    if(option.id==='writing'){if(messages.some(hasHumanWriting))options.push({...option,available:true,note:'',legend:[]});continue}
+    if(option.id==='engagement'){const summary=conversation?.engagement;if(!summary)continue;
+      const layers=engagementLayers(messages.flatMap(message=>messageEngagementView(message)||[]));
+      options.push({...option,available:layers.length>0,title:layers.length?option.title:'No engagement labels found in what was typed in this conversation',note:summary.pending?'Waiting to be read again after a change':'',
+        legend:layers.map(layer=>({name:layer.dimensionName,className:layer.className,key:layer.dimension}))});continue}
+    if(option.id==='events'){const summary=conversation?.agent_events;if(!summary)continue;
+      const views=messages.map(message=>messageEventView(message)).filter(Boolean),count=views.reduce((sum,view)=>sum+view.length,0),groups=new Set(views.flat().map(event=>event.group));
+      options.push({...option,available:count>0,title:count?option.title:'No agent events found in this conversation',note:summary.pending?'Waiting to be rebuilt for changed transcripts or session evidence; which messages these belong to may change':'',
+        legend:[...EVENT_GROUPS.filter(([group])=>groups.has(group)).map(([group])=>({name:group,className:eventGroupClass(group)})),...(views.flat().some(event=>event.target)?[{name:'Earlier text linked to an event',className:'event-target-legend'}]:[])]});continue}
+    const summary=conversation?.labels;if(!summary)continue;
+    const families=new Set(messages.map(message=>messageLabelView(message,taxonomy)?.family).filter(family=>family!==undefined));
+    options.push({...option,available:Boolean(summary.labeled),title:summary.labeled?option.title:'Pharos has not labeled this conversation yet',note:summary.pending?(summary.labeled?'Still labeling this conversation':'Not labeled yet'):'',
+      legend:[...LABEL_FAMILIES,['','Other']].filter(([key])=>families.has(key)).map(([key,name])=>({name,family:key}))});
+  }
+  return options;
+}
+// Whole-key defaults use the existing linked fields for every key section.
+const READER_KEY_PRESETS=[
+  {id:'last',label:'Last',note:'Restore your last selection of content, timeline and highlights.'},
+  {id:'all',label:'All',note:'Show all content, the full timeline and all text highlighting.',level:'all',highlights:true,timeline:true},
+  {id:'content',label:'Content only',note:'Show all content. Hide the timeline and all text highlighting.',level:'all',highlights:false,timeline:false},
+  {id:'quiet',label:'Quiet',note:'Show the timeline, text highlighting and all content except other usage and quota entries.',level:'all-minus-usage',highlights:true,timeline:true}
+];
+function readerKeyPresetValues(id){
+  const preset=READER_KEY_PRESETS.find(preset=>preset.id===id);if(!preset||id==='last')return null;
+  const shown=[...transcriptShown({level:preset.level})];
+  return{reader_filter_level:preset.level,reader_filter:shown,reader_hidden_tags:[],
+    ...Object.fromEntries(READER_HIGHLIGHTS.map(option=>[option.field,preset.highlights])),reader_highlight_hidden:[],
+    timeline_visibility:preset.timeline?{}:{sections:{values:[],excluded:false,allHidden:true}}};
+}
+function readerKeyLastNote(values){
+  const shown=new Set(values.reader_filter||[]),visible=TRANSCRIPT_CATEGORIES.filter(([id])=>shown.has(id)).map(([,label])=>label),hidden=TRANSCRIPT_CATEGORIES.filter(([id])=>!shown.has(id)).map(([,label])=>label);
+  const on=READER_HIGHLIGHTS.filter(option=>values[option.field]).map(option=>option.label),off=READER_HIGHLIGHTS.filter(option=>!values[option.field]).map(option=>option.label);
+  const parts=[hidden.length?`Content shown: ${visible.join(', ')||'none'}. Hidden: ${hidden.join(', ')}.`:'All content shown.',`Text highlighting shown: ${on.join(', ')||'none'}; hidden: ${off.join(', ')||'none'}.`];
+  const tags=values.reader_hidden_tags||[],marks=values.reader_highlight_hidden||[];
+  if(tags.length)parts.push(`Activity filters: ${tags.map(id=>{const show=id.startsWith('show:'),tag=show?id.slice(5):id;return (show?'show ':'hide ')+(transcriptTagParts(tag)?.[1]||tag)}).join(', ')}.`);
+  if(marks.length){const annotations=marks.filter(id=>id.startsWith('annotation:')).length,keys=marks.filter(id=>!id.startsWith('annotation:'));parts.push(`Highlight exclusions: ${[...keys,...annotations?[annotations+' individual annotation'+(annotations===1?'':'s')]:[]].join(', ')}.`)}
+  const timeline=values.timeline_visibility||{},entries=Object.entries(timeline);
+  if(!entries.length)parts.push('All timeline elements shown.');
+  else if(entries.length===1&&timeline.sections?.allHidden)parts.push('Timeline elements hidden.');
+  else parts.push('Timeline filters: '+entries.map(([section,selection])=>`${section}: ${selection.allHidden?'all hidden':selection.excluded?'hidden '+selection.values.join(', '):'only '+selection.values.join(', ')}`).join('; ')+'.');
+  return parts.join(' ');
+}
+function readerKeyPresetID(state,highlights,hidden=[],tags=[],timeline={}){
+  if(hidden.length||tags.length)return null;const shown=transcriptShown(state);
+  return READER_KEY_PRESETS.find(preset=>{
+    const values=readerKeyPresetValues(preset.id);if(!values)return false;
+    const expected=new Set(values.reader_filter);
+    return shown.size===expected.size&&[...shown].every(key=>expected.has(key))
+      &&READER_HIGHLIGHTS.every(option=>Boolean(highlights[option.field])===values[option.field])
+      &&JSON.stringify(timeline)===JSON.stringify(values.timeline_visibility);
+  })?.id||null;
+}
+// The ids of the highlights shown: a linked value (true or false) wins, then
+// the saved choice, then the option's fallback. One with nothing to show is off.
+function readerHighlightsShown(options,linked=()=>null,saved=(pref,fallback)=>fallback){
+  return new Set(options.filter(option=>{if(!option.available)return false;const value=linked(option.field);return typeof value==='boolean'?value:saved(option.pref,option.fallback)===true}).map(option=>option.id));
+}
+// A conversation only edits its available keys; other conversations' exclusions
+// survive ordinary selections. Whole-key defaults explicitly reset everything.
+function readerHighlightExclusions(hidden,all,selected){
+  const available=new Set(all),shown=new Set(selected);
+  return [...hidden.filter(key=>!available.has(key)),...all.filter(key=>!shown.has(key))];
+}
+// An individual annotation keeps its conversation, message, kind and span
+// identity in the same URL field as the reader's highlight exclusions.
+function readerAnnotationPrefix(conversation){return 'annotation:'+JSON.stringify([conversation]).slice(0,-1)+','}
+function readerAnnotationSpan(kind,className,writingIndex){
+  if(kind==='writing')return writingIndex;
+  const classes=String(className).split(/\s+/),at=classes.find(name=>/^event-(?:target-)?at-\d+$/.test(name));
+  return (classes.includes('event-context')?'context:':classes.includes('agent-event')?'sentence:':'target:')+at;
+}
+function readerAnnotationKey(conversation,message,kind,span){return 'annotation:'+JSON.stringify([conversation,message,kind,span])}
+// A sentence can carry several event groups. Its hue and tooltip follow the
+// likeliest remaining event when a group is hidden, without changing its text.
+function readerEventHighlights(events,shown){
+  return events.filter(event=>shown.has('events:'+eventGroupClass(event.group))).sort((a,b)=>(b.probability??0)-(a.probability??0));
 }
 function markdownText(text,mask=''){
   if(!/[^0]/.test(mask))return [text];
@@ -559,7 +1627,7 @@ function markdownLinkKind(href){
   if(href.startsWith('#'))return {kind:'fragment',icon:'link',detail:'Jump within this page'};
   if(href.startsWith('/')||href.startsWith('?')){
     const path=new URL(href,'http://pharos.invalid/').pathname;
-    const pages=['/','/home','/cards','/library','/settings','/settings/backups','/settings/libraries','/settings/sources','/settings/sync','/settings/optimization','/settings/mcp','/settings/header','/settings/layout','/settings/preferences','/settings/ask','/sources','/activity','/analyze','/tools','/health','/mcp','/findings'];
+    const pages=['/','/home','/cards','/library','/settings','/settings/backups','/settings/libraries','/settings/sources','/settings/sync','/settings/optimization','/settings/mcp','/settings/header','/settings/layout','/settings/preferences','/settings/projects','/settings/models','/settings/ask','/sources','/activity','/analyze','/tools','/health','/mcp','/findings'];
     if(pages.includes(path)||/^\/work\/[^/]+(?:\/conversation\/[^/]+)?$/.test(path)||/^\/conversation\/[^/]+$/.test(path))return {kind:'page',icon:'link',detail:'Open Pharos view'};
   }
   if(/^mailto:/i.test(href))return {kind:'mail',icon:'mail',detail:'Open in your email app'};
@@ -607,6 +1675,25 @@ function markdownInline(text,parent,depth=0,mask=''){
     }else{const double=token.startsWith('**')||token.startsWith('__')||token.startsWith('~~'),size=double?2:1;element=markdownElement(token.startsWith('~~')?'del':double?'strong':'em','');markdownInline(token.slice(size,-size),element,depth+1,flags.slice(size,-size))}
     parent.children.push(element);offset=match.index+token.length;
   }parent.children.push(...markdownText(text.slice(offset),mask.slice(offset)));
+  parent.children=markdownMarkRuns(parent.children);
+}
+// A highlight that crosses inline code, emphasis or a link is one mark: an
+// inline element whose text one mark covers entirely moves inside the mark
+// (mark[code[...]] rather than code[mark[...]]), and neighbours with the same
+// mark join it, so "hello `code` world" highlighted whole is one <mark>, not
+// three pieces with the code's padding between them. Only an element the
+// highlight starts or ends inside keeps its own mark.
+function markdownMarkRuns(children){
+  const covered=item=>{if(!item||typeof item==='string'||item.icon)return null;if(item.tag==='mark')return item.className;const only=item.children.length===1?item.children[0]:null;return only&&typeof only==='object'&&only.tag==='mark'?only.className:null};
+  const result=[];
+  for(const item of children){
+    const className=covered(item);if(className===null){result.push(item);continue}
+    const inner=item.tag==='mark'?item.children:[{...item,children:item.children[0].children}],last=result[result.length-1];
+    // Marks in result are this function's own copies, so extending one is safe.
+    if(last&&typeof last==='object'&&last.tag==='mark'&&last.className===className)last.children.push(...inner);
+    else result.push({...markdownElement('mark',className),children:[...inner]});
+  }
+  return result;
 }
 function markdownTree(text,depth=0,mask=''){
   let source=String(text);
@@ -637,6 +1724,22 @@ function markdownTree(text,depth=0,mask=''){
   }return root;
 }
 
+// File chips' history links (conversationFileLinks, work_files.go): each
+// call's files by the message that made the call and the path it named,
+// matched exactly, else by the file's path in its project. A file the
+// service did not link (a read outside a repository, a session not yet
+// derived) opens the Files page by its path, which finds it if it can.
+function fileLinkIndex(links){
+  const byMessage=new Map();
+  for(const link of Array.isArray(links)?links:[]){if(!link?.message_id||!link.url)continue;const list=byMessage.get(link.message_id)||[];list.push(link);byMessage.set(link.message_id,list)}
+  return(messageId,path,callId='')=>{
+    if(!path)return'';
+    const list=(byMessage.get(messageId)||[]).filter(link=>!callId||!link.call_id||link.call_id===callId),clean=String(path).replace(/^\.\//,'');
+    const found=list.find(link=>link.path===path)||list.find(link=>link.file&&(link.file===clean||clean.endsWith('/'+link.file)||String(link.path||'').endsWith('/'+clean)));
+    return found?found.url:'/files?'+new URLSearchParams({file:path});
+  };
+}
+
 // Exact source identities take precedence. Aggregated time rows resolve to the
 // nearest retained event; equal distances prefer the earlier recorded event.
 function transcriptAnchor(messages,{message='',at='',call=''}={}){
@@ -645,4 +1748,62 @@ function transcriptAnchor(messages,{message='',at='',call=''}={}){
   let best=null,distance=Infinity,bestTime=Infinity;
   for(const item of messages){const when=Date.parse(item.created_at),delta=Math.abs(when-time);if(!item.id||!Number.isFinite(when))continue;if(delta<distance||delta===distance&&when<bestTime){best=item.id;distance=delta;bestTime=when}}
   return best;
+}
+
+// Related work (peer_reader.go): top-level work linked to a workspace by
+// generic evidence, such as a review that read an implementation's diff and
+// whose findings were pasted back. A work page shows it as a strip of chips
+// (dashed when uncertain), certain work's sessions in its hierarchy, and
+// markers on the messages a hand-off is anchored on.
+const PEER_ROLE_LABELS={reviewer:'Reviewer',implementer:'Implementer',related:'Related work'};
+function peerRoleLabel(role){return PEER_ROLE_LABELS[role]||PEER_ROLE_LABELS.related}
+function peerCount(value,one,many){const n=Number(value)||0;return`${n.toLocaleString()} ${n===1?one:many}`}
+// One stored link as a sentence, from a page's point of view: names(id)
+// says "this workspace", "it" (the peer) or another title. Links are
+// directional: a read link's from side wrote the lines its to side saw; a
+// copy link's from side wrote the reply its to side's prompt quoted.
+function peerReasonText(reason,names=id=>id){
+  const d=reason?.details||{},certain=reason?.confidence==='high'?'':' (uncertain)',from=names(reason?.from_workspace_id),to=names(reason?.to_workspace_id);
+  const subject=name=>name.charAt(0).toUpperCase()+name.slice(1),possessive=name=>name==='it'?'its':`${name}’s`;
+  if(reason?.kind==='read_written_by'){
+    const timing=d.timing==='start'?`, starting as ${from} finished a turn`:d.timing==='return'?`; ${possessive(from)} next prompt followed`:'';
+    return`${subject(to)} saw ${peerCount(d.lines,'line','lines')} ${from} wrote, in ${d.basis==='diff'?'a diff':'files it read'}${timing}${certain}`;
+  }
+  if(reason?.kind==='copied_into')return`A prompt in ${to} quoted ${peerCount(d.words,'word','words')} of a reply in ${from}${certain}`;
+  if(reason?.kind==='tl1_candidate')return`Both are TL1 tasks on the same candidate${certain}`;
+  return`Related${certain}`;
+}
+// A peer's chip. page names the workspace shown; titles names other work.
+function peerChip(peer,{page='',titles={}}={},now=Date.now()){
+  const certain=peer.confidence==='high';
+  const names=id=>id===page?'this workspace':id===peer.workspace_id?'it':titles[id]||'other related work';
+  const reasons=(peer.evidence||[]).map(reason=>peerReasonText(reason,names));
+  if(peer.via)reasons.push(`Linked through ${titles[peer.via]||'other related work'}`);
+  return{
+    label:[peerRoleLabel(peer.role),peer.title||'Untitled work',peer.provider,relativeAge(peer.started_at,now)].filter(Boolean).join(' · '),
+    href:'/work/'+encodeURIComponent(peer.workspace_id),certain,reasons,
+    title:[certain?'Related work':'Possibly related work · uncertain',...reasons].join('\n'),
+  };
+}
+// The strip's order: most recently started first, whatever the certainty
+// (uncertain chips stay dashed); work with no start time goes last.
+function peersByAge(peers){
+  const started=peer=>{const time=new Date(peer?.started_at??NaN).getTime();return Number.isFinite(time)?time:-Infinity};
+  return[...peers||[]].sort((a,b)=>started(b)-started(a)||0);
+}
+const HANDOFF_VERBS={'copied_into:in':'Quotes','copied_into:out':'Quoted in','read_written_by:in':'Shows lines from','read_written_by:out':'Read in'};
+// The markers a message carries, one per linked message, certain first.
+function handoffMarkers(message){
+  const markers=new Map();
+  for(const direction of['in','out'])for(const h of message?.['handoffs_'+direction]||[]){
+    const verb=HANDOFF_VERBS[`${h.kind}:${direction}`];if(!verb||!h.message_id)continue;
+    const key=`${direction}:${h.message_id}`,certain=h.confidence==='high',known=markers.get(key);
+    if(known&&(known.certain||!certain))continue;
+    const params=new URLSearchParams({message:h.message_id});
+    markers.set(key,{label:`${verb} ${h.title||'Untitled work'}`,certain,
+      workspace:h.workspace_id,conversation:h.conversation_id,message:h.message_id,
+      href:`/work/${encodeURIComponent(h.workspace_id)}/conversation/${encodeURIComponent(h.conversation_id)}?${params}`,
+      title:certain?'Hand-off between related work':'Possible hand-off between related work · uncertain'});
+  }
+  return[...markers.values()].sort((a,b)=>Number(b.certain)-Number(a.certain));
 }

@@ -28,7 +28,7 @@ func (index queryTextIndex) version() string {
 	if index.table == toolQueryFacts.table {
 		janName, janOffset := time.Date(2020, 1, 1, 12, 0, 0, 0, time.Local).Zone()
 		julName, julOffset := time.Date(2020, 7, 1, 12, 0, 0, 0, time.Local).Zone()
-		return fmt.Sprintf("%s/day-v1/%s/%s:%d/%s:%d", toolRollupVersion, toolRollupTimezone(), janName, janOffset, julName, julOffset)
+		return fmt.Sprintf("%s/day-v1/%s/%s:%d/%s:%d", toolQueryFactsVersion, toolRollupTimezone(), janName, janOffset, julName, julOffset)
 	}
 	return "1"
 }
@@ -95,7 +95,7 @@ func (c *Catalog) queryTextDataset(ctx context.Context, dataset string, table sq
 	if err == nil && dataset == "tool_calls" {
 		var built string
 		err = c.reader().QueryRowContext(ctx, "SELECT COALESCE((SELECT value FROM meta WHERE key='tool_query_facts_ready'),'')").Scan(&built)
-		table.scalarFacts = built == toolRollupVersion || strings.HasPrefix(built, toolRollupVersion+"/day-v1/")
+		table.scalarFacts = built == toolQueryFactsVersion || strings.HasPrefix(built, toolQueryFactsVersion+"/day-v1/")
 		table.calendarFacts = built == toolQueryFacts.version()
 	}
 	return table, err
@@ -115,7 +115,8 @@ func (c *Catalog) indexQueryTextBatch(ctx context.Context, index queryTextIndex)
 		return false, err
 	}
 	var cursor, last sql.NullInt64
-	calendarUpgrade := index.table == toolQueryFacts.table && (ready == toolRollupVersion || strings.HasPrefix(ready, toolRollupVersion+"/day-v1/"))
+	var count int
+	calendarUpgrade := index.table == toolQueryFacts.table && (ready == toolQueryFactsVersion || strings.HasPrefix(ready, toolQueryFactsVersion+"/day-v1/"))
 	from := index.from
 	if calendarUpgrade {
 		from = "FROM tool_query_facts t"
@@ -124,9 +125,17 @@ func (c *Catalog) indexQueryTextBatch(ctx context.Context, index queryTextIndex)
 	if err = tx.QueryRowContext(ctx, "SELECT CAST(value AS INTEGER) FROM meta WHERE key=?", cursorKey).Scan(&cursor); err != nil && err != sql.ErrNoRows {
 		return false, err
 	}
-	if err = tx.QueryRowContext(ctx, "SELECT MAX(id) FROM (SELECT "+index.rowID+" id "+from+" WHERE "+index.rowID+">? ORDER BY "+index.rowID+" LIMIT ?)", cursor.Int64, queryTextIndexBatch).Scan(&last); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT MAX(id),COUNT(*) FROM (SELECT "+index.rowID+" id "+from+" WHERE "+index.rowID+">? ORDER BY "+index.rowID+" LIMIT ?)", cursor.Int64, queryTextIndexBatch).Scan(&last, &count); err != nil {
 		return false, err
 	}
+	phase, unit := "Indexing tool command text", "tool call"
+	if index.table == humanQueryText.table {
+		phase, unit = "Indexing writing text", "message"
+	} else if index.table == toolQueryFacts.table {
+		phase = "Indexing tool query facts"
+	}
+	completed := maintenanceBatch(ctx, tx, phase, unit, count,
+		"SELECT count(*) "+from+" WHERE "+index.rowID+">?", cursor.Int64)
 	if !last.Valid {
 		_, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", index.table+"_ready", index.version())
 		if err == nil {
@@ -157,21 +166,27 @@ func (c *Catalog) indexQueryTextBatch(ctx context.Context, index queryTextIndex)
 	if err != nil {
 		return false, err
 	}
-	return last.Valid, tx.Commit()
+	err = tx.Commit()
+	completed(err)
+	return last.Valid, err
 }
 func (c *Catalog) maintainQueryTextIndexes(ctx context.Context) {
+	schedule := searchScheduleGate{}
 	// One operation for the whole build, forgotten if there was nothing to build.
-	pass := c.beginPass(ctx, "maintenance.search.query", triggerVersion)
+	var pass *daemonPass
 	defer func() { pass.end(nil) }()
 	for _, index := range []queryTextIndex{humanQueryText, toolQueryText, toolQueryFacts} {
 		for {
-			if c.queries.wait(ctx) != nil {
+			if schedule.wait(ctx, c, &pass) != nil || c.queries.wait(pass.context(ctx)) != nil {
 				return
+			}
+			if pass == nil {
+				pass = c.beginPass(ctx, "maintenance.search.query", triggerVersion)
 			}
 			var more bool
 			var err error
-			pass.runIO(func() { more, err = c.indexQueryTextBatch(ctx, index) })
-			if more {
+			pass.runIO(ctx, func(ctx context.Context) { more, err = c.indexQueryTextBatch(ctx, index) })
+			if more && err == nil {
 				pass.worked(1)
 			}
 			if ctx.Err() != nil {

@@ -1,6 +1,6 @@
 // Interface preferences and saved views live in the library, so they follow it
 // between Macs. window.pharosPrefs (internal/archive/assets/ui.py) keeps them
-// there, or in the web view's storage on a shared page with no library.
+// there, or in the web view's storage on a page with no library.
 export interface Preferences {
   get<T>(key: string, fallback: T): T;
   set(key: string, value: unknown): void;

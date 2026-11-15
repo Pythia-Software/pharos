@@ -28,7 +28,31 @@ func TestParseShellCommand(t *testing.T) {
 		{"sed -n '1,20p' file.go", "sed", "", "read", 1, false, false, false},
 		{"echo '---' ; rg -n 'a|b' src", "rg", "", "search", 2, false, false, false},
 		{"git commit -m \"$(cat <<'EOF'\nFix it; don't break\n\nCo-Authored-By: x\nEOF\n)\" && git push", "git", "commit", "vcs", 2, false, false, true},
-		{"cat > out.txt <<EOF\nline one && two\nEOF\nls -la", "cat", "", "read", 2, false, true, true},
+		{"cat > out.txt <<EOF\nline one && two\nEOF\nls -la", "cat", "", "file-write", 2, false, true, true},
+		{"cat a.go 2>/dev/null", "cat", "", "read", 1, false, true, false},
+		{"npx tsc --noEmit", "npx", "tsc", "build", 1, false, false, false},
+		{"npx -y vitest run", "npx", "vitest", "test", 1, false, false, false},
+		{"npx next dev", "npx", "next", "run", 1, false, false, false},
+		{"pnpm --filter web exec playwright test", "pnpm", "exec playwright", "test", 1, false, false, false},
+		{"pnpm dlx prettier --check .", "pnpm", "dlx prettier", "test", 1, false, false, false},
+		{"npm exec -- prettier --check .", "npm", "exec prettier", "test", 1, false, false, false},
+		{"npm exec --yes -- eslint .", "npm", "exec", "test", 1, false, false, false},
+		{"pnpm exec cat > out.txt", "pnpm", "exec cat", "file-write", 1, false, true, false},
+		{"npx prettier --write . 2>/dev/null", "npx", "prettier", "file-write", 1, false, true, false},
+		{"pnpm typecheck", "pnpm", "typecheck", "test", 1, false, false, false},
+		{"uv run --with rich pytest -q", "uv", "run", "test", 1, false, false, false},
+		{"uv run python script.py", "uv", "run", "run", 1, false, false, false},
+		{"cargo +1.91.0 clippy --all-targets", "cargo", "clippy", "test", 1, false, false, false},
+		{"cargo check", "cargo", "check", "test", 1, false, false, false},
+		{"go list ./...", "go", "list", "read", 1, false, false, false},
+		{"gofmt -l -w .", "gofmt", "", "file-write", 1, false, false, false},
+		{"gofmt -l .", "gofmt", "", "test", 1, false, false, false},
+		{"rustfmt --check src/main.rs", "rustfmt", "", "test", 1, false, false, false},
+		{"gzip -dc log.gz", "gzip", "", "read", 1, false, false, false},
+		{"gzip big.log", "gzip", "", "file-write", 1, false, false, false},
+		{"source ~/.nvm/nvm.sh && nvm use && npm --prefix web test", "npm", "test", "test", 3, false, false, false},
+		{"command -v uvx", "command", "", "shell", 1, false, false, false},
+		{"unzip -l a.zip", "unzip", "", "read", 1, false, false, false},
 		{"sudo -n /usr/bin/lsof -i :3000 &", "lsof", "", "process", 1, false, false, false},
 	}
 	for _, test := range cases {
@@ -43,6 +67,25 @@ func TestParseShellCommand(t *testing.T) {
 		if parsed.HasPipe != test.pipe || parsed.HasRedirect != test.redirect || parsed.HasHeredoc != test.heredoc {
 			t.Errorf("%q: pipe/redirect/heredoc %v/%v/%v", test.line, parsed.HasPipe, parsed.HasRedirect, parsed.HasHeredoc)
 		}
+	}
+	for _, test := range []struct{ line, script string }{
+		{`/bin/zsh -lc "sed -n '1,9p' a.go && rg -n \"x\" ."`, `sed -n '1,9p' a.go && rg -n "x" .`},
+		{`bash -c 'echo '"'"'hi'"'"''`, `echo 'hi'`},
+		{`zsh -lc "cat a" > out`, ""},
+		{`bash -c "go test" && ls`, ""},
+		{`bash script.sh`, ""},
+		{`python3 -c "print(1)"`, ""},
+	} {
+		if script, ok := shellScript(test.line); script != test.script || ok != (test.script != "") {
+			t.Errorf("%q: script %q, %v; want %q", test.line, script, ok, test.script)
+		}
+	}
+	// A command line that hands its script to a shell is read as the script,
+	// as the argv form ["/bin/zsh","-lc",script] already is.
+	call := toolCall{ToolName: "shell"}
+	applyToolCommands(&call, map[string]any{"command": `/bin/zsh -lc "cd sub && sed -n '1,9p' a.go"`}, nil)
+	if call.Program != "sed" || call.CommandCategory != "read" || call.Command != "cd sub && sed -n '1,9p' a.go" {
+		t.Errorf("shell script call: %q %q %q", call.Program, call.CommandCategory, call.Command)
 	}
 	if !parseShellCommand("sleep 10 &").IsBackgrounded || parseShellCommand("go test 2>&1").IsBackgrounded {
 		t.Fatal("background detection")
@@ -213,6 +256,29 @@ func TestCodexExecToolLedger(t *testing.T) {
 	}
 	if commands[1]["operator"] != "script" || integer(commands[1]["exit_code"]) != 1 || integer(commands[1]["duration_ms"]) != 1000 {
 		t.Fatalf("second command: %#v", commands[1])
+	}
+}
+
+// A call's file is read from every shape an edit records: a field, a patch,
+// a patch a code-mode script holds as a string literal, and a list of changes.
+func TestToolFilePath(t *testing.T) {
+	patch := "*** Begin Patch\n*** Update File: /repo/a.go\n@@\n-old\n+new \"quoted\"\n*** Add File: /repo/b.go\n+b\n*** End Patch"
+	for name, call := range map[string]struct {
+		tool  string
+		input any
+	}{
+		"field":       {"Edit", map[string]any{"file_path": "/repo/a.go", "old_string": "x", "new_string": "y"}},
+		"patch":       {"apply_patch", patch},
+		"patch field": {"apply_patch", map[string]any{"input": patch}},
+		"code mode":   {"apply_patch", "text(await tools.apply_patch(" + fmt.Sprintf("%q", patch) + "))"},
+		"changes":     {"apply_patch", map[string]any{"changes": []any{map[string]any{"kind": "update", "path": "/repo/a.go"}, map[string]any{"kind": "add", "path": "/repo/b.go"}}}},
+	} {
+		if got := toolFilePath(call.tool, call.input); got != "/repo/a.go" {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+	if got := toolFilePath("apply_patch", "text(await tools.exec_command({cmd: 'ls'}))"); got != "" {
+		t.Errorf("a script without a patch: %q", got)
 	}
 }
 
@@ -591,4 +657,208 @@ func TestToolPathsFollowNewlyKnownCheckouts(t *testing.T) {
 	check("gadget known", map[string]string{"/w2/a.go": "", "/w4/b.go": repository("gadget")})
 	ingestRecords(t, catalog, record("widget-w2", checkout("widget", dir+"/w2")))
 	check("w2 known", map[string]string{"/w2/a.go": widget, "/w4/b.go": repository("gadget")})
+}
+
+func TestModelRequestSpeedEvidence(t *testing.T) {
+	cases := []struct{ body, want string }{
+		{`{"message":{"usage":{"speed":"fast","service_tier":"standard"}}}`, "fast"},
+		{`{"message":{"usage":{"speed":"standard"}}}`, "standard"},
+		{`{"response":{"service_tier":"priority"}}`, "fast"},
+		{`{"payload":{"service_tier":"default"}}`, "standard"},
+		{`{"message":{"usage":{"service_tier":"standard"}}}`, "standard"},
+		{`{"message":{"usage":{"speed":null,"service_tier":"standard"}}}`, "standard"},
+		{`{"usage":{"speed":"future"}}`, "standard"},
+		{`{"service_tier":"auto"}`, "standard"},
+		{`{"service_tier":"flex"}`, "standard"},
+		{`{"model":"fast-model","effort":"low","input":{"speed":"fast"}}`, "standard"},
+	}
+	for _, sample := range cases {
+		config, _ := messageInference(MessageRecord{RawText: sample.body})
+		speed := config.Speed
+		if speed != sample.want {
+			t.Errorf("%s: %q want %q", sample.body, speed, sample.want)
+		}
+	}
+
+	for _, sample := range []struct {
+		message             MessageRecord
+		speed, tier, source string
+	}{
+		{MessageRecord{}, "standard", "", "assumed_standard"},
+		{MessageRecord{Role: "user", Kind: "message", Text: `{"service_tier":"priority"}`}, "standard", "", "assumed_standard"},
+		{MessageRecord{RawText: `{"service_tier":"priority","speed":null}`}, "fast", "priority", "service_tier"},
+		{MessageRecord{RawText: `{"service_tier":null}`}, "standard", "", "assumed_standard"},
+		{MessageRecord{RawText: `{"message":{"usage":{"speed":"fast"}}}`, ServiceTier: "priority", Speed: "fast", SpeedSource: "service_tier"}, "fast", "priority", "speed"},
+		{MessageRecord{Speed: "fast", SpeedSource: "speed", RawText: `{"message":{"usage":{"service_tier":"standard"}}}`}, "fast", "standard", "speed"},
+		{MessageRecord{Speed: "fast", RawText: `{"message":{"usage":{"service_tier":"standard"}}}`}, "fast", "standard", "speed"},
+		{MessageRecord{Speed: "fast", ServiceTier: "priority", SpeedSource: "speed", RawText: `{"service_tier":null}`}, "fast", "", "speed"},
+		{MessageRecord{Speed: "standard", SpeedSource: "speed", RawText: `{"service_tier":"priority"}`}, "standard", "priority", "speed"},
+		{MessageRecord{Speed: "fast", SpeedSource: "speed", RawText: `{"speed":null,"service_tier":"standard"}`}, "standard", "standard", "service_tier"},
+		{MessageRecord{Speed: "fast", SpeedSource: "service_tier", ServiceTier: "priority", RawText: `{"service_tier":"standard"}`}, "standard", "standard", "service_tier"},
+	} {
+		normalized := normalizeMessageInference(sample.message)
+		if normalized.Speed != sample.speed || normalized.ServiceTier != sample.tier || normalized.SpeedSource != sample.source {
+			t.Fatalf("normalized inference %+v", normalized)
+		}
+		if replay := normalizeMessageInference(normalized); replay.Speed != sample.speed || replay.ServiceTier != sample.tier || replay.SpeedSource != sample.source {
+			t.Fatalf("replayed inference %+v", replay)
+		}
+	}
+	for _, anonymous := range []bool{false, true} {
+		t.Run(fmt.Sprintf("streamed/anonymous=%t", anonymous), func(t *testing.T) {
+			for _, sample := range []struct {
+				name, initial, update, speed, tier, source string
+			}{
+				{"tier update preserves fast", `"speed":"fast","service_tier":"priority",`, `"service_tier":"standard",`, "fast", "standard", "speed"},
+				{"tier update preserves standard", `"speed":"standard",`, `"service_tier":"priority",`, "standard", "priority", "speed"},
+				{"speed update preserves tier", `"speed":"fast","service_tier":"standard",`, `"speed":"standard",`, "standard", "standard", "speed"},
+				{"tier reset preserves speed", `"speed":"fast","service_tier":"priority",`, `"service_tier":null,`, "fast", "", "speed"},
+				{"speed reset clears override", `"speed":"fast","service_tier":"standard",`, `"speed":null,`, "standard", "standard", "service_tier"},
+				{"unknown speed clears override", `"speed":"fast","service_tier":"standard",`, `"speed":"future",`, "standard", "standard", "service_tier"},
+				{"tier updates derived speed", `"service_tier":"priority",`, `"service_tier":"standard",`, "standard", "standard", "service_tier"},
+			} {
+				t.Run(sample.name, func(t *testing.T) {
+					id := `"id":"streamed",`
+					if anonymous {
+						id = ""
+					}
+					messages := []MessageRecord{
+						{NativeID: "event-0", Kind: "metadata", RawText: `{"message":{` + id + `"usage":{` + sample.initial + `"input_tokens":10,"output_tokens":1}}}`},
+						{NativeID: "event-1", Kind: "metadata", RawText: `{"message":{` + id + `"usage":{` + sample.update + `"input_tokens":10,"output_tokens":2}}}`},
+						{NativeID: "event-2", Kind: "metadata", RawText: `{"message":{` + id + `"usage":{"input_tokens":10,"output_tokens":3}}}`},
+					}
+					requests, _ := buildToolLedger(messages, "model")
+					if len(requests) != 1 || requests[0].Speed != sample.speed || requests[0].ServiceTier != sample.tier || requests[0].SpeedSource != sample.source {
+						t.Fatalf("streamed inference: %+v", requests)
+					}
+					if requests[0].Counts["total_tokens"] != 13 {
+						t.Fatalf("streamed usage was counted more than once: %+v", requests)
+					}
+					if anonymous {
+						messages = append(messages,
+							MessageRecord{NativeID: "user", Role: "user", Kind: "message", Text: "next turn"},
+							MessageRecord{NativeID: "event-3", Kind: "metadata", RawText: `{"message":{"usage":{"input_tokens":10,"output_tokens":1}}}`})
+						requests, _ = buildToolLedger(messages, "model")
+						if len(requests) != 2 || requests[0].Speed != sample.speed || requests[1].Speed != "standard" || requests[1].ServiceTier != "" || requests[1].SpeedSource != "assumed_standard" {
+							t.Fatalf("inference leaked into the next request: %+v", requests)
+						}
+					}
+				})
+			}
+		})
+	}
+	messages := []MessageRecord{
+		{Kind: "metadata", RawText: `{"message":{"id":"streamed","usage":{"speed":"fast","input_tokens":10,"output_tokens":1}}}`},
+		{Kind: "metadata", RawText: `{"message":{"id":"streamed","usage":{"input_tokens":10,"output_tokens":2}}}`},
+	}
+	requests, _ := buildToolLedger(messages, "model")
+	if len(requests) != 1 || requests[0].Speed != "fast" {
+		t.Fatalf("streamed request lost speed: %+v", requests)
+	}
+	messages[1].RawText = `{"message":{"id":"streamed","usage":{"speed":null,"input_tokens":10,"output_tokens":2}}}`
+	requests, _ = buildToolLedger(messages, "model")
+	if len(requests) != 1 || requests[0].Speed != "standard" {
+		t.Fatalf("explicit unknown speed must reset: %+v", requests)
+	}
+	// Anonymous streamed events also preserve explicit unknowns when merged.
+	for i := range messages {
+		messages[i].NativeID = fmt.Sprint("event-", i)
+		messages[i].RawText = strings.Replace(messages[i].RawText, `"id":"streamed",`, "", 1)
+	}
+	requests, _ = buildToolLedger(messages, "model")
+	if len(requests) != 1 || requests[0].Speed != "standard" {
+		t.Fatalf("anonymous request retained stale speed: %+v", requests)
+	}
+	catalog, _ := testCatalog(t)
+	root := t.TempDir()
+	// Same model, distinct requests; an unreported request must not inherit fast.
+	fixture := slices.Clone(claudeToolFixture)
+	fixture[1] = strings.Replace(fixture[1], `"input_tokens":10`, `"speed":"fast","service_tier":"standard","input_tokens":10`, 1)
+	writeFixture(t, root, "project/claude-speed.jsonl", fixture)
+	ingestFixture(t, catalog, "claude", root)
+	rows, err := queryMaps(catalog.DB, "SELECT native_id,speed FROM model_requests ORDER BY sequence")
+	if err != nil || len(rows) != 4 {
+		t.Fatalf("requests %+v: %v", rows, err)
+	}
+	if rows[0]["speed"] != "fast" {
+		t.Fatalf("lost recorded fast speed: %+v", rows)
+	}
+	for _, row := range rows[1:] {
+		if firstString(row["speed"]) != "standard" {
+			t.Fatalf("inherited speed without evidence: %+v", row)
+		}
+	}
+	// Replaying the versioned ledger recovers speed from retained raw accounting.
+	if _, err := catalog.DB.Exec("UPDATE model_requests SET speed='standard',speed_source='assumed_standard'; UPDATE tool_ledger_state SET version='before-speed'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.BackfillToolLedger(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	var speed string
+	if err := catalog.DB.QueryRow("SELECT speed FROM model_requests ORDER BY sequence LIMIT 1").Scan(&speed); err != nil || speed != "fast" {
+		t.Fatalf("backfill speed %q: %v", speed, err)
+	}
+}
+
+// Replaying another version's ledger brings every stored row to what this
+// version derives: a changed row is corrected, a row it no longer derives is
+// removed with its commands, and a row that comes out the same is left as it
+// is rather than replaced by itself.
+func TestToolLedgerReplayChangesOnlyRowsThatDiffer(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	root := t.TempDir()
+	writeFixture(t, root, "project/claude-replay.jsonl", claudeToolFixture)
+	ingestFixture(t, catalog, "claude", root)
+	ledger := func() string {
+		t.Helper()
+		out := []string{}
+		for _, statement := range []string{"SELECT * FROM tool_calls ORDER BY id", "SELECT * FROM tool_commands ORDER BY tool_call_id,position",
+			"SELECT * FROM model_requests ORDER BY id", "SELECT * FROM skill_usages ORDER BY id"} {
+			rows, err := queryMaps(catalog.DB, statement)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, jsonText(rows))
+		}
+		return strings.Join(out, "\n")
+	}
+	want := ledger()
+	var calls int
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM tool_calls").Scan(&calls); err != nil || calls < 2 {
+		t.Fatalf("fixture tool calls: %d %v", calls, err)
+	}
+	execTx(t, catalog.DB,
+		"CREATE TABLE replay_writes(id TEXT)",
+		"CREATE TRIGGER replay_update AFTER UPDATE ON tool_calls BEGIN INSERT INTO replay_writes VALUES(NEW.id); END",
+		"CREATE TRIGGER replay_delete AFTER DELETE ON tool_calls BEGIN INSERT INTO replay_writes VALUES(OLD.id); END",
+		"CREATE TRIGGER replay_insert AFTER INSERT ON tool_calls BEGIN INSERT INTO replay_writes VALUES(NEW.id); END",
+		// One call as an older version stored it, and one it derived that
+		// this version does not.
+		"UPDATE tool_calls SET tool_category='as an older version had it' WHERE id=(SELECT MIN(id) FROM tool_calls WHERE started_at IS NOT NULL)",
+		"INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status) SELECT 'no-longer-derived',workspace_id,conversation_id,999,provider,kind,tool_name,tool_category,status FROM tool_calls LIMIT 1",
+		"INSERT INTO tool_commands(tool_call_id,position,command) VALUES('no-longer-derived',0,'true')",
+		"DELETE FROM replay_writes",
+		"DELETE FROM work_peer_links_dirty",
+		"UPDATE tool_ledger_state SET version='an older version'")
+	var corrected string
+	if err := catalog.DB.QueryRow("SELECT started_at FROM tool_calls WHERE tool_category='as an older version had it'").Scan(&corrected); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.BackfillToolLedger(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := ledger(); got != want {
+		t.Fatalf("replayed ledger differs:\n%s\n%s", got, want)
+	}
+	var written int
+	if err := catalog.DB.QueryRow("SELECT COUNT(DISTINCT id) FROM replay_writes").Scan(&written); err != nil || written != 2 {
+		t.Fatalf("replay wrote %d of %d calls, want the corrected and the removed one (%v)", written, calls+1, err)
+	}
+	// The corrected call kept its rowid, so related conversations are told
+	// to look again from its start.
+	var since string
+	if err := catalog.DB.QueryRow("SELECT since FROM work_peer_links_dirty").Scan(&since); err != nil || since != corrected {
+		t.Fatalf("related conversations recheck from %q, want the corrected call's start %q (%v)", since, corrected, err)
+	}
 }

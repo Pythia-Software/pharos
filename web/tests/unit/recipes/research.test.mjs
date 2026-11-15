@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import {cardCoverQuery,recipeHarness} from '../helpers/recipes.mjs';
 import {filterBoxSamples} from '../../../src/compact-box-model';
 const now=Date.parse('2026-10-15T12:00:00Z'),{card,table,metric}=recipeHarness(now);
-const call=(id,extra={})=>({id,started_at:now-1000,tool_name:'WebSearch',tool_category:'web',status:'ok',search_query:'sqlite query plans',repository_name:'repo',conversation_id:'one',title:'Fixture work',url:null,host:null,...extra});
+const call=(id,extra={})=>({id,started_at:now-1000,tool_name:'WebSearch',tool_category:'web',status:'ok',search_query:'sqlite query plans',project_name:'repo',conversation_id:'one',title:'Fixture work',url:null,host:null,...extra});
 const archive=(id,extra={})=>({id,called_at:now-1000,tool_name:'search_work',status:'ok',result_count:0,...extra});
 
 test('search-count boxes include single searches and retain sparse conversation cohorts',()=>{
  const rows=[1,2,9].flatMap((n,c)=>Array.from({length:n},(_,i)=>call(`${c}-${i}`,{conversation_id:`c-${c}`})));
- rows.push(call('sparse',{repository_name:'sparse'}),call('missing-conversation',{conversation_id:null}),call('sql',{tool_category:'meta'}));
+ rows.push(call('sparse',{project_name:'sparse'}),call('missing-conversation',{conversation_id:null}),call('sql',{tool_category:'meta'}));
  const result=filterBoxSamples(metric('research-conversation-searches',rows),3);assert.equal(result.buckets.length,1);const summary=result.buckets[0].distribution.summary;assert.deepEqual([summary.n,summary.min,summary.median,summary.max],[3,1,2,9]);
  assert.equal(table('research-conversation-searches',rows).length,4);
  assert.equal(card('research-conversation-searches').recipe.exploration.coverMetric.groupLimit,10000);

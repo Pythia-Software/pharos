@@ -1,10 +1,14 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -63,6 +67,12 @@ func TestWorkspaceNamesPreferSpecificSourcesAndPreserveRenames(t *testing.T) {
 	}
 	if got := cachedWorkTitle(t, c, id); got != native.Title {
 		t.Fatalf("native name must win = %q", got)
+	}
+	for _, conversation := range []ConversationRecord{native.Conversations[0], app.Conversations[0]} {
+		cid := stableID("conversation", conversation.Provider, conversation.Account, conversation.NativeID)
+		if got := conversationDisplayName(t, c, cid); got.Text != native.Title {
+			t.Fatalf("native/app mirror selected a different primary name: %+v", got)
+		}
 	}
 	app.Title = "Different session name"
 	ingestNamingRecord(t, c, app)
@@ -205,6 +215,300 @@ func TestAuthoredWorkspaceTitleBoundsUnicodeWithoutPastedText(t *testing.T) {
 	title := authoredWorkspaceTitle(text, []authorSpan{{Start: 0, End: 200, Category: spanTyped}, {Start: 200, End: len(text), Category: spanPasted}})
 	if !strings.HasSuffix(title, "…") || strings.Contains(title, "copied") || len([]rune(title)) != 81 {
 		t.Fatalf("bounded title = %q", title)
+	}
+}
+
+func drainConversationNames(t *testing.T, c *Catalog) {
+	t.Helper()
+	for {
+		count, err := c.refreshConversationNames(t.Context(), 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count == 0 {
+			return
+		}
+	}
+}
+
+func conversationDisplayName(t *testing.T, c *Catalog, id string) executionLabel {
+	t.Helper()
+	r, err := c.executionResolution(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := r.Executions[r.BindConversation(id).ExecutionID]
+	if x == nil {
+		t.Fatalf("conversation %s has no execution", id)
+	}
+	return x.Label
+}
+
+func TestConversationNamesPreferHumanWordsAfterAutomatedInstructions(t *testing.T) {
+	c, _ := testCatalog(t)
+	record := namingRecord("codex", "01a128b8-395c-7121-bf40-9a1903a6f306", "Codex 01a128b8",
+		"<system_instruction>Ignore this harness</system_instruction>\n\nReply with one line: your model name, and whether you have a web search tool available in this session (yes/no). Do not run any commands.")
+	record.Conversations[0].Messages[0].Sender = "automation:test"
+	workspace := ingestNamingRecord(t, c, record)
+	cid := stableID("conversation", "codex", "local", record.Conversations[0].NativeID)
+	rebuild := func() {
+		t.Helper()
+		generation, _, err := c.authorshipGenerations()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.RebuildAuthorship(t.Context(), generation); err != nil {
+			t.Fatal(err)
+		}
+		drainConversationNames(t, c)
+	}
+	rebuild()
+	if got := conversationDisplayName(t, c, cid); got.Source != "assignment" || !strings.HasPrefix(got.Text, "Reply with one line:") || strings.Contains(got.Text, "harness") {
+		t.Fatalf("automated request name = %+v", got)
+	}
+	if got := cachedWorkTitle(t, c, workspace); !strings.HasPrefix(got, "Reply with one line:") {
+		t.Fatalf("single-conversation workspace name = %q", got)
+	}
+	if got := countRows(t, c, "SELECT SUM(typed_words) FROM message_authorship WHERE conversation_id=?", cid); got != 0 {
+		t.Fatalf("naming turned automated words into %d human words", got)
+	}
+	record.Conversations[0].Messages = append(record.Conversations[0].Messages, MessageRecord{
+		NativeID: "human", Sender: "account:me", Role: "user", Kind: "message", CreatedAt: "2026-09-01T13:00:00Z", Selected: true,
+		Text: "<system_instruction>More injected setup</system_instruction>\n\nPlease fix the login failure",
+	})
+	ingestNamingRecord(t, c, record)
+	rebuild()
+	if got := conversationDisplayName(t, c, cid); got.Source != "typed" || got.Text != "Please fix the login failure" {
+		t.Fatalf("first human words must beat the earlier automation: %+v", got)
+	}
+	// Appends preserve the first human excerpt; source renames supersede it
+	// without a full classifier run or a cold execution cache.
+	record.Conversations[0].Messages = append(record.Conversations[0].Messages, MessageRecord{NativeID: "later", Role: "user", Kind: "message", Sender: "account:me", Text: "Now update the tests", CreatedAt: "2026-09-01T14:00:00Z", Selected: true})
+	ingestNamingRecord(t, c, record)
+	drainConversationNames(t, c)
+	if got := conversationDisplayName(t, c, cid); got.Text != "Please fix the login failure" {
+		t.Fatalf("append replaced the original human name: %+v", got)
+	}
+	fixtureExec(t, c, `UPDATE authorship_message_state SET provisional=1 WHERE message_id IN
+ (SELECT id FROM messages WHERE conversation_id=? AND native_id='human')`, cid)
+	if got := conversationDisplayName(t, c, cid); got.Source == "typed" {
+		t.Fatal("provisional classification supplied human words to a primary name")
+	}
+	fixtureExec(t, c, `UPDATE authorship_message_state SET provisional=0 WHERE message_id IN
+ (SELECT id FROM messages WHERE conversation_id=? AND native_id='human')`, cid)
+	if got := conversationDisplayName(t, c, cid); got.Text != "Please fix the login failure" {
+		t.Fatalf("refined classification did not refresh a warm name: %+v", got)
+	}
+	before, _, _ := c.authorshipGenerations()
+	record.Title = "Repair login failures"
+	ingestNamingRecord(t, c, record)
+	if got := conversationDisplayName(t, c, cid); got.Source != "authored" || got.Text != record.Title {
+		t.Fatalf("source rename under a warm cache = %+v", got)
+	}
+	if after, _, _ := c.authorshipGenerations(); after != before {
+		t.Fatal("source rename reclassified human writing")
+	}
+}
+
+func TestConversationNamesBackfillInvalidateAndResume(t *testing.T) {
+	c, _ := testCatalog(t)
+	record := namingRecord("claude", "worker", "Claude worker", "Inspect message naming")
+	record.Conversations[0].Messages[0].Role = "agent"
+	workspace := ingestNamingRecord(t, c, record)
+	cid := stableID("conversation", "codex", "local", record.Conversations[0].NativeID)
+	before := sourceGeneration(t, c)
+	var output, errors bytes.Buffer
+	if err := runConversationNamesCLI(Config{CatalogPath: c.Path}, []string{"audit", "--conversation", cid}, &output, &errors); err != nil {
+		t.Fatal(err)
+	}
+	var audit struct {
+		DryRun        bool `json:"dry_run"`
+		Conversations []struct {
+			ProposedName string `json:"proposed_name"`
+		} `json:"conversations"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &audit); err != nil || !audit.DryRun || len(audit.Conversations) != 1 || audit.Conversations[0].ProposedName != "Inspect message naming" {
+		t.Fatalf("read-only audit: %s, %v", output.String(), err)
+	}
+	if sourceGeneration(t, c) != before || countRows(t, c, "SELECT COUNT(*) FROM conversation_name_candidates") != 0 {
+		t.Fatal("audit initialized or published names")
+	}
+	drainConversationNames(t, c)
+	if got := conversationDisplayName(t, c, cid); got.Text != "Inspect message naming" {
+		t.Fatal(got)
+	}
+	// A changed input is rejected before the background queue catches up.
+	record.Conversations[0].Messages[0].Text = "Inspect conversation ownership"
+	ingestNamingRecord(t, c, record)
+	if got := conversationDisplayName(t, c, cid); got.Text == "Inspect message naming" {
+		t.Fatal("edited assignment reused a stale excerpt")
+	}
+	drainConversationNames(t, c)
+	if got := conversationDisplayName(t, c, cid); got.Text != "Inspect conversation ownership" {
+		t.Fatal(got)
+	}
+	// An upgrade queues completed conversations once, without re-ingest.
+	fixtureExec(t, c, `UPDATE conversation_names_state SET version='older'`)
+	if err := c.ensureConversationNames(); err != nil {
+		t.Fatal(err)
+	}
+	if countRows(t, c, `SELECT COUNT(*) FROM conversation_names_state WHERE dirty=1`) != 1 {
+		t.Fatal("policy upgrade did not queue the retained conversation")
+	}
+	drainConversationNames(t, c)
+	if count, err := c.refreshConversationNames(t.Context(), 1); count != 0 || err != nil {
+		t.Fatalf("settled migration repeated: %d %v", count, err)
+	}
+	fixtureExec(t, c, `DELETE FROM messages WHERE conversation_id=?`, cid)
+	if got := conversationDisplayName(t, c, cid); meaningfulWorkspaceTitle(got.Text, "") && strings.Contains(got.Text, "ownership") {
+		t.Fatal("deleted assignment survived in a primary name")
+	}
+	drainConversationNames(t, c)
+	if got := cachedWorkTitle(t, c, workspace); strings.Contains(got, "ownership") {
+		t.Fatal("deleted assignment survived in the workspace fallback")
+	}
+	t.Run("audit includes mirrored evidence", func(t *testing.T) {
+		c, _ := testCatalog(t)
+		native := namingRecord("codex", "audit-native", "Untitled", "Inspect URL restoration")
+		nativeID := stableID("conversation", "codex", "local", native.Conversations[0].NativeID)
+		mirror := namingRecord("conductor", "audit-mirror", "Untitled", "Inspect URL restoration", "codex:audit-native")
+		// Put the suppressed mirror first so --limit also excludes the native
+		// representative. Only these two conversation records are inserted.
+		var mirrorID string
+		for i := 0; ; i++ {
+			mirror.Conversations[0].NativeID = fmt.Sprintf("conductor:audit-mirror-%d", i)
+			mirrorID = stableID("conversation", "codex", "local", mirror.Conversations[0].NativeID)
+			if mirrorID < nativeID {
+				break
+			}
+		}
+		ingestNamingRecord(t, c, native)
+		ingestNamingRecord(t, c, mirror)
+		generation, _, err := c.authorshipGenerations()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.RebuildAuthorship(t.Context(), generation); err != nil {
+			t.Fatal(err)
+		}
+		if countRows(t, c, `SELECT COALESCE(SUM(typed_words),0) FROM message_authorship WHERE conversation_id=?`, mirrorID) != 0 {
+			t.Fatal("fixture mirror was not suppressed")
+		}
+		if countRows(t, c, `SELECT COALESCE(SUM(typed_words),0) FROM message_authorship WHERE conversation_id=?`, nativeID) == 0 {
+			t.Fatal("fixture native representative has no human words")
+		}
+		before := sourceGeneration(t, c)
+		for _, scope := range []struct {
+			limit int
+			id    string
+		}{{100, mirrorID}, {1, ""}} {
+			audit, err := c.auditConversationNames(t.Context(), scope.limit, scope.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			items := audit["conversations"].([]map[string]any)
+			if len(items) != 1 || items[0]["conversation_id"] != mirrorID || items[0]["proposed_name"] != "Inspect URL restoration" || items[0]["name_source"] != "typed" {
+				t.Fatalf("scoped audit missed native evidence: %+v", audit)
+			}
+		}
+		if sourceGeneration(t, c) != before || countRows(t, c, `SELECT COUNT(*) FROM conversation_name_candidates`) != 0 {
+			t.Fatal("scoped audit published candidates")
+		}
+		drainConversationNames(t, c)
+		for _, id := range []string{nativeID, mirrorID} {
+			if got := conversationDisplayName(t, c, id); got.Text != "Inspect URL restoration" || got.Source != "typed" {
+				t.Fatalf("audit and backfill disagree: %+v", got)
+			}
+		}
+	})
+}
+
+func TestConversationNamesRejectIdentifiersAndHarness(t *testing.T) {
+	for _, title := range []string{
+		"01a128b8-395c-7121-bf40-9a1903a6f306", "{01a128b8-395c-7121-bf40-9a1903a6f306}",
+		"conductor:01a128b8-395c-7121-bf40-9a1903a6f306", "conversation_a123456789abcdef", "Codex a1234567", "deadbeef98765432",
+		"/Users/example/transcripts/task.jsonl", "gAAAAencryptedmessage", "Untitled",
+	} {
+		if meaningfulWorkspaceTitle(title, "a different source id") {
+			t.Errorf("identifier/placeholder considered a useful title: %q", title)
+		}
+	}
+	for _, title := range []string{"Fix conversation 01a128b8", "Codex SDK naming", "Inspect renderer", "tooling_independent_review"} {
+		if !meaningfulWorkspaceTitle(title, "unrelated") {
+			t.Errorf("meaningful name rejected: %q", title)
+		}
+	}
+	for _, text := range []string{"<system_instruction>Setup only</system_instruction>", "gAAAAencryptedmessage", "```sh\nls -la\n```", "# AGENTS.md instructions for /repo\n\nInstructions"} {
+		if got := assignmentNameExcerpt(text); got != "" {
+			t.Errorf("harness/payload became a name: %q", got)
+		}
+	}
+}
+
+func TestConversationNamesUseRecordedTaskAttemptsWithoutNamingHelpers(t *testing.T) {
+	c := executionFixture(t, executionFixtureConversation{id: "one"}, executionFixtureConversation{id: "two"}, executionFixtureConversation{id: "helper", parent: "one", depth: 1})
+	fixtureExec(t, c, `UPDATE workspaces SET source_kind='tl1',source_id='install:task',title='Repair login' WHERE id='work'`)
+	fixtureExec(t, c, `INSERT INTO tl1_attempts(installation_id,attempt_id,task_id,attempt_number,conversation_native_id) VALUES('install','attempt-one','task',1,'one'),('install','attempt-two','task',2,'two')`)
+	if got := conversationDisplayName(t, c, "one"); got.Text != "Repair login · attempt 1" || got.Source != "context" {
+		t.Fatal(got)
+	}
+	if got := conversationDisplayName(t, c, "two"); got.Text != "Repair login · attempt 2" {
+		t.Fatal(got)
+	}
+	if got := conversationDisplayName(t, c, "helper"); strings.Contains(got.Text, "Repair login") || got.Text == "helper" {
+		t.Fatalf("helper inherited its parent's task or native ID: %+v", got)
+	}
+	// A workspace's previously derived excerpt cannot become task context
+	// once the originating candidate has been withdrawn.
+	for _, origin := range []string{"typed", "assignment"} {
+		fixtureExec(t, c, `INSERT INTO workspace_names(workspace_id,source_title,source_scope,display_title,display_source)
+ VALUES('work','Untitled','task','Old request',?) ON CONFLICT(workspace_id) DO UPDATE SET display_source=excluded.display_source`, origin)
+		fixtureExec(t, c, `UPDATE workspaces SET title='Old request' WHERE id='work'`)
+		if got := conversationDisplayName(t, c, "one"); strings.Contains(got.Text, "Old request") {
+			t.Fatalf("withdrawn %s excerpt survived as task context: %+v", origin, got)
+		}
+	}
+}
+
+func TestConversationNamesScopeChangesInvalidateWarmNames(t *testing.T) {
+	c, _ := testCatalog(t)
+	record := namingRecord("codex", "original", "Named original conversation", "")
+	workspace := ingestNamingRecord(t, c, record)
+	cid := stableID("conversation", "codex", "local", record.Conversations[0].NativeID)
+	mirror := namingRecord("conductor", "mirror", "Untitled", "", "codex:original")
+	ingestNamingRecord(t, c, mirror)
+	mirrorID := stableID("conversation", "codex", "local", mirror.Conversations[0].NativeID)
+	for _, id := range []string{cid, mirrorID} {
+		if got := conversationDisplayName(t, c, id); got.Text != record.Title {
+			t.Fatal(got)
+		}
+	}
+	fixtureExec(t, c, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('another',?,'codex','local','another')`, workspace)
+	for _, id := range []string{cid, "another", mirrorID} {
+		if got := conversationDisplayName(t, c, id); got.Text == record.Title {
+			t.Fatalf("shared workspace title named a different conversation: %+v", got)
+		}
+	}
+	// Further roots cannot change the others' names, so they are not reloaded
+	// for each one; leaving a single root still restores its name.
+	fixtureExec(t, c, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('third',?,'codex','local','third')`, workspace)
+	before, _, err := executionSourceGeneration(t.Context(), c.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureExec(t, c, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('fourth',?,'codex','local','fourth')`, workspace)
+	if changed, err := executionChangedSince(t.Context(), c.DB, before); err != nil || !slices.Equal(changed, []string{"fourth"}) {
+		t.Fatalf("a root added beside several others changed %v, %v", changed, err)
+	}
+	fixtureExec(t, c, `DELETE FROM conversations WHERE id IN ('third','fourth')`)
+	if got := conversationDisplayName(t, c, cid); got.Text == record.Title {
+		t.Fatalf("two roots still share the workspace title: %+v", got)
+	}
+	fixtureExec(t, c, `DELETE FROM conversations WHERE id='another'`)
+	for _, id := range []string{cid, mirrorID} {
+		if got := conversationDisplayName(t, c, id); got.Text != record.Title {
+			t.Fatalf("restored source scope was not reflected in a warm reader: %+v", got)
+		}
 	}
 }
 

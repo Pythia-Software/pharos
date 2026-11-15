@@ -55,11 +55,31 @@ Reloading restores this tab's open overlay or floating progress panel, including
 the draft and page context. Closed or dismissed surfaces stay closed; restoring
 an overlay preserves the underlying page URI.
 
+Full screen is its own page, `/ask?ask_chat=ID`: the same composer, without its
+glow, filling the page's full width and height, its transcript above the editor.
+While working, the signal trace runs around the page's edge instead.
+Before the first question, the suggestions sit there instead, inside the
+composer, until the user types. The composer's full
+screen button opens it from Home or the overlay and keeps the draft attachments;
+pressed again, it returns to the page it came from, where Home shows the chat
+inline and any other page reopens the overlay. Back, the navigation, or opening
+an answer also leave full screen; a pending question then floats as usual.
+
 ## Composer and responses
 
 The prompt editor expands automatically. Focus enlivens the whole composer and its SVG
 ribbon border. Provide light and dark appearances, a paper-plane send button, and
 an icon beside it to switch to ordinary search.
+
+An empty new chat cycles through the library's suggestion questions every
+twelve seconds, starting with a randomly chosen question. Questions currently
+readable in the suggestion carousel are excluded, including after scrolling,
+resizing or refreshing it. If none remain, use “Ask about your past work…”;
+when suggestions are hidden, the whole slate is available. The placeholder
+disappears immediately on focus and returns only when the editor is empty and
+unfocused. Rotation pauses and resets its idle time while focused, hidden,
+loading a chat, or holding a draft or context chip. Reduced motion keeps the
+invitation still. Existing chats use a short follow-up invitation instead.
 
 The expanded composer, floating progress panel and header button share the
 `createPharosGlow` effect in `assets/ask-glow.js` and the `.pharos-glow` styles.
@@ -68,6 +88,10 @@ it to another surface, call `setWorking` with the active request state, and
 `destroy` it when that surface is removed. Hue cycles slowly while idle and six
 times faster while working, preserving its current phase when speed changes.
 Only the decoration changes hue; content and panel fills retain their colors.
+Hue motion pauses while the decoration is not shown, such as a closed panel or
+full screen's composer, so hidden glows do not restyle every frame. Full screen's
+page-edge signal (`createPharosEdgeTrace`) animates only the transforms of four
+small streaks, one per side, so the compositor moves it without repainting.
 Reduced motion keeps both hue and loading trace still, with loading still visible.
 For an icon, supply its 24×24 SVG outline path to the same effect. The header's
 chat glyph uses this mode so its glow and loading trace follow the bubble inside
@@ -131,25 +155,51 @@ conversation grows, it expands equally above and below its original center until
 it reaches a viewport edge, then uses the remaining space, keeping the
 editor and controls visible while the transcript scrolls. Opening, height changes,
 and repositioning animate gently; reduced motion disables those animations.
-A dismissible context chip is an atomic inline part of
-the prompt, alongside ordinary text. Drag it to a caret position within the
-prompt, or focus it and use Alt+Left/Right to move it with the keyboard. Backspace
-or Delete removes a focused chip; undo and redo restore text edits and chip
-movement or removal. The editor supports multiple chips without merging their
-metadata into the question text. The page chip attaches that page's local URI,
-including its filters and view settings, to the request.
-Reloading the same chat in the same tab preserves chip placement with the draft;
-stale positions never replace a newer text draft.
-Removing the chip preserves the draft and omits that URI from subsequent requests
-in the open modal. Opening the modal again attaches the current page. Retries
-retain the original request's URI. This context stays out of the indexed
-conversation text.
+Opening chat never automatically attaches the page. A plus menu in the composer
+offers Attach files, Attach current URL, and Select a page element. Removable
+attachment chips sit inline with the draft, wrap naturally, and use distinct URL,
+file and selection icons. Element chips say “Highlighted element”; URL chips say
+“Page URL”, and file names truncate to a compact width. The + button sits in the
+normal composer action row. Dragging a chip, or using Alt + Left/Right, moves it
+between words. Drafts, history and the agent prompt preserve that placement.
+Clicking one shows the exact attached
+URL, selected element name and selector, or original file name and temporary path.
+The URL carries the selected view's filters and controls. Element selection
+reuses the annotation picker, including Up for a parent and Down for a child,
+without enabling its toolbar, creating a feedback annotation, or taking a screenshot.
+While picking, the composer becomes picture in picture over its originating page.
+That panel explains the purple highlight, names the hovered target, and shows
+the keyboard controls and Cancel. Selecting or canceling restores the previous
+composer surface, including full screen, and preserves the draft.
+
+Files of any type are copied unchanged into a private temporary directory;
+they are not imported, extracted, or stored as another document format. The agent
+receives the original name and temporary path. Its private Pharos MCP connection
+offers read_attached_file for only the explicitly attached paths in this chat,
+while its ordinary filesystem and command tools remain disabled. The general
+library MCP connection has no access to these attachments. Temporary files
+removed by the OS must be attached again; missing files are reported explicitly.
+Allow eight attachments, at most 20 MiB per file and 50 MiB of files per message.
+Attachment drafts persist with the private Ask session. Sending moves them into
+that message and clears the composer's attachment list; follow-ups retain the
+earlier message's context, and retries keep its original attachments. Removing
+a draft attachment preserves the typed question. Attachment context stays out
+of indexed conversation text.
+Retrying with another model carries those same original file pointers, URLs,
+elements and unsent draft attachments into the new prompt, preserving their
+placement. If the combined context exceeds attachment limits, keep the old chat
+and report the limit instead of dropping attachments. CLI event-stream allowances
+include attached file bytes and JSON encoding overhead; final-answer and
+diagnostic limits remain separate.
 
 A picture-in-picture icon moves the chat from either Home or the overlay into
 a draggable, dismissible progress panel. Keep the icon in the composer footer,
 immediately before Send/Stop. While processing, show “Browse while you wait”
 below the icon with a small gap. Clear the hint when processing ends or browsing
-is chosen, including when reopening that running request. Drag the panel itself to move it, or
+is chosen, including when reopening that running request. The hint's × dismisses
+it; dismissing it or choosing picture in picture hides it for the next five
+questions (`pharos-ask-browse-hint-snoozed` in UI preferences), so it keeps
+appearing only for people who never browse. Drag the panel itself to move it, or
 tap it once to reopen the chat; drafts and active questions stay intact.
 The panel shows only the latest streamed activity or request state
 and announces a completed response, clarification, or error. Dismissing it keeps
@@ -162,14 +212,14 @@ Loading needs elapsed time, cancellation, retry, and preserved drafts. Suggestio
 prefill the editor without submitting and follow the existing card carousel's
 interaction patterns.
 
-The suggestion catalog in `assets/ask-model.js` interleaves questions about
-instructions, failures, tools, context, usage, models, delegation, prior work,
-findings and activity. Optional repository phrases use names from the Library's
-distinct repository values, and appear on only some eligible questions when
-at least two named repositories exist. Comparisons across repositories remain
-unqualified. Refresh changes both the page of ideas and the repository examples;
-missing metadata leaves the broad questions available. These are invitations to
-investigate, not claims that a pattern or a finding exists in the library.
+Suggestions are generic questions Pharos expects this library to answer
+well, chosen from what it noticed in the user's work; see
+[Ask suggestions](ask-suggestions.md). They never name what was noticed and
+carry no evidence line, so they read as invitations to a conversation rather
+than another set of cards. They appear only once Ask Pharos is enabled.
+Without enough data there are fewer suggestions, or none, never padding.
+Refresh asks for another seeded slate; opening the modal over a page leans
+the slate toward that page.
 
 Hide/Show suggestions remains above the cards. Its collapsed state is stored in
 the library's UI preferences (`pharos-ask-suggestions-hidden`), survives reloads
@@ -190,6 +240,50 @@ the next agent request receives them alongside the user's answer. Unsubmitted
 Other text survives reloads. Only the latest question's controls accept answers;
 older questions remain visible in the transcript. The agent should ask only when
 needed, then proceed once the ambiguity has been resolved.
+
+Ask Pharos can also return a `feedback` draft (`kind`: feature, bug, or feedback;
+`comment`: up to 16,000 bytes). It is mutually exclusive with destinations,
+clarifications, and private lookups. The draft persists and is indexed with the
+visible conversation. This ends the CLI request without sending anything.
+
+The existing feedback composer is embedded directly in the conversation, without
+opening a dialog or moving keyboard focus. The user edits the report there and
+explicitly chooses **Approve and send feedback** to submit to Pythia Software.
+Chat text, including “yes” or “send it”, never grants submission
+consent. Enter in another form field cannot submit an Ask proposal. The CLI's
+MCP access remains read-only and has no feedback submission capability.
+
+Each proposal has separate browser draft, review, pending-submission and receipt
+storage. It does not import manual feedback drafts, annotations, screenshots,
+or diagnostic logs. Logs are opt-in; the optional contact email is visible and
+editable before approval. **Keep draft** or pressing Escape within the review
+collapses it without sending; **Review feedback** restores the editor.
+**Discard draft** removes this proposal's local edits, review, and pending report,
+and records a tombstone so restoring the chat cannot resurrect it. The tombstone
+and autosave guard share an IndexedDB transaction to prevent delayed saves from
+recreating discarded data. Discard does not remove confirmed receipts or retract
+an earlier submission. Failures preserve the draft and unchanged retries reuse
+the submission ID.
+Only a matching confirmed receipt marks delivery. The proposal owns the active
+send independently of its editor, so switching chats reconnects to that same
+operation. Approval atomically checks saved receipts, discards and pending IDs
+before preparing a submission, including from a stale editor in another tab.
+Receipt persistence and pending/draft cleanup commit together. Receipts retain
+the submitted kind and text, so a restored sent summary shows the approved report
+rather than the generated proposal. Older ID-only receipts omit unavailable
+report text. Reopening a confirmed proposal shows its receipt rather than
+sending again. The agent receives the proposed
+text as draft context, never as evidence that it was approved or sent.
+
+The UI embedding boundary uses a mount function that returns a disposer, matching
+Ask's existing link previews. This allows each action to reuse a normal React
+interface without rebuilding the conversation shell. The current proposal
+schema, Go validation, browser storage and executor remain feedback-specific.
+Future actions should each have a typed proposal, explicit validation, a review
+interface and a narrowly scoped executor reached only through affirmative user
+consent. When adding a second action, extract the shared draft/terminal-state,
+keyboard and receipt lifecycle rather than copying the feedback composer or
+allowing arbitrary agent-supplied component names, URLs or commands.
 
 Each suggestion card has a smooth ribbon on one corner or two opposite corners;
 never decorate adjacent corners. Vary the curvature and color orientation between
@@ -237,12 +331,12 @@ accessible in History; Clear does not delete saved chats. Ordinary search remain
 available. Clear keeps the selected CLI/model/effort for the next chat.
 
 Place the icon buttons inside the composer in this order: switch to ordinary
-search, History, Clear, picture in picture, Send/Stop. Show History only for an empty new composer, with no
+search, History, Clear, picture in picture, full screen, Send/Stop. Show History only for an empty new composer, with no
 submitted messages or draft. Show Clear whenever the composer has a draft or a
 conversation, as a text button floating in the composer's upper-right corner.
 In the modal, place a matching Close text button beside Clear. Their transparent
 container takes no height in the prompt layout. Text wraps around the controls
-on its first line; context chips flow inline with it. Use a transparent background
+on its first line; attachment chips flow inline with it. Use a transparent background
 and border, and the short tooltip “Clear chat and start fresh”. Keep the controls
 outside the scrollable transcript so they remain reachable while reading earlier
 replies.
@@ -277,8 +371,10 @@ real CLI execution belong to the full build.
 The home page now mounts the approved composer using `ask-pharos.html`,
 `ask-pharos.css`, and `ask-pharos.js` under `internal/archive/assets/`. The
 existing React `HomeSearch` is retained inside it. Interaction rules which do
-not need the DOM live in `ask-model.js`. `/settings/ask` provides opt-in,
-invitation visibility, and default CLI/model/effort selection.
+not need the DOM live in `ask-model.js`. The Ask Pharos card in App
+preferences (`/settings/preferences`; `/settings/ask` redirects there) provides
+opt-in and CLI refresh, beside a separate invitation switch. The composer
+chooses the CLI, model and effort and saves the default.
 
 The Go service owns CLI discovery, consent enforcement, invocation, cancellation,
 chat storage, and destination validation. Detecting an executable checks PATH
@@ -303,6 +399,15 @@ disabled; Claude runs without native tools, hooks, session persistence, or
 inherited MCP configuration; Antigravity uses a dedicated navigation agent,
 plan mode and its terminal sandbox. No adapter uses permission-bypass flags.
 Provider login remains the CLI's responsibility; Pharos accepts no API keys.
+
+Before inference, draft and question saves have a ten-second catalog-write
+deadline. A busy catalog returns a retryable explanation rather than leaving
+the composer waiting indefinitely before the CLI starts. Draft and visit-history
+saves retry transient failures in order before showing an error; question sends
+are never automatically repeated. Visit-history writes
+use that same deadline and run without Ask's chat-state lock, so they cannot
+block starting or canceling a question. Status, history and suggestion reads
+also run independently of that lock.
 
 Every inference launch explicitly connects the read-only Pharos MCP server for
 the current library using the same executable and configuration as Settings →
@@ -440,3 +545,19 @@ activity; routing details arriving later can refine a generic tool label.
 Running activity is held in memory and included when reopening a chat; it is saved with the finished
 turn, outside the conversation search index. A broken stream uses the existing
 session reconciliation path and never automatically repeats inference.
+
+
+Fullscreen Ask shows chat history as a persistent left inbox on wide windows;
+narrow windows retain the History drawer. New chat starts an independent question
+without canceling the previous chat. Up to two chats can answer concurrently,
+with one question running per chat. Switching chats preserves each stream and
+its Stop action targets only that chat. Answers completed in another chat do
+not navigate the current page.
+
+Inbox rows distinguish answering, unseen answers, and seen answers. Each answer
+attempt stores a `seenAt` receipt in the library through `/api/ask/read`; receipts
+survive reload and library moves and do not change the chat's activity order or
+search index. A receipt is sent only while Ask is visible in the foreground and
+the end of that answer is visible in its conversation viewport. Background,
+floating, hidden, loading, and canceled answers are not marked seen. A retry
+starts unseen, and a delayed receipt from an earlier attempt cannot read it.

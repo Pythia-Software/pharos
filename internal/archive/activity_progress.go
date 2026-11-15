@@ -16,6 +16,7 @@ import (
 // one source can contain a handful of sessions and another several thousand.
 type activityWork struct {
 	Phase      string        `json:"phase"`
+	Detail     string        `json:"detail,omitempty"`
 	Source     string        `json:"source,omitempty"`
 	Unit       string        `json:"unit,omitempty"`
 	Done       float64       `json:"done"`

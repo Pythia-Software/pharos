@@ -52,6 +52,18 @@ has requested the release.
 
 The default is a Developer ID signed and notarized release.
 
+App builds use `-trimpath -ldflags='-s -w'` for both Go executables, removing
+build-machine paths and debug metadata before signing. For a local build with
+Go symbols and DWARF, set `PHAROS_DEBUG_SYMBOLS=1` and use a separate output
+directory, for example `PHAROS_DEBUG_SYMBOLS=1 macos/build-app.sh dist/debug`.
+To investigate a release, use its source tag and compiler version. Release
+disk images use ULMO (LZMA) compression, supported on macOS 10.15 and later,
+below the app's macOS 14 minimum. Compression happens before final image
+signing, notarization and update-feed signing.
+
+The remaining installed-size work is tracked in the high-priority
+[MLX runtime size TODO](local-labeler.md#apple-silicon-gpu).
+
 Use `macos/release.sh X.Y.Z --adhoc` to explicitly publish an ad hoc signed release.
 GitHub will host an ad hoc release, but it cannot be notarized. macOS may block the downloaded
 app on first launch. A user who trusts the download can try opening it, then
@@ -84,7 +96,26 @@ credentials stay in Keychain.
 
 Releases select the macOS 26.5 SDK by default: the standalone macOS 27
 Command Line Tools SDK references a SwiftUI macro plugin not included with
-those tools. Set `SDKROOT` explicitly to use another compatible SDK.
+those tools. SDK selection is exported in the shell before Python or the
+keychain wrapper runs: Apple's system Python launcher otherwise injects
+`SDKROOT=…/MacOSX.sdk`, which follows the newest SDK and can defeat the pinned
+default. The
+app, keychain helper, update verifier and DMG artwork compiler share
+`macos/swift-toolchain.sh` and its Python runner, which pass `-sdk` and a module cache keyed by SDK
+settings, compiler path and compiler version. Local app builds use the same
+configuration. Set `SDKROOT` explicitly to use another compatible SDK.
+
+Before unlocking signing keys, the release compiles a small SwiftUI `@State`
+executable for both architectures and runs the native one. It prints the SDK,
+compiler version and cache path so a toolchain failure is diagnosable before
+building the app or submitting it for notarization. This is a release build
+preflight, not a test-suite run. It never accesses signing keys. The DMG artwork
+is compiled and then invoked with ordinary executable arguments. Global
+`ADDITIONAL_SWIFT_DRIVER_FLAGS` are rejected: they can leak compiler options
+into Swift interpreter arguments. Pass supported configuration through
+`SDKROOT`; do not use global compiler flags to repair a release.
+To check the toolchain alone without signing or publishing, run
+`/bin/sh macos/swift-toolchain.sh preflight`.
 
 The script fetches `origin/master`, refuses a dirty or different checkout and
 an existing tag, builds and verifies the app, then creates an annotated tag
@@ -93,10 +124,23 @@ disk image, notarizes and staples both app and image, signs the final image
 with Sparkle, verifies the uploaded bytes, and publishes the signed appcast last. It keeps the disk image and
 checksum under `dist/releases/vX.Y.Z/`. If publication fails after the tag is
 pushed, inspect the tag and draft release before retrying; never replace the
-asset of a published version. The disk image's Finder layout is written by
-[dmgbuild](https://dmgbuild.readthedocs.io/), which the script runs with `uvx`,
-so install [uv](https://docs.astral.sh/uv/) on the release Mac. Finder is not
-scripted, and its settings on the release Mac do not affect the layout.
+asset of a published version. The disk image is packaged by
+`macos/make-release-dmg.sh` and `macos/build_dmg.py`, using Apple's `hdiutil`
+and `ditto`. Python 3.10 or newer must be on `PATH`; no Python packages are
+downloaded or installed during packaging. The helper writes the Finder layout
+directly with the checked-in MIT-licensed `ds_store` and `mac_alias` libraries.
+Their versions, source hashes and maintenance instructions are recorded in
+[macos/vendor/README.md](../macos/vendor/README.md). Finder is not scripted,
+and its settings on the release Mac do not affect the layout. Packaging checks
+the copied app's signature, release version, layout and Applications shortcut,
+then remounts and checks the final compressed image before exposing its output.
+
+The packaging smoke test uses a disposable ad hoc signed app, the real release
+artwork and a real disk image, without signing credentials or publication:
+`PHAROS_DMG_TESTS=1 python3 -m unittest discover -s tools -p test_release_dmg.py`.
+It also resolves the background Alias after remounting at a different path.
+Before changing layout or format code, also open the image in Finder on macOS 14
+and the current macOS release, including a Retina display, to check appearance.
 
 The disk image opens in Finder. Drag `Pharos.app` onto the Applications shortcut
 and open the installed copy. The setup guide asks where the library lives:
@@ -178,6 +222,12 @@ ignored `build/`. Framework helpers are signed inside-out before the outer app;
 Developer ID releases retain hardened runtime and library validation. Ad hoc
 and self-signed local builds use a development-only library-validation exception.
 Generated framework binaries must not be committed.
+
+Model artifacts have a separate [cleanroom publication workflow](local-labeler.md#cleanroom-model-publication).
+The development Mac prepares the trained ONNX/MLX release kit; the cleanroom
+publishes those opaque archives. After verified model pins are committed and
+merged, the ordinary app release builds from source and pins without training
+files or model conversion dependencies.
 
 ### Separate development and deployment Macs
 
@@ -423,6 +473,14 @@ writes, stops its MCP connections, and takes an exclusive lease only after old
 processes exit. Another CLI command or another app instance defers installation;
 it is never force-killed for an update. Before an explicit Install and Relaunch,
 Pharos performs this preparation through Sparkle's public user-driver callbacks.
+An explicit install first asks the broker (or a portable service) to release
+its libraries with `POST /api/release?for=update`, as an eject does: work that
+stops at its next safe point within 7 s is stopped there, and work that cannot
+(a library copy, move, restore, compaction or delivery, catalog preparation,
+a service still opening, or work Pharos cannot identify) refuses the install
+before anything is stopped. Pharos then says what it is waiting for, and the
+user installs with Check for Updates once it finishes. Another process's work
+on the library does not hold an update, which leaves the drive mounted.
 If an install-on-quit handoff is unsafe, Pharos resumes the staged installer and
 cancels it through the public Skip reply before allowing ordinary Quit. Ordinary
 Quit sends SIGTERM to its owned service, which can finish closing independently;
@@ -487,8 +545,9 @@ full signed installation test.
 
 ## Upgrading an existing library
 
-This build upgrades catalogs to schema 21 and writes capture manifest version 5,
-combining durable preservation with managed-library delivery safeguards. Earlier
+This build upgrades catalogs to schema 23 and writes capture manifest version 5,
+combining durable preservation, managed-library delivery safeguards and separate
+provisional/refined writing state, explicit suppression outcomes, and timestamped writing queues. Earlier
 builds refuse these versions. Take and verify a backup of
 both the catalog and captures before upgrading: rollback requires restoring
 the pre-upgrade catalog and capture tree together, not just replacing the app.

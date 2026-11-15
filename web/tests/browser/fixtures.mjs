@@ -13,6 +13,39 @@ const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const schemas = Object.fromEntries(readdirSync(join(repo, "schemas")).filter(file => file.endsWith(".schema.json"))
   .map(file => [file.replace(".schema.json", ""), core.loadSchema(JSON.parse(readFileSync(join(repo, "schemas", file), "utf8")))]));
 const now = Date.now();
+// Invented strings for structural tests; production exports never enter git.
+export const conversationLabelsFixture = {
+  version:1,
+  source:{kind:'test fixture',catalog:'fixture.sqlite3',exported_at:'2026-10-31T12:00:00Z',models:['fixture-model/v1'],taxonomy:'candidate-0.3',ledger:{messages:14,conversations:2},candidate_conversations:2,limit:2,minimum_labeled_prose:2,selection:'Synthetic browser-test fixture.'},
+  taxonomy:[{id:'P.request.work.implement',name:'Implement',definition:'Request work.'},{id:'C.report.product',name:'Product',definition:'Report a product.'}],
+  conversations:['first','second'].map((id,index)=>({id:`fixture-${id}`,work_id:'fixture-work',title:index?'Review the retained conversation sequence and compare its recurring message functions':'Add a conversation explorer',repository:index?'example':'fixture',provider:index?'claude':'codex',started_at:'2026-10-30T12:00:00Z',
+    messages:['P.request.work.implement','C.deliberation.plan','C.report.product','P.control.redirect','C.report.product','P.request.work.implement','C.report.product'].map((label,i)=>({id:`${id}-${i}`,role:i===0||i===3||i===5?'user':'assistant',kind:i===1?'reasoning':'message',at:new Date(Date.parse('2026-10-30T12:00:00Z')+i*60000).toISOString(),segment:i===0||i===3||i===5?'H-typed':i===1?'TH':'AR',labels:[[label,.92]],text:'A small invented fixture for browser layout and navigation.',text_source:'Test fixture',truncated:false,chunks:1}))})),
+};
+// Recorded-structure fixture: one child and grandchild, including an async
+// acknowledgement. These invented records never enter the production export.
+for (const c of conversationLabelsFixture.conversations) {
+  c.main_session=c.id+':main';
+  c.sessions=[{id:c.main_session,parent_id:null,conversation_id:c.id,work_id:c.work_id,name:'Main agent',kind:'root',depth:0,link_evidence:'sample root',call_message_id:null,result_message_id:null}];
+  c.messages.forEach((m,i)=>Object.assign(m,{session_id:c.main_session,conversation_id:c.id,work_id:c.work_id,order:i*10,call_id:null}));
+  if(c.id!=='fixture-first')continue;
+  const event=(id,kind,session,order,labels,role='assistant')=>({id,kind,role,at:new Date(Date.parse('2026-10-30T12:00:00Z')+(session===c.main_session?order*6000:session==='fixture-child'?165000+order*50000:205000+order*25000)).toISOString(),segment:role==='tool'?'DEL':'AR',labels,text:'Invented nested workflow fixture.',text_source:'Test fixture',truncated:false,chunks:labels.length?1:0,session_id:session,conversation_id:c.id,work_id:c.work_id,order,call_id:id.includes('call')||id.includes('receipt')?'call-handle':null});
+  c.sessions.push({id:'fixture-child',parent_id:c.main_session,conversation_id:c.id,work_id:c.work_id,name:'Review helper',kind:'subagent',depth:1,link_evidence:'delegation handle',call_message_id:'fixture-call',result_message_id:'fixture-receipt'},
+    {id:'fixture-grandchild',parent_id:'fixture-child',conversation_id:c.id,work_id:c.work_id,name:'Nested helper',kind:'subagent',depth:2,link_evidence:'native session parent',call_message_id:null,result_message_id:null});
+  c.messages.push(event('fixture-call','delegation',c.main_session,25,[['P.request.work.review',.94]]),event('fixture-receipt','delegation_result',c.main_session,26,[['C.report.progress',.92]],'tool'),
+    event('child-0','message','fixture-child',0,[['P.request.work.review',.93],['C.report.intent',.91]]),event('child-1','message','fixture-child',1,[['C.report.product',.95]]),event('child-2','message','fixture-child',2,[['P.request.work.review',.93],['C.report.intent',.91]]),
+    event('grandchild-0','message','fixture-grandchild',0,[]),event('grandchild-1','message','fixture-grandchild',1,[['C.report.product',.95]]),
+    event('grandchild-2','message','fixture-grandchild',2,[]),event('grandchild-3','message','fixture-grandchild',3,[['C.report.product',.95]]));
+  c.messages.sort((a,b)=>a.order-b.order);
+  // Exercise a completed no-match beside the still-unprocessed grandchild-2.
+  c.messages.find(m=>m.id==='grandchild-0').chunks=1;
+}
+// Agent events on the first conversation's fingerprint: two point back at
+// the same prompt (one arc), one at another, one has no target.
+const linkEvent=(id,message,group,target)=>({id,message_id:message,kind:'assumption',label:'Assumption',group,probability:.9,source:'reply',sentence:'I assume the explorer means the sidebar list.',
+  target:target?{method:'quote',message_id:target,role:'user',kind:'message',start:0,end:8,text:'Invented',strong:true}:null});
+const fingerprintEvents=[linkEvent('e1','first-2','Choices you may not see','first-0'),linkEvent('e2','first-4','Reactions and learning','first-0'),linkEvent('e3','first-6','Friction','first-3'),linkEvent('e4','first-4','Friction',null)];
+for(const c of conversationLabelsFixture.conversations)c.activity=[{id:c.id+':tool',session_id:c.main_session,message_id:c.messages.find(m=>m.kind==='message').id,name:'Read',category:'read',command_category:'',status:'ok',start:'2026-10-30T12:01:15Z',end:'2026-10-30T12:01:30Z',duration_ms:15000}];
+conversationLabelsFixture.version=2;
 export const sourceSetupCandidates = [
   {name:'claude',kind:'claude',path:'/Users/test/.claude/projects',display_path:'~/.claude/projects',count:24,unit:'session',bytes:2400000,status:'found',acceptable:true,recommended:true},
   {name:'claude-work',kind:'claude',path:'/Users/test/.claude-work/projects',display_path:'~/.claude-work/projects',count:8,unit:'session',bytes:800000,status:'found',acceptable:true,recommended:true},
@@ -31,8 +64,61 @@ const longTitle = "Investigate why the incremental indexer re-reads every captur
 export const queryFixtureDatasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
 const datasets = queryFixtureDatasets;
+// Timed model requests for Thinking: two models and efforts over two weeks,
+// waits across every band, and some requests without a usable wait.
+const thinkingModels=['gpt-6.1-sol','claude-opus-5-5'],thinkingEfforts=['low','high'];
+const waitEdges=[.1,.2,.3,.5,1,2,3,5,10,20,30,50,100,200,300,500,600];
+datasets.model_requests=Array.from({length:448},(_,index)=>{
+  const at=new Date(now-(index%14+.05+(index*7%24)/25)*day),iso=at.toISOString(),gap=index%9===0?null:Math.min(600,.12*Math.pow(1.7,index%17));
+  const monday=new Date(at);monday.setUTCDate(monday.getUTCDate()-(monday.getUTCDay()+6)%7);
+  return {...datasets.model_requests[index%datasets.model_requests.length],id:'request-'+index,conversation_id:'conversation-'+index%16,
+    model:thinkingModels[index%2],effort:thinkingEfforts[(index>>1)%2],speed:index%5?'standard':'fast',requested_at:iso,day:iso.slice(0,10),week:monday.toISOString().slice(0,10),month:iso.slice(0,7),
+    hour_of_day:at.getUTCHours(),gap_seconds:gap,gap_bin:gap===null?null:(band=>`${waitEdges[band]}–${waitEdges[band+1]} s`)(Math.max(0,waitEdges.findLastIndex(edge=>edge<=gap)-(gap===600?1:0))),
+    timing_quality:gap===null?'No linked tool timestamp':'Usable timing',reasoning_output_tokens:index%3?100+index:0,agent_depth:index%4?0:1};
+});
+// Invented entity measurements for the standalone cross-dashboard scatter.
+datasets.scatter = ["conversation","work","agent_session","message"].flatMap(point_kind => Array.from({length:8},(_,index)=>({
+  ...datasets.scatter[index], id:`${point_kind}:point-${index}`,entity_id:`point-${index}`,point_kind,
+  title:`Example ${point_kind} ${index + 1}`,provider:index%2?"codex":"claude",repository_name:"pharos",
+  first_at:new Date(now-day).toISOString(),last_at:new Date(now-1000).toISOString(),human_typed:index*120,tokens_cost:index*.4,
+})));
+for (const [index, row] of datasets.messages.entries()) {
+  const role = ["user", "assistant", "assistant", "tool"][index % 4];
+  Object.assign(row, { role, kind: ["message", "message", "thinking", "tool_result"][index % 4], has_authorship: role === "user", selected: true,
+    text: ["Review the query table pages and show every retained message.", "The dataset now includes prompts, replies, thinking and tool messages.", "I should compare recorded timing with coverage before drawing a conclusion.", "Read completed: 24 matching records."][index % 4],
+    model: role === "assistant" ? "gpt-6-sol" : null, effort: role === "assistant" ? "high" : null,
+    typed_words: role === "user" ? 12 + index : null, words: role === "user" ? 18 + index : null,
+    pasted_words: role === "user" ? 6 : null, typed_message: role === "user" ? true : null,
+    main_category: role === "user" ? "typed" : null, work_id: role === "user" ? row.workspace_id : null });
+}
+
+for (const [index, row] of datasets.compactions.entries()) Object.assign(row, { trigger: ["human", "machine", "unknown"][index % 3], trigger_evidence: ["recorded", "inferred", "unknown"][index % 3] });
+for(const [i,row] of datasets.message_labels.entries())Object.assign(row,{fingerprint:row.conversation_id,message_id:"label-message-"+i,label:i%3?"C.report.finding":"P.request.work.implement",family:i%3?"C.report":"P.request",function_role:i%3?"Receiver":"Sender",label_status:"matched",source:["human","output","thinking"][i%3]});
 // Parallelism records are built with the saved counting and gap settings.
 for (const row of datasets.parallelism) Object.assign(row, { counting: "workspace", gap_minutes: 60 });
+// Habits: four months of days, with streaks, a vacation, a punchcard and
+// one automation with a long name.
+function habitsSummary() {
+  const count = 120, first = new Date(summaryDay - (count - 1) * day), zero = () => Array.from({ length: 7 }, () => Array(24).fill(0));
+  const days = Array.from({ length: count }, (_, index) => {
+    const date = new Date(+first + index * day), name = date.toISOString().slice(0, 10), weekday = (date.getUTCDay() + 6) % 7, active = index % 9 !== 4 && weekday < 6;
+    const actor = minutes => ({ elapsed_ms: minutes * 60000, active_ms: minutes * 90000, turns: minutes ? 3 : 0 });
+    return { day: name, weekday, vacation: index === count - 20, excused: index === count - 20,
+      you: { engaged_ms: active ? (60 + index % 5 * 40) * 60000 : 0, messages: active ? 12 : 0, typed_words: active ? 800 : 0, ...(active ? { first: +date + 9 * 3600000, last: +date + (17 + index % 4) * 3600000 } : {}), focus_blocks: active ? 2 : 0, focus_ms: active ? 3600000 : 0, ...(active ? { blocks: [[+date + 9 * 3600000, +date + 12 * 3600000], [+date + 14 * 3600000, +date + (17 + index % 4) * 3600000]] } : {}) },
+      with_you: actor(active ? 90 : 0), unattended: actor(index % 3 ? 120 : 0), automated: actor(index % 2 ? 20 : 0), agents_ms: (active ? 90 : 0) * 60000 + (index % 3 ? 120 : 0) * 60000, parallel_ms: 1800000, peak_agents: 3,
+      qualifies: { you: active, agents: active || index % 3 > 0, automated: index % 2 > 0 } };
+  });
+  const cells = { you: zero(), with_you: zero(), unattended: zero(), automated: zero() };
+  for (let weekday = 0; weekday < 5; weekday++) for (let hour = 9; hour < 18; hour++) { cells.you[weekday][hour] = 30 * 60000 * 13; cells.unattended[weekday][(hour + 8) % 24] = 50 * 60000 * 13; }
+  const streak = { current: 4, current_from: days.at(-5).day, longest: 21, longest_from: days[10].day, longest_to: days[30].day, today: "pending" };
+  return { generated_at: iso(0), timezone: "UTC", today: days.at(-1).day, period_start: days[0].day, mode: "all", settings: { vacations: [days[count - 20].day], youMessages: 1, agentMinutes: 10, engagedGap: 15, dayStart: 0 },
+    days, streaks: { you: streak, agents: { ...streak, today: "done" }, automated: { ...streak, current: 0 } },
+    windows: [7, 30, 90, 365].map(length => ({ days: length, considered: Math.min(length, count), active: { you: Math.round(Math.min(length, count) * .7), agents: Math.min(length, count), automated: Math.round(Math.min(length, count) / 2) } })),
+    punchcard: { from: days.at(-90).day, to: days.at(-1).day, weeks: [13, 13, 13, 13, 13, 13, 12].map(count => Array(24).fill(count)), cells },
+    automations: [{ initiator: "scheduled", label: "corpus-overnight-quota-and-progress-with-an-unusually-long-automation-name", runs: 140, active_days: 60, agent_hours: 32.5, first_run: +first, last_run: now - 3600000, median_gap_ms: 3600000, missed: 3, daily: Object.fromEntries(days.filter((_, index) => index % 2).map(item => [item.day, 2])) },
+      { initiator: "scripted", label: "claude -p", runs: 12, active_days: 6, agent_hours: 1.2, first_run: +first, last_run: now - day, median_gap_ms: 2 * day, missed: 0, daily: {} }],
+    coverage: { turns: 3000, unmatched_turns: 40, typed_messages: 900, messages: 5000 } };
+}
 // The service assigns every usage record a carbon factor tier.
 datasets.usage.forEach((row, index) => { row.carbon_tier = ["small", "medium", "large"][index % 3]; });
 // Usage trends consume the calendar keys of their source records.
@@ -47,6 +133,10 @@ for (const row of [...datasets.tools, ...datasets.mcp_calls]) {
 // transcript (long code blocks, a wide table, tool output, an edit, nested
 // agents) and two child sessions.
 export const workID = "work-long", rootConversation = "conv-root";
+datasets.people_message_labels=['human','activity','habits'].flatMap(scope=>datasets.writing_messages.slice(0,24).map((row,i)=>{
+ const label=i%3?'P.request.work.implement':'P.control.redirect';
+ return {...row,id:`${scope}:${row.id}:${label}`,message_id:row.id,people_scope:scope,label,family:label.split('.').slice(0,2).join('.'),label_status:'matched',sent_at:row.sent_at,event_at:row.sent_at,started_at:row.sent_at,typed_words:8,source_conversation_id:rootConversation,source_workspace_id:workID,actor:'you',initiator:'human'};
+}));
 const start = now - 2 * 3600000;
 const at = seconds => new Date(start + seconds * 1000).toISOString();
 let sequence = 0;
@@ -59,18 +149,31 @@ const codeBlock = ["```js", ...Array.from({ length: 30 }, (_, i) => `${"  ".repe
 const wideTable = [`| ${Array.from({ length: 14 }, (_, i) => `Column header ${i}`).join(" | ")} |`, `|${" --- |".repeat(14)}`,
   ...Array.from({ length: 6 }, (_, row) => `| ${Array.from({ length: 14 }, (_, i) => `value-${row}-${i}-${"x".repeat(i)}`).join(" | ")} |`)].join("\n");
 const usage = (input, output = 400) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: input * 4, cache_creation_input_tokens: 200 });
+// Related work (peer_reader.go): a certain review and an uncertain reader.
+export const peerWorkID = "work-review";
+const peerHandoff = (kind, confidence) => ({ kind, confidence, role: "reviewer", workspace_id: peerWorkID, conversation_id: "conv-review", message_id: "conv-review-reply", title: `Review: ${longTitle}` });
+export const relatedWork = {
+  peers: [
+    { workspace_id: peerWorkID, title: `Review: ${longTitle}`, provider: "codex", started_at: at(30), role: "reviewer", confidence: "high",
+      evidence: [{ kind: "read_written_by", confidence: "high", from_workspace_id: workID, to_workspace_id: peerWorkID, details: { basis: "diff", lines: 42, timing: "return" } }, { kind: "copied_into", confidence: "high", from_workspace_id: peerWorkID, to_workspace_id: workID, details: { words: 180 } }] },
+    { workspace_id: "work-maybe", title: "Parallel work in the same checkout that may have read this diff", provider: "claude", started_at: at(60), role: "reviewer", confidence: "low",
+      evidence: [{ kind: "read_written_by", confidence: "low", from_workspace_id: workID, to_workspace_id: "work-maybe", details: { basis: "read", lines: 4 } }] },
+  ],
+  peer_conversations: [{ id: "conv-review", workspace_id: peerWorkID, provider: "codex", native_id: "conv-review", started_at: at(30), title: `Review: ${longTitle}`, peer_role: "reviewer", peer: true }],
+};
 function transcript() {
   sequence = 0;
   const messages = [];
   for (let turn = 0; turn < 12; turn++) {
-    messages.push(event("message", `Turn ${turn}: ${turn % 3 ? "please look at the failing test and fix it" : `${longTitle}. ${"Here is more context that wraps across several lines. ".repeat(8)}`}`, { role: "user" }));
+    // The first prompt quotes a related review; the first edit was read by one.
+    messages.push(event("message", `Turn ${turn}: ${turn % 3 ? "please look at the failing test and fix it" : `${longTitle}. ${"Here is more context that wraps across several lines. ".repeat(8)}`}`, { role: "user", ...(turn === 0 ? { handoffs_in: [peerHandoff("copied_into", "high")] } : {}) }));
     messages.push(event("message", { message: { id: `r-${turn}`, usage: usage(12000 + turn * 9000), content: [{ type: "text", text: turn % 2 ? `Here is the change:\n\n${codeBlock}` : `Findings so far:\n\n${wideTable}\n\nA path to note: /Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive/incremental_sync_recovery_test.go` }] } }));
     const call = `call-${turn}`;
     if (turn % 3 === 0) {
       messages.push(event("tool_call", { name: "Bash", input: { command: `go test -run 'TestIncrementalSyncRecovery|TestCaptureAfterSleep' -count=1 -v ./internal/archive/... 2>&1 | tee /tmp/${"very-long-log-name-".repeat(4)}${turn}.log` } }, { call_id: call }));
       messages.push(event("tool_result", { content: Array.from({ length: 40 }, (_, i) => `=== RUN   TestIncrementalSyncRecovery/case_${i}_${"with_a_long_subtest_name_".repeat(3)}`).join("\n"), is_error: turn === 3 }, { call_id: call }));
     } else if (turn % 3 === 1) {
-      messages.push(event("tool_call", { name: "Edit", input: { file_path: "/repo/internal/archive/incremental_sync.go", old_string: `func recover() {\n${longLine}\n}`, new_string: `func recover(ctx context.Context) error {\n${longLine}\n${longLine}\n\treturn nil\n}` } }, { call_id: call }));
+      messages.push(event("tool_call", { name: "Edit", ...(turn === 1 ? { handoffs_out: [peerHandoff("read_written_by", "low")] } : {}), input: { file_path: "/repo/internal/archive/incremental_sync.go", old_string: `func recover() {\n${longLine}\n}`, new_string: `func recover(ctx context.Context) error {\n${longLine}\n${longLine}\n\treturn nil\n}` } }, { call_id: call }));
       messages.push(event("tool_result", { content: "The file /repo/internal/archive/incremental_sync.go has been updated." }, { call_id: call }));
     } else {
       // A delegation with a nested delegation inside it.
@@ -100,26 +203,26 @@ const work = {
 };
 
 // The delegation explorer's analysis of the workspace's three sessions.
-const metricKeys = ["start", "tokens", "cost", "calls", "errors", "files", "messages", "requests", "turns", "clock", "total", "toolTime", "toolAgent", "toolSum", "wait", "modelTime", "backgroundTime", "episodes", "children", "leaves", "depth", "input", "uncached", "cacheRead", "cacheWrite", "output", "reasoning", "remainder"];
+const metricKeys = ["start", "tokens", "cost", "calls", "events", "errors", "files", "filesRead", "messages", "requests", "turns", "clock", "total", "toolTime", "toolAgent", "toolSum", "wait", "modelTime", "backgroundTime", "episodes", "children", "leaves", "depth", "input", "uncached", "cacheRead", "cacheWrite", "output", "reasoning", "remainder"];
 const durations = new Set(["clock", "total", "toolTime", "toolAgent", "toolSum", "wait", "modelTime", "backgroundTime"]);
-const metricSpecs = metricKeys.map(id => ({ id, label: { start: "First evidence", tokens: "Tokens", cost: "API cost", calls: "Tool calls", errors: "Errors", files: "Files Edited", clock: "Clock span", total: "Session spans", toolTime: "Tool elapsed" }[id] || id,
+const metricSpecs = metricKeys.map(id => ({ id, label: { start: "First evidence", tokens: "Tokens", cost: "API cost", calls: "Tool calls", messages: "Messages", events: "Agent events", filesRead: "Files read", errors: "Errors", files: "Files Edited", clock: "Clock span", total: "Session spans", toolTime: "Tool elapsed" }[id] || id,
   unit: id === "cost" ? "usd" : durations.has(id) ? "ms" : id === "start" ? "date" : "count", definition: `Definition for ${id}` }));
 const metric = (value, quality = "observed") => ({ value, quality, known: value === null ? 0 : 1, total: 1 });
 const sessionEnd = start + 300000;
-function session(id, conversation, parent, provider, outline, depth, label, tokens) {
+function session(id, conversation, parent, provider, depth, label, tokens) {
   const self = Object.fromEntries(metricKeys.map(key => [key, metric(0)]));
-  Object.assign(self, { tokens: metric(tokens), calls: metric(3), files: metric(depth === 0 ? 1 : 2), cost: metric(tokens / 1000), clock: metric(300000), start: metric(start), wait: metric(null, "unknown"), modelTime: metric(null, "unknown"), backgroundTime: metric(null, "unknown") });
-  return { id, workspace_id: workID, conversation_id: conversation, parent_id: parent, provider, outline, depth, label, model: provider === "codex" ? "gpt-test" : "claude-test", effort: "medium", coverage: "complete", usage_status: "reported-reconciled",
+  Object.assign(self, { tokens: metric(tokens), calls: metric(3), files: metric(depth === 0 ? 1 : 2), filesRead: metric(4), messages: metric(12), events: metric(2), cost: metric(tokens / 1000), clock: metric(300000), start: metric(start), wait: metric(null, "unknown"), modelTime: metric(null, "unknown"), backgroundTime: metric(null, "unknown") });
+  return { id, workspace_id: workID, conversation_id: conversation, parent_id: parent, provider, depth, ancestry: { state: parent ? "resolved" : "root", depth }, label, model: provider === "codex" ? "gpt-test" : "claude-test", effort: "medium", coverage: "complete", usage_status: "reported-reconciled",
     order: depth, child_count: depth < 2 ? 1 : 0, start, end: sessionEnd, subtree_start: start, subtree_end: sessionEnd, self, all: { ...self } };
 }
 const sessions = [
-  session("s-root", rootConversation, "", "claude", "1", 0, longTitle, 100000),
-  { ...session("s-child", "conv-child", "s-root", "codex", "1.1", 1, "Review implementation", 60000), message_id: "m-15" },
-  { ...session("s-nested", "conv-nested", "s-child", "claude", "1.1.1", 2, "Review timing", 30000), message_id: "conv-child-reply" },
+  session("s-root", rootConversation, "", "claude", 0, longTitle, 100000),
+  { ...session("s-child", "conv-child", "s-root", "codex", 1, "Review implementation", 60000), message_id: "m-15" },
+  { ...session("s-nested", "conv-nested", "s-child", "claude", 2, "Review timing", 30000), message_id: "conv-child-reply" },
 ];
 function delegation(query) {
   const search = (query.get("search") || "").toLowerCase();
-  const rows = sessions.filter(row => !search || row.label.toLowerCase().includes(search) || row.outline === "1");
+  const rows = sessions.filter(row => !search || row.label.toLowerCase().includes(search) || !row.parent_id);
   return { snapshot: "fixture-v1", rows, ancestors: [], focus: sessions, matched: Object.fromEntries(rows.map(row => [row.id, true])), total: rows.length, session_count: sessions.length, offset: 0, next_cursor: "",
     metrics: metricSpecs, maxima: { self: Object.fromEntries(metricKeys.map(key => [key, key === "tokens" ? 100000 : 300000])), all: Object.fromEntries(metricKeys.map(key => [key, key === "tokens" ? 190000 : 300000])) },
     totals: { ...sessions[0].all, clock: metric(300000), total: metric(900000) }, start, end: sessionEnd, density: Array.from({ length: 120 }, (_, i) => i % 13), warnings: [] };
@@ -134,9 +237,10 @@ function workPreview(id, query) {
 }
 function parallel(query) {
   const from = Number(query.get("start")) || start, to = Number(query.get("end")) || sessionEnd;
-  return { snapshot: "fixture-v1", start: from, end: to, inference: "Inferred, not measured", lanes: (query.get("sessions") || "").split(",").filter(Boolean).map(id => ({ session: id,
+  return { snapshot: "fixture-v1", start: from, end: to, inference: "Inferred, not measured", ...(query.get("labels")==="1"?{taxonomy:conversationLabelsFixture.taxonomy}:{}), lanes: (query.get("sessions") || "").split(",").filter(Boolean).map(id => ({ session: id,
+    ...(query.get("labels")==="1"?{messages:[{id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',created_at:new Date(start+10000).toISOString(),text:'Implement this change',authorship:id==='s-root'?[{category:'typed',bytes:12,text:'Implement th',truncated:false},{category:'pasted',bytes:9,text:'is change',truncated:false}]:[{category:'automated',bytes:21}],labels:{ids:['P','P.request','P.request.work','P.request.work.implement'],probs:{'P.request.work.implement':.95},segment:id==='s-root'?'H-typed':'AIUR'}},{id:'thought-'+id,role:'assistant',kind:'reasoning',created_at:new Date(start+20000).toISOString(),text:'Thinking through the work',labels:{ids:['C','C.deliberation','C.deliberation.plan'],probs:{'C.deliberation.plan':.95},segment:'AR'}}],messages_truncated:false,labels_pending:false,agent_events:[{id:'e-'+id,message_id:'thought-'+id,kind:'assumption',label:'Assumption',group:'Choices you may not see',probability:.9,source:'thinking',sentence:'I assume the change means the importer.',target:{method:'quote',message_id:id==='s-root'?'m-1':id==='s-child'?'conv-child-reply':'conv-nested-reply',role:'user',kind:'message',start:0,end:9,text:'Implement',strong:true,at:new Date(start+10000).toISOString()}},{id:'e-'+id+'-open',message_id:'thought-'+id,kind:'obstacle',label:'Obstacle or roadblock',group:'Friction',probability:.8,source:'thinking',sentence:'The build failed once.',target:null}]}:{}),
     model_inferred: [{ start: Math.max(from, start + 1000), end: Math.min(to, sessionEnd - 1000) }], episodes: [{ start, end: sessionEnd }], truncated: false,
-    marks: [{ start: start + 1000, end: start + 100000, end_known: true, category: "read", name: "Read", count: 1, tool_id: "tool-read", message_id: "m-1" }, { start: start + 110000, end: start + 125000, end_known: true, category: "run", name: "Test", count: 1, error: true, tool_id: "tool-error", message_id: "m-2" }] })) };
+    marks: [{ start: start + 1000, end: start + 100000, end_known: true, category: "read", name: "Read", count: 1, tool_id: "tool-read", message_id: "m-1", preview: "/repo/README.md", status: "ok" }, { start: start + 110000, end: start + 125000, end_known: true, category: "run", name: "Test", count: 1, error: true, tool_id: "tool-error", message_id: "m-2", preview: "npm test", status: "error" }] })) };
 }
 
 // Findings: open, in-cart and watching cards with a detail chart.
@@ -146,7 +250,10 @@ const openCard = { id: "drift:repo:repo_explo:abc", state: "open", title: "Codex
   detector: "drift", detector_label: "Instruction drift", target: repoTarget, target_label: "explo", scope_label: "explo", repository_id: "repo_explo", first_seen_at: iso(20 * day), last_seen: iso(day), active: true, new: true };
 const cartCard = { ...openCard, id: "failure:repo:repo_explo:def", title: `${longTitle} in explo`, explanation: "Agents read gzipped files as text.", impact: { usd: 3, tokens: 1e6, minutes: 1, failures: 36 }, impact_note: "34 failed commands", new: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
 const watchingCard = { ...openCard, id: "drift:repo:repo_tl1:ghi", state: "watching", title: "Codex can't find tl1's instructions", new: false, target: "repo:repo_tl1", target_label: "tl1", scope_label: "tl1", repository_id: "repo_tl1", change_label: "A shared instructions file", change: "A shared instructions file",
-  watching: { before: "1 in 3", change: "A shared instructions file", copied_at: iso(12 * day), day: 12, of_days: 28, result_on: new Date(now + 16 * day).toISOString().slice(0, 10), saved_usd: 3.2, target_label: "tl1" } };
+  watching: { before: "1 in 3", change: "A shared instructions file", copied_at: iso(12 * day), day: 12, of_days: 28, result_on: new Date(now + 16 * day).toISOString().slice(0, 10), saved_usd: 3.2, target_label: "tl1",
+    provisional: { signal: "promising", ratio: 0.2, before: { units: 48, rate: 5 / 12, exposure: 48 }, after: { units: 24, rate: 1 / 12, exposure: 24 },
+      through: iso(day).slice(0, 10), guards: [{ name: "tokens per conversation", before: 100000, after: 90000, ok: true }],
+      savings: { usd: 3.2, tokens: 1e6, added_usd: 0, weeks: 2, through: iso(day).slice(0, 10) } } } };
 const findingCards = [openCard, cartCard, watchingCard];
 const findings = {
   status: { built_at: iso(3600000), took_ms: 11000, measured_at: null, conversations_28d: 4482, weekly_conversations: 1120, generation: "g", running: false, phase: null, error: null, current: true },
@@ -166,104 +273,201 @@ const findingDetail = card => ({ ...card, chart: { title: "Codex conversations t
   attempts: [{ attempt: 1, change: "A shared instructions file", copied_at: iso(12 * day), status: "watching", target_label: "tl1", savings: { usd: 3.2, added_usd: 0 } }],
   steps: [{ label: "A shared instructions file", change: "" }, { label: "A fallback setting", change: "" }], metric: { kind: "rate", unit: "conversations" }, prompt: `Pharos finding ${card.id} …` });
 
+// Synthetic fixes for layout; grouping, bounds and lifecycle are tested in Go and fixes-model.
+const fixStatus = { state: "recurring", label: "Still recurring", detail: "Seen in the last 3 days of the data.", first: iso(9 * day).slice(0, 10), last: iso(day).slice(0, 10), days_quiet: 1 };
+const fixCard = { id: "fix_sample", title: "trimesh isn't installed in this environment, so the mesh check falls back to a slower path", category: "env", category_label: "Environment or setup", source: "friction",
+  target: repoTarget, target_label: "explo", scope: "repo", scope_reason: "All but one event are in explo.", destination_kind: "Environment", destination: "explo's setup (requirements, setup script)",
+  terms: ["trimesh"], files: ["requirements.txt"], work_items: 6, events: 9, conversations: 7, repositories: [{ key: "explo", count: 8 }, { key: "No repository", count: 1 }], status: fixStatus, hours: 1.4, episodes: 3,
+  guidance_hit: { repository: "explo", file: "AGENTS.md", line: 2, term: "trimesh", text: "Install trimesh before running mesh checks." }, groups: 2, tentative: false, safeguards: 1,
+  state: "open", recurred: false, handed_at: null, cart: { target: repoTarget, target_label: "explo", ticked: true }, priority: 8.8, hidden: "", deprioritized: false };
+export const fixesFixtures = {
+  items: [fixCard,
+    { ...fixCard, id: "fix_global", title: "gh pr edit fails with a GraphQL error about Projects (classic)", category: "tool", category_label: "Tool or integration", target: "global", target_label: "Global setup", scope: "global", scope_reason: "Seen in 3 repositories; none holds more than 85%.", destination_kind: "Global guidance", destination: "~/.claude/CLAUDE.md", terms: ["gh pr edit"], files: [], repositories: [{ key: "explo", count: 2 }, { key: "tl1", count: 2 }, { key: "corpus", count: 1 }], guidance_hit: null, groups: 1, safeguards: 0, cart: null, work_items: 4, events: 5, hours: 0, priority: 4 },
+    { ...fixCard, id: "fix_rare", title: "The fixture loader expects UTC timestamps", category: "knowledge", category_label: "Codebase knowledge", tentative: true, work_items: 2, events: 2, hidden: "rare", cart: null, guidance_hit: null, groups: 1, safeguards: 0, priority: 2 },
+    { ...fixCard, id: "fix_handed", title: "The sandbox blocks writes to ~/.cache", category: "harness", category_label: "Harness and shell behaviour", state: "handed_off", handed_at: iso(2 * day), cart: null, groups: 1, status: { ...fixStatus, state: "quiet", label: "Quiet since handoff", days_quiet: 8 }, deprioritized: true }],
+  summary: { open: 2, handed_off: 1, dismissed: 0 }, hidden: { stale: 0, rare: 1, total: 1 },
+  bounds: { quiet_days: 7, hide_days: 30, min_work_items: 3 }, default_bounds: { quiet_days: 7, hide_days: 30, min_work_items: 3 },
+  cart: [{ target: repoTarget, label: "explo", ticked: 1, handoff: "review", handoff_reason: "Investigate and propose, or make the change; you choose before copying.", items: [{ id: "fix_sample", title: fixCard.title, ticked: true, change_label: "Environment or setup", suggested_target: repoTarget }] }],
+  targets: [{ target: "global", label: "Global setup" }, { target: repoTarget, label: "explo" }], built_at: iso(3600000), end: iso(day).slice(0, 10), in_scope_events: "412", excluded_events: 37, safeguard_events: 3, prompt_limit: 12, version: "fixes-v1",
+  coverage: "Agent events from the last 90 days the events pass scanned, grouped by what they say.",
+};
+const fixQuote = { event_id: "e1", sentence: fixCard.title, about: "the mesh check", kind: "friction", kind_label: "Friction", repository: "explo", model: "claude-opus", day: iso(day).slice(0, 10), source: "reply", workspace_id: workID, conversation_id: rootConversation, message_id: "m-1" };
+export const fixDetailFixture = { ...fixCard, suggestion: "Add trimesh to the environment agents run in, pinned, so the check never falls back.", category_explanation: "Something agents need is missing, too slow or the wrong version where they run.",
+  quotes: [fixQuote, { ...fixQuote, event_id: "e2", source: "thinking", about: "" }], members: [fixQuote, { ...fixQuote, event_id: "e2" }, { ...fixQuote, event_id: "e3" }], member_count: 9,
+  guidance_hits: [fixCard.guidance_hit], tool_errors: [{ key: "ModuleNotFoundError: trimesh", count: 4 }], kinds: [{ key: "friction", label: "Friction", count: 7 }, { key: "workaround", label: "Workaround", count: 2 }], models: [{ key: "claude-opus", count: 9 }], thinking: 3,
+  cost: { episodes: 3, hours: 1.4, calls: 22, unresolved: 1 }, status: { ...fixStatus, messages_after: 40 } };
+export const fixesSettingsFixture = { bounds: fixesFixtures.bounds, default_bounds: fixesFixtures.default_bounds, open: 3, hidden_stale: 0, hidden_rare: 1, built_at: fixesFixtures.built_at, end: fixesFixtures.end, window_days: 90, version: "fixes-v1" };
+
 // Synthetic examples for risky action layout; selection and lifecycle are tested in Go.
-const safetyCard = { id: "safety_sample", title: "Check where credentials were copied", explanation: "A command selected credential files or cloud configuration for copying to another location.", state: "open", target: repoTarget, target_label: "explo", first_seen_at: iso(day), last_seen_at: iso(day), calls: 3, material_change: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
+const safetyCard = { id: "safety_sample", rule: "credentials", danger: "high", subject: "/Users/example/repo/.build/gcloud", title: "Credentials copied to another location", explanation: "A command copied credential files or cloud configuration somewhere else, where they can outlive the task or be uploaded.", state: "open", target: repoTarget, target_label: "explo", first_seen_at: iso(day), last_seen_at: iso(day), calls: 3, material_change: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
 export const safetyFixtures = {
-  cases: [safetyCard, { ...safetyCard, id: "safety_delete", target: "machine:studio", target_label: "Mac Studio", calls: 7, material_change: true, handed_at: iso(3 * day), first_seen_at: iso(4 * day), last_seen_at: iso(2 * day), title: "Review a deletion outside this checkout", explanation: "A recursive deletion selects content outside the recorded checkout, or its target could not be resolved.", cart: undefined }, { ...safetyCard, id: "safety_handed", title: "Review a change to published Git history", explanation: "A command selects a force push or remote ref deletion.", state: "handed_off", handed_at: iso(day), cart: undefined }],
+  cases: [safetyCard, { ...safetyCard, id: "safety_delete", rule: "boundary-delete", danger: "medium", subject: "/Users/example/old-builds", target: "machine:studio", target_label: "Mac Studio", calls: 7, material_change: true, handed_at: iso(3 * day), first_seen_at: iso(4 * day), last_seen_at: iso(2 * day), title: "Deletion outside the checkout", explanation: "A command deleted content outside the recorded checkout and outside temporary or build space, or a path that could expand to a whole directory.", cart: undefined }, { ...safetyCard, id: "safety_handed", rule: "remote-history", danger: "high", subject: "/Users/example/repo · push --force origin main", title: "Published Git history rewritten", explanation: "A command force-pushed, mirrored, or deleted a branch or tag on a remote that others fetch.", state: "handed_off", handed_at: iso(day), cart: undefined }],
   summary: { open: 2, handed_off: 1, dismissed: 0 },
-  cart: [{ target: repoTarget, label: "explo", ticked: 1, handoff: "review", handoff_reason: "Investigate and recommend; make no changes.", items: [{ id: safetyCard.id, title: safetyCard.title, ticked: true, change_label: "Investigate and recommend", suggested_target: repoTarget }] }],
+  cart: [{ target: repoTarget, label: "explo", ticked: 1, handoff: "review", handoff_reason: "Investigate and recommend; make no changes.", items: [{ id: safetyCard.id, rule: safetyCard.rule, danger: safetyCard.danger, title: safetyCard.title, ticked: true, change_label: "Investigate and recommend", suggested_target: repoTarget }] }],
   targets: [{ target: repoTarget, label: "explo" }, { target: "machine:studio", label: "Mac Studio" }], built_at: iso(3600000), scanned_calls: "807",
-  coverage: "Supported shell commands in the last 28 days. Embedded interpreter code and arbitrary native/MCP mutations are not comprehensively interpreted. No open reviews is not a safety assessment.",
+  coverage: "Supported shell commands in the last 28 days. Embedded interpreter code and arbitrary native/MCP mutations are not comprehensively interpreted. No open notices is not a safety assessment.",
 };
 export const safetyDetailFixture = { ...safetyCard, subject: "/Users/example/repo/.build/gcloud", questions: ["Which sources contain credentials rather than configuration?", "Was the destination uploaded, published, or later cleaned up?"], evidence: [{ id: "safety_evidence_sample", call_id: "tool-call_sample", message_id: "m-1", at: iso(day), command: "cp -R ~/.config/gcloud .build/gcloud", cwd: "/Users/example/repo", cwd_basis: "tool input", status: "no_result", outcome: "Execution and effects need context", conditional: false, path: `/work/${workID}?conversation=${rootConversation}&message=m-1` }] };
 // Keep the sample settings catalog complete, even when there are only three example reviews.
 export const safetySettingsFixture = { rules: [
   {
-    "id": "api",
-    "title": "Check what an API request changes",
-    "explanation": "An HTTP mutation needs its endpoint and payload semantics checked.",
-    "enabled": true
-  },
-  {
-    "id": "boundary-delete",
-    "title": "Review a deletion outside this checkout",
-    "explanation": "A recursive deletion selects content outside the recorded checkout, or its target could not be resolved.",
-    "enabled": true
-  },
-  {
     "id": "cloud-delete",
-    "title": "Review a cloud deletion",
-    "explanation": "A command selects remote objects for deletion.",
+    "title": "Cloud objects deleted",
+    "explanation": "A command deleted objects or resources in a cloud account.",
+    "questions": [
+      "Which account, bucket, and object prefix were selected?",
+      "What establishes deletion, retention, and recovery?"
+    ],
+    "danger": "high",
     "enabled": true
   },
   {
     "id": "credentials",
-    "title": "Check where credentials were copied",
-    "explanation": "A command selected credential files or cloud configuration for copying to another location.",
-    "enabled": true
-  },
-  {
-    "id": "database",
-    "title": "Review a database change",
-    "explanation": "A command contains a database mutation. Its environment and affected records need checking.",
-    "enabled": true
-  },
-  {
-    "id": "delete",
-    "title": "Check content selected for deletion",
-    "explanation": "A command selects checkout content for deletion without establishing that it is disposable.",
+    "title": "Credentials copied to another location",
+    "explanation": "A command copied credential files or cloud configuration somewhere else, where they can outlive the task or be uploaded.",
+    "questions": [
+      "Which sources contain credentials rather than configuration?",
+      "Was the destination uploaded, published, or later cleaned up?"
+    ],
+    "danger": "high",
     "enabled": true
   },
   {
     "id": "disk-image",
-    "title": "Check a disk image operation",
-    "explanation": "A command selects a disk image or mounted volume for a lifecycle operation.",
-    "enabled": true
-  },
-  {
-    "id": "local-history",
-    "title": "Check a change to saved Git work",
-    "explanation": "A command selects a reset, history rewrite, branch deletion, or stash discard.",
-    "enabled": true
-  },
-  {
-    "id": "permissions",
-    "title": "Review a permission change",
-    "explanation": "A command selects permissions outside the recorded checkout or against an unresolved path.",
-    "enabled": true
-  },
-  {
-    "id": "process",
-    "title": "Check which processes were selected",
-    "explanation": "A process signal uses a name or expression that may match more than this task's process.",
-    "enabled": true
-  },
-  {
-    "id": "publication",
-    "title": "Review a merge or publication",
-    "explanation": "A command selects a merge, release change, or tag publication.",
+    "title": "Disk image or volume detached or changed",
+    "explanation": "A command detached, ejected, resized, or converted an existing disk image or volume.",
+    "questions": [
+      "Was this a newly created test image or an existing volume?",
+      "Which image or mount was selected, and what does the result establish?"
+    ],
+    "danger": "high",
     "enabled": true
   },
   {
     "id": "remote-history",
-    "title": "Review a change to published Git history",
-    "explanation": "A command selects a force push or remote ref deletion.",
-    "enabled": false
+    "title": "Published Git history rewritten",
+    "explanation": "A command force-pushed, mirrored, or deleted a branch or tag on a remote that others fetch.",
+    "questions": [
+      "Which remote and refs were selected?",
+      "What did the lease protect, what did the remote report, and what user request covered the change?"
+    ],
+    "danger": "high",
+    "enabled": true
   },
   {
     "id": "system",
-    "title": "Review a system change",
-    "explanation": "A command selects a system service, installation, or disk change.",
+    "title": "System or disk changed",
+    "explanation": "A command changed a system service, an installation, or a disk.",
+    "questions": [
+      "Was this a test resource or a persistent system resource?",
+      "What privileges, persistence, and recovery consequences were involved?"
+    ],
+    "danger": "high",
+    "enabled": true
+  },
+  {
+    "id": "delete",
+    "title": "Checkout or ignored files deleted",
+    "explanation": "A command deleted the checkout itself, its Git directory, or ignored files such as local configuration and data.",
+    "questions": [
+      "Which exact paths were selected?",
+      "Was the content created for this task or preserved elsewhere, and what does the result establish?"
+    ],
+    "danger": "medium",
+    "enabled": true
+  },
+  {
+    "id": "database",
+    "title": "Database changed outside the checkout",
+    "explanation": "A command changed a database file outside the checkout's scratch space, or a database on another host.",
+    "questions": [
+      "Which database and environment were selected?",
+      "What tables and predicates bound the change, and what result or recovery evidence exists?"
+    ],
+    "danger": "medium",
+    "enabled": true
+  },
+  {
+    "id": "boundary-delete",
+    "title": "Deletion outside the checkout",
+    "explanation": "A command deleted content outside the recorded checkout and outside temporary or build space, or a path that could expand to a whole directory.",
+    "questions": [
+      "Resolve the target using the archived working directory and command context.",
+      "Was the content created for this task, preserved elsewhere, or potentially pre-existing?",
+      "What establishes execution, affected contents, and recovery?"
+    ],
+    "danger": "medium",
+    "enabled": true
+  },
+  {
+    "id": "permissions",
+    "title": "Permissions broadened",
+    "explanation": "A command made a path writable by everyone or setuid, or gave a path outside the checkout a new owner.",
+    "questions": [
+      "Which resource and mode or owner were selected?",
+      "Does this broaden access, repair permissions, or protect sensitive content?"
+    ],
+    "danger": "medium",
+    "enabled": true
+  },
+  {
+    "id": "publication",
+    "title": "Published release deleted or replaced",
+    "explanation": "A command deleted a release, or replaced assets others may already have downloaded.",
+    "questions": [
+      "Which repository and release were selected?",
+      "What request covered the operation, and who may already depend on the release?"
+    ],
+    "danger": "medium",
+    "enabled": true
+  },
+  {
+    "id": "process",
+    "title": "Every instance of a program stopped",
+    "explanation": "A process signal matched a program by name, so it can stop other tasks' processes too.",
+    "questions": [
+      "What could the selector match?",
+      "Is there launch or ownership evidence, and was unrelated work affected?"
+    ],
+    "danger": "low",
+    "enabled": true
+  },
+  {
+    "id": "api",
+    "title": "Remote service changed by an API request",
+    "explanation": "An HTTP request with a mutating method went to a service that is not local.",
+    "questions": [
+      "Which endpoint, method, account, and resource were selected?",
+      "Was this a test or a consequential change, and what does the response establish?"
+    ],
+    "danger": "low",
+    "enabled": true
+  },
+  {
+    "id": "local-history",
+    "title": "Shared Git work discarded",
+    "explanation": "A command force-deleted a shared branch, or dropped a stash entry by position. Every worktree shares one stash.",
+    "questions": [
+      "Which refs or saved work were selected?",
+      "Was the work preserved, and whose work was it?"
+    ],
+    "danger": "low",
     "enabled": true
   }
-], built_at: iso(3600000), scanned_calls: "807", window_days: 28, version: "safety-v1" };
-datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.title, subject: card.id === "safety_sample" ? "/Users/example/repo/.build/gcloud" : card.id === "safety_delete" ? "/Users/example/archive" : "origin · work", material_change: false, in_prompt: Boolean(card.cart), review_count: 1 }));
+], built_at: iso(3600000), scanned_calls: "807", window_days: 28, version: "safety-v3" };
+datasets.fixes = fixesFixtures.items.map(item => ({ id: item.id, title: item.title, lead: item.title, state: item.state, shown: item.state === "open" && item.hidden ? item.hidden : "shown", category: item.category, status: item.status.state,
+  target: item.target, target_label: item.target_label, destination: item.destination, terms: item.terms.join(", "), check_name: null, work_items: item.work_items, events: item.events, conversations: item.conversations,
+  hours: item.hours, priority: item.priority, safeguards: item.safeguards, in_prompt: Boolean(item.cart), first_seen: item.status.first, last_seen: item.status.last, handed_at: item.handed_at, fix_count: 1 }));
+datasets.safety = safetyFixtures.cases.map(card => ({ ...card, rule_label: card.title, danger_rank: card.danger === "high" ? 3 : 2, subject: card.id === "safety_sample" ? "/Users/example/repo/.build/gcloud" : card.id === "safety_delete" ? "/Users/example/archive" : "origin · work", material_change: false, in_prompt: Boolean(card.cart), review_count: 1 }));
 
 // Settings, sync and the header's library status.
 const hosts = [{ id: "studio", label: "Mac Studio", sources: [{ name: "Claude", captured_at: iso(3 * day), indexed_at: iso(3600000) }] }, { id: "air", label: "MacBook Air with a long machine name", sources: [{ name: "Codex", last_data_at: iso(125 * 60000) }] }, { id: "new", label: "New Mac", sources: [] }];
-const sources = { configured: 2, enabled: 2, items: [
-  { name: "claude", enabled: true, path: "/Users/someone/.claude/projects", last_success_at: iso(3600000), last_attempt_at: iso(3600000), coverage: "complete", account: "someone@example.com" },
-  { name: "codex", enabled: false, path: "/Users/someone/.codex/sessions/a/very/long/path/that/should/wrap/inside/its/card", last_success_at: iso(day), last_attempt_at: iso(day), coverage: "partial", error: "The source directory could not be read." },
+export const claudeSettingsSourceFixture={name:'claude-chat-settings',kind:'claude-ai-settings',tool:'Claude Chat settings',scope:'host',enabled:true,path:'/Users/example/Library/Application Support/Claude',path_status:'available',coverage:'partial',account:'local'};
+export const claudeSettingsCoverageFixture={account:'local',conversations:3,missing_models:2,setup:{source:'claude-chat-settings',path:'/Users/example/Library/Application Support/Claude',account:'local',configured:true,enabled:false,scope:'host'}};
+const sources = { configured: 3, enabled: 2, items: [claudeSettingsSourceFixture,
+  { name: "claude", kind: "claude", tool: "Claude Code", scope: "host", enabled: true, path: "/Users/someone/.claude/projects", last_success_at: iso(3600000), last_attempt_at: iso(3600000), coverage: "complete", account: "someone@example.com",
+    not_recorded: ["Reported cost"], sometimes_recorded: ["Effort", "Title"] },
+  { name: "codex", kind: "codex", tool: "Codex", scope: "library", enabled: false, path: "/Users/someone/.codex/sessions/a/very/long/path/that/should/wrap/inside/its/card", last_success_at: iso(day), last_attempt_at: iso(day), coverage: "partial", error: "The source directory could not be read." },
 ] };
 const syncHistory = Array.from({ length: 6 }, (_, index) => ({ run_id: `run-${index}`, finished_at: iso((index + 1) * 120000), state: index === 2 ? "failed" : "complete", class: index === 1 ? "no_changes" : "changes", changed_groups: 2, conversations: 12, messages_in_changed_groups: 340,
   seconds: 22.1, cpu_seconds: 8.7, cpu_percent_one_core: 39.4, rss_baseline_bytes: 100 * 1048576, rss_observed_peak_bytes: 129 * 1048576, allocated_bytes: 50 * 1048576, sources: ["codex", "claude"],
@@ -285,12 +489,7 @@ const syncStatus = { verification: { available: true, last_verified_at: syncHist
   coverage: [{ source_name: "codex", outcome: "passed", units: 2, last_verification: syncHistory[0].finished_at }], deferred: [{ name: "tools", changed_at: syncHistory[0].finished_at }], recovery_jobs: [], issues: [], measurement_limits: "CPU is process-wide." };
 
 const carbonFactors = JSON.parse(readFileSync(join(repo, "carbon", "co2_factors.json"), "utf8"));
-const carbonTokens = { small: { output: 1000000 }, medium: { uncached_input: 1000000, cache_write: 2000000, cache_read: 20000000, output: 500000 }, large: { output: 250000 } };
-const carbon = { factors: carbonFactors, windows: [{ key: "all", tokens: carbonTokens }, { key: "30d", tokens: carbonTokens }],
-  series: Array.from({ length: 20 }, (_, index) => ({ day: new Date(now - index * day).toLocaleDateString("en-CA"), value: "", tokens: carbonTokens })), choices: { provider: ["codex", "claude"], repository_name: ["pythia-software/pharos"] },
-  default_tier_models: [{ model: "mystery-model", tokens: 500000 }], default_tier_unknown_tokens: 250000, unclassified_tokens: 100000, undated_tokens: 0 };
 
-const mcpCall = { id: 1, called_at: iso(3600000), tool_name: "search_conversations", arguments_json: '{"query":"parser"}', status: "ok", error_text: null, duration_ms: 18, response_bytes: 900, estimated_output_tokens: 300, result_count: 3, truncated: 0 };
 const toolsStatus = { conversations: 10, current_conversations: 10, pending_conversations: 0, tool_calls: 400, backfill: { running: false, done: 0, total: 0, error: null } };
 const writingCounts = (typed, pasted, harness) => ({
   typed_words: typed, pasted_words: pasted, harness_words: harness, words: typed + pasted + harness,
@@ -353,7 +552,7 @@ const busySummary = { all_current: false, checked_at: null, groups: [
   { group: "backups", label: "Backups", state: "behind", short: "behind", short_age: true, text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: false, muted: false },
 ] };
 // Resources as a service reports them (§10): itself and a Terminal command.
-const statusResources = (label, processes) => ({ cpu_percent: 3, memory_bytes: 340e6, disk_bytes_per_second: 4.2e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
+const statusResources = (label, processes) => ({ cpu_percent: 3, gpu: { utilization_percent: 62, sampled_at: iso(0), basis: "IOAccelerator.AppUsage.accumulatedGPUTime" }, memory_bytes: 340e6, disk_bytes_per_second: 4.2e6, sampled_at: iso(0), basis: "proc_pid_rusage", approximate: false, label, processes });
 const idleResources = statusResources("Pharos is using under 1% of one core · 180 MB", [
   { pid: 4120, role: "service", cpu_percent: 0, memory_bytes: 180e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service · under 1% of one core · 180 MB" }]);
 const busyResources = statusResources("Pharos is using ~45% of one core · 1.2 GB", [
@@ -364,6 +563,9 @@ const statusHeadings = { work: "Work", data: "Data" };
 // /api/background report it.
 const backgroundItem = (id, label, cadence, state, changes = {}) => ({
   id, label, verb: `Updating ${label}`, feeds: "Pages it feeds", why: "Why it runs where it does.", sub: changes.sub ?? "Pages it feeds", cadence, cadence_label: cadence, column: cadence, placed: cadence, usual_cadence: cadence,
+  cadence_moves: ["frequent", "hourly", "daily", "manual"].filter(target => target !== cadence).map(target => ({
+    cadence: target, label: `Move to ${{ frequent: "Frequently", hourly: "Hourly", daily: "Daily", manual: "Only when you ask" }[target]} for a week`,
+  })),
   adaptive: false, fixed: false, opt_in: false, override: "", state, state_label: { current: "Updated", running: "Updating now", failed: "Failed", queued: "Up next", unavailable: "Not set up" }[state],
   as_of: iso(41 * 60000), next_at: iso(-19 * 60000), error: null, note: null, cost: { seconds: 40, runs: 7, class: "light", text: "about 40 s", typical: "Typically 30–45 s" },
   choices: [{ value: "", label: "Automatically" }, { value: "daily", label: "Daily" }, { value: "manual", label: "Only when I ask" }], ...changes,
@@ -383,24 +585,25 @@ const idleBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { sub: "claude (1 of 2 sources)", fixed: true, choices: null,
     sources: [{ name: "claude", selected: true }, { name: "codex-with-a-rather-long-source-name", selected: false }] }),
   backgroundItem("repositories", "Repositories & merges", "frequent", "current"),
-  backgroundItem("writing", "Your writing", "hourly", "current", { adaptive: true,
-    cadence_moves: [{ cadence: "frequent", label: "Promote to Frequently for a week" }, { cadence: "daily", label: "Demote to Daily for a week" }],
-    cost: { seconds: 358, runs: 7, class: "heavy", text: "about 6 min", typical: "Typically 5–8 min" }, note: "Moves to Frequently once a run usually takes under a minute." }),
+  backgroundItem("writing", "Update writing estimates", "frequent", "current", { cost: { seconds: 2, runs: 7, class: "light", text: "a few seconds", typical: "Typically a few seconds" } }),
   backgroundItem("findings", "Findings", "hourly", "current"),
   backgroundItem("verification", "Verify indexed data", "hourly", "queued", { sub: "Integrity checks deferred by quick indexing", why: "Checks a bounded batch of larger inputs once the library is quiet.", cost: { seconds: 1, runs: 2, class: "light", text: "about 1 s" } }),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
+  backgroundItem("writing-refine", "Refine writing history", "daily", "current", { cost: { seconds: 240, runs: 7, class: "heavy", text: "about 4 min", typical: "Typically about 4 min" } }),
   backgroundItem("backup", "Back up to /Volumes/Backup Drive With A Long Name/Pharos Backup", "manual", "unavailable", { column: "daily", cost: null }),
+  ...[["labels", "Message labels"], ["agent_events", "Agent events"]].map(([id, label]) => backgroundItem(id, label, "manual", "disabled", { state_label: "Off", column: "hourly", usual_cadence: "hourly", next_at: null, cost: null })),
 ], { tone: "good", title: "Up to date", text: "Everything is on schedule." });
 const busyBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { fixed: true, choices: null }),
   backgroundItem("repositories", "Repositories & merges", "frequent", "failed", { error: "git rev-list timed out after 5 s in ~/code/a-repository-with-a-very-long-name-that-has-to-wrap" }),
-  backgroundItem("writing", "Your writing", "hourly", "running"),
+  backgroundItem("writing", "Update writing estimates", "frequent", "running"),
   backgroundItem("findings", "Findings", "hourly", "queued"),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
   backgroundItem("backup", "Back up to /Users/someone/PharosBackup", "manual", "manual", { column: "daily", state_label: "Only when you ask", as_of: iso(26 * 3600000), next_at: null }),
 ], { tone: "busy", title: "Updating your writing", text: "Human Words cards, and Analyze → Writing update when this finishes.", tech: null });
 export const backgroundDocument = {
-  labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.' },
+  labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.', notice:'', execution: {device:'gpu', status:'GPU · Automatic', detail:'Confirmed by the last worker. GPU capacity is managed automatically.', confirmed:true}, threads: 4, threads_can_change: false },
+  agent_events: { enabled: false, can_change: true, status: 'Off. Turn on to find agent events in this library.', notice:'', execution: {device:'cpu', status:'CPU · GPU unavailable', detail:'Confirmed by the last worker. Automatic GPU selection fell back to CPU.', confirmed:true}, threads: 4, threads_can_change: true, thread_choices: [1, 2, 4, 8, 16, 28] },
   settings: { mode: "on", paused_until: null, interval_seconds: 300, daily_at: "03:00", hold_when_busy: true, overrides: {},
     battery: { frequent: "slower", hourly: "wait", daily: "wait", low_battery_waits: true }, battery_choices: { frequent: ["same", "slower", "wait"], hourly: ["same", "wait"], daily: ["same", "wait"] },
     battery_slower_minutes: 15, low_battery_percent: 20 },
@@ -419,6 +622,32 @@ export const temporaryBackgroundDocument = {
     note: "Temporary schedule; your usual schedule resumes after one week.",
   } : item), idleBackground.headline),
 };
+// Shared work (docs/work-execution-plan.md §10): a scheduled service's CPU
+// allowance, and GET /api/work with a recent request waiting on a
+// dependency, a running task, a held task with a long failure and a
+// finished request, so the Work card draws every row kind.
+export const workBackgroundDocument = {
+  ...backgroundDocument,
+  work: { available: true, engine: "scheduled", cpu_slots: 4, max_cpu_slots: 10, scope: "this process", can_change: true },
+};
+export const workInspection = () => ({ engine: "scheduled", scope: "this process", state: {
+  at: iso(0), authority: { cpu_cap: 4, cpu_allocated: 2, cpu_waiters: 1, memory_reserved: 0, memory_limit: 134217728, request_memory_limit: 33554432, explicit_request_limit: 8 },
+  requests: [
+    { id: 7, scope: "recent", key: `recent:${(now - 2 * day) * 1e6}:${now * 1e6}:[analysis.authorship analysis.labels]`, trigger: "user", kinds: ["analysis.authorship", "analysis.labels"], priority: "foreground", explicit: true,
+      state: "running", requested_at: iso(300000), membership_frozen_at: iso(290000), members: 40, sealed: 12, failed: 1, unfinished: 27, bytes: 4096,
+      tasks: [{ kind: "analysis.authorship", state: "running", covered: 12 }, { kind: "analysis.labels", state: "blocked", covered: 0, blocker: { reason: "dependency", depends_on: "analysis.authorship" } }] },
+    { id: 8, key: "library", kinds: ["maintenance.parallelism"], priority: "live", state: "queued", library: true, requested_at: iso(60000), members: 0, sealed: 0, unfinished: 0, bytes: 0 },
+  ],
+  ended: [{ id: 5, scope: "backfill", key: "explicit-backfill:[analysis.labels]", kinds: ["analysis.labels"], priority: "backfill", explicit: true, state: "interrupted", reason: "inputs-keep-changing",
+    requested_at: iso(3 * 3600000), members: 900, sealed: 880, unfinished: 20, bytes: 0 }],
+  tasks: [
+    { kind: "analysis.authorship", state: "running", running: { kind: "analysis.authorship", batch: 3, units: 12, cpus: 2, demanders: [7] }, batches: 3, committed_units: 30, work: 30, active_ns: 4e9, select_ns: 1e6 },
+    { kind: "analysis.labels", state: "blocked", blocker: { reason: "held", detail: "stopped until Resume or a service restart" }, batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0, failures: 1,
+      failure_examples: [{ kind: "analysis.labels", unit: { id: "c1", revision: "r1" }, attempts: 3, error: "labeler worker exited: /Users/someone/Library/Application Support/Pharos/models/a-model-with-a-very-long-name-that-has-to-wrap.onnx", exhausted: true }] },
+    { kind: "maintenance.parallelism", batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0 },
+  ],
+  decisions: [], decisions_total: 0,
+} });
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
   eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
@@ -433,17 +662,26 @@ const statusOperation = (id, changes) => ({
 });
 export const busyStatus = {
   ...idleStatus, revision: 2,
-  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", headline: "Safe to eject after the current workspace: stops index changes", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
+  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", headline: "Safe to eject in a moment", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
     blockers: [{ operation: "op-index", label: "Index changes", on_eject: "Stops between workspaces; the next index resumes it.", latency: "batch", verdict: "safe-in" }] },
   operations: [
     statusOperation("op-index", { step: { index: 3, count: 6, name: "Indexing a source with a very long name that has to wrap somewhere", source: "Claude Code", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },
       time: { state: "estimating", low_seconds: 180, high_seconds: 360, label: "about 3–6 min" },
       children: [statusOperation("op-chain", { kind: "analysis.chain", label: "Update analyses", state_label: "Updating analyses", stoppable: false, stop: undefined })], children_count: 2 }),
-    statusOperation("op-view", { kind: "maintenance.library-view", label: "Index the Search view", state_label: "Indexing the Search view", priority: "background", stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-view" } }, step: { index: 1, count: null, name: "Search view", unit: "workspace", done: 2, total: 40, fraction: 0.05 } }),
+    statusOperation("op-view", { kind: "maintenance.library-view", label: "Index the Search view", state_label: "Indexing the Search view", priority: "background", stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-view" } }, step: { index: 1, count: null, name: "Search view", unit: "workspace", done: 2, total: 40, fraction: 0.05 },
+      // A task resource record (docs/work-resource-accounting.md), so the
+      // panel draws the resource line, its export and the profile link.
+      resources: { version: 1, allocation: { current: { cpu_slots: 2, gpu: 0 } }, time: { active: { value: 95, unit: "seconds", basis: "measured" } },
+        waits: { capacity: { value: 12, unit: "seconds", basis: "measured" }, writer: { value: 3, unit: "seconds", basis: "measured" } },
+        cpu: { go_process: { value: null, unit: "cpu_seconds", basis: "shared", coverage: "Go work shares the service process with other tasks." } },
+        memory: { process: { value: null, unit: "bytes", basis: "shared" }, owned_buffers_peak_bytes: { value: 48e6, unit: "bytes", basis: "counted" } },
+        gpu: { time: { value: null, unit: "gpu_seconds", basis: "unavailable" } },
+        io: { logical_read_bytes: { value: 310e6, unit: "bytes", basis: "counted", coverage: "Instrumented logical bytes only; coverage is partial." }, logical_written_bytes: { value: 22e6, unit: "bytes", basis: "counted" } } } }),
     statusOperation("op-backup", { kind: "backup.local", label: "Back up", state: "blocked", state_label: "Waiting", priority: "background", stoppable: true, stop: { method: "POST", path: "/api/operations/stop", body: { id: "op-backup" } }, detail: "Waiting for a capture to finish" }),
     statusOperation("op-old", { kind: "analysis.findings", label: "Update findings", state: "succeeded", state_label: "Done", stoppable: false, stop: undefined, ended_at: iso(60000) }),
   ],
   freshness: busyLedger, freshness_summary: busySummary, resources: busyResources, background: busyBackground,
+  library: {...idleStatus.library, wal_bytes: 2e9},
   attention: [{ id: "backup-failed", rule: 6, severity: "error", title: "The last backup failed", detail: "The destination drive is full: /Volumes/Backup Drive With A Long Name/Pharos Backup", action: { label: "Open Backups", path: "/settings/backups" } }],
 };
 // The broker's document, with two other libraries. A broker operation
@@ -470,24 +708,41 @@ export const managedStatus = snapshot => ({
     { pid: 4300, role: "service", library: "archive", cpu_percent: 5, memory_bytes: 210e6, sampled_at: iso(0), basis: "proc_pid_rusage", text: "Library service (Archive) · ~5% of one core · 210 MB" }]),
 });
 
+// Resource history (docs/work-resource-accounting.md): a few minutes of
+// samples with a gap, irregular GPU samples, a task marker and an omission,
+// so the panel's strip draws every case. A since= request gets the same
+// document; the store merges it without repeating a time.
+export const resourceHistory = (scope = "this library service") => {
+  const t = Array.from({ length: 60 }, (_, index) => now - (240 - index * 4) * 1000).filter((_, index) => index < 30 || index > 34);
+  const wave = index => Math.round((60 + 50 * Math.sin(index / 4)) * 10) / 10;
+  return {
+    version: 1, available: true, scope, instance: "fixture", generated_at: iso(0), now, window_seconds: 900, active: true,
+    cadence: { active_seconds: 2, idle_seconds: 10, gpu_seconds: 5 },
+    series: { cpu: { label: "CPU", unit: "percent_one_core", basis: "proc_pid_rusage", available: true, max: 1000 }, memory: { label: "RAM", unit: "bytes", basis: "proc_pid_rusage", available: true },
+      disk: { label: "I/O", unit: "bytes_per_second", basis: "proc_pid_rusage", available: true }, gpu: { label: "GPU", unit: "percent_driver_time", basis: "IOAccelerator.AppUsage.accumulatedGPUTime", available: true } },
+    samples: { t, cpu: t.map((_, index) => index === 0 ? null : wave(index)), memory: t.map((_, index) => 1.2e9 + index * 4e6), disk: t.map((_, index) => index === 0 ? null : 2e6 + index * 1e5),
+      cpu_partial: t.map((_, index) => index === 1), disk_partial: t.map(() => false), processes: t.map(() => 2) },
+    gpu: { t: Array.from({ length: 40 }, (_, index) => now - (238 - index * 6) * 1000), value: Array.from({ length: 40 }, (_, index) => index === 20 ? null : 20 + index), partial: Array.from({ length: 40 }, () => false) },
+    segments: [{ t: t[0], reason: "started", detail: "fixture" }, { t: t[30], reason: "gap", detail: "No samples for 24 s" }],
+    coverage: [{ t: t[0], covered: [{ pid: 4100, role: "service" }, { pid: 4200, role: "worker:pharos-labeler-ort" }], omitted: ["Pharos Mac app: ownership is not verified, so it is not measured"] }],
+    markers: [{ t: t[10], event: "start", id: "op-index", kind: "index.changes.manual" }, { t: t[40], event: "end", id: "op-index", kind: "index.changes.manual", observed: true }],
+  };
+};
+
 // Synthetic numeric timing fixture: UI/layout tests never read a user library.
+// /api/thinking answers only the workload fit's parts and the time-of-day
+// cells (thinking-query.ts reads the rest from model_requests), keyed as the
+// page keys its groups.
 export function thinkingFixture(query) {
-  const edges=[.1,.2,.3,.5,1,2,3,5,10,20,30,50,100,200,300,500,600];
   const periods=Array.from({length:14},(_,i)=>new Date(+summaryDay-(13-i)*day).toISOString().slice(0,10));
-  const bounds=Object.fromEntries(periods.map(p=>[p,{From:p+"T00:00:00.000Z",To:new Date(Date.parse(p)+day).toISOString()}]));
-  const models=['gpt-6.1-sol','claude-opus-5-5'],efforts=['low','high'];
-  const stats=(factor=1)=>({n:320,median:8*factor,p75:15*factor,p90:30*factor,p95:45*factor,q1:3*factor,q3:15*factor,low:1*factor,high:30*factor});
-  const counts=[0,0,1,1,5,10,20,40,80,70,50,25,10,5,2,1];
+  const models=thinkingModels,efforts=thinkingEfforts;
   const by=query.get('groupBy')??'none';
-  const labels=by==='model_effort'?models.flatMap(m=>efforts.map(e=>[m+' · '+e,m,e])):by==='model'?models.map(m=>[m,m,'']):by==='effort'?efforts.map(e=>[e,'',e]):[['All selected requests','','']];
-  const groups=labels.map(([label,model,effort],i)=>({key:label,label,model,effort,Retained:400,Timed:320,Adjusted:280,Conversations:16,RetainedConversations:20,stats:stats(1+i*.2),counts,
-    periods:Object.fromEntries(periods.map(p=>[p,{stats:stats(1+i*.2),retained:400,conversations:16,counts}])),
-    calendar:periods.flatMap(p=>Array.from({length:24},(_,hour)=>({day:p,hour,Raw:8+hour,Ratio:.6+hour/30,N:100,Adjusted:80,Conversations:8,AdjustedConversations:7}))),
-    bands:Array.from({length:8},(_,h)=>({hour:h*3,days:14,n:300,Ratio:.7+h*.08,Low:.6+h*.08,High:.8+h*.08})),comparison:{days:14,Ratio:.7,Low:.6,High:.8},
-    cdf:Array.from({length:101},(_,p)=>[.1+Math.pow(p/100,3)*150,p/100])}));
-  const response={periodBounds:bounds,calendarBounds:bounds,Retained:1600,Timed:1280,Adjusted:1120,Conversations:40,Hidden:0,Models:models,Efforts:efforts,edges,groups,summary:stats(),periods,calendarPeriods:periods,From:'',To:'',timezone:query.get('timezone')||'UTC'};
+  const keys=by==='model_effort'?models.flatMap(m=>efforts.map(e=>JSON.stringify([m,e]))):by==='model'?models:by==='effort'?efforts:by==='none'?['All requests']:[];
+  const groups=keys.map(key=>({key,Adjusted:280,
+    calendar:periods.flatMap(p=>Array.from({length:24},(_,hour)=>({day:p,hour,Raw:4+hour/4,Ratio:.6+hour/30,N:90,Adjusted:80,Conversations:8,AdjustedConversations:7}))),
+    bands:Array.from({length:8},(_,h)=>({hour:h*3,days:14,n:300,Ratio:.7+h*.08,Low:.6+h*.08,High:.8+h*.08})),comparison:{days:14,Ratio:.7,Low:.6,High:.8}}));
+  const response={Adjusted:query.get('view')==='calendar'?1120:0,groups:query.get('view')==='calendar'?groups:[],timezone:query.get('timezone')||'UTC'};
   if(query.get('overview')==='1')Object.assign(response,{
-    coverage:groups,agentCoverage:[{...groups[0],key:'codex',label:'Codex'},{...groups[0],key:'claude',label:'Claude'}],
     factors:models.flatMap(model=>['context','reasoning','other'].map((factor,i)=>({model,factor,Ratio:1.2+i*.1,Low:1.1+i*.1,High:1.3+i*.1,N:1200,Conversations:40}))),
     compactions:Array.from({length:32},(_,i)=>({ID:'compact-'+i,Model:models[i%2],Effort:'high',Conversation:'conv-'+i,Gap:.2+i/40,Context:.3,Output:.7,Before:10,After:4})),
     traces:[{ID:'stream-1',Model:models[0],Conversation:rootConversation,Workspace:workID,Count:36,Points:Array.from({length:36},(_,i)=>({ID:'request-'+i,At:iso((36-i)*60000),Rank:i,Context:i<18?10000+i*3000:12000+(i-18)*2000,Cache:1000,Output:100+i*7,Gap:2+i%12,Smooth:4+i%5,Compaction:i===18}))}],
@@ -496,7 +751,84 @@ export function thinkingFixture(query) {
   return response;
 }
 
+const askSuggestionTexts = [
+  ["verification-latency", "Find the causes of testing latency in the pharos repository."],
+  ["context-crowding", "What's crowding my agents' context?"],
+  ["spend-change", "How has my token use changed this week?"],
+  ["writing-improve", "How could I steer my agents with less back-and-forth in the query-table repository?"],
+  ["risk-review", "Is there anything risky in what my agents have been doing lately?"],
+  ["recall-similar", "Help me find a past conversation where we solved something similar."],
+  ["models-fit", "Am I using the right models for the right work?"],
+  ["findings-best", "What's the single best change I could make to how I work with agents?"],
+  ["parallel-pattern", "What happens when I run several agents at the same time?"],
+];
+// A seeded rotation, as the service varies its slate for Refresh.
+const askSuggestionFixture = seed => askSuggestionTexts.map((_, i) => askSuggestionTexts[(i + seed * 2) % askSuggestionTexts.length]).map(([id, text]) => ({ id, text }));
+
+export const claudeImportFixture = {
+  version:1,id:'f'.repeat(64),name:'claude-ai-imports',state:'incomplete',completeness:'manifest',
+  parts:[{id:'part-one',filename:'conversations-000.zip',state:'collected',conversations:4,messages:12},
+    {id:'part-two',filename:'projects-000-with-a-long-name-to-exercise-the-export-list-at-a-narrow-window-width.zip',state:'missing',error:'Download this file in your signed-in browser, then check the folder again.',download_available:true}],warnings:[],source:null,
+};
+
+// A paused and an imported export; nothing in progress, so the page does not poll.
+export const claudeWatchFixture = {enabled:true,available:true,folder:'/Users/example/Downloads',problem:'',browser:'chrome:Default',
+  browsers:[{key:'chrome:Default',label:'Google Chrome — Personal (someone@example.com)'},{key:'chrome:Profile 2',label:'Google Chrome — Work account with a long profile name for narrow windows'}],exports:[
+  {id:'a'.repeat(64),state:'paused',browser:'chrome:Default',exported_at:'2026-11-10T15:01:48Z',collected:3,expected:7,message:'Pharos opened frames-000-with-a-long-name-for-narrow-windows.zip in Google Chrome — Personal (someone@example.com), but no file arrived. If another browser or profile is signed in to this Claude account, choose it and try again. The browser must save to Downloads.'},
+  {id:'b'.repeat(64),state:'imported',exported_at:'2026-11-09T15:01:48Z',collected:7,expected:7}]};
+
+// A repository's tree for the Files page: the root, a directory, and the
+// projects to choose from without one.
+const filesProject = { ref: "pharos", name: "pharos", kind: "repository", repository_id: "repo-pharos" };
+function fileTree(query) {
+  if (!query.get("project")) return { projects: [filesProject, { ref: "~/notes", name: "~/notes", kind: "folder", folder: "~/notes", sessions: 3, files: 4, last_at: iso(3 * day) }].map(project => ({ sessions: 12, files: 40, last_at: iso(day), ...project })) };
+  const dir = query.get("dir") ?? "";
+  const git = { status: "checked", reason: null, checked_at: iso(day), commits_since: iso(30 * day), tree_ref: "origin/master", tree_commit: "0123456789abcdef0123456789abcdef01234567" };
+  const entries = dir === "" ? [
+    { name: "internal", path: "internal", kind: "dir", sessions: 12, commits: 30, last_at: iso(day), in_tree: true,
+      last_commit: { hash: "0123456789abcdef0123456789abcdef01234567", author_at: iso(day), url: "/files?file_commit=0123456789abcdef0123456789abcdef01234567&file_project=pharos" } },
+    { name: "web", path: "web", kind: "dir", sessions: 8, commits: 21, last_at: iso(2 * day), in_tree: true },
+    { name: "README.md", path: "README.md", kind: "file", sessions: 1, commits: 2, last_at: iso(9 * day), in_tree: true },
+    { name: "notes-from-a-session-that-were-never-committed-with-a-long-name.md", path: "notes-from-a-session-that-were-never-committed-with-a-long-name.md", kind: "file", sessions: 1, commits: 0, last_at: iso(4 * day), in_tree: false,
+      last_session: { workspace_id: "workspace-2", title: "A session whose notes were never committed, with a title long enough to wrap", at: iso(4 * day), url: "/work/workspace-2" } },
+  ] : [
+    { name: dir === "internal" ? "archive" : "src", path: `${dir}/${dir === "internal" ? "archive" : "src"}`, kind: "dir", sessions: 6, commits: 12, last_at: iso(day), in_tree: true },
+    { name: "api.go", path: `${dir}/api.go`, kind: "file", sessions: 2, commits: 2, last_at: iso(2 * day), in_tree: true,
+      last_commit: { hash: "89abcdef0123456789abcdef0123456789abcdef", author_at: iso(5 * day), url: "/files?file_commit=89abcdef0123456789abcdef0123456789abcdef&file_project=pharos" },
+      last_session: { workspace_id: "workspace-1", title: "Add the file history endpoint", at: iso(2 * day), url: "/work/workspace-1" } },
+  ];
+  const tree = { project: filesProject, git, dir, entries };
+  if (query.get("activity") !== "1") return tree;
+  return { ...tree,
+    sessions: [{ workspace_id: "workspace-1", title: "Add the file history endpoint", files: 4, edits: 9, last_edit_at: iso(day), outcome_label: "landed", outcome_why: "1 of its 1 linked commit reached mainline (local Git).", url: "/work/workspace-1" }],
+    commits: [{ hash: "0123456789abcdef0123456789abcdef01234567", author_at: iso(2 * day), files: 3, lines_added: 40, lines_removed: 7, on_mainline: true, reverted_by: null,
+      sessions: [{ workspace_id: "workspace-1", title: "Add the file history endpoint", method: "transcript", confidence: 1, counted: true, url: "/work/workspace-1?conversation=conversation-1&message=message-3" }] }],
+  };
+}
+
+// What Git reads from the chosen checkout for the Files page's code, blame,
+// history and diffs; a long line checks that code scrolls in its box.
+const filesHash = "0123456789abcdef0123456789abcdef01234567", filesOlder = "89abcdef0123456789abcdef0123456789abcdef";
+const filesCheckout = { checkout: { path: "/Users/me/pharos", status: "set", reason: null }, project: filesProject, commit: filesHash };
+const filesCode = ["package archive", "", "// ServeHTTP answers the service's API, a line long enough to scroll sideways in its box rather than widen the page at any width: " + "x".repeat(160), "func (s *Server) ServeHTTP() {", "\treturn", "}"];
+const filesLink = { workspace_id: "workspace-1", title: "Add the file history endpoint", method: "transcript", confidence: 1, counted: true, url: "/work/workspace-1?conversation=conversation-1&message=message-3" };
+const filesLog = [
+  { hash: filesHash, parents: [filesOlder], author: "Pharos Test", author_at: iso(2 * day), committed_at: iso(2 * day), subject: "Add the file history endpoint, with a subject long enough to wrap at narrow widths", read: true, on_mainline: true, reverted_by: null, sessions: [filesLink], url: `/files?file_commit=${filesHash}&file_project=pharos` },
+  { hash: filesOlder, parents: ["fedcba9876543210fedcba9876543210fedcba98"], author: "Someone Else", author_at: iso(5 * day), committed_at: iso(5 * day), subject: "Fix a typo by hand", read: false, sessions: [], url: `/files?file_commit=${filesOlder}&file_project=pharos` },
+];
+const filesDiff = ["diff --git a/internal/archive/api.go b/internal/archive/api.go", "index 1111111..2222222 100644", "--- a/internal/archive/api.go", "+++ b/internal/archive/api.go",
+  "@@ -1,4 +1,5 @@ package archive", " package archive", " ", "-// ServeHTTP answers.", "+" + filesCode[2], "+func (s *Server) ServeHTTP() {", " \treturn", ""].join("\n");
+
+export const projectColorFixture = [
+  { id: "repository:pharos", key: "a".repeat(64), name: "pharos", kind: "repository", default_color: "#2a83a4", source: "public/favicon.svg", conversations: 42, latest_conversation_at: "2026-10-20T12:00:00Z" },
+  { id: "folder:~/notes", key: "b".repeat(64), name: "~/notes", kind: "folder", default_color: "#b27430", source: "Automatic palette", conversations: 7, latest_conversation_at: "2026-10-21T09:00:00Z" },
+];
+
 export const defaultApi = {
+  "GET /api/chatgpt-imports":{enabled:false,available:true,exports:[],library:{workspaces:0,conversations:0,recent:[]}},
+  "POST /api/chatgpt-imports":{enabled:false,available:true,exports:[],library:{workspaces:0,conversations:0,recent:[]}},
+  "GET /api/claude-imports":{jobs:[],run:{running:false},watch:claudeWatchFixture},
+  "POST /api/claude-imports/watch":{...claudeWatchFixture,enabled:false},
   "GET /api/thinking": ({query}) => thinkingFixture(query),
   "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},
   // No remote image bytes in fixtures; the renderer uses its globe fallback.
@@ -506,16 +838,38 @@ export const defaultApi = {
   "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
   "POST /api/cloud-backup/schedule": {saved:true},
   "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
+  // Suggestions the library chose; Refresh asks for the next seed.
+  "GET /api/ask/suggestions": ({ query }) => ({ suggestions: askSuggestionFixture(Number(query.get("seed") || 0)) }),
+  "POST /api/ask/read": {ok:true},
   "POST /api/ask/clear-visits": {ok:true},
   "POST /api/ask/visits": {ok:true},
   "POST /api/ask/remove-visit": {ok:true},
 
   // Library preferences, saved views and snapshots.
+  "GET /api/model-colors": ({ state }) => state.modelColors ??= { overrides: {}, models: ["gpt-local"], sources: [] },
+  "POST /api/model-colors": ({ body, state }) => {
+    state.modelColors ??= { overrides: {}, models: ["gpt-local"], sources: [] };
+    for (const [id, color] of Object.entries(body.changes ?? {[body.id]: body.color})) {
+      if (color) state.modelColors.overrides[id] = color;
+      else delete state.modelColors.overrides[id];
+    }
+    return state.modelColors;
+  },
+  "GET /api/project-colors": ({ state }) => state.projectColors ??= structuredClone(projectColorFixture),
+  "POST /api/project-colors": ({ body, state }) => {
+    state.projectColors = state.projectColors.map(project => project.id === body.id ? { ...project, custom_color: body.color || undefined } : project);
+    return state.projectColors;
+  },
   "GET /api/preferences": ({ state }) => ({ values: state.preferences }),
   "POST /api/preferences": ({ body, state }) => {
     Object.assign(state.preferences, body?.set);
     for (const key of body?.delete ?? []) delete state.preferences[key];
     return { values: state.preferences };
+  },
+  "POST /api/session-preferences": ({ body, state }) => {
+    Object.assign(state.preferences, body?.set);
+    for (const key of body?.delete ?? []) delete state.preferences[key];
+    return { buffered: true };
   },
   "PUT /api/query-snapshots": ({body,query,state}) => {
     state.querySnapshots ??= {};
@@ -526,22 +880,48 @@ export const defaultApi = {
   "GET /api/query-computed-columns": [],
   "GET /api/query-object-references": { references: [] },
 
+  // Synthetic 1-pixel PNG tests image loading; geometry is covered by the
+  // shared model/native renderer tests, with no user library in this fixture.
+  "POST /api/fingerprints": ({body}) => ({items: body.items.map(item => ({...item, state:'ready', href: item.entity==='workspace' ? `/work/${item.id}` : `/work/${workID}/conversation/${rootConversation}`,
+    images:{light:'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="'+(item.profile==='card'?256:128)+'"><rect width="100%" height="100%" fill="#cad6cd"/></svg>'),dark:'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="'+(item.profile==='card'?256:128)+'"><rect width="100%" height="100%" fill="#cad6cd"/></svg>')}}))}),
+  "GET /api/labels/conversations/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id,messages:conversationLabelsFixture.conversations[0].messages.map(message=>({...message,conversation_id:params.id}))},taxonomy:conversationLabelsFixture.taxonomy,truncated:false,agent_events:fingerprintEvents}),
+  "GET /api/labels/workspaces/:id":({params})=>({conversation:{...conversationLabelsFixture.conversations[0],id:params.id,work_id:params.id},taxonomy:conversationLabelsFixture.taxonomy,truncated:false,agent_events:fingerprintEvents}),
   // Query Table, on the production transport.
-  "POST /api/query/usage/carbon": carbon,
   "POST /api/query/writing/series": ({ body }) => ({ works: 2, ...(body?.hourly ? { hourly: [] } : {}),
     daily: Array.from({ length: 14 }, (_, index) => ({ day: new Date(now - index * day).toLocaleDateString("en-CA"), typed_messages: 3, messages: 5, ...writingCounts(120 + index * 10, 40, 900) })),
     totals: { messages: 70, typed_messages: 42, first_day: new Date(now - 13 * day).toLocaleDateString("en-CA"), ...writingCounts(2000, 560, 12600) } }),
+  "GET /api/tool-calls/:id": ({ params }) => datasets.tool_calls.find(row => String(row.id) === params.id) ?? {},
   "* /api/query/:dataset/:operation": ({ params, body, query }) => schemas[params.dataset] && answerQuery(params.operation, body, datasets[params.dataset], schemas[params.dataset], { now, id: query.get("id") }),
   "POST /api/query/:dataset": ({ params, body }) => schemas[params.dataset] && answerQuery("rows", body, datasets[params.dataset], schemas[params.dataset], { now }),
 
   // The header, menus and status polling on every page.
+  "GET /api/library/recent-conversations": { items: [
+    ["Trace the incremental indexer", "pharos", "codex", "gpt-5", 2, "Review the recovery path after sleep and preserve the existing index.", "The index resumes after sleep without replaying retained captures."],
+    ["Make search feel faster", "atlas", "claude", "claude-opus-4-1", 1, "Find what slows down the first search in a large library.", "The search now reuses the stored catalog summaries."],
+    ["A simpler release checklist", "pharos", "codex", "gpt-5", 0, "Walk through the release process and flag any duplicate steps.", "The checklist follows signing, verification, and publication in order."],
+    ["Review the conversation reader", "atlas", "claude", "claude-sonnet-4", 3, "Keep each review inside the turn that requested it.", "The outline shows every helper beneath its parent turn."],
+    ["Explore the activity timeline", "observatory", "codex", "gpt-5", 0, "Compare activity across the last week of conversations.", "The timeline makes the quiet gaps and long sessions easier to inspect."],
+    ["Follow nested agent work", "pharos", "claude", "claude-opus-4-1", 2, "Show which sub-agent handled each part of the migration.", "The delegated work is grouped by assignment and depth."],
+    ["Clean up a small parser", "atlas", "codex", "gpt-5", 0, "Handle quoted phrases without changing ordinary word searches.", "Quoted phrases and individual words now keep their intended meanings."],
+    ["Check background recovery", "observatory", "claude", "claude-sonnet-4", 1, "Test what happens when indexing stops halfway through a batch.", "The next pass picks up the remaining records safely."],
+    ["Understand token patterns", "pharos", "codex", "gpt-5", 0, "Compare shorter conversations with the deeper delegated work.", "The comparison separates main-agent and helper activity."],
+    ["Plan the next iteration", "observatory", "claude", "claude-opus-4-1", 1, "Review the open questions and choose the next small improvement.", "The next iteration starts with clearer navigation and a smaller scope."],
+    ["Tidy the settings page", "pharos", "codex", "gpt-5", 0, "Group the color settings and drop the actions nobody uses.", "Colors now sit together and only useful palette actions remain."],
+    ["Measure the cold start", "atlas", "claude", "claude-sonnet-4", 1, "Time the first page load after the service restarts.", "Most of the cold start is the first catalog read, not the bundle."],
+  ].map(([title, repository, provider, model, subagent_depth, first_input, last_response], index) => ({
+    id: index ? `recent-${index}` : rootConversation, workspace_id: workID, title, repository, provider, model, effort: "high", subagent_depth, first_input, last_response,
+    activity_at: new Date(now - index * day).toISOString(), labels_ready: index < 7, events_ready: index < 4, duration_ms: 4980000, tool_calls: 34, tokens: 123456, cost_usd: 2.34, is_estimate: index === 1, price_status: index === 1 ? "partial" : "priced",
+  })) },
   "GET /api/activity": { active: 0, runs: [] },
   "GET /api/library/status": { idle: true, portable: true, library_dir: "/Volumes/Pharos SSD/Pharos", drive: { name: "Pharos SSD", mounted: true, ejectable: true }, activities: [] },
-  "GET /api/probe/status": { library: true, needs_onboarding: false, host: { id: "test-mac", label: "This Mac" } },
+  "GET /api/probe/status": { library: true, needs_onboarding: false, host_file_exists: true, host: { id: "test-mac", label: "This Mac" } },
+  "GET /api/providers": JSON.parse(readFileSync(join(repo, "testdata", "providers.json"), "utf8")),
   "GET /api/probe/tools": {tools:[{kind:'claude',path:'~/.claude',found_by:'data folder'}]},
   "POST /api/probe": ({body})=>({candidates:sourceSetupCandidates.filter(candidate=>body.kinds.includes(candidate.kind)),checked:[]}),
+  "POST /api/sources/import": ({body})=>({added:[body.kind],enabled:[],declined:[],skipped:[]}),
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
-  "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 },
+  "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0, prompt: "Refresh the API price history in pricing/cost_changes.json." },
+  "GET /api/estimation/status": { conversations: 2, current_conversations: 2, pending_conversations: 0, version: "claude-output-v4", range_kind: "sensitivity_not_confidence", scope: "selected_branch_unreported_output" },
   "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),
   "GET /api/usage/parallelism": {
     generated_at: iso(0), timezone: "Local", period_start: iso(day).slice(0, 10), period_end: iso(0).slice(0, 10),
@@ -549,15 +929,16 @@ export const defaultApi = {
     threads: [0, 1].map(index => ({
       id: `timing-${index}`, conversation_id: rootConversation, work_id: workID,
       workspace_id: `${workID}-${index}`, workspace_name: `Workspace ${index + 1}`,
-      repository: "pharos", title: longTitle, provider: "codex", model: "gpt-5.3-codex", agent_depth: 0,
+      repository: "pharos", project: "pharos", title: longTitle, provider: "codex", model: "gpt-5.3-codex", agent_depth: 0,
       turns: [[now - 2 * 3600000 + index * 600000, now - 3600000]],
       model_spans: [[now - 2 * 3600000 + index * 600000, now - 5400000]],
     })),
     coverage: { conversations: 2, mirrors_removed: 0, unexplained_waits_excluded: 0, timing: "Captured timing", catalog: "Test catalog" },
   },
+  "GET /api/habits": () => habitsSummary(),
   "GET /api/origins": { machines: [{ id: "machine-fixture", label: "Test Mac", kind: "device" }] },
-  "GET /api/usage/history": { oldest_conversation_at: iso(180 * day) },
-  "GET /api/usage/summary": { generated_at: iso(0), timezone: "UTC", windows: ["1h", "6h", "today", "24h", "7d", "30d", "all", "5m", "15m", "yesterday", "week", "month"].map((key, index) => ({ key, until: key === 'yesterday' ? summaryDay.toISOString() : iso(0), ...(summaryFrom[key] ? {from:summaryFrom[key]} : {}), human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) }, active_conversations: index + 2, message_count: 20 * (index + 1), user_messages: 8 * (index + 1), assistant_messages: 12 * (index + 1), tool_calls: 50 * (index + 1), failed_tool_calls: index + 1, tool_failure_rate: 2, tool_time_ms: (index + 1) * 240000, timed_tool_calls: 40 * (index + 1), delegated_runs: index + 1, active_repositories: Math.min(index + 1, 4) })), carbon_factors: carbonFactors },
+  "GET /api/usage/history": { oldest_conversation_at: iso(180 * day), active_conversations: { 1: 4, 7: 18, 30: 60, 90: 140, 180: 200, 365: 200, all: 200 } },
+  "GET /api/usage/summary": { generated_at: iso(0), timezone: "UTC", windows: ["1h", "6h", "today", "24h", "7d", "30d", "all", "5m", "15m", "yesterday", "week", "month"].map((key, index) => ({ key, until: key === 'yesterday' ? summaryDay.toISOString() : iso(0), ...(summaryFrom[key] ? {from:summaryFrom[key]} : {}), human_words: 100 * (index + 1), tokens: 1000 * (index + 1), is_estimate: index % 2 === 0, cost_is_estimate: index % 2 === 0, input_tokens_available: index % 2 !== 0, price_status: index % 2 === 0 ? "partial" : "priced", tool_time_is_estimate: index % 2 === 0, cost_usd: index + 1, reported: {tokens: 500 * (index + 1), cost_usd: (index + 1) / 2, price_status: "priced", carbon_tokens: {}}, co2e_g: { central: 10 * (index + 1) }, active_conversations: index + 2, message_count: 20 * (index + 1), user_messages: 8 * (index + 1), assistant_messages: 12 * (index + 1), tool_calls: 50 * (index + 1), failed_tool_calls: index + 1, tool_failure_rate: 2, tool_time_ms: (index + 1) * 240000, timed_tool_calls: 40 * (index + 1), delegated_runs: index + 1, active_repositories: Math.min(index + 1, 4) })), carbon_factors: carbonFactors },
   "GET /api/search/text/options": { providers: ["codex", "claude"], sources: ["conductor"] },
   "POST /api/search/text/validate": ({ body }) => ({ where: body.where ?? { op: ["literal", "regex", "phrase"].includes(body.mode) ? body.mode : "term", text: body.query } }),
   "GET /api/search/text/capabilities": { fuzzy: true, regex: true, case_sensitive: true },
@@ -567,11 +948,74 @@ export const defaultApi = {
   "GET /api/status/stream": eventStream(idleStatus),
   "GET /api/app/status": managedStatus(idleStatus),
   "GET /api/app/status/stream": eventStream(managedStatus(idleStatus)),
+  "GET /api/resources/history": () => resourceHistory(),
+  "GET /api/app/resources/history": () => resourceHistory("Pharos app (covered processes)"),
   "POST /api/operations/stop": { stopping: true },
   "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
+  // Files: one repository's tree, one file with a linked and an unlinked
+  // commit and rework between its sessions, a directory and a commit.
+  "GET /api/file-history": ({ query }) => ({ path: query.get("path"), note: "Sessions are those that edited the file through their tool calls, newest first.", files: [{
+    file_key: "repository:repo-pharos:internal/archive/api.go", repository_id: "repo-pharos", path: "internal/archive/api.go", project: "pharos", project_kind: "repository", project_ref: "pharos",
+    relative_path: "internal/archive/api.go", url: "/files?file=internal%2Farchive%2Fapi.go&file_project=pharos", in_tree: true, sessions_truncated: false,
+    sessions: [
+      { workspace_id: "workspace-1", title: "Add the file history endpoint with a title long enough to wrap at narrow widths", source: "claude", last_edit_at: iso(2 * day), edits: 3, lines_added: 42, lines_removed: 7, rewrote: false, outcome_label: "landed", outcome_why: "1 of its 1 linked commit reached mainline (local Git).", url: "/work/workspace-1?conversation=conversation-1&message=message-1",
+        places: [1, 2, 3].map(index => ({ at: iso((2 + index / 24) * day), path: "/Users/me/pharos/internal/archive/api.go", lines_added: 14, lines_removed: index, conversation_id: "conversation-1", message_id: `message-${index}`, url: `/work/workspace-1?conversation=conversation-1&message=message-${index}` })),
+        reworked_by: [], reworked: [{ workspace_id: "workspace-2", title: "Codex session", removed_lines: 12, url: "/work/workspace-2" }] },
+      { workspace_id: "workspace-2", title: "Codex session", source: "codex", last_edit_at: iso(9 * day), edits: 1, lines_added: null, lines_removed: null, rewrote: true, outcome_label: "reworked", outcome_why: "Later sessions removed most of its lines (transcript).", url: "/work/workspace-2",
+        places: [{ at: iso(9 * day), path: "internal/archive/api.go", lines_added: null, lines_removed: null, url: "/work/workspace-2" }],
+        reworked_by: [{ workspace_id: "workspace-1", title: "Add the file history endpoint", removed_lines: 12, url: "/work/workspace-1?conversation=conversation-1&message=message-1" }], reworked: [] },
+    ],
+    git: { status: "checked", reason: null, checked_at: iso(day), commits_since: iso(30 * day), commits_truncated: false, tree_ref: "origin/master", tree_commit: "0123456789abcdef0123456789abcdef01234567" },
+    commits: [
+      { hash: "0123456789abcdef0123456789abcdef01234567", author_at: iso(2 * day), lines_added: 40, lines_removed: 7, on_mainline: true, reverted_by: null, url: "/files?file_commit=0123456789abcdef0123456789abcdef01234567&file_project=pharos",
+        sessions: [{ workspace_id: "workspace-1", title: "Add the file history endpoint", method: "transcript", confidence: 1, counted: true, url: "/work/workspace-1?conversation=conversation-1&message=message-3" }] },
+      { hash: "89abcdef0123456789abcdef0123456789abcdef", author_at: iso(5 * day), lines_added: 3, lines_removed: 1, on_mainline: true, reverted_by: null, sessions: [] },
+    ],
+  }] }),
+  "GET /api/file-tree": ({ query }) => fileTree(query),
+  "GET /api/file-find": ({ query }) => ({ project: filesProject, files: [
+    { path: "internal/archive/api.go", in_tree: true, url: "/files?file=internal%2Farchive%2Fapi.go&file_project=pharos" },
+    { path: "internal/archive/a-very-long-directory-name-that-wraps/api_test_with_a_long_name.go", in_tree: false, url: "/files?file=x&file_project=pharos" },
+  ].filter(file => file.path.includes(query.get("q") ?? "")), more: false }),
+  "GET /api/repositories/:id/checkout": ({ params }) => ({ repository_id: params.id, name: "pharos", path: "/Users/me/pharos", status: "set", reason: null, candidates: ["/Users/me/pharos", "/Users/me/conductor/workspaces/pharos/a-workspace-with-a-long-name"] }),
+  "GET /api/file-content": ({ query }) => ({ ...filesCheckout, path: query.get("path"), size: filesCode.join("\n").length, text: filesCode.join("\n") + "\n", truncated: false }),
+  "GET /api/file-blame": ({ query }) => ({ ...filesCheckout, path: query.get("path"), lines: filesCode,
+    groups: [{ hash: filesOlder, start: 1, count: 2 }, { hash: filesHash, start: 3, count: 2 }, { hash: filesOlder, start: 5, count: 2 }],
+    commits: { [filesHash]: { author: "Pharos Test", author_at: iso(2 * day), summary: filesLog[0].subject, sessions: [filesLink], read: true }, [filesOlder]: { author: "Someone Else", author_at: iso(5 * day), summary: "Fix a typo by hand", sessions: [], read: false } } }),
+  "GET /api/file-log": ({ query }) => ({ ...filesCheckout, path: query.get("path") ?? "", offset: 0, more: true, commits: filesLog }),
+  "GET /api/file-diff": ({ query }) => ({ ...filesCheckout, path: query.get("path"), diff: filesDiff, truncated: false }),
+  "GET /api/file-commit-git": () => ({ ...filesCheckout, commit: { ...filesLog[0], body: "Pages read stored facts; the tree comes from local Git.\n\nCo-Authored-By: Someone <someone@example.com>",
+    files: [{ path: "internal/archive/api.go", lines_added: 38, lines_removed: 7, binary: false }, { path: "internal/archive/assets/logo.png", binary: true }], files_truncated: false } }),
+  "GET /api/file-last-commits": ({ query }) => ({ ...filesCheckout, path: query.get("path") ?? "", truncated: false, entries: Object.fromEntries(fileTree(new URLSearchParams({ project: "pharos", dir: query.get("path") ?? "" })).entries
+    .filter(entry => entry.in_tree).map((entry, index) => [entry.name, filesLog[index % 2]])) }),
+  "GET /api/file-changes": ({ query }) => ({ project: filesProject, path: query.get("path"), offset: 0, more: false, changes: [
+    { workspace_id: "workspace-1", title: "Add the file history endpoint", outcome_label: "landed", at: iso(2 * day), tool_name: "Edit", lines_added: 2, lines_removed: 1, url: "/work/workspace-1?conversation=conversation-1&message=message-1", session_url: "/work/workspace-1",
+      kind: "replace", hunks: [{ lines: [[" ", "package archive"], ["-", "// ServeHTTP answers."], ["+", filesCode[2]], ["+", "func (s *Server) ServeHTTP() {"]] }], truncated: false },
+    { workspace_id: "workspace-2", title: "Codex session", outcome_label: "reworked", at: iso(9 * day), tool_name: "apply_patch", lines_added: null, lines_removed: null, url: "/work/workspace-2", session_url: "/work/workspace-2", kind: "listed", hunks: [] },
+  ] }),
+  "GET /api/file-commit": ({ query }) => ({
+    project: filesProject, git: fileTree(new URLSearchParams()).git,
+    commit: { hash: "0123456789abcdef0123456789abcdef01234567", author_at: iso(2 * day), committed_at: iso(day), parents: 1, lines_added: 40, lines_removed: 7, on_mainline: true, mainline_evidence: "reachable from origin/master", reverted_by: null, revert_evidence: null,
+      files: [{ path: "internal/archive/api.go", lines_added: 38, lines_removed: 7, in_tree: true, sessions: 2 }, { path: "internal/archive/a-very-long-directory-name-that-wraps/removed_since_then_with_a_long_name.go", lines_added: 2, lines_removed: 0, in_tree: false, sessions: 0 }],
+      sessions: [{ workspace_id: "workspace-1", title: "Add the file history endpoint", method: query.get("commit") ? "transcript" : "window", confidence: 1, counted: true, url: "/work/workspace-1?conversation=conversation-1&message=message-3" }] },
+  }),
+  "GET /api/work/:id/files": ({ params }) => ({
+    workspace_id: params.id, outcome_label: "landed", outcome_why: "1 of its 1 linked commit reached mainline (local Git).", git: { status: "checked", reason: null },
+    files: [{ file_key: "repository:repo-pharos:internal/archive/api.go", path: "internal/archive/api.go", project: "pharos", project_ref: "pharos", relative_path: "internal/archive/api.go", url: "/files?file=internal%2Farchive%2Fapi.go&file_project=pharos",
+      first_edit_at: iso(2 * day), last_edit_at: iso(2 * day), edits: 2, lines_added: 20, lines_removed: 3, rewrote: false, other_sessions: 1,
+      places: [{ at: iso(2 * day), lines_added: 18, lines_removed: 3, conversation_id: "conversation-1", message_id: "message-1", url: `/work/${params.id}?conversation=conversation-1&message=message-1` }],
+      reworked_by: [], reworked: [] }],
+    commits: [{ hash: "0123456789abcdef0123456789abcdef01234567", repository_id: "repo-pharos", project: "pharos", project_ref: "pharos", workspace_id: params.id, method: "transcript", confidence: 1, counted: true,
+      author_at: iso(2 * day), files: 1, lines_added: 40, lines_removed: 7, on_mainline: true, reverted_by: null, url: "/files?file_commit=0123456789abcdef0123456789abcdef01234567&file_project=pharos", place_url: `/work/${params.id}?conversation=conversation-1&message=message-1` }],
+  }),
+
   // Settings.
   "GET /api/feedback/diagnostics": { service: "Recent service diagnostics" },
+  "POST /api/feedback/screenshot": { url: "file:///tmp/pharos-annotation-fixture/screenshot.jpg" },
+  "POST /api/logs/page": ({ body }) => ({ recorded: body?.events?.length ?? 0 }),
+  "GET /api/logs/summary": () => logsSummary,
+  "GET /api/logs/source": ({ query }) => logsSource(query.get("id")),
   "POST /api/feedback/submit": ({ body }) => ({ id: body.id, received: true }),
   "GET /api/health/counts": { workspaces: 1964, conversations: 2400, messages: 311120 },
   "GET /api/health/storage": { volume_name: "Pharos SSD", index_bytes: 2_000_000_000, internal_free_bytes: 100_000_000_000, free_bytes: 400_000_000_000, staging_bytes: 0, staging_cap_bytes: 1, path: "/Volumes/Pharos SSD/Pharos", status: "available" },
@@ -585,31 +1029,56 @@ export const defaultApi = {
       .map(([key, label, bytes]) => ({ key, label, bytes })),
     machines: [{ id: "test-mac", label: "A Mac Studio with a rather long name (this Mac)", originals_bytes: 52e9, catalog_bytes: 90e9 }, { id: "air", label: "MacBook Air", originals_bytes: 9e9, catalog_bytes: 17e9 }],
     sources: [{ id: "conductor", label: "conductor", originals_bytes: 30e9, catalog_bytes: 50e9 }, { id: "codex", label: "codex", originals_bytes: 16e9, catalog_bytes: 30e9 }],
-    repositories: [{ id: "repo", label: "a-repository-name-without-any-spaces-to-wrap", originals_bytes: 20e9, catalog_bytes: 40e9 }, { id: "", label: "No repository", originals_bytes: 30e9, catalog_bytes: 20e9 }],
+    projects: [{ id: "repository:repo", label: "a-repository-name-without-any-spaces-to-wrap", originals_bytes: 20e9, catalog_bytes: 40e9 }, { id: "folder:~/notes", label: "~/notes", originals_bytes: 5e9, catalog_bytes: 1e9 }, { id: "", label: "No project", originals_bytes: 30e9, catalog_bytes: 20e9 }],
   },
   "GET /api/health/freshness": { sources: [], sync_active: false },
   "GET /api/health/drive": { free_bytes: 400_000_000_000, sizes: { library_bytes: 12_000_000_000 } },
-  "GET /api/authorship": { built_at: iso(3600000), running: false, stale: false, error: null, totals: { typed_words: 1234, typed_messages: 98, messages: 400 }, last_30_days: { typed_words: 500 } },
+  "GET /api/authorship": { built_at: iso(120000), refined_at: iso(8*3600000), provisional_messages: 12, refinement_pending: true, pending_messages: 0, refining: false, running: false, stale: false, error: null },
   "GET /api/index": { active: false, sync_active: false, hosts },
   "GET /api/capture": { active: false, runs: [] },
   "GET /api/sources": sources,
+  "GET /api/claude-chat-settings/coverage": {accounts:[]},
+  "GET /api/claude-chat-settings/setup": ({state})=>state.claudeSettingsSetup??{source:'claude-chat-settings',path:claudeSettingsSourceFixture.path,account:'local',configured:true,enabled:true,scope:'host'},
+  "POST /api/claude-chat-settings/setup": ({state,body})=>state.claudeSettingsSetup={source:'claude-chat-settings',path:body.path,account:'local',configured:true,enabled:true,scope:'host'},
+  "GET /api/claude-chat-settings/recording": ({state,query}) => ({source:query.get('source'),active:false,known_conversations:67,new_conversations:0,...state.claudeSettingsRecording}),
+  "POST /api/claude-chat-settings/recording": ({state,body}) => state.claudeSettingsRecording={source:body.source,active:body.active,known_conversations:67,new_conversations:0,expires_at:new Date(Date.now()+1800000).toISOString()},
   "GET /api/sync/status": syncStatus,
+  "GET /api/operations": { journal: { recent: [
+    { id: "op-index-history", root_id: "op-index-history", kind: "index.changes.manual", label: "Index changes", trigger: "user", process: "service", state: "succeeded", started_at: iso(145000), updated_at: iso(120000), ended_at: iso(120000), legacy_ref: "run-0" },
+    { id: "op-findings-history", root_id: "op-findings-history", kind: "analysis.findings", label: "Update findings", trigger: "schedule", process: "service", state: "succeeded", started_at: iso(360000), updated_at: iso(300000), ended_at: iso(300000) },
+    { id: "op-backup-history", root_id: "op-backup-history", kind: "backup.local", label: "Back up", trigger: "user", process: "service", state: "failed", error: "Destination unavailable", started_at: iso(600000), updated_at: iso(540000), ended_at: iso(540000) },
+  ] } },
   "GET /api/sync/issues": { issues: [] },
   "GET /api/sync/settings": syncSettings,
   "GET /api/sync/history": { history: syncHistory },
   "GET /api/sync/recovery": { jobs: [] },
   "GET /api/background": backgroundDocument,
   "POST /api/background/settings": backgroundDocument,
-  "POST /api/labels/settings": ({ body }) => ({ ...backgroundDocument, labels: { enabled: body.enabled, can_change: true, status: body.enabled ? 'On, waiting for the labeling model.' : 'Off.' } }),
+  "POST /api/labels/settings": ({ body }) => ({ ...backgroundDocument,
+    labels: { ...backgroundDocument.labels, ...('enabled' in body ? {enabled:body.enabled, status:body.enabled ? 'On, waiting for the labeling model.' : 'Off.'} : {}), ...('threads' in body ? {threads:body.threads} : {}) },
+    agent_events: { ...backgroundDocument.agent_events, ...('agent_events_threads' in body ? {threads:body.agent_events_threads} : {}) } }),
   "POST /api/background/run": ({ body }) => ({ accepted: true, items: [body?.item].filter(Boolean) }),
+  "GET /api/work": { engine: "classic", available: false },
+  "POST /api/work": ({ body }) => ["recent", "backfill"].includes(body?.action) ? { request_id: 9, operation_id: "op-work-9", scope: body.action, state: "queued" }
+    : body?.action === "cancel" ? { cancelled: true } : { changed: true, kind: body?.kind, action: body?.action },
+  "POST /api/work/settings": ({ body }) => ({ ...workBackgroundDocument, work: { ...workBackgroundDocument.work, cpu_slots: body.cpu_slots } }),
   "GET /api/backup": { active: false, run: null, runs: [], last_success: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day) }, record: "/Volumes/Pharos SSD/Pharos/backups.json", suggested_destination: "/Users/someone/Pharos Backup" },
 
   // Findings and MCP.
   "GET /api/findings": findings,
+  "GET /api/findings/fixes": fixesFixtures,
+  "GET /api/findings/fixes/settings": fixesSettingsFixture,
+  "POST /api/findings/fixes/settings": ({ body }) => ({ ...fixesSettingsFixture, bounds: { ...fixesSettingsFixture.bounds, ...Object.fromEntries(Object.entries(body ?? {}).filter(([key]) => key in fixesSettingsFixture.bounds)) } }),
+  "GET /api/findings/fixes/:id": ({ params }) => ({ ...fixDetailFixture, ...fixesFixtures.items.find(item => item.id === params.id) }),
+  "POST /api/findings/fixes/bulk": ({ body }) => ({ ok: true, count: body?.ids?.length ?? 0 }),
+  "POST /api/findings/fixes/cart/prompt": ({ body }) => ({ target: body?.target, label: "explo", prompt: `Improve the guidance, setup and docs agents work with in explo.\n${(body?.ids ?? []).join("\n")}`, count: body?.ids?.length ?? 0, preview_token: "sample-preview" }),
+  "POST /api/findings/fixes/cart/copy": { ok: true },
+  "POST /api/findings/fixes/:id/action": { ok: true },
   "GET /api/findings/safety": safetyFixtures,
   "GET /api/findings/safety/settings": safetySettingsFixture,
   "POST /api/findings/safety/settings": ({ body }) => ({ ...safetySettingsFixture, rules: safetySettingsFixture.rules.map(rule => ({ ...rule, enabled: body?.rule_enabled?.[rule.id] ?? rule.enabled })) }),
   "GET /api/findings/safety/:id": ({ params }) => ({ ...safetyDetailFixture, ...safetyFixtures.cases.find(item => item.id === params.id) }),
+  "POST /api/findings/safety/bulk": ({ body }) => ({ ok: true, count: body?.ids?.length ?? 0 }),
   "POST /api/findings/safety/cart/prompt": ({ body }) => ({ target: body?.target, label: "explo", prompt: `Review these archived safety questions. Investigate and recommend; make no changes.\nUse get_safety_case for each case:\n${(body?.ids ?? []).join("\n")}`, count: body?.ids?.length ?? 0, preview_token: "sample-preview" }),
   "POST /api/findings/seen": { ok: true },
   "POST /api/findings/refresh": { started: true },
@@ -617,7 +1086,6 @@ export const defaultApi = {
   "GET /api/findings/:id": ({ params }) => { const card = findingCards.find(item => item.id === params.id); return card && findingDetail(card); },
   "GET /api/mcp": ({ state }) => ({ enabled: state.mcpEnabled ?? true, transport: "stdio", command: "/Applications/Pharos.app/Contents/MacOS/pharos", args: ["--config", "/Users/someone/Library/Application Support/Pharos/archive.toml", "mcp"], note: "Agent clients launch this local command when they connect.", skill: { name: "search-prior-coding-sessions", text: "Search prior coding sessions with Pharos.", paths: { codex: "~/.codex/skills/search-prior-coding-sessions/SKILL.md" } } }),
   "POST /api/mcp/enabled": ({ body, state }) => { state.mcpEnabled = body.enabled; return { enabled: body.enabled }; },
-  "GET /api/mcp/calls": { items: [mcpCall], filtered_total: 1, tool_stats: [{ tool_name: "search_conversations", calls: 1, errors: 0, average_output_tokens: 300, largest_output_tokens: 300, truncated_calls: 0, average_duration_ms: 18 }], stats: { total_calls: 1, failed_calls: 0, average_output_tokens: 300, largest_output_tokens: 300, truncated_calls: 0 } },
 
   // The workspace reader and delegation explorer.
   "GET /api/work/:id": ({ params }) => params.id === workID ? work : undefined,
@@ -630,3 +1098,63 @@ export const defaultApi = {
   "GET /api/work/:id/preview": ({ params, query }) => workPreview(params.id, query),
   "GET /api/work/:id/find": { conversations: [] },
 };
+
+// Evidence the explorer and event views cannot settle yet, for layout and URL
+// restoration only (the states themselves are tested in Go and node): an ≈
+// session count, a row whose relatives the family bound left out (loaded by
+// delegation_relatives), and events waiting for a rebuild.
+const eventsPending = { state: "pending", pending_conversations: 4, withheld_conversations: 2 };
+const omittedRelatives = [1, 2].map(n => ({ ...session(`s-relative-${n}`, `conv-relative-${n}`, "s-child", "claude", 2, `Omitted relative ${n} with a long session label`, 10000), order: 2 + n }));
+export const pendingEvidenceApi = {
+  "GET /api/work/:id/delegation": ({ query }) => {
+    const data = delegation(query), loaded = (query.get("relatives") || "").split(",").includes("s-child");
+    // As the server does, a collapse leaves descendants out of rows but not out of the counts.
+    const collapsed = new Set((query.get("collapsed") || "").split(",").filter(Boolean)), all = [...data.rows, ...loaded ? omittedRelatives : []];
+    const parents = new Map(all.map(row => [row.id, row.parent_id])), hidden = row => { for (let id = parents.get(row.id); id; id = parents.get(id)) if (collapsed.has(id)) return true; return false; };
+    const rows = all.filter(row => !hidden(row)).map(row => row.id === "s-child" && !loaded ? { ...row, children_omitted: omittedRelatives.length } : row.id === "s-nested" ? { ...row, events_pending: true } : row);
+    return { ...data, rows, focus: [...data.focus, ...loaded ? omittedRelatives : []], matched: Object.fromEntries(rows.map(row => [row.id, true])), total: rows.length, session_count: sessions.length + omittedRelatives.length, session_count_uncertain: 1, events_pending_sessions: 1 };
+  },
+  "GET /api/work/:id/parallel": ({ query }) => { const data = parallel(query); return { ...data, lanes: data.lanes.map(lane => lane.session === "s-nested" ? { ...lane, events_pending: true } : lane) }; },
+  "GET /api/labels/conversations/:id": async call => ({ ...await defaultApi["GET /api/labels/conversations/:id"](call), events_pending: 1, events_pending_conversations: [call.params.id] }),
+  // Result cards draw the stored image: one whose events are withheld is a
+  // stale image (not current) that says how many conversations wait.
+  "POST /api/fingerprints": async call => {
+    const answer = await defaultApi["POST /api/fingerprints"](call);
+    return { ...answer, items: answer.items.map(item => call.body.events === false ? item : { ...item, state: "pending", stale: true, events_pending: 1 }) };
+  },
+  // Every event conversation is withheld: nothing reads as scanned, yet the
+  // pages say a rebuild is pending rather than that nothing was ever read.
+  "* /api/query/:dataset/:operation": async ({ params, body, query }) => {
+    if (!/^agent_event/.test(params.dataset)) return defaultApi["* /api/query/:dataset/:operation"]({ params, body, query });
+    const answer = schemas[params.dataset] && answerQuery(params.operation, body, [], schemas[params.dataset], { now, id: query.get("id") });
+    return answer && { ...answer, coverage: eventsPending };
+  },
+  "GET /api/findings/fixes": { ...fixesFixtures, events_freshness: eventsPending },
+  "GET /api/findings/safety": { ...safetyFixtures, events_freshness: eventsPending, cases: [...safetyFixtures.cases, { ...safetyFixtures.cases[0], id: "safety_safeguard", rule: "safeguard-test", danger: "medium", title: "A test safeguard was weakened", cart: undefined }] },
+};
+
+// Settings → Logs: a crash in the service's last run and a page error. As
+// the API does, a quiet source omits its empty collection.
+const logsSources = [
+  { id: "page", title: "Page errors", attention: "warning", count: 2, latest_at: iso(120000), headline: "GET /api/query/usage/rows had not answered after 15 s", files: ["/Users/me/Library/Application Support/Pharos/logs/library-1/page-errors.jsonl"] },
+  { id: "requests", title: "Slow & failed requests", count: 0, files: ["/Users/me/Library/Application Support/Pharos/logs/library-1/requests.jsonl"] },
+  { id: "service", title: "Service output", attention: "error", count: 3, latest_at: iso(600000), headline: "A run ended in a crash: panic: runtime error: index out of range [3] with length 3", files: ["/Users/me/Library/Application Support/Pharos/logs/library-1/service.log"] },
+  { id: "app", title: "App output", count: 0 },
+  { id: "background", title: "Background work", count: 0 },
+  { id: "crashes", title: "Crash reports", count: 0, files: ["/Users/me/Library/Logs/DiagnosticReports"] },
+];
+export const logsSummary = { generated_at: iso(0), folder: "/Users/me/Library/Application Support/Pharos/logs", sources: logsSources };
+export function logsSource(id) {
+  const summary = logsSources.find(source => source.id === id);
+  if (!summary) return undefined;
+  const long = "pharos/internal/archive.(*Server).serveQueryWithAVeryLongFunctionNameThatMustWrapAtNarrowWidths(0x14000a2c000, {0x105f0c2a8, 0x14000b3e0f0}, 0x14000c81200) /Users/me/src/pharos/internal/archive/query_api.go:412 +0x1f4";
+  return {
+    summary,
+    ...id === "page" ? { events: [{ id: "a1", at: iso(120000), level: "warning", kind: "stalled", message: summary.headline, page: "/analyze", path: "/api/query/usage/rows", count: 2 }, { id: "a2", at: iso(900000), level: "error", kind: "render", message: "TypeError: undefined is not an object (evaluating 'rows.length')", detail: long, page: "/library" }] } : {},
+
+    ...id === "service" || id === "app" ? { runs: [
+      { started_at: iso(60000), running: true, crashed: false, problems: 0, lines: ["listening on 127.0.0.1:18765"] },
+      { started_at: iso(600000), ended_at: iso(300000), exit: "exit status 2", running: false, crashed: true, problems: 3, crash: "panic: runtime error: index out of range [3] with length 3", lines: ["listening on 127.0.0.1:18765", "panic: runtime error: index out of range [3] with length 3", "", "goroutine 1234 [running]:", long] },
+    ] } : {},
+  };
+}

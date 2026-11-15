@@ -199,10 +199,15 @@ func spanRule(span authorSpan) string {
 
 // authorshipState tracks the in-process rebuild.
 type authorshipState struct {
-	rebuild   sync.Mutex
-	mu        sync.Mutex
-	running   bool
-	lastError string
+	workRepresentatives    map[string]string
+	workPreparedGeneration string
+	rebuild                sync.Mutex
+	mu                     sync.Mutex
+	running                bool
+	refining               bool
+	// A bounded first pass must not be repeated by page polling.
+	estimatesAttempted bool
+	lastError          string
 	// deferred records a follow-up a rebuild skipped while this process
 	// indexed; the ingest's end runs it (ingestEnded).
 	deferred atomic.Bool
@@ -630,6 +635,7 @@ type lineUse struct {
 // agent output of the window before the current message, and every earlier
 // message's text and lines.
 type classifier struct {
+	quick          bool
 	replyStart     time.Time
 	loadLines      func([]uint64) error
 	incrementalErr error
@@ -717,12 +723,17 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	lines := textLines(text)
 	// Harness text is left out of word runs, or its closing words and the
 	// first words typed after it would match every earlier session's.
-	tokens := wordTokens(comparisonText)
-	for len(tokens) > 0 && tokens[0].start < bodyStart {
-		tokens = tokens[1:]
+	var tokens []wordToken
+	var hashes []uint64
+	var agentRuns []copiedRun
+	if !c.quick {
+		tokens = wordTokens(comparisonText)
+		for len(tokens) > 0 && tokens[0].start < bodyStart {
+			tokens = tokens[1:]
+		}
+		hashes = shingles(tokens)
+		agentRuns = copiedRuns(tokens, hashes, c.agentText, input.SentAt.Add(-authorshipWindow))
 	}
-	hashes := shingles(tokens)
-	agentRuns := copiedRuns(tokens, hashes, c.agentText, input.SentAt.Add(-authorshipWindow))
 	for _, run := range agentRuns {
 		reason := reasonAgentOutput
 		if run.batch.tool {
@@ -731,7 +742,11 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 		l.claim(run.start, run.end, spanQuoted, reason.with(ago(input.SentAt, run.at)), run.origin)
 	}
 	claimCopiedReviewItems(l, comparisonText, agentRuns, input.SentAt)
-	for _, run := range copiedRuns(tokens, hashes, c.userText, time.Time{}) {
+	var userRuns []copiedRun
+	if !c.quick {
+		userRuns = copiedRuns(tokens, hashes, c.userText, time.Time{})
+	}
+	for _, run := range userRuns {
 		l.claim(run.start, run.end, spanResent, reasonAlreadySent.with(ago(input.SentAt, run.at)), run.origin)
 	}
 	for _, match := range fencePattern.FindAllStringIndex(heuristicText, -1) {
@@ -772,8 +787,12 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	// After the speed check, so pasted identifiers still count as text that
 	// arrived too fast to type.
 	claimIdentifiers(l, heuristicText, lines, bodyStart)
-	c.userText.add(input.SentAt, textOrigin{input.ConversationID, input.ID}, hashes)
-	c.rememberLines(textOrigin{input.ConversationID, input.ID}, keys)
+	if !c.quick {
+		c.userText.add(input.SentAt, textOrigin{input.ConversationID, input.ID}, hashes)
+	}
+	if !c.quick {
+		c.rememberLines(textOrigin{input.ConversationID, input.ID}, keys)
+	}
 	return l.spans()
 }
 
@@ -1200,7 +1219,10 @@ func summarizeSpans(text string, spans []authorSpan) spanSummary {
 // classification even when they add no tools or model requests; the tool
 // ledger generation also captures changes to identity links and launch data.
 func (c *Catalog) authorshipGenerations() (want, built string, err error) {
-	ctx := context.Background()
+	return c.authorshipGenerationsContext(context.Background())
+}
+
+func (c *Catalog) authorshipGenerationsContext(ctx context.Context) (want, built string, err error) {
 	if want, err = c.metaValue(ctx, "tool_ledger_generation"); err != nil {
 		return "", "", err
 	}
@@ -1234,7 +1256,7 @@ func (c *Catalog) refreshAuthorshipInContext(parent context.Context) bool {
 	if parent != nil && parent.Err() != nil {
 		return false
 	}
-	if want, built, err := c.authorshipGenerations(); err == nil && want != built {
+	if want, built, err := c.authorshipEstimateGenerations(); err == nil && (want != built || c.authorshipQuickPending()) {
 		return c.startAuthorshipInContext(want, parent)
 	}
 	return false
@@ -1245,53 +1267,29 @@ func (c *Catalog) refreshAuthorshipInContext(parent context.Context) bool {
 // and otherwise shows the last index's until the next. It reports whether
 // messages changed since the ledger was built.
 func (c *Catalog) ensureAuthorship() (stale bool) {
-	want, built, err := c.authorshipGenerations()
-	if err != nil || want == built {
+	want, built, err := c.authorshipEstimateGenerations()
+	if err != nil || want == built && !c.authorshipQuickPending() {
 		return false
 	}
 	c.authorship.mu.Lock()
 	failed := c.authorship.lastError != ""
+	attempted := c.authorship.estimatesAttempted
 	c.authorship.mu.Unlock()
-	if !strings.HasSuffix(built, "/"+authorshipVersion) && !failed {
+	quickVersion, _ := c.metaValue(context.Background(), "authorship_quick_version")
+	if !strings.HasSuffix(built, "/"+authorshipVersion) && quickVersion != authorshipQuickVersion && !failed && !attempted {
 		c.startAuthorship(want)
 	}
 	return true
 }
 
-// startAuthorship rebuilds for generation in the background, unless a
-// rebuild is running already. A rebuild that succeeds checks again for
-// messages an index wrote while it ran, except one a page started while this
-// process indexes: the index writes on every record, so that rebuild would
-// start again as soon as it ended, rewriting message_authorship and holding a
-// read snapshot round after round. The skipped follow-up is remembered
-// (authorshipFollowUp) and runs once when the last ingest ends, unless it was
-// stopped or the service is stopping, in which case it waits for the next
-// ingest that ends normally or an explicit refresh. A manual index's
-// analysis chain has rebuilt by then (refreshAuthorship), so that run finds
-// the ledger current. Pages show the last ledger meanwhile
-// (ensureAuthorship).
+// startAuthorship starts one bounded estimates pass. New work arriving
+// during it remains queued for the next index or scheduled pass.
 func (c *Catalog) startAuthorship(generation string) {
 	c.startAuthorshipInContext(generation, nil)
 }
 
-// authorshipFollowUp reports whether a rebuild that just succeeded should
-// check again for inputs written while it ran.
-// A skipped follow-up is remembered for the ingest's end: a scheduled
-// index runs no analysis chain, and a page does not rebuild a ledger of the
-// current rules, so without it authorship could stay stale until the next
-// manual index.
-func (c *Catalog) authorshipFollowUp(parent context.Context) bool {
-	if parent != nil || c.ingestRuns.Load() == 0 {
-		return true
-	}
-	c.authorship.deferred.Store(true)
-	// The ingest may have ended between the check and the store, its end
-	// finding nothing deferred: then follow up now.
-	return c.ingestRuns.Load() == 0 && c.authorship.deferred.Swap(false)
-}
-
 // ingestStarted and ingestEnded bracket an ingest in this process. Once the
-// last one ends, a follow-up rebuild deferred while it ran runs, once. A
+// last one ends, a follow-up estimates pass deferred while it ran runs, once. A
 // manual index's chain has rebuilt by then, so the refresh finds the
 // ledger current and starts nothing. An ingest that was stopped, or that
 // ends because the service is stopping, starts no work the stop no longer
@@ -1309,6 +1307,9 @@ func (c *Catalog) ingestEnded(stopped bool) {
 }
 
 func (c *Catalog) startAuthorshipInContext(generation string, parent context.Context) bool {
+	if c.work.declares(kindAuthorship) {
+		return c.startAuthorshipWork(parent)
+	}
 	state := &c.authorship
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -1334,7 +1335,7 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 		} else {
 			ctx = withWorkProgress(ctx, op.mirrorWork)
 		}
-		err := c.RebuildAuthorship(ctx, generation)
+		err := admitWorkCPU(ctx, c, 1, 1, func(ctx context.Context, _ workAllocation) error { return c.UpdateAuthorship(ctx, generation) })
 		state.mu.Lock()
 		state.running, state.lastError = false, ""
 		// Cancellation interrupts a rebuild; it must not block a later page retry.
@@ -1342,8 +1343,10 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 			state.lastError = err.Error()
 		}
 		state.mu.Unlock()
-		if err == nil && ctx.Err() == nil && c.authorshipFollowUp(parent) {
-			c.refreshAuthorshipInContext(parent)
+		// Remember work arriving during an ingest, but leave bounded backlogs
+		// to the next scheduled pass instead of starting another full budget.
+		if err == nil && ctx.Err() == nil && c.ingestRuns.Load() > 0 {
+			c.authorship.deferred.Store(true)
 		}
 		return err
 	}
@@ -1362,6 +1365,129 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 	return state.running
 }
 
+// startAuthorshipWork is startAuthorshipInContext under population
+// execution: the bounded pass becomes this caller's own request for the
+// recent conversations' estimates plus the classic pass's historical share
+// (authorshipHistoricalShare; the rest of history stays with the analysis
+// chain's backfill), and a waiter the service's lifetime tracks
+// keeps the classic state the pages read: running while it is outstanding,
+// lastError when it failed, estimatesAttempted once one succeeded. A
+// cancelled parent (a stopped index) withdraws only this request; the shared
+// execution continues for any other request that needs it.
+func (c *Catalog) startAuthorshipWork(parent context.Context) bool {
+	w := c.work
+	state := &c.authorship
+	state.mu.Lock()
+	if state.running || parent != nil && parent.Err() != nil {
+		state.mu.Unlock()
+		return false
+	}
+	state.running = true
+	state.mu.Unlock()
+	finish := func(failure string, succeeded bool) {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		state.running, state.lastError = false, failure
+		if succeeded {
+			state.estimatesAttempted = true
+		}
+	}
+	spec := workRequestSpec{Scope: "selection", Kinds: []string{kindAuthorship}, Priority: workPriorityLive, Trigger: triggerRead,
+		// Someone is reading; Pause never held the classic page pass.
+		Unpausable: true}
+	if parent != nil {
+		spec.Trigger, spec.Unpausable = triggerChained, false
+	}
+	until := c.clock()
+	from := until.Add(-maintenanceRecent)
+	spec.Build = func(ctx context.Context, b *workInventoryBuilder) error {
+		if err := c.freezeWorkPopulation(ctx, b, from, until, nil); err != nil {
+			return err
+		}
+		// Reuse the builder's bounded storage for membership lookup; do
+		// not allocate a second map the size of the recent population.
+		slices.SortFunc(b.members, func(a, b workMember) int { return strings.Compare(a.ID, b.ID) })
+		older, err := c.authorshipHistoricalShare(ctx, from, b.members)
+		if err != nil || len(older) == 0 {
+			return err
+		}
+		return c.freezeWorkPopulation(ctx, b, time.Time{}, time.Time{}, older)
+	}
+	id, record, err := w.submit(w.server.life.ctx, spec)
+	if err != nil {
+		finish("", false)
+		return false
+	}
+	started := w.server.spawn(func(life context.Context) {
+		wait := life
+		if parent != nil {
+			var cancel context.CancelFunc
+			wait, cancel = context.WithCancel(life)
+			defer cancel()
+			defer context.AfterFunc(parent, cancel)()
+		}
+		facts, err := w.await(wait, id, record)
+		failure, succeeded := authorshipRequestOutcome(facts, err)
+		finish(failure, succeeded)
+		// Remember work arriving during an ingest, as the classic pass does.
+		if succeeded && c.ingestRuns.Load() > 0 {
+			state.deferred.Store(true)
+		}
+	})
+	if !started {
+		// The service is stopping: nothing will wait for the request.
+		w.runner.Cancel(id)
+		finish("", false)
+	}
+	return started
+}
+
+// authorshipRequestOutcome is a page request's result as the classic state
+// records it. An interruption (a withdrawn or held request, or recent
+// conversations still being written) must not block a later page retry, nor
+// read as an estimates error.
+func authorshipRequestOutcome(facts workRequestFacts, err error) (failure string, succeeded bool) {
+	switch {
+	case err != nil || facts.State == opCancelled || facts.State == opInterrupted:
+		return "", false
+	case facts.State == opSucceeded:
+		return "", true
+	}
+	return workRequestError(facts).Error(), false
+}
+
+// authorshipHistoricalShare names the older conversations a page pass also
+// estimates, as runAuthorshipLanes' historical lane does: the oldest-queued
+// pending messages sent before from, up to the quick limit less the recent
+// lane's pending messages but never under a fifth of it, so a fully
+// historical library still makes bounded progress. A chosen conversation is
+// estimated whole. Conversations in sorted skip (the recent members) are left out.
+func (c *Catalog) authorshipHistoricalShare(ctx context.Context, from time.Time, skip []workMember) ([]string, error) {
+	limit := max(1, authorshipQuickLimit)
+	cutoff := formatTime(from)
+	var recent int
+	if err := c.reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM authorship_pending WHERE sent_at>=? LIMIT ?)`, cutoff, limit).Scan(&recent); err != nil {
+		return nil, err
+	}
+	rows, err := c.reader().QueryContext(ctx, `SELECT m.conversation_id FROM authorship_pending p JOIN messages m ON m.id=p.message_id
+ WHERE p.sent_at<? OR p.sent_at IS NULL ORDER BY p.queued_at,p.rowid LIMIT ?`, cutoff, max(limit/5, limit-recent, 1))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if _, found := slices.BinarySearchFunc(skip, id, func(m workMember, id string) int { return strings.Compare(m.ID, id) }); !found {
+			ids = append(ids, id)
+		}
+	}
+	return ids, rows.Err()
+}
+
 // authorshipRunning reports whether a rebuild is writing message_authorship.
 func (c *Catalog) authorshipRunning() bool {
 	c.authorship.mu.Lock()
@@ -1372,6 +1498,10 @@ func (c *Catalog) authorshipRunning() bool {
 // RebuildAuthorship links headless runs to the commands that launched them,
 // classifies user messages in send order and stores only changed rows.
 func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) error {
+	return c.withAuthorshipLease(func() error { return c.rebuildAuthorship(ctx, generation, false) })
+}
+
+func (c *Catalog) withAuthorshipLease(work func() error) error {
 	// Cache readers must not observe another classifier's partial checkpoint.
 	// This lease does not block ingest or hold a SQLite snapshot/transaction.
 	if !c.authorship.rebuild.TryLock() {
@@ -1385,9 +1515,21 @@ func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) erro
 		}
 		defer lease.Close()
 	}
+	return work()
+}
+
+func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, force bool) error {
 	started := time.Now()
 	reportWork(ctx, "reading authorship inputs", "", 0, -1)
-	run, err := c.incrementalAuthorship(ctx)
+	var run *authorshipIncremental
+	var err error
+	if force {
+		var checkpoint authorshipCheckpoint
+		checkpoint, err = c.authorshipCheckpoint(ctx)
+		run = &authorshipIncremental{checkpoint: checkpoint, reason: "daily refinement"}
+	} else {
+		run, err = c.incrementalAuthorship(ctx)
+	}
 	if err != nil {
 		return err
 	}
@@ -1400,7 +1542,15 @@ func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) erro
 					return err
 				}
 			}
-			for key, value := range map[string]string{"authorship_generation": generation, "authorship_state_generation": generation, "authorship_built_at": now()} {
+			metadata := map[string]string{"authorship_generation": generation, "authorship_state_generation": generation, "authorship_built_at": now(), "authorship_quick_generation": generation, "authorship_quick_at": now(), "authorship_quick_version": authorshipQuickVersion}
+			var pending bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM authorship_pending)`).Scan(&pending); err != nil {
+				return err
+			}
+			if !pending {
+				metadata["authorship_complete_at"] = now()
+			}
+			for key, value := range metadata {
 				if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 					return err
 				}
@@ -1414,6 +1564,7 @@ func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) erro
 	}
 	full := run.classifier == nil
 	if full {
+		run.refinementKey = authorshipRefinementKey(run.checkpoint.revision)
 		run.inputs, run.launches, err = c.authorshipInputs(ctx)
 		if err != nil {
 			return err
@@ -1423,7 +1574,9 @@ func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) erro
 	inputsTook := time.Since(started)
 	reportWork(ctx, "authorship mode: "+run.reason, "message", 0, len(run.inputs))
 	classified := time.Now()
-	results, err := classifyAuthorship(ctx, c.DB, run.inputs, run.classifier)
+	// Bounded reply pages must keep moving even while other work occupies
+	// the catalog connections with writes or waits for the writer lock.
+	results, err := classifyAuthorship(ctx, c.reader(), run.inputs, run.classifier)
 	if err != nil {
 		return err
 	}
@@ -1657,7 +1810,7 @@ func authorshipContinuations(ctx context.Context, q queryer, representative map[
 // replies in the same order, so the agent index always holds exactly the
 // replies of the preceding window.
 func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]authorResult, error) {
-	return classifyInputsFrom(ctx, c.DB, inputs)
+	return classifyInputsFrom(ctx, c.reader(), inputs)
 }
 
 // classifyInputsFrom is classifyInputs reading agent replies through q.
@@ -1718,30 +1871,38 @@ func walkAuthorshipInputs(ctx context.Context, inputs []authorInput, classifier 
 	return results, nil
 }
 
-// AuthorshipStats summarizes user-turn text for Settings: all-time and
-// last-30-day totals, and a daily series the page rolls up by week or month.
-// Every total has characters and words per category.
+// AuthorshipStats is the state of the writing estimates: whether they are
+// built, running or catching up. The words themselves are the
+// writing_messages dataset, read through query-v3.
 func (c *Catalog) AuthorshipStats(ctx context.Context) (map[string]any, error) {
 	stale := c.ensureAuthorship()
-	builtAt, err := c.metaValue(ctx, "authorship_built_at")
+	refinedAt, err := c.metaValue(ctx, "authorship_refined_at")
 	if err != nil {
 		return nil, err
 	}
-	sums := []string{"COUNT(*) messages", "COALESCE(SUM(typed_words>0),0) typed_messages"}
-	for _, column := range authorshipColumns() {
-		sums = append(sums, fmt.Sprintf("COALESCE(SUM(%s),0) %s", column, column))
+	builtAt, err := c.metaValue(ctx, "authorship_quick_at")
+	if builtAt == "" {
+		builtAt, _ = c.metaValue(ctx, "authorship_built_at")
 	}
-	aggregate := strings.Join(sums, ",")
-	totals, err := queryMapsContext(ctx, c.DB, "SELECT "+aggregate+",COALESCE(SUM(total_chars),0) total_chars,MIN(day) first_day,MAX(day) last_day FROM message_authorship")
 	if err != nil {
 		return nil, err
 	}
-	since := c.clock().AddDate(0, 0, -29).Format("2006-01-02")
-	recent, err := queryMapsContext(ctx, c.DB, "SELECT "+aggregate+" FROM message_authorship WHERE day>=?", since)
+	refinementPending, err := c.authorshipRefinementPending(ctx)
 	if err != nil {
 		return nil, err
 	}
-	daily, err := queryMapsContext(ctx, c.DB, "SELECT day,"+aggregate+" FROM message_authorship GROUP BY day ORDER BY day")
+	var provisional, deferred int
+	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM authorship_message_state WHERE provisional=1 AND disposition='counted'").Scan(&provisional); err != nil {
+		return nil, err
+	}
+	if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM authorship_message_state WHERE disposition='deferred'").Scan(&deferred); err != nil {
+		return nil, err
+	}
+	backlog, err := c.authorshipBacklog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	completeAt, err := c.metaValue(ctx, "authorship_complete_at")
 	if err != nil {
 		return nil, err
 	}
@@ -1749,8 +1910,10 @@ func (c *Catalog) AuthorshipStats(ctx context.Context) (map[string]any, error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return map[string]any{
+		"refined_at": nilIfEmpty(refinedAt), "refinement_pending": refinementPending, "provisional_messages": provisional, "deferred_messages": deferred, "pending_messages": backlog.Pending,
+		"pending_recent_messages": backlog.Recent, "pending_historical_messages": backlog.Historical, "oldest_pending_sent_at": nilIfEmpty(backlog.OldestSent), "oldest_pending_queued_at": nilIfEmpty(backlog.OldestQueued), "complete_at": nilIfEmpty(completeAt), "refining": state.refining,
 		"version": authorshipVersion, "built_at": nilIfEmpty(builtAt), "running": state.running, "stale": stale, "error": nilIfEmpty(state.lastError),
-		"window_hours": int(authorshipWindow.Hours()), "totals": totals[0], "last_30_days": recent[0], "daily": daily,
+		"window_hours": int(authorshipWindow.Hours()),
 	}, nil
 }
 
@@ -1770,7 +1933,7 @@ func (c *Catalog) attachAuthorship(conversationID any, messages []map[string]any
 
 // Prepare once so reader rows can attach spans before their bodies are clipped.
 func (c *Catalog) messageAuthorshipAttacher(conversationID any) (func(map[string]any), error) {
-	rows, err := queryMaps(c.DB, "SELECT message_id,typed_words,pasted_words,spans_json FROM message_authorship WHERE conversation_id=?", conversationID)
+	rows, err := queryMaps(c.DB, `SELECT a.message_id,a.typed_words,a.pasted_words,a.spans_json,COALESCE(s.provisional,0) provisional FROM message_authorship a LEFT JOIN authorship_message_state s ON s.message_id=a.message_id WHERE a.conversation_id=?`, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1825,7 +1988,7 @@ func (c *Catalog) messageAuthorshipAttacher(conversationID any) (func(map[string
 			}
 			parts = append(parts, part)
 		}
-		message["authorship"] = map[string]any{"typed_words": row["typed_words"], "pasted_words": row["pasted_words"], "spans": parts}
+		message["authorship"] = map[string]any{"typed_words": row["typed_words"], "pasted_words": row["pasted_words"], "spans": parts, "provisional": integer(row["provisional"]) != 0}
 	}, nil
 }
 

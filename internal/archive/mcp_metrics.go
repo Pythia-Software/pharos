@@ -18,13 +18,13 @@ type metricDefinition struct {
 
 var metricDefinitions = []metricDefinition{
 	{"cost_usd", "USD", "Historical API list-price equivalent; not a bill. Complete requires priced usage; assumed/partial costs require available quality."},
-	{"total_tokens", "tokens", "Reconciled consumption, including aggregate remainders; checkpoints and requests are not added twice."},
+	{"total_tokens", "tokens", "Reconciled consumption, including aggregate remainders; checkpoints and requests are not added twice. Flagged estimates require available quality."},
 	{"input_tokens", "tokens", "Reconciled input including cached input; aggregate-only breakdowns remain partial."},
-	{"output_tokens", "tokens", "Reconciled output including reported reasoning; reasoning is not added twice."},
+	{"output_tokens", "tokens", "Reconciled output including reported reasoning; reasoning is not added twice. Flagged output estimates require available quality."},
 	{"cache_read_input_tokens", "tokens", "Cache-read portion of input; absence of reported usage is unknown."},
-	{"user_turn_count", "count", "Retained user messages of kind message, including harness-generated prompts."},
-	{"tool_call_count", "count", "Classified ledger calls including delegations; compound commands count once."},
-	{"tool_error_count", "count", "Classified ledger status error, not textual mentions or overall task outcome."},
+	{"user_turn_count", "count", "Retained user messages of kind message, including prompts supplied by the agent app."},
+	{"tool_call_count", "count", "Recorded tool calls including delegations; compound commands count once."},
+	{"tool_error_count", "count", "Calls recorded with error status, rather than mentions of errors in text or the overall task outcome."},
 	{"compaction_count", "count", "Attributed Claude boundaries and Codex triggers, excluding replayed events."},
 	{"wall_clock_span_seconds", "seconds", "Recorded start-to-end span including idle time; unfinished intervals are unknown."},
 }
@@ -48,6 +48,7 @@ func metricName(name string) (string, error) {
 }
 
 type statMetricValue struct {
+	IsEstimate  bool     `json:"is_estimate,omitempty"`
 	Value       *float64 `json:"value,omitempty"`
 	Status      string   `json:"status"`
 	PriceStatus string   `json:"price_status,omitempty"`
@@ -92,10 +93,12 @@ type statisticsRequest struct {
 	WorkspaceIDs       []string            `json:"workspace_ids,omitempty"`
 	Query              string              `json:"query,omitempty"`
 	Repository         string              `json:"repository,omitempty"`
+	Project            string              `json:"project,omitempty"`
 	Owner              string              `json:"owner,omitempty"`
 	Flavor             string              `json:"flavor,omitempty"`
 	Version            string              `json:"version,omitempty"`
 	Outcome            string              `json:"outcome,omitempty"`
+	OutcomeLabel       string              `json:"outcome_label,omitempty"`
 	Error              string              `json:"error,omitempty"`
 	Source             string              `json:"source,omitempty"`
 	Channel            string              `json:"channel,omitempty"`
@@ -119,7 +122,7 @@ type statisticsRequest struct {
 }
 
 func metricCall(args map[string]any) bool {
-	for _, key := range []string{"metric_filters", "metric_scope", "metric_quality", "order_by", "select", "result_mode", "cursor", "snapshot_id", "retain_snapshot", "workspace_ids", "channel", "machine_id", "execution_machine_id"} {
+	for _, key := range []string{"metric_filters", "metric_scope", "metric_quality", "order_by", "select", "result_mode", "cursor", "snapshot_id", "retain_snapshot", "workspace_ids", "channel", "machine_id", "execution_machine_id", "outcome_label"} {
 		if _, ok := args[key]; ok {
 			return true
 		}
@@ -178,6 +181,9 @@ func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, er
 	}
 	if r.Entity != "conversation" && r.Entity != "workspace" {
 		return r, fmt.Errorf("entity must be conversation or workspace")
+	}
+	if r.OutcomeLabel != "" && !slices.Contains(outcomeLabels, r.OutcomeLabel) {
+		return r, fmt.Errorf("outcome_label must be one of %s", strings.Join(outcomeLabels, ", "))
 	}
 	if r.Scope == "" {
 		r.Scope = r.Entity
@@ -319,7 +325,7 @@ func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, er
 			continue
 		}
 		switch field {
-		case "execution_machine_status", "channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind", "channel_status", "machine_status", "origin_conversation_id", "origin_evidence", "channels", "machines", "execution_machines", "workspace_id", "conversation_id", "conversation_ids", "conversation_count", "linked_conversation_ids", "mirrored_workspace_ids", "repository", "source", "model", "provider", "effort", "started_at", "activity_at", "coverage":
+		case "execution_machine_status", "channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind", "channel_status", "machine_status", "origin_conversation_id", "origin_evidence", "channels", "machines", "execution_machines", "workspace_id", "conversation_id", "conversation_ids", "conversation_count", "linked_conversation_ids", "mirrored_workspace_ids", "repository", "project", "outcome_label", "source", "model", "provider", "effort", "started_at", "activity_at", "coverage":
 			if r.Entity == "workspace" && slices.Contains(originFields, field) {
 				return r, fmt.Errorf("field %s requires conversation entities; workspace membership is available as channels/machines", field)
 			}
@@ -365,7 +371,7 @@ func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, er
 	}
 	groups := map[string]bool{}
 	for _, g := range r.GroupBy {
-		if !slices.Contains([]string{"repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "channels", "machines"}, g) || groups[g] {
+		if !slices.Contains([]string{"project", "outcome_label", "repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "channels", "machines"}, g) || groups[g] {
 			return r, fmt.Errorf("group_by requires unique supported dimensions")
 		}
 		if r.Entity == "workspace" && slices.Contains([]string{"provider", "channel", "machine_id", "execution_machine_id"}, g) {

@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -74,12 +75,15 @@ type labelingUnit struct {
 	id, messageID, conversation, workspace, cohort, actor, provider, role, kind string
 	sender, channel, format, createdAt, contentHash, authorship                 string
 	session, sessionRole, canonical, root, run, depthStatus, length             string
-	depth                                                                       int64
-	text, visible, context, contextPrompt                                       string
-	contextExcerpt                                                              bool
-	contextRefs                                                                 map[string]any
-	pieces                                                                      []labelingPiece
-	chunks, markers                                                             []labelingChunk
+	// rootQuality is how the root was established (executionAncestry):
+	// observed, inferred or unverified; "" without a root.
+	rootQuality                           string
+	depth                                 int64
+	text, visible, context, contextPrompt string
+	contextExcerpt                        bool
+	contextRefs                           map[string]any
+	pieces                                []labelingPiece
+	chunks, markers                       []labelingChunk
 	// attachedChunks counts chunks holding only markers, attached to an item.
 	attachedChunks int
 	// hashes are the items' normalized target-text hashes.
@@ -123,9 +127,10 @@ type labelingPass struct {
 	targetCache map[string][]bool
 	// automated marks conversations with a user message from automation.
 	automated map[string]bool
-	// laterCopies maps fork records after the in-order copy that repeat a
-	// parent message to it.
-	laterCopies map[string]string
+	// occurrences answers which records are copies or duplicate
+	// observations of another occurrence, from the shared occurrence index
+	// (labelingOccurrences); forks of a live builder share it.
+	occurrences *labelingOccurrences
 	// userTimeline holds each conversation's user messages in send order;
 	// flattenedKeys, the current conversation's flattened question answers.
 	userTimeline map[string][]labelingUserMessage
@@ -139,17 +144,19 @@ type labelingPass struct {
 	conversations  map[string]*labelingConversation
 	representative map[string]string
 	lineage        *usageConversationAttribution
-	authorship     map[string]*authorResult
-	mainSession    map[string]string
-	sessionKind    map[string]string
-	childOwners    map[string]bool
-	current        map[string]bool
+	// executionDigests are conversations' execution dependency digests
+	// (execution_dependencies.go), for the live ledgers' structure; prepare
+	// does not use them.
+	executionDigests map[string]string
+	authorship       map[string]*authorResult
+	mainSession      map[string]string
+	sessionKind      map[string]string
+	childOwners      map[string]bool
+	current          map[string]bool
 	// children holds a delegated child's messages (conversation "c:" or
 	// embedded session "s:"), to find delegation duplicates.
 	children map[string]*labelingChild
 	checks   []labelingDuplicateCheck
-	// parents caches a forked conversation's parent messages by role and text.
-	parents map[string][]labelingParentMessage
 	// units counts cohort, provider, depth, length: units, items, characters.
 	units      map[[4]string]*[3]int
 	exclusions map[[2]string]int
@@ -194,8 +201,6 @@ type labelingChild struct {
 	first, last     string
 	firstID, lastID string
 }
-
-type labelingParentMessage struct{ id, key, norm, createdAt string }
 
 // itemTargetHash hashes an item's target text, without markers, lowercased
 // with whitespace collapsed.
@@ -449,6 +454,14 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 		snapshot[key] = generations[key]
 	}
 	snapshot["build"] = labelingBuild()
+	evidence, gap, err := labelingExecutionEvidence(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	snapshot["execution_evidence"] = evidence
+	if gap != "" {
+		coverage = append(coverage, gap)
+	}
 
 	progress("reading works, identity links and lineage")
 	p := newLabelingPass(tx, present["reasoning_extraction_state"])
@@ -494,6 +507,9 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 	if p.lineage, err = usageConversationRootsWith(tx, kept, derived); err != nil {
 		return nil, err
 	}
+	// Inherited history comes from the shared occurrence index, against the
+	// same resolution as lineage: one resolution of this snapshot.
+	p.occurrences = snapshotOccurrences(p.lineage.resolution, tx)
 	// A continuation (a Codex filename fork) is the root's own execution, so
 	// its new messages are the person's: authorship's own rule
 	// (authorshipContinuations), applied in authorshipInputsFrom.
@@ -536,6 +552,14 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 		if (index+1)%2000 == 0 || index+1 == len(scope) {
 			progress("conversations %d/%d, units %d", index+1, len(scope), len(p.stats))
 		}
+	}
+	if unresolved, partial := p.counters["occurrence:"+string(occurrenceUnresolved)], p.prefixed("occurrence_partial:"); unresolved > 0 || len(partial) > 0 {
+		conversations := 0
+		for _, n := range partial {
+			conversations += n
+		}
+		coverage = append(coverage, fmt.Sprintf("occurrences: %d units are observations whose equivalence to another occurrence is unresolved, and %d conversations may hold copied history the evidence cannot account for (%v); they stay units rather than being deduplicated or treated as proven originals (duplicates.occurrences)",
+			unresolved, conversations, partial))
 	}
 	// A restricted scope may hold a delegation without the child it started:
 	// read that child's messages too, so duplication is found either way.
@@ -678,9 +702,9 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 // newLabelingPass is an empty pass reading through tx.
 func newLabelingPass(tx labelingReader, reasoningStore bool) *labelingPass {
 	return &labelingPass{tx: tx, reasoningStore: reasoningStore, targetCache: map[string][]bool{}, automated: map[string]bool{}, unparsedActor: map[string]string{},
-		laterCopies: map[string]string{}, userTimeline: map[string][]labelingUserMessage{}, shortHashes: map[string]bool{}, conversations: map[string]*labelingConversation{},
+		userTimeline: map[string][]labelingUserMessage{}, shortHashes: map[string]bool{}, conversations: map[string]*labelingConversation{},
 		mainSession: map[string]string{}, sessionKind: map[string]string{}, childOwners: map[string]bool{}, current: map[string]bool{}, children: map[string]*labelingChild{},
-		parents: map[string][]labelingParentMessage{}, units: map[[4]string]*[3]int{}, exclusions: map[[2]string]int{}, counters: map[string]int{}, firstAt: map[string]string{},
+		units: map[[4]string]*[3]int{}, exclusions: map[[2]string]int{}, counters: map[string]int{}, firstAt: map[string]string{},
 		authorship: map[string]*authorResult{}, lineage: &usageConversationAttribution{}}
 }
 
@@ -690,6 +714,31 @@ func newLabelingPass(tx labelingReader, reasoningStore bool) *labelingPass {
 // conversation's main session, the children delegations started) and which
 // conversations' reasoning extraction is current. Prepare and the labels
 // ledger both start here, so they decide units alike.
+// The labeling context's per-conversation rows, read for the whole library
+// (loadLabelingPass) or for a labels session step's selection
+// (refreshLabelingContext). One definition, so an input added here reaches
+// both a discovery and a warm step.
+const (
+	labelingConversationsSQL = `SELECT id,workspace_id,provider,COALESCE(started_at,''),COALESCE(parent_id,''),agent_depth FROM conversations`
+	labelingSessionsSQL      = `SELECT id,conversation_id,native_id,kind,COALESCE(child_conversation_id,'') child,COALESCE(delegation_message_id,'') delegation FROM agent_sessions`
+	labelingReasoningSQL     = `SELECT conversation_id,unavailable_count FROM reasoning_extraction_state WHERE version=?`
+)
+
+func scanLabelingConversation(rows *sql.Rows) (*labelingConversation, error) {
+	info := &labelingConversation{}
+	err := rows.Scan(&info.id, &info.workspace, &info.provider, &info.started, &info.parent, &info.depth)
+	return info, err
+}
+
+// addSession records one labelingSessionsSQL row's kind and main session.
+func (p *labelingPass) addSession(row map[string]any) {
+	id := firstString(row["id"])
+	p.sessionKind[id] = firstString(row["kind"])
+	if row["native_id"] == "main" {
+		p.mainSession[firstString(row["conversation_id"])] = id
+	}
+}
+
 func loadLabelingPass(ctx context.Context, q labelingReader, p *labelingPass) (ids []string, kept, sessions []map[string]any, unavailable map[string]int64, err error) {
 	workspaces, err := queryMapsContext(ctx, q, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w`)
 	if err != nil {
@@ -705,13 +754,13 @@ func loadLabelingPass(ctx context.Context, q labelingReader, p *labelingPass) (i
 			kept = append(kept, map[string]any{"workspace_id": row["id"]})
 		}
 	}
-	rows, err := q.QueryContext(ctx, `SELECT id,workspace_id,provider,COALESCE(started_at,''),COALESCE(parent_id,''),agent_depth FROM conversations ORDER BY id`)
+	rows, err := q.QueryContext(ctx, labelingConversationsSQL+` ORDER BY id`)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 	for rows.Next() {
-		info := &labelingConversation{}
-		if err := rows.Scan(&info.id, &info.workspace, &info.provider, &info.started, &info.parent, &info.depth); err != nil {
+		info, err := scanLabelingConversation(rows)
+		if err != nil {
 			rows.Close()
 			return nil, nil, nil, nil, err
 		}
@@ -722,16 +771,13 @@ func loadLabelingPass(ctx context.Context, q labelingReader, p *labelingPass) (i
 	if err := rows.Err(); err != nil {
 		return nil, nil, nil, nil, err
 	}
-	sessions, err = queryMapsContext(ctx, q, `SELECT id,conversation_id,native_id,kind,COALESCE(child_conversation_id,'') child,COALESCE(delegation_message_id,'') delegation FROM agent_sessions`)
+	sessions, err = queryMapsContext(ctx, q, labelingSessionsSQL)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 	for _, row := range sessions {
 		id := firstString(row["id"])
-		p.sessionKind[id] = firstString(row["kind"])
-		if row["native_id"] == "main" {
-			p.mainSession[firstString(row["conversation_id"])] = id
-		}
+		p.addSession(row)
 		if message := firstString(row["delegation"]); message != "" {
 			owner := "s:" + id
 			if child := firstString(row["child"]); child != "" {
@@ -742,7 +788,7 @@ func loadLabelingPass(ctx context.Context, q labelingReader, p *labelingPass) (i
 	}
 	unavailable = map[string]int64{}
 	if p.reasoningStore {
-		reasoning, err := queryMapsContext(ctx, q, `SELECT conversation_id,unavailable_count FROM reasoning_extraction_state WHERE version=?`, reasoningExtractionVersion)
+		reasoning, err := queryMapsContext(ctx, q, labelingReasoningSQL, reasoningExtractionVersion)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
@@ -845,7 +891,7 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 			}
 		}
 	}
-	inherited, copied, err := p.inheritedHistory(ctx, info, records)
+	copies, partial, err := p.inheritedHistory(ctx, info, records)
 	if err != nil {
 		return err
 	}
@@ -877,8 +923,11 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 		}
 		var unit *labelingUnit
 		reason, detail, duplicate := "", "", ""
-		if copied[record.id] {
-			reason, detail, duplicate = "inherited_history", "copied from the parent conversation before the fork", inherited[record.id]
+		occurrence, copied := copies[record.id]
+		copied = copied && occurrence.role != occurrenceUnresolved
+		if copied {
+			reason, detail = occurrence.exclusion()
+			duplicate = occurrence.original
 		} else {
 			if !p.itemsOnly {
 				p.rememberChildText(id, record)
@@ -903,14 +952,18 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 			}
 			if reply {
 				state.assistant, state.assistantRef = record.text.String, map[string]any{"message": record.id}
+				if copied {
+					state.assistantRef = occurrence.ref(record.id)
+				}
 				if !utf8.ValidString(state.assistant) {
 					state.assistant, state.assistantRef = "", nil
 				}
 			}
-			// A copied request is context for what follows it, though not a unit.
-			if copied[record.id] && record.kind == "message" && record.role == "user" {
+			// A copied request is context for what follows it, though not a
+			// unit; its provenance is the occurrence index's.
+			if copied && record.kind == "message" && record.role == "user" {
 				if visible := p.requestVisible(record); visible != "" {
-					state.user, state.userRef = visible, map[string]any{"message": record.id, "inherited_from": inherited[record.id]}
+					state.user, state.userRef = visible, occurrence.ref(record.id)
 				}
 			}
 			continue
@@ -923,6 +976,14 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 		if state.assistant != "" {
 			unit.contextRefs["prior_assistant"] = state.assistantRef
 		}
+		// An observation whose equivalence to another is unresolved stays a
+		// unit, said so; so does copied history the evidence cannot account for.
+		if occurrence.role == occurrenceUnresolved {
+			unit.contextRefs["occurrence"] = map[string]any{"role": string(occurrence.role), "rule": occurrence.rule}
+		}
+		if partial != "" {
+			unit.contextRefs["occurrence_coverage"] = partial
+		}
 		if !p.itemsOnly {
 			p.addUnit(unit)
 		}
@@ -934,11 +995,6 @@ func (p *labelingPass) conversation(ctx context.Context, id string) error {
 		if p.writer != nil {
 			if err := p.writer.unit(unit); err != nil {
 				return err
-			}
-			if parent := p.laterCopies[record.id]; parent != "" {
-				if err := p.writer.duplicate(record.id, parent, "fork_copy_after_difference"); err != nil {
-					return err
-				}
 			}
 		}
 		if unit.cohort == "human" || unit.cohort == "agent_in_user_role" {
@@ -999,163 +1055,123 @@ func (p *labelingPass) requestVisible(record labelingRecord) string {
 	return unit.Visible
 }
 
-// inheritedHistory finds the records a forked conversation copied from its
-// parent. Copies keep their original send times, so when the fork's start
-// and the records' times are known, every selected record sent before the
-// start is a copy and none sent at or after it is; each copied text record
-// is matched to the parent record it repeats (same role, same text), in
-// order where possible. Without times it walks the child's selected text
-// records alongside the parent's, in order, and stops at the first
-// difference. It returns the parent message each copy repeats and the
-// records that belong to the copy.
-func (p *labelingPass) inheritedHistory(ctx context.Context, info *labelingConversation, records []labelingRecord) (map[string]string, map[string]bool, error) {
-	inherited, copied := map[string]string{}, map[string]bool{}
-	if info.parent == "" || p.conversations[info.parent] == nil {
-		return inherited, copied, nil
+// labelingCopy is what the shared occurrence index says of a record that is
+// not plainly its conversation's own: an inherited copy or a duplicate
+// observation of another occurrence, or an observation whose equivalence the
+// evidence cannot decide (unresolved).
+type labelingCopy struct {
+	role occurrenceRole
+	// original is the original message when it survives; "" when it is
+	// unavailable or unknown (never a guess).
+	original, rule string
+}
+
+// exclusion is why a proven copy is not a unit.
+func (c labelingCopy) exclusion() (reason, detail string) {
+	if c.role == occurrenceDuplicate {
+		return "duplicate_observation", "another observation of an occurrence (" + c.rule + ")"
 	}
-	history, cached := p.parents[info.parent]
-	if !cached {
-		parentRecords, err := readLabelingRecords(ctx, p.tx, info.parent)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, record := range parentRecords {
-			if record.selected && record.text.Valid && strings.TrimSpace(record.text.String) != "" {
-				history = append(history, labelingParentMessage{record.id, record.role + "\x00" + textKey(record.text.String),
-					record.role + "\x00" + textKey(normalizeSpace(record.text.String)), record.createdAt})
-			}
-		}
-		p.parents[info.parent] = history
+	return "inherited_history", "inherited copy of an earlier occurrence (" + c.rule + ")"
+}
+
+// ref is the provenance of a copied record that frames the units after it.
+func (c labelingCopy) ref(message string) map[string]any {
+	ref := map[string]any{"message": message, "occurrence": string(c.role)}
+	if c.original != "" {
+		ref["inherited_from"] = c.original
+	} else {
+		ref["original"] = "unavailable"
 	}
-	text := func(record labelingRecord) bool {
-		return record.selected && record.text.Valid && strings.TrimSpace(record.text.String) != ""
+	return ref
+}
+
+// inheritedHistory classifies a conversation's selected records through the
+// shared occurrence index (execution_occurrences.go), by each record's
+// stored membership: the session that recorded it, else the conversation's
+// own stream. An inherited copy or duplicate observation is not this
+// conversation's unit, and names its original only when the index resolves
+// one that survives. An unresolved observation stays a unit. partial says
+// why the transcript may still hold copied history the evidence cannot
+// account for ("" when complete). Equal text, send times and synthesized
+// line locators decide nothing here: the index alone does.
+func (p *labelingPass) inheritedHistory(ctx context.Context, info *labelingConversation, records []labelingRecord) (map[string]labelingCopy, string, error) {
+	copies := map[string]labelingCopy{}
+	if p.occurrences == nil {
+		return copies, "", nil
 	}
-	p.counters["child_conversations"]++
-	// Evidence for the rule below: how the times of an in-order copy relate
-	// to the parent's and to the child's start.
-	for next, index := 0, 0; index < len(records); index++ {
-		record := records[index]
-		if !text(record) {
-			continue
-		}
-		if next >= len(history) || history[next].key != record.role+"\x00"+textKey(record.text.String) {
-			break
-		}
-		switch {
-		case record.createdAt == history[next].createdAt:
-			p.counters["fork_copy_time:same_as_parent"]++
-		case record.createdAt < history[next].createdAt:
-			p.counters["fork_copy_time:before_parent"]++
-		default:
-			p.counters["fork_copy_time:after_parent"]++
-		}
-		if info.started != "" && record.createdAt < info.started {
-			p.counters["fork_copy_time:before_child_start"]++
-		} else {
-			p.counters["fork_copy_time:at_or_after_child_start"]++
-		}
-		next++
+	index, err := p.occurrences.forConversation(ctx)
+	if err != nil {
+		return nil, "", err
 	}
-	inOrder := func() {
-		next, last := 0, -1
-		for index, record := range records {
-			if !text(record) {
-				continue
-			}
-			if next >= len(history) || history[next].key != record.role+"\x00"+textKey(record.text.String) {
-				break
-			}
-			inherited[record.id] = history[next].id
-			next++
-			last = index
-		}
-		// The copy is every selected record up to its last matched text.
-		for index, record := range records[:last+1] {
-			if record.selected {
-				copied[records[index].id] = true
-			}
-		}
-		// A copy can differ from the parent early on (a regenerated
-		// instruction message), ending the walk before the copy ends. Later
-		// records that repeat a parent message from before the fork, not yet
-		// matched, are kept as units but marked duplicate_of it, so plan
-		// skips them and training does not count them twice.
-		used := map[int]bool{}
-		for index := 0; index < next; index++ {
-			used[index] = true
-		}
-		// Short texts ("Done.", "continue") repeat by chance, in sub-agents
-		// that copied nothing; only longer ones are taken for copies.
-		for _, record := range records[last+1:] {
-			if !text(record) || utf8.RuneCountInString(normalizeSpace(record.text.String)) < labelingShortChars {
-				continue
-			}
-			norm := record.role + "\x00" + textKey(normalizeSpace(record.text.String))
-			for index, entry := range history {
-				if used[index] || entry.norm != norm || info.started != "" && entry.createdAt != "" && entry.createdAt >= info.started {
-					continue
-				}
-				used[index] = true
-				p.laterCopies[record.id] = entry.id
-				p.counters["fork_copies_after_difference"]++
-				p.counters["copies_after_difference:"+info.provider]++
-				break
-			}
-		}
+	partial := index.Partial(info.id)
+	if partial != "" {
+		p.counters["occurrence_partial:"+partial]++
 	}
-	timed := info.started != ""
 	for _, record := range records {
-		timed = timed && (!record.selected || record.createdAt != "")
-	}
-	if !timed {
-		p.counters["forks_without_times"]++
-		inOrder()
-		return inherited, copied, nil
-	}
-	next, unmatched := 0, 0
-	for _, record := range records {
-		if !record.selected || record.createdAt >= info.started {
+		if !record.selected {
 			continue
 		}
-		copied[record.id] = true
-		p.counters["records_before_child_start:"+info.provider]++
-		if !text(record) {
+		stream := sourceRef{sourceSession, record.session}
+		if record.session == "" {
+			stream = sourceRef{sourceConversation, info.id}
+		}
+		o := index.Lookup(sourceRef{sourceMessage, record.id}, stream)
+		if o.Role == occurrenceOriginal {
 			continue
 		}
-		key := record.role + "\x00" + textKey(record.text.String)
-		match := -1
-		for index := next; index < len(history) && match < 0; index++ {
-			if history[index].key == key {
-				match = index
-			}
+		c := labelingCopy{role: o.Role, rule: "copied-launch-stream"}
+		if len(o.Evidence) > 0 {
+			c.rule = o.Evidence[0].Rule
 		}
-		for index := 0; index < len(history) && match < 0; index++ {
-			if history[index].key == key {
-				match = index
-			}
+		if o.Role != occurrenceUnresolved && o.Canonical.Kind == sourceMessage && o.Canonical.ID != record.id {
+			c.original = o.Canonical.ID
 		}
-		if match < 0 {
-			unmatched++
-			continue
+		copies[record.id] = c
+		p.counters["occurrence:"+string(o.Role)]++
+		if c.original == "" && o.Role != occurrenceUnresolved {
+			p.counters["occurrence:original_unavailable"]++
 		}
-		inherited[record.id] = history[match].id
-		next = match + 1
 	}
-	// Records before the start that repeat none of the parent's are clock
-	// skew, not a copy: such a catalog stamps copies when it forks, so only
-	// the in-order walk can find them.
-	if len(inherited) == 0 {
-		inherited, copied = map[string]string{}, map[string]bool{}
-		p.counters["forks_restamped"]++
-		inOrder()
-		return inherited, copied, nil
-	}
-	p.counters["forks_with_original_times"]++
-	if unmatched > 0 {
-		p.counters["forks_with_unmatched_copies"]++
-		p.counters["fork_unmatched_copies"] += unmatched
-	}
-	return inherited, copied, nil
+	return copies, partial, nil
+}
+
+// labelingOccurrences is the pass's adapter over the shared occurrence index:
+// one execution resolution and the occurrence claims of the same snapshot.
+// Prepare reads them lazily inside its one snapshot transaction
+// (snapshotOccurrences); a live builder reads them with its other shared
+// inputs from one snapshot it then releases (buildLabelsItems). Never from a
+// later read: decisions would then rest on evidence the captured dependency
+// digests do not describe. The same resolver rules apply to every source,
+// including snapshots from before typed evidence, whose transcripts with
+// ancestry the index reports as partial.
+type labelingOccurrences struct {
+	once  sync.Once
+	load  func(ctx context.Context) (*executionResolution, *occurrenceIndex, error)
+	index *occurrenceIndex
+	err   error
+	// source names where the decisions came from, for the manifest.
+	source string
+}
+
+func (o *labelingOccurrences) forConversation(ctx context.Context) (*occurrenceIndex, error) {
+	o.once.Do(func() { _, o.index, o.err = o.load(ctx) })
+	return o.index, o.err
+}
+
+// preloadedOccurrences serves decisions already read from one snapshot.
+func preloadedOccurrences(source string, res *executionResolution, index *occurrenceIndex) *labelingOccurrences {
+	return &labelingOccurrences{source: source, load: func(context.Context) (*executionResolution, *occurrenceIndex, error) {
+		return res, index, nil
+	}}
+}
+
+// snapshotOccurrences reads every occurrence claim of the snapshot q reads
+// once, against res (resolved from the same snapshot).
+func snapshotOccurrences(res *executionResolution, q queryer) *labelingOccurrences {
+	return &labelingOccurrences{source: "snapshot", load: func(ctx context.Context) (*executionResolution, *occurrenceIndex, error) {
+		index, err := res.Occurrences(ctx, q, nil)
+		return res, index, err
+	}}
 }
 
 // labelingAnswer is a structured answer to a question an agent asked: a
@@ -1558,7 +1574,7 @@ func (p *labelingPass) record(conversation string, record labelingRecord, answer
 		createdAt: record.createdAt, contentHash: record.contentHash, session: record.session, text: text,
 		canonical: p.lineage.canonical[conversation], run: p.lineage.runs[conversation]}
 	if root := p.lineage.roots[conversation]; root != nil {
-		unit.root = firstString(root["id"])
+		unit.root, unit.rootQuality = firstString(root["id"]), p.lineage.rootQuality[conversation]
 	}
 	p.resolveDepth(unit, info)
 	var rendered humanUnit
@@ -1728,7 +1744,12 @@ func (p *labelingPass) resolveDepth(unit *labelingUnit, info *labelingConversati
 		unit.sessionRole = p.sessionKind[session]
 	}
 	if depth, ok := p.lineage.delegatedDepth[session]; ok && session != "" {
+		// A depth reached through an inferred or unverified link is never
+		// recorded as observed.
 		unit.depth, unit.depthStatus = depth, "resolved"
+		if quality := p.lineage.depthQuality[session]; quality != "" && quality != ancestryObserved {
+			unit.depthStatus += ":" + quality
+		}
 		return
 	}
 	if reason := p.lineage.unresolved[info.id]; reason != "" {
@@ -1894,6 +1915,10 @@ func labelingSplit(family, first, freshSince string) string {
 // manifest describes the prepared population: scope, snapshot, contracts,
 // counts, exclusions, duplicates and split coverage.
 func (p *labelingPass) manifest(opts labelingPrepareOptions, snapshot, selection map[string]any, scope []string, families map[string]labelingFamily, duplicates map[string]map[string]int) map[string]any {
+	occurrenceSource := "none"
+	if p.occurrences != nil {
+		occurrenceSource = p.occurrences.source
+	}
 	counts := []map[string]any{}
 	units, items := 0, 0
 	for key, value := range p.units {
@@ -1992,14 +2017,11 @@ func (p *labelingPass) manifest(opts labelingPrepareOptions, snapshot, selection
 		"long":       map[string]any{"units": long["units"], "items": long["items"], "merge": "unvalidated"},
 		"exclusions": exclusions, "excluded_records": excluded,
 		"duplicates": map[string]any{"delegation": duplicates["delegation"], "delegation_result": duplicates["delegation_result"],
-			"inherited_history": p.exclusionTotal("inherited_history"), "result_records": p.exclusionTotal("result_record"),
-			"forks": map[string]any{"child_conversations": p.counters["child_conversations"], "without_times": p.counters["forks_without_times"],
-				"records_before_start":        p.prefixed("records_before_child_start:"),
-				"forks_with_unmatched_copies": p.counters["forks_with_unmatched_copies"], "unmatched_copies": p.counters["fork_unmatched_copies"],
-				"with_original_times": p.counters["forks_with_original_times"], "restamped_or_no_copy": p.counters["forks_restamped"],
-				"copies_after_difference": p.counters["fork_copies_after_difference"], "copies_after_difference_by_provider": p.prefixed("copies_after_difference:"),
-				"in_order_copy_times": p.prefixed("fork_copy_time:")},
-			"note": "delegation units that repeat a child's message (equal or containing, whitespace-normalized) are kept with duplicate_of set; inherited history is excluded"},
+			"inherited_history": p.exclusionTotal("inherited_history"), "duplicate_observations": p.exclusionTotal("duplicate_observation"), "result_records": p.exclusionTotal("result_record"),
+			"occurrences": map[string]any{"source": occurrenceSource, "inherited_copies": p.counters["occurrence:"+string(occurrenceInherited)],
+				"duplicate_observations": p.counters["occurrence:"+string(occurrenceDuplicate)], "original_unavailable": p.counters["occurrence:original_unavailable"],
+				"unresolved_units": p.counters["occurrence:"+string(occurrenceUnresolved)], "partial_conversations": p.prefixed("occurrence_partial:")},
+			"note": "delegation units that repeat a child's message (equal or containing, whitespace-normalized) are kept with duplicate_of set. Inherited history and duplicate observations are excluded only as the shared occurrence index decides (provider event IDs in a declared namespace, retained copy boundaries); repeated text, send times and synthesized line locators decide nothing. Unresolved observations stay units, marked in context_refs, and transcripts whose copied history is unaccounted for are counted in occurrences.partial_conversations"},
 		"invalid_utf8":       p.exclusionTotal("invalid_utf8"),
 		"delegation_payload": map[string]any{"transform": feedbackJSONTransform, "decoded": p.counters["delegation_payload_decoded"], "raw": p.counters["delegation_payload_raw"]},
 		"actions": map[string]any{"question_forms": p.counters["actions_flattened_message"], "tool_results": p.counters["actions_tool_result"],
@@ -2134,4 +2156,33 @@ func (p *labelingPass) sourceTargets(id string, visiting map[string]bool) []bool
 	}
 	p.targetCache[id] = mask
 	return mask
+}
+
+// labelingExecutionEvidence describes the typed execution evidence a snapshot
+// carries, and the coverage gap when lineage falls back to legacy rows: a
+// snapshot from before typed claims, or one whose conversations were not all
+// extracted at the current version. Lineage then keeps legacy relationships
+// unverified rather than treating them as proof (docs/execution-evidence-backfill.md).
+func labelingExecutionEvidence(ctx context.Context, tx labelingReader) (map[string]any, string, error) {
+	out := map[string]any{"version": executionEvidenceVersion, "resolver": executionResolverVersion}
+	present, err := executionEvidenceTablesPresent(ctx, tx)
+	if err != nil {
+		return nil, "", err
+	}
+	out["present"] = present
+	if !present {
+		return out, "execution evidence: unavailable from this snapshot; the catalog predates typed execution claims, so lineage reads legacy relationships only (unverified)", nil
+	}
+	var total, current int64
+	var generation string
+	if err := tx.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM conversations),
+	 (SELECT COUNT(*) FROM execution_evidence_state s JOIN conversations c ON c.id=s.conversation_id WHERE s.version=?),
+	 COALESCE((SELECT value FROM meta WHERE key='execution_evidence_generation'),'')`, executionEvidenceVersion).Scan(&total, &current, &generation); err != nil {
+		return nil, "", err
+	}
+	out["conversations"], out["current"], out["generation"] = total, current, generation
+	if current < total {
+		return out, fmt.Sprintf("execution evidence: %d of %d conversations have typed evidence at %s; the rest use legacy relationships only (unverified)", current, total, executionEvidenceVersion), nil
+	}
+	return out, "", nil
 }

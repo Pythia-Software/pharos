@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // A backup copies the library to a folder on another drive, so the library
@@ -106,6 +108,16 @@ func (h backupHistory) growth() (float64, float64) {
 	return float64(backups[0].BytesTotal-oldest.BytesTotal) / days, days
 }
 
+// Backup's flocks go through filelock, one injectable call per policy so
+// tests can fail each: backups.json's history lock (Exclusive, Wait), a
+// destination's lock (Exclusive, Try) and a host's capture lock (Shared, Try).
+// Only filelock.ErrContended means another holder.
+var (
+	lockBackupHistory     = filelock.Lock
+	lockBackupDestination = filelock.Lock
+	lockBackupCaptures    = filelock.Lock
+)
+
 // updateBackupHistory changes backups.json under a lock shared by every
 // process, replacing it atomically when update reports a change.
 func updateBackupHistory(config Config, update func(*backupHistory) bool) (backupHistory, error) {
@@ -115,7 +127,8 @@ func updateBackupHistory(config Config, update func(*backupHistory) bool) (backu
 		return backupHistory{}, err
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	// One blocking acquisition; its failure is returned as is, before update.
+	if err := lockBackupHistory(lock, filelock.Exclusive, filelock.Wait); err != nil {
 		return backupHistory{}, err
 	}
 	history := loadBackupHistory(config)
@@ -460,9 +473,12 @@ type backupJob struct {
 	// keep holds the DEST files (by device and inode, so names that the
 	// destination stores differently, as HFS+ does accented ones, still
 	// match) that the item being backed up accounts for; prune keeps them.
-	keep     map[fileKey]bool
-	symlinks int
-	links    map[backupLinkKey]string
+	keep map[fileKey]bool
+	// keepFailed is why a destination file the item accounts for could not
+	// be identified; prune then keeps the item's whole earlier backup.
+	keepFailed error
+	symlinks   int
+	links      map[backupLinkKey]string
 }
 
 type backupLinkKey struct {
@@ -470,26 +486,34 @@ type backupLinkKey struct {
 	size, mtime int64
 }
 
+// linkKey is the hard-link group of the object info describes, with its own
+// size and mtime. False means it is copied on its own: such a key never goes
+// into links, so files without an identity are never grouped.
 func linkKey(info fs.FileInfo) (backupLinkKey, bool) {
 	key, ok := keyOf(info)
-	return backupLinkKey{key, info.Size(), info.ModTime().UnixNano()}, ok
-}
-
-type fileKey struct{ device, inode uint64 }
-
-func keyOf(info fs.FileInfo) (fileKey, bool) {
-	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		return fileKey{}, false
+		return backupLinkKey{}, false
 	}
-	return fileKey{uint64(stat.Dev), uint64(stat.Ino)}, true
+	return backupLinkKey{key, info.Size(), info.ModTime().UnixNano()}, true
 }
 
-func (j *backupJob) keepPath(path string) {
-	if info, err := os.Lstat(path); err == nil {
-		if key, ok := keyOf(info); ok {
-			j.keep[key] = true
+// keepPath records the destination object at path as accounted for. Where
+// it cannot be identified, prune could not tell it from a stale file listed
+// under another name, so the item is not pruned at all; absent is only
+// expected where the library has a symlink nothing was copied for.
+func (j *backupJob) keepPath(path string, mayBeAbsent bool) {
+	info, err := os.Lstat(path)
+	if err == nil {
+		var observed fileObservation
+		if observed, err = observeFile(info); err == nil {
+			j.keep[observed.key] = true
+			return
 		}
+	} else if mayBeAbsent && errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if j.keepFailed == nil {
+		j.keepFailed = err
 	}
 }
 
@@ -625,8 +649,8 @@ func (j *backupJob) execute() error {
 		return toBackupDestination(err)
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+	if err := lockBackupDestination(lock, filelock.Exclusive, filelock.Try); err != nil {
+		if errors.Is(err, filelock.ErrContended) {
 			return errBackupDestinationBusy
 		}
 		return toBackupDestination(err)
@@ -671,7 +695,6 @@ func (j *backupJob) execute() error {
 		item.Files, item.Bytes = j.run.FilesTotal-files, j.run.BytesTotal-bytes
 		manifest.Items = append(manifest.Items, item)
 	}
-	j.run.BytesTotal += j.run.CatalogBytes
 	if len(j.run.Errors) > 0 {
 		return nil
 	}
@@ -734,6 +757,7 @@ func (j *backupJob) backupCatalog(previous *backupCatalog) (*backupCatalog, erro
 	destination := filepath.Join(j.dest, filepath.FromSlash(j.plan.catalog.Path))
 	if previous != nil && previous.Path == j.plan.catalog.Path && previous.Source == state && current(destination, previous.Size, previous.MTimeNS) {
 		j.run.CatalogBytes = previous.Size
+		j.run.BytesTotal = previous.Size
 		return previous, nil
 	}
 	if err := ensureFree(j.dest, state.Size+state.WALSize); err != nil {
@@ -745,7 +769,18 @@ func (j *backupJob) backupCatalog(previous *backupCatalog) (*backupCatalog, erro
 	temporary := destination + backupTempSuffix
 	os.Remove(temporary)
 	ctx, stop := j.boundWAL(source, state.WALSize)
-	err = snapshotSQLite(ctx, source, temporary)
+	var reported time.Time
+	var reportedDone int64
+	err = snapshotSQLiteWithProgress(ctx, source, temporary, func(done, total int64) {
+		// The catalog is copied first. Keep absolute counts so retries do
+		// not count abandoned pages twice, and later files add to this copy.
+		j.run.BytesCopied, j.run.BytesTotal = done, total
+		if done == 0 || reportedDone == 0 || done == total || time.Since(reported) >= 250*time.Millisecond {
+			j.report()
+			reported = time.Now()
+			reportedDone = done
+		}
+	})
 	stop()
 	if cause := context.Cause(ctx); err != nil && errors.Is(cause, errBackupWALGrew) {
 		err = cause
@@ -766,7 +801,7 @@ func (j *backupJob) backupCatalog(previous *backupCatalog) (*backupCatalog, erro
 		return nil, toBackupDestination(err)
 	}
 	j.run.CatalogBytes, j.run.CatalogCopied = info.Size(), true
-	j.run.BytesCopied += info.Size()
+	j.run.BytesCopied, j.run.BytesTotal = info.Size(), info.Size()
 	j.report()
 	return &backupCatalog{Path: j.plan.catalog.Path, Size: info.Size(), MTimeNS: info.ModTime().UnixNano(), Method: "sqlite-backup", TakenAt: now(), Source: state}, nil
 }
@@ -832,9 +867,16 @@ func ensureFree(dir string, bytes int64) error {
 	if bytes == 0 {
 		return nil
 	}
-	_, free := diskUsage(dir)
-	if int64(free)-bytes < captureFreeMargin {
-		return backupDestinationError{fmt.Errorf("needs %s but only %s is free", humanBytes(bytes+captureFreeMargin), humanBytes(int64(free)))}
+	space, err := diskCapacity(dir)
+	if err != nil {
+		return backupDestinationError{fmt.Errorf("cannot tell how much space is free: %w", err)}
+	}
+	need, err := spaceNeeded(bytes, captureFreeMargin)
+	if err != nil {
+		return backupDestinationError{err}
+	}
+	if space.AvailableBytes < need {
+		return backupDestinationError{fmt.Errorf("needs %s but only %s is free", humanBytes(displayBytes(need)), humanBytes(displayBytes(space.AvailableBytes)))}
 	}
 	return nil
 }
@@ -855,7 +897,7 @@ func (j *backupJob) item(item backupItem) error {
 		return nil
 	}
 	destination := filepath.Join(j.dest, filepath.FromSlash(item.Path))
-	j.keep = map[fileKey]bool{}
+	j.keep, j.keepFailed = map[fileKey]bool{}, nil
 	errorsBefore := len(j.run.Errors)
 	listed := 0
 	switch {
@@ -874,6 +916,8 @@ func (j *backupJob) item(item backupItem) error {
 	switch {
 	case len(j.run.Errors) > errorsBefore:
 		// An incomplete listing must not prune what it failed to list.
+	case j.keepFailed != nil:
+		j.run.Warnings = append(j.run.Warnings, fmt.Sprintf("the files backed up from %s could not all be identified in %s (%v), so its earlier backup was not pruned", item.Source, destination, j.keepFailed))
 	case listed == 0:
 		if entries, err := os.ReadDir(destination); err == nil && len(entries) > 0 {
 			j.run.Warnings = append(j.run.Warnings, fmt.Sprintf("%s has no files, so its earlier backup in %s was not pruned", item.Source, destination))
@@ -945,11 +989,13 @@ func (j *backupJob) lockCaptures(hostDir string) (func(), error) {
 		return nil, err
 	}
 	for waiting := false; ; {
-		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+		err := lockBackupCaptures(lock, filelock.Shared, filelock.Try)
 		if err == nil {
 			return func() { lock.Close() }, nil
 		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
+		// Only another holder is worth waiting for; any other failure leaves
+		// the lock's state unknown, so this host is not copied.
+		if !errors.Is(err, filelock.ErrContended) {
 			lock.Close()
 			return nil, err
 		}
@@ -1002,7 +1048,7 @@ func (j *backupJob) tree(source, destination string) (int, error) {
 		switch {
 		case entry.Type()&fs.ModeSymlink != 0:
 			j.symlinks++
-			j.keepPath(filepath.Join(destination, rel))
+			j.keepPath(filepath.Join(destination, rel), true)
 		case entry.Type().IsRegular() && !skipBackupName(entry.Name()):
 			files = append(files, path)
 		}
@@ -1050,7 +1096,7 @@ func (j *backupJob) copyAll(files []string, root, destination string) (int, erro
 				j.links[key] = target
 			}
 			j.run.FilesUnchanged++
-			j.keepPath(target)
+			j.keepPath(target, false)
 			continue
 		}
 		jobs = append(jobs, copyJob{file, target, info})
@@ -1078,7 +1124,7 @@ func (j *backupJob) copyAll(files []string, root, destination string) (int, erro
 			j.fail(job.source, err)
 			continue
 		}
-		j.keepPath(job.target)
+		j.keepPath(job.target, false)
 		j.run.FilesCopied++
 		j.run.BytesCopied += job.info.Size()
 		j.report()
@@ -1200,7 +1246,7 @@ func (j *backupJob) copyFile(source, target string, info fs.FileInfo) error {
 	if err := os.Chtimes(temporary, info.ModTime(), info.ModTime()); err != nil {
 		return abandon(toBackupDestination(err))
 	}
-	if err := syscall.Fsync(int(out.Fd())); err != nil {
+	if err := syncFileData(out); err != nil {
 		return abandon(toBackupDestination(err))
 	}
 	if err := out.Close(); err != nil {
@@ -1237,9 +1283,13 @@ func (j *backupJob) pruneTree(destination, source string) {
 		if err != nil || path == destination {
 			return nil
 		}
-		info, infoErr := entry.Info()
-		key, ok := keyOf(info)
-		kept := infoErr != nil || !ok || j.keep[key] || protected[path] || appleDouble(path)
+		// What cannot be identified is kept, and a directory with its subtree.
+		kept := protected[path] || appleDouble(path)
+		if info, infoErr := entry.Info(); infoErr != nil {
+			kept = true
+		} else if key, ok := keyOf(info); !ok || j.keep[key] {
+			kept = true
+		}
 		if !kept && !entry.IsDir() {
 			rel, _ := filepath.Rel(destination, path)
 			original := filepath.Join(source, rel)

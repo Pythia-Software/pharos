@@ -4,6 +4,7 @@ import { core, schemas } from '../helpers/recipes.mjs';
 import { queryRecipes, instantiateRecipe, loadQueryPreview, clearPreviewCache } from '../../../src/curiosity-data';
 import { rollingAverageBuckets, shareBuckets, foldSeries } from '../../../src/chart-series';
 import { loadQueryPreviews } from '../../../src/query-previews';
+import { chartSeriesStyle } from '../../../src/chart-colors';
 const schema = schemas.usage;
 const recipe = queryRecipes.find(recipe => recipe.id === 'provider-cost-share');
 const execution = { profile: 'qt-sqlite-v1', planToken: '', fields: {}, resolvedRevisions: {} };
@@ -177,8 +178,8 @@ test('model timelines use different token and cost denominators with the same sm
     const values = shareBuckets(rollingAverageBuckets(preview.buckets, 7, {period:'day'})).at(-1).values;
     assert.ok(Math.abs(values['s:opus-4-6'] - claudeShare) < 1e-12, id);
     assert.ok(Math.abs(values['s:gpt-5.3-codex'] - codexShare) < 1e-12, id);
-    assert.equal(preview.series.find(series => series.value === 'opus-4-6').color, '#e67a30');
-    assert.equal(preview.series.find(series => series.value === 'gpt-5.3-codex').color, '#087e62');
+    assert.equal(preview.series.find(series => series.value === 'opus-4-6').color, chartSeriesStyle('model_family', 'opus-4-6').color);
+    assert.equal(preview.series.find(series => series.value === 'gpt-5.3-codex').color, chartSeriesStyle('model_family', 'gpt-5.3-codex').color);
   }
 });
 

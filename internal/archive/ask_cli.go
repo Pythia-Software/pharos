@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -47,6 +46,7 @@ type askProvider struct {
 	Error            string        `json:"error,omitempty"`
 	path             string
 	mcp              askMCPServer
+	attachmentBytes  int64
 }
 
 type askMCPServer struct {
@@ -134,26 +134,35 @@ func (b *askOutput) Write(p []byte) (int, error) {
 	}
 	return b.Buffer.Write(p)
 }
-func askCommand(ctx context.Context, path, dir string, args ...string) *exec.Cmd {
+
+// CLIs echo MCP results in their event streams. Allow for JSON's worst-case
+// escaping (including a nested JSON string) and a repeated tool-result event.
+// Only explicitly attached files increase this allowance; stderr, model
+// discovery and the final structured answer keep their own smaller limits.
+func askCLIStreamLimit(p askProvider) int64 {
+	const base = 2 << 20
+	const expansion = 16
+	size := max(int64(0), p.attachmentBytes)
+	return base + expansion*size
+}
+
+// askCommand configures an Ask CLI to run in its own process group; it fails,
+// before anything starts, where that isolation is unavailable.
+func askCommand(ctx context.Context, path, dir string, args ...string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = dir
 	cmd.Env = cliEnvironment(path)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
+	if err := askProcessConfig(cmd); err != nil {
+		return nil, fmt.Errorf("cannot run %s: %w", filepath.Base(path), err)
 	}
 	cmd.WaitDelay = 2 * time.Second
-	return cmd
+	return cmd, nil
 }
 func askReadProtocol(ctx context.Context, path, dir string, args []string, messages []any, match func(map[string]json.RawMessage) bool) (map[string]json.RawMessage, error) {
-	cmd := askCommand(ctx, path, dir, args...)
+	cmd, err := askCommand(ctx, path, dir, args...)
+	if err != nil {
+		return nil, err
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -237,7 +246,10 @@ var askDiscoverModels = func(ctx context.Context, p askProvider) ([]askModel, er
 		}
 		return result, nil
 	case "Antigravity":
-		cmd := askCommand(ctx, p.path, dir, "models")
+		cmd, err := askCommand(ctx, p.path, dir, "models")
+		if err != nil {
+			return nil, err
+		}
 		var out askOutput
 		cmd.Stdout = &out
 		cmd.Stderr = io.Discard
@@ -362,9 +374,10 @@ var askRunCLI = func(ctx context.Context, p askProvider, s askSelection, prompt 
 		return nil, err
 	}
 	events := askCLIEvents{provider: p}
-	output := &io.LimitedReader{R: stdout, N: 2<<20 + 1}
+	streamLimit := askCLIStreamLimit(p)
+	output := &io.LimitedReader{R: stdout, N: streamLimit + 1}
 	scan := bufio.NewScanner(output)
-	scan.Buffer(make([]byte, 4096), 2<<20+1)
+	scan.Buffer(make([]byte, 4096), int(streamLimit)+1)
 	var result []byte
 	for scan.Scan() {
 		events.read(scan.Bytes())
@@ -375,7 +388,7 @@ var askRunCLI = func(ctx context.Context, p askProvider, s askSelection, prompt 
 	}
 	readErr := scan.Err()
 	if output.N == 0 {
-		readErr = fmt.Errorf("CLI output exceeded 2 MiB")
+		readErr = fmt.Errorf("CLI output exceeded its %d byte stream allowance", streamLimit)
 	}
 	if readErr != nil {
 		_ = cmd.Cancel()
@@ -509,7 +522,7 @@ Use only the pharos-ask MCP server, for archived work and for site links (browse
 			args = append(args, "--effort", strings.ToLower(s.Effort))
 		}
 	}
-	return askCommand(ctx, p.path, dir, args...), nil
+	return askCommand(ctx, p.path, dir, args...)
 }
 
 func askCheckAGYMCPPermissions() error {
@@ -587,11 +600,16 @@ func askRunAGY(ctx context.Context, cmd *exec.Cmd, p askProvider, prompt string)
 		return nil, err
 	}
 	defer func() { _ = cmd.Cancel(); _ = cmd.Wait() }()
-	scan := bufio.NewScanner(io.LimitReader(stdout, 2<<20))
-	scan.Buffer(make([]byte, 4096), 1<<20)
+	streamLimit := askCLIStreamLimit(p)
+	output := &io.LimitedReader{R: stdout, N: streamLimit + 1}
+	scan := bufio.NewScanner(output)
+	scan.Buffer(make([]byte, 4096), int(streamLimit)+1)
 	events := askCLIEvents{provider: p}
 	sent := false
 	for scan.Scan() {
+		if output.N == 0 {
+			return nil, fmt.Errorf("CLI output exceeded its %d byte stream allowance", streamLimit)
+		}
 		var event struct {
 			Event          string `json:"event"`
 			ConversationID string `json:"conversation_id"`
@@ -633,6 +651,12 @@ func askRunAGY(ctx context.Context, cmd *exec.Cmd, p askProvider, prompt string)
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+	if output.N == 0 {
+		return nil, fmt.Errorf("CLI output exceeded its %d byte stream allowance", streamLimit)
+	}
+	if err := scan.Err(); err != nil {
+		return nil, err
 	}
 	return nil, fmt.Errorf("Antigravity ended without a response")
 }

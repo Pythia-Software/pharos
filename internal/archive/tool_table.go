@@ -32,10 +32,10 @@ func init() {
 // summary dimension (tool, shell program, model, repository, agent kind).
 var toolRollupDataset = func() sqlDataset {
 	columns := map[string]string{}
-	for _, name := range []string{"id", "day", "week", "month", "repository_name", "source_kind", "provider", "model", "effort", "model_family", "session_kind",
+	for _, name := range []string{"id", "day", "week", "month", "repository_name", "project_name", "source_kind", "provider", "model", "effort", "model_family", "session_kind",
 		"tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_name", "command_category", "call_count", "error_count", "error_rate",
 		"no_result_count", "rejected_count", "interrupted_count", "timeout_count", "nonzero_exit_count", "hook_blocked_count", "truncated_count",
-		"timed_count", "total_duration_ms", "avg_duration_ms", "max_duration_ms", "input_bytes", "result_bytes", "result_tokens", "measured_count",
+		"duration_is_estimate", "timed_count", "total_duration_ms", "avg_duration_ms", "max_duration_ms", "input_bytes", "result_bytes", "result_tokens", "measured_count",
 		"avg_result_tokens", "carried_tokens", "output_tokens", "lines_added", "lines_removed", "work_count", "context_cost_usd", "output_cost_usd",
 		"tool_cost_usd", "price_status"} {
 		columns[name] = "d." + name
@@ -55,7 +55,7 @@ var toolRollupDataset = func() sqlDataset {
 
 // toolCallDataset serves one row per tool call, excluding mirrored work.
 var toolCallDataset = sqlDataset{
-	from: `FROM tool_calls t JOIN workspaces w ON w.id=t.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
+	from: `FROM tool_calls t JOIN workspaces w ON w.id=t.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w") + `
 		LEFT JOIN agent_sessions a ON a.id=t.agent_session_id LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,t.conversation_id)`,
 	base:      "t.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)",
 	countFrom: "FROM tool_calls t", countAlias: "t",
@@ -64,12 +64,14 @@ var toolCallDataset = sqlDataset{
 	cube:       toolCallCube,
 	lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "operation_key": true, "activity": true},
 	optionalJoins: map[string]string{
-		"o": " LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,t.conversation_id)",
-		"w": " JOIN workspaces w ON w.id=t.workspace_id",
-		"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
-		"a": "LEFT JOIN agent_sessions a ON a.id=t.agent_session_id",
+		"o":  " LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,t.conversation_id)",
+		"w":  " JOIN workspaces w ON w.id=t.workspace_id",
+		"r":  " LEFT JOIN repositories r ON r.id=w.repository_id",
+		"pj": projectJoin("w"),
+		"a":  "LEFT JOIN agent_sessions a ON a.id=t.agent_session_id",
 	},
 	pageFrom:           "FROM tool_calls t",
+	newestFirst:        map[string]string{"started_at": "tool_calls_page_idx"},
 	pageIndexes:        map[string]string{"started_at": "tool_calls_page_idx", "duration_ms": "tool_calls_duration_page_idx", "result_tokens": "tool_calls_result_tokens_page_idx", "carried_tokens": "tool_calls_carried_page_idx"},
 	coveringIndex:      "tool_calls_analytics_idx",
 	rangeCoveringIndex: "tool_calls_analytics_time_idx",
@@ -104,7 +106,7 @@ var toolCallDataset = sqlDataset{
 		"day":             "date(t.started_at,'localtime')",
 		"week":            "date(t.started_at,'localtime','-6 days','weekday 1')",
 		"month":           "strftime('%Y-%m',t.started_at,'localtime')",
-		"repository_name": "r.display_name", "title": "w.title", "workspace_id": "t.workspace_id", "conversation_id": "t.conversation_id",
+		"repository_name": "r.display_name", "project_name": projectNameSQL("w"), "title": "w.title", "workspace_id": "t.workspace_id", "conversation_id": "t.conversation_id",
 		"source_kind": "w.source_kind", "provider": "t.provider", "model": "t.model", "effort": "t.effort", "model_family": "model_family(t.model)",
 		"model_effort": "model_effort(t.model,t.effort)",
 		"session_kind": "COALESCE(a.kind,'root')", "agent_depth": "COALESCE(a.depth,0)",
@@ -120,7 +122,7 @@ var toolCallDataset = sqlDataset{
 		"backgrounded": "t.backgrounded", "file_path": "t.file_path", "repo_path": "t.repo_path", "path_repository": "t.path_repository", "path_scope": "t.path_scope",
 		"status": "t.status", "error_type": "t.error_type", "error_signature": "t.error_signature", "test_failure": "t.test_failure", "exit_code": "t.exit_code", "interrupted": "t.interrupted", "truncated": "t.truncated",
 		"call_count": "1", "error_count": "(t.status='error')",
-		"duration_ms": "t.duration_ms", "duration_source": "t.duration_source",
+		"duration_is_estimate": "t.duration_is_estimate", "duration_ms": "t.duration_ms", "duration_source": "t.duration_source",
 		"input_bytes": "t.input_bytes", "result_bytes": "t.result_bytes", "result_tokens": "t.result_tokens",
 		"result_tokens_source": "t.result_tokens_source", "output_tokens": "t.output_tokens", "parallel_count": "t.parallel_count",
 		"carried_requests": "t.carried_requests", "carried_tokens": "t.carried_tokens",
@@ -129,22 +131,35 @@ var toolCallDataset = sqlDataset{
 	},
 }
 
-func sqlDatasetFor(dataset string) (sqlDataset, bool) {
+func sqlDatasetFor(dataset string) (table sqlDataset, ok bool) {
+	defer func() {
+		if ok {
+			table = withAgentSessionIdentity(dataset, table)
+		}
+	}()
 	switch dataset {
+	case "message_labels":
+		return messageLabelDataset, true
 	case "tools":
 		return toolRollupDataset, true
 	case "tool_calls":
 		return toolCallDataset, true
+	case "compactions":
+		return compactionDataset, true
 	case "model_requests":
 		return thinkingRequestDataset, true
 	case "skill_usages":
 		return skillUsageDataset, true
 	case "writing_messages":
 		return writingMessageDataset, true
+	case "messages":
+		return messagesDataset, true
 	case "agent_events":
 		return agentEventDataset, true
 	case "agent_event_messages":
 		return agentEventMessageDataset, true
+	case "agent_event_rates":
+		return agentEventRateDataset, true
 	}
 	return sqlDataset{}, false
 }

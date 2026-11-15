@@ -3,8 +3,8 @@
 The site map lists every page Pharos serves, the options each page takes, and,
 for the Analyze dashboards, which combinations of options the page draws as
 given. Go reads it to browse the site and to build and check links, with no
-TypeScript. It is `internal/archive/assets/site-map.json`, embedded with the
-other assets.
+TypeScript. It is `internal/archive/assets/site-map.json`, a build output
+embedded with the other assets.
 
 ## Goal
 
@@ -27,9 +27,9 @@ under `example`.
 ## Pieces
 
 1. **The site map (this document).** `web/generate-site-map.mjs` bundles
-   `web/src/site-map.ts` with esbuild and writes the file.
-   `npm --prefix web run check-site-map` fails when the file is stale, and
-   `npm run check` runs it. The map is data, not an algorithm. It lists what
+   `web/src/site-map.ts` with esbuild and writes the file;
+   `npm --prefix web run build` runs it ([Rendering](#rendering)). The map is
+   data, not an algorithm. It lists what
    exists and which combinations are valid, so Go never re-derives
    TypeScript rules.
 2. **The link codec.** The published Query Table release supplies `EncodeQueryLink` and
@@ -56,7 +56,7 @@ routes. Legacy aliases are not offered; only canonical routes are.
 | Home | Carousel state, card identities, disclosures and shared navigation controls |
 | Cards | Filters and sort, and every card (see Cards) |
 | Library | Applied text searches and scope, result presentation, and full native `q_library` |
-| Analyze dashboards | Every topic, with chart, filters and window |
+| Analyze dashboards | Catalog charts, filters and windows; Habits chart selectors and their per-view ranges in the view contract |
 | Analyze query | Each dataset, with full native `q_<dataset>` |
 | Findings | List, finding, tab, repo, and the table view with full native `q_findings` |
 | Work and reader | IDs, conversation, message, and the delegation explorer's options |
@@ -85,17 +85,33 @@ the reader's parameters in `updateConversationURL`, and the MCP
 tools behind each ID source. `web/tests/unit/site-map/site-map.test.mjs`
 compares each of them with the map.
 
-## Regenerating
+## Rendering
 
-Run `npm --prefix web run generate-site-map` after changing any of these:
-- pages or routes;
-- an analysis catalog or dashboard defaults;
-- a schema;
-- card recipes or their destinations;
-- a page's parameters.
+`internal/archive/assets/site-map.json`, `testdata/site-map-cases.json` and
+`internal/archive/assets/ask-suggestions.json` are build outputs, gitignored
+like the frontend bundles: generated text that every branch rewrote used to
+conflict on almost every merge. `npm --prefix web run build` renders them,
+and the unit test runner does too before it bundles the tests, whenever an
+input changed since the last render. The inputs are every file the bundle
+read (esbuild's metafile: pages, routes, catalogs, schemas, card recipes,
+`docs/view-controls.json` and the packages they import) and the files the
+generator reads itself (`ui.py`, `managed-library.html`, the Query Table
+declarations); `web/node_modules/.cache/pharos-site-map.json` records their
+hashes and the outputs'. An unchanged build checks them in about a tenth of
+a second. `npm --prefix web run generate-site-map` renders regardless, and
+`npm --prefix web run check-bundle` fails when a file is stale. Go embeds
+both assets by name, so a checkout without them does not compile; run
+`tools/setup.sh`.
 
-It rewrites `internal/archive/assets/site-map.json` and
-`testdata/site-map-cases.json`. The generator runs in UTC, so cards that group
+A render checks every combination of every dashboard view's options against
+the page (`viewFacts`), several million charts in all. Views are independent,
+so worker threads take them heaviest first: up to eight, or
+`PHAROS_SITE_MAP_WORKERS` (1 renders in one thread). A render takes about
+ten seconds on eight cores; the output does not depend on the number of
+workers.
+
+A new page fails generation until an Ask suggestion area covers it or the
+catalog excludes it with a reason ([Ask suggestions](ask-suggestions.md)). The generator runs in UTC, so cards that group
 by the local calendar carry the UTC time zone.
 
 The generator checks itself, and fails rather than writing a map that
@@ -250,6 +266,8 @@ with. `absent` and `fallback` are the markers the rules use.
 | `domains` | For each non-numeric key, the values the page accepts |
 | `numeric` | Integer ranges (`min`, optional `max`, `integer`) and the legend selection's `max_values` |
 | `rules` | How the page draws each option of the merged chart, in order |
+| `kept` | Every dashboard's default view depends on the data asked for ([Default views](dashboard-analysis.md#default-views)). Its view settings (`display`, `share`, `nonzero`, `scale`, `scaleY`, `compareAs`) are not among `keys` and no rule fills or checks them, since no one value fills a missing one; a chart may hold them as the reader chose them, and Go keeps them where it writes (`viewChart`) and accepts them as options |
+| `chosen_display` | For the same catalogs: the display the page draws by default, walked by `given` (`metric`, `split`); a chart's own `display` is drawn instead |
 
 #### Valid combinations
 
@@ -270,8 +288,10 @@ implementation:
    - A merged value that `legacy` lists as an older name `{key, value, set}`
      takes `set`, as `canonicalState` reads it. `readChart` does both steps.
      The legacy list holds the older names the site's own card links still
-     use, plus the list positions older metrics used. Other older vocabulary
-     is outside the map.
+     use, the list positions older metrics used, and the engine's own:
+     `norm: true`, the old single reference line, is `percentiles: ["mean"]`
+     (`norm: false` asks for none). Other older vocabulary is outside the
+     map.
    - A chart may hold keys its view does not draw. The page writes such
      charts itself: after a view switch it saves the whole switched state,
      and some cards' own charts carry them (a Compare chart's `period`).
@@ -281,18 +301,25 @@ implementation:
      example, Carbon's default split `type` is no breakdown outside the
      trend, so a Compare chart without `split` is invalid.
 2. **Invalid.** The chart is invalid if any of these holds:
-   - `v` is present and is not `analyze.version`;
+   - `v` is present and is not one of `analyze.readable_versions`;
    - the view is not in `views`;
    - a merged key that has a domain holds a value outside it;
    - a numeric key is outside `numeric`;
    - `selection` is not `{values: [string…], excluded: bool}` within
-     `max_values`.
+     `max_values`;
+   - a list rule's key (`percentiles`) is not a list of distinct values of
+     its domain. Every view checks it, as the page does, though only the
+     trend draws it.
 
    `domains` and `numeric` cover every key `validAnalysisState` checks in
    the view, drawn or not. A key the view does not check has neither, and is
    ignored.
-3. **Older link.** Otherwise, a chart without `v`, or one with an older name,
-   is coercible: the page migrates or renames it.
+3. **Older link.** Otherwise, a chart without `v`, one with an earlier
+   readable `v`, or one with an older name, is coercible: the page migrates
+   or renames it. A version 2 page wrote its view defaults into every link;
+   version 3 holds only the view settings the reader chose, and the page
+   leaves a version 2 link's default-equal values out
+   (`readAnalysisLink`, `legacyViewDefaults`).
 4. **Draw.** Apply each rule `{option, fill?, constraints, fallback?}` in
    order:
    - **Own value.** The option's own value is its merged value. A missing
@@ -308,9 +335,23 @@ implementation:
      rule came earlier, and its merged value (or `"(absent)"`) otherwise.
      `self` is the option's own merged value. `multiple_periods` is true when
      the merge over `fill_defaults` has `period` `hours` with `hours` > 1, or
-     `days` with `days` > 1.
+     `days` with `days` > 1. `single_selection` is true when the merged
+     `selection` holds exactly one value and `excluded` is not true: the
+     legend draws one group alone.
    - **Unchanged options.** An option with no rule is drawn as its merged
      value.
+   - **List rules** (`list: true`; the %ile control's `percentiles`). The
+     merged value is a list of the option's domain values. It is drawn as
+     the domain's values, in the domain's order, that the list holds and
+     that every constraint's list allows; a constraint's `given` options
+     are read as above. A missing list is left to the page, which draws its
+     catalog's default levels (a heatmap traces its median and 90th
+     percentile). The constraints say which levels each context draws: none
+     with shares or a cumulative display, or for a measure without a total
+     across groups unless the legend selects one group (`single_selection`);
+     no mean on a heatmap. Since shares and the display are left to the
+     page, the level rule reads them jointly with the measure and breakdown,
+     and the generator checks it with each of them chosen.
 5. **Valid or coercible.** The chart is valid if every key it names among the
    view's `keys` is drawn as given, and coercible otherwise.
 
@@ -332,7 +373,7 @@ older name becomes valid. Every canonical chart in the cases is valid: every
 link, each card's `state`, and each view's defaults.
 
 **The trade-off:** the page keeps the trend's own settings (`rollingPeriods`,
-`period`, `norm` …) in the chart while another view is showing, and returns
+`period`, `percentiles` …) in the chart while another view is showing, and returns
 to them when the reader chooses Over time again. A Go-written non-trend link
 drops them, so the same drawing opens, but choosing Over time from it starts
 from the topic's defaults rather than the trend the link was copied from.
@@ -468,7 +509,7 @@ next:
 | `<node>/view` | Page controls with parameter names, types and choices; `<node>/view/<field>` gives structured templates and examples |
 | `<node>/view/global` | Shared navigation, guide, History, overlay and disclosure controls |
 | `<node>/targets` | Attention target families, source-discovered section IDs, and the tools/endpoints yielding dynamic IDs |
-| `<node>/query` | Query-table page default, dataset columns, time-window example, and the full native QueryState |
+| `<node>/query` | Query-table page default, dataset columns (name, label unless it is the name in words, and type unless text), time-window example, and the full native QueryState |
 | `<node>/query/types[/<name>]` | Transitive public types from the pinned Query Table release |
 | `<node>/filters` | The dataset's filterable fields |
 | `<node>/filters/<field>` | The field's operators, value format, and its values: an enum's own, or for text up to 50 of the most frequent current values |
@@ -476,8 +517,9 @@ next:
 
 `query` keeps the list items whose text contains it. Lists page with `limit`
 (50 by default) and `offset`, and an answer sheds items from the end to fit
-`max_output_tokens` (3,000 by default, as three bytes a token), giving
-`next_offset`.
+`max_output_tokens` (3,500 by default, as three bytes a token), giving
+`next_offset`. Query help pages apply the same pagination and text search to
+their `columns` list, keeping the query default and type help on every page.
 
 A text field's frequent values never compute anything a page has not, so
 browsing never blocks on, starts or writes a derived build:
@@ -647,11 +689,12 @@ Tests (`site_map_test.go`, `site_tools_test.go`):
 ## Cases
 
 `testdata/site-map-cases.json` holds the cross-language cases. The same
-generator writes it.
+generator writes it, from the combinations it enumerated for each view.
 
 | Key | Contents |
 |---|---|
 | `example` | The motivating example, with its canonical URL |
+| `population` | A partial dashboard population as the legend writes it (an exclusion and an inclusion), with its canonical URL |
 | `analyze` | By topic: a spread of each view's complete charts, plus partial charts (one option at each of its values, and each view's defaults less one key), invalid ones, and charts the page writes itself (`written`: each view switch's saved state, and each card's own chart). Each has the page's verdict. Some valid ones carry filters using several operators, a window, and the link |
 | `cards` | A sample of card links. The generator itself checks every card at every window against `cardDestination`; the fixture carries a sample for Go: every card at its first default window. Every window for the first card of each way a link takes its window: the page kind, Parallelism's ribbon, a chart that follows the window, filters or none, window terms on another field, a cover, the local calendar, and no window |
 | `nodes` | A link per page, with the state the page's reader reads from it |

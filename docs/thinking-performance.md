@@ -198,6 +198,33 @@ seconds reading records.
   callbacks, and an exact rational sum in box metrics). That needs an upstream
   release.
 
+## November 2026: stored compaction boundaries
+
+Measured on November 7, 2026 on an APFS clone of the 11:59 SQLite-backup
+snapshot, on a shared machine (load average 40–50): 48,337 conversations,
+2,818,319 metadata messages (2.25 GB of text), 10,070 boundary messages and
+3,055 compactions after group and alias selection.
+
+The `compactions` dataset JSON-parsed every metadata message on each request,
+once for the population and again for the native-alias choice. Every production
+request timed out. It now reads `compaction_boundaries`, which triggers on
+`messages` keep classified in the writer's transaction. The alias choice reads
+the same rows and walks only the families of aliased conversations that have
+boundaries.
+
+| Request | Before (Query Table 1.0.0) | Stored |
+|---|---:|---:|
+| count, last 30 days | 36–77 s | 0.22 s |
+| count, all time | 105–120 s | 0.22 s |
+| 50-row page | 82 s | 0.43 s |
+| 30 days, four grouped metrics | not measured | 1.1 s |
+| every row, all 22 fields | 936 s under load | 0.73 s |
+
+All 3,055 rows matched the previous SQL in every field. The one-time backfill
+read the metadata messages in 45.5 s, 200 conversations per transaction, and
+held the writer for at most about 1 s at a time. Installing the table and
+triggers took 0.03 s.
+
 ## Reproduction and checks
 
 The read-only probe requires a `.pharos-dev` marker and never initializes or

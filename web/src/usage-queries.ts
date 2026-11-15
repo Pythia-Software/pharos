@@ -1,4 +1,5 @@
 import { EMPTY_QUERY, applyPatch, groupKeyFields, matchPatch, type GroupingDefinition, type QueryPatch, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
+import { cacheHitRateExpression } from "./usage-estimate-model";
 
 export type UsageTablePreset = {
   label: string;
@@ -9,7 +10,7 @@ export type UsageTablePreset = {
 };
 
 const sum = (field: string, label: string): SummaryColumn => ({ id: `usage_${field}`, op: "sum", field, label });
-const cacheRate: SummaryColumn = { id: "usage_cache_hit_percent", op: "formula", expression: "SUM([cache_read_input_tokens])/NULLIF(SUM([cache_read_input_tokens])+SUM([uncached_input_tokens]),0)", label: "Cache hit %", display: { kind: "percent", decimals: 1 } };
+const cacheRate: SummaryColumn = { id: "usage_cache_hit_percent", op: "formula", expression: cacheHitRateExpression, label: "Cache hit %", display: { kind: "percent", decimals: 1 } };
 const totals: SummaryColumn[] = [
   sum("cost_usd", "API cost"), sum("total_tokens", "Total tokens"), sum("output_tokens", "Output tokens"),
   { id: "usage_sessions", op: "count_distinct", field: "agent_session_id", label: "Agent sessions" }, cacheRate,
@@ -21,16 +22,16 @@ const grouped = (label: string, title: string, keys: string[], summaries = total
 const calendar = (label: string, key: string) => ({ ...grouped(label, `Cost, tokens, distinct sessions and cache hit rate per ${label.toLowerCase()}`, [key]), orderBy: [{ field: key, dir: "desc" as const }] });
 // Usage titles come from the same workspace row for every fact. MAX retains
 // that one title without sorting and validating a representative per workspace.
-const workLink: SummaryColumn = { id: "usage_work", op: "link", label: "Work", link: { label: { column: "usage_work_title" }, to: { kind: "template", template: "/work/{field:workspace_id}" } } };
-const work = grouped("Work", "Rank work by cost across days and models; each workspace retains its own identity", ["workspace_id"], [{ id: "usage_work_title", op: "max", field: "title", label: "Title" }, workLink, ...totals]);
+const workLink: SummaryColumn = { id: "usage_work", op: "link", label: "Workspace", link: { label: { column: "usage_work_title" }, to: { kind: "template", template: "/work/{field:workspace_id}" } } };
+const work = grouped("Workspace", "Rank work by cost across days and models; each workspace retains its own identity", ["workspace_id"], [{ id: "usage_work_title", op: "max", field: "title", label: "Title" }, workLink, ...totals]);
 
 export const usageGroupPresets: UsageTablePreset[] = [
-  grouped("Repositories", "Compare repository cost, tokens, sessions and cache reuse", ["repository_name"]),
+  grouped("Projects", "Compare project cost, tokens, sessions and cache reuse", ["project_name"]),
   grouped("Models", "Compare models within each provider", ["provider", "model_family"]),
   grouped("Model + effort", "Keep each provider, model and recorded effort level separate, including missing effort", ["provider", "model_family", "effort"]),
   ...[["channel", "Channels"], ["machine_id", "Machines"], ["execution_machine_id", "Execution machines"]].map(([field,label]) => grouped(label, `Compare usage by ${label.toLowerCase()}`, [field])),
   grouped("Providers", "Compare provider cost, tokens, sessions and cache reuse", ["provider"]),
-  grouped("Agents", "Compare root agents and subagents within each provider", ["provider", "session_kind"]),
+  grouped("Agents", "Compare main agents and sub-agents within each provider", ["provider", "session_kind"]),
   { ...work,
     columns: [workLink.id, "workspace_id", ...totals.map(column => column.id)] },
   calendar("Day", "day"), calendar("Week", "week"), calendar("Month", "month"),
@@ -40,12 +41,6 @@ export const usageComparisonPresets: UsageTablePreset[] = [
   { ...grouped("Cache efficiency", "Compare weighted cache hit rates and cached, uncached and written input by model", ["provider", "model_family"], [
     ...totals, sum("uncached_input_tokens", "Uncached input"), sum("cache_read_input_tokens", "Cache reads"), sum("cache_creation_input_tokens", "Cache writes"),
   ]), orderBy: [{ field: cacheRate.id, dir: "asc", nulls: "last" }] },
-  grouped("Price changes", "Compare historical and today's API prices for the same usage, per month", ["month"], [
-    sum("cost_usd", "Historical API cost"), sum("cost_today_usd", "At today's prices"),
-    // Compare only rows with both prices so missing prices cannot create a false difference.
-    { id: "usage_price_delta", op: "formula", expression: "SUM([cost_today_usd]-[cost_usd])", label: "Price difference" },
-    sum("total_tokens", "Total tokens"), { id: "usage_price_pairs", op: "formula", expression: "COUNT([cost_today_usd]-[cost_usd])", label: "Rows with both prices" },
-  ]),
   grouped("Price coverage", "Keep priced, assumed, partial and unpriced usage visible alongside cost and tokens", ["price_status"]),
 ];
 

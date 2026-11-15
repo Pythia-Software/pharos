@@ -186,7 +186,7 @@ export function libraryStorageAdapter(options: { fresh?: boolean; onRecovery?: (
       const candidate = readRollingWindow(new URLSearchParams(location.search), dataset);
       const window = candidate && rollingQueryMatches(query, candidate) ? candidate : undefined;
       const service = createQueryLinkService(key, httpQuerySnapshotStore("/api/query-snapshots", queryFetch));
-      const link = await service.durable(query, new URL(queryURL(dataset, query, window), location.origin).href, `q_${dataset}`);
+      const link = await service.durable(query, new URL(queryURL(dataset, query, window, { preserveSource: true }), location.origin).href, `q_${dataset}`);
       const url = new URL(link.url);
       return replaceSavedQuery(dataset, id, query, savedAt, `${url.pathname}${url.search}${url.hash}`);
     },

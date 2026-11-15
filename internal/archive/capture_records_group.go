@@ -26,7 +26,7 @@ func (c *sourceCapture) commitRecordGroup() error {
 	if isConductorSource(c.source.Kind) || len(c.snapshots) == 0 {
 		return nil
 	}
-	plan, err := planCapture(c.source)
+	plan, err := planCapture(c.ctx, c.source)
 	if err != nil || !plan.complete {
 		return errors.New("source discovery changed during SQLite group acquisition")
 	}

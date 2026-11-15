@@ -141,8 +141,10 @@ func planHistory(ctx context.Context, config Config, scope historyScope) (histor
 	if e != nil {
 		return p, e
 	}
-	if key, ok := keyOf(rootInfo); ok {
-		p.RootIdentity = fmt.Sprintf("%d:%d", key.device, key.inode)
+	// A plan binds the capture volume it inventoried; without its identity
+	// no job could check that it still protects that volume.
+	if p.RootIdentity, e = rootIdentity(rootInfo); e != nil {
+		return p, e
 	}
 	for _, h := range hosts {
 		if !h.IsDir() || !validCaptureName(h.Name()) || strings.HasPrefix(h.Name(), ".") || scope.Host != "" && scope.Host != h.Name() {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +15,170 @@ import (
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
+
+func TestSessionEffortSummarizesOnlyRecordedRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name, settings string
+		levels         []string
+		known, unknown int64
+		state          string
+	}{
+		{"startup-unknown", `"high","high"`, []string{"high"}, 2, 0, "single"},
+		{"unknown-request", `null,"high"`, []string{"high"}, 1, 1, "single"},
+		{"explicit-reset", `"high",null`, []string{"high"}, 1, 1, "single"},
+		{"empty-reset", `"high",""`, []string{"high"}, 1, 1, "single"},
+		{"multiple", `"high","low"`, []string{"high", "low"}, 2, 0, "multiple"},
+		{"multiple-unknown", `"high",null,"low"`, []string{"high", "low"}, 2, 1, "multiple"},
+		{"unknown-only", `null`, []string{}, 0, 1, "unknown"},
+		{"literal-none", `"none"`, []string{"none"}, 1, 0, "single"},
+		{"no-requests", ``, []string{}, 0, 0, "no-requests"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			dir := t.TempDir()
+			lines := []string{
+				`{"type":"session_meta","payload":{"id":"summary","model":"gpt-6"}}`,
+				`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"startup before configuration"}]}}`,
+			}
+			if tc.settings != "" {
+				for i, setting := range strings.Split(tc.settings, ",") {
+					lines = append(lines,
+						fmt.Sprintf(`{"type":"turn_context","payload":{"model":"gpt-6","effort":%s}}`, setting),
+						fmt.Sprintf(`{"type":"token_usage_record","timestamp":"2026-09-20T12:0%d:00Z","payload":{"response_id":"request-%d","usage":{"input_tokens":100,"output_tokens":20}}}`, i, i))
+				}
+			}
+			writeSourceFile(t, filepath.Join(dir, "rollout-summary.jsonl"), strings.Join(lines, "\n"))
+			ingestSource(t, c, SourceConfig{Name: "summary", Kind: "codex", Path: dir, Account: "local", Enabled: true})
+			var summary string
+			var strict sql.NullString
+			var workspace string
+			if err := c.DB.QueryRow(`SELECT es.summary_json,a.effort,a.workspace_id FROM agent_sessions a`+sessionEffortSummaryJoin).Scan(&summary, &strict, &workspace); err != nil {
+				t.Fatal(err)
+			}
+			want := &sessionEffortSummary{Levels: tc.levels, KnownRequests: tc.known, UnknownRequests: tc.unknown, State: tc.state, Coverage: "recorded-requests"}
+			if got := readSessionEffortSummary(summary); !reflect.DeepEqual(got, want) {
+				t.Fatalf("summary %s, want %+v", summary, want)
+			}
+			if strict.String != "" {
+				t.Fatalf("summary changed strict configuration: %q", strict.String)
+			}
+			detail, err := c.WorkDetail(workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := detail["agent_sessions"].([]map[string]any)[0]["effort_summary"]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("detail summary %+v, want %+v", got, want)
+			}
+			bounded, err := c.boundedWorkDetail(map[string]any{"workspace_id": workspace, "section": "agent_sessions"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := bounded["items"].([]map[string]any)[0]["effort_summary"]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("bounded summary %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestSessionEffortBackfillPreservesUsageAndResumes(t *testing.T) {
+	c, config := testCatalog(t)
+	seedDelegation(t, c)
+	if err := c.replacePricing(testPricing(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB,
+		`UPDATE model_requests SET effort='low' WHERE id='request'`,
+		`INSERT INTO model_requests(id,conversation_id,agent_session_id,sequence,model,effort,total_tokens) VALUES('root-request','root','root-session',0,'claude-opus-4-8','high',30)`,
+		`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,effort,attribution,input_tokens,uncached_input_tokens,total_tokens) VALUES('root-session','2026-01-01T00:00:00Z','claude-opus-4-8','high','request',30,30,30),('root-session','2026-01-01T00:00:00Z','claude-opus-4-8','','session-remainder',70,70,70)`,
+		`INSERT INTO usage_attribution_state(workspace_id,version) VALUES('delegation-work','`+usageAttributionVersion+`')`,
+	)
+	snapshot := func(c *Catalog) string {
+		t.Helper()
+		data := map[string]any{}
+		for _, table := range []string{"agent_sessions", "agent_session_usage", "model_requests", "metrics", "usage_attribution_state", "messages", "conversations"} {
+			rows, err := queryMaps(c.DB, "SELECT * FROM "+table+" ORDER BY 1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			data[table] = rows
+		}
+		ledger, err := queryMaps(c.DB, `SELECT u.*,u.model usage_model,a.model session_model,a.conversation_id,a.workspace_id
+ FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id
+ ORDER BY u.agent_session_id,u.usage_hour,u.model,u.effort,u.attribution`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, err := c.usageRowsFromLedger(time.UTC, false, ledger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		priced := false
+		for _, row := range rows {
+			if cost, ok := row["cost_usd"].(float64); ok && cost > 0 {
+				priced = true
+			}
+		}
+		if !priced {
+			t.Fatal("backfill fixture needs a nonzero calculated cost")
+		}
+		data["usage_and_costs"] = rows
+		return jsonText(data)
+	}
+	before := snapshot(c)
+	override(t, &sessionEffortRepairBatchSize, 2)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done, err := c.RepairSessionEffortSummaries(ctx, func(done, total int) { cancel() })
+	if done != 2 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("interrupted repair: %d, %v", done, err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c, err = OpenCatalog(config.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if done, err := c.RepairSessionEffortSummaries(t.Context(), nil); done != 4 || err != nil {
+		t.Fatalf("resumed repair: %d, %v", done, err)
+	}
+	if got := snapshot(c); got != before {
+		t.Fatal("summary backfill changed IDs, tokens, buckets, effort, costs, or source records")
+	}
+	stamp, err := readCacheGenerations(t.Context(), c.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done, err := c.RepairSessionEffortSummaries(t.Context(), nil); done != 0 || err != nil {
+		t.Fatalf("repeated repair: %d, %v", done, err)
+	}
+	if got, err := readCacheGenerations(t.Context(), c.DB); err != nil || got != stamp {
+		t.Fatalf("repeated repair wrote cache state: %+v -> %+v, %v", stamp, got, err)
+	}
+	fixtureExec(t, c, `UPDATE agent_session_effort_summaries SET version='old' WHERE agent_session_id='root-session'`)
+	if done, err := c.RepairSessionEffortSummaries(t.Context(), nil); done != 1 || err != nil {
+		t.Fatalf("stale summary repair: %d, %v", done, err)
+	}
+	// Request changes invalidate the projection without substituting defaults.
+	fixtureExec(t, c, `UPDATE model_requests SET effort=NULL WHERE id='root-request'`)
+	var count int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM agent_session_effort_summaries WHERE agent_session_id='root-session'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("stale summary survived request reset: %d %v", count, err)
+	}
+	if done, err := c.RepairSessionEffortSummaries(t.Context(), nil); done != 1 || err != nil {
+		t.Fatalf("reset repair: %d, %v", done, err)
+	}
+	// Moving a request invalidates both its previous owner and its new owner.
+	fixtureExec(t, c, `UPDATE model_requests SET agent_session_id='embedded' WHERE id='root-request'`)
+	if done, err := c.RepairSessionEffortSummaries(t.Context(), nil); done != 2 || err != nil {
+		t.Fatalf("moved request repair: %d, %v", done, err)
+	}
+	fixtureExec(t, c, `DELETE FROM model_requests WHERE id='root-request'`)
+	if done, err := c.RepairSessionEffortSummaries(t.Context(), nil); done != 1 || err != nil {
+		t.Fatalf("deleted request repair: %d, %v", done, err)
+	}
+}
 
 func TestEffortParsingPreservesTurnChangesAndUnknowns(t *testing.T) {
 	parser := &jsonlAdapter{baseAdapter: baseAdapter{config: SourceConfig{Account: "local"}}, provider: "codex"}
@@ -111,7 +277,7 @@ func TestEffortUsageAccountingQueriesAndExports(t *testing.T) {
 			q := metricRequest(qt.AggSpec{ID: "effort-tokens", Expression: "SUM([total_tokens])", GroupBy: []string{"hour", "effort"}, Scope: scope})
 			q.Where = []qt.WhereTerm{{Field: "effort", Op: "=", Value: high}}
 			q.Limit = 1
-			v2Result, err := testServer(t, config, catalog).executeQueryV2(context.Background(), "usage", nil, v2Schema, nil, &q)
+			v2Result, err := testServer(t, config, catalog).executeQueryFixture(context.Background(), "usage", nil, v2Schema, nil, &q)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -168,7 +334,6 @@ func TestEffortUsageAccountingQueriesAndExports(t *testing.T) {
 			t.Fatalf("MCP effort filter %q: %v %v", effort, result, err)
 		}
 	}
-	id := firstString(works[0]["id"])
 	library, err := catalog.cachedLibraryRows(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -176,19 +341,19 @@ func TestEffortUsageAccountingQueriesAndExports(t *testing.T) {
 	if len(library) != 1 || !strings.Contains(firstString(library[0]["efforts"]), "low") || !strings.Contains(firstString(library[0]["efforts"]), "max") {
 		t.Fatalf("library: %v", library)
 	}
-	page, _, err := catalog.SharedHTML(context.Background(), []string{id})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(page), `"effort":"low"`) || !strings.Contains(string(page), `"effort":"max"`) {
-		t.Fatal("share dropped effort")
-	}
 }
 
 func TestEffortUsageMigrationPreservesLegacyAccounting(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	ingestUsageFixture(t, catalog)
 	// Recreate the previous layout using exactly its old key, then initialize again.
+	// The previous catalog had neither canonical prediction triggers nor their
+	// installation marker. Remove them before simulating its table layout.
+	triggers := queryRows(t, catalog, "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'usage_estimation_store_%'")
+	for _, trigger := range triggers {
+		execTx(t, catalog.DB, "DROP TRIGGER "+sqlIdentifier(firstString(trigger["name"])))
+	}
+	execTx(t, catalog.DB, "DELETE FROM meta WHERE key='usage_estimation_store_version'")
 	if _, err := catalog.DB.Exec(`ALTER TABLE agent_session_usage RENAME TO usage_new;
  CREATE TABLE agent_session_usage AS SELECT agent_session_id,usage_hour,model,attribution,input_tokens,uncached_input_tokens,
  cache_read_input_tokens,cache_creation_input_tokens,cache_creation_5m_input_tokens,cache_creation_1h_input_tokens,
@@ -314,6 +479,84 @@ func TestEffortFromConductorColumnsAndEnvelopes(t *testing.T) {
 	}
 }
 
+func TestConductorObservedModelSurvivesSyntheticError(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	dir := t.TempDir()
+	db := openWritableSQLite(t, filepath.Join(dir, "conductor.db"))
+	execSQL(t, db,
+		`CREATE TABLE sessions(id TEXT PRIMARY KEY,model TEXT,agent_type TEXT)`,
+		`CREATE TABLE session_messages(id TEXT PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,created_at TEXT)`,
+		`INSERT INTO sessions VALUES('s','claude-opus-5','claude')`,
+		`INSERT INTO session_messages VALUES('a','s','assistant','{"type":"assistant","message":{"model":"claude-sonnet-5","content":[{"type":"text","text":"reply"}],"usage":{"input_tokens":10,"output_tokens":1}}}','2026-09-20T12:00:00Z')`,
+		`INSERT INTO session_messages VALUES('b','s','assistant','{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"failed"}]}}','2026-09-20T12:01:00Z')`,
+		`INSERT INTO session_messages VALUES('c','s','system','{"type":"result","usage":{"input_tokens":100,"output_tokens":10},"modelUsage":{"claude-sonnet-5":{"contextWindow":200000},"claude-haiku-5":{"contextWindow":200000}}}','2026-09-20T12:02:00Z')`)
+	db.Close()
+	ingestFixture(t, catalog, "conductor", dir)
+	for _, table := range []string{"conversations", "agent_sessions"} {
+		var model string
+		if err := catalog.DB.QueryRow("SELECT model FROM " + table).Scan(&model); err != nil || model != "claude-sonnet-5" {
+			t.Fatalf("%s model=%q: %v", table, model, err)
+		}
+	}
+	var model, raw string
+	if err := catalog.DB.QueryRow(`SELECT model,raw_text FROM messages WHERE text='failed'`).Scan(&model, &raw); err != nil || model != "<synthetic>" || raw == "" {
+		t.Fatalf("error evidence=%q %q: %v", model, raw, err)
+	}
+	rows, err := queryMaps(catalog.DB, `SELECT model,total_tokens FROM agent_session_usage ORDER BY model`)
+	if err != nil || len(rows) != 2 || rows[0]["model"] != "Unknown model" || integer(rows[0]["total_tokens"]) != 99 || rows[1]["model"] != "claude-sonnet-5" || integer(rows[1]["total_tokens"]) != 11 {
+		t.Fatalf("usage=%v: %v", rows, err)
+	}
+	db = openWritableSQLite(t, filepath.Join(dir, "conductor.db"))
+	execSQL(t, db, `ALTER TABLE session_messages ADD COLUMN full_message TEXT`)
+	display := strings.Repeat("request display ", 40)
+	if _, err := db.Exec(`INSERT INTO session_messages VALUES('d','s','assistant',?,'2026-09-20T12:03:00Z',?)`, display, `{"type":"assistant","message":{"id":"short-request","model":"claude-opus-4-8","usage":{"input_tokens":20,"output_tokens":2}}}`); err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, db, `INSERT INTO session_messages VALUES('e','s','assistant','continued','2026-09-20T12:04:00Z',NULL)`)
+	db.Close()
+	ingestFixture(t, catalog, "conductor", dir)
+	for _, table := range []string{"conversations", "agent_sessions"} {
+		var model string
+		if err := catalog.DB.QueryRow("SELECT model FROM " + table).Scan(&model); err != nil || model != "claude-opus-4-8" {
+			t.Fatalf("alternate request %s model=%q: %v", table, model, err)
+		}
+	}
+}
+
+func TestConductorAlternateModelRetainsChildOwnership(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	dir := t.TempDir()
+	db := openWritableSQLite(t, filepath.Join(dir, "conductor.db"))
+	execSQL(t, db,
+		`CREATE TABLE sessions(id TEXT PRIMARY KEY,model TEXT,agent_type TEXT)`,
+		`CREATE TABLE session_messages(id TEXT PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,created_at TEXT,full_message TEXT)`,
+		`INSERT INTO sessions VALUES('s','claude-opus-4-8','claude')`,
+		`INSERT INTO session_messages VALUES('a','s','assistant','{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"parent"},{"type":"tool_use","id":"child","name":"Task","input":{}}]}}','2026-09-20T12:00:00Z',NULL)`)
+	display := strings.Repeat("child reply ", 50)
+	if _, err := db.Exec(`INSERT INTO session_messages VALUES('b','s','assistant',?,'2026-09-20T12:01:00Z',?)`, display,
+		`{"type":"assistant","parent_tool_use_id":"child","message":{"id":"child-request","model":"claude-haiku-5","usage":{"input_tokens":10,"output_tokens":1}}}`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	ingestFixture(t, catalog, "conductor", dir)
+	var model string
+	if err := catalog.DB.QueryRow(`SELECT model FROM conversations`).Scan(&model); err != nil || model != "claude-opus-4-8" {
+		t.Fatalf("parent conversation model=%q: %v", model, err)
+	}
+	for native, want := range map[string]string{"main": "claude-opus-4-8", "child": "claude-haiku-5"} {
+		if err := catalog.DB.QueryRow(`SELECT model FROM agent_sessions WHERE native_id=?`, native).Scan(&model); err != nil || model != want {
+			t.Fatalf("%s model=%q, want %q: %v", native, model, want, err)
+		}
+	}
+	var parent string
+	if err := catalog.DB.QueryRow(`SELECT parent_native_id FROM messages WHERE text=?`, display).Scan(&parent); err != nil || parent != "child" {
+		t.Fatalf("child display parent=%q: %v", parent, err)
+	}
+	if total := countRows(t, catalog, `SELECT SUM(u.total_tokens) FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id WHERE a.native_id='child'`); total != 11 {
+		t.Fatalf("child tokens=%d", total)
+	}
+}
+
 func TestConductorSessionEffortUsesOnlyActiveAgentSetting(t *testing.T) {
 	for _, fixture := range []struct {
 		name    string
@@ -428,6 +671,113 @@ func TestEffortTL1InitialConfigurationRespectsTranscriptChanges(t *testing.T) {
 			}
 			if !reflect.DeepEqual(efforts, []string{"high", "low", ""}) || conversation.Effort != "" {
 				t.Fatalf("initial setting overwrote transcript changes: %v (final %q)", efforts, conversation.Effort)
+			}
+		})
+	}
+}
+
+func TestInferenceSpeedIngestionAndReplay(t *testing.T) {
+	cases := []struct {
+		provider, file, body string
+		first                inferenceSpeed
+	}{
+		{"codex", "rollout-speed.jsonl", strings.Join([]string{
+			`{"type":"session_meta","payload":{"id":"speed","model":"gpt-test"}}`,
+			`{"type":"turn_context","payload":{"model":"gpt-test","service_tier":"priority"}}`,
+			`{"type":"token_usage_record","timestamp":"2026-09-20T12:01:00Z","payload":{"response_id":"fast-request","usage":{"input_tokens":10,"output_tokens":1}}}`,
+			`{"type":"turn_context","payload":{"model":"gpt-test"}}`,
+			`{"type":"token_usage_record","timestamp":"2026-09-20T12:02:00Z","payload":{"response_id":"standard-request","usage":{"input_tokens":10,"output_tokens":1}}}`,
+		}, "\n"), inferenceSpeed{Speed: "fast", ServiceTier: "priority", Source: "service_tier"}},
+		// OpenAI's Ultrafast Processing is fast too.
+		{"codex", "rollout-ultrafast.jsonl", strings.Join([]string{
+			`{"type":"session_meta","payload":{"id":"ultrafast","model":"gpt-test"}}`,
+			`{"type":"turn_context","payload":{"model":"gpt-test","service_tier":"ultrafast"}}`,
+			`{"type":"token_usage_record","timestamp":"2026-09-20T12:01:00Z","payload":{"response_id":"ultrafast-request","usage":{"input_tokens":10,"output_tokens":1}}}`,
+			`{"type":"turn_context","payload":{"model":"gpt-test","service_tier":"flex"}}`,
+			`{"type":"token_usage_record","timestamp":"2026-09-20T12:02:00Z","payload":{"response_id":"flex-request","usage":{"input_tokens":10,"output_tokens":1}}}`,
+		}, "\n"), inferenceSpeed{Speed: "fast", ServiceTier: "ultrafast", Source: "service_tier"}},
+		{"canonical", "speed.json", `{"id":"speed","conversations":[{"id":"speed","provider":"codex","service_tier":"priority","messages":[{"id":"fast","role":"assistant","text":"first"},{"id":"standard","role":"assistant","service_tier":null,"text":"second"}]}]}`, inferenceSpeed{Speed: "fast", ServiceTier: "priority", Source: "service_tier"}},
+		{"canonical", "explicit-speed.json", `{"id":"speed","conversations":[{"id":"speed","provider":"claude","messages":[{"id":"fast","role":"assistant","speed":"fast","text":"first","raw_text":"{\"message\":{\"id\":\"request-fast\",\"usage\":{\"service_tier\":\"standard\",\"input_tokens\":10,\"output_tokens\":1}}}"},{"id":"standard","role":"assistant","speed":"standard","text":"second","raw_text":"{\"message\":{\"id\":\"request-standard\",\"usage\":{\"service_tier\":\"priority\",\"input_tokens\":10,\"output_tokens\":1}}}"}]}]}`, inferenceSpeed{Speed: "fast", ServiceTier: "standard", Source: "speed"}},
+		{"chatgpt", "conversations.json", `[{"id":"speed","mapping":{"a":{"message":{"id":"fast","author":{"role":"assistant"},"content":{"parts":["first"]},"create_time":1,"metadata":{"model_slug":"gpt-test","service_tier":"priority"}}},"b":{"message":{"id":"standard","author":{"role":"assistant"},"content":{"parts":["second"]},"create_time":2,"metadata":{"model_slug":"gpt-test"}}}}}]`, inferenceSpeed{Speed: "fast", ServiceTier: "priority", Source: "service_tier"}},
+	}
+	for _, sample := range cases {
+		t.Run(sample.provider+"/"+sample.file, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			root := t.TempDir()
+			writeSourceFile(t, filepath.Join(root, sample.file), sample.body)
+			adapter, err := MakeAdapter(SourceConfig{Name: "speed", Kind: sample.provider, Path: root, Account: "local", Enabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result := c.Ingest(adapter, nil); result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			query := "SELECT * FROM messages"
+			// ChatGPT also retains a system metadata record for exported
+			// conversation settings. This fixture tests its two assistant replies.
+			if sample.provider == "chatgpt" {
+				query += " WHERE role='assistant'"
+			}
+			rows, err := queryMaps(c.DB, query+" ORDER BY created_at,source_order")
+			if err != nil || len(rows) != 2 {
+				t.Fatalf("messages %+v: %v", rows, err)
+			}
+			if rows[0]["speed"] != sample.first.Speed || rows[0]["service_tier"] != sample.first.ServiceTier || rows[0]["speed_source"] != sample.first.Source || rows[1]["speed"] != "standard" {
+				t.Fatalf("normalized messages %+v", rows)
+			}
+			retained := storedMessageRecords(rows)
+			var replay []MessageRecord
+			if err := json.Unmarshal([]byte(jsonText(retained)), &replay); err != nil {
+				t.Fatal(err)
+			}
+			for i := range replay {
+				if normalized := normalizeMessageInference(replay[i]); normalized.Speed != retained[i].Speed || normalized.ServiceTier != retained[i].ServiceTier || normalized.SpeedSource != retained[i].SpeedSource {
+					t.Fatalf("replay changed inference settings: %+v", normalized)
+				}
+			}
+			if sample.provider == "codex" || sample.file == "explicit-speed.json" {
+				requests, err := queryMaps(c.DB, "SELECT speed,service_tier,speed_source FROM model_requests ORDER BY sequence")
+				if err != nil || len(requests) != 2 {
+					t.Fatalf("request configuration %+v: %v", requests, err)
+				}
+				for i, request := range requests {
+					for _, field := range []string{"speed", "service_tier", "speed_source"} {
+						if request[field] != rows[i][field] {
+							t.Fatalf("request %d lost %s: %+v; message %+v", i, field, request, rows[i])
+						}
+					}
+				}
+				if _, err := c.DB.Exec("UPDATE model_requests SET speed='standard',service_tier=NULL,speed_source='assumed_standard';UPDATE tool_ledger_state SET version='before-speed-policy'"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := c.BackfillToolLedger(t.Context(), nil); err != nil {
+					t.Fatal(err)
+				}
+				rebuilt, err := queryMaps(c.DB, "SELECT speed,service_tier,speed_source FROM model_requests ORDER BY sequence")
+				if err != nil || !reflect.DeepEqual(requests, rebuilt) {
+					t.Fatalf("request replay lost configuration: %+v %v", rebuilt, err)
+				}
+				if sample.first.ServiceTier != "ultrafast" {
+					return
+				}
+				// A catalog indexed when ultrafast counted as standard rebuilds
+				// just the conversations that recorded it, once.
+				if _, err := c.DB.Exec("UPDATE messages SET speed='standard' WHERE service_tier='ultrafast';UPDATE model_requests SET speed='standard' WHERE service_tier='ultrafast';UPDATE meta SET value='priority,fast' WHERE key='fast_service_tiers'"); err != nil {
+					t.Fatal(err)
+				}
+				for want := range 2 {
+					if err := c.ensureFastTiers(); err != nil {
+						t.Fatal(err)
+					}
+					if built, err := c.BackfillToolLedger(t.Context(), nil); err != nil || built != 1-want {
+						t.Fatalf("rebuilt %d conversations, want %d: %v", built, 1-want, err)
+					}
+				}
+				for _, table := range []string{"messages", "model_requests"} {
+					if speeds, err := queryMaps(c.DB, "SELECT DISTINCT speed FROM "+table+" WHERE service_tier='ultrafast'"); err != nil || len(speeds) != 1 || speeds[0]["speed"] != "fast" {
+						t.Fatalf("%s kept the old policy: %+v %v", table, speeds, err)
+					}
+				}
 			}
 		})
 	}

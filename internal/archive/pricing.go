@@ -156,6 +156,11 @@ func (c *Catalog) replacePricing(doc pricingDocument, digest string) error {
 		return err
 	}
 	defer tx.Rollback()
+	ctx := context.Background()
+	before, err := c.loadPriceBookFrom(ctx, tx)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec("DELETE FROM cost_changes; DELETE FROM model_aliases"); err != nil {
 		return err
 	}
@@ -178,7 +183,98 @@ func (c *Catalog) replacePricing(doc pricingDocument, digest string) error {
 	if _, err := tx.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES('pricing_digest',?)", digest); err != nil {
 		return err
 	}
+	after, err := c.loadPriceBookFrom(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := markRepricedWorkspaces(ctx, tx, before, after); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+// quote is what the book charges for model's usage on day, as text: the
+// resolved rates and whether they are an assumption, or "" when unpriced.
+// Two books with the same quote give that usage the same cost and status.
+func (b priceBook) quote(model, day string) string {
+	if day == "" {
+		return ""
+	}
+	at := b.price(b.resolve(model, day), day)
+	if at == nil {
+		return ""
+	}
+	var text strings.Builder
+	for _, rate := range at.rates {
+		if rate == nil {
+			text.WriteString("-|")
+		} else {
+			fmt.Fprintf(&text, "%g|", *rate)
+		}
+	}
+	fmt.Fprint(&text, at.assumption)
+	return text.String()
+}
+
+// markRepricedWorkspaces leaves the stored metrics of workspaces whose usage
+// after prices differently from before to be computed again, and releases a
+// computation of them already running. A pricing file usually adds a model or
+// a dated price, which reprices the few workspaces that used it; the rest
+// keep what is stored.
+func markRepricedWorkspaces(ctx context.Context, tx *sql.Tx, before, after priceBook) error {
+	// A catalog without the projection (one this build has not initialized)
+	// has nothing stored to mark.
+	var projected int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='mcp_metric_dirty'`).Scan(&projected); err != nil || projected == 0 {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT a.workspace_id,u.model,COALESCE(a.model,''),u.usage_hour
+		FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	days, repriced, marked := map[string]string{}, map[string]bool{}, map[string]bool{}
+	for rows.Next() {
+		var workspace, own, session, hour string
+		if err := rows.Scan(&workspace, &own, &session, &hour); err != nil {
+			return err
+		}
+		if marked[workspace] {
+			continue
+		}
+		day, known := days[hour]
+		if !known {
+			if at, ok := parseTime(hour); ok {
+				day = localMidnight(at, time.Local).Format("2006-01-02")
+			}
+			days[hour] = day
+		}
+		// The model and day usageMetrics prices a ledger row by.
+		model := firstString(own, session)
+		key := model + "\x00" + day
+		changed, known := repriced[key]
+		if !known {
+			changed = before.quote(model, day) != after.quote(model, day)
+			repriced[key] = changed
+		}
+		if changed {
+			marked[workspace] = true
+		}
+	}
+	if err := rows.Err(); err != nil || len(marked) == 0 {
+		return err
+	}
+	ids := make([]string, 0, len(marked))
+	for id := range marked {
+		ids = append(ids, id)
+	}
+	chosen := jsonText(ids)
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO mcp_metric_dirty SELECT value FROM json_each(?) WHERE value IN (SELECT id FROM workspaces)`, chosen); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM mcp_metric_claims WHERE workspace_id IN (SELECT value FROM json_each(?))`, chosen)
+	return err
 }
 
 type priceInterval struct {
@@ -194,7 +290,6 @@ type aliasInterval struct{ from, to, modelKey string }
 type priceBook struct {
 	prices  map[string][]priceInterval
 	aliases map[string][]aliasInterval
-	today   string
 }
 
 func (c *Catalog) loadPriceBook() (priceBook, error) {
@@ -202,7 +297,7 @@ func (c *Catalog) loadPriceBook() (priceBook, error) {
 }
 
 func (c *Catalog) loadPriceBookFrom(ctx context.Context, db queryer) (priceBook, error) {
-	book := priceBook{prices: map[string][]priceInterval{}, aliases: map[string][]aliasInterval{}, today: c.clock().Format("2006-01-02")}
+	book := priceBook{prices: map[string][]priceInterval{}, aliases: map[string][]aliasInterval{}}
 	prices, err := queryMapsContext(ctx, db, `SELECT * FROM cost_on_date`)
 	if err != nil {
 		return book, err
@@ -261,9 +356,9 @@ func (b priceBook) price(key, day string) *priceInterval {
 }
 
 type usageCost struct {
-	cost, costToday *float64
-	status          string // priced, assumed, partial, or unpriced
-	pricedModel     string
+	cost        *float64
+	status      string // priced, assumed, partial, or unpriced
+	pricedModel string
 }
 
 // cost prices one ledger entry. tokens holds the ledger's token categories.
@@ -294,9 +389,6 @@ func (b priceBook) cost(model, day string, tokens map[string]int64) usageCost {
 			total += float64(quantity) * *interval.rates[index] / 1_000_000
 		}
 		return &total, complete
-	}
-	if today := b.price(key, b.today); today != nil {
-		result.costToday, _ = price(today)
 	}
 	at := b.price(key, day)
 	if at == nil {
@@ -338,7 +430,7 @@ func addCost(total any, value *float64) any {
 // Claude Code's "<synthetic>" messages or usage with no model recorded. They
 // stay unpriced but are never sent to the pricing agent.
 func placeholderModel(model string) bool {
-	return model == "Unknown model" || (strings.HasPrefix(model, "<") && strings.HasSuffix(model, ">"))
+	return model == "Unknown model" || model == multipleSessionModels || (strings.HasPrefix(model, "<") && strings.HasSuffix(model, ">"))
 }
 
 // modelsWithStatus lists reported model strings whose usage has the given
@@ -378,23 +470,35 @@ func modelsWithStatus(rows []map[string]any, status string) []map[string]any {
 // pricingHealth reports how much usage has a confirmed price, so gaps in the
 // price history are visible instead of silently lowering cost.
 func (c *Catalog) pricingHealth() map[string]any {
+	health, _ := c.pricingHealthContext(context.Background())
+	return health
+}
+
+func (c *Catalog) pricingHealthContext(ctx context.Context) (map[string]any, error) {
 	health := map[string]any{"priced_tokens": int64(0), "assumed_tokens": int64(0), "partial_tokens": int64(0), "unpriced_tokens": int64(0),
 		"unpriced_models": []map[string]any{}, "assumed_models": []map[string]any{}}
 	for _, status := range []string{"confirmed", "proposed"} {
 		var changes int64
-		_ = c.reader().QueryRow("SELECT COUNT(*) FROM cost_changes WHERE status=?", status).Scan(&changes)
+		if err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM cost_changes WHERE status=?", status).Scan(&changes); err != nil {
+			health["error"] = err.Error()
+			return health, err
+		}
 		health[status+"_changes"] = changes
 	}
-	rows, err := c.localUsageRows(context.Background())
+	rows, err := c.localUsageRows(ctx)
 	if err != nil {
 		health["error"] = err.Error()
-		return health
+		return health, err
 	}
 	// Totals for the Settings usage card, overall and for the last 30 days.
 	since := c.clock().AddDate(0, 0, -29).Format("2006-01-02")
 	var tokens, recentTokens int64
 	var cost, recentCost any
+	health["is_estimate"] = false
+	health["price_status"] = ""
 	for _, row := range rows {
+		health["is_estimate"] = estimateFlag(health["is_estimate"]) || estimateFlag(row["is_estimate"])
+		health["price_status"] = worsePriceStatus(firstString(health["price_status"]), firstString(row["price_status"]))
 		key := firstString(row["price_status"]) + "_tokens"
 		if _, ok := health[key]; ok {
 			health[key] = integer(health[key]) + integer(row["total_tokens"])
@@ -414,7 +518,7 @@ func (c *Catalog) pricingHealth() map[string]any {
 	health["total_tokens"], health["cost_usd"], health["recent_tokens"], health["recent_cost_usd"] = tokens, cost, recentTokens, recentCost
 	health["unpriced_models"] = modelsWithStatus(rows, "unpriced")
 	health["assumed_models"] = modelsWithStatus(rows, "assumed")
-	return health
+	return health, nil
 }
 
 // migratePricingSchema runs before schema.sql: it adds columns that the

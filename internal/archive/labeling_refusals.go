@@ -110,7 +110,7 @@ func appendLabelingRegistry(path string, entries []labelingRefusalEntry) error {
 	if _, err := file.Write(buffer.Bytes()); err != nil {
 		return fmt.Errorf("refusal registry %s: %w", path, err)
 	}
-	return file.Sync()
+	return syncToDrive(file)
 }
 
 // labelingRefusalCheck is what blocks items now, for one job.

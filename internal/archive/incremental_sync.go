@@ -12,12 +12,14 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
-	"syscall"
 	"time"
 )
 
 const automaticRunKind = "automatic-sync"
 const manualSyncRunKind = "manual-sync"
+
+var errAutomaticPreempted = errors.New("background work yielded to manual indexing or verification")
+var errAutomaticPaused = errors.New("background work paused by settings")
 
 type syncSettings struct {
 	Enabled  bool     `json:"enabled"`
@@ -28,7 +30,7 @@ type syncSettings struct {
 
 type automaticSync struct {
 	mu            sync.Mutex
-	cancel        context.CancelFunc
+	cancel        context.CancelCauseFunc
 	done          chan struct{}
 	cold          bool
 	manualWaiters int
@@ -144,7 +146,8 @@ func (c *Catalog) syncSettings(ctx context.Context) (syncSettings, error) {
 }
 
 func automaticProvider(kind string) bool {
-	return slices.Contains([]string{"claude", "codex", "conductor", "antigravity"}, kind)
+	spec, ok := registeredKind(kind)
+	return ok && spec.Automatic
 }
 
 func (s *Server) autoSources(settings syncSettings) []SourceConfig {
@@ -165,12 +168,25 @@ func syncSourceChoices(sources []SourceConfig) []map[string]any {
 	return choices
 }
 
+// Manual maintenance can interrupt scheduled indexing and background passes
+// through acquireManualIngest. Only capture and other foreground runs block it.
+func (s *Server) maintenanceBusy() bool {
+	if s.captureActive() {
+		return true
+	}
+	s.runsMu.RLock()
+	defer s.runsMu.RUnlock()
+	return slices.ContainsFunc(s.runs, func(run *SyncRun) bool {
+		return run.State == "running" && run.Kind != "automatic-sync" && run.Kind != backgroundRunKind
+	})
+}
+
 func (s *Server) acquireManualIngest() bool {
 	s.auto.mu.Lock()
 	s.auto.manualWaiters++
 	defer func() { s.auto.manualWaiters--; s.auto.mu.Unlock() }()
 	if s.auto.cancel != nil {
-		s.auto.cancel()
+		s.auto.cancel(errAutomaticPreempted)
 		done := s.auto.done
 		s.auto.mu.Unlock()
 		select {
@@ -190,7 +206,7 @@ func (s *Server) automaticLoop(ctx context.Context) {
 	for {
 		background, err := s.Catalog.backgroundSettings(ctx, time.Now())
 		requested := s.indexRequested()
-		if err == nil && automaticDue(background, s.cachedPower(ctx), requested, time.Now()) && s.runAutomatic(ctx, background.sync) && requested {
+		if err == nil && automaticDue(background, s.cachedPower(ctx), requested, time.Now()) && s.automaticScheduleReady(ctx, background, requested, time.Now()) && s.runAutomatic(ctx, background.sync) && requested {
 			s.takeIndexRequest()
 		}
 		select {
@@ -203,22 +219,43 @@ func (s *Server) automaticLoop(ctx context.Context) {
 
 // automaticDue is whether the scheduled index runs now: Run now
 // (requested) whatever the mode, power or time; otherwise when background
-// updates are on, the battery policy lets Frequently run, and its time has
-// come, 15 min after the last run on battery when Frequently runs slower
-// (§11).
+// updates are on, the chosen cadence and battery policy allow it, and its
+// time has come (§11).
 func automaticDue(background backgroundSettings, power powerState, requested bool, at time.Time) bool {
 	if requested {
 		return true
 	}
-	battery := background.Battery.onPower(cadenceFrequent, power)
-	if background.Mode != "on" || battery == batteryWait {
+	item, _ := backgroundItemByID("conversations")
+	cadence := background.cadence(item)
+	battery := background.Battery.onPower(cadence, power)
+	if background.Mode != "on" || cadence == cadenceManual || battery == batteryWait {
 		return false
 	}
-	due, _ := time.Parse(time.RFC3339Nano, background.sync.NextAt)
+	due := background.conversationsPlan(time.Time{}, at).Next
 	if battery == batterySlower && !due.IsZero() {
 		due = due.Add(slowerBy(background.sync.Interval))
 	}
 	return due.IsZero() || !at.Before(due)
+}
+
+// The Hourly/Daily columns also honor quiet time and Hold while busy.
+func (s *Server) automaticScheduleReady(ctx context.Context, settings backgroundSettings, requested bool, at time.Time) bool {
+	item, _ := backgroundItemByID("conversations")
+	if requested || settings.cadence(item) == cadenceFrequent {
+		return true
+	}
+	deferred, err := s.Catalog.freshnessDeferred(ctx)
+	if err != nil {
+		return false
+	}
+	quiet := time.Time{}
+	for _, row := range deferred {
+		if changed, ok := parseTime(row.changedAt); ok {
+			quiet = maxTime(quiet, changed.Add(hourlyQuiet))
+		}
+	}
+	plan := settings.conversationsPlan(quiet, at)
+	return !plan.Next.IsZero() && !at.Before(plan.Next) && (!settings.HoldWhenBusy || plan.Overdue || !machineBusy())
 }
 
 func (s *Server) runAutomatic(parent context.Context, settings syncSettings) bool {
@@ -252,13 +289,14 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		// Deferred first, so it runs last, after the run's final state.
 		defer handle.Finish(nil)
 	}
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancelCause := context.WithCancelCause(parent)
+	cancel := func() { cancelCause(nil) }
 	mode := modeOf(ctx)
 	mode.automatic = !manual
 	ctx = withIngestMode(ctx, mode)
 	done := make(chan struct{})
 	if !manual {
-		s.auto.cancel, s.auto.done = cancel, done
+		s.auto.cancel, s.auto.done = cancelCause, done
 	}
 	cold := !s.auto.cold
 	s.auto.cold = true
@@ -434,24 +472,30 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 			}
 		}, written: func(id string) { changedWorkspaces[id] = true }}
 		baseW, baseC, baseM := totals(results)
-		var result IngestResult
-		handle.RunIO(func() {
-			result = s.Catalog.IngestContext(withIngestMode(ctx, mode), adapter, func(phase string, w, c, m, skipped, processed int) {
-				s.updateRun(run.ID, func(run *SyncRun) {
-					run.Phase = phase
-					run.Workspaces = baseW + w
-					run.Conversations = baseC + c
-					run.Messages = baseM + m
-					run.InputsChecked = checked
+		// Each source is one admitted CPU leaf, taken before its ingest opens
+		// anything; the run itself (holding only the TryLock coordinator) is
+		// not admitted.
+		result := s.Catalog.admittedIngest(ctx, source.Name, currentHost().ID, func(ctx context.Context) IngestResult {
+			var result IngestResult
+			handle.RunIO(func() {
+				result = s.Catalog.IngestContext(withIngestMode(ctx, mode), adapter, func(phase string, w, c, m, skipped, processed int) {
+					s.updateRun(run.ID, func(run *SyncRun) {
+						run.Phase = phase
+						run.Workspaces = baseW + w
+						run.Conversations = baseC + c
+						run.Messages = baseM + m
+						run.InputsChecked = checked
+					})
+					work := activityWork{Phase: phase, Source: source.Name}
+					if plan != nil && phase == "indexing" {
+						work = plan.work(phase, source.Name, model, processed)
+						work.Kind = "incremental"
+					}
+					work.Next = "Refresh the Library view and verify changed inputs"
+					workMeter.report(work)
 				})
-				work := activityWork{Phase: phase, Source: source.Name}
-				if plan != nil && phase == "indexing" {
-					work = plan.work(phase, source.Name, model, processed)
-					work.Kind = "incremental"
-				}
-				work.Next = "Refresh the Library view and verify changed inputs"
-				workMeter.report(work)
 			})
+			return result
 		})
 		op.end("source:"+source.Name, result.Error == nil && ctx.Err() == nil)
 		results = append(results, result)
@@ -743,7 +787,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		MAX(v.checked_at) last_attempt FROM sync_verifications v LEFT JOIN sync_verification_progress p USING(host_id,source_name,unit)
 		WHERE v.host_id=? GROUP BY v.source_name,v.outcome`, currentHost().ID)
 	issues, _ := queryMaps(s.Catalog.reader(), "SELECT id,source_name,unit,last_at FROM sync_integrity_issues WHERE state='open' ORDER BY last_at DESC LIMIT 100")
-	jobs, _ := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT * FROM sync_recovery_jobs WHERE state!='complete' ORDER BY updated_at DESC LIMIT 30")
+	jobs, _ := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT * FROM sync_recovery_jobs WHERE state NOT IN ('complete','superseded') ORDER BY updated_at DESC LIMIT 30")
 	pause := ""
 	if !settings.Enabled {
 		pause = "Off"
@@ -758,7 +802,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, 500)
 		return
 	}
-	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "library_empty": libraryEmpty, "has_sources": slices.ContainsFunc(s.Config().Sources, func(source SourceConfig) bool { return source.Enabled }), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns, "verification": s.Catalog.verificationStatus(r.Context())}, 200)
+	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "maintenance_busy": s.maintenanceBusy(), "library_empty": libraryEmpty, "has_sources": slices.ContainsFunc(s.Config().Sources, func(source SourceConfig) bool { return source.Enabled }), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns, "verification": s.Catalog.verificationStatus(r.Context())}, 200)
 }
 
 // capturePending is the Sources table's "Needs capture": the source was indexed
@@ -819,7 +863,7 @@ func (s *Server) postIncrementalSync(w http.ResponseWriter, r *http.Request, bod
 		settings.NextAt = time.Now().Add(time.Duration(settings.Interval) * time.Second).UTC().Format(time.RFC3339Nano)
 		s.auto.mu.Lock()
 		if !settings.Enabled && s.auto.cancel != nil {
-			s.auto.cancel()
+			s.auto.cancel(errAutomaticPaused)
 		}
 		s.Catalog.projectionBatches.Add(1)
 		err = s.Catalog.writeTransaction(r.Context(), "sync settings", func(tx *sql.Tx) error {
@@ -867,13 +911,16 @@ func conductorPreflight(adapter Adapter) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	info, err := os.Stat(adapter.Config().Path)
+	path := adapter.Config().Path
+	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
 	}
-	identity := ""
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		identity = fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
+	// Without the directory's identity, a replaced source could hash as
+	// unchanged, so the check fails rather than hashing an empty identity.
+	identity, err := localIdentityText(info)
+	if err != nil {
+		return "", fmt.Errorf("identify %s: %w", path, err)
 	}
 	return hashBytes([]byte(fingerprint + ":" + identity + ":" + sourceIndexVersion(adapter))), nil
 }

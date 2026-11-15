@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
 	"modernc.org/sqlite"
 )
@@ -36,7 +37,11 @@ type sqlDataset struct {
 	timestamps map[string]string
 	// lookups are fields with an index that finds their few rows directly,
 	// such as IDs; filters on other fields are marked likely() (see where).
-	lookups           map[string]bool
+	lookups map[string]bool
+	// exact are fields whose column is plain text compared byte for byte
+	// (BINARY collation), so the source can apply an equality or inequality
+	// with a non-empty value itself, before its joins.
+	exact             map[string]bool
 	toolSearchIndexed bool            // the command trigram index is complete
 	queryText         *queryTextIndex // complete, normalized exact substring membership
 	scalarFacts       bool            // complete compact per-call time/activity projection
@@ -46,9 +51,18 @@ type sqlDataset struct {
 	// Joins to unique primary keys can be omitted when no consumed expression
 	// references them. Explicit pruning lets SQLite choose a covering count
 	// index before its later unused-LEFT-JOIN elimination pass.
-	optionalJoins      map[string]string
-	pageFrom           string
-	pageIndexes        map[string]string
+	optionalJoins map[string]string
+	// Compound sources need to prune their inner projection too: SQLite may
+	// otherwise carry every UNION column through a coroutine for each row.
+	projectFrom func([]string) string
+	pageFrom    string
+	pageIndexes map[string]string
+	// newestFirst maps a timestamp field to an index on pageFrom's table
+	// that begins with its column, for pages sorted by it (see newestFirstScan).
+	newestFirst map[string]string
+	// newestBounds maps a timestamp field to how a page sorted by it reads
+	// only the dataset's newest rows (see newestBound).
+	newestBounds       map[string]newestBound
 	coveringIndex      string
 	rangeCoveringIndex string
 	coveredFields      map[string]bool
@@ -94,6 +108,84 @@ func (d sqlDataset) preferCoveringScan(terms []querytable.WhereTerm) (sqlDataset
 	return d, true
 }
 
+// newestBound is for a source that cannot be read in a timestamp's order: a
+// UNION of stored rows and ones derived live. A page sorted newest first
+// needs only the newest stored rows, so the source is bounded at the
+// timestamp nth returns for the stored row ?1 places from the newest, on
+// column. join, when set, is a join in from and the form of it that reads
+// the stored table first. The caller checks that the page came back full
+// and reads the whole source otherwise (executeQueryV3).
+type newestBound struct {
+	nth, column string
+	join        [2]string
+}
+
+// newestPage reports the field a request pages by, newest first, and the
+// row its page ends at. NULLs sort lowest in SQLite, so only descending with
+// NULLs last is a timestamp index's own order read backwards.
+func newestPage(q qt.QueryRequestV3) (field string, through int, ok bool) {
+	if !q.Rows || q.Grouping != nil || q.Distinct != nil || len(q.Metrics) > 0 || len(q.Result.OrderBy) == 0 {
+		return "", 0, false
+	}
+	order := q.Result.OrderBy[0]
+	if order.Dir != "desc" || order.Nulls == "first" || order.Extract != nil {
+		return "", 0, false
+	}
+	return order.Field, q.Result.Offset + q.Result.Limit, true
+}
+
+// boundedNewest is d without the rows before cutoff on field.
+func (d sqlDataset) boundedNewest(field, cutoff string) sqlDataset {
+	bound := d.newestBounds[field]
+	if bound.join[0] != "" {
+		d.from = strings.Replace(d.from, bound.join[0], bound.join[1], 1)
+	}
+	condition := bound.column + ">=" + quoteSQLText(cutoff)
+	if d.base != "" {
+		condition = "(" + d.base + ") AND " + condition
+	}
+	d.base = condition
+	return d
+}
+
+var innerJoin = regexp.MustCompile(`(\s)(LEFT |CROSS )?JOIN `)
+
+// newestFirstScan is d reading its rows in a timestamp's order, for a page
+// of rows sorted newest first by that timestamp and filtered by nothing
+// else. SQLite otherwise tends to start from the smaller joined table and
+// sort every row to find the first fifty: all eight million messages, text
+// included. Reading the timestamp's index stops after a page. ok is false
+// when the request is anything else, where the planner's choice stands.
+//
+// A count over this source would visit every row in index order, so the
+// caller counts over a source with no order fixed (narrowCount).
+func (d sqlDataset) newestFirstScan(q qt.QueryRequestV3, where []qt.WhereTerm) (ordered sqlDataset, ok bool) {
+	field, _, ok := newestPage(q)
+	index := d.newestFirst[field]
+	if !ok || index == "" {
+		return d, false
+	}
+	for _, term := range where {
+		if term.IsGroup() || term.Negated || term.Field != field || !slices.Contains([]string{">", ">=", "<", "<="}, term.Op) {
+			return d, false
+		}
+	}
+	rest, found := strings.CutPrefix(d.from, d.pageFrom)
+	if d.pageFrom == "" || !found || rest != "" && !strings.ContainsAny(rest[:1], " \n\t") || strings.HasPrefix(strings.TrimSpace(rest), "INDEXED BY") {
+		return d, false // already indexed, or another table
+	}
+	from := d.pageFrom + " INDEXED BY " + sqlIdentifier(index) + rest
+	// Keep the indexed table outermost: an inner join is free to start from
+	// the other side.
+	d.from = innerJoin.ReplaceAllStringFunc(from, func(join string) string {
+		if strings.Contains(join, "LEFT ") || strings.Contains(join, "CROSS ") {
+			return join
+		}
+		return join[:1] + "CROSS JOIN "
+	})
+	return d, true
+}
+
 func (d sqlDataset) project(fields []string) sqlDataset {
 	columns := make(map[string]string, len(fields))
 	for _, field := range fields {
@@ -102,14 +194,18 @@ func (d sqlDataset) project(fields []string) sqlDataset {
 		}
 	}
 	d.columns = columns
+	if d.projectFrom != nil {
+		d.from = d.projectFrom(fields)
+	}
 	if d.scalarFacts && d.pageFrom == "FROM tool_calls t" {
 		compact := true
 		for field := range columns {
-			compact = compact && slices.Contains([]string{"id", "workspace_id", "started_at", "day", "week", "month", "duration_ms", "provider", "activity", "tool_category", "call_count", "repository_name", "source_kind", "title"}, field)
+			compact = compact && slices.Contains([]string{"id", "workspace_id", "started_at", "day", "week", "month", "duration_ms", "provider", "activity", "tool_category", "call_count", "repository_name", "project_name", "source_kind", "title"}, field)
 		}
 		if compact {
 			d.from = strings.Replace(d.from, "FROM tool_calls t", "FROM tool_query_facts t", 1)
 			d.pageFrom = "FROM tool_query_facts t"
+			d.newestFirst = nil // the index is on tool_calls
 			if _, ok := columns["activity"]; ok {
 				columns["activity"] = "t.activity"
 			}
@@ -511,20 +607,6 @@ func (d sqlDataset) selectList() string {
 	return strings.Join(parts, ",")
 }
 
-// scopedRows returns, in ID order, every row of the dataset that also meets
-// condition: an SQL condition over the dataset's aliases, and its arguments.
-func (d sqlDataset) scopedRows(ctx context.Context, q queryer, condition string, args []any, idField string) ([]map[string]any, error) {
-	where := condition
-	if d.base != "" {
-		where = d.base + " AND (" + condition + ")"
-	}
-	statement := "SELECT " + d.selectList() + " " + d.from + " WHERE " + where
-	if id, ok := d.columns[idField]; ok {
-		statement += " ORDER BY " + id
-	}
-	return queryMapsContext(ctx, q, statement, args...)
-}
-
 func (d sqlDataset) Rows(ctx context.Context, q queryer, query querytable.Query, schema querytable.Schema) (querytable.Result, error) {
 	if err := schema.ValidateQuery(query); err != nil {
 		return querytable.Result{}, err
@@ -597,7 +679,7 @@ func (d sqlDataset) Distinct(ctx context.Context, q queryer, fieldName, search s
 	if _, ok := d.cube.dimensionFor(fieldName); ok {
 		// Daily summaries preserve this set of dimension values, including
 		// absent values, with far fewer and narrower rows than the raw cube.
-		if d.cube == toolCallCube && slices.Contains([]string{"day", "week", "month", "repository_name", "source_kind", "provider", "model", "effort", "model_family", "model_effort", "session_kind", "tool_name", "tool_category", "mcp_server", "mcp_method", "program", "subcommand", "command_name", "command_category", "activity", "operation_key", "operation_name"}, fieldName) {
+		if d.cube == toolCallCube && slices.Contains([]string{"day", "week", "month", "repository_name", "project_name", "source_kind", "provider", "model", "effort", "model_family", "model_effort", "session_kind", "tool_name", "tool_category", "mcp_server", "mcp_method", "program", "subcommand", "command_name", "command_category", "activity", "operation_key", "operation_name"}, fieldName) {
 			return toolRollupDataset.Distinct(ctx, q, fieldName, search, limit, schema)
 		}
 		return d.cube.table().Distinct(ctx, q, fieldName, search, limit, schema)

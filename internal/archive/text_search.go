@@ -29,6 +29,7 @@ type TextSearchOptions struct {
 	Where                 *textQuery `json:"where,omitempty"`
 	Surface               string     `json:"surface,omitempty"`
 	Repository            string     `json:"repository,omitempty"`
+	Project               string     `json:"project,omitempty"`
 	ConversationID        string     `json:"conversation_id,omitempty"`
 	WorkspaceID           string     `json:"workspace_id,omitempty"`
 	WorkspaceIDs          []string   `json:"workspace_ids,omitempty"`
@@ -648,6 +649,17 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		clauses = append(clauses, "c.workspace_id IN (SELECT value FROM json_each(?))")
 		arguments = append(arguments, jsonText(o.WorkspaceIDs))
 	}
+	if o.ConversationID == "" && o.WorkspaceID == "" && o.WorkspaceIDs == nil && o.originConversationIDs == nil {
+		// A search of the library leaves out the document of an exported
+		// artifact a conversation made, where it is shown (message_assets.go).
+		placed, held, e := c.withoutPlacedArtifactDocuments(ctx, "c.workspace_id")
+		if e != nil {
+			return result, e
+		}
+		if placed != "" {
+			clauses, arguments = append(clauses, placed), append(arguments, held...)
+		}
+	}
 	if key == "d.message_rowid" && scoped {
 		// Surface scans stream documents before joining message bodies. A scope
 		// only on m/c still walks every document in the archive. Apply the same
@@ -660,6 +672,10 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	if o.Repository != "" {
 		clauses = append(clauses, `w.repository_id IN (SELECT id FROM repositories WHERE instr(lower(display_name),lower(?))>0 OR instr(lower(COALESCE(canonical_remote,'')),lower(?))>0)`)
 		arguments = append(arguments, o.Repository, o.Repository)
+	}
+	if o.Project != "" {
+		clauses = append(clauses, projectPredicate("w"))
+		arguments = append(arguments, projectArgs(o.Project)...)
 	}
 	if o.From != "" {
 		clauses = append(clauses, "julianday(m.created_at)>=julianday(?)")

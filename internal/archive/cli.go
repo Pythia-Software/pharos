@@ -58,6 +58,14 @@ func Run(arguments []string) error {
 	if command == "cloud-restore" {
 		return runCloudRestoreCLI(args)
 	}
+	// Capture export reads a capture root and writes an outbox it is given:
+	// it never loads a configuration or opens a library or catalog.
+	if command == "capture-export" {
+		return runCaptureExportCLI(args)
+	}
+	if command == "capture-export-verify" {
+		return runCaptureExportVerifyCLI(args)
+	}
 	// Labeling never opens the catalog through OpenCatalog: prepare reads a
 	// read-only snapshot, and plan and status read only a dataset.
 	if command == "labeling" {
@@ -142,6 +150,9 @@ func Run(arguments []string) error {
 	if command == "doctor" {
 		return runDoctor(config)
 	}
+	if command == "conversation-names" {
+		return runConversationNamesCLI(config, args, os.Stdout, os.Stderr)
+	}
 	// dev-ui only talks to the running service, so it skips the guards below
 	// and never opens the catalog.
 	if command == "dev-ui" {
@@ -174,6 +185,12 @@ func Run(arguments []string) error {
 	if _, err := os.Stat(pendingDeliveryPath(config)); err == nil {
 		return fmt.Errorf("a verified library move needs to finish cleanup; resume its transfer before opening or capturing this library")
 	}
+	// Compaction owns the library-use lease itself: shared for a plan and
+	// exclusive for retirement. Taking the generic shared CLI lease first
+	// would prevent its own exclusive acquisition.
+	if command == "claude-import" && firstOf(args) == "compact" {
+		return runClaudeImportCommand(config, args)
+	}
 	if _, err := os.Stat(config.CatalogPath); err == nil {
 		use, err := fileLease(libraryUseLock(config), false)
 		if err != nil {
@@ -184,6 +201,9 @@ func Run(arguments []string) error {
 	// Capturing and backing up only copy files; they never open the catalog
 	// for writing.
 	// Each holds a lease under the capture root while it writes (§6.5).
+	if command == "claude-import" {
+		return runClaudeImportCommand(config, args)
+	}
 	if command == "sqlite-records" {
 		if subcommand := firstOf(args); subcommand == "status" || subcommand == "verify" {
 			return runSQLiteRecordsCLI(config, args)
@@ -243,8 +263,13 @@ func Run(arguments []string) error {
 			return err
 		}
 		defer catalog.Close()
+		if err := catalog.scheduleDefaultModelBackfill(context.Background()); err != nil {
+			return err
+		}
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
+		catalog.ReworkDays = config.OutcomeReworkDays
+		catalog.EngagementEnabled = config.Engagement.Enabled
 		catalog.setCaptureRoot(config.CaptureRoot)
 		openBrowser := false
 		for _, arg := range args {
@@ -272,6 +297,8 @@ func Run(arguments []string) error {
 	return runLeasedCatalogCommand(config, command, cliCatalogOperation(command, args), func(ctx context.Context, op *Op, catalog *Catalog) error {
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
+		catalog.ReworkDays = config.OutcomeReworkDays
+		catalog.EngagementEnabled = config.Engagement.Enabled
 		catalog.setCaptureRoot(config.CaptureRoot)
 		switch command {
 		case "ingest":
@@ -282,6 +309,8 @@ func Run(arguments []string) error {
 			return runBuildToolsCLI(ctx, catalog, op)
 		case "agent-events":
 			return runAgentEventsCLI(ctx, config, catalog, op, args)
+		case "engagement":
+			return runEngagementCLI(ctx, config, catalog, op, args)
 		case "refine-usage":
 			refined, err := catalog.RefineUsageTimeline(func(done, total int) {
 				op.progress("Refine usage", "", "conversation", float64(done), float64(total), total > 0)
@@ -293,7 +322,25 @@ func Run(arguments []string) error {
 				return fmt.Errorf("refine usage after %d conversations: %w", refined, err)
 			}
 			return printJSON(map[string]any{"conversations_refined": refined})
+		case "repair-session-models":
+			report, err := catalog.RepairAgentSessionModels(ctx, func(done, total int) {
+				op.progress("Correct agent session models", "", "workspace", float64(done), float64(total), total > 0)
+			})
+			if err != nil {
+				return fmt.Errorf("repair session models: %w", err)
+			}
+			return printJSON(report)
 		case "repair-usage-attribution":
+			if slices.Contains(args, "--session-effort-only") {
+				repaired, err := catalog.RepairSessionEffortSummaries(ctx, func(done, total int) {
+					op.progress("Summarize recorded request effort", "", "agent session", float64(done), float64(total), total > 0)
+					fmt.Fprintf(os.Stderr, "summarized effort for %d/%d agent sessions\n", done, total)
+				})
+				if err != nil {
+					return fmt.Errorf("summarize request effort after %d agent sessions: %w", repaired, err)
+				}
+				return printJSON(map[string]any{"agent_sessions_summarized": repaired})
+			}
 			repaired, err := catalog.RepairUsageAttribution(ctx, func(done, total int) {
 				op.progress("Repair usage attribution", "", "workspace", float64(done), float64(total), total > 0)
 				if done%100 == 0 || done == total {
@@ -303,7 +350,20 @@ func Run(arguments []string) error {
 			if err != nil {
 				return fmt.Errorf("repair usage attribution after %d workspaces: %w", repaired, err)
 			}
-			return printJSON(map[string]any{"workspaces_repaired": repaired})
+			summarized, err := catalog.RepairSessionEffortSummaries(ctx, nil)
+			if err != nil {
+				return fmt.Errorf("summarize request effort after %d agent sessions: %w", summarized, err)
+			}
+			return printJSON(map[string]any{"workspaces_repaired": repaired, "agent_sessions_summarized": summarized})
+		case "repair-session-bounds":
+			if len(args) > 1 || len(args) == 1 && args[0] != "--apply" {
+				return fmt.Errorf("usage: pharos repair-session-bounds [--apply]")
+			}
+			result, err := catalog.RepairSessionBounds(ctx, slices.Contains(args, "--apply"))
+			if err != nil {
+				return fmt.Errorf("repair session bounds after %d updates: %w", result.Updated, err)
+			}
+			return printJSON(result)
 		case "upgrade":
 			return runUpgradeCLIContext(ctx, catalog, args)
 		case "pricing":
@@ -316,6 +376,8 @@ func Run(arguments []string) error {
 			return runFindingsCLI(catalog, args)
 		case "labels":
 			return runLabelsCLI(ctx, config, catalog, op, args, os.Stdout, os.Stderr)
+		case "execution-evidence":
+			return runExecutionEvidenceCLI(ctx, catalog, op, args, os.Stdout, os.Stderr)
 		case "health":
 			value := catalog.Health()
 			value["storage"] = storage(config)
@@ -356,7 +418,12 @@ func cliCatalogOperation(command string, args []string) OperationSpec {
 		default:
 			return OperationSpec{Kind: "analysis.agent_events.import"}
 		}
-	case "refine-usage", "repair-usage-attribution":
+	case "engagement":
+		// status only reads; run scores and stores.
+		if firstOf(args) == "run" {
+			return OperationSpec{Kind: "analysis.engagement"}
+		}
+	case "refine-usage", "repair-usage-attribution", "repair-session-models", "repair-session-bounds":
 		return OperationSpec{Kind: "catalog.repair", Variant: command}
 	case "upgrade":
 		if !slices.Contains(args, "--status") && !slices.Contains(args, "--preview") {
@@ -370,6 +437,11 @@ func cliCatalogOperation(command string, args []string) OperationSpec {
 		return OperationSpec{Kind: "index.captures"}
 	case "labels":
 		return labelsCLIOperation(args)
+	case "execution-evidence":
+		// status only reads.
+		if firstOf(args) == "run" {
+			return OperationSpec{Kind: "catalog.execution-evidence"}
+		}
 	}
 	return OperationSpec{}
 }
@@ -386,7 +458,9 @@ func runIngestCLI(ctx context.Context, config Config, catalog *Catalog, op *Op) 
 			return err
 		}
 		op.Step(source.Name, "", -1)
-		results = append(results, catalog.Ingest(adapter, nil))
+		// Each source is one admitted CPU leaf of this command's authority;
+		// the ingest itself runs as it always has.
+		results = append(results, catalog.admittedIngest(ctx, source.Name, currentHost().ID, func(context.Context) IngestResult { return catalog.Ingest(adapter, nil) }))
 	}
 	op.Step("Link identities and refresh the Search view", "", -1)
 	links, err := catalog.ReconcileIdentities()
@@ -461,7 +535,7 @@ func runBuildToolsCLI(ctx context.Context, catalog *Catalog, op *Op) error {
 // model runs inside Pharos.
 func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op *Op, args []string) error {
 	if len(args) >= 1 && args[0] == "run" {
-		labels := config.Labels
+		labels := config.AgentEvents.labeler(config.Labels)
 		flags := flag.NewFlagSet("agent-events run", flag.ContinueOnError)
 		limit := flags.Int("limit", 0, "score at most about N messages")
 		full := flags.Bool("full", false, "look at every conversation")
@@ -483,6 +557,9 @@ func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op 
 		if stats != nil {
 			_ = printJSON(stats)
 		}
+		if err == nil && !*dryRun {
+			catalog.refreshAgentEventFactsLogged(ctx, false)
+		}
 		return err
 	}
 	if len(args) == 2 && args[0] == "import" {
@@ -490,7 +567,17 @@ func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op 
 		if err != nil {
 			return err
 		}
+		catalog.refreshAgentEventFactsLogged(ctx, false)
 		return printJSON(result)
+	}
+	if len(args) == 1 && args[0] == "facts" {
+		// The Agent events dashboard's projection (agent_event_facts.go),
+		// which the background pass otherwise refreshes after it runs.
+		rebuilt, err := catalog.refreshAgentEventFacts(ctx)
+		if err != nil {
+			return err
+		}
+		return printJSON(map[string]int{"conversations_rebuilt": rebuilt})
 	}
 	if len(args) == 1 && args[0] == "fetch" {
 		// The verifier, and the runtime unless one is configured or bundled.
@@ -505,7 +592,7 @@ func runAgentEventsCLI(ctx context.Context, config Config, catalog *Catalog, op 
 		}
 		return printJSON(status)
 	}
-	return fmt.Errorf("usage: pharos agent-events {run [flags] | fetch | status | import FILE}")
+	return fmt.Errorf("usage: pharos agent-events {run [flags] | fetch | status | facts | import FILE}")
 }
 
 // applyRepositoryMergesCLI: pharos repositories --merge --apply.
@@ -538,7 +625,7 @@ func firstOf(args []string) string {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,agent-events,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,claude-import,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,repair-session-models,repair-session-bounds,upgrade,build-tools,agent-events,engagement,execution-evidence,conversation-names,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
 
 }
 func urlQueryEscape(value string) string {
@@ -576,6 +663,7 @@ func runSearchCLI(catalog *Catalog, args []string) error {
 	outcome := flags.String("outcome", "", "")
 	errorType := flags.String("error", "", "")
 	metric := flags.String("metric", "", "")
+	has := flags.String("has", "", "Kinds of content a conversation must hold, separated by commas: "+strings.Join(contentFeatureNames(), ", "))
 	limit := flags.Int("limit", 20, "")
 	prText := flags.String("pr", "", "")
 	minimumText := flags.String("minimum", "", "")
@@ -586,7 +674,7 @@ func runSearchCLI(catalog *Catalog, args []string) error {
 	if query == "" && flags.NArg() > 0 {
 		query = flags.Arg(0)
 	}
-	options := SearchOptions{Query: query, Repository: *repository, Source: *source, File: *file, Owner: *owner, Provider: *provider, Model: *model, Effort: *effort, From: *from, To: *to, Flavor: *flavor, Version: *version, Outcome: *outcome, Error: *errorType, Metric: *metric, Limit: *limit}
+	options := SearchOptions{Has: *has, Query: query, Repository: *repository, Source: *source, File: *file, Owner: *owner, Provider: *provider, Model: *model, Effort: *effort, From: *from, To: *to, Flavor: *flavor, Version: *version, Outcome: *outcome, Error: *errorType, Metric: *metric, Limit: *limit}
 	if *prText != "" {
 		value, err := strconv.Atoi(*prText)
 		if err != nil {

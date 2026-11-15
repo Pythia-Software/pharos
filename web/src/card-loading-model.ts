@@ -1,28 +1,22 @@
 import type { AggregationClause, QueryState } from "@pythia-software/query-table-core";
-import { cardCoverQuery, humanStudyCoverMatches, type CardCover } from "./card-cover";
+import { cardChart, humanStudyCoverMatches, type CardCover } from "./card-cover";
 import { boxCoverHeight } from "./compact-box-model";
 import type { QueryRecipe } from "./curiosity-data";
 import { usesWeekdayCover } from "./weekday-cover";
 
-export type CardLoadingKind = "value" | "columns" | "list" | "scatter" | "line" | "box" | "pie" | "donut" | "table" | "text";
+export type CardLoadingKind = "value" | "columns" | "list" | "scatter" | "line" | "box" | "pie" | "donut" | "heatmap" | "table" | "text";
 export type CardLoadingSpec = { kind: CardLoadingKind; count: number; headline?: boolean; belowLabels?: boolean; height?: number };
 
 // Read the same cover definition as the preview, before any requests finish.
 // Placeholder marks describe the display, never estimated data values.
 export function cardLoadingPresentation(query: QueryState, options: { recipe?: QueryRecipe; cover?: CardCover; metricId?: string; days?: number } = {}): CardLoadingSpec {
+  if (options.recipe?.habits) return options.recipe.habits.loading;
   const study = options.recipe?.humanStudy;
   if (study && (!query.grouping || study === "conversation-lengths") && humanStudyCoverMatches(options.recipe!, options.cover, options.metricId)) {
     const spec: CardLoadingSpec = study === "conversation-lengths" ? { kind: "list", count: 6, height: 240 } : study === "hours" ? { kind: "columns", count: 24, height: 205 } : ["contribution-patterns", "examples"].includes(study) ? { kind: "list", count: study === "examples" ? 3 : 4, height: 210 } : { kind: "line", count: 31, headline: true, height: 260 };
     return { ...spec, height: (options.cover ?? options.recipe?.cover)?.height ?? spec.height };
   }
-  let projected = query, metricId = options.metricId;
-  if (options.recipe && (query.grouping || options.cover)) {
-    const cover = options.cover ?? (metricId ? { mode: query.grouping && !query.aggregations?.length ? "result" as const : "source" as const, metricId } : undefined);
-    const result = cardCoverQuery(query, options.recipe, cover);
-    projected = result.query; metricId = result.metricId;
-  }
-  const metrics = projected.aggregations ?? [];
-  const metric = metrics.find(metric => metric.id === metricId) ?? metrics[0];
+  const { query: projected, clause: metric } = cardChart(query, options);
   if (!metric) return { kind: projected.grouping ? "table" : "text", count: 3 };
   const cover = options.cover ?? options.recipe?.cover;
   if (usesWeekdayCover(options.recipe, metric, cover, projected)) {
@@ -32,7 +26,7 @@ export function cardLoadingPresentation(query: QueryState, options: { recipe?: Q
   const requested = options.cover?.maxGroups ?? metric.display?.maxGroups;
   const limit = typeof requested === "number" && Number.isSafeInteger(requested) && requested > 0 ? Math.min(100, requested) : undefined;
   const display = options.cover?.kind ?? metric.display?.kind ?? "auto";
-  const timeline = metric.groupBy[0] === "day" && display === "auto" && metric.op === "sum" && !metric.expression && !metric.distribution;
+  const timeline = metric.groupBy[0] === "day" && display === "auto" && (metric.op === "sum" || metric.op === "count" && !metric.field) && !metric.expression && !metric.distribution;
   const kind = timeline && cover?.timeline?.scale === "logarithmic" && !cover?.timeline?.percent ? "line" : loadingKind(metric, display, timeline);
   const count = kind === "value" ? 1 : kind === "columns" && metric.distribution?.kind === "histogram" ? metric.distribution.bins ?? 10
     : timeline ? Math.min(100, (options.days ?? 7) + 1)

@@ -10,8 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 	sqlite "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -99,9 +99,12 @@ func historyJobLock(dir string) (*os.File, error) {
 	if e != nil {
 		return nil, e
 	}
-	if e = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
+	if e = lockHistoryJob(f, filelock.Exclusive, filelock.Try); e != nil {
 		f.Close()
-		return nil, errors.New("history job is already running")
+		if errors.Is(e, filelock.ErrContended) {
+			return nil, errors.New("history job is already running")
+		}
+		return nil, fmt.Errorf("lock history job %s: %w", dir, e)
 	}
 	return f, nil
 }
@@ -141,11 +144,17 @@ func prepareHistory(ctx context.Context, config Config, p historyPlan, backup st
 	if e != nil {
 		return j, e
 	}
+	// Before any job state: an identity that cannot be read, or a plan
+	// without one, is no proof the volume is the one planned.
 	rootInfo, err := os.Stat(p.CaptureRoot)
 	if err != nil {
 		return j, err
 	}
-	if key, ok := keyOf(rootInfo); ok && fmt.Sprintf("%d:%d", key.device, key.inode) != p.RootIdentity {
+	root, err := rootIdentity(rootInfo)
+	if err != nil {
+		return j, err
+	}
+	if p.RootIdentity == "" || root != p.RootIdentity {
 		return j, errors.New("capture volume changed after planning")
 	}
 	if e = os.MkdirAll(dir, 0700); e != nil {

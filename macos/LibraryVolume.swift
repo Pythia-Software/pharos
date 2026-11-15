@@ -133,13 +133,28 @@ enum ServiceClient {
         case failed(String)
     }
 
+    /// Before an explicit update: the service (or the broker, for every
+    /// library) first refuses, stopping nothing, while work cannot stop in
+    /// time. The broker asks each library before it closes any, so this may
+    /// take longer than an eject's release.
+    static func releaseForUpdate(_ service: URL, token: String) -> Release {
+        release(service, token: token, timeout: 30, query: "for=update")
+    }
+
+    /// The reason in a refused release's JSON answer, if it gave one.
+    static func reason(_ body: String) -> String? {
+        let answer = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any]
+        guard let reason = answer?["error"] as? String, !reason.isEmpty else { return nil }
+        return reason
+    }
+
     /// Blocks until the service answers. The service gives up after 7 s,
     /// inside DiskArbitration's ~10 s wait for an eject approval.
     static func release(_ service: URL, token: String, timeout: TimeInterval = 8.5,
-                        path: String = "/api/release", body: Data? = nil) -> Release {
+                        path: String = "/api/release", query: String? = nil, body: Data? = nil) -> Release {
         var components = URLComponents(url: service, resolvingAgainstBaseURL: false)
         components?.path = path
-        components?.query = nil
+        components?.query = query
         guard let url = components?.url else { return .failed("invalid service URL \(service)") }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"
@@ -279,18 +294,74 @@ enum VolumeEject {
     """
 }
 
+/// A run's log file: it starts with a line the reader splits runs on, and
+/// once it passes `limit` it moves to <name>.previous.log and starts again
+/// with the same line, which the reader joins to the run it continues
+/// (internal/archive diagnostic_logs.go).
+final class RunLogFile {
+    private let url: URL
+    private let start: Data
+    private let limit: Int64
+    private var handle: FileHandle?
+    private var size: Int64 = 0
+
+    init?(url: URL, limit: Int64 = 4 << 20) {
+        self.url = url
+        self.limit = limit
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "development"
+        start = Data("=== Pharos app started \(formatter.string(from: Date())) (pid \(getpid()), version \(version)) ===\n".utf8)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        open()
+        guard handle != nil else { return nil }
+    }
+
+    private func open() {
+        let manager = FileManager.default
+        if let current = (try? manager.attributesOfItem(atPath: url.path))?[.size] as? NSNumber, current.int64Value > limit {
+            let previous = url.deletingPathExtension().appendingPathExtension("previous.log")
+            try? manager.removeItem(at: previous)
+            try? manager.moveItem(at: url, to: previous)
+        }
+        if !manager.fileExists(atPath: url.path) { manager.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
+        handle = try? FileHandle(forWritingTo: url)
+        size = (try? handle?.seekToEnd()).flatMap { Int64(exactly: $0) } ?? 0
+        // It could not be moved aside (the folder is read-only): start it
+        // over rather than grow it, or reopen it on every write.
+        if size > limit, (try? handle?.truncate(atOffset: 0)) != nil { size = 0 }
+        // Written directly: the start line never starts another rotation.
+        try? handle?.write(contentsOf: start)
+        size += Int64(start.count)
+    }
+
+    func write(_ chunk: Data) {
+        guard let handle else { return }
+        try? handle.write(contentsOf: chunk)
+        size += Int64(chunk.count)
+        if size > limit {
+            try? handle.close()
+            self.handle = nil
+            open()
+        }
+    }
+}
+
 /// Drains a service's stderr as it is written, keeping the last `limit`
 /// bytes for the error view. A pipe nobody reads blocks its writer once
-/// its 64 KB buffer fills, which would wedge the service.
+/// its 64 KB buffer fills, which would wedge the service. With a `file`, it
+/// also appends everything there, for Settings → Logs.
 final class ServiceLog {
     let pipe = Pipe()
     private let limit: Int
     private let lock = NSLock()
     private var data = Data()
     private let closed = DispatchGroup()
+    private let file: RunLogFile?
 
-    init(limit: Int = 64 * 1024) {
+    init(limit: Int = 64 * 1024, file: URL? = nil) {
         self.limit = limit
+        self.file = file.flatMap { RunLogFile(url: $0) }
         closed.enter()
         pipe.fileHandleForReading.readabilityHandler = { [weak self, closed] handle in
             autoreleasepool {
@@ -305,7 +376,17 @@ final class ServiceLog {
         }
     }
 
+    /// The app's log is <support>/logs/app.log (internal/archive
+    /// diagnostic_logs.go reads it). Each launch starts a run with a line the
+    /// reader splits on; a large log moves to app.previous.log first.
+    static func appLogFile() -> URL {
+        let support = ProcessInfo.processInfo.environment["PHAROS_SUPPORT_DIR"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pharos")
+        return support.appendingPathComponent("logs/app.log")
+    }
+
     private func append(_ chunk: Data) {
+        file?.write(chunk)
         lock.withLock {
             data.append(chunk)
             // Data.removeFirst keeps the storage it trims, which then grows

@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -204,16 +203,21 @@ func (s *Server) interruptedCloudRuns(ctx context.Context) ([]interruptedCloudRu
 }
 
 // interruptCloudRun marks run failed where this Mac was running it and its
-// process is gone, or is this one without the job, and reports whether it
-// changed. Callers hold cloud.mu.
+// process is positively gone, or is this one without the job, and reports
+// whether it changed. A process whose presence is unknown keeps its run and
+// verified state. Callers hold cloud.mu.
 func (s *Server) interruptCloudRun(run *cloudRun) bool {
+	processGone := func(pid int) bool {
+		state, _ := observeProcess(pid)
+		return state == processAbsent
+	}
 	host := currentHost().ID
 	changed := false
-	if run.State == "running" && run.OwnerHost == host && run.OwnerPID > 0 && (errors.Is(syscall.Kill(run.OwnerPID, 0), syscall.ESRCH) || (run.OwnerPID == os.Getpid() && s.cloud.active != run.ID)) {
+	if run.State == "running" && run.OwnerHost == host && run.OwnerPID > 0 && (processGone(run.OwnerPID) || (run.OwnerPID == os.Getpid() && s.cloud.active != run.ID)) {
 		run.State, run.Phase, run.Error = "failed", "interrupted", "Upload was interrupted before completion could be confirmed. No restore was verified."
 		changed = true
 	}
-	if run.VerificationState == "running" && run.VerificationHost == host && run.VerificationPID > 0 && (errors.Is(syscall.Kill(run.VerificationPID, 0), syscall.ESRCH) || (run.VerificationPID == os.Getpid() && s.cloud.active != run.ID)) {
+	if run.VerificationState == "running" && run.VerificationHost == host && run.VerificationPID > 0 && (processGone(run.VerificationPID) || (run.VerificationPID == os.Getpid() && s.cloud.active != run.ID)) {
 		run.VerificationState, run.VerificationError, run.Verified = "failed", "Verification was interrupted. Run verification again.", false
 		changed = true
 	}

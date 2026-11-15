@@ -20,25 +20,27 @@ type ProbeSelection struct {
 	All       bool              `json:"all"`
 	Kinds     *[]string         `json:"kinds,omitempty"`
 	Locations []ProbeLocation   `json:"locations,omitempty"`
+	// OnlyLocations checks just Locations: not the tools' usual places, nor
+	// the variables that move them.
+	OnlyLocations bool `json:"only_locations,omitempty"`
+	Downloads     bool `json:"downloads,omitempty"`
 }
 
 // Keep omitted selections backward compatible with the CLI and older clients.
 // The guided UI always sends kinds, including [] when deferring setup.
 func selectedProbe(config Config, catalog *Catalog, selection ProbeSelection) (ProbeReport, error) {
 	if selection.Kinds == nil {
-		if len(selection.Locations) != 0 {
+		if len(selection.Locations) != 0 || selection.OnlyLocations {
 			return ProbeReport{}, probeRequestError{fmt.Errorf("choose tools before adding folders")}
 		}
 		return ProbeSources(config, catalog), nil
 	}
 	kinds := map[string]bool{}
 	for _, kind := range *selection.Kinds {
-		switch kind {
-		case "claude", "codex", "conductor", "tl1", "antigravity":
-			kinds[kind] = true
-		default:
+		if spec, ok := registeredKind(kind); !ok || spec.Setup == 0 {
 			return ProbeReport{}, probeRequestError{fmt.Errorf("unsupported source kind %q", kind)}
 		}
+		kinds[kind] = true
 	}
 	if len(selection.Locations) > 20 {
 		return ProbeReport{}, probeRequestError{fmt.Errorf("choose at most 20 additional folders")}
@@ -49,7 +51,7 @@ func selectedProbe(config Config, catalog *Catalog, selection ProbeSelection) (P
 		}
 	}
 	home, _ := os.UserHomeDir()
-	return probeSelectedSources(home, config, catalog, kinds, selection.Locations), nil
+	return probeSelectedSources(home, config, catalog, kinds, selection.Locations, selection.OnlyLocations), nil
 }
 
 func (s *Server) probeSelected(w http.ResponseWriter, body map[string]any) {
@@ -63,6 +65,11 @@ func (s *Server) probeSelected(w http.ResponseWriter, body map[string]any) {
 	if err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
+	}
+	if selection.Downloads && !selection.OnlyLocations {
+		home, _ := os.UserHomeDir()
+		result := scanDownloadExports(home)
+		report.Downloads = &result
 	}
 	writeJSON(w, report, http.StatusOK)
 }

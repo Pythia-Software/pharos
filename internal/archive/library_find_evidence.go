@@ -74,7 +74,12 @@ func (c *Catalog) WorkMatches(ctx context.Context, workspaceID string, values ur
 	if err != nil {
 		return result, err
 	}
+	firstID, _, _, err := c.firstHumanPreview(ctx, workspaceID, "")
+	if err != nil {
+		return result, err
+	}
 	for _, preview := range previews {
+		preview["first_input_id"] = firstID
 		for kind, field := range map[string]string{"first": "first_input_id", "last": "last_response_id"} {
 			id := firstString(preview[field])
 			if id == "" {

@@ -45,7 +45,7 @@ func newDevUI(assets string, service *url.URL, token string, port int) *devUI {
 				r.Out.Header.Del(name)
 			}
 			r.Out.Header.Set("Authorization", "Bearer "+token)
-			if r.Out.URL.Path == "/api/health/carbon" || r.Out.URL.Path == "/api/query/usage/carbon" || r.Out.URL.Path == "/api/usage/summary" {
+			if r.Out.URL.Path == "/api/health/carbon" || r.Out.URL.Path == "/api/usage/summary" {
 				r.Out.Header.Set("Accept-Encoding", "identity")
 			}
 		},
@@ -63,7 +63,7 @@ func newDevUI(assets string, service *url.URL, token string, port int) *devUI {
 func (d *devUI) withLocalCarbonFactors(response *http.Response) error {
 	field := ""
 	switch response.Request.URL.Path {
-	case "/api/health/carbon", "/api/query/usage/carbon":
+	case "/api/health/carbon":
 		field = "factors"
 	case "/api/usage/summary":
 		field = "carbon_factors"
@@ -164,7 +164,7 @@ func runDevUICLI(config Config, args []string) error {
 	}
 	page, err := url.Parse(*openPath)
 	if err != nil || page.IsAbs() || page.Host != "" || page.User != nil || !isUIPage(page.Path) {
-		return fmt.Errorf("--open-path must be a local UI page, such as /analyze?machine_view=time")
+		return fmt.Errorf("--open-path must be a local UI page, such as /analyze?analyze_topic=time")
 	}
 	if _, err := os.Stat(filepath.Join(*assets, "ui.py")); err != nil {
 		return fmt.Errorf("no ui.py in %s; run from the repository root or pass --assets DIR", *assets)

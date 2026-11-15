@@ -9,8 +9,9 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 func runCaptureCLI(config Config, names []string) error {
@@ -167,7 +168,8 @@ func (s *Server) captureActive() bool {
 		return false
 	}
 	defer lock.Close()
-	return syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB) != nil
+	// A shared probe: contention, or a lock that cannot be tested, is active.
+	return lockCaptureStatus(lock, filelock.Shared, filelock.Try) != nil
 }
 
 // captureStatus's safe_to_unplug is the library status's: nothing at all is

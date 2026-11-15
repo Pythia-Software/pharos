@@ -193,7 +193,7 @@ func detectOrientation(env *findingEnv) ([]*findingCandidate, error) {
 					tokens[path] += file.Tokens
 				}
 				candidate.addEvidence(findingHandle{At: file.At, ConversationID: id, WorkspaceID: conv.WorkspaceID, ToolCallID: file.CallID, MessageID: file.MessageID,
-					Where: env.evidenceWhere(conv), Did: "read " + path + " before the first edit", Happened: compactNumber(float64(file.Tokens)) + " tokens"})
+					Where: env.evidenceWhere(conv), Did: "read " + path + " before the first edit", Happened: formatTokens(float64(file.Tokens)) + " tokens"})
 			}
 			candidate.Obs[id] = obs
 		}
@@ -280,7 +280,7 @@ func detectExploration(env *findingEnv) ([]*findingCandidate, error) {
 			obs.Removable = env.toolCallCost(conv.Provider, phase.Model, conv.Day, 0, obs.RemovableTokens, 0)
 			obs.At = conv.Started.UTC().Format(timeLayout)
 			candidate.addEvidence(findingHandle{At: obs.At, ConversationID: id, WorkspaceID: conv.WorkspaceID, Where: env.evidenceWhere(conv) + " · " + providerLabel(conv.Provider),
-				Did: thousands(int(phase.Calls)) + " reads, searches, and commands before the first edit", Happened: compactNumber(float64(phase.Carried)) + " tokens carried afterwards"})
+				Did: thousands(int(phase.Calls)) + " reads, searches, and commands before the first edit", Happened: formatTokens(float64(phase.Carried)) + " tokens carried afterwards"})
 		}
 		candidate.Obs[id] = obs
 	}
@@ -338,7 +338,7 @@ func (env *findingEnv) outlierRemovable(candidates map[string]*findingCandidate)
 	inputs := map[string][]float64{}
 	for start := 0; start < len(ids); start += 300 {
 		end := min(start+300, len(ids))
-		rows, err := queryMapsContext(env.ctx, env.db, `SELECT conversation_id,input_tokens FROM model_requests WHERE input_tokens>0 AND conversation_id IN (`+placeholders(end-start)+`)`, ids[start:end]...)
+		rows, err := queryMapsContext(env.ctx, env.db, `SELECT conversation_id,input_tokens FROM model_requests WHERE is_estimate=0 AND input_tokens_available=1 AND input_tokens>0 AND conversation_id IN (`+placeholders(end-start)+`)`, ids[start:end]...)
 		if err != nil {
 			return err
 		}
@@ -554,7 +554,7 @@ func detectHeavyOutput(env *findingEnv) ([]*findingCandidate, error) {
 			obs.Removable, obs.RemovableTokens = obs.CostUSD*share, int64(float64(obs.Tokens)*share)
 			candidate.addEvidence(findingHandle{At: obs.At, ConversationID: item.conv.ID, WorkspaceID: item.conv.WorkspaceID, ToolCallID: obs.Unit,
 				MessageID: firstString(item.row["message_id"]), Where: env.evidenceWhere(item.conv) + " · " + providerLabel(provider),
-				Did: "ran `" + clipText(firstLine(firstString(item.row["command"])), 80) + "`", Happened: compactNumber(float64(result)) + " tokens back, re-read " + compactNumber(float64(carried)) + " more"})
+				Did: "ran `" + clipText(firstLine(firstString(item.row["command"])), 80) + "`", Happened: formatTokens(float64(result)) + " tokens back, re-read " + formatTokens(float64(carried)) + " more"})
 		}
 		candidate.Obs[obs.Unit] = obs
 	}
@@ -632,8 +632,10 @@ func detectHeavyOutput(env *findingEnv) ([]*findingCandidate, error) {
 // 500k input tokens). The metric is the share of the scope's tokens from
 // conversations with the cause; the thresholds are fixed, so the bar does
 // not move as outliers shrink.
+// Tests lower the request threshold to exercise outliers with small fixtures.
+var runawayRequests int64 = 1000
+
 const (
-	runawayRequests    = 1000
 	runawayCompactions = 10
 	oversizedInput     = 500_000
 	// compactedInput is about the context an earlier compaction would keep.
@@ -668,7 +670,7 @@ func detectOutliers(env *findingEnv) ([]*findingCandidate, error) {
 				obs.Occurrences, obs.Tokens, obs.CostUSD, obs.At = 1, conv.Tokens, conv.CostUSD, conv.Started.UTC().Format(timeLayout)
 				detail := fmt.Sprintf("%s requests, %s compactions", thousands(int(conv.Requests)), thousands(int(conv.Compactions)))
 				if cause == "oversized" {
-					detail = "a request with " + compactNumber(float64(conv.PeakInput)) + " tokens of context"
+					detail = "a request with " + formatTokens(float64(conv.PeakInput)) + " tokens of context"
 				}
 				candidate.addEvidence(findingHandle{At: obs.At, ConversationID: conv.ID, WorkspaceID: conv.WorkspaceID, Where: env.evidenceWhere(conv) + " · " + providerLabel(conv.Provider),
 					Did: "ran one conversation to " + tokensPhrase(float64(conv.Tokens)), Happened: detail})
@@ -685,7 +687,7 @@ func detectOutliers(env *findingEnv) ([]*findingCandidate, error) {
 		repository := env.repositories[candidate.RepositoryID]
 		var steps []findingStep
 		if cause == "runaway" {
-			candidate.Metric.Threshold = runawayRequests
+			candidate.Metric.Threshold = float64(runawayRequests)
 			steps = []findingStep{
 				{Lever: "repo-instructions", Label: "A line in the instructions", Change: "Tell agents to split long tasks, and to write a short handoff (what's done, what's next, where things are) and start a fresh session when a task passes a few hundred requests."},
 				{Lever: "repo-tooling", Label: "A handoff skill", Change: "Add a skill that writes a checkpoint of the task's state, so a fresh session can pick it up."},
@@ -702,12 +704,12 @@ func detectOutliers(env *findingEnv) ([]*findingCandidate, error) {
 			if cause == "runaway" {
 				return findingCard{Title: fmt.Sprintf("A few very long conversations in %s use much of its tokens", repository),
 					Explanation: fmt.Sprintf("%s this month ran past %s requests or %d compactions. They used %s of the repository's tokens.",
-						capitalize(countNoun(stats.Affected, "conversation")), thousands(runawayRequests), runawayCompactions, fractionPhrase(stats.Rate, "")),
+						capitalize(countNoun(stats.Affected, "conversation")), thousands(int(runawayRequests)), runawayCompactions, fractionPhrase(stats.Rate, "")),
 					ImpactNote: tokensPhrase(float64(stats.Tokens)), Steps: steps, ChartTitle: "Share of tokens from very long conversations", Rate: fractionPhrase(stats.Rate, "")}
 			}
 			return findingCard{Title: fmt.Sprintf("Conversations in %s carry very large contexts", repository),
 				Explanation: fmt.Sprintf("%s this month sent a request with more than %s tokens of context. They used %s of the repository's tokens.",
-					capitalize(countNoun(stats.Affected, "conversation")), compactNumber(oversizedInput), fractionPhrase(stats.Rate, "")),
+					capitalize(countNoun(stats.Affected, "conversation")), formatTokens(oversizedInput), fractionPhrase(stats.Rate, "")),
 				ImpactNote: tokensPhrase(float64(stats.Tokens)), Steps: steps, ChartTitle: "Share of tokens from conversations with very large contexts", Rate: fractionPhrase(stats.Rate, "")}
 		}
 		output = append(output, candidate)

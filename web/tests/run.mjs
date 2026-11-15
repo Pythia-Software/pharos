@@ -113,6 +113,10 @@ try {
     if (!tier.files.length || interrupted) continue;
     let files = tier.files.map(file => join(tier.source, file));
     if (tier.name === "unit") {
+      // The unit tests import the site map, its cases and the Ask
+      // suggestions, which the build renders; bring them up to date first.
+      const { generateSiteMap } = await import("../generate-site-map.mjs");
+      if (!await generateSiteMap().then(() => true, error => { console.error(error.message); return false; })) { failed = true; break; }
       const wanted = new Set(tier.files.map(file => join(unitSource, file)));
       // esbuild prints its own errors.
       const built = await buildUnitTests(join(scratch, "unit")).catch(() => undefined);

@@ -1,3 +1,6 @@
+import { UsageDashboardLinks } from "./usage-workspace";
+import { thinkingQueryContext } from "./dashboard-query-adapters";
+import { DataReadinessIndicator } from "./data-readiness";
 import React, { useEffect, useRef, useState } from "react";
 import {
   EMPTY_QUERY,
@@ -14,6 +17,9 @@ import { ViewDisclosure } from "./view-disclosure";
 import { PageLink } from "./nested-pages";
 import { SearchHelp } from "./search-help";
 import { usageWorkspaceURL } from "./usage-workspace-model";
+import { DashboardResultActions, DashboardCardSourceContext } from "./create-dashboard-card";
+import { thinkingCardTitle } from "./thinking-card";
+import { DashboardLoading } from "./card-loading";
 
 import {
   thinkingBreakdowns,
@@ -42,17 +48,15 @@ import {
   ThinkingHourly,
   ThinkingScatter,
 } from "./thinking-charts";
+import { loadThinkingData, loadThinkingFit, supportedThinkingPeriod, thinkingHourChoices, maxThinkingDays } from "./thinking-query";
+import { loadFollowing, type ServedReadiness } from "./result-cache";
+import { useDatasetRefresh } from "./use-dataset-refresh";
 import "./thinking.css";
+import { formatTokens } from "./token-count";
 
-async function loadThinking(
-  url: string,
-  signal: AbortSignal,
-): Promise<ThinkingResponse> {
-  const response = await fetch(url, { signal });
-  const body = await response.json();
-  if (!response.ok) throw Error(body.error ?? "Unable to load request timing.");
-  return body;
-}
+// The page's address is its cards' definition (thinking-card.ts).
+const cardSource = { page: true as const, schema: loadSchema(modelRequestDocument) };
+
 const amount = (value: number | null) =>
   value === null ? "—" : value.toFixed(2) + "×";
 export function thinkingDashboardURL(
@@ -100,7 +104,7 @@ function GroupTable({ data, state }: { data: ThinkingResponse; state: ThinkingSt
   const ratio = state.view === "calendar" && state.calendarMetric === "ratio",
     reasoning = state.view === "reasoning",
     format = (v: number | null) => ratio ? amount(v) : reasoning
-      ? v === null ? "—" : thinkingCount(v) + " tokens"
+      ? v === null ? "—" : formatTokens(v) + " tokens"
       : thinkingDuration(v);
   return <div className="thinking-table-wrap"><table>
     <thead><tr><th>Group</th><th>Retained requests</th>
@@ -225,9 +229,9 @@ function Methodology() {
       className="usage-query-search thinking-disclosure"
     >
       <p>
-        Think time is a coarse proxy: the first retained usage-bearing response
-        event minus the latest linked tool-result timestamp. The request
-        ledger’s <code>requested_at</code> field names that response evidence,
+        Think time estimates the wait between the latest linked tool result
+        and the first recorded response with token usage. The model-request
+        record’s <code>requested_at</code> field names that response evidence,
         not a verified request-send clock. The wait includes reasoning, some
         generation, queueing, scheduling and delivery. It measures neither
         first-token latency nor pure inference nor complete user-turn duration.
@@ -283,7 +287,7 @@ function Methodology() {
       <p>
         A separate per-model ridge regression estimates log gap from workload,
         cache and effort with five conversation-held-out folds. It uses only the
-        selected cohort; every displayed request is evaluated by a fit that
+        selected group; every displayed request is evaluated by a fit that
         excludes its conversation. Each training fold needs 200 requests from 20
         conversations, a reported effort present in training and numeric
         features within training ranges. Unsupported observations remain
@@ -338,16 +342,19 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
     () => initialThinking(new URLSearchParams(location.search)),
   );
   const initial = initialThinking(new URLSearchParams(location.search));
-  const state: ThinkingState = {
+  // Hour and day buckets are those query-v3 supports; older links read as
+  // the nearest one.
+  const state: ThinkingState = supportedThinkingPeriod({
       ...initial,
       ...linked,
       minimum: 0,
       timezone: initial.timezone,
-    },
+    }),
     [data, setData] = useState<ThinkingResponse | null>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true),
-    [refresh, setRefresh] = useState(0),
+    [reload, setReload] = useState(0),
+    [readiness, setReadiness] = useState<ServedReadiness>(),
     [rangeVersion, setRangeVersion] = useState(0),
     [evidenceOpen] = useViewEntry("disclosures", "thinking:validation", false, !detail),
     [validation, setValidation] = useState<ThinkingResponse["validation"]>(),
@@ -355,7 +362,8 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
   // Capture effective viewer defaults even for partial card links.
   useEffect(() => {
     if (Object.keys(defaultThinking).some((key) => !Object.hasOwn(linked, key)) ||
-        linked.timezone !== state.timezone || linked.minimum !== 0)
+        linked.timezone !== state.timezone || linked.minimum !== 0 ||
+        linked.hours !== state.hours || linked.days !== state.days)
       setLinked(state);
   }, [JSON.stringify(linked)]);
   const brushOrigin = useRef<Pick<
@@ -389,32 +397,37 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
       brushOrigin.current = null;
     setLinked((p) => ({ ...state, ...p, ...next }));
   };
-  const request = thinkingRequest(state, !detail, false, nativeFilters);
+  // The page's reads, as a key: the state's query inputs and its filters.
+  const request = JSON.stringify([thinkingRequest(state, !detail, false, nativeFilters), nativeFilters]);
+  // Refresh asks for current answers ("fresh"); a new day, Try again or a
+  // changed control takes what the result cache holds, shown with its age.
+  const [datasetRefresh, takePolicy] = useDatasetRefresh("model_requests"),
+    refresh = datasetRefresh + reload;
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setError("");
-    void loadThinking(request, controller.signal)
-      .then((value) => {
+    void loadFollowing(
+      (signal) => loadThinkingData({ state, overview: !detail, where: nativeQuery.where, filters: nativeFilters }, signal),
+      (value, served) => {
         setData({ ...value, groups: orderThinkingGroups(value.groups, state) });
+        setReadiness(served);
         setLoading(false);
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted) {
-          setError(String(e.message ?? e));
-          setLoading(false);
-        }
-      });
+      },
+      controller.signal,
+      takePolicy(),
+    ).catch((e) => {
+      if (!controller.signal.aborted) {
+        setError(String(e.message ?? e));
+        setLoading(false);
+      }
+    });
     return () => controller.abort();
   }, [request, refresh]);
   useEffect(() => {
-    const update = () => setRefresh((n) => n + 1);
-    window.addEventListener("pharos:usage-refresh", update);
+    const update = () => setReload((n) => n + 1);
     window.addEventListener("pharos:day-change", update);
-    return () => {
-      window.removeEventListener("pharos:usage-refresh", update);
-      window.removeEventListener("pharos:day-change", update);
-    };
+    return () => window.removeEventListener("pharos:day-change", update);
   }, []);
   const evidenceRequest = thinkingRequest(
     { ...state, view: "histogram" },
@@ -427,7 +440,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
     const controller = new AbortController();
     setValidation(undefined);
     setValidationError("");
-    void loadThinking(evidenceRequest, controller.signal)
+    void loadThinkingFit(evidenceRequest, controller.signal)
       .then((d) => setValidation(d.validation))
       .catch((e) => {
         if (!controller.signal.aborted) setValidationError(e.message);
@@ -442,6 +455,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
   const trace =
     data?.traces?.find((t) => t.ID === state.session) ?? data?.traces?.[0];
   return (
+    <DashboardCardSourceContext.Provider value={cardSource}>
     <section
       className="thinking-dashboard"
       data-view-field="thinking"
@@ -449,7 +463,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
     >
       <div className="thinking-links">
         <PageLink href={thinkingDashboardURL(state, !detail)}>
-          {detail ? "Waiting and Compaction" : "Thinking"} →
+          {detail ? "Waiting" : "Thinking"} →
         </PageLink>
         {detail ? (
           <PageLink href={thinkingDashboardURL(state, false, true)}>
@@ -507,16 +521,16 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
           ]}
           onChange={(effort) => change({ effort })}
         />
+        <ChartSelect
+          label="Breakdown"
+          value={!detail && state.groupBy === "none" ? "model" : state.groupBy}
+          options={thinkingBreakdowns.filter(([key]) => detail || key !== "none").map(([a, b]) => [a, b])}
+          onChange={(groupBy) =>
+            change({ groupBy: groupBy as ThinkingState["groupBy"] })
+          }
+        />
         {detail ? (
           <>
-            <ChartSelect
-              label="Breakdown"
-              value={state.groupBy}
-              options={thinkingBreakdowns.map(([a, b]) => [a, b])}
-              onChange={(groupBy) =>
-                change({ groupBy: groupBy as ThinkingState["groupBy"] })
-              }
-            />
             <ChartSelect
               label="Order by"
               disabled={fixed}
@@ -588,7 +602,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
           }
         />
         {detail && state.view === "time" ? (
-          <PeriodControl view={state} onChange={(next) => change(next)} />
+          <PeriodControl view={state} onChange={(next) => change(next)} every={{ hours: thinkingHourChoices, maxDays: maxThinkingDays }} />
         ) : null}
         {detail && state.view === "calendar" ? (
           <>
@@ -636,14 +650,12 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
       {error ? (
         <p role="alert" className="query-table-error">
           {error}{" "}
-          <button type="button" onClick={() => setRefresh((n) => n + 1)}>
+          <button type="button" onClick={() => setReload((n) => n + 1)}>
             Try again
           </button>
         </p>
       ) : loading ? (
-        <p role="status" className="usage-dashboard-note">
-          Computing request timing…
-        </p>
+        <DashboardLoading spec={{ kind: !detail ? "line" : state.view === "histogram" ? "columns" : box ? "box" : "heatmap", count: 16 }} />
       ) : null}
       {data && !error ? (
         <div className={loading ? "thinking-loading" : ""}>
@@ -674,9 +686,17 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
               : ""}
             .
           </p>
+          {state.groupBy.includes("speed") ? (
+            <p className="usage-dashboard-note">
+              Speed uses recorded settings; requests without a fast or priority marker count as Standard.
+            </p>
+          ) : null}
           {detail ? (
             <>
-              <h2>Compare whole distributions</h2>
+              <div className="thinking-card-title">
+                <h2>{thinkingCardTitle("thinking-distributions", state)}</h2>
+                <DashboardResultActions target="thinking-distributions" />
+              </div>
               {fixed ? (
                 <p className="usage-dashboard-note">
                   Effort stays low to high, with Unreported last. Model panels
@@ -791,7 +811,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                         : "≥1.5×"}
                     </span>
                   </div>
-                  <h3>Is one time of day consistently faster?</h3>
+                  <h3>Is one time of day consistently faster? <DataReadinessIndicator id="thinking:hour" title="Is one time of day consistently faster?" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></h3>
                   <p className="usage-dashboard-note">
                     Day-balanced workload-adjusted gaps in three-hour windows.
                     Each day/window needs 20 modeled gaps from three
@@ -872,17 +892,17 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
             <>
               <div className="thinking-stat-cards thinking-overview-stats">
                 <div>
-                  <span>Typical wait</span>
+                  <span>Typical wait<DataReadinessIndicator id="thinking:metric:typical-wait" title="Typical wait" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></span>
                   <strong>{thinkingDuration(data.summary.median)}</strong>
                   <small>Median observed gap</small>
                 </div>
                 <div>
-                  <span>Slowest 10% begin at</span>
+                  <span>Slowest 10% begin at<DataReadinessIndicator id="thinking:metric:slowest-10%-begin-at" title="Slowest 10% begin at" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></span>
                   <strong>{thinkingDuration(data.summary.p90)}</strong>
                   <small>90th percentile</small>
                 </div>
                 <div>
-                  <span>Timing coverage</span>
+                  <span>Timing coverage<DataReadinessIndicator id="thinking:metric:timing-coverage" title="Timing coverage" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></span>
                   <strong>
                     {data.Retained
                       ? ((100 * data.Timed) / data.Retained).toFixed(1)
@@ -892,7 +912,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                   <small>Usable gaps / retained requests</small>
                 </div>
                 <div>
-                  <span>Conversations represented</span>
+                  <span>Conversations represented<DataReadinessIndicator id="thinking:metric:conversations-represented" title="Conversations represented" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></span>
                   <strong>{thinkingCount(data.Conversations)}</strong>
                   <small>Including requests without timing</small>
                 </div>
@@ -903,9 +923,14 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 not a pure inference or first-token clock.
               </p>
               <div className="thinking-overview-pair">
-                <ThinkingCDF groups={data.groups} />
+                <ThinkingCDF
+                  groups={data.groups}
+                  groupBy={state.groupBy === "none" ? "model" : state.groupBy}
+                  title={thinkingCardTitle("thinking-waits", state)}
+                  action={<DashboardResultActions target="thinking-waits" />}
+                />
                 <div>
-                  <h2>What affects the wait?</h2>
+                  <h2>What affects the wait? <DataReadinessIndicator id="thinking:factors" title="What affects the wait?" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></h2>
                   <p className="usage-dashboard-note">
                     Associated wait multiplier when each input doubles.
                   </p>
@@ -989,12 +1014,12 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 summary="Which models and agents have usable timing?"
                 className="usage-query-search thinking-disclosure"
               >
-                <h3>By recorded model</h3>
+                <h3>By recorded model <DataReadinessIndicator id="thinking:models" title="By recorded model" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></h3>
                 <GroupTable
                   data={{ ...data, groups: data.coverage ?? [] }}
                   state={{ ...state, view: "histogram", groupBy: "model" }}
                 />
-                <h3>By agent / harness</h3>
+                <h3>By agent app <DataReadinessIndicator id="thinking:harness" title="By agent app" dataset="model_requests" query={{state,nativeFilters}} {...readiness} /></h3>
                 <GroupTable
                   data={{ ...data, groups: data.agentCoverage ?? [] }}
                   state={{ ...state, view: "histogram", groupBy: "harness" }}
@@ -1002,36 +1027,38 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                 <p>
                   Missing timing stays in the retained denominator. A source
                   with no projected usage requests cannot appear in this table.
-                  Model names are retained as recorded; agent family is not
-                  necessarily API vendor.
+                  Model names are retained as recorded; Provider identifies the agent
+                  product and may differ from the API vendor.
                 </p>
               </ViewDisclosure>
-              <h2 className="thinking-section-title">
-                Compaction and thinking time
-              </h2>
-              <p className="usage-dashboard-note">
-                Compare median waits before and after compaction within the
-                same model, effort and conversation stream. We use up to three
-                waits before and the next two usable waits after, skipping the
-                wait that crosses compaction.
-              </p>
-              <p className="usage-dashboard-note">
-                For example, waits of 10, 9 and 11 seconds before compaction
-                have a median of 10 seconds. Waits of 3 and 1 seconds after have
-                a median of 2 seconds. The compaction ratio is after ÷ before:
-                2 ÷ 10 = <strong>0.2×</strong>, an 80% shorter wait.
-              </p>
-              {data.compactions?.length ? (
-                <ThinkingCompactions events={data.compactions} />
-              ) : (
+              <ViewDisclosure viewKey="thinking:compaction-waits" summary="How compaction changes observed waits" className="usage-query-search thinking-disclosure">
                 <p className="usage-dashboard-note">
-                  No eligible paired compactions in this population.
+                  Compare median waits before and after compaction within the
+                  same model, effort and conversation stream. We use up to three
+                  waits before and the next two usable waits after, skipping the
+                  wait that crosses compaction.
                 </p>
-              )}
+                <p className="usage-dashboard-note">
+                  For example, waits of 10, 9 and 11 seconds before compaction
+                  have a median of 10 seconds. Waits of 3 and 1 seconds after have
+                  a median of 2 seconds. The compaction ratio is after ÷ before:
+                  2 ÷ 10 = <strong>0.2×</strong>, an 80% shorter wait.
+                </p>
+                {data.compactions?.length ? (
+                  <ThinkingCompactions events={data.compactions} />
+                ) : (
+                  <p className="usage-dashboard-note">
+                    No eligible paired compactions in this population.
+                  </p>
+                )}
+                <p className="usage-dashboard-note">
+                  The response after compaction often gets shorter too, so the
+                  reduction can reflect both shorter context and shorter output.
+                  Compaction’s own duration is excluded.
+                </p>
+              </ViewDisclosure>
               <p className="usage-dashboard-note">
-                The response after compaction often gets shorter too, so the
-                reduction can reflect both shorter context and shorter output.
-                Compaction’s own duration is excluded.
+                <PageLink href={usageWorkspaceURL({ mode: "dashboards", topic: "compaction" })}>Explore compaction counts and triggers →</PageLink>
               </p>
               <ViewDisclosure
                 viewKey="thinking:conversation"
@@ -1119,7 +1146,7 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
                       </p>
                     )}
                     <p>
-                      Harness-reported thinkingDurationMs is matched by
+                      App-reported thinkingDurationMs is matched by
                       conversation and response identity, taking the maximum
                       repeated report once. The chart shows up to 1,600 evenly
                       selected pairs; statistics use all matched pairs.
@@ -1159,6 +1186,8 @@ export function ThinkingDashboard({ detail }: { detail: boolean }) {
           )}
         </div>
       ) : null}
+      <UsageDashboardLinks dataset="model_requests" schema={loadSchema(modelRequestDocument)} query={nativeQuery} context={thinkingQueryContext(state, nativeQuery.where, !detail)} />
     </section>
+    </DashboardCardSourceContext.Provider>
   );
 }

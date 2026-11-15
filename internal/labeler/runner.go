@@ -2,8 +2,10 @@ package labeler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -29,11 +31,15 @@ type RunnerConfig struct {
 	Worker string
 	Args   []string
 	Env    []string
+	// GPU reserves the single shared Metal device and at least 3072 MB.
+	GPU bool
 	// Workers processes, each with Threads intra-op threads, and InFlight
 	// batches outstanding at each (default 2; 1 for one at a time).
 	Workers, Threads, InFlight int
 	// MaxBatch is the most rows per batch the worker is told to expect.
 	MaxBatch int
+	// Options are the hello's worker options (for example "sparse").
+	Options map[string]any
 	// Pool options: restart backoff and its hook.
 	Backoff   func(n int) time.Duration
 	OnRestart func(slot int, cause error)
@@ -44,7 +50,7 @@ func NewRunner(ctx context.Context, model *Model, cfg RunnerConfig) (*Runner, er
 	cfg.Workers, cfg.Threads = max(1, cfg.Workers), max(1, cfg.Threads)
 	pool, err := NewPool(ctx, PoolConfig{Workers: cfg.Workers, Backoff: cfg.Backoff, OnRestart: cfg.OnRestart,
 		Worker: WorkerConfig{Path: cfg.Worker, Args: cfg.Args, Env: cfg.Env, Model: model.Path, ModelSHA256: model.SHA256, Threads: cfg.Threads,
-			VocabSize: model.Tokenizer.VocabSize(), MaxBatch: cfg.MaxBatch, MaxSeq: model.MaxSeq, Inputs: model.Inputs, InFlight: cfg.InFlight}})
+			VocabSize: model.Tokenizer.VocabSize(), MaxBatch: cfg.MaxBatch, MaxSeq: model.MaxSeq, Inputs: model.Inputs, InFlight: cfg.InFlight, Options: cfg.Options}})
 	if err != nil {
 		return nil, err
 	}
@@ -59,6 +65,13 @@ func NewRunner(ctx context.Context, model *Model, cfg RunnerConfig) (*Runner, er
 // Pool is the runner's pool (its restarts, worker PIDs and handshake).
 func (r *Runner) Pool() *Pool { return r.pool }
 
+// Legacy workers omit Device and retain the CPU thread contract. Auto sessions
+// that actually fell back to CPU must still retune, despite reserving GPU capacity.
+func (r *Runner) UsesCPUThreads() bool { return r.pool.Ready().Worker.Device != "gpu" }
+
+// Threads is the CPU thread target used to start (and restart) these workers.
+func (r *Runner) Threads() int { return r.cfg.Threads }
+
 // MaxBatch is the most rows a batch may hold: the configured limit, lowered
 // to what the worker announced.
 func (r *Runner) MaxBatch() int {
@@ -67,6 +80,14 @@ func (r *Runner) MaxBatch() int {
 		batch = limit
 	}
 	return batch
+}
+
+// TokenBudget caps a caller's token budget to the backend's memory limit.
+func (r *Runner) TokenBudget(requested int) int {
+	if limit := r.pool.Ready().Limits.MaxTokens; limit > 0 && (requested <= 0 || requested > limit) {
+		return limit
+	}
+	return requested
 }
 
 // Capacity is how many batches the runner keeps in flight: InFlight per
@@ -95,12 +116,64 @@ type RowOutputs map[string][]float32
 // Run runs any number of rows: packed by length into batches under
 // tokenBudget padded tokens, Capacity at a time, results in row order.
 func (r *Runner) Run(ctx context.Context, rows []Framed, outputs []string, tokenBudget int) ([]RowOutputs, error) {
+	return r.RunWithProgress(ctx, rows, outputs, tokenBudget, nil)
+}
+
+// RunWithProgress is Run with a callback for each successful batch's row count.
+// Callbacks may overlap; the caller must synchronize any shared progress state.
+func (r *Runner) RunWithProgress(ctx context.Context, rows []Framed, outputs []string, tokenBudget int, progress func(int)) ([]RowOutputs, error) {
+	results := make([]RowOutputs, len(rows))
+	err := r.runPacked(ctx, rows, outputs, tokenBudget, progress, func(batch []int, result *RunResult) error {
+		for k, index := range batch {
+			row := RowOutputs{}
+			for _, tensor := range result.Outputs {
+				width := len(tensor.Float32) / len(batch)
+				row[tensor.Name] = tensor.Float32[k*width : (k+1)*width]
+			}
+			results[index] = row
+		}
+		return nil
+	})
+	return results, err
+}
+
+// RunSparse is RunWithProgress for one sparse output (SparseOption): each
+// row's entries, by position in the row. The runner must have been started
+// with the option, and its worker must have the sparse capability; a worker
+// without it would answer with the dense output, so this refuses it.
+func (r *Runner) RunSparse(ctx context.Context, rows []Framed, output string, tokenBudget int, progress func(int)) ([][]TokenLabel, error) {
+	option, err := SparseOptionFrom(r.cfg.Options)
+	if err != nil || option == nil || option.Output != output {
+		return nil, fmt.Errorf("the runner was not started with a sparse option for output %q", output)
+	}
+	if !slices.Contains(r.pool.Ready().Capabilities, SparseCapability) {
+		worker := r.pool.Ready().Worker
+		return nil, fmt.Errorf("%w: worker %s %s has no %q capability; token-label models need a newer worker", ErrModelUnavailable, worker.Name, worker.Version, SparseCapability)
+	}
+	results := make([][]TokenLabel, len(rows))
+	err = r.runPacked(ctx, rows, []string{output}, tokenBudget, progress, func(batch []int, result *RunResult) error {
+		entries, err := SparseRows(result.Tensor(output), len(batch))
+		if err != nil {
+			return err
+		}
+		for k, index := range batch {
+			results[index] = entries[k]
+		}
+		return nil
+	})
+	return results, err
+}
+
+// runPacked packs rows by length into batches under tokenBudget padded
+// tokens, keeps Capacity of them in flight, and hands each batch's result to
+// assign (batch holds the rows' indices). Calls of assign may overlap, on
+// disjoint rows.
+func (r *Runner) runPacked(ctx context.Context, rows []Framed, outputs []string, tokenBudget int, progress func(int), assign func(batch []int, result *RunResult) error) error {
 	lengths := make([]int, len(rows))
 	for i, row := range rows {
 		lengths[i] = len(row.IDs)
 	}
-	results := make([]RowOutputs, len(rows))
-	batches := PackBatches(lengths, tokenBudget, r.MaxBatch(), r.Model.PadMultiple)
+	batches := PackBatches(lengths, r.TokenBudget(tokenBudget), r.MaxBatch(), r.Model.PadMultiple)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -124,17 +197,15 @@ func (r *Runner) Run(ctx context.Context, rows []Framed, outputs []string, token
 				framed[k] = rows[index]
 			}
 			result, err := r.RunBatch(ctx, framed, outputs)
+			if err == nil {
+				err = assign(batch, result)
+			}
 			if err != nil {
 				once.Do(func() { failure = err; cancel() })
 				return
 			}
-			for k, index := range batch {
-				row := RowOutputs{}
-				for _, tensor := range result.Outputs {
-					width := len(tensor.Float32) / len(batch)
-					row[tensor.Name] = tensor.Float32[k*width : (k+1)*width]
-				}
-				results[index] = row
+			if progress != nil {
+				progress(len(batch))
 			}
 		}()
 	}
@@ -142,7 +213,7 @@ func (r *Runner) Run(ctx context.Context, rows []Framed, outputs []string, token
 	if failure == nil && ctx.Err() != nil {
 		failure = ctx.Err()
 	}
-	return results, failure
+	return failure
 }
 
 // Budget bounds what every model's workers use together: intra-op threads
@@ -163,6 +234,7 @@ type Manager struct {
 	// runners by model (file and SHA-256).
 	runners         map[string]*managed
 	threads, memory int
+	gpu             int
 	closed          bool
 }
 
@@ -170,8 +242,10 @@ type managed struct {
 	runner          *Runner
 	users           int
 	threads, memory int
+	gpu             int
 	lastUsed        time.Time
 	timer           *time.Timer
+	retired         bool
 }
 
 // NewManager makes a manager; idle is how long an unused runner keeps its
@@ -185,7 +259,11 @@ func modelKey(model *Model) string { return model.Path + "@" + model.SHA256 }
 // runnerKey is a model with how its workers run: a different configuration
 // (one at a time, other thread counts) is another runner.
 func runnerKey(model *Model, cfg RunnerConfig) string {
-	return fmt.Sprintf("%s|%s|%d|%d|%d|%d", modelKey(model), cfg.Worker, max(1, cfg.Workers), max(1, cfg.Threads), cfg.InFlight, cfg.MaxBatch)
+	args, _ := json.Marshal(struct {
+		Args, Env []string
+		Options   map[string]any `json:",omitempty"`
+	}{cfg.Args, cfg.Env, cfg.Options})
+	return fmt.Sprintf("%s|%s|%d|%d|%d|%d|%t|%s", modelKey(model), cfg.Worker, max(1, cfg.Workers), max(1, cfg.Threads), cfg.InFlight, cfg.MaxBatch, cfg.GPU, args)
 }
 
 // Runner returns model's runner, starting it within the budget when it is
@@ -194,6 +272,8 @@ func runnerKey(model *Model, cfg RunnerConfig) string {
 // with ErrBudget. Call release when done; the runner then stays warm for
 // the idle period.
 func (m *Manager) Runner(ctx context.Context, model *Model, cfg RunnerConfig) (*Runner, func(), error) {
+	var dead *Runner
+	defer func() { reapRunner(dead) }() // after the unlock below
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
@@ -201,6 +281,9 @@ func (m *Manager) Runner(ctx context.Context, model *Model, cfg RunnerConfig) (*
 	}
 	key := runnerKey(model, cfg)
 	if entry := m.runners[key]; entry != nil && entry.runner.pool.alive() {
+		if entry.retired {
+			return nil, nil, fmt.Errorf("%w: the previous runner is draining after a deliberate settings change", ErrBudget)
+		}
 		entry.users++
 		if entry.timer != nil {
 			entry.timer.Stop()
@@ -208,12 +291,22 @@ func (m *Manager) Runner(ctx context.Context, model *Model, cfg RunnerConfig) (*
 		}
 		return entry.runner, m.releaser(key, entry), nil
 	} else if entry != nil {
-		m.dropLocked(key, entry, true)
+		dead = m.dropLocked(key, entry, true)
 	}
 	cfg.Workers, cfg.Threads = max(1, cfg.Workers), max(1, cfg.Threads)
+	memoryMB := model.MemoryMB
+	gpu := 0
+	if cfg.GPU {
+		gpu = 1
+		cfg.Workers = 1
+		memoryMB = max(memoryMB, 3072)
+	}
 	fits := func(workers int) bool {
+		if m.gpu+gpu > 1 {
+			return false
+		}
 		return (m.budget.Threads <= 0 || m.threads+workers*cfg.Threads <= m.budget.Threads) &&
-			(m.budget.MemoryMB <= 0 || m.memory+workers*model.MemoryMB <= m.budget.MemoryMB)
+			(m.budget.MemoryMB <= 0 || m.memory+workers*memoryMB <= m.budget.MemoryMB)
 	}
 	for !fits(cfg.Workers) {
 		if m.evictIdleLocked() {
@@ -223,16 +316,20 @@ func (m *Manager) Runner(ctx context.Context, model *Model, cfg RunnerConfig) (*
 			cfg.Workers--
 			continue
 		}
+		if gpu > 0 && m.gpu > 0 {
+			return nil, nil, fmt.Errorf("%w: the shared GPU is in use", ErrBudget)
+		}
 		return nil, nil, fmt.Errorf("%w: model %s needs %d threads and %d MB; %d threads and %d MB of %d and %d are in use",
-			ErrBudget, model.Manifest.Name, cfg.Threads, model.MemoryMB, m.threads, m.memory, m.budget.Threads, m.budget.MemoryMB)
+			ErrBudget, model.Manifest.Name, cfg.Threads, memoryMB, m.threads, m.memory, m.budget.Threads, m.budget.MemoryMB)
 	}
 	runner, err := NewRunner(ctx, model, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-	entry := &managed{runner: runner, users: 1, threads: cfg.Workers * cfg.Threads, memory: cfg.Workers * model.MemoryMB}
+	entry := &managed{runner: runner, users: 1, threads: cfg.Workers * cfg.Threads, memory: cfg.Workers * memoryMB, gpu: gpu}
 	m.threads += entry.threads
 	m.memory += entry.memory
+	m.gpu += entry.gpu
 	m.runners[key] = entry
 	return runner, m.releaser(key, entry), nil
 }
@@ -248,7 +345,7 @@ func (m *Manager) releaser(key string, entry *managed) func() {
 			if entry.users > 0 || m.runners[key] != entry {
 				return
 			}
-			if m.idle <= 0 {
+			if m.idle <= 0 || entry.retired {
 				m.dropLocked(key, entry, false)
 				return
 			}
@@ -260,6 +357,21 @@ func (m *Manager) releaser(key string, entry *managed) func() {
 				}
 			})
 		})
+	}
+}
+
+// Retire ends cached configurations after a deliberate allowance/settings
+// change. In-use workers drain before their last release; ordinary transient
+// capacity changes never call this, so batching keeps models warm.
+func (m *Manager) Retire() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, entry := range m.runners {
+		if entry.users == 0 {
+			m.dropLocked(key, entry, false)
+		} else {
+			entry.retired = true
+		}
 	}
 }
 
@@ -278,29 +390,63 @@ func (m *Manager) evictIdleLocked() bool {
 	return true
 }
 
-func (m *Manager) dropLocked(key string, entry *managed, kill bool) {
+// dropLocked removes a runner. A GPU runner is killed and reaped before the
+// manager is released, so the GPU it held is free when the budget says so.
+// A killed CPU runner is only signalled here and returned: the caller reaps
+// it (reapRunner) after releasing the manager and before it returns, so a
+// worker slow to exit holds up no other model's Runner or release, and a
+// caller's CPU grant still outlives the workers. Otherwise the workers
+// finish in the background.
+func (m *Manager) dropLocked(key string, entry *managed, kill bool) (reap *Runner) {
+	m.forgetLocked(key, entry)
+	switch {
+	case entry.gpu > 0:
+		entry.runner.pool.Kill()
+		entry.runner.pool.Close()
+	case kill:
+		entry.runner.pool.Kill()
+		return entry.runner
+	default:
+		go entry.runner.pool.Close()
+	}
+	return nil
+}
+
+// reapRunner waits for a killed runner's workers to exit (nil: none). Tests
+// replace it to check that the manager is free meanwhile.
+var reapRunner = func(r *Runner) {
+	if r != nil {
+		r.pool.Close()
+	}
+}
+
+// forgetLocked removes a runner from the manager and its budget.
+func (m *Manager) forgetLocked(key string, entry *managed) {
 	delete(m.runners, key)
 	m.threads -= entry.threads
 	m.memory -= entry.memory
+	m.gpu -= entry.gpu
 	if entry.timer != nil {
 		entry.timer.Stop()
-	}
-	if kill {
-		entry.runner.pool.Kill()
-	} else {
-		go entry.runner.pool.Close()
 	}
 }
 
 // Kill stops a runner's workers at once (a stop, where results in flight
-// are not wanted); its users' calls fail.
+// are not wanted); its users' calls fail. It returns once the workers are
+// reaped, so a caller's CPU grant outlives them, but reaps them after
+// releasing the manager: other models' Runner calls do not wait for it. A
+// GPU runner is reaped before the lock is released, as on any drop.
 func (m *Manager) Kill(runner *Runner) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	reap := []*Runner{}
 	for key, entry := range m.runners {
 		if entry.runner == runner {
-			m.dropLocked(key, entry, true)
+			reap = append(reap, m.dropLocked(key, entry, true))
 		}
+	}
+	m.mu.Unlock()
+	for _, killed := range reap {
+		reapRunner(killed)
 	}
 }
 
@@ -339,7 +485,7 @@ func (m *Manager) Close() {
 	m.closed = true
 	entries := m.runners
 	m.runners = map[string]*managed{}
-	m.threads, m.memory = 0, 0
+	m.threads, m.memory, m.gpu = 0, 0, 0
 	m.mu.Unlock()
 	var wg sync.WaitGroup
 	for _, entry := range entries {

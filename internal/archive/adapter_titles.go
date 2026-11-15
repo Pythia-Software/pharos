@@ -23,7 +23,7 @@ func (n transcriptName) signal() string {
 	return hashBytes([]byte(jsonText([]any{n.id, n.title, n.custom})))[:16]
 }
 
-var codexSessionFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$`)
+var codexSessionFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl(?:\.zst)?$`)
 
 func codexStateName(name string) bool {
 	if name == "state.sqlite" {
@@ -44,12 +44,12 @@ func codexStateVersion(path string) int {
 
 // Read only known metadata stores under the configured source root. Optional
 // older databases without threads.name do not turn prompt previews into names.
-func codexNamingDatabases(root string) ([]string, error) {
-	info, err := os.Stat(root)
+func codexNamingDatabases(source sourceFiles, root string) ([]string, error) {
+	info, err := source.Stat(root)
 	if err != nil || !info.IsDir() {
 		return nil, err
 	}
-	entries, err := os.ReadDir(root)
+	entries, err := source.ReadDir(root)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func codexNamingDatabases(root string) ([]string, error) {
 			continue
 		}
 		path := filepath.Join(root, entry.Name())
-		db, err := openReadOnlySQLite(path)
+		db, err := source.SQLite(path)
 		if err != nil {
 			return nil, err
 		}
@@ -83,7 +83,7 @@ func codexNamingDatabases(root string) ([]string, error) {
 
 func (a *jsonlAdapter) codexNames() (map[string]transcriptName, error) {
 	names := map[string]transcriptName{}
-	if info, err := os.Stat(a.config.Path); err != nil || !info.IsDir() {
+	if info, err := a.files().Stat(a.config.Path); err != nil || !info.IsDir() {
 		return names, err
 	}
 	index := filepath.Join(a.config.Path, "session_index.jsonl")
@@ -109,13 +109,13 @@ func (a *jsonlAdapter) codexNames() (map[string]transcriptName, error) {
 	} else if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	databases, err := codexNamingDatabases(a.config.Path)
+	databases, err := codexNamingDatabases(a.files(), a.config.Path)
 	if err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
 	for _, path := range databases {
-		db, err := openReadOnlySQLite(path)
+		db, err := a.files().SQLite(path)
 		if err != nil {
 			return nil, err
 		}
@@ -169,7 +169,8 @@ func (a *jsonlAdapter) transcriptNames(roots []string) (map[string]transcriptNam
 		ambiguous := map[string]bool{}
 		for _, name := range names {
 			if name.rollout != "" {
-				path := filepath.Clean(name.rollout)
+				// Compression renames a rollout; Codex may record either name.
+				path := plainRollout(filepath.Clean(name.rollout))
 				if previous, exists := paths[path]; exists && previous.id != name.id {
 					ambiguous[path] = true
 					delete(paths, path)
@@ -183,7 +184,7 @@ func (a *jsonlAdapter) transcriptNames(roots []string) (map[string]transcriptNam
 		// reads. Only index candidates need a small session_meta read. Its ID
 		// is verified again by the body parser before applying the title.
 		for _, path := range roots {
-			if name, exists := paths[filepath.Clean(a.original(path))]; exists {
+			if name, exists := paths[plainRollout(filepath.Clean(a.original(path)))]; exists {
 				result[path] = name
 				continue
 			}
@@ -193,6 +194,11 @@ func (a *jsonlAdapter) transcriptNames(roots []string) (map[string]transcriptNam
 				}
 			}
 			id, err := a.files().codexRolloutIdentity(path)
+			if err != nil && compressedRollout(path) {
+				// A rollout that does not decode fails its own group when it
+				// is parsed; it must not stop the others from being planned.
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -231,10 +237,6 @@ func (a *jsonlAdapter) transcriptNames(roots []string) (map[string]transcriptNam
 	return result, nil
 }
 
-func codexRolloutIdentity(path string) (string, error) {
-	return sourceFiles{}.codexRolloutIdentity(path)
-}
-
 // codexRolloutIdentity reads only the rollout's header: for an encoded
 // rollout, the decoder stops after its first block.
 func (s sourceFiles) codexRolloutIdentity(path string) (string, error) {
@@ -247,8 +249,8 @@ func (s sourceFiles) codexRolloutIdentity(path string) (string, error) {
 }
 
 func (s sourceFiles) readCodexRolloutIdentity(path string) (string, error) {
-	fallback := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	file, err := s.Open(path)
+	fallback := rolloutStem(path)
+	file, err := s.OpenContent(path)
 	if os.IsNotExist(err) {
 		return fallback, nil
 	}

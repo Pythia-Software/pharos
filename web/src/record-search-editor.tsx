@@ -8,6 +8,7 @@ import { SearchOrderControl } from "./search-order";
 import { SearchHelp } from "./search-help";
 import { Icon } from "./icons";
 export const recordSearchTargets: Record<string, { label: string; field: string }> = {
+  messages: { label: "Messages", field: "text" },
   writing_messages: { label: "User messages", field: "text" },
   tool_calls: { label: "Tool calls", field: "command" },
   mcp_calls: { label: "MCP calls", field: "arguments_json" },

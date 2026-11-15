@@ -2,12 +2,43 @@
 // file paths in the conversation reader (reader-model.js).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { plain } from "../helpers/classic-script.mjs";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import vm from "node:vm";
+import { assets, loadClassicScript, plain } from "../helpers/classic-script.mjs";
 import { event, human, read, reader, render } from "../helpers/transcript.mjs";
 
 const { commandKind, conversationMessages, fileChanges, filePathParts, messageFailed, messageJSON, normalizeMessages, readableValue, todoItems, toolCategory, toolFailed, toolPayload } = reader;
 const ids = messages => plain([...messages].map(message => message.native_id));
 const calls = events => [...events].filter(message => message.kind === "tool_call");
+
+test('file path copy preserves source bytes and waits for a host acknowledgement', async () => {
+  const source=readFileSync(join(assets,'ui.py'),'utf8');
+  const chipSource=source.slice(source.indexOf('function fileChip('),source.indexOf('\nfunction actionRow('));
+  const wrapper=source.slice(source.indexOf('async function copyFeedbackText('),source.indexOf('\nfunction clearFeedback'));
+  for(const outcome of ['native','native-failure','browser-denial']){
+    const transfer=Promise.withResolvers(),writes=[];let browserCalls=0;
+    const window=loadClassicScript('host-services.js',{
+      ...(outcome==='browser-denial'?{}:{webkit:{messageHandlers:{pharosClipboard:{postMessage:text=>{writes.push(text);return transfer.promise;}}}}}),
+      navigator:{clipboard:{writeText:()=>{browserCalls++;return outcome==='browser-denial'?transfer.promise:Promise.reject(Error('Browser denied'));}}},
+    }).window;
+    const node=(tag,className,text)=>{const attributes=new Map();return Object.assign(window.document.createElement(tag),{className,textContent:text,disabled:false,setAttribute:(key,value)=>attributes.set(key,value),getAttribute:key=>attributes.get(key)??null,removeAttribute:key=>attributes.delete(key)});};
+    const fileChip=vm.runInNewContext(wrapper+'\n'+chipSource+';fileChip',{window,node,icon:name=>name,filePathParts});
+    const path='/Volumes/My drive/資料/../file\nname.txt';
+    const chip=fileChip(path,[],()=>{}),copy=chip.children.at(-1),event={stopPropagation(){},preventDefault(){}};
+    const pending=copy.onclick(event);
+    assert.equal(copy.disabled,false,'pending copies stay focusable');assert.equal(copy.getAttribute('aria-disabled'),'true');assert.deepEqual(copy.children,['copy']);
+    await copy.onclick(event);assert.equal(writes.length+browserCalls,1);
+    if(outcome==='native')transfer.resolve(true);else transfer.reject(Error('Copy denied'));
+    await pending;
+    assert.equal(copy.disabled,false);assert.equal(copy.getAttribute('aria-disabled'),null);
+    assert.deepEqual(copy.children,[outcome==='native'?'check':'error']);
+    if(outcome!=='native')assert.match(copy.title,/unavailable/i);
+    assert.deepEqual(writes,outcome==='browser-denial'?[]:[path]);
+    assert.equal(browserCalls,outcome==='browser-denial'?1:0);
+    await copy.onclick(event);assert.equal(writes.length+browserCalls,2,'completion allows a retry');
+  }
+});
 
 test("session and turn ages accept epoch and ISO timestamps and keep two useful units", () => {
   const now = Date.parse("2026-10-20T15:20:00Z");
@@ -31,6 +62,32 @@ test("missing or invalid timestamps omit the age instead of inventing one", () =
     assert.equal(reader.relativeAge(value, now), "", String(value));
   }
   assert.equal(reader.relativeAge(now, NaN), "");
+});
+
+test("action relative times omit missing or invalid timestamps", () => {
+  const source=readFileSync(join(assets,'ui.py'),'utf8');
+  const relativeTime=vm.runInNewContext('('+source.slice(source.indexOf('function relativeTime('),source.indexOf('\nfunction transcriptHasTimes('))+')');
+  const start='2026-10-20T15:20:00Z';
+  for(const value of [undefined,null,'','invalid'])assert.equal(relativeTime(value,start),'');
+  for(const origin of [undefined,null,'','invalid'])assert.equal(relativeTime(start,origin),'');
+  assert.equal(relativeTime('2026-10-20T15:21:05Z',start),'+1m05s');
+});
+
+test("timestamp column accounts for messages, all turns and nested actions", () => {
+  const source=readFileSync(join(assets,'ui.py'),'utf8');
+  const helperSource=source.slice(source.indexOf('function relativeTime('),source.indexOf('\nfunction timelineEntry('));
+  const hasTimes=vm.runInNewContext(helperSource+';transcriptHasTimes',{window:{}});
+  const start='2026-10-20T15:20:00Z',human={kind:'message',created_at:start},call={kind:'tool_call',native_id:'call',created_at:null},result={kind:'tool_result',native_id:'result',created_at:start};
+  const turn={human,events:[call],owned:[human,call,result]},consumed=new Set(['result']);
+  assert.equal(hasTimes([turn],consumed),true,'a prompt timestamp reserves the column even when actions have no times');
+  const reply={kind:'message',native_id:'reply',created_at:'2026-10-20T15:20:20Z'};
+  assert.equal(hasTimes([{...turn,owned:[call,reply]}],consumed),true,'a reply timestamp also reserves the column');
+  assert.equal(hasTimes([{...turn,owned:[call,result]}],consumed),false,'paired result times alone do not reserve a column');
+  assert.equal(hasTimes([{...turn,owned:[{...human,created_at:null},call]}],consumed),false,'entirely untimed rows can use the full width');
+  assert.equal(hasTimes([{...turn,owned:[{...call,created_at:'invalid'}]}],consumed),false);
+  const nested={...call,native_id:'nested',created_at:'2026-10-20T15:20:10Z'};
+  assert.equal(hasTimes([{...turn,owned:[call]},{...turn,owned:[call,nested]}],consumed),true,'a timed nested action in a later turn retains the column');
+  assert.equal(hasTimes([{...turn,human:{...human,created_at:null},events:[call],owned:[nested]}],consumed),false,'relative time needs a usable turn start');
 });
 
 test("JSON-string command arguments show the command and associate failures with it", () => {
@@ -248,4 +305,170 @@ test("parsed message bodies are reused and update when an original replaces a pr
   normalized.text = JSON.stringify({ tool: "read", input: { path: "after" } }); normalized.raw_text = normalized.text;
   assert.deepEqual({ same, shared, path: toolPayload(normalized).input.path, raw: messageJSON(normalized, true).input.path, source: messageJSON(message).input.path, missing: messageJSON({}) },
     { same: true, shared: true, path: "after", raw: "after", source: "before", missing: null });
+});
+
+
+test("Claude export citations and attachment names preserve research sources", () => {
+  const message = event("research", "message", "A researched answer", 0, {raw_text: JSON.stringify({type:"text",text:"A researched answer",citations:[
+    {details:{type:"web_search_citation",url:"https://example.com/report",title:"Published report",cited_text:"Source excerpt"}},
+    {details:{type:"document_citation",document_title:"Uploaded paper"}},
+    {details:{url:"javascript:alert(1)",title:"Unsafe source"}},
+  ]})});
+  const citations = plain(reader.messageCitations(message));
+  assert.deepEqual(citations, [
+    {title:"Published report",url:"https://example.com/report",quote:"Source excerpt"},
+    {title:"Uploaded paper",url:"",quote:""},
+    {title:"Unsafe source",url:"",quote:""},
+  ]);
+  for (const [payload, expected] of [
+    [{type:"file_attachment",file_name:"notes.pdf"},"notes.pdf"],
+    [{type:"files",file_names:["chart.csv","paper.pdf"]},"chart.csv, paper.pdf"],
+    [{type:"document",title:"Company brief",file_uuid:"f1"},"Company brief"],
+    [{type:"image",file_uuid:"img"},"Image · img"],
+  ]) assert.equal(reader.attachmentSummary(event("attachment","attachment",payload)),expected);
+});
+
+
+test("export documents expose prose while keeping unrelated metadata out of the narrative", () => {
+  const payload={type:"export_file",file_name:"projects/p.json",extracted_content:JSON.stringify({name:"Research",is_private:true,prompt_template:"Cite sources",docs:[{filename:"report.md",content:"# Report\nOriginal exported paragraph."}]})};
+  assert.deepEqual(plain(reader.exportDocumentSections(payload)),[{title:"Research · prompt template",text:"Cite sources"},{title:"report.md",text:"# Report\nOriginal exported paragraph."}]);
+  assert.deepEqual(plain(reader.exportDocumentSections({...payload,file_name:"index.html"})),[]);
+});
+
+
+test("retained export summaries and settings do not create extra turns", () => {
+  for(const [provider,payload]of [
+    ['claude',{type:'claude_ai_conversation',text:'Archived summary'}],
+    ['chatgpt',{source:'chatgpt_export',settings:{default_model_slug:'bidi',voice:'saved-voice'}}],
+  ]){
+    const metadata=event('export','metadata',payload,0,{role:'system'});
+    const {conversation,graph}=render([metadata,human(),event('reply','message','An answer')],{provider});
+    assert.equal(graph.turns.length,1,provider);
+    assert.equal(graph.turns[0].human.native_id,'human');
+    assert.deepEqual(ids(graph.turns[0].events),['export','reply']);
+    const [summary]=reader.turnSummaryData(conversation);
+    assert.equal(summary.prompt,'Inspect the rules and report the result.');
+    assert.equal(summary.outcome,'An answer');
+    assert.equal(summary.replies,1);
+    const [outline]=reader.conversationOutline(conversation);
+    assert.equal(outline.label,'Turn 1');
+    assert.deepEqual(ids(outline.messages),['human','export','reply']);
+    assert.deepEqual(plain(reader.messageJSON(outline.messages[1])),payload,'source evidence remains available');
+    if(provider==='chatgpt')assert.deepEqual(plain(reader.chatGPTConversationContext(conversation).facts),[['Recorded model label','bidi'],['Saved voice','saved-voice']]);
+    const metadataOnly=render([metadata],{provider}).graph;
+    assert.equal(metadataOnly.turns.length,1,'evidence without a user message is retained');
+    assert.deepEqual(ids(metadataOnly.turns[0].events),['export']);
+  }
+});
+
+test('Claude Docs additions use receipts and resolve the imported document identity', () => {
+  const id='fd29a52d-3aac-4fd5-90e5-1c21d41e56a7';
+  const call=event('add','tool_call',{tool:'mcp__Claude_Docs__update',input:{container:{kind:'project',id},payload:JSON.stringify({ops:[{op:'replace',target:{kind:'blocks',ids:['section.1']},with:{from:{kind:'inline',content:'## Findings\n\nA **recorded** finding.'},as:'markdown'}}]})}});
+  const receipt=event('receipt','tool_result',{content:[{type:'text',text:JSON.stringify({verdict:'allow',data:{notices:[{code:'pending_ended',as:'resolved',opIndex:0,ids:['section.1']}]}})}]});
+  const links={[id]:{title:'Research brief',href:'/work/imported/conversation/document?message=page'}};
+  const view=reader.mcpPresentation(call,[receipt],links);
+  assert.equal(view.label,'Added to document');assert.equal(view.target,'Research brief');assert.equal(view.href,links[id].href);
+  assert.equal(view.sections[0].format,'markdown');assert.match(view.sections[0].text,/\*\*recorded\*\*/);
+  const clipped=event('clipped','tool_result',{tool:'mcp__Claude_Docs__update',content:[{type:'text',text:'{\"verdict\":\"allow\",\"xml\":\"short…'}]});
+  clipped.mcp_receipts=reader.mcpRecords([receipt]);
+  assert.equal(reader.mcpPresentation(call,[clipped],links).label,'Added to document','small receipts survive lazy output clipping');
+  assert.equal(toolCategory(call),'edit');assert.equal(fileChanges(call,receipt),null,'document changes are not invented file diffs');
+  assert.match(reader.mcpPresentation(call,[],links).label,/Requested/);
+  const replace=event('replace','tool_result',{content:[{type:'text',text:'{"verdict":"allow"}'}]});
+  assert.equal(reader.mcpPresentation(call,[replace],links).label,'Updated document','replacement without placeholder evidence is not an addition');
+  assert.equal(reader.mcpPresentation(call,[receipt]).href,'','unimported documents do not acquire invented local links');
+});
+
+test('MCP envelopes preserve failed, partial, unknown and missing outcomes', () => {
+  const call=event('update','tool_call',{name:'mcp__Claude_Docs__update',input:{payload:{ops:[]}}});
+  for(const [body,status]of [
+    [{isError:true,content:[{type:'text',text:'Denied'}]},'failed'],
+    [{content:[{type:'text',text:'{"verdict":"deny","error":"Revision conflict"}'}]},'failed'],
+    [{content:[{type:'text',text:'{"acks":[{"verdict":"allow"},{"verdict":"deny"}]}'}]},'partial'],
+    [{structuredContent:{status:'unknown'}},'unknown'],
+    [{content:[{type:'text',text:JSON.stringify({verdict:'allow',operation_results:[{status:'applied'},{status:'rejected'}]})}]},'partial'],
+  ]){
+    const result=event(status,'tool_result',{content:JSON.stringify(body)}),view=reader.mcpPresentation(call,[result]);
+    assert.equal(view.status,status);assert.equal(toolFailed(call,[result]),['failed','partial'].includes(status));
+    assert.doesNotMatch(view.label,/^Added|^Created|^Updated/);
+  }
+  const clipped=event('clipped','tool_result',{content:[{type:'text',text:'{"verdict":"allow","xml":"short…'}]});
+  for(const [operation,status]of [['rejected','partial'],['unknown','unknown']]){
+    clipped.mcp_receipts=[{verdict:'allow'},{status:'applied'},{status:operation}];
+    const view=reader.mcpPresentation(call,[clipped]);
+    assert.equal(view.status,status);assert.doesNotMatch(view.label,/^Updated document$/);
+    assert.equal(toolFailed(call,[clipped]),status==='partial');
+  }
+  assert.equal(reader.mcpPresentation(call).status,'missing');
+  assert.equal(reader.mcpPresentation(event('unknown','tool_call',{name:'mcp__unfamiliar__update',input:{content:'kept'}})),null);
+  assert.equal(reader.mcpPresentation(event('future','tool_call',{name:'mcp__Claude_Docs__transform',input:{content:'kept'}})),null);
+});
+
+test('Docs creation, comments, excerpts and exported Unicode Markdown have readable content', () => {
+  const present=(method,input,value)=>reader.mcpPresentation(event(method,'tool_call',{name:'mcp__Claude_Docs__'+method,input}),[event('output','tool_result',{content:[{type:'text',text:JSON.stringify(value)+'\n\nViewer instructions retained in raw output.'}]})]);
+  const create=present('batch',{container:{create:{name:'Brief',doc:{markdown:'# Brief\n\nOpening.'}}},batch:[]},{verdict:'allow',frame:{slug:'recorded-id'}});
+  assert.equal(create.label,'Created document');assert.match(create.sections[0].text,/# Brief/);
+  const tab=present('batch',{batch:[{verb:'create',object:'file',payload:{value:{birthName:'Appendix.ldoc'}}},{verb:'create',object:'node',engine:'prose',payload:{parent:{id:'$lid:f2'},source:{as:'markdown',from:{kind:'inline',content:'# Appendix\n\nTab content.'}}}},{verb:'update',ref:{object:'project'},payload:{patch:[{op:'set',path:['tabs','$lid:f2'],value:{name:'Appendix'}}]}}]},{verdict:'allow'});
+  assert.equal(tab.label,'Added document tab');assert.equal(tab.sections[0].title,'New tab · Appendix');assert.match(tab.sections[0].text,/Tab content/);
+  const comment=present('create',{object:'utterance',payload:JSON.stringify({value:{body:'Please confirm.',parent:{anchor:{text:'The assumption'}}}})},{verdict:'allow'});
+  assert.equal(comment.sections[0].text,'The assumption');assert.equal(comment.sections[1].text,'Please confirm.');
+  const excerpt=present('read',{payload:{kind:'search',text:'term'}},{verdict:'allow',data:{xml:"<doc><gap blocks='2'/><paragraph>Human &amp; readable</paragraph></doc>",complete:false}});
+  assert.match(excerpt.sections[0].text,/blocks omitted/);assert.match(excerpt.sections[0].text,/Human & readable/);assert.doesNotMatch(excerpt.sections[0].text,/<paragraph/);
+  const markdown='# Café 日本語\n\n**Readable** export.',exported=present('export',{format:'markdown'},{verdict:'allow',data:{format:'markdown',name:'Brief.md',bytes_b64:Buffer.from(markdown).toString('base64')}});
+  assert.equal(exported.sections[0].text,markdown);assert.equal(exported.sections[0].format,'markdown');
+  assert.equal(present('update',{payload:{ops:[{op:'future_transform'}]}},{verdict:'allow'}),null,'future operations retain the generic source view');
+  assert.equal(reader.mcpMarkdownExport({format:'pdf',bytes_b64:Buffer.from(markdown).toString('base64')}),'');
+  assert.equal(reader.mcpMarkdownExport({format:'markdown',bytes_b64:'broken'}),'');
+});
+
+test('common MCP families unwrap native and Codex responses without receipt boilerplate', () => {
+  const present=(name,input,body)=>reader.mcpPresentation(event('call','tool_call',{tool:name,input}),[event('result','tool_result',{content:JSON.stringify(body)})]);
+  const memory=present('mcp__memory__memory_read',{path:'/areas/topic.md'},{content:[{type:'text',text:'Receipt text'}],structured_content:{parsed:{name:'Topic',body:'- Remember **this**.'}}});
+  assert.equal(memory.sections[0].text,'- Remember **this**.');assert.equal(memory.sections[0].format,'markdown');
+  for(const name of ['mcp__remote-devices__Claude_Browser__browser_batch','mcp__claude-in-chrome__browser_batch','mcp__chrome__batch']){
+    const browser=present(name,{actions:[{name:'computer',input:{action:'left_click',action_summary:'Select Pickup'}},{name:'get_page_text',input:{tabId:'seed'}}]},{content:[{type:'text',text:'Visible page text'}]});
+    assert.equal(browser.family,'browser');assert.equal(browser.sections[0].text,'Select Pickup');assert.equal(browser.sections.at(-1).text,'Visible page text');
+  }
+  for(const name of ['mcp__codex_apps__github.fetch_file','mcp__codex_apps__github_fetch_file']){
+    const github=present(name,{repository_full_name:'owner/repo',path:'app.go'},{content:[{type:'text',text:'Action completed.'}],structuredContent:{content:'package app',display_url:'https://github.com/owner/repo/blob/main/app.go'}});
+    assert.equal(github.family,'github');assert.equal(github.sections[0].text,'package app');assert.match(github.href,/github.com/);
+  }
+  const comments=present('mcp__conductor__DiffComment',{comments:[{file:'app.go',lineNumber:4,body:'Check this branch.'}]},{content:[{type:'text',text:'Posted'}]});
+  assert.equal(comments.sections[0].title,'app.go:4');assert.equal(comments.sections[0].text,'Check this branch.');
+  const source=present('mcp__codex_apps__github.fetch_file',{path:'error.json'},{structuredContent:{encoding:'utf-8',display_url:'https://github.com/owner/repo/blob/main/error.json',content:'{\"error\":\"example\",\"isError\":true,\"status\":\"failed\"}'}});
+  assert.equal(source.status,'recorded','fetched JSON fields are source content, not tool outcome flags');
+  const page=present('mcp__chrome__get_page_text',{}, {content:[{type:'text',text:'{\"error\":\"a page describing errors\",\"status\":\"failed\"}'}]});
+  assert.equal(page.status,'recorded');assert.match(page.sections[0].text,/a page describing errors/);
+  const pharos=present('mcp__pharos__search_conversations',{query:'retained context'},{items:[{title:'Research',snippet:'A **useful** excerpt.'}],has_more:true});
+  assert.equal(pharos.sections[0].text,'A **useful** excerpt.');assert.ok(pharos.facts.some(([key])=>key==='Coverage'));
+  const stats=present('mcp__pharos__query_statistics',{metric:'tools'},{rows:[{tool:'Docs',count:3},{tool:'Browser',count:0}]});
+  assert.deepEqual(plain(stats.sections[0].rows),[['Docs','3'],['Browser','0']]);
+  const overview=present('mcp__pharos__get_conversation_overview',{}, {title:'Parser review',request:{text:'Review **this**.'},last_response:{text:'A recorded finding.'},note:'Extractive previews.'});
+  assert.equal(overview.target,'Parser review');assert.deepEqual(plain(overview.sections.map(section=>section.text)),['Review **this**.','A recorded finding.','Extractive previews.']);
+  const work=present('mcp__pharos__get_work_detail',{}, {items:[{title:'Research',purpose:'Compare reports',outcome:'Drafted brief'}]});
+  assert.deepEqual(plain(work.sections.map(section=>section.text)),['Research','Compare reports','Drafted brief']);
+  const groups=present('mcp__pharos__query_statistics',{}, {groups:[{keys:{provider:'claude'},values:{calls:0,cost:null}}],population_complete:false});
+  assert.deepEqual(plain(groups.sections[0].rows),[['claude','0','Unavailable']]);
+  assert.ok(groups.facts.some(([key,value])=>key==='Population'&&value==='Incomplete'));
+  const gmail=present('mcp__Gmail__search_threads',{query:'from:example.com'},{structured_content:{threads:[],resultCountEstimate:'1'}});
+  assert.deepEqual(plain(gmail.facts),[['Threads retained','0'],['Estimated matches','1']]);
+  const link=present('mcp__pharos__site_link',{}, {title:'Habits',summary:'Recorded view',url:'/analyze?analyze_days=30'});
+  assert.equal(link.href,'/analyze?analyze_days=30');
+  assert.equal(present('mcp__pharos__site_link',{}, {url:'javascript:alert(1)'}).href,'');
+});
+
+test('ChatGPT references and voice remain evidence without synthesizing tool calls',()=>{
+  const message={id:'chat-message',kind:'message',role:'assistant',text:'A cited answer',raw_text:JSON.stringify({author:{role:'assistant'},content:{content_type:'multimodal_text',parts:[{content_type:'audio_transcription',text:'A cited answer',direction:'out'}]},metadata:{model_slug:'bidi',content_references:[{type:'webpage',url:'https://example.com',title:'Citation'},{type:'widget',dil:{url:'https://do-not-execute.example'}}],search_result_groups:[{domain:'example.com',entries:[{url:'https://example.com',title:'Duplicate'},{url:'javascript:alert(1)',title:'Unsafe'},{url:'https://another.example',title:'Result',snippet:'Exported snippet'}]}]}})};
+  const context=reader.chatGPTMessageContext(message);
+  assert.deepEqual(plain(context.references.map(value=>value.url)),['https://example.com/','https://another.example/']);
+  assert.deepEqual(plain(context.directions),['out']);assert.equal(context.model,'bidi');
+  assert.equal(reader.normalizeMessages([message]).length,1);assert.equal(reader.normalizeMessages([message])[0].kind,'message');
+  assert.equal(reader.chatGPTMessageContext({...message,source_provider:'chatgpt',raw_text:'clipped',raw_clipped:true}).clipped,true);
+  assert.equal(reader.chatGPTMessageContext({text:'ordinary prose'}),null);
+});
+
+test('ChatGPT saved conversation settings preserve unknowns and keep the original model label',()=>{
+  const context=reader.chatGPTConversationContext({provider:'chatgpt',messages:[{kind:'metadata',text:JSON.stringify({source:'chatgpt_export',settings:{default_model_slug:'bidi',voice:'saved-voice',is_starred:true,is_archived:false,is_read_only:null,memory_scope:'global_enabled'},sharing:{id:'share'}})}]});
+  assert.deepEqual(plain(context.facts),[['Recorded model label','bidi'],['Saved voice','saved-voice'],['Memory scope','global_enabled'],['Archived','No'],['Starred','Yes'],['Sharing record','Included in export']]);
+  assert.equal(reader.chatGPTConversationContext({provider:'claude',messages:[]}),null);
 });

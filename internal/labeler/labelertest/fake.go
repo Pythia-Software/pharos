@@ -6,6 +6,7 @@ package labelertest
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,6 +23,12 @@ import (
 const (
 	FakeWorkerEnv = "PHAROS_LABELER_FAKE_WORKER"
 	FakeCountEnv  = "PHAROS_LABELER_FAKE_COUNT"
+	// FakeHelloEnv optionally records each worker's handshake as JSONL.
+	FakeHelloEnv = "PHAROS_LABELER_FAKE_HELLO"
+	// FakeMaxTokensEnv optionally imposes a backend padded-token limit.
+	FakeMaxTokensEnv  = "PHAROS_LABELER_FAKE_MAX_TOKENS"
+	FakeDeviceEnv     = "PHAROS_LABELER_FAKE_DEVICE"
+	FakeDeviceFileEnv = "PHAROS_LABELER_FAKE_DEVICE_FILE"
 )
 
 // FakeProb is the fake model: (sum of the row's real token ids + j) mod 100
@@ -34,7 +41,33 @@ func FakeProb(ids []int32, j int) float32 {
 	return float32((sum+j)%100) / 100
 }
 
+// FakeTokenProb is the fake token-label model: the probability of label j
+// at a token with this id, (7·id + 13·j) mod 100 over 100.
+func FakeTokenProb(id int32, j int) float32 {
+	return float32((7*int(id)+13*j)%100) / 100
+}
+
+// fakeTokenLogits is the fake's per-token output [batch, seq, labels], as
+// logits whose sigmoid is FakeTokenProb.
+func fakeTokenLogits(name string, ids *labeler.Tensor, labels int) labeler.Tensor {
+	values := make([]float32, 0, len(ids.Int32)*labels)
+	for _, id := range ids.Int32 {
+		for j := range labels {
+			p := float64(FakeTokenProb(id, j))
+			values = append(values, float32(math.Log(p/(1-p))))
+		}
+	}
+	return labeler.Tensor{Name: name, DType: labeler.DTypeFloat32, Dims: []int{ids.Dims[0], ids.Dims[1], labels}, Float32: values}
+}
+
 func fakeLabels(model string) int {
+	// A token-label export lists its labels in model.json.
+	var export struct {
+		Labels []string `json:"labels"`
+	}
+	if data, err := os.ReadFile(filepath.Join(filepath.Dir(model), "model.json")); err == nil && json.Unmarshal(data, &export) == nil && len(export.Labels) > 0 {
+		return len(export.Labels)
+	}
 	var manifest struct {
 		Labels struct {
 			Order []string `json:"order"`
@@ -77,6 +110,9 @@ func fakeOutputs(names []string, probs []float32, batch, labels int) []labeler.T
 // the hello's model file (4 without one). Modes:
 // "ok"; "crash-after:N" exits after N results (counted in the file named by
 // FakeCountEnv, so a restarted worker carries on counting);
+// A hello with the sparse option gets that output as the sparse entries of
+// FakeTokenProb per token and label ("dense" mode leaves the capability
+// out, like a worker that predates it).
 // "crash-on-id:K" exits on any batch holding token K; "refuse" fails the
 // hello; "slow" sleeps 200 ms per run; "deaf" answers the hello and never
 // reads its input again, so a large frame fills the pipe.
@@ -98,13 +134,33 @@ func FakeWorker(mode string) int {
 	}
 	var hello labeler.Hello
 	_ = json.Unmarshal(payload, &hello)
+	if path := os.Getenv(FakeHelloEnv); path != "" {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return 2
+		}
+		_ = json.NewEncoder(file).Encode(hello)
+		_ = file.Close()
+	}
 	if mode == "refuse" {
 		fmt.Fprintln(os.Stderr, "cannot open the model file")
 		writeJSON(labeler.FrameError, labeler.ErrorReply{Code: labeler.ErrCodeModel, Message: "no model at " + hello.Model, Fatal: true})
 		return 3
 	}
 	ready := labeler.Ready{Protocol: labeler.ProtocolVersion, Worker: labeler.WorkerInfo{Name: "fake", Version: "1", Runtime: "none"}}
+	ready.Worker.Device = os.Getenv(FakeDeviceEnv)
+	if path := os.Getenv(FakeDeviceFileEnv); path != "" {
+		device, _ := os.ReadFile(path)
+		ready.Worker.Device = strings.TrimSpace(string(device))
+	}
 	ready.Limits.MaxBatch, ready.Limits.MaxSeq = 64, max(512, hello.MaxSeq)
+	ready.Limits.MaxTokens, _ = strconv.Atoi(os.Getenv(FakeMaxTokensEnv))
+	sparse, _ := labeler.SparseOptionFrom(hello.Options)
+	if mode == "dense" {
+		sparse = nil
+	} else {
+		ready.Capabilities = []string{labeler.SparseCapability}
+	}
 	writeJSON(labeler.FrameReady, ready)
 	if mode == "deaf" {
 		time.Sleep(time.Hour) // until killed
@@ -135,6 +191,9 @@ func FakeWorker(mode string) int {
 			req, err := labeler.DecodeRun(payload)
 			if err == nil {
 				err = labeler.ValidateRun(req, hello.RunInputs(), hello.VocabSize, 64, ready.Limits.MaxSeq)
+			}
+			if err == nil && ready.Limits.MaxTokens > 0 && req.Inputs[0].Elements() > ready.Limits.MaxTokens {
+				err = fmt.Errorf("batch exceeds %d padded tokens", ready.Limits.MaxTokens)
 			}
 			if err != nil {
 				writeJSON(labeler.FrameError, labeler.ErrorReply{ID: req.ID, Code: labeler.ErrCodeBadRequest, Message: err.Error()})
@@ -192,6 +251,23 @@ func FakeWorker(mode string) int {
 			outputs := []labeler.Tensor{{Name: "probs", DType: labeler.DTypeFloat32, Dims: []int{batch, labels}, Float32: probs}}
 			if !slices.Contains(req.Outputs, "probs") && len(req.Outputs) > 0 {
 				outputs = fakeOutputs(req.Outputs, probs, batch, labels)
+			}
+			if sparse != nil && slices.Contains(req.Outputs, sparse.Output) {
+				// The per-token output, with padding left to Sparsify.
+				attention := mask
+				for _, input := range hello.RunInputs() {
+					for i := range req.Inputs {
+						if req.Inputs[i].Name == input.Name && input.Role == labeler.RoleAttention {
+							attention = &req.Inputs[i]
+						}
+					}
+				}
+				entries, err := sparse.Sparsify(fakeTokenLogits(sparse.Output, ids, labels), attention.Int32)
+				if err != nil {
+					writeJSON(labeler.FrameError, labeler.ErrorReply{ID: req.ID, Code: labeler.ErrCodeRunFailed, Message: err.Error()})
+					continue
+				}
+				outputs = []labeler.Tensor{entries}
 			}
 			out, _ := labeler.EncodeResult(&labeler.RunResult{ID: req.ID, Outputs: outputs})
 			write(labeler.FrameResult, out)

@@ -17,7 +17,7 @@ const labelingDatasetSQL = `
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE units(
   id TEXT PRIMARY KEY, message_id TEXT NOT NULL UNIQUE, conversation_id TEXT NOT NULL, canonical_conversation_id TEXT,
-  workspace_id TEXT NOT NULL, root_conversation_id TEXT, run_id TEXT, depth INTEGER, depth_status TEXT NOT NULL,
+  workspace_id TEXT NOT NULL, root_conversation_id TEXT, root_quality TEXT, run_id TEXT, depth INTEGER, depth_status TEXT NOT NULL,
   session_id TEXT, session_role TEXT, cohort TEXT NOT NULL, actor_kind TEXT NOT NULL, sender_role TEXT NOT NULL, sender TEXT,
   provider TEXT NOT NULL, kind TEXT NOT NULL, channel TEXT NOT NULL, reasoning_format TEXT, created_at TEXT,
   content_hash TEXT, message_sha256 TEXT NOT NULL, message_text TEXT NOT NULL, authorship_reason TEXT,
@@ -101,11 +101,11 @@ func (w *labelingWriter) close() {
 
 func (w *labelingWriter) unit(unit *labelingUnit) error {
 	refs, _ := json.Marshal(unit.contextRefs)
-	if err := w.exec(`INSERT INTO units(id,message_id,conversation_id,canonical_conversation_id,workspace_id,root_conversation_id,run_id,depth,depth_status,
+	if err := w.exec(`INSERT INTO units(id,message_id,conversation_id,canonical_conversation_id,workspace_id,root_conversation_id,root_quality,run_id,depth,depth_status,
 		session_id,session_role,cohort,actor_kind,sender_role,sender,provider,kind,channel,reasoning_format,created_at,content_hash,message_sha256,message_text,
 		authorship_reason,visible_text,visible_chars,marker_ranges,length_bucket,chunk_count,attached_marker_chunks,context_text,context_prompt,context_excerpt,context_refs)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		unit.id, unit.messageID, unit.conversation, nilIfEmpty(unit.canonical), unit.workspace, nilIfEmpty(unit.root), nilIfEmpty(unit.run), unit.depth, unit.depthStatus,
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		unit.id, unit.messageID, unit.conversation, nilIfEmpty(unit.canonical), unit.workspace, nilIfEmpty(unit.root), nilIfEmpty(unit.rootQuality), nilIfEmpty(unit.run), unit.depth, unit.depthStatus,
 		nilIfEmpty(unit.session), nilIfEmpty(unit.sessionRole), unit.cohort, unit.actor, unit.role, nilIfEmpty(unit.sender), unit.provider, unit.kind, unit.channel,
 		nilIfEmpty(unit.format), nilIfEmpty(unit.createdAt), nilIfEmpty(unit.contentHash), hashBytes([]byte(unit.text)), unit.text, nilIfEmpty(unit.authorship),
 		unit.visible, utf8.RuneCountInString(unit.visible), jsonText(markerPairs(unit.markers)), unit.length, len(unit.chunks), unit.attachedChunks, unit.context, unit.contextPrompt, unit.contextExcerpt, string(refs)); err != nil {

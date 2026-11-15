@@ -171,7 +171,7 @@ func TestLibraryQueryTableServesArbitrarySortsAndFilters(t *testing.T) {
 	server := testServer(t, config, catalog)
 	post := func(path, body string) map[string]any {
 		t.Helper()
-		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		request := queryFixtureHTTPRequest(http.MethodPost, path, strings.NewReader(body))
 		request.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)
@@ -189,7 +189,7 @@ func TestLibraryQueryTableServesArbitrarySortsAndFilters(t *testing.T) {
 	if sorted["total"] != float64(2) || rows[0].(map[string]any)["title"] != "Bravo" || rows[1].(map[string]any)["title"] != "Charlie" {
 		t.Fatalf("unexpected sorted page: %#v", sorted)
 	}
-	if firstString(rows[1].(map[string]any)["first_input"]) != "Please fix the parser" || firstString(rows[1].(map[string]any)["last_response"]) != "Fixed it" {
+	if row := rows[1].(map[string]any); firstString(row["first_input"]) != "Please fix the parser" || firstString(row["last_response"]) != "Fixed it" || row["first_input_id"] != "m1" || row["last_response_id"] != "m4" {
 		t.Fatalf("page rows lack previews: %#v", rows[1])
 	}
 	filtered := post("/api/query/library", `{"select":["title"],"where":[{"field":"tool_error_count","op":">=","value":"1"}],"orderBy":[{"field":"changed_file_count","dir":"desc"}],"limit":10,"offset":0}`)
@@ -201,7 +201,7 @@ func TestLibraryQueryTableServesArbitrarySortsAndFilters(t *testing.T) {
 		t.Fatalf("pending subagent count filter hid the library: %#v", pending)
 	}
 	metrics := post("/api/query/library/metrics", `{"version":2,"where":[],"orderBy":[],"limit":1,"offset":0,"metrics":[{"id":"n","op":"count","groupBy":["repository_name"]}]}`)
-	var want qt.SQLiteMetricsV2Result
+	var want queryFixtureMetricsResult
 	encoded, _ := json.Marshal(metrics)
 	if err := json.Unmarshal(encoded, &want); err != nil || want.Metrics[0].Error != "" {
 		t.Fatal(err, metrics)
@@ -302,7 +302,7 @@ func TestLibraryRequestsReadingFewerFieldsMatchFullRows(t *testing.T) {
 		}
 		call := func(method, path, body string) any {
 			t.Helper()
-			request := httptest.NewRequest(method, path, strings.NewReader(body))
+			request := queryFixtureHTTPRequest(method, path, strings.NewReader(body))
 			request.Header.Set("Authorization", "Bearer test-token")
 			response := httptest.NewRecorder()
 			server.ServeHTTP(response, request)
@@ -324,7 +324,7 @@ func TestLibraryRequestsReadingFewerFieldsMatchFullRows(t *testing.T) {
 			`{"select":["title"],"where":[{"field":"purpose","op":"contains","value":"summarized"}],"limit":10,"offset":0}`,
 			`{"select":["title"],"where":[{"field":"outcome","op":"is_not_null","value":""}],"orderBy":[{"field":"cost_usd","dir":"desc"}],"limit":10,"offset":0}`,
 			`{"select":["title"],"where":[{"any":[{"field":"changed_files","op":"contains","value":"parser"},{"field":"title","op":"=","value":"Bravo"}]}],"orderBy":[{"field":"purpose","dir":"asc"}],"limit":10,"offset":0}`,
-			`{"select":["cost_usd"],"where":[{"field":"price_status","op":"=","value":"priced"}],"orderBy":[{"field":"cost_today_usd","dir":"asc"}],"limit":5,"offset":0}`,
+			`{"select":["cost_usd"],"where":[{"field":"price_status","op":"=","value":"priced"}],"orderBy":[{"field":"cost_usd","dir":"asc"}],"limit":5,"offset":0}`,
 			`{"select":["pr_numbers"],"orderBy":[{"field":"pr_numbers","dir":"desc","extract":{"regex":"(\\d+)"}}],"limit":1,"offset":1}`,
 		} {
 			var query querytable.Query
@@ -358,15 +358,15 @@ func TestLibraryRequestsReadingFewerFieldsMatchFullRows(t *testing.T) {
 			qt.AggSpec{ID: "outcomes", Op: "count_distinct", Field: "outcome"}, qt.AggSpec{ID: "cost", Op: "max", Field: "cost_usd"})
 		metrics.Where = []qt.WhereTerm{{Field: "purpose", Op: "is_not_null"}}
 		ctx := context.Background()
-		tx, release, err := beginQueryV2(ctx, catalog.reader())
+		tx, release, err := beginQueryMemory(ctx, catalog.reader())
 		if err != nil {
 			t.Fatal(err)
 		}
-		full := queryV2Dataset("library", PharosLibrarySchema())
+		full := queryFixtureFor("library", PharosLibrarySchema())
 		if full.SourceSQL, err = stageQueryRows(ctx, tx, "full_library_rows", fullRows(""), full.Schema); err != nil {
 			t.Fatal(err)
 		}
-		want, err := full.ExecuteV2In(ctx, tx, nil, &metrics, qt.PlanOptions{})
+		want, err := full.executeFixtureIn(ctx, tx, nil, &metrics, qt.PlanOptions{})
 		release()
 		if err != nil {
 			t.Fatal(err)
@@ -376,7 +376,12 @@ func TestLibraryRequestsReadingFewerFieldsMatchFullRows(t *testing.T) {
 				t.Fatalf("metric %s over full rows: %+v", metric.ID, metric)
 			}
 		}
-		if got := call(http.MethodPost, "/api/query/library/metrics", string(mustJSON(t, metrics))); !reflect.DeepEqual(got, decodeJSON(t, mustJSON(t, want.Metrics))) {
+		got := call(http.MethodPost, "/api/query/library/metrics", string(mustJSON(t, metrics)))
+		var actual queryFixtureMetricsResult
+		if err := json.Unmarshal(mustJSON(t, got), &actual); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(decodeJSON(t, mustJSON(t, actual)), decodeJSON(t, mustJSON(t, want.Metrics))) {
 			t.Fatalf("refreshed=%v metrics: got %v, want %v", refreshed, got, want.Metrics)
 		}
 	}
@@ -390,7 +395,7 @@ func TestLibraryDefaultPageReadsNoLongTextForOtherRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := testServer(t, config, catalog)
-	request := httptest.NewRequest(http.MethodPost, "/api/query/library", strings.NewReader(
+	request := queryFixtureHTTPRequest(http.MethodPost, "/api/query/library", strings.NewReader(
 		`{"select":["title","outcome","pr_numbers"],"orderBy":[{"field":"activity_at","dir":"desc","nulls":"last"},{"field":"id","dir":"asc"}],"limit":1,"offset":0}`))
 	request.Header.Set("Authorization", "Bearer test-token")
 	response := httptest.NewRecorder()
@@ -419,7 +424,7 @@ func TestLibraryDefaultPageReadsNoLongTextForOtherRows(t *testing.T) {
 		func(column libraryColumn) string { return "(" + column.expr + ")" },
 	} {
 		statement := libraryRowSelect(value, catalog.library.fields)
-		for _, text := range []string{"w.*", "purpose", "outcome", "summary_", "changed_files", "pr_details"} {
+		for _, text := range []string{"w.*", "purpose", "w.outcome", "summary_", "changed_files", "pr_details"} {
 			if strings.Contains(statement, text) {
 				t.Fatalf("default request reads %s for every row:\n%s", text, statement)
 			}
@@ -468,11 +473,26 @@ func TestLibraryPreviewsFollowTheirMessages(t *testing.T) {
 		}
 		return count
 	}
+	execTx(t, catalog.DB,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES('cc-helper','c','claude','local','helper','cc',1)`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('helper-prompt','cc-helper','p','user','message','Investigate this delegated task','2026-09-23T01:57:00Z','h')`,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('m0','cc','0','user','message','<system_instruction>Injected setup</system_instruction>','2026-09-23T01:59:00Z','h')`,
+		`UPDATE messages SET text='<system_instruction>Injected setup</system_instruction>
+
+Please fix the parser' WHERE id='m1'`)
 	if err := catalog.refreshAllLibrary(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if first, last := preview(); first != "Please fix the parser" || last != "Fixed it" || stored() != 1 {
 		t.Fatalf("preview %q/%q, stored %d", first, last, stored())
+	}
+	// A retained copied message must not displace the first human writing,
+	// including when an older preview ID has already been cached.
+	execTx(t, catalog.DB,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('copied','cc','copy','user','message','Copied agent output','2026-09-23T01:58:00Z','h')`,
+		`INSERT INTO message_authorship(message_id,conversation_id,workspace_id,sent_at,day,total_chars,spans_json) VALUES('copied','cc','c','2026-09-23T01:58:00Z','2026-09-23',19,'[{"start":0,"end":19,"category":"quoted"}]')`)
+	if first, _ := preview(); first != "Please fix the parser" {
+		t.Fatalf("copied text used as first ask: %q", first)
 	}
 	// A new response marks the workspace dirty, which drops the stored
 	// preview until the refresh; meanwhile the page finds it itself.

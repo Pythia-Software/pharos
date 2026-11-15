@@ -8,6 +8,7 @@ func PharosWritingMessagesSchema() querytable.Schema {
 		Name:    "pharos_writing_messages",
 		IDField: "id",
 		Fields: map[string]querytable.FieldSpec{
+			"agent_session_id":         {Name: "agent_session_id", Kind: querytable.FieldText, Expr: "r.\"agent_session_id\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"agent_session_id\""},
 			"id":                       {Name: "id", Kind: querytable.FieldText, Expr: "r.\"id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"id\""},
 			"sent_at":                  {Name: "sent_at", Kind: querytable.FieldDatetime, Expr: "r.\"sent_at\"", Synthetic: false, SQLiteDatetimeFormat: "utc-millis", Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"sent_at\""},
 			"day":                      {Name: "day", Kind: querytable.FieldText, Expr: "r.\"day\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"day\""},
@@ -15,6 +16,7 @@ func PharosWritingMessagesSchema() querytable.Schema {
 			"month":                    {Name: "month", Kind: querytable.FieldText, Expr: "r.\"month\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"month\""},
 			"text":                     {Name: "text", Kind: querytable.FieldText, Expr: "r.\"text\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"text\""},
 			"main_category":            {Name: "main_category", Kind: querytable.FieldEnum, Expr: "r.\"main_category\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"main_category\""},
+			"estimate":                 {Name: "estimate", Kind: querytable.FieldEnum, Expr: "r.\"estimate\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"estimate\""},
 			"categories":               {Name: "categories", Kind: querytable.FieldTextArray, Expr: "r.\"categories\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"categories\""},
 			"rules":                    {Name: "rules", Kind: querytable.FieldTextArray, Expr: "r.\"rules\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"rules\""},
 			"has_source":               {Name: "has_source", Kind: querytable.FieldBool, Expr: "r.\"has_source\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"has_source\""},
@@ -39,6 +41,7 @@ func PharosWritingMessagesSchema() querytable.Schema {
 			"message_count":            {Name: "message_count", Kind: querytable.FieldNumber, Expr: "r.\"message_count\"", Synthetic: false, ExpressionNumeric: true, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"message_count\""},
 			"title":                    {Name: "title", Kind: querytable.FieldText, Expr: "r.\"title\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"title\""},
 			"repository_name":          {Name: "repository_name", Kind: querytable.FieldText, Expr: "r.\"repository_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"repository_name\""},
+			"project_name":             {Name: "project_name", Kind: querytable.FieldText, Expr: "r.\"project_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"project_name\""},
 			"source_kind":              {Name: "source_kind", Kind: querytable.FieldEnum, Expr: "r.\"source_kind\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"source_kind\""},
 			"provider":                 {Name: "provider", Kind: querytable.FieldEnum, Expr: "r.\"provider\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"provider\""},
 			"channel":                  {Name: "channel", Kind: querytable.FieldText, Expr: "r.\"channel\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"channel\""},

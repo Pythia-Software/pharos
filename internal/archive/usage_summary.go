@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,22 +19,41 @@ var usageSummaryWindows = []struct {
 }
 
 // usageSummaryWindow is one window's topline totals.
-type usageSummaryWindow struct {
-	Key          string                        `json:"key"`
-	From         string                        `json:"from,omitempty"`
-	Until        string                        `json:"until,omitempty"`
-	HumanWords   int64                         `json:"human_words"`
-	Messages     int64                         `json:"messages"`
+type usageSummaryReported struct {
 	Tokens       int64                         `json:"tokens"`
 	CostUSD      any                           `json:"cost_usd"`
+	PriceStatus  string                        `json:"price_status"`
 	CarbonTokens map[string]map[string]float64 `json:"carbon_tokens"`
+}
+
+type usageSummaryWindow struct {
+	Reported             usageSummaryReported          `json:"reported"`
+	IsEstimate           bool                          `json:"is_estimate"`
+	CostIsEstimate       bool                          `json:"cost_is_estimate"`
+	PriceStatus          string                        `json:"price_status"`
+	InputTokensAvailable bool                          `json:"input_tokens_available"`
+	Key                  string                        `json:"key"`
+	From                 string                        `json:"from,omitempty"`
+	Until                string                        `json:"until,omitempty"`
+	HumanWords           int64                         `json:"human_words"`
+	Messages             int64                         `json:"messages"`
+	Tokens               int64                         `json:"tokens"`
+	CostUSD              any                           `json:"cost_usd"`
+	CarbonTokens         map[string]map[string]float64 `json:"carbon_tokens"`
 	*quickStatsCounts
 }
 
-// UsageHistory gives charts the library's unfiltered conversation history.
-// Keep it separate from the usage summary's more expensive ledger reads.
+// usageHistoryWindows are the trailing windows, in days, whose activity
+// /api/usage/history counts: the rolling windows a card can take.
+var usageHistoryWindows = []int{1, 7, 30, 90, 180, 365}
+
+// UsageHistory gives charts the library's unfiltered conversation history,
+// and the home page how much of it falls in each trailing window: the number
+// of top-level conversations last active within it, and in all time. Keep it
+// separate from the usage summary's more expensive ledger reads.
 func (c *Catalog) UsageHistory(ctx context.Context) (map[string]any, error) {
-	return cachedValue(ctx, c, "usage:history", func(ctx context.Context) (map[string]any, error) {
+	now := c.clock()
+	return cachedValue(ctx, c, "usage:history:"+now.UTC().Format("2006-01-02T15"), func(ctx context.Context) (map[string]any, error) {
 		rows, err := queryMapsContext(ctx, c.reader(), `SELECT started_at FROM conversations
 			WHERE julianday(started_at) IS NOT NULL ORDER BY julianday(started_at),started_at LIMIT 1`)
 		if err != nil {
@@ -43,6 +63,26 @@ func (c *Catalog) UsageHistory(ctx context.Context) (map[string]any, error) {
 		if len(rows) > 0 {
 			result["oldest_conversation_at"] = rows[0]["started_at"]
 		}
+		columns, args := []string{"COUNT(*)"}, []any{}
+		for _, days := range usageHistoryWindows {
+			columns = append(columns, "COALESCE(SUM(active>=julianday(?)),0)")
+			args = append(args, now.Add(-time.Duration(days)*24*time.Hour).UTC().Format(time.RFC3339Nano))
+		}
+		counts := make([]int64, len(columns))
+		targets := make([]any, len(counts))
+		for index := range counts {
+			targets[index] = &counts[index]
+		}
+		if err := c.reader().QueryRowContext(ctx, `SELECT `+strings.Join(columns, ",")+` FROM (
+			SELECT MAX(julianday(started_at),COALESCE(julianday(ended_at),0)) active FROM conversations
+			WHERE agent_depth=0 AND julianday(started_at) IS NOT NULL)`, args...).Scan(targets...); err != nil {
+			return nil, err
+		}
+		active := map[string]int64{"all": counts[0]}
+		for index, days := range usageHistoryWindows {
+			active[strconv.Itoa(days)] = counts[index+1]
+		}
+		result["active_conversations"] = active
 		return result, nil
 	})
 }
@@ -60,7 +100,7 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 	cutoffs := make([]time.Time, len(usageSummaryWindows))
 	ends := make([]time.Time, len(usageSummaryWindows))
 	for index, window := range usageSummaryWindows {
-		windows[index] = &usageSummaryWindow{Key: window.key, Until: now.UTC().Format(time.RFC3339Nano)}
+		windows[index] = &usageSummaryWindow{InputTokensAvailable: true, Key: window.key, Until: now.UTC().Format(time.RFC3339Nano), Reported: usageSummaryReported{CarbonTokens: map[string]map[string]float64{}}}
 		cutoffs[index], ends[index] = usageSummaryBounds(window.key, window.span, now)
 		windows[index].Until = ends[index].UTC().Format(time.RFC3339Nano)
 		if !cutoffs[index].IsZero() {
@@ -114,6 +154,9 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 			day = localMidnight(hour, time.Local).Format("2006-01-02")
 		}
 		priced := book.cost(entry.model, day, entry.tokens)
+		if entry.isEstimate && priced.cost != nil {
+			priced.status = "partial"
+		}
 		tier, _ := carbon.tier(entry.model)
 		carbonParts := map[string]int64{
 			"uncached_input": entry.tokens["uncached_input_tokens"] + entry.tokens["unclassified_tokens"],
@@ -154,7 +197,28 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 			if share == 0 {
 				continue
 			}
+			window.IsEstimate = window.IsEstimate || entry.isEstimate
+			window.InputTokensAvailable = window.InputTokensAvailable && !entry.missingInput
+			window.PriceStatus = worsePriceStatus(window.PriceStatus, priced.status)
+			window.CostIsEstimate = window.CostIsEstimate || entry.isEstimate && priced.cost != nil
 			window.Tokens += int64(float64(entry.tokens["total_tokens"])*share + .5)
+			if !entry.isEstimate {
+				window.Reported.Tokens += int64(float64(entry.tokens["total_tokens"])*share + .5)
+				window.Reported.PriceStatus = worsePriceStatus(window.Reported.PriceStatus, priced.status)
+				if priced.cost != nil {
+					cost := *priced.cost * share
+					window.Reported.CostUSD = addCost(window.Reported.CostUSD, &cost)
+				}
+				if window.Reported.CarbonTokens == nil {
+					window.Reported.CarbonTokens = map[string]map[string]float64{}
+				}
+				if window.Reported.CarbonTokens[tier] == nil {
+					window.Reported.CarbonTokens[tier] = map[string]float64{}
+				}
+				for category, count := range carbonParts {
+					window.Reported.CarbonTokens[tier][category] += float64(count) * share
+				}
+			}
 			if window.CarbonTokens == nil {
 				window.CarbonTokens = map[string]map[string]float64{}
 			}
@@ -176,6 +240,7 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 type usageSummaryEntry struct {
 	workspaceID, hour, model string
 	tokens                   map[string]int64
+	isEstimate, missingInput bool
 }
 
 const usageSummaryAuthorshipSQL = `SELECT sent_at,typed_words FROM message_authorship WHERE typed_words>0`
@@ -188,7 +253,7 @@ const usageSummaryAuthorshipSQL = `SELECT sent_at,typed_words FROM message_autho
 // the primary-key indexes, which would fetch the full records again.
 const usageSummaryLedgerSQL = `SELECT a.workspace_id,w.source_kind,u.usage_hour,u.model,COALESCE(a.model,''),
 	u.total_tokens,u.uncached_input_tokens,u.cache_read_input_tokens,u.cache_creation_input_tokens,
-	u.cache_creation_1h_input_tokens,u.output_tokens,u.unclassified_tokens
+	u.cache_creation_1h_input_tokens,u.output_tokens,u.unclassified_tokens,u.is_estimate,u.input_tokens_available
 	FROM agent_session_usage u
 	JOIN agent_sessions a INDEXED BY agent_sessions_summary_idx ON a.id=u.agent_session_id
 	JOIN workspaces w INDEXED BY workspaces_library_idx ON w.id=a.workspace_id
@@ -207,10 +272,13 @@ func (c *Catalog) usageSummaryLedger(ctx context.Context) ([]usageSummaryEntry, 
 		var entry usageSummaryEntry
 		var source, sessionModel string
 		var total, input, read, write, write1h, output, unclassified int64
+		var estimated, inputAvailable int64
 		if err := rows.Scan(&entry.workspaceID, &source, &entry.hour, &entry.model, &sessionModel,
-			&total, &input, &read, &write, &write1h, &output, &unclassified); err != nil {
+			&total, &input, &read, &write, &write1h, &output, &unclassified, &estimated, &inputAvailable); err != nil {
 			return nil, err
 		}
+		entry.isEstimate = estimated != 0
+		entry.missingInput = inputAvailable == 0
 		entry.model = strings.TrimSpace(entry.model)
 		if entry.model == "" {
 			entry.model = strings.TrimSpace(sessionModel)
@@ -235,7 +303,11 @@ func (c *Catalog) usageSummaryLedger(ctx context.Context) ([]usageSummaryEntry, 
 	// Match representativeLedger: choose among workspaces with positive usage
 	// across all time, even when a mirror has no usage in a trailing window.
 	representative := map[string]bool{}
-	for _, workspace := range c.suppressMirrors(workspaces) {
+	representatives, err := c.suppressMirrorsContext(ctx, workspaces)
+	if err != nil {
+		return nil, err
+	}
+	for _, workspace := range representatives {
 		representative[firstString(workspace["id"])] = true
 	}
 	kept := ledger[:0]

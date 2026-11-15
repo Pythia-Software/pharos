@@ -930,7 +930,7 @@ func TestTextSearchReasoningIngest(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := testServer(t, config, c)
-	request := httptest.NewRequest(http.MethodPost, "/api/search/text", strings.NewReader(`{"query":"I understand now","mode":"literal","surface":"reasoning","conversation_id":"`+conversation+`"}`))
+	request := queryFixtureHTTPRequest(http.MethodPost, "/api/search/text", strings.NewReader(`{"query":"I understand now","mode":"literal","surface":"reasoning","conversation_id":"`+conversation+`"}`))
 	request.Header.Set("Authorization", "Bearer "+config.APIToken)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -1135,7 +1135,7 @@ func TestTextSearchEditorValidationDoesNotSearch(t *testing.T) {
 		{`{"where":{"op":"and","children":[]}}`, 400},
 		{`{"query":"cache","from":"2026-10-12","to":"2026-10-01"}`, 400},
 	} {
-		req := httptest.NewRequest(http.MethodPost, "/api/search/text/validate", strings.NewReader(tc.body))
+		req := queryFixtureHTTPRequest(http.MethodPost, "/api/search/text/validate", strings.NewReader(tc.body))
 		req.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, req)
@@ -1163,7 +1163,7 @@ func TestTextSearchVisualLibraryRequests(t *testing.T) {
 		if strings.Contains(endpoint, "v2") {
 			body = `{"version":2,"profile":"qt-sqlite-v1",` + body[1:]
 		}
-		req := httptest.NewRequest(http.MethodPost, endpoint+"?find_fuzzy=0&find_where="+url.QueryEscape(where), strings.NewReader(body))
+		req := queryFixtureHTTPRequest(http.MethodPost, endpoint+"?find_fuzzy=0&find_where="+url.QueryEscape(where), strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, req)
@@ -1382,7 +1382,7 @@ func TestTextSearchHTTPAndMCPParity(t *testing.T) {
 	config := defaultConfig(t.TempDir() + "/config.toml")
 	config.APIToken = "test-token"
 	server := testServer(t, config, c)
-	req := httptest.NewRequest(http.MethodPost, "/api/search/text", strings.NewReader(`{"query":"cache NOT redis","selected_only":true}`))
+	req := queryFixtureHTTPRequest(http.MethodPost, "/api/search/text", strings.NewReader(`{"query":"cache NOT redis","selected_only":true}`))
 	req.Header.Set("Authorization", "Bearer test-token")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, req)
@@ -1693,7 +1693,7 @@ func TestLibraryFindMetadataIgnoresScopedCursor(t *testing.T) {
 	params := url.Values{"find": {"parser"}, "find_fuzzy": {"0"}, "find_cursor": {page.NextCursor}}
 	request := func(t *testing.T, method, path, body string) string {
 		t.Helper()
-		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req := queryFixtureHTTPRequest(method, path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer test-token")
 		recorder := httptest.NewRecorder()
 		server.ServeHTTP(recorder, req)

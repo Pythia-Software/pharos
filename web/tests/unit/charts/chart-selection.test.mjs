@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EMPTY_QUERY, applyQuery, loadSchema } from '@pythia-software/query-table-core';
 import usageSchema from '../../../../schemas/usage.schema.json';
 import writingSchema from '../../../../schemas/writing.schema.json';
-import { isSliceTerm, readSlice, updateSlice, withSlice } from '../../../src/chart-selection';
+import { isSliceTerm, readSlice, updateSlice, updateSliceValues, sliceGroupState, sliceValueVisible, sliceGroupCounts, legendMenuItems, withSlice } from '../../../src/chart-selection';
 import { chartGesture, chartInspectionRange } from '../../../src/chart-inspection';
 const all = { values: [], excluded: false };
 const field = 'model_family';
@@ -56,8 +56,88 @@ test('only, additive toggle, exclusion, and reset have explicit selection semant
   assert.deepEqual(updateSlice(hidden, '', 'clear'), all);
 });
 
+test('category actions include all children atomically and preserve outside selections',()=>{
+ const group=['C.difficulty','C.difficulty.blocker','C.difficulty.ambiguity'],outside='C.report.finding';
+ assert.deepEqual(updateSliceValues(all,[...group,group[0]],'only'),{values:group,excluded:false});
+ assert.deepEqual(updateSliceValues(all,group,'exclude'),{values:group,excluded:true});
+ const mixed={values:[outside,group[0]],excluded:false};
+ const full=updateSliceValues(mixed,group,'toggle');
+ assert.deepEqual(full,{values:[outside,...group],excluded:false});
+ assert.deepEqual(updateSliceValues(full,group,'toggle'),{values:[outside],excluded:false});
+ assert.deepEqual(updateSliceValues({values:group,excluded:false},group,'toggle'),all);
+ assert.deepEqual(updateSliceValues(full,group,'clear'),all);
+ assert.deepEqual(updateSliceValues(mixed,[],'toggle'),mixed);
+});
+
+test('category additions reveal all partially excluded children and removals exclude the whole category',()=>{
+ const group=['a','b','c'],outside='outside',mixed={values:[outside,'a'],excluded:true};
+ const visible=updateSliceValues(mixed,group,'toggle');
+ assert.deepEqual(visible,{values:[outside],excluded:true});
+ const hidden=updateSliceValues(visible,group,'toggle');
+ assert.deepEqual(hidden,{values:[outside,...group],excluded:true});
+ assert.deepEqual(updateSliceValues(hidden,group,'toggle'),visible);
+ for(const selection of [all,{values:['a'],excluded:false},{values:['b'],excluded:true}])for(const value of group)for(const action of ['only','toggle','exclude','clear']){
+  assert.deepEqual(updateSliceValues(selection,[value],action),updateSlice(selection,value,action));
+ }
+});
+
+test('category state distinguishes neutral, full, mixed and hidden in either selection mode',()=>{
+ const group=['a','b'];
+ assert.deepEqual(sliceGroupState(all,group),{active:false,mixed:false,dimmed:false,soleSelection:false});
+ assert.deepEqual(sliceGroupState({values:group,excluded:false},group),{active:true,mixed:false,dimmed:false,soleSelection:true});
+ for(const excluded of [false,true]){
+  assert.deepEqual(sliceGroupState({values:['a'],excluded},group),{active:false,mixed:true,dimmed:false,soleSelection:false});
+  const values=excluded?group:['outside'];
+  assert.deepEqual(sliceGroupState({values,excluded},group),{active:false,mixed:false,dimmed:true,soleSelection:false});
+ }
+ assert.deepEqual(sliceGroupState({values:['outside'],excluded:true},group),{active:true,mixed:false,dimmed:false,soleSelection:false});
+});
+
+test('Hide and Show preserve other hidden values and support an explicitly empty drawing',()=>{
+ let selection=updateSlice(all,'a','hide');
+ selection=updateSlice(selection,'b','hide');
+ assert.deepEqual(selection,{values:['a','b'],excluded:true});
+ selection=updateSlice(selection,'a','show');
+ assert.deepEqual(selection,{values:['b'],excluded:true});
+ assert.equal(sliceValueVisible(selection,'future'),true);
+ const only=updateSlice(all,'a','only'),none=updateSlice(only,'a','hide');
+ assert.deepEqual(none,{values:[],excluded:false,allHidden:true});
+ for(const value of ['a','b','future'])assert.equal(sliceValueVisible(none,value),false);
+ assert.deepEqual(updateSlice(none,'b','show'),{values:['b'],excluded:false});
+ assert.deepEqual(updateSlice(none,'a','clear'),all);
+ const rows=[{model_family:'a'},{model_family:'b'},{model_family:null}];
+ const where=withSlice([],field,none);
+ assert.deepEqual(applyQuery(rows,{...EMPTY_QUERY,where},loadSchema(usageSchema)).rows,[]);
+ assert.deepEqual(readSlice(where,field),none);
+});
+
+test('mixed category Show and Hide act on all children while retaining outside choices',()=>{
+ const values=['a','b','c'],included={values:['outside','a'],excluded:false},excluded={values:['other','b','c'],excluded:true};
+ for(const selection of [included,excluded]){
+  assert.deepEqual(sliceGroupCounts(selection,values),{visibleCount:1,hiddenCount:2});
+  const shown=updateSliceValues(selection,values,'show'),hidden=updateSliceValues(selection,values,'hide');
+  for(const value of values){assert.equal(sliceValueVisible(shown,value),true);assert.equal(sliceValueVisible(hidden,value),false);}
+  for(const value of ['outside','other','future']){
+   assert.equal(sliceValueVisible(shown,value),sliceValueVisible(selection,value));
+   assert.equal(sliceValueVisible(hidden,value),sliceValueVisible(selection,value));
+  }
+ }
+ assert.deepEqual(sliceGroupCounts({values:[],excluded:false,allHidden:true},values),{visibleCount:0,hiddenCount:3});
+});
+
+test('legend menus use the requested visible, hidden and mixed one-line actions',()=>{
+ const labels=(visible,hidden,others)=>legendMenuItems(visible,hidden,others).map(item=>item.label);
+ assert.deepEqual(labels(1,0,false),['Hide','Hide others']);
+ assert.deepEqual(labels(1,0,true),['Hide','Hide others','Show All']);
+ assert.deepEqual(labels(0,1,true),['Show','Show and Hide Others','Show All']);
+ assert.deepEqual(labels(3,2,true),['Show 2 values','Hide 3 values','Show All']);
+ assert.deepEqual(labels(1,1,true),['Show 1 value','Hide 1 value','Show All']);
+ assert.equal(legendMenuItems(3,2,true).at(-1).separator,true);
+ for(const item of legendMenuItems(3,2,true))assert.ok(!item.label.includes('\n'));
+});
+
 test('selection writes preserve date, repository, and unrelated model predicates', () => {
-  const preserved = [{ field: 'last_usage_at', op: '>=', value: '2026-09-01' }, { field: 'repository_name', op: '=', value: 'pharos' }, { field, op: 'contains', value: '5' }];
+  const preserved = [{ field: 'last_usage_at', op: '>=', value: '2026-09-01' }, { field: 'project_name', op: '=', value: 'pharos' }, { field, op: 'contains', value: '5' }];
   const original = [...preserved, { field, op: '=', value: 'opus-5-5' }];
   const changed = withSlice(original, field, { values: ['gpt-6-sol'], excluded: true });
   assert.deepEqual(changed.slice(0, 3), preserved);
@@ -99,13 +179,13 @@ test('inclusions with an unknown value remain a single OR selection', () => {
 });
 
 test('plain not-equal filters preserve missing repositories through legend actions', () => {
-  const repositoryField = 'repository_name';
+  const repositoryField = 'project_name';
   const time = { field: 'last_usage_at', op: '>=', value: '2026-09-01' };
   const where = [time, { field: repositoryField, op: '!=', value: 'foo' }];
   const selection = readSlice(where, repositoryField);
   assert.deepEqual(selection, { values: ['foo'], excluded: true });
   assert.equal(selection.values.includes(null), false);
-  const rows = ['foo', 'bar', 'baz', null, ''].map(repository_name => ({ repository_name, last_usage_at: '2026-10-01' }));
+  const rows = ['foo', 'bar', 'baz', null, ''].map(project_name => ({ project_name, last_usage_at: '2026-10-01' }));
   rows.push({ last_usage_at: '2026-10-01' });
   for (const [next, expected] of [[selection, rows.slice(1)], [updateSlice(selection, 'bar', 'toggle'), rows.slice(2)]]) {
     const rewritten = withSlice(where, repositoryField, next);

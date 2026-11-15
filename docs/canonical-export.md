@@ -84,3 +84,31 @@ to the child's provider and source account. A
 child's runtime does not override its parent's channel. Conflicting equal-authority
 claims remain visible as conflicts. See [channel and machine](channel-and-machine.md)
 for inheritance, evidence, and grouping semantics.
+
+## Inference speed
+
+Conversations and messages accept `speed: "fast" | "standard"` and an optional
+`service_tier` string. Message settings override conversation settings; a null
+tier defaults to standard when no explicit speed is set. OpenAI's `priority`
+tier (requested as `fast`) and its `ultrafast` tier are fast. All other or
+missing tiers default to standard; an explicit speed field takes precedence so
+Claude's `speed: "fast"` works alongside `service_tier: "standard"`.
+Normalization and streamed request merges update speed and tier independently:
+tier-only accounting preserves an explicit speed until another speed setting or
+reset arrives. A null or unknown speed clears that override and uses the tier.
+
+Ingestion normalizes the settings on each retained message and model request:
+
+| Field | Values | Meaning |
+|---|---|---|
+| `speed` | `fast`, `standard` | Stable dimension for filtering and grouping. |
+| `service_tier` | Original tier, trimmed and lowercase; otherwise null | Recorded routing/configuration evidence. |
+| `speed_source` | `speed`, `service_tier`, `assumed_standard` | Distinguishes a recorded setting from the standard-speed fallback policy. |
+
+Codex turn context, Claude request usage, Conductor accounting/configuration,
+ChatGPT message metadata and canonical messages share this contract. It survives
+stored-message replay and catalog recovery. The versioned request-ledger rebuild
+backfills retained evidence; discarded original settings require source reindexing.
+`model_requests` exposes these dimensions to native queries and includes
+`model_speed` and `model_effort_speed` convenience grouping fields. Request token
+counts and observed timing remain separate measures; speed never implies effort.

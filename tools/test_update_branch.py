@@ -10,6 +10,7 @@ import unittest
 SCRIPT = Path(__file__).with_name("update-branch.py")
 BUNDLE = "internal/archive/assets/query-tables.js"
 CSS = "internal/archive/assets/query-tables.css"
+SITE_MAP = "internal/archive/assets/site-map.json"
 
 
 class BranchUpdateTests(unittest.TestCase):
@@ -31,9 +32,10 @@ class BranchUpdateTests(unittest.TestCase):
         self.write(self.upstream, "source-b", "base b\n")
         self.write(self.upstream, BUNDLE, "base bundle\n")
         self.write(self.upstream, CSS, "base css\n")
-        self.write(self.upstream, ".gitignore", f"/{BUNDLE}\n/{CSS}\n/checks.log\n")
+        self.write(self.upstream, SITE_MAP, '{"controls": 1}\n')
+        self.write(self.upstream, ".gitignore", f"/{BUNDLE}\n/{CSS}\n/{SITE_MAP}\n/checks.log\n")
         self.git("add", ".", cwd=self.upstream)
-        self.git("add", "-f", BUNDLE, CSS, cwd=self.upstream)
+        self.git("add", "-f", BUNDLE, CSS, SITE_MAP, cwd=self.upstream)
         self.git("commit", "-qm", "base", cwd=self.upstream)
         self.git("clone", "-q", str(self.upstream), str(self.repo), cwd=self.root)
         self.git("checkout", "-qb", "feature")
@@ -49,6 +51,7 @@ if os.environ.get('PHAROS_UPDATE_TEST_REQUIRE_HELPER'):
 Path('{BUNDLE}').parent.mkdir(parents=True, exist_ok=True)
 Path('{BUNDLE}').write_text(Path('source-a').read_text() + Path('source-b').read_text())
 Path('{CSS}').write_text('rebuilt css')
+Path('{SITE_MAP}').write_text('rendered from ' + Path('source-a').read_text())
 if os.environ.get('PHAROS_UPDATE_TEST_DIRTY_CHECKS'):
     Path('source-a').write_text('changed during checks')
 if os.environ.get('PHAROS_UPDATE_TEST_UNTRACKED_CHECKS'):
@@ -56,8 +59,8 @@ if os.environ.get('PHAROS_UPDATE_TEST_UNTRACKED_CHECKS'):
 """)
         setup.chmod(0o755)
         self.git("add", "tools/setup.sh")
-        self.git("rm", BUNDLE, CSS)
-        self.git("commit", "-qm", "ignore generated bundles")
+        self.git("rm", "-q", BUNDLE, CSS, SITE_MAP)
+        self.git("commit", "-qm", "ignore generated files")
 
     def git(self, *args, cwd=None, check=True):
         return subprocess.run(["git", *args], cwd=cwd or self.repo, env=self.env,
@@ -115,6 +118,20 @@ if os.environ.get('PHAROS_UPDATE_TEST_UNTRACKED_CHECKS'):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.git("ls-files", BUNDLE).stdout, "")
         self.assertEqual((self.repo / BUNDLE).read_text(), "base a\nbase b\n")
+
+    def test_discards_a_site_map_an_older_branch_still_tracks(self):
+        # Master stopped tracking the generated site map; this older branch
+        # still changes its control count, which used to conflict.
+        self.git("rm", "-q", "--cached", SITE_MAP, cwd=self.upstream)
+        self.git("commit", "-qm", "render the site map in the build", cwd=self.upstream)
+        self.write(self.repo, SITE_MAP, '{"controls": 2}\n')
+        self.git("add", "-f", SITE_MAP)
+        self.git("commit", "-qm", "older branch still tracks the site map")
+        result = self.run_update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git("ls-files", SITE_MAP).stdout, "")
+        self.assertEqual((self.repo / SITE_MAP).read_text(), "rendered from base a\n")
+        self.assertEqual(self.git("status", "--porcelain").stdout, "")
 
     def test_stops_for_source_conflict_and_continues_staged_resolution(self):
         self.commit(self.repo, "source-a", "feature a\n")

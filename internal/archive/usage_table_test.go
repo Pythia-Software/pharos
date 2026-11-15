@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,6 +77,12 @@ func TestUsageRowsSplitSessionsByRequestTime(t *testing.T) {
 
 func TestUsageSeedAndRefineExistingCatalogs(t *testing.T) {
 	catalog, _ := testCatalog(t)
+	loads := 0
+	load := storedWorkspaceConversations
+	override(t, &storedWorkspaceConversations, func(ctx context.Context, q queryer, workspace string) ([]ConversationRecord, []string, error) {
+		loads++
+		return load(ctx, q, workspace)
+	})
 	ingestUsageFixture(t, catalog)
 	if _, err := catalog.DB.Exec("DELETE FROM agent_session_usage; DELETE FROM usage_attribution_state"); err != nil {
 		t.Fatal(err)
@@ -98,6 +105,40 @@ func TestUsageSeedAndRefineExistingCatalogs(t *testing.T) {
 	if refined, err = catalog.RefineUsageTimeline(nil); err != nil || refined != 0 {
 		t.Fatalf("refinement should be idempotent: refined=%d err=%v", refined, err)
 	}
+	if loads != 0 {
+		t.Fatalf("non-Claude refinement loaded a whole workspace %d times", loads)
+	}
+	// Several conversations sharing a Claude workspace resolve ownership from
+	// one snapshot, including recovered results that would otherwise reload it.
+	root, child := recoveredUsageGroup()
+	root.Messages = append(root.Messages, MessageRecord{NativeID: "claim", Kind: "metadata", Text: `{"type":"cost-state","modelUsage":{"opus":{"input_tokens":100,"output_tokens":10},"sonnet":{"input_tokens":100,"output_tokens":10}}}`})
+	record := WorkspaceRecord{SourceID: "batch-refine", SourceKind: "claude", Account: "local", Conversations: []ConversationRecord{root, child}}
+	tx, err := catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = ingestWorkspace(tx, record, false); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, catalog.DB, `DELETE FROM agent_session_usage WHERE agent_session_id IN (SELECT a.id FROM agent_sessions a JOIN workspaces w ON w.id=a.workspace_id WHERE w.source_id='batch-refine')`)
+	execSQL(t, catalog.DB, `DELETE FROM usage_attribution_state WHERE workspace_id IN (SELECT id FROM workspaces WHERE source_id='batch-refine')`)
+	if err = catalog.seedSessionUsage(); err != nil {
+		t.Fatal(err)
+	}
+	loads = 0
+	var done, total int
+	refined, err = catalog.RefineUsageTimeline(func(d, n int) { done, total = d, n })
+	if err != nil || refined != 2 || done != 2 || total != 2 || loads != 1 {
+		t.Fatalf("batch refine=%d, progress=%d/%d, workspace loads=%d: %v", refined, done, total, loads, err)
+	}
+	var tokens int
+	if err = catalog.DB.QueryRow(`SELECT SUM(u.total_tokens) FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id JOIN workspaces w ON w.id=a.workspace_id WHERE w.source_id='batch-refine'`).Scan(&tokens); err != nil || tokens != 220 {
+		t.Fatalf("batch lost ownership: tokens=%d: %v", tokens, err)
+	}
+
 }
 
 func TestUsageRowsSuppressMirroredWorkspaces(t *testing.T) {

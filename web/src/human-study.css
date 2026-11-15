@@ -23,7 +23,7 @@
 .human-study-row>i>span { display:block; height:100%; background:var(--query-tone); }
 .human-study-hour-bars { display:flex; flex:1; min-height:70px; align-items:end; gap:2px; }
 .human-study-hour-bars>span { display:flex; align-items:end; height:100%; flex:1; }
-.human-study-hour-bars i { display:block; width:100%; background:var(--query-tone); border-radius:2px 2px 0 0; }
+.human-study-hour-bars i { display:block; width:100%; border-radius:2px 2px 0 0; }
 
 .human-study-hour-bars>span:hover { background:color-mix(in srgb,var(--query-tone) 10%,transparent); }
 .human-study-hour-bars>span:hover i,.human-study-row:hover>i>span { filter:brightness(1.15); }

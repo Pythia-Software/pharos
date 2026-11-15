@@ -77,7 +77,7 @@ func render(scale: Int) -> Data {
     // Lay out the design against the top edge, where Finder anchors the picture.
     context.cgContext.translateBy(x: 0, y: CGFloat(height - designHeight))
 
-    // Finder icon centers are in points from the top left (see dmg-settings.py);
+    // Finder icon centers are in points from the top left (see build_dmg.py);
     // flip them into the design's bottom-left coordinates.
     func flip(_ y: CGFloat) -> CGFloat { CGFloat(designHeight) - y }
 

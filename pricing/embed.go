@@ -6,3 +6,6 @@ import _ "embed"
 
 //go:embed cost_changes.json
 var CostChanges []byte
+
+//go:embed model_colors.json
+var ModelColors []byte

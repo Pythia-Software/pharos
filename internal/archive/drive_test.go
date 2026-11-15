@@ -322,3 +322,37 @@ func TestDriveHealthAnswersFromCacheAndRefreshesInBackground(t *testing.T) {
 		t.Fatal("health wrote to the library")
 	}
 }
+
+// A drive whose device cannot be observed gets no cached checks and starts
+// no measurement, which could not be kept; a missing one reads disconnected.
+func TestDriveHealthWithoutDeviceIdentity(t *testing.T) {
+	config, _ := backupFixture(t)
+	stubDriveTool(t, map[string]string{})
+	stubDevices(t)
+	server := probeServer(t, config.Path)
+	for range 2 {
+		_, health := probeCall(t, server, http.MethodGet, "/api/health", "")
+		drive := health["drive"].(map[string]any)
+		checks, _ := drive["checks"].([]any)
+		if drive["status"] != "unknown" || len(checks) != 1 || checks[0].(map[string]any)["id"] != "volume" {
+			t.Fatalf("unidentified drive: %v", drive)
+		}
+	}
+	drives.mu.Lock()
+	refreshing, key := drives.refreshing, drives.key
+	drives.mu.Unlock()
+	if refreshing || key != "" {
+		t.Fatalf("unidentified drive started a refresh or kept a key: %v %q", refreshing, key)
+	}
+	// A missing drive reads disconnected from backup history alone, so a
+	// drive reappearing mid-report cannot reach checks that need a state.
+	missing := Config{Library: true, Path: filepath.Join(t.TempDir(), "gone", "library.toml")}
+	report := driveUnidentifiedReport(missing, errFileObservationUnavailable)
+	checks, _ := report["checks"].([]driveCheck)
+	if report["status"] != "disconnected" || len(checks) != 1 || checks[0].ID != "backup" {
+		t.Fatalf("missing drive: %v", report)
+	}
+	if fmt.Sprint(driveReport(missing, &driveState{})) != fmt.Sprint(report) {
+		t.Fatalf("disconnected answers differ: %v and %v", driveReport(missing, &driveState{}), report)
+	}
+}

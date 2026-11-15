@@ -8,8 +8,6 @@ const machines = new Map<string, string>([["environment:web", "Web (device unkno
 let revision = 0, loading: Promise<void> | undefined;
 const listeners = new Set<() => void>();
 if (typeof window !== "undefined") {
-  const shared = (window as unknown as { pharosShare?: { datasets?: Record<string, Array<Record<string,unknown>>> } }).pharosShare;
-  for (const rows of Object.values(shared?.datasets ?? {})) for (const row of rows) for (const [key,label] of [["machine_id","machine"],["execution_machine_id","execution_machine"]]) if (row[key] && row[label]) machines.set(String(row[key]),String(row[label]));
   for (const event of ["pharos:data-refresh","pharos:usage-refresh"]) window.addEventListener(event, () => { void loadOriginMetadata(true); });
 }
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
@@ -23,7 +21,7 @@ export function originLabel(field: string, value: unknown, row?: Record<string, 
 }
 export async function loadOriginMetadata(force = false): Promise<void> {
   if (force) loading = undefined;
-  if (loading || typeof window === "undefined" || (window as unknown as { pharosShare?: unknown }).pharosShare) return loading;
+  if (loading || typeof window === "undefined") return loading;
   const pending = fetch("/api/origins").then(async response => {
     if (!response.ok) throw new Error(`Origin metadata: ${response.status}`);
     const data = await response.json() as { machines?: Array<{ id: string; label: string }> };

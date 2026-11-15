@@ -8,11 +8,13 @@ func PharosToolsSchema() querytable.Schema {
 		Name:    "pharos_tools",
 		IDField: "id",
 		Fields: map[string]querytable.FieldSpec{
+			"duration_is_estimate":   {Name: "duration_is_estimate", Kind: querytable.FieldBool, Expr: "r.\"duration_is_estimate\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"duration_is_estimate\""},
 			"id":                     {Name: "id", Kind: querytable.FieldText, Expr: "r.\"id\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"id\""},
 			"day":                    {Name: "day", Kind: querytable.FieldText, Expr: "r.\"day\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"day\""},
 			"week":                   {Name: "week", Kind: querytable.FieldText, Expr: "r.\"week\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"week\""},
 			"month":                  {Name: "month", Kind: querytable.FieldText, Expr: "r.\"month\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"month\""},
 			"repository_name":        {Name: "repository_name", Kind: querytable.FieldText, Expr: "r.\"repository_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"repository_name\""},
+			"project_name":           {Name: "project_name", Kind: querytable.FieldText, Expr: "r.\"project_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"project_name\""},
 			"source_kind":            {Name: "source_kind", Kind: querytable.FieldEnum, Expr: "r.\"source_kind\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"source_kind\""},
 			"provider":               {Name: "provider", Kind: querytable.FieldEnum, Expr: "r.\"provider\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"provider\""},
 			"channel":                {Name: "channel", Kind: querytable.FieldText, Expr: "r.\"channel\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"channel\""},

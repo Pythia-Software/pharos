@@ -1,3 +1,4 @@
+import { scatterAnalysisCatalog as scatter } from "../../../src/scatter-analysis-catalog";
 import { conversationAnalysisCatalog as activity } from "../../../src/conversation-analysis-catalog";
 // Cards of the Human Words, Carbon and Parallelism dashboards (and Pharos
 // MCP's empty-search rate, in record-dashboard-parity.test.mjs), each opened
@@ -13,10 +14,9 @@ import { now, writingMessages, parallelismRecords, carbonUsage } from "../helper
 import { loadClassicScript } from "../helpers/classic-script.mjs";
 import { canonicalState, analysisQuery, catalogProblems, nativeCycleResult, normalizeAnalysis, selectGroups, trendAdjustments, validAnalysisState, readAnalysisLink, analysisVersion } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
-import { humanAnalysisCatalog as human, humanLegacyURL, readHumanLink } from "../../../src/human-analysis-catalog";
+import { humanAnalysisCatalog as human, readHumanLink } from "../../../src/human-analysis-catalog";
 import { carbonAnalysisCatalog, carbonCatalogShape, deriveCarbon } from "../../../src/carbon-analysis-catalog";
 import { parallelismAnalysisCatalog, parallelismCatalogShape, parallelismSettingsNote } from "../../../src/parallelism-analysis-catalog";
-import { legacyCarbonChart } from "../../../src/carbon-analysis-catalog";
 import { windowedChart } from "../../../src/card-windows";
 import { cardDestination } from "../../../src/card-destinations";
 import { usageDashboardReturn } from "../../../src/usage-workspace-model";
@@ -39,7 +39,7 @@ const carbon = carbonAnalysisCatalog(assumptions), usage = carbonUsage(calculato
 // The service serves only records built with the saved settings.
 const saved = { counting: "workspace", gap: 60 }, parallelism = parallelismAnalysisCatalog(saved.counting);
 const records = parallelismRecords();
-const catalogs = { activity, human, carbon, parallelism };
+const catalogs = { activity, human, carbon, parallelism, scatter };
 const cardRows = { writing_messages: writingMessages(), usage: usage.rows, parallelism: records };
 const dashboardRows = cardRows;
 const round = value => typeof value === "number" ? Number(value.toPrecision(12)) : value;
@@ -59,7 +59,7 @@ test("the three catalogs are well formed and read their older links", () => {
   const defaults = { metric: "typed", split: "none", period: "day" };
   assert.deepEqual([read({ ...defaults, scope: "all", split: "kind" }).metric, read({ ...defaults, scope: "all", split: "kind" }).split], ["words", "kind"]);
   assert.deepEqual([read({ ...defaults, scope: "typed", split: "kind" }).metric, read({ ...defaults, scope: "typed", split: "kind" }).split], ["typed", "none"]);
-  assert.ok(validAnalysisState(human, { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15, scope: "typed", split: "repository_name", hours: 6, days: 3 }));
+  assert.ok(validAnalysisState(human, { period: "day", rollingPeriods: 0, display: "interval", scale: "linear", seriesLimit: 15, scope: "typed", split: "project_name", hours: 6, days: 3 }));
   // An older link's work filters read as message filters, and its legend
   // filter on the breakdown's field becomes the selection.
   const where = [{ field: "last_message_at", op: ">=", value: "-7d" }, { field: "first_message_at", op: "<", value: "+0s" }, { field: "providers", op: "=", value: "codex" }];
@@ -99,10 +99,10 @@ const sameGroups = ({ recipe, card, dashboard, scale }) => {
 
 test("explaining-repos and human-word-mix: shares of typed words, and typed shares, by repository", () => {
   const shares = pair("explaining-repos");
-  assert.deepEqual([shares.state.view, shares.state.compareAs, shares.state.metric, shares.state.split], ["compare", "share", "typed", "repository_name"]);
+  assert.deepEqual([shares.state.view, shares.state.compareAs, shares.state.metric, shares.state.split], ["compare", "share", "typed", "project_name"]);
   sameGroups(shares);
   const mix = pair("human-word-mix");
-  assert.deepEqual([mix.state.metric, mix.state.split], ["typed_share", "repository_name"]);
+  assert.deepEqual([mix.state.metric, mix.state.split], ["typed_share", "project_name"]);
   sameGroups(mix);
   assert.ok(mix.dashboard.buckets.every(bucket => bucket.value > 0 && bucket.value < 1));
 });
@@ -158,14 +158,17 @@ test("human-words and human-repository-words-trend: typed words a day, and a 7-d
     const built = trendSeries(human, state, query, core.evaluateMetrics(cardRows.writing_messages, query.query, schemas.writing_messages, { now }).metrics, { now });
     assert.equal(built.error, undefined);
     assert.deepEqual(built.buckets.map(bucket => bucket.key), card.map(bucket => bucket.key), `${id}: the same days`);
-    // Series match by their raw values; the card's preview keys a missing
-    // repository "Unspecified", the dashboard "".
-    const labels = series => Object.fromEntries(series.map(item => [item.key, item.value === "Unspecified" ? "" : item.value ?? ""]));
+    // Series match by their values; the card's preview keys a missing
+    // repository "Unspecified", the dashboard "", and the card names a
+    // labelled value (Refined) that the dashboard keeps raw (refined).
+    const names = human.breakdowns[state.split]?.values ?? {};
+    const labels = series => Object.fromEntries(series.map(item => [item.key, item.value === "Unspecified" ? "" : names[item.value] ?? item.value ?? ""]));
     const named = (values, names) => Object.fromEntries(Object.entries(values).filter(([, value]) => value).map(([key, value]) => [names[key], round(value)]));
     // A single series is the total, whatever each names it.
     const single = series => series.length === 1 ? { [series[0].key]: "total" } : labels(series);
     card.forEach((bucket, index) => assert.deepEqual(named(built.buckets[index].values, single(built.series)), named(bucket.values, single(preview.series)), `${id} ${bucket.key}`));
     assert.ok(card.some(bucket => Object.values(bucket.values).some(value => value > 0)));
+    if (id === "human-words") assert.deepEqual(preview.series.map(item => item.value).sort(), ["Provisional", "Refined"], "the card splits refined from provisional estimates");
   }
 });
 
@@ -175,7 +178,9 @@ test("a message recorded on another Mac's day: the day trend files it as the car
   const where = withTimeRange([], human.time, undefined, undefined, "7d"), state = { metric: "typed", split: "none" };
   const query = trendQuery(human, state, where, { now, zone }), built = trendSeries(human, state, query, core.evaluateMetrics(cardRows.writing_messages, query.query, schemas.writing_messages, { now }).metrics, { now });
   const card = core.evaluateMetrics(cardRows.writing_messages, cardCoverQuery(instantiateRecipe(recipeById("human-words"), 7, new Date(now)).query, recipeById("human-words")).query, schemas.writing_messages, { now }).metrics[0];
-  const recorded = Object.fromEntries(card.buckets.map(bucket => [bucket.keys[0], bucket.value]));
+  // The card splits each day into refined and provisional estimates.
+  const recorded = {};
+  for (const bucket of card.buckets) recorded[bucket.keys[0]] = (recorded[bucket.keys[0]] ?? 0) + bucket.value;
   assert.equal(built.buckets.find(bucket => bucket.key === message.day).values.total, recorded[message.day], "the recorded day holds the message on both");
   const cycle = analysisQuery(human, { view: "cycle", cycle: "weekday", metric: "typed", split: "none" }, where, { now, zone });
   // The daily totals the weekday boxes summarise: its supporting query.
@@ -199,7 +204,7 @@ function trailingCard(id, scale = 1, window = 7) {
   const opened = new URL(cardDestination(recipe, instantiateRecipe(recipe, window, new Date(at)).query, { days: window, field: recipe.field, mode: "relative" }), "http://localhost");
   const state = { ...JSON.parse(opened.searchParams.get("analyze_chart")), view: "trend" };
   assert.deepEqual(state, { ...windowedChart(id, recipe.destination.chart, window), view: "trend" });
-  assert.deepEqual([state.rollingPeriods, state.completePeriods === true, state.norm, state.split], [lookback, Boolean(trend.completeDays), true, "none"], id);
+  assert.deepEqual([state.rollingPeriods, state.completePeriods === true, state.percentiles, state.split], [lookback, Boolean(trend.completeDays), ["mean"], "none"], id);
   const query = trendQuery(catalog, state, where, { now: at, zone });
   const built = trendSeries(catalog, state, query, core.evaluateMetrics(dashboardRows[catalog.dataset], query.query, schemas[catalog.dataset], { now: at }).metrics, { now: at });
   assert.equal(built.error, undefined);
@@ -213,7 +218,7 @@ function trailingCard(id, scale = 1, window = 7) {
   });
   assert.ok(card.points.some(point => point > 0), `${id}: the fixture has values`);
   assert.equal(built.normPoints, card.points.slice(0, -1).filter(point => point !== null).length);
-  assert.ok(Math.abs(built.norm * scale - card.baseline) < 1e-9 * Math.max(1, card.baseline), `${id}: norm ${built.norm * scale} != baseline ${card.baseline}`);
+  assert.ok(Math.abs(built.references?.[0]?.value * scale - card.baseline) < 1e-9 * Math.max(1, card.baseline), `${id}: norm ${built.references?.[0]?.value * scale} != baseline ${card.baseline}`);
 }
 test("human-messages-per-day and human-conversations-per-day: 7-day means over complete days, with their norms", () => {
   trailingCard("human-messages-per-day");
@@ -275,7 +280,7 @@ test("writing-hours: typed words by local hour", () => {
 // ----- Carbon: usage under the user's assumptions ----------------------------
 
 test("carbon-tiers, carbon-repositories, carbon-models, carbon-providers and carbon-effort: estimated CO₂e by group", () => {
-  for (const [id, split, share] of [["carbon-tiers", "carbon_tier", true], ["carbon-repositories", "repository_name", false], ["carbon-models", "model_family", false], ["carbon-providers", "provider", true], ["carbon-effort", "effort", true]]) {
+  for (const [id, split, share] of [["carbon-tiers", "carbon_tier", true], ["carbon-repositories", "project_name", false], ["carbon-models", "model_family", false], ["carbon-providers", "provider", true], ["carbon-effort", "effort", true]]) {
     const compared = pair(id);
     assert.deepEqual([compared.state.view, compared.state.metric, compared.state.split, compared.state.compareAs], ["compare", "co2", split, share ? "share" : "bars"], id);
     sameGroups(compared);
@@ -354,7 +359,7 @@ test("parallel-hours, parallel-active-weekday and parallel-weekday: agent hours 
 test("Parallelism names the settings its records carry, warns when they differ, and offers provider and model only under agent counting", () => {
   assert.equal(parallelism.request, undefined, "no built-under filter: the service serves only the saved settings' records");
   const workspace = { counting: "workspace", gap: 60 };
-  assert.deepEqual(parallelismSettingsNote([workspace], workspace), { note: "These records count workspaces and join turns across gaps up to 60 minutes: the saved Parallelism settings the service built them with. Provider and Model breakdowns need agent counting (Count by Sessions)." });
+  assert.deepEqual(parallelismSettingsNote([workspace], workspace), { note: "These records count workspaces and join turns across gaps up to 60 minutes: the saved Parallelism settings the service built them with. Provider and Model breakdowns require Count by Conversations." });
   assert.doesNotMatch(parallelismSettingsNote([{ counting: "agent", gap: 60 }], { counting: "agent", gap: 60 }).note, /need agent counting/);
   // Links are read with the shape, so a Provider link opened under
   // workspace counting draws the default breakdown instead of failing.
@@ -363,7 +368,7 @@ test("Parallelism names the settings its records carry, warns when they differ, 
   assert.equal(validAnalysisState(parallelismAnalysisCatalog("workspace"), provider), false, "the counting-specific catalog alone would reject it");
   assert.equal(normalizeAnalysis(parallelismAnalysisCatalog("workspace"), provider).split, "level_band");
   const stale = parallelismSettingsNote([{ counting: "agent", gap: 15 }], workspace);
-  assert.match(stale.note, /count top-level sessions and join turns across gaps up to 15 minutes/);
+  assert.match(stale.note, /count top-level conversations and join turns across gaps up to 15 minutes/);
   assert.match(stale.warning, /believes the saved settings count workspaces/);
   assert.match(parallelismSettingsNote([], workspace).note, /No records in range/);
   assert.equal(parallelismAnalysisCatalog("workspace").breakdowns.provider, undefined);
@@ -378,15 +383,15 @@ test("Back to dashboard from a Parallelism query leaves counting and gap out of 
   const opened = new URLSearchParams(dashboard);
   opened.set("analyze_mode", "query");
   opened.set("analyze_opened", core.encodeQuery({ ...core.EMPTY_QUERY, where }));
-  const edited = [...where, { field: "counting", op: "=", value: "agent" }, { field: "gap_minutes", op: "=", value: "15" }, { field: "repository_name", op: "=", value: "pharos" }];
+  const edited = [...where, { field: "counting", op: "=", value: "agent" }, { field: "gap_minutes", op: "=", value: "15" }, { field: "project_name", op: "=", value: "pharos" }];
   opened.set("q_parallelism", core.encodeQuery({ ...core.EMPTY_QUERY, where: edited }));
   const back = core.decodeQueryStrict(new URL(usageDashboardReturn(opened).href, "http://localhost").searchParams.get("analyze_filters")).where;
-  assert.deepEqual(back, [...where, { field: "repository_name", op: "=", value: "pharos" }]);
+  assert.deepEqual(back, [...where, { field: "project_name", op: "=", value: "pharos" }]);
 });
 
 test("old Human Words links: filters that cannot keep their meaning for messages are left out and listed, never rewritten", () => {
   const time = [{ field: "last_message_at", op: ">=", value: "-7d" }, { field: "first_message_at", op: "<", value: "+0s" }];
-  const kept = [{ field: "repository_name", op: "=", value: "pharos" }, { field: "providers", op: "=", value: "codex" }, { field: "id", op: "=", value: "work-3" }];
+  const kept = [{ field: "project_name", op: "=", value: "pharos" }, { field: "providers", op: "=", value: "codex" }, { field: "id", op: "=", value: "work-3" }];
   const dropped = [
     { field: "user_words", op: ">", value: "100" }, // a work total messages lack
     { field: "typed_words", op: ">", value: "100" }, // a work's total, not a message's
@@ -403,20 +408,11 @@ test("old Human Words links: filters that cannot keep their meaning for messages
   // A versioned link is in message terms already: typed_words > 0 is a card's population.
   const card = [{ field: "typed_words", op: ">", value: "0" }];
   assert.deepEqual(readHumanLink(card, true), { where: card, unsupported: [] });
-  // The legacy Writing view applies the original filters.
-  const legacy = new URL(humanLegacyURL([...time, ...dropped]), "http://localhost").searchParams;
-  assert.equal(legacy.get("analyze_view"), "writing");
-  assert.deepEqual(core.decodeQueryStrict(legacy.get("q_writing")).where, [...time, ...dropped]);
   assert.match(human.breakdowns.provider.note, /not its work's combined providers/);
 });
 
-test("old Carbon chart links keep their chart: on the legacy page a link wins over the saved chart, and the dashboard reads it in its terms", () => {
+test("old Carbon chart links keep their chart: the dashboard reads it in its terms", () => {
   const old = { metric: "energy", split: "tier", period: "days", hours: 6, days: 3, seriesLimit: 15, rollingPeriods: 7, display: "cumulative" };
-  const saved = { metric: "co2", split: "provider", period: "month" };
-  const linked = legacyCarbonChart(JSON.stringify(old), saved);
-  assert.deepEqual([linked.metric, linked.split, linked.period, linked.days, linked.rollingPeriods, linked.display], ["energy", "carbon_tier", "days", 3, 7, "cumulative"]);
-  assert.deepEqual([legacyCarbonChart(null, saved).metric, legacyCarbonChart(null, saved).split, legacyCarbonChart(null, saved).period], ["co2", "provider", "month"]);
-  assert.deepEqual([legacyCarbonChart("{broken", null).metric, legacyCarbonChart('{"metric":"nonsense"}', null).split], ["co2", "type"]);
   // The dashboard fills its defaults, reads the link in its terms and marks it.
   const read = readAnalysisLink(carbonCatalogShape, canonicalState(carbonCatalogShape, { metric: "co2", split: "type", period: "day", ...old }), []);
   assert.deepEqual([read.state.metric, read.state.split, read.state.v], ["energy", "carbon_tier", analysisVersion]);
@@ -444,7 +440,7 @@ test("Human Words queries keep a relative range relative, so a repeated request 
   }
   // A smoothing window resolves the start against the clock; the end stays
   // relative, and a later day's query starts a day later.
-  const smoothed = { metric: "typed", split: "repository_name", rollingPeriods: 7 };
+  const smoothed = { metric: "typed", split: "project_name", rollingPeriods: 7 };
   const start = at => Date.parse(trendQuery(human, smoothed, where, { now: at, zone }).query.where.find(term => term.op === ">=").value);
   assert.ok(trendQuery(human, smoothed, where, { now, zone }).query.where.some(term => term.op === "<" && term.value === "+0s"));
   assert.equal(start(now + 86400000) - start(now), 86400000);
@@ -452,6 +448,7 @@ test("Human Words queries keep a relative range relative, so a repeated request 
   const query = trendQuery(human, { metric: "messages", split: "none" }, where, { now, zone }).query;
   const arrived = { ...cardRows.writing_messages[2], id: "late", sent_at: new Date(now + 60000).toISOString(), ...{ day: new Date(now + 60000).toLocaleDateString("en-CA") } };
   let clock = now;
+ t.mock.method(Date,"now",()=>clock);
   const prior = global.fetch;
   global.fetch = async (url, init = {}) => Response.json(answerQuery(String(url).split("?")[0].split("/").at(-1), init.body ? JSON.parse(init.body) : undefined, [...cardRows.writing_messages, arrived], schemas.writing_messages, { now: clock }));
   t.after(() => { global.fetch = prior; });

@@ -44,14 +44,14 @@ test('navigation switches only after all actions collect, then restores actions 
   assert.deepEqual(place(256, { widths: { ...dimensions.widths, theme: 120 } }), { phone: true, inline: [], overflow: tools }, 'wider action labels change what fits');
 });
 
-test('header defaults start with navigation and preserve previous visibility choices', () => {
+test('launch header has six tools and leaves alternatives available for customization', () => {
   const header = loadClassicScript('header.js');
   const defaults = plain(header.defaultHeaderTools());
-  assert.equal(defaults[0], 'history');
-  assert.equal(defaults[1], 'library');
-  assert.ok(defaults.includes('theme'));
-  assert.ok(defaults.includes('summary'));
-  assert.ok(!defaults.includes('navigator'));
+  assert.deepEqual(defaults, ['back', 'library', 'summary', 'ask', 'feedback', 'settings']);
+  for (const id of ['history', 'sync', 'guide', 'annotations', 'navigator', 'search', 'readiness', 'theme']) {
+    assert.ok(header.HEADER_TOOLS.some(tool => tool.id === id), `${id} stays available in the toolbox`);
+    assert.ok(!defaults.includes(id));
+  }
   const legacy = new Map([
     ['pharos-show-nav-button', true], ['pharos-show-agent-annotation-button', true],
     ['pharos-show-theme-button', false], ['pharos-show-usage-summary-button', false],
@@ -69,6 +69,7 @@ test('saved header layouts keep their order and omissions, reject unknowns, and 
   assert.deepEqual(plain(header.normalizeHeaderTools(['theme', 'history', 'theme', 'retired', null, {}])), ['theme', 'history', 'settings']);
   assert.deepEqual(plain(header.normalizeHeaderTools([])), ['settings']);
   assert.deepEqual(plain(header.normalizeHeaderTools(['settings', 'search'])), ['settings', 'search']);
+  assert.deepEqual(plain(header.normalizeHeaderTools(['guide', 'settings'])), ['guide', 'settings']);
   for (const invalid of [null, false, 'search', {}]) {
     assert.deepEqual(plain(header.normalizeHeaderTools(invalid)), plain(header.defaultHeaderTools()));
   }
@@ -82,6 +83,8 @@ test('header tools move in either direction, add once, and return to the toolbox
   assert.deepEqual(plain(edit(start, 'library', 1)), start);
   assert.deepEqual(plain(edit(start, 'library', 2)), start);
   assert.deepEqual(plain(edit(start, 'theme', 1)), ['history', 'theme', 'library', 'settings', 'search']);
+  assert.deepEqual(plain(edit(start, 'guide', 1)), ['history', 'guide', 'library', 'settings', 'search']);
+  assert.deepEqual(plain(edit(['guide', ...start], 'guide', null)), start);
   assert.deepEqual(plain(edit(start, 'history', null)), ['library', 'settings', 'search']);
   assert.deepEqual(plain(edit(start, 'settings', null)), start);
   assert.deepEqual(plain(edit(start, 'settings', 0)), ['settings', 'history', 'library', 'search'], 'Settings can still be repositioned');
@@ -114,8 +117,25 @@ test('compact variants replace the paired control in place or at a chosen drop b
   assert.deepEqual(plain(header.editHeaderTools(start, 'back', null)), start, 'removing an unused alternative leaves the active control alone');
   assert.deepEqual(plain(header.normalizeHeaderTools(['sync', 'library', 'back', 'history', 'settings'])), ['sync', 'back', 'settings']);
   assert.deepEqual(add(['settings'], 'sync'), ['settings', 'sync']);
-  assert.ok(!header.defaultHeaderTools().includes('back'));
+  assert.ok(header.defaultHeaderTools().includes('back'));
+  assert.ok(!header.defaultHeaderTools().includes('history'));
   assert.ok(!header.defaultHeaderTools().includes('sync'));
+});
+
+test('bookmarks and page history can be configured independently of the navigation bar', () => {
+  const header = loadClassicScript('header.js');
+  const add = (tools, id) => plain(header.editHeaderTools(tools, id, header.headerToolAddPosition(tools, id)));
+  for (const id of ['bookmarks', 'visits']) {
+    const tools = add(['settings'], id);
+    assert.deepEqual(tools, ['settings', id]);
+    assert.deepEqual(plain(header.normalizeHeaderTools(tools)), tools);
+    assert.ok(!header.defaultHeaderTools().includes(id));
+    assert.deepEqual(plain(header.editHeaderTools(tools, id, null)), ['settings']);
+  }
+  const combined = add(add(['navigator', 'settings'], 'bookmarks'), 'visits');
+  assert.deepEqual(combined, ['navigator', 'settings', 'bookmarks', 'visits']);
+  assert.deepEqual(plain(header.editHeaderTools(combined, 'navigator', null)), ['settings', 'bookmarks', 'visits']);
+  assert.deepEqual(add(['history', 'settings'], 'visits'), ['history', 'settings', 'visits'], 'page history can coexist with back / forward');
 });
 
 function historyHarness() {

@@ -51,6 +51,7 @@ func TestInteractiveReadDemand(t *testing.T) {
 		{http.MethodPost, "/api/query/library/query-v3", true},
 		{http.MethodGet, "/api/search", true},
 		{http.MethodGet, "/api/library/find", true},
+		{http.MethodGet, "/api/library/recent-conversations", true},
 		{http.MethodPost, "/api/search/text", true},
 		{http.MethodGet, "/api/work/id/conversations/id", true},
 		{http.MethodGet, "/api/usage/parallelism", true},
@@ -62,7 +63,7 @@ func TestInteractiveReadDemand(t *testing.T) {
 		{http.MethodPost, "/api/sync/run", false},
 		{http.MethodPost, "/api/query-computed-columns", false},
 	} {
-		if got := interactiveRead(httptest.NewRequest(route.method, route.path, nil)); got != route.query {
+		if got := interactiveRead(queryFixtureHTTPRequest(route.method, route.path, nil)); got != route.query {
 			t.Errorf("%s %s: query demand=%t, want %t", route.method, route.path, got, route.query)
 		}
 	}
@@ -93,10 +94,14 @@ func TestQueryPausingPreference(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
+			ctx, op := server.ops.begin(ctx, OperationSpec{Kind: "maintenance.search.text"})
+			defer op.Finish(nil)
+			reportWork(ctx, "Building text search", "message", 2, 10)
 			done := make(chan error, 1)
 			go func() { done <- catalog.queries.wait(ctx) }()
 			if step.on {
 				waitForIndexPause(t, catalog)
+				waitUntil(t, time.Second, "the operation to report its query wait", func() bool { return op.State() == opBlocked })
 				cancel()
 			}
 			select {
@@ -106,6 +111,9 @@ func TestQueryPausingPreference(t *testing.T) {
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("index failed to progress with query pausing off")
+			}
+			if op.State() != opRunning {
+				t.Fatalf("query wait did not restore the operation's state: %s", op.State())
 			}
 		})
 	}
@@ -190,7 +198,7 @@ func TestInteractiveQueriesPauseIngest(t *testing.T) {
 
 			// A query arriving after the first commit must pause the next record
 			// without retaining either the writer gate or SQLite's write lock.
-			query := httptest.NewRequest(http.MethodPost, "/api/query/library/rows-v2", strings.NewReader(`{"version":2,"profile":"qt-sqlite-v1","limit":5}`))
+			query := queryFixtureHTTPRequest(http.MethodPost, "/api/query/library/rows-v2", strings.NewReader(`{"version":2,"profile":"qt-sqlite-v1","limit":5}`))
 			query.Header.Set("Authorization", "Bearer "+config.APIToken)
 			w := &heldQueryResponse{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
 			queryDone := make(chan struct{})
@@ -401,6 +409,56 @@ func TestCatalogWriterSummaryNamesLocalWriter(t *testing.T) {
 	}
 }
 
+func TestCatalogWriterWaitReportsProgressAndRestoresState(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	reg := newOpRegistry("service")
+	ctx, op := reg.begin(t.Context(), OperationSpec{Kind: "maintenance.labels.query"})
+	defer op.Finish(nil)
+	reportWork(ctx, "Indexing message labels", "conversation", 2, 10)
+	release, err := catalog.acquireWriteGate(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			release()
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		tx, finish, err := catalog.beginTrackedWrite(ctx, "progress-wait")
+		if err == nil {
+			_ = tx.Rollback()
+			finish()
+		}
+		done <- err
+	}()
+	waitUntil(t, 5*time.Second, "the writer wait to appear in status", func() bool { return op.State() == opBlocked })
+	view := reg.views()[0]
+	if view.Reason != "catalog-busy" || operationStep(view)["fraction"] != 0.2 {
+		t.Fatalf("writer wait lost the reason or last committed progress: %+v", view)
+	}
+	release()
+	released = true
+	if err := <-done; err != nil || op.State() != opRunning {
+		t.Fatalf("writer wait failed to resume: %v (%s)", err, op.State())
+	}
+	op.Block("waiting-for-network", "the network")
+	resume := op.waitFor("catalog-busy", "the catalog writer")
+	resume()
+	if view := reg.views()[0]; view.State != opBlocked || view.Reason != "waiting-for-network" {
+		t.Fatalf("a nested wait replaced another owner's state: %+v", view)
+	}
+	op.Unblock()
+	resume = op.waitFor("catalog-busy", "the catalog writer")
+	op.Finish(context.Canceled)
+	resume()
+	if op.State() != opFailed {
+		t.Fatal("a wait resurrected a finished operation")
+	}
+}
+
 // A sync holds the catalog writer for seconds at a time. Every page read and
 // MCP tool answers from what is stored, leaving projections and history to
 // background work, so none of them waits for the writer.
@@ -415,11 +473,18 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 	if err := catalog.ensureToolRollup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// Even a backlog larger than the inline budget serves stored Session
+	// Shape statistics while the writer is held.
+	override(t, &sessionShapeInlineLimit, 0)
+	if _, err := catalog.refreshSessionShape(t.Context(), 100, true); err != nil {
+		t.Fatal(err)
+	}
 	// A sync's commits leave every projection stale, and a cloud backup this
 	// Mac was running has lost its process.
 	interrupted := jsonText(cloudRun{ID: "lost-run", DestinationID: "cloud", State: "running", OwnerPID: 999999999, OwnerHost: currentHost().ID, UpdatedAt: "earlier"})
 	execTx(t, catalog.DB, "UPDATE origin_state SET revision=revision+1",
 		"INSERT OR IGNORE INTO parallelism_dirty SELECT id,'' FROM conversations",
+		"INSERT OR IGNORE INTO session_shape_dirty SELECT id,'' FROM conversations",
 		"INSERT OR IGNORE INTO mcp_metric_dirty SELECT id FROM workspaces",
 		"INSERT OR IGNORE INTO tool_rollup_dirty SELECT id,'stale' FROM workspaces",
 		`INSERT INTO cloud_destinations(id,config_json,credential_json,imported_at) VALUES('cloud','{"name":"Backup"}','{}','2026-10-27')`,
@@ -469,7 +534,7 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 		{"GET", "/api/menu-bar/usage", ""}, {"GET", "/api/tools/status", ""}, {"GET", "/api/sources", ""},
 		// The first shows the lost run as failed and stores that in the
 		// background, which waits for the writer; the next does not.
-		{"GET", "/api/cloud-backup", ""}, {"GET", "/api/cloud-backup", ""}, {"GET", "/api/mcp/calls", ""}, {"GET", "/api/search?q=parser", ""},
+		{"GET", "/api/cloud-backup", ""}, {"GET", "/api/cloud-backup", ""}, {"GET", "/api/search?q=parser", ""},
 		{"POST", "/api/search/text", `{"query":"parser"}`}, {"GET", "/api/work/" + workspace, ""}, {"GET", "/api/findings", ""},
 		{"GET", "/api/tl1", ""}, {"GET", "/api/preferences", ""}, {"GET", "/api/sync/status", ""},
 		// The operations snapshot reads the registry and the journal, which
@@ -479,10 +544,12 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 		{"GET", "/api/status", ""}, {"GET", "/api/status?fresh=1", ""},
 	}
 	for _, dataset := range []string{"library", "usage", "tools", "tool_calls", "writing", "writing_messages", "parallelism",
-		"conversation_activity", "activity", "mcp_calls", "skill_usages", "tl1_attempts", "findings"} {
+		"conversation_activity", "activity", "mcp_calls", "skill_usages", "tl1_attempts", "findings", "session_shape"} {
 		requests = append(requests, struct{ method, path, body string }{"POST", "/api/query/" + dataset + "/rows-v2", rows},
 			struct{ method, path, body string }{"POST", "/api/query/" + dataset + "/metrics", count})
 	}
+	requests = append(requests, struct{ method, path, body string }{"POST", "/api/query/session_shape/query-v3",
+		fmt.Sprintf(`{"version":3,"profile":"qt-sqlite-v1","now":%d,"rows":true,"source":{},"result":{"select":["id","messages"],"limit":5}}`, time.Now().UnixMilli())})
 	tools := []struct {
 		name string
 		args map[string]any
@@ -497,6 +564,7 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 		{"trace_worktree", map[string]any{"query": "parser"}},
 		{"query_statistics", map[string]any{"entity": "conversation", "select": []string{"total_tokens", "user_turn_count"}}},
 		{"list_repositories", map[string]any{}},
+		{"list_projects", map[string]any{}},
 		{"get_archive_status", map[string]any{}},
 	}
 	for id, tool := range tools {
@@ -505,7 +573,7 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 	}
 	for _, request := range requests {
 		read, cancel := context.WithTimeout(ctx, 3*time.Second)
-		r := httptest.NewRequestWithContext(read, request.method, request.path, strings.NewReader(request.body))
+		r := queryFixtureHTTPRequest(request.method, request.path, strings.NewReader(request.body)).WithContext(read)
 		r.Header.Set("Authorization", "Bearer "+config.APIToken)
 		w := httptest.NewRecorder()
 		// Work that ignores the request's context would wait for the writer
@@ -544,7 +612,7 @@ func TestRequestReadsDoNotWaitForTheCatalogWriter(t *testing.T) {
 	stale.checked = time.Now().Add(-2 * driveFactsTTL)
 	drives.state = &stale
 	drives.mu.Unlock()
-	if _, refresh := drives.cached(config); refresh {
+	if _, refresh, err := drives.cached(config); err != nil || refresh {
 		t.Error("a second drive refresh started while the first still waited for the writer")
 	}
 
@@ -582,4 +650,96 @@ func mcpCalls(t *testing.T, catalog *Catalog) int {
 		t.Fatal(err)
 	}
 	return count
+}
+
+// A request whose write queues behind a long writer says who held it: in a
+// report written while it still waits, and in its entry in the request log.
+func TestQueuedRequestWriteNamesTheWriterItWaitedBehind(t *testing.T) {
+	catalog, config := testCatalog(t)
+	t.Setenv(diagnosticLogDirEnv, t.TempDir())
+	override(t, &slowRequest, time.Duration(0))
+	override(t, &contentionReportAfter, 10*time.Millisecond)
+	server := testServer(t, config, catalog)
+	reports := func() []string {
+		names, _ := filepath.Glob(filepath.Join(walPinReportDir(), contentionReportPrefix+"*"))
+		return names
+	}
+	before := reports()
+	tx, finish, err := catalog.beginTrackedWrite(t.Context(), "test-sync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := true
+	release := func() {
+		if held {
+			held = false
+			_ = tx.Rollback()
+			finish()
+		}
+	}
+	defer release()
+	status := make(chan int, 1)
+	go func() {
+		status <- apiCall(t, server, config.APIToken, "POST", "/api/preferences", `{"set":{"example-preference":"1"}}`).Code
+	}()
+	var report string
+	waitUntil(t, 10*time.Second, "a report of the queued write", func() bool {
+		for _, name := range reports() {
+			if !slices.Contains(before, name) {
+				report = name
+			}
+		}
+		return report != ""
+	})
+	t.Cleanup(func() { os.Remove(report) })
+	release()
+	if code := <-status; code != http.StatusOK {
+		t.Fatalf("the queued write returned %d", code)
+	}
+	body, err := os.ReadFile(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"POST /api/preferences", "writer_gate_holder=[test-sync", "ui-preferences for", "Requests in flight, oldest first: 1", "Goroutines:", "queueWriteGate"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("the report lacks %q:\n%s", want, clipText(string(body), 3000))
+		}
+	}
+	if strings.Contains(string(body), "example-preference") {
+		t.Error("the report holds a request's content")
+	}
+	if again := catalog.contentionReport("again", time.Now()); again != "" {
+		t.Errorf("a second report within contentionReportEvery: %s", again)
+	}
+	detail := func(path string) string {
+		for _, event := range server.diagnosticsState().requests.list() {
+			if event.Path == path {
+				return event.Detail
+			}
+		}
+		t.Fatalf("no request log entry for %s", path)
+		return ""
+	}
+	if got := detail("/api/preferences"); !strings.Contains(got, "writes=1 behind=[test-sync ") || strings.Contains(got, "writer_wait=0.00s") {
+		t.Errorf("the queued write's entry does not say who it waited behind: %s", got)
+	}
+	// A read's statements are its own whether or not its code passes the
+	// request's context to the catalog, and it waits for no writer.
+	if code := apiCall(t, server, config.APIToken, "GET", "/api/sources", nil).Code; code != http.StatusOK {
+		t.Fatalf("sources returned %d", code)
+	}
+	// The slowest statement is named by the code that ran it.
+	override(t, &slowStatement, time.Duration(0))
+	if code := apiCall(t, server, config.APIToken, "GET", "/api/receipt/none", nil).Code; code != http.StatusNotFound {
+		t.Fatalf("a missing receipt returned %d", code)
+	}
+	if got := detail("/api/receipt/none"); !strings.Contains(got, `slowest_statement=`) || !strings.Contains(got, `at "archive.`) {
+		t.Errorf("the entry does not name the slowest statement's caller: %s", got)
+	}
+	if got := detail("/api/sources"); strings.Contains(got, "statements=0") || !strings.Contains(got, "writer_wait=0.00s") || strings.Contains(got, "behind=") {
+		t.Errorf("the read's entry: %s", got)
+	}
+	if requestsTimed.active.Load() != 0 {
+		t.Error("a finished request is still listed as in flight")
+	}
 }

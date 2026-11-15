@@ -8,6 +8,7 @@ Use the annotation target as the reference for new Pharos interface icons. The l
 - Use a `1.6` unit stroke with round caps and joins. The shared `.app-icon` CSS supplies `stroke: currentColor` and `fill: none`; let the surrounding control set the color.
 - Prefer a few clear strokes that still read at 14–18 CSS pixels. Avoid heavier outlines, tiny detail, shadows, gradients, emoji, and font glyphs.
 - Keep shapes unfilled, including the moon, gear, and state icons. Fill only when the meaning requires a solid mark: `event` is deliberately a small dot (`r="2.2"` on the 24-unit grid). A selected state usually changes color, not the SVG geometry.
+- The freshness clock is a quantitative exception: its filled pie encodes hours behind on a 12-hour scale, saturating at twelve hours. Its database outline and current-state checkmark remain unfilled.
 - Reuse an existing symbol when it conveys the same action. Give a new action a distinct name and shape rather than relying on a similar Unicode character.
 
 ## Size and placement

@@ -29,36 +29,54 @@ type askCard struct {
 	Href        string `json:"href"`
 }
 type askTurn struct {
-	ID         string        `json:"id"`
-	Prompt     string        `json:"prompt"`
-	CurrentURI string        `json:"currentURI,omitempty"`
-	CLI        string        `json:"cli"`
-	Model      string        `json:"model"`
-	ModelLabel string        `json:"modelLabel"`
-	Effort     string        `json:"effort"`
-	Fast       bool          `json:"fast,omitempty"`
-	Status     string        `json:"status"`
-	Message    string        `json:"message"`
-	Reply      string        `json:"reply"`
-	ElapsedMs  int64         `json:"elapsedMs"`
-	StartedAt  int64         `json:"startedAt"`
-	Cards      []askCard     `json:"cards"`
-	Activity   []askProgress `json:"activity,omitempty"`
+	Feedback    *askFeedback    `json:"feedback,omitempty"`
+	ID          string          `json:"id"`
+	SeenAt      int64           `json:"seenAt,omitempty"`
+	Prompt      string          `json:"prompt"`
+	CurrentURI  string          `json:"currentURI,omitempty"`
+	Attachments []askAttachment `json:"attachments,omitempty"`
+	CLI         string          `json:"cli"`
+	Model       string          `json:"model"`
+	ModelLabel  string          `json:"modelLabel"`
+	Effort      string          `json:"effort"`
+	Fast        bool            `json:"fast,omitempty"`
+	Status      string          `json:"status"`
+	Message     string          `json:"message"`
+	Reply       string          `json:"reply"`
+	ElapsedMs   int64           `json:"elapsedMs"`
+	StartedAt   int64           `json:"startedAt"`
+	Cards       []askCard       `json:"cards"`
+	Activity    []askProgress   `json:"activity,omitempty"`
 	// Omitted counts destinations the agent returned that Pharos could not
 	// open; the page notes them and does not open a lone remaining card.
 	Omitted       int               `json:"omitted,omitempty"`
 	Clarification *askClarification `json:"clarification,omitempty"`
+	// Suggestion is the suggested question's family when the prompt began
+	// as one; SuggestionEdited that the user rewrote it substantially.
+	Suggestion       string `json:"suggestion,omitempty"`
+	SuggestionEdited bool   `json:"suggestionEdited,omitempty"`
 }
 type askSession struct {
-	HostID             string       `json:"hostID"`
-	QuestionCount      int          `json:"questionCount,omitempty"`
-	ID                 string       `json:"id"`
-	CreatedAt          int64        `json:"createdAt"`
-	UpdatedAt          int64        `json:"updatedAt"`
-	Selection          askSelection `json:"selection"`
-	Draft              string       `json:"draft"`
-	ClarificationDraft string       `json:"clarificationDraft,omitempty"`
-	Conversation       []askTurn    `json:"conversation"`
+	HostID             string          `json:"hostID"`
+	QuestionCount      int             `json:"questionCount,omitempty"`
+	UnreadCount        int             `json:"unreadCount,omitempty"`
+	LastStatus         string          `json:"lastStatus,omitempty"`
+	ID                 string          `json:"id"`
+	CreatedAt          int64           `json:"createdAt"`
+	UpdatedAt          int64           `json:"updatedAt"`
+	Selection          askSelection    `json:"selection"`
+	Draft              string          `json:"draft"`
+	DraftAttachments   []askAttachment `json:"draftAttachments,omitempty"`
+	ClarificationDraft string          `json:"clarificationDraft,omitempty"`
+	Conversation       []askTurn       `json:"conversation"`
+	// Models lists, in history summaries only, each CLI and model the chat's
+	// turns used, most recently used first.
+	Models []askModelUse `json:"models,omitempty"`
+}
+type askModelUse struct {
+	CLI   string `json:"cli"`
+	Model string `json:"model"`
+	Label string `json:"label"`
 }
 type askVisit struct {
 	URL   string `json:"url"`
@@ -96,7 +114,29 @@ type askSaving struct {
 
 var askID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,100}$`)
 var askRequestTimeout = 3 * time.Minute
+var askWriteTimeout = 10 * time.Second
 var askVisitLimit = 1000
+
+// Drafts, visits and the initial question are saved before inference starts.
+// They must not wait indefinitely behind an indexer's catalog transaction.
+func (s *Server) askWrite(ctx context.Context, label string, run func(*sql.Tx) error) error {
+	writeCtx, cancel := context.WithTimeout(ctx, askWriteTimeout)
+	defer cancel()
+	err := s.Catalog.writeTransaction(writeCtx, label, run)
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		return askBusyError{err}
+	}
+	return err
+}
+
+// askBusyError is shown to people as is, so it leaves out the deadline's text;
+// errors.Is still finds the deadline.
+type askBusyError struct{ err error }
+
+func (e askBusyError) Error() string {
+	return "Pharos is busy saving library changes; try again in a moment."
+}
+func (e askBusyError) Unwrap() error { return e.err }
 
 func askDecode(body map[string]any, out any) error {
 	b, err := json.Marshal(body)
@@ -119,7 +159,7 @@ func (s *Server) askSettings(ctx context.Context) (askSettings, error) {
 	return config, err
 }
 func (s *Server) saveAskSettings(ctx context.Context, config askSettings) error {
-	return s.Catalog.writeTransaction(ctx, "ask-settings", func(tx *sql.Tx) error {
+	return s.askWrite(ctx, "ask-settings", func(tx *sql.Tx) error {
 		_, err := tx.Exec("INSERT INTO ask_settings(host_id,value) VALUES(?,?) ON CONFLICT(host_id) DO UPDATE SET value=excluded.value", currentHost().ID, jsonText(config))
 		return err
 	})
@@ -138,7 +178,7 @@ func (s *Server) saveAskSession(ctx context.Context, session askSession, index b
 	if session.HostID == "" {
 		session.HostID = currentHost().ID
 	}
-	return s.Catalog.writeTransaction(ctx, "ask-session", func(tx *sql.Tx) error {
+	return s.askWrite(ctx, "ask-session", func(tx *sql.Tx) error {
 		result, err := tx.Exec("INSERT INTO ask_sessions(id,host_id,value,updated_at) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at ", session.ID, session.HostID, jsonText(session), session.UpdatedAt)
 		if err != nil {
 			return err
@@ -161,6 +201,9 @@ func (s *Server) saveAskSession(ctx context.Context, session askSession, index b
 		}
 		for index, turn := range session.Conversation {
 			text := turn.Reply
+			if turn.Feedback != nil {
+				text += "\nFeedback draft (" + turn.Feedback.Kind + "):\n" + turn.Feedback.Comment
+			}
 			if turn.Clarification != nil {
 				text += "\n" + turn.Clarification.Question
 				for i, option := range turn.Clarification.Options {
@@ -199,7 +242,15 @@ func (s *Server) askSessions(ctx context.Context, query string, offset int) ([]a
  json_extract(value,'$.createdAt'), json_extract(value,'$.selection'),
  COALESCE(json_extract(value,'$.draft'),''),
  COALESCE(json_extract(value,'$.conversation[0].prompt'),''),
- json_array_length(json_extract(value,'$.conversation'))
+ json_array_length(json_extract(value,'$.conversation')),
+ COALESCE(json_extract(value,'$.conversation[#-1].status'),''),
+ (SELECT count(*) FROM json_each(ask_sessions.value,'$.conversation') turn
+  WHERE json_extract(turn.value,'$.status') NOT IN ('loading','canceled')
+  AND COALESCE(json_extract(turn.value,'$.seenAt'),0)=0),
+ (SELECT json_group_array(json_object('cli',cli,'model',model,'label',label) ORDER BY latest DESC) FROM (
+  SELECT COALESCE(json_extract(turn.value,'$.cli'),'') cli,COALESCE(json_extract(turn.value,'$.model'),'') model,
+   COALESCE(json_extract(turn.value,'$.modelLabel'),'') label,MAX(turn.key) latest
+  FROM json_each(ask_sessions.value,'$.conversation') turn GROUP BY cli,model))
  FROM ask_sessions WHERE (?='' OR instr(lower(value),lower(?))>0)
  ORDER BY updated_at DESC,id LIMIT 100 OFFSET ?`, query, query, offset)
 	if err != nil {
@@ -209,11 +260,14 @@ func (s *Server) askSessions(ctx context.Context, query string, offset int) ([]a
 	result := []askSession{}
 	for rows.Next() {
 		var session askSession
-		var selection, title string
-		if err = rows.Scan(&session.ID, &session.UpdatedAt, &session.CreatedAt, &selection, &session.Draft, &title, &session.QuestionCount); err != nil {
+		var selection, title, models string
+		if err = rows.Scan(&session.ID, &session.UpdatedAt, &session.CreatedAt, &selection, &session.Draft, &title, &session.QuestionCount, &session.LastStatus, &session.UnreadCount, &models); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal([]byte(selection), &session.Selection); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal([]byte(models), &session.Models); err != nil {
 			return nil, err
 		}
 		session.Conversation = []askTurn{}
@@ -361,18 +415,43 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Errorf("GET or POST required"), 405)
 		return
 	}
+	if r.URL.Path == "/api/ask/attachments" && r.Method == http.MethodPost {
+		s.askUpload(w, r)
+		return
+	}
 	ctx := r.Context()
 	var body map[string]any
 	if r.Method == http.MethodPost {
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&body); err != nil {
 			writeError(w, err, 400)
 			return
 		}
 	}
-	s.ask.mu.Lock()
-	defer s.ask.mu.Unlock()
-	fail := func(err error) { writeError(w, err, 400) }
+	// These routes use only the catalog. In particular, recording a visit
+	// must not hold the lock needed to start, stop or reconcile a question
+	// while it waits for the catalog writer.
 	switch r.URL.Path {
+	case "/api/ask/visits", "/api/ask/remove-visit", "/api/ask/clear-visits",
+		"/api/ask/status", "/api/ask/sessions", "/api/ask/suggestions":
+	default:
+		s.ask.mu.Lock()
+		defer s.ask.mu.Unlock()
+	}
+	fail := func(err error) {
+		var busy askBusyError
+		if errors.As(err, &busy) {
+			writeError(w, err, http.StatusServiceUnavailable)
+			return
+		}
+		writeError(w, err, http.StatusBadRequest)
+	}
+	switch r.URL.Path {
+	case "/api/ask/suggestions":
+		if r.Method != http.MethodGet {
+			fail(fmt.Errorf("GET required"))
+			return
+		}
+		s.askSuggestionsHTTP(w, r)
 	case "/api/ask/status":
 		if r.Method != http.MethodGet {
 			fail(fmt.Errorf("GET required"))
@@ -443,6 +522,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		} else if body["enabled"] == true {
 			s.warmAskModels(triggerUser)
+			s.requestBackground("suggestions")
 		}
 		writeJSON(w, settings, 200)
 	case "/api/ask/models":
@@ -468,6 +548,25 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			fail(err)
 			return
+		}
+		// History remains available while a draft or receipt waits for the writer.
+		if s.ask.mu.TryLock() {
+			for i := range sessions {
+				if saved := s.ask.saving[sessions[i].ID]; saved != nil {
+					sessions[i].LastStatus = saved.session.Conversation[len(saved.session.Conversation)-1].Status
+					sessions[i].UnreadCount = 0
+					for _, turn := range saved.session.Conversation {
+						if turn.Status != "loading" && turn.Status != "canceled" && turn.SeenAt == 0 {
+							sessions[i].UnreadCount++
+						}
+					}
+				} else if sessions[i].LastStatus == "loading" {
+					if _, running := s.ask.active[sessions[i].ID]; !running {
+						sessions[i].LastStatus = "canceled"
+					}
+				}
+			}
+			s.ask.mu.Unlock()
 		}
 		writeJSON(w, map[string]any{"sessions": sessions}, 200)
 	case "/api/ask/session":
@@ -527,6 +626,18 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		session.Draft = draft
+		if raw, ok := body["draftAttachments"]; ok {
+			var items []askAttachment
+			if err := json.Unmarshal([]byte(jsonText(raw)), &items); err != nil {
+				fail(fmt.Errorf("invalid draft attachments"))
+				return
+			}
+			if err := s.validateAskAttachments(items); err != nil {
+				fail(err)
+				return
+			}
+			session.DraftAttachments = items
+		}
 		if raw, ok := body["clarificationDraft"]; ok {
 			text, valid := raw.(string)
 			if !valid || len(text) > 12000 {
@@ -537,6 +648,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if saving := s.ask.saving[id]; saving != nil {
 			saving.session.Draft = draft
+			saving.session.DraftAttachments = session.DraftAttachments
 			if _, ok := body["clarificationDraft"]; ok {
 				saving.session.ClarificationDraft = session.ClarificationDraft
 			}
@@ -550,6 +662,52 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, session, 200)
+	case "/api/ask/read":
+		if r.Method != http.MethodPost {
+			fail(fmt.Errorf("POST required"))
+			return
+		}
+		var input struct {
+			ID, TurnID string
+			StartedAt  int64
+		}
+		if err := askDecode(body, &input); err != nil {
+			fail(err)
+			return
+		}
+		if !askID.MatchString(input.ID) || !askID.MatchString(input.TurnID) {
+			fail(fmt.Errorf("invalid chat or message ID"))
+			return
+		}
+		saving := s.ask.saving[input.ID]
+		var session askSession
+		var err error
+		if saving != nil {
+			session = saving.session
+			session.Conversation = slices.Clone(session.Conversation)
+		} else {
+			session, err = s.askSession(ctx, input.ID)
+		}
+		if err != nil {
+			fail(err)
+			return
+		}
+		for i := range session.Conversation {
+			turn := &session.Conversation[i]
+			// A receipt for an earlier attempt must never read its retry.
+			if turn.ID != input.TurnID || turn.StartedAt != input.StartedAt || turn.Status == "loading" || turn.Status == "canceled" || turn.SeenAt != 0 {
+				continue
+			}
+			turn.SeenAt = time.Now().UnixMilli()
+			if saving != nil {
+				saving.session = session
+				saving.version++
+			} else if err = s.saveAskSession(ctx, session, false); err != nil {
+				fail(err)
+				return
+			}
+		}
+		writeJSON(w, map[string]bool{"ok": true}, 200)
 	case "/api/ask/cancel":
 		if r.Method != http.MethodPost {
 			fail(fmt.Errorf("POST required"))
@@ -571,7 +729,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		if saving := s.ask.saving[id]; saving != nil {
 			conversation := slices.Clone(saving.session.Conversation)
 			turn := &conversation[len(conversation)-1]
-			turn.Status, turn.Reply, turn.Cards, turn.Clarification = "canceled", askCanceledReply, []askCard{}, nil
+			turn.Status, turn.Reply, turn.Cards, turn.Clarification, turn.Feedback = "canceled", askCanceledReply, []askCard{}, nil, nil
 			saving.session.Conversation = conversation
 			saving.version++
 		}
@@ -603,7 +761,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(fmt.Errorf("too many visits"))
 			return
 		}
-		err = s.Catalog.writeTransaction(ctx, "ask-visits", func(tx *sql.Tx) error {
+		err = s.askWrite(ctx, "ask-visits", func(tx *sql.Tx) error {
 			// The browser history is authoritative. Reconcile its initial snapshot
 			// to remove superseded entries retained by earlier versions, and replace
 			// individual identities atomically as titles or query state change.
@@ -642,7 +800,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(err)
 			return
 		}
-		err := s.Catalog.writeTransaction(ctx, "ask-remove-visit", func(tx *sql.Tx) error {
+		err := s.askWrite(ctx, "ask-remove-visit", func(tx *sql.Tx) error {
 			_, err := tx.Exec("DELETE FROM ask_visits WHERE host_id=? AND url=? AND at=?", currentHost().ID, visit.URL, visit.At)
 			return err
 		})
@@ -656,7 +814,7 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(fmt.Errorf("POST required"))
 			return
 		}
-		err := s.Catalog.writeTransaction(ctx, "ask-clear-visits", func(tx *sql.Tx) error {
+		err := s.askWrite(ctx, "ask-clear-visits", func(tx *sql.Tx) error {
 			_, err := tx.Exec("DELETE FROM ask_visits WHERE host_id=?", currentHost().ID)
 			return err
 		})
@@ -721,7 +879,15 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 		fresh, readErr := s.askSession(context.WithoutCancel(ctx), session.ID)
 		if readErr == nil {
 			session.Draft = fresh.Draft
+			session.DraftAttachments = fresh.DraftAttachments
 			session.ClarificationDraft = fresh.ClarificationDraft
+			for i := range session.Conversation {
+				for _, saved := range fresh.Conversation {
+					if session.Conversation[i].ID == saved.ID && session.Conversation[i].StartedAt == saved.StartedAt {
+						session.Conversation[i].SeenAt = saved.SeenAt
+					}
+				}
+			}
 		}
 		turn := &session.Conversation[len(session.Conversation)-1]
 		turn.Activity = slices.Clone(s.ask.active[session.ID].activity)
@@ -743,8 +909,11 @@ func (s *Server) askHTTP(w http.ResponseWriter, r *http.Request) {
 			turn.Omitted = result.Omitted
 			turn.Reply = result.Message
 			turn.Clarification = result.Clarification
+			turn.Feedback = result.Feedback
 			turn.Status = "multiple"
-			if turn.Clarification != nil {
+			if turn.Feedback != nil {
+				turn.Status = "feedback"
+			} else if turn.Clarification != nil {
 				turn.Status = "clarification"
 			} else if len(turn.Cards) == 1 {
 				turn.Status = "single"
@@ -852,13 +1021,17 @@ func (s *Server) dropFinishedAsk(id string) {
 
 func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession, askProvider, context.Context, context.CancelFunc, error) {
 	var input struct {
-		ID         string
-		TurnID     string
-		Prompt     string
-		CurrentURI string
-		Draft      string
-		Selection  askSelection
-		Retry      bool
+		ID               string
+		TurnID           string
+		Prompt           string
+		CurrentURI       string
+		Attachments      []askAttachment
+		DraftAttachments []askAttachment
+		Draft            string
+		Selection        askSelection
+		Retry            bool
+		// Suggestion is the suggested question the prompt began as.
+		Suggestion struct{ ID, Text string }
 	}
 	fail := func(err error) (askSession, askProvider, context.Context, context.CancelFunc, error) {
 		return askSession{}, askProvider{}, nil, nil, err
@@ -878,6 +1051,12 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 	}
 	if input.CurrentURI != "" && !askSafeURL(input.CurrentURI) {
 		return fail(fmt.Errorf("invalid current page URI"))
+	}
+	if err := s.validateAskAttachments(input.Attachments); err != nil {
+		return fail(err)
+	}
+	if err := s.validateAskAttachments(input.DraftAttachments); err != nil {
+		return fail(err)
 	}
 	p, err := s.askProvider(ctx, input.Selection.Provider)
 	if err != nil {
@@ -913,7 +1092,12 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 				return fail(fmt.Errorf("message was already submitted; reload the chat to see its result"))
 			}
 			input.CurrentURI = turn.CurrentURI
+			input.Attachments = turn.Attachments
 			input.Prompt = turn.Prompt
+			input.Suggestion.ID, input.Suggestion.Text = turn.Suggestion, ""
+			if !turn.SuggestionEdited {
+				input.Suggestion.Text = turn.Prompt
+			}
 			session.Conversation = session.Conversation[:i]
 			break
 		}
@@ -921,14 +1105,24 @@ func (s *Server) startAsk(ctx context.Context, body map[string]any) (askSession,
 	if len(session.Conversation) >= 200 {
 		return fail(fmt.Errorf("start a fresh chat to continue; this chat has 200 questions"))
 	}
+	if err := askFilesAvailable(input.Attachments); err != nil {
+		return fail(err)
+	}
 	label := input.Selection.Model
 	for _, model := range p.Models {
 		if model.ID == input.Selection.Model {
 			label = model.Label
 		}
 	}
-	session.Conversation = append(session.Conversation, askTurn{ID: input.TurnID, Prompt: input.Prompt, CurrentURI: input.CurrentURI, CLI: p.ID, Model: input.Selection.Model, ModelLabel: label, Effort: input.Selection.Effort, Fast: input.Selection.Fast, Status: "loading", StartedAt: time.Now().UnixMilli(), Cards: []askCard{}})
+	turn := askTurn{ID: input.TurnID, Prompt: input.Prompt, CurrentURI: input.CurrentURI, CLI: p.ID, Model: input.Selection.Model, ModelLabel: label, Effort: input.Selection.Effort, Fast: input.Selection.Fast, Status: "loading", StartedAt: time.Now().UnixMilli(), Cards: []askCard{}}
+	turn.Attachments = input.Attachments
+	if askSuggestionFamilyKnown(input.Suggestion.ID) {
+		turn.Suggestion = input.Suggestion.ID
+		turn.SuggestionEdited = input.Prompt != strings.TrimSpace(input.Suggestion.Text) && askSimilar(input.Prompt, input.Suggestion.Text) < 0.6
+	}
+	session.Conversation = append(session.Conversation, turn)
 	session.Draft = input.Draft
+	session.DraftAttachments = input.DraftAttachments
 	session.ClarificationDraft = ""
 	session.UpdatedAt = time.Now().UnixMilli()
 	if err = s.saveAskSession(ctx, session, true); err != nil {

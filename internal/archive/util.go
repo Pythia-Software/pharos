@@ -7,13 +7,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/bits"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/fsinfo"
 )
 
 // timeLayout is the one stored timestamp format: fixed-width UTC with
@@ -210,19 +212,53 @@ func volumeIdentity(path string) string {
 		}
 		resolved = parent
 	}
-	var stat syscall.Stat_t
-	if err := syscall.Stat(path, &stat); err == nil {
-		return fmt.Sprintf("device:%d", stat.Dev)
+	// The legacy fallback keeps the native spelling: signed on Darwin.
+	if info, err := statDevice(path); err == nil {
+		if label, err := legacyDeviceLabel(info); err == nil {
+			return label
+		}
 	}
 	return "unavailable"
 }
 
+// diskCapacity observes the capacity path's file system offers Pharos.
+// Every write admission check uses it; tests replace it to fail or to
+// report synthetic sizes.
+var diskCapacity = fsinfo.Capacity
+
+// diskUsage is a legacy display reading of diskCapacity that reports (0, 0)
+// when the capacity cannot be observed, indistinguishable from an empty
+// drive. Only displays and informational fields use it; nothing that admits a
+// write may, because its failure looks like a measurement.
 func diskUsage(path string) (total, free uint64) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
+	space, err := diskCapacity(path)
+	if err != nil {
 		return 0, 0
 	}
-	return stat.Blocks * uint64(stat.Bsize), stat.Bavail * uint64(stat.Bsize)
+	return space.TotalBytes, space.AvailableBytes
+}
+
+// spaceNeeded adds the byte counts a write admission check compares with
+// the available space, refusing a negative count or a total past 64 bits
+// rather than letting it wrap into a small requirement.
+func spaceNeeded(parts ...int64) (uint64, error) {
+	var total uint64
+	for _, part := range parts {
+		if part < 0 {
+			return 0, fmt.Errorf("cannot check free space for %d bytes: %w", part, fsinfo.ErrRange)
+		}
+		var carry uint64
+		if total, carry = bits.Add64(total, uint64(part), 0); carry != 0 {
+			return 0, fmt.Errorf("cannot check free space for more than %d bytes: %w", uint64(math.MaxUint64), fsinfo.ErrRange)
+		}
+	}
+	return total, nil
+}
+
+// displayBytes is an observed byte count for the int64 formatters, which
+// show anything past their range as their largest value.
+func displayBytes(value uint64) int64 {
+	return int64(min(value, math.MaxInt64))
 }
 
 func treeSize(root string) int64 {

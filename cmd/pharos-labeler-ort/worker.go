@@ -42,6 +42,9 @@ type modelInput struct {
 }
 
 type modelInfo struct {
+	MaxBatch  int // optional backend row limit
+	MaxTokens int // optional padded-token limit for native GPU memory
+	MaxSeq    int
 	Runtime   string // for example "onnxruntime 1.31.1"
 	Device    string
 	Providers []string
@@ -146,11 +149,14 @@ type worker struct {
 	out   *replies
 	log   io.Writer
 	hello *labeler.Hello
-	sess  session
-	info  modelInfo
-	ready labeler.Ready
-	queue chan job
-	done  chan struct{} // closed when the runner has drained queue
+	// sparse, when the hello asks for it, is the output returned as sparse
+	// entries (labeler.SparseOption).
+	sparse *labeler.SparseOption
+	sess   session
+	info   modelInfo
+	ready  labeler.Ready
+	queue  chan job
+	done   chan struct{} // closed when the runner has drained queue
 }
 
 type frame struct {
@@ -282,6 +288,10 @@ func (w *worker) start(payload []byte) error {
 	if hello.Model == "" {
 		return fatal(labeler.ErrCodeModel, "hello names no model")
 	}
+	sparse, err := labeler.SparseOptionFrom(hello.Options)
+	if err != nil {
+		return fatal(labeler.ErrCodeProtocol, "hello: %v", err)
+	}
 	sum, err := fileSHA256(hello.Model)
 	if err != nil {
 		return fatal(labeler.ErrCodeModel, "%v", err)
@@ -298,7 +308,11 @@ func (w *worker) start(payload []byte) error {
 		sess.Close()
 		return fatal(labeler.ErrCodeModel, "%s: %v", hello.Model, err)
 	}
-	w.hello, w.sess, w.info = &hello, sess, info
+	if sparse != nil && !slices.ContainsFunc(info.Outputs, func(out labeler.TensorInfo) bool { return out.Name == sparse.Output && len(out.Shape) == 3 }) {
+		sess.Close()
+		return fatal(labeler.ErrCodeModel, "%s: the sparse option names output %q, which is not a rank-3 output of the model", hello.Model, sparse.Output)
+	}
+	w.hello, w.sparse, w.sess, w.info = &hello, sparse, sess, info
 
 	r := &w.ready
 	r.Protocol = labeler.ProtocolVersion
@@ -309,7 +323,14 @@ func (w *worker) start(payload []byte) error {
 	r.Model.Outputs = info.Outputs
 	r.Limits.MaxBatch, r.Limits.MaxSeq = limits(&hello, len(info.Inputs), info.Outputs)
 	r.Limits.MaxFrameBytes = labeler.MaxFrameBytes
-	r.Capabilities = []string{"ping"}
+	r.Limits.MaxTokens = info.MaxTokens
+	if info.MaxBatch > 0 {
+		r.Limits.MaxBatch = min(r.Limits.MaxBatch, info.MaxBatch)
+	}
+	if info.MaxSeq > 0 {
+		r.Limits.MaxSeq = min(r.Limits.MaxSeq, info.MaxSeq)
+	}
+	r.Capabilities = []string{"ping", labeler.SparseCapability}
 
 	w.queue = make(chan job, runQueue)
 	w.done = make(chan struct{})
@@ -416,6 +437,10 @@ func (w *worker) enqueue(payload []byte) {
 		w.out.error(req.ID, labeler.ErrCodeBadRequest, "%v", err)
 		return
 	}
+	if w.info.MaxTokens > 0 && req.Inputs[0].Dims[0]*req.Inputs[0].Dims[1] > w.info.MaxTokens {
+		w.out.error(req.ID, labeler.ErrCodeBadRequest, "batch exceeds %d padded tokens", w.info.MaxTokens)
+		return
+	}
 	outputs, err := w.outputs(req.Outputs)
 	if err != nil {
 		w.out.error(req.ID, labeler.ErrCodeBadRequest, "%v", err)
@@ -490,6 +515,25 @@ func (w *worker) run(j job) {
 	if len(tensors) != len(j.outputs) {
 		w.out.error(j.id, labeler.ErrCodeInternal, "the runtime returned %d outputs for %d requested", len(tensors), len(j.outputs))
 		return
+	}
+	if w.sparse != nil {
+		// The mask is the request's own: ValidateRun found it.
+		var attention []int32
+		for i, input := range w.hello.RunInputs() {
+			if input.Role == labeler.RoleAttention {
+				k := slices.IndexFunc(j.inputs, func(t labeler.Tensor) bool { return t.Name == w.hello.RunInputs()[i].Name })
+				attention = j.inputs[k].Int32
+			}
+		}
+		for i := range tensors {
+			if tensors[i].Name != w.sparse.Output {
+				continue
+			}
+			if tensors[i], err = w.sparse.Sparsify(tensors[i], attention); err != nil {
+				w.out.error(j.id, labeler.ErrCodeRunFailed, "%v", err)
+				return
+			}
+		}
 	}
 	payload, err := labeler.EncodeResult(&labeler.RunResult{ID: j.id, Outputs: tensors})
 	if err == nil && len(payload)+1 > labeler.MaxFrameBytes {

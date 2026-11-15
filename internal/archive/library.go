@@ -44,9 +44,10 @@ var libraryColumns = []libraryColumn{
 	{"changed_file_count", "(SELECT COUNT(*) FROM change_sets csx JOIN change_files cfx ON cfx.change_set_id=csx.id WHERE csx.workspace_id=w.id)"},
 	// A unary + on name keeps metrics found through their workspace, not
 	// metrics_name_value_idx, which holds every workspace's metric of that name.
+	{"is_estimate", `EXISTS(SELECT 1 FROM agent_sessions ax JOIN conversations cx ON cx.id=ax.conversation_id WHERE ax.workspace_id=w.id AND ` + currentGroupConversation("cx") + ` AND ax.is_estimate=1)`},
 	{"token_count", `COALESCE(
 		(SELECT MAX(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name='total_tokens'),
-		(SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name IN ('input_tokens','output_tokens','cache_tokens')))`},
+		(SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name IN ('input_tokens','output_tokens','cache_tokens')), CASE WHEN EXISTS(SELECT 1 FROM agent_sessions ax WHERE ax.workspace_id=w.id AND ax.is_estimate=1) THEN 0 END) + COALESCE((SELECT SUM(ax.total_tokens) FROM agent_sessions ax JOIN conversations cx ON cx.id=ax.conversation_id WHERE ax.workspace_id=w.id AND ` + currentGroupConversation("cx") + ` AND ax.is_estimate=1),0)`},
 	{"tool_use_count", `MAX(
 		(SELECT COUNT(*) FROM conversations tc JOIN messages tm ON tm.conversation_id=tc.id WHERE tc.workspace_id=w.id AND ` + currentGroupConversation("tc") + ` AND tm.kind IN ('tool_call','delegation')),
 		COALESCE((SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name='tool_calls' AND mx.extractor_version<>'core-v1'),0))`},
@@ -75,8 +76,18 @@ var libraryColumns = []libraryColumn{
 	{"pr_numbers", "(SELECT GROUP_CONCAT(prx.number) FROM work_pr_links lx JOIN pull_requests prx ON prx.id=lx.pr_id WHERE lx.workspace_id=w.id)"},
 	{"pr_details", "(SELECT json_group_array(json_object('number',prx.number,'title',prx.title,'url',prx.url,'host',prx.host)) FROM work_pr_links lx JOIN pull_requests prx ON prx.id=lx.pr_id WHERE lx.workspace_id=w.id)"},
 	{"providers", "(SELECT GROUP_CONCAT(DISTINCT cx.provider) FROM conversations cx WHERE cx.workspace_id=w.id)"},
-	{"models", "(SELECT GROUP_CONCAT(DISTINCT cx.model) FROM conversations cx WHERE cx.workspace_id=w.id AND cx.model IS NOT NULL)"},
-	{"efforts", "(SELECT GROUP_CONCAT(DISTINCT effort) FROM (SELECT cx.effort FROM conversations cx WHERE cx.workspace_id=w.id AND cx.effort IS NOT NULL UNION SELECT mx.effort FROM messages mx JOIN conversations cx ON cx.id=mx.conversation_id WHERE cx.workspace_id=w.id AND mx.effort IS NOT NULL))"},
+	{"models", `(SELECT GROUP_CONCAT(DISTINCT model) FROM (
+		SELECT cx.model FROM conversations cx WHERE cx.workspace_id=w.id AND cx.model IS NOT NULL
+		UNION SELECT mx.model FROM conversations cx JOIN messages mx ON mx.conversation_id=cx.id
+		WHERE cx.workspace_id=w.id AND cx.harness='claude-ai-export' AND mx.model IS NOT NULL AND mx.role='assistant' AND NULLIF(TRIM(mx.model),'') IS NOT NULL
+		UNION SELECT ` + claudeSelectionValue("cx", "model") + ` FROM conversations cx WHERE cx.workspace_id=w.id AND cx.harness='claude-ai-export' AND ` + claudeNoRecordedModel("cx") + `))`},
+	{"efforts", `(SELECT GROUP_CONCAT(DISTINCT effort) FROM (
+		SELECT cx.effort FROM conversations cx WHERE cx.workspace_id=w.id AND cx.effort IS NOT NULL
+		UNION SELECT mx.effort FROM messages mx JOIN conversations cx ON cx.id=mx.conversation_id WHERE cx.workspace_id=w.id AND mx.effort IS NOT NULL
+		UNION SELECT CASE WHEN ` + claudeSelectionValue("cx", "model") + ` IS NOT NULL
+			THEN COALESCE(` + claudeSelectionValue("cx", "effort_level") + `,'Unknown effort')
+			ELSE ` + claudeSelectionValue("cx", "effort_level") + ` END
+		FROM conversations cx WHERE cx.workspace_id=w.id AND cx.harness='claude-ai-export' AND ` + claudeNoRecordedModel("cx") + `))`},
 	// De-duplicate raw pairs before crossing into the Go formatting function.
 	// Most messages repeat a configuration; formatting each one costs far more
 	// than scanning their pairs in the covering index.
@@ -84,7 +95,9 @@ var libraryColumns = []libraryColumn{
 		SELECT DISTINCT model_effort(model,effort) configuration FROM (
 			SELECT cx.model,cx.effort FROM conversations cx WHERE cx.workspace_id=w.id AND (cx.model IS NOT NULL OR cx.effort IS NOT NULL)
 			UNION SELECT COALESCE(mx.model,cx.model),mx.effort FROM messages mx JOIN conversations cx ON cx.id=mx.conversation_id
-			WHERE cx.workspace_id=w.id AND (mx.model IS NOT NULL OR mx.effort IS NOT NULL)) ORDER BY configuration))`},
+			WHERE cx.workspace_id=w.id AND (mx.model IS NOT NULL OR mx.effort IS NOT NULL)
+			UNION SELECT ` + claudeSelectionValue("cx", "model") + `,` + claudeSelectionValue("cx", "effort_level") + ` FROM conversations cx
+			WHERE cx.workspace_id=w.id AND cx.harness='claude-ai-export' AND ` + claudeNoRecordedModel("cx") + `) WHERE model IS NOT NULL OR effort IS NOT NULL ORDER BY configuration))`},
 	{"harnesses", "(SELECT GROUP_CONCAT(DISTINCT cx.harness) FROM conversations cx WHERE cx.workspace_id=w.id AND cx.harness IS NOT NULL)"},
 	{"harness_versions", "(SELECT GROUP_CONCAT(DISTINCT cx.harness_version_last) FROM conversations cx WHERE cx.workspace_id=w.id AND cx.harness_version_last IS NOT NULL)"},
 	{"changed_files", "(SELECT GROUP_CONCAT(DISTINCT cfx.path) FROM change_sets csx JOIN change_files cfx ON cfx.change_set_id=csx.id WHERE csx.workspace_id=w.id)"},
@@ -107,6 +120,9 @@ var libraryDependencies = []libraryDependency{
 	// Workspace columns are read live; a new workspace only needs a stored row.
 	{table: "workspaces", workspaces: func(row string) string { return "SELECT " + row + ".id AS id" }, insertOnly: true},
 	{table: "conversations", workspaces: workspaceColumn},
+	{table: "claude_chat_settings_observations", workspaces: func(row string) string {
+		return "SELECT workspace_id AS id FROM conversations WHERE harness='claude-ai-export' AND account=" + row + ".account AND native_id=" + row + ".conversation_uuid"
+	}},
 	{table: "conversation_group_membership", workspaces: workspaceColumn},
 	{table: "messages", workspaces: func(row string) string {
 		return "SELECT workspace_id AS id FROM conversations WHERE id=" + row + ".conversation_id"
@@ -245,8 +261,10 @@ func (c *Catalog) ensureLibrary() error {
 	return tx.Commit()
 }
 
-// RefreshLibrary recomputes up to batch dirty workspaces in one short write
-// transaction and reports how many it cleared.
+// RefreshLibrary recomputes up to batch dirty workspaces' Search view rows and
+// then up to batch dirty workspaces' metrics, and reports the larger count.
+// The service maintains the two separately (maintainLibrary,
+// maintainWorkspaceMetrics); this is for commands and tests without one.
 func (c *Catalog) RefreshLibrary(ctx context.Context, batch int) (int, error) {
 	count, err := c.refreshLibrary(ctx, batch, nil)
 	if err != nil {
@@ -288,6 +306,8 @@ func (c *Catalog) refreshLibrary(ctx context.Context, batch int, workspaces []st
 	if err != nil || len(rows) == 0 {
 		return 0, err
 	}
+	completed := maintenanceBatch(ctx, tx, "Indexing the Search view", "workspace", len(rows),
+		"SELECT ?+count(*) FROM workspace_library_dirty", len(rows))
 	args := make([]any, len(rows))
 	for index, row := range rows {
 		args[index] = row["workspace_id"]
@@ -301,7 +321,9 @@ func (c *Catalog) refreshLibrary(ctx context.Context, batch int, workspaces []st
 	if _, err := tx.ExecContext(ctx, previews, args...); err != nil {
 		return 0, err
 	}
-	return len(rows), tx.Commit()
+	err = tx.Commit()
+	completed(err)
+	return len(rows), err
 }
 
 // refreshPreviews stores the preview IDs of up to batch large workspaces
@@ -312,10 +334,19 @@ func (c *Catalog) refreshLibrary(ctx context.Context, batch int, workspaces []st
 // stored only for workspaces nothing has changed since: a change marks the
 // workspace dirty, and RefreshLibrary stores its previews.
 func (c *Catalog) refreshPreviews(ctx context.Context, batch int) (int, error) {
-	rows, err := queryMapsContext(ctx, c.DB, libraryPreviewSelect(`w.id IN (SELECT l.workspace_id FROM workspace_library l
-		WHERE l.turn_count+l.tool_use_count>200 AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_previews)
-			AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)
-		ORDER BY l.turn_count+l.tool_use_count DESC LIMIT ?)`), batch)
+	const pending = `FROM workspace_library l WHERE l.turn_count+l.tool_use_count>200
+		AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_previews)
+		AND l.workspace_id NOT IN (SELECT workspace_id FROM workspace_library_dirty)`
+	selected, err := queryMapsContext(ctx, c.DB, "SELECT l.workspace_id "+pending+" ORDER BY l.turn_count+l.tool_use_count DESC LIMIT ?", batch)
+	if err != nil || len(selected) == 0 {
+		return 0, err
+	}
+	completed := maintenanceBatch(ctx, c.DB, "Filling in previews", "workspace", len(selected), "SELECT count(*) "+pending)
+	ids := make([]any, len(selected))
+	for i, row := range selected {
+		ids[i] = row["workspace_id"]
+	}
+	rows, err := queryMapsContext(ctx, c.DB, libraryPreviewSelect("w.id IN ("+placeholders(len(ids))+")"), ids...)
 	if err != nil || len(rows) == 0 {
 		return 0, err
 	}
@@ -332,7 +363,9 @@ func (c *Catalog) refreshPreviews(ctx context.Context, batch int) (int, error) {
 			return 0, err
 		}
 	}
-	return len(rows), tx.Commit()
+	err = tx.Commit()
+	completed(err)
+	return len(rows), err
 }
 
 // refreshAllLibrary clears every dirty workspace, for commands that ingest
@@ -359,9 +392,11 @@ type libraryCatchUp struct {
 	since time.Time
 	// stopped is set while the user has stopped the refresh: maintainLibrary
 	// leaves dirty workspaces dirty (reads compute them live) until it is
-	// resumed or the service restarts. cancel abandons the pass in progress.
-	stopped bool
-	cancel  context.CancelFunc
+	// resumed or the service restarts. Every active pass is cancellable,
+	// including overlapping continuous and explicitly requested catch-up.
+	stopped  bool
+	nextPass uint64
+	passes   map[uint64]context.CancelFunc
 }
 
 func (c *Catalog) noteLibraryRefresh(count int, err error) {
@@ -393,8 +428,8 @@ func (c *Catalog) stopLibraryRefresh() bool {
 		return false
 	}
 	c.catchUp.stopped, c.catchUp.since = true, time.Time{}
-	if c.catchUp.cancel != nil {
-		c.catchUp.cancel()
+	for _, cancel := range c.catchUp.passes {
+		cancel()
 	}
 	return true
 }
@@ -406,6 +441,9 @@ func (c *Catalog) resumeLibraryRefresh() bool {
 	defer c.catchUp.mu.Unlock()
 	stopped := c.catchUp.stopped
 	c.catchUp.stopped = false
+	if c.work != nil {
+		c.work.runner.Wake()
+	}
 	return stopped
 }
 
@@ -424,10 +462,15 @@ func (c *Catalog) libraryPass(ctx context.Context) (context.Context, func(), boo
 		return nil, nil, false
 	}
 	pass, cancel := context.WithCancel(ctx)
-	c.catchUp.cancel = cancel
+	if c.catchUp.passes == nil {
+		c.catchUp.passes = map[uint64]context.CancelFunc{}
+	}
+	c.catchUp.nextPass++
+	id := c.catchUp.nextPass
+	c.catchUp.passes[id] = cancel
 	return pass, func() {
 		c.catchUp.mu.Lock()
-		c.catchUp.cancel = nil
+		delete(c.catchUp.passes, id)
 		c.catchUp.mu.Unlock()
 		cancel()
 	}, true
@@ -445,7 +488,7 @@ func (c *Catalog) originsPass(ctx context.Context) {
 	origins := c.beginPass(ctx, "maintenance.origins", triggerChained)
 	var published bool
 	var err error
-	origins.runIO(func() { published, err = c.publishOrigins(ctx) })
+	origins.runIO(ctx, func(ctx context.Context) { published, err = c.publishOrigins(ctx) })
 	if published {
 		origins.worked(1)
 	}
@@ -469,7 +512,8 @@ func (c *Catalog) originsPass(ctx context.Context) {
 // none; filling previews and measuring parallelism likewise. A publication
 // that stores origins is one too. A pass that does nothing is forgotten.
 func (c *Catalog) maintainLibrary(ctx context.Context) {
-	var view, previews, parallelism *daemonPass
+	schedule := searchScheduleGate{}
+	var view, previews, parallelism, shape, names *daemonPass
 	settle := func(pass **daemonPass, more bool, err error) {
 		if *pass != nil && (!more || err != nil) {
 			(*pass).end(err)
@@ -481,10 +525,30 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			*pass = c.beginPass(ctx, kind, triggerChained)
 		}
 	}
-	defer func() { settle(&view, false, nil); settle(&previews, false, nil); settle(&parallelism, false, nil) }()
+	defer func() {
+		settle(&view, false, nil)
+		settle(&previews, false, nil)
+		settle(&parallelism, false, nil)
+		settle(&shape, false, nil)
+		settle(&names, false, nil)
+	}()
 	var originsAt time.Time
+	var resumeProjections func()
+	var projectionWaitReason string
+	defer func() {
+		if resumeProjections != nil {
+			resumeProjections()
+		}
+	}()
 	for {
-		if c.queries.wait(ctx) != nil {
+		workCtx := ctx
+		for _, active := range []*daemonPass{view, previews, parallelism, shape, names} {
+			if active.active() {
+				workCtx = active.context(ctx)
+				break
+			}
+		}
+		if schedule.wait(ctx, c, &view, &previews, &parallelism, &shape, &names) != nil || c.queries.wait(workCtx) != nil {
 			return
 		}
 		if !c.libraryRefreshStopped() && (c.ingestRuns.Load() == 0 || time.Since(originsAt) >= originsRunInterval) {
@@ -492,6 +556,20 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			originsAt = time.Now()
 		}
 		if c.projectionBatches.Load() > 0 || c.libraryRefreshStopped() {
+			// These passes can have committed a batch before the index took
+			// over. Keep that progress, but do not present the time spent
+			// waiting through its analysis chain as active measurement.
+			reason, detail := "ingest-busy", "source indexing and its follow-up analysis to finish"
+			if c.libraryRefreshStopped() {
+				reason, detail = "search-stopped", "the Search view refresh to resume"
+			}
+			if resumeProjections == nil || projectionWaitReason != reason {
+				if resumeProjections != nil {
+					resumeProjections()
+				}
+				resumeProjections = waitForDaemonPasses(reason, detail, view, previews, parallelism, shape, names)
+				projectionWaitReason = reason
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -499,17 +577,45 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 				continue
 			}
 		}
+		if resumeProjections != nil {
+			resumeProjections()
+			resumeProjections = nil
+		}
 		pass, done, running := c.libraryPass(ctx)
 		if !running {
 			continue
 		}
+		// Names advance even while a large Search projection is catching up.
+		begin(&names, kindNames)
+		var named int
+		var nameErr error
+		names.runIO(pass, func(ctx context.Context) { named, nameErr = c.refreshConversationNames(ctx, 25) })
+		names.worked(named)
+		settle(&names, named > 0, nameErr)
+		if nameErr != nil && pass.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Conversation names: %v\n", nameErr)
+		}
 		begin(&view, "maintenance.library-view")
 		var count int
 		var err error
-		view.runIO(func() { count, err = c.RefreshLibrary(pass, 10) })
+		view.runIO(pass, func(ctx context.Context) { count, err = c.refreshLibrary(ctx, 10, nil) })
 		c.noteLibraryRefresh(count, err)
 		view.worked(count)
 		settle(&view, count > 0, err)
+		// Session facts must also advance during a large Search refresh. Doing
+		// one conversation between view batches avoids waiting for every dirty
+		// workspace and preview before an upgrade's backfill can even start.
+		if count > 0 && err == nil {
+			begin(&shape, "maintenance.session-shape")
+			var shaped int
+			var shapeErr error
+			shape.runIO(pass, func(ctx context.Context) { shaped, shapeErr = c.refreshSessionShape(ctx, 1, false) })
+			shape.worked(shaped)
+			settle(&shape, shaped > 0, shapeErr)
+			if shapeErr != nil && pass.Err() == nil {
+				fmt.Fprintf(os.Stderr, "Session shape: %v\n", shapeErr)
+			}
+		}
 		wait := time.Duration(0)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -523,7 +629,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			// Idle: fill in previews, then keep the page caches warm.
 			begin(&previews, "maintenance.previews")
 			var filled int
-			previews.runIO(func() { filled, err = c.refreshPreviews(pass, 25) })
+			previews.runIO(pass, func(ctx context.Context) { filled, err = c.refreshPreviews(ctx, 25) })
 			previews.worked(filled)
 			settle(&previews, filled > 0, err)
 			if err != nil || filled == 0 {
@@ -534,18 +640,33 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 				// page computes only what changed since (all, after an upgrade).
 				begin(&parallelism, "maintenance.parallelism")
 				var derived int
-				parallelism.runIO(func() { derived, err = c.refreshParallelism(pass, parallelismBatch, false) })
+				parallelism.runIO(pass, func(ctx context.Context) { derived, err = c.refreshParallelism(ctx, parallelismBatch, false) })
 				parallelism.worked(derived)
 				settle(&parallelism, derived > 0, err)
 				if err != nil || derived == 0 {
 					if err != nil && pass.Err() == nil {
 						fmt.Fprintf(os.Stderr, "Parallelism activity: %v\n", err)
 					}
-					wait = 2 * time.Second
-					// Warming only reads; its operation is never published.
-					warm := c.beginPass(ctx, "maintenance.cache-warm", triggerChained)
-					warm.runIO(func() { c.warmCaches(ctx) })
-					warm.end(nil)
+					// Then changed conversations' session shape, likewise.
+					begin(&shape, "maintenance.session-shape")
+					var shaped int
+					shape.runIO(pass, func(ctx context.Context) { shaped, err = c.refreshSessionShape(ctx, sessionShapeBatch, false) })
+					shape.worked(shaped)
+					settle(&shape, shaped > 0, err)
+					if err != nil || shaped == 0 {
+						if err != nil && pass.Err() == nil {
+							fmt.Fprintf(os.Stderr, "Session shape: %v\n", err)
+						}
+						if named > 0 && nameErr == nil && err == nil {
+							done()
+							continue
+						}
+						wait = 2 * time.Second
+						// Warming only reads; its operation is never published.
+						warm := c.beginPass(ctx, "maintenance.cache-warm", triggerChained)
+						warm.runIO(ctx, func(ctx context.Context) { c.warmCaches(ctx) })
+						warm.end(nil)
+					}
 				}
 			}
 		}
@@ -575,8 +696,8 @@ var (
 	// libraryGoFields are added in Go after the read: relevance, mirror
 	// suppression, and costs.
 	libraryGoFields = []string{"channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind", "channels", "machines", "execution_machines", "score", "match_types", "source_aliases", "mirrored_workspace_ids",
-		"cost_usd", "cost_today_usd", "price_status"}
-	libraryCostFields = []string{"cost_usd", "cost_today_usd", "price_status"}
+		"cost_usd", "price_status"}
+	libraryCostFields = []string{"cost_usd", "price_status"}
 	// libraryLargeFields hold long text, so only requests that use them read them.
 	libraryLargeFields = []string{"purpose", "outcome", "changed_files", "pr_details", "summary_initiation", "summary_outcome"}
 	// libraryCompactFields is every field except long text and costs, which
@@ -600,9 +721,32 @@ func libraryExtraColumns(derived map[string]string) []libraryColumn {
 		{"purpose", "COALESCE(w.purpose," + derived["summary_initiation"] + ")"},
 		{"outcome", "COALESCE(w.outcome," + derived["summary_outcome"] + ")"},
 		{"repository_name", "r.display_name"},
+		{"project_id", projectIDSQL("w")},
+		{"project_name", projectNameSQL("w")},
+		{"project_kind", projectKindSQL("w")},
 		{"canonical_remote", "r.canonical_remote"},
 		{"file_edit_count", derived["changed_file_count"]},
-		{"branch_count", "CASE WHEN w.branch IS NULL OR TRIM(w.branch)='' THEN 0 ELSE 1 END"},
+		// Branches and pull requests are Git facts: without any, a folder or
+		// no project has none to count, which is not applicable rather than
+		// zero. Git data a session did record always shows.
+		{"branch_count", "CASE WHEN TRIM(COALESCE(w.branch,''))<>'' THEN 1 WHEN pj.id IS NULL THEN NULL ELSE 0 END"},
+		{"pr_count", "CASE WHEN " + derived["pr_count"] + ">0 THEN " + derived["pr_count"] + " WHEN pj.id IS NULL THEN NULL ELSE 0 END"},
+		// The session's outcome (outcomes.go): its label, what decided it,
+		// and its Tier 1 facts.
+		{"outcome_label", outcomeLabelSQL("w")},
+		{"outcome_why", outcomeWhySQL("w")},
+		{"files_changed", outcomeFactSQL("w", "so.files_changed")},
+		{"lines_added", outcomeFactSQL("w", "so.lines_added")},
+		{"lines_removed", outcomeFactSQL("w", "so.lines_removed")},
+		{"verification", outcomeFactSQL("w", "so.verification")},
+		{"recorded_commits", outcomeFactSQL("w", "json_array_length(so.commits_json)")},
+		{"reworked_files", outcomeFactSQL("w", "so.reworked_files")},
+		// Local Git (outcome_git.go): whether it was asked, and the commits
+		// linked to the session and on mainline, empty unless it was.
+		{"git_check", gitCheckSQL("w")},
+		{"git_check_reason", gitCheckReasonSQL("w")},
+		{"linked_commits", gitFactSQL("w", "sg.linked_commits")},
+		{"landed_commits", gitFactSQL("w", "sg.landed_commits")},
 	}
 }
 
@@ -679,16 +823,21 @@ func libraryRowSelect(value func(libraryColumn) string, fields libraryFields) st
 	derived := map[string]string{}
 	for _, column := range libraryColumns {
 		derived[column.name] = value(column)
-		if fields.has(column.name) {
+	}
+	extras := libraryExtraColumns(derived)
+	for _, column := range libraryColumns {
+		// An extra column of the same name reads the stored one itself.
+		redefined := slices.ContainsFunc(extras, func(extra libraryColumn) bool { return extra.name == column.name })
+		if fields.has(column.name) && !redefined {
 			columns = append(columns, derived[column.name]+" "+column.name)
 		}
 	}
-	for _, column := range libraryExtraColumns(derived) {
+	for _, column := range extras {
 		if fields.has(column.name) {
 			columns = append(columns, column.expr+" "+column.name)
 		}
 	}
-	return "SELECT " + strings.Join(columns, ",\n\t") + "\n\tFROM workspaces w LEFT JOIN repositories r ON r.id=w.repository_id"
+	return "SELECT " + strings.Join(columns, ",\n\t") + "\n\tFROM workspaces w LEFT JOIN repositories r ON r.id=w.repository_id" + projectJoin("w")
 }
 
 // libraryRows reads Library rows with fields (nil: every column) for
@@ -774,8 +923,8 @@ func libraryPreviewSelect(filter string) string {
 		FROM workspaces w WHERE ` + filter
 }
 
-// attachLibraryPreviews adds the first request and latest response text to
-// page rows. The text is large, so only displayed rows carry it.
+// attachLibraryPreviews adds the first request and latest response, with
+// their message IDs, to page rows. The text is large, so only displayed rows carry it.
 func (c *Catalog) attachLibraryPreviews(ctx context.Context, page []map[string]any) error {
 	if len(page) == 0 {
 		return nil
@@ -816,7 +965,25 @@ func (c *Catalog) attachLibraryPreviews(ctx context.Context, page []map[string]a
 	}
 	for _, row := range page {
 		preview := byWorkspace[firstString(row["id"])]
-		row["first_input"], row["last_response"] = texts[firstString(preview["first_input_id"])], texts[firstString(preview["last_response_id"])]
+		firstID, firstText, firstAt, err := c.firstHumanPreview(ctx, firstString(row["id"]), "")
+		if err != nil {
+			return err
+		}
+		preview["first_input_id"] = firstID
+		if firstID != "" {
+			texts[firstID] = firstText
+			if stamp, ok := parseTime(firstAt); ok {
+				timestamps[firstID] = stamp
+			}
+		}
+		row["first_input"], row["last_response"] = nilIfEmpty(firstText), texts[firstString(preview["last_response_id"])]
+		// The card view opens its conversation browser at these messages.
+		for _, field := range []string{"first_input_id", "last_response_id"} {
+			row[field] = nil
+			if id := firstString(preview[field]); texts[id] != nil {
+				row[field] = id
+			}
+		}
 		row["preview_elapsed_ms"] = nil
 		first, firstOK := timestamps[firstString(preview["first_input_id"])]
 		last, lastOK := timestamps[firstString(preview["last_response_id"])]

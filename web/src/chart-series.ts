@@ -1,8 +1,36 @@
-import { chartSeriesStyle, otherSeriesColor } from "./chart-colors";
+import { chartSeriesStyle, orderedScope, otherSeriesColor } from "./chart-colors";
 import { periodBuckets, periodIndex, periodKey, periodStart, type ChartPeriod } from "./chart-period";
-import { columnScale, type ChartScale } from "./chart-scale";
+import { columnScale, type AxisUnit, type ChartScale } from "./chart-scale";
 
-export type ChartSeries = { key: string; label: string; color: string; value?: string; hiddenCount?: number; foldedValues?: string[]; group?: string };
+export type ChartSeries = { key: string; label: string; color: string; value?: string; hiddenCount?: number; foldedValues?: string[]; group?: string; groupPath?: string[] };
+export type LegendGroup = { label: string; path: string[]; items: ChartSeries[]; groups: LegendGroup[] };
+export const legendGroupSeries = (group: LegendGroup): ChartSeries[] => [...group.items,...group.groups.flatMap(legendGroupSeries)];
+// Keep every series in its full hierarchy; identical subgroup names in
+// separate branches remain separate, and empty groups never appear.
+export function legendGroups(series: ChartSeries[]): LegendGroup {
+  const root: LegendGroup = {label:"",path:[],items:[],groups:[]};
+  for (const item of series) {
+    let node = root;
+    for (const label of item.groupPath ?? (item.group ? [item.group] : [])) {
+      let child = node.groups.find(group => group.label === label);
+      if (!child) { child = {label,path:[...node.path,label],items:[],groups:[]}; node.groups.push(child); }
+      node = child;
+    }
+    node.items.push(item);
+  }
+  const containParents = (node: LegendGroup) => {
+    for (const child of node.groups) {
+      // An accepted general label is also a series. Keep it inside the
+      // same outline as its specific descendants rather than beside it.
+      const parents = node.items.filter(item => item.groupPath && item.value && item.value.split('.').length === child.path.length && item.label === child.label && legendGroupSeries(child).some(leaf => leaf.value?.startsWith(item.value + '.')));
+      node.items = node.items.filter(item => !parents.includes(item));
+      child.items.unshift(...parents);
+      containParents(child);
+    }
+  };
+  containParents(root);
+  return root;
+}
 export type ChartBucket = { key: string; date: Date; values: Record<string, number>; parts?: Record<string, Array<[string, number]>>; detail?: string; windowSize?: number; history?: boolean };
 export const chartDisplays = ["interval", "cumulative"] as const;
 export type ChartDisplay = typeof chartDisplays[number];
@@ -10,27 +38,43 @@ export const validChartDisplay = (value: unknown): value is ChartDisplay | undef
 
 // Logarithmic timelines compare each series independently: a stack's segment
 // heights would depend on the amounts below it, rather than its own value.
-export function timelineGeometry(buckets: ChartBucket[], series: ChartSeries[], { scale, lines = false, percent = false, reference = 0 }: { scale: ChartScale; lines?: boolean; percent?: boolean; reference?: number }) {
-  lines ||= scale === "logarithmic" && !percent;
-  const peaks = buckets.map(bucket => {
+// Lines and grouped bars draw every series' value on its own, so the linear +
+// log break looks at all of them: one series far above the rest, even for
+// many periods, gets the compressed top half instead of flattening the rest.
+export function timelineGeometry(buckets: ChartBucket[], series: ChartSeries[], { scale, lines = false, bars = false, grouped = false, percent = false, reference = 0, unit }: { scale: ChartScale; lines?: boolean; bars?: boolean; grouped?: boolean; percent?: boolean; reference?: number; unit?: AxisUnit }) {
+  lines = !bars && (lines || scale === "logarithmic" && !percent);
+  const heights = buckets.flatMap(bucket => {
     const values = series.map(item => bucket.values[item.key] ?? 0);
-    return lines ? Math.max(0, ...values) : values.reduce((sum, value) => sum + value, 0);
+    return lines || grouped ? values : [values.reduce((sum, value) => sum + value, 0)];
   });
-  return { ...columnScale([...peaks, reference], percent ? "linear" : scale), lines };
+  return { ...columnScale([...heights, reference], percent ? "linear" : scale, percent ? undefined : unit), lines };
 }
 
 // Missing additive amounts are idle periods; missing ratios break the line.
-// A single period gets a short horizontal segment so it remains visible.
-export function timelinePath(buckets: ChartBucket[], key: string, y: (value: number) => number, additive = true): string {
-  let pen = "M";
-  const steps = buckets.flatMap((bucket, index) => {
-    const value = bucket.values[key] ?? (additive ? 0 : undefined);
-    if (value === undefined) { pen = "M"; return []; }
-    const step = `${pen} ${1000 * (index + .5) / buckets.length} ${100 - y(value)}`;
-    pen = "L";
-    return [step];
+// Without zeroes (withoutZeroes), a missing value is passed over instead.
+// A point with no neighbour on its line, such as a single period or a series
+// with one value left, gets a horizontal segment across its period so it
+// remains visible.
+export function timelinePath(buckets: ChartBucket[], key: string, y: (value: number) => number, additive = true, nonzero = false): string {
+  const half = 500 / Math.max(1, buckets.length);
+  const lines: Array<Array<[number, number]>> = [[]];
+  buckets.forEach((bucket, index) => {
+    const value = bucket.values[key] ?? (additive && !nonzero ? 0 : undefined);
+    if (value === undefined) { if (!nonzero && lines.at(-1)!.length) lines.push([]); return; }
+    lines.at(-1)!.push([1000 * (index + .5) / buckets.length, 100 - y(value)]);
   });
-  return steps.join(" ") + (buckets.length === 1 && steps.length ? ` L 1000 ${100 - y(buckets[0].values[key] ?? 0)}` : "");
+  return lines.filter(points => points.length).map(points => points.length === 1
+    ? `M ${points[0][0] - half} ${points[0][1]} L ${points[0][0] + half} ${points[0][1]}`
+    : points.map(([x, top], index) => `${index ? "L" : "M"} ${x} ${top}`).join(" ")).join(" ");
+}
+
+// Values without zeroes: a zero is no value, and a period in which none of
+// the drawn series (any series, without keys) has a value is left out.
+export function withoutZeroes(buckets: ChartBucket[], keys?: string[]): ChartBucket[] {
+  return buckets.flatMap(bucket => {
+    const values = Object.fromEntries(Object.entries(bucket.values).filter(([, value]) => value !== 0));
+    return (keys ?? Object.keys(values)).some(key => values[key] !== undefined) ? [{ ...bucket, values }] : [];
+  });
 }
 
 // Accumulate original amounts within the visible range, including folded
@@ -142,8 +186,8 @@ export function foldSeries(rows: Array<[string, string, number]>, byKey: Map<str
   for (const name of selected) if (!top.includes(name)) top.push(name);
   const rest = shown.filter(name => !top.includes(name));
   const styles = new Map([...new Set([...shown, ...selected])].sort().map(name => [name, chartSeriesStyle(scope, name)]));
-  if (scope === "level_band" || scope === "model_family" || scope === "provider" || scope === "effort" || scope === "model_effort") top.sort((left, right) => styles.get(left)!.order!.localeCompare(styles.get(right)!.order!, undefined, { numeric: true }));
-  const series: ChartSeries[] = top.map(name => ({ key: `s:${name}`, label: label(name), color: styles.get(name)!.color, group: styles.get(name)!.group, value: name }));
+  if (orderedScope(scope) || ["label","family"].includes(scope) && top.every(name => styles.get(name)?.order !== undefined)) top.sort((left, right) => styles.get(left)!.order!.localeCompare(styles.get(right)!.order!, undefined, { numeric: true }));
+  const series: ChartSeries[] = top.map(name => ({ key: `s:${name}`, label: label(name), color: styles.get(name)!.color, group: styles.get(name)!.group, ...styles.get(name)!.groupPath ? {groupPath:styles.get(name)!.groupPath} : {}, value: name }));
   if (rest.length) series.push({ key: "other", label: `Other (${rest.length})`, color: otherSeriesColor, hiddenCount: rest.length, foldedValues: rest });
   for (const [bucketKey, name, value] of inView) {
     const target = byKey.get(bucketKey)!, key = top.includes(name) ? `s:${name}` : "other";

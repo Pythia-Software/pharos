@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { EMPTY_QUERY, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
+import { canonicalAnalyzeURL, readUsageWorkspace } from "./usage-workspace-model";
+import { useLocationRevision } from "./nested-pages";
 
 // Empty columns/order use the source schema defaults, including host-added
 // detail columns. Never reuse a named baseline or a grouped result schema.
@@ -7,29 +9,39 @@ export function tableRecoveryQuery(schema: FieldSchema, scopeWhere: WhereTerm[] 
   return { ...EMPTY_QUERY, where: [...scopeWhere], limit: schema.defaultLimit ?? EMPTY_QUERY.limit };
 }
 
-// Explicit route options bypass all saved Analyze tabs and machine filters. The
-// storage adapter's fresh flag also bypasses last-used and named default queries.
+// Keep the page identity while clearing its controls, filters and landing target.
+// The storage adapter's fresh flag bypasses last-used and named default queries.
 // Saved views stay available in Saved; a reset never deletes them.
 export function freshPageURL(href: string): string {
   const url = new URL(href);
+  const current = new URLSearchParams(url.search);
   url.search = "fresh=1";
   url.hash = "";
-  if (url.pathname === "/analyze") {
-    for (const [key, value] of Object.entries({ analyze_mode: "dashboards", analyze_topic: "tokens" })) url.searchParams.set(key, value);
+  if (url.pathname === "/analyze" || url.pathname === "/tools") {
+    const { mode, topic, dataset } = readUsageWorkspace(new URL(canonicalAnalyzeURL(url.pathname, current), url.origin).searchParams);
+    url.pathname = "/analyze";
+    for (const [key, value] of Object.entries({ analyze_mode: mode, analyze_topic: topic, analyze_data: dataset })) url.searchParams.set(key, value);
   }
   return `${url.pathname}${url.search}`;
 }
 
 export function ResetPage() {
+  useLocationRevision();
   return <a className="query-reset-page" href={freshPageURL(location.href)}>Reset page</a>;
 }
 
 // A renderer exception otherwise unmounts the entire React page, including its
 // reset controls. Keep a recovery action outside the failed component tree.
+declare global { interface Window { pharosReportError?: (error: unknown, kind?: string, detail?: string) => void } }
+
 export class PageErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
   static getDerivedStateFromError(failure: unknown) {
     return { error: failure instanceof Error ? failure : new Error(String(failure)) };
+  }
+  // Settings → Logs (Page errors) keeps it, with the component stack.
+  componentDidCatch(error: unknown, info: React.ErrorInfo) {
+    window.pharosReportError?.(error, "render", info.componentStack ?? "");
   }
   render() {
     if (!this.state.error) return this.props.children;

@@ -53,6 +53,16 @@ func readPower(ctx context.Context) powerState {
 // snapshot ask often, and a power source changes rarely.
 var powerMaxAge = time.Minute
 
+// A selector reads cached policy only. Refreshing pmset is an admitted phase,
+// and a concurrent status refresh must not make selection wait on its I/O.
+func (s *Server) workPowerSnapshot() (powerState, bool) {
+	if !s.background.mu.TryLock() {
+		return powerState{Percent: -1}, false
+	}
+	defer s.background.mu.Unlock()
+	return s.background.power, !s.background.powerAt.IsZero() && time.Since(s.background.powerAt) <= powerMaxAge
+}
+
 func (s *Server) cachedPower(ctx context.Context) powerState {
 	s.background.mu.Lock()
 	defer s.background.mu.Unlock()

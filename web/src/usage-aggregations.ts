@@ -1,4 +1,6 @@
-import { EMPTY_QUERY, applyAggregations, branchesOf, matchesClause, predicatesOf, type AggregationRequest, type FieldSchema, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, applyAggregations, branchesOf, matchesClause, predicatesOf, type AggregationClause, type FieldSchema, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+
+type AggregationRequest = { where: WhereTerm[]; aggregations: AggregationClause[] };
 
 type Row = Record<string, any>;
 const dailyID = (row: Row) => `${row.agent_session_id}|${row.day}|${row.model}|${row.effort ?? ""}`;

@@ -2,24 +2,81 @@
 
 ## Dashboard colors
 
-`model_colors.json` is the static dashboard color catalog, bundled with the
-frontend. Model keys use the same normalization as usage/pricing: no `claude-`
-prefix, snapshot date, or `-1m`/`[1m]` context suffix. Add a unique hex color and
-model class here when adding a priced model. Anthropic models use orange,
-Google models use blue (base `#4285f4`), and OpenAI models use green. Classes
-and versions get distinct tints/shades within those families. Within each model
-class, older versions use lighter tints and newer versions use deeper, darker
-shades. Keep that direction when adding new versioned colors.
+`model_color_rules.json` encodes the approved palette policy; `model_colors.json`
+contains the complete inventory, class assignments, generated swatches and class
+order bundled with the frontend. Model keys use the same normalization as
+usage/pricing: no `claude-` prefix, snapshot date, or `-1m`/`[1m]` suffix.
+
+After adding sourced model/date records to `cost_changes.json`, use Node 24:
+
+```sh
+npm --prefix web run generate-model-colors -- --preview
+npm --prefix web run check-model-colors
+npm --prefix web run build
+npm --prefix web test -- model-colors chart-colors
+```
+
+Generation automatically adds recognizable priced models and may recolor any
+existing default. Do not pick a new isolated hex value or preserve an old default
+at the expense of the palette. `--preview` writes the complete catalog to
+`.context/model-colors.html` with light/dark swatches; `--check` verifies freshness
+without writing. Normal builds regenerate colors; the web check also rejects stale
+catalogs. Rejected price rows do not introduce models or dates.
+
+Provider families remain Anthropic orange, Google blue and mainline OpenAI green.
+The version 2 rules' `palette` object holds the reviewed Hue fan preset:
+`vividness: 1`, `tierWeight: 0.5`, `lightness: 0.67`, `spread: 30`, and
+`specialistSpread: 75`. Higher capability and release scores gain chroma at a
+useful middle lightness. Core tiers use neighboring hues; specialist categories
+use a separate wider fan of their authored hue relationships. Independent
+developers have their own roots. Optional class `hue` values place specialists;
+class rules no longer prescribe luminance endpoints or saturation.
+
+The shared OKLCH formula drives both generation and provider-root previews.
+Gamut mapping reduces chroma at fixed hue/lightness. Neutral roots stay neutral.
+Dense release histories report close neighbors rather than pushing frontier
+models toward black to force a minimum version spacing. Historical cross-class
+lightness order is not guaranteed.
+
+`ranked_classes` defines both the capability hierarchy and presentation order:
+Haiku → Sonnet → Opus → Fable / Mythos; Flash → Gemini/Argon; and
+Luna → Terra → Sol → Astra. Fable and Mythos share the Fable class. Specialized
+classes follow in rule-definition order and are not ranked against core tiers.
+A genuinely new class needs an explicit rule and reviewed rank (or a specialized
+classification), rather than a guessed place on the intelligence scale. Add a
+`match` regex against normalized names to recognize that class's future versions
+without editing code; overlapping matches are rejected. Explicit existing catalog
+class assignments take precedence. Unrecognizable new models stop generation
+before any file is written and identify the missing rule.
+
+Chronology is based on the first non-rejected `effective_from` date, not today's
+date or the current usage view. Same-day siblings remain distinct but nearby;
+`observed_dates` supplies reviewed first-use dates for unpriced labels;
+other undated names occupy a midpoint without consuming a release step.
+Keep observation provenance in [Model colors](../docs/model-colors.md). Saved user
+choices remain exact even when generated defaults change. See
+[Model colors](../docs/model-colors.md) for the full behavior and implementation.
+
+A provider rule may set `pricing_provider` and class matchers to split a broad
+price-ledger category into developer color palettes without changing price rows.
+New color providers also require a catalog brand entry; API validation reads
+that same catalog.
 
 The `sources` entries map the usage dataset's provider/source values (Claude,
 Codex, ChatGPT, Antigravity, etc.) into provider groups without changing table
 filters. Codex and ChatGPT have different green shades. The model chart groups
 stacks and legends by provider, then model class and version; the five largest
 models are initially shown, with the rest behind **Other**. Expanding reveals
-five more at a time without recoloring existing series. Unlisted models and
-other chart dimensions get stable, collision-checked colors, rather than cycling
-through a short palette. Unknown models with recognizable names stay in their
-provider's hue family. Rebuild the frontend after editing this catalog.
+five more at a time without recoloring existing series. Unlisted models get
+stable shades; recognizable classes use their class color. Other chart dimensions
+get stable, collision-checked colors rather than cycling through a short palette.
+Rebuild the frontend after editing this catalog.
+
+Users can override provider and model colors in Settings → Colors → Model & provider
+colors. The shared resolver uses the catalog colors by default and shifts them
+together when a provider color changes. Unlisted model suggestions are
+deterministic. User choices take precedence and survive changes to provider
+bases. See [Model colors](../docs/model-colors.md).
 
 Click a chart legend chip to open its filter menu: **Show only this value**,
 **Add to selection** (or **Remove from selection**), and **Show all except this

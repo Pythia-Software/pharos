@@ -18,12 +18,15 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 type applicationEndpoint struct {
@@ -91,6 +94,9 @@ func newApplicationManager(ctx context.Context, application string) (*applicatio
 	}
 	m := &applicationManager{registry: r, id: installationID(application), token: randomToken(), children: map[string]*applicationChild{}, suspended: map[string]bool{}, missing: map[string]bool{}, ctx: ctx,
 		client: &http.Client{Timeout: 2 * time.Minute, Transport: &http.Transport{Proxy: nil}}, starts: map[string]int{}, leaseDirCache: map[string][]string{}, canonicalCache: map[string]string{}}
+	// The broker collects resource history only under the process-start
+	// scheduled engine, which its services inherit; app start reads no
+	// library's config.
 	m.operations = newBrokerOperations(brokerOperationsPath(m.id))
 	m.publishLocked()
 	return m, nil
@@ -117,8 +123,11 @@ func runApplicationCLI(args []string) error {
 		return err
 	}
 	owner, err := fileLease(filepath.Join(filepath.Dir(installationPath(m.id)), ".application.lock"), true)
-	if err != nil {
+	if errors.Is(err, filelock.ErrContended) {
 		return fmt.Errorf("this copy of Pharos is already open: %w", err)
+	}
+	if err != nil {
+		return fmt.Errorf("lock this copy of Pharos: %w", err)
 	}
 	defer owner.Close()
 	if *initial != "" && len(m.registry.Libraries) == 0 {
@@ -163,21 +172,7 @@ func runApplicationCLI(args []string) error {
 		_ = server.Shutdown(shutdown)
 	}()
 	if pid, _ := strconv.Atoi(os.Getenv(parentEnv)); pid > 0 {
-		go func() {
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					if syscall.Kill(pid, 0) != nil {
-						cancel()
-						return
-					}
-				}
-			}
-		}()
+		go watchApplicationParent(ctx, pid, cancel)
 	}
 	m.operations.start(ctx)
 	go m.maintain()
@@ -196,6 +191,29 @@ func runApplicationCLI(args []string) error {
 		return nil
 	}
 	return err
+}
+
+// applicationParentInterval is how often the broker checks its parent.
+var applicationParentInterval = time.Second
+
+// watchApplicationParent cancels the broker once its parent cannot be seen
+// running: absent, or unknown because the observation failed or is
+// unsupported. A broker that depends on its parent must not outlive it
+// unnoticed. It returns when ctx ends or after cancelling.
+func watchApplicationParent(ctx context.Context, pid int, cancel context.CancelFunc) {
+	ticker := time.NewTicker(applicationParentInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if state, _ := observeProcess(pid); state != processPresent {
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 func (m *applicationManager) childLocked(id string) (*applicationChild, error) {
@@ -256,12 +274,32 @@ func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, c
 	_ = os.Remove(path)
 	cmd := exec.Command(runningExecutable(), "--config", config.Path, "serve", "--dynamic", "--endpoint", path, "--application", m.registry.Application)
 	cmd.Env = append(os.Environ(), parentEnv+"="+strconv.Itoa(os.Getpid()))
+	// Only a broker that collects history owns it; otherwise each service
+	// keeps its own collector and its /api/status resources.
+	if m.operations.history != nil {
+		cmd.Env = append(cmd.Env, "PHAROS_RESOURCE_OWNER=broker")
+	}
 	cmd.Stderr = os.Stderr
+	// The service's output also goes to its log, from here: a panic is
+	// written by the runtime to the process's stderr, past any copy the
+	// service keeps itself. WaitDelay keeps a helper that inherited stderr
+	// from holding Wait open after the service exits.
+	serviceLog, logDir := openServiceLog(l.ID)
+	if serviceLog != nil {
+		cmd.Stderr = io.MultiWriter(quietWriter{serviceLog}, quietWriter{os.Stderr})
+		cmd.WaitDelay = 2 * time.Second
+	}
+	cmd.Env = append(cmd.Env, diagnosticLogDirEnv+"="+logDir)
 	c := &applicationChild{cmd: cmd, done: make(chan struct{})}
 	if err := cmd.Start(); err != nil {
+		closeServiceLog(serviceLog, 0, err)
 		return nil, err
 	}
-	go func() { _ = cmd.Wait(); close(c.done) }()
+	go func() {
+		err := cmd.Wait()
+		closeServiceLog(serviceLog, cmd.Process.Pid, err)
+		close(c.done)
+	}()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	timeout := time.NewTimer(2 * time.Minute)
@@ -274,6 +312,13 @@ func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, c
 		case <-c.done:
 			return nil, fmt.Errorf("Pharos could not open %s; inspect the service diagnostic", l.Name)
 		case <-timeout.C:
+			// Upgrades run before the service publishes its endpoint. Killing
+			// one here rolls back its migration and makes every retry start over.
+			if catalogInitializationInProgress(config.CatalogPath) {
+				start.Step("Upgrade the library's catalog", "Waiting for catalog initialization to finish", -1)
+				timeout.Reset(2 * time.Minute)
+				continue
+			}
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 			return nil, fmt.Errorf("opening %s took too long", l.Name)
 		case <-ticker.C:
@@ -402,6 +447,65 @@ func (m *applicationManager) stopChildLocked(id string) {
 	m.publishLocked()
 }
 
+// updateRefusal is why stopping every library for an update would
+// interrupt work that cannot stop in time, or "". It reads only what the
+// broker published (a service start holds m.mu for minutes): the broker's
+// own running operations, and each running service's own check.
+func (m *applicationManager) updateRefusal(ctx context.Context) string {
+	ops := slices.DeleteFunc(m.operations.reg.views(), func(view opView) bool { return opTerminal(view.State) })
+	if reason := updateRefusal(computeEjectVerdict(verdictInput{ops: ops})); reason != "" {
+		return reason
+	}
+	m.operations.mu.Lock()
+	libraries := slices.Clone(m.operations.libraries)
+	m.operations.mu.Unlock()
+	client := &http.Client{Timeout: brokerFreshTimeout, Transport: m.client.Transport}
+	reasons := make([]string, len(libraries))
+	var wait sync.WaitGroup
+	for index, library := range libraries {
+		if library.Child == nil {
+			continue
+		}
+		wait.Go(func() { reasons[index] = libraryUpdateRefusal(ctx, client, library) })
+	}
+	wait.Wait()
+	for _, reason := range reasons {
+		if reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+// libraryUpdateRefusal asks one library's service whether an update may stop
+// it (GET /api/release?for=update). A service that cannot say refuses.
+func libraryUpdateRefusal(ctx context.Context, client *http.Client, library brokerLibrary) string {
+	unanswered := func(err error) string {
+		return fmt.Sprintf("The update waits for %s, whose service did not say whether it can stop (%v).", library.Name, err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, library.Child.URL+"/api/release?for=update", nil)
+	if err != nil {
+		return unanswered(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+library.Child.Token)
+	response, err := client.Do(request)
+	if err != nil {
+		return unanswered(err)
+	}
+	defer response.Body.Close()
+	var answer struct {
+		Releasable *bool  `json:"releasable"`
+		Error      string `json:"error"`
+	}
+	if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&answer) != nil || answer.Releasable == nil {
+		return unanswered(fmt.Errorf("it answered %s", response.Status))
+	}
+	if !*answer.Releasable {
+		return answer.Error
+	}
+	return ""
+}
+
 func (m *applicationManager) authorized(r *http.Request) bool {
 	if secureEqual(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), m.token) {
 		return true
@@ -427,6 +531,18 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Errorf("open Pharos to connect to this application"), http.StatusUnauthorized)
 		return
 	}
+	// Liveness alone cannot tell the native window whether to retry a page:
+	// the initial authenticated navigation opens the selected library under
+	// mu, and a catalog upgrade can hold it for minutes. Before /app/state
+	// answers, the window does not even know which library to scope its probe
+	// to. Report that routing is busy without waiting on, or starting, a child.
+	if r.URL.Path == "/api/ready" && r.URL.Query().Get("routing") == "1" {
+		if !m.mu.TryLock() {
+			writeJSON(w, map[string]any{"ready": false}, http.StatusServiceUnavailable)
+			return
+		}
+		m.mu.Unlock()
+	}
 	// The broker answers for itself; a request scoped to a library (the
 	// app's window asking whether its page can load) goes on to that
 	// library's service, below.
@@ -447,11 +563,24 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.operations.serveStatusStream(w, r)
 		return
 	}
+	if r.URL.Path == "/api/app/resources/history" && r.Method == http.MethodGet {
+		serveResourceHistory(w, r, m.operations.history, r.URL.Query().Get("library"))
+		return
+	}
 	if r.Method == "POST" && !sameOrigin(r) {
 		writeError(w, fmt.Errorf("request origin does not match this app"), http.StatusForbidden)
 		return
 	}
 	if r.URL.Path == "/api/release" && r.Method == "POST" {
+		// For an update (?for=update), refuse before stopping anything
+		// while the broker's or a library's work cannot stop in time.
+		update := r.URL.Query().Get("for") == "update"
+		if update {
+			if reason := m.updateRefusal(r.Context()); reason != "" {
+				writeError(w, errors.New(reason), 503)
+				return
+			}
+		}
 		if !m.operationMu.TryLock() {
 			writeError(w, fmt.Errorf("a library operation is still running"), 503)
 			return
@@ -466,6 +595,11 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			m.stopChildLocked(id)
 		}
 		remaining := len(m.children)
+		if remaining > 0 && update {
+			// The app stays open after a refused update: let each library
+			// reopen once its service has finished closing.
+			m.released = false
+		}
 		m.mu.Unlock()
 		if remaining > 0 {
 			writeError(w, fmt.Errorf("libraries are still closing"), 503)
@@ -651,14 +785,24 @@ func (m *applicationManager) mcp(ctx context.Context, request map[string]any) (m
 // provides the same directory picker on the Mac running this local service.
 // Keep cancellation distinct from failure, and return paths as JSON so spaces,
 // quotes and newlines survive without shell interpolation.
-var applicationFolderPicker = func(ctx context.Context) (string, error) {
+var applicationFolderPicker = func(ctx context.Context, purpose string) (string, error) {
 	if runtime.GOOS != "darwin" {
 		return "", fmt.Errorf("the folder picker requires macOS; enter the folder path instead")
 	}
-	const script = `const app = Application.currentApplication();
+	picker := pickerPurposes[purpose]
+	if picker.Prompt == "" {
+		picker = pickerPurposes["library"]
+	}
+	call := "chooseFolder"
+	if picker.File {
+		call = "chooseFile"
+	}
+	// The prompt is one of pickerPurposes' constants, quoted as JSON.
+	prompt, _ := json.Marshal(picker.Prompt)
+	script := `const app = Application.currentApplication();
 app.includeStandardAdditions = true;
 try {
-  JSON.stringify(app.chooseFolder({withPrompt: "Choose a Pharos library or a parent folder for a new library."}).toString());
+  JSON.stringify(app.` + call + `({withPrompt: ` + string(prompt) + `}).toString());
 } catch (error) {
   if (error.errorNumber !== -128) throw error;
   JSON.stringify("");
@@ -672,6 +816,17 @@ try {
 		return "", fmt.Errorf("could not read the selected folder: %w", err)
 	}
 	return path, nil
+}
+
+// pickerPurposes are what a picker can be opened to choose, and what it says.
+// The native app's NSOpenPanel says the same (PharosApp.swift).
+var pickerPurposes = map[string]struct {
+	Prompt string
+	File   bool
+}{
+	"library": {Prompt: "Choose a Pharos library or a parent folder for a new library."},
+	"source":  {Prompt: "Choose the folder that holds this tool’s conversations."},
+	"export":  {Prompt: "Choose the export you downloaded: its ZIP, or its conversations.json.", File: true},
 }
 
 func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
@@ -722,7 +877,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer m.pickerMu.Unlock()
-		path, err := applicationFolderPicker(r.Context())
+		path, err := applicationFolderPicker(r.Context(), firstString(body["purpose"]))
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
@@ -994,7 +1149,12 @@ func applicationRPC(client *http.Client, application string, request map[string]
 	if err = json.Unmarshal(b, &endpoint); err != nil {
 		return nil, err
 	}
-	if endpoint.PID <= 0 || syscall.Kill(endpoint.PID, 0) != nil {
+	// Only a running publisher may receive the token. Liveness is not
+	// authentication: the token and the broker's own checks still apply.
+	if state, err := observeProcess(endpoint.PID); state != processPresent {
+		if err != nil {
+			return nil, fmt.Errorf("Pharos is offline; open this copy of Pharos (%w)", err)
+		}
 		return nil, fmt.Errorf("Pharos is offline; open this copy of Pharos")
 	}
 	payload, _ := json.Marshal(request)

@@ -14,7 +14,8 @@ const windows = fullMatrix ? [1, 7, 30, 90] : [7];
 for (const empty of [false, true]) test(`all card definitions retain preview results and loading shapes after collection (${empty ? "empty" : "populated"})`, async t => {
   const { values } = fixture(t, empty), failures = [];
   let ready = 0, cases = 0;
-  for (const recipe of queryRecipes) for (const days of windows) {
+  // Habits templates are collected as their dashboard cards (dashboard-card.test.mjs).
+  for (const recipe of queryRecipes.filter(recipe => !recipe.habits)) for (const days of windows) {
     const result = await compare(recipe, days, values);
     cases++; if (result.state === "ready") ready++;
     if (result.preview || result.analysis || result.loading || result.failures.length) failures.push({ id: recipe.id, days, ...result });

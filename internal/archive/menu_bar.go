@@ -6,15 +6,87 @@ import (
 	qt "github.com/Pythia-Software/query-table/backends/go"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
 
 const menuBarPreferenceKey = "pharos-menu-bar"
 
-var menuBarDefaultOrder = []string{"open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "settings", "eject", "quit"}
+var menuBarDefaultOrder = []string{"open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "streak", "agent_streak", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "logs", "settings", "eject", "quit"}
 var menuBarRequired = []string{"open", "status", "settings", "quit"}
 var menuBarSeparatorPattern = regexp.MustCompile(`^separator:[1-9][0-9]*$`)
+
+// The launch enables the previously optional items once. Existing native menu
+// order, disabled menu-bar visibility, usage period and other customizations
+// are retained; the app toolbar has its own separate six-item reset.
+func launchMenuBarPreferences(raw json.RawMessage) map[string]any {
+	values := map[string]json.RawMessage{menuBarPreferenceKey: raw}
+	saved := map[string]any{}
+	_ = json.Unmarshal(raw, &saved)
+	if saved == nil {
+		saved = map[string]any{}
+	}
+	period := menuBarUsagePeriod(values)
+	order := menuBarOrder(values, menuBarSettings(values))
+	separator := 0
+	newSeparator := func() string {
+		for {
+			separator++
+			id := "separator:" + strconv.Itoa(separator)
+			if !slices.Contains(order, id) {
+				return id
+			}
+		}
+	}
+	for _, id := range []string{"index", "cost", "streak", "agent_streak", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "logs", "eject"} {
+		saved[id] = true
+		if slices.Contains(order, id) {
+			continue
+		}
+		group, usual := menuBarGroup(id), slices.Index(menuBarDefaultOrder, id)
+		groupExists := slices.ContainsFunc(order, func(item string) bool { return menuBarGroup(item) == group })
+		// Stay on the same side of existing separators as this item's group.
+		// Prefer its nearest earlier member; Eject, for example, goes before
+		// Quit when no earlier member of that group is present.
+		at := -1
+		for i := usual - 1; i >= 0; i-- {
+			previous := menuBarDefaultOrder[i]
+			if groupExists && menuBarGroup(previous) != group {
+				continue
+			}
+			if index := slices.Index(order, previous); index >= 0 {
+				at = index + 1
+				break
+			}
+		}
+		if at < 0 && groupExists {
+			for _, next := range menuBarDefaultOrder[usual+1:] {
+				if index := slices.Index(order, next); menuBarGroup(next) == group && index >= 0 {
+					at = index
+					break
+				}
+			}
+		}
+		if at < 0 {
+			at = 0
+		}
+		items := []string{id}
+		if !groupExists {
+			// A new group follows the nearest earlier usual item. Reuse its
+			// surrounding separators, adding unique IDs only where needed.
+			if at > 0 && !menuBarSeparatorPattern.MatchString(order[at-1]) {
+				items = append([]string{newSeparator()}, items...)
+			}
+			if at < len(order) && !menuBarSeparatorPattern.MatchString(order[at]) {
+				items = append(items, newSeparator())
+			}
+		}
+		order = slices.Insert(order, at, items...)
+	}
+	saved["order"], saved["layoutVersion"], saved["usagePeriod"] = order, 2, period
+	return saved
+}
 
 func menuBarGroup(id string) string {
 	switch id {
@@ -22,11 +94,13 @@ func menuBarGroup(id string) string {
 		return "status"
 	case "words", "tokens", "cost", "carbon":
 		return "usage"
+	case "streak", "agent_streak":
+		return "habits"
 	case "backup", "space":
 		return "library"
 	case "search", "analyze", "optimize":
 		return "navigation"
-	case "capture", "health", "sources", "finder":
+	case "capture", "health", "sources", "finder", "logs":
 		return "manage"
 	case "eject", "quit":
 		return "quit"
@@ -94,10 +168,10 @@ func menuBarOrder(values map[string]json.RawMessage, settings map[string]bool) [
 }
 
 func menuBarSettings(values map[string]json.RawMessage) map[string]bool {
-	settings := map[string]bool{"enabled": true, "indexed": true, "words": true, "tokens": true, "carbon": true,
-		"cost": false, "backup": false, "space": false, "index": false, "eject": false,
-		"open": true, "status": true, "settings": true, "quit": true,
-		"search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false}
+	settings := map[string]bool{"enabled": true}
+	for _, id := range menuBarDefaultOrder {
+		settings[id] = true
+	}
 	var saved map[string]any
 	_ = json.Unmarshal(values[menuBarPreferenceKey], &saved)
 	for key := range settings {
@@ -252,6 +326,9 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 		status["error_path"] = "/settings/backups"
 	}
 	status["error"] = problem
+	if settings["logs"] {
+		status["logs"] = s.logsAttention(ctx)
+	}
 	if settings["backup"] {
 		for _, backup := range loadBackupHistory(s.Config()).Backups {
 			if !backup.Partial {
@@ -311,9 +388,21 @@ func (s *Server) menuBarUsage(ctx context.Context, requestedPeriod ...string) (m
 				}
 				links[key] = "/analyze?" + params.Encode()
 			}
-			return map[string]any{"period": period, "from": window.From, "until": window.Until, "timezone": summary["timezone"], "local_day": summary["local_day"], "links": links, "generated_at": summary["generated_at"], "human_words": window.HumanWords,
+			result := map[string]any{"period": period, "from": window.From, "until": window.Until, "timezone": summary["timezone"], "local_day": summary["local_day"], "links": links, "generated_at": summary["generated_at"], "human_words": window.HumanWords,
 				"tokens": window.Tokens, "cost_usd": window.CostUSD,
-				"co2e_g": menuBarCarbon(summary["carbon_factors"].(carbonDocument), window.CarbonTokens, prefs)}, nil
+				"is_estimate": window.IsEstimate, "cost_is_estimate": window.CostIsEstimate, "price_status": window.PriceStatus, "input_tokens_available": window.InputTokensAvailable,
+				"co2e_g": menuBarCarbon(summary["carbon_factors"].(carbonDocument), window.CarbonTokens, prefs)}
+			// Streaks are read only when shown: the first read of a day
+			// builds the day's rhythm records.
+			if settings := menuBarSettings(values); settings["streak"] || settings["agent_streak"] {
+				habits, err := s.Catalog.Habits(ctx, habitsModeAll, 7)
+				if err != nil {
+					return nil, err
+				}
+				result["streaks"] = map[string]string{"you": habitsMenuValue(habits.Streaks[actorYou]), "agents": habitsMenuValue(habits.Streaks["agents"])}
+				links["streak"], links["agent_streak"] = "/analyze?analyze_topic=habits", "/analyze?analyze_topic=habits"
+			}
+			return result, nil
 		}
 	}
 	return nil, nil

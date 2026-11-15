@@ -144,12 +144,20 @@ test("date inputs show UTC calendar dates while saved precise bounds retain thei
 test("clearing the keyword date searches all time and preserves that choice in saved searches", () => {
   const draft = m.newKeywordSearch();
   draft.root.children[0].text = "migration";
-  draft.scope.from = "";
-  const restored = m.readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(draft) }));
-  assert.equal(restored.error, "");
-  assert.equal(restored.draft.scope.from, "");
-  assert.equal(m.searchDateWindow(restored.draft), undefined);
-  assert.equal(new URLSearchParams(m.textFindParameters(restored.draft)).has("find_from"), false);
+  draft.scope.provider = "codex";
+  const today = m.withSearchDateComparison(draft, "from", "today");
+  const range = { ...draft, dateWindow: undefined, scope: { ...draft.scope, from: "2026-01-01", to: "2026-02-01" } };
+  for (const source of [draft, today, range]) for (const field of ["from", "to"]) {
+    const all = m.withSearchDateComparison(source, field, "all");
+    assert.equal(all.scope.from, ""); assert.equal(all.scope.to, "");
+    assert.equal(all.scope.provider, "codex");
+    assert.equal(m.searchDateWindow(all), undefined);
+    const restored = m.readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(all) }));
+    assert.equal(restored.error, "");
+    assert.deepEqual(restored.draft.scope, all.scope);
+    const params = new URLSearchParams(m.textFindParameters(restored.draft));
+    assert.equal(params.has("find_from"), false); assert.equal(params.has("find_to"), false);
+  }
   for (const params of ["search=migration", "search=migration&text_from=2026-01-01", "text_from=&text_to="]) {
     const saved = m.readTextSearch(new URLSearchParams(params));
     assert.equal(saved.draft.scope.from, new URLSearchParams(params).get("text_from") ?? "");

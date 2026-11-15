@@ -55,7 +55,7 @@ export function workPreviewView(preview: WorkPreview, now = Date.now()): WorkPre
   }
   where.push(...measure("clock"));
   const place = [preview.repository, preview.branch].filter(Boolean).join(" · ");
-  if (place) where.push({ text: place, title: place });
+  if (place) where.push({ text: place });
   const models = scope.models.slice(0, 2).map(model => modelName(model.model));
   const what: WorkPreviewPart[] = [];
   // Subagents are sessions another session in scope launched; independent

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime/debug"
+	"runtime/pprof"
 	"time"
 )
 
@@ -44,7 +45,12 @@ func runOperation(op *Op, work func(ctx context.Context, op *Op) error) {
 		}
 	}()
 	var err error
-	op.RunIO(func() { err = work(op.Context(), op) })
+	invoke := func(ctx context.Context) { op.RunIO(func() { err = work(ctx, op) }) }
+	if op != nil && op.resources != nil {
+		pprof.Do(op.Context(), taskProfileLabels(op.resources.identity), invoke)
+	} else {
+		invoke(op.Context())
+	}
 	op.Finish(err)
 }
 
@@ -57,8 +63,8 @@ func (s *Server) begin(ctx context.Context, spec OperationSpec) (context.Context
 // daemonNames lists the service's loops that are daemons, not operations
 // (§3.4): they hold nothing and are never shown, and each pass that does real
 // work starts an operation. The unregistered-work test accounts for them.
-var daemonNames = []string{"maintainLibrary", "maintainSubstringIndex", "maintainToolOutputIndex", "maintainTextSearch", "maintainToolSearch", "maintainQueryTextIndexes",
-	"keepWALSmall", "automaticLoop", "backgroundLoop", "cloudScheduleLoop", "journalWriter", "leaseReconciler", "watchFeatureFlags", "compressCaptures"}
+var daemonNames = []string{"workExecutor", "resourceHistory", "maintainLibrary", "maintainWorkspaceMetrics", "maintainSubstringIndex", "maintainToolOutputIndex", "maintainTextSearch", "maintainToolSearch", "maintainQueryTextIndexes", "maintainMessageLabelFacts", "maintainFingerprintImages", "maintainFingerprintImagesSecondary",
+	"keepWALSmall", "automaticLoop", "backgroundLoop", "cloudScheduleLoop", "journalWriter", "leaseReconciler", "watchFeatureFlags", "compressCaptures", "refreshResults", "chatGPTDownloads", "claudeDownloads", "claudeSettingsRecording"}
 
 // daemon runs a registered daemon loop in the background.
 func (s *Server) daemon(name string, loop func(ctx context.Context)) bool {
@@ -112,12 +118,13 @@ func (c *Catalog) beginOp(ctx context.Context, spec OperationSpec) (context.Cont
 
 // startBackground starts Catalog-level background work as an operation:
 // with the service's start when the catalog has a service, or in a goroutine
-// counted in unowned otherwise. It reports false if the service is stopping.
+// counted in unowned otherwise, under a Terminal command's CPU authority if
+// it has one. It reports false if the service is stopping.
 func (c *Catalog) startBackground(spec OperationSpec, work func(ctx context.Context, op *Op) error) bool {
 	if c.background != nil {
 		return c.background(spec, work)
 	}
-	ctx, op := c.beginOp(context.Background(), spec)
+	ctx, op := c.beginOp(withWorkAuthority(context.Background(), c.commandCPUs.Load()), spec)
 	c.unowned.Go(func() { runOperation(op, func(context.Context, *Op) error { return work(ctx, op) }) })
 	return true
 }
@@ -138,8 +145,9 @@ func flushBudget(started time.Time, timeout time.Duration, now time.Time) time.D
 // is registered before the work runs, published once the work does
 // something, and forgotten if the stretch turned out to have nothing to do.
 type daemonPass struct {
-	op  *Op
-	did bool
+	op       *Op
+	progress maintenanceProgress
+	fallback bool
 }
 
 // beginPass starts a pass of kind for a daemon of c.
@@ -152,11 +160,24 @@ func (c *Catalog) beginPass(ctx context.Context, kind, trigger string) *daemonPa
 }
 
 // worked records n units of real work.
-func (p *daemonPass) worked(n int) {
-	if p == nil || p.op == nil {
+func (p *daemonPass) worked(n int, unit ...string) {
+	if p == nil || p.op == nil || n <= 0 {
 		return
 	}
-	p.did = true
+	p.op.reg.mu.Lock()
+	measured := p.op.step.Name != "" && !p.fallback
+	p.op.reg.mu.Unlock()
+	if measured || len(p.progress.phases) != 0 {
+		return // measured batches already published their committed counts
+	}
+	if !p.fallback {
+		name := "batch"
+		if len(unit) > 0 {
+			name = unit[0]
+		}
+		p.op.Step(p.op.kind.Verb, name, -1)
+		p.fallback = true
+	}
 	p.op.Advance(int64(n))
 }
 
@@ -165,7 +186,10 @@ func (p *daemonPass) end(err error) {
 	if p == nil || p.op == nil {
 		return
 	}
-	if !p.did && err == nil {
+	p.op.reg.mu.Lock()
+	tentative := p.op.tentative
+	p.op.reg.mu.Unlock()
+	if tentative && err == nil {
 		p.op.discard()
 		return
 	}
@@ -174,16 +198,41 @@ func (p *daemonPass) end(err error) {
 
 // runIO runs one batch of the pass at its operation's priority class
 // (Op.RunIO); without an operation it runs fn as is.
-func (p *daemonPass) runIO(fn func()) {
+func (p *daemonPass) runIO(ctx context.Context, fn func(context.Context)) {
 	if p == nil {
-		fn()
+		fn(ctx)
 		return
 	}
-	p.op.RunIO(fn)
+	ctx = p.context(ctx)
+	p.op.RunIO(func() { fn(ctx) })
+}
+
+func (p *daemonPass) context(ctx context.Context) context.Context {
+	if p == nil || p.op == nil {
+		return ctx
+	}
+	return context.WithValue(withOp(ctx, p.op), maintenanceProgressKey{}, &p.progress)
 }
 
 // active reports a pass with an operation open.
 func (p *daemonPass) active() bool { return p != nil && p.op != nil }
+
+// waitForDaemonPasses records a shared gate for every pass it pauses. The
+// scoped waits preserve their counts, leave tentative probes invisible and
+// restore only the blocked states they own.
+func waitForDaemonPasses(reason, detail string, passes ...*daemonPass) func() {
+	resumes := make([]func(), 0, len(passes))
+	for _, pass := range passes {
+		if pass.active() {
+			resumes = append(resumes, pass.op.waitFor(reason, detail))
+		}
+	}
+	return func() {
+		for _, resume := range resumes {
+			resume()
+		}
+	}
+}
 
 // defaultError is err, or fallback when err is nil.
 func defaultError(err, fallback error) error {

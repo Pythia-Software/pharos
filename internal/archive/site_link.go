@@ -798,7 +798,7 @@ func (site *siteMap) argChart(node *siteNode, base, options map[string]any) (ord
 		return orderedObject{}, linkError("options.view", message, dashboard.viewOrder...)
 	}
 	for key := range options {
-		if key == "v" || key == "selection" || slices.Contains(view.Keys, key) {
+		if key == "v" || key == "selection" || slices.Contains(view.Keys, key) || slices.Contains(view.Kept, key) {
 			continue
 		}
 		return orderedObject{}, linkError("options."+key, fmt.Sprintf("is not an option of the %s view; browse_site({path: %q}) lists them.", viewName, node.Path+"/chart/"+viewName), viewOptionNames(view)...)
@@ -2113,6 +2113,17 @@ func (site *siteMap) chartPhrase(node *siteNode, chart map[string]any) string {
 	}
 	switch viewName {
 	case "trend":
+		// A display the link chose is drawn; otherwise the catalog's default.
+		display := text("display")
+		if chosen := view.ChosenDisplay; chosen != nil && merged["display"] == nil {
+			keys := make([]string, len(chosen.Given))
+			for index, name := range chosen.Given {
+				keys[index] = text(name)
+			}
+			if found := lookupTable(chosen.Values, keys); found != nil {
+				display = siteString(found)
+			}
+		}
 		period := text("period")
 		count := int(jsNumber(value(period)))
 		phrase := measure("metric") + " per " + period
@@ -2126,8 +2137,11 @@ func (site *siteMap) chartPhrase(node *siteNode, chart map[string]any) string {
 		if value("share") == true {
 			phrase += ", as a share of the total"
 		}
-		if text("display") == "cumulative" {
+		switch display {
+		case "cumulative":
 			phrase += ", cumulative"
+		case "heatmap":
+			phrase += ", as a heatmap of its distribution"
 		}
 		if rolling := int(jsNumber(value("rollingPeriods"))); rolling > 0 {
 			span := singular
@@ -2136,8 +2150,16 @@ func (site *siteMap) chartPhrase(node *siteNode, chart map[string]any) string {
 			}
 			phrase += fmt.Sprintf(", %d-%s rolling %s", rolling, span, text("rollingOp"))
 		}
-		if value("norm") == true {
-			phrase += fmt.Sprintf(", against the norm of the previous %s periods", text("normPeriods"))
+		if levels, ok := value("percentiles").([]any); ok && len(levels) > 0 {
+			names := make([]string, len(levels))
+			for index, level := range levels {
+				names[index] = lowerLabel(site.Analyze.Labels.Percentiles[siteString(level)])
+			}
+			if display == "heatmap" {
+				phrase += ", tracing each period's " + strings.Join(names, " and ")
+			} else {
+				phrase += fmt.Sprintf(", against the %s of the previous %s periods", strings.Join(names, " and "), text("normPeriods"))
+			}
 		}
 		return phrase
 	case "compare":

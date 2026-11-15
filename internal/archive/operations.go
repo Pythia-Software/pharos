@@ -118,6 +118,7 @@ var errOperationSkipped = errors.New("operation skipped")
 type opStep struct {
 	Index  int
 	Name   string
+	Detail string
 	Source string
 	Unit   string
 	Done   float64
@@ -131,17 +132,24 @@ type opStep struct {
 // transaction. They update memory under the registry's mutex and wake its
 // subscribers and journal writer.
 type Op struct {
-	reg    *opRegistry
-	id     OpID
-	spec   OperationSpec
-	kind   *operationKind
-	parent *Op
-	root   *Op
-	ctx    context.Context
+	reg               *opRegistry
+	id                OpID
+	spec              OperationSpec
+	kind              *operationKind
+	parent            *Op
+	root              *Op
+	ctx               context.Context
+	resources         *taskResources
+	resourceSummary   *taskResourceView
+	neededBy          []OpID
+	sharedWork        []OpID
+	sharedWorkOmitted int
+	workControlled    bool
 
 	// Guarded by reg.mu.
 	state, reason, detail, errText string
 	started, updated, ended        time.Time
+	runningSince                   time.Time
 	plan                           []StepPlan
 	step                           opStep
 	safePoint                      time.Duration
@@ -155,6 +163,8 @@ type Op struct {
 	version                        uint64 // bumped on every change, for the journal
 	written                        uint64 // version last written to the journal
 	writtenEver                    bool
+	// stopper is how a kind whose Stop is "work" stops (setStopper).
+	stopper func()
 	// tentative is set while a daemon pass's operation is unpublished.
 	tentative bool
 	// locks are the capture and index locks the operation has taken: a hold
@@ -327,6 +337,16 @@ type opRegistry struct {
 	// (§10). The service and the broker set it; a registry without it leaves
 	// IO policy alone.
 	lowerIO bool
+	// Resource diagnostics are enabled with scheduled execution. They never
+	// establish freshness or add a journal write for a counter update.
+	telemetry       bool
+	resourceHistory *resourceHistory
+	// executorRoots is set under the scheduled engine, whose execution roots
+	// live for hours and outlive the requests that share them: an ended root
+	// keeps its live descendants, and its ended child detail is bounded.
+	// Classic pruning is unchanged without it.
+	executorRoots  bool
+	resourceLedger *taskResourceLedger
 }
 
 func newOpRegistry(process string) *opRegistry {
@@ -366,6 +386,16 @@ func (r *opRegistry) changedLocked(op *Op, boundary bool) {
 	}
 	if boundary {
 		r.boundary = true
+		if r.resourceHistory != nil {
+			r.resourceHistory.poke()
+			if op != nil && op.parent == nil && !op.runningSince.IsZero() {
+				event, at := "start", op.runningSince
+				if opTerminal(op.state) {
+					event, at = "end", op.ended
+				}
+				r.resourceHistory.mark(resourceHistoryMarker{At: at, Event: event, ID: string(op.id), Kind: op.spec.Kind, Variant: op.spec.Variant, Priority: op.spec.Priority, Trigger: op.spec.Trigger, Libraries: op.spec.Libraries})
+			}
+		}
 	}
 	for sub := range r.subs {
 		select {
@@ -469,9 +499,21 @@ func (r *opRegistry) register(ctx context.Context, spec OperationSpec, tentative
 		op.spec.Priority = defaultString(kind.Priority, priorityBackground)
 	}
 	op.started = r.clock()
+	if op.state == opRunning {
+		op.runningSince = op.started
+	}
 	op.updated = op.started
 	op.duringRelease = releasing
 	op.ctx = withOp(ctx, op)
+	if r.telemetry {
+		batch := ""
+		if op.spec.Variant == "batch" {
+			batch = string(op.id)
+		}
+		op.resources = newTaskResources(taskIdentity{Kind: op.spec.Kind, ID: string(op.id), Root: string(op.root.id),
+			Batch: batch, Priority: op.spec.Priority, Trigger: op.spec.Trigger}, r.clock)
+		op.ctx = withTaskResources(op.ctx, op.resources)
+	}
 	r.ops[op.id] = op
 	r.pruneLocked()
 	if tentative {
@@ -529,7 +571,10 @@ func (op *Op) discard() {
 func (r *opRegistry) pruneLocked() {
 	ended := []*Op{}
 	for _, op := range r.ops {
-		if op.parent == nil && opTerminal(op.state) {
+		if op.parent == nil && r.executorRoots {
+			r.pruneChildrenLocked(op)
+		}
+		if op.parent == nil && opTerminal(op.state) && (!r.executorRoots || !op.activeDescendantsLocked()) {
 			ended = append(ended, op)
 		}
 	}
@@ -554,6 +599,34 @@ func (r *opRegistry) pruneLocked() {
 	}
 }
 
+// Batches can keep an execution root alive for hours. Keep bounded recent
+// child detail while preserving every active descendant and allowing the
+// journal its existing bounded opportunity to write terminal records.
+var maxEndedChildren = 200
+
+func (r *opRegistry) pruneChildrenLocked(op *Op) {
+	if len(op.children) <= maxEndedChildren {
+		return
+	}
+	kept := op.children[:0]
+	for index, child := range op.children {
+		retire := index < len(op.children)-maxEndedChildren && opTerminal(child.state) && !child.activeDescendantsLocked()
+		if retire && r.journaled && child.treeUnwrittenLocked() && len(op.children)-index <= maxUnwrittenOperations {
+			retire = false
+		}
+		if retire {
+			if r.journaled && child.treeUnwrittenLocked() {
+				r.forgotten++
+			}
+			child.forgetLocked()
+		} else {
+			kept = append(kept, child)
+		}
+	}
+	clear(op.children[len(kept):])
+	op.children = kept
+}
+
 // maxUnwrittenOperations caps the ended operations kept for a journal that
 // keeps failing; tests lower it.
 var maxUnwrittenOperations = 2000
@@ -572,6 +645,18 @@ func (op *Op) forgetLocked() {
 	delete(op.reg.ops, op.id)
 }
 
+// An ended requester must never make live work disappear. Shared execution
+// has its own root; this also protects older callers that ended a parent
+// before its workers drained. Call with reg.mu held.
+func (op *Op) activeDescendantsLocked() bool {
+	for _, child := range op.children {
+		if !opTerminal(child.state) || child.activeDescendantsLocked() {
+			return true
+		}
+	}
+	return false
+}
+
 // transitionLocked moves op to state, or records a programming error and
 // keeps the old state.
 func (op *Op) transitionLocked(state string) bool {
@@ -583,6 +668,12 @@ func (op *Op) transitionLocked(state string) bool {
 		return false
 	}
 	op.state = state
+	if state == opRunning && op.runningSince.IsZero() {
+		op.runningSince = op.reg.clock()
+		if op.reg.resourceHistory != nil {
+			op.reg.resourceHistory.poke()
+		}
+	}
 	if opTerminal(state) {
 		op.ended = op.reg.clock()
 		op.safePointKnown = false
@@ -646,7 +737,17 @@ func (op *Op) Plan(steps ...StepPlan) {
 	if !op.lock() {
 		return
 	}
+	// Worker phases replace step.Name, but the declared task remains active.
+	// Preserve that task's identity when discovery revises the remaining plan;
+	// unplanned discovery phases do not become positions in a new plan.
+	active := op.step.Name
+	if op.step.Index > 0 && op.step.Index <= len(op.plan) {
+		active = op.plan[op.step.Index-1].Name
+	}
 	op.plan = slices.Clone(steps)
+	if len(op.plan) > 0 {
+		op.step.Index = slices.IndexFunc(op.plan, func(step StepPlan) bool { return step.Name == active }) + 1
+	}
 	op.unlock(false)
 }
 
@@ -664,6 +765,11 @@ func (op *Op) stepLocked(name, source, unit string, total float64) {
 		op.transitionLocked(opRunning)
 	}
 	index := op.step.Index + 1
+	if len(op.plan) > 0 {
+		// A named task selects its planned position below. Other phase/source
+		// changes describe work inside that task and must not advance N of M.
+		index = op.step.Index
+	}
 	if planned := slices.IndexFunc(op.plan, func(step StepPlan) bool { return step.Name == name }); planned >= 0 {
 		index = planned + 1
 	}
@@ -693,8 +799,12 @@ func (op *Op) SetDone(n int64) {
 // progress mirrors a measured progress report (an activityWork, a SyncRun's
 // phase) into the operation: a new phase or source starts a new step, and
 // the same one updates its counts. It allocates nothing when nothing changed.
-func (op *Op) progress(phase, source, unit string, done, total float64, known bool) {
+func (op *Op) progress(phase, source, unit string, done, total float64, known bool, details ...string) {
 	if !op.lock() {
+		return
+	}
+	if opTerminal(op.state) {
+		op.reg.mu.Unlock()
 		return
 	}
 	if !known && total <= 0 {
@@ -703,17 +813,23 @@ func (op *Op) progress(phase, source, unit string, done, total float64, known bo
 	if op.state == opQueued {
 		op.transitionLocked(opRunning)
 	}
+	detail := ""
+	if len(details) > 0 {
+		detail = details[0]
+	}
 	if op.step.Name != phase || op.step.Source != source {
 		op.stepLocked(phase, source, unit, total)
 		op.step.Done = done
+		op.step.Detail = detail
 		op.unlock(false)
 		return
 	}
-	if op.step.Unit == unit && op.step.Done == done && op.step.Total == total {
+	if op.step.Unit == unit && op.step.Done == done && op.step.Total == total && op.step.Detail == detail {
 		op.reg.mu.Unlock()
 		return
 	}
 	op.step.Unit, op.step.Done, op.step.Total = unit, done, total
+	op.step.Detail = detail
 	op.unlock(false)
 }
 
@@ -723,7 +839,7 @@ func (op *Op) mirrorWork(w activityWork) {
 		return
 	}
 	measured := w.measured()
-	op.progress(w.Phase, w.Source, measured.Unit, measured.Done, measured.Total, measured.TotalKnown || measured.Total > 0)
+	op.progress(w.Phase, w.Source, measured.Unit, measured.Done, measured.Total, measured.TotalKnown || measured.Total > 0, w.Detail)
 }
 
 // Block moves a running operation to blocked with a reason code (§8.3) and
@@ -752,6 +868,35 @@ func (op *Op) Unblock() {
 	op.unlock(false)
 }
 
+// waitFor marks a real wait without replacing another owner's blocked/stopping
+// state. Tentative daemon probes stay invisible until they have found work.
+// The returned function restores only the wait this call actually installed.
+func (op *Op) waitFor(reason, detail string) func() {
+	if op == nil {
+		return func() {}
+	}
+	op.reg.mu.Lock()
+	if op.tentative || op.state != opRunning {
+		op.reg.mu.Unlock()
+		return func() {}
+	}
+	op.transitionLocked(opBlocked)
+	op.reason, op.detail = reason, detail
+	op.unlock(false)
+	return func() {
+		if !op.lock() {
+			return
+		}
+		if op.state == opBlocked && op.reason == reason && op.detail == detail {
+			op.transitionLocked(opRunning)
+			op.reason, op.detail = "", ""
+			op.unlock(false)
+			return
+		}
+		op.reg.mu.Unlock()
+	}
+}
+
 // SafePoint says how soon a stop would land; 0 means at one now.
 func (op *Op) SafePoint(next time.Duration) {
 	if !op.lock() {
@@ -778,6 +923,7 @@ func (op *Op) SkipWith(reason, detail string) {
 	if op.state == opQueued || op.state == opRunning || op.state == opBlocked || op.state == opStopping {
 		op.state, op.reason = opSkipped, reason
 		op.ended = op.reg.clock()
+		op.finishResourcesLocked()
 		if detail != "" {
 			op.detail = detail
 		}
@@ -814,6 +960,31 @@ func (op *Op) childFrom(ctx context.Context, spec OperationSpec) (context.Contex
 	}
 	spec.Parent = op.id
 	return op.reg.begin(ctx, spec)
+}
+
+// setStopper is how work of a kind whose Stop is "work" is stopped: stop
+// cancels the work's context, and the work ends at its next safe point with
+// what it finished stored.
+func (op *Op) setStopper(stop func()) {
+	if !op.lock() {
+		return
+	}
+	op.stopper = stop
+	op.reg.mu.Unlock()
+}
+
+// stopWork calls the work's stopper, reporting false before it has one.
+func (op *Op) stopWork() bool {
+	if !op.lock() {
+		return false
+	}
+	stop := op.stopper
+	op.reg.mu.Unlock()
+	if stop == nil {
+		return false
+	}
+	stop()
+	return true
 }
 
 // markStopping records a stop asked for by a user (a stop endpoint).
@@ -915,6 +1086,7 @@ func (op *Op) finishLocked(state, reason, text string) {
 	}
 	if state == opSkipped {
 		op.state, op.reason, op.ended = opSkipped, reason, op.reg.clock()
+		op.finishResourcesLocked()
 		return
 	}
 	if op.transitionLocked(state) {
@@ -922,6 +1094,20 @@ func (op *Op) finishLocked(state, reason, text string) {
 		if state != opBlocked {
 			op.detail = ""
 		}
+		if opTerminal(state) {
+			op.finishResourcesLocked()
+		}
+	}
+}
+
+func (op *Op) finishResourcesLocked() {
+	if op.resources == nil || op.resourceSummary != nil {
+		return
+	}
+	summary := op.resources.finish(op.state, op.reg.resourceHistory, "")
+	op.resourceSummary = &summary
+	if op.reg.resourceLedger != nil && op.spec.Variant != "scheduled" && op.spec.Variant != "population-request" {
+		op.reg.resourceLedger.record(summary)
 	}
 }
 
@@ -1006,27 +1192,34 @@ func (r *opRegistry) markKindStopping(kinds ...string) {
 // opView is a copy of an operation's state, taken under the registry lock,
 // for snapshots, the verdict and the journal.
 type opView struct {
-	ID            OpID
-	Parent        OpID
-	Root          OpID
-	Spec          OperationSpec
-	Kind          *operationKind
-	Process       string
-	Instance      string
-	State         string
-	Reason        string
-	Detail        string
-	Error         string
-	Started       time.Time
-	Updated       time.Time
-	Ended         time.Time
-	Plan          []StepPlan
-	Step          opStep
-	SafePoint     time.Duration
-	SafePointSet  bool
-	Wrote         bool
-	UserStop      bool
-	DuringRelease bool
+	ID                OpID
+	Parent            OpID
+	Root              OpID
+	Spec              OperationSpec
+	Kind              *operationKind
+	Process           string
+	Instance          string
+	State             string
+	Reason            string
+	Detail            string
+	Error             string
+	Started           time.Time
+	RunningSince      time.Time
+	Updated           time.Time
+	Ended             time.Time
+	ActiveDescendants bool
+	Resources         *taskResourceView
+	NeededBy          []OpID
+	SharedWork        []OpID
+	SharedWorkOmitted int
+	WorkControlled    bool
+	Plan              []StepPlan
+	Step              opStep
+	SafePoint         time.Duration
+	SafePointSet      bool
+	Wrote             bool
+	UserStop          bool
+	DuringRelease     bool
 	// Sources are a mirrored index run's sources.
 	Sources  []string
 	Children []OpID
@@ -1047,6 +1240,21 @@ func (op *Op) viewLocked() opView {
 		Reason: op.reason, Detail: op.detail, Error: op.errText, Started: op.started, Updated: op.updated, Ended: op.ended, Plan: slices.Clone(op.plan),
 		Step: op.step, SafePoint: op.safePoint, SafePointSet: op.safePointKnown, Wrote: op.wrote, UserStop: op.userStop,
 		DuringRelease: op.duringRelease, Forecast: op.forecast, Version: op.version, Tentative: op.tentative, Sources: slices.Clone(op.sources)}
+	// Only scheduled execution roots outlive their live descendants; classic
+	// views (and their 10-minute recent cut) are unchanged.
+	if op.reg.executorRoots && opTerminal(op.state) {
+		view.ActiveDescendants = op.activeDescendantsLocked()
+	}
+	if op.resourceSummary != nil {
+		copy := *op.resourceSummary
+		view.Resources = &copy
+	} else if op.resources != nil {
+		copy := op.resources.view(op.reg.clock())
+		view.Resources = &copy
+	}
+	view.NeededBy, view.SharedWork = slices.Clone(op.neededBy), slices.Clone(op.sharedWork)
+	view.SharedWorkOmitted, view.RunningSince = op.sharedWorkOmitted, op.runningSince
+	view.WorkControlled = op.workControlled
 	if op.parent != nil {
 		view.Parent = op.parent.id
 	}

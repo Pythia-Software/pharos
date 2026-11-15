@@ -5,7 +5,7 @@ import { queryCapabilities, serverQuery as sharedServerQuery } from "../../suppo
 import { queryRecipes, instantiateRecipe, loadQueryPreviews, loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
 import { compactTimelineBuckets } from "../../../src/column-marks";
 
-const rows = Array.from({ length: 10 }, (_, i) => ({ id: String(i), call_count: 1, error_count: i < 2 ? 1 : 0, tool_name: "Bash", command_name: "go test", duration_ms: (i + 1) * 100, result_tokens: i * 10, result_tokens_source: i % 2 ? "estimated" : "measured", repository_name: i % 2 ? "one" : "two", conversation_id: String(i), started_at: Date.now() }));
+const rows = Array.from({ length: 10 }, (_, i) => ({ id: String(i), call_count: 1, error_count: i < 2 ? 1 : 0, tool_name: "Bash", command_name: "go test", duration_ms: (i + 1) * 100, result_tokens: i * 10, result_tokens_source: i % 2 ? "estimated" : "measured", project_name: i % 2 ? "one" : "two", conversation_id: String(i), started_at: Date.now() }));
 function query(aggregations, extra = {}) { return { ...core.EMPTY_QUERY, aggregations, ...extra }; }
 function job(id, aggregations, options = {}, extra = {}) { return { id, dataset: "tool_calls", schema: schemas.tool_calls, query: query(aggregations, extra), options }; }
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -19,13 +19,18 @@ function fixture(t, intercept = () => undefined) {
     const path = String(url), request = init.body ? JSON.parse(init.body) : undefined;
     requests.push({ path, request });
     const replacement = await intercept(path, request, init);
-    if (replacement) return replacement;
+    if (replacement) {
+      if (!replacement.ok || request?.version !== 3) return replacement;
+      const partial=await replacement.json();
+      const dataset=path.split("/")[3];
+      return response({...serverQuery(request,rows,schemas[dataset]??schemas.tool_calls),...partial});
+    }
     if (path.includes("computed-columns")) return response([]);
     if (path.endsWith("capabilities")) return response({ metricCapabilities: { version: 2, expressions: true, distributions: true }, computedExecution: execution, queryCapabilities });
-    if (path.includes("query-v3")) return response(serverQuery(request));
-    if (path.includes("rows-v2")) return response(core.applyQuery(rows, request, schemas.tool_calls));
+    if (path.includes("query-v3")) return response(serverQuery(request,rows,schemas[path.split("/")[3]]??schemas.tool_calls));
+    if (path.includes("query-v3")) return response(core.applyQuery(rows, request, schemas.tool_calls));
     const metrics = request.metrics.map(metric => ({ ...metric, ...(metric.distribution ? { display: { kind: metric.distribution.kind } } : {}) }));
-    return response(core.evaluateMetrics(rows, query(metrics, request), schemas.tool_calls));
+    return response(core.evaluateMetrics(rows, query(metrics, request.result), schemas.tool_calls));
   };
   t.after(() => { global.fetch = priorFetch; global.location = priorLocation; clearPreviewCache(); });
   return requests;
@@ -39,13 +44,13 @@ test("failure rate includes successful calls and preserves all dashboard results
   assert.equal(preview.metrics[1].result.buckets[0].value, 2);
   assert.equal(preview.metrics[2].result.buckets[0].value, 10);
   assert.match(preview.summary, /10 observations/);
-  assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
+  assert.equal(requests.filter(request => request.path.endsWith("query-v3")).length, 1);
 });
 
 test("compatible dashboards batch despite duplicate metric IDs and split at twenty", async t => {
   const requests = fixture(t), previews = new Map();
   await loadQueryPreviews(Array.from({ length: 23 }, (_, i) => job(String(i), [{ id: "same", op: "sum", field: "duration_ms", groupBy: [], expression: `SUM([duration_ms])+${i}` }])), (id, preview, error) => { assert.ifError(error); previews.set(id, preview); });
-  const batches = requests.filter(request => request.path.endsWith("metrics"));
+  const batches = requests.filter(request => request.path.endsWith("query-v3"));
   assert.deepEqual(batches.map(batch => batch.request.metrics.length), [20, 3]);
   assert.equal(requests.filter(request => request.path.endsWith("capabilities")).length, 1);
   for (let i = 0; i < 23; i++) assert.equal(previews.get(String(i)).metrics[0].result.buckets[0].value, 5500 + i);
@@ -56,7 +61,7 @@ test("distribution cards request separately from their batch siblings", async t 
   const box = { id: "box", op: "count", groupBy: [], distribution: { kind: "box", input: "[duration_ms]", whiskers: "tukey" } };
   const sum = i => ({ id: "sum", op: "sum", field: "duration_ms", groupBy: [], expression: `SUM([duration_ms])+${i}` });
   await loadQueryPreviews([job("a", [sum(1)]), job("b", [box, sum(2)]), job("c", [box]), job("d", [sum(3)])], (id, preview, error) => { assert.ifError(error); previews.set(id, preview); });
-  const batches = requests.filter(request => request.path.endsWith("metrics")).map(batch => batch.request.metrics.length).sort();
+  const batches = requests.filter(request => request.path.endsWith("query-v3")).map(batch => batch.request.metrics.length).sort();
   assert.deepEqual(batches, [1, 2, 2]);
   assert.equal(previews.size, 4);
 });
@@ -72,14 +77,14 @@ test("cover changes reuse full results and preserve distributions and paired axe
   const second = await loadQueryPreview("tool_calls", query(metrics), schemas.tool_calls, { coverMetricId: "pair" });
   assert.equal(second.coverMetricId, "pair");
   assert.equal(second.metrics[1].result.buckets[0].y, 45);
-  assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
+  assert.equal(requests.filter(request => request.path.endsWith("query-v3")).length, 1);
 });
 
 test("duration boxes select positive timing while nonempty output sizes preserve provenance", async t => {
   fixture(t, (path, request) => {
-    if (!path.endsWith("metrics")) return;
+    if (!path.endsWith("query-v3")) return;
     const observations = [...rows, { ...rows[0], id: "zero", duration_ms: 0, result_tokens: 0 }];
-    return response(core.evaluateMetrics(observations, query(request.metrics.map(metric => ({ ...metric, ...(metric.distribution ? { display: { kind: metric.distribution.kind } } : {}) })), request), schemas.tool_calls));
+    return response(core.evaluateMetrics(observations, query(request.metrics.map(metric => ({ ...metric, ...(metric.distribution ? { display: { kind: metric.distribution.kind } } : {}) })), request.result), schemas.tool_calls));
   });
   const duration = queryRecipes.find(recipe => recipe.id === "duration-distribution");
   const preview = await loadQueryPreview(duration.dataset, query(duration.measures, { where: duration.where }), schemas.tool_calls);
@@ -93,7 +98,7 @@ test("duration boxes select positive timing while nonempty output sizes preserve
 });
 
 test("changing the cover to evidence counts uses the selected metric's unit", async t => {
-  fixture(t, (path, request) => path.endsWith("metrics") ? response({ metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: metric.groupBy.map(() => "review"), value: 10, count: 10 }], processedRows: 10 })) }) : undefined);
+  fixture(t, (path, request) => path.endsWith("query-v3") ? response({ metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: metric.groupBy.map(() => "review"), value: 10, count: 10 }], processedRows: 10 })) }) : undefined);
   const recipe = queryRecipes.find(recipe => recipe.id === "skill-reach");
   const preview = await loadQueryPreview(recipe.dataset, query(recipe.measures), schemas.skill_usages, { recipe, coverMetricId: "skill-evidence-types" });
   assert.equal(preview.summary, "10 records");
@@ -176,7 +181,7 @@ test("weekday previews render daily distributions and keep all-time and edited c
     }
   }
   const date = { field: "sent_at", op: ">=", value: "2026-10-12T12:00:00Z" };
-  for (const predicate of [{ any: [date, { field: "repository_name", op: "=", value: "other" }] }, { ...date, negated: true }]) {
+  for (const predicate of [{ any: [date, { field: "project_name", op: "=", value: "other" }] }, { ...date, negated: true }]) {
     for (const changed of [
       { ...item.query, where: [...item.query.where, predicate] },
       { ...item.query, aggregations: item.query.aggregations.map(metric => ({ ...metric, where: [predicate] })) },
@@ -220,22 +225,22 @@ test("relative daily covers chart every local date their window touches, across 
 });
 
 test("sparse tool-size cohorts explain their cutoff in calls rather than conversations", async t => {
-  fixture(t, (path, request) => path.endsWith("metrics") ? response(core.evaluateMetrics(rows.slice(1, 3), query(request.metrics), schemas.tool_calls)) : undefined);
+  fixture(t, (path, request) => path.endsWith("query-v3") ? response(core.evaluateMetrics(rows.slice(1, 3), query(request.metrics), schemas.tool_calls)) : undefined);
   const recipe = queryRecipes.find(recipe => recipe.id === "output-distribution");
   const preview = await loadQueryPreview(recipe.dataset, query(recipe.measures, { where: recipe.where }), schemas.tool_calls, { recipe });
   assert.equal(preview.state, "empty");
-  assert.equal(preview.emptyLabel, "No cohorts with at least 3 calls");
+  assert.equal(preview.emptyLabel, "No groups with at least 3 calls");
 });
 
 test("sparse skill boxes name their actual sample population", async t => {
-  fixture(t, (path, request) => path.endsWith("metrics") ? response({ metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: ["example", "explicit_invocation"], value: 200, count: 2, distribution: { kind: "box", summary: { n: 2, min: 100, q1: 125, median: 150, q3: 175, max: 200, mean: 150 } } }], processedRows: 2 })) }) : undefined);
+  fixture(t, (path, request) => path.endsWith("query-v3") ? response({ metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: ["example", "explicit_invocation"], value: 200, count: 2, distribution: { kind: "box", summary: { n: 2, min: 100, q1: 125, median: 150, q3: 175, max: 200, mean: 150 } } }], processedRows: 2 })) }) : undefined);
   const recipe = queryRecipes.find(recipe => recipe.id === "skill-body-sizes");
   const state = query(recipe.measures, { where: recipe.where });
   const preview = await loadQueryPreview(recipe.dataset, state, schemas.skill_usages, { recipe });
   assert.equal(preview.state, "empty");
-  assert.equal(preview.emptyLabel, "No cohorts with at least 3 body records");
+  assert.equal(preview.emptyLabel, "No groups with at least 3 body records");
   const overridden = await loadQueryPreview(recipe.dataset, state, schemas.skill_usages, { recipe, cover: { ...recipe.cover, sampleUnit: "conversation/path groups" } });
-  assert.equal(overridden.emptyLabel, "No cohorts with at least 3 conversation/path groups");
+  assert.equal(overridden.emptyLabel, "No groups with at least 3 conversation/path groups");
 });
 
 test("empty diagnostic covers explain the exact missing population", async t => {
@@ -251,8 +256,8 @@ test("canonical computed fields carry current revisions, labels and typed result
   let sent;
   fixture(t, (path, request) => {
     if (path.includes("computed-columns")) return response([definition]);
-    if (path.endsWith("capabilities")) return response({ metricCapabilities: { version: 2, computedFields: true }, computedExecution: { ...execution, fields: { "@computed/seconds": { type: "number", select: true, sort: true, measure: true, group: false } }, resolvedRevisions: { seconds: "2" } } });
-    if (path.endsWith("metrics")) { sent = request; return response({ metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: [], value: metric.field === "@computed/seconds" ? 5.5 : 5500, count: 10 }], processedRows: 10, coverage: "exact" })) }); }
+    if (path.endsWith("capabilities")) return response({ queryCapabilities, computedExecution: { ...execution, fields: { "@computed/seconds": { type: "number", select: true, sort: true, measure: true, group: false } }, resolvedRevisions: { seconds: "2" } } });
+    if (path.endsWith("query-v3")) { sent = request; return response({ execution:{...execution,resolvedRevisions:{seconds:"2"}}, metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: [], value: metric.field === "@computed/seconds" ? 5.5 : 5500, count: 10 }], processedRows: 10, coverage: "exact" })) }); }
   });
   const results = new Map();
   await loadQueryPreviews([job("raw", [{ id: "raw", op: "sum", field: "duration_ms", groupBy: [] }]), job("computed", [{ id: "seconds", op: "sum", field: "@computed/seconds", groupBy: [] }])], (id, preview, error) => { assert.ifError(error); results.set(id, preview); });
@@ -268,13 +273,13 @@ test("residual computed predicates fail locally while healthy sibling queries co
   const requests = fixture(t), results = new Map();
   const metric = [{ id: "count", op: "count", groupBy: [] }];
   await loadQueryPreviews([job("bad", metric, {}, { where: [{ field: "@computed/missing", op: ">", value: "0" }] }), job("good", metric)], (id, preview, error) => results.set(id, { preview, error }));
-  assert.match(String(results.get("bad").error), /residual|filter/i);
+  assert.equal(results.get("bad").error.code, "residual_query");
   assert.equal(results.get("good").preview.state, "ready");
-  assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
+  assert.equal(requests.filter(request => request.path.endsWith("query-v3")).length, 1);
 });
 
 test("server-rejected batches isolate the bad formula without replaying successful work", async t => {
-  const requests = fixture(t, (path, request) => path.endsWith("metrics") && request.metrics.some(metric => metric.expression === "SUM([duration_ms])") ? response({ error: "backend failure for SUM" }, 400) : undefined);
+  const requests = fixture(t, (path, request) => path.endsWith("query-v3") && request.metrics.some(metric => metric.expression === "SUM([duration_ms])") ? response({ error: "backend failure for SUM" }, 400) : undefined);
   const results = new Map();
   await loadQueryPreviews([job("bad", [{ id: "x", op: "count", groupBy: [], expression: "SUM([duration_ms])" }]), job("good", [{ id: "x", op: "count", groupBy: [], expression: "COUNT()" }])], (id, preview, error) => {
     assert.ok(!results.has(id), `published ${id} more than once`);
@@ -282,22 +287,22 @@ test("server-rejected batches isolate the bad formula without replaying successf
   });
   assert.match(String(results.get("bad").error), /backend failure/);
   assert.equal(results.get("good").preview.total, 10);
-  assert.deepEqual(requests.filter(request => request.path.endsWith("metrics")).map(request => request.request.metrics.map(metric => metric.expression)), [["SUM([duration_ms])", "COUNT()"], ["SUM([duration_ms])"], ["COUNT()"]]);
+  assert.deepEqual(requests.filter(request => request.path.endsWith("query-v3")).map(request => request.request.metrics.map(metric => metric.expression)), [["SUM([duration_ms])", "COUNT()"], ["SUM([duration_ms])"], ["COUNT()"]]);
 });
 
 test("shown-row scopes preserve saved paging and stay separate from the complete population", async t => {
   const requests = fixture(t), metric = { id: "n", op: "count", groupBy: [] };
   await loadQueryPreviews([job("all", [metric]), job("page", [{ ...metric, scope: "shownRows" }], {}, { limit: 3, offset: 2 })], (_id, _preview, error) => assert.ifError(error));
-  const batches = requests.filter(request => request.path.endsWith("metrics"));
+  const batches = requests.filter(request => request.path.endsWith("query-v3"));
   assert.equal(batches.length, 2);
-  assert.equal(batches.find(batch => batch.request.metrics[0].scope === "shownRows").request.offset, 2);
+  assert.equal(batches.find(batch => batch.request.metrics[0].scope === "shownRows").request.result.offset, 2);
 });
 
 test("Library searches retain indexed options and never share batches or cached populations", async t => {
   const requests = fixture(t), metric = { id: "n", op: "count", groupBy: [] };
   const jobs = ["first", "second"].map(id => ({ ...job(id, [metric], { url: `/library?search=${id}&kind=file&case=1&fuzzy=0&separators=1` }), dataset: "library", schema: schemas.library }));
   await loadQueryPreviews(jobs, (_id, _preview, error) => assert.ifError(error));
-  const batches = requests.filter(request => request.path.includes("/metrics"));
+  const batches = requests.filter(request => request.path.includes("/query-v3"));
   assert.equal(batches.length, 2);
   for (const [i, batch] of batches.entries()) {
     const params = new URL(batch.path, global.location.origin).searchParams;
@@ -308,25 +313,25 @@ test("Library searches retain indexed options and never share batches or cached 
     assert.equal(params.get("find_separators"), "1");
   }
   await loadQueryPreviews(jobs, (_id, _preview, error) => assert.ifError(error));
-  assert.equal(requests.filter(request => request.path.includes("/metrics")).length, 2);
+  assert.equal(requests.filter(request => request.path.includes("/query-v3")).length, 2);
 });
 
 test("legacy Library previews preserve default-on fuzzy matching and explicit opt-out", async t => {
   const requests = fixture(t);
   const jobs = ["", "&fuzzy=0"].map((suffix, index) => ({ ...job(`legacy-${index}`, [], { url: `/library?search=migration${suffix}` }), dataset: "library", schema: schemas.library }));
   await loadQueryPreviews(jobs, (_id, _preview, error) => assert.ifError(error));
-  const fuzzy = requests.filter(request => request.path.includes("rows-v2")).map(request => new URL(request.path, global.location.origin).searchParams.get("find_fuzzy"));
+  const fuzzy = requests.filter(request => request.path.includes("query-v3")).map(request => new URL(request.path, global.location.origin).searchParams.get("find_fuzzy"));
   assert.deepEqual(fuzzy.sort(), ["0", "1"]);
 });
 
 test("visual Library bookmarks preserve their tree, scope, cursor, and incomplete coverage", async t => {
-  const requests = fixture(t, path => path.includes("rows-v2") ? response({ total: 0, rows: [], find: { search: { complete: false } } }) : undefined);
+  const requests = fixture(t, path => path.includes("query-v3") ? response({ total: 0, rows: [], find: { search: { complete: false } } }) : undefined);
   const draft = { editor: "visual", match: "rules", text: "", mode: "advanced", fuzzy: false, caseSensitive: false, separators: false,
     root: { kind: "group", join: "any", exclude: false, children: ["cache", "buffer"].map(text => ({ kind: "words", text, other: "", distance: "8", exclude: false })) },
     scope: { surface: "user", roles: [], kinds: [], repository: "pharos", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" } };
   const url = `/library?${new URLSearchParams({ text_builder: JSON.stringify(draft), text_cursor: "saved-cursor" })}`;
   const preview = await loadQueryPreview("library", query([]), schemas.library, { url });
-  const params = new URL(requests.find(r => r.path.includes("rows-v2")).path, global.location.origin).searchParams;
+  const params = new URL(requests.find(r => r.path.includes("query-v3")).path, global.location.origin).searchParams;
   assert.deepEqual(JSON.parse(params.get("find_where")), { op: "or", children: [{ op: "term", text: "cache" }, { op: "term", text: "buffer" }] });
   assert.equal(params.get("find_surface"), "user");
   assert.equal(params.get("find_repository"), "pharos");
@@ -339,7 +344,6 @@ test("Human Words bookmark previews preserve the bounded message search and curs
   t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-14T12:00:00Z") });
   let complete = false, limited = false, population = [];
   const requests = fixture(t, (path, request) => {
-    if (path.includes("rows-v2")) return response({ total: 0, rows: [], find: { search: { complete } } });
     if (path.includes("/writing_messages/query-v3")) {
       const result = sharedServerQuery(request, population, schemas.writing_messages);
       return response({ ...result, metrics: result.metrics.map(metric => ({ ...metric, coverage: "exact" })), find: { limited, search: { complete } } });
@@ -350,7 +354,7 @@ test("Human Words bookmark previews preserve the bounded message search and curs
     scope: { surface: "user", roles: [], kinds: [], repository: "pharos", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" } };
   const url = `/analyze?${new URLSearchParams({ message_query: JSON.stringify(draft), message_cursor: "saved-cursor" })}`;
   const preview = await loadQueryPreview("writing_messages", query([]), schemas.writing_messages, { url });
-  const params = new URL(requests.find(r => r.path.includes("rows-v2")).path, global.location.origin).searchParams;
+  const params = new URL(requests.find(r => r.path.includes("query-v3")).path, global.location.origin).searchParams;
   assert.deepEqual(JSON.parse(params.get("find_where")), { op: "or", children: [{ op: "term", text: "cache" }, { op: "term", text: "buffer" }] });
   assert.equal(params.get("find_surface"), "user");
   assert.equal(params.get("find_repository"), "pharos");
@@ -387,9 +391,9 @@ test("a broken visual bookmark fails visibly without unfiltering itself or other
 test("row excerpts preserve the saved offset and cap only the preview length", async t => {
   const requests = fixture(t);
   await loadQueryPreview("tool_calls", query([], { limit: 2, offset: 5 }), schemas.tool_calls);
-  const request = requests.find(request => request.path.includes("rows-v2")).request;
-  assert.equal(request.limit, 2);
-  assert.equal(request.offset, 5);
+  const request = requests.find(request => request.path.includes("query-v3")).request;
+  assert.equal(request.result.limit, 2);
+  assert.equal(request.result.offset, 5);
 });
 
 test("empty distributions stay empty while observed zero rates remain valid saved views", async t => {
@@ -413,28 +417,28 @@ test("cancellation also suppresses cached publications", async t => {
   await loadQueryPreviews(jobs, () => { publications++; controller.abort(); }, controller.signal);
   assert.equal(publications, 1);
   await loadQueryPreviews(jobs, () => assert.fail("already aborted cache hit published"), controller.signal);
-  assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
+  assert.equal(requests.filter(request => request.path.endsWith("query-v3")).length, 1);
 });
 
 test("cancellation prevents publication and leaves no aborted result in the cache", async t => {
   const controller = new AbortController();
-  const requests = fixture(t, (path) => { if (path.endsWith("metrics")) { controller.abort(); return response({ metrics: [] }); } });
+  const requests = fixture(t, (path) => { if (path.endsWith("query-v3")) { controller.abort(); return response({ metrics: [] }); } });
   await loadQueryPreviews([job("n", [{ id: "n", op: "count", groupBy: [] }])], () => assert.fail("aborted result published"), controller.signal);
-  assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
+  assert.equal(requests.filter(request => request.path.endsWith("query-v3")).length, 1);
 });
 
 test("grouped saved views preview the full source before HAVING and result paging", async t => {
  const requests=fixture(t);
  const grouped=core.normalizeQueryState({
-  grouping:{source:query([],{where:[{field:'duration_ms',op:'>',value:'200'}],limit:1,offset:99}),keys:['repository_name'],summaries:[{id:'group_rows',op:'count'}]},
-  select:[{field:'repository_name'},{field:'group_rows'}],where:[{field:'group_rows',op:'>=',value:'4'}],orderBy:[{field:'repository_name',dir:'asc'}],limit:1,offset:1,
+  grouping:{source:query([],{where:[{field:'duration_ms',op:'>',value:'200'}],limit:1,offset:99}),keys:['project_name'],summaries:[{id:'group_rows',op:'count'}]},
+  select:[{field:'project_name'},{field:'group_rows'}],where:[{field:'group_rows',op:'>=',value:'4'}],orderBy:[{field:'project_name',dir:'asc'}],limit:1,offset:1,
   aggregations:[{id:'groups',op:'count',expression:'COUNT()',groupBy:[]}],
  });
  const preview=await loadQueryPreview('tool_calls',grouped,schemas.tool_calls);
  assert.equal(preview.state,'ready');assert.equal(preview.metrics[0].result.buckets[0].value,2);
  assert.equal(requests.filter(r=>r.path.includes('/query-v3')).length,1);
  assert.equal(requests.filter(r=>r.path.includes('/population')).length,0);
- assert.equal(requests.filter(r=>r.path.includes('/rows-v2')||r.path.endsWith('/metrics')).length,0);
+ assert.ok(requests.filter(r=>r.path.includes('/query-v3')).every(r=>!r.request.rows));
 });
 
 test("calendar previews execute on the server and preserve server failures", async t => {
@@ -447,7 +451,7 @@ test("calendar previews execute on the server and preserve server failures", asy
  assert.ok(preview.metrics[0].result.buckets.some(bucket=>bucket.count===0));
  complete=false;clearPreviewCache();
  await assert.rejects(loadQueryPreview('tool_calls',q,schemas.tool_calls),/incomplete/);
- assert.equal(requests.filter(r=>r.path.endsWith('/metrics')||r.path.includes('/population')).length,0);
+ assert.ok(requests.filter(r=>r.path.includes('/query-v3')).every(r=>!r.request.rows));
 });
 
 test("all-time writing hours combine older dates and repeated DST hours into the clock-hour cover", async t => {
@@ -475,6 +479,11 @@ test("all-time writing hours combine older dates and repeated DST hours into the
   assert.match(preview.study.sampleLabel, /^3 written messages/);
   partial = true; clearPreviewCache();
   await assert.rejects(loadQueryPreview(item.dataset, item.query, schema, { recipe }), /Complete hourly totals/);
+  // A bucket of several hours starts at one hour but holds the next ones' words.
+  partial = false; clearPreviewCache();
+  item.query.aggregations[0].dateGrouping.every = 2;
+  const multiHour = await loadQueryPreview(item.dataset, item.query, schema, { recipe, cover: item.cover, url: item.url });
+  assert.equal(multiHour.study, undefined, "two-hour buckets keep the native chart rather than the clock-hour cover");
 });
 
 test("daily repository words average seven calendar days with history before the 30-day window", async t => {
@@ -482,12 +491,12 @@ test("daily repository words average seven calendar days with history before the
   t.mock.timers.enable({ apis: ["Date"], now });
   const recipe = queryRecipes.find(recipe => recipe.id === "human-repository-words-trend"), item = instantiateRecipe(recipe, recipe.days[0]);
   const schema = schemas.writing_messages;
-  const dated = (id, date, typed_words, repository_name) => ({ id, sent_at: new Date(date).toISOString(), day: new Date(date).toLocaleDateString("en-CA"), typed_words, repository_name });
+  const dated = (id, date, typed_words, project_name) => ({ id, sent_at: new Date(date).toISOString(), day: new Date(date).toLocaleDateString("en-CA"), typed_words, project_name });
   const first = new Date(now); first.setDate(first.getDate() - 30);
   const history = new Date(first); history.setDate(history.getDate() - 1);
   const population = [dated("history", history, 70, "one"), dated("first", first, 140, "one"), dated("other-repo", first, 35, "two"), dated("automated", first, 0, "one")];
   fixture(t, (path, request) => {
-    if (path.includes("/writing_messages/metrics")) return response(core.evaluateMetrics(population, query(request.metrics, request), schema, { now }));
+    if (path.includes("/writing_messages/query-v3")) return response(core.evaluateMetrics(population, query(request.metrics, request.result), schema, { now }));
   });
   const preview = await loadQueryPreview(item.dataset, item.query, schema, { recipe, window: item.window, cover: item.cover, url: item.url });
   assert.equal(preview.state, "ready");
@@ -498,7 +507,7 @@ test("daily repository words average seven calendar days with history before the
   assert.equal(buckets[7].values["s:one"] ?? 0, 0, "old writing rolls out of the trailing window");
   const url = new URL(item.url, "http://preview.test"), chart = JSON.parse(url.searchParams.get("analyze_chart"));
   assert.equal(url.searchParams.get("analyze_days"), "30");
-  assert.equal(chart.split, "repository_name");
+  assert.equal(chart.split, "project_name");
   assert.equal(chart.rollingPeriods, 7);
 });
 
@@ -522,7 +531,7 @@ test("headline numbers represent complete additive measures with their units", a
 test("truncated and errored measures never produce a headline total", async t => {
   let partial = true;
   const requests = fixture(t, (path, request) => {
-    if (path.endsWith("metrics")) return response({ metrics: request.metrics.map(metric => ({ id: metric.id, coverage: partial ? "partial" : "exact", groupCount: partial ? 20 : 2, buckets: [{ keys: ["Bash"], value: 5, count: 5 }, ...partial ? [] : [{ keys: ["Read"], value: null, count: 1, error: "Cannot calculate" }]], processedRows: 100 })) });
+    if (path.endsWith("query-v3")) return response({ metrics: request.metrics.map(metric => ({ id: metric.id, coverage: partial ? "partial" : "exact", groupCount: partial ? 20 : 2, buckets: [{ keys: ["Bash"], value: 5, count: 5 }, ...partial ? [] : [{ keys: ["Read"], value: null, count: 1, error: "Cannot calculate" }]], processedRows: 100 })) });
   });
   const metric = { id: "calls", op: "count", groupBy: ["tool_name"] };
   const preview = await loadQueryPreview("tool_calls", query([metric]), schemas.tool_calls);
@@ -539,28 +548,33 @@ test("truncated and errored measures never produce a headline total", async t =>
 
 
 test("labelled covers fetch friendly titles beyond twelve visible groups", async t => {
- const population=Array.from({length:25},(_,i)=>({id:`u-${i}`,workspace_id:`w-${i}`,root_conversation_id:`root-${i}`,root_repository_name:'repo',root_title:`Friendly work ${i}`,agent_session_id:`s-${i}`,title:`Friendly work ${i}`,first_usage_at:Date.now()-1000,last_usage_at:new Date().toISOString(),total_tokens:1000-i,cost_usd:100-i}));
+ const population=Array.from({length:25},(_,i)=>({id:`u-${i}`,workspace_id:`w-${i}`,root_conversation_id:`root-${i}`,root_project_name:'repo',root_title:`Friendly work ${i}`,agent_session_id:`s-${i}`,title:`Friendly work ${i}`,first_usage_at:Date.now()-1000,last_usage_at:new Date().toISOString(),total_tokens:1000-i,cost_usd:100-i}));
  const requests=fixture(t,(path,request)=>{
   if(!path.includes("/usage/query-v3"))return;
   const state={...core.EMPTY_QUERY,...request.result,select:request.result.select.map(field=>({field})),aggregations:request.metrics,grouping:{...request.grouping,source:{...core.EMPTY_QUERY,...request.source,select:request.source.select.map(field=>({field}))}}};
   const prepared=core.prepareGrouping(population,schemas.usage,state.grouping,{now:request.now});
   const page=core.applyQuery(population,state,schemas.usage,{now:request.now});
-  return response({version:3,now:request.now,sourceTotal:population.length,...page,metrics:core.evaluateMetrics(population,state,schemas.usage,{now:request.now,shownRows:page.rows}).metrics,execution,schema:{name:prepared.schema.name,idField:prepared.schema.idField,fields:prepared.schema.fields.map(({name,type})=>({name,type}))}});
+  // The page may hold more groups than the metrics chart.
+  const rows=core.applyQuery(population,{...state,limit:25},schemas.usage,{now:request.now}).rows;
+  return response({version:3,now:request.now,sourceTotal:population.length,...page,rows,metrics:core.evaluateMetrics(population,state,schemas.usage,{now:request.now,shownRows:page.rows}).metrics,execution,schema:{name:prepared.schema.name,idField:prepared.schema.idField,fields:prepared.schema.fields.map(({name,type})=>({name,type}))}});
  });
  const recipe=queryRecipes.find(recipe=>recipe.id==="usage-work"),item=instantiateRecipe(recipe,7),cover={mode:"result",metricId:recipe.exploration.valueField,maxGroups:20};
  const preview=await loadQueryPreview("usage",item.query,schemas.usage,{recipe,cover});
  assert.equal(requests.find(({path})=>path.includes("/usage/query-v3")).request.result.limit,20);
  assert.equal(Object.keys(preview.groupLabels).length,20);
  assert.equal(preview.groupLabels[JSON.stringify(["repo","root-19"])],"Friendly work 19 · repo");
+ // Labels are kept only for groups a metric returned: covers are cached by the hundred.
+ const drawn=new Set(preview.metrics.flatMap(metric=>metric.result.buckets.map(bucket=>JSON.stringify(bucket.keys))));
+ assert.deepEqual(Object.keys(preview.groupLabels).filter(key=>!drawn.has(key)),[]);
 });
 
 test("cost history shares identical loads, preserves mixed windows, and refetches truncated timestamp ranges", async t => {
  const now=Date.now(),d=86400000,population=[{id:'recent',first_usage_at:new Date(now-d).toISOString(),total_tokens:1,price_status:'priced',cost_usd:70},{id:'older',first_usage_at:new Date(now-20*d).toISOString(),total_tokens:1,price_status:'priced',cost_usd:140}];
  let truncated=false;
  const requests=fixture(t,(path,request)=>{
-  if(!path.endsWith('/usage/metrics'))return;
+  if(!path.endsWith('/usage/query-v3'))return;
   assert.deepEqual(request.metrics[0].groupBy,['first_usage_at']);
-  const body=core.evaluateMetrics(population,{...core.EMPTY_QUERY,...request,aggregations:request.metrics},schemas.usage);
+  const body=core.evaluateMetrics(population,{...core.EMPTY_QUERY,...request.result,aggregations:request.metrics},schemas.usage);
   if(!truncated){truncated=true;body.metrics[0].groupCount=10001;body.metrics[0].buckets=body.metrics[0].buckets.slice(0,1);}
   return response(body);
  });
@@ -568,12 +582,12 @@ test("cost history shares identical loads, preserves mixed windows, and refetche
  const jobs=[7,7,30].map((days,i)=>{const item=instantiateRecipe(recipe,days);return{id:String(i),dataset:'usage',query:item.query,schema:schemas.usage,options:{recipe:item,window:item.window,cover:item.cover}};});
  const result=new Map();await loadQueryPreviews(jobs,(id,preview,error)=>{assert.equal(error,undefined);result.set(id,preview);});
  assert.equal(result.get('0').study.value,70);assert.equal(result.get('1').study.value,70);assert.equal(result.get('2').study.value,210);assert.equal(result.get('0').study.lookbackDays,7);assert.equal(result.get('2').study.lookbackDays,7);assert.equal(result.get('0').study.points.at(-1),10);
- assert.equal(requests.filter(r=>r.path.endsWith('/usage/metrics')).length,4,'two periods plus the two replacement ranges; the duplicate seven-day card shares its load');
- assert.equal(requests.filter(r=>r.path.includes('/rows')||r.path.includes('/query-v3')).length,0,'only reduced timestamp totals are downloaded');
+ assert.equal(requests.filter(r=>r.path.endsWith('/usage/query-v3')).length,4,'two periods plus the two replacement ranges; the duplicate seven-day card shares its load');
+ assert.ok(requests.filter(r=>r.path.includes('/query-v3')).every(r=>!r.request.rows),'only reduced timestamp totals are downloaded');
 });
 
 test("partial cost history is rejected instead of manufacturing a total", async t => {
- fixture(t,(path,request)=>path.endsWith('/usage/metrics')?response({metrics:[{id:request.metrics[0].id,coverage:'partial',buckets:[],processedRows:0}]}):undefined);
+ fixture(t,(path,request)=>path.endsWith('/usage/query-v3')?response({metrics:[{id:request.metrics[0].id,coverage:'partial',buckets:[],processedRows:0}]}):undefined);
  const recipe=queryRecipes.find(r=>r.id==='api-cost-total'),item=instantiateRecipe(recipe,7);
  await assert.rejects(loadQueryPreview('usage',item.query,schemas.usage,{recipe:item,window:item.window,cover:item.cover}),/Complete API cost history/);
 });
@@ -588,14 +602,14 @@ test("model tail previews apply task-count support before the visible point budg
  });
  const recipe=queryRecipes.find(r=>r.id==='model-task-token-spread'),item=instantiateRecipe(recipe,7),cover={...recipe.cover,maxGroups:1};
  const preview=await loadQueryPreview('usage',item.query,schemas.usage,{recipe,cover,window:item.window});assert.equal(preview.state,'ready');assert.equal(preview.groupSummary,undefined,'scatter support and omission summaries are not hidden as ranked-list captions');assert.equal(preview.metrics[0].result.buckets.length,1);assert.deepEqual(preview.metrics[0].result.buckets[0].keys,['codex','B supported']);assert.equal(preview.metrics[0].result.buckets[0].count,3);assert.equal(preview.metrics[0].clause.display.maxGroups,1);assert.equal(core.applyQuery(population,item.query,schemas.usage,{now}).total,4);
- population=population.slice(0,1);clearPreviewCache();const empty=await loadQueryPreview('usage',item.query,schemas.usage,{recipe,cover,window:item.window});assert.equal(empty.state,'empty');assert.match(empty.emptyLabel,/at least 3 root tasks/);
+ population=population.slice(0,1);clearPreviewCache();const empty=await loadQueryPreview('usage',item.query,schemas.usage,{recipe,cover,window:item.window});assert.equal(empty.state,'empty');assert.match(empty.emptyLabel,/at least 3 top-level conversations/);
 });
 
 test("metric filters and minimum group sizes run only where advertised and disclose hidden groups", async t => {
   const errors = [{ field: "error_count", op: ">", value: "0" }];
-  const measures = [{ id: "calls", op: "sum", field: "call_count", groupBy: ["repository_name"], minCount: 4, where: [{ field: "duration_ms", op: ">=", value: "400" }] }];
+  const measures = [{ id: "calls", op: "sum", field: "call_count", groupBy: ["project_name"], minCount: 4, where: [{ field: "duration_ms", op: ">=", value: "400" }] }];
   // Without the handshake flags the card fails on its own instead of dropping the controls.
-  fixture(t);
+  fixture(t,path => path.endsWith("capabilities") ? response({queryCapabilities:{...queryCapabilities,metricFilters:false,metricMinCount:false,metricMinCountMeasures:false},computedExecution:execution}) : undefined);
   await assert.rejects(loadQueryPreview("tool_calls", query(measures), schemas.tool_calls), /filter|minimum|minCount/i);
   await assert.rejects(loadQueryPreview("tool_calls", query([{ id: "errors", op: "count", groupBy: [], where: errors }]), schemas.tool_calls), /filter/i);
   clearPreviewCache();
@@ -618,7 +632,7 @@ test("metric filters and minimum group sizes run only where advertised and discl
     [{ min: 4, distinct: "conversation_id" }, "1 group hidden (fewer than 4 distinct Conversation ID values)"],
     [{ min: 200, sum: "result_tokens" }, "1 group hidden (fewer than 200 total Context added (tokens))"],
   ]) {
-    const measured = await loadQueryPreview("tool_calls", query([{ id: "calls", op: "sum", field: "call_count", groupBy: ["repository_name"], minCount, where: slow }]), schemas.tool_calls);
+    const measured = await loadQueryPreview("tool_calls", query([{ id: "calls", op: "sum", field: "call_count", groupBy: ["project_name"], minCount, where: slow }]), schemas.tool_calls);
     assert.equal(measured.metrics[0].result.hiddenGroups, 1);
     assert.ok(measured.note.includes(note), measured.note);
   }
@@ -639,9 +653,9 @@ test("grouped previews run distinct minimums only where query-v3 advertises them
 test("grouped cards with link columns execute without sending the links", async t => {
   const requests = fixture(t);
   const source = { ...core.EMPTY_QUERY };
-  const grouped = { ...core.withGroupingKeys(source, ["repository_name"]), select: [{ field: "open" }, { field: "calls" }] };
+  const grouped = { ...core.withGroupingKeys(source, ["project_name"]), select: [{ field: "open" }, { field: "calls" }] };
   grouped.grouping = { ...grouped.grouping, summaries: [{ id: "calls", op: "sum", field: "call_count" },
-    { id: "open", op: "link", label: "Repository", link: { label: { column: "repository_name" }, to: { kind: "query", target: "tool_calls" } } }] };
+    { id: "open", op: "link", label: "Repository", link: { label: { column: "project_name" }, to: { kind: "query", target: "tool_calls" } } }] };
   const preview = await loadQueryPreview("tool_calls", grouped, schemas.tool_calls);
   assert.equal(preview.state, "ready");
   const request = requests.find(item => item.path.includes("query-v3")).request;
@@ -653,7 +667,7 @@ test("grouped cards with link columns execute without sending the links", async 
 
 test("parallel hours by day headline is the share of active hours with several agents", async t => {
   const population = [["2026-10-19", "1", 6], ["2026-10-19", "2", 2], ["2026-10-20", "3", 1], ["2026-10-20", "4+", 1]].map(([day, level_band, elapsed_hours], i) => ({ id: String(i), day, level_band, elapsed_hours }));
-  fixture(t, (path, request) => path.endsWith("/metrics") ? response(core.evaluateMetrics(population, query(request.metrics, request), schemas.parallelism)) : undefined);
+  fixture(t, (path, request) => path.endsWith("/query-v3") ? response(core.evaluateMetrics(population, query(request.metrics, request.result), schemas.parallelism)) : undefined);
   const recipe = queryRecipes.find(recipe => recipe.id === "parallel-days");
   const preview = await loadQueryPreview("parallelism", query(recipe.measures), schemas.parallelism, { recipe });
   assert.equal(preview.headlineMetric.value, "40%");
@@ -661,8 +675,9 @@ test("parallel hours by day headline is the share of active hours with several a
 });
 
 // Card covers can be shown from a prior visit while canonical queries refresh.
-import { cardPreviewKey, invalidateCardPreviews, loadCardPreviews } from "../../../src/card-previews";
+import { batchPreviewArrivals, cardPreviewKey, invalidateCardPreviews, loadCardPreviews } from "../../../src/card-previews";
 import { createCardPreviewCache } from "../../../src/card-preview-cache";
+import { staleRetryDelays } from "../../../src/result-cache";
 
 test("cached card covers revalidate and remain visible after refresh failure", async t => {
   const priorWindow = global.window;
@@ -671,7 +686,7 @@ test("cached card covers revalidate and remain visible after refresh failure", a
   let fail = false, release, requestStarted;
   const refreshingRequest = new Promise(resolve => { requestStarted = resolve; });
   const requests = fixture(t, async path => {
-    if (fail && path.endsWith("metrics")) {
+    if (fail && path.endsWith("query-v3")) {
       await new Promise(resolve => { release = resolve; requestStarted(); });
       return response({ error: "Offline" }, 503);
     }
@@ -704,13 +719,170 @@ test("cached card covers revalidate and remain visible after refresh failure", a
   assert.equal(updates.at(-1).metrics[0].result.buckets[0].value, 5500);
 });
 
+test("partial rebuilds retain a recent baseline but cannot freeze a card", async t => {
+  const priorWindow = global.window;
+  global.window = { pharosPreviewScope: t.name };
+  t.after(() => { global.window = priorWindow; });
+  const now = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now });
+  let mode = "complete";
+  fixture(t, (path, request) => {
+    if (!path.endsWith("/session_shape/query-v3")) return;
+    if (mode === "failure") return response({ error: "Offline" }, 503);
+    const population = mode === "complete" ? rows : mode === "no-missing" ? rows.slice(0, 5) : [];
+    const coverage = mode === "pending" ? { state: "pending", missing_sessions: 20 } : mode === "unknown" ? { state: "pending" } : mode === "no-missing" ? { state: "pending", stale_sessions: 2, missing_sessions: 0 } : { state: "current" };
+    return response({ ...serverQuery(request, population, schemas.session_shape), coverage });
+  });
+  const item = { id: "shape", dataset: "session_shape", schema: schemas.session_shape, query: query([{ id: "sessions", op: "count", groupBy: [] }]) };
+  const read = async () => { const updates = []; await loadCardPreviews([item], (_id, value, error) => { assert.ifError(error); updates.push(value); }); return updates.at(-1); };
+  const complete = await read();
+  assert.equal(complete.total, 10);
+  t.mock.timers.setTime(now + 1000);
+  mode = "pending"; clearPreviewCache(); invalidateCardPreviews();
+  const saved = await read();
+  assert.equal(saved.total, 10);
+  assert.equal(saved.updatedAt, complete.updatedAt);
+  assert.equal(saved.refreshing, false);
+  assert.match(saved.savedReason, /20 agent sessions are not included/);
+  assert.equal(saved.refreshError, undefined);
+  clearPreviewCache(); invalidateCardPreviews();
+  assert.equal((await read()).total, 10, "a partial answer does not overwrite the saved baseline");
+  mode = "unknown"; clearPreviewCache(); invalidateCardPreviews();
+  assert.equal((await read()).total, 10, "an absent missing count is not zero");
+  mode = "no-missing"; clearPreviewCache(); invalidateCardPreviews();
+  const available = await read();
+  assert.equal(available.total, 5, "new available statistics replace the saved cover");
+  assert.equal(available.incompleteWithoutMissing, true);
+  assert.match(available.summary, /^≈/);
+  assert.match(available.note, /older statistics/);
+  mode = "pending"; clearPreviewCache(); invalidateCardPreviews();
+  assert.equal((await read()).total, 5, "the available statistics become the next baseline");
+  t.mock.timers.setTime(now + 3601001);
+  clearPreviewCache(); invalidateCardPreviews();
+  const partial = await read();
+  assert.equal(partial.total, 0, "new partial data eventually replaces an old baseline");
+  assert.ok(partial.incompleteReason);
+  assert.equal(partial.savedReason, undefined);
+  mode = "empty"; clearPreviewCache(); invalidateCardPreviews();
+  const empty = await read();
+  assert.equal(empty.state, "empty", "a complete empty answer replaces the saved chart");
+  assert.equal(empty.savedReason, undefined);
+});
+
+test("unknown agent-event coverage eventually replaces an old baseline", async t => {
+  const priorWindow = global.window;
+  global.window = { pharosPreviewScope: t.name };
+  t.after(() => { global.window = priorWindow; });
+  const now = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now });
+  let pending = false;
+  fixture(t, (path, request) => path.endsWith("/agent_events/query-v3") ? response({ ...serverQuery(request, pending ? [] : rows, schemas.agent_events), coverage: { state: pending ? "unknown" : "current" } }) : undefined);
+  const item = { id: "events", dataset: "agent_events", schema: schemas.agent_events, query: query([{ id: "events", op: "count", groupBy: [] }]) };
+  const read = async () => { let result; await loadCardPreviews([item], (_id, value, error) => { assert.ifError(error); result = value; }); return result; };
+  assert.equal((await read()).total, 10);
+  pending = true; t.mock.timers.setTime(now + 1000); clearPreviewCache(); invalidateCardPreviews();
+  assert.ok((await read()).savedReason);
+  t.mock.timers.setTime(now + 3600001); clearPreviewCache(); invalidateCardPreviews();
+  const partial = await read();
+  assert.equal(partial.total, 0);
+  assert.match(partial.incompleteReason, /Conversations changed/);
+  assert.equal(partial.savedReason, undefined);
+});
+
+test("a failed follow-up reports the error after showing a saved cover", async t => {
+  const priorWindow = global.window, delay = staleRetryDelays[0];
+  global.window = { pharosPreviewScope: t.name }; staleRetryDelays[0] = 0;
+  t.after(() => { global.window = priorWindow; staleRetryDelays[0] = delay; });
+  let mode = "complete";
+  fixture(t, (path, request) => {
+    if (!path.endsWith("/session_shape/query-v3")) return;
+    if (mode === "failure") return response({ error: "Offline" }, 503);
+    return response({ ...serverQuery(request, mode === "complete" ? rows : [], schemas.session_shape), coverage: mode === "complete" ? { state: "current" } : { state: "pending", missing_sessions: 20 } });
+  });
+  const fetch = global.fetch;
+  global.fetch = async (url, init) => {
+    const result = await fetch(url, init);
+    if (mode !== "pending" || !String(url).endsWith("/session_shape/query-v3")) return result;
+    return new Response(await result.text(), { headers: { "Content-Type": "application/json", "X-Pharos-Cache": "stale", "X-Pharos-Cache-Built": new Date().toISOString() } });
+  };
+  const item = { id: "shape", dataset: "session_shape", schema: schemas.session_shape, query: query([{ id: "sessions", op: "count", groupBy: [] }]) };
+  await loadCardPreviews([item], (_id, _value, error) => assert.ifError(error));
+  mode = "pending"; clearPreviewCache(); invalidateCardPreviews();
+  const controller = new AbortController();
+  let finish;
+  const failed = new Promise(resolve => { finish = resolve; });
+  await loadCardPreviews([item], (_id, preview, error) => {
+    assert.ifError(error);
+    if (preview?.savedReason) mode = "failure";
+    if (preview?.refreshError) { controller.abort(); finish(preview); }
+  }, controller.signal);
+  const result = await failed;
+  assert.equal(result.total, 10);
+  assert.match(result.refreshError, /Offline/);
+  assert.equal(result.savedReason, undefined);
+});
+
+test("a delayed partial answer cannot overwrite a concurrently completed card", async t => {
+  const priorWindow = global.window;
+  global.window = { pharosPreviewScope: t.name };
+  t.after(() => { global.window = priorWindow; });
+  let mode = "pending", release, started;
+  const gate = new Promise(resolve => { release = resolve; }), waiting = new Promise(resolve => { started = resolve; });
+  fixture(t, async (path, request) => {
+    if (!path.endsWith("/session_shape/query-v3")) return;
+    const partial = mode === "pending";
+    if (partial) { started(); await gate; }
+    return response({ ...serverQuery(request, partial ? [] : rows, schemas.session_shape), coverage: partial ? { state: "pending", missing_sessions: 20 } : { state: "current" } });
+  });
+  const item = { id: "shape", dataset: "session_shape", schema: schemas.session_shape, query: query([{ id: "sessions", op: "count", groupBy: [] }]) };
+  let delayed;
+  const first = loadCardPreviews([item], (_id, preview, error) => { assert.ifError(error); delayed = preview; });
+  await waiting;
+  mode = "complete";
+  await loadCardPreviews([item], (_id, _preview, error) => assert.ifError(error));
+  release(); await first;
+  assert.equal(delayed.total, 10);
+  assert.ok(delayed.savedReason);
+  const last = [];
+  await loadCardPreviews([item], (_id, preview) => last.push(preview));
+  assert.equal(last.at(-1).total, 10);
+});
+
+test("an older server snapshot cannot replace a newer complete card", async t => {
+  const priorWindow = global.window;
+  global.window = { pharosPreviewScope: t.name };
+  t.after(() => { global.window = priorWindow; });
+  const now = Date.now();
+  t.mock.timers.enable({ apis: ["Date"], now });
+  fixture(t);
+  const fetch = global.fetch;
+  let stale = false;
+  global.fetch = async (url, init) => {
+    const result = await fetch(url, init);
+    if (!stale || !String(url).endsWith("/query-v3")) return result;
+    const request = JSON.parse(init.body);
+    return new Response(JSON.stringify(serverQuery(request, [])), { headers: { "Content-Type": "application/json", "X-Pharos-Cache": "stale", "X-Pharos-Cache-Built": new Date(now - 600_000).toISOString() } });
+  };
+  const item = job("saved", [{ id: "total", op: "sum", field: "duration_ms", groupBy: [] }]);
+  let complete;
+  await loadCardPreviews([item], (_id, preview) => { complete = preview; });
+  stale = true; t.mock.timers.setTime(now + 3_600_001); clearPreviewCache(); invalidateCardPreviews();
+  const controller = new AbortController();
+  let saved;
+  await loadCardPreviews([item], (_id, preview) => { saved = preview; }, controller.signal);
+  controller.abort();
+  assert.equal(saved.total, complete.total);
+  assert.equal(saved.updatedAt, complete.updatedAt);
+  assert.ok(saved.savedReason);
+});
+
 test("card preview identity separates query, cover, template, schema and search changes", async () => {
   const item = job("one", [{ id: "total", op: "sum", field: "duration_ms", groupBy: [] }]);
   const key = await cardPreviewKey(item);
   assert.equal(key, await cardPreviewKey({ ...item, id: "two" }));
   assert.equal(key, await cardPreviewKey(Object.fromEntries(Object.entries(item).reverse())), "property order does not change a cover");
   for (const changed of [
-    { ...item, query: { ...item.query, where: [{ field: "repository_name", op: "=", value: "one" }] } },
+    { ...item, query: { ...item.query, where: [{ field: "project_name", op: "=", value: "one" }] } },
     { ...item, options: { coverMetricId: "other" } },
     { ...item, options: { url: "/library?search=cache" } },
     { ...item, schema: { ...item.schema, fields: item.schema.fields.slice(1) } },
@@ -734,6 +906,11 @@ test("persisted covers are stale on a new page and storage failures do not block
   const generation = next.generation();
   next.invalidate(); next.put("one", { state: "ready", total: 1, summary: "New" }, generation);
   assert.equal(next.get("one").fresh, false, "an older in-flight computation cannot undo invalidation");
+  // A cover the server answered from an older stored result keeps that age,
+  // so it is asked for again rather than treated as just computed.
+  next.put("old", { state: "ready", total: 1, summary: "Stored", served: { state: "stale", built: Date.now() - 600_000 } }, next.generation(), Date.now() - 600_000);
+  assert.equal(next.get("old").fresh, false);
+  assert.equal(next.get("old").preview.served, undefined, "how an answer was served is not part of the cover");
   const broken = createCardPreviewCache({ read: async () => { throw Error("blocked"); }, write: async () => { throw Error("full"); } });
   await broken.ready;
   broken.put("one", { state: "ready", total: 1, summary: "Live" });
@@ -752,7 +929,7 @@ test("grouped card requests do not wait for every sibling in their metrics batch
     await waiting.at(-1);
   });
   const items = Array.from({ length: 3 }, (_, i) => job(String(i), [{ id: "metric", op: "sum", field: "total", groupBy: [] }], {}, {
-    grouping: { source: core.EMPTY_QUERY, keys: ["repository_name"], summaries: [{ id: "total", op: "sum", field: "duration_ms" }], representative: null },
+    grouping: { source: core.EMPTY_QUERY, keys: ["project_name"], summaries: [{ id: "total", op: "sum", field: "duration_ms" }], representative: null },
   }));
   const work = loadQueryPreviews(items, (id, preview, error) => { assert.ifError(error); completed.set(id, preview); });
   await twoStarted;
@@ -762,7 +939,7 @@ test("grouped card requests do not wait for every sibling in their metrics batch
 });
 
 
-test("card snapshot retention is bounded and expired or malformed entries are ignored", async () => {
+test("card snapshot retention is bounded and malformed entries are ignored", async () => {
   const now = Date.now();
   let saved = [
     { key: "expired", at: now - 8 * 86400000, preview: { state: "ready" } },
@@ -773,7 +950,8 @@ test("card snapshot retention is bounded and expired or malformed entries are ig
   ];
   const store = createCardPreviewCache({ read: async () => saved, write: async entries => { saved = entries; } }, { entries: 2, bytes: 1000 });
   await store.ready;
-  for (const key of ["expired", "future", "bad"]) assert.equal(store.get(key), undefined);
+  assert.equal(store.get("expired").fresh, false, "an old snapshot remains available with its age");
+  for (const key of ["future", "bad"]) assert.equal(store.get(key), undefined);
   store.put("three", { state: "ready", total: 1, summary: "Three" });
   store.put("huge", { state: "ready", total: 1, summary: "x".repeat(1000) });
   await store.save();
@@ -807,8 +985,8 @@ test("scrolling promotes newly visible cards ahead of the remaining cold queue",
   const started = new Promise(resolve => { began = resolve; });
   const order = [];
   fixture(t, async (path, request) => {
-    if (!path.endsWith("rows-v2")) return;
-    order.push(request.where[0].value);
+    if (!path.endsWith("query-v3")) return;
+    order.push(request.result.where[0].value);
     if (order.length <= 3) { if (order.length === 3) began(); await gate; }
   });
   const jobs = Array.from({ length: 6 }, (_, index) => ({
@@ -840,4 +1018,27 @@ test("Today persisted preview identity changes at local midnight", async t => {
   t.mock.timers.setTime(+before + 2000);
   assert.notEqual(await cardPreviewKey(item), todayKey);
   assert.equal(await cardPreviewKey(fixed), elapsedKey);
+});
+
+test("cover arrivals reach a page together, in order, and never after it has left", async () => {
+  const applied = [];
+  const arrivals = batchPreviewArrivals(batch => applied.push(batch.map(item => [item.id, item.preview?.summary ?? String(item.error)])), 0);
+  // A timer set after the batch's own fires after it.
+  const afterInterval = () => new Promise(resolve => setTimeout(resolve, 0));
+  arrivals.publish("a", { state: "ready", summary: "first" });
+  arrivals.publish("b", undefined, "Offline");
+  arrivals.publish("a", { state: "ready", summary: "second" });
+  assert.deepEqual(applied, []);
+  await afterInterval();
+  assert.deepEqual(applied, [[["a", "first"], ["b", "Offline"], ["a", "second"]]]);
+  // The end of a load does not wait for the interval.
+  arrivals.publish("c", { state: "empty", summary: "third" });
+  arrivals.flush();
+  assert.equal(applied.length, 2);
+  arrivals.flush();
+  assert.equal(applied.length, 2);
+  arrivals.publish("d", { state: "ready", summary: "dropped" });
+  arrivals.cancel();
+  await afterInterval();
+  assert.equal(applied.length, 2);
 });

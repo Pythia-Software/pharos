@@ -133,6 +133,19 @@ test("in the app the store reads the broker's document: the selected library, th
   assert.equal(normalize({ revision: 1 }).library.revision, 1);
 });
 
+test("the store retains only the selected library's last sizes across a brief status timeout", () => {
+  const { createStore } = loadClassicScript("status-store.js").window.pharosStatusStore;
+  const fake = fakeBrowser();
+  const store = createStore({...fake.browser, managed: true});
+  store.start();
+  fake.sources[0].emit({libraries: [{id: "a", selected: true, service: {state: "running"}, snapshot: {library: {storage_bytes: 48e9, wal_bytes: 64e6}}}], resources: {memory_bytes: 2e9}});
+  fake.sources[0].emit({libraries: [{id: "a", selected: true, service: {state: "running"}, snapshot: null, resources: {memory_bytes: 1e9}}], resources: {memory_bytes: 2e9}});
+  assert.deepEqual(plain(store.current().view.lastLibrarySizes), {id: "a", storage: 48e9, wal: 64e6});
+  assert.equal(store.current().view.service.resources.memory_bytes, 1e9);
+  fake.sources[0].emit({libraries: [{id: "b", selected: true, service: {state: "running"}, snapshot: null}], resources: {memory_bytes: 2e9}});
+  assert.equal(store.current().view.lastLibrarySizes, undefined, "another library never inherits these sizes");
+});
+
 test("the eject check asks for a fresh verdict; in the app only the broker's fresh verdict for the selected library counts", async () => {
   const { createStore, brokerEjectVerdict } = loadClassicScript("status-store.js").window.pharosStatusStore;
   const plainStore = fakeBrowser({ answers: [{ status: 200, body: { eject: { verdict: "safe", checked: "fresh" } } }] });

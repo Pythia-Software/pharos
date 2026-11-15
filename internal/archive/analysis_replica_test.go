@@ -140,7 +140,21 @@ func TestAnalysisReplica(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("workload=%s pass=%d stage=%s wall=%.6f cpu=%.6f allocated=%d mallocs=%d rss=%d read_blocks=%d written_blocks=%d", workload, pass, stage, time.Since(start).Seconds(), end.cpu-resource.cpu, after.TotalAlloc-before.TotalAlloc, after.Mallocs-before.Mallocs, processRSS(), end.read-resource.read, end.written-resource.written)
+			// An OS counter this platform does not read is logged as unavailable.
+			observed := func(value any, ok bool) any {
+				if !ok {
+					return "unavailable"
+				}
+				return value
+			}
+			cpu, cpuOK := 0.0, false
+			if delta := cpuDelta(resource, end); delta != nil {
+				cpu, cpuOK = *delta, true
+			}
+			rss, rssOK := processRSS()
+			blocks := resource.known.has(counterBlocks) && end.known.has(counterBlocks)
+			t.Logf("workload=%s pass=%d stage=%s wall=%.6f cpu=%v allocated=%d mallocs=%d rss=%v read_blocks=%v written_blocks=%v", workload, pass, stage, time.Since(start).Seconds(),
+				observed(cpu, cpuOK), after.TotalAlloc-before.TotalAlloc, after.Mallocs-before.Mallocs, observed(rss, rssOK), observed(end.read-resource.read, blocks), observed(end.written-resource.written, blocks))
 			var writer string
 			if stage == "tools" {
 				writer, _ = c.metaValue(t.Context(), "tool_rollup_writer_ms")

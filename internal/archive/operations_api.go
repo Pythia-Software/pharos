@@ -31,6 +31,8 @@ var operationReasons = map[string]string{
 	"capture-running":     "Waiting for a capture to finish",
 	"ingest-busy":         "Waiting for another index to finish",
 	"catalog-busy":        "Waiting for the catalog",
+	"interactive-query":   "Waiting for interactive queries to finish",
+	"search-stopped":      "Waiting for the Search view refresh to resume",
 	"destination-busy":    "Waiting for the destination",
 	"waiting-for-drive":   "Waiting for the drive",
 	"waiting-for-network": "Waiting for the network",
@@ -127,6 +129,9 @@ func operationStep(view opView) map[string]any {
 		return nil
 	}
 	step := map[string]any{"index": index, "count": nil, "name": view.Step.Name, "unit": nilIfEmpty(view.Step.Unit), "done": view.Step.Done, "total": nil}
+	if view.Step.Detail != "" {
+		step["detail"] = view.Step.Detail
+	}
 	if count > 0 {
 		step["count"] = count
 	}
@@ -143,7 +148,7 @@ func operationStep(view opView) map[string]any {
 }
 
 // operationEntry is one operation in the snapshot's shape.
-func operationEntry(view opView, children []opView, at time.Time) map[string]any {
+func operationEntry(view opView, byID map[OpID]opView, at time.Time) map[string]any {
 	kind := view.Kind
 	entry := map[string]any{"id": view.ID, "kind": view.Spec.Kind, "variant": nilIfEmpty(view.Spec.Variant), "subject": nilIfEmpty(view.Spec.Subject),
 		"label": kind.label(view.Spec.Variant), "verb": kind.Verb, "state": view.State, "state_label": stateLabel(view), "detail": nilIfEmpty(stateDetail(view)),
@@ -164,14 +169,26 @@ func operationEntry(view opView, children []opView, at time.Time) map[string]any
 	}
 	if view.Foreign {
 		entry["detail"] = defaultString(firstString(entry["detail"]), "In another process ("+strings.Replace(view.Process, "cli:", "pharos ", 1)+")")
-	} else if kind.Stop != "" && !opTerminal(view.State) && view.State != opStopping && view.Parent == "" {
+	} else if (kind.Stop != "" || view.WorkControlled) && !opTerminal(view.State) && view.State != opStopping && view.Parent == "" {
 		entry["stoppable"] = true
 		entry["stop"] = map[string]any{"method": "POST", "path": "/api/operations/stop", "body": map[string]any{"id": view.ID}}
 	}
+	if view.Resources != nil {
+		entry["resources"] = view.Resources
+	}
+	if len(view.NeededBy) > 0 {
+		entry["needed_by"] = view.NeededBy
+	}
+	if len(view.SharedWork) > 0 {
+		entry["work_ids"] = view.SharedWork
+	}
+	if view.SharedWorkOmitted > 0 {
+		entry["work_ids_omitted"] = view.SharedWorkOmitted
+	}
 	running := []map[string]any{}
-	for _, child := range children {
-		if !opTerminal(child.State) {
-			running = append(running, operationEntry(child, nil, at))
+	for _, id := range view.Children {
+		if child, ok := byID[id]; ok && child.Kind != nil && !child.Kind.Hidden && !child.Tentative && (!opTerminal(child.State) || child.ActiveDescendants) {
+			running = append(running, operationEntry(child, byID, at))
 		}
 	}
 	entry["children"] = running
@@ -225,16 +242,17 @@ func foreignView(info leaseInfo, row journalRow) opView {
 		total = *row.StepTotal
 	}
 	var detail struct {
-		Holds    []Hold   `json:"holds"`
-		Affects  []string `json:"affects"`
-		Priority string   `json:"priority"`
+		Holds      []Hold   `json:"holds"`
+		Affects    []string `json:"affects"`
+		Priority   string   `json:"priority"`
+		StepDetail string   `json:"step_detail"`
 	}
 	_ = json.Unmarshal(row.Detail, &detail)
 	if detail.Holds == nil {
 		detail.Holds = info.Holds
 	}
 	return opView{ID: OpID(row.ID), Root: OpID(row.RootID), Kind: kind, Process: row.Process, Instance: row.Instance, State: row.State, Reason: row.Reason,
-		Error: row.Error, Started: started, Foreign: true, Step: opStep{Index: row.StepIndex, Name: row.StepName, Unit: row.StepUnit, Done: row.StepDone, Total: total},
+		Error: row.Error, Started: started, Foreign: true, Step: opStep{Index: row.StepIndex, Name: row.StepName, Detail: detail.StepDetail, Unit: row.StepUnit, Done: row.StepDone, Total: total},
 		Spec: OperationSpec{Kind: row.Kind, Variant: row.Variant, Subject: row.Subject, Trigger: row.Trigger, Holds: detail.Holds, Affects: detail.Affects,
 			Priority: defaultString(detail.Priority, kind.Priority), Legacy: row.Legacy}}
 }
@@ -314,16 +332,10 @@ func (s *Server) operationsDocumentViews(ctx context.Context, fresh bool) (map[s
 		if view.Parent != "" || view.Kind == nil || view.Kind.Hidden || view.Tentative {
 			continue
 		}
-		if opTerminal(view.State) && at.Sub(view.Ended) > operationsRecent {
+		if opTerminal(view.State) && !view.ActiveDescendants && at.Sub(view.Ended) > operationsRecent {
 			continue
 		}
-		children := []opView{}
-		for _, id := range view.Children {
-			if child, ok := byID[id]; ok {
-				children = append(children, child)
-			}
-		}
-		operations = append(operations, operationEntry(view, children, at))
+		operations = append(operations, operationEntry(view, byID, at))
 	}
 	config := s.Config()
 	drive := libraryDriveOf(config)
@@ -374,7 +386,11 @@ func (s *Server) stopOperation(w http.ResponseWriter, body map[string]any) {
 		return
 	}
 	stopped := false
-	switch view.Kind.Stop {
+	stopKind := view.Kind.Stop
+	if view.WorkControlled {
+		stopKind = "work"
+	}
+	switch stopKind {
 	case "index":
 		s.ingestStop.mu.Lock()
 		current := s.ingestStop.runID
@@ -386,6 +402,8 @@ func (s *Server) stopOperation(w http.ResponseWriter, body map[string]any) {
 		stopped = s.Catalog.stopLibraryRefresh()
 	case "backup":
 		stopped = s.backups.stop()
+	case "work":
+		stopped = op.stopWork()
 	case "cloud":
 		id := view.Spec.Legacy
 		if view.Spec.Kind == "cloud.connect" {
@@ -453,7 +471,7 @@ func unregisteredActivities(activities []libraryActivity, ops []opView, leases [
 		case activity.Label == "Updating findings":
 			ok = running(kinds("analysis.findings"))
 		case activity.Label == "Classifying your writing":
-			ok = running(kinds("analysis.authorship"))
+			ok = running(kinds("analysis.authorship", "analysis.authorship.refine"))
 		case activity.Label == "Indexing the Library view":
 			ok = running(kinds("maintenance.library-view"))
 		}

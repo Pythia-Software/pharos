@@ -12,12 +12,10 @@ export function SearchDialog({ schema }: { schema: FieldSchema }) {
     const dialog = document.getElementById("searchDialog") as HTMLDialogElement;
     let invoker: HTMLElement | null = null;
     let resolution = new AbortController();
-    const show = (event: Event) => {
+    const show = () => {
       if (dialog.open) return;
       invoker = document.activeElement as HTMLElement;
-      const context = (event as CustomEvent<{workspaceID: string; title: string}>).detail;
-      if (context?.workspaceID) { const scoped = freshSearch(schema); scoped.query.where = [{ field: "id", op: "=", value: context.workspaceID }]; replaceSearchDraft(scoped); }
-      else if (location.pathname === "/library" && libraryURL.current !== location.search) {
+      if (location.pathname === "/library" && libraryURL.current !== location.search) {
         libraryURL.current = location.search;
         const params = new URLSearchParams(location.search);
         replaceSearchDraft(restoreSearch(params, schema));

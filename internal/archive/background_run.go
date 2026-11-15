@@ -13,6 +13,10 @@ import (
 // chain, as a child of the pass's operation.
 func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error {
 	switch id {
+	case "search":
+		return s.Catalog.backgroundSearch(ctx)
+	case "fingerprints":
+		return s.runFingerprintPass(ctx)
 	case "other-sources":
 		names := s.backgroundInputsFor(ctx, nil).otherSources
 		return s.backgroundCapture(ctx, op, "sources", names)
@@ -33,6 +37,24 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 		return err
 	case "backup":
 		return s.backgroundBackup(ctx, op)
+	case "writing-refine":
+		if s.work.declares(kindRefine) {
+			// The runner's execution is the refinement's operation.
+			return s.work.runRefineWork(ctx, backgroundExplicit(ctx))
+		}
+		ctx, child := op.Child(OperationSpec{Kind: "analysis.authorship.refine", Trigger: triggerChained})
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		child.setStopper(cancel)
+		ctx = withWorkProgress(ctx, child.mirrorWork)
+		err := s.Catalog.refineAuthorship(ctx, false)
+		child.Finish(err)
+		return err
+	case "suggestions":
+		ctx, child := op.Child(OperationSpec{Kind: "ask.suggestions", Trigger: triggerChained})
+		err := s.refreshAskSuggestions(ctx)
+		child.Finish(err)
+		return err
 	}
 	return fmt.Errorf("unknown background item %q", id)
 }
@@ -42,13 +64,21 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 // Capture & index does, without the analysis chain, whose stages then run
 // on their own cadences.
 func (s *Server) backgroundCapture(ctx context.Context, op *Op, variant string, names []string) error {
+	return s.backgroundCaptureProgress(ctx, op, variant, names, nil)
+}
+
+func (s *Server) backgroundCaptureProgress(ctx context.Context, op *Op, variant string, names []string, progress ProgressFunc) error {
 	ctx, child := op.Child(OperationSpec{Kind: "background.capture", Variant: variant, Trigger: triggerChained})
-	err := s.captureAndIndex(ctx, child, names)
+	err := s.captureAndIndexProgress(ctx, child, names, progress)
 	child.Finish(err)
 	return err
 }
 
 func (s *Server) captureAndIndex(ctx context.Context, op *Op, names []string) error {
+	return s.captureAndIndexProgress(ctx, op, names, nil)
+}
+
+func (s *Server) captureAndIndexProgress(ctx context.Context, op *Op, names []string, progress ProgressFunc) error {
 	config := s.Config()
 	sources := []SourceConfig{}
 	for _, source := range config.Sources {
@@ -61,10 +91,13 @@ func (s *Server) captureAndIndex(ctx context.Context, op *Op, names []string) er
 	// A Mac with no enabled sources (one that only browses a library)
 	// captures nothing, but still indexes what other Macs captured.
 	if len(sources) > 0 {
+		if progress != nil {
+			progress("capturing", 0, 0, 0, 0, 0)
+		}
 		op.Step("Capture this Mac", "", -1)
 		summary, err := Capture(ctx, config, sources, func(result CaptureSourceResult) {
 			work := captureWork(result)
-			op.progress(work.Phase, result.Name, work.Unit, work.Done, work.Total, work.TotalKnown)
+			op.progress(work.Phase, result.Name, work.Unit, work.Done, work.Total, work.TotalKnown, work.Detail)
 		})
 		if err != nil {
 			return err
@@ -82,11 +115,25 @@ func (s *Server) captureAndIndex(ctx context.Context, op *Op, names []string) er
 	}
 	op.Step("Index captures", "source", int64(len(targets)))
 	wrote := false
+	var completed IngestResult
 	for _, target := range targets {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		result := s.Catalog.IndexCapture(withIngestMode(ctx, ingestMode{deferGit: true}), target, nil)
+		var report ProgressFunc
+		if progress != nil {
+			report = func(stage string, workspaces, conversations, messages, skipped, processed int) {
+				progress(stage, completed.Workspaces+workspaces, completed.Conversations+conversations, completed.Messages+messages, completed.SkippedCurrent+skipped, completed.Processed+processed)
+			}
+		}
+		result := s.Catalog.admittedIngest(ctx, target.Source, target.Host.ID, func(ctx context.Context) IngestResult {
+			return s.Catalog.IndexCapture(withIngestMode(ctx, ingestMode{deferGit: true}), target, report)
+		})
+		completed.Workspaces += result.Workspaces
+		completed.Conversations += result.Conversations
+		completed.Messages += result.Messages
+		completed.SkippedCurrent += result.SkippedCurrent
+		completed.Processed += result.Processed
 		op.Advance(1)
 		wrote = wrote || result.Workspaces > 0
 		if result.Error != nil && failure == nil {
@@ -98,6 +145,13 @@ func (s *Server) captureAndIndex(ctx context.Context, op *Op, names []string) er
 		if err := s.Catalog.writeTransaction(ctx, "background deferred", func(tx *sql.Tx) error { return markSyncDeferred(tx) }); err != nil && failure == nil {
 			failure = err
 		}
+	}
+	if progress != nil {
+		stage := "complete"
+		if failure != nil {
+			stage = "failed"
+		}
+		progress(stage, completed.Workspaces, completed.Conversations, completed.Messages, completed.SkippedCurrent, completed.Processed)
 	}
 	return failure
 }

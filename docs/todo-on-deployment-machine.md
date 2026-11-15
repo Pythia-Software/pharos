@@ -14,8 +14,9 @@ Confirm each item before touching keys.
   by default. Check with `xcrun --sdk macosx26.5 --show-sdk-path`. If that SDK
   is absent, decide on another compatible SDK and export `SDKROOT` for every
   release command.
-- Go, Node 24 LTS via `nvm use` in the checkout, Python 3, `curl`, `uv` (the
-  release script runs `dmgbuild` with `uvx`).
+- Go, Node 24 LTS via `nvm use` in the checkout, Python 3.10 or newer on
+  `PATH`, and `curl`. DMG packaging uses checked-in Python code and macOS tools;
+  it needs no Python package installation.
 - `gh auth login` for an account that can create releases and push tags in
   `Pythia-Software/pharos`. Protect that account with hardware-backed 2FA: the
   GitHub release asset that holds the update feed is a trust anchor.

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
+	"strings"
 )
 
 // Interface preferences live in the catalog's ui_preferences table, so a
@@ -23,10 +25,67 @@ import (
 
 var preferenceKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.-]{0,199}$`)
 
-const maxPreferenceBytes = 512 << 10
+var maxPreferenceBytes = 512 << 10
+
+const launchPreferencesReceipt = "launch_preferences_2026_11_v1"
+
+// migrateLaunchPreferences applies the launch choices before any page or native
+// menu reads them. The receipt commits with the preferences, so subsequent
+// customization (including turning a launched behavior off) survives reopening
+// the library on this or another Mac.
+func (c *Catalog) migrateLaunchPreferences() error {
+	tx, err := c.DB.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec("INSERT OR IGNORE INTO meta(key,value) VALUES(?,'1')", launchPreferencesReceipt)
+	if err != nil {
+		return err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil || inserted == 0 {
+		return err
+	}
+	updates := map[string]any{
+		"pharos-header-tools-v1":        []string{"back", "library", "summary", "ask", "feedback", "settings"},
+		"pharos-usage-summary-links":    true,
+		"pharos-reader-events":          true,
+		"pharos-reader-labels":          true,
+		"pharos-uncertain-related-work": true,
+	}
+	var menu string
+	if err := tx.QueryRow("SELECT value FROM ui_preferences WHERE key=?", menuBarPreferenceKey).Scan(&menu); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	updates[menuBarPreferenceKey] = launchMenuBarPreferences(json.RawMessage(menu))
+	// A prior hide-all selection must not conceal the newly enabled classifier
+	// marks. Keep unrelated writing and individual annotation exclusions.
+	var hidden string
+	err = tx.QueryRow("SELECT value FROM ui_preferences WHERE key='pharos-reader-highlight-hidden'").Scan(&hidden)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	var exclusions []string
+	if err == nil && json.Unmarshal([]byte(hidden), &exclusions) == nil {
+		updates["pharos-reader-highlight-hidden"] = slices.DeleteFunc(exclusions, func(key string) bool {
+			return strings.HasPrefix(key, "events:") || strings.HasPrefix(key, "labels:")
+		})
+	}
+	for key, value := range updates {
+		if _, err := tx.Exec("INSERT INTO ui_preferences(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, jsonText(value)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
 
 // UIPreferences returns every stored preference, keyed by name.
 func (c *Catalog) UIPreferences(ctx context.Context) (map[string]json.RawMessage, error) {
+	// Keep a pending value visible until this read has taken its SQLite
+	// snapshot, even if a background flush commits at the same time.
+	c.sessionPreferences.mu.Lock()
+	defer c.sessionPreferences.mu.Unlock()
 	values := map[string]json.RawMessage{}
 	rows, err := c.reader().QueryContext(ctx, "SELECT key,value FROM ui_preferences")
 	if err != nil {
@@ -42,7 +101,17 @@ func (c *Catalog) UIPreferences(ctx context.Context) (map[string]json.RawMessage
 			values[key] = json.RawMessage(value)
 		}
 	}
-	return values, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for key, change := range c.sessionPreferences.pending {
+		if change.deleted {
+			delete(values, key)
+		} else {
+			values[key] = json.RawMessage(change.value)
+		}
+	}
+	return values, nil
 }
 
 // SetUIPreferences stores the values in body["set"] and removes the names in
@@ -75,6 +144,36 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 	if len(updates) == 0 && len(deletes) == 0 {
 		return nil
 	}
+	// An explicit durable update of disposable state (such as clearing
+	// history) must supersede any older buffered copy, even if a background
+	// round already took its snapshot. Newer buffered edits remain queued.
+	versions := map[string]uint64{}
+	for key := range updates {
+		if sessionPreferenceKey.MatchString(key) {
+			versions[key] = 0
+		}
+	}
+	for _, key := range deletes {
+		if sessionPreferenceKey.MatchString(key) {
+			versions[key] = 0
+		}
+	}
+	if len(versions) > 0 {
+		b := &c.sessionPreferences
+		b.flushMu.Lock()
+		defer b.flushMu.Unlock()
+		b.mu.Lock()
+		for key := range versions {
+			if change, ok := b.pending[key]; ok {
+				versions[key] = change.version
+			}
+		}
+		b.mu.Unlock()
+	}
+	_, setsEvents := updates[agentEventsFlag]
+	checkEvents := setsEvents || slices.Contains(deletes, agentEventsFlag)
+	wasEventsEnabled := checkEvents && c.featureFlag(ctx, agentEventsFlag)
+	wasEventsEffective := checkEvents && c.work != nil && c.work.server.agentEventsEnabled(ctx)
 	err := c.writeTransaction(ctx, "ui-preferences", func(tx *sql.Tx) error {
 		for key, value := range updates {
 			if _, err := tx.Exec("INSERT INTO ui_preferences(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
@@ -86,11 +185,30 @@ func (c *Catalog) SetUIPreferences(ctx context.Context, body map[string]any) err
 				return err
 			}
 		}
+		// Turning the events pass back on must revisit earlier messages even
+		// when the disabled stage had already been acknowledged.
+		if checkEvents && !wasEventsEnabled && (updates[agentEventsFlag] == "true" || slices.Contains(deletes, agentEventsFlag)) {
+			return markSyncDeferredStage(tx, "agent_events")
+		}
 		return nil
 	})
 	c.flags.invalidate()
 	if err == nil {
+		if len(versions) > 0 {
+			b := &c.sessionPreferences
+			b.mu.Lock()
+			for key, version := range versions {
+				if change, ok := b.pending[key]; ok && change.version == version {
+					delete(b.pending, key)
+				}
+			}
+			b.mu.Unlock()
+		}
 		c.rememberSavedFlags(updates, deletes)
+		if checkEvents && c.work != nil && wasEventsEffective != c.work.server.agentEventsEnabled(ctx) {
+			c.work.runner.InterruptKinds([]string{"analysis.agent_events"}, "agent analysis policy changed; reissue the request with the current analyses")
+			c.work.runner.Wake()
+		}
 	}
 	return err
 }
@@ -113,6 +231,26 @@ func (s *Server) getPreferences(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
+	colors, err := s.Catalog.projectColors(r.Context())
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	colorPayload, err := json.Marshal(colors)
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	// The blocking first-paint script needs only saved choices, not a scan of
+	// recorded models. Settings discovers the inventory after the page mounts.
+	modelColors := modelColorPalette{Overrides: map[string]string{}}
+	for key, raw := range values {
+		var color string
+		if strings.HasPrefix(key, modelColorPrefix) && json.Unmarshal(raw, &color) == nil && validProjectColor(color) {
+			modelColors.Overrides[strings.TrimPrefix(key, modelColorPrefix)] = color
+		}
+	}
+	modelPayload, _ := json.Marshal(modelColors)
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -122,6 +260,17 @@ func (s *Server) getPreferences(w http.ResponseWriter, r *http.Request) {
 	// catalog path or API token to the page.
 	scope := sha256.Sum256([]byte(s.Catalog.Path + "\x00" + s.config.APIToken))
 	_, _ = fmt.Fprintf(w, "window.pharosPreviewScope=%q;", fmt.Sprintf("%x", scope))
+	_, _ = w.Write(append(append([]byte("window.pharosProjectColors="), colorPayload...), ';'))
+	_, _ = w.Write(append(append([]byte("window.pharosModelColors="), modelPayload...), ';'))
+	// Feature flags the library's configuration turns on, which no
+	// preference records: agent_events_enabled lists Agent Experience as
+	// its Settings switch does.
+	configured := map[string]bool{}
+	if s.Config().AgentEvents.Enabled {
+		configured[agentEventsFlag] = true
+	}
+	flags, _ := json.Marshal(configured)
+	_, _ = w.Write(append(append([]byte("window.pharosConfiguredFlags="), flags...), ';'))
 }
 
 func (s *Server) postPreferences(w http.ResponseWriter, r *http.Request, body map[string]any) {

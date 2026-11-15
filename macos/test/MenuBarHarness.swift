@@ -120,6 +120,10 @@ final class MenuFixture: URLProtocol {
         return item.menu!
     }
     static func main() {
+        let currencyLocale = Locale(identifier: "en_US")
+        for (value, expected): (Double, String) in [(0, "$0.00"), (0.0001, "$0.00"), (12.3456, "$12.35"), (99.99, "$99.99"), (99.995, "$100"), (100, "$100"), (1234.56, "$1,235"), (-1234.56, "-$1,235"), (-0.0001, "$0.00")] {
+            precondition(MenuBarController.dollars(value, locale: currencyLocale) == expected)
+        }
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         URLProtocol.registerClass(MenuFixture.self)
@@ -188,7 +192,8 @@ final class MenuFixture: URLProtocol {
         let words = menu.items.first { $0.title.hasPrefix("Words typed") }!
         let baselineWidth = menu.size.width
         let baselineValueEdge = words.attributedTitle!.size().width
-        precondition(baselineWidth - baselineValueEdge < 40, "Values must reach the menu's trailing text edge")
+        let titleInsets = MenuBarController.menuTitleInsets(font: menu.font!, submenu: true)
+        precondition(baselineWidth - baselineValueEdge <= titleInsets + 2, "Values must reach the menu's trailing text edge before the submenu gutter")
         // A wider native item changes the menu's width without changing usage.
         let wideAction = NSMenuItem(title: String(repeating: "W", count: 40), action: nil, keyEquivalent: "")
         menu.addItem(wideAction)
@@ -311,7 +316,7 @@ final class MenuFixture: URLProtocol {
         let shortcuts = [("search", "Search conversations…", "/library"), ("analyze", "Analyze usage…", "/analyze"),
                          ("optimize", "Optimize…", "/findings"), ("capture", "Capture & index…", "/settings/sync"),
                          ("health", "Library health & backups…", "/settings"), ("sources", "Manage sources…", "/settings/sources")]
-        precondition(shortcuts.allSatisfy { !MenuBarPreferences()[$0.0] } && !MenuBarPreferences()["finder"], "Shortcuts must not change the default menu")
+        precondition(shortcuts.allSatisfy { MenuBarPreferences()[$0.0] } && MenuBarPreferences()["finder"], "Shortcuts default on and remain customizable")
         controller.applyPreferences(["layoutVersion": 2, "order": ["open"] + shortcuts.map { $0.0 } + ["finder", "status", "settings", "quit"]])
         var shortcutOpened = false
         controller.openWindow = { shortcutOpened = true }
@@ -336,6 +341,16 @@ final class MenuFixture: URLProtocol {
         NSApp.sendAction(finder.action!, to: finder.target, from: finder)
         precondition(revealed == nil)
         service.ejecting = false
+        // Logs defaults on; it opens Settings → Logs at each source.
+        precondition(MenuBarPreferences()["logs"], "Logs defaults on")
+        controller.applyPreferences(["layoutVersion": 2, "order": ["open", "logs", "status", "settings", "quit"]])
+        let logs = menu.items.first { $0.title.hasPrefix("Logs & crash reports") && !$0.isHidden }!
+        let logSources = logs.submenu!.items.filter { !$0.isSeparatorItem }
+        precondition(logs.image != nil && logSources.map(\.title) == MenuBarController.logSources.map(\.1))
+        controller.openWindow = {}
+        NSApp.sendAction(logSources.last!.action!, to: logSources.last!.target, from: logSources.last!)
+        precondition(Mirror(reflecting: controller).children.first { $0.label == "pendingPath" }!.value as? String == "/settings/logs?log_source=crashes")
+        controller.openWindow = nil
         controller.applyPreferences(["layoutVersion": 2, "order": ["quit", "tokens", "space", "open", "status", "settings", "words"]])
         let reordered = menu.items.filter { !$0.isHidden && !$0.isSeparatorItem }.map { String($0.title.split(separator: "\t")[0]) }
         precondition(reordered.first == "Quit Pharos")
@@ -440,7 +455,7 @@ final class MenuFixture: URLProtocol {
         }
         precondition(MenuBarPreferences(["enabled": 0])["enabled"], "Numbers are not booleans")
         precondition(MenuBarController.mass(1234) == "1.23 kg")
-        for (input, expected) in [(999.0, "999"), (999.7, "1k"), (999400.0, "999k"), (999700.0, "1M"), (999700000.0, "1B"), (999700000000.0, "1T")] {
+        for (input, expected) in [(999.0, "999"), (999.7, "1K"), (1234.0, "1.23K"), (999400.0, "999K"), (999700.0, "1M"), (1234567.0, "1.23M"), (999700000.0, "1B"), (999700000000.0, "1T")] {
             precondition(MenuBarController.compact(input) == expected)
         }
         for (input, expected) in [(999.4, "999 g"), (999.7, "1 kg"), (999700.0, "1 t"), (999700000.0, "1000 t"), (0.0000001, "0.0000001 g")] {

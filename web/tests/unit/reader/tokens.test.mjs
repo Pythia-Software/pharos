@@ -11,10 +11,60 @@ const { conversationTokenReports, contextTokenReports, contextWindow, contextDel
 const raw = events => events.map(value => ({ text: JSON.stringify(value) }));
 const samples = events => [...events].map(message => message.tokenReport?.contextSample).filter(Boolean);
 
+test("usage sensitivity diagnostics scope to owned messages; canonical estimates use token reports", () => {
+  const report = {range_kind:"sensitivity_not_confidence",manifest_revision:"fixture.1",responses:[
+    {message_id:"a",output_tokens:{expected:1200,lower:400,upper:3000},local_weight:0},
+    {message_id:"b",model:"claude-opus-fixture",model_source:"observed_conversation_selection",effort:"high",output_tokens:{expected:800,lower:200,upper:2000},local_weight:.5},
+  ]};
+  const conversation = {usage_estimates:report};
+  const all = reader.usageEstimatePresentation(conversation);
+  assert.equal(all.expected,2000);
+  assert.equal(all.lower,600);
+  assert.equal(all.upper,5000);
+  assert.match(all.detail,/Local coding calibration/);
+  assert.match(all.detail,/unreported/);
+  assert.match(all.detail,/estimation and API pricing assume claude-opus-fixture.*not recorded/i);
+  assert.equal(reader.usageEstimatePresentation(conversation,[{id:"a"}]).expected,1200);
+  assert.doesNotMatch(reader.usageEstimatePresentation(conversation,[{id:"a"}]).detail,/API pricing assume/i);
+  assert.equal(reader.usageEstimatePresentation(conversation,[{id:"different"}]),null);
+  assert.equal(reader.usageEstimatePresentation({}),null);
+  assert.equal(reader.usageEstimatePresentation({usage_estimates:{...report,range_kind:"confidence"}}),null);
+  const messages = [event("answer","message","Hello",0,{id:"a",duration_estimate:{status:"estimated",seconds:{expected:3,lower:1,upper:10}}})];
+  assert.equal(spend(render(messages).events),null,"estimates must not enter token accounting");
+  const estimatedMessages = [{...messages[0],usage_is_estimate:true,usage:{output_tokens:1200,reasoning_output_tokens:200,total_tokens:1200}}];
+  const estimates = conversationTokenReports(estimatedMessages);
+  assert.equal(estimates[0].total,1200);
+  assert.equal(estimates[0].isEstimate,true);
+  assert.equal(contextTokenReports(estimatedMessages,estimates)[0].contextSample,undefined,"estimated output is not measured input context");
+  // Processed input is a separate estimate, summed only when every response has one.
+  const withInput = {usage_estimates:{...report,responses:report.responses.map((response,index)=>({...response,input:{requests:index+2,input_tokens:{expected:50000,lower:30000,upper:90000},cache_read_input_tokens:20000}}))}};
+  const both = reader.usageEstimatePresentation(withInput);
+  assert.deepEqual([both.input.expected,both.input.requests,both.expected],[100000,5,2000],"input and output keep separate sums");
+  assert.match(both.label,/~100K estimated input.*~2K estimated output/);
+  assert.match(both.detail,/5 inferred model requests.*hidden system prompts/s);
+  const mixed = {usage_estimates:{...report,responses:[withInput.usage_estimates.responses[0],report.responses[1]]}};
+  assert.equal(reader.usageEstimatePresentation(mixed).input,undefined,"a missing input estimate is not a zero");
+  const inputMessages = [{...messages[0],usage_is_estimate:true,usage:{input_tokens:50000,cache_read_input_tokens:20000,cache_creation_input_tokens:30000,output_tokens:1200,total_tokens:51200}}];
+  const inputReports = conversationTokenReports(inputMessages);
+  assert.equal(inputReports[0].total,51200);
+  assert.match(inputReports[0].label,/input and output/);
+  assert.equal(contextTokenReports(inputMessages,inputReports)[0].contextSample,undefined,"estimated input is not a measured context sample");
+  assert.match(reader.toolDurationEstimatePresentation(messages[0]).label,/Estimated/);
+  assert.match(reader.toolDurationEstimatePresentation({duration_estimate:{status:"observed",seconds:{expected:0,lower:0,upper:0}}}).label,/Recorded/);
+  assert.equal(reader.toolDurationEstimatePresentation({duration_estimate:{status:"unavailable"}}),null);
+  const split = reader.toolDurationEstimatePresentation({duration_estimate:{status:"estimated",seconds:{expected:6,lower:5,upper:10},argument_generation_seconds:{expected:5,lower:5,upper:5},argument_generation_status:"observed",execution_seconds:{expected:1,lower:0,upper:5},execution_status:"estimated"}});
+  assert.match(split.label,/Estimated execution/);
+  assert.match(split.detail,/Argument generation: recorded 5 s/);
+  assert.match(split.detail,/Full call-to-result span: 6 s/);
+  const zero = reader.toolDurationEstimatePresentation({duration_estimate:{status:"observed",seconds:{expected:5,lower:5,upper:5},execution_seconds:{expected:0,lower:0,upper:0},execution_status:"observed"}});
+  assert.match(zero.label,/Recorded execution: 0 s/);
+});
+
 test("all source accounting formats reconcile against shared fixtures", () => {
   assert.ok(tokenCases.length > 0);
   for (const item of tokenCases) {
-    const reports = conversationTokenReports(item.events.map((value, i) => ({ native_id: String(i), text: JSON.stringify(value) })));
+    // Fixture events are protocol accounting envelopes, stored as metadata.
+    const reports = conversationTokenReports(item.events.map((value, i) => ({ native_id: String(i), kind: "metadata", role: "system", text: JSON.stringify(value) })));
     assert.equal(reports.reduce((sum, report) => sum + (report?.total || 0), 0), item.total, item.name);
   }
 });
@@ -44,6 +94,13 @@ test("turn and sub-agent spend include nested usage across many turns", () => {
   const sampled = samples(events);
   assert.deepEqual([sampled.filter(sample => !sample.compact).length, sampled.filter(sample => sample.compact).length], [46, 1]);
   assert.deepEqual([...new Set(sampled.map(sample => sample.stream))], ["main", "child"]);
+});
+
+test("an advisor's request leaves the conversation's context alone", () => {
+  const reply = (id, input) => event(id, "metadata", { type: "assistant", message: { id, usage: { input_tokens: input, output_tokens: 10 } } });
+  const advisor = event("advisor", "metadata", { type: "assistant", advisor_of: "r1", message: { id: "r1:advisor:0", usage: { input_tokens: 50, output_tokens: 5 } } });
+  const { events } = render([human(), reply("r1", 1000), advisor, reply("r2", 1020)]);
+  assert.deepEqual(plain(samples(events).map(sample => sample.size)), [1000, 1020]);
 });
 
 test("split message usage includes cache once and reconciles result totals", () => {
@@ -128,4 +185,64 @@ test("nested subagent checkpoints count once and remain nested sessions", () => 
   assert.deepEqual(plain(graph.turns[0].events.map(message => message.native_id)), ["outer-call", "result"]);
   assert.deepEqual(plain(graph.childrenByParent.get("outer").map(message => message.native_id)), ["outer-request", "inner-call", "outer-total"]);
   assert.deepEqual(plain(graph.childrenByParent.get("inner").map(message => message.native_id)), ["inner-request", "inner-total"]);
+
+  const launch=event("launch", "delegation", {tool:"Agent",input:{model:"sonnet"}}, 1, {call_id:"child"});
+  const details={status:"completed",totalToolUseCount:0,totalTokens:110,usage:{input_tokens:5,cache_read_input_tokens:90,cache_creation_input_tokens:5,output_tokens:10}};
+  const handback=changed=>event("handback", "delegation_result", {content:"Finished",details:{...details,...changed}}, 3, {call_id:"child"});
+  const request=event("request", "metadata", {type:"assistant",message:{id:"request",usage:{input_tokens:200,output_tokens:20}}}, 2, {parent_native_id:"child"});
+  for(const [name,messages,want] of [
+    ["result only",[launch,handback()],110],
+    ["result owned by retained child",[launch,{...handback(),usage_in_child_conversation:true}],0],
+    ["child ownership preserves parent launch request",[event("parent","metadata",{type:"assistant",message:{id:"parent",usage:{input_tokens:100,output_tokens:10}}}),launch,{...handback(),usage_in_child_conversation:true}],110],
+    ["duplicate result",[launch,handback(),handback()],110],
+    ["request already retained",[launch,request,handback()],220],
+    ["SDK aggregate includes child",[launch,handback(),event("sdk","result",{type:"result",usage:{total_tokens:150}},4)],150],
+    ["multi-step result is only a last request",[launch,handback({totalToolUseCount:12})],0],
+    ["incomplete result",[launch,handback({status:"async_launched"})],0],
+    ["inconsistent counters",[launch,handback({totalTokens:999})],0],
+    ["unproved child identity",[handback()],0],
+    ["ordinary tool output",[launch,{...handback(),kind:"tool_result"}],0],
+    ["quoted usage",[launch,event("quote","delegation_result",{content:JSON.stringify({details})},3,{call_id:"child"})],0],
+  ]){
+    const reports=conversationTokenReports(messages);
+    assert.equal(reports.reduce((sum,report)=>sum+(report?.total||0),0),want,name);
+  }
+  const reports=conversationTokenReports([launch,handback()]);
+  assert.equal(reports[1].stream,"child");
+  assert.equal(reports[1].breakdown.cacheRead,90);
+});
+
+test("only protocol metadata marks a continuation", () => {
+  const count = (total, last) => ({ kind: "metadata", role: "system", text: JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: total }, last_token_usage: { total_tokens: last } } } }) });
+  const marker = JSON.stringify({ type: "session_meta", payload: { forked_from_id: "parent" } });
+  // Conductor stores pasted JSON as metadata under the sender's role.
+  for (const kind of ["message", "metadata"]) {
+    const reports = conversationTokenReports([{ kind, role: "user", text: marker }, count(1100, 100), count(1300, 200)]);
+    assert.equal(reports.reduce((sum, report) => sum + (report?.total || 0), 0), 1300, kind);
+  }
+});
+
+
+test("harness footer stays separate from consumption and context", () => {
+  const footer="agentId: agent-one (use SendMessage with to: 'agent-one', summary: '<5-10 word recap>' to continue this agent)\n<usage>subagent_tokens: 116837\ntool_uses: 83\nduration_ms: 835048</usage>";
+  const launch=event("launch","delegation",{tool:"Agent",input:{}},1,{call_id:"child"});
+  const result=event("result","delegation_result",{content:[{type:"text",text:"Report"},{type:"text",text:footer}],is_error:false},2,{call_id:"child"});
+  const evidence=reader.conversationTokenEvidence;
+  for(const [name,call,body,want] of [
+    ["harness footer",launch,result,1],
+    ["ordinary output",launch,{...result,kind:"tool_result"},0],
+    ["not delegated",{...launch,call_id:"other"},result,0],
+    ["ordinary tool",{...launch,text:JSON.stringify({tool:"Read"})},result,0],
+    ["wrong resume",{...launch,text:JSON.stringify({tool:"Agent",input:{resume:"other"}})},result,0],
+    ["prose prefix",launch,{...result,text:JSON.stringify({content:[{type:"text",text:"Example: "+footer}]})},0],
+    ["duplicate trailer",launch,{...result,text:JSON.stringify({content:[{type:"text",text:footer},{type:"text",text:footer}]})},0],
+    ["identity mismatch",launch,{...result,text:JSON.stringify({content:[{type:"text",text:footer}],details:{agentId:"other"}})},0],
+    ["overflow",launch,{...result,text:result.text.replace('116837','999999999999999999999')},0],
+  ]) assert.equal(evidence([call,body]).length,want,name);
+  const reports=contextTokenReports([launch,result],conversationTokenReports([launch,result]));
+  assert.equal(reports[1].observedMinimum,116837);
+  assert.equal(reports.reduce((n,r)=>n+(r?.total||0),0),0,"observation never enters the spending ledger");
+  assert.ok(!reports.some(r=>r?.contextSample),"observation is not input context");
+  const aggregate=event("sdk","result",{type:"result",usage:{total_tokens:200000}},3);
+  assert.equal(conversationTokenReports([launch,result,aggregate]).reduce((n,r)=>n+(r?.total||0),0),200000);
 });

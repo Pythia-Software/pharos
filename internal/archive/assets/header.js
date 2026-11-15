@@ -1,18 +1,22 @@
 // Add a header tool here and give its existing DOM node an element ID. The
 // registry owns the toolbox, defaults, legacy preferences and allowed layouts.
 const HEADER_TOOLS = [
-  { id: 'history', family: 'history', element: 'headerHistory', label: 'Back / forward', description: 'Move through pages visited in this window.', on: true },
-  { id: 'back', family: 'history', element: 'headerBackOnly', label: 'Back only', description: 'Go back through pages visited in this window.', on: false },
+  { id: 'history', family: 'history', element: 'headerHistory', label: 'Back / forward', description: 'Move through pages visited in this window.', on: false },
+  { id: 'back', family: 'history', element: 'headerBackOnly', label: 'Back only', description: 'Go back through pages visited in this window.', on: true },
   { id: 'library', family: 'library', element: 'headerLibrary', label: 'Drive & sync status', description: 'Library activity, drive actions, and Index changes.', on: true },
   { id: 'sync', family: 'library', element: 'headerSyncOnly', label: 'Sync only', description: 'Index changes without the drive name or status.', on: false },
-  { id: 'search', element: 'searchToggle', label: 'Search', description: 'Search the library. The ⌘K shortcut also works.', on: true },
-  { id: 'ask', element: 'askPharosToggle', label: 'Ask Pharos', description: 'Ask about the current page and browse while Pharos works.', on: true },
+  { id: 'search', element: 'searchToggle', label: 'Search', description: 'Search the library. The ⌘K shortcut also works.', on: false },
+  { id: 'readiness', element: 'dataReadinessToggle', label: 'Data updates', description: 'See when this page was last updated and what is still waiting.', on: false },
   { id: 'summary', element: 'usageSummaryToggle', label: 'Quick Stats', description: 'Recent words, tokens, CO₂e, and API cost.', on: true, legacy: 'pharos-show-usage-summary-button' },
+  { id: 'ask', element: 'askPharosToggle', label: 'Ask Pharos', description: 'Ask about the current page and browse while Pharos works.', on: true },
+  { id: 'guide', element: 'dataGuideToggle', label: 'Data Guide', description: 'Understand conversations, agent sessions, workspaces, and the rest of your agent history.', on: false },
   { id: 'annotations', element: 'feedbackToggle', label: 'Agent annotations', description: 'Mark up the interface to share feedback with an agent.', on: false, legacy: 'pharos-show-agent-annotation-button' },
   { id: 'feedback', element: 'feedbackSubmitToggle', label: 'Send feedback', description: 'Send a bug report, request, or prompt to Pythia Software.', on: true },
   { id: 'settings', element: 'settingsToggle', label: 'Settings', description: 'Keep app settings within reach.', on: true, required: true },
-  { id: 'theme', element: 'themeToggle', label: 'Color theme', description: 'Switch between system, light, and dark themes.', on: true, legacy: 'pharos-show-theme-button' },
+  { id: 'theme', element: 'themeToggle', label: 'Color theme', description: 'Switch between system, light, and dark themes.', on: false, legacy: 'pharos-show-theme-button' },
   { id: 'navigator', element: 'navigatorToggle', label: 'Navigation bar', description: 'Navigate by URL, save bookmarks, and view page history.', on: false, legacy: 'pharos-show-nav-button' },
+  { id: 'bookmarks', element: 'headerBookmarksToggle', label: 'Bookmarks', description: 'Open saved pages and bookmark the current page.', on: false },
+  { id: 'visits', element: 'headerHistoryToggle', label: 'History', description: 'Browse and search previously visited pages.', on: false },
 ];
 const HEADER_LAYOUT_KEY = 'pharos-header-tools-v1';
 
@@ -256,7 +260,7 @@ function initHeaderHistory(changed) {
 function initHeaderControls(close = {}) {
   const root = document.querySelector('body>header .header-icons');
   const active = document.getElementById('headerActive'), toolbox = document.getElementById('headerToolbox');
-  if (!root || !active || !toolbox) return;
+  if (!root || !active || !toolbox) return null;
   let tools = normalizeHeaderTools(pharosPrefs.get(HEADER_LAYOUT_KEY, null), (key, fallback) => pharosPrefs.get(key, fallback));
   const layoutOverflow = initHeaderOverflow(() => tools);
   let dragId = null;
@@ -367,7 +371,7 @@ function initHeaderControls(close = {}) {
     const node = element('button');
     node.type = 'button';
     node.dataset.action = action;
-    node.title = label;
+    if (action !== 'remove' && action !== 'add') node.title = label;
     node.setAttribute('aria-label', `${label} ${tool.label}`);
     node.append(glyph(icon));
     if (action === 'remove') node.append('Remove');
@@ -410,7 +414,7 @@ function initHeaderControls(close = {}) {
         const row = element('li', 'header-tool'), face = element('div', 'header-tool-face');
         row.dataset.tool = tool.id;
         row.draggable = true;
-        face.title = inHeader ? tool.label : `${tool.label}: ${tool.description}`;
+        if (!inHeader) face.title = tool.description;
         if (!inHeader) {
           face.tabIndex = 0;
           face.setAttribute('role', 'button');
@@ -502,4 +506,7 @@ function initHeaderControls(close = {}) {
   const overflow = get('headerOverflowTools');
   if (overflow) new MutationObserver(syncAppearances).observe(overflow, { subtree: true, childList: true, attributes: true });
   new MutationObserver(syncTabs).observe(liveTabs, { subtree: true, childList: true, attributes: true });
+  // Puts a tool in the header when something outside the editor turns its
+  // feature on, so the header can turn it off again.
+  return { show: id => { if (!tools.includes(id)) commit(editHeaderTools(tools, id, headerToolAddPosition(tools, id)), `${definition(id).label} added to the header.`); } };
 }

@@ -3,7 +3,6 @@ import test from "node:test";
 import { applyQuery, EMPTY_QUERY, encodeQuery, decodeQueryStrict } from "@pythia-software/query-table-core";
 import { schemas, execution } from "../helpers/recipes.mjs";
 import { originDimensions, originLabel, loadOriginMetadata } from "../../../src/origin-dimensions";
-import { machineWhere, machineWindow } from "../../../src/machine-activity-data";
 import { trendQuery } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog } from "../../../src/token-analysis-catalog";
 import { toolSummaryCallFilters, toolMetricPresentation } from "../../../src/tools-dashboard-model";
@@ -19,10 +18,8 @@ test("origin filters preserve device IDs and null groups across query links", ()
   assert.equal(originLabel("channel", "desktop"), "Desktop app");
 });
 
-test("machine scopes and summary drilldowns carry initiation and execution separately", () => {
+test("summary drilldowns and trends carry initiation and execution separately", () => {
   const scope = { days: 0, repository: "", provider: "", model: "", channel: "desktop", machine_id: "laptop", execution_machine_id: "worker" };
-  const where = machineWhere(scope, machineWindow(0));
-  assert.deepEqual(where, originDimensions.map(([field]) => ({ field, op: "=", value: scope[field] })));
   const filters = toolSummaryCallFilters(scope);
   for (const [field] of originDimensions) {
     assert.deepEqual(filters.find(clause => clause.field === field), { field, op: "=", value: scope[field] });

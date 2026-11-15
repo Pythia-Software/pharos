@@ -5,7 +5,7 @@ import {filterBoxSamples} from '../../../src/compact-box-model';
 import {compactPieSlices} from '../../../src/compact-pie-model';
 import {compactMetricPresentation} from '../../../src/card-presentation';
 const schema=schemas.usage,now=Date.parse('2026-10-16T12:00:00Z'),day=86400000,{card,table,metric}=recipeHarness(now);
-const fact=(id,extra={})=>({id,first_usage_at:now-1000,last_usage_at:new Date(now-1000).toISOString(),day:'2026-10-16',workspace_id:'work',repository_name:'repo',root_repository_name:'root repo',root_conversation_id:'root',root_title:'Root title',agent_session_id:'run',root_provider:'codex',root_model_family:'gpt-6-sol',root_effort:'high',delegated_session_id:null,total_tokens:100,input_tokens:90,output_tokens:10,price_status:'unpriced',attribution:'request',...extra});
+const fact=(id,extra={})=>({id,first_usage_at:now-1000,last_usage_at:new Date(now-1000).toISOString(),day:'2026-10-16',workspace_id:'work',project_name:'repo',root_project_name:'root repo',root_conversation_id:'root',root_title:'Root title',agent_session_id:'run',root_provider:'codex',root_model_family:'gpt-6-sol',root_effort:'high',delegated_session_id:null,total_tokens:100,input_tokens:90,output_tokens:10,price_status:'unpriced',attribution:'request',...extra});
 
 test('usage cards bound one rolling window and never filter by price status',()=>{
  for(const recipe of queryRecipes.filter(r=>r.category==='usage'&&!r.retired))for(const days of [7,30]){const {query}=card(recipe.id,days);assert.equal(query.grouping.source.where.filter(t=>t.field==='first_usage_at').length,2,recipe.id);assert.ok(!query.grouping.source.where.some(t=>t.field==='price_status'),recipe.id);}
@@ -14,17 +14,17 @@ test('usage cards bound one rolling window and never filter by price status',()=
 test('token allocation includes all price statuses, repeated cached input and missing lineage but excludes nonpositive and old facts',()=>{
  const rows=[fact('unpriced'),fact('assumed',{price_status:'assumed',root_conversation_id:null,total_tokens:200,input_tokens:190}),fact('partial',{price_status:'partial',total_tokens:300}),fact('priced',{price_status:'priced',total_tokens:400}),fact('old',{first_usage_at:now-8*day,total_tokens:99999}),fact('zero',{total_tokens:0}),fact('future',{first_usage_at:now})];
  assert.equal(compactPieSlices(metric('repository-token-share',rows),5).total,1000);assert.equal(metric('usage-repos',rows).buckets.reduce((n,b)=>n+b.value,0),1000);
- const many=Array.from({length:20},(_,i)=>fact(String(i),{repository_name:`repo-${i}`,total_tokens:i+1}));const pie=compactPieSlices(metric('repository-token-share',many),5);assert.equal(pie.slices.length,6);assert.equal(pie.total,210);assert.equal(pie.slices.reduce((n,s)=>n+s.value,0),210);
+ const many=Array.from({length:20},(_,i)=>fact(String(i),{project_name:`repo-${i}`,total_tokens:i+1}));const pie=compactPieSlices(metric('repository-token-share',many),5);assert.equal(pie.slices.length,6);assert.equal(pie.total,210);assert.equal(pie.slices.reduce((n,s)=>n+s.value,0),210);
  for(const id of ['usage-repos','repository-token-share']){const {recipe,query}=card(id);assert.equal(cardCoverQuery(query,recipe).query.aggregations[0].groupLimit,10000);}
 });
 
 test('root-task ranking includes cross-repository children and distinguishes independent roots sharing a workspace',()=>{
- const rows=[fact('root'),fact('child',{workspace_id:'child',repository_name:'child repo',total_tokens:200,agent_session_id:'child'}),fact('child-only',{workspace_id:'elsewhere',root_conversation_id:'inactive-root',total_tokens:50}),fact('separate',{root_conversation_id:'independent',total_tokens:25}),fact('orphan',{root_conversation_id:null,total_tokens:99999})];
- const ranked=table('usage-work',rows);assert.deepEqual(ranked.map(r=>r.card_total_tokens),[300,50,25]);assert.ok(ranked.every(r=>r.root_repository_name==='root repo'&&r.card_work_title==='Root title'));assert.equal(ranked[0].card_agent_session_id,2);
+ const rows=[fact('root'),fact('child',{workspace_id:'child',project_name:'child repo',total_tokens:200,agent_session_id:'child'}),fact('child-only',{workspace_id:'elsewhere',root_conversation_id:'inactive-root',total_tokens:50}),fact('separate',{root_conversation_id:'independent',total_tokens:25}),fact('orphan',{root_conversation_id:null,total_tokens:99999})];
+ const ranked=table('usage-work',rows);assert.deepEqual(ranked.map(r=>r.card_total_tokens),[300,50,25]);assert.ok(ranked.every(r=>r.root_project_name==='root repo'&&r.card_work_title==='Root title'));assert.equal(ranked[0].card_agent_session_id,2);
 });
 
 test('token boxes require root-task observations and output boxes retain input-only zeros',()=>{
- const rows=[fact('a',{output_tokens:0}),fact('child',{workspace_id:'child',total_tokens:200,output_tokens:0}),fact('b',{root_conversation_id:'second',total_tokens:50,output_tokens:5}),fact('c',{root_conversation_id:'third',total_tokens:25,output_tokens:1}),...Array.from({length:10},(_,i)=>fact(`sparse-${i}`,{root_repository_name:'sparse',root_conversation_id:'one sparse task'}))];
+ const rows=[fact('a',{output_tokens:0}),fact('child',{workspace_id:'child',total_tokens:200,output_tokens:0}),fact('b',{root_conversation_id:'second',total_tokens:50,output_tokens:5}),fact('c',{root_conversation_id:'third',total_tokens:25,output_tokens:1}),...Array.from({length:10},(_,i)=>fact(`sparse-${i}`,{root_project_name:'sparse',root_conversation_id:'one sparse task'}))];
  const total=filterBoxSamples(metric('task-token-ranges',rows),3);assert.equal(total.buckets.length,1);assert.deepEqual([total.buckets[0].distribution.summary.n,total.buckets[0].distribution.summary.min,total.buckets[0].distribution.summary.median,total.buckets[0].distribution.summary.max],[3,25,50,300]);
  const output=filterBoxSamples(metric('task-output-ranges',rows),3);assert.deepEqual([output.buckets[0].distribution.summary.n,output.buckets[0].distribution.summary.min,output.buckets[0].distribution.summary.max],[3,0,5]);assert.equal(table('task-output-ranges',rows).length,4,'sparse root remains inspectable');
 });

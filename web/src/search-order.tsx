@@ -28,7 +28,7 @@ export function SearchOrderControl({ catalogue, order, onChange, batched = false
           {fields.filter(([name]) => name === term.field || !order.some(other => other.field === name)).map(([name, field]) => <option value={name} key={name}>{field.label ?? name}</option>)}
         </SearchSelect>
         <SearchSelect aria-label={`Sort direction ${index + 1}`} value={term.dir} onChange={event => update(index, { dir: event.target.value as OrderByClause["dir"] })}><option value="asc">{labels(term.field)[0]}</option><option value="desc">{labels(term.field)[1]}</option></SearchSelect>
-        {term.extract ? <span className="text-sort-detail" title={`Sort uses regex extraction: ${term.extract.regex}`}>Extract: <code>{term.extract.regex}</code></span> : null}
+        {term.extract ? <span className="text-sort-detail">Extract: <code>{term.extract.regex}</code></span> : null}
         {term.nulls === "first" ? <span className="text-sort-detail">Empty first</span> : null}
         {order.length > 1 ? <button type="button" className="text-remove" aria-label={`Remove sort ${index + 1}`} title="Remove sort" onClick={() => onChange(order.filter((_, i) => i !== index))}><Icon name="close" /></button> : null}
       </div>

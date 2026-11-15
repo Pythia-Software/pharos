@@ -43,7 +43,7 @@ const BeltCard = memo(function BeltCard({ item, preview, xray, lean, index, reve
   item: QuerySuggestion; preview?: QueryPreview; xray: boolean; lean: number; index: number; revealable: boolean; actions: React.MutableRefObject<BeltActions | null>;
 }) {
   return <QueryCard discovery xray={xray} id={item.instanceId} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={suggestionWindowLabel(item)} category={item.category} lean={lean}
-    loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={preview} onReveal={revealable ? () => actions.current!.reveal(index) : undefined}
+    readinessSource={{dataset:item.dataset,query:item.query}} loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={preview} onReveal={revealable ? () => actions.current!.reveal(index) : undefined}
     onOpen={url => actions.current!.open(url)} onKeep={() => actions.current!.keep(item)} onDragStart={event => actions.current!.dragStart(event, item)} onDragEnd={() => actions.current!.dragEnd()} />;
 });
 
@@ -212,9 +212,9 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
       <button type="button" className="home-all-cards" onClick={onAllCards}>All Cards<Icon name="arrow-right" /></button>
       <CarouselCountdown held={held} paused={paused} reset={clockReset} advance={() => step(1, false)} /><div className="home-conveyor-controls">
       <button data-view-field="conveyor_paused" type="button" className="home-play" aria-label={paused ? "Play suggestions" : "Pause suggestions"} onClick={() => setPaused(value => !value)}>{paused ? "▶ Play" : "Ⅱ Pause"}</button>
-      <button type="button" aria-label={`Previous ${counted(navigationStep)} suggestions`} disabled={!canNavigate} onClick={() => step(-1)}><Icon name="chevron-left" /></button>
-      <button type="button" aria-label={`Next ${counted(navigationStep)} suggestions`} disabled={!canNavigate} onClick={() => step(1)}><Icon name="chevron-right" /></button>
-      <button type="button" aria-label="Refresh suggestions" onClick={() => { running.current = null; pendingFocus.current = undefined; leans.current.clear(); setMovement(null); setPublished([]); setCenter(undefined); setEntering([]); lastReveal.current = 0; setClockReset(value => value + 1); onRefresh(); }}><Icon name="refresh" /></button>
+      <button type="button" aria-label={`Previous ${counted(navigationStep)} suggestions`} title="Previous suggestions" disabled={!canNavigate} onClick={() => step(-1)}><Icon name="chevron-left" /></button>
+      <button type="button" aria-label={`Next ${counted(navigationStep)} suggestions`} title="Next suggestions" disabled={!canNavigate} onClick={() => step(1)}><Icon name="chevron-right" /></button>
+      <button type="button" aria-label="Refresh suggestions" title="Refresh suggestions" onClick={() => { running.current = null; pendingFocus.current = undefined; leans.current.clear(); setMovement(null); setPublished([]); setCenter(undefined); setEntering([]); lastReveal.current = 0; setClockReset(value => value + 1); onRefresh(); }}><Icon name="refresh" /></button>
     </div></div></div>
     <div className="home-belt-viewport" style={{ width: layout.width, marginLeft: -layout.overhang }}
       onMouseEnter={() => setInteracting(true)} onMouseLeave={() => setInteracting(false)} onFocus={() => setInteracting(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setInteracting(false); }}>

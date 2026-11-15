@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // Initialize migrates, backfills, and scans whole tables, taking the write
@@ -144,6 +146,25 @@ const initializeLockName = ".initialize.lock"
 
 var errCatalogInitializing = errors.New("Pharos is upgrading this library's catalog; try again in a moment")
 
+// Tests replace the mechanism serially to exercise lock errors and retries.
+var lockCatalogInitialization = filelock.Lock
+
+// catalogInitializationInProgress lets the app's startup watchdog distinguish
+// a catalog upgrade from a service that failed to become ready. The shared
+// probe never blocks or excludes other readers, and leaves no lock behind.
+func catalogInitializationInProgress(path string) bool {
+	file, err := os.Open(filepath.Join(filepath.Dir(path), initializeLockName))
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	err = lockCatalogInitialization(file, filelock.Shared, filelock.Try)
+	if err == nil {
+		_ = filelock.Unlock(file)
+	}
+	return errors.Is(err, filelock.ErrContended)
+}
+
 // initializeLocked runs Initialize under the initialize lock, unless this
 // build already completed it. A service waits for an in-progress upgrade;
 // query opens give up after a moment and leave older schemas to the service.
@@ -153,19 +174,19 @@ func (c *Catalog) initializeLocked(wait bool) error {
 		return err
 	}
 	defer file.Close()
+	how := filelock.Wait
+	if !wait {
+		how = filelock.Try
+	}
 	for deadline := time.Now().Add(2 * time.Second); ; {
-		how := syscall.LOCK_EX
-		if !wait {
-			how |= syscall.LOCK_NB
-		}
-		err = syscall.Flock(int(file.Fd()), how)
+		err = lockCatalogInitialization(file, filelock.Exclusive, how)
 		if err == nil {
 			break
-		} else if err == syscall.EWOULDBLOCK && time.Now().Before(deadline) {
+		} else if errors.Is(err, filelock.ErrContended) && time.Now().Before(deadline) {
 			time.Sleep(50 * time.Millisecond)
-		} else if err == syscall.EWOULDBLOCK {
+		} else if errors.Is(err, filelock.ErrContended) {
 			return errCatalogInitializing
-		} else if err != syscall.EINTR {
+		} else if !errors.Is(err, syscall.EINTR) {
 			return err
 		}
 	}
@@ -209,6 +230,7 @@ func (c *Catalog) recordInitialize(reg *opRegistry, trigger string) {
 // checkpointed. SQLite still checkpoints when the last connection of any
 // process closes, which leaves nothing to replay if the drive is then pulled.
 func (c *Catalog) closeQuery() error {
+	c.closeDerivedCache()
 	if !c.readOnly {
 		c.closeMCPHistory()
 	}
@@ -221,8 +243,5 @@ func (c *Catalog) closeQuery() error {
 	c.library.mu.Lock()
 	c.library.close()
 	c.library.mu.Unlock()
-	c.derived.mu.Lock()
-	c.derived.close()
-	c.derived.mu.Unlock()
 	return c.DB.Close()
 }

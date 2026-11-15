@@ -127,12 +127,17 @@ func (site *siteMap) browseTool(ctx context.Context, catalog *Catalog, args map[
 		limit = clamp(int(integer(args["limit"])), 1, 200)
 	}
 	offset := max(int(integer(args["offset"])), 0)
-	budget := mcpBudget(args, 3000)
+	budget := mcpBudget(args, 3500)
 	result, err := site.browse(ctx, catalog, path, query)
 	if err != nil {
 		return nil, err
 	}
 	items, listed := result["items"].([]map[string]any)
+	listKey := "items"
+	if !listed {
+		items, listed = result["columns"].([]map[string]any)
+		listKey = "columns"
+	}
 	if !listed {
 		if len(jsonText(result)) > budget*3 {
 			return nil, fmt.Errorf("max_output_tokens is too small for %s; increase the output budget", path)
@@ -154,13 +159,13 @@ func (site *siteMap) browseTool(ctx context.Context, catalog *Catalog, args map[
 	result["total"] = total
 	// Shed list items from the end until the answer fits the budget.
 	for {
-		result["items"] = items
+		result[listKey] = items
 		result["returned_count"] = len(items)
 		delete(result, "next_offset")
 		if offset+len(items) < total {
 			result["next_offset"] = offset + len(items)
 		}
-		if len(jsonText(result)) <= budget*3 {
+		if len(jsonText(result)) <= budget*3 && (len(items) > 0 || offset >= total) {
 			break
 		}
 		if len(items) == 0 {
@@ -523,7 +528,7 @@ func (c *Catalog) frequentFieldValues(parent context.Context, dataset, field str
 	ctx, cancel := context.WithTimeout(parent, siteValuesDeadline)
 	defer cancel()
 	slow := fmt.Sprintf("Counting this field's values would take longer than %s on this library, so none are listed; filter with contains instead.", siteValuesDeadline)
-	if table, ok := sqlDatasetFor(dataset); ok {
+	if table, ok := c.sqlDatasetFor(dataset); ok {
 		document, err := querySchemaDocument(dataset)
 		if err != nil {
 			return nil, err.Error()
@@ -545,7 +550,7 @@ func (c *Catalog) frequentFieldValues(parent context.Context, dataset, field str
 	var err error
 	cold := warmOnly(ctx)
 	switch dataset {
-	case "usage", "conversation_activity", "tl1_attempts", "parallelism":
+	case "usage", "conversation_activity", "tl1_attempts", "parallelism", "rhythm", "session_shape", "outcomes", "branch_usage":
 		rows, _, err = c.datasetRows(cold, dataset, libraryFields{field: true})
 	case "writing":
 		// Without ensureAuthorship, which may start a rebuild.
@@ -646,6 +651,9 @@ func (site *siteMap) browseChart(node *siteNode) map[string]any {
 	if len(dashboard.UnavailableViews) > 0 {
 		result["unavailable_views"] = dashboard.UnavailableViews
 	}
+	if len(dashboard.Series) > 0 {
+		result["series"] = dashboard.Series
+	}
 	if node.Settings != "" {
 		result["note"] = node.Settings
 	}
@@ -674,6 +682,8 @@ func (site *siteMap) valueLabels(dashboard *siteDashboard, option string) map[st
 		}
 	case "reduce":
 		labels = site.Analyze.Labels.Reduce
+	case "percentiles":
+		labels = site.Analyze.Labels.Percentiles
 	case "view":
 		labels = site.Analyze.Labels.View
 	}
@@ -760,6 +770,14 @@ func (site *siteMap) chartOptionSummary(node *siteNode, dashboard *siteDashboard
 		return summary
 	}
 	labels := site.valueLabels(dashboard, key)
+	// Large cross-dashboard pickers must remain browsable within the normal
+	// response budget. Their own path paginates values and per-value constraints.
+	large := len(view.Domains[key]) > 32
+	if large && !detail {
+		summary["kind"], summary["value_count"] = "choice", len(view.Domains[key])
+		summary["description"] = "Browse this setting for its values, notes and valid combinations."
+		return summary
+	}
 	values := []map[string]any{}
 	for _, value := range view.Domains[key] {
 		item := map[string]any{"value": value}
@@ -773,11 +791,33 @@ func (site *siteMap) chartOptionSummary(node *siteNode, dashboard *siteDashboard
 			if unit, ok := dashboard.Units[siteString(value)]; ok && key == "unit" && unit.Note != "" {
 				item["note"] = unit.Note
 			}
+			if large {
+				constraints := []string{}
+				for _, rule := range view.Rules {
+					if rule.Option == key {
+						for _, constraint := range rule.Constraints {
+							if phrase := site.allowedPhrase(constraint.Given, constraint.Allowed, value); phrase != "" {
+								constraints = append(constraints, phrase)
+							}
+						}
+					}
+				}
+				if len(constraints) > 0 {
+					item["constraints"] = constraints
+				}
+			}
 		}
 		values = append(values, item)
 	}
 	summary["kind"] = "choice"
+	if view.listRule(key) != nil {
+		summary["kind"] = "list"
+		summary["description"] = "A list of any of these reference levels, e.g. [\"p50\", \"p90\"]; [] draws none. A line chart draws each as a line at that level of the normPeriods periods before the latest; a heatmap traces each period's own percentile (no mean). Levels the chart cannot draw are dropped."
+	}
 	summary["values"] = values
+	if large {
+		return summary
+	}
 	for _, rule := range view.Rules {
 		if rule.Option != key {
 			continue
@@ -846,7 +886,7 @@ func (site *siteMap) allowedPhrase(given []string, allowed any, value any) strin
 		word, list = "not with ", no
 	}
 	// One given setting: name it once, then its values.
-	if len(given) == 1 && given[0] != "multiple_periods" {
+	if len(given) == 1 && given[0] != "multiple_periods" && given[0] != "single_selection" {
 		values := []string{}
 		for _, context := range list {
 			values = append(values, site.contextText(given, context))
@@ -933,6 +973,10 @@ func (site *siteMap) contextText(given, context []string) string {
 			parts[index] = "periods of several hours or days"
 		case name == "multiple_periods":
 			parts[index] = "single-unit periods"
+		case name == "single_selection" && value == "true":
+			parts[index] = "one group selected in the legend"
+		case name == "single_selection":
+			parts[index] = "no single group selected"
 		case value == site.Analyze.Absent:
 			parts[index] = name + " unset"
 		default:

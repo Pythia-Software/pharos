@@ -2,12 +2,15 @@ import { todayBounds } from "./day-window";
 import { clipIntervals, concurrencyMetrics, concurrencySpans, mergeIntervals, minute, workSessions, zonedDayBounds, type ConcurrencyCounting, type ConcurrencyData, type ConcurrencyMetrics } from "./concurrency-data";
 import { readConcurrencySettings, resolveConcurrencyRange } from "./concurrency-settings";
 
-let cached: ConcurrencyData | null = null, pending: Promise<ConcurrencyData> | null = null, loadError = "";
+let cached: ConcurrencyData | null = null, pending: Promise<ConcurrencyData> | null = null, loadError = "", stale = false;
 const summaryCache = new Map<string, ConcurrencyMetrics | null>();
 const runtimeCache = new Map<string, {agent: number; active: number} | null>();
+// Refreshing card previews marks the snapshot stale: the next load fetches
+// it again, while synchronous readers (quick stats) keep the last one.
+export function invalidateConcurrencyData(): void { stale = true; }
 export function loadConcurrencyData(refresh = false): Promise<ConcurrencyData> {
   if (pending) return pending;
-  if (cached && !refresh) return Promise.resolve(cached);
+  if (cached && !refresh && !stale) return Promise.resolve(cached);
   // The dev UI can explicitly substitute a captured export for visual previews.
   const prototype = typeof document !== "undefined" && document.documentElement.hasAttribute("data-concurrency-prototype");
   pending = fetch(prototype ? "/api/usage/concurrency-prototype" : "/api/usage/parallelism").then(async response => {
@@ -17,7 +20,7 @@ export function loadConcurrencyData(refresh = false): Promise<ConcurrencyData> {
     // Go names the system timezone "Local" when TZ is unset. The loopback
     // service and browser share that timezone; Intl needs its IANA name.
     if (data.timezone === "Local") data = { ...data, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
-    cached = data; loadError = ""; summaryCache.clear(); runtimeCache.clear(); return data;
+    cached = data; stale = false; loadError = ""; summaryCache.clear(); runtimeCache.clear(); return data;
   }).catch(error => { loadError = error instanceof Error ? error.message : String(error); throw error; }).finally(() => { pending = null; });
   return pending;
 }
@@ -27,7 +30,7 @@ export function loadConcurrencyData(refresh = false): Promise<ConcurrencyData> {
 export function threadedSummaryWindow(data: ConcurrencyData, gap: number, repository: string, key: string, referenceTime: number, counting: ConcurrencyCounting = "workspace", fromTimestamp?: string): ConcurrencyMetrics | null {
   const bounds = quickStatsTimingBounds(data, key, referenceTime, fromTimestamp);
   if (!bounds) return null;
-  const threads = data.threads.filter(thread => !repository || thread.repository === repository);
+  const threads = data.threads.filter(thread => !repository || thread.project === repository);
   const sessions = clipIntervals(workSessions(threads), bounds);
   const spans = concurrencySpans(threads, "user", gap, counting);
   return concurrencyMetrics(spans, sessions, bounds);
@@ -44,7 +47,7 @@ function quickStatsTimingBounds(data: ConcurrencyData, key: string, end: number,
   return [from, end];
 }
 
-// Fixed to top-level sessions across all repositories: changing the chart's
+// Fixed to top-level conversations across all repositories: changing the chart's
 // counting unit or repository filter must not change these library totals.
 export function quickStatsRuntimeWindow(data: ConcurrencyData, gap: number, key: string, end: number, from?: string): { agent: number; active: number } | null {
   const bounds = quickStatsTimingBounds(data, key, end, from);
@@ -59,7 +62,7 @@ declare global {
     routeFromLocation?: () => void;
     pharosConcurrencySummary?: {
       open(): void;
-      load(): Promise<void>;
+      load(refresh?: boolean): Promise<void>;
       value(key: string, generatedAt: string | null, from?: string): { amount: string; title: string };
       runtime(metric: string, key: string, generatedAt: string | null, from?: string): { value: number | null; title: string };
       note(): string;
@@ -86,14 +89,14 @@ export function closeConcurrencyModal(): void {
 export function startConcurrencySummary(): void {
   window.pharosConcurrencySummary = {
     open: openConcurrencyModal,
-    async load() { await loadConcurrencyData(true); },
+    async load(refresh = true) { await loadConcurrencyData(refresh); },
     value(key, generatedAt, from) {
       if (!cached) return { amount: loadError ? "—" : "…", title: loadError || "Loading timing data" };
       const settings = readConcurrencySettings(), now = generatedAt ? Date.parse(generatedAt) : Date.now();
       const cacheKey = JSON.stringify([settings.counting, settings.gap, settings.repository, key, now, from]);
       if (!summaryCache.has(cacheKey)) summaryCache.set(cacheKey, threadedSummaryWindow(cached, settings.gap, settings.repository, key, now, settings.counting, from));
       const result = summaryCache.get(cacheKey);
-      return { amount: result ? `${result.average.toFixed(2)}×` : "—", title: result ? `Average concurrent ${settings.counting === "agent" ? "sessions (root conversations)" : "workspaces"} over ${key === "today" ? "today so far" : `the full ${key} window`}, including idle time · ${settings.gap}-minute turn gap · ${settings.repository || "all repositories"}` : `Incomplete timing coverage for this window. Available: ${cached.period_start} – ${cached.period_end}.` };
+      return { amount: result ? `${result.average.toFixed(2)}×` : "—", title: result ? `Average concurrent ${settings.counting === "agent" ? "conversations (top-level conversations)" : "workspaces"} over ${key === "today" ? "today so far" : `the full ${key} window`}, including idle time · ${settings.gap}-minute turn gap · ${settings.repository || "all repositories"}` : `Incomplete timing coverage for this window. Available: ${cached.period_start} – ${cached.period_end}.` };
     },
     runtime(metric, key, generatedAt, from) {
       if (!cached || loadError) return {value: null, title: loadError || "Loading timing data"};
@@ -102,12 +105,12 @@ export function startConcurrencySummary(): void {
       if (!runtimeCache.has(cacheKey)) runtimeCache.set(cacheKey, quickStatsRuntimeWindow(cached, gap, key, end, from));
       const result = runtimeCache.get(cacheKey);
       if (!result) return {value: null, title: `Incomplete timing coverage for this window. Available: ${cached.period_start} – ${cached.period_end}.`};
-      return {value: metric === "agent_time_ms" ? result.agent : result.active, title: `Estimated ${metric === "agent_time_ms" ? "summed top-level session time; simultaneous sessions count separately" : "wall-clock time with a top-level session active; overlap counts once"} · available transcript timings · ${gap}-minute turn gap · all repositories`};
+      return {value: metric === "agent_time_ms" ? result.agent : result.active, title: `Estimated ${metric === "agent_time_ms" ? "summed top-level conversation time; simultaneous conversations count separately" : "wall-clock time with a top-level conversation active; overlap counts once"} · available transcript timings · ${gap}-minute turn gap · all repositories`};
     },
     note() {
       const settings = readConcurrencySettings();
       const range = cached ? resolveConcurrencyRange(cached, settings) : null;
-      return `Parallelism: ${settings.counting === "agent" ? "sessions (root conversations)" : "workspaces"} · full-window average, including idle time · ${settings.gap}-minute turn gap · ${settings.repository || "all repositories"}${range ? ` · chart ${range.startDay}${range.startDay === range.endDay ? "" : ` – ${range.endDay}`}${settings.zoom ? " (zoomed)" : ""}` : ""}${cached ? ` · timing coverage ${cached.period_start} – ${cached.period_end}` : loadError ? ` · ${loadError}` : ""}`;
+      return `Parallelism: ${settings.counting === "agent" ? "conversations (top-level conversations)" : "workspaces"} · full-window average, including idle time · ${settings.gap}-minute turn gap · ${settings.repository || "all repositories"}${range ? ` · chart ${range.startDay}${range.startDay === range.endDay ? "" : ` – ${range.endDay}`}${settings.zoom ? " (zoomed)" : ""}` : ""}${cached ? ` · timing coverage ${cached.period_start} – ${cached.period_end}` : loadError ? ` · ${loadError}` : ""}`;
     },
   };
 }

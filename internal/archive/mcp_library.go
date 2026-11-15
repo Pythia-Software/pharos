@@ -15,7 +15,6 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -93,14 +92,30 @@ func (m *mcpServer) afterAnswer(pending []byte) {
 
 // restartMCP replaces this process with a fresh run of executable, this
 // process's own. The PID and stdio stay, so the agent client stays connected.
-// It returns only on failure.
+// It returns only on failure, including on platforms that cannot replace a
+// process (errProcessReplaceUnsupported).
 func restartMCP(executable string, pending []byte) error {
 	fmt.Fprintln(os.Stderr, "Pharos MCP: restarting after a memory fault while reading the catalog")
-	return syscall.Exec(executable, os.Args, append(os.Environ(), mcpPendingEnv+"="+base64.StdEncoding.EncodeToString(pending)))
+	return replaceProcess(executable, os.Args, append(os.Environ(), mcpPendingEnv+"="+base64.StdEncoding.EncodeToString(pending)))
 }
+
+var errProcessReplaceUnsupported = fmt.Errorf("replacing the process is not supported on this platform: %w", errors.ErrUnsupported)
+
+// replaceProcess is replaceProcessNative; tests replace it to observe the
+// replacement without one.
+var replaceProcess = replaceProcessNative
 
 func (m *mcpServer) handle(request map[string]any) map[string]any {
 	method := firstString(request["method"])
+	if scope := m.askFileScope(); len(scope) > 0 {
+		if method == "tools/list" {
+			tools := append([]map[string]any{}, mcpTools...)
+			return mcpResult(request, map[string]any{"tools": append(tools, askReadAttachmentTool)})
+		}
+		if method == "tools/call" && firstString(mapValue(request["params"])["name"]) == "read_attached_file" {
+			return readAskAttachment(request, scope)
+		}
+	}
 	if method != "tools/list" && method != "tools/call" {
 		return handleMCP(nil, request)
 	}
@@ -397,13 +412,14 @@ func releasedRecently(catalogPath string) bool {
 
 // checkLibrary runs the library guards before a direct open. Checking the
 // volume shells out to diskutil (~0.1 s), so it is skipped while the library
-// directory is the same one on the same device as when it last passed.
+// directory is the same one on the same device as when it last passed. Without
+// the directory's identity there is no reuse key, so every check runs in full.
 func (m *mcpServer) checkLibrary(config Config) error {
 	identity := m.identity
 	key := ""
 	if info, err := os.Stat(filepath.Dir(config.Path)); err == nil {
-		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-			key = fmt.Sprint(config.Path, "|", config.VolumeID, "|", stat.Dev, "|", stat.Ino)
+		if directory, err := localIdentityText(info); err == nil {
+			key = fmt.Sprint(config.Path, "|", config.VolumeID, "|", directory)
 		}
 	}
 	if key != "" && key == m.verified {

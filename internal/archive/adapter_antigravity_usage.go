@@ -57,7 +57,7 @@ func (a *antigravityAdapter) requestsDatabase(id string) string {
 // step each generated. A missing database has none.
 func (a *antigravityAdapter) requests(id string) (map[int64]antigravityRequest, error) {
 	path := a.requestsDatabase(id)
-	if _, err := os.Stat(path); err != nil {
+	if _, err := a.files().Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
@@ -65,11 +65,7 @@ func (a *antigravityAdapter) requests(id string) (map[int64]antigravityRequest, 
 	}
 	// An idle conversation's database may be stored compressed: decoded into
 	// the reader's lease when its conversation is parsed (phase 3).
-	readable, err := a.files().Database(path)
-	if err != nil {
-		return nil, err
-	}
-	db, err := openReadOnlySQLite(readable)
+	db, err := a.files().SQLite(path)
 	if err != nil {
 		return nil, err
 	}

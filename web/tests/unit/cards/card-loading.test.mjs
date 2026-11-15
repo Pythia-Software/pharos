@@ -2,8 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as core from "@pythia-software/query-table-core";
 import { cardLoadingPresentation } from "../../../src/card-loading-model";
-import { instantiateRecipe, queryRecipes } from "../../../src/curiosity-data";
-import { availableChartKinds, cardTemplates, saveCardTemplate } from "../../../src/card-library-model";
+import { instantiateRecipe, queryRecipes, supportsToday } from "../../../src/curiosity-data";
 import { boxCoverHeight } from "../../../src/compact-box-model";
 const query = clause => ({ ...core.EMPTY_QUERY, aggregations: [{ id: "m", op: "count", groupBy: ["tool_name"], ...clause }] });
 
@@ -59,33 +58,12 @@ test("compact box covers size their placeholder to the visible rows", () => {
   assert.equal(cardLoadingPresentation(instantiateRecipe(recipe, 7).query, { recipe }).height, boxCoverHeight(recipe.cover.maxGroups, true));
 });
 
-test("chart heights persist through template edits and pairing pies remain editable", t => {
-  const before = global.window, storage = new Map();
-  global.window = { dispatchEvent() {}, pharosPrefs: { get: (key, fallback) => storage.get(key) ?? fallback, set: (key, value) => storage.set(key, value) } };
-  t.after(() => { global.window = before; });
+test("an authored chart height sizes the loading cover", () => {
   const recipe = queryRecipes.find(recipe => recipe.id === "usage-models");
-  saveCardTemplate(recipe.id, { title: recipe.title, description: recipe.description, days: 7, cover: { ...recipe.cover, height: 360 } });
-  const saved = cardTemplates().find(item => item.id === recipe.id);
-  assert.equal(saved.cover.height, 360);
-  assert.equal(cardLoadingPresentation(instantiateRecipe(saved, 7).query, { recipe: saved }).height, 360);
-  assert.throws(() => saveCardTemplate(recipe.id, { title: recipe.title, description: recipe.description, days: 7, cover: { ...recipe.cover, height: 20 } }), /height/);
-  const pairing = queryRecipes.find(recipe => recipe.id === "model-conversation-reach");
-  assert.ok(availableChartKinds(pairing).includes("pie"));
-  saveCardTemplate(pairing.id, { title: pairing.title, description: pairing.description, days: 7, cover: pairing.cover });
-  assert.equal(cardTemplates().find(item => item.id === pairing.id).cover.kind, "pie");
+  assert.equal(cardLoadingPresentation(instantiateRecipe(recipe, 7).query, { recipe, cover: { ...recipe.cover, height: 360 } }).height, 360);
 });
 
-
-test("eligible template defaults retain Today while fixed and completed-day cards reject it", t => {
-  const before = global.window, storage = new Map();
-  global.window = { dispatchEvent() {}, pharosPrefs: { get: (key, fallback) => storage.get(key) ?? fallback, set: (key, value) => storage.set(key, value) } };
-  t.after(() => { global.window = before; });
-  const recipe = queryRecipes.find(recipe => recipe.id === "usage-models");
-  saveCardTemplate(recipe.id, { title: recipe.title, description: recipe.description, days: 1, window: "today" });
-  const saved = cardTemplates().find(item => item.id === recipe.id);
-  assert.equal(saved.defaultWindow, "today");
-  assert.equal(instantiateRecipe(saved, saved.defaultWindow).window.mode, "today");
-  for (const other of queryRecipes.filter(recipe => recipe.dataset === "tl1_attempts" || recipe.weekday || recipe.trend?.completeDays || recipe.period)) {
-    assert.throws(() => saveCardTemplate(other.id, { title: other.title, description: other.description, days: 1, window: "today" }), /complete days|fixed period/);
-  }
+test("Today is offered only to cards with rolling, partial-day windows", () => {
+  assert.equal(supportsToday(queryRecipes.find(recipe => recipe.id === "usage-models")), true);
+  for (const other of queryRecipes.filter(recipe => recipe.dataset === "tl1_attempts" || recipe.weekday || recipe.trend?.completeDays || recipe.period)) assert.equal(supportsToday(other), false, other.id);
 });

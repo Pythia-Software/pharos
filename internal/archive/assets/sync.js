@@ -1,9 +1,10 @@
 (() => {
-  if (document.getElementById('pharosShareData')) return;
-  let status = null;
+  // The live status, and the snapshot the Settings query tables show.
+  let status = null, tableStatus = null;
   let busy = false;
   let timer = null;
   let activeRun = null;
+  let verificationRun = null;
   let runningIds = new Set();
   let openIssues = [];
   const node = (tag, text, className = '') => {
@@ -90,10 +91,6 @@
     .sync-controls select,.sync-controls input[type=number]{font:inherit;border:1px solid var(--line);border-radius:5px;padding:5px 8px;background-color:var(--bg);color:var(--ink)}
     .sync-controls select{padding-right:30px}
     .sync-controls>button{border:1px solid var(--line);padding:6px 12px;background:var(--bg)}
-    .sync-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-bottom:18px}
-    .sync-metric{background:var(--panel);padding:14px 16px;min-width:0}
-    .sync-metric span{display:block;color:var(--muted);font-size:var(--fs-sm)}
-    .sync-metric strong{display:block;font-size:var(--fs-2xl);font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
     .sync-result{display:inline-block;max-width:100%;box-sizing:border-box;white-space:normal;overflow-wrap:anywhere;padding:2px 7px;border:1px solid var(--line);border-radius:4px;font-size:var(--fs-xs)}
     .sync-result.attention{color:var(--warn);border-color:var(--warn)}
     .sync-disclosure>summary{cursor:pointer;font-weight:600;font-size:var(--fs-md)}
@@ -102,12 +99,12 @@
     .sync-separate>summary{cursor:pointer;font-size:var(--fs-sm);color:var(--muted)}
     #syncDashboard fieldset{border:0;padding:0;margin:14px 0 0}
     #syncDashboard legend{font-size:var(--fs-sm);color:var(--muted);margin-bottom:8px}
-    .sync-warning{border:1px solid var(--warn);padding:14px;border-radius:6px}
+    .sync-warning{border:1px solid var(--warn);padding:14px;border-radius:6px;overflow-wrap:anywhere}
     .sync-dialog{max-width:620px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:24px}
     .sync-dialog::backdrop{background:#0008}
     .header-sync[aria-busy=true] svg{animation:sync-spin 1.5s linear infinite}
     #syncDashboard [hidden]{display:none}
-    @media(max-width:760px){.sync-panel{padding:14px}.sync-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.sync-metric{padding:12px}}
+    @media(max-width:760px){.sync-panel{padding:14px}}
     @keyframes sync-spin{to{transform:rotate(360deg)}}
   `);
   document.head.append(style);
@@ -132,7 +129,7 @@
     }
     dialog.append(node('p', mode === 'full'
       ? 'Freshly copy available source evidence on this Mac, then reindex selected captures from every Mac. This can take a long time. It is stoppable and resumable. Historical evidence and catalog-only user records are preserved. Other Macs are re-indexed from retained captures, not recaptured remotely.'
-      : 'Reindex search, conversation documents, sessions, usage and tool ledgers from the messages the library already stores. No original source is required. This cannot recreate missing transcripts or source-only metadata. Your findings, preferences, identity links and retained history are preserved.'));
+      : 'Rebuild search and analysis indexes, agent sessions, usage records and tool records from the messages the library already stores. No original source is required. This cannot recreate missing transcripts or source-only metadata. Your findings, preferences, identity links and retained history are preserved.'));
     if (sources?.length) dialog.append(node('p', `Scope: ${sources.join(', ')}`));
     const actions = node('div', '', 'sync-actions');
     actions.append(button('Cancel', () => dialog.close()), button('Begin repair', async () => {
@@ -144,6 +141,13 @@
     document.body.append(dialog);
     dialog.showModal();
   }
+
+  const verify = (repair, sources) => call('/api/sync/verify', {all: true, repair, sources});
+  const verificationSummary = run => {
+    const v = run?.verification;
+    if (!v) return '';
+    return `Verification ${run.state === 'running' ? 'in progress' : run.state === 'interrupted' ? 'stopped' : run.state === 'failed' ? 'failed' : 'finished'}: ${number(v.checked)} inputs checked · ${number(v.passed)} passed · ${number(v.reindexed || 0)} reindexed · ${number(v.mismatch)} still mismatch · ${number(v.deferred)} deferred · ${number(v.errors)} errors.`;
+  };
 
   // Whether a run among `followed` (the ids running at the last poll) has
   // since finished having indexed something. A run that has left the list
@@ -198,20 +202,25 @@
     const dashboard = document.getElementById('syncDashboard');
     if (!dashboard || !status?.settings || (dashboard.contains(document.activeElement) && document.activeElement.matches('input,select'))) return;
     const focused = dashboard.contains(document.activeElement) ? document.activeElement.dataset.syncFocus : null;
+    // Scheduled work yields to manual maintenance. Older services only expose
+    // the shared busy flag, so retain that guard when the new field is absent.
+    const maintenanceBusy = status.maintenance_busy ?? Boolean(status.busy);
     // Keep the React tables and activity panel attached. Detaching a host
     // resets its scroll containers even when the React root is retained.
-    const retained = new Set(['backgroundSchedule', 'syncHistoryTables', 'syncSourceTables', 'syncDiagnosticTables', 'syncOperations'].map(id => document.getElementById(id)));
+    const retained = new Set(['backgroundProcessingWorkload', 'backgroundSchedule', 'syncHistoryTables', 'syncSourceTables', 'syncDiagnosticTables'].map(id => document.getElementById(id)));
     for (const child of [...dashboard.children]) if (!retained.has(child)) child.remove();
     // The schedule (Background Processing) is background.js's, at the top.
     const repairs = panel('Repair & maintenance', 'repairs', status.recovery_jobs?.some(job => ['interrupted', 'failed'].includes(job.state)));
-    repairs.append(node('p', 'For missing data or damaged indexes. These operations can take a long time; everyday capturing and indexing do not need them.', 'muted'));
+    repairs.append(node('p', 'Verify all & repair mismatches checks every available input, reindexes only confirmed mismatches, then verifies them again. Inputs that pass stay untouched. Full verification can take a long time and can be stopped.', 'muted'));
     const actions = node('div', '', 'sync-actions');
-    actions.append(button('Full recapture & reindex…', () => recovery('full')), button('Reindex from stored messages…', () => recovery('retained')), button('Verify all retained inputs', () => call('/api/sync/verify', {all: true})));
+    actions.append(button('Verify all & repair mismatches', () => verify(true)), button('Verify all retained inputs', () => verify(false)), button('Full recapture & reindex…', () => recovery('full')), button('Reindex from stored messages…', () => recovery('retained')));
+    for (const action of actions.children) action.disabled = maintenanceBusy;
     repairs.append(actions);
+    if (verificationRun?.verification) dashboard.append(node('p', verificationSummary(verificationRun), 'sync-verification-summary'));
     for (const job of status.recovery_jobs || []) {
       const line = node('p', `${job.mode} repair: ${job.state} · last progress ${when(job.updated_at)}${job.error ? ` · ${job.error}` : ''}`);
       const resume = button('Resume repair', () => recovery(job.mode, undefined, job.id));
-      resume.disabled = Boolean(status.busy);
+      resume.disabled = maintenanceBusy;
       line.append(resume); repairs.append(line);
     }
     for (const source of status.source_states || []) {
@@ -220,19 +229,41 @@
       if (state === 'untracked') continue;
       const labels = {pending: preservation.error ? 'Acquisition failed; inputs remain pending' : 'Newer inputs pending', indexed: 'Latest retained acquisition indexed'};
       const line = node('p', `${source.source_name} · ${labels[state]} `);
-      line.append(button('Repair this source…', () => recovery('full', [source.source_name])));
+      const repair = button('Repair this source…', () => recovery('full', [source.source_name]));
+      repair.disabled = maintenanceBusy;
+      line.append(repair);
       repairs.append(line);
     }
     dashboard.append(repairs);
     for (const issue of status.issues || []) {
       const warning = node('div', '', 'sync-warning');
-      warning.append(node('strong', 'Verifying indexed changes found a mismatch.'), node('p', `${issue.source_name} · ${issue.unit}`), button('View details / copy diagnostics', async () => {
+      warning.append(node('strong', 'Verifying indexed changes found a mismatch.'), node('p', `${issue.source_name} · ${issue.unit}`), node('p', 'Verify this source again to check whether the mismatch still exists. Repair reindexes only inputs that still mismatch and clears each warning after verification passes.'));
+      const issueActions = node('div', '', 'sync-actions');
+      const verifyAgain = button('Verify this source again', () => verify(false, [issue.source_name]));
+      const repair = button('Verify & repair this source', () => verify(true, [issue.source_name]));
+      const recapture = button('Full recapture & reindex…', () => recovery('full', [issue.source_name]));
+      for (const action of [verifyAgain, repair, recapture]) action.disabled = maintenanceBusy;
+      issueActions.append(verifyAgain, repair, button('View details / copy diagnostics', async () => {
         const data = await call('/api/sync/issues');
         const details = data.issues.find(item => item.id === issue.id);
         const dialog = node('dialog', '', 'sync-dialog');
-        dialog.append(node('h2', 'Index integrity issue'), node('pre', JSON.stringify(details, null, 2)), button('Copy diagnostics', () => navigator.clipboard.writeText(JSON.stringify(details, null, 2))), button('Close', () => dialog.close()));
+        const copyStatus = node('p'); copyStatus.setAttribute('role', 'status');
+        // Copying changes nothing to refresh, and native disabled would drop
+        // keyboard focus to the body while the write is pending: mark the
+        // control aria-disabled and ignore repeat presses until it settles.
+        const copy = node('button', 'Copy diagnostics'); copy.type = 'button';
+        let copying = false;
+        copy.onclick = async () => {
+          if (copying) return;
+          copying = true; copy.setAttribute('aria-disabled', 'true'); copyStatus.textContent = '';
+          try { await window.pharosHost.clipboard.writeText(JSON.stringify(details, null, 2)); copyStatus.textContent = 'Diagnostics copied.'; }
+          catch { copyStatus.textContent = 'Could not copy diagnostics. Select and copy the details above.'; }
+          finally { copying = false; copy.removeAttribute('aria-disabled'); }
+        };
+        dialog.append(node('h2', 'Index integrity issue'), node('pre', JSON.stringify(details, null, 2)), copy, copyStatus, button('Close', () => dialog.close()));
         dialog.addEventListener('close', () => dialog.remove()); document.body.append(dialog); dialog.showModal();
-      }), button('Full recapture & reindex…', () => recovery('full', [issue.source_name])));
+      }), recapture);
+      warning.append(issueActions);
       dashboard.prepend(warning);
     }
     if (focused) [...dashboard.querySelectorAll('[data-sync-focus]')].find(element => element.dataset.syncFocus === focused)?.focus({preventScroll: true});
@@ -243,13 +274,20 @@
     busy = true;
     try {
       const activity = await call('/api/activity');
+      verificationRun = (activity.runs || []).find(run => run.kind === 'verification') || verificationRun;
       renderHeader(activity);
       announceChanges(activity);
       if (document.getElementById('settings')?.classList.contains('active') || !status || status.library_empty) {
         const latest = await call('/api/sync/status');
-        // Keep history still while it is being reviewed. Page visits, Refresh
-        // and actions replace it; activity, source status and alerts stay live.
-        status = automatic && status?.settings ? {...latest, history: status.history} : latest;
+        if (!automatic || !tableStatus?.settings) {
+          try { latest.operation_history = (await call('/api/operations')).journal?.recent || []; }
+          catch (error) { latest.operation_history_error = error.message; }
+        }
+        // Query tables stay still while they are being reviewed: page visits,
+        // their Run Now and auto-refresh, and actions replace them; activity
+        // and alerts stay live.
+        status = latest;
+        if (!automatic || !tableStatus?.settings) tableStatus = latest;
         renderDashboard();
         window.dispatchEvent(new Event('pharos:sync-status'));
       }
@@ -261,11 +299,21 @@
         window.pharosLibrary?.renderAlerts?.();
       }
     } catch (error) { if (!status) showError(error.message); }
-    finally { busy = false; clearTimeout(timer); timer = setTimeout(() => refresh({automatic: true}), 3000); }
+    finally { busy = false; schedule(); }
   }
+  // Follow a run, Settings and first-run setup closely; otherwise the header
+  // only needs to notice that something started. A hidden page asks nothing
+  // and catches up when it is shown.
+  function schedule() {
+    clearTimeout(timer);
+    if (document.hidden) return;
+    const close = activeRun || status?.library_empty || document.getElementById('settings')?.classList.contains('active');
+    timer = setTimeout(() => refresh({automatic: true}), close ? 3000 : 10000);
+  }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else refresh({automatic: true}); });
   window.addEventListener('pharos:route', () => refresh());
-  window.pharosSync = {status: () => status, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
+  window.pharosSync = {status: () => status, tableStatus: () => tableStatus, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.
-    finishedRunsChanged, runningRun, preservationState, format: {seconds, memory, when, number, percent}};
+    finishedRunsChanged, runningRun, preservationState, verificationSummary, format: {seconds, memory, when, number, percent}};
   refresh();
 })();

@@ -44,7 +44,7 @@ export function ExploreSearch({ kind, active, summary, error, onClear, children 
         </>}
       </div>
     </div>
-    {open ? <ModalSurface title="Search within work" onClose={() => setOpen(false)} returnFocus={invoker.current} className="qt-modal explore-search-modal" initialFocus="textarea, input:not([type=checkbox])">
+    {open ? <ModalSurface title="Search within this workspace" onClose={() => setOpen(false)} returnFocus={invoker.current} className="qt-modal explore-search-modal" initialFocus="textarea, input:not([type=checkbox])">
       <div className="qt-overlay-body">{children(() => setOpen(false), draftKind, setDraftKind)}</div>
     </ModalSurface> : null}
   </>;

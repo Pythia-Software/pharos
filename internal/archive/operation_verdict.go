@@ -10,8 +10,9 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 // The eject verdict (docs/background-work.md §4.2) is computed from what
@@ -211,6 +212,33 @@ func computeEjectVerdict(in verdictInput) ejectVerdict {
 	return result
 }
 
+// updateInputs keeps what stopping this process for an app update
+// interrupts: its own operations and writers no operation accounts for.
+// Unlike an eject, an update leaves the drive mounted, so another process's
+// work (its leases, its operations and the capture locks it takes) carries
+// on after this one exits. The app refuses an update while a command runs
+// from its own bundle.
+func updateInputs(in verdictInput) verdictInput {
+	return verdictInput{ops: slices.DeleteFunc(slices.Clone(in.ops), func(view opView) bool { return view.Foreign }),
+		unregistered: in.unregistered, unreachable: in.unreachable, fresh: in.fresh}
+}
+
+// updateRefusal is why an update must not stop work now, as one sentence,
+// or "" when every holder stops at its next safe point within the release's
+// budget (safe or safe-in), as it does for an eject.
+func updateRefusal(v ejectVerdict) string {
+	if v.Verdict != verdictBusy && v.Verdict != verdictUnsafe {
+		return ""
+	}
+	labels := []string{}
+	for _, blocker := range v.Blockers {
+		if (blocker.Verdict == verdictBusy || blocker.Verdict == verdictUnsafe) && !slices.Contains(labels, blocker.Label) {
+			labels = append(labels, blocker.Label)
+		}
+	}
+	return "The update waits for " + lowerFirst(joinLabels(labels)) + ", which cannot stop in time."
+}
+
 // leaseLabel names a lease's work for people: "Capture (Terminal), in
 // another process (pharos capture)".
 func leaseLabel(info leaseInfo) string {
@@ -283,8 +311,8 @@ func verdictSummary(v ejectVerdict) string {
 }
 
 // verdictHeadline is the verdict in one short clause (server text, §7.1):
-// "Safe to eject in ~2 s: stops back up first". The details, including the
-// release's 7 s limit, are in the summary.
+// "Safe to eject in ~2 s". What ejecting stops, and the release's 7 s
+// limit, are in the summary.
 func verdictHeadline(v ejectVerdict) string {
 	labels := func(verdict string) string { return lowerFirst(blockerLabels(v.Blockers, verdict)) }
 	switch v.Verdict {
@@ -294,22 +322,9 @@ func verdictHeadline(v ejectVerdict) string {
 		return "Eject waits for " + labels(verdictBusy)
 	case verdictSafeIn:
 		if v.ETASeconds != nil {
-			return fmt.Sprintf("Safe to eject in ~%s: stops %s first", secondsLabel(*v.ETASeconds), labels(verdictSafeIn))
+			return fmt.Sprintf("Safe to eject in ~%s", secondsLabel(*v.ETASeconds))
 		}
-		unit := "step"
-		for _, blocker := range v.Blockers {
-			if blocker.Verdict == verdictSafeIn && blocker.ETASeconds == nil && blocker.unit != "" && blocker.unit != "byte" {
-				unit = blocker.unit
-				break
-			}
-		}
-		return fmt.Sprintf("Safe to eject after the current %s: stops %s", unit, labels(verdictSafeIn))
-	}
-	if readers := labels(verdictSafe); readers != "" {
-		return "Safe to eject: stops " + readers
-	}
-	if v.Checked != "fresh" {
-		return "Safe to eject; checked again on eject"
+		return "Safe to eject in a moment"
 	}
 	return "Safe to eject"
 }
@@ -334,9 +349,13 @@ func lowerFirst(text string) string {
 // tests can show that a polled read takes none (§4.2).
 var lockScans, lockProbes atomic.Int64
 
+// Tests replace only probeLockFile's lock calls to exercise adapter failures.
+var lockProbeFile = filelock.Lock
+
 // probeLockFile reports whether another holder has path's lock
 // exclusively (a shared, non-blocking lock cannot be taken), as captureActive
-// does. A missing file is not held; any other failure is an error.
+// does. A missing file is not held; any other failure, including a platform
+// without locks, is an error: it never vouches for a free lock.
 func probeLockFile(path string) (bool, error) {
 	lockProbes.Add(1)
 	file, err := os.Open(path)
@@ -347,14 +366,14 @@ func probeLockFile(path string) (bool, error) {
 		return false, err
 	}
 	defer file.Close()
-	switch err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); {
+	switch err := lockProbeFile(file, filelock.Shared, filelock.Try); {
 	case err == nil:
-		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = filelock.Unlock(file)
 		return false, nil
-	case errors.Is(err, syscall.EWOULDBLOCK):
+	case errors.Is(err, filelock.ErrContended):
 		return true, nil
 	default:
-		return false, err
+		return false, fmt.Errorf("probe lock %s: %w", path, err)
 	}
 }
 

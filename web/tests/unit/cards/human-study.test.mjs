@@ -1,3 +1,5 @@
+import messagesDocument from "../../../../schemas/messages.schema.json";
+import { capabilities } from "../../support/query-server.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EMPTY_QUERY, applyQuery, decodeQuery, loadSchema } from "@pythia-software/query-table-core";
@@ -100,7 +102,7 @@ test("supplied-format percentages include context-only messages, exclude automat
   assert.equal(contributionSignals(image).file, false, "an image marker does not also count as a file reference");
   assert.equal(contributionSignals(automated).image, false);
   assert.equal(study.evidence.length, 2);
-  assert.ok(study.evidence.every(evidence => evidence.url.includes("q_writing_messages=")));
+  assert.ok(study.evidence.every(evidence => new URL(evidence.url, "http://study.test").searchParams.get("analyze_data") === "messages"));
   assert.match(study.sampleLabel, /3 assessed contributions/);
 });
 
@@ -117,7 +119,7 @@ test("example percentages use each shared workspace directory's contribution den
   const rows = [row("a", "Here is context", { pasted_words: 20 }), row("b", "My own direction"), row("c", "Another direction")];
   const study = buildHumanStudy("examples", rows, [{ id: "a", location: "/repo/tree", repository_name: "repo" }, { id: "b", location: "/repo/tree", repository_name: "repo" }, { id: "c", location: "/repo/other", repository_name: "repo" }], 7, now, "UTC");
   assert.deepEqual(study.workspaceRows.map(row => [row.location, row.count, row.total, row.value]), [["/repo/tree", 1, 2, .5], ["/repo/other", 0, 1, 0]]);
-  assert.ok(study.workspaceRows[0].url.includes("q_writing_messages="));
+  assert.ok(new URL(study.workspaceRows[0].url, "http://study.test").searchParams.get("analyze_data") === "messages");
 });
 
 for (const ids of ["work", "workspace", "mixed"]) test(`directory drill-down matches its contribution totals with ${ids} IDs`, () => {
@@ -139,8 +141,12 @@ for (const ids of ["work", "workspace", "mixed"]) test(`directory drill-down mat
   ];
   const study = buildHumanStudy("examples", [...rows, ...excluded], workspaces, 7, now, "UTC");
   const directory = study.workspaceRows.find(group => group.location === "/repo/tree");
-  const query = decodeQuery(new URL(directory.url, "http://study.test").searchParams.get("q_writing_messages"));
-  const actual = applyQuery([...rows, ...excluded], query, schema, { now }).rows;
+  const params = new URL(directory.url, "http://study.test").searchParams;
+  assert.equal(params.get("analyze_data"), "messages");
+  const query = decodeQuery(params.get("q_messages"));
+  const source = [...rows, ...excluded].map(message => ({ ...message, role: "user", has_authorship: true,
+    authorship_sent_at: message.sent_at, authorship_repository_name: message.repository_name, authorship_title: message.title }));
+  const actual = applyQuery(source, query, loadSchema(messagesDocument), { now }).rows;
   assert.deepEqual(actual.map(message => message.id).sort(), rows.map(message => message.id).sort());
   assert.equal(actual.length, directory.total);
   assert.equal(buildHumanStudy("examples", actual, workspaces, 7, now, "UTC").value, directory.value);
@@ -157,7 +163,8 @@ for (const firstDays of [7, 30]) test(`mixed-window directory loads stay complet
   ];
   const workspaces = rows.map(message => ({ id: message.work_id, location: `/repo/${message.work_id}`, repository_name: "repo" }));
   global.fetch = async (url, init) => {
-    const request = JSON.parse(init.body);
+    if (url.endsWith("capabilities")) return Response.json(capabilities());
+    const request = JSON.parse(init.body).result;
     calls.push({ url, request });
     if (url.includes("writing_messages")) {
       const from = Date.parse(request.where[0].value), days = (now - from) / day - 30;
@@ -193,7 +200,8 @@ test("the loader shares bounded paged evidence and honors additional source filt
   const prior = global.fetch, calls = [];
   const rows = Array.from({ length: 501 }, (_, index) => row(String(index), "Some words", { typed_words: index === 500 ? 100 : 2, repository_name: index === 500 ? "target" : "other" }));
   global.fetch = async (_url, init) => {
-    const request = JSON.parse(init.body); calls.push(request);
+    if (_url.endsWith("capabilities")) return Response.json(capabilities());
+    const request = JSON.parse(init.body).result; calls.push(request);
     return new Response(JSON.stringify({ total: rows.length, rows: rows.slice(request.offset, request.offset + request.limit) }), { status: 200 });
   };
   t.after(() => { global.fetch = prior; });
@@ -213,8 +221,8 @@ test("the loader shares bounded paged evidence and honors additional source filt
 test("oversized or incomplete evidence produces an error instead of a partial score", async t => {
   const prior = global.fetch;
   t.after(() => { global.fetch = prior; });
-  global.fetch = async () => new Response(JSON.stringify({ total: 20001, rows: [] }), { status: 200 });
+  global.fetch = async url => url.endsWith("capabilities") ? Response.json(capabilities()) : new Response(JSON.stringify({ total: 20001, rows: [] }), { status: 200 });
   await assert.rejects(createHumanStudyLoader(now, schema)("volume", EMPTY_QUERY, 7), /exceeds 20,000/);
-  global.fetch = async () => new Response(JSON.stringify({ total: 2, rows: [row("a", "Only one")] }), { status: 200 });
+  global.fetch = async url => url.endsWith("capabilities") ? Response.json(capabilities()) : new Response(JSON.stringify({ total: 2, rows: [row("a", "Only one")] }), { status: 200 });
   await assert.rejects(createHumanStudyLoader(now, schema)("volume", EMPTY_QUERY, 7), /incomplete/);
 });

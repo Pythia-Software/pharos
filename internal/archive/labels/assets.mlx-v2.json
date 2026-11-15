@@ -1,0 +1,26 @@
+{
+  "model": {
+    "name": "kestrel-68m-tpool",
+    "version": "2",
+    "url": "https://github.com/Pythia-Software/pharos/releases/download/labeler-{name}-{version}/{name}-{version}.tar.gz",
+    "sha256": "6ce7bea0cd466f8f2c7252748c473916678c2ed201f36c85fbd719111774fd01",
+    "size": 648971601,
+    "default_variant": "fp32"
+  },
+  "onnxruntime": {
+    "name": "onnxruntime-osx-arm64",
+    "version": "1.31.1",
+    "url": "https://github.com/microsoft/onnxruntime/releases/download/v{version}/{name}-{version}.tgz",
+    "sha256": "2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f",
+    "size": 36936435,
+    "path": "onnxruntime-osx-arm64-1.31.1/lib/libonnxruntime.1.31.1.dylib"
+  },
+  "agent_events_model": {
+    "url": "https://github.com/Pythia-Software/pharos/releases/download/labeler-{name}-{version}/{name}-{version}.tar.gz",
+    "name": "jayhawk-68m",
+    "version": "2",
+    "sha256": "0da680bf1fb59d62c5ad5a5f36184bc72290770eef31306f0244759ecffab197",
+    "size": 665999964,
+    "default_variant": "fp32"
+  }
+}

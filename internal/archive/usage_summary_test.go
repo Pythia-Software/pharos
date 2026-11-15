@@ -33,6 +33,20 @@ func TestUsageHistory(t *testing.T) {
 	if got := read(); got != "2023-01-01T00:00:00Z" {
 		t.Fatalf("history after older import: %v", got)
 	}
+	// Activity counts top-level conversations by their last activity: a
+	// conversation that began long ago and ended recently is recent work.
+	catalog.now = func() time.Time { return time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC) }
+	execTx(t, catalog.DB,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,started_at,ended_at,agent_depth) VALUES
+			('today','w-history','codex','local','today','2026-10-31T09:00:00Z',NULL,0),
+			('week','w-history','codex','local','week','2026-10-27T09:00:00Z','2026-10-27T10:00:00Z',0),
+			('resumed','w-history','codex','local','resumed','2026-06-01T09:00:00Z','2026-10-20T09:00:00Z',0),
+			('agent','w-history','codex','local','agent','2026-10-31T09:00:00Z',NULL,1)`)
+	active := libraryStatusCall(t, server, "/api/usage/history")["active_conversations"]
+	want := map[string]any{"1": 1.0, "7": 2.0, "30": 3.0, "90": 3.0, "180": 3.0, "365": 3.0, "all": 6.0}
+	if !reflect.DeepEqual(active, want) {
+		t.Fatalf("active conversations: %v, want %v", active, want)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := catalog.UsageHistory(ctx); err != context.Canceled {
@@ -400,5 +414,38 @@ func TestQuickStatsShortUsageUsesObservedHour(t *testing.T) {
 		if w.Key == "yesterday" && w.Tokens != 2030 {
 			t.Fatalf("yesterday: %+v", w)
 		}
+	}
+}
+
+func TestUsageSummaryReportedTotalsExcludeEstimates(t *testing.T) {
+	c, _ := testCatalog(t)
+	c.background = func(OperationSpec, func(context.Context, *Op) error) bool { return false }
+	ingestUsageFixture(t, c)
+	c.now = func() time.Time { return time.Date(2026, 9, 21, 2, 15, 0, 0, time.UTC) }
+	execTx(t, c.DB,
+		`UPDATE agent_session_usage SET model='claude-sonnet-4-20250514'`,
+		`UPDATE agent_session_usage SET is_estimate=1, input_tokens_available=0 WHERE usage_hour='2026-09-20T23:00:00Z'`)
+	summary, err := c.UsageSummary(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	windows := map[string]*usageSummaryWindow{}
+	for _, w := range summary["windows"].([]*usageSummaryWindow) {
+		windows[w.Key] = w
+	}
+	mixed, reported, empty := windows["6h"], windows["1h"], windows["5m"]
+	if !mixed.IsEstimate || mixed.Tokens != 3050 || mixed.Reported.Tokens != 2030 || reported.Tokens != 1523 || reported.Reported.Tokens != 1523 {
+		t.Fatalf("mixed and reported counts: mixed=%+v reported=%+v", mixed, reported)
+	}
+	allCost, ok := mixed.CostUSD.(float64)
+	knownCost, known := mixed.Reported.CostUSD.(float64)
+	if !ok || !known || knownCost <= 0 || allCost <= knownCost || mixed.Reported.PriceStatus == "partial" {
+		t.Fatalf("mixed and reported costs: %+v", mixed)
+	}
+	if reflect.DeepEqual(mixed.CarbonTokens, mixed.Reported.CarbonTokens) || !reflect.DeepEqual(reported.CarbonTokens, reported.Reported.CarbonTokens) {
+		t.Fatalf("carbon components mixed=%v reported=%v", mixed.CarbonTokens, mixed.Reported.CarbonTokens)
+	}
+	if empty.Reported.Tokens != 0 || empty.Reported.CostUSD != nil || len(empty.Reported.CarbonTokens) != 0 {
+		t.Fatalf("empty reported usage: %+v", empty.Reported)
 	}
 }

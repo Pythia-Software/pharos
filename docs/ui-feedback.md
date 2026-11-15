@@ -13,13 +13,26 @@ never go into preference values or localStorage. Credentials and known token
 parameters are excluded from captured URLs; other query parameters are visible
 in the report preview.
 
-The send dialog defaults to a bug report and lists every included annotation and
-screenshot compactly; users may exclude annotations from this report. The
+**Copy feedback** also exports each attached screenshot to a private directory
+in the service's OS temporary storage (`$TMPDIR` on macOS, or `/tmp`) and includes
+a `file://` link beside that annotation in the copied Markdown. The image files
+remain available after **Clear on Copy**; the OS may eventually remove temporary
+files. Export or clipboard failures preserve the annotations for retry. Copying
+does not send a report to the hosted inbox.
+
+The send dialog has no report type: manual reports are sent as `feedback`, and
+Ask Pharos proposals keep the kind they were proposed with. It lists every
+included annotation and screenshot compactly; users may exclude annotations
+from this report. **Annotate an element** and the **Include recent logs** toggle
+sit below the contact email. The
 optional contact email is the **Contact email for feedback** app preference
 (Settings → App preferences), so it follows the library between Macs. The form
 prefills it, and editing or clearing it there updates the preference; the gear
 beside the field opens that setting. **Privacy** in the footer explains what a
-report shares. Sending succeeds only after the server
+report shares; **Review attached logs** appears beside it once logs are included.
+The close button keeps the draft. Once the report has a comment, an annotation
+or logs, **Discard** clears it, including its annotations and screenshots, and
+closes the dialog without sending. Sending succeeds only after the server
 confirms the matching report ID. Failed sends preserve the draft; retries of an
 unchanged payload reuse its ID, including after reopening the app. Editing a
 pending payload creates a new ID.
@@ -27,14 +40,23 @@ The reviewed selection and edited diagnostic logs are saved in IndexedDB.
 Closing or reopening keeps excluded annotations excluded; adding another
 annotation includes the new element without restoring prior exclusions.
 
-Diagnostics are included by default for bug reports and opt-in otherwise; once
-collected for a draft, the reviewer's choice stands. They are editable before sending, and capped at 64 KiB each for
+Diagnostics are opt-in and off by default; once collected for a draft, the
+reviewer's choice stands. They are editable before sending, and capped at 64 KiB each for
 browser errors, failed requests, and service stderr. Request diagnostics capture
 method, path, time, and status, never headers or bodies. Known credential formats
 and user home directory names are redacted. The Go executable mirrors stderr
 into a bounded memory tail; it does not create a log file. Reports and optional
 contact details are used for feedback follow-up. Resolution emails are manual.
 Submitted prompts are data for review; this service never executes them.
+
+Ask Pharos embeds this composer directly in its conversation with a separate
+draft and no inherited annotations or logs. Receiving or restoring a draft does
+not move keyboard focus. Sending requires **Approve and send feedback** after
+reviewing the report and optional contact email. An affirmative chat reply does
+not send it. **Keep draft** collapses the editor; **Review feedback** reopens it.
+**Discard draft** removes the proposal's local edits and prevents it reopening
+after reload; it does not retract feedback already submitted. Ask proposals keep
+their own edited drafts, retry IDs, and confirmed receipts on this browser.
 
 ## Boundaries and extraction
 

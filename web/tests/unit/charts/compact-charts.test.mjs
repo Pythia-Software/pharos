@@ -8,6 +8,60 @@ import assert from "node:assert/strict";
 import * as core from "@pythia-software/query-table-core";
 import { boxBytes, boxDetails, boxDuration, boxOutliers, boxWhiskerExtent, sharedBoxScale } from "../../../src/compact-box-model";
 import { compactPieSlices, pieWedgePath } from "../../../src/compact-pie-model";
+import { overflowTooltip } from "../../../src/overflow-tooltip";
+import { chartTooltipColors } from "../../../src/chart-tooltip";
+import { periodPopover, readChartPopover } from "../../../src/chart-popover-model";
+import { chartSeriesStyle } from "../../../src/chart-colors";
+import { installProjectColors } from "../../../src/project-colors";
+
+test("tooltip swatches preserve saved and provisional project colors and line positions", t => {
+  installProjectColors([{ id: "repository:app", key: "a".repeat(64), name: "app", kind: "repository", default_color: "#2a83a4", source: "Automatic palette" }]);
+  t.after(() => installProjectColors([]));
+  const saved = chartSeriesStyle("project_name", "app").color;
+  const provisional = chartSeriesStyle("project_name", "new project").color;
+  const colors = [null, saved, provisional, "#123456", "rgb(12, 34, 56)", "rgba(12, 34, 56, .5)", "var(--sea)", null];
+  assert.deepEqual(chartTooltipColors(JSON.stringify(colors)), colors);
+  installProjectColors([{ id: "repository:app", key: "a".repeat(64), name: "app", kind: "repository", default_color: "#2a83a4", custom_color: "#aa6633", source: "Automatic palette" }]);
+  assert.equal(chartTooltipColors(JSON.stringify([saved]))[0], chartSeriesStyle("project_name", "app").color, "hover swatches keep a live reference to an edited project");
+});
+
+test("tooltip swatches reject malformed metadata and arbitrary CSS while retaining valid rows", () => {
+  for (const value of [null, "invalid", "null", "{}", '"#123456"']) assert.deepEqual(chartTooltipColors(value), []);
+  const invalid = [4, {}, false, "url(https://example.com/image)", "var(--sea, url(image))", "var(--sea);color:red", "var()", "var(--sea, #123456);background:red"];
+  assert.deepEqual(chartTooltipColors(JSON.stringify([...invalid, "var(--sea, #123456)", "#abcdef"])), [...invalid.map(() => null), "var(--sea, #123456)", "#abcdef"]);
+  const blends = ["color-mix(in srgb, var(--a) 50%, white)", "color-mix(in srgb,var(--m, #e5893f) 62%,var(--bg))", "color-mix(in oklch, 30% #123456, rgb(1, 2, 3))", "var(--a, color-mix(in srgb, #fff 40%, var(--b, #000)))"];
+  const unsafe = ["color-mix(in srgb, url(x) 50%, white)", "color-mix(in srgb, #fff)", "color-mix(in srgb, #fff, #000, #111)", "color-mix(in srgb, #fff 50%, #000));color:red", "color-mix(in srgb, #fff 50%, #000);background:url(x)"];
+  assert.deepEqual(chartTooltipColors(JSON.stringify([...blends, ...unsafe])), [...blends, ...unsafe.map(() => null)], "blended series colors keep their swatches; other CSS does not");
+});
+
+test("tooltip swatches cover every series color a chart draws", () => {
+  const colors = [chartSeriesStyle("model_effort", "claude-opus-5-5 · high").color, chartSeriesStyle("estimate", "provisional").color, chartSeriesStyle("family", "C.question").color, chartSeriesStyle("model_family", "gpt-5").color];
+  assert.deepEqual(chartTooltipColors(JSON.stringify(colors)), colors);
+});
+
+test("period popovers list folded parts and keep only well-formed content from marks", () => {
+  const series = [{ key: "s:a", label: "Alpha", color: "#aabbcc" }, { key: "other", label: "Other (6)", color: "#85909b" }];
+  const bucket = { key: "d", date: new Date(2026, 9, 1), values: { "s:a": 1, other: 21 }, parts: { other: [["p1", 1], ["p2", 2], ["p3", 3], ["p4", 4], ["p5", 5], ["p6", 6]] } };
+  const content = periodPopover(bucket, series, { heading: "Oct 1", additive: true, format: String, suffix: " calls", empty: "Nothing", href: item => `/x?series=${item.key}` });
+  assert.deepEqual(content.rows.map(row => [row.label, row.parts, row.more, row.href]), [
+    ["Other (6)", [["p6", "6"], ["p5", "5"], ["p4", "4"], ["p3", "3"]], 2, "/x?series=other"],
+    ["Alpha", undefined, undefined, "/x?series=s:a"],
+  ]);
+  assert.deepEqual(content.totals, [["Total", "22 calls"]]);
+  const marked = readChartPopover(JSON.stringify({ ...content, notes: ["7d rolling average", 4], rows: [...content.rows, { label: "Bad", value: 3 }, { label: "Mix", value: "1", color: "color-mix(in srgb, var(--a) 50%, white)" }, { label: "CSS", value: "1", color: "red;background:url(x)" }] }));
+  assert.deepEqual(marked.notes, ["7d rolling average"]);
+  assert.deepEqual(marked.rows.map(row => [row.label, row.color, row.href]), [["Other (6)", "#85909b", undefined], ["Alpha", "#aabbcc", undefined], ["Mix", "color-mix(in srgb, var(--a) 50%, white)", undefined], ["CSS", undefined, undefined]], "hover bubbles drop links, malformed rows and unsafe colors");
+  for (const value of [null, "invalid", "{}", '{"heading":1,"rows":[]}']) assert.equal(readChartPopover(value), null);
+});
+
+test("legend hover adds hidden label text and keeps distinct detail", () => {
+  const label = "repository/branches/long-shared-prefix/feature-one";
+  assert.equal(overflowTooltip(label, undefined, false), undefined);
+  assert.equal(overflowTooltip(label, label, false), undefined);
+  assert.equal(overflowTooltip(label, undefined, true), label);
+  assert.equal(overflowTooltip(label, `${label}\n42 calls`, false), "42 calls");
+  assert.equal(overflowTooltip(label, `${label}\n42 calls`, true), `${label}\n42 calls`);
+});
 
 test("pie geometry divides a shared circle evenly and conserves a folded Other", () => {
   const result={id:"pie",coverage:"exact",groupCount:4,buckets:Array.from({length:4},(_,i)=>({keys:[String(i)],value:1,count:1}))};
@@ -56,7 +110,7 @@ test("sparse skewed box whiskers meet interpolated quartiles without passing the
   const summary=core.boxSummary([28798,729273,3177124,1728195886],"tukey");
   assert.equal(summary.high,3177124);assert.equal(summary.q3,434431814.5);assert.deepEqual(summary.outliers,[1728195886]);
   const tooltip=boxDetails("Codex GPT 6.1 Sol Ultra",summary,"tokens");
-  assert.match(tooltip,/Observed whisker range: 28,798 – 3,177,124/);assert.match(tooltip,/Max: 1,728,195,886/);assert.match(tooltip,/Interpolated quartile/);
+  assert.match(tooltip,/Observed whisker range: 28.8K – 3.18M/);assert.match(tooltip,/Max: 1.73B/);assert.match(tooltip,/Interpolated quartile/);
 });
 
 test("duration and byte boxes show readable units with exact values in hover, without changing count or currency formats", () => {
@@ -70,7 +124,7 @@ test("duration and byte boxes show readable units with exact values in hover, wi
   assert.match(boxDetails("command",summary,"ms"),/Max: 6s \(6,000 ms\)/);
   assert.ok(!boxDetails("command",summary,"ms").includes("$"));
   assert.match(boxDetails("count",summary,"calls"),/Median: 2,000 · Mean: 3,000/);
-  assert.match(boxDetails("cost",summary,"USD"),/Median: \$2,000\.00/);
+  assert.match(boxDetails("cost",summary,"USD"),/Median: \$2,000 · Mean: \$3,000/);
   assert.equal(boxBytes(0),"0 B");
   assert.equal(boxBytes(1536),"1.5 KiB");
   assert.equal(boxBytes(1073741824),"1 GiB");

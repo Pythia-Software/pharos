@@ -24,7 +24,7 @@ export function usePreviewReload(
       if (controller.signal.aborted) return;
       if (preview) setPreviews(current => ({ ...current, [id]: preview }));
       if (error) setErrors(current => ({ ...current, [id]: String(error) }));
-    }, controller.signal).finally(() => {
+    }, controller.signal, { policy: "live" }).finally(() => {
       if (pending.current.get(job.id) === controller) pending.current.delete(job.id);
     });
   }, [setPreviews, setErrors]);

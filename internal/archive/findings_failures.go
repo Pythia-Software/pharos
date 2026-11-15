@@ -2,6 +2,7 @@ package archive
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -452,7 +453,7 @@ var failurePatterns = []failurePattern{
 	{name: "sandbox-write", match: regexp.MustCompile(`(?i)operation not permitted`), title: func(program, _ string) string {
 		return "The sandbox stops `" + defaultString(program, "a command") + "`"
 	},
-		why: "The agent's sandbox refuses the write, so the command fails however it is phrased.", change: "allow that path in the harness's sandbox settings, or move the write inside the workspace", lever: "harness-settings", label: "A sandbox setting"},
+		why: "The agent's sandbox refuses the write, so the command fails however it is phrased.", change: "allow that path in the agent app’s sandbox settings, or move the write inside the workspace", lever: "harness-settings", label: "A sandbox setting"},
 	{name: "test-imports", match: regexp.MustCompile(`(?i)importerror while importing test module|no module named`), title: func(program, scope string) string { return "Tests" + scopeIn(scope) + " fail on imports" },
 		why: "The test runner can't import the package, usually because the working directory isn't on the import path.", change: "document how to run the tests (for example `PYTHONPATH=. pytest`), or add a test command that sets it"},
 	{name: "zsh-glob", match: regexp.MustCompile(`(?i)no matches found`), title: func(string, string) string { return "zsh stops on file patterns that match nothing" },
@@ -571,28 +572,44 @@ func describeFailure(env *findingEnv, candidate *findingCandidate, calls []failu
 	}
 }
 
+// globalInstructionFile is where provider's rules for every project live, as
+// its registry entry declares: a quoted home-relative path, or a place in the
+// app's settings.
 func globalInstructionFile(provider string) string {
-	switch provider {
-	case "claude":
-		return "`~/.claude/CLAUDE.md`"
-	case "codex":
-		return "`~/.codex/AGENTS.md`"
-	case "antigravity", "gemini":
-		return "`~/.gemini/GEMINI.md`"
+	if provider == "gemini" {
+		provider = "antigravity"
 	}
-	return "your global agent instructions"
+	if spec, ok := providerFor(provider); ok && spec.Instructions != "" {
+		if instructionPath(spec.Instructions) {
+			return "`" + spec.Instructions + "`"
+		}
+		return spec.Instructions
+	}
+	return anyGlobalInstructions
+}
+
+// anyGlobalInstructions stands for a provider the registry does not know.
+const anyGlobalInstructions = "your global agent instructions"
+
+// instructionPath says whether instructions name a file or folder, rather
+// than a place in an app's settings.
+func instructionPath(instructions string) bool {
+	return strings.HasPrefix(strings.Trim(instructions, "`"), "~/")
 }
 
 func shortInstructionFile(file string) string {
-	switch {
-	case strings.Contains(file, "CLAUDE.md"):
-		return "CLAUDE.md"
-	case strings.Contains(file, "AGENTS.md"):
-		return "AGENTS.md"
-	case strings.Contains(file, "GEMINI.md"):
-		return "GEMINI.md"
-	case strings.Contains(file, "prompt"):
+	if instructionPath(file) {
+		file = strings.Trim(file, "`")
+		if strings.HasSuffix(file, "/") {
+			return "a file in " + path.Base(file)
+		}
+		return path.Base(file)
+	}
+	if strings.Contains(file, "prompt") {
 		return "the prompt"
+	}
+	if place, _, found := strings.Cut(file, " ("); found {
+		return place
 	}
 	return "the instructions"
 }

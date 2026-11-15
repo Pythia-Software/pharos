@@ -1,0 +1,145 @@
+{
+  "version": 2,
+  "palette": {
+    "vividness": 1,
+    "tierWeight": 0.5,
+    "lightness": 0.67,
+    "spread": 30,
+    "specialistSpread": 75
+  },
+  "providers": {
+    "anthropic": {
+      "hue": 24,
+      "ranked_classes": [
+        "Haiku",
+        "Sonnet",
+        "Opus",
+        "Fable / Mythos"
+      ],
+      "classes": {
+        "Haiku": {},
+        "Sonnet": {},
+        "Opus": {},
+        "Fable / Mythos": {}
+      }
+    },
+    "google": {
+      "hue": 217,
+      "ranked_classes": [
+        "Flash",
+        "Gemini"
+      ],
+      "classes": {
+        "Flash": {},
+        "Gemini": {},
+        "Nano Banana": {}
+      }
+    },
+    "openai": {
+      "hue": 154,
+      "ranked_classes": [
+        "Luna",
+        "Terra",
+        "Sol",
+        "Astra"
+      ],
+      "classes": {
+        "Luna": {},
+        "Terra": {},
+        "Sol": {},
+        "Astra": {},
+        "GPT": {
+          "hue": 110
+        },
+        "Codex": {
+          "hue": 82
+        },
+        "Rosalind": {
+          "hue": 178
+        },
+        "Image": {
+          "hue": 48
+        },
+        "Cyber": {
+          "hue": 198
+        }
+      }
+    },
+    "reflection": {
+      "hue": 282,
+      "pricing_provider": "other",
+      "ranked_classes": [],
+      "classes": {
+        "Beam": {
+          "hue": 282,
+          "match": "^reflection/beam(?:-|$)"
+        }
+      }
+    },
+    "deepseek": {
+      "hue": 247,
+      "pricing_provider": "other",
+      "ranked_classes": [],
+      "classes": {
+        "DeepSeek": {
+          "hue": 247,
+          "match": "^deepseek(?:-|$)"
+        }
+      }
+    },
+    "opencode": {
+      "hue": 326,
+      "pricing_provider": "other",
+      "ranked_classes": [],
+      "classes": {
+        "Big Pickle": {
+          "hue": 326,
+          "match": "^big-pickle(?:-|$)"
+        }
+      }
+    },
+    "microsoft": {
+      "hue": 5,
+      "pricing_provider": "other",
+      "ranked_classes": [],
+      "classes": {
+        "MAI Code": {
+          "hue": 5,
+          "match": "^mai-code(?:-|$)"
+        }
+      }
+    },
+    "xai": {
+      "hue": 210,
+      "pricing_provider": "other",
+      "ranked_classes": [],
+      "classes": {
+        "Grok": {
+          "hue": 210,
+          "match": "^(?:cursor-)?grok(?:-|$)"
+        }
+      }
+    },
+    "cursor": {
+      "hue": 38,
+      "pricing_provider": "other",
+      "ranked_classes": [],
+      "classes": {
+        "Composer": {
+          "hue": 38,
+          "match": "^composer(?:-|$)"
+        }
+      }
+    },
+    "other": {
+      "hue": 215,
+      "ranked_classes": [],
+      "classes": {}
+    }
+  },
+  "observed_dates": {
+    "haiku": "2025-11-27",
+    "sonnet": "2025-08-09",
+    "opus": "2025-08-09"
+  }
+}

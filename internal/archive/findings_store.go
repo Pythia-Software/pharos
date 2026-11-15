@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS repository_retirements (
 `
 
 func (c *Catalog) ensureFindingsSchema() error {
-	_, err := c.DB.Exec(findingsSchemaSQL + safetySchemaSQL)
+	_, err := c.DB.Exec(findingsSchemaSQL + safetySchemaSQL + fixesSchemaSQL)
 	return err
 }
 
@@ -802,6 +802,9 @@ func providerLabel(provider string) string {
 	}
 	if provider == "" {
 		return "agents"
+	}
+	if spec, ok := providerFor(provider); ok {
+		return spec.DisplayName
 	}
 	return strings.ToUpper(provider[:1]) + provider[1:]
 }

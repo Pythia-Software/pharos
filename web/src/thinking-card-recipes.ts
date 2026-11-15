@@ -7,7 +7,7 @@ const base = {
   idea: "models-01",
   unit: "seconds",
 } as const;
-// Cards open Waiting and Compaction (overview: true) for the whole-library
+// Cards open Waiting (overview: true) for the whole-library
 // questions, and Thinking for one comparison, already in its view.
 export const thinkingCardRecipes: QueryRecipe[] = [
   {
@@ -28,14 +28,15 @@ export const thinkingCardRecipes: QueryRecipe[] = [
       },
     ],
     thinking: { overview: true, state: {} },
-    action: "Explore Waiting and Compaction",
-    note: "Same request population as Waiting and Compaction, which adds the typical wait, the slowest tenth, per-model curves and what each wait is associated with. The compact native histogram uses automatic bins. Neither measures pure inference or first-token latency.",
+    action: "Explore Waiting",
+    note: "Same request population as Waiting, which adds the typical wait, the slowest tenth, per-model curves and what each wait is associated with. The compact native histogram uses automatic bins. Neither measures pure inference or first-token latency.",
   },
   {
     ...base,
     days: [...base.days],
     unit: "compactions",
     id: "thinking-compactions",
+    retired: true,
     title: "Context compactions",
     description:
       "Requests that follow a context compaction, day by day by model, over the last {days} days.",
@@ -51,8 +52,8 @@ export const thinkingCardRecipes: QueryRecipe[] = [
     ],
     cover: { mode: "source", metricId: "compactions_daily", kind: "auto", maxGroups: 6, showOther: true, showLegend: true, height: 240 },
     thinking: { overview: true, state: {}, open: "thinking:conversation", coverWhere: true },
-    action: "Explore Waiting and Compaction",
-    note: "One compaction is a request whose stream compacted its context since the previous request. Waiting and Compaction pairs the waits, context and output before and after each compaction within one stream, model and effort.",
+    action: "Explore Waiting",
+    note: "Legacy request-based proxy: one request whose stream compacted since the previous request. The Compaction dashboard counts boundary events directly, including multiple boundaries between requests.",
   },
   {
     ...base,
@@ -150,7 +151,7 @@ export const thinkingCardRecipes: QueryRecipe[] = [
       },
     ],
     thinking: { overview: true, state: {}, open: "thinking:coverage" },
-    action: "Explore Waiting and Compaction",
+    action: "Explore Waiting",
     note: "Includes missing timestamps, stale anchors, cross-stream links and excluded durations. The overview explains how timing is reconstructed and provides source-specific validation.",
   },
 ];

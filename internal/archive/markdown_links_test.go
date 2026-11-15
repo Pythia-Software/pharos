@@ -2,6 +2,7 @@ package archive
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -38,11 +39,14 @@ func TestMarkdownLinksResolveAndOpenFiles(t *testing.T) {
 	for _, href := range []string{path, path + ":12:3", "file://" + path, "My report.html", "My report.html:12:3", "./My%20report.html", path + "#L12"} {
 		q := url.Values{"href": {href}, "workspace": {"links"}}
 		response := get(q)
-		var result map[string]string
+		var result struct {
+			Status, Href, Path string
+			Launchable         bool
+		}
 		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 			t.Fatal(err)
 		}
-		if result["status"] != "file" || result["href"] == "" {
+		if result.Status != "file" || result.Href == "" || !filepath.IsAbs(result.Path) || result.Launchable {
 			t.Fatalf("%s: %s", href, response.Body.String())
 		}
 		q.Set("open", "1")
@@ -61,6 +65,110 @@ func TestMarkdownLinksResolveAndOpenFiles(t *testing.T) {
 	opened := get(url.Values{"href": {binary}, "open": {"1"}})
 	if opened.Code != http.StatusOK || !strings.Contains(opened.Header().Get("Content-Disposition"), "Report.pdf") {
 		t.Fatal("download lost its filename", opened.Header())
+	}
+
+	type launch struct {
+		path   string
+		reveal bool
+	}
+	var launched []launch
+	override(t, &markdownOpenFile, func(path string, reveal bool) error {
+		launched = append(launched, launch{path, reveal})
+		return nil
+	})
+	script := filepath.Join(root, "build.command")
+	if err := os.WriteFile(script, []byte("echo hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := filepath.Join(root, "tool")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "notes.txt")
+	if err := os.Symlink(script, alias); err != nil {
+		t.Fatal(err)
+	}
+	// A Finder alias is a regular file that open follows to its target.
+	bookmark := filepath.Join(root, "bookmark.txt")
+	if err := os.WriteFile(bookmark, []byte("book\x00\x00\x00\x00mark\x00\x00\x00\x00rest"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(root, "legacy.txt")
+	if err := os.WriteFile(legacy, []byte("alias"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	finderInfo := make([]byte, 32)
+	finderInfo[8] = 0x80
+	legacyAlias := setFinderInfo(legacy, finderInfo) == nil
+	real := func(path string) string { resolved, _ := filepath.EvalSymlinks(path); return resolved }
+	for _, test := range []struct {
+		href string
+		want launch
+	}{
+		{"My report.html:12", launch{real(path), false}},
+		{binary, launch{real(binary), false}},
+		{script, launch{real(script), true}},
+		{tool, launch{real(tool), true}},
+		{alias, launch{real(script), true}},
+		{bookmark, launch{real(bookmark), true}},
+		{legacy, launch{real(legacy), legacyAlias}},
+	} {
+		launched = nil
+		r := httptest.NewRequest(http.MethodPost, "/api/markdown-link?"+url.Values{"href": {test.href}, "workspace": {"links"}}.Encode(), nil)
+		r.Header.Set("Authorization", "Bearer test-token")
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, r)
+		if w.Code != http.StatusOK || len(launched) != 1 || launched[0] != test.want {
+			t.Fatalf("open %s: %d %s %v", test.href, w.Code, w.Body.String(), launched)
+		}
+		// The probe tells the Mac app's Open With menu the same path and verdict.
+		var probe struct {
+			Path       string
+			Launchable bool
+		}
+		if json.Unmarshal(get(url.Values{"href": {test.href}, "workspace": {"links"}}).Body.Bytes(), &probe); probe.Path != test.want.path || probe.Launchable != test.want.reveal {
+			t.Fatalf("probe %s: %+v", test.href, probe)
+		}
+	}
+	// Bookmark bytes are read in common code; only the Finder flags come
+	// from the platform's attribute read, whose failure or short data never
+	// marks a file launchable and never hides a bookmark.
+	var finderInfo32 []byte
+	var finderInfoErr error
+	override(t, &markdownFinderInfo, func(string) ([]byte, error) { return finderInfo32, finderInfoErr })
+	plain := filepath.Join(root, "plain.txt")
+	if err := os.WriteFile(plain, []byte("alias"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		info []byte
+		err  error
+		href string
+		want bool
+	}{
+		{"attribute failure", nil, errors.New("no attribute"), plain, false},
+		{"unsupported", nil, errFinderInfoUnsupported, plain, false},
+		{"failure despite flag bytes", []byte{8: 0x80, 9: 0}, errors.New("short read"), plain, false},
+		{"short data", []byte{8: 0x80}, nil, plain, false},
+		{"flags clear", make([]byte, 32), nil, plain, false},
+		{"low flag byte", []byte{8: 0, 9: 0x80}, nil, plain, false},
+		{"alias flag", []byte{8: 0x80, 9: 0}, nil, plain, true},
+		{"bookmark without attributes", nil, errFinderInfoUnsupported, bookmark, true},
+	} {
+		finderInfo32, finderInfoErr = test.info, test.err
+		var probe struct{ Launchable bool }
+		if json.Unmarshal(get(url.Values{"href": {test.href}, "workspace": {"links"}}).Body.Bytes(), &probe); probe.Launchable != test.want {
+			t.Fatalf("%s: launchable %v", test.name, probe.Launchable)
+		}
+	}
+
+	launched = nil
+	r := httptest.NewRequest(http.MethodPost, "/api/markdown-link?"+url.Values{"href": {"missing.md"}, "workspace": {"links"}}.Encode(), nil)
+	r.Header.Set("Authorization", "Bearer test-token")
+	w := httptest.NewRecorder()
+	if server.ServeHTTP(w, r); w.Code != http.StatusNotFound || launched != nil {
+		t.Fatal("opened a missing file", w.Code, launched)
 	}
 
 	for _, href := range []string{"missing.md", root, "file://other-host" + path, "https://example.com", "javascript:alert(1)", path + "?raw=1", path + "%00"} {

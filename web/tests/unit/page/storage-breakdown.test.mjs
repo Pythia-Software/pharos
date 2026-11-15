@@ -37,7 +37,7 @@ test("known source names read as their tools; configured names stay", () => {
 });
 
 test("a breakdown with nothing measured has no parts or rows", () => {
-  const empty = model({ status: "measured", total_bytes: 0, parts: [{ key: "other", label: "Other", bytes: 0 }] }, "repositories");
+  const empty = model({ status: "measured", total_bytes: 0, parts: [{ key: "other", label: "Other", bytes: 0 }] }, "projects");
   assert.deepEqual(plain([empty.parts, empty.rows, empty.volume]), [[], [], "the library drive"]);
 });
 

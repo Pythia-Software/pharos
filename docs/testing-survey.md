@@ -1,5 +1,8 @@
 # Test suite survey and plan
 
+For the current Go runtime audit and implemented follow-up, see
+[November 2026 Go runtime](testing-survey/go-runtime-2026-11.md).
+
 Survey date: **2026-10-19**. Code reviewed at `bb496be`.
 This is a survey and a proposal; nothing in it has been implemented. Timings
 were measured on the shared Mac Studio while other agents were building and

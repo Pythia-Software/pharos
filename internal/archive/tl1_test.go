@@ -13,6 +13,17 @@ import (
 	"time"
 )
 
+func TestTL1DollarDisplay(t *testing.T) {
+	for value, want := range map[float64]string{
+		0: "$0.00", 0.0001: "$0.00", 12.3456: "$12.35", 99.99: "$99.99",
+		99.995: "$100", 100: "$100", 1234.56: "$1235", -1234.56: "$-1235", -0.0001: "$0.00",
+	} {
+		if got := tl1Dollars(value); got != want {
+			t.Errorf("tl1Dollars(%v) = %q, want %q", value, got, want)
+		}
+	}
+}
+
 func TestClassifyTL1Error(t *testing.T) {
 	for _, test := range []struct{ text, class, signature, attribution string }{
 		{"worker wren died", "worker_died", "worker died", tl1AttributionInfrastructure},
@@ -131,6 +142,28 @@ func ingestTL1Fixture(t *testing.T, catalog *Catalog, extraFailures int) {
 	}
 }
 
+func TestTL1AttemptModelIsOnlyASummaryFallback(t *testing.T) {
+	for _, observed := range []string{"<synthetic>", "claude-sonnet-5"} {
+		t.Run(observed, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "task", "1-claude.jsonl")
+			parseJSONL(t, "claude", path, claudeTurn("s", "reply", "", "assistant", text("reply"), claudeEntry{"message": map[string]any{"model": observed}}), claudeTurn("s", "error", "", "assistant", text("failed"), claudeEntry{"message": map[string]any{"model": "<synthetic>"}}))
+			adapter := &tl1Adapter{}
+			c, ok, err := adapter.transcript(tl1Installation{ID: "install", Transcripts: dir}, "task", map[string]any{"id": "attempt", "model": "claude-opus-5"}, "1-claude.jsonl")
+			want := observed
+			if observed == "<synthetic>" {
+				want = "claude-opus-5"
+			}
+			if err != nil || !ok || c.Model != want {
+				t.Fatalf("model=%q want %q: %v", c.Model, want, err)
+			}
+			if m := byNativeID(c.Messages)["error"]; m.Model != "<synthetic>" {
+				t.Fatalf("synthetic message changed: %+v", m)
+			}
+		})
+	}
+}
+
 func TestTL1IngestCapturesWorkflowAndCodexTranscripts(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	ingestTL1Fixture(t, catalog, 0)
@@ -162,6 +195,17 @@ func TestTL1IngestCapturesWorkflowAndCodexTranscripts(t *testing.T) {
 	if conversationProvider != "codex" || sessionProvider != "codex" {
 		t.Fatalf("TL1 Codex transcript provider: conversation=%q session=%q", conversationProvider, sessionProvider)
 	}
+	var start, end, timing string
+	if err := catalog.DB.QueryRow(`SELECT s.started_at,s.ended_at,s.time_bounds_source FROM agent_sessions s JOIN conversations c ON c.id=s.conversation_id WHERE c.native_id=?`, conversation).Scan(&start, &end, &timing); err != nil {
+		t.Fatal(err)
+	}
+	if start != "2026-09-20T10:00:05.000Z" || end != "2026-09-20T10:20:00.000Z" || timing != "attempt-envelope" {
+		t.Fatalf("Codex root envelope: %s / %s (%s)", start, end, timing)
+	}
+	var timedRequests int
+	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM model_requests r JOIN conversations c ON c.id=r.conversation_id WHERE c.native_id=? AND r.requested_at IS NOT NULL`, conversation).Scan(&timedRequests); err != nil || timedRequests != 0 {
+		t.Fatalf("timestamp-free requests acquired times: %d, %v", timedRequests, err)
+	}
 	var input, cached, output, reasoning int64
 	if err := catalog.DB.QueryRow(`SELECT s.input_tokens,s.cache_read_input_tokens,s.output_tokens,s.reasoning_output_tokens
 		FROM agent_sessions s JOIN conversations c ON c.id=s.conversation_id WHERE c.native_id=?`, conversation).Scan(&input, &cached, &output, &reasoning); err != nil {
@@ -181,6 +225,53 @@ func TestTL1IngestCapturesWorkflowAndCodexTranscripts(t *testing.T) {
 	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM workspaces WHERE id=? AND source_kind='tl1'", workspace).Scan(&workspaces); err != nil || workspaces != 1 {
 		t.Fatalf("TL1 task does not join its Library workspace %s: %d %v", workspace, workspaces, err)
 	}
+}
+
+func TestTL1AttemptSessionEnvelopeScope(t *testing.T) {
+	registry := tl1Fixture(t, 0)
+	installation := tl1Installation{ID: "install", Transcripts: filepath.Join(filepath.Dir(registry), "transcripts")}
+	a := &tl1Adapter{baseAdapter: baseAdapter{config: SourceConfig{Account: "local"}}}
+	for _, tc := range []struct {
+		name, end    string
+		files        []string
+		wantEnvelope bool
+	}{
+		{"completed", "2026-09-20T10:20:00Z", []string{"1-codex.jsonl"}, true},
+		{"ongoing", "", []string{"1-codex.jsonl"}, true},
+		{"multiple transcripts", "2026-09-20T10:20:00Z", []string{"1-codex.jsonl", "1-other.jsonl"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attempt := map[string]any{"id": "attempt", "attempt_number": 1, "executor": "codex", "started_at": "2026-09-20T10:00:00Z", "completed_at": tc.end}
+			record, err := a.task(installation, map[string]any{"id": "task-impl"}, []map[string]any{attempt}, nil, nil, nil, nil, nil, nil, tc.files)
+			if err != nil || len(record.Conversations) != 1 {
+				t.Fatalf("task: %+v, %v", record, err)
+			}
+			conversation := record.Conversations[0]
+			if (rootSessionEnvelope(conversation) != nil) != tc.wantEnvelope {
+				t.Fatalf("attempt scope: %+v", conversation.SessionBounds)
+			}
+			if tc.end == "" && conversation.EndedAt != "" {
+				t.Fatal("ongoing attempt manufactured a completion")
+			}
+		})
+	}
+	t.Run("completion arrives after ongoing ingest", func(t *testing.T) {
+		c, _ := testCatalog(t)
+		conversation := ConversationRecord{NativeID: "ongoing-root", Provider: "codex", Account: "local", StartedAt: "2026-09-20T10:00:00.000Z", SessionBounds: attemptSessionBounds("2026-09-20T10:00:00Z", ""), Messages: []MessageRecord{{NativeID: "request", Kind: "metadata", RawText: `{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}`}}}
+		record := WorkspaceRecord{SourceID: "ongoing", SourceKind: "tl1", Account: "local", Conversations: []ConversationRecord{conversation}}
+		ingestRecordTx(t, c, record)
+		end := "2026-09-20T10:20:00.000Z"
+		record.Conversations[0].EndedAt = end
+		record.Conversations[0].SessionBounds = attemptSessionBounds(conversation.StartedAt, end)
+		ingestRecordTx(t, c, record)
+		var conversationEnd, sessionEnd, source string
+		if err := c.DB.QueryRow(`SELECT c.ended_at,s.ended_at,s.time_bounds_source FROM conversations c JOIN agent_sessions s ON s.conversation_id=c.id WHERE c.native_id='ongoing-root'`).Scan(&conversationEnd, &sessionEnd, &source); err != nil {
+			t.Fatal(err)
+		}
+		if conversationEnd != end || sessionEnd != end || source != "attempt-envelope" {
+			t.Fatalf("completion: %s / %s (%s)", conversationEnd, sessionEnd, source)
+		}
+	})
 }
 
 // TL1 before registry.json listed projects in workspaces.json, and TL1 goes

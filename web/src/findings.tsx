@@ -1,3 +1,6 @@
+import { DataReadinessIndicator } from "./data-readiness";
+import { formatUSD } from "./currency";
+import { formatTokens } from "./token-count";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewState } from "./view-state";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -5,6 +8,7 @@ import "./findings.css";
 import { Icon } from "./icons";
 import { findingDetailURL, findingsRank, readFindingsRoute, type FindingsList, type FindingsRoute } from "./findings-route";
 import { SafetyPage } from "./safety";
+import { FixesPage } from "./fixes";
 import { findingsDiscoveryChanged } from "./dataset-refresh";
 import { OptimizePlaceFilter, OptimizeRank } from "./optimize-controls";
 
@@ -77,7 +81,7 @@ function publish(overview: Overview) {
   latest = overview;
   subscribers.forEach(listener => listener(overview));
   updateChrome((overview.summary?.open ?? 0) + (overview.summary?.safety_open ?? 0));
-  if (discoveryChanged) window.dispatchEvent(new Event("pharos:safety-changed"));
+  if (discoveryChanged) { window.dispatchEvent(new Event("pharos:safety-changed")); window.dispatchEvent(new Event("pharos:fixes-changed")); }
 }
 async function loadOverview(): Promise<Overview> {
   const overview = await request<Overview>("/api/findings");
@@ -135,13 +139,7 @@ const lowerFirst = (text: string) => /^[A-Z]([a-z]|\s)/.test(text) && !properNou
 const num = (value: unknown) => { const n = Number(value); return Number.isFinite(n) ? n : 0; };
 
 function money(value: unknown): string {
-  const amount = num(value);
-  const size = Math.abs(amount);
-  if (size >= 1e6) return `$${amount.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 })}`;
-  if (size >= 10) return `$${Math.round(amount).toLocaleString()}`;
-  if (size >= 0.995) return `$${amount.toFixed(2)}`;
-  if (size >= 0.005) return `$${amount.toFixed(2)}`;
-  return "$0";
+  return formatUSD(num(value));
 }
 /** Rounds to two significant figures for estimates that say "about". */
 function aboutMoney(value: unknown): string {
@@ -150,7 +148,8 @@ function aboutMoney(value: unknown): string {
   const step = 10 ** (Math.floor(Math.log10(amount)) - 1);
   return `$${(Math.round(amount / step) * step).toLocaleString()}`;
 }
-const compact = (value: unknown) => num(value).toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
+// Findings amounts are token counts or measured check values; both read in token precision.
+const compact = (value: unknown) => formatTokens(num(value));
 function minutes(value: unknown): string {
   const m = num(value);
   if (m === 0) return "0 min";
@@ -274,7 +273,7 @@ function Menu({ label, items, className = "", heading, align = "start", ariaLabe
 }
 
 /** A modal dialog: focus moves in, Tab stays inside, Escape closes, and focus returns to what opened it. */
-function Dialog({ title, onClose, children, footer, wide }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
+export function Dialog({ title, onClose, children, footer, wide }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -352,10 +351,21 @@ function SnoozeDismiss({ card, act }: { card: Card; act: Act }) {
 
 const dismissReasons: Record<string, string> = { not_real: "not real", not_worth_it: "not worth it", wont_fix: "won't fix" };
 
+const earlySignals: Record<string, { label: string; tone: string; explanation: string }> = {
+  promising: { label: "Promising so far", tone: "good", explanation: "The pattern is substantially lower, with no measured check more than 10% worse." },
+  lower: { label: "Lower so far", tone: "good", explanation: "The pattern is lower. More comparable work will help tell a lasting improvement from variation." },
+  similar: { label: "No clear change yet", tone: "muted", explanation: "The pattern is close to its earlier level. The estimate can still change as more work comes in." },
+  higher: { label: "Higher so far", tone: "warn", explanation: "The pattern is higher than before. More work will help tell whether this continues." },
+  mixed: { label: "Mixed signals", tone: "warn", explanation: "At least one other measured check got worse. A saving alone may not mean the change helped overall." },
+  too_early: { label: "Too early to tell", tone: "muted", explanation: "There isn't enough comparable work yet to describe a direction." },
+};
+
 function stateChip(card: Card): { text: string; tone: string } {
   switch (card.state) {
     case "watching": {
       const watching = card.watching ?? {};
+      const signal = earlySignals[watching.provisional?.signal];
+      if (signal) return { text: `${signal.label} · provisional`, tone: signal.tone };
       return { text: watching.day && watching.of_days ? `Measuring · day ${watching.day} of about ${watching.of_days}` : "Measuring", tone: "watching" };
     }
     case "won": return { text: "Improved", tone: "good" };
@@ -378,7 +388,11 @@ function StateNote({ card }: { card: Card }) {
   if (card.inconclusive) return <p className="findings-note"><Icon name="info" /><span>{card.inconclusive.sentence ? <Text text={card.inconclusive.sentence} /> : `There wasn't enough of this work after ${lowerFirst(card.inconclusive.change ?? "the change")} to tell whether it helped.`}</span></p>;
   if (card.state === "watching" && card.watching) {
     const watching = card.watching;
-    return <p className="findings-note watching"><span className="findings-pulse" aria-hidden="true" /><span>Copied {day(watching.copied_at)} in the prompt for {watching.target_label ?? card.target_label}. Before: {watching.before}.{watching.result_on ? ` First result on ${day(watching.result_on)}.` : ""}{num(watching.saved_usd) > 0 ? ` Saved so far: ${money(watching.saved_usd)}.` : ""}</span></p>;
+    const early = watching.provisional;
+    if (early) return <p className={`findings-note ${earlySignals[early.signal]?.tone ?? "watching"}`}><Icon name="info" /><span>
+      {earlySignals[early.signal]?.explanation} {watching.result_on ? `Final evaluation ${day(watching.result_on)}.` : "The final evaluation is still pending."}
+    </span></p>;
+    return <p className="findings-note watching"><span className="findings-pulse" aria-hidden="true" /><span>Copied {day(watching.copied_at)} in the prompt for {watching.target_label ?? card.target_label}. Before: {watching.before}.{watching.result_on ? ` Final evaluation ${day(watching.result_on)}.` : ""}{num(watching.saved_usd) > 0 ? ` Estimated savings so far: ${money(watching.saved_usd)}.` : ""}</span></p>;
   }
   if (card.state === "won" && card.result) return <p className="findings-note good"><Icon name="check" /><span><Text text={card.result.sentence} /></span></p>;
   if (card.state === "dismissed") return <p className="findings-note"><span>Dismissed {day(card.dismissed?.at)}. It stays hidden until you restore it.</span></p>;
@@ -391,6 +405,11 @@ const impactText = (impact: Impact | undefined, dollars: (value: unknown) => str
   [dollars(impact?.usd), `${compact(impact?.tokens)} tokens`, num(impact?.minutes) > 0 ? minutes(impact?.minutes) : "", num(impact?.failures) > 0 ? counted(Math.round(num(impact?.failures)), "failure") : ""].filter(Boolean).join(" · ");
 
 function ImpactLine({ card, rank }: { card: Card; rank: Rank }) {
+  const early = card.state === "watching" ? card.watching?.provisional : null;
+  if (early?.savings?.weeks && num(early.after?.units) > 0 && num(early.before?.exposure) > 0) return <div className="findings-impact">
+    <span className="findings-impact-lead"><strong>{unitValue[rank](early.savings[rank])}</strong> so far</span>
+    <span className="findings-impact-stake">estimated net savings{early.savings.through ? ` through ${day(early.savings.through)}` : ""}</span>
+  </div>;
   const impact = card.impact ?? { usd: 0, tokens: 0, minutes: 0, failures: 0 };
   const expected = expectedOf(card);
   const brief: Record<Rank, (value: unknown) => string> = { usd: aboutMoney, tokens: value => `${compact(value)} tokens`, minutes: value => `${minutes(value)}`, failures: value => counted(Math.round(num(value)), "failure") };
@@ -461,7 +480,7 @@ export function CartPanel({ cart, targets, act, onReview, safety = false }: { ca
   };
   return <aside className="findings-cart" id="findingsCart" aria-labelledby="findingsCartTitle">
     <h2 id="findingsCartTitle">{safety ? "Risky action prompts to copy" : "Efficiency prompts to copy"}</h2>
-    {!cart.length ? <p className="findings-cart-empty">{safety ? "Collect reviews for the same repository or Mac. Copy a prompt to hand them off to your agent." : "Add findings to a prompt for the repository or Mac where the change goes. Copying hands them to an agent and starts measuring each change."}</p> : null}
+    {!cart.length ? <p className="findings-cart-empty">{safety ? "Collect notices for the same repository or Mac. Copy a prompt to hand them off to your agent." : "Add findings to a prompt for the repository or Mac where the change goes. Copying hands them to an agent and starts measuring each change."}</p> : null}
     {cart.map(group => { const count = group.items.filter(ticked).length; return <section key={group.target} className={`findings-cart-group ${dragging && dragging.target !== group.target ? "drop-target" : ""}`} aria-label={`Prompt for ${group.label}`} onDragOver={event => { if (dragging) event.preventDefault(); }} onDrop={event => { event.preventDefault(); drop(group.target); }}>
       <div className="findings-cart-head"><h3>{group.label}</h3><span>{count} of {group.items.length} ticked</span></div>
       <ul>{group.items.map(item => <li key={item.id} draggable onDragStart={event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); setDragging({ id: item.id, target: group.target }); }} onDragEnd={() => setDragging(null)} onDragOver={event => { if (dragging) event.preventDefault(); }} onDrop={event => { event.stopPropagation(); event.preventDefault(); drop(group.target, item.id); }} className={`${ticked(item) ? "" : "unticked"} ${dragging?.id === item.id ? "dragging" : ""}`}>
@@ -479,16 +498,25 @@ export function CartPanel({ cart, targets, act, onReview, safety = false }: { ca
       <button type="button" className="findings-button primary" disabled={!count || count !== group.ticked} onClick={() => onReview(group)}>Review prompt ({count} ticked)</button>
     </section>; })}
     {dragging ? targets.filter(target => !cart.some(group => group.target === target.target)).map(target => <div key={target.target} className="findings-cart-drop-zone" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); drop(target.target); }}>Drop in {target.label}</div>) : null}
-    <p className="findings-cart-note">{safety ? "Risky actions and efficiency use separate prompts. After copying, these reviews leave Open and remain in Handed off." : "Risky action reviews have their own baskets in Optimize → Risky actions."}</p>
+    <p className="findings-cart-note">{safety ? "Risky actions and efficiency use separate prompts. After copying, these notices leave Open and remain in Handed off." : "Risky action notices have their own baskets in Optimize → Risky actions."}</p>
   </aside>;
 }
 
-export function ReviewDialog({ group, copy, onClose, onCopied, safety = false }: { group: CartGroup; copy: Copy; onClose: () => void; onCopied: () => void; safety?: boolean }) {
+export type ReviewArea = "efficiency" | "safety" | "fixes";
+type FixMode = "propose" | "change";
+
+// The prompt review before a copy. Efficiency starts measuring; Risky actions
+// and Fixes record a handoff. Fixes asks whether the agent investigates or
+// makes the change.
+export function ReviewDialog({ group, copy, onClose, onCopied, safety = false, area: given }: { group: CartGroup; copy: Copy; onClose: () => void; onCopied: () => void; safety?: boolean; area?: ReviewArea }) {
+  const area: ReviewArea = given ?? (safety ? "safety" : "efficiency");
+  const handsOff = area !== "efficiency";
   const idsKey = group.items.filter(item => item.ticked).map(item => item.id).join("\n");
   const ids = useMemo(() => idsKey ? idsKey.split("\n") : [], [idsKey]);
-  const repository = !safety && group.target.startsWith("repo:");
-  const endpoint = safety ? "/api/findings/safety/cart" : "/api/findings/cart";
+  const repository = area === "efficiency" && group.target.startsWith("repo:");
+  const endpoint = { efficiency: "/api/findings/cart", safety: "/api/findings/safety/cart", fixes: "/api/findings/fixes/cart" }[area];
   const [handoff, setHandoff] = useState<Handoff>(group.handoff === "review" ? "diff" : group.handoff);
+  const [mode, setMode] = useState<FixMode>("propose");
   const [prompt, setPrompt] = useState<Row | null>(null);
   const [error, setError] = useState("");
   const [state, setState] = useState<"" | "copying" | "done">("");
@@ -497,11 +525,11 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false }:
     setError("");
     // Copy stays disabled until the preview matches the choices.
     setPrompt(null);
-    request<Row>(`${endpoint}/prompt`, { target: group.target, ids, ...(repository ? { handoff } : {}) })
+    request<Row>(`${endpoint}/prompt`, { target: group.target, ids, ...(repository ? { handoff } : {}), ...(area === "fixes" ? { mode } : {}) })
       .then(body => { if (!cancelled) setPrompt(body); })
       .catch(failure => { if (!cancelled) setError(failure.message); });
     return () => { cancelled = true; };
-  }, [group.target, ids, handoff, repository, endpoint]);
+  }, [group.target, ids, handoff, repository, endpoint, mode, area]);
   const count = ids.length;
   const global = group.label.match(/· (\S+) on (.+)$/);
   const where = repository ? `an agent working in ${group.label}`
@@ -514,23 +542,26 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false }:
       setState(""); setError("Pharos couldn't write to the clipboard, so nothing started. Select the text, copy it, and try again."); return;
     }
     try {
-      await request(`${endpoint}/copy`, { target: group.target, ids, handoff: repository ? handoff : prompt.handoff, ...(safety ? { preview_token: prompt.preview_token } : {}) });
+      await request(`${endpoint}/copy`, { target: group.target, ids, handoff: repository ? handoff : prompt.handoff, ...(handsOff ? { preview_token: prompt.preview_token } : {}), ...(area === "fixes" ? { mode } : {}) });
       setState("done");
       window.setTimeout(onCopied, 1400);
     } catch (failure) {
-      setState(""); setError(`The prompt is on your clipboard, but Pharos couldn't ${safety ? "record the handoff" : "start measuring"}: ${(failure as Error).message}. Close and review the prompt again before pasting it.`);
+      setState(""); setError(`The prompt is on your clipboard, but Pharos couldn't ${handsOff ? "record the handoff" : "start measuring"}: ${(failure as Error).message}. Close and review the prompt again before pasting it.`);
     }
   }
+  const lede = area === "safety" ? `${spelled(count, "notice")}. Paste this into your agent for ${group.label}. It will investigate and recommend next steps. Copying moves these notices to Handed off.`
+    : area === "fixes" ? `${spelled(count, "fix", "fixes")}. Paste this into ${group.target === "global" ? "an agent on this Mac; it works on the setup every repository shares" : `an agent working in ${group.label}`}. Copying moves ${count === 1 ? "it" : "them"} to Handed off; a fix opens again if it recurs.`
+      : <>{spelled(count, "finding")}. Paste this into {where}. Copying it starts the before-and-after measurement for {count === 1 ? "it" : count === 2 ? "both" : `all ${count}`}.</>;
   return <Dialog title={`Prompt for ${group.label}`} onClose={onClose} wide footer={<>
-    <span className="findings-dialog-fine">{safety ? "Copying records a handoff. No returned report is required." : "Measured separately: each finding on its own rate."}</span>
+    <span className="findings-dialog-fine">{handsOff ? "Copying records a handoff. No returned report is required." : "Measured separately: each finding on its own rate."}</span>
     <span className="findings-dialog-buttons">
       <button type="button" className="findings-button" onClick={onClose}>Keep in cart</button>
       <button type="button" className="findings-button primary" disabled={!prompt?.prompt || state !== ""} onClick={() => void start()}>
-        {state === "done" ? <><Icon name="check" />{safety ? "Copied · handed off" : "Copied · measuring"}</> : state === "copying" ? "Copying…" : safety ? "Copy prompt and hand off" : "Copy prompt and start measuring"}
+        {state === "done" ? <><Icon name="check" />{handsOff ? "Copied · handed off" : "Copied · measuring"}</> : state === "copying" ? "Copying…" : handsOff ? "Copy prompt and hand off" : "Copy prompt and start measuring"}
       </button>
     </span>
   </>}>
-    <p className="findings-dialog-lede">{safety ? `${spelled(count, "review")}. Paste this into your agent for ${group.label}. It will investigate and recommend next steps. Copying moves these reviews to Handed off.` : <>{spelled(count, "finding")}. Paste this into {where}. Copying it starts the before-and-after measurement for {count === 1 ? "it" : count === 2 ? "both" : `all ${count}`}.</>}</p>
+    <p className="findings-dialog-lede">{lede}</p>
     {repository ? <fieldset className="findings-handoff">
       <legend>Ask the agent to</legend>
       <div>
@@ -538,9 +569,16 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false }:
         <label><input type="radio" name="findingsHandoff" checked={handoff === "diff"} onChange={() => setHandoff("diff")} /> Show me the diff</label>
       </div>
       <p>{group.handoff_reason} <a href="/findings?view=settings" onClick={event => { event.preventDefault(); onClose(); navigate("/findings?view=settings"); }}>Change the default</a></p>
+    </fieldset> : area === "fixes" ? <fieldset className="findings-handoff">
+      <legend>Ask the agent to</legend>
+      <div>
+        <label><input type="radio" name="fixesMode" checked={mode === "propose"} onChange={() => setMode("propose")} /> Investigate and propose</label>
+        <label><input type="radio" name="fixesMode" checked={mode === "change"} onChange={() => setMode("change")} /> Make the change</label>
+      </div>
+      <p>{mode === "propose" ? "The agent checks each problem still happens and proposes the change, with exact wording for any note; it changes nothing." : "The agent confirms each problem still happens, then makes the smallest change that stops it, on a branch, and reports what it changed."}</p>
     </fieldset> : <p className="findings-handoff-note">{group.handoff_reason}</p>}
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
-    {state === "done" ? <p className="findings-success" role="status">{safety ? "Copied. These reviews have been handed off. You can bring them back at any time." : <>Copied. Paste it into the agent; Pharos is now measuring {count === 1 ? "this finding" : `these ${count} findings`}.</>}</p> : null}
+    {state === "done" ? <p className="findings-success" role="status">{area === "safety" ? "Copied. These notices have been handed off. You can bring them back at any time." : area === "fixes" ? "Copied. These fixes have been handed off. You can bring them back at any time." : <>Copied. Paste it into the agent; Pharos is now measuring {count === 1 ? "this finding" : `these ${count} findings`}.</>}</p> : null}
     <pre className="findings-prompt" tabIndex={0} aria-label="Prompt text">{prompt?.prompt ?? (error ? "" : "Writing the prompt…")}</pre>
   </Dialog>;
 }
@@ -693,6 +731,54 @@ function savedText(savings: Row | undefined): React.ReactNode {
   return <>{money(savings.usd)}{added > 0 ? <span className="findings-muted"> (after {money(added)} of added context)</span> : null}</>;
 }
 
+export function findingMetricLabel(metric?: { kind?: string; value?: string }): string {
+  if (metric?.kind === "share") return metric.value === "dollars" ? "Share of spend" : metric.value === "tokens" ? "Share of tokens" : "Share";
+  return metric?.kind === "mean" ? "Typical tokens" : "Pattern rate";
+}
+
+/** A reading of observed change, not a probability of a win or a final result. */
+function ProvisionalResult({ detail }: { detail: Detail }) {
+  const early = detail.watching?.provisional;
+  if (!early) return null;
+  const signal = earlySignals[early.signal] ?? earlySignals.too_early;
+  const savings = early.savings;
+  const before = early.before ?? {};
+  const after = early.after ?? {};
+  const hasWork = num(before.exposure) > 0 && num(after.exposure) > 0 && early.ratio != null;
+  const reduction = hasWork ? (1 - Number(early.ratio)) * 100 : null;
+  const rate = (window: Row) => detail.metric?.kind === "mean" ? `${compact(window.median)} tokens` : `${(num(window.rate) * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+  const unit = String(detail.metric?.unit || "conversations");
+  const failed = (early.guards ?? []).filter((guard: Row) => guard.ok === false);
+  const hasSavings = num(savings?.weeks) > 0 && num(after.units) > 0 && num(before.exposure) > 0;
+  return <section className={`findings-early ${signal.tone}`} aria-label="Provisional result">
+    <div className="findings-early-heading"><span>Early read</span><span>Provisional · can change</span></div>
+    <div className="findings-early-body">
+      <div className="findings-early-savings">
+        <span className="findings-early-amount">{hasSavings ? money(savings.usd) : "—"}</span>
+        <strong>estimated net savings so far</strong>
+        <span>{hasSavings ? `${compact(savings.tokens)} tokens${savings.through ? ` · through ${day(savings.through)}` : ""}` : "Available after the first complete day of relevant work"}</span>
+        {num(savings?.added_usd) > 0 ? <span>After {money(savings.added_usd)} of added context</span> : null}
+      </div>
+      <div className="findings-early-reading">
+        <h2>{signal.label}</h2>
+        <p>{signal.explanation}</p>
+        {hasWork ? <>
+          <div className="findings-early-change"><span>{findingMetricLabel(detail.metric)}: <strong>{rate(before)} → {rate(after)}</strong></span><strong>{Math.abs(reduction!).toLocaleString(undefined, { maximumFractionDigits: 0 })}% {reduction! >= 0 ? "lower" : "higher"}</strong></div>
+          <div className="findings-early-scale" role="img" aria-label={`Observed change: ${Math.abs(reduction!).toFixed(0)}% ${reduction! >= 0 ? "lower" : "higher"}. This is not a probability.`}>
+            <div className="findings-early-track"><span style={{ left: `${50 + Math.max(-100, Math.min(100, reduction!)) / 2}%` }} /></div>
+            <div className="findings-early-scale-labels"><span>Higher</span><span>No change</span><span>Lower</span></div>
+          </div>
+        </> : null}
+      </div>
+    </div>
+    <div className="findings-early-evidence">
+      <span><strong>Comparable work</strong> {counted(num(after.units), unit.slice(0, -1))} since · {counted(num(before.units), unit.slice(0, -1))} before</span>
+      <span><strong>Other checks</strong> {num(after.units) === 0 ? "Waiting for work" : failed.length ? failed.map((guard: Row) => `${guard.name}: ${compact(guard.before)} → ${compact(guard.after)} (worse)`).join("; ") : "No measured check more than 10% worse"}</span>
+    </div>
+    <p className="findings-early-footnote">An API-equivalent estimate against the expected no-change baseline, after added context costs. Other changes can contribute; this remains separate from confirmed savings. {detail.watching?.result_on ? <>Final evaluation <strong>{day(detail.watching.result_on)}</strong>, on the schedule set when the prompt was copied.</> : null}</p>
+  </section>;
+}
+
 const attemptStatus: Record<string, string> = { watching: "measuring", improved: "improved", unchanged: "no change", worse: "got worse", inconclusive: "no clear result", withdrawn: "not applied", not_applied: "not applied" };
 
 function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied: () => void }) {
@@ -707,21 +793,21 @@ function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied
   const [confirming, setConfirming] = useState(false);
   let caption: React.ReactNode = null;
   if (detail.state === "watching") {
-    const before = detail.watching?.before ?? chart?.baseline_phrase;
-    caption = <>Before the change, about {before}. {since ? <>Since then, {since} so far. </> : "Nothing to compare yet. "}The result comes once there has been about as much of this work as before{detail.watching?.result_on ? `, around ${day(detail.watching.result_on)}` : ""}.</>;
+    caption = <>The weekly pattern before and after the prompt was copied. The early read uses complete days{detail.watching?.provisional?.through ? ` through ${day(detail.watching.provisional.through)}` : ""}; the final evaluation{detail.watching?.result_on ? ` is scheduled for ${day(detail.watching.result_on)}` : " follows the fixed measurement window"}.</>;
   } else if (current?.result?.sentence) caption = <Text text={current.result.sentence} />;
   else if (detail.result?.sentence) caption = <Text text={detail.result.sentence} />;
   else if (chart?.baseline_phrase && chart.baseline_phrase !== "none") caption = <>Over the last 28 days: {chart.baseline_phrase}. After you copy a prompt with this finding, its line continues here so you can see whether the change worked.</>;
   const harness = attempts.map(attempt => attempt.result?.harness_note).filter(Boolean);
   const alongside = attempts.flatMap(attempt => attempt.result?.alongside ?? attempt.result?.others ?? []).filter(Boolean);
-  const guards: Row[] = current?.result?.guards ?? [];
+  const early = detail.watching?.provisional;
+  const guards: Row[] = early?.guards ?? current?.result?.guards ?? [];
   const nextIndex = detail.state === "watching" || detail.state === "won" ? num(detail.attempt || attempts.length) : num(detail.attempt || 1) - 1;
   const next = detail.steps?.[nextIndex + (detail.state === "watching" || detail.state === "won" ? 0 : 1)];
   const facts: Array<[string, React.ReactNode] | null | false> = detail.state === "watching" || detail.state === "won" || current ? [
     current ? ["Copied", <>{fullDay(current.copied_at)}, in the prompt for {current.target_label ?? detail.target_label}</>] : null,
-    ["Before", <>{detail.watching?.before ?? (current?.result?.before?.rate !== undefined ? rateText(current.result.before.rate) : current?.plan?.before_rate !== undefined ? rateText(current.plan.before_rate) : chart?.baseline_phrase)} {chart?.kind === "rate" ? unit : ""}</>],
-    detail.state === "watching" ? ["Since", since ? `${since} so far` : "nothing yet"] : current?.result?.after?.rate !== undefined ? ["After", rateText(current.result.after.rate)] : null,
-    current?.savings ? ["Saved so far", savedText(current.savings)] : detail.watching?.saved_usd !== undefined ? ["Saved so far", money(detail.watching.saved_usd)] : null,
+    ["Before", <>{early?.before ? rateText(detail.metric?.kind === "mean" ? early.before.median : early.before.rate) : detail.watching?.before ?? (current?.result?.before?.rate !== undefined ? rateText(current.result.before.rate) : current?.plan?.before_rate !== undefined ? rateText(current.plan.before_rate) : chart?.baseline_phrase)} {chart?.kind === "rate" ? unit : ""}</>],
+    detail.state === "watching" ? ["Since", early ? num(early.after?.units) > 0 ? `${rateText(detail.metric?.kind === "mean" ? early.after.median : early.after.rate)} so far` : "nothing yet" : since ? `${since} so far` : "nothing yet"] : current?.result?.after?.rate !== undefined ? ["After", rateText(current.result.after.rate)] : null,
+    detail.watching?.provisional?.savings ? ["Estimated saving", savedText(detail.watching.provisional.savings)] : current?.savings ? [detail.state === "watching" ? "Estimated saving" : "Saved so far", savedText(current.savings)] : detail.watching?.saved_usd !== undefined ? ["Estimated saving", money(detail.watching.saved_usd)] : null,
     detail.state === "watching" && detail.watching?.result_on ? ["Result", `around ${fullDay(detail.watching.result_on)}`] : current?.result && detail.result?.decided_at ? ["Result", fullDay(detail.result.decided_at)] : null,
     ...guards.map((guard): [string, React.ReactNode] => [`Also checked`, <>{guard.name}: {compact(guard.before)} → {compact(guard.after)}{guard.ok === false ? " (got worse)" : ""}</>]),
     ...harness.map((note, index): [string, React.ReactNode] => [index ? "Note " : "Note", <Text text={note} />]),
@@ -738,7 +824,7 @@ function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied
   return <div className="findings-detail-grid">
     <section className="findings-panel findings-chart-panel" aria-labelledby="findingsChartTitle">
       {chart ? <>
-        <div className="findings-panel-head"><h2 id="findingsChartTitle"><Text text={chart.title} />, by week</h2></div>
+        <div className="findings-panel-head"><h2 id="findingsChartTitle"><Text text={chart.title} />, by week <DataReadinessIndicator id="findings:weekly" title={chart.title} dataset="findings" /></h2></div>
         <WeeklyChart chart={chart} unit={unit} copiedLabel="Prompt copied" />
         {caption ? <p className="findings-caption">{caption}</p> : null}
         <WeeksTable chart={chart} unit={unit} />
@@ -755,14 +841,16 @@ function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied
       </section>
       <section className="findings-panel" aria-labelledby="findingsAttemptsTitle">
         <h2 id="findingsAttemptsTitle">Attempts</h2>
-        {attempts.length ? <ol className="findings-attempts">{attempts.map(attempt => <li key={`${attempt.attempt}-${attempt.copied_at}`} className={attempt.status}>
+        {attempts.length ? <ol className="findings-attempts">{attempts.map(attempt => {
+          const savings = attempt.result?.provisional?.savings ?? attempt.savings;
+          return <li key={`${attempt.attempt}-${attempt.copied_at}`} className={attempt.status}>
           <span className="findings-attempt-mark" aria-hidden="true" />
           <div><strong><Text text={attempt.change} /></strong>
             <span className="findings-muted">{fullDay(attempt.copied_at)} · {attemptStatus[attempt.status] ?? attempt.status}{attempt.regressed_at ? ` · came back ${day(attempt.regressed_at)}` : ""}</span>
             {attempt.result?.sentence ? <p><Text text={attempt.result.sentence} /></p> : null}
-            {attempt.savings && num(attempt.savings.usd) > 0 ? <p className="findings-muted">Saved {money(attempt.savings.usd)}{num(attempt.savings.added_usd) > 0 ? ` after ${money(attempt.savings.added_usd)} of added context` : ""}.</p> : null}
+            {savings && num(savings.usd) > 0 ? <p className="findings-muted">{attempt.status === "watching" ? "Estimated savings: " : "Saved "}{money(savings.usd)}{num(savings.added_usd) > 0 ? ` after ${money(savings.added_usd)} of added context` : ""}.</p> : null}
           </div>
-        </li>)}</ol> : <p className="findings-muted">Nothing tried yet. Copying a prompt with this finding starts the first attempt.</p>}
+        </li>; })}</ol> : <p className="findings-muted">Nothing tried yet. Copying a prompt with this finding starts the first attempt.</p>}
         {next && detail.state !== "dismissed" && detail.state !== "snoozed" ? <p className="findings-next">{detail.state === "watching" ? "If nothing changes, Pharos will suggest" : detail.state === "won" ? "If it comes back, Pharos will suggest" : "After this, Pharos would suggest"}: <Text text={lowerFirst(next.label)} />.</p> : null}
       </section>
     </div>
@@ -803,7 +891,8 @@ function FindingDetail({ id, tab, overview, act, rank, onReview, newIds }: { id:
   const group = detail.cart ? overview?.cart.find(item => item.target === detail.cart?.target) : undefined;
   const tabs: Array<[Route["tab"], string]> = [["overview", "Overview"], ["evidence", `Evidence · ${evidence.length}`], ["prompt", "Prompt"]];
   const onTab = (next: Route["tab"]) => replaceParams({ tab: next === "overview" ? "" : next });
-  return <div className="findings-page findings-detail">
+  return <div className="findings-page findings-layout with-cart findings-detail-layout">
+    <div className="findings-detail">
     <button type="button" className="findings-button findings-back" onClick={back}><Icon name="arrow-left" />Back to Optimize</button>
     <nav className="findings-breadcrumb" aria-label="Breadcrumb"><button type="button" className="findings-crumb" onClick={() => navigate("/findings")}>Findings</button><span aria-hidden="true">›</span><button type="button" className="findings-crumb" onClick={back}>{stateName}</button></nav>
     <h1><Text text={detail.title} /></h1>
@@ -813,10 +902,11 @@ function FindingDetail({ id, tab, overview, act, rank, onReview, newIds }: { id:
       <span className={`findings-chip ${chip.tone}`}>{chip.tone === "watching" ? <span className="findings-pulse" aria-hidden="true" /> : null}{chip.text}</span>
       {newIds.has(detail.id) ? <span className="findings-chip new">New</span> : null}
     </div>
-    <p className="findings-detail-explanation"><span className="findings-change-label">Problem</span> <Text text={detail.explanation} /></p>
-    <ImpactLine card={detail} rank={rank} />
+    {detail.state === "watching" ? <ProvisionalResult detail={detail} /> : null}
+    <p className="findings-detail-explanation"><span className="findings-change-label">{detail.state === "watching" ? "Original finding" : "Problem"}</span> <Text text={detail.explanation} /></p>
+    {detail.state !== "watching" ? <ImpactLine card={detail} rank={rank} /> : null}
     <p className="findings-change"><span className="findings-change-label">{solutionLabel(detail)}</span> <Text text={detail.change} /></p>
-    {detail.state !== "watching" ? <StateNote card={detail} /> : null}
+    {detail.state !== "watching" || !detail.watching?.provisional ? <StateNote card={detail} /> : null}
     <div className="findings-actions">
       {detail.state === "open" ? <><AddToPrompt card={detail} targets={overview?.targets ?? []} act={act} />{group ? <button type="button" className="findings-button" onClick={() => onReview(group)} disabled={!group.ticked}>Review that prompt</button> : null}<SnoozeDismiss card={detail} act={act} /></> : null}
       {detail.state === "dismissed" || detail.state === "snoozed" ? <button type="button" className="findings-button" onClick={() => void act(detail.id, { action: "restore" }, "Restored to open findings.")}>Restore</button> : null}
@@ -834,6 +924,8 @@ function FindingDetail({ id, tab, overview, act, rank, onReview, newIds }: { id:
         {detail.state === "open" ? <div className="findings-actions"><AddToPrompt card={detail} targets={overview?.targets ?? []} act={act} />{group ? <button type="button" className="findings-button" onClick={() => onReview(group)} disabled={!group.ticked}>Review that prompt</button> : null}</div> : null}
       </div> : null}
     </div>
+    </div>
+    <CartPanel cart={overview?.cart ?? []} targets={overview?.targets ?? []} act={act} onReview={onReview} />
   </div>;
 }
 
@@ -913,7 +1005,7 @@ function FindingsSettings({ overview, reload }: { overview: Overview | null; rel
   }
   const position = (index: number) => checkpoints.length > 1 ? `${(index / (checkpoints.length - 1)) * 100}%` : "0%";
   return <div className="findings-page findings-settings">
-    <div className="view-heading"><div><h1>Efficiency settings</h1><p className="muted">How much evidence an efficiency pattern needs, how findings are ranked, and what change prompts ask agents to make. Saved in the library, so they apply on every Mac. Risky action reviews use separate prompts and can qualify from a single event.</p></div></div>
+    <div className="view-heading"><div><h1>Efficiency settings</h1><p className="muted">How much evidence an efficiency pattern needs, how findings are ranked, and what change prompts ask agents to make. Saved in the library, so they apply on every Mac. Risky action notices use separate prompts and can be raised by a single event.</p></div></div>
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
 
     <section className="findings-panel findings-setting" aria-labelledby="findingsThresholdTitle">
@@ -1033,8 +1125,8 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
   const showCart = route.list !== "wins";
   return <div className="findings-page">
     <div className="view-heading findings-heading">
-      <div><h1>Efficiency</h1>
-        <p className="muted">Recurring patterns in your agents' work that a change to a repository, its instructions, or a harness setting can fix. Each is measured before and after you hand it to an agent.</p>
+      <div><h1>Efficiency <DataReadinessIndicator id="findings:overview" title="Efficiency" dataset="findings" query={route} /></h1>
+        <p className="muted">Recurring patterns in your agents' work that a change to a repository, its instructions, or an agent app setting can fix. Each is measured before and after you hand it to an agent.</p>
         {built ? <p className="findings-updated">{status.running ? <>Updating{status.phase ? ` · ${status.phase}` : ""}… </> : null}Updated {whenText(status.built_at)} from {counted(Math.round(num(status.conversations_28d)), "conversation")}.</p> : null}
       </div>
     </div>
@@ -1068,15 +1160,17 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
 
 // ---------------------------------------------------------------- page
 
-export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?: React.ReactNode; safetyTable?: React.ReactNode }) {
+export function FindingsPage({ copy, table, safetyTable, fixesTable }: { copy: Copy; table?: React.ReactNode; safetyTable?: React.ReactNode; fixesTable?: React.ReactNode }) {
   const [area] = useViewState<string>("optimize_area", "efficiency", location.pathname === "/findings");
+  // Risky actions and Fixes are review areas with their own pages and prompts.
+  const reviewArea = area === "safety" || area === "fixes";
   const [route, setRoute] = useState<Route>(readRoute);
   const [overview, setOverview] = useState<Overview | null>(latest);
   const [error, setError] = useState("");
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
   const [review, setReview] = useState<string>("");
   const [toast, setToast] = useState("");
-  const [rankOverride, setRankOverride] = useViewState<Rank | "">("findings_rank", "", area !== "safety" && location.pathname === "/findings" && new URLSearchParams(location.search).get("view") !== "settings");
+  const [rankOverride, setRankOverride] = useViewState<Rank | "">("findings_rank", "", !reviewArea && location.pathname === "/findings" && new URLSearchParams(location.search).get("view") !== "settings");
   const toastTimer = useRef<number>();
   const listScroll = useRef(0);
 
@@ -1096,7 +1190,7 @@ export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?:
         return next;
       });
       if (!wasOpen) {
-        const safety = new URLSearchParams(location.search).get("optimize_area") === "safety";
+        const safety = ["safety", "fixes"].includes(new URLSearchParams(location.search).get("optimize_area") ?? "");
         wasOpen = !safety;
         // A visit: remember which findings were new, then mark them seen.
         void reload().then(body => {
@@ -1117,10 +1211,10 @@ export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?:
 
   // Refresh while a pass is running so the page fills in when it's done.
   useEffect(() => {
-    if (area !== "safety" && (!overview?.status?.running || route.view === "settings")) return;
+    if (!reviewArea && (!overview?.status?.running || route.view === "settings")) return;
     const poll = window.setInterval(() => { if (!document.hidden && location.pathname === "/findings") void reload(); }, overview?.status?.running ? 3000 : 15000);
     return () => window.clearInterval(poll);
-  }, [overview?.status?.running, route.view, area, reload]);
+  }, [overview?.status?.running, route.view, reviewArea, reload]);
 
   const say = useCallback((message: string) => {
     setToast(message);
@@ -1137,7 +1231,7 @@ export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?:
     } catch (failure) { say(`Couldn't do that: ${(failure as Error).message}`); return false; }
   }, [reload, say]);
 
-  useEffect(()=>{if(area!=="safety" && overview && !rankOverride && location.pathname==="/findings" && route.view!=="settings")setRankOverride(findingsRank("", overview.settings?.rank).rank);},[overview?.settings?.rank,rankOverride,route.view,area]);
+  useEffect(()=>{if(!reviewArea && overview && !rankOverride && location.pathname==="/findings" && route.view!=="settings")setRankOverride(findingsRank("", overview.settings?.rank).rank);},[overview?.settings?.rank,rankOverride,route.view,reviewArea]);
   const rank: Rank = findingsRank(rankOverride, overview?.settings?.rank).rank;
   const setRank = (next: Rank) => {
     const choice = findingsRank(rankOverride, overview?.settings?.rank, next);
@@ -1148,6 +1242,7 @@ export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?:
 
   let body: React.ReactNode;
   if (area === "safety") body = <SafetyPage copy={copy} view={route.view} table={safetyTable} refreshDiscovery={reload} />;
+  else if (area === "fixes") body = <FixesPage copy={copy} view={route.view === "settings" || route.view === "table" ? route.view : ""} table={fixesTable} refreshDiscovery={reload} />;
   else if (route.view === "settings") body = <>{error ? <p className="findings-error" role="alert">{error}</p> : null}<FindingsSettings overview={overview} reload={reload} /></>;
   else if (route.view === "table") body = null;
   else if (route.finding) body = <FindingDetail id={route.finding} tab={route.tab} overview={overview} act={act} rank={rank} onReview={next => setReview(next.target)} newIds={newIds} />;
@@ -1157,12 +1252,10 @@ export function FindingsPage({ copy, table, safetyTable }: { copy: Copy; table?:
   // The table stays mounted so its query survives visits to a finding.
   return <>
     {body}
-    {table ? <div className="findings-page findings-table" hidden={area === "safety" || route.view !== "table"}>
-      <div className="view-heading findings-heading"><div><h1>Findings table</h1><p className="muted">Every finding as a row, with its state, kind of fix, likely monthly saving and verified results. Group, filter and chart them like any table.</p></div>
-      </div>
+    {table ? <div className="findings-page findings-table" hidden={reviewArea || route.view !== "table"}>
       {table}
     </div> : null}
-    {group && area !== "safety" ? <ReviewDialog group={group} copy={copy} onClose={() => setReview("")} onCopied={() => { setReview(""); void reload(); say("Copied. Measuring has started."); }} /> : null}
+    {group && !reviewArea ? <ReviewDialog group={group} copy={copy} onClose={() => setReview("")} onCopied={() => { setReview(""); void reload(); say("Copied. Measuring has started."); }} /> : null}
     <div className={`findings-toast ${toast ? "shown" : ""}`} role="status" aria-live="polite">{toast}</div>
   </>;
 }

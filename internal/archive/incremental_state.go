@@ -8,10 +8,14 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 var errCatalogIngestBusy = errors.New("source indexing is already running for this catalog; retry when it finishes")
+
+// Tests replace the mechanism serially to exercise acquisition failures.
+var lockCatalogIngestFile = filelock.Lock
 
 // The service's ingest mutex also participates in CLI replay coordination.
 // Keep the file lease for the complete ingest, before any capture/DB locks.
@@ -26,9 +30,9 @@ func lockCatalogIngest(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = syscall.Flock(int(lease.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err = lockCatalogIngestFile(lease, filelock.Exclusive, filelock.Try); err != nil {
 		lease.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+		if errors.Is(err, filelock.ErrContended) {
 			return nil, errCatalogIngestBusy
 		}
 		return nil, err

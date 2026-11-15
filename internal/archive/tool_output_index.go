@@ -445,6 +445,7 @@ func toolOutputPosting(fts string) string {
 type toolOutputMigration struct {
 	removal, merge batchSizer
 	removed        bool
+	merged         int
 }
 
 func newToolOutputMigration() *toolOutputMigration {
@@ -453,7 +454,13 @@ func newToolOutputMigration() *toolOutputMigration {
 
 // step is the migration's next step: a removal batch, then merge steps
 // once removal is done.
-func (m *toolOutputMigration) step(ctx context.Context, c *Catalog) (bool, error) {
+func (m *toolOutputMigration) step(ctx context.Context, c *Catalog) (more bool, err error) {
+	m.report(ctx, c)
+	defer func() {
+		if err == nil {
+			m.report(ctx, c)
+		}
+	}()
 	if m.removed {
 		m.removed = false
 		_, held, err := c.mergeWordIndexStep(ctx, m.merge.next(), false)
@@ -468,24 +475,47 @@ func (m *toolOutputMigration) step(ctx context.Context, c *Catalog) (bool, error
 	}
 	more, held, err = c.mergeWordIndexStep(ctx, m.merge.next(), true)
 	m.merge.held(held)
+	if err == nil {
+		m.merged++
+	}
 	return more, err
+}
+
+func (m *toolOutputMigration) report(ctx context.Context, c *Catalog) {
+	if opFrom(ctx) == nil {
+		return
+	}
+	progress, err := c.toolOutputIndexProgress(ctx)
+	if err != nil || progress.Ready {
+		return
+	}
+	if progress.Phase == "removing" {
+		reportWork(ctx, "Removing tool output from word search", "index row", int(progress.Done), int(progress.Total))
+	} else {
+		// FTS supplies no trustworthy denominator for the final merges.
+		reportWork(ctx, "Compacting word search", "merge batch", m.merged, -1)
+	}
 }
 
 // maintainToolOutputIndex removes tool output from the word index of a
 // catalog written before it was left out, then returns.
 func (c *Catalog) maintainToolOutputIndex(ctx context.Context) {
+	schedule := searchScheduleGate{}
 	// One operation for the whole migration, forgotten if there was none.
-	pass := c.beginPass(ctx, "maintenance.search.tool-output", triggerVersion)
+	var pass *daemonPass
 	defer func() { pass.end(nil) }()
 	migration := newToolOutputMigration()
 	for {
-		if c.queries.wait(ctx) != nil {
+		if schedule.wait(ctx, c, &pass) != nil || c.queries.wait(pass.context(ctx)) != nil {
 			return
+		}
+		if pass == nil {
+			pass = c.beginPass(ctx, "maintenance.search.tool-output", triggerVersion)
 		}
 		var more bool
 		var err error
-		pass.runIO(func() { more, err = migration.step(ctx, c) })
-		if more {
+		pass.runIO(ctx, func(ctx context.Context) { more, err = migration.step(ctx, c) })
+		if more && err == nil {
 			pass.worked(1)
 		}
 		wait := 20 * time.Millisecond

@@ -47,7 +47,7 @@ func TestJournalWritesStartsAndEndsAndCoalescesSteps(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := journalRows(t, catalog)
-	if row := rows["index.captures"]; row.State != opRunning || row.Legacy != "run-1" || row.Process != "service" || row.Instance != reg.instance || row.EndedAt != "" {
+	if row := rows["index.captures"]; row.State != opRunning || row.Label != "Index captures" || row.Legacy != "run-1" || row.Process != "service" || row.Instance != reg.instance || row.EndedAt != "" {
 		t.Fatalf("start row: %+v", row)
 	}
 	if _, ok := rows["maintenance.search.text"]; ok {
@@ -60,6 +60,7 @@ func TestJournalWritesStartsAndEndsAndCoalescesSteps(t *testing.T) {
 	for range 100 {
 		index.Advance(1)
 	}
+	index.progress("Index captured inputs", "", "conversation", 100, 100, true, "Saved 1,234 messages")
 	quick.Finish(nil)
 	clock = clock.Add(31 * time.Second)
 	index.Finish(nil)
@@ -70,6 +71,9 @@ func TestJournalWritesStartsAndEndsAndCoalescesSteps(t *testing.T) {
 	row := rows["index.captures"]
 	if row.State != opSucceeded || row.EndedAt == "" || row.StepName != "Index captured inputs" || row.StepDone != 100 || row.StepTotal == nil || *row.StepTotal != 100 {
 		t.Fatalf("end row: %+v", row)
+	}
+	if step := operationStep(foreignView(leaseInfo{}, row)); step["detail"] != "Saved 1,234 messages" {
+		t.Fatalf("journal lost step detail: %+v", step)
 	}
 	if _, ok := rows["maintenance.search.text"]; ok {
 		t.Fatal("an if-longer-than operation that ended sooner was written")
@@ -556,7 +560,7 @@ func TestJournalRoundInterruptedMidTransactionReleasesTheLock(t *testing.T) {
 	override(t, &journalRoundDeadline, 30*time.Millisecond)
 	// Each journal row now takes far longer than the round's deadline.
 	execTx(t, catalog.DB, `CREATE TRIGGER slow_journal AFTER INSERT ON operation_journal BEGIN
-		INSERT INTO meta(key,value) SELECT 'slow-journal', (WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<30000000) SELECT SUM(i) FROM n)
+		INSERT INTO meta(key,value) SELECT 'slow-journal', (WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<3000000) SELECT SUM(i) FROM n)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value; END`)
 	if err := journal.round(context.Background(), 0); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a round slower than its deadline: %v", err)

@@ -74,7 +74,7 @@ func runCloudRestoreCLI(args []string) error {
 	if len(args) != 2 {
 		return errors.New("usage: pharos cloud-restore DOWNLOADED_ARCHIVE NEW_OUTPUT_FOLDER")
 	}
-	archive, err := os.OpenFile(expandPath(args[0]), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	archive, err := openInputNonblocking(expandPath(args[0]))
 	if err != nil {
 		return err
 	}

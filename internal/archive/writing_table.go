@@ -61,8 +61,7 @@ type writingTable struct {
 }
 
 // writingData returns the writing rows and, per row ID, its daily text. They
-// are kept until the next commit or local day (costs at today's prices follow
-// the date), and must not be modified.
+// are kept until the next commit, and must not be modified.
 func (c *Catalog) writingData(ctx context.Context) ([]map[string]any, map[string]map[string]*writingDay, error) {
 	c.ensureAuthorship()
 	return c.cachedWritingData(ctx)
@@ -70,7 +69,7 @@ func (c *Catalog) writingData(ctx context.Context) ([]map[string]any, map[string
 
 // cachedWritingData is writingData without bringing authorship up to date.
 func (c *Catalog) cachedWritingData(ctx context.Context) ([]map[string]any, map[string]map[string]*writingDay, error) {
-	table, err := cachedValue(ctx, c, "writing:"+c.clock().Format("2006-01-02"), c.computeWritingData)
+	table, err := cachedValue(ctx, c, "writing", c.computeWritingData)
 	return table.rows, table.daily, err
 }
 
@@ -87,9 +86,9 @@ func (c *Catalog) computeWritingDataByPeriod(ctx context.Context, hourly bool) (
 	if err != nil {
 		return writingTable{}, err
 	}
-	works, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,w.title,w.source_kind,r.display_name repository_name,
+	works, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,w.title,w.source_kind,r.display_name repository_name,`+projectNameSQL("w")+` project_name,
 			(SELECT GROUP_CONCAT(DISTINCT cx.provider) FROM conversations cx WHERE cx.workspace_id=w.id) providers
-		FROM workspaces w LEFT JOIN repositories r ON r.id=w.repository_id`)
+		FROM workspaces w LEFT JOIN repositories r ON r.id=w.repository_id`+projectJoin("w"))
 	if err != nil {
 		return writingTable{}, err
 	}
@@ -201,11 +200,11 @@ func (c *Catalog) writingPeriods(ctx context.Context, parents map[string]string,
 
 func writingRow(work map[string]any, total *writingDay, spent *workspaceUsageTotal, subagents, launched int) map[string]any {
 	row := map[string]any{
-		"id": work["id"], "workspace_id": work["id"], "title": work["title"], "repository_name": work["repository_name"],
+		"id": work["id"], "workspace_id": work["id"], "title": work["title"], "repository_name": work["repository_name"], "project_name": work["project_name"],
 		"source_kind": work["source_kind"], "providers": work["providers"],
 		"first_message_at": nilIfEmpty(total.firstSent), "last_message_at": nilIfEmpty(total.lastSent),
 		"user_turns": total.messages, "typed_turns": total.typedMessages, "longest_typed_words": total.longestTyped,
-		"total_tokens": spent.tokens, "cost_usd": spent.cost, "cost_today_usd": spent.today, "price_status": nilIfEmpty(spent.status),
+		"total_tokens": spent.tokens, "cost_usd": spent.cost, "price_status": nilIfEmpty(spent.status),
 		"subagent_works": int64(subagents), "launched_works": int64(launched),
 	}
 	words := int64(0)
@@ -290,7 +289,7 @@ func rootWorkspace(id string, parents map[string]string) string {
 }
 
 // writingSplits are the row fields the writing chart can split its words by.
-var writingSplits = map[string]bool{"repository_name": true, "source_kind": true, "providers": true, "channel": true, "machine_id": true, "execution_machine_id": true, "channels": true, "machines": true, "execution_machines": true}
+var writingSplits = map[string]bool{"repository_name": true, "project_name": true, "source_kind": true, "providers": true, "channel": true, "machine_id": true, "execution_machine_id": true, "channels": true, "machines": true, "execution_machines": true}
 
 // writingSeries sums, per day, the classified text of the writing rows that
 // match the request's filters, and totals it, so the page's chart and
@@ -331,7 +330,7 @@ func (c *Catalog) writingSeries(ctx context.Context, request writingSeriesReques
 			return nil, err
 		}
 	} else if request.Hourly {
-		table, hourlyErr := cachedValue(ctx, c, "writing-hourly:"+c.clock().Format("2006-01-02"), func(ctx context.Context) (writingTable, error) {
+		table, hourlyErr := cachedValue(ctx, c, "writing-hourly", func(ctx context.Context) (writingTable, error) {
 			return c.computeWritingDataByPeriod(ctx, true)
 		})
 		if hourlyErr != nil {

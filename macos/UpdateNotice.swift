@@ -392,9 +392,19 @@ struct UpdateCommands: Commands {
             updates.deferInstallation(completion: completion)
         }
         service.resumeUpdates = { [weak updates] in updates?.resumeAfterFailedEject() }
-        updates.prepareInstallation = { [weak service] completion in
+        updates.prepareInstallation = { [weak self, weak service] completion in
             guard let service else { completion(UpdateFailure(message: "Pharos is closing.")); return }
-            service.prepareToTerminate(installing: true, completion: completion)
+            // An explicit install waits for work that cannot stop in time,
+            // as an eject does, and says why it did not install.
+            service.prepareToTerminate(installing: true, unlessBusy: true) { error in
+                completion(error)
+                if let error {
+                    DispatchQueue.main.async {
+                        self?.showFailure(error, title: "The update was not installed",
+                                          next: "Choose Check for Updates… once it has finished to install the update.")
+                    }
+                }
+            }
         }
         updates.cancelInstallationPreparation = { [weak service] in service?.cancelUpdatePreparation() }
     }
@@ -449,10 +459,10 @@ struct UpdateCommands: Commands {
         }
     }
 
-    private func showFailure(_ error: Error) {
+    private func showFailure(_ error: Error, title: String = "Pharos is still in use", next: String? = nil) {
         let alert = NSAlert()
-        alert.messageText = "Pharos is still in use"
-        alert.informativeText = error.localizedDescription
+        alert.messageText = title
+        alert.informativeText = [error.localizedDescription, next].compactMap { $0 }.joined(separator: " ")
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }

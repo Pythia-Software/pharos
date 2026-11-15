@@ -27,10 +27,10 @@ func TestMessageSearchFiltersExactRowsAndMetrics(t *testing.T) {
 		t.Fatalf("unexpected search: %+v", matches.search)
 	}
 	schema, _ := sqliteQuerySchema("writing_messages")
-	d := queryV2Dataset("writing_messages", schema)
-	d.SourceSQL = table.v2Source(schema)
-	rows := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "text"}, Limit: 50}}
-	result, err := d.ExecuteV2(context.Background(), c.DB, &rows, nil, qt.PlanOptions{})
+	d := queryFixtureFor("writing_messages", schema)
+	d.SourceSQL = table.querySourceSQL(schema)
+	rows := queryFixtureRows{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "text"}, Limit: 50}}
+	result, err := d.executeFixture(context.Background(), c.DB, &rows, nil, qt.PlanOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestMessageSearchFiltersExactRowsAndMetrics(t *testing.T) {
 		t.Fatalf("filtered wrong records: %+v", result.Rows)
 	}
 	metrics := metricRequest(qt.AggSpec{ID: "n", Expression: "COUNT()"})
-	counted, err := d.ExecuteV2(context.Background(), c.DB, nil, &metrics, qt.PlanOptions{})
+	counted, err := d.executeFixture(context.Background(), c.DB, nil, &metrics, qt.PlanOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,8 +56,8 @@ func TestMessageSearchFiltersExactRowsAndMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.SourceSQL = table.v2Source(schema)
-	empty, err := d.ExecuteV2(context.Background(), c.DB, &rows, nil, qt.PlanOptions{})
+	d.SourceSQL = table.querySourceSQL(schema)
+	empty, err := d.executeFixture(context.Background(), c.DB, &rows, nil, qt.PlanOptions{})
 	if err != nil || len(empty.Rows.Rows) != 0 || empty.Rows.Total != 0 {
 		t.Fatalf("a search with no matches broadened the dataset: %+v %v", empty.Rows, err)
 	}

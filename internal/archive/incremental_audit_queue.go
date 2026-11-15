@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -88,7 +89,8 @@ func (s *Server) verifyQueued(ctx context.Context, op *Op) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, heavyAuditWall)
+	parent := ctx
+	ctx, cancel := context.WithTimeout(parent, heavyAuditWall)
 	defer cancel()
 	op.Step("Verify queued inputs", "input", int64(len(rows)))
 	remaining := map[string]map[string]bool{}
@@ -115,11 +117,25 @@ func (s *Server) verifyQueued(ctx context.Context, op *Op) error {
 		// database identities match, and pin that reader through verification.
 		input, err := s.Catalog.acquireRetainedInput(ctx, adapter, nil)
 		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
 			failure = errors.Join(failure, err)
 			continue
 		}
 		defer input.Close()
 		adapter = input.Adapter
+		// A queued Conductor check already names its sessions. Listing every
+		// session's message statistics can consume the entire batch budget on
+		// a large live database before the first queued input is reached.
+		if conductor, ok := adapter.(*conductorAdapter); ok {
+			conductor.selected = map[string]bool{}
+			for unit := range selected {
+				if separator := strings.LastIndex(unit, ":sessions:"); separator >= 0 {
+					conductor.selected[unit[separator+len(":sessions:"):]] = true
+				}
+			}
+		}
 		partial, ok := adapter.(partialAdapter)
 		if !ok {
 			continue
@@ -137,6 +153,9 @@ func (s *Server) verifyQueued(ctx context.Context, op *Op) error {
 			return errors.New("verification discovery attempted to parse")
 		})
 		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
 			failure = errors.Join(failure, err)
 			continue
 		}
@@ -155,18 +174,26 @@ func (s *Server) verifyQueued(ctx context.Context, op *Op) error {
 			}
 		}
 	}
-	// Missing or disabled sources remain pending with backoff. They do not
-	// manufacture coverage, disappear from the queue, or spin every tick.
+	// Unfinished inputs remain pending with backoff, including when discovery
+	// exhausted this pass's budget. Use the parent so the local deadline cannot
+	// prevent saving the retry or leave the same inputs blocking every batch.
+	// A service stop still cancels the pass and leaves its durable queue alone.
+	reason := "source_unavailable"
+	if ctx.Err() == context.DeadlineExceeded && parent.Err() == nil {
+		reason = "time_budget"
+	}
 	for source, units := range remaining {
 		for unit := range units {
-			if ctx.Err() != nil {
+			if parent.Err() != nil {
 				break
 			}
-			_, err := s.Catalog.DB.ExecContext(ctx, "UPDATE sync_verification_progress SET next_at=?,reason='source_unavailable' WHERE host_id=? AND source_name=? AND unit=? AND heavy=1", formatTime(time.Now().Add(auditRetry)), currentHost().ID, source, unit)
+			_, err := s.Catalog.DB.ExecContext(parent, "UPDATE sync_verification_progress SET next_at=?,reason=? WHERE host_id=? AND source_name=? AND unit=? AND heavy=1", formatTime(time.Now().Add(auditRetry)), reason, currentHost().ID, source, unit)
 			if err != nil {
 				return err
 			}
 		}
 	}
-	return errors.Join(failure, ctx.Err())
+	// Reaching our own batch limit is a deferral, just as in auditUnit. Real
+	// read failures and cancellation of the parent remain operation failures.
+	return errors.Join(failure, parent.Err())
 }

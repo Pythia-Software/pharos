@@ -10,6 +10,7 @@ const carried = new URLSearchParams({
   tools_view: "summary",
   q_tools: encodeQuery({ ...EMPTY_QUERY, select: [{ field: "tool_name" }, { field: "call_count" }] }),
   q_library: encodeQuery({ ...EMPTY_QUERY, select: [{ field: "title" }] }),
+  view: "table",
   text_builder: JSON.stringify({ editor: "visual", match: "rules", text: "", mode: "advanced", root: { id: "group-3", kind: "group", join: "all", exclude: false, children: [{ id: "rule-5", kind: "phrase", text: "lock this to another object", other: "", distance: "8", exclude: false }] }, scope: { surface: "prose", roles: [], kinds: [], repository: "", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" }, fuzzy: false, caseSensitive: false, separators: false }),
 });
 const queryURL = "/analyze?analyze_mode=query&analyze_data=mcp_calls&analyze_topic=mcp";
@@ -21,7 +22,7 @@ async function navigate(page, href) {
 // The fallback without AbortSignal.any is unit-tested (metric-request.test.mjs).
 test("MCP opens and reopens after Tools and a Library text search", { skip }, async t => {
     const app = await open(t, { url: `/library?${carried}`, ready: "#queryTableLibrary .qt-table" });
-    for (const [href, ready] of [[`/tools?${carried}`, "#toolsPage .qt-row"], [queryURL, `${table} .qt-row`], [`/library?${carried}`, "#queryTableLibrary .qt-row"], [queryURL, `${table} .qt-row`]]) {
+    for (const [href, ready] of [[`/tools?${carried}`, `${table} .qt-row`], [queryURL, `${table} .qt-row`], [`/library?${carried}`, "#queryTableLibrary .qt-row"], [queryURL, `${table} .qt-row`]]) {
       await navigate(app.page, href);
       await app.page.locator(ready).first().waitFor();
     }

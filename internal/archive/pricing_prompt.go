@@ -54,7 +54,7 @@ func (c *Catalog) pricingRefreshPrompt(health map[string]any) string {
 	}
 	var prompt strings.Builder
 	fmt.Fprintf(&prompt, "Refresh the API price history that Pharos uses to compute API-equivalent cost. Today is %s.\n\n", today)
-	fmt.Fprintf(&prompt, "Work in %s. Edit only `pricing/cost_changes.json`. Read `pricing/README.md` first: it defines the file contract, and the rules below restate the parts that matter most.\n\n", location)
+	fmt.Fprintf(&prompt, "Work in %s. Edit `pricing/cost_changes.json` and regenerate `pricing/model_colors.json`. Edit `pricing/model_color_rules.json` only when a genuinely new class needs a rule and reviewed capability order. Read `pricing/README.md` first: it defines the file contracts, and the rules below restate the parts that matter most.\n\n", location)
 
 	prompt.WriteString("## What to research\n\n")
 	unpriced, _ := health["unpriced_models"].([]map[string]any)
@@ -101,6 +101,10 @@ func (c *Catalog) pricingRefreshPrompt(health map[string]any) string {
 - Only when a model genuinely has no published API price (for example, a Codex-only or pre-launch model), you may propose a row with ` + "`\"assumption\": true`" + ` priced from its closest published sibling. Its ` + "`notes`" + ` must name the sibling and explain why it's a reasonable basis.
 - Ignore placeholder model strings such as ` + "`<synthetic>`" + `; they aren't API calls.
 
+## Dashboard model colors
+
+For each newly priced model, run ` + "`npm --prefix web run generate-model-colors -- --preview`" + ` after updating prices. The generator adds recognizable models and rebalances the entire default palette using ` + "`pricing/model_color_rules.json`" + `. Existing default colors may change; do not preserve them at the expense of useful version separation. Follow ` + "`pricing/README.md`" + ` for class and provider rules. A genuinely new class needs an explicit rule and capability order; do not guess its rank. Alias rows do not need a separate color unless their target model is missing one.
+
 ## Check your work
 
 `)
@@ -109,7 +113,7 @@ func (c *Catalog) pricingRefreshPrompt(health map[string]any) string {
 	} else {
 		prompt.WriteString("Run `go test ./internal/archive -run 'Pricing|Price|Cost'` from the repository root and fix any problems it reports. ")
 	}
-	prompt.WriteString("`go run ./cmd/pharos pricing check` also validates the file and lists models that are still unpriced.\n\n")
+	prompt.WriteString("`go run ./cmd/pharos pricing check` also validates the file and lists models that are still unpriced. If you update model colors, run `npm --prefix web run build` and `npm --prefix web test -- chart-colors` using Node 24.\n\n")
 	prompt.WriteString(`## Approval and handoff
 
 Present a table of every row you added (model or alias, effective_from, rates, source URL), plus anything you couldn't source and why. Then explicitly ask: "Do you approve these pricing changes?"

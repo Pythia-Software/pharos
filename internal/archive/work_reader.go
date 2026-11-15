@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/gbdubs/pharos/estimation"
 )
 
 // The transcript reader loads a workspace in pieces: an overview without
@@ -33,13 +36,17 @@ const (
 // Kinds whose bodies the reader shows only when an event is expanded. Prose,
 // tool calls, and delegations stay whole: their text is shown or measured
 // (edit diffs) while collapsed.
-var readerClippedKinds = map[string]bool{"tool_result": true, "metadata": true, "result": true, "context": true, "error": true}
+var readerClippedKinds = map[string]bool{"tool_result": true, "metadata": true, "result": true, "context": true, "attachment": true, "error": true}
 
-const readerMessageColumns = "id,native_id,role,kind,model,effort,text,raw_text,created_at,parent_native_id,call_id,reasoning_format"
+const readerMessageColumns = "id,native_id,role,kind,model,effort,text,raw_text,created_at,parent_native_id,call_id,reasoning_format,selected"
 
 // WorkOverview is the workspace detail page's first request: everything but
 // the messages, plus what the page used to derive by scanning all of them.
 func (c *Catalog) WorkOverview(id string) (map[string]any, error) {
+	return c.workOverviewWithPeers(id, false)
+}
+
+func (c *Catalog) workOverviewWithPeers(id string, includeUncertain bool) (map[string]any, error) {
 	result, err := c.workDetail(id, false)
 	if err != nil || result == nil {
 		return result, err
@@ -62,6 +69,24 @@ func (c *Catalog) WorkOverview(id string) (map[string]any, error) {
 		return nil, err
 	}
 	if result["files"], err = c.workFileTargets(id); err != nil {
+		return nil, err
+	}
+	// The page shows its Files and commits section only when it has
+	// something to list (WorkFiles): an edited file or a linked commit. File
+	// targets include reads, and a session that only committed, through a
+	// shell, has commits but no file targets.
+	var edited, linked int
+	if err := c.reader().QueryRow(`SELECT (SELECT COUNT(*) FROM session_files WHERE workspace_id=?),(SELECT COUNT(*) FROM session_commit_links WHERE workspace_id=?)`, id, id).Scan(&edited, &linked); err != nil {
+		return nil, err
+	}
+	result["edited_files"], result["linked_commits"] = edited, linked
+	// Related top-level work (peer_reader.go).
+	peers, err := c.workPeers(context.Background(), id)
+	if err != nil {
+		return nil, err
+	}
+	result["peers"] = peers
+	if result["peer_conversations"], err = c.peerConversations(context.Background(), peers, includeUncertain); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -125,17 +150,38 @@ func (c *Catalog) workFileTargets(workspaceID string) ([]map[string]any, error) 
 // such messages carry text_clipped/raw_clipped and are fetched whole with
 // MessageOriginal when the reader expands them.
 func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[string]any, error) {
-	return c.workConversation(workspaceID, conversationID, true)
+	return c.WorkConversationContext(context.Background(), workspaceID, conversationID)
 }
 
-// workConversation is WorkConversation, optionally leaving every body whole
-// (a shared export carries the full text, so its reader never asks for more).
-func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool) (map[string]any, error) {
+// WorkConversationContext is WorkConversation stopping with ctx (the
+// request), including the freshness reads of its labels and events.
+func (c *Catalog) WorkConversationContext(ctx context.Context, workspaceID, conversationID string) (map[string]any, error) {
 	rows, err := queryMaps(c.reader(), "SELECT * FROM conversations WHERE id=? AND workspace_id=?", conversationID, workspaceID)
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
 	conversation := rows[0]
+	estimates := newUsageEstimationBuilder(firstString(conversation["harness"]))
+	if firstString(conversation["harness"]) == "claude-ai-export" {
+		observations, err := c.claudeConversationSettings(ctx, firstString(conversation["account"]), firstString(conversation["native_id"]))
+		if err != nil {
+			return nil, err
+		}
+		if len(observations) > 0 {
+			estimates.selections = observations
+			conversation["selected_settings"] = map[string]any{"scope": "observed_conversation_selection", "observations": observations[:min(500, len(observations))], "truncated": len(observations) > 500}
+		}
+	}
+	if firstString(conversation["harness"]) == "claude-export-document" {
+		// The conversations that made an exported artifact (message_assets.go).
+		origins, err := c.artifactOrigins(ctx, conversationID)
+		if err != nil {
+			return nil, err
+		}
+		if origins != nil {
+			conversation["made_in"] = origins
+		}
+	}
 	sessions, err := queryMaps(c.reader(), `SELECT * FROM agent_sessions WHERE workspace_id=? AND conversation_id=? AND usage_status<>'in-child-conversation'`, workspaceID, conversationID)
 	if err != nil {
 		return nil, err
@@ -144,31 +190,57 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 	if err != nil {
 		return nil, err
 	}
-	// Local labels are for the live reader; a shared export leaves them out.
-	attachLabels, labelsSummary := func(map[string]any) {}, func() (map[string]any, error) { return nil, nil }
-	attachEvents, eventsSummary := func(map[string]any) {}, func() (map[string]any, error) { return nil, nil }
-	if clip {
-		if attachLabels, labelsSummary, err = c.messageLabelsAttacher(conversationID); err != nil {
-			return nil, err
-		}
-		// Agent events (agent_events.go), likewise only in the live reader.
-		if attachEvents, eventsSummary, err = c.agentEventsAttacher(conversationID); err != nil {
-			return nil, err
-		}
+	attachLabels, labelsSummary, err := c.messageLabelsAttacherContext(ctx, conversationID, nil)
+	if err != nil {
+		return nil, err
+	}
+	// Agent events (agent_events.go).
+	attachEvents, eventsSummary, linkEvents, err := c.agentEventsAttacherContext(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	// Engagement spans of what the person typed (engagement.go).
+	attachEngagement, engagementSummary, err := c.engagementAttacher(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	// Hand-offs to and from related work (peer_reader.go).
+	attachPeers, err := c.messagePeerAttacher(conversationID)
+	if err != nil {
+		return nil, err
+	}
+	// Files and sources its messages refer to (message_assets.go).
+	attachAssets, err := c.messageAssetsAttacher(ctx, conversationID)
+	if err != nil {
+		return nil, err
 	}
 	// With ledger usage, whole bodies are only needed while attaching authorship
 	// and clipping a row. Do that before retaining it, rather than keeping every
 	// original output alive until the entire conversation has been read.
-	previewRows := clip && len(sessions) > 0
+	previewRows := len(sessions) > 0
+	childCalls, err := storedChildUsageCalls(c.reader(), conversationID)
+	if err != nil {
+		return nil, err
+	}
 	prepare := func(message map[string]any) {
+		estimates.observe(message)
+		if conversation["provider"] == "chatgpt" {
+			message["source_provider"] = "chatgpt"
+		}
+		if firstString(message["kind"]) == "delegation_result" && childCalls[firstString(message["call_id"])] {
+			message["usage_in_child_conversation"] = true
+		}
 		attach(message)
 		attachLabels(message)
 		attachEvents(message)
+		attachEngagement(message)
+		attachPeers(message)
+		attachAssets(message)
 		if previewRows {
 			clipReaderMessage(message)
 		}
 	}
-	messages, err := queryMapsTransformContext(context.Background(), c.reader(), "SELECT "+readerMessageColumns+",source_order FROM messages WHERE conversation_id=?", prepare, conversationID)
+	messages, err := queryMapsTransformContext(ctx, c.reader(), "SELECT "+readerMessageColumns+",source_order FROM messages WHERE conversation_id=?", prepare, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -193,6 +265,8 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 	for _, message := range messages {
 		delete(message, "source_order")
 	}
+	showPublishedArtifacts(messages)
+	linkEvents(messages)
 	if labels, err := labelsSummary(); err != nil {
 		return nil, err
 	} else if labels != nil {
@@ -203,13 +277,31 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 	} else if events != nil {
 		conversation["agent_events"] = events
 	}
-	if len(sessions) > 0 {
-		usage := tokenCounts{}
-		for _, session := range sessions {
-			for _, key := range []string{"input_tokens", "uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_5m_input_tokens", "cache_creation_1h_input_tokens", "output_tokens", "reasoning_output_tokens", "unclassified_tokens", "total_tokens"} {
-				usage[key] += float64(integer(session[key]))
-			}
+	if engagement, err := engagementSummary(); err != nil {
+		return nil, err
+	} else if engagement != nil {
+		conversation["engagement"] = engagement
+	}
+	usage := tokenCounts{}
+	isEstimate, inputMissing := false, false
+	for _, session := range sessions {
+		if status := firstString(session["usage_status"]); status == "" || status == "unavailable" {
+			continue
 		}
+		isEstimate = isEstimate || estimateFlag(session["is_estimate"])
+		inputMissing = inputMissing || estimateFlag(session["is_estimate"]) && !estimateFlag(session["input_tokens_available"])
+		for _, key := range []string{"input_tokens", "uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_5m_input_tokens", "cache_creation_1h_input_tokens", "output_tokens", "reasoning_output_tokens", "unclassified_tokens", "total_tokens"} {
+			usage[key] += float64(integer(session[key]))
+		}
+	}
+	conversation["token_usage_is_estimate"] = isEstimate
+	conversation["token_usage_input_estimated"] = isEstimate && !inputMissing
+	if inputMissing {
+		for _, field := range usageInputFields {
+			delete(usage, field)
+		}
+	}
+	if len(usage) > 0 {
 		conversation["token_usage"] = usage
 	} else {
 		// The ledger is authoritative when present. Reparsing hundreds of MB
@@ -224,13 +316,126 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 		}
 		conversation["token_usage"] = conversationTokenCounts(records)
 	}
-	if clip && !previewRows {
+	if !previewRows {
 		for _, message := range messages {
 			clipReaderMessage(message)
 		}
 	}
+
+	// Join canonical usage onto messages without rewriting retained source bodies.
+	estimated, err := queryMapsContext(ctx, c.reader(), `SELECT source_message_id,input_tokens,cache_read_input_tokens,cache_creation_input_tokens,input_tokens_available,output_tokens,reasoning_output_tokens,total_tokens FROM model_requests WHERE conversation_id=? AND is_estimate=1`, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	byID := map[string]map[string]any{}
+	for _, row := range estimated {
+		byID[firstString(row["source_message_id"])] = row
+	}
+	for _, message := range messages {
+		if row := byID[firstString(message["id"])]; row != nil {
+			usage := map[string]any{"output_tokens": row["output_tokens"], "reasoning_output_tokens": row["reasoning_output_tokens"], "total_tokens": row["total_tokens"]}
+			if estimateFlag(row["input_tokens_available"]) {
+				for _, field := range []string{"input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"} {
+					usage[field] = row[field]
+				}
+			}
+			message["usage"] = usage
+			message["usage_is_estimate"] = true
+		}
+	}
 	conversation["messages"] = messages
+	if estimates != nil {
+		manifest, err := bundledEstimation()
+		if err != nil {
+			return nil, err
+		}
+		calibration, err := c.loadEstimationCalibration(ctx)
+		if err != nil {
+			return nil, err
+		}
+		report := estimates.estimate(manifest, calibration, hashBytes(estimation.Assumptions))
+		authoritative, err := authoritativeUsageExists(ctx, c.reader(), conversationID)
+		if err != nil {
+			return nil, err
+		}
+		if authoritative || report.ReportedResponses > 0 {
+			report.Responses = []usageResponseEstimate{}
+			report.Output = nil
+			report.Input, report.InputRequests = nil, 0
+		}
+		conversation["usage_estimates"] = report
+		byMessage := map[string]usageToolEstimate{}
+		for _, response := range report.Responses {
+			for _, tool := range response.Tools {
+				byMessage[tool.MessageID] = tool
+			}
+		}
+		for _, message := range messages {
+			if tool, ok := byMessage[firstString(message["id"])]; ok {
+				message["duration_estimate"] = tool
+			}
+		}
+	}
+	// The files its calls edited and read, each linked to its history page.
+	links, err := c.conversationFileLinks(context.Background(), workspaceID, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	conversation["file_links"] = links
+	artifactLinks, err := c.conversationArtifactLinks(ctx, conversation, messages)
+	if err != nil {
+		return nil, err
+	}
+	conversation["artifact_links"] = artifactLinks
 	return conversation, nil
+}
+
+var readerArtifactID = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+
+// Resolve recorded Claude Docs identities within the importing account. Stored
+// workspace/message IDs, rather than reconstructed IDs, own the destinations.
+func (c *Catalog) conversationArtifactLinks(ctx context.Context, conversation map[string]any, messages []map[string]any) (map[string]any, error) {
+	ids := map[string]bool{}
+	for _, message := range messages {
+		if kind := firstString(message["kind"]); kind != "tool_call" && kind != "tool_result" {
+			continue
+		}
+		text := firstString(message["text"])
+		if !strings.Contains(strings.ToLower(text), "claude_docs") {
+			continue
+		}
+		if message["mcp_receipts"] != nil {
+			text += jsonText(message["mcp_receipts"])
+		}
+		for _, id := range readerArtifactID.FindAllString(text, -1) {
+			ids[id] = true
+		}
+	}
+	links := map[string]any{}
+	// Each exact lookup uses conversations' native-identity index. The set is
+	// normally a single document; do not scan every artifact in the library.
+	for id := range ids {
+		rows, err := queryMapsContext(ctx, c.reader(), `SELECT c.id conversation_id,c.workspace_id,w.title,
+			(SELECT m.id FROM messages m WHERE m.conversation_id=c.id AND m.native_id=? LIMIT 1) message_id
+			FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
+			WHERE c.account=? AND c.provider=? AND c.native_id=?`,
+			"artifacts/"+id+"/page.md", conversation["account"], conversation["provider"], "claude-export:artifacts/"+id)
+		if err != nil {
+			return nil, err
+		}
+		// An ambiguous identity is not a safe destination.
+		if len(rows) != 1 {
+			continue
+		}
+		row := rows[0]
+		href := "/work/" + url.PathEscape(firstString(row["workspace_id"])) + "/conversation/" + url.PathEscape(firstString(row["conversation_id"]))
+		if message := firstString(row["message_id"]); message != "" {
+			href += "?message=" + url.QueryEscape(message)
+		}
+		row["href"] = href
+		links[id] = row
+	}
+	return links, nil
 }
 
 // MessageOriginal returns a message's complete text and raw source record.
@@ -245,6 +450,12 @@ func (c *Catalog) MessageOriginal(id string) (map[string]any, error) {
 // clipReaderMessage shortens a message row in place for the reader.
 func clipReaderMessage(message map[string]any) {
 	text, raw := firstString(message["text"]), firstString(message["raw_text"])
+	// Docs encloses its receipt in a JSON text block. Ordinary string clipping
+	// can cut that inner JSON in half and hide a successful or partial outcome.
+	// Keep only its small receipt fields beside the shortened original output.
+	if len(text) > readerBodyBytes && firstString(message["kind"]) == "tool_result" && strings.Contains(strings.ToLower(text), "claude_docs") {
+		message["mcp_receipts"] = readerDocsReceipts(readerJSONBody(text), 0)
+	}
 	textClipped := false
 	if kind := firstString(message["kind"]); readerClippedKinds[kind] && len(text) > readerBodyBytes {
 		// Decode once for both classification and clipping. A single tool
@@ -269,6 +480,42 @@ func clipReaderMessage(message map[string]any) {
 	if textClipped {
 		message["text_clipped"] = true
 	}
+}
+
+func readerDocsReceipts(value any, depth int) []map[string]any {
+	if depth > 8 {
+		return nil
+	}
+	var receipts []map[string]any
+	switch v := value.(type) {
+	case string:
+		decoder := json.NewDecoder(strings.NewReader(v))
+		var decoded any
+		if decoder.Decode(&decoded) == nil {
+			return readerDocsReceipts(decoded, depth+1)
+		}
+	case []any:
+		for _, item := range v {
+			receipts = append(receipts, readerDocsReceipts(item, depth+1)...)
+		}
+	case map[string]any:
+		receipt := map[string]any{}
+		for _, key := range []string{"verdict", "is_error", "isError", "status", "commit_status", "frame", "created"} {
+			if v[key] != nil {
+				receipt[key] = v[key]
+			}
+		}
+		if data := mapValue(v["data"]); data["notices"] != nil {
+			receipt["data"] = map[string]any{"notices": data["notices"]}
+		}
+		if len(receipt) > 0 {
+			receipts = append(receipts, receipt)
+		}
+		for _, key := range []string{"content", "text", "output", "result", "structured_content", "structuredContent", "acks", "operation_results"} {
+			receipts = append(receipts, readerDocsReceipts(v[key], depth+1)...)
+		}
+	}
+	return receipts
 }
 
 // readerReinterprets reports whether the reader's normalizeMessages turns
@@ -352,7 +599,7 @@ func clipReaderBody(text string, value any) string {
 func clipJSONStrings(value any, key string, limit int) any {
 	switch typed := value.(type) {
 	case string:
-		if key == "diff" || key == "patch" {
+		if key == "diff" || key == "patch" || key == "url" || key == "href" {
 			limit = readerDiffRunes
 		}
 		// A string longer than four bytes per allowed rune cannot fit.

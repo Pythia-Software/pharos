@@ -9,7 +9,12 @@ function askGlowMotion(host,layers) {
   // Animate compositor filters on decoration only. An inherited custom property
   // on the host restyles and repaints its SVG/gradients every frame in WebKit.
   const hues=layers.map(layer=>layer.animate({filter:['hue-rotate(0deg)','hue-rotate(360deg)']},{duration:120000,iterations:Infinity}));
-  const syncMotion=()=>hues.forEach(hue=>reduced.matches?hue.pause():hue.play());
+  // A hidden decoration (a closed panel, or full screen's composer) still
+  // ticks styles every frame unless its motion is paused.
+  let shown=true;
+  const syncMotion=()=>hues.forEach(hue=>reduced.matches||!shown?hue.pause():hue.play());
+  const visibility=typeof IntersectionObserver==='function'?new IntersectionObserver(entries=>{shown=entries.at(-1).isIntersecting;syncMotion();}):null;
+  visibility?.observe(layers[0]);
   syncMotion();
   reduced.addEventListener('change',syncMotion);
   let working=false;
@@ -23,6 +28,7 @@ function askGlowMotion(host,layers) {
       hues.forEach(hue=>hue.updatePlaybackRate(working?6:1));
     },
     destroy() {
+      visibility?.disconnect();
       reduced.removeEventListener('change',syncMotion);
       hues.forEach(hue=>hue.cancel());
       delete host.dataset.glowWorking;
@@ -175,6 +181,60 @@ function createPharosGlow(host,{radius=17,outline=null}={}) {
     destroy() {
       observer.disconnect();motion.destroy();paint.remove();
       host.classList.remove('pharos-glow','pharos-glow-icon');
+    },
+  };
+}
+
+// A streak's lap clockwise around a width × height edge, one lane per side.
+// Each lane's streak enters past its starting corner as the previous side's
+// leaves, so the signal turns corners continuously. start and travel are
+// fractions of the lap; from and to are the translation along the lane's axis.
+function askEdgeTraceLanes({width,height,length}) {
+  const perimeter=2*(width+height);
+  const sides=[['top','X',width,-length,width],['right','Y',height,-length,height],['bottom','X',width,width,-length],['left','Y',height,height,-length]];
+  let start=0;
+  return sides.map(([side,axis,size,from,to])=>{const lane={side,axis,start:start/perimeter,travel:(size+length)/perimeter,from,to};start+=size;return lane;});
+}
+
+// The working signal around an edge, such as the full-screen page. Only
+// transforms animate, so the compositor moves four small, pre-rasterized
+// streaks; nothing repaints per frame. Attach to an empty positioned element.
+function createPharosEdgeTrace(host,{lap=6500}={}) {
+  const reduced=matchMedia('(prefers-reduced-motion: reduce)');
+  const streaks=Object.fromEntries(['top','right','bottom','left'].map(side=>{const streak=document.createElement('i');streak.dataset.side=side;host.append(streak);return [side,streak];}));
+  let working=false,motion=[],origin=0,frame=null;
+  host.dataset.traceWorking='false';
+  function stop(){motion.forEach(animation=>animation.cancel());motion=[];}
+  function start() {
+    stop();
+    const {width,height}=host.getBoundingClientRect();
+    host.dataset.traceWorking=String(working);
+    if(!working||reduced.matches||!width||!height)return;
+    const length=Math.min(360,Math.max(120,Math.round((width+height)*.13)),width+height-1);
+    host.style.setProperty('--pharos-trace-length',length+'px');
+    // Restarting after a resize keeps the signal where it was on its lap.
+    const elapsed=(performance.now()-origin)%lap;
+    motion=askEdgeTraceLanes({width,height,length}).map(lane=>{
+      const at=value=>({transform:`translate${lane.axis}(${value}px)`});
+      return streaks[lane.side].animate([{...at(lane.from),offset:0},{...at(lane.to),offset:lane.travel},{...at(lane.to),offset:1}],{duration:lap,delay:lane.start*lap-elapsed,iterations:Infinity,fill:'backwards'});
+    });
+  }
+  const restart=()=>{if(frame!==null)return;frame=requestAnimationFrame(()=>{frame=null;start();});};
+  // Hiding the edge (leaving full screen) collapses it, which stops the motion.
+  const observer=new ResizeObserver(()=>{if(working)restart();});
+  observer.observe(host);
+  reduced.addEventListener('change',start);
+  return {
+    setWorking(value) {
+      const next=Boolean(value);
+      if(next===working)return;
+      working=next;
+      if(working)origin=performance.now();
+      start();
+    },
+    destroy() {
+      observer.disconnect();reduced.removeEventListener('change',start);cancelAnimationFrame(frame);stop();
+      Object.values(streaks).forEach(streak=>streak.remove());delete host.dataset.traceWorking;
     },
   };
 }

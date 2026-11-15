@@ -1,65 +1,91 @@
-// DOM-free interaction rules shared by the composer and its unit tests.
-// Interleave subjects so each carousel page offers different ways into the
-// archive. {scope} is optional; comparisons deliberately stay library-wide.
-const askIdeaCatalog = [
-  {topic:'prompting',text:'What instructions am I repeating{scope}?'},
-  {topic:'errors',text:'Which errors recur across conversations{scope}?'},
-  {topic:'usage',text:'Where did most tokens go this week{scope}?'},
-  {topic:'memory',text:'Find past conversations that explain a design decision{scope}.'},
-  {topic:'tools',text:'Which commands keep failing{scope}?'},
-  {topic:'models',text:'How has my mix of models changed this month?'},
-  {topic:'prompting',text:'What did I have to correct more than once{scope}?'},
-  {topic:'context',text:'Which tool outputs fill the most context{scope}?'},
-  {topic:'delegation',text:'How much token usage comes from subagents{scope}?'},
-  {topic:'memory',text:'Find an earlier fix for a recurring test failure{scope}.'},
-  {topic:'tools',text:'Which commands account for the most recorded tool time{scope}?'},
-  {topic:'cost',text:'How does the API cost equivalent vary by model?'},
-  {topic:'prompting',text:'What could I turn into reusable project instructions{scope}?'},
-  {topic:'errors',text:'Which files have the most failed edits{scope}?'},
-  {topic:'usage',text:'Which repositories use the most tokens?'},
-  {topic:'memory',text:'What approaches have I already tried for flaky tests{scope}?'},
-  {topic:'context',text:'Which tool outputs get truncated{scope}?'},
-  {topic:'activity',text:'When do my agent sessions overlap the most?'},
-  {topic:'prompting',text:'Where am I writing the most explanations{scope}?'},
-  {topic:'skills',text:'Which skills have recorded invocations or loads{scope}?'},
-  {topic:'usage',text:'How has my cache reuse changed this month?'},
-  {topic:'memory',text:'Find conversations where I revisited the same decision{scope}.'},
-  {topic:'errors',text:'Which test commands fail most often{scope}?'},
-  {topic:'models',text:'Which models have the most recorded tool errors?'},
-  {topic:'findings',text:'Which recurring problems have findings I could act on{scope}?'},
-  {topic:'tools',text:'Which files do agents read repeatedly{scope}?'},
-  {topic:'cost',text:'Which conversations have the highest API cost equivalent{scope}?'},
-  {topic:'memory',text:'Find my longest conversations{scope}.'},
-  {topic:'context',text:'Which conversations have the most compactions{scope}?'},
-  {topic:'activity',text:'What changed in my work this week?'},
-  {topic:'prompting',text:'Find examples where a clearer prompt helped me change course{scope}.'},
-  {topic:'skills',text:'Which skill loads have recorded errors{scope}?'},
-  {topic:'usage',text:'How do input and output tokens compare across models?'},
-  {topic:'memory',text:'What have I already learned about slow builds{scope}?'},
-  {topic:'tools',text:'Which searches am I repeating{scope}?'},
-  {topic:'cost',text:'How has my estimated carbon footprint changed this month?'},
-  {topic:'findings',text:'Which findings are being watched for improvement{scope}?'},
-  {topic:'tools',text:'Which MCP methods do I use most{scope}?'},
-  {topic:'activity',text:'How does my activity differ across machines?'},
-  {topic:'memory',text:'Find work where I switched approaches after a failure{scope}.'},
-  {topic:'tools',text:'Which documentation hosts do agents consult most{scope}?'},
-  {topic:'usage',text:'Which days had unusually high token usage this month?'},
-];
-function askPromptSuggestions({repositories=[],variation=0}={}) {
-  const names=[...new Set(repositories.filter(name=>typeof name==='string'&&name.trim()))];
-  let eligible=0,scoped=0;
-  return askIdeaCatalog.map(idea=>{
-    // Keep a mixture of broad and scoped questions, even with many repos.
-    const qualify=idea.text.includes('{scope}')&&eligible++%2===1&&names.length>1;
-    const repository=qualify?names[(scoped++ + variation)%names.length]:'';
-    return idea.text.replace('{scope}',qualify?' in the “'+repository+'” repository':'');
-  });
+// Interaction rules shared by the composer and its unit tests.
+const askAttachmentLimit = 8, askAttachmentByteLimit = 50 * 1024 * 1024, askAttachmentFileLimit = 20 * 1024 * 1024;
+function askAttachmentSize(items) {
+  return items.reduce((total,item)=>total+(item.size||0),0);
+}
+function askAddAttachments(current, added) {
+  const result=[...current];
+  for(const item of added){
+    if(item.kind!=='file'&&result.some(other=>other.kind===item.kind&&other.url===item.url&&other.selector===item.selector))continue;
+    result.push(item);
+  }
+  if(result.length>askAttachmentLimit)throw new Error('Attach at most 8 items.');
+  if(askAttachmentSize(result)>askAttachmentByteLimit)throw new Error('Files must total at most 50 MiB.');
+  return result;
+}
+function askAttachmentDetails(item) {
+  return item.kind==='file'?[['File',item.name],['Temporary path',item.path],['Type',item.mime||'application/octet-stream'],['Size',item.size+' bytes']]:[
+    ['URL',item.url],...(item.kind==='element'?[['Element',item.name],['Selector',item.selector]]:[])
+  ];
+}
+function askAttachmentChip(item) {
+  return {id:item.id,type:item.kind,label:item.kind==='element'?'Highlighted element':item.kind==='url'?'Page URL':item.name,value:item.id};
+}
+// Offsets count plain-text UTF-16 units; attachments at the same offset keep
+// their order. The stored metadata can reconstruct the editor on any surface.
+function askAttachmentParts(text,items=[]) {
+  const parts=[];let previous=0;
+  for(const item of [...items].sort((a,b)=>(a.offset||0)-(b.offset||0))){
+    let offset=Math.max(previous,Math.min(text.length,item.offset||0));
+    if(offset>0&&offset<text.length&&/[\uD800-\uDBFF]/.test(text[offset-1])&&/[\uDC00-\uDFFF]/.test(text[offset]))offset--;
+    parts.push(text.slice(previous,offset),askAttachmentChip(item));previous=offset;
+  }
+  parts.push(text.slice(previous));return parts.filter(part=>part!=='');
+}
+function askPositionedAttachments(parts,items,text) {
+  const byID=new Map(items.map(item=>[item.id,item])),result=[];
+  let offset=0;
+  const leading=text===undefined?0:text.length-text.trimStart().length,limit=text===undefined?Infinity:text.trim().length;
+  for(const part of parts){
+    if(typeof part==='string')offset+=part.length;
+    else if(byID.has(part.id))result.push({...byID.get(part.id),offset:Math.max(0,Math.min(limit,offset-leading))});
+  }
+  return result;
+}
+// The library chooses suggestions (GET /api/ask/suggestions,
+// docs/ask-suggestions.md); keep only well-formed, distinct questions.
+function askSuggestionItems(list) {
+  const seen=new Set();
+  return (Array.isArray(list)?list:[]).flatMap(item=>{
+    const text=typeof item?.text==='string'?item.text.trim():'';
+    if(typeof item?.id!=='string'||!text||seen.has(text))return [];
+    seen.add(text);
+    return [{id:item.id,text}];
+  }).slice(0,12);
+}
+
+// The suggestion carousel shows one card on narrow screens and at least three
+// from 600 px. Wider rows, such as full screen Ask, add cards while each stays
+// at least 200 px wide. Past three, one question stays off the row, for the
+// placeholder and for rotation to bring in. Peeks of the neighbouring cards
+// sit on both sides; side is the list padding that puts the first card read
+// right after the left peek when the viewport scrolls to the reading block's
+// center slot times the stride.
+// The row repeats the slate copies times and rests in the copy after lead
+// copies, with room on each side for two full rotations and a peek: a timed
+// glide plus a click during it never scrolls past the last card.
+function askIdeaLayout(width, available) {
+  const gap=14,minCard=200;
+  if(!(width>0)||!(available>0))return {count:0,card:0,peek:0,stride:0,side:0,lead:0,copies:0};
+  const fit=Math.floor((width-2*44+gap)/(minCard+gap));
+  const count=Math.max(1,width<600?1:Math.min(available,Math.max(3,Math.min(fit,available-1))));
+  const peek=count>1?44:28,card=(width-2*peek-(count-1)*gap)/count,stride=card+gap;
+  const lead=Math.max(1,Math.ceil((Math.floor(count/2)+2*count+1)/available));
+  const trail=Math.max(1,Math.ceil((Math.ceil(count/2)+2*count)/available));
+  return {count,card,peek,stride,side:peek+Math.floor(count/2)*stride,lead,copies:lead+1+trail};
+}
+
+// While the first suggestions are still being chosen, ask again after 20 s,
+// doubling up to every five minutes: a busy library can take longer than any
+// fixed number of tries.
+function askSuggestionRetryDelay(attempt) {
+  return Math.min(300000,20000*2**Math.max(0,attempt));
 }
 
 async function askReadResponse(response, onProgress) {
   if (!response.ok || !response.headers.get('Content-Type')?.includes('application/x-ndjson')) {
     const result=await response.json();
-    if(!response.ok)throw new Error(result.error||'Ask Pharos request failed');
+    if(!response.ok){const error=new Error(result.error||'Ask Pharos request failed');error.status=response.status;throw error;}
     return result;
   }
   const reader=response.body.getReader(),decoder=new TextDecoder();
@@ -94,50 +120,130 @@ function askWaitStatus({activity=[],elapsedMs=0,message='',cli=''}) {
     elapsed:latest?elapsed+'s elapsed'+(silent>=10?' · '+silent+'s since last update':''):'',
   };
 }
+
+// Walk away from the solved board with legal moves, then reverse the walk.
+// Avoid returning the same board twice, including with a deterministic RNG.
+function askPuzzlePath(random=Math.random,previous=null) {
+  const solved=[1,2,3,4,5,6,7,8,0],boards=[solved],same=(a,b)=>!!b&&a.every((tile,index)=>tile===b[index]);
+  let board=solved,priorEmpty=-1;
+  const nextBoards=(avoidUndo=true)=>{
+    const empty=board.indexOf(0);
+    return board.flatMap((tile,index)=>{
+      if((avoidUndo&&index===priorEmpty)||Math.abs(index%3-empty%3)+Math.abs(Math.floor(index/3)-Math.floor(empty/3))!==1)return [];
+      const next=board.slice();next[empty]=tile;next[index]=0;return [next];
+    });
+  };
+  function advance(next){priorEmpty=board.indexOf(0);board=next;boards.push(next);}
+  for(let i=0;i<20;i++){const options=nextBoards();advance(options[Math.floor(random()*options.length)]);}
+  if(same(board,previous)||same(board,solved))advance(nextBoards(false).find(next=>!same(next,previous)&&!same(next,solved)));
+  return boards.reverse();
+}
+
+// One compositor-driven transform animation per tile. JavaScript only runs at
+// the end of a solve or reset, and cancels all motion when the turn is hidden.
+function askPuzzleMotion(host, {random=Math.random, media=matchMedia('(prefers-reduced-motion: reduce)')}={}) {
+  const tiles=[...host.children],step=640,pause=160,initial=1000,rest=2000,reset=400;
+  let active=false,animations=[],previous=null;
+  const position=(board,tile)=>{
+    const index=board.indexOf(tile),home=tile-1;
+    return `translate(${(index%3-home%3)*6}px,${(Math.floor(index/3)-Math.floor(home/3))*6}px)`;
+  };
+  function cancel(){animations.forEach(animation=>animation.cancel());animations=[];tiles.forEach(tile=>tile.style.removeProperty('transform'));}
+  function animate(frames,duration,done){
+    animations=tiles.map((tile,index)=>tile.animate(frames[index],{duration,fill:'forwards',easing:'linear'}));
+    animations[0].onfinish=()=>{if(active&&!media.matches)done();};
+  }
+  function solve(path,delay){
+    const moves=path.length-1,duration=delay+moves*step+(moves-1)*pause+rest;
+    const frames=tiles.map((_,index)=>{
+      const tile=index+1,first=position(path[0],tile),keyframes=[{transform:first,offset:0}];
+      if(delay)keyframes.push({transform:first,offset:delay/duration});
+      for(let i=1;i<path.length;i++){
+        const start=delay+(i-1)*(step+pause);
+        if(i>1)keyframes.push({transform:position(path[i-1],tile),offset:start/duration});
+        keyframes.push({transform:position(path[i],tile),offset:(start+step)/duration});
+      }
+      keyframes.push({transform:position(path.at(-1),tile),offset:1});return keyframes;
+    });
+    animate(frames,duration,()=>{
+      const next=askPuzzlePath(random,previous);previous=next[0];
+      const resetFrames=tiles.map((_,index)=>[{transform:position(path.at(-1),index+1)},{transform:position(next[0],index+1)}]);
+      cancel();animate(resetFrames,reset,()=>{cancel();solve(next,0);});
+    });
+  }
+  function start(){const path=askPuzzlePath(random,previous);previous=path[0];solve(path,initial);}
+  function setWorking(value){const next=!!value;if(next===active)return;active=next;cancel();if(active&&!media.matches)start();}
+  function changed(){cancel();if(active&&!media.matches)start();}
+  media.addEventListener('change',changed);
+  return {setWorking,destroy(){active=false;cancel();media.removeEventListener('change',changed);}};
+}
 function askComposerActions({draft = '', turns = [], pending = false, opening = false, enabled = false, model = ''}) {
   const populated = turns.length > 0 || draft.length > 0;
-  return {send: enabled && !!model && !pending && !opening && !!draft.trim(), stop: pending, history: !populated, clear: populated, modelLocked: turns.length > 0};
+  return {send: enabled && !!model && !pending && !opening && !!draft.trim(), stop: pending, history: true, clear: populated, clearLabel: turns.length ? 'New Chat' : 'Clear', modelLocked: turns.length > 0};
 }
 // Carry the visible conversation into a fresh, editable prompt for another model.
-function askRetryDraft({turns = [], draft = ''}) {
+function askRetryContext({turns = [], draft = '', draftAttachments = []}) {
   const messages=[];
   for(const turn of turns){
     const prompt='You:\n'+turn.prompt;
-    const reply=[turn.reply,turn.clarification?.question,
+    const reply=[turn.reply,turn.feedback&&'Feedback draft ('+turn.feedback.kind+'):\n'+turn.feedback.comment,turn.clarification?.question,
       ...(turn.clarification?.options||[]).map(option=>'- '+option),
       ...(turn.cards||[]).map(card=>[card.title,card.description,card.href].filter(Boolean).join('\n')),
     ].filter(text=>text&&text.trim()).join('\n\n');
     const status=['error','canceled'].includes(turn.status)?' ('+turn.status+')':'';
-    messages.push(prompt+(reply?'\n\nPharos'+status+':\n'+reply:''));
+    messages.push({text:prompt+(reply?'\n\nPharos'+status+':\n'+reply:''),attachments:(turn.attachments||[]).map(item=>({...item,offset:5+Math.min(turn.prompt.length,item.offset||0)}))});
   }
-  const unsent=draft.trim()?'You (unsent draft):\n'+draft:'';
-  const full=[...messages,unsent].filter(Boolean).join('\n\n');
+  const prefix='You (unsent draft):\n';
+  const unsent=draft.trim()||draftAttachments.length?{text:prefix+draft,attachments:draftAttachments.map(item=>({...item,offset:prefix.length+Math.min(draft.length,item.offset||0)}))}:null;
+  const all=[...messages,...(unsent?[unsent]:[])];
+  const full=all.map(message=>message.text).join('\n\n');
   // Match the server's prompt/draft limit, including labels and omission notices.
   const limit=12000,encoder=new TextEncoder(),bytes=text=>encoder.encode(text).length;
-  if(bytes(full)<=limit)return full;
   const notice='[Earlier conversation omitted or shortened to fit.]\n\n';
-  const shorten=(text,budget)=>{
-    if(bytes(text)<=budget)return text;
-    const suffix='\n[Message shortened.]',encoded=encoder.encode(text);
+  const shorten=(message,budget)=>{
+    if(bytes(message.text)<=budget)return message;
+    const suffix='\n[Message shortened.]',encoded=encoder.encode(message.text);
     let end=Math.max(0,budget-bytes(suffix));
     // Do not cut a multibyte code point or introduce a replacement character.
     while(end>0&&(encoded[end]&0xc0)===0x80)end--;
-    return new TextDecoder().decode(encoded.subarray(0,end))+suffix;
+    const text=new TextDecoder().decode(encoded.subarray(0,end));
+    return {text:text+suffix,attachments:message.attachments.map(item=>({...item,offset:Math.min(text.length,item.offset)}))};
   };
   let remaining=limit-bytes(notice);
-  const kept=[];
-  if(unsent){const text=shorten(unsent,remaining);kept.push(text);remaining-=bytes(text)+2;}
-  for(let i=messages.length-1;i>=0;i--){
-    const text=messages[i];
-    if(bytes(text)>remaining){
-      // Keep a useful part of the latest turn if even that turn is too large.
-      if(i===messages.length-1&&remaining>bytes('\n[Message shortened.]'))kept.unshift(shorten(text,remaining));
-      break;
+  let kept=all,start='';
+  if(bytes(full)>limit){
+    kept=[];start=notice;
+    if(unsent){const message=shorten(unsent,remaining);kept.push(message);remaining-=bytes(message.text)+2;}
+    for(let i=messages.length-1;i>=0;i--){
+      const message=messages[i];
+      if(bytes(message.text)>remaining){
+        // Keep a useful part of the latest turn if even that turn is too large.
+        if(i===messages.length-1&&remaining>bytes('\n[Message shortened.]'))kept.unshift(shorten(message,remaining));
+        break;
+      }
+      kept.unshift(message);remaining-=bytes(message.text)+2;
     }
-    kept.unshift(text);remaining-=bytes(text)+2;
   }
-  return notice+kept.join('\n\n');
+  // A repeated reference needs one chip. Prefer its most recent placement,
+  // including an unsent draft, while keeping all distinct retained context.
+  const attachments=new Map();let offset=start.length;
+  const remember=(item,position)=>{
+    const key=JSON.stringify(item.kind==='file'?['file',item.path]:[item.kind,item.url,item.selector||'']);
+    attachments.set(key,{...item,offset:position});
+  };
+  // Text can be shortened without losing a file or page a later question
+  // still refers to. Context from omitted text sits beside the omission note.
+  for(const message of all)for(const item of message.attachments)remember(item,0);
+  for(const message of kept){
+    for(const item of message.attachments)remember(item,offset+item.offset);
+    offset+=message.text.length+2;
+  }
+  const items=[...attachments.values()].sort((a,b)=>a.offset-b.offset);
+  // Fail before clearing the old chat if a combined retry exceeds attachment
+  // limits; never silently discard context to make a new draft fit.
+  return {draft:start+kept.map(message=>message.text).join('\n\n'),attachments:askAddAttachments([],items)};
 }
+function askRetryDraft(input) { return askRetryContext(input).draft; }
 // Chart previews stay in the answer for inspection. A lone ordinary link opens
 // itself unless the agent offered a choice or the user has started browsing.
 function askShouldNavigate({cards = [], omitted = 0, draft = '', enabled, regular, edited, browsing = false, hasPreview = false}) {
@@ -147,9 +253,11 @@ function askOmittedNote(omitted = 0) {
   if (!omitted) return '';
   return omitted === 1 ? 'One suggested view could not be opened, so it is left out.' : `${omitted} suggested views could not be opened, so they are left out.`;
 }
+// Home and the full-screen page show the chat inline and name it in ask_chat.
+function askChatPage(pathname) { return ['/', '/home', '/ask'].includes(pathname); }
 function askChatURL(href, id) {
   const url = new URL(href);
-  if (!['/', '/home'].includes(url.pathname)) return url.href;
+  if (!askChatPage(url.pathname)) return url.href;
   if (id) url.searchParams.set('ask_chat', id);
   else url.searchParams.delete('ask_chat');
   return url.href;
@@ -157,7 +265,16 @@ function askChatURL(href, id) {
 // History links must work independently of the page hosting the overlay.
 function askHistoryURL(href, id) {
   const url = new URL(href);
-  return askChatURL(['/', '/home'].includes(url.pathname) ? url.href : new URL('/', url).href, id);
+  return askChatURL(askChatPage(url.pathname) ? url.href : new URL('/', url).href, id);
+}
+function askFullscreenURL(href, id) { return askChatURL(new URL('/ask', href).href, id); }
+// Leaving full screen returns to the page it was opened from: Home shows the
+// chat inline, and any other page reopens it in the dialog.
+function askFullscreenExit(href, from, id) {
+  let target = new URL('/', href);
+  try { const url = new URL(from, href); if (typeof from === 'string' && url.origin === target.origin && url.pathname !== '/ask') target = url; } catch {}
+  const home = ['/', '/home'].includes(target.pathname);
+  return {href: home ? askChatURL(target.href, id) : target.href, presentation: home ? 'home' : 'modal'};
 }
 // Search results are matched against complete chats on the server. Their
 // summaries cannot be searched again without dropping later-message matches.
@@ -165,13 +282,136 @@ function askHistoryEntries({sessions = [], current = null, query = ''}) {
   const entries = query || !current ? sessions : [current, ...sessions.filter(session => session.id !== current.id)];
   return [...entries].sort((a, b) => b.updatedAt - a.updatedAt);
 }
+// Request ownership stays with its chat when the visible composer switches.
+// Releasing an old attempt cannot release a later retry of the same chat.
+function askRequestRegistry(){
+  const requests=new Map();
+  return {
+    get size(){return requests.size;},
+    get:id=>requests.get(id),values:()=>requests.values(),
+    forEach:callback=>requests.forEach(callback),
+    start(run){if(requests.has(run.id))throw new Error('This chat is already answering.');requests.set(run.id,run);},
+    release(run){if(requests.get(run.id)===run)requests.delete(run.id);},
+  };
+}
+// A queued request may not be present in a saved snapshot yet. Preserve its
+// live object so the stream and the restored transcript share the same turn.
+function askRestoreTurns(conversation = [], localTurn = null){
+  const turns=conversation.map(turn=>turn.id===localTurn?.id?localTurn:{...turn});
+  if(localTurn&&!turns.some(turn=>turn.id===localTurn.id))turns.push(localTurn);
+  return turns;
+}
+// Resolve a receipt against the current session, never the object captured by
+// the original read. Reopening clones turns and retrying creates a new attempt.
+function askApplyReceipt(session, {id,turnID,startedAt}, seenAt){
+  if(session?.id!==id)return null;
+  const turn=session.conversation?.find(turn=>turn.id===turnID&&turn.startedAt===startedAt);
+  if(!askAnswerUnread(turn))return null;
+  turn.seenAt=seenAt;
+  return turn;
+}
+// Receipts belong to an answer attempt, and only a visible answer is seen.
+function askAnswerUnread(turn) {
+  return !!turn && !['loading','canceled'].includes(turn.status) && !!turn.status && !turn.seenAt;
+}
+function askInboxState(session) {
+  const turns=session.conversation||[],latest=turns.at(-1);
+  const status=session.lastStatus||latest?.status,running=status==='loading';
+  const unread=session.unreadCount??turns.filter(askAnswerUnread).length;
+  return {running,unread,label:running?'Answering…':status==='canceled'?'Canceled':unread?unread+(unread===1?' unseen answer':' unseen answers'):turns.length||session.questionCount?'Seen':'Draft'};
+}
+// Each CLI and model a chat's turns used, most recent first. Server summaries
+// carry the list; the open chat derives it from its turns, and a chat without
+// a question yet names the model it will ask.
+function askHistoryModels(session, labels = {}) {
+  let uses = Array.isArray(session.models) ? session.models : [];
+  if (!Array.isArray(session.models)) {
+    const seen = new Set();
+    for (const turn of [...(session.conversation || [])].reverse()) {
+      const key = turn.cli + '\u0000' + turn.model;
+      if (!turn.model || seen.has(key)) continue;
+      seen.add(key); uses.push({cli: turn.cli, model: turn.model, label: turn.modelLabel});
+    }
+    if (!uses.length && session.selection?.model) uses = [{cli: session.selection.provider, model: session.selection.model}];
+  }
+  return uses.map(use => ({cli: use.cli || '', model: use.model || '', label: use.label || labels[use.cli]?.[use.model] || use.model || use.cli || ''}));
+}
+function askHistoryDay(timestamp) { const day = new Date(timestamp); day.setHours(0, 0, 0, 0); return day; }
+function askHistoryStamp(timestamp, now = Date.now()) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp), days = Math.round((askHistoryDay(now) - askHistoryDay(timestamp)) / 86400000);
+  if (days <= 0) return date.toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
+  if (days < 7) return date.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
+  return date.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(date.getFullYear() !== new Date(now).getFullYear() ? {year: 'numeric'} : {})});
+}
+function askHistoryFullDate(timestamp) {
+  return new Date(timestamp).toLocaleString(undefined, {weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit'});
+}
+// One history row: title, turn count, models and when the chat was last active.
+function askHistoryRow(session, {now = Date.now(), labels = {}} = {}) {
+  const turns = session.questionCount ?? session.conversation?.length ?? 0, models = askHistoryModels(session, labels);
+  const started = session.createdAt && session.createdAt !== session.updatedAt ? 'Started ' + askHistoryFullDate(session.createdAt) : '';
+  return {
+    title: session.conversation?.[0]?.prompt || session.draft || 'Untitled chat',
+    turns: turns ? turns + (turns === 1 ? ' turn' : ' turns') : 'Draft',
+    models,
+    modelSummary: models.map(model => model.label).join(', '),
+    stamp: askHistoryStamp(session.updatedAt, now),
+    when: [session.updatedAt ? (turns ? 'Last active ' : 'Edited ') + askHistoryFullDate(session.updatedAt) : '', started].filter(Boolean).join(' · '),
+  };
+}
+// Retry only safe background writes, never a question that may have started a CLI.
+// The bounded retries leave persistent failures visible to the user.
+async function askRetryBackground(write, wait = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  for(let attempt=0;;attempt++) {
+    try{return await write();}
+    catch(error){
+      if(attempt>=2 || !(error instanceof TypeError || [502,503,504].includes(error?.status)))throw error;
+      await wait(500*2**attempt);
+    }
+  }
+}
 // Keep snapshots/replacements ahead of later removals, even on slow requests.
 // A failed write must not prevent the next deletion or clear from running.
 let askVisitWrites = Promise.resolve();
 function askWriteVisit(write) {
-  const result = askVisitWrites.then(write);
+  const result = askVisitWrites.then(()=>askRetryBackground(write));
   askVisitWrites = result.catch(() => {});
   return result;
+}
+// Automatic visits are disposable. Keep at most one pending update while a
+// writer is busy; reconcile the current history after coalescing or failure.
+// The shared queue still orders these writes with explicit history removals.
+function askBufferVisits(write, snapshot, enqueue = askWriteVisit) {
+  let active=false, dirty=false, reconcile=false, latest=null, timer=null, delay=150, stopped=false;
+  const schedule=ms=>{if(!stopped&&!active&&timer===null)timer=setTimeout(run,ms);};
+  async function run(){
+    timer=null;
+    if(stopped||active||!dirty)return;
+    active=true;
+    try{
+      await enqueue(async()=>{
+        if(stopped)return;
+        const input=latest, full=snapshot();
+        const visit=input?.visits?.[0];
+        const retained=visit&&full.visits.some(item=>item.url===visit.url&&item.at===visit.at);
+        const current=reconcile||!input||input.reconcile||!retained?full:input;
+        dirty=false;reconcile=false;latest=null;
+        try { return await write(current); }
+        catch(error) { reconcile=true; throw error; }
+      });
+      delay=150;
+    }catch{
+      dirty=true;reconcile=true;delay=Math.min(delay*2,30000);
+    }finally{
+      active=false;
+      if(dirty)schedule(delay);
+    }
+  }
+  return {
+    add(input){if(dirty)reconcile=true;dirty=true;latest=input;schedule(150);},
+    stop(){stopped=true;clearTimeout(timer);timer=null;},
+  };
 }
 // Keep a little of the preceding reply for context, then the latest exchange.
 // The viewport budget wins when a single exchange is itself very long.
@@ -204,10 +444,18 @@ function askRestorePresentation(href, saved) {
   const url = new URL(href), id = url.searchParams.get('ask_chat');
   if (id && id !== saved.id) return null;
   if (saved.presentation === 'home' && !['/', '/home'].includes(url.pathname)) return null;
-  return ['home', 'modal', 'floating', 'dismissed'].includes(saved.presentation) ? saved.presentation : null;
+  if (saved.presentation === 'page' && url.pathname !== '/ask') return null;
+  return ['home', 'modal', 'floating', 'dismissed', 'page'].includes(saved.presentation) ? saved.presentation : null;
 }
-function askShowBrowseHint({pending=false,browsing=false,presentation='home'}) {
-  return pending&&!browsing&&['home','modal'].includes(presentation);
+function askShowBrowseHint({pending=false,browsing=false,presentation='home',hint=true}) {
+  return pending&&hint&&!browsing&&['home','modal','page'].includes(presentation);
+}
+// Dismissing the browse hint or choosing picture in picture skips the hint for
+// the next questions, so only people who never browse keep seeing it.
+function askBrowseHintSnooze() { return 5; }
+function askStartBrowseHint(snoozed) {
+  const left = Math.max(0, Math.floor(Number(snoozed) || 0));
+  return {hint: left === 0, snoozed: Math.max(0, left - 1)};
 }
 function askFloatingState(turn, {navigated = false} = {}) {
   if (!turn) return {message: 'Ask a question', ready: false};

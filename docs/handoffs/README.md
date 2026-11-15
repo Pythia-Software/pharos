@@ -17,6 +17,8 @@ tests.
 | [machine-time-all-time-cpu.md](machine-time-all-time-cpu.md) | Machine Time's all-time view may take twice the CPU the legacy route did; confirm or fix |
 | [usage-v3-hour-grouping.md](usage-v3-hour-grouping.md) | `/query-v3` groups usage by `hour` over daily records, where it is null; only `/metrics` reads the hourly ledger |
 | [query-table-schema-reload.md](query-table-schema-reload.md) | Every staged Query Table request makes its connection re-parse the whole catalog schema twice, adding about 6 ms of CPU |
+| [query-table-log-axes.md](query-table-log-axes.md) | Native log axes give the smallest bar zero length and unround ticks, and histograms bin evenly, so long-tailed histograms cannot take a log axis; requires an upstream release |
+| [query-table-significant-digits.md](query-table-significant-digits.md) | Query Table formats compact numbers by fraction digits, so its cards and charts read token counts as `123.4K` instead of `123K`; requires an upstream release |
 
 ## Analysis chain cost
 
@@ -56,6 +58,28 @@ shipped as #271–#273.
 
 ## Upstream Query Table
 
+Query Table 1.0.7 delivered the shared filtered/validated inputs requested in
+[`query-table-label-trend-latency.md`](query-table-label-trend-latency.md),
+including exact text distinct counts across different grouping lists, plus
+stored-source scan sharing for eligible mixed metric batches. Pharos consumes
+the published release without host flags or reducer patches; the handoff records
+the before/after measurements and exact bucket comparisons.
+
+Query Table 1.0.5 delivered
+[`query-table-rate-intervals.md`](query-table-rate-intervals.md) (intervals
+for ratio metrics),
+[`query-table-tuple-colors.md`](query-table-tuple-colors.md) (colour a grouped
+bar by one key),
+[`query-table-fit-wrapping-links.md`](query-table-fit-wrapping-links.md),
+[`query-table-redundant-tooltips.md`](query-table-redundant-tooltips.md),
+[`query-table-icon-tooltips.md`](query-table-icon-tooltips.md),
+[`query-table-disabled-picker-cursor.md`](query-table-disabled-picker-cursor.md),
+[`query-table-scatter-text-metrics.md`](query-table-scatter-text-metrics.md)
+and §3–§4 of [`query-table-after-1.0.0.md`](query-table-after-1.0.0.md), along
+with the percentiles, quantile curves and calendar buckets of several intervals
+that the dashboards' move onto query-v3 needed. Each handoff is marked with
+what the release resolved.
+
 Pharos uses the published Query Table module and packages without patches.
 Query Table 0.9.7 delivered every request in
 [`query-table-after-0.9.6.md`](query-table-after-0.9.6.md): chart labels,
@@ -65,12 +89,8 @@ counts, calendar grouping keys and OR-of-AND filters; and the V2, text-index
 and metadata performance asks. Pharos took the chart, fitting and metadata
 fixes on upgrading; it adopts the new capabilities in later changes.
 
-[`query-table-fit-wrapping-links.md`](query-table-fit-wrapping-links.md) is
-open: 0.9.7's fit-to-screen minimums measure a wrapping host link as one
-unshrinkable line, so Analyze's fitted tables scroll at desktop widths. It can
-be sent directly to the Query Table team.
-
-That handoff superseded the requests in
+[`query-table-fit-wrapping-links.md`](query-table-fit-wrapping-links.md)
+(resolved in 1.0.5) superseded the requests in
 [`query-table-dashboard-views.md`](query-table-dashboard-views.md),
 [`query-table-fit-link-clipping.md`](query-table-fit-link-clipping.md),
 [`query-table-fit-screen-controls.md`](query-table-fit-screen-controls.md),
@@ -82,6 +102,20 @@ That handoff superseded the requests in
 [`usage-query-upstream-handoff.md`](../usage-query-upstream-handoff.md).
 Each is marked with the release that resolved it and remains the detailed
 record of its request.
+
+[`query-table-row-pipeline-cost.md`](query-table-row-pipeline-cost.md) is
+open: a V3 metric over a large SQL source spends most of its time copying
+rows through one materialized validation stage per field. On 1.5 million
+rows the compiled request takes 8.5 s where the same aggregate written by
+hand takes 2.4 s. It can be sent directly to the Query Table team.
+
+[`query-table-shared-clause-scans.md`](query-table-shared-clause-scans.md)
+(resolved in 1.0.7) asked for one read of a metric request's population
+across its clauses; the Thinking dashboards moved onto query-v3 with it.
+[`query-table-shared-scan-groupings.md`](query-table-shared-scan-groupings.md)
+(resolved in 1.0.8) asked for number group keys and a shared read over
+derived and computed sources; the agent depth breakdown and views while
+timings await refresh now take seconds, not tens of seconds.
 
 [`query-table-go-link-codec.md`](query-table-go-link-codec.md) asked for Go
 `EncodeQueryLink` and `DecodeQueryLink`, at parity with `encodeQuery` and

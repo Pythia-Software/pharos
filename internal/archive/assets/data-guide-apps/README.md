@@ -1,0 +1,1 @@
+Application icons identify the named apps in the Data Guide’s illustrative macOS Applications folder. Artwork was resized from their macOS app bundles; each app’s publisher retains its artwork and trademarks. Codex uses the Codex icon bundled with ChatGPT.

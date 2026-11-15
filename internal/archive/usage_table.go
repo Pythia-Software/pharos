@@ -2,6 +2,8 @@ package archive
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"maps"
 	"regexp"
 	"strings"
@@ -17,7 +19,7 @@ var usageTokenFields = []string{
 }
 
 func queryFieldsFor(dataset string, names ...string) libraryFields {
-	if dataset != "usage" && dataset != "parallelism" {
+	if dataset != "scatter" && dataset != "usage" && dataset != "parallelism" && dataset != "rhythm" && dataset != "session_shape" && dataset != "people_message_labels" {
 		return libraryFieldsFor(names...)
 	}
 	return fieldSet(names...)
@@ -53,7 +55,7 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 	if err != nil {
 		return nil, err
 	}
-	roots, err := c.usageConversationRoots(ledger)
+	roots, err := c.usageConversationRoots(context.Background(), ledger)
 	if err != nil {
 		return nil, err
 	}
@@ -61,11 +63,15 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 }
 
 func (c *Catalog) usageRowsFromLedger(location *time.Location, hourly bool, ledger []map[string]any) ([]map[string]any, error) {
-	origins, err := c.conversationOrigins(context.Background())
+	return c.usageRowsFromLedgerContext(context.Background(), location, hourly, ledger)
+}
+
+func (c *Catalog) usageRowsFromLedgerContext(ctx context.Context, location *time.Location, hourly bool, ledger []map[string]any) ([]map[string]any, error) {
+	origins, err := c.conversationOrigins(ctx)
 	if err != nil {
 		return nil, err
 	}
-	book, err := c.loadPriceBook()
+	book, err := c.loadPriceBookFrom(ctx, c.reader())
 	if err != nil {
 		return nil, err
 	}
@@ -95,29 +101,32 @@ func (c *Catalog) usageRowsFromLedger(location *time.Location, hourly bool, ledg
 		if row == nil {
 			row = map[string]any{
 				"id": key, "agent_session_id": entry["agent_session_id"], "conversation_id": entry["conversation_id"],
-				"workspace_id": entry["workspace_id"], "title": entry["title"], "repository_name": entry["repository_name"],
+				"workspace_id": entry["workspace_id"], "title": entry["title"], "repository_name": entry["repository_name"], "project_name": entry["project_name"],
 				"source_kind": entry["source_kind"], "provider": entry["provider"], "model": model, "effort": nilIfEmpty(firstString(entry["effort"])),
 				"model_effort": modelEffort(model, firstString(entry["effort"])),
 				"harness":      entry["harness"], "harness_version_first": entry["harness_version_first"], "harness_version_last": entry["harness_version_last"], "harness_version_source": entry["harness_version_source"], "model_family": modelFamily(model),
 				"session_kind": entry["session_kind"], "depth": integer(entry["depth"]), "attribution": entry["attribution"],
 				"hour": hourKey, "day": day, "week": week, "month": month, "first_usage_at": at, "last_usage_at": at,
-				"cost_usd": nil, "cost_today_usd": nil, "price_status": "", "priced_model": nil,
+				"is_estimate": false, "input_tokens_available": true, "cost_usd": nil, "price_status": "", "priced_model": nil,
 			}
 			copyOrigin(row, origins[firstString(entry["conversation_id"])])
-			row["carbon_tier"], _ = carbon.tier(model)
+			row["carbon_tier"], row["carbon_tier_basis"] = carbonTierBasis(carbon, model)
 			for _, field := range usageTokenFields {
 				row[field] = int64(0)
 			}
 			grouped[key] = row
 			order = append(order, key)
 		}
+		row["is_estimate"] = estimateFlag(row["is_estimate"]) || estimateFlag(entry["is_estimate"])
+		// Estimated rows carry their own flag: input is absent from an
+		// output-only estimate and present in an input-and-output one.
+		row["input_tokens_available"] = estimateFlag(row["input_tokens_available"]) && (estimateFlag(entry["input_tokens_available"]) || entry["input_tokens_available"] == nil && !estimateFlag(entry["is_estimate"]))
 		tokens := ledgerTokens(entry)
 		for _, field := range usageTokenFields {
 			row[field] = integer(row[field]) + tokens[field]
 		}
-		priced := book.cost(model, firstString(day), tokens)
+		priced := book.ledgerCost(entry, model, firstString(day), tokens)
 		row["cost_usd"] = addCost(row["cost_usd"], priced.cost)
-		row["cost_today_usd"] = addCost(row["cost_today_usd"], priced.costToday)
 		row["price_status"] = worsePriceStatus(firstString(row["price_status"]), priced.status)
 		if priced.pricedModel != "" {
 			row["priced_model"] = priced.pricedModel
@@ -139,11 +148,17 @@ func (c *Catalog) usageRowsFromLedger(location *time.Location, hourly bool, ledg
 	rows := make([]map[string]any, 0, len(order))
 	for _, key := range order {
 		row := grouped[key]
-		if input := integer(row["input_tokens"]); input > 0 {
+		// An estimate's cache division is assumed, so it has no cache-read share.
+		if input := integer(row["input_tokens"]); input > 0 && !estimateFlag(row["is_estimate"]) {
 			row["cache_read_share"] = float64(integer(row["cache_read_input_tokens"])) / float64(input) * 100
 		}
 		if !hourly {
 			delete(row, "hour")
+		}
+		if !estimateFlag(row["input_tokens_available"]) {
+			for _, field := range usageInputFields {
+				row[field] = nil
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -160,14 +175,26 @@ func attachUsageLineage(base []map[string]any, lineage *usageConversationAttribu
 		rows[i] = row
 		session := firstString(row["agent_session_id"])
 		row["session_role"] = nilIfEmpty(lineage.sessionRoles[session])
-		if root := lineage.roots[firstString(row["conversation_id"])]; root != nil {
+		conversation := firstString(row["conversation_id"])
+		if lineage.uncertain[conversation] || lineage.uncertain[session] {
+			// Equally strong evidence disagrees about how many executions these
+			// sources are: the row stays, its run and cohort counts do not.
+			row["run_identity"] = "uncertain"
+		}
+		if root := lineage.roots[conversation]; root != nil {
+			if row["run_identity"] == nil {
+				row["run_identity"] = "exact"
+			}
+			row["root_quality"] = nilIfEmpty(lineage.rootQuality[conversation])
 			row["root_conversation_id"], row["root_provider"] = root["id"], root["provider"]
-			row["root_title"], row["root_repository_name"] = root["root_title"], root["root_repository_name"]
+			row["root_title"], row["root_repository_name"], row["root_project_name"] = root["root_title"], root["root_repository_name"], root["root_project_name"]
 			row["root_model_family"] = modelFamily(firstString(root["model"]))
 			row["root_effort"] = nilIfEmpty(firstString(root["effort"]))
 			row["delegated_session_id"] = nilIfEmpty(lineage.delegatedRuns[session])
+			row["delegated_parent_session_id"] = nilIfEmpty(lineage.delegatedParents[session])
 			if depth, known := lineage.delegatedDepth[session]; known {
 				row["delegated_run_depth"] = depth
+				row["delegated_run_depth_quality"] = nilIfEmpty(lineage.depthQuality[session])
 				if depth > 0 {
 					row["run_role"] = "delegated"
 				} else if role := firstString(row["session_role"]); role == "parent" {
@@ -186,7 +213,7 @@ func usageNeedsLineage(fields libraryFields) bool {
 		return true
 	}
 	for field := range fields {
-		if strings.HasPrefix(field, "root_") || strings.HasPrefix(field, "delegated_") || field == "session_role" || field == "run_role" {
+		if strings.HasPrefix(field, "root_") || strings.HasPrefix(field, "delegated_") || field == "session_role" || field == "run_role" || field == "run_identity" {
 			return true
 		}
 	}
@@ -194,7 +221,10 @@ func usageNeedsLineage(fields libraryFields) bool {
 }
 
 func (c *Catalog) localUsageLedger(ctx context.Context) ([]map[string]any, error) {
-	return cachedValue(ctx, c, "usage-ledger", func(context.Context) ([]map[string]any, error) { return c.representativeLedger() })
+	if err := c.currentUsageEstimation(ctx); err != nil {
+		return nil, err
+	}
+	return cachedValue(ctx, c, "usage-ledger", c.representativeLedgerContext)
 }
 
 // usageCarbonSuffix ends usage cache keys with the reader's carbon
@@ -213,7 +243,7 @@ func (c *Catalog) localUsageBaseRows(ctx context.Context, hourly bool) ([]map[st
 }
 
 func (c *Catalog) usageBaseRows(ctx context.Context, hourly bool, carbon carbonAssumptions) ([]map[string]any, error) {
-	key := time.Local.String() + ":" + c.clock().Format("2006-01-02")
+	key := time.Local.String()
 	if hourly {
 		key += ":hourly"
 	}
@@ -224,7 +254,7 @@ func (c *Catalog) usageBaseRows(ctx context.Context, hourly bool, carbon carbonA
 		if err != nil {
 			return nil, err
 		}
-		rows, err := c.usageRowsFromLedger(time.Local, hourly, ledger)
+		rows, err := c.usageRowsFromLedgerContext(ctx, time.Local, hourly, ledger)
 		if err != nil {
 			return nil, err
 		}
@@ -232,16 +262,15 @@ func (c *Catalog) usageBaseRows(ctx context.Context, hourly bool, carbon carbonA
 	})
 }
 
-// localUsageRows returns usageRows in local time, kept until the next commit
-// or local day, since costs at today's prices follow the date.
+// localUsageRows returns usageRows in local time, kept until the next commit.
 func (c *Catalog) localUsageRows(ctx context.Context) ([]map[string]any, error) {
-	key := "usage:" + time.Local.String() + ":" + c.clock().Format("2006-01-02")
+	key := "usage:" + time.Local.String()
 	return c.cachedUsageLineage(ctx, key, false)
 }
 
 // Hourly chart data keeps the ledger's time precision without changing table rows.
 func (c *Catalog) localUsageHourlyRows(ctx context.Context) ([]map[string]any, error) {
-	key := "usage-hourly:" + time.Local.String() + ":" + c.clock().Format("2006-01-02")
+	key := "usage-hourly:" + time.Local.String()
 	return c.cachedUsageLineage(ctx, key, true)
 }
 
@@ -263,14 +292,14 @@ func (c *Catalog) cachedUsageLineage(ctx context.Context, key string, hourly boo
 	})
 }
 
-// The lineage graph depends on neither carbon settings nor the local day.
+// The lineage graph does not depend on carbon settings.
 func (c *Catalog) localUsageRoots(ctx context.Context) (*usageConversationAttribution, error) {
 	return cachedValue(ctx, c, "usage-roots", func(ctx context.Context) (*usageConversationAttribution, error) {
 		ledger, err := c.localUsageLedger(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return c.usageConversationRoots(ledger)
+		return c.usageConversationRoots(ctx, ledger)
 	})
 }
 
@@ -301,12 +330,12 @@ func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []qt.Wher
 	if err != nil {
 		return nil, err
 	}
-	return selectUsageHours(daily, hourly, where)
+	return selectUsageHours(ctx, daily, hourly, where)
 }
 
 // selectUsageHours is the hourly rows of the daily rows matching where's row
 // filters, that match its timestamp and hour filters.
-func selectUsageHours(daily, hourly []map[string]any, where []qt.WhereTerm) ([]map[string]any, error) {
+func selectUsageHours(ctx context.Context, daily, hourly []map[string]any, where []qt.WhereTerm) ([]map[string]any, error) {
 	var rowWhere, hourWhere []qt.WhereTerm
 	for _, term := range where {
 		timeOnly := true
@@ -325,7 +354,7 @@ func selectUsageHours(daily, hourly []map[string]any, where []qt.WhereTerm) ([]m
 			rowWhere = append(rowWhere, term)
 		}
 	}
-	matched, err := filterUsageRows(daily, rowWhere)
+	matched, err := filterUsageRows(ctx, daily, rowWhere)
 	if err != nil {
 		return nil, err
 	}
@@ -339,27 +368,53 @@ func selectUsageHours(daily, hourly []map[string]any, where []qt.WhereTerm) ([]m
 			kept = append(kept, row)
 		}
 	}
-	return filterUsageRows(kept, hourWhere)
+	return filterUsageRows(ctx, kept, hourWhere)
 }
 
 // filterUsageRows keeps the Usage rows matching where, with Query Table's
-// in-memory filter: the rows its SQLite adapter would select from a staged
-// copy of them.
-func filterUsageRows(rows []map[string]any, where []qt.WhereTerm) ([]map[string]any, error) {
+// public source planner over a staged copy.
+func filterUsageRows(ctx context.Context, rows []map[string]any, where []qt.WhereTerm) ([]map[string]any, error) {
 	if len(where) == 0 {
 		return rows, nil
 	}
-	filter, err := qt.CompileRowFilter(where, PharosUsageSchema(), qt.SQLiteOptions{})
+	// V3 owns typed NULL, datetime and boolean semantics. Stage only identity
+	// and filter inputs, then keep the original fact objects for hourly expansion.
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return nil, err
 	}
-	kept := []map[string]any{}
+	defer db.Close()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	schema := PharosUsageSchema()
+	d := queryV3Dataset(schema)
+	fields := append(whereFields(where), schema.IDField)
+	d.SourceSQL, err = stageQueryRowsWithBudget(ctx, tx, "usage_filter", rows, schema, d.MaxPopulation, fields)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := d.SourcePlan(ctx, qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true, Result: qt.WireQuery{Select: []string{schema.IDField}, Where: where, Limit: 1}}, qt.PlanOptions{})
+	if err != nil {
+		return nil, err
+	}
+	matches, err := queryMapsContext(ctx, tx, plan.SQL, plan.Args...)
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) > d.MaxPopulation {
+		return nil, fmt.Errorf("usage filter exceeds source population budget")
+	}
+	alias := recordIdentityColumn(plan.Columns, schema.IDField)
+	ids := map[string]bool{}
+	for _, row := range matches {
+		ids[firstString(row[alias])] = true
+	}
+	kept := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
-		match, err := filter.Match(row)
-		if err != nil {
-			return nil, err
-		}
-		if match {
+		if ids[firstString(row[schema.IDField])] {
 			kept = append(kept, row)
 		}
 	}
@@ -367,7 +422,11 @@ func filterUsageRows(rows []map[string]any, where []qt.WhereTerm) ([]map[string]
 }
 
 func (c *Catalog) representativeLedger() ([]map[string]any, error) {
-	ledger, err := c.usageLedger(nil)
+	return c.representativeLedgerContext(context.Background())
+}
+
+func (c *Catalog) representativeLedgerContext(ctx context.Context) ([]map[string]any, error) {
+	ledger, err := c.usageLedger(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +440,11 @@ func (c *Catalog) representativeLedger() ([]map[string]any, error) {
 		}
 	}
 	representative := map[string]bool{}
-	for _, row := range c.suppressMirrors(workspaces) {
+	mirrors, err := c.suppressMirrorsContext(ctx, workspaces)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range mirrors {
 		representative[firstString(row["id"])] = true
 	}
 	kept := ledger[:0]
@@ -394,7 +457,7 @@ func (c *Catalog) representativeLedger() ([]map[string]any, error) {
 }
 
 // usageLedger reads priced ledger entries, optionally for specific workspaces.
-func (c *Catalog) usageLedger(workspaceIDs []string) ([]map[string]any, error) {
+func (c *Catalog) usageLedger(ctx context.Context, workspaceIDs []string) ([]map[string]any, error) {
 	sums := make([]string, len(usageTokenFields))
 	for index, field := range usageTokenFields {
 		sums[index] = "u." + field
@@ -406,16 +469,16 @@ func (c *Catalog) usageLedger(workspaceIDs []string) ([]map[string]any, error) {
 			args = append(args, id)
 		}
 	}
-	return queryMaps(c.reader(), `SELECT u.agent_session_id,u.usage_hour,u.model usage_model,u.effort,u.attribution,`+strings.Join(sums, ",")+`,
+	return queryMapsContext(ctx, c.reader(), `SELECT u.agent_session_id,u.usage_hour,u.model usage_model,u.effort,u.attribution,u.is_estimate,u.input_tokens_available,`+strings.Join(sums, ",")+`,
 			a.kind session_kind,a.depth,a.provider,a.model session_model,a.conversation_id,
             CASE WHEN `+currentGroupConversation("c")+` THEN 1 ELSE 0 END current_group_member,
             c.harness,c.harness_version_first,c.harness_version_last,c.harness_version_source,
-			w.id workspace_id,w.title,w.source_kind,r.display_name repository_name
+			w.id workspace_id,w.title,w.source_kind,r.display_name repository_name,`+projectNameSQL("w")+` project_name
 		FROM agent_session_usage u
 		JOIN agent_sessions a INDEXED BY agent_sessions_usage_idx ON a.id=u.agent_session_id
         LEFT JOIN conversations c INDEXED BY conversations_usage_idx ON c.id=a.conversation_id
 		JOIN workspaces w INDEXED BY workspaces_library_idx ON w.id=a.workspace_id
-		LEFT JOIN repositories r ON r.id=w.repository_id
+		LEFT JOIN repositories r ON r.id=w.repository_id`+projectJoin("w")+`
 		WHERE u.total_tokens>0`+filter, args...)
 }
 
@@ -450,7 +513,7 @@ func (c *Catalog) attachWorkspaceCosts(ctx context.Context, rows []map[string]an
 		for _, row := range rows {
 			ids = append(ids, firstString(row["id"]))
 		}
-		totals, err = c.workspaceUsage(ids)
+		totals, err = c.workspaceUsage(ctx, ids)
 	} else {
 		totals, err = c.allWorkspaceUsage(ctx)
 	}
@@ -458,9 +521,10 @@ func (c *Catalog) attachWorkspaceCosts(ctx context.Context, rows []map[string]an
 		return err
 	}
 	for _, row := range rows {
-		row["cost_usd"], row["cost_today_usd"], row["price_status"] = nil, nil, nil
+		row["cost_usd"], row["price_status"] = nil, nil
 		if value := totals[firstString(row["id"])]; value != nil {
-			row["cost_usd"], row["cost_today_usd"], row["price_status"] = value.cost, value.today, value.status
+			row["cost_usd"], row["price_status"] = value.cost, value.status
+			row["is_estimate"] = value.isEstimate
 		}
 	}
 	return nil
@@ -468,39 +532,38 @@ func (c *Catalog) attachWorkspaceCosts(ctx context.Context, rows []map[string]an
 
 // workspaceUsageTotal is one workspace's reconciled tokens and priced cost.
 type workspaceUsageTotal struct {
-	tokens      int64
-	cost, today any
-	status      string
+	tokens     int64
+	cost       any
+	status     string
+	isEstimate bool
 }
 
 // add folds another workspace's usage into this one.
 func (total *workspaceUsageTotal) add(other *workspaceUsageTotal) {
 	total.tokens += other.tokens
+	total.isEstimate = total.isEstimate || other.isEstimate
 	if cost, ok := other.cost.(float64); ok {
 		total.cost = addCost(total.cost, &cost)
-	}
-	if today, ok := other.today.(float64); ok {
-		total.today = addCost(total.today, &today)
 	}
 	total.status = worsePriceStatus(total.status, other.status)
 }
 
 // allWorkspaceUsage returns workspaceUsage for every workspace, kept until the
-// next commit or local day. The totals are shared and must not be modified.
+// next commit. The totals are shared and must not be modified.
 func (c *Catalog) allWorkspaceUsage(ctx context.Context) (map[string]*workspaceUsageTotal, error) {
-	return cachedValue(ctx, c, "workspace-usage:"+c.clock().Format("2006-01-02"), func(context.Context) (map[string]*workspaceUsageTotal, error) {
-		return c.workspaceUsage(nil)
+	return cachedValue(ctx, c, "workspace-usage", func(ctx context.Context) (map[string]*workspaceUsageTotal, error) {
+		return c.workspaceUsage(ctx, nil)
 	})
 }
 
 // workspaceUsage totals the priced ledger per workspace, for the given
 // workspaces or, with none, all of them.
-func (c *Catalog) workspaceUsage(workspaceIDs []string) (map[string]*workspaceUsageTotal, error) {
-	ledger, err := c.usageLedger(workspaceIDs)
+func (c *Catalog) workspaceUsage(ctx context.Context, workspaceIDs []string) (map[string]*workspaceUsageTotal, error) {
+	ledger, err := c.usageLedger(ctx, workspaceIDs)
 	if err != nil {
 		return nil, err
 	}
-	book, err := c.loadPriceBook()
+	book, err := c.loadPriceBookFrom(ctx, c.reader())
 	if err != nil {
 		return nil, err
 	}
@@ -514,15 +577,15 @@ func (c *Catalog) workspaceUsage(workspaceIDs []string) (map[string]*workspaceUs
 			day = localMidnight(hour, time.Local).Format("2006-01-02")
 		}
 		tokens := ledgerTokens(entry)
-		priced := book.cost(ledgerModel(entry), day, tokens)
+		priced := book.ledgerCost(entry, ledgerModel(entry), day, tokens)
 		id := firstString(entry["workspace_id"])
 		if totals[id] == nil {
 			totals[id] = &workspaceUsageTotal{}
 		}
 		total := totals[id]
 		total.tokens += tokens["total_tokens"]
+		total.isEstimate = total.isEstimate || estimateFlag(entry["is_estimate"])
 		total.cost = addCost(total.cost, priced.cost)
-		total.today = addCost(total.today, priced.costToday)
 		total.status = worsePriceStatus(total.status, priced.status)
 	}
 	return totals, nil

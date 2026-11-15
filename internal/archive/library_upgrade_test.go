@@ -214,7 +214,7 @@ func legacyUpgradeCatalog(t *testing.T) *Catalog {
 func TestLibraryUpgrade(t *testing.T) {
 	catalog := legacyUpgradeCatalog(t)
 	pending := upgradePending(t, catalog)
-	if pending["repositories"] == 0 || pending["usage"] != 1 || pending["harness"] == 0 || pending["instructions"] == 0 || pending["reasoning"] == 0 || pending["message-search"] != 2 || pending["tools"] != 2 {
+	if pending["repositories"] == 0 || pending["usage"] != 2 || pending["harness"] == 0 || pending["instructions"] == 0 || pending["reasoning"] == 0 || pending["message-search"] != 2 || pending["tools"] != 2 {
 		t.Fatalf("legacy library pending: %v", pending)
 	}
 	preview, err := catalog.RepositoryMergePreview(context.Background())
@@ -278,8 +278,90 @@ func TestLibraryUpgrade(t *testing.T) {
 		t.Fatalf("rename-only merge left %d rows, %v", rows, err)
 	}
 	// Running it again finds nothing to do.
-	if err := catalog.RunUpgrade(context.Background(), nil); err != nil {
+	catalog.ops = newOpRegistry("service")
+	ctx, op := catalog.beginOp(t.Context(), OperationSpec{Kind: "library.upgrade"})
+	defer op.Finish(nil)
+	ctx = withWorkProgress(ctx, func(work activityWork) {
+		view := op.view()
+		if len(view.Plan) > 0 && view.Step.Index > len(view.Plan) {
+			t.Fatalf("worker phase %q advanced the upgrade beyond its plan: %+v", work.Phase, operationStep(view))
+		}
+	})
+	if err := catalog.RunUpgrade(ctx, nil); err != nil {
 		t.Fatal(err)
+	}
+	step := operationStep(op.view())
+	if step == nil || step["index"] != 1 || step["count"] != 1 {
+		t.Fatalf("a single-step upgrade must remain step 1 of 1 through rollup phases and final inventory: %+v", step)
+	}
+}
+
+func TestLibraryUpgradeRestoresLinksBeforeSessionModels(t *testing.T) {
+	c, _ := testCatalog(t)
+	ingestRecordTx(t, c, sessionModelLinkedFixture())
+	// Usage is already reconciled. The previous model repair was marked
+	// current before the retained-lineage repair had restored its links.
+	execSQL(t, c.DB, `UPDATE agent_sessions SET child_conversation_id=NULL,model='sonnet' WHERE native_id='child-call';
+		UPDATE meta SET value='1' WHERE key='agent_session_model_version'; DELETE FROM message_search_state`)
+	if pending := upgradePending(t, c); pending["usage"] != 0 || pending["message-search"] == 0 || pending["session-models"] == 0 {
+		t.Fatalf("upgrade dependencies=%v", pending)
+	}
+	before, err := queryMaps(c.DB, `SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := []string{}
+	if err := c.RunUpgrade(t.Context(), func(step string, done, total int) {
+		if len(steps) == 0 || steps[len(steps)-1] != step {
+			steps = append(steps, step)
+		}
+		if step == "session-models" && done > 0 {
+			var model string
+			if err := c.DB.QueryRow(`SELECT model FROM agent_sessions WHERE native_id='child-call' AND child_conversation_id IS NOT NULL`).Scan(&model); err != nil || model != "haiku" {
+				t.Errorf("model repair completed before restoring evidence: %q %v", model, err)
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lineage, models := -1, -1
+	for i, step := range steps {
+		if step == "message-search" {
+			lineage = i
+		}
+		if step == "session-models" {
+			models = i
+		}
+	}
+	if lineage < 0 || models <= lineage {
+		t.Fatalf("upgrade order=%v", steps)
+	}
+	if version, err := c.metaValue(t.Context(), "agent_session_model_version"); err != nil || version != agentSessionModelVersion {
+		t.Fatalf("completion marker=%q: %v", version, err)
+	}
+	if pending := upgradePending(t, c)["session-models"]; pending != 0 {
+		t.Fatalf("model repair still pending=%d", pending)
+	}
+	after, err := queryMaps(c.DB, `SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model`)
+	if err != nil || jsonText(before) != jsonText(after) {
+		t.Fatalf("upgrade changed accounted usage: %v", err)
+	}
+	if err := c.RunUpgrade(t.Context(), func(step string, done, total int) {
+		if step == "session-models" {
+			t.Error("completed one-time model repair ran again")
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A later lineage-only repair also maintains the label when the model
+	// marker is current, including callers outside the full upgrade job.
+	execSQL(t, c.DB, `UPDATE agent_sessions SET child_conversation_id=NULL,model='sonnet' WHERE native_id='child-call'; DELETE FROM message_search_state`)
+	if _, err := c.BackfillMessageSearch(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	var model string
+	if err := c.DB.QueryRow(`SELECT model FROM agent_sessions WHERE native_id='child-call' AND child_conversation_id IS NOT NULL`).Scan(&model); err != nil || model != "haiku" {
+		t.Fatalf("lineage-only repair left model=%q: %v", model, err)
 	}
 }
 

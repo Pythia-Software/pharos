@@ -5,12 +5,19 @@ import type { QueryPreview } from "./query-previews";
 // server. A new page always revalidates its saved covers.
 export type CardPreviewSnapshot = { key: string; at: number; preview: QueryPreview };
 export type CardPreviewStorage = { read: () => Promise<CardPreviewSnapshot[]>; write: (entries: CardPreviewSnapshot[]) => Promise<void> };
-const lifetime = 7 * 86400000;
 const defaultLimits = { entries: 400, bytes: 16 * 1024 * 1024 };
 
 export function createCardPreviewCache(storage?: CardPreviewStorage, limits = defaultLimits) {
   const entries = new Map<string, CardPreviewSnapshot & { generation: number }>();
   let generation = 1, writes = Promise.resolve();
+  // An entry never changes after put, so its stored size is measured once: a
+  // save while a catalog loads would otherwise serialize every cover again.
+  const sizes = new WeakMap<object, number>(), encoder = new TextEncoder();
+  const sizeOf = (entry: object) => {
+    let size = sizes.get(entry);
+    if (size === undefined) sizes.set(entry, size = encoder.encode(JSON.stringify(entry)).length);
+    return size;
+  };
   // A busy or blocked browser store must not hold up live queries.
   let readTimer: ReturnType<typeof setTimeout> | undefined;
   const loaded = storage ? Promise.race([
@@ -19,7 +26,7 @@ export function createCardPreviewCache(storage?: CardPreviewStorage, limits = de
   ]) : Promise.resolve([]);
   const ready = loaded.then(saved => {
     for (const entry of saved) {
-      if (!entry || typeof entry.key !== "string" || !Number.isFinite(entry.at) || Date.now() - entry.at > lifetime || entry.at > Date.now()
+      if (!entry || typeof entry.key !== "string" || !Number.isFinite(entry.at) || entry.at > Date.now()
         || !entry.preview || !["ready", "empty"].includes(entry.preview.state)) continue;
       if (!entries.has(entry.key)) entries.set(entry.key, { ...entry, generation: 0 });
     }
@@ -28,15 +35,17 @@ export function createCardPreviewCache(storage?: CardPreviewStorage, limits = de
     ready,
     get(key: string) {
       const entry = entries.get(key);
-      if (!entry || Date.now() - entry.at > lifetime) return;
+      if (!entry) return;
       return { ...entry, fresh: entry.generation === generation && Date.now() - entry.at < 60_000 };
     },
-    put(key: string, preview: QueryPreview, expectedGeneration = generation) {
+    // at is when the cover's data was computed: a stale answer from the
+    // server's result cache keeps its age, so the next page asks again.
+    put(key: string, preview: QueryPreview, expectedGeneration = generation, at = Date.now()) {
       // A refresh that started before invalidation cannot make an old result fresh.
       if ((entries.get(key)?.generation ?? -1) > expectedGeneration) return;
-      const { refreshing: _refreshing, refreshError: _error, updatedAt: _at, ...cover } = preview;
+      const { refreshing: _refreshing, refreshError: _error, updatedAt: _at, served: _served, savedReason: _saved, ...cover } = preview;
       entries.delete(key);
-      entries.set(key, { key, at: Date.now(), preview: cover, generation: expectedGeneration });
+      entries.set(key, { key, at: Math.min(at, Date.now()), preview: cover, generation: expectedGeneration });
     },
     invalidate() { generation++; },
     generation: () => generation,
@@ -44,8 +53,7 @@ export function createCardPreviewCache(storage?: CardPreviewStorage, limits = de
       await ready;
       let bytes = 0;
       const kept = [...entries.values()].reverse().sort((a, b) => b.at - a.at).filter(entry => {
-        if (Date.now() - entry.at > lifetime) return false;
-        const size = new TextEncoder().encode(JSON.stringify(entry)).length;
+        const size = sizeOf(entry);
         if (bytes + size > limits.bytes) return false;
         bytes += size; return true;
       }).slice(0, limits.entries).map(({ key, at, preview }) => ({ key, at, preview }));

@@ -14,7 +14,9 @@ without patches.
 
 ## Scope and measurements
 
-`tools/usage-bench.cjs` drives the real Usage UI. It exercises Machine Tokens
+`tools/usage-bench.cjs` drove the real Usage UI. It was removed on 2026-11-02
+with the legacy Analyze and Tools pages it drove; the probe server below still
+serves the dashboards that replaced them. It exercised Machine Tokens
 chart presets, table presets, metrics, breakdowns, intervals, date presets,
 scales, smoothing, activity periods and representative repository/provider/model
 filters; Human Words conversation/message sort and metric presets and chart
@@ -142,8 +144,6 @@ startup creates the new indexes; a manually copied probe database needs those
 indexes prepared separately to reproduce indexed timings.
 
 ```sh
-npm --prefix web ci --no-audit --no-fund  # playwright-core for tools/usage-bench.cjs
-
 PHAROS_USAGE_PROBE=/path/to/dev/catalog/catalog.sqlite3 \
 PHAROS_USAGE_SERVER=127.0.0.1:8859 \
 PHAROS_USAGE_ASSETS="$PWD/internal/archive/assets" \
@@ -152,21 +152,4 @@ go test -tags probe ./internal/archive -run '^TestUsagePerformanceServer$' \
   -v -count=1 -timeout=120m
 ```
 
-In another terminal:
-
-```sh
-node tools/usage-bench.cjs --url http://127.0.0.1:8859 \
-  --output .context/usage-audited-benchmark.json
-
-# Repeat only Machine Time and Parallelism after a focused change:
-node tools/usage-bench.cjs --url http://127.0.0.1:8859 --section time \
-  --output .context/usage-time-final.json
-```
-
 `PHAROS_USAGE_TIMING` is optional and enables the captured Parallelism path.
-The benchmark uses installed Chrome on macOS and otherwise Playwright Chromium.
-It samples three arbitrary command families and all built-in activity categories;
-recorded program/tool names can number in the thousands.
-`PLAYWRIGHT_MODULE` can identify another Playwright installation.
-For a normally authenticated service, set `PHAROS_BENCH_TOKEN` in the environment;
-the benchmark never records the token or response message text.

@@ -99,7 +99,7 @@ func historyViewAdapter(ctx context.Context, root string, u historyUnit) (Adapte
 	view := newCaptureView(m.Host, dir, m)
 	view.noLocalLookups = true
 	view.evidenceRevision = filepath.Base(filepath.Dir(u.Path))
-	path, ok := view.captured(m.Source.Path)
+	path, ok := view.capturedSource(m.Source)
 	if !ok {
 		return nil, errors.New("unmapped history source root")
 	}
@@ -397,7 +397,7 @@ func compareHistoryWorkspace(ctx context.Context, oracle, rebuilt *sql.DB, u his
 		}
 		if !slices.Equal(historyComparisonRows(expected, kind), historyComparisonRows(actual, kind)) {
 			category := "source-values-or-relationships"
-			if slices.Contains([]string{"agent_sessions", "agent_session_usage", "model_requests", "metrics", "metric_ledger"}, kind) {
+			if slices.Contains([]string{"agent_sessions", "agent_session_usage", "agent_session_token_evidence", "model_requests", "metrics", "metric_ledger"}, kind) {
 				category = "accounting-or-parser-derived"
 			}
 			v.difference(u.Original, category, kind+" differs; exact values and populations compared")

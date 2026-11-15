@@ -1,20 +1,67 @@
 // Source choice and consent stay separate from discovery and DOM rendering.
-function createPharosSourceWizard() {
-  const supported=['claude','codex','conductor','tl1','antigravity'];
+// providers are GET /api/providers' list. Setup offers those marked setup, in
+// their order, as tools: a provider shown with another (Cursor CLI with
+// Cursor) is one tool of two kinds. A niche tool (when_found) is listed only
+// when it is found here, and can still be chosen under More tools.
+function createPharosSourceWizard(providers=[]) {
+  const supported=providers.filter(provider=>provider.setup).map(provider=>provider.kind);
+  const catalog=providers.filter(provider=>provider.setup&&!provider.setup_with).map(provider=>({
+    kind:provider.kind,name:provider.display_name,summary:provider.summary||'',hint:provider.folder_hint||'',whenFound:!!provider.when_found,
+    locations:provider.locations||[],variables:provider.variables||[],
+    kinds:[provider.kind,...providers.filter(other=>other.setup&&other.setup_with===provider.kind).map(other=>other.kind)],
+  }));
+  const toolOf=kind=>catalog.find(tool=>tool.kinds.includes(kind));
   const key=c=>c.kind+'\0'+c.path;
   return {
-    tools:[], detected:[], detectionReady:false, locations:[], report:null, decisions:new Map(), names:{},
+    mode:'scan', tools:[], detected:[], detectionReady:false, locations:[], report:null, decisions:new Map(), names:{},
+    catalog, providers,
+    tool:toolOf,
+    capabilities() {return pharosCapabilityRows(providers,this.tools)},
+    // What a kind never records, for the review.
+    notRecorded(kind) {return (providers.find(provider=>provider.kind===kind)?.capabilities||[]).filter(capability=>capability.support==='unsupported').map(capability=>capability.label)},
+    exports() {return providers.filter(provider=>provider.export).map(provider=>({kind:provider.kind,name:provider.display_name,how:provider.export}))},
     detect(tools) {
       this.detected=supported.filter(kind=>tools.some(tool=>tool.kind===kind));
-      if(!this.detectionReady)this.tools=[...this.detected];
+      if(!this.detectionReady)this.tools=this.found().flatMap(tool=>tool.kinds);
       this.detectionReady=true;
     },
-    toolGroups() {return {found:[...this.detected],other:supported.filter(kind=>!this.detected.includes(kind))}},
+    found() {return catalog.filter(tool=>tool.kinds.some(kind=>this.detected.includes(kind)))},
+    // Found tools; the others setup lists; and the niche ones it does not.
+    toolGroups() {
+      const found=this.found();
+      return {found:found.map(tool=>tool.kind),offered:catalog.filter(tool=>!found.includes(tool)&&!tool.whenFound).map(tool=>tool.kind),more:catalog.filter(tool=>!found.includes(tool)&&tool.whenFound).map(tool=>tool.kind)};
+    },
+    // Look in the usual places of every found tool.
+    scan() {this.mode='scan';this.tools=this.found().flatMap(tool=>tool.kinds);this.locations=[];this.report=null},
+    // Check only the folders named for the chosen tools. Each starts with its
+    // usual folder filled in, but not a second face (Cursor CLI), which many
+    // people never use; a folder cleared stays clear until the tool is chosen
+    // again.
+    manual() {
+      this.mode='manual';this.locations=[];this.report=null;
+      for(const tool of this.chosen())this.prefill(tool);
+    },
+    prefill(tool) {if(tool.locations[0])this.locations.push({kind:tool.kind,path:tool.locations[0]})},
     choose(kind,checked) {
-      if(!supported.includes(kind))throw Error('Unsupported tool');
-      this.tools=supported.filter(tool=>tool===kind?checked:this.tools.includes(tool));
+      const tool=toolOf(kind);
+      if(!tool)throw Error('Unsupported tool');
+      const was=tool.kinds.some(each=>this.tools.includes(each));
+      this.tools=supported.filter(other=>tool.kinds.includes(other)?checked:this.tools.includes(other));
       this.locations=this.locations.filter(location=>this.tools.includes(location.kind));
+      if(this.mode==='manual'&&checked&&!was)this.prefill(tool);
       this.report=null;
+    },
+    chosen() {return catalog.filter(tool=>tool.kinds.some(kind=>this.tools.includes(kind)))},
+    // A folder named for kind, replacing any named before; blank removes it.
+    name(kind,path) {
+      this.locations=this.locations.filter(location=>location.kind!==kind);
+      if(path.trim())this.locations.push({kind,path:path.trim()});
+      this.report=null;
+    },
+    // What a failed check returns to: the tools, folders and report before it.
+    checkpoint() {
+      const saved={mode:this.mode,tools:[...this.tools],locations:this.locations.map(location=>({...location})),report:this.report};
+      return ()=>Object.assign(this,saved);
     },
     discovered(report) {
       this.report={...report,candidates:report.candidates.filter(c=>this.tools.includes(c.kind))};
@@ -23,13 +70,97 @@ function createPharosSourceWizard() {
     set(candidate,checked) {this.decisions.set(key(candidate),checked)},
     checked(candidate) {return this.decisions.get(key(candidate))===true},
     selected() {return (this.report?.candidates||[]).filter(c=>c.acceptable&&this.checked(c)&&!(c.configured?.enabled||c.configured&&c.configured.scope!=='host'))},
-    request() {return {kinds:[...this.tools],locations:this.locations.map(location=>({...location}))}},
+    request() {
+      if(this.mode!=='manual')return {kinds:[...this.tools],locations:this.locations.map(location=>({...location}))};
+      const named=this.locations.filter(location=>this.tools.includes(location.kind));
+      return {kinds:supported.filter(kind=>named.some(location=>location.kind===kind)),locations:named.map(location=>({...location})),only_locations:true};
+    },
     selection() {
       const selected=this.selected(), accept=selected.map(c=>c.name);
       const decline=(this.report?.candidates||[]).filter(c=>!c.configured&&c.acceptable&&c.status==='found'&&!accept.includes(c.name)).map(c=>c.name);
       return {...this.request(),accept,decline,names:{...this.names}};
     },
   };
+}
+
+// What the chosen tools' histories hold: a row for each capability, with a
+// cell for each tool (support and note), in the providers' order.
+function pharosCapabilityRows(providers,kinds) {
+  const chosen=kinds.map(kind=>providers.find(provider=>provider.kind===kind)).filter(Boolean);
+  if(!chosen.length)return[];
+  return chosen[0].capabilities.map(({key,label})=>({key,label,cells:chosen.map(provider=>{
+    const capability=provider.capabilities.find(item=>item.key===key)||{support:'unsupported'};
+    return {kind:provider.kind,name:provider.display_name,support:capability.support,note:capability.note||''};
+  })}));
+}
+
+// Counts describe the supplied export records. Collection and indexing have
+// separate completion states, and a set without a manifest has unknown coverage.
+function pharosClaudeImportSummary(job) {
+  // Excluded parts (account details, sign-in history) are never kept.
+  const parts=(job.parts||[]).filter(part=>part.state!=='excluded'),collected=parts.filter(part=>part.state==='collected');
+  return {expected:parts.length,collected:collected.length,
+    conversations:collected.reduce((sum,part)=>sum+(part.conversations||0),0),
+    messages:collected.reduce((sum,part)=>sum+(part.messages||0),0),
+    complete:parts.length>0&&collected.length===parts.length,
+    knownCoverage:job.completeness==='manifest'};
+}
+
+// A completed import or an acknowledged setup postpones the reminder for a week.
+// Unknown history is not evidence that an import is overdue.
+function pharosClaudeRoutineDue(watch, now=Date.now()) {
+  if(!watch || watch.import_history_available===false)return false;
+  const week=7*24*60*60*1000;
+  return ![watch.last_import_at,watch.routine_done_at].some(value=>{
+    const at=Date.parse(value);
+    return Number.isFinite(at)&&at<=now&&now-at<=week;
+  });
+}
+
+// One watched Claude export as Settings shows it: what Pharos is doing, why it
+// stopped, and which decisions are the person's. Retrying reopens a link, so
+// it is offered only after Pharos has stopped on its own or been stopped.
+function pharosClaudeWatchLine(item) {
+  const files=`${item.collected||0} of ${item.expected||0} files collected`;
+  const ingestion=item.ingestion;
+  const stages={capturing:'Preserving collected files','discovering inputs':'Reading collected conversations',checking:'Checking for changed conversations',indexing:'Adding conversations to your library','waiting for catalog':'Waiting to save conversations','indexing retained snapshots':'Indexing retained snapshots','saving index':'Saving ingestion results',complete:'Finishing ingestion'};
+  const phase={queued:'Waiting for the library',indexing:stages[ingestion?.stage]||'Preparing ingestion'}[item.phase]||'Collecting export files';
+  const line={
+    fetching:{text:item.waiting_file?`Waiting for ${item.waiting_file} from ${item.browser_label||'your browser'}`:phase,actions:['stop'],attention:false},
+    paused:{text:ingestion?'Ingestion paused':'Collection paused',actions:['retry','stop'],attention:true},
+    stopped:{text:'Stopped',actions:['retry'],attention:false},
+    expired:{text:'Download links expired',actions:[],attention:true},
+    imported:{text:'Ready in your library',actions:[],attention:false},
+  }[item.state]||{text:files,actions:[],attention:false};
+  const count=(n,word)=>`${Number(n||0).toLocaleString()} ${word}${n===1?'':'s'}`;
+  const progress=ingestion&&(ingestion.processed||ingestion.conversations||ingestion.messages||ingestion.skipped_current)
+    ?`${count(ingestion.processed,'workspace')} processed · ${count(ingestion.conversations,'conversation')} written · ${count(ingestion.messages,'message')} written${ingestion.skipped_current?` · ${Number(ingestion.skipped_current).toLocaleString()} already current`:''}`:'';
+  return {...line,files,progress,detail:item.message||''};
+}
+
+// The same ingestion counts as Claude, with a single verified ZIP.
+function pharosChatGPTWatchLine(item) {
+  const line=pharosClaudeWatchLine(item);
+  if(item.state==='fetching'&&item.phase==='collecting')line.text='Copying and verifying export';
+  line.files=item.collected?'ZIP verified and preserved':'ZIP awaiting verification';
+  return line;
+}
+
+// A deliberate one-time capture uses existing capture/index jobs and never starts recording.
+async function captureClaudeSettings(coverage,{call,runs,conversation='',progress=()=>{}}){
+  if(!runs)throw Error('Library controls are still loading. Try again.');
+  progress('Preparing settings capture…');
+  const setup=await call('/api/claude-chat-settings/setup',{method:'POST',body:JSON.stringify({account:coverage.account,path:coverage.setup.path,capture_only:true})});
+  progress('Capturing settings…');
+  const captured=await runs.capture([setup.source]);
+  if(captured?.state!=='complete')throw Error('Settings capture did not complete. Try again when the current capture has finished.');
+  progress('Indexing settings…');
+  const indexed=await runs.index({sources:[setup.source],only_needed:true});
+  if(indexed?.state!=='complete')throw Error('Settings were captured, but indexing did not complete. Try again to finish.');
+  const result=await call('/api/claude-chat-settings/coverage?account='+encodeURIComponent(coverage.account)+'&conversation='+encodeURIComponent(conversation));
+  const current=result.accounts.find(item=>item.account===coverage.account);
+  if(!current||!Number.isSafeInteger(current.missing_models)||current.missing_models<0)throw Error('Settings were captured, but model coverage could not be confirmed. Reload this page to check it.');
+  return current;
 }
 
 // Source setup UI.
@@ -39,12 +170,40 @@ function createPharosSourceWizard() {
 // indexing. The CLI retains its separate full-discovery probe.
 (() => {
   'use strict';
+  let guideReady;
+  const loadDataGuide = async () => {
+    if (!document.querySelector('#dataGuideHost dialog[data-ready="true"]')) {
+      if (!guideReady) guideReady = new Promise((resolve, reject) => {
+        const ready = () => resolve();
+        window.addEventListener('pharos:data-guide-ready', ready, {once:true});
+        if (document.getElementById('dataGuideHost')) return;
+        const style = document.createElement('link');style.rel='stylesheet';style.href='/assets/data-guide.css';
+        const script = document.createElement('script');script.src='/assets/data-guide.js';
+        script.onerror=()=>{window.removeEventListener('pharos:data-guide-ready',ready);script.remove();style.remove();guideReady=null;reject(Error('Could not load the Data Guide.'))};
+        document.head.append(style,script);
+      });
+      await guideReady;
+    }
+  };
+  window.pharosOpenDataGuide = async (entity, invoker) => {
+    await loadDataGuide();
+    window.dispatchEvent(new CustomEvent('pharos:open-data-guide',{detail:{entity,invoker}}));
+  };
   const DISMISSED = 'pharos-onboarding-dismissed:';
-  const KINDS = {claude: 'Claude Code', codex: 'Codex', conductor: 'Conductor', tl1: 'TL1', chatgpt: 'ChatGPT', antigravity: 'Antigravity'};
+  // Display names, folder hints and providers by kind, from GET
+  // /api/providers once setup has loaded it.
+  let NAMES = {}, HINTS = {}, PROVIDERS = {};
+  const toolName = kind => NAMES[kind] || kind;
+  const learn = providers => {
+    NAMES = Object.fromEntries(providers.map(provider => [provider.kind, provider.display_name]));
+    HINTS = Object.fromEntries(providers.map(provider => [provider.kind, provider.folder_hint || '']));
+    PROVIDERS = Object.fromEntries(providers.map(provider => [provider.kind, provider]));
+  };
   const CSS = `
 .source-setup-open .application-body{overflow:hidden}
 .source-setup-open .application-body>:not(#pharosOnboarding){display:none!important}
 .source-setup-open .application-body>#pharosOnboarding{display:flex;flex:1;min-height:0}
+.pharos-source-guide{align-self:flex-start;margin:0 0 12px;padding:4px 0;color:var(--accent);text-decoration:underline;text-underline-offset:3px;font:inherit;font-size:12px}
 .pharos-onboard{position:fixed;inset:0;margin:auto;width:min(1040px,calc(100% - 48px));height:min(720px,calc(100dvh - 64px));max-width:none;max-height:calc(100dvh - 64px);padding:32px 40px;box-sizing:border-box;display:flex;flex-direction:column;background:var(--panel,#fff);color:var(--ink,#222);border:1px solid var(--line,#ccc);border-radius:12px;box-shadow:0 24px 70px #0006;overflow:hidden;font:14px/1.55 var(--sans,sans-serif)}
 .pharos-onboard::backdrop{background:color-mix(in srgb,var(--bg) 52%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 .pharos-onboard.pharos-embedded{position:static;margin:0;width:100%;height:100%;max-height:none;padding:0;border:0;border-radius:0;box-shadow:none}
@@ -56,15 +215,7 @@ function createPharosSourceWizard() {
 .pharos-onboard [hidden]{display:none!important}
 .pharos-onboard :focus-visible{outline:2px solid var(--focus-ring, var(--accent));outline-offset:3px}
 .pharos-onboard>h2:focus{outline:none}
-.pharos-tool-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;border:0;margin:0;padding:0;min-width:0}
-.pharos-onboard .pharos-tool{display:flex;align-items:center;gap:16px;position:relative;padding:20px;margin:0;border:1px solid var(--line);border-radius:9px;background:var(--bg);font-weight:400;cursor:pointer}
-.pharos-onboard .pharos-tool:has(input:checked){border-color:var(--gold);background:color-mix(in srgb,var(--gold) 7%,var(--bg));box-shadow:inset 0 0 0 1px var(--gold)}
-.pharos-tool>svg{width:64px;flex:none;fill:var(--bg);stroke:var(--gold);stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round}
-.pharos-tool>span{display:grid;gap:6px;padding-right:10px;min-width:0}
-.pharos-tool strong{font:600 19px/1.3 var(--serif)}
-.pharos-tool .pharos-muted{font-size:12px;line-height:1.5}
 .pharos-tool-detected{color:var(--gold);font-size:10px;letter-spacing:.04em}
-.pharos-onboard .pharos-tool input[type=checkbox]{position:absolute;top:12px;right:12px;width:16px;min-height:0;height:16px;padding:0;margin:0;accent-color:var(--accent)}
 .pharos-source-progress{margin-right:auto;font-size:11px;color:var(--muted);white-space:nowrap}
 .pharos-source-review{display:grid;gap:6px;padding:14px 0;border-bottom:1px solid var(--line)}
 .pharos-source-review code{overflow-wrap:anywhere;white-space:pre-wrap;font-size:12px}
@@ -73,11 +224,62 @@ function createPharosSourceWizard() {
 .pharos-custom-source button{margin:10px 10px 0 0}
 .pharos-onboard .pharos-source-rename{grid-column:2;padding:0;border:0;margin:6px 0;background:transparent;font-size:12px}
 .pharos-source-rename summary{cursor:pointer;color:var(--muted)}
-.pharos-onboard .pharos-other-sources{padding:0;border:0;margin:14px 0;background:transparent;font-size:12px;color:var(--muted)}
 .pharos-onboard .pharos-other-tools{padding:16px 0 0;border:0;border-top:1px solid var(--line);margin:18px 0 0;background:transparent}
 .pharos-other-tools>summary{cursor:pointer;font-weight:600}
-.pharos-other-tools>.pharos-tool-options{margin-top:16px}
-.pharos-other-sources summary,.pharos-custom-source summary{cursor:pointer;font-weight:600}
+.pharos-onboard .pharos-tool-contents{margin:18px 0 0;padding:14px 0 0;border:0;border-top:1px solid var(--line);border-radius:0;background:transparent}
+.pharos-tool-contents>summary{cursor:pointer;font-weight:600}
+.pharos-tool-contents p{margin:6px 0 12px}
+.pharos-visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.pharos-modes{display:grid;gap:12px;border:0;margin:0;padding:0;min-width:0}
+.pharos-mode-wrap{border:1px solid var(--line);border-radius:9px;background:var(--bg)}
+.pharos-mode-wrap:has(input:checked){border-color:var(--gold);box-shadow:inset 0 0 0 1px var(--gold);background:color-mix(in srgb,var(--gold) 7%,var(--bg))}
+.pharos-onboard .pharos-mode{display:flex;gap:14px;align-items:flex-start;padding:18px 20px;margin:0;font-weight:400;cursor:pointer}
+.pharos-modes>.pharos-mode{border:1px solid var(--line);border-radius:9px;background:var(--bg)}
+.pharos-modes>.pharos-mode:has(input:checked){border-color:var(--gold);box-shadow:inset 0 0 0 1px var(--gold)}
+.pharos-onboard .pharos-mode input{margin:5px 0 0;width:16px;height:16px;min-height:0;padding:0;flex:none;accent-color:var(--accent)}
+.pharos-mode>span{display:grid;gap:4px;min-width:0}
+.pharos-mode strong{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font:600 18px/1.3 var(--serif)}
+.pharos-recommended{font:600 10px/1.4 var(--sans);letter-spacing:.04em;text-transform:uppercase;color:var(--gold)}
+.pharos-onboard .pharos-places{margin:0 20px 16px 50px;padding:0;border:0;background:transparent;font-size:13px}
+.pharos-places>summary{cursor:pointer;color:var(--muted);font-weight:600}
+.pharos-places ul{margin:10px 0 0;padding:0;list-style:none;display:grid;gap:6px}
+.pharos-places code{font:12px ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}
+.pharos-places p{margin:10px 0 0}
+.pharos-exports-link{margin:18px 0 0;font-size:13px}
+.pharos-onboard button.pharos-link{min-height:0;padding:0;border:0;background:transparent;color:var(--gold);font:600 13px/1.4 var(--sans);text-decoration:underline;text-underline-offset:2px}
+.pharos-path-row{display:flex;gap:10px;align-items:center;margin:8px 0}
+.pharos-path-row input{flex:1;min-width:0;box-sizing:border-box;padding:8px 10px;background:var(--bg);border:1px solid var(--line);border-radius:5px;color:var(--ink);font:12px ui-monospace,SFMono-Regular,monospace}
+.pharos-path-row button{flex:none}
+.pharos-folders{display:grid;gap:4px}
+.pharos-folder>p{margin:0 0 6px;font-size:12px}
+.pharos-folder-label{display:block;margin:8px 0 0;font-size:13px;font-weight:600}
+.pharos-onboard-body h3.pharos-folders-heading{margin-top:26px;padding-top:16px;border-top:1px solid var(--line)}
+.pharos-not-found{margin-top:4px;font-size:13px}
+.pharos-not-recorded{font-size:12px}
+.pharos-export-how{margin:12px 0 4px}
+.pharos-claude-downloads{display:grid;gap:12px;margin:16px 0}
+.pharos-claude-downloads a{overflow-wrap:anywhere}
+.pharos-claude-parts{max-width:100%;overflow-wrap:anywhere}
+.pharos-claude-routine{min-width:0;margin:16px 0;padding:16px;border:1px solid var(--line);border-radius:8px}
+.pharos-claude-routine h3{margin:0 0 8px}.pharos-claude-routine p{margin:8px 0}
+.pharos-claude-routine pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;margin:12px 0;padding:12px;background:var(--bg);border-radius:6px;user-select:text}
+.pharos-claude-routine [role=status]:empty{display:none}
+.pharos-modes.pharos-pair{grid-template-columns:repeat(2,minmax(0,1fr))}
+.pharos-chips{display:flex;flex-wrap:wrap;gap:8px;border:0;margin:0;padding:0;min-width:0}
+.pharos-onboard .pharos-chip-option{display:inline-flex;align-items:center;gap:8px;margin:0;padding:8px 14px;border:1px solid var(--line);border-radius:20px;background:var(--bg);font:600 13px/1.3 var(--sans);cursor:pointer}
+.pharos-onboard .pharos-chip-option:has(input:checked){border-color:var(--gold);box-shadow:inset 0 0 0 1px var(--gold);background:color-mix(in srgb,var(--gold) 7%,var(--bg))}
+.pharos-onboard .pharos-chip-option input{margin:0;width:14px;height:14px;min-height:0;padding:0;accent-color:var(--accent)}
+.pharos-chip-option .pharos-tool-detected{font-weight:400}
+.pharos-onboard .pharos-other-tools>.pharos-chips{margin-top:12px}
+.pharos-onboard .pharos-candidate-head label.pharos-candidate-path{font:600 14px/1.4 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}
+.pharos-table-scroll{overflow-x:auto;max-width:100%}
+.pharos-capabilities{border-collapse:collapse;font-size:14px}
+.pharos-capabilities th,.pharos-capabilities td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.pharos-capabilities thead th{font-weight:600;white-space:nowrap}
+.pharos-capabilities tbody th{font-weight:400;white-space:nowrap}
+.pharos-capabilities td small{display:block;max-width:24ch;margin-top:2px;font-size:12px}
+.pharos-capabilities .pharos-support-unsupported>span,.pharos-capabilities .pharos-support-not-applicable>span{color:var(--muted,#666)}
+.pharos-custom-source summary{cursor:pointer;font-weight:600}
 .pharos-onboard-body>p{margin:18px 0}
 .pharos-candidate{display:grid;grid-template-columns:22px 1fr;gap:3px 10px;padding:14px 0;border-bottom:1px solid var(--line,#ccc)}
 .pharos-candidate:last-child{border-bottom:0}
@@ -105,9 +307,20 @@ function createPharosSourceWizard() {
 .pharos-working{display:grid;gap:10px;margin:18px 0}.pharos-working>p{margin:0}
 .pharos-working .pharos-meter{height:6px;overflow:hidden;border-radius:6px;background:var(--line,#ccc)}
 .pharos-working .pharos-meter>span{display:block;width:35%;height:100%;background:var(--accent,#315845);animation:pharos-onboard-slide 1.6s ease-in-out infinite}
-@keyframes pharos-onboard-slide{from{margin-left:-35%}to{margin-left:100%}}
-@media(max-width:600px){.pharos-onboard{padding:24px;width:calc(100% - 24px);max-height:calc(100dvh - 24px)}.pharos-onboard>h2,.application-setup .pharos-onboard>h2{font-size:27px}.pharos-onboard-intro,.application-setup .pharos-onboard-intro{font-size:14px}.pharos-tool-options{grid-template-columns:1fr;gap:10px}.pharos-onboard .pharos-tool{padding:14px 12px;gap:12px}.pharos-tool>svg{width:48px}.pharos-tool strong{font-size:17px}.pharos-onboard-actions{gap:8px}.pharos-onboard .pharos-onboard-actions button{min-width:0;padding:7px 10px}.pharos-candidate-name{flex-wrap:wrap}.pharos-candidate-name input{max-width:100%;box-sizing:border-box}}
-@media(prefers-reduced-motion:reduce){.pharos-working .pharos-meter>span{animation:none;width:100%;opacity:.5}}`;
+@keyframes pharos-onboard-slide{from{transform:translateX(-100%)}to{transform:translateX(286%)}}
+@media(max-width:600px){.pharos-onboard{padding:24px;width:calc(100% - 24px);max-height:calc(100dvh - 24px)}.pharos-onboard>h2,.application-setup .pharos-onboard>h2{font-size:27px}.pharos-onboard-intro,.application-setup .pharos-onboard-intro{font-size:14px}.pharos-modes.pharos-pair{grid-template-columns:1fr}.pharos-onboard-actions{gap:8px}.pharos-onboard .pharos-onboard-actions button{min-width:0;padding:7px 10px}.pharos-candidate-name{flex-wrap:wrap}.pharos-candidate-name input{max-width:100%;box-sizing:border-box}.pharos-onboard .pharos-places{margin:0 14px 14px}.pharos-path-row{flex-wrap:wrap}.pharos-path-row input{flex-basis:100%}}
+@media(prefers-reduced-motion:reduce){.pharos-working .pharos-meter>span{animation:none;width:100%;opacity:.5}}
+.claude-downloads-watch{margin-top:16px;padding:4px 20px 16px}.layout-preference-card.claude-downloads-watch>.optional-behavior{padding:16px 0;border-bottom:0}
+.claude-watch-how{margin:0 0 12px}.claude-watch-exports{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}.claude-watch-export{min-width:0}.claude-watch-exports:empty{display:none}
+.pharos-download-export{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--line)}.pharos-download-export-info{display:grid;min-width:0;gap:4px}.pharos-download-export-info code{overflow-wrap:anywhere}.pharos-download-export button{flex-shrink:0}
+.claude-watch-history{margin:12px 0;min-width:0}.claude-watch-history h4{margin:0 0 8px}.claude-watch-table-scroll{overflow-x:auto}.claude-watch-table{width:100%;border-collapse:collapse;text-align:left}.claude-watch-table th,.claude-watch-table td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}.claude-watch-table th{font-size:var(--fs-sm);color:var(--muted)}.claude-watch-table td{white-space:nowrap}.claude-watch-table td.claude-watch-file{max-width:24em;overflow:hidden;text-overflow:ellipsis}.claude-watch-history p{margin:8px 0}
+.claude-watch-export h4{margin:0;font-size:var(--fs-base)}.claude-watch-export p{margin:4px 0 0;overflow-wrap:anywhere}
+.claude-watch-library{margin:16px 0 0;min-width:0;overflow-wrap:anywhere}.claude-watch-library h4{margin:0;font-size:var(--fs-base)}.claude-watch-library p{margin:6px 0}.claude-watch-library ul{margin:6px 0;padding-left:20px}
+.claude-watch-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
+.claude-watch-button{border:1px solid var(--line);background:var(--bg);color:var(--ink)}.claude-watch-button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.claude-watch-options{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:0 0 12px}.claude-watch-options>p{flex-basis:100%;margin:0}
+.claude-watch-browser{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;max-width:100%}.claude-watch-browser select{flex:1 1 12em;box-sizing:border-box;width:100%;max-width:100%;min-width:0;height:30px;padding:3px 28px 3px 8px;border:1px solid var(--line);border-radius:5px;background-color:var(--panel);color:var(--ink);font:inherit}
+@media(max-width:560px){.claude-downloads-watch>.optional-behavior{flex-wrap:wrap;gap:12px}.claude-downloads-watch>.optional-behavior>div{flex-basis:100%}}`;
 
   const node = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -125,6 +338,24 @@ function createPharosSourceWizard() {
     return body;
   };
   const toast = message => { if (typeof window.feedbackToast === 'function') window.feedbackToast(message); };
+  function claudeExportRoutine(){
+    const section=node('section','pharos-claude-routine');
+    const prompt=node('pre','','Help me keep my Claude conversations up to date in Pharos. Use browser access in Claude Desktop to open Claude’s Settings → Privacy → Export data. Set up a daily scheduled task at 9 AM in my local timezone to request an export of the rolling last 30 days of conversations, recalculating the date range each day. If the export screen has no date filter, request the full export and tell me. Test the export request once now, verify that this browser task can run on the schedule, and tell me what must stay open or signed in. If scheduling or browser access is unavailable, explain what I need to enable. Leave the emailed download for me to initiate. Confirm the saved task’s schedule and export scope.');
+    const copy=node('button','','Copy daily export prompt'),done=node('button','','I’ve set this up'),status=node('p','pharos-muted');copy.type='button';done.type='button';status.setAttribute('role','status');
+    done.onclick=async()=>{done.disabled=true;try{await watchPost({action:'routine_done'});section.hidden=true;(section.closest('#pharosOnboarding')?.querySelector('input[aria-label="Export"]')||document.getElementById('claudeDownloadsWatch'))?.focus()}catch(failure){status.textContent=failure.message;done.disabled=false}};
+    copy.onclick=async()=>{
+      if(copy.getAttribute('aria-busy')==='true')return;
+      copy.setAttribute('aria-busy','true');status.textContent='';
+      try{await window.pharosHost.clipboard.writeText(prompt.textContent);status.textContent='Copied. Paste this into Claude Desktop.'}
+      catch{status.textContent='Could not copy the prompt. Select the text above and copy it, or try again.'}
+      finally{copy.removeAttribute('aria-busy')}
+    };
+    section.append(node('h3','','Request a daily Claude export'),
+      node('p','pharos-muted','Paste this starter prompt into Claude Desktop with scheduled tasks and browser access available. Claude will check which export options and scheduling capabilities your account supports.'),prompt,copy,' ',done,status,
+      node('p','pharos-muted','Each day, when Claude’s email arrives, use its link to download the export manifest into Downloads within 24 hours. With Import Claude exports from Downloads turned on in Settings → Sources, Pharos running, and your chosen browser profile signed in to Claude, Pharos collects the remaining files and imports your conversations.'),
+      node('p','pharos-muted','For your first import, request all history to preserve conversations older than 30 days. You can also request an export yourself in Claude’s Settings → Privacy → Export data.'));
+    return section;
+  }
   const plural = (count, unit) => `${Number(count).toLocaleString()} ${unit}${count === 1 ? '' : 's'}`;
   const size = value => {
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -156,17 +387,17 @@ function createPharosSourceWizard() {
   function candidateRow(candidate, index, choices) {
     const row = node('div', 'pharos-candidate'), head = node('div', 'pharos-candidate-head');
     const id = `pharosCandidate${index}`, configured = candidate.configured;
-    const title = node('label', '', KINDS[candidate.kind] || candidate.kind);
+    // Rows sit under their tool's heading, so a row is named by its folder.
+    const title = node('label', candidate.display_path ? 'pharos-candidate-path' : '', candidate.display_path || toolName(candidate.kind));
     title.htmlFor = id;
     head.append(title);
-    if (candidate.display_path) head.append(node('code', '', candidate.display_path));
     if (configured) head.append(node('span', 'pharos-chip', `Added as ${configured.name}${configured.enabled ? '' : ' · paused'}`));
     else if (candidate.status !== 'found' && candidate.status !== 'manual') head.append(node('span', 'pharos-chip', candidate.status));
     if (candidate.acceptable) {
       const box = node('input');
       box.type = 'checkbox';
       box.id = id;
-      box.setAttribute('aria-label', `${KINDS[candidate.kind] || candidate.kind}: ${candidate.display_path || candidate.path}`);
+      box.setAttribute('aria-label', `${toolName(candidate.kind)}: ${candidate.display_path || candidate.path}`);
       box.checked = configured ? configured.enabled : candidate.recommended;
       // A paused source in this Mac's file can be switched on from here.
       box.disabled = Boolean(configured) && (configured.enabled || configured.scope !== 'host');
@@ -208,7 +439,47 @@ function createPharosSourceWizard() {
     if(embedded)location.href='/library';else opener?.focus();
   }
 
-  function openPanel(status) {
+  // The app's folder picker, where there is one: the native panel, or the
+  // app manager's (a browser window of the app). purpose is source or export.
+  const pickerAvailable = () => Boolean(document.getElementById('application-setup') || window.pharosManagedSession || window.pharosHost.capabilities.folders.available);
+  async function choosePath(purpose) {
+    return window.pharosHost.capabilities.folders.available ? await window.pharosHost.folders.chooseLibraryFolder(purpose) : (await call('/api/app/choose-folder', {method: 'POST', body: JSON.stringify({purpose})})).path;
+  }
+
+  // A tool as a chip: a checkbox and its name, marked when spotted here.
+  function toolChip(tool, checked, spotted, onchange) {
+    const label=node('label','pharos-chip-option'),box=node('input');box.type='checkbox';box.value=tool.kind;box.checked=checked;
+    label.title=tool.summary;
+    label.append(box,node('span','',tool.name));
+    if(spotted)label.append(node('span','pharos-tool-detected','on this Mac'));
+    box.onchange=()=>onchange(box.checked);
+    return label;
+  }
+
+  // A path field with an optional Choose… button.
+  function pathField(labelText, value, placeholder, purpose, onchange, fail) {
+    const row=node('div','pharos-path-row'),input=node('input');
+    input.value=value;input.placeholder=placeholder;input.spellcheck=false;input.setAttribute('aria-label',labelText);
+    input.oninput=()=>onchange(input.value);
+    row.append(input);
+    if(pickerAvailable()){
+      const pick=button(purpose==='export'?'Choose file…':'Choose folder…',false,async()=>{
+        // Closing setup replaces active; rerendering a step disconnects its fields.
+        const view=active,current=()=>view&&active===view&&input.isConnected&&pick.isConnected;
+        pick.disabled=true;
+        try{const chosen=await choosePath(purpose);if(current()&&chosen){input.value=chosen;onchange(chosen)}}
+        catch(failure){if(current())fail(failure)}
+        finally{pick.disabled=false;if(current())pick.focus()}
+      });
+      pick.setAttribute('aria-label',`${pick.textContent} ${labelText}`);
+      row.append(pick);
+    }
+    return {row,input};
+  }
+
+  // mode: start (choose how to find), scan, manual, or import; kind, a tool
+  // to begin with when adding a folder.
+  function openPanel(status, {mode='start', kind=''}={}) {
     if(active)return;
     const embedded=document.getElementById('application-setup');
     const dialog=node(embedded?'section':'dialog','pharos-onboard'+(embedded?' pharos-embedded':''));
@@ -216,15 +487,21 @@ function createPharosSourceWizard() {
     const title=node('h2');title.id='pharosOnboardTitle';title.tabIndex=-1;
     const intro=node('p','pharos-onboard-intro');
     const body=node('div','pharos-onboard-body'),actions=node('div','pharos-onboard-actions');
-    const wizard=createPharosSourceWizard();
-    active={embedded:!!embedded,opener:document.activeElement,stage:0,back:()=>renderTools()};
-    dialog.append(title,intro,body,actions);
+    let wizard=createPharosSourceWizard();
+    let choice='scan';
+    const claudeSettingsSources=new Map();
+    active={embedded:!!embedded,opener:document.activeElement,stage:0,back:()=>renderStart()};
+    const guide=node('button','pharos-source-guide','Data Guide');guide.type='button';guide.dataset.viewField='guide_open';guide.onclick=()=>window.pharosOpenDataGuide('sources',guide).catch(failure=>{guide.textContent='Retry Data Guide';guide.title=failure.message});
+    dialog.append(title,intro,guide,body,actions);
     if(embedded){embedded.classList.add('source-setup-open');embedded.setAttribute('aria-labelledby',title.id);embedded.querySelector('.application-body').append(dialog)}
     else{document.body.append(dialog);dialog.showModal();dialog.addEventListener('cancel',event=>{event.preventDefault();active?.back()})}
-    const heading=(text,description)=>{title.textContent=text;intro.textContent=description;body.scrollTop=0;title.focus()};
+    const heading=(text,description)=>{guide.hidden=false;title.textContent=text;intro.textContent=description;intro.hidden=false;body.scrollTop=0;title.focus()};
     const step=n=>node('span','pharos-source-progress',`Step ${n} of 3`);
     const error=node('p','pharos-error');error.setAttribute('role','status');
     const fail=failure=>{error.textContent=failure.message;body.prepend(error)};
+    const clear=()=>{body.replaceChildren();error.textContent=''};
+    // Leaving setup before any source is chosen still writes this Mac's file,
+    // so setup does not reopen on every page.
     const skip=async()=>{
       active.stage=-1;
       active.back=()=>{};
@@ -232,54 +509,91 @@ function createPharosSourceWizard() {
       try{await call('/api/probe/accept',{method:'POST',body:JSON.stringify({kinds:[],accept:[],decline:[]})});sessionStorage.setItem(DISMISSED+status.host?.id,'1');close()}
       catch(failure){active.stage=0;active.back=skip;fail(failure);buttons.forEach(b=>b.disabled=false)}
     };
-    function renderTools() {
-      active.stage=0;active.back=skip;
-      const groups=wizard.toolGroups();
-      heading(groups.found.length?'Found on this Mac.':'Connect your tools.',groups.found.length?'We found these tools in common locations. Review what to include, then we’ll find their conversation folders.':'No tools were found in the common locations. Open Other tools to choose one and locate its history.');
-      body.replaceChildren();error.textContent='';
-      const descriptions={claude:'Conversations from the Claude Code app and CLI.',codex:'Conversations from the Codex app and CLI.',conductor:'Agent conversations and workspace context.',tl1:'Agent runs, tasks and project context.',antigravity:'Conversations from Antigravity / AGY.'};
-      const note=node('p','pharos-muted');
-      const update=()=>{next.disabled=!wizard.tools.length;note.textContent='Reviewing locations comes next. Nothing is captured until you approve the sources.'};
-      function options(kinds,labelText,detected){
-        const fieldset=node('fieldset','pharos-tool-options');fieldset.setAttribute('aria-label',labelText);
-        for(const kind of kinds){
-          const label=node('label','pharos-tool'),box=node('input');box.type='checkbox';box.value=kind;box.checked=wizard.tools.includes(kind);
-          const art=document.createElementNS('http://www.w3.org/2000/svg','svg');art.setAttribute('viewBox','0 0 80 54');art.setAttribute('aria-hidden','true');
-          art.innerHTML=kind==='conductor'||kind==='tl1'?'<rect x="5" y="6" width="48" height="32" rx="3"/><rect x="26" y="19" width="48" height="30" rx="3"/><path d="m34 29 6 5-6 5m14 0h13"/>':'<rect x="7" y="5" width="66" height="44" rx="4"/><path d="M7 16h66m-54 9 8 6-8 6m19 0h17"/>';
-          const copy=node('span'),name=node('strong','',KINDS[kind]);copy.append(name,node('span','pharos-muted',descriptions[kind]));
-          if(detected)copy.append(node('span','pharos-tool-detected','Detected on this Mac'));
-          label.append(box,art,copy);fieldset.append(label);
-          box.onchange=()=>{wizard.choose(kind,box.checked);update()};
-        }
-        return fieldset;
+    const leave=()=>status.host_file_exists?close():skip();
+    // From Settings there is nothing to defer: leaving just closes.
+    const leaveLabel=status.host_file_exists?'Cancel':'Set up later';
+    const exportsLink=back=>{
+      const line=node('p','pharos-exports-link'),open=node('button','pharos-link','Import an export');
+      open.type='button';open.onclick=()=>renderImport(back);
+      line.append(node('span','pharos-muted','Have a ChatGPT or Claude.ai export? '),open);
+      return line;
+    };
+
+    // How to find: the usual places, or only the folders the person names.
+    function renderStart(){
+      active.stage=0;active.back=leave;
+      heading('Find your AI conversations.','Pharos copies the history your AI tools keep on this Mac into your library, so you can search and study it. Choose how it finds that history.');
+      clear();
+      const modes=node('fieldset','pharos-modes');modes.append(node('legend','pharos-visually-hidden','How Pharos finds your conversations'));
+      const option=(value,name,text,extra)=>{
+        const label=node('label','pharos-mode'),radio=node('input'),copy=node('span');
+        radio.type='radio';radio.name='pharos-find';radio.value=value;radio.checked=choice===value;radio.onchange=()=>{choice=value};
+        const head=node('strong','',name);
+        if(value==='scan')head.append(node('span','pharos-recommended','Recommended'));
+        copy.append(head,node('span','pharos-muted',text));
+        label.append(radio,copy);
+        const wrap=node('div','pharos-mode-wrap');wrap.append(label);if(extra)wrap.append(extra);
+        modes.append(wrap);
+      };
+      const places=node('details','pharos-places');places.append(node('summary','','Which places?'));
+      const list=node('ul');
+      for(const tool of wizard.catalog){
+        const item=node('li');item.append(node('strong','',tool.name+' '),node('code','',tool.locations.join(', ')));
+        if(tool.variables.length)item.append(node('span','pharos-muted',` or where ${tool.variables.join(' or ')} points`));
+        list.append(item);
       }
-      const next=button('Continue',true,discover);
-      if(groups.found.length)body.append(options(groups.found,'Detected tools',true));
-      body.append(note);
-      const other=node('details','pharos-other-tools');other.append(node('summary','','Other tools'));
-      other.open=groups.other.some(kind=>wizard.tools.includes(kind));
-      if(groups.other.length)other.append(options(groups.other,'Other tools',false));
-      other.append(node('p','pharos-muted','Tools in a custom location may not be detected. Select one here to find or choose its conversation folder.'));
-      const exports=node('details','pharos-other-sources');exports.append(node('summary','','ChatGPT exports and other formats'),node('p','pharos-muted','ChatGPT history comes from a downloaded export, rather than a local agent folder. You can configure exports and other supported source formats later in Settings → Sources.'));
-      other.append(exports);body.append(other);
-      actions.replaceChildren(step(1),button('Set up later',false,skip),next);update();
+      places.append(list,node('p','pharos-muted','Pharos also checks Downloads for ChatGPT and Claude.ai exports. macOS may ask for access to Downloads. It does not search the rest of your disk.'));
+      const found=wizard.found();
+      const foundNote=found.length?`Already spotted here: ${found.map(tool=>tool.name).join(', ')}.`:'';
+      option('scan','Look in the usual places',`Pharos checks where ${wizard.catalog.length} tools keep their history and looks in Downloads for ChatGPT and Claude.ai exports. Nothing is copied until you approve it.${foundNote?' '+foundNote:''}`,places);
+      option('manual','I’ll tell Pharos where to look','Choose your tools, then the folders that hold their history. Pharos checks only those folders.');
+      body.append(modes,exportsLink(renderStart));
+      actions.replaceChildren(step(1),button(leaveLabel,false,leave),button('Continue',true,()=>choice==='scan'?scan():renderManual()));
     }
-    async function discover(){
-      heading('Looking for your conversations…','Checking only the tools you selected. This check won’t add sources or start a capture.');
-      body.replaceChildren(working('Checking selected source locations…'));actions.replaceChildren();active.back=()=>{};
-      try{wizard.discovered(await call('/api/probe',{method:'POST',body:JSON.stringify(wizard.request())}));renderLocations()}
-      catch(failure){renderTools();fail(failure)}
+
+    async function scan(){
+      wizard.scan();
+      await discover('Looking in the usual places…','Checking where your tools keep their history and looking in Downloads for exports. Nothing is added or copied yet.',()=>wizard.tools.length||wizard.report.downloads?.exports?.length||wizard.report.downloads?.problem||wizard.report.downloads?.incomplete?renderFound():renderNothing(),renderStart,()=>{},true);
     }
-    function renderLocations(){
-      active.stage=1;active.back=renderTools;
-      heading('Choose the folders to include.','These locations belong to your selected tools. Review them before adding sources for this Mac.');
-      body.replaceChildren();error.textContent='';
+    // restore undoes what led to a failed check, so back finds the screen as
+    // it was.
+    async function discover(text,description,next,back,restore=()=>{},downloads=false){
+      heading(text,description);
+      body.replaceChildren(working('Counting conversations…'));actions.replaceChildren();active.back=()=>{};
+      try{const previous=wizard.report?.downloads,report=await call('/api/probe',{method:'POST',body:JSON.stringify({...wizard.request(),...(downloads?{downloads:true}:{})})});if(!downloads&&previous)report.downloads=previous;wizard.discovered(report);next()}
+      catch(failure){restore();back();fail(failure)}
+    }
+
+    function renderNothing(){
+      active.stage=1;active.back=renderStart;
+      heading('Nothing in the usual places.','Pharos found no installed tools or possible exports in Downloads. If you keep history somewhere else, point Pharos at it.');
+      clear();
+      body.append(exportsLink(renderNothing));
+      actions.replaceChildren(step(2),button('Back',false,renderStart),button('Choose tools and folders',true,()=>renderManual()));
+    }
+
+    function downloadResults(){
+      const scan=wizard.report?.downloads;if(!scan)return;
+      const section=node('section','pharos-source-group');section.append(node('h3','','Exports in Downloads'));
+      if(scan.problem)section.append(node('p','pharos-error',scan.problem));
+      if(scan.incomplete)section.append(node('p','pharos-muted','The Downloads check stopped before checking every item. You can also choose an export yourself.'));
+      if(!scan.exports?.length&&!scan.problem)section.append(node('p','pharos-muted','No possible ChatGPT or Claude.ai exports found in Downloads.'));
+      for(const item of scan.exports||[]){
+        const row=node('div','pharos-download-export'),info=node('div','pharos-download-export-info'),label=item.kind?toolName(item.kind):'Possible ChatGPT or Claude.ai export';
+        info.append(node('strong','',label),node('code','',item.path));row.append(info,button('Review export',false,()=>renderImport(renderFound,item)));
+        section.append(row);
+      }
+      body.append(section);
+    }
+
+    // Candidates for each chosen tool, with what was not found.
+    function candidateGroups(){
       const choices=[];
       for(const checked of wizard.report.checked||[])if(checked.found_by==='chosen folder'&&checked.status==='missing')body.append(node('p','pharos-error',`No history found at ${checked.path}. Check the folder or choose another location.`));
-      for(const kind of wizard.tools){
-        const candidates=wizard.report.candidates.filter(candidate=>candidate.kind===kind);
-        const group=node('section','pharos-source-group');group.append(node('h3','',KINDS[kind]));
-        if(!candidates.length)group.append(node('p','pharos-muted','No saved history found in the usual locations. Choose a different folder below, or go Back to change tools.'));
+      for(const tool of wizard.chosen()){
+        const candidates=wizard.report.candidates.filter(candidate=>tool.kinds.includes(candidate.kind));
+        const group=node('section','pharos-source-group');group.append(node('h3','',tool.name));
+        if(!candidates.length)group.append(node('p','pharos-muted',wizard.mode==='manual'?'No history found in the folders you named.':'Installed, but no saved history in its usual folders yet.'));
         for(const candidate of candidates){
           const row=candidateRow(candidate,choices.length,choices),choice=choices.find(c=>c.candidate===candidate);
           if(choice){choice.box.checked=choice.box.disabled?!!candidate.configured?.enabled:wizard.checked(candidate);choice.box.onchange=()=>wizard.set(candidate,choice.box.checked);
@@ -289,44 +603,255 @@ function createPharosSourceWizard() {
         }
         body.append(group);
       }
-      const custom=node('details','pharos-custom-source');custom.append(node('summary','','Use a different folder'));
-      const kind=node('select');kind.setAttribute('aria-label','Tool for this folder');
-      wizard.tools.forEach(tool=>{const option=node('option','',KINDS[tool]);option.value=tool;kind.append(option)});
-      const path=node('input');path.setAttribute('aria-label','Source folder');path.placeholder='/path/to/source';path.spellcheck=false;
-      const hint=node('p','pharos-muted'),hints={claude:'Choose the Claude configuration folder containing projects, or the projects folder itself.',codex:'Choose the Codex home folder containing sessions.',conductor:'Choose the Conductor app data folder containing its databases.',tl1:'Choose the TL1 folder containing registry.json or workspaces.json.',antigravity:'Choose the Antigravity profile folder.'};
-      kind.onchange=()=>hint.textContent=hints[kind.value];kind.onchange();
-      custom.append(kind,hint,path);
-      if(embedded||window.pharosManagedSession||window.webkit?.messageHandlers?.pharosLibrary){
-        const pick=button('Choose folder…',false,async()=>{pick.disabled=true;try{const native=window.webkit?.messageHandlers?.pharosLibrary;const chosen=native?await native.postMessage({action:'chooseFolder'}):(await call('/api/app/choose-folder',{method:'POST',body:'{}'})).path;if(chosen)path.value=chosen}catch(failure){fail(failure)}finally{pick.disabled=false;pick.focus()}});custom.append(pick);
-      }
-      custom.append(button('Check folder',false,()=>{const value=path.value.trim();if(!value.startsWith('/')&&!value.startsWith('~/')){fail(Error('Enter an absolute folder path, or one starting with ~/.'));path.focus();return}if(!wizard.locations.some(l=>l.kind===kind.value&&l.path===value))wizard.locations.push({kind:kind.value,path:value});discover()}));
-      body.append(custom);actions.replaceChildren(step(2),button('Back',false,renderTools),button('Continue',true,review));
     }
+
+    // A folder the scan did not find, for any tool.
+    function otherFolder(){
+      const custom=node('details','pharos-custom-source');custom.append(node('summary','','Add a folder Pharos didn’t find'));
+      const kind=node('select');kind.setAttribute('aria-label','Tool for this folder');
+      for(const tool of wizard.catalog)for(const each of tool.kinds){const option=node('option','',toolName(each));option.value=each;kind.append(option)}
+      const hint=node('p','pharos-muted');
+      let path='';
+      const field=pathField('Folder',path,'/path/to/folder','source',value=>{path=value},fail);
+      kind.onchange=()=>{hint.textContent=HINTS[kind.value]||''};kind.onchange();
+      custom.append(kind,hint,field.row,button('Check folder',false,()=>{
+        const value=path.trim();
+        if(!value.startsWith('/')&&!value.startsWith('~/')){fail(Error('Enter an absolute folder path, or one starting with ~/.'));field.input.focus();return}
+        const restore=wizard.checkpoint();
+        if(!wizard.tools.includes(kind.value))wizard.choose(kind.value,true);
+        if(!wizard.locations.some(l=>l.kind===kind.value&&l.path===value))wizard.locations.push({kind:kind.value,path:value});
+        discover('Checking that folder…','Nothing is added or copied yet.',renderFound,renderFound,restore);
+      }));
+      return custom;
+    }
+
+    function renderFound(){
+      active.stage=1;active.back=wizard.mode==='manual'?renderManual:renderStart;
+      const manual=wizard.mode==='manual';
+      heading(manual?'Choose the folders to include.':'Found on this Mac.',manual?'These are the folders you named. Choose which to include.':wizard.report.candidates.length?'Choose which folders to include and review any exports separately. Folders you leave out are kept as paused sources, so you can add them later in Settings → Sources.':'Review an export to import it, or add a folder with other history.');
+      clear();
+      candidateGroups();
+      if(!manual){
+        downloadResults();
+        body.append(otherFolder());
+        const missing=wizard.toolGroups().offered.map(toolName);
+        if(missing.length)body.append(node('p','pharos-muted pharos-not-found',`Not found here: ${missing.join(', ')}.`));
+      }
+      actions.replaceChildren(step(2),button('Back',false,active.back),button('Continue',true,review));
+    }
+
+    // Which tools, then a folder for each: only those folders are checked.
+    function renderManual(){
+      if(wizard.mode!=='manual'){if(kind)wizard.tools=[];wizard.manual();if(kind)wizard.choose(kind,true)}
+      active.stage=1;active.back=renderStart;
+      heading('Which tools do you use?','Pick your tools, then the folder that holds each one’s history. Pharos checks only the folders you name here.');
+      clear();
+      const groups=wizard.toolGroups(),found=new Set(groups.found);
+      const chips=node('fieldset','pharos-chips');chips.setAttribute('aria-label','Your tools');
+      const cards=kinds=>kinds.map(kind=>toolChip(wizard.tool(kind),wizard.tools.includes(kind),found.has(kind),checked=>{const top=body.scrollTop;wizard.choose(kind,checked);renderManual();body.scrollTop=top;body.querySelector(`.pharos-chips input[value="${kind}"]`)?.focus()}));
+      chips.append(...cards([...groups.found,...groups.offered]));
+      body.append(chips);
+      if(groups.more.length){
+        const more=node('details','pharos-other-tools');more.append(node('summary','','More tools'));
+        more.open=groups.more.some(kind=>wizard.tools.includes(kind));
+        const fieldset=node('fieldset','pharos-chips');fieldset.setAttribute('aria-label','More tools');fieldset.append(...cards(groups.more));
+        more.append(fieldset);body.append(more);
+      }
+      let next;
+      const ready=()=>{if(next)next.disabled=!wizard.request().locations.length};
+      const folders=node('section','pharos-folders');
+      for(const tool of wizard.chosen()){
+        const group=node('div','pharos-folder');group.append(node('h3','',tool.name));
+        tool.kinds.forEach(each=>{
+          const usual=PROVIDERS[each]?.locations?.[0]||'';
+          const field=pathField(`${toolName(each)} folder`,wizard.locations.find(location=>location.kind===each)?.path||'',usual?`Usually ${usual}`:'/path/to/folder','source',value=>{wizard.name(each,value);ready()},fail);
+          if(tool.kinds.length>1)group.append(node('label','pharos-folder-label',toolName(each)));
+          group.append(field.row,node('p','pharos-muted',HINTS[each]||''));
+        });
+        folders.append(group);
+      }
+      if(wizard.chosen().length)body.append(node('h3','pharos-folders-heading','Folders to check'),folders);
+      body.append(exportsLink(renderManual));
+      next=button('Check these folders',true,()=>{
+        const named=wizard.request();
+        const bad=named.locations.find(location=>!location.path.startsWith('/')&&!location.path.startsWith('~/'));
+        if(bad){fail(Error(`Enter an absolute folder for ${toolName(bad.kind)}, or one starting with ~/.`));return}
+        discover('Checking the folders you named…','Only these folders. Nothing is added or copied yet.',renderFound,renderManual);
+      });
+      ready();
+      actions.replaceChildren(step(2),button('Back',false,renderStart),next);
+    }
+
     function review(){
-      active.stage=2;active.back=renderLocations;
+      active.stage=2;active.back=renderFound;
       const selected=wizard.selected();
-      heading('Review source access.',selected.length?'Pharos will add these sources for this Mac and preserve their conversation files and database history in your library. Indexing comes next.':'No new sources are selected. You can finish setup now and add sources later.');
-      body.replaceChildren();error.textContent='';
-      selected.forEach(candidate=>{const row=node('div','pharos-source-review');row.append(node('strong','',KINDS[candidate.kind]),node('code','',candidate.display_path||candidate.path),node('span','pharos-muted',facts(candidate)||'Size unavailable'));body.append(row)});
-      if(selected.length){const bytes=selected.reduce((total,c)=>total+(c.bytes||0),0);body.append(node('p','pharos-muted',`${plural(selected.length,'source')} selected${bytes?' · '+size(bytes)+' of source files':''}. Counts and sizes are estimates; database snapshots and search indexes need additional room.`))}
-      body.append(node('p','pharos-muted','These choices apply only on this Mac. Opening the library on another Mac will ask you to configure its own sources.'));
+      heading(selected.length?'Pharos will read these folders.':'Nothing new to add.',selected.length?'Pharos will add them as sources for this Mac and copy their conversation files and database history into your library. Indexing comes next.':'No new sources are selected. You can finish setup now and add sources later in Settings → Sources.');
+      clear();
+      selected.forEach(candidate=>{
+        const row=node('div','pharos-source-review');
+        row.append(node('strong','',toolName(candidate.kind)),node('code','',candidate.display_path||candidate.path),node('span','pharos-muted',facts(candidate)||'Size unavailable'));
+        const missing=wizard.notRecorded(candidate.kind);
+        if(missing.length)row.append(node('span','pharos-muted pharos-not-recorded',`${toolName(candidate.kind)} doesn’t record: ${missing.join(', ').toLowerCase()}.`));
+        body.append(row);
+      });
+      if(selected.length){
+        const bytes=selected.reduce((total,c)=>total+(c.bytes||0),0);
+        body.append(node('p','pharos-muted',`${plural(selected.length,'source')} selected${bytes?' · '+size(bytes)+' of source files':''}. Counts and sizes are estimates; database snapshots and search indexes need additional room.`));
+        const contents=node('details','pharos-tool-contents');contents.append(node('summary','','What each tool records'));
+        const table=node('div');renderContents(table,pharosCapabilityRows(wizard.providers,[...new Set(selected.map(c=>c.kind))]));
+        contents.append(table);body.append(contents);
+      }
+      body.append(node('p','pharos-muted','These choices apply only on this Mac. Opening the library on another Mac will ask you to set up its own sources.'));
       const add=button(selected.length?'Add and capture':'Finish setup',true,async()=>{
         const buttons=[...actions.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);error.textContent='';active.back=()=>{};
         try{const result=await call('/api/probe/accept',{method:'POST',body:JSON.stringify(wizard.selection())});renderResult(result,body,actions,status);window.loadSources?.();refreshNote()}
-        catch(failure){active.back=renderLocations;fail(failure);buttons.forEach(b=>b.disabled=false)}
+        catch(failure){active.back=renderFound;fail(failure);buttons.forEach(b=>b.disabled=false)}
       });
-      actions.replaceChildren(step(3),button('Back',false,renderLocations),add);
+      actions.replaceChildren(step(3),button('Back',false,renderFound),add);
     }
-    heading('Finding your tools…','Checking common application and data-folder locations on this Mac.');
+
+    async function renderClaudeCollection(back, selectedJob=null, wait=false) {
+      const view=active;
+      heading('Collect your Claude export.','Download links use your signed-in browser. Pharos verifies completed files and keeps a resumable copy in your library.');
+      clear();active.back=back;
+      const progress=node('p','','Checking collected files…');progress.setAttribute('role','status');body.append(progress);
+      const current=()=>active===view&&progress.isConnected;
+      try {
+        let report=await call('/api/claude-imports');
+        // The buttons are made once, so keyboard focus survives polling.
+        let running=false;
+        while(current()&&report.run?.running){
+          progress.textContent='Collecting and verifying files. You can close this panel and return later.';
+          if(!running){running=true;actions.replaceChildren(button('Stop collecting',false,async()=>{try{await call('/api/claude-imports/cancel',{method:'POST',body:'{}'})}catch(e){fail(e)}}),button('Done',false,close))}
+          await new Promise(resolve=>setTimeout(resolve,700));
+          if(!current())return;
+          report=await call('/api/claude-imports');
+        }
+        if(!current())return;
+        if(wait&&report.run?.error)fail(Error(report.run.error));
+        const chosen=selectedJob||(report.run?.id?{id:report.run.id,name:report.run.name}:report.jobs?.[0]);
+        if(!chosen){progress.textContent='No Claude exports have been collected yet.';actions.replaceChildren(button('Back',false,back));return}
+        const job=await call('/api/claude-imports?id='+encodeURIComponent(chosen.id)+'&name='+encodeURIComponent(chosen.name));
+        if(!current())return;
+        const settingsKey=job.name+'/'+job.id;
+        if(job.source){
+          let setup;
+          try{setup=await call('/api/claude-chat-settings/setup?name='+encodeURIComponent(job.name))}
+          catch{if(current())body.append(node('p','pharos-muted','Could not check saved Claude settings sources. You can capture missing settings after importing.'))}
+          if(!current())return;
+          if(setup?.enabled)claudeSettingsSources.set(settingsKey,setup.source);else claudeSettingsSources.delete(settingsKey);
+        }
+        const summary=pharosClaudeImportSummary(job);if(job.error)fail(Error(job.error));
+        progress.textContent=`Collected ${summary.collected} of ${summary.expected} files · ${plural(summary.conversations,'conversation')} · ${plural(summary.messages,'message')} in the supplied export.`;
+        body.append(node('p','pharos-muted',summary.knownCoverage?(summary.complete?'Every file listed by this manifest is collected. Conversation indexing is a separate step.':'This export is incomplete. Collected files are preserved while you obtain the missing parts.'):'No manifest was supplied, so Pharos cannot verify whether this is your full export.'));
+        for(const warning of [...new Set(job.warnings||[])])body.append(node('p','pharos-muted',warning));
+        const files=node('div','pharos-claude-parts');
+        for(const part of job.parts||[]){
+          const row=node('div','pharos-source-review');
+          row.append(node('code','',part.filename),node('span','',part.state==='collected'?'Verified and collected':part.error||'Waiting for this file'));
+          files.append(row);
+        }
+        body.append(files);
+        const links=node('div','pharos-claude-downloads');body.append(links);
+        if((job.parts||[]).some(part=>part.state!=='collected'&&part.download_available)){
+          body.append(button('Show missing download links',false,async()=>{
+            try{
+              const result=await call('/api/claude-imports/links',{method:'POST',body:JSON.stringify({id:job.id,name:job.name})});
+              if(!current())return;
+              links.replaceChildren(node('p','pharos-muted','Open these links in the browser where you are signed in to Claude. Keep the downloaded files beside the manifest, then check the folder again. Links may expire or work only once.'));
+              for(const part of job.parts||[]){if(!result.links?.[part.id])continue;const a=node('a','',`Download ${part.filename}`);a.href=result.links[part.id];a.target='_blank';a.rel='noopener noreferrer';links.append(a)}
+            }catch(e){fail(e)}
+          }));
+        }
+        let extra='';
+        const folder=pathField('Downloaded file or folder','','Optional: another folder or an exact file','export',value=>{extra=value},fail);
+        body.append(node('label','pharos-folder-label','Add a downloaded file or folder'),folder.row);
+        const resume=button('Check files again',false,async()=>{
+          try{await call('/api/claude-imports',{method:'POST',body:JSON.stringify({id:job.id,name:job.name,paths:extra.trim()?[extra.trim()]:[]})});if(current())renderClaudeCollection(back,{id:job.id,name:job.name},true)}catch(e){fail(e)}
+        });
+        const buttons=[button('Back',false,back),resume];
+        if(job.source)buttons.push(button('Capture and index conversations',true,()=>{active.back=()=>{};captureSources([...new Set([job.name,claudeSettingsSources.get(settingsKey)].filter(Boolean))],status,body,actions)}));
+        buttons.push(button('Done',false,close));actions.replaceChildren(...buttons);
+        window.loadSources?.();
+      }catch(e){if(current()){fail(e);actions.replaceChildren(button('Back',false,back),button('Done',false,close))}}
+    }
+
+    // A cloud history arrives as a downloaded export: name it, and Pharos
+    // checks it holds conversations before adding it.
+    function renderImport(back,foundExport=null){
+      active.stage=1;active.back=back;
+      heading('Import an export.','ChatGPT and Claude.ai keep your history in the cloud. Download an export, then choose it here; Pharos copies it into your library.');
+      clear();
+      const exports=wizard.exports();
+      let chosen=foundExport?(foundExport.kind||''):exports[0]?.kind,path=foundExport?.path||'';
+      const kinds=node('fieldset','pharos-modes pharos-pair');kinds.append(node('legend','pharos-visually-hidden','Which export'));
+      const how=node('p','pharos-muted pharos-export-how');
+      if(foundExport&&!foundExport.kind)body.append(node('p','pharos-muted','Choose whether this export is from ChatGPT or Claude.ai.'));
+      const recent=node('div'),routine=claudeExportRoutine();routine.hidden=true;let add;
+      const describe=()=>{if(add)add.disabled=!chosen;how.textContent=exports.find(item=>item.kind===chosen)?.how||'';routine.hidden=true;recent.replaceChildren();if(chosen==='claude-ai'){
+        call('/api/claude-imports').then(report=>{if(chosen!=='claude-ai'||!recent.isConnected)return;routine.hidden=!pharosClaudeRoutineDue(report.watch);if(!report.watch?.enabled&&report.watch?.available)recent.append(node('p','pharos-muted','To import each new Claude export as it arrives, turn on Import Claude exports from Downloads in Settings → Sources.'));for(const job of (report.jobs||[]).slice(0,5))recent.append(button(`Resume export: ${job.collected}/${job.expected} files`,false,()=>renderClaudeCollection(()=>renderImport(back),job)))}).catch(failure=>{if(recent.isConnected)fail(failure)});
+      }};
+      for(const item of exports){
+        const label=node('label','pharos-mode'),radio=node('input'),copy=node('span');
+        radio.type='radio';radio.name='pharos-export';radio.value=item.kind;radio.checked=item.kind===chosen;radio.onchange=()=>{chosen=item.kind;describe()};
+        copy.append(node('strong','',item.name));label.append(radio,copy);kinds.append(label);
+      }
+      describe();
+      const field=pathField('Export',path,'~/Downloads/export.zip','export',value=>{path=value},fail);
+      body.append(kinds,how,recent,node('h3','','The export'),field.row,
+        node('p','pharos-muted','For Claude, choose the manifest or a folder containing its downloaded ZIPs. A legacy ZIP or conversations.json also works. macOS may ask to let Pharos read Downloads.'),routine);
+      add=button('Import',true,async()=>{
+        const submittingView=active;
+        const value=path.trim();
+        if(!value.startsWith('/')&&!value.startsWith('~/')){fail(Error('Enter an absolute path, or one starting with ~/.'));field.input.focus();return}
+        const buttons=[...actions.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);error.textContent='';
+        try{if(chosen==='claude-ai'){await call('/api/claude-imports',{method:'POST',body:JSON.stringify({paths:[value]})});if(active!==submittingView||!field.input.isConnected)return;renderClaudeCollection(()=>renderImport(back),null,true)}else if(chosen==='chatgpt'&&value.toLowerCase().endsWith('.zip')){
+          await call('/api/chatgpt-imports',{method:'POST',body:JSON.stringify({path:value})});
+          if(active!==submittingView||!field.input.isConnected)return;
+          heading('Your ChatGPT export.','Pharos verifies the ZIP, preserves a snapshot, and adds its conversations to your library.');clear();
+          const report=node('div');body.append(report);renderChatGPTWatch(report);
+          actions.replaceChildren(button('Done',true,()=>{close();window.loadSources?.()}));
+        }else{const result=await call('/api/sources/import',{method:'POST',body:JSON.stringify({kind:chosen,path:value})});window.loadSources?.();renderResult(result,body,actions,status)}}
+        catch(failure){if(active!==submittingView||!field.input.isConnected)return;fail(failure);buttons.forEach(b=>b.disabled=false)}
+      });
+      add.disabled=!chosen;actions.replaceChildren(button('Back',false,back),add);
+    }
+
+    heading('Finding your tools…','Checking where common AI tools keep their history on this Mac.');
     body.replaceChildren(working('Looking for installed tools…'));
-    actions.replaceChildren(step(1),button('Set up later',false,skip));active.back=skip;
-    call('/api/probe/tools').then(result=>{
+    actions.replaceChildren(button(leaveLabel,false,leave));active.back=leave;
+    // The tools setup offers, and what each records, come from the registry;
+    // presence detection only says which are on this Mac.
+    Promise.all([call('/api/providers'),call('/api/probe/tools').catch(()=>null)]).then(([catalog,result])=>{
       if(!dialog.isConnected||active?.stage!==0)return;
-      wizard.detect(result.tools||[]);renderTools();
+      learn(catalog.providers);
+      wizard=createPharosSourceWizard(catalog.providers);
+      wizard.detect(result?.tools||[]);
+      ({scan,manual:renderManual,import:()=>renderImport(renderStart)}[mode]||renderStart)();
+      if(!result)fail(Error('Pharos could not check for installed tools. You can still name their folders yourself.'));
     }).catch(failure=>{
       if(!dialog.isConnected||active?.stage!==0)return;
-      wizard.detect([]);renderTools();fail(Error('Tool detection was unavailable. You can still select tools under Other tools.'));
+      body.replaceChildren();fail(failure);
     });
+  }
+
+  const SUPPORT={supported:'Yes',varies:'Sometimes',unsupported:'No','not-applicable':'Not applicable'};
+  // A table of what the chosen tools record (pharosCapabilityRows), one
+  // column a tool, so their limits are known before any is added.
+  function renderContents(section,rows) {
+    section.replaceChildren();section.hidden=!rows.length;
+    if(!rows.length)return;
+    section.append(node('h3','','What Pharos can read from these tools'),node('p','pharos-muted','Each tool keeps a different record of its conversations, and Pharos can only show what it keeps. When a tool reports no cost, Pharos prices its tokens.'));
+    const scroll=node('div','pharos-table-scroll'),table=node('table','pharos-capabilities'),head=node('tr'),tbody=node('tbody'),thead=node('thead');
+    scroll.tabIndex=0;scroll.setAttribute('role','region');scroll.setAttribute('aria-label','What each chosen tool records');
+    const corner=node('th','','Records');corner.scope='col';head.append(corner);
+    for(const cell of rows[0].cells){const th=node('th','',cell.name);th.scope='col';head.append(th)}
+    for(const row of rows){
+      const tr=node('tr'),label=node('th','',row.label);label.scope='row';tr.append(label);
+      for(const cell of row.cells){const td=node('td','pharos-support-'+cell.support);td.append(node('span','',SUPPORT[cell.support]||cell.support));if(cell.note)td.append(node('small','pharos-muted',cell.note));tr.append(td)}
+      tbody.append(tr);
+    }
+    thead.append(head);table.append(thead,tbody);scroll.append(table);section.append(scroll);
   }
 
   function renderResult(result, body, actions, status) {
@@ -490,12 +1015,12 @@ function createPharosSourceWizard() {
     const skippedParts = (run?.results || []).reduce((count, result) => count + (result.unchanged || 0), 0);
     const summary = run?.state === 'complete'
       ? !run.conversations && !parsedParts && !skippedParts && (alreadyCurrent || !run.results?.length) ? `${label} is already up to date; no conversations rewritten.`
-        : `Indexed ${plural(run.conversations, 'conversation')} (${plural(run.messages, 'message')}) from ${label}.${parsedParts ? ` ${plural(parsedParts, 'source part')} parsed.` : ''}${skippedParts ? ` ${skippedParts.toLocaleString()} unchanged files or sessions skipped.` : ''}`
+        : `Indexed ${plural(run.conversations, 'conversation')} (${plural(run.messages, 'message')}) from ${label}.${parsedParts ? ` ${plural(parsedParts, 'source part')} parsed.` : ''}${skippedParts ? ` ${skippedParts.toLocaleString()} unchanged history files or conversations skipped.` : ''}`
       : run?.state === 'interrupted' ? `Indexing ${label} was interrupted; the next index resumes it.` : `Indexing ${label} finished with errors.`;
     if (!shown()) return toast(summary);
     setTitle(body, run?.state === 'complete' ? `${label} is in the library` : `Indexing ${label}`);
     body.replaceChildren(node('p', 'pharos-lead', summary), indexRows(run));
-    if(run?.state==='complete')body.append(optionalBackup());
+    if(run?.state==='complete'){body.append(optionalBackup());if(typeof claudeSettingsBackfillNotice==='function')body.append(claudeSettingsBackfillNotice())}
     if (run?.error && run.state !== 'complete') body.append(node('p', 'pharos-error', run.error));
     active.back=close;
     const done = button('Done', true, close);
@@ -503,29 +1028,267 @@ function createPharosSourceWizard() {
     done.focus();
   }
 
+  // Settings → Sources: look again, name a folder, or import an export.
   async function refreshNote() {
     const slot = document.getElementById('sourceSetupAction');
     let status;
     try { status = await call('/api/probe/status?discovery=none'); } catch { return null; }
     if (!slot) return status;
     if (!status.library) { slot.replaceChildren(); return status; }
-    const find = node('button', '', 'Configure sources on this Mac…');
-    find.type = 'button';
-    find.id = 'pharosFindSources';
-    find.title = `Look for conversation sources on ${hostLabel(status)}. Configuration is saved in ${status.host_file_display}.`;
-    find.onclick = () => openPanel(status);
-    slot.replaceChildren(find);
+    const action = (id, text, title, options) => {
+      const b = button(text, false, () => openPanel(status, options));
+      b.id = id;
+      b.title = title;
+      return b;
+    };
+    slot.replaceChildren(
+      action('pharosFindSources', 'Look for sources…', `Look in the usual places and Downloads on ${hostLabel(status)}. Sources are saved in ${status.host_file_display}.`, {mode: 'scan'}),
+      action('pharosAddSource', 'Add a folder…', 'Name a folder that holds a tool’s history. Pharos checks only that folder.', {mode: 'manual'}),
+      action('pharosImportSource', 'Import an export…', 'Add a ChatGPT or Claude.ai export you downloaded.', {mode: 'import'}));
     return status;
   }
 
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);
+  // Settings → Sources: the opt-in Downloads watch and its recent exports.
+  // Controls stay the same elements across refreshes so focus survives polling.
+  const claudeWatch={root:null,timer:0};
+  const watchPost=body=>call('/api/claude-imports/watch',{method:'POST',body:JSON.stringify(body)});
+  // Keep a picker's options and value in step without disturbing it while open.
+  function browserOptions(select,watch,value){
+    const choices=[{key:'',label:'Default browser'},...(watch.browsers||[])];
+    if(choices.some(choice=>choice.key===value)===false)choices.push({key:value,label:'Unavailable profile'});
+    const signature=choices.map(choice=>choice.key+'\u0000'+choice.label).join('\u0001');
+    if(select.dataset.signature!==signature){
+      select.replaceChildren(...choices.map(choice=>{const option=node('option','',choice.label);option.value=choice.key;return option}));
+      select.dataset.signature=signature;
+    }
+    if(document.activeElement!==select)select.value=value;
+  }
+  // Completed exports, Claude's and ChatGPT's, are rows of one table.
+  function exportHistory(columns,note){
+    const history=node('section','claude-watch-history'),scroll=node('div','claude-watch-table-scroll'),table=node('table','claude-watch-table'),head=node('thead'),header=node('tr');
+    for(const text of columns){const th=node('th','',text);th.scope='col';header.append(th)}
+    head.append(header);table.append(head,node('tbody'));scroll.append(table);history.append(node('h4','','Completed exports'),scroll,node('p','muted',note));history.hidden=true;
+    return history;
+  }
+  // cells gives every column but the last, which opens the imported conversations.
+  function showExportHistory(history,completed,url,cells){
+    const signature=JSON.stringify([completed,url]);
+    history.hidden=!completed.length;
+    if(history.dataset.signature===signature)return;
+    history.dataset.signature=signature;
+    const focused=history.contains(document.activeElement)?document.activeElement.dataset.focusKey:'';
+    history.querySelector('tbody').replaceChildren(...completed.map(item=>{
+      const row=node('tr');row.dataset.id=item.id;row.append(...cells(item));
+      const destination=node('td');if(url){const link=node('a','','View conversations');link.href=url;link.dataset.focusKey=`${item.id}:conversations`;destination.append(link)}else destination.textContent='Unavailable';row.append(destination);
+      return row;
+    }));
+    if(focused)history.querySelector(`[data-focus-key="${window.CSS.escape(focused)}"]`)?.focus({preventScroll:true});
+  }
+  function renderClaudeWatch(root){
+    if(!root)return;
+    if(claudeWatch.root!==root){
+      claudeWatch.root=root;
+      const row=node('div','optional-behavior'),copy=node('div'),title=node('h3','','Import Claude exports from Downloads');title.id='claudeDownloadsWatchTitle';
+      const about=node('p','muted','Off by default. When a Claude export manifest arrives in Downloads, Pharos opens each of its download links in the browser you choose, one at a time, collects the ZIP files as they finish, and imports your conversations. Pharos opens only files named like a Claude export manifest (manifest-….json) and the files that manifest lists. It checks every 15 minutes while Pharos is running.');about.id='claudeDownloadsWatchDescription';
+      const toggle=node('button','toggle');toggle.id='claudeDownloadsWatch';toggle.type='button';toggle.setAttribute('role','switch');
+      toggle.setAttribute('aria-labelledby',title.id);toggle.setAttribute('aria-describedby',about.id);
+      toggle.onclick=async()=>{
+        const enabled=toggle.getAttribute('aria-checked')!=='true';toggle.disabled=true;
+        try{showClaudeWatch(await watchPost({enabled}))}catch(failure){toast(failure.message);toggle.disabled=false}
+      };
+      copy.append(title,about);row.append(copy,toggle);
+      const options=node('div','claude-watch-options'),label=node('label','claude-watch-browser','Open download links in '),select=node('select');
+      select.id='claudeDownloadsBrowser';
+      select.onchange=async()=>{select.disabled=true;try{showClaudeWatch(await watchPost({browser:select.value}))}catch(failure){toast(failure.message)}finally{select.disabled=false}};
+      const check=node('button','claude-watch-button','Check Downloads now');check.type='button';check.id='claudeDownloadsCheck';
+      check.onclick=async()=>{check.disabled=true;try{showClaudeWatch(await watchPost({action:'check'}));clearTimeout(claudeWatch.timer);claudeWatch.timer=setTimeout(refreshClaudeWatch,3000)}catch(failure){toast(failure.message)}finally{check.disabled=false}};
+      label.append(select);
+      options.append(label,check,node('p','muted','Choose the browser profile that is signed in to your Claude account. When a download arrives, Pharos remembers that profile for the account’s later exports.'));
+      const how=node('p','muted claude-watch-how','To start an export, open Claude, then Settings → Privacy → Export data. When Claude emails you, download the manifest from its link into Downloads. The links work for 24 hours.');
+      const problem=node('p','sync-note badtext');problem.setAttribute('role','status');
+      const list=node('div','claude-watch-exports'),library=node('div','claude-watch-library'),routine=claudeExportRoutine();routine.hidden=true;
+      const history=exportHistory(['Date','Files collected','Library status','Conversations added','Open'],'The number of conversations added by each export is not available. Exports can include conversations already in your library. The link opens all imported Claude.ai conversations.');
+      root.replaceChildren(row,options,how,routine,problem,list,history,library);root.hidden=false;
+    }
+    refreshClaudeWatch();
+  }
+  async function refreshClaudeWatch(){
+    clearTimeout(claudeWatch.timer);
+    try{showClaudeWatch((await call('/api/claude-imports')).watch)}catch(failure){if(claudeWatch.root?.isConnected)toast(failure.message)}
+  }
+  function showClaudeWatch(watch){
+    const root=claudeWatch.root;if(!root?.isConnected||!watch)return;
+    clearTimeout(claudeWatch.timer);
+    const toggle=root.querySelector('#claudeDownloadsWatch'),problem=root.querySelector('.badtext'),list=root.querySelector('.claude-watch-exports');
+    toggle.classList.toggle('on',!!watch.enabled);toggle.setAttribute('aria-checked',String(!!watch.enabled));toggle.disabled=!watch.available&&!watch.enabled;
+    root.querySelector('.claude-watch-options').hidden=!watch.enabled;
+    if(watch.enabled)browserOptions(root.querySelector('#claudeDownloadsBrowser'),watch,watch.browser||'');
+    problem.textContent=!watch.available?'Opening download links automatically needs the Pharos Mac app on macOS.':watch.enabled?watch.problem||'':'';
+    problem.hidden=!problem.textContent;
+    root.querySelector('.pharos-claude-routine').hidden=!pharosClaudeRoutineDue(watch);
+    const library=root.querySelector('.claude-watch-library'),libraryStatus=watch.library;
+    const browse=window.pharosQueryTables?.sourceWorkspacesURL?.('claude-ai');
+    const librarySignature=JSON.stringify([libraryStatus,browse]);
+    if(library.dataset.signature!==librarySignature){
+      library.dataset.signature=librarySignature;library.hidden=!libraryStatus;
+      if(libraryStatus){
+        if(!library.firstChild){
+          const title=node('h4','','Claude.ai workspaces in your library'),about=node('p','muted','This is the combined, searchable history from Claude.ai exports collected by this source. Pharos groups each imported conversation into a workspace so you can open it alongside your other work. Later exports update existing conversations in place; they do not create a separate workspace for every export.'),counts=node('p','claude-library-counts'),error=node('p','claude-library-error muted'),recentLabel=node('p','claude-library-recent-label muted','Recently active imported workspaces'),recent=node('ul','claude-library-recent'),browseLink=node('a','claude-library-browse','Browse all Claude.ai workspaces');
+          library.append(title,about,counts,error,recentLabel,recent,browseLink);
+        }
+        const counts=library.querySelector('.claude-library-counts'),error=library.querySelector('.claude-library-error'),recent=library.querySelector('.claude-library-recent'),browseLink=library.querySelector('.claude-library-browse');
+        counts.textContent=`${plural(libraryStatus.workspaces,'workspace')} · ${plural(libraryStatus.conversations,'conversation')}`;
+        counts.hidden=!!libraryStatus.error;error.textContent=libraryStatus.error||'';error.hidden=!libraryStatus.error;
+        const existing=new Map([...recent.children].map(entry=>[entry.dataset.workspaceId,entry]));
+        const focused=recent.contains(document.activeElement)?document.activeElement.dataset.focusKey:'';
+        const entries=(libraryStatus.recent||[]).map(workspace=>{
+          let entry=existing.get(workspace.id);
+          if(!entry){entry=node('li');entry.dataset.workspaceId=workspace.id;const link=node('a');link.dataset.focusKey=`claude-workspace:${workspace.id}`;entry.append(link)}
+          const link=entry.firstChild;link.href=workspace.url;if(link.textContent!==workspace.title)link.textContent=workspace.title;
+          return entry;
+        });
+        if(entries.length!==recent.children.length||entries.some((entry,index)=>recent.children[index]!==entry)){
+          recent.replaceChildren(...entries);
+          if(focused)recent.querySelector(`[data-focus-key="${window.CSS.escape(focused)}"]`)?.focus({preventScroll:true});
+        }
+        recent.hidden=!!libraryStatus.error||!entries.length;library.querySelector('.claude-library-recent-label').hidden=recent.hidden;
+        browseLink.hidden=!browse;if(browse)browseLink.href=browse;
+      }
+    }
+    const focusKey=list.contains(document.activeElement)?document.activeElement.dataset.focusKey:'';
+    // A row whose export did not change is kept as it is, so an open picker
+    // or an unsaved profile choice survives polling for another export.
+    const existing=new Map([...list.children].map(row=>[row.dataset.id,row]));
+    const browsersSignature=(watch.browsers||[]).map(choice=>choice.key+'\u0000'+choice.label).join('\u0001');
+    const rows=(watch.exports||[]).filter(item=>item.state!=='imported').slice(0,5).map(item=>{
+      const signature=JSON.stringify([item.state,item.phase,item.ingestion,item.collected,item.expected,item.message,item.waiting_file,item.browser,item.browser_label,item.exported_at,!!watch.enabled,browsersSignature]);
+      const kept=existing.get(item.id);
+      if(kept&&kept.dataset.signature===signature)return kept;
+      const line=pharosClaudeWatchLine(item),row=node('div','source-card claude-watch-export'+(line.attention?' attention':''));
+      row.dataset.id=item.id;row.dataset.signature=signature;
+      const when=item.exported_at?new Date(item.exported_at).toLocaleString():'Claude export';
+      row.append(node('h4','',`Export from ${when}`),node('p','',line.text));
+      row.append(node('p','muted',line.files));
+      if(line.progress)row.append(node('p','',line.progress),node('p','muted','This update includes earlier exports in the source. Existing conversations are updated in place.'));
+      if(line.detail)row.append(node('p',line.attention?'sync-note badtext':'muted',line.detail));
+      if(line.actions.length){
+        const actions=node('div','claude-watch-actions');
+        let profile=null;
+        if(line.actions.includes('retry')&&watch.enabled){
+          const label=node('label','claude-watch-browser','Try again in ');profile=node('select');profile.dataset.focusKey=`${item.id}:browser`;
+          browserOptions(profile,watch,item.browser||'');label.append(profile);actions.append(label);
+        }
+        for(const action of line.actions){
+          const button=node('button','claude-watch-button',action==='retry'?'Try again':'Stop');button.type='button';button.dataset.focusKey=`${item.id}:${action}`;
+          button.onclick=async()=>{button.disabled=true;try{showClaudeWatch(await watchPost({id:item.id,action,...(action==='retry'&&profile?{browser:profile.value}:{})}))}catch(failure){toast(failure.message);button.disabled=false}};
+          actions.append(button);
+        }
+        row.append(actions);
+      }
+      return row;
+    });
+    if(rows.length!==list.children.length||rows.some((row,index)=>list.children[index]!==row))list.replaceChildren(...rows);
+    if(focusKey&&!list.contains(document.activeElement))list.querySelector(`[data-focus-key="${window.CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
+    showExportHistory(root.querySelector('.claude-watch-history'),(watch.exports||[]).filter(item=>item.state==='imported'),window.pharosQueryTables?.sourceConversationsURL?.('claude-ai'),item=>[
+      node('td','',item.exported_at?new Date(item.exported_at).toLocaleString():'Unknown'),node('td','',Number(item.collected||0).toLocaleString()),node('td','','Ready in your library'),node('td','','—')]);
+    // Follow an export in progress while its section is on screen.
+    if(watch.enabled&&(watch.exports||[]).some(item=>item.state==='fetching'))claudeWatch.timer=setTimeout(()=>{if(root.isConnected&&!root.parentElement.closest('[hidden]'))refreshClaudeWatch()},3000);
+  }
+  const chatGPTWatch={root:null,timer:0};
+  const chatGPTPost=body=>call('/api/chatgpt-imports',{method:'POST',body:JSON.stringify(body)});
+  function renderChatGPTWatch(root){
+    if(!root)return;
+    if(chatGPTWatch.root!==root){
+      chatGPTWatch.root=root;
+      const row=node('div','optional-behavior'),copy=node('div'),title=node('h3','','Import ChatGPT exports from Downloads'),about=node('p','muted','Off by default. Pharos checks Downloads every 15 minutes while running, verifies completed ChatGPT export ZIPs, and preserves their conversations and files. Only ZIPs with ChatGPT’s export filename pattern are detected automatically.');
+      const suffix=root.id==='chatGPTDownloadsWatchSection'?'':'Report';
+      title.id='chatGPTDownloadsWatchTitle'+suffix;about.id='chatGPTDownloadsWatchDescription'+suffix;
+      const toggle=node('button','toggle');toggle.type='button';toggle.id='chatGPTDownloadsWatch'+suffix;toggle.setAttribute('role','switch');toggle.setAttribute('aria-labelledby',title.id);toggle.setAttribute('aria-describedby',about.id);
+      toggle.onclick=async()=>{toggle.disabled=true;try{showChatGPTWatch(await chatGPTPost({enabled:toggle.getAttribute('aria-checked')!=='true'}))}catch(failure){toast(failure.message);toggle.disabled=false}};
+      copy.append(title,about);row.append(copy,toggle);
+      const check=node('button','claude-watch-button','Check Downloads now');check.type='button';check.id='chatGPTDownloadsCheck'+suffix;check.dataset.chatgptCheck='true';
+      check.onclick=async()=>{check.disabled=true;try{showChatGPTWatch(await chatGPTPost({action:'check'}))}catch(failure){toast(failure.message)}finally{check.disabled=false}};
+      const how=node('p','muted','In ChatGPT, open Settings → Data controls → Export data. Allow about 24 hours for delivery; timing may vary. Download the emailed ZIP into Downloads. Renamed ZIPs can be selected with Import an export. Account profile, account settings, and advertising records are excluded from managed snapshots.');
+      const problem=node('p','sync-note badtext');problem.setAttribute('role','status');
+      const history=exportHistory(['Imported','Export','Library status','Open'],'Each export updates conversations already in your library in place. The link opens all imported ChatGPT conversations.');
+      root.replaceChildren(row,check,how,problem,node('div','claude-watch-exports'),history,node('div','claude-watch-library'));root.hidden=false;
+    }
+    refreshChatGPTWatch();
+  }
+  async function refreshChatGPTWatch(){
+    clearTimeout(chatGPTWatch.timer);
+    try{showChatGPTWatch(await call('/api/chatgpt-imports'))}catch(failure){if(chatGPTWatch.root?.isConnected)toast(failure.message)}
+  }
+  function showChatGPTWatch(watch){
+    const root=chatGPTWatch.root;if(!root?.isConnected||!watch)return;
+    clearTimeout(chatGPTWatch.timer);
+    const toggle=root.querySelector('[role="switch"]');toggle.disabled=false;toggle.classList.toggle('on',!!watch.enabled);toggle.setAttribute('aria-checked',String(!!watch.enabled));
+    root.querySelector('[data-chatgpt-check]').hidden=!watch.enabled;
+    const problem=root.querySelector('.badtext');problem.textContent=watch.problem||'';problem.hidden=!problem.textContent;
+    const list=root.querySelector('.claude-watch-exports'),existing=new Map([...list.children].map(row=>[row.dataset.id,row]));
+    const focusKey=list.contains(document.activeElement)?document.activeElement.dataset.focusKey:'';
+    // Cards are for exports in progress or stopped; completed ones are table rows.
+    const rows=(watch.exports||[]).filter(item=>item.state!=='imported').slice(0,5).map(item=>{
+      const signature=JSON.stringify(item),kept=existing.get(item.id);if(kept?.dataset.signature===signature)return kept;
+      const line=pharosChatGPTWatchLine(item),row=node('div','source-card claude-watch-export'+(line.attention?' attention':''));row.dataset.id=item.id;row.dataset.signature=signature;
+      row.append(node('h4','',item.filename||'ChatGPT export'),node('p','',line.text),node('p','muted',line.files));
+      if(line.progress)row.append(node('p','',line.progress),node('p','muted','Counts include earlier snapshots in this source. Conversations are updated in place.'));
+      if(line.detail)row.append(node('p',line.attention?'sync-note badtext':'muted',line.detail));
+      if(item.excluded?.length)row.append(node('p','muted',`Excluded account files: ${item.excluded.join(', ')}`));
+      const actions=node('div','claude-watch-actions');
+      for(const action of line.actions){
+        const button=node('button','claude-watch-button',action==='retry'?'Try again':'Stop');button.type='button';button.dataset.focusKey=`${item.id}:${action}`;
+        button.onclick=async()=>{button.disabled=true;try{showChatGPTWatch(await chatGPTPost({id:item.id,action}))}catch(failure){toast(failure.message);button.disabled=false}};actions.append(button);
+      }
+      row.append(actions);return row;
+    });
+    if(rows.length!==list.children.length||rows.some((row,index)=>list.children[index]!==row))list.replaceChildren(...rows);
+    if(focusKey&&!list.contains(document.activeElement))list.querySelector(`[data-focus-key="${window.CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
+    showExportHistory(root.querySelector('.claude-watch-history'),(watch.exports||[]).filter(item=>item.state==='imported'),window.pharosQueryTables?.sourceConversationsURL?.('chatgpt'),item=>{
+      const file=node('td','claude-watch-file',item.filename||'ChatGPT export');file.title=item.filename||'';
+      return [node('td','',item.updated_at?new Date(item.updated_at).toLocaleString():'Unknown'),file,node('td','','Ready in your library')];
+    });
+    const library=root.querySelector('.claude-watch-library'),status=watch.library;
+    library.hidden=!status;
+    if(status){
+      if(!library.firstChild)library.append(node('h4','','ChatGPT workspaces in your library'),node('p','chatgpt-library-counts'),node('ul','chatgpt-library-recent'),node('p','muted','Each ChatGPT conversation is grouped into a workspace.'),node('a','chatgpt-library-browse','Browse ChatGPT conversations →'));
+      library.querySelector('.chatgpt-library-counts').textContent=status.error||`${Number(status.workspaces).toLocaleString()} workspaces · ${Number(status.conversations).toLocaleString()} conversations`;
+      const recent=library.querySelector('ul'),existing=new Map([...recent.children].map(row=>[row.dataset.id,row])),focused=recent.contains(document.activeElement)?document.activeElement.dataset.workspaceId:'';
+      const entries=(status.recent||[]).map(workspace=>{const row=existing.get(workspace.id)||node('li');row.dataset.id=workspace.id;if(!row.firstChild){const link=node('a');link.dataset.workspaceId=workspace.id;row.append(link)}row.firstChild.href=workspace.url;row.firstChild.textContent=workspace.title;return row});
+      if(entries.length!==recent.children.length||entries.some((row,index)=>recent.children[index]!==row))recent.replaceChildren(...entries);
+      if(focused&&!recent.contains(document.activeElement))recent.querySelector(`[data-workspace-id="${window.CSS.escape(focused)}"]`)?.focus({preventScroll:true});
+      const browse=window.pharosQueryTables?.sourceConversationsURL?.('chatgpt'),link=library.querySelector('.chatgpt-library-browse');link.hidden=!browse;if(browse)link.href=browse;
+    }
+    // The worker discovers jobs after the POST response. Keep observing an
+    // enabled watch even when it is currently empty or all jobs are settled.
+    if(watch.enabled||(watch.exports||[]).some(item=>item.state==='fetching'))chatGPTWatch.timer=setTimeout(()=>{if(root.isConnected&&!root.closest('[hidden]'))refreshChatGPTWatch()},3000);
+  }
+  window.pharosChatGPTDownloads={render:renderChatGPTWatch};
+  // Conversation links need search; an idle watch does not poll for it.
+  window.addEventListener('pharos:search-ready',()=>{if(chatGPTWatch.root?.isConnected)refreshChatGPTWatch()});
+  const chatGPTSection=document.getElementById('chatGPTDownloadsWatchSection');
+  if(chatGPTSection&&!chatGPTSection.parentElement.closest('[hidden]'))renderChatGPTWatch(chatGPTSection);
+  window.pharosClaudeDownloads={render:renderClaudeWatch};
+  window.addEventListener('pharos:search-ready',()=>{if(claudeWatch.root?.isConnected)refreshClaudeWatch()});
+  // This script is deferred: Settings → Sources may already be showing.
+  const claudeWatchSection=document.getElementById('claudeDownloadsWatchSection');
+  if(claudeWatchSection&&!claudeWatchSection.parentElement.closest('[hidden]'))renderClaudeWatch(claudeWatchSection);
   window.pharosOnboarding={
-    open:async({library}={})=>{libraryScope=library||null;const status=await call('/api/probe/status?discovery=none');openPanel(status)},
+    // mode: start (the default), scan, manual or import; kind, a tool to
+    // begin with when naming a folder.
+    open:async({library,mode,kind}={})=>{libraryScope=library||null;const status=await call('/api/probe/status?discovery=none');openPanel(status,{mode,kind})},
     back:()=>active?.back(),
   };
-  if(document.body.hasAttribute('data-application-setup'))return;
+  if(document.body.hasAttribute('data-application-setup')){
+    // A copied setup URL can restore the guide without starting library pages.
+    document.addEventListener('DOMContentLoaded',()=>{
+      if(new URLSearchParams(location.search).get('guide_open')==='1')loadDataGuide().catch(failure=>toast(failure.message));
+    },{once:true});
+    return;
+  }
   refreshNote().then(status => {
     if (!status || sessionStorage.getItem(DISMISSED + status.host?.id)) return;
     if (status.needs_onboarding) openPanel(status);

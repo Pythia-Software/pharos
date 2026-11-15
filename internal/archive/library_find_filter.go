@@ -13,6 +13,8 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
+
 	"github.com/gbdubs/pharos/internal/querytable"
 )
 
@@ -231,7 +233,7 @@ func (s *Server) libraryRows(ctx context.Context, values url.Values, fields libr
 		return nil, nil, err
 	}
 	if set.limited || set.search.Strategy != "" && !set.search.Complete {
-		return nil, nil, fmt.Errorf("search is incomplete (%s); workspace rows, counts and metrics are withheld because Limit applies after filtering and sorting. Narrow the search or retry", set.search.StopReason)
+		return nil, nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeResourceLimit, Message: fmt.Sprintf("search is incomplete (%s); workspace rows, counts and metrics are withheld because Limit applies after filtering and sorting. Narrow the search or retry", set.search.StopReason)}
 	}
 	// searchRows returns a slice of its own, so it can be filtered in place.
 	rows = slices.DeleteFunc(rows, func(row map[string]any) bool { return set.matches[firstString(row["id"])] == nil })
@@ -364,8 +366,21 @@ func (c *Catalog) attachLibraryFind(ctx context.Context, set *libraryFindSet, ro
 		}
 	}
 	set.attach(rows)
+	hits := []libraryHit{}
 	for _, row := range rows {
 		if hit, ok := row["find_hit"].(libraryHit); ok {
+			hits = append(hits, hit)
+		}
+	}
+	edits, err := c.firstEdits(ctx, hits)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if hit, ok := row["find_hit"].(libraryHit); ok {
+			if hit.firstEditOf != "" {
+				hit.withFirstEdit(edits[[2]string{hit.WorkspaceID, hit.firstEditOf}])
+			}
 			if found, exists := evidence[hit.MessageID]; exists {
 				hit.Title, hit.Provider, hit.StartedAt = found.Title, found.Provider, found.StartedAt
 				hit.Role, hit.MessageKind, hit.Snippet = found.Role, found.MessageKind, found.Snippet

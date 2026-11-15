@@ -34,7 +34,7 @@ export function toolCalls() {
     return {
       id: `call-${index}`, started_at: new Date(at).toISOString(), ended_at: new Date(at + 1000).toISOString(), ...calendar(at),
       tool_name, tool_category, activity, command_name, operation_name, program: command_name?.split(" ")[0] ?? null, command_category: command_name ? command_name.split(" ")[1] : null,
-      repository_name: repositories[index % 3], provider: index % 4 ? "claude" : "codex", conversation_id: index % 17 === 0 ? null : tool_name === "Grep" ? "conversation-grep" : conversation, title: `Work ${index % 13}`,
+      repository_name: repositories[index % 3], project_name: repositories[index % 3], provider: index % 4 ? "claude" : "codex", conversation_id: index % 17 === 0 ? null : tool_name === "Grep" ? "conversation-grep" : conversation, title: `Work ${index % 13}`,
       // Some calls have no timing, some only timestamps; result sizes vary
       // by orders of magnitude and are measured or estimated.
       duration_ms: index % 11 === 0 ? null : (index % 6 + 1) * 10 ** (1 + index % 4), duration_source: index % 5 ? "reported" : "timestamps",
@@ -48,7 +48,7 @@ export function toolCalls() {
 }
 
 // The rollup sums each day's calls of one tool group.
-const rollupKeys = ["day", "week", "month", "tool_name", "tool_category", "command_name", "command_category", "program", "repository_name", "provider", "mcp_server", "mcp_method"];
+const rollupKeys = ["day", "week", "month", "tool_name", "tool_category", "command_name", "command_category", "program", "repository_name", "project_name", "provider", "mcp_server", "mcp_method"];
 export function toolsRollup(calls = toolCalls()) {
   const groups = new Map();
   for (const call of calls) {
@@ -83,7 +83,7 @@ export function skillUsages() {
       id: `evidence-${index}`, created_at: new Date(at).toISOString(), ...calendar(at), skill_name: index % 23 === 0 ? null : skill_name, skill_path, evidence_type,
       status: index % 19 === 0 ? "error" : "ok", content_bytes: index % 4 === 0 ? null : index % 10 === 1 ? -1 : (index % 6 + 1) * 10 ** (2 + index % 2),
       conversation_id: index % 13 === 0 ? null : `conversation-${index % 11}`, tool_call_id: evidence_type === "file_load" ? `load-${Math.floor(index / 2)}` : null,
-      provider: index % 2 ? "claude" : "codex", repository_name: repositories[index % 3],
+      provider: index % 2 ? "claude" : "codex", repository_name: repositories[index % 3], project_name: repositories[index % 3],
     };
   });
 }

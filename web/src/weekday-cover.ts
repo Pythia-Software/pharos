@@ -1,11 +1,12 @@
 import { boxSummary, coerceValue, loadSchema, predicatesOf, metricDateFloor, metricDateNext, metricDateTime, resolveFieldName, type AggregationClause, type AggregationResultEntry, type QueryState, type WhereClause } from "@pythia-software/query-table-core";
 import writingDocument from "../../schemas/writing_messages.schema.json";
 import parallelismDocument from "../../schemas/parallelism.schema.json";
+import sessionShapeDocument from "../../schemas/session_shape.schema.json";
 import type { QueryRecipe } from "./curiosity-data";
 import type { CardCover } from "./card-cover";
 
 export const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const calendarSchemas = [loadSchema(writingDocument as never), loadSchema(parallelismDocument as never)];
+const calendarSchemas = [loadSchema(writingDocument as never), loadSchema(parallelismDocument as never), loadSchema(sessionShapeDocument as never)];
 
 // Only a conjunction of simple date bounds defines one interval that we can
 // safely fill with idle days. Preserve native daily results for other date
@@ -19,7 +20,9 @@ function weekdayDatePredicates(clause: AggregationClause, query?: QueryState): W
   // Persisted Day/Week/Month/hour dimensions can exclude whole or partial
   // dates independently of the timestamp bounds. Resolve their aliases from
   // the dataset schema and leave these edited populations to the daily chart.
-  const calendar = new Set(schema.fields.filter(item => item.group === "Time" && item.name !== field).map(item => item.name));
+  // Bounds on another timestamp, such as a session's start when it folds by
+  // its last message, pick records rather than dates; the range is observed.
+  const calendar = new Set(schema.fields.filter(item => item.group === "Time" && item.name !== field && item.type !== "datetime").map(item => item.name));
   const isCalendar = (predicate: WhereClause) => calendar.has(name(predicate) ?? "");
   const dates: WhereClause[] = [];
   const where = [...((query?.grouping?.source ?? query)?.where ?? []), ...(clause.where ?? [])];
@@ -44,7 +47,7 @@ export function usesWeekdayCover(recipe: QueryRecipe | undefined, metric: Aggreg
   const original = recipe?.measures.find(item => item.id === recipe.weekday?.metricId);
   return recipe?.weekday?.metricId === metric.id && (!cover || cover.mode === "source" && cover.metricId === metric.id && (!cover.kind || cover.kind === "auto"))
     && original?.op === metric.op && original.field === metric.field && original.expression === metric.expression
-    && !metric.distribution && !metric.expressionY && metric.scope !== "shownRows" && metric.dateGrouping?.interval === "day" && metric.dateGrouping.includeEmpty
+    && !metric.distribution && !metric.expressionY && metric.scope !== "shownRows" && metric.dateGrouping?.interval === "day" && (metric.dateGrouping.every ?? 1) === 1 && metric.dateGrouping.includeEmpty
     && metric.dateGrouping.range === "observed"
     && metric.groupBy.length === 1 && metric.groupBy[0] === metric.dateGrouping.field
     && weekdayDatePredicates(metric, query) !== undefined;

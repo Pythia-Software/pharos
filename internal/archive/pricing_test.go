@@ -28,7 +28,7 @@ func testPricing() pricingDocument {
 
 func near(got *float64, want float64) bool { return got != nil && math.Abs(*got-want) < 1e-9 }
 
-func TestPriceBookUsesPriceOnDateAliasesAndTodaysPrice(t *testing.T) {
+func TestPriceBookUsesPriceOnDateAndAliases(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	if err := catalog.replacePricing(testPricing(), "test"); err != nil {
 		t.Fatal(err)
@@ -41,13 +41,12 @@ func TestPriceBookUsesPriceOnDateAliasesAndTodaysPrice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	book.today = "2026-09-24"
 	tokens := map[string]int64{"uncached_input_tokens": 1_000_000, "cache_read_input_tokens": 2_000_000,
 		"cache_creation_input_tokens": 3_000_000, "cache_creation_1h_input_tokens": 1_000_000, "output_tokens": 100_000}
 	// 1M uncached x10 + 2M reads x1 + 2M 5m-writes x12.5 + 1M 1h-writes x20 + 0.1M output x50.
 	march := book.cost("opus-4-8-1m", "2026-03-10", tokens)
-	if march.status != "priced" || !near(march.cost, 10+2+25+20+5) || !near(march.costToday, 5+1+12.5+10+2.5) || march.pricedModel != "claude-opus-4-8" {
-		t.Fatalf("price before the cut: %+v cost=%v today=%v", march, deref(march.cost), deref(march.costToday))
+	if march.status != "priced" || !near(march.cost, 10+2+25+20+5) || march.pricedModel != "claude-opus-4-8" {
+		t.Fatalf("price before the cut: %+v cost=%v", march, deref(march.cost))
 	}
 	if july := book.cost("opus", "2026-07-10", tokens); !near(july.cost, 5+1+12.5+10+2.5) {
 		t.Fatalf("bare alias should resolve to the model current on that day: %+v", july)
@@ -56,7 +55,7 @@ func TestPriceBookUsesPriceOnDateAliasesAndTodaysPrice(t *testing.T) {
 	if august := book.cost("opus", "2026-08-10", tokens); august.status != "unpriced" || august.cost != nil {
 		t.Fatalf("proposed prices must not be used: %+v", august)
 	}
-	if early := book.cost("claude-opus-4-8", "2025-12-01", tokens); early.status != "unpriced" || early.cost != nil || !near(early.costToday, 5+1+12.5+10+2.5) {
+	if early := book.cost("claude-opus-4-8", "2025-12-01", tokens); early.status != "unpriced" || early.cost != nil {
 		t.Fatalf("usage before the first known price: %+v", early)
 	}
 	// OpenAI has no cache-write rate, so a stray cache write makes cost a lower bound.
@@ -64,8 +63,19 @@ func TestPriceBookUsesPriceOnDateAliasesAndTodaysPrice(t *testing.T) {
 	if openai.status != "partial" || !near(openai.cost, 2+0.2+16) {
 		t.Fatalf("missing rate should be partial: %+v", openai)
 	}
-	if unknown := book.cost("<synthetic>", "2026-06-01", tokens); unknown.status != "unpriced" {
-		t.Fatalf("unknown model: %+v", unknown)
+	for _, model := range []string{"<synthetic>", "Unknown model", "codex-auto-review"} {
+		if unknown := book.cost(model, "2026-06-01", tokens); unknown.status != "unpriced" || unknown.cost != nil {
+			t.Fatalf("unmapped model %q must stay unpriced: %+v", model, unknown)
+		}
+	}
+	// A total-only remainder does not erase the known categories' cost or
+	// become input/output at the model's rates. Only the remainder is unknown.
+	partial := book.cost("opus", "2026-07-10", map[string]int64{
+		"uncached_input_tokens": 1_000_000, "output_tokens": 100_000,
+		"unclassified_tokens": 7, "total_tokens": 1_100_007,
+	})
+	if partial.status != "partial" || !near(partial.cost, 7.5) {
+		t.Fatalf("known cost with a small uncategorized remainder: %+v", partial)
 	}
 }
 
@@ -97,6 +107,71 @@ func TestPricingValidationRejectsUncitedAndConflictingRows(t *testing.T) {
 	}
 }
 
+func TestSyntheticModelRepairPricesOnlyExactAllocation(t *testing.T) {
+	for _, check := range []struct {
+		name, models string
+		pricedTokens int64
+	}{
+		{"context metadata", `{"claude-opus-4-8":{"contextWindow":200000},"claude-haiku-5":{"contextWindow":200000}}`, 11},
+		{"exact model counters", `{"claude-opus-4-8":{"inputTokens":60,"outputTokens":6},"claude-haiku-5":{"inputTokens":40,"outputTokens":4}}`, 110},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			doc := testPricing()
+			doc.Changes = append(doc.Changes, priceChange{Provider: "anthropic", Model: "claude-haiku-5", EffectiveFrom: "2026-01-01", Input: rate(1), Output: rate(5), Status: "confirmed", SourceURL: "https://example.com/haiku"})
+			if err := c.replacePricing(doc, "test"); err != nil {
+				t.Fatal(err)
+			}
+			record := WorkspaceRecord{SourceID: "synthetic-cost", SourceKind: "tl1", Account: "local", Conversations: []ConversationRecord{{NativeID: "synthetic-cost", Provider: "claude", Account: "local", Model: "<synthetic>", StartedAt: "2026-09-20T12:00:00Z", Messages: []MessageRecord{
+				{NativeID: "request", Role: "assistant", Kind: "metadata", Model: "claude-opus-4-8", CreatedAt: "2026-09-20T12:00:00Z", Text: `{"type":"assistant","message":{"id":"request","model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":1}}}`},
+				{NativeID: "result", Role: "system", Kind: "result", Model: "<synthetic>", CreatedAt: "2026-09-20T12:01:00Z", Text: `{"type":"result","usage":{"input_tokens":100,"output_tokens":10},"modelUsage":` + check.models + `}`},
+			}}}}
+			tx, err := c.DB.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = ingestWorkspace(tx, record, false); err != nil {
+				tx.Rollback()
+				t.Fatal(err)
+			}
+			if err = tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			// An older allocator put the whole run under its error envelope.
+			if _, err = c.DB.Exec(`DELETE FROM agent_session_usage; INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,attribution,input_tokens,uncached_input_tokens,output_tokens,total_tokens) SELECT id,'2026-09-20T12:00:00Z','<synthetic>','run-remainder',100,100,10,110 FROM agent_sessions; UPDATE conversations SET model='<synthetic>'; UPDATE agent_sessions SET model='<synthetic>'; UPDATE usage_attribution_state SET version='8'`); err != nil {
+				t.Fatal(err)
+			}
+			before, err := c.usageRows(time.UTC)
+			if err != nil || len(before) != 1 || before[0]["cost_usd"] != nil {
+				t.Fatalf("old usage=%v %v", before, err)
+			}
+			if _, err = c.RepairUsageAttribution(t.Context(), nil); err != nil {
+				t.Fatal(err)
+			}
+			after, err := c.usageRows(time.UTC)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var total, priced int64
+			for _, row := range after {
+				total += integer(row["total_tokens"])
+				if row["cost_usd"] != nil {
+					priced += integer(row["total_tokens"])
+				} else if !placeholderModel(firstString(row["model"])) {
+					t.Fatalf("unexpected unpriced model: %v", row)
+				}
+			}
+			if total != 110 || priced != check.pricedTokens {
+				t.Fatalf("total/priced=%d/%d, want 110/%d: %v", total, priced, check.pricedTokens, after)
+			}
+			var model string
+			if err := c.DB.QueryRow(`SELECT model FROM agent_sessions`).Scan(&model); err != nil || model != "claude-opus-4-8" {
+				t.Fatalf("summary=%q: %v", model, err)
+			}
+		})
+	}
+}
+
 func TestUsageAndLibraryRowsCarryCost(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	doc := testPricing()
@@ -109,6 +184,17 @@ func TestUsageAndLibraryRowsCarryCost(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows, err := catalog.usageRows(time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row["cost_usd"] != nil || row["price_status"] != "unpriced" {
+			t.Fatalf("summary label priced unknown usage: %#v", row)
+		}
+	}
+	// Pricing requires a usage allocation, independently of the label above.
+	execTx(t, catalog.DB, `UPDATE agent_session_usage SET model='gpt-6-sol'`)
+	rows, err = catalog.usageRows(time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,10 +272,13 @@ func TestAssumedPricesAndRefreshPrompt(t *testing.T) {
 		}
 	}
 	prompt := status["prompt"].(string)
-	for _, want := range []string{"| `gpt-7-preview` | codex |", "\"status\": \"proposed\"", "\"assumption\": true", "pricing/cost_changes.json", "Never fill in a value from memory"} {
+	for _, want := range []string{"| `gpt-7-preview` | codex |", "\"status\": \"proposed\"", "\"assumption\": true", "pricing/cost_changes.json", "pricing/model_colors.json", "pricing/model_color_rules.json", "generate-model-colors -- --preview", "Existing default colors may change", "For each newly priced model", "npm --prefix web test -- chart-colors", "Never fill in a value from memory"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("refresh prompt is missing %q:\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "Edit only `pricing/cost_changes.json`.") {
+		t.Error("refresh prompt must permit the model color catalog")
 	}
 	doc.Changes[len(doc.Changes)-1].Notes = ""
 	if problems := strings.Join(validatePricing(doc), "\n"); !strings.Contains(problems, "assumption rows must explain") {

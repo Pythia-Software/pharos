@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -97,6 +99,8 @@ func redactFeedbackLog(raw string) string {
 }
 func (s *Server) feedbackHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
+	case r.Method == "POST" && r.URL.Path == "/api/feedback/screenshot":
+		exportFeedbackScreenshot(w, r)
 	case r.Method == "GET" && r.URL.Path == "/api/feedback/diagnostics":
 		writeJSON(w, map[string]any{"service": feedbackServiceLog.text()}, 200)
 	case r.Method == "POST" && r.URL.Path == "/api/feedback/submit":
@@ -150,4 +154,40 @@ func (s *Server) feedbackHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, map[string]any{"error": "not found"}, 404)
 	}
+}
+
+// Exported images outlive the annotation draft (including Clear on Copy), so
+// agents can read the copied file link until the OS clears temporary storage.
+func exportFeedbackScreenshot(w http.ResponseWriter, r *http.Request) {
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, (2<<20)+1024))
+	if err != nil {
+		writeJSON(w, map[string]any{"error": "Screenshot exceeds the export limit."}, 413)
+		return
+	}
+	var screenshot uifeedback.Screenshot
+	if err = uifeedback.Decode(data, &screenshot); err == nil {
+		err = screenshot.Validate()
+	}
+	if err != nil {
+		writeJSON(w, map[string]any{"error": fmt.Sprint(err)}, 400)
+		return
+	}
+	image, _ := base64.StdEncoding.DecodeString(screenshot.Data) // Validated above.
+	dir, err := os.MkdirTemp("", "pharos-annotation-")
+	if err != nil {
+		writeJSON(w, map[string]any{"error": "Could not save the screenshot to temporary storage. Try again."}, 500)
+		return
+	}
+	extension := ".png"
+	if screenshot.MIME == "image/jpeg" {
+		extension = ".jpg"
+	}
+	path := filepath.Join(dir, "screenshot"+extension)
+	if err := os.WriteFile(path, image, 0600); err != nil {
+		_ = os.RemoveAll(dir)
+		writeJSON(w, map[string]any{"error": "Could not save the screenshot to temporary storage. Try again."}, 500)
+		return
+	}
+	link := (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+	writeJSON(w, map[string]any{"url": link}, 200)
 }

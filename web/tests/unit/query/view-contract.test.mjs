@@ -1,13 +1,15 @@
+import {dataEntities,dataEntityGroups,dataSources,describeDataSource,resolveGuideEntity} from '../../../src/data-taxonomy-model';
 import searchCases from '../../../../testdata/search-draft-cases.json';
+import timelineVisibilityCases from '../../../../testdata/timeline-visibility-cases.json';
 import inspectionCases from '../../../../testdata/json-inspection-cases.json';
 import {parseDetailTarget,detailReference,revealQueryDetail} from '../../../src/query-attention';
 import {findingsRank} from '../../../src/findings-route';
-import {createDetailLanding,nativeDetailsReady,attentionMutationMatters} from '../../../src/view-attention-model';
+import {createDetailLanding,nativeDetailsReady,attentionMutationMatters,attentionReferenceAt,attentionTargetNoun,toggleAttentionTarget} from '../../../src/view-attention-model';
 import {createAttentionRegistry,parseJsonInspections} from '@pythia-software/query-table-core';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EMPTY_QUERY,encodeQuery,decodeQueryStrict} from '@pythia-software/query-table-core';
-import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView,viewPageForURL} from '../../../src/view-contract';
+import {viewFields,fieldsForPage,encodeViewValue,parseViewValue,retainPageView,retainNavigationView,viewPageForURL} from '../../../src/view-contract';
 import {portableQueryLinks} from '../../../src/portable-query-link';
 import {viewRequestURL} from '../../../src/query-request';
 import {withSearchDateWindow,emptyTextSearch,refreshSearchToday,readTextSearch} from '../../../src/text-search-model';
@@ -41,11 +43,27 @@ test('semantic detail targets preserve typed identities, reject ambiguous paths,
 });
 
 test('host view codecs preserve explicit false, empty values, ordered IDs and relative intent',()=>{
- const values={card_window:'today',card_filters:false,search_cards:{},delegation_columns:['cost','tokens'],reader_expanded:['message:m'],disclosures:{'row:r:input':true},findings_rank:'tokens'};
+ for(const key of ['reader_writing','reader_engagement','reader_events','reader_labels']){
+  assert.equal(fieldsForPage('work')[key].default,true,key);
+  assert.equal(parseViewValue(viewFields[key],encodeViewValue(viewFields[key],false)),false,key);
+ }
+ const values={card_window:'today',card_filters:false,search_cards:{},delegation_columns:['cost','tokens'],reader_expanded:['message:m'],reader_highlight_hidden:['events:event-friction','labels:C.report'],reader_navigator:['timeline','context','turns'],disclosures:{'row:r:input':true,'timeline-key':false},findings_rank:'tokens',timeline_visibility:{modes:{values:['C.report.finding','?'],excluded:false},events:{values:['friction'],excluded:true},tools:{values:['error'],excluded:true},origins:{values:['typed'],excluded:false}}};
  for(const [key,value]of Object.entries(values))assert.deepEqual(parseViewValue(viewFields[key],encodeViewValue(viewFields[key],value)),value,key);
  assert.equal(fieldsForPage('findings/settings').findings_rank,undefined);
  assert.equal(fieldsForPage('analyze/query/tool_calls','tool_calls').record_keyword.param,'record_tool_calls');
  for(const [key,raw]of [['card_filters','false'],['card_window','forever'],['delegation_columns','[1]'],['search_state','{}']])assert.throws(()=>parseViewValue(viewFields[key],raw),key);
+ for(const sample of timelineVisibilityCases){
+  if(sample.valid)assert.deepEqual(parseViewValue(viewFields.timeline_visibility,encodeViewValue(viewFields.timeline_visibility,sample.state)),sample.state,sample.name);
+  else assert.throws(()=>encodeViewValue(viewFields.timeline_visibility,sample.state),undefined,sample.name);
+ }
+ for(const count of [1000,1001]){
+  const state={modes:{values:Array(count).fill('?'),excluded:false}};
+  if(count===1000)assert.doesNotThrow(()=>encodeViewValue(viewFields.timeline_visibility,state));
+  else assert.throws(()=>encodeViewValue(viewFields.timeline_visibility,state));
+ }
+ assert.deepEqual(parseViewValue(viewFields.timeline_visibility,'{}'),{});
+ assert.deepEqual(parseViewValue(viewFields.reader_navigator,'[]'),[]);
+ for(const raw of ['[\"unknown\"]','[\"turns\",\"turns\"]','{}'])assert.throws(()=>parseViewValue(viewFields.reader_navigator,raw));
 });
 
 test('Safety links restore their own section, lifecycle, case and evidence disclosures',()=>{
@@ -120,7 +138,7 @@ test('elapsed lookbacks renew on a later execution while fixed custom dates stay
  assert.deepEqual(read(reopened).where.map(term=>term.value),['-7d','+0s']);
 });
 
-test('the same contract is exported to agents, and each field has a runtime owner',async()=>{
+test('the same contract is exported to agents, and each active field has a runtime owner',async()=>{
  const {readFileSync}=await import('node:fs');
  const {join}=await import('node:path');
  const {assets}=await import('../helpers/classic-script.mjs');
@@ -139,8 +157,9 @@ test('the same contract is exported to agents, and each field has a runtime owne
  assert.ok(readFileSync(join(root,'go.mod'),'utf8').includes('github.com/Pythia-Software/query-table/backends/go v'+map.query_types.version));
  for(const name of ['JsonInspectionState','JsonInspectionScope','JsonMatchIdentity','ScopedJsonInspectionState'])assert.ok(map.query_types.types[name],`${name} is discoverable`);
  const runtimeBindings=new Set(ledger.bindings.map(binding=>binding.field));
- for(const [name] of Object.entries(viewFields)){
-  if(delegatedViewFields[name]){const owner=delegatedViewFields[name];assert.ok(readFileSync(join(root,owner.file),'utf8').includes(owner.symbol),name);}
+ for(const [name,field] of Object.entries(viewFields)){
+  if(field.details?.status==='retired'){assert.ok(field.details.reason,name);assert.ok(!runtimeBindings.has(name),`${name} still has a runtime binding`);assert.ok(!ledger.controls.some(control=>control.binding===name),`${name} still has a control`);}
+  else if(delegatedViewFields[name]){const owner=delegatedViewFields[name];assert.ok(readFileSync(join(root,owner.file),'utf8').includes(owner.symbol),name);}
   else assert.ok(runtimeBindings.has(name),`${name} has no discovered runtime binding`);
  }
  for(const control of ledger.controls){if(['details','summary'].includes(control.tag)||control.disclosure)assert.notEqual(control.contract,'settings',`Unbound accordion: ${control.file} ${control.owner}`);assert.notEqual(control.contract,'unclassified',control.key);assert.ok(control.reason,control.key);if(control.contract.startsWith('view.'))assert.ok(viewFields[control.contract.slice(5)],control.contract);}
@@ -221,6 +240,15 @@ test('retained page bindings cannot write foreign URL fields after navigation',a
  for(const [name,value]of Object.entries({delegation_page:'0',delegation_event:'',delegation_expanded:[],card_window:'default',findings_rank:'usd'}))writeViewState(name,value);
  assert.equal(location.href,before);
  writeViewState('nav_collapsed',false);assert.equal(location.searchParams.get('nav_collapsed'),'0');
+ // Fields written together replace the history entry once, and not at all when unchanged.
+ const {writeViewStates}=await import('../../../src/view-state');
+ globalThis.location=new URL('https://pharos.test/work/w');
+ let replaced=0;globalThis.history={state:null,replaceState(_state,_title,url){replaced++;globalThis.location=new URL(url);}};
+ writeViewStates({reader_expanded:['message:a'],reader_collapsed:['message:b'],card_window:'default'});
+ assert.equal(replaced,1);
+ assert.deepEqual([location.searchParams.get('reader_expanded'),location.searchParams.get('reader_collapsed'),location.searchParams.has('card_window')],['["message:a"]','["message:b"]',false]);
+ writeViewStates({reader_expanded:['message:a'],reader_collapsed:['message:b']});
+ assert.equal(replaced,1);
 });
 
 test('viewer-dependent entry captures batch writes and respect explicit changes, cancellation and navigation',async t=>{
@@ -306,6 +334,23 @@ test('changing a window preserves unrelated datetime constraints and pinned Toda
 });
 
 
+test('workspace navigation scopes selections while retaining presentation and stable content identities',()=>{
+ const url=path=>new URL(path,'http://pharos.test');
+ const source=url('/work/first/conversation/one');
+ const selections={conversation:'one',message:'m1',call:'c1',at:'2026-11-08',delegation_session:'session',delegation_start:'100',delegation_end:'200',delegation_collapsed:'session',delegation_page:'2',delegation_expanded:'["session"]',delegation_relatives:'["session"]',delegation_event:'event-1',reader_event_link:'e1',reader_expanded:'["call:c1"]',reader_collapsed:'["message:m1"]',highlight:'message:m1',reveal:'message:m1',find:'previous page'};
+ const state={...selections,reader_content:'{"loaded:m1":true}',disclosures:'{"work:first:files":true}',reader_writing:'1',sidebar_width:'490',delegation_scope:'self',delegation_mode:'rank',nav_collapsed:'1',q_library:'saved-query'};
+ const same=new URLSearchParams(state);retainNavigationView(same,url('/work/first'),source);
+ assert.equal(same.get('conversation'),'one');assert.equal(same.get('delegation_start'),'100');
+ const changed=new URLSearchParams(state);retainNavigationView(changed,url('/work/second'),source);
+ for(const key of Object.keys(selections))assert.equal(changed.has(key),false,key);
+ for(const key of ['reader_content','disclosures','reader_writing','sidebar_width','delegation_scope','delegation_mode','nav_collapsed','q_library'])assert.equal(changed.get(key),state[key],key);
+ const search=new URLSearchParams(state);retainNavigationView(search,url('/library'),source);
+ for(const key of ['conversation','message','call','at','delegation_session','delegation_start','delegation_mode','reader_event_link'])assert.equal(search.has(key),false,key);
+ assert.equal(search.get('reader_content'),state.reader_content);assert.equal(search.get('q_library'),'saved-query');
+ const reopened=new URLSearchParams(state);retainNavigationView(reopened,url('/work/second'),url('/library'));
+ assert.equal(reopened.has('conversation'),false,'old library URLs cannot inject a selection');
+});
+
 test('page navigation drops source attention while preserving global view controls',()=>{
  const params=new URLSearchParams({highlight:'text:quorum',reveal:'message:old',nav_collapsed:'1',reader_content:'{"old":true}'});
  params.append('highlight','card:old');
@@ -360,10 +405,10 @@ test('native detail landings wait for a provider, retry when one registers, and 
 });
 
 test('native details wait for the first result page of a visible, restored table',()=>{
- const ready={visible:true,shared:false,restored:true,loading:false,rows:'succeeded',schema:'pharos_mcp_calls'};
+ const ready={visible:true,restored:true,loading:false,rows:'succeeded',schema:'pharos_mcp_calls'};
  assert.equal(nativeDetailsReady(ready),true);
  assert.equal(nativeDetailsReady({...ready,rows:'failed'}),true);
- for(const waiting of [{rows:'running'},{rows:undefined},{loading:true},{restored:false},{visible:false},{shared:true},{schema:undefined}])
+ for(const waiting of [{rows:'running'},{rows:undefined},{loading:true},{restored:false},{visible:false},{schema:undefined}])
   assert.equal(nativeDetailsReady({...ready,...waiting}),false,JSON.stringify(waiting));
 });
 
@@ -385,9 +430,69 @@ test("attention ignores its own status UI and class changes but follows the page
  assert.equal(attentionMutationMatters({type:'attributes',attributeName:'class',oldValue:'card pharos-highlight',target:cleared},new Set([cleared])),true,'a re-render dropped the mark from a target');
 });
 
+test('a right-click names the innermost target that resolves back to it, and highlighting toggles the link',()=>{
+ const node=(tagName,attributes={},parentElement=null,inner=null)=>({tagName,parentElement,getAttribute:name=>attributes[name]??null,querySelector:()=>inner});
+ const card=node('ARTICLE',{'data-pharos-target':'card:tool-failures'});
+ const disclosure=node('DETAILS',{'data-pharos-target':'section:help','data-view-field':'disclosures'},card);
+ const text=node('P',{},disclosure);
+ const owners=new Map([['card:tool-failures',card],['section:help',disclosure]]);
+ const resolvesTo=(reference,element)=>owners.get(reference)===element;
+ assert.equal(attentionReferenceAt(text,resolvesTo),'section:help');
+ owners.delete('section:help');
+ assert.equal(attentionReferenceAt(text,resolvesTo),'card:tool-failures','a reference naming another element is skipped');
+ const row=node('TR',{},null,node('SPAN',{'data-pharos-target':'row:42'}));
+ owners.set('row:42',row);
+ assert.equal(attentionReferenceAt(node('TD',{},row),resolvesTo),'row:42','a cell names its row');
+ assert.equal(attentionReferenceAt(node('DIV'),resolvesTo),null);
+ assert.equal(attentionTargetNoun('call:toolu_1'),'Tool Call');
+ assert.equal(attentionTargetNoun('unknown:x'),'Element');
+ const step=(search,reference)=>'?'+toggleAttentionTarget(search,reference).toString();
+ let search=step('?tab=1','card:a');
+ assert.deepEqual([...new URLSearchParams(search)],[['tab','1'],['reveal','card:a']],'the first target is the landing');
+ search=step(search,'card:b');
+ assert.deepEqual(new URLSearchParams(search).getAll('highlight'),['card:b']);
+ search=step(search,'card:a');
+ assert.deepEqual([...new URLSearchParams(search)],[['tab','1'],['reveal','card:b']],'removing the landing promotes a highlight');
+ assert.equal(step(search,'card:b'),'?tab=1');
+});
+
 test('a linked Findings rank applies without saving; a manual choice saves the default a new unlinked view uses',()=>{
  assert.deepEqual(findingsRank('minutes','usd'),{rank:'minutes'},'restoring a link is read-only');
  assert.deepEqual(findingsRank('','tokens'),{rank:'tokens'},'an unlinked view shows the saved default');
  assert.deepEqual(findingsRank('',undefined),{rank:'usd'});
  assert.deepEqual(findingsRank('minutes','usd','tokens'),{rank:'tokens',save:{rank:'tokens'}});
+});
+
+
+test('every guide term and dataset round-trips through the shared view contract',()=>{
+ const grouped=dataEntityGroups.flatMap(group=>group.entities);
+ assert.equal(new Set(grouped).size,grouped.length);
+ assert.deepEqual([...grouped].sort(),Object.keys(dataEntities).sort());
+ for(const term of grouped)assert.equal(parseViewValue(viewFields.guide_entity,encodeViewValue(viewFields.guide_entity,term)),term);
+ for(const [dataset,source]of Object.entries(dataSources)){
+  assert.ok(dataEntities[source.entity],dataset);
+  assert.equal(parseViewValue(viewFields.guide_dataset,encodeViewValue(viewFields.guide_dataset,dataset)),dataset);
+ }
+ for(const [oldTerm,noun]of [['datasets','conversations'],['labels','messages'],['findings','conversations'],['model_requests','tokens'],['execution_machines','machines']]){
+  const linked=parseViewValue(viewFields.guide_entity,oldTerm);
+  assert.equal(resolveGuideEntity(linked),noun,'older guide links still open the related history');
+ }
+ assert.equal(describeDataSource('parallelism','workspace').entity,'workspaces');
+ assert.equal(describeDataSource('parallelism','agent').entity,'conversations');
+});
+
+
+test("dashboard query settings apply to every native request and explicit settings win", () => {
+ const values={carbon_settings:'{"pue":1.2}',habits_settings:'{"engagedGap":30,"dayStart":4}',parallelism_settings:'{"counting":"workspace","gap":30}'};
+ const view=new URL('http://localhost/analyze?'+new URLSearchParams({analyze_mode:'query',analyze_query_settings:JSON.stringify(values)}));
+ for(const [dataset,name]of [['usage','carbon_settings'],['rhythm','habits_settings'],['parallelism','parallelism_settings']])for(const operation of ['query-v3','metrics','rows','stats','distinct','schema']){
+  const request=new URL(viewRequestURL('/api/query/'+dataset+'/'+operation,view),view.origin);
+  assert.equal(request.searchParams.get(name),values[name]);
+  assert.deepEqual([...request.searchParams.keys()],[name],"another source's settings do not leak into the request");
+ }
+ assert.equal(new URL(viewRequestURL('/api/query/rhythm/metrics?habits_settings=explicit',view),view.origin).searchParams.get('habits_settings'),'explicit');
+ assert.equal(viewRequestURL('https://elsewhere.test/api/query/rhythm/rows',view),'https://elsewhere.test/api/query/rhythm/rows');
+ assert.equal(viewRequestURL('/api/query/tool_calls/rows',view),'/api/query/tool_calls/rows');
+ const invalid=new URL('http://localhost/analyze?analyze_query_settings=%5B%5D');
+ assert.throws(()=>viewRequestURL('/api/query/rhythm/rows',invalid),/Invalid dashboard query settings/);
 });

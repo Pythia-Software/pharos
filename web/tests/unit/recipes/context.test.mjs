@@ -4,8 +4,8 @@ import { cardCoverQuery, recipeHarness } from "../helpers/recipes.mjs";
 import { filterBoxSamples } from "../../../src/compact-box-model";
 import { compactPieSlices } from "../../../src/compact-pie-model";
 const now = Date.parse("2026-10-15T12:00:00Z"), { card, table: destination, metric } = recipeHarness(now);
-const usage = (id, extra = {}) => ({ id, first_usage_at: now - 1000, day: "2026-10-15", provider: "one", model_family: "alpha", repository_name: "repo", input_tokens: 100, uncached_input_tokens: 20, cache_read_input_tokens: 60, cache_creation_input_tokens: 20, root_provider: "one", root_model_family: "alpha", root_conversation_id: "root", ...extra });
-const call = (id, extra = {}) => ({ id, started_at: now - 1000, tool_name: "Read", tool_category: "read", repository_name: "repo", repo_path: "src/main.ts", conversation_id: "one", result_tokens: 100, result_tokens_source: "measured", carried_tokens: 300, truncated: false, ...extra });
+const usage = (id, extra = {}) => ({ id, first_usage_at: now - 1000, day: "2026-10-15", provider: "one", model_family: "alpha", project_name: "repo", input_tokens: 100, uncached_input_tokens: 20, cache_read_input_tokens: 60, cache_creation_input_tokens: 20, root_provider: "one", root_model_family: "alpha", root_conversation_id: "root", ...extra });
+const call = (id, extra = {}) => ({ id, started_at: now - 1000, tool_name: "Read", tool_category: "read", project_name: "repo", path_repository: "repo", repo_path: "src/main.ts", conversation_id: "one", result_tokens: 100, result_tokens_source: "measured", carried_tokens: 300, truncated: false, ...extra });
 
 test("cache shares weight all input, including cache writes, without dropping zero-reuse groups", () => {
   const rows = [usage("a"), usage("b", { input_tokens: 900, cache_read_input_tokens: 0, uncached_input_tokens: 600, cache_creation_input_tokens: 300 }), usage("zero", { model_family: "zero", cache_read_input_tokens: 0 }), usage("other-provider", { provider: "two" }), usage("missing", { input_tokens: null, cache_read_input_tokens: 999 }), usage("empty", { input_tokens: 0, cache_read_input_tokens: 999 }), usage("old", { first_usage_at: now - 8 * 86400000, cache_read_input_tokens: 999 })];
@@ -63,12 +63,14 @@ test("truncation divides by all calls and applies its sample cutoff after counti
 });
 
 test("path popularity and within-conversation rereads use distinct grains", () => {
-  const rows = [call("a"), call("b"), call("c", { conversation_id: "two" }), call("other-repo", { repository_name: "another" }), call("missing-conversation", { conversation_id: null }), call("missing-path", { repo_path: null }), call("edit", { tool_category: "edit" })];
+  // A folder session reading a repository's file counts under that file's
+  // repository, not under its own project.
+  const rows = [call("a"), call("b"), call("c", { conversation_id: "two" }), call("other-repo", { project_name: "another", path_repository: "another" }), call("folder", { project_name: "~/notes" }), call("missing-conversation", { conversation_id: null }), call("missing-path", { repo_path: null }), call("edit", { tool_category: "edit" })];
   const popular = destination("read-paths", rows), repeated = destination("repeated-reads", rows);
-  assert.equal(popular.find(row => row.repository_name === "repo").cc_calls, 4);
-  assert.equal(popular.find(row => row.repository_name === "repo").cc_conversations, 2);
+  assert.equal(popular.find(row => row.path_repository === "repo").cc_calls, 5);
+  assert.equal(popular.find(row => row.path_repository === "repo").cc_conversations, 2);
   assert.equal(popular.length, 2, "repositories with the same path stay separate");
   assert.equal(repeated.length, 1);
-  assert.equal(repeated[0].cc_calls, 2);
+  assert.equal(repeated[0].cc_calls, 3);
   assert.equal(repeated[0].conversation_id, "one");
 });

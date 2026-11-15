@@ -20,12 +20,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"syscall"
 	"time"
 
 	"filippo.io/age"
 	"filippo.io/age/armor"
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 const cloudMagic = "PHAROS-CLOUD-1\n"
@@ -321,7 +322,7 @@ func buildCloudArchive(ctx context.Context, d cloudDestination, r *cloudRun, con
 			return "", m, err
 		}
 	}
-	if err = file.Sync(); err != nil {
+	if err = syncToDrive(file); err != nil {
 		return "", m, err
 	}
 	info, err := file.Stat()
@@ -364,9 +365,11 @@ func (c *Catalog) verifyCloudArchive(ctx context.Context, config Config, r *clou
 	if err := json.Unmarshal([]byte(raw), &expected); err != nil {
 		return "", errors.New("backup manifest is unavailable")
 	}
-	file, err := os.OpenFile(expandPath(path), os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return "", errors.New("downloaded archive not found; check the local file path")
+	file, err := openInputNonblocking(expandPath(path))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("downloaded archive not found; check the local file path: %w", err)
+	} else if err != nil {
+		return "", fmt.Errorf("could not open the downloaded archive: %w", err)
 	}
 	defer file.Close()
 	info, err := file.Stat()
@@ -641,6 +644,9 @@ func extractCloudArchive(ctx context.Context, config Config, payload io.Reader, 
 	return directory, nil
 }
 
+// Tests replace the verification lock to exercise adapter failures.
+var lockCloudVerification = filelock.Lock
+
 // Retain known files for explicit recovery. No live-library paths are replaced.
 func (c *Catalog) finishCloudVerification(ctx context.Context, config Config, r *cloudRun, path string, password []byte) error {
 	lockPath := filepath.Join(expandPath(config.StagingRoot), "cloud-verify-"+r.ID+".lock")
@@ -649,8 +655,11 @@ func (c *Catalog) finishCloudVerification(ctx context.Context, config Config, r 
 		return err
 	}
 	defer lock.Close()
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return errors.New("verification is already running for this revision")
+	if err = lockCloudVerification(lock, filelock.Exclusive, filelock.Try); err != nil {
+		if errors.Is(err, filelock.ErrContended) {
+			return errors.New("verification is already running for this revision")
+		}
+		return fmt.Errorf("lock cloud verification %s: %w", lockPath, err)
 	}
 
 	r.Verified = false

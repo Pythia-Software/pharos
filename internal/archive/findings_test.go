@@ -391,6 +391,27 @@ func TestFindingPromptTargets(t *testing.T) {
 			t.Fatalf("global prompt lacks %q:\n%s", want, global)
 		}
 	}
+	// Every provider's global instructions come from its registry entry: a
+	// file the agent edits, or a place in the app it drafts lines for.
+	for target, want := range map[string]string{
+		"global:h:opencode":       "OpenCode's global instructions on this Mac (~/.config/opencode/AGENTS.md)",
+		"global:h:vscode-copilot": "VS Code Copilot's global instructions on this Mac (~/.copilot/copilot-instructions.md)",
+		"global:h:cursor":         "drafting lines for Cursor's global instructions, which the person keeps in Cursor's User Rules (Cursor Settings → Rules)",
+		"global:h:gemini":         "Gemini's global instructions on this Mac (~/.gemini/GEMINI.md)",
+		"global:h:unknown":        "Unknown's global instructions on this Mac (your global agent instructions)",
+	} {
+		if prompt := renderFindingPrompt(target, "All repositories", "", "diff", []cartItem{{Row: row, Step: row.Card.Steps[0], Attempt: 1}}); !strings.Contains(prompt, want) {
+			t.Fatalf("%s prompt lacks %q:\n%s", target, want, prompt)
+		}
+	}
+	for provider, want := range map[string]string{"claude": "CLAUDE.md", "zed": "AGENTS.md", "copilot": "copilot-instructions.md", "cline": "a file in Rules", "chatgpt": "ChatGPT's custom instructions", "": "the instructions"} {
+		if got := shortInstructionFile(globalInstructionFile(provider)); got != want {
+			t.Fatalf("%q steps say a line in %q, want %q", provider, got, want)
+		}
+	}
+	if providerLabel("vscode-copilot") != "VS Code Copilot" || providerLabel("opencode") != "OpenCode" || providerLabel("claude") != "Claude" {
+		t.Fatalf("labels name providers as the registry does: %s, %s", providerLabel("vscode-copilot"), providerLabel("opencode"))
+	}
 	repo := renderFindingPrompt("repo:r", "alpha", "/src/alpha", "pr", []cartItem{{Row: row, Step: row.Card.Steps[0], Attempt: 1}})
 	if !strings.Contains(repo, "You are working in the alpha repository (/src/alpha).") || !strings.HasSuffix(repo, "Open a pull request.") {
 		t.Fatalf("repository prompt:\n%s", repo)

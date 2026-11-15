@@ -580,12 +580,23 @@ func transcriptCategory(event transcriptEvent, finalReply bool) string {
 		}
 		return "replies"
 	}
-	value := jsonObject(event.value)
-	if payload := jsonObject(value["payload"]); payload != nil {
+	root := jsonObject(event.value)
+	value := root
+	if payload := jsonObject(root["payload"]); payload != nil {
 		value = payload
 	}
 	if value["type"] == "token_usage" {
 		return "usage"
+	}
+	if event.kind == "metadata" {
+		for _, kind := range []any{root["type"], value["type"]} {
+			if kind == "token_count" || kind == "token_usage_record" || kind == "cost-state" {
+				return "usage"
+			}
+		}
+		if value["type"] == "system" && value["subtype"] == "thinking_tokens" {
+			return "usage"
+		}
 	}
 	switch event.toolCategory() {
 	case "edit":
@@ -606,6 +617,12 @@ func (structure transcriptStructure) find(pattern *regexp.Regexp, shown map[stri
 	visible, hidden, kinds := 0, 0, map[string]bool{}
 	for index, event := range structure.events {
 		if _, ok := structure.consumed[index]; ok && !output {
+			continue
+		}
+		// The reader never shows token usage records (transcriptUndisplayed
+		// in reader-model.js): the Turns · context bar and the turns' token
+		// summaries already show what they hold.
+		if len(structure.paths[index]) > 0 && structure.paths[index][0] == "usage" && event.toolCategory() == "run" {
 			continue
 		}
 		if !pattern.MatchString(event.findableText()) {
@@ -876,7 +893,14 @@ func (c *Catalog) WorkConversationMatches(ctx context.Context, workspaceID strin
 		}
 		for offset, event := range normalizeRecord(record, nil) {
 			index := span[0] + offset
-			if offset >= span[1] || conversation.consumed[index] && !o.Output || !expression.MatchString(event.findableText()) {
+			if offset >= span[1] || conversation.consumed[index] && !o.Output {
+				continue
+			}
+			// Token usage records are never shown, so never matched (see find).
+			if len(conversation.paths[index]) > 0 && conversation.paths[index][0] == "usage" && event.toolCategory() == "run" {
+				continue
+			}
+			if !expression.MatchString(event.findableText()) {
 				continue
 			}
 			count := tallies[conversationID]

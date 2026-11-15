@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fixtures from '../../../../testdata/menu-bar-layout.json';
-import { loadClassicScript, plain } from '../helpers/classic-script.mjs';
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import vm from 'node:vm';
+import { assets, loadClassicScript, plain } from '../helpers/classic-script.mjs';
 
 for (const fixture of fixtures) test(`Mac menu preferences: ${fixture.name}`, () => {
   const menu = loadClassicScript('menu-bar.js');
@@ -15,7 +18,7 @@ for (const fixture of fixtures) test(`Mac menu preferences: ${fixture.name}`, ()
 test('Mac menu edits move either way, add once, remove, and preserve essential actions', () => {
   const menu = loadClassicScript('menu-bar.js');
   const edit = (settings, id, position) => plain(menu.editMenuBarSettings(settings, id, position));
-  const start = plain(menu.normalizeMenuBarSettings({layoutVersion: 2}));
+  const start = plain(menu.normalizeMenuBarSettings({layoutVersion: 2, order: ['open', 'status', 'indexed', 'words', 'tokens', 'carbon', 'settings', 'quit']}));
   const up = edit(start, 'tokens', 2);
   assert.deepEqual(up.order, ['open', 'status', 'tokens', 'indexed', 'words', 'carbon', 'settings', 'quit']);
   const down = edit(up, 'tokens', 5);
@@ -56,18 +59,17 @@ test('Mac menu separators can be added repeatedly, moved independently, and remo
 });
 
 
-test('new Mac menu shortcuts remain opt in and leave default dividers unchanged', () => {
+test('all Mac menu tools default on and can be returned to the toolbox', () => {
   const menu = loadClassicScript('menu-bar.js');
   const defaults = plain(menu.normalizeMenuBarSettings());
-  const shortcuts = ['search', 'analyze', 'optimize', 'capture', 'health', 'sources', 'finder'];
-  for (const id of shortcuts) {
-    assert.equal(defaults[id], false);
-    assert.ok(!defaults.order.includes(id));
-    const added = plain(menu.editMenuBarSettings(defaults, id, 1));
-    assert.equal(added[id], true);
-    assert.equal(added.order[1], id);
-    assert.deepEqual(plain(menu.normalizeMenuBarSettings(added)), added);
-    assert.deepEqual(plain(menu.editMenuBarSettings(added, id, null)), defaults);
+  for (const tool of menu.MENU_BAR_TOOLS) {
+    assert.equal(defaults[tool.id], true);
+    if (tool.required) continue;
+    const removed = plain(menu.editMenuBarSettings(defaults, tool.id, null));
+    assert.equal(removed[tool.id], false);
+    assert.deepEqual(plain(menu.normalizeMenuBarSettings(removed)), removed, 'custom omissions survive reload');
+    const added = plain(menu.editMenuBarSettings(removed, tool.id, defaults.order.indexOf(tool.id)));
+    assert.deepEqual(added, defaults);
   }
 });
 
@@ -84,4 +86,17 @@ test('Mac menu preview includes the current stage and remaining estimate in stat
     'Indexing · about 1 min for this stage');
   assert.equal(detail({label: 'Indexing', estimated_completion_at: '2026-10-22T13:21:00Z'}, now), 'Indexing');
   assert.equal(detail({estimated_completion_at: 'invalid'}, now), 'Working');
+});
+
+test('menu preferences notify the host only when available and tolerate a dispatch failure', () => {
+  const source=readFileSync(join(assets,'menu-bar.js'),'utf8');
+  const notify=source.match(/  const notify = .*;/)[0];
+  for(const available of [false,true]) {
+    const sent=[],settings={enabled:true,order:['open','quit']};
+    const window={pharosHost:{capabilities:{menu:{available}},menu:{applyPreferences:value=>{sent.push(plain(value));}}}};
+    const run=vm.runInNewContext(notify+';notify',{window,settings});
+    run();assert.deepEqual(sent,available?[settings]:[]);
+    window.pharosHost.menu.applyPreferences=()=>{throw new Error('Host unavailable');};
+    assert.doesNotThrow(run);
+  }
 });

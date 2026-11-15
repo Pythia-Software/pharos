@@ -59,7 +59,7 @@ func findingsBy(t *testing.T, catalog *Catalog, detector string) map[string]*fin
 	if err := catalog.RefreshFindings(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := loadFindingRows(context.Background(), catalog.DB, "WHERE detector=?", detector)
+	rows, err := loadFindingRowsAt(context.Background(), catalog.DB, catalog.clock(), "WHERE detector=?", detector)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +96,69 @@ func TestDriftDetector(t *testing.T) {
 	if codex.Lever != "repo-tooling" || len(codex.Card.Steps) < 2 {
 		t.Fatalf("lever %q steps %v", codex.Lever, codex.Card.Steps)
 	}
+
+	for _, test := range []struct {
+		name, provider, kind, path string
+		loaded                     time.Duration
+		unknown, skill, recentOnly bool
+		want                       int
+	}{
+		{name: "already loaded", kind: "agents_md", path: "AGENTS.md"},
+		{name: "Claude shared instructions", provider: "claude", kind: "project", path: "CLAUDE.md"},
+		{name: "only historical hunts remain", kind: "agents_md", path: "AGENTS.md", recentOnly: true, want: 7},
+		{name: "loaded later", kind: "agents_md", path: "AGENTS.md", loaded: 5 * time.Minute, want: 10},
+		{name: "unknown load time", kind: "agents_md", path: "AGENTS.md", unknown: true, want: 10},
+		{name: "global instructions", kind: "user", path: "", want: 10},
+		{name: "nested instructions", kind: "project", path: "other/AGENTS.md", want: 10},
+		{name: "skill discovery remains separate", kind: "agents_md", path: "AGENTS.md", skill: true, want: 10},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFindingFixture(t, now)
+			fixture.monthOf(now, func(day time.Time, index int) {
+				calls := []detectorCall{}
+				if index%3 == 0 {
+					calls = append(calls, detectorCall{program: "rg", command: "rg --files -g 'AGENTS.md'"}, detectorCall{program: "cat", command: "cat CLAUDE.md"})
+					if test.skill {
+						calls = append(calls, detectorCall{program: "cat", command: "cat .claude/skills/deploy/SKILL.md"})
+					}
+				}
+				fixture.addConversation(day, defaultString(test.provider, "codex"), calls, 3, 0, 1000)
+			})
+			// Warm the tool-feature cache before instruction records arrive.
+			findingsBy(t, fixture.catalog, "drift")
+			conversations, err := queryMaps(fixture.catalog.DB, "SELECT id,started_at FROM conversations")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tx := seedTx(t, fixture.catalog.DB)
+			for _, conversation := range conversations {
+				started, _ := parseTime(firstString(conversation["started_at"]))
+				if test.recentOnly && started.Before(dayTime(now.Format("2006-01-02")).AddDate(0, 0, -(findingRecentDays-1))) {
+					continue
+				}
+				var at any = formatTime(started.Add(test.loaded))
+				if test.unknown {
+					at = nil
+				}
+				if _, err := tx.Exec(`INSERT INTO conversation_instructions(conversation_id,harness,path,kind,repo_path,first_seen_at)
+					VALUES(?,'codex','instructions',?,?,?)`, conversation["id"], test.kind, nilIfEmpty(test.path), at); err != nil {
+					t.Fatal(err)
+				}
+			}
+			commitSeed(t, tx)
+			rows := findingsBy(t, fixture.catalog, "drift")
+			affected := 0
+			for _, row := range rows {
+				affected += row.Stats.Affected
+				if test.recentOnly && row.Stats.Recent != 0 {
+					t.Fatalf("successfully loading instructions still counts as recent drift: %+v", row.Stats)
+				}
+			}
+			if affected != test.want {
+				t.Fatalf("affected conversations = %d, want %d", affected, test.want)
+			}
+		})
+	}
 }
 
 func TestCLIFrictionDetector(t *testing.T) {
@@ -130,6 +193,7 @@ func TestCLIFrictionDetector(t *testing.T) {
 }
 
 func TestHeavyOutputAndOutlierDetectors(t *testing.T) {
+	override(t, &runawayRequests, int64(30))
 	now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
 	fixture := newFindingFixture(t, now)
 	fixture.monthOf(now, func(day time.Time, index int) {
@@ -139,7 +203,7 @@ func TestHeavyOutputAndOutlierDetectors(t *testing.T) {
 		}
 		requests, compactions := 20, 0
 		if index%4 == 0 {
-			requests, compactions = 1200, 12
+			requests, compactions = int(runawayRequests)+1, 12
 		}
 		fixture.addConversation(day, "codex", calls, requests, compactions, 1000)
 	})

@@ -134,6 +134,9 @@ func rawUsage(pid int) (rusageInfoV4Struct, error) {
 // resourceBasis names how processUsageOf measures.
 const resourceBasis = "proc_pid_rusage"
 
+// platformMeasurementLimits completes syncMeasurementLimits.
+const platformMeasurementLimits = "On macOS, CPU and block counts come from getrusage and RSS from proc_pid_rusage, with ps as the fallback; a failed reading is unavailable."
+
 // processUsageOf reads pid's CPU time (its own and its exited children's)
 // and memory. It works for this user's processes; others fail with EPERM.
 func processUsageOf(pid int) (processUsage, error) {
@@ -149,7 +152,31 @@ func processUsageOf(pid int) (processUsage, error) {
 		Footprint:       info.PhysFootprint,
 		Resident:        info.ResidentSize,
 		DiskBytes:       info.DiskioBytesread + info.DiskioByteswritten,
-		DiskKnown:       true,
+		Known:           counterOwnCPU | counterChildCPU | counterMemory | counterResident | counterDisk,
 		Started:         info.ProcStartAbstime,
 	}, nil
+}
+
+// processRSS is this process's resident set size. It is read from the kernel
+// (proc_pid_rusage's resident size), which is the figure ps -o rss reports,
+// so samples stay comparable with those taken by forking ps once a second,
+// as the index runs' telemetry did before. ps is the fallback.
+func processRSS() (int64, bool) {
+	if usage, err := processUsageOf(os.Getpid()); err == nil && usage.Known.has(counterResident) {
+		return int64(usage.Resident), true
+	}
+	return processRSSFromPS()
+}
+
+// resourceProcessTable reads the process tree without launching a subprocess.
+func resourceProcessTable() []processNode {
+	entries, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	if err != nil {
+		return nil
+	}
+	nodes := make([]processNode, 0, len(entries))
+	for _, entry := range entries {
+		nodes = append(nodes, processNode{PID: int(entry.Proc.P_pid), Parent: int(entry.Eproc.Ppid), Name: unix.ByteSliceToString(entry.Proc.P_comm[:])})
+	}
+	return nodes
 }

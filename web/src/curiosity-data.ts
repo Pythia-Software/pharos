@@ -14,16 +14,23 @@ import { toolFlowRecipes, refineToolFlowRecipe } from "./tool-flow-recipes";
 import { skillsInstructionsRecipes, refineSkillsInstructionsRecipe } from "./skills-instructions-recipes";
 import { researchRecipes, refineResearchRecipe } from "./research-recipes";
 import { tokenUsageRecipes, refineTokenUsageRecipe } from "./token-usage-recipes";
+import { qualifyLineage } from "./card-qualifier";
 import { delegationRecipes, refineDelegationRecipe } from "./delegation-recipes";
 import { steeringRecipes, refineSteeringRecipe } from "./steering-recipes";
 import { apiCostRecipes, refineApiCostRecipe } from "./api-cost-recipes";
 import type { HumanStudy } from "./human-study";
 import type { CardTrend } from "./card-trend";
 import { coverageRecipes } from "./coverage-recipes";
+import { sessionShapeCardRecipes } from "./session-shape-card-recipes";
 import type { ThinkingState } from "./thinking-model";
 import { thinkingCardRecipes } from "./thinking-card-recipes";
 import { dashboardCardRecipes } from "./dashboard-card-recipes";
+import { agentEventCardRecipes } from "./agent-event-card-recipes";
+import { digestCardRecipes } from "./digest-card-recipes";
 import { weekdayRecipes } from "./weekday-recipes";
+import { habitsCardRecipes } from "./habits-card-recipes";
+import type { HabitsCardTarget } from "./habits-card";
+import type { CardLoadingSpec } from "./card-loading-model";
 import { cardDestination, refineCardDestination, type CardDestination } from "./card-destinations";
 export { clearPreviewCache, loadQueryPreview, loadQueryPreviews, formatPreviewValue } from "./query-previews";
 export type { QueryPreview } from "./query-previews";
@@ -32,6 +39,9 @@ export type QueryRecipe = {
   id: string; idea: string; title: string; description: string; dataset: QueryDataset;
   field: string; days?: number[]; where?: WhereTerm[]; measures: AggregationClause[];
   unit: string; category: QueryCategory; scope?: string; note?: string; emptyLabel?: string;
+  // Its empty cover tells the person how to turn its data on, so the catalog
+  // and Home keep it when empty (card-interest.ts).
+  emptyIsSetup?: boolean;
   eligibility?: { metricId: string; minValue: number };
   exploration?: CardExploration;
   cover?: CardCover;
@@ -41,7 +51,6 @@ export type QueryRecipe = {
   action?: string;
   // Current-state and all-time cards carry no rolling lookback.
   period?: "current" | "all";
-  defaultWindow?: "today";
   trend?: CardTrend;
   weekday?: { metricId: string; unit: string };
   destination?: CardDestination;
@@ -49,9 +58,13 @@ export type QueryRecipe = {
   // coverWhere: the recipe's where narrows only the cover; the dashboard keeps
   // the whole population (compaction pairs need the requests around each one).
   thinking?: {overview?:boolean; state:Partial<ThinkingState>; open?: string; coverWhere?: boolean};
+  // A Habits section: the page at view (its habits_* fields), drawn as its
+  // dashboard card; window, kind and loading are that card's.
+  habits?: { target: HabitsCardTarget; view: Record<string, string>; window: string; kind: string; loading: CardLoadingSpec };
 };
 export type QuerySuggestion = QueryRecipe & { query: QueryState; window?: RollingWindow; url: string; instanceId: string };
-export function suggestionWindowLabel(item: { window?: RollingWindow; period?: QueryRecipe["period"]; dataset?: QueryDataset }): string {
+export function suggestionWindowLabel(item: { window?: RollingWindow; period?: QueryRecipe["period"]; dataset?: QueryDataset; habits?: QueryRecipe["habits"] }): string {
+  if (item.habits) return item.habits.window;
   if (item.dataset === "tl1_attempts" && item.window && !item.period) return item.window.days === 365 ? "Last year" : `Last ${item.window.days}d`;
   return item.period === "current" ? "Now" : item.period === "all" || !item.window ? "All time" : windowLabel(item.window.mode === "today" ? "today" : item.window.days);
 }
@@ -69,7 +82,7 @@ const usage = { dataset: "usage" as const, field: "first_usage_at", unit: "token
 const baseRecipes: QueryRecipe[] = [
   { id: "correction-phrases", category: "steering", idea: "conversation-02", title: "Where am I correcting course?", description: "Your messages containing explicit correction phrases.", dataset: "writing_messages", field: "sent_at", unit: "messages", where: [equal("typed_message", "true"), { any: ["you misunderstand", "you misunderstood", "that's not what", "that is not what", "I meant"].map(value => ({ field: "text", op: "contains" as const, value })) }], measures: [], note: "Literal phrase matches; not a semantic classification" },
   { ...calls, id: "tool-failures", category: "errors", idea: "tools-01", title: "Which tools keep failing?", description: "The calls behind recurring tool failures.", days: [1, 7, 30], where: [positive("error_count")], measures: [sum("error_count", ["tool_name"], "Failures by tool")] },
-  { ...calls, id: "error-signatures", category: "errors", idea: "tools-02", title: "What error keeps coming back?", description: "Repeated error signatures, with the original calls.", where: [positive("error_count"), { field: "error_signature", op: "is_not_null", value: "" }], measures: [count(["error_signature"], "Calls by error signature"), distinct("conversation_id", ["error_signature"], "Conversations per signature"), distinct("repository_name", ["error_signature"], "Repositories per signature")] },
+  { ...calls, id: "error-signatures", category: "errors", idea: "tools-02", title: "What error keeps coming back?", description: "Repeated error signatures, with the original calls.", where: [positive("error_count"), { field: "error_signature", op: "is_not_null", value: "" }], measures: [count(["error_signature"], "Calls by error signature"), distinct("conversation_id", ["error_signature"], "Conversations per signature"), distinct("project_name", ["error_signature"], "Projects per signature")] },
   { ...calls, id: "slow-commands", category: "tools", idea: "tools-05", title: "Where is the waiting?", description: "Recorded elapsed time by command; includes approval waits.", where: [positive("duration_ms"), { field: "command_name", op: "is_not_null", value: "" }], measures: [sum("duration_ms", ["command_name"], "Recorded elapsed time by command")], unit: "ms" },
   { ...calls, id: "edit-failures", category: "errors", idea: "tools-07", title: "Where do edits fail?", description: "Failed edit calls, grouped by repository path.", where: [positive("error_count"), equal("tool_category", "edit")], measures: [count(["repo_path"], "Failed edits by path"), count(["error_type"], "Edit failure mechanisms"), distinct("conversation_id", ["repo_path"], "Conversations with failed edits")] },
   { ...calls, id: "test-failures", category: "errors", idea: "verification-01", title: "Which checks need attention?", description: "Recorded test failures by command, ready to inspect.", where: [equal("test_failure", "true")], measures: [count(["command_name"], "Calls with test failures")] },
@@ -82,13 +95,13 @@ const baseRecipes: QueryRecipe[] = [
   { ...calls, id: "mcp-methods", category: "tools", idea: "skills-06", title: "Which MCP methods do I use?", description: "Recorded method calls across connected tools.", where: [{ field: "mcp_method", op: "is_not_null", value: "" }], measures: [count(["mcp_method"], "Calls by MCP method")] },
   { id: "skill-evidence", category: "skills", idea: "skills-01", title: "Which skills are showing up?", description: "Invocations and observed loads; evidence of use, not compliance.", dataset: "skill_usages", field: "created_at", unit: "records", measures: [count(["skill_name"], "Evidence by skill"), count(["skill_name", "evidence_type"], "Skill evidence types"), distinct("conversation_id", ["skill_name"], "Conversations per skill")] },
   { id: "skill-load-failures", category: "errors", idea: "skills-04", title: "Which skill loads fail?", description: "Skill evidence whose parent call recorded an error.", dataset: "skill_usages", field: "created_at", unit: "records", where: [equal("status", "error")], measures: [count(["skill_name"], "Failed skill evidence"), count(["skill_path", "provider"], "Failed skill paths and providers"), distinct("conversation_id", ["skill_name"], "Conversations with failed skill evidence")] },
-  { id: "human-words", category: "human", idea: "human-01", title: "How much am I writing?", description: "Words classified as typed or dictated, day by day.", dataset: "writing_messages", field: "sent_at", unit: "words", where: [positive("typed_words")], measures: [sum("typed_words", ["day"], "Your words per day")] },
-  { id: "explaining-repos", category: "human", idea: "human-02", title: "Where do I explain the most?", description: "Your typed words across repositories in this window.", dataset: "writing_messages", field: "sent_at", unit: "words", where: [positive("typed_words")], measures: [sum("typed_words", ["repository_name"], "Your words by repository")], scope: "repository_name" },
+  { id: "human-words", category: "human", idea: "human-01", title: "How much am I writing?", description: "Words classified as typed or dictated, day by day.", dataset: "writing_messages", field: "sent_at", unit: "words", where: [positive("typed_words")], measures: [sum("typed_words", ["day", "estimate"], "Your words per day")] },
+  { id: "explaining-repos", category: "human", idea: "human-02", title: "Where do I explain the most?", description: "Your typed words across projects in this window.", dataset: "writing_messages", field: "sent_at", unit: "words", where: [positive("typed_words")], measures: [sum("typed_words", ["project_name"], "Your words by project")], scope: "project_name" },
   { ...usage, id: "usage-models", category: "models", idea: "models-01", title: "Which models do the work?", description: "Token use by model, day by day.", where: [positive("total_tokens")], measures: [sum("total_tokens", ["day", "model_family"], "Daily tokens by model")], scope: "model_family" },
-  { ...usage, id: "usage-repos", category: "usage", idea: "cost-01", title: "Where does my usage go?", description: "Daily tokens across your repositories.", where: [positive("total_tokens")], measures: [sum("total_tokens", ["day", "repository_name"], "Daily tokens by repository")], scope: "repository_name" },
-  { ...usage, id: "cost-repos", category: "cost", idea: "cost-01", title: "What is the API equivalent?", description: "Recorded usage priced at standard API rates, by repository.", where: [positive("cost_usd")], measures: [sum("cost_usd", ["day", "repository_name"], "Daily API equivalent by repository")], unit: "USD", scope: "repository_name", note: "API equivalent; partial and assumed pricing can contribute" },
+  { ...usage, id: "usage-repos", category: "usage", idea: "cost-01", title: "Where does my usage go?", description: "Daily tokens across your projects.", where: [positive("total_tokens")], measures: [sum("total_tokens", ["day", "project_name"], "Daily tokens by project")], scope: "project_name" },
+  { ...usage, id: "cost-repos", category: "cost", idea: "cost-01", title: "What is the API equivalent?", description: "Recorded usage priced at standard API rates, by project.", where: [positive("cost_usd")], measures: [sum("cost_usd", ["day", "project_name"], "Daily API equivalent by project")], unit: "USD", scope: "project_name", note: "API equivalent; partial and assumed pricing can contribute" },
   { ...usage, id: "cache-reads", category: "context", idea: "cost-03", title: "Where is caching used?", description: "Recorded cache-read tokens by model; inspect usage details.", where: [positive("cache_read_input_tokens")], measures: [sum("cache_read_input_tokens", ["day", "model_family"], "Daily cache-read tokens by model")], scope: "model_family" },
-  { ...usage, id: "subagent-usage", category: "delegation", idea: "models-06", title: "What happens in subagents?", description: "Attributed subagent tokens across repositories.", where: [equal("session_kind", "subagent"), positive("total_tokens")], measures: [sum("total_tokens", ["day", "repository_name"], "Daily subagent tokens")], scope: "repository_name" },
+  { ...usage, id: "subagent-usage", category: "delegation", idea: "models-06", title: "What happens in sub-agents?", description: "Attributed sub-agent tokens across projects.", where: [equal("session_kind", "subagent"), positive("total_tokens")], measures: [sum("total_tokens", ["day", "project_name"], "Daily sub-agent tokens")], scope: "project_name" },
   ...richerQueryRecipes,
   ...newCardRecipes,
   ...wishlistCardRecipes,
@@ -104,11 +117,15 @@ const baseRecipes: QueryRecipe[] = [
   ...delegationRecipes,
   ...steeringRecipes,
   ...coverageRecipes,
+  ...sessionShapeCardRecipes,
   ...dashboardCardRecipes,
+  ...agentEventCardRecipes,
+  ...digestCardRecipes,
   ...thinkingCardRecipes,
   ...weekdayRecipes,
+  ...habitsCardRecipes,
 ];
-export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe).map(refineCardDestination);
+export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe).map(qualifyLineage).map(refineCardDestination);
 
 export const supportsToday = (recipe: QueryRecipe) => !recipe.period && !recipe.weekday && !recipe.trend?.completeDays && !recipe.humanStudy && !["tl1_attempts", "findings"].includes(recipe.dataset);
 export function describeRecipeText(text: string, days: WindowChoice | null): string {
@@ -147,8 +164,37 @@ export function shuffled<T>(items: T[]): T[] {
   return result;
 }
 
-export function suggestionPool(clock = new Date(), recipes = queryRecipes): QuerySuggestion[] {
+// Top-level conversations last active within each trailing window, keyed by
+// its days ("all" for all time), from /api/usage/history.
+export type WindowActivity = Record<string, number>;
+// A window is worth suggesting when it holds at least FIT_MIN conversations
+// and, if a shorter window already qualifies, at least FIT_GROWTH times as
+// many: otherwise it shows the shorter window's work under a staler frame.
+export const FIT_MIN = 3, FIT_GROWTH = 1.5;
+
+// The windows among `days` that fit where the library's activity lies,
+// shortest first. Without activity for every window, all of them fit. When no
+// window holds enough, the shortest one holding the most stands alone.
+export function fittingWindows(days: number[], activity?: WindowActivity): number[] {
+  const sorted = [...days].sort((a, b) => a - b), count = (day: number) => activity?.[String(day)];
+  if (sorted.some(day => count(day) === undefined)) return sorted;
+  const fitting: number[] = [];
+  let previous = 0;
+  for (const day of sorted) {
+    const active = count(day)!;
+    if (active >= FIT_MIN && active >= previous * FIT_GROWTH) { fitting.push(day); previous = active; }
+  }
+  if (fitting.length) return fitting;
+  const most = Math.max(...sorted.map(day => count(day)!));
+  return [sorted.find(day => count(day) === most)!];
+}
+
+export function suggestionPool(clock = new Date(), recipes = queryRecipes, activity?: WindowActivity): QuerySuggestion[] {
   // One explicit window per question per visit. Keep the mix broad, without
-  // filling the belt with three nearly identical windows of the same card.
-  return shuffled(recipes.filter(recipe => !recipe.retired)).map((recipe, index) => instantiateRecipe(recipe, recipe.defaultWindow ?? (recipe.days ?? [7, 30, 90])[index % (recipe.days?.length ?? 3)], clock));
+  // filling the belt with three nearly identical windows of the same card,
+  // and only among the windows that fit the library's activity.
+  return shuffled(recipes.filter(recipe => !recipe.retired)).map((recipe, index) => {
+    const windows = fittingWindows(recipe.days ?? [7, 30, 90], activity);
+    return instantiateRecipe(recipe, windows[index % windows.length], clock);
+  });
 }

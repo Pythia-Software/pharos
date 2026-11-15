@@ -1,0 +1,5 @@
+{
+  "comment": "What the pages show of stored engagement spans. reader-model.js holds the rules (ENGAGEMENT_MIN_SCORE, ENGAGEMENT_UNDISPLAYED); engagement.go repeats them to leave undisplayable spans out of the Timeline's payload. A Go test and a JS test each compare their copy with this file.",
+  "min_score": 0.7,
+  "undisplayed": ["register.filler"]
+}

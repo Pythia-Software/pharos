@@ -1,11 +1,9 @@
 import { useViewEntry } from "./view-state";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { authorshipCategories } from "./authorship-categories";
 import { createPortal } from "react-dom";
-import { createSetFilter, isWhereGroup, loadSchema, readSetFilter, type AggregationClause, type WhereTerm } from "@pythia-software/query-table-core";
 import type { QueryTableApi } from "@pythia-software/query-table-react";
 import type { CellContext } from "@pythia-software/query-table-ui";
-import writingMessagesDocument from "../../schemas/writing_messages.schema.json";
-import { postMetrics } from "./metric-request";
 
 // The Human Words message view: one row per user message, with its text
 // highlighted by what the authorship classification counted each span as (see
@@ -15,18 +13,6 @@ type Row = Record<string, any>;
 type SpanSource = { workspace_id: string; conversation_id: string; message_id?: string | null; title?: string | null };
 export type Segment = { text: string; category?: string; rule?: string; reason?: string | null; words?: number; source?: SpanSource };
 
-// Categories in the order the page lists them. The second category of a group
-// shares its color, striped, so the chart's five groups still read.
-export const authorshipCategories = [
-  { key: "typed", label: "Typed", color: "var(--sea)", description: "Written or dictated by you: no other rule claimed it." },
-  { key: "pasted", label: "Likely pasted", color: "var(--heat-1)", description: "Looks like code, logs, tables, or agent formatting, or arrived faster than anyone types. Inferred from how the text looks." },
-  { key: "quoted", label: "Copied", color: "var(--gold)", description: "Matches agent output or authored file content from the preceding seven days, or is explicitly quoted." },
-  { key: "resent", label: "Re-sent", color: "var(--gold)", striped: true, description: "Matches something you sent before." },
-  { key: "template", label: "Template", color: "var(--heat-2)", description: "A one-click prompt or saved prompt sent again and again, or a slash command." },
-  { key: "attachment", label: "Attachment", color: "var(--heat-2)", striped: true, description: "An attachment reference or image placeholder." },
-  { key: "harness", label: "Harness", color: "var(--muted)", description: "Generated prompt context, question forms, and feedback metadata." },
-  { key: "automated", label: "Automated", color: "var(--muted)", striped: true, description: "The whole message came from a script or another agent." },
-];
 const categoryByKey = new Map(authorshipCategories.map(category => [category.key, category]));
 const categoryLabel = (key: unknown) => categoryByKey.get(String(key))?.label ?? String(key ?? "");
 
@@ -59,10 +45,12 @@ const ruleHelp: Record<string, string> = {
   "Sent by another agent session": "Conductor recorded another agent session as its sender.",
   "Sent by automation": "Conductor recorded an API key as its sender.",
 };
+// These are stored classifier identities; vocabulary changes belong in the
+// displayed explanation, never in the lookup keys.
 const harnessRules = new Set(["Conductor system instruction", "System reminder", "Environment context", "Project instructions", "Plugin recommendations", "Harness context"]);
-function explainRule(rule: string | undefined, category: string | undefined): string {
+export function explainAuthorshipRule(rule: string | undefined, category: string | undefined): string {
   if (rule && ruleHelp[rule]) return ruleHelp[rule];
-  if (rule && harnessRules.has(rule)) return "A block the harness adds at the start of the message. It stays part of the prompt; only this count sets it apart.";
+  if (rule && harnessRules.has(rule)) return "A block the agent app adds at the start of the message. It stays part of the prompt; only this count sets it apart.";
   if (rule?.startsWith("Sent by a headless") || rule === "Sent by a codex exec run") return "The run's transcript or logs show it was started headlessly, by a script or another agent.";
   return categoryByKey.get(category ?? "")?.description ?? "";
 }
@@ -112,7 +100,7 @@ function SpanTip({ tip, onEnter, onLeave, onClose }: { tip: Tip; onEnter: () => 
       <span className="muted">{words.toLocaleString()} word{words === 1 ? "" : "s"}</span>
     </div>
     <div className="authored-tip-reason">{segment.reason || segment.rule || "No other rule matched"}</div>
-    <p className="authored-tip-help">{explainRule(segment.rule, segment.category)}</p>
+    <p className="authored-tip-help">{explainAuthorshipRule(segment.rule, segment.category)}</p>
     {source?.workspace_id ? <button type="button" className="authored-tip-source" onClick={() => { onClose(); openMessage(source.workspace_id, source.conversation_id, source.message_id); }}>
       Open the matching text in {source.title || "its conversation"}
     </button> : null}
@@ -203,7 +191,7 @@ function AuthoredMessageCard({ row }: { row: Row }) {
   return <article className="authored-card" data-pharos-target={`section:authored:message:${row.id}`}>
     <div className="authored-head">
       <div className="authored-summary">
-        <button type="button" className="authored-title" onClick={() => window.pharosOpenDetail?.(String(row.work_id ?? row.workspace_id))}>{String(row.title ?? "Untitled work")}</button>
+        <button type="button" className="authored-title" onClick={() => window.pharosOpenDetail?.(String(row.work_id ?? row.workspace_id))}>{String(row.title ?? "Untitled workspace")}</button>
         <div className="authored-meta">{meta.join(" · ")}</div>
       </div>
       <button type="button" className="authored-open" onClick={() => openMessage(String(row.workspace_id), row.conversation_id, row.id)}>Open in conversation</button>
@@ -258,7 +246,7 @@ export const authoredRenderers = {
     for (const [index, segment] of segmentsOf(row).entries()) {
       if (used >= limit) break;
       // Harness blocks shrink to a marker, so the text after them shows.
-      const text = !detail && segment.category === "harness" ? "[Harness instructions] " : segment.text.slice(0, limit - used);
+      const text = !detail && segment.category === "harness" ? "[App instructions] " : segment.text.slice(0, limit - used);
       used += text.length;
       shown.push(segment.category
         ? <mark key={index} className="authored-span" data-category={segment.category} title={`${categoryLabel(segment.category)} · ${segment.reason || segment.rule || ""}${segment.words ? ` · ${segment.words} words` : ""}`}>{text}</mark>
@@ -274,83 +262,10 @@ export const authoredRenderers = {
     return Array.isArray(value) ? <span className="authored-pills">{value.map(category => <CategoryPill key={category} category={category} />)}</span> : "";
   },
   authorship_rules({ value }: CellContext<Row>) {
-    return Array.isArray(value) ? <span title={value.join("\n")}>{value.join(", ")}</span> : "";
+    return Array.isArray(value) ? <span>{value.join(", ")}</span> : "";
   },
 };
 
 export function CategoryPill({ category, label }: { category: string; label?: string }) {
   return <span className="authored-pill"><i className="authored-swatch" data-category={category} />{label ?? categoryLabel(category)}</span>;
-}
-
-// includesCategory reports whether where keeps only messages holding category.
-function includesCategory(where: WhereTerm[], category: string): boolean {
-  return where.some(term => isCategoryTerm(term, category));
-}
-
-function isCategoryTerm(term: WhereTerm, category: string): boolean {
-  return !isWhereGroup(term) && term.field === "categories" && term.op === "includes" && !term.negated && term.value === category;
-}
-
-// toggleCategory keeps, or stops keeping, only messages holding category. The
-// legend's categories collect in one ALL set filter, so the query builder
-// shows and edits them as one Categories filter.
-export function toggleCategory(where: WhereTerm[], category: string): WhereTerm[] {
-  const held = includesCategory(where, category);
-  const next: WhereTerm[] = [];
-  let collected = false;
-  for (let index = 0; index < where.length; index++) {
-    const set = readSetFilter(where, index);
-    if (set?.field === "categories" && set.metadata.mode === "all") {
-      const { id, values } = set.metadata;
-      next.push(...createSetFilter("categories", "all", held ? values.filter(value => value !== category) : collected ? values : [...values, category], id));
-      collected = true;
-      index += set.count - 1;
-    } else if (!held || !isCategoryTerm(where[index], category)) {
-      next.push(where[index]);
-    }
-  }
-  return held || collected ? next : [...next, ...createSetFilter("categories", "all", [category], `message-mix-${Date.now()}`)];
-}
-
-type MixResult = { messages: number; words: Record<string, number> };
-const messageSchema = loadSchema(writingMessagesDocument);
-const messageMixMetrics: AggregationClause[] = [{ id: "messages", op: "count", groupBy: [] }, ...authorshipCategories.map(category => ({ id: category.key, op: "sum" as const, field: `${category.key}_words`, groupBy: [] }))];
-
-// The words per category of every message the filters match, as a stacked
-// bar and a key that filters to messages holding a category.
-export function MessageMix({ where, reload, onFilter }: { where: WhereTerm[]; reload: number; onFilter: (change: (where: WhereTerm[]) => WhereTerm[]) => void }) {
-  const key = JSON.stringify(where);
-  const [state, setState] = useState<{ result: MixResult | null; error: string; loading: boolean }>({ result: null, error: "", loading: true });
-  useEffect(() => {
-    const controller = new AbortController();
-    setState(previous => ({ ...previous, loading: true }));
-    postMetrics("writing_messages", messageSchema, where, messageMixMetrics, controller.signal)
-      .then(metrics => {
-        const value = (id: string) => Number(metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
-        setState({ result: { messages: value("messages"), words: Object.fromEntries(authorshipCategories.map(category => [category.key, value(category.key)])) }, error: "", loading: false });
-      })
-      .catch(failure => { if (!controller.signal.aborted) setState({ result: null, error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
-    return () => controller.abort();
-  }, [key, reload]);
-  const words = state.result?.words ?? {};
-  const total = Object.values(words).reduce((sum, value) => sum + value, 0);
-  function toggle(category: string) {
-    onFilter(current => toggleCategory(current, category));
-  }
-  return <section className="writing-mix authored-mix" aria-label="Where these messages' text came from">
-    <h3>{state.result ? `${state.result.messages.toLocaleString()} message${state.result.messages === 1 ? "" : "s"} · ${total.toLocaleString()} words` : "Messages"}</h3>
-    {state.error ? <p className="query-table-error">{state.error}</p> : null}
-    {total ? <div className="writing-stack" role="img" aria-label={authorshipCategories.filter(category => words[category.key]).map(category => `${category.label} ${Math.round(100 * words[category.key] / total)}%`).join(", ")}>
-      {authorshipCategories.map(category => words[category.key] ? <i key={category.key} data-category={category.key} style={{ flex: words[category.key] }} title={`${category.label}: ${words[category.key].toLocaleString()} words (${Math.round(100 * words[category.key] / total)}%)`} /> : null)}
-    </div> : <p className="muted">{state.loading ? "Loading…" : "No classified user messages match these filters."}</p>}
-    <div className="authored-legend" role="group" aria-label="Show messages holding a category">
-      {authorshipCategories.map(category => {
-        const active = includesCategory(where, category.key);
-        return <button key={category.key} type="button" data-category={category.key} aria-pressed={active} title={`${category.description}\n\nClick to ${active ? "stop showing only" : "show only"} messages holding ${category.label.toLowerCase()} text.`} onClick={() => toggle(category.key)}>
-          <i className="authored-swatch" data-category={category.key} />{category.label}<strong>{(words[category.key] ?? 0).toLocaleString()}</strong>
-        </button>;
-      })}
-    </div>
-    <p className="muted authored-mix-note">Each message's text is highlighted by what it counted as. Hover over or focus a highlighted span to see the rule that labelled it and why; click it to keep the explanation open.</p>
-  </section>;
 }

@@ -12,8 +12,14 @@ func PharosSafetySchema() querytable.Schema {
 			"title":           {Name: "title", Kind: querytable.FieldText, Expr: "r.\"title\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"title\""},
 			"state":           {Name: "state", Kind: querytable.FieldEnum, Expr: "r.\"state\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"state\""},
 			"rule_label":      {Name: "rule_label", Kind: querytable.FieldText, Expr: "r.\"rule_label\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"rule_label\""},
+			"rule":            {Name: "rule", Kind: querytable.FieldEnum, Expr: "r.\"rule\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"rule\""},
+			"danger":          {Name: "danger", Kind: querytable.FieldEnum, Expr: "r.\"danger\"", Synthetic: false, SQLiteSortField: "danger_rank", ServerFilter: true, Sortable: true, SortExpr: "r.\"danger_rank\""},
+			"danger_rank":     {Name: "danger_rank", Kind: querytable.FieldNumber, Expr: "r.\"danger_rank\"", Synthetic: false, ExpressionNumeric: true, ServerFilter: false, Sortable: true, SortExpr: "r.\"danger_rank\""},
 			"subject":         {Name: "subject", Kind: querytable.FieldText, Expr: "r.\"subject\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"subject\""},
+			"target":          {Name: "target", Kind: querytable.FieldText, Expr: "r.\"target\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"target\""},
 			"target_label":    {Name: "target_label", Kind: querytable.FieldText, Expr: "r.\"target_label\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"target_label\""},
+			"command":         {Name: "command", Kind: querytable.FieldText, Expr: "r.\"command\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"command\""},
+			"cwd":             {Name: "cwd", Kind: querytable.FieldText, Expr: "r.\"cwd\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"cwd\""},
 			"calls":           {Name: "calls", Kind: querytable.FieldNumber, Expr: "r.\"calls\"", Synthetic: false, ExpressionNumeric: true, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"calls\""},
 			"material_change": {Name: "material_change", Kind: querytable.FieldBool, Expr: "r.\"material_change\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"material_change\""},
 			"in_prompt":       {Name: "in_prompt", Kind: querytable.FieldBool, Expr: "r.\"in_prompt\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"in_prompt\""},
@@ -22,7 +28,7 @@ func PharosSafetySchema() querytable.Schema {
 			"handed_at":       {Name: "handed_at", Kind: querytable.FieldDatetime, Expr: "r.\"handed_at\"", Synthetic: false, SQLiteDatetimeFormat: "rfc3339", Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"handed_at\""},
 			"review_count":    {Name: "review_count", Kind: querytable.FieldNumber, Expr: "r.\"review_count\"", Synthetic: false, ExpressionNumeric: true, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"review_count\""},
 		},
-		DefaultSort:  []querytable.OrderBy{{Field: "last_seen_at", Dir: "desc"}},
+		DefaultSort:  []querytable.OrderBy{{Field: "danger", Dir: "desc"}, {Field: "last_seen_at", Dir: "desc"}},
 		TiebreakSort: []querytable.OrderBy{{Field: "id", Dir: "asc"}},
 	}
 }
