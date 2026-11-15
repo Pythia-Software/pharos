@@ -35,13 +35,20 @@
         "items": {
           "enum": [
             "claude",
+            "claude-config",
             "codex"
           ]
         },
         "default": [
           "claude",
+          "claude-config",
           "codex"
         ]
+      },
+      "remote_env": {
+        "type": "boolean",
+        "title": "Follow CLAUDE_CONFIG_DIR and CODEX_HOME on that machine",
+        "default": false
       },
       "label": {
         "type": "string",

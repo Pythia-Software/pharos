@@ -70,7 +70,7 @@ class SSHPullTests(unittest.TestCase):
         path.write_bytes(content)
         os.utime(path, (mtime, mtime))
 
-    def pull(self, cursor=None, max_bytes=1 << 30, destination="alice@lab-box"):
+    def pull(self, cursor=None, max_bytes=1 << 30, destination="alice@lab-box", params=None, environment=None):
         self.runs += 1
         out = self.root / f"run-{self.runs}" / "out"
         out.mkdir(parents=True)
@@ -81,11 +81,11 @@ class SSHPullTests(unittest.TestCase):
                    "started_at": datetime.now(timezone.utc).isoformat(), "deadline": deadline.isoformat(),
                    "dry_run": False, "trigger": {"kind": "test"}, "limits": {"max_bytes": max_bytes},
                    "api": {"url": "http://127.0.0.1:1/connector/v1", "token": "t" * 32}, "cursor": cursor,
-                   "params": {"destination": destination, "ssh": [str(self.ssh)]}}
+                   "params": {"destination": destination, "ssh": [str(self.ssh)], **(params or {})}}
         self.conforms("run-request.schema.json", request)
         request_path = out.parent / "request.json"
         request_path.write_text(json.dumps(request))
-        environment = {"HOME": str(self.home), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C"}
+        environment = {"HOME": str(self.home), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", **(environment or {})}
         process = subprocess.run([sys.executable, str(HERE / "ssh_pull.py"), str(request_path)],
                                  env=environment, capture_output=True, text=True)
         result = json.loads((out / "result.json").read_text())
@@ -95,7 +95,7 @@ class SSHPullTests(unittest.TestCase):
         for drop in result["drops"]:
             for path in (out / drop["dir"]).rglob("*"):
                 if path.is_file():
-                    delivered[(drop["kind"], path.relative_to(out / drop["dir"]).as_posix())] = path
+                    delivered[(drop.get("source", drop["kind"]), path.relative_to(out / drop["dir"]).as_posix())] = path
         return result, delivered
 
     def conforms(self, schema, instance):
@@ -120,7 +120,7 @@ class SSHPullTests(unittest.TestCase):
         with sqlite3.connect(delivered[("codex", "state_5.sqlite")]) as connection:
             self.assertEqual(connection.execute("SELECT name FROM threads").fetchall(), [("Fix the build",)])
         self.assertEqual([machine["key"] for machine in result["machines"]], ["alice@lab-box"])
-        roots = {drop["kind"]: drop["root"] for drop in result["drops"]}
+        roots = {drop["source"]: drop["root"] for drop in result["drops"]}
         self.assertEqual(roots, {"claude": f"{self.home}/.claude/projects", "codex": f"{self.home}/.codex"})
         self.assertGreater(result["transferred_bytes"], 0)
 
@@ -159,6 +159,31 @@ class SSHPullTests(unittest.TestCase):
         result, delivered = self.pull(first["cursor"], destination="alice@other-box")
         self.assertEqual(len(delivered), len(self.pull()[1]))
         self.assertEqual(result["cursor"]["destination"], "alice@other-box")
+
+    def test_compressed_rollouts_and_the_other_claude_folder_are_fetched(self):
+        compressed = self.source("codex") / "archived_sessions/rollout-0.jsonl.zst"
+        compressed.parent.mkdir(parents=True)
+        compressed.write_bytes(b"\x28\xb5\x2f\xfd")
+        other = self.home / ".config/claude/projects/-work-other/s9.jsonl"
+        other.parent.mkdir(parents=True)
+        other.write_bytes(b'{"type":"user"}\n')
+        result, delivered = self.pull()
+        self.assertEqual(result["warnings"], [])
+        self.assertIn(("codex", "archived_sessions/rollout-0.jsonl.zst"), delivered)
+        self.assertIn(("claude-config", "-work-other/s9.jsonl"), delivered)
+        drops = {drop["source"]: (drop["kind"], drop["root"]) for drop in result["drops"]}
+        self.assertEqual(drops["claude-config"], ("claude", f"{self.home}/.config/claude/projects"))
+
+    def test_the_remote_environment_moves_a_source_only_when_asked(self):
+        moved = self.root / "moved-codex"
+        (moved / "sessions").mkdir(parents=True)
+        (moved / "sessions/rollout-9.jsonl").write_bytes(b'{"type":"session_meta"}\n')
+        environment = {"CODEX_HOME": str(moved)}
+        _, unasked = self.pull(environment=environment)
+        self.assertNotIn(("codex", "sessions/rollout-9.jsonl"), unasked)
+        result, asked = self.pull(environment=environment, params={"remote_env": True})
+        self.assertEqual({relative for source, relative in asked if source == "codex"}, {"sessions/rollout-9.jsonl"})
+        self.assertEqual({drop["source"]: drop["root"] for drop in result["drops"]}["codex"], str(moved))
 
 
 if __name__ == "__main__":

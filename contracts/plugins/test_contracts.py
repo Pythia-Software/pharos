@@ -30,7 +30,12 @@ EXAMPLES = {
     "run-result.import.json": "run-result.schema.json",
     "run-result.usage-import.json": "run-result.schema.json",
     "usage-records.jsonl": "usage-record.schema.json",
-    "drop-bundle.json": "drop-bundle.schema.json",
+    "manifest.bucket-importer.json": "plugin-manifest.schema.json",
+    "run-result.bucket-import.json": "run-result.schema.json",
+    "push.export.json": "push.schema.json#/$defs/export",
+    "push.hello.json": "push.schema.json#/$defs/hello",
+    "push.config.write.json": "push.schema.json#/$defs/config",
+    "push.config.read.json": "push.schema.json#/$defs/config",
     "report.batch.json": "report.schema.json",
     "connector.grant.json": "connector.schema.json#/$defs/grant",
     "connector.credential.json": "connector.schema.json#/$defs/credential",
@@ -51,7 +56,7 @@ EXAMPLES = {
 }
 
 # Docs mark a JSON example for checking with <!-- contract: NAME --> on the line before its fence.
-DOCS = [ROOT / "docs/plugins.md", ROOT / "docs/plugin-receiver.md"]
+DOCS = [ROOT / "docs/plugins.md", ROOT / "docs/plugin-receiver.md", ROOT / "docs/plugin-imports.md"]
 DOC_CONTRACT = re.compile(r"<!-- contract: (\S+) -->\n```json\n(.*?)\n```", re.S)
 
 
@@ -130,6 +135,21 @@ class ContractTests(unittest.TestCase):
                 {**result, "drops": [{**result["drops"][0], "dir": "claude/../../etc"}]}),
             "a usage drop with a root": ("run-result.schema.json",
                 {**result, "drops": [{"dir": "usage", "kind": "usage-records/1", "namespace": "x", "root": "/tmp"}]}),
+            "a files drop with a Windows root": ("run-result.schema.json",
+                {**result, "drops": [{**result["drops"][0], "root": "C:\\Users\\alice\\.claude\\projects"}]}),
+            "an envelope drop that names a machine": ("run-result.schema.json",
+                {**result, "drops": [{"dir": "e", "kind": "claude", "form": "capture-export", "machine": "alice@lab-box"}]}),
+            "an envelope drop of a kind capture export does not cover": ("run-result.schema.json",
+                {**result, "drops": [{"dir": "e", "kind": "canonical", "form": "capture-export"}]}),
+            "an export drop of a transcript kind": ("run-result.schema.json",
+                {**result, "drops": [{"dir": "e", "kind": "codex", "form": "export"}]}),
+            "an exporter run by the bucket importer": ("plugin-manifest.schema.json",
+                {**manifest, "run": {"builtin": "bucket-import/1"}}),
+            "a pusher that reads through a plain URL": ("push.schema.json#/$defs/config",
+                {"contract": "pharos-push-config/1", "access": "read",
+                 "destination": {"type": "http", "url_template": "https://example.com/{key}"}}),
+            "an S3 destination without a credential": ("push.schema.json#/$defs/config",
+                {"contract": "pharos-push-config/1", "access": "write", "destination": {"type": "s3", "bucket": "b"}}),
             "an unknown status": ("run-result.schema.json", {**result, "status": "done"}),
             "a need that is not offered": ("receiver.schema.json#/$defs/hello_response",
                 {"need": "more-permissions", "accepts": [], "max_batch_bytes": 65536, "max_version": 0}),

@@ -152,6 +152,16 @@
           "$ref": "common.schema.json#/$defs/library_instance"
         }
       }
+    },
+    "state_dir": {
+      "description": "Importers: a private folder that survives runs, for whatever saves fetching again. Pharos never reads it, counts it against max_bytes, and deletes it on uninstall and on Recover library.",
+      "type": "string",
+      "minLength": 1
+    },
+    "cpus": {
+      "description": "The run's cooperative CPU allowance: how many threads of work the plugin should run at once. Also in PHAROS_CPUS.",
+      "type": "integer",
+      "minimum": 1
     }
   }
 }

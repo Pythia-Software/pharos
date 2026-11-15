@@ -1,0 +1,366 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.pythia.software/contracts/plugins/push.schema.json",
+  "title": "Pushed captures (pharos-push/1)",
+  "description": "What `pharos capture-push` writes to a bucket and `bucket-import/1` reads. Keys under the prefix: chunks/<sha256 hex> (a piece of a member, named by its content), exports/<pusher>/<source>/<time>-<id>.json (an export, written after its chunks) and hello/<pusher>.json. No key is ever written with different bytes, so nothing is overwritten.",
+  "$defs": {
+    "pusher": {
+      "description": "One capture root. Random, made with the root, and replaced when the root is found on another machine.",
+      "type": "string",
+      "pattern": "^psh_[A-Za-z0-9]{10,40}$"
+    },
+    "export": {
+      "description": "One envelope of one source. <time> in its key is pushed_at as YYYYMMDDTHHMMSSZ and <id> is envelope.id.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "pusher",
+        "pushed_at",
+        "previous",
+        "envelope",
+        "chunking",
+        "members"
+      ],
+      "properties": {
+        "contract": {
+          "const": "pharos-push/1"
+        },
+        "pusher": {
+          "$ref": "#/$defs/pusher"
+        },
+        "pushed_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "previous": {
+          "description": "The key, below exports/<pusher>/<source>/, of the export this one follows, or null for the first. An export contains everything its predecessors did.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pool": {
+          "description": "The pool this machine belongs to, if any.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "retention_days": {
+          "description": "The bucket's lifecycle the pusher was told about. It uploads a chunk again before half of this has passed.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "envelope": {
+          "description": "The capture-export envelope (docs/capture-export.md), verbatim. The importer rebuilds the folder it describes and verifies it.",
+          "type": "object",
+          "required": [
+            "format",
+            "version",
+            "id",
+            "host_id",
+            "source_name",
+            "source_kind",
+            "files"
+          ]
+        },
+        "chunking": {
+          "description": "How members were cut. gear-v1 is the content-defined chunking of docs/claude-export-storage.md.",
+          "const": "gear-v1"
+        },
+        "members": {
+          "description": "One entry per envelope file, in the envelope's order. Concatenating the chunks gives the member's stored bytes.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "chunks"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "chunks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "sha256",
+                    "size"
+                  ],
+                  "properties": {
+                    "sha256": {
+                      "$ref": "common.schema.json#/$defs/sha256"
+                    },
+                    "size": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "hello": {
+      "description": "Written by `capture-push --check` and by a pusher's first push, so setup can show that a machine reached the bucket before any conversation exists.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "pusher",
+        "at",
+        "version"
+      ],
+      "properties": {
+        "contract": {
+          "const": "pharos-push/1"
+        },
+        "pusher": {
+          "$ref": "#/$defs/pusher"
+        },
+        "at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "version": {
+          "description": "The pharos version that wrote it.",
+          "type": "string"
+        },
+        "os": {
+          "enum": [
+            "linux",
+            "windows",
+            "darwin",
+            "other"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "pool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "sources": {
+          "description": "Source kinds found on the machine.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "config": {
+      "description": "pharos-push.json (access write, for machines that push) and pharos-read.json (access read, imported by Pharos). Bucket setup writes both. A secret is given inline, or as {\"env\": NAME} or {\"file\": PATH} so it can live in a secret store.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "access",
+        "destination"
+      ],
+      "properties": {
+        "contract": {
+          "const": "pharos-push-config/1"
+        },
+        "access": {
+          "enum": [
+            "write",
+            "read"
+          ]
+        },
+        "prefix": {
+          "description": "Key prefix inside the bucket, without a leading or trailing slash.",
+          "type": "string",
+          "pattern": "^(?!/)(?!.*/$).*$"
+        },
+        "retention_days": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "destination": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "bucket",
+                "access_key_id",
+                "secret_access_key"
+              ],
+              "properties": {
+                "type": {
+                  "const": "s3"
+                },
+                "bucket": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "region": {
+                  "type": "string"
+                },
+                "endpoint": {
+                  "description": "For S3-compatible stores.",
+                  "type": "string",
+                  "format": "uri"
+                },
+                "access_key_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "secret_access_key": {
+                  "$ref": "#/$defs/secret"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "bucket"
+              ],
+              "oneOf": [
+                {
+                  "required": [
+                    "access_key_id",
+                    "secret_access_key"
+                  ]
+                },
+                {
+                  "required": [
+                    "service_account_key"
+                  ]
+                }
+              ],
+              "properties": {
+                "type": {
+                  "const": "gcs"
+                },
+                "bucket": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "access_key_id": {
+                  "description": "An HMAC key's access ID.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "secret_access_key": {
+                  "$ref": "#/$defs/secret"
+                },
+                "service_account_key": {
+                  "$ref": "#/$defs/secret"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "sas_url"
+              ],
+              "properties": {
+                "type": {
+                  "const": "azure"
+                },
+                "sas_url": {
+                  "description": "A SAS URL for the container.",
+                  "$ref": "#/$defs/secret"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "url_template"
+              ],
+              "properties": {
+                "type": {
+                  "const": "http"
+                },
+                "url_template": {
+                  "description": "An HTTPS URL with {key} where the object key goes. Write access needs PUT; read access needs GET and a listing, so plain HTTP destinations are for pushing.",
+                  "type": "string",
+                  "pattern": "^https://.*\\{key\\}"
+                },
+                "header": {
+                  "description": "One request header, such as an authorization, as \"Name: value\".",
+                  "$ref": "#/$defs/secret"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "destination": {
+            "properties": {
+              "type": {
+                "const": "http"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "access": {
+            "const": "write"
+          }
+        }
+      }
+    },
+    "secret": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "env"
+          ],
+          "properties": {
+            "env": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ],
+          "properties": {
+            "file": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    }
+  }
+}

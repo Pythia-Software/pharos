@@ -425,7 +425,7 @@ POST /connector/v1/query/{dataset}                an export query: rows or group
 POST /connector/v1/items/{dataset}                rows by opaque ID, for example those /changes lists
 GET  /connector/v1/changes?since=&limit=          what to send again, restate or retract
 GET  /connector/v1/conversations/{id}/messages    a conversation's messages, when the grant allows text
-GET  /connector/v1/export?since=&cursor=          pharos-drop/1 bundles, for another Pharos
+GET  /connector/v1/export?since=&cursor=          transcripts for another Pharos (format being redefined)
 POST /connector/v1/resend                         record that the receiver asked for everything
 ```
 
@@ -1089,11 +1089,14 @@ Invariants, each a test target:
 
 ## Pharos to Pharos
 
-Pharos never listens, so two libraries meet through something both can reach:
-an exporter on one writes `pharos-drop/1` bundles (from `/export`, private
-conversations already left out) to a bucket, shared folder or service; an
-importer on the other pulls them, and they go through the same validation and
-adoption as any drop.
+Pharos never listens, so two libraries meet through something both can reach.
+The receiving side is settled: a library imports
+[capture-export](capture-export.md) envelopes from a bucket, as
+[importer plugins](plugin-imports.md) describes, and `pharos-drop/1` is
+withdrawn. The sending side is open: an envelope is a byte-for-byte capture,
+so it cannot leave private conversations out the way `/export` promised. How
+one library sends another only what is shareable is for the export design to
+decide.
 
 Each library exports only conversations its own Macs captured unless the
 manifest asks to forward imported ones, so two libraries feeding each other do

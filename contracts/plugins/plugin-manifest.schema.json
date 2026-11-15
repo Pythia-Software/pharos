@@ -124,6 +124,9 @@
         },
         {
           "$ref": "#/$defs/declarative_run"
+        },
+        {
+          "$ref": "#/$defs/bucket_import_run"
         }
       ]
     },
@@ -153,6 +156,11 @@
                 "produce"
               ]
             }
+          },
+          "run": {
+            "not": {
+              "$ref": "#/$defs/bucket_import_run"
+            }
           }
         }
       },
@@ -178,7 +186,14 @@
             }
           },
           "run": {
-            "$ref": "#/$defs/scripted_run"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/scripted_run"
+              },
+              {
+                "$ref": "#/$defs/bucket_import_run"
+              }
+            ]
           }
         }
       }
@@ -189,7 +204,12 @@
           "run": {
             "required": [
               "builtin"
-            ]
+            ],
+            "properties": {
+              "builtin": {
+                "const": "declarative-export/1"
+              }
+            }
           }
         },
         "required": [
@@ -444,7 +464,7 @@
           "default": false
         },
         "export_bundles": {
-          "description": "Whether /export may return pharos-drop/1 bundles of transcripts, for another Pharos.",
+          "description": "Whether /export may return transcripts for another Pharos. pharos-drop/1 is withdrawn; the format is being redefined around capture-export envelopes (docs/plugin-imports.md).",
           "type": "boolean",
           "default": false
         },
@@ -874,6 +894,19 @@
               }
             }
           }
+        }
+      }
+    },
+    "bucket_import_run": {
+      "description": "Run by Pharos itself: fetch pharos-push/1 envelopes that other machines pushed to a bucket, verify them and declare them as capture-export drops. The destination and read credential come from setup, not the manifest.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "builtin"
+      ],
+      "properties": {
+        "builtin": {
+          "const": "bucket-import/1"
         }
       }
     }

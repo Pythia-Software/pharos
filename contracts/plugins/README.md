@@ -1,7 +1,8 @@
 # Plugin contracts
 
 The public interfaces between Pharos, plugins and receivers, as described in
-[docs/plugins.md](../../docs/plugins.md). Nothing here is implemented in the
+[docs/plugins.md](../../docs/plugins.md) and, for imports,
+[docs/plugin-imports.md](../../docs/plugin-imports.md). Nothing here is implemented in the
 service yet. Where the docs and a schema disagree, the schema is the contract.
 
 | Contract | File | Written by | Read by |
@@ -11,7 +12,8 @@ service yet. Where the docs and a schema disagree, the schema is the contract.
 | `pharos-run/1` request | [run-request.schema.json](run-request.schema.json) | Pharos | plugin, per run |
 | `pharos-run/1` result | [run-result.schema.json](run-result.schema.json) | plugin, per run | Pharos |
 | `usage-records/1` | [usage-record.schema.json](usage-record.schema.json) | usage importer, one JSON line per record | Pharos |
-| `pharos-drop/1` bundle | [drop-bundle.schema.json](drop-bundle.schema.json) | Pharos (`/export`) | importer on another library |
+| `pharos-push/1` exports and hello | [push.schema.json](push.schema.json) | `pharos capture-push`, in a bucket | Pharos's `bucket-import/1` |
+| `pharos-push-config/1` | [push.schema.json](push.schema.json) (`config`) | bucket setup: `pharos-push.json`, `pharos-read.json` | `pharos capture-push`; Pharos |
 | `connector/v1` API | [connector-api.openapi.json](connector-api.openapi.json), bodies in [connector.schema.json](connector.schema.json) | Pharos, on loopback during a run | plugin |
 | `pharos-report/1` batch | [report.schema.json](report.schema.json) | exporter | receiver |
 | `pharos-receiver/1` protocol | [receiver-api.openapi.json](receiver-api.openapi.json), bodies in [receiver.schema.json](receiver.schema.json) | receiver | Pharos's declarative exporter, or a scripted one |
@@ -24,8 +26,9 @@ timestamps, durations, byte sizes, machines, drops, tokens and the error body.
 ## Rules the schemas encode
 
 - **Exporters read; importers produce.** An export manifest has
-  `permissions.read` and no `produce`; an import manifest the reverse, and only
-  scripted runs. A declarative exporter must declare `destinations`.
+  `permissions.read` and no `produce`; an import manifest the reverse, run by
+  a script or by the built-in `bucket-import/1`. A declarative exporter must
+  declare `destinations`.
 - **Datasets are versioned** (`usage/1`). A published dataset version never
   changes; a new field, or a new value that changes what a field covers (a new
   kind of channel, say), means a new version, a new manifest version and new
@@ -40,11 +43,17 @@ timestamps, durations, byte sizes, machines, drops, tokens and the error body.
 - **Presets agree with permissions:** `stats` only aggregates and no text,
   `metadata` no text, `text-scrubbed` text.
 - **Runs name an interpreter and entry, or an executable,** inside the bundle.
-- **Usage drops name a namespace and no machine root**; transcript drops name a
-  machine and its original `root`. Drop folders cannot climb out of
+- **A drop has a form.** A `files` drop (the default) names a machine and its
+  original `root`, an absolute POSIX path. A `capture-export` drop is an
+  envelope, which carries its own host, of a kind capture export covers. An
+  `export` drop holds provider export files and names no machine. A usage
+  drop names a namespace and nothing else. Drop folders cannot climb out of
   `output_dir`.
+- **Nothing in a bucket is overwritten.** Every `pharos-push/1` key is under
+  its pusher's ID or named by its content, and an export is written after its
+  chunks. Plain-URL destinations can be pushed to but not imported from.
 - **Spend and estimates are different fields.** A usage record's `cost.usd` is
-  required when its status is `priced` or `assumed`; `estimate` is never cost.
+  required when its status is `priced`, `assumed` or `partial`; `estimate` is never cost.
 - **A receiver can ask for changes, everything, or particular items and
   periods again** (keyed as in the report), and nothing else. It always says
   the highest version it holds.
@@ -55,6 +64,11 @@ Some rules span documents and are checked by Pharos rather than by the schemas:
 
 - every drop's `machine`, and every usage record's `machine`, is declared in
   the result's `machines`;
+- a drop's kind may arrive in its form: the provider registry says which
+  kinds are importable as files, and no drop names a host this library
+  captures itself or that another installation owns;
+- an envelope verifies (`capture-export-verify`), every chunk hashes to its
+  name, and a member's chunks rebuild its recorded size and hash;
 - drops do not share a folder, or a machine and source;
 - a usage drop's namespace is in the manifest's `produce.namespaces`, and
   namespaces belong to the plugin that declares them;

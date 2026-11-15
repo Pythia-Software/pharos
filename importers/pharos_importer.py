@@ -1,7 +1,7 @@
 """Helpers for Pharos importer scripts (contract pharos-run/1).
 
 Standard library only: copy this file beside an importer and import it. See
-docs/plugins.md and contracts/plugins/ for the contract.
+docs/plugin-imports.md and contracts/plugins/ for the contract.
 """
 
 from datetime import datetime
@@ -28,6 +28,8 @@ class Run:
         if self.request.get("contract") != CONTRACT:
             raise SystemExit(f"unsupported contract {self.request.get('contract')!r}; expected {CONTRACT}")
         self.output_dir = Path(self.request["output_dir"])
+        # A private folder that survives runs, when Pharos provides one.
+        self.state_dir = Path(self.request["state_dir"]) if self.request.get("state_dir") else None
         self.params = self.request.get("params") or {}
         self.cursor = self.request.get("cursor")
         self.max_bytes = int(self.request["limits"]["max_bytes"])

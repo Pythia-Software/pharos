@@ -262,7 +262,7 @@
     "/export": {
       "get": {
         "operationId": "exportBundle",
-        "summary": "A pharos-drop/1 bundle of transcripts, for another Pharos",
+        "summary": "Transcripts for another Pharos (format being redefined; pharos-drop/1 is withdrawn)",
         "description": "A tar stream with bundle.json first, then the drops' files. Needs export_bundles. Only conversations captured by this library's own Macs, unless forward_imported. Sized to stay within the run's served bytes; Pharos-Next-Cursor and Pharos-More headers page through the rest.",
         "parameters": [
           {

@@ -1,7 +1,7 @@
 # Importer plugins: bringing transcripts in from other places
 
-Design, revised 2026-11-15 against master, with the owner's decisions of the
-same day (listed under [Decisions](#decisions)). **Nothing here is built.** This document replaces
+Design, revised 2026-11-15 against master and agreed with the owner the same
+day (see [Decisions](#decisions)). **Nothing here is built yet.** This document replaces
 the *Importers* and *Cursors* sections of [plugins](plugins.md) and the import
 parts of the [implementation plan](plugins-implementation.md). The shared
 plugin model (manifest, consent, installing, limits, the run contract) stays in
@@ -323,12 +323,14 @@ safe by design.
 All of these are supported: pulling raw files from a machine that runs
 nothing of ours, and pushing from a machine that runs Pharos's collector.
 
-`ssh_pull.py` changes that follow: read `kinds.json` instead of its own
-patterns; fetch Codex `.jsonl.zst` rollouts; look in `~/.config/claude` and
-other Claude profiles; honour the remote `CLAUDE_CONFIG_DIR` and `CODEX_HOME`
-when the person's parameters say to (never by reading the remote environment
-unasked); dump only `CaptureTables` from a state database when the remote
-`sqlite3` allows, falling back to `.backup`, which Pharos filters on capture.
+`ssh_pull.py` now fetches Codex `.jsonl.zst` rollouts, looks in
+`~/.config/claude/projects` as well as `~/.claude/projects` (another profile
+is one more entry in `roots`), and follows the remote `CLAUDE_CONFIG_DIR` and
+`CODEX_HOME` only when `remote_env` is set, never unasked. Still to come: it
+reads `kinds.json` instead of its own patterns. Claude Code and Codex declare
+no `CaptureTables`, so its database snapshot needs no filter today; a kind
+that declares them is filtered by Pharos on capture, and its importer should
+fetch only those tables where the remote `sqlite3` allows.
 
 ### Pushing from a machine that runs Pharos
 
@@ -575,20 +577,24 @@ Decided by the owner on 2026-11-15:
 10. **Pushes are designed for every turn:** nothing in the bucket is
     overwritten, members are chunked, collection only adds.
 
-Proposed, not yet confirmed:
+11. **Envelopes from a pusher are added to that host's capture;**
+    `.imports/` stays the home of one-off envelopes.
+12. **Each container in a pool is its own host,** under one machine.
+13. **The numbers:** 30 seconds between passes; a 90-day bucket lifecycle; a
+    setup that never collected anything pauses after a week and is removed,
+    with its credential, 30 days later; a quiet integration pauses after 90
+    days.
 
-- Envelopes from a pusher are added to that host's capture rather than each
-  landing under `.imports/`, which stays the home of one-off envelopes.
-- Each container in a pool is its own host, under one machine.
-- The numbers: 30 seconds between passes; a 90-day bucket lifecycle; a
-  setup that never collected anything pauses after a week and is removed
-  after 30 more days; a quiet integration pauses after 90 days.
+The contracts for all of this are in
+[`contracts/plugins/`](../contracts/plugins/): drop forms and pools in
+`common.schema.json`, `state_dir` in the run request, `bucket-import/1` in
+the manifest, and the bucket's documents in `push.schema.json`, each with
+checked examples.
 
 ## Order of work
 
-1. Contracts: drop `form`, machine `pool`, `state_dir`, the pushed layout,
-   `bucket-import/1`, withdraw `pharos-drop/1`, `kinds.json` with its Go
-   test.
+1. Contracts (done, except `kinds.json`, which arrives with its Go test in
+   step 2).
 2. Plugin runtime: manifests, installations, consent, Mac allowance, the
    background item, the native supervisor leaf with its contract tests,
    `plugin.run`.

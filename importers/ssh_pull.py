@@ -7,9 +7,17 @@ Codex thread names. Nothing is installed on it.
 
 params:
   destination      ssh destination, e.g. "alice@lab-box" or a Host alias (required)
-  sources          subset of ["claude", "codex"] (default both)
-  roots            {"claude": ".claude/projects", "codex": ".codex"}; relative
-                   paths are under the remote home
+  sources          subset of ["claude", "claude-config", "codex"] (default all;
+                   "claude-config" is Claude Code's other usual folder,
+                   ~/.config/claude/projects, and is skipped quietly when absent)
+  roots            {"claude": ".claude/projects", ...}; relative paths are
+                   under the remote home. Name another Claude profile's
+                   projects folder here.
+  remote_env       true to honour CLAUDE_CONFIG_DIR and CODEX_HOME as the
+                   remote shell reports them, for sources whose root is not
+                   given. Off by default: nothing is read from the remote
+                   environment unasked. A non-interactive ssh shell may not
+                   load the profile that sets them.
   ssh              ssh command prefix (default ["ssh", "-T", "-o", "BatchMode=yes"])
   machine_key      stable machine key (default: destination)
   label            display name (default: "<hostname> (<user>)")
@@ -31,7 +39,15 @@ import tarfile
 
 import pharos_importer
 
-DEFAULT_ROOTS = {"claude": ".claude/projects", "codex": ".codex"}
+# Source name -> (kind, default root under the remote home, environment
+# variable that moves it and the folder below that variable's value).
+SOURCES = {
+    "claude": ("claude", ".claude/projects", ("CLAUDE_CONFIG_DIR", "projects")),
+    "claude-config": ("claude", ".config/claude/projects", None),
+    "codex": ("codex", ".codex", ("CODEX_HOME", "")),
+}
+# Usual folders that many machines lack; their absence is not worth a warning.
+OPTIONAL = {"claude-config"}
 DATABASE = re.compile(r"state(_\d+)?\.sqlite")
 
 
@@ -42,8 +58,9 @@ def wanted(kind, relative):
         return name.endswith(".jsonl") or name == "sessions-index.json"
     if relative == "session_index.jsonl" or DATABASE.fullmatch(relative):
         return True
-    return name.endswith(".jsonl") and (relative.startswith(("sessions/", "archived_sessions/"))
-                                        or name.startswith("rollout"))
+    # Codex compresses a rollout idle for a week to .jsonl.zst.
+    return name.endswith((".jsonl", ".jsonl.zst")) and (relative.startswith(("sessions/", "archived_sessions/"))
+                                                        or name.startswith("rollout"))
 
 
 def quote(value):
@@ -71,7 +88,18 @@ class Remote:
         return data.decode()
 
 
-def probe_and_list(remote, roots):
+def root_expression(name, root, remote_env):
+    """The remote sh expression for a source's root."""
+    moved = SOURCES[name][2]
+    if root is None and remote_env and moved:
+        variable, below = moved
+        default = '"$HOME"/' + quote(SOURCES[name][1])
+        return f'"${{{variable}:+${variable}{"/" + below if below else ""}}}"; [ -n "$root" ] || root={default}'
+    root = root or SOURCES[name][1]
+    return quote(root) if root.startswith("/") else '"$HOME"/' + quote(root)
+
+
+def probe_and_list(remote, roots, remote_env=False):
     """One round trip: who the machine is, its clock, and every candidate file."""
     lines = ["LC_ALL=C; export LC_ALL",
              'printf "os\\t%s\\nhost\\t%s\\nuser\\t%s\\nhome\\t%s\\nnow\\t%s\\n" '
@@ -80,9 +108,8 @@ def probe_and_list(remote, roots):
              'command -v sqlite3 >/dev/null 2>&1 && printf "sqlite3\\tyes\\n"',
              'case "$(uname -s)" in Darwin|*BSD|DragonFly) fmt=f; spec="%m\t%z\t%N";; *) fmt=c; spec="%Y\t%s\t%n";; esac']
     for name, root in roots.items():
-        root_expr = root and (quote(root) if root.startswith("/") else '"$HOME"/' + quote(root))
-        lines.append(f'root={root_expr}; printf "root\\t{name}\\t%s\\n" "$root"')
-        lines.append(f'if [ -d "$root" ]; then find "$root" -type f \\( -name "*.jsonl" -o -name sessions-index.json'
+        lines.append(f'root={root_expression(name, root, remote_env)}; printf "root\\t{name}\\t%s\\n" "$root"')
+        lines.append(f'if [ -d "$root" ]; then find "$root" -type f \\( -name "*.jsonl" -o -name "*.jsonl.zst" -o -name sessions-index.json'
                      f' -o -name "state*.sqlite" -o -name "state*.sqlite-wal" \\) -exec stat -$fmt "{name}\t$spec" {{}} +;'
                      f' else printf "missing\\t{name}\\n"; fi')
     info, roots_found, files, missing = {}, {}, {name: {} for name in roots}, set()
@@ -190,11 +217,11 @@ def pull(run):
     destination = params.get("destination")
     if not destination:
         raise ValueError("params.destination is required")
-    sources = params.get("sources") or list(DEFAULT_ROOTS)
-    unknown = sorted(set(sources) - set(DEFAULT_ROOTS))
+    sources = params.get("sources") or list(SOURCES)
+    unknown = sorted(set(sources) - set(SOURCES))
     if unknown:
-        raise ValueError(f"unsupported sources {unknown}; ssh_pull reads claude and codex")
-    roots = {name: (params.get("roots") or {}).get(name, DEFAULT_ROOTS[name]) for name in sources}
+        raise ValueError(f"unsupported sources {unknown}; ssh_pull reads {', '.join(SOURCES)}")
+    roots = {name: (params.get("roots") or {}).get(name) for name in sources}
     overlap = int(params.get("overlap_seconds", 300))
     batch_bytes = int(params.get("batch_bytes", 64 << 20))
 
@@ -204,7 +231,7 @@ def pull(run):
     previous = cursor["sources"]
 
     remote = Remote(run, destination, params.get("ssh") or ["ssh", "-T", "-o", "BatchMode=yes"])
-    info, root_paths, listed, missing = probe_and_list(remote, roots)
+    info, root_paths, listed, missing = probe_and_list(remote, roots, bool(params.get("remote_env")))
     now = int(info["now"])
     os_name = {"Linux": "linux", "Darwin": "darwin"}.get(info.get("os"), "other")
     machine = run.machine(params.get("machine_key") or destination,
@@ -214,16 +241,19 @@ def pull(run):
     next_sources, stopped, delivered = dict(previous), None, 0
     for name in sources:
         if name in missing:
+            if name in OPTIONAL and not roots[name]:
+                continue
             run.warn(f"{name}: {root_paths.get(name)} does not exist on {destination}")
             continue
         root = root_paths[name]
         state = previous.get(name) or {}
         since, after = state.get("since"), state.get("after")
         databases = dict(state.get("databases") or {})
-        pending = candidates(name, root, listed[name], since, after, databases)
+        kind = SOURCES[name][0]
+        pending = candidates(kind, root, listed[name], since, after, databases)
         if stopped:
             continue
-        drop_dir = run.drop(name, machine, name, root) if pending else None
+        drop_dir = run.drop(name, machine, kind, root, source=name) if pending else None
         while pending:
             if run.out_of_time():
                 stopped = "the deadline is near"

@@ -154,11 +154,17 @@
           "description": "Optional hardware or OS identifier, such as /etc/machine-id, used only as a hint for the machine registry.",
           "type": "string",
           "maxLength": 200
+        },
+        "pool": {
+          "description": "A named group of short-lived machines, such as \"CI runners\". Every machine in a pool is one value of Machine in Pharos, of kind cloud; each still keeps its own captures.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
         }
       }
     },
     "drop": {
-      "description": "One folder of output_dir (or of a bundle). Transcript drops mirror the source's layout under root; a usage drop holds usage-records/1 JSON Lines files.",
+      "description": "One folder of output_dir, in one of the forms docs/plugin-imports.md describes. A files drop mirrors a source's folder under root and is captured by Pharos with the kind's own plan; a capture-export drop is one verified envelope folder; an export drop holds provider export files for the export collector; a usage drop holds usage-records/1 JSON Lines files.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -176,7 +182,7 @@
           "$ref": "#/$defs/drop_kind"
         },
         "machine": {
-          "description": "key of a machine declared beside this drop.",
+          "description": "files drops: key of a machine declared beside this drop. Envelopes carry their own host, and export files name no machine.",
           "type": "string"
         },
         "source": {
@@ -185,42 +191,164 @@
           "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
         },
         "root": {
-          "description": "The original absolute path on that machine, POSIX or Windows style. A file's original path is root joined with its path under dir.",
+          "description": "files drops: the original absolute POSIX path on that machine. A file's original path is root joined with its path under dir. Windows-style roots are refused.",
           "type": "string",
-          "minLength": 1
+          "pattern": "^/"
         },
         "namespace": {
           "$ref": "#/$defs/namespace"
+        },
+        "form": {
+          "description": "How the folder is laid out. Defaults to files. Usage drops have no form.",
+          "enum": [
+            "files",
+            "capture-export",
+            "export"
+          ]
         }
       },
-      "if": {
-        "properties": {
-          "kind": {
-            "const": "usage-records/1"
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "usage-records/1"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "namespace"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "root"
+                  ]
+                },
+                {
+                  "required": [
+                    "machine"
+                  ]
+                },
+                {
+                  "required": [
+                    "form"
+                  ]
+                }
+              ]
+            }
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "namespace"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "not": {
+                  "const": "usage-records/1"
+                }
+              },
+              "form": {
+                "const": "files"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "machine",
+              "root"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "form": {
+                "enum": [
+                  "capture-export",
+                  "export"
+                ]
+              }
+            },
+            "required": [
+              "form"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "root"
+                  ]
+                },
+                {
+                  "required": [
+                    "machine"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "form": {
+                "const": "capture-export"
+              }
+            },
+            "required": [
+              "form"
+            ]
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "claude",
+                  "codex"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "form": {
+                "const": "export"
+              }
+            },
+            "required": [
+              "form"
+            ]
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "chatgpt",
+                  "chatgpt-export",
+                  "claude-ai"
+                ]
+              }
+            }
           }
         }
-      },
-      "then": {
-        "required": [
-          "namespace"
-        ],
-        "not": {
-          "required": [
-            "root"
-          ]
-        }
-      },
-      "else": {
-        "required": [
-          "machine",
-          "root"
-        ],
-        "not": {
-          "required": [
-            "namespace"
-          ]
-        }
-      }
+      ]
     },
     "tokens": {
       "description": "Token counts by category, already normalized: input that was neither read from nor written to a cache, cache reads, cache writes by lifetime, output, reasoning output, and anything the source could not classify.",
