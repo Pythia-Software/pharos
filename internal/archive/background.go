@@ -90,6 +90,10 @@ var (
 	hourlyEvery  = time.Hour
 	hourlyQuiet  = 10 * time.Minute
 	hourlyLatest = 90 * time.Minute
+	// An hourly pass also takes the hourly items due within hourlyJoin, so
+	// items whose clocks drifted apart run in one pass and stay together,
+	// instead of each holding the library for a pass of its own.
+	hourlyJoin = 20 * time.Minute
 	// Daily work runs at the daily time, or the first quiet moment after;
 	// past dailyLatest it runs whether or not the library is quiet.
 	dailyLatest = 12 * time.Hour
@@ -868,6 +872,11 @@ type itemPlan struct {
 	Overdue bool
 	// WaitsForPower is work the battery policy holds until plugged in.
 	WaitsForPower bool
+	// Joins is hourly work not yet due that runs with an hourly pass now: its
+	// hour is up within hourlyJoin, and nothing else (a quiet library, a
+	// retry, power) holds it. join is the moment from which it does.
+	Joins bool
+	join  time.Time
 }
 
 // backgroundPlan is every item's place in the schedule at at.
@@ -918,6 +927,9 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			if plan.Pending {
 				standaloneNext(&plan, settings, quiet, at)
 				plan.Next = maxTime(plan.Next, in.verificationNext)
+				if !plan.join.IsZero() {
+					plan.join = maxTime(plan.join, in.verificationNext)
+				}
 			}
 		case item.ID == "writing":
 			row := in.deferred["authorship"]
@@ -929,6 +941,7 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 				standaloneNext(&plan, settings, quiet, at)
 				if plan.Cadence == cadenceHourly {
 					plan.Next = maxTime(plan.LastDone.Add(hourlyEvery), minTime(quiet, plan.LastDone.Add(hourlyLatest)))
+					plan.join = maxTime(plan.LastDone.Add(hourlyEvery-hourlyJoin), minTime(quiet, plan.LastDone.Add(hourlyLatest)))
 				}
 			}
 		case item.ID == "writing-refine":
@@ -964,6 +977,7 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 				plan.Next = at
 			case plan.Cadence == cadenceHourly:
 				plan.Next = maxTime(plan.LastDone.Add(hourlyEvery), minTime(quiet, plan.LastDone.Add(hourlyLatest)))
+				plan.join = maxTime(plan.LastDone.Add(hourlyEvery-hourlyJoin), minTime(quiet, plan.LastDone.Add(hourlyLatest)))
 				plan.Overdue = at.Sub(plan.LastDone) > 3*hourlyEvery
 			case plan.Cadence == cadenceDaily:
 				daily()
@@ -998,6 +1012,7 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 				plan.Next = at
 			case plan.Cadence == cadenceHourly:
 				plan.Next = plan.LastDone.Add(hourlyEvery)
+				plan.join = plan.LastDone.Add(hourlyEvery - hourlyJoin)
 			case plan.Cadence == cadenceDaily:
 				daily()
 			}
@@ -1025,13 +1040,18 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			// stopped is not asked again on every check; only a failure
 			// says Failed.
 			plan.Failed, plan.Error = run.err != "", run.err
-			if retry := value.Add(backgroundRetry); retry.After(plan.Next) {
+			retry := value.Add(backgroundRetry)
+			if retry.After(plan.Next) {
 				plan.Next = retry
+			}
+			if !plan.join.IsZero() && retry.After(plan.join) {
+				plan.join = retry
 			}
 		}
 		if cadenceRank(plan.Cadence) < len(cadences) {
 			switch settings.Battery.onPower(plan.Cadence, in.power) {
 			case batteryWait:
+				plan.join = time.Time{}
 				plan.Next, plan.WaitsForPower = time.Time{}, plan.Pending || item.ID == "conversations" || item.continuous
 			case batterySlower:
 				if item.ID == "conversations" && !plan.Next.IsZero() {
@@ -1040,9 +1060,12 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			}
 		}
 		if plan.Cadence == cadenceManual || settings.Mode != "on" {
-			plan.Next = time.Time{}
+			plan.Next, plan.join = time.Time{}, time.Time{}
 		}
 		plan.Due = !plan.Next.IsZero() && !at.Before(plan.Next) && plan.Pending && item.ID != "conversations" && !(item.continuous && plan.Cadence == cadenceFrequent)
+		// The continuous items keep their own passes' rules (a retained
+		// fingerprint pass, Search's daemons).
+		plan.Joins = plan.Cadence == cadenceHourly && plan.Pending && !plan.Due && !plan.join.IsZero() && !at.Before(plan.join) && item.ID != "conversations" && !item.continuous
 		if in.requested[item.ID] && item.ID != "conversations" {
 			plan.Due = true
 		}
@@ -1058,6 +1081,7 @@ func standaloneNext(plan *itemPlan, settings backgroundSettings, quiet, at time.
 		plan.Next = plan.LastDone.Add(time.Duration(max(settings.Interval, 1)) * time.Second)
 	case cadenceHourly:
 		plan.Next = maxTime(quiet, plan.LastDone.Add(hourlyEvery))
+		plan.join = maxTime(quiet, plan.LastDone.Add(hourlyEvery-hourlyJoin))
 		if !plan.LastDone.IsZero() && at.Sub(plan.LastDone) > 3*hourlyEvery {
 			plan.Next, plan.Overdue = at, true
 		}
@@ -1275,8 +1299,34 @@ func (s *Server) backgroundLoop(ctx context.Context) {
 	}
 }
 
-// backgroundPass runs the most frequent cadence that has due work, with
-// every item of it that is due; the next pass takes the next cadence.
+// passGroup is the work a pass takes from the plans: the most frequent
+// cadence that has due work (Run now's requests before any), with every item
+// of it that is due; the next pass takes the next cadence. An hourly pass
+// also takes the hourly items about to be due (itemPlan.Joins).
+func passGroup(plans []itemPlan, requested map[string]bool) (cadence string, group []itemPlan) {
+	label := func(plan itemPlan) string {
+		if requested[plan.ID] {
+			return "requested"
+		}
+		return plan.Cadence
+	}
+	for _, plan := range plans {
+		if !plan.Due {
+			continue
+		}
+		if label := label(plan); cadence == "" || label == "requested" && cadence != "requested" || cadence != "requested" && cadenceRank(label) < cadenceRank(cadence) {
+			cadence = label
+		}
+	}
+	for _, plan := range plans {
+		if plan.Due && label(plan) == cadence || cadence == cadenceHourly && plan.Joins {
+			group = append(group, plan)
+		}
+	}
+	return cadence, group
+}
+
+// backgroundPass runs the work passGroup takes from the plan.
 func (s *Server) backgroundPass(ctx context.Context, at time.Time) bool {
 	settings, err := s.Catalog.backgroundSettings(ctx, at)
 	if err != nil {
@@ -1305,27 +1355,14 @@ func (s *Server) backgroundPass(ctx context.Context, at time.Time) bool {
 		return false
 	}
 	plans := backgroundPlan(settings, s.backgroundInputsFor(ctx, requested), at)
-	group, cadence := []itemPlan{}, ""
-	for _, plan := range plans {
+	for index, plan := range plans {
 		if plan.ID == "fingerprints" && fingerprintRetry != "" && fingerprintReady && settings.Mode == "on" && !plan.WaitsForPower {
 			// This pass was already accepted: finish it after analysis even
 			// when the next Hourly/Daily/Ad hoc pass is not due yet.
-			plan.Due = true
-		}
-		if !plan.Due {
-			continue
-		}
-		label := plan.Cadence
-		if requested[plan.ID] {
-			label = "requested"
-		}
-		if cadence == "" || label == "requested" && cadence != "requested" || cadence != "requested" && cadenceRank(label) < cadenceRank(cadence) {
-			cadence, group = label, nil
-		}
-		if label == cadence {
-			group = append(group, plan)
+			plans[index].Due = true
 		}
 	}
+	cadence, group := passGroup(plans, requested)
 	if len(group) == 0 {
 		return false
 	}

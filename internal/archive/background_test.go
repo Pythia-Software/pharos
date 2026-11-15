@@ -461,6 +461,61 @@ func TestBackgroundStandaloneCadencesWaitAfterCompletion(t *testing.T) {
 	}
 }
 
+// Hourly items whose clocks drifted apart run in one pass: the pass for the
+// one that is due takes those whose hour is up within hourlyJoin, unless a
+// retry, a library that is not quiet or the battery still holds them. Other
+// cadences' passes take only what is due.
+func TestHourlyPassTakesItemsAboutToBeDue(t *testing.T) {
+	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
+	ago := func(d time.Duration) string { return formatTime(at.Add(-d)) }
+	pending := func(changed, completed time.Duration) deferredRow {
+		return deferredRow{generation: 2, completed: 1, changedAt: ago(changed), completedAt: ago(completed), pendingSince: ago(changed)}
+	}
+	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: defaultDailyAt, Overrides: map[string]string{}, Placements: map[string]string{}, Battery: defaultBatteryPolicy()}
+	inputs := func(labelsDone, verificationDone time.Duration) backgroundInputs {
+		return backgroundInputs{otherSources: []string{"tl1"}, labels: true, verificationNext: at.Add(-time.Hour),
+			deferred: map[string]deferredRow{"labels": pending(30*time.Minute, labelsDone), "tools": {generation: 1, completed: 1, changedAt: ago(30 * time.Minute)}},
+			runs: map[string]backgroundRunRow{"other-sources": {succeeded: ago(61 * time.Minute)}, "verification": {succeeded: ago(verificationDone)},
+				"preserve": {succeeded: ago(time.Minute)}, "review": {succeeded: ago(time.Minute)}}}
+	}
+	taken := func(in backgroundInputs) (string, []string) {
+		cadence, group := passGroup(backgroundPlan(settings, in, at), in.requested)
+		ids := []string{}
+		for _, plan := range group {
+			ids = append(ids, plan.ID)
+		}
+		return cadence, ids
+	}
+	in := inputs(50*time.Minute, 45*time.Minute)
+	in.findingsToday = true
+	if cadence, ids := taken(in); cadence != cadenceHourly || !slices.Equal(ids, []string{"other-sources", "verification", "labels"}) {
+		t.Fatalf("the hourly pass takes the items due within %v: %s %v", hourlyJoin, cadence, ids)
+	}
+	in = inputs(30*time.Minute, 45*time.Minute)
+	in.findingsToday = true
+	if _, ids := taken(in); !slices.Equal(ids, []string{"other-sources", "verification"}) {
+		t.Fatalf("an item that ran half an hour ago waits for its own hour: %v", ids)
+	}
+	in.runs["verification"] = backgroundRunRow{succeeded: ago(45 * time.Minute), finished: ago(5 * time.Minute), err: "boom"}
+	if _, ids := taken(in); !slices.Equal(ids, []string{"other-sources"}) {
+		t.Fatalf("a failed item waits out its retry: %v", ids)
+	}
+	in = inputs(50*time.Minute, 45*time.Minute)
+	in.findingsToday = true
+	in.deferred["labels"] = pending(2*time.Minute, 50*time.Minute)
+	if _, ids := taken(in); slices.Contains(ids, "labels") {
+		t.Fatalf("a stage still waits for a quiet library: %v", ids)
+	}
+	// A frequent pass does not bring hourly work forward.
+	in = inputs(50*time.Minute, 45*time.Minute)
+	in.findingsToday = true
+	in.deferred["tools"] = pending(time.Minute, 2*time.Hour)
+	in.runs["other-sources"] = backgroundRunRow{succeeded: ago(45 * time.Minute)}
+	if cadence, ids := taken(in); cadence != cadenceFrequent || !slices.Equal(ids, []string{"tools"}) {
+		t.Fatalf("a frequent pass takes only frequent work: %s %v", cadence, ids)
+	}
+}
+
 func TestConversationsMovedScheduleWaitsForItsCadenceAndQuiet(t *testing.T) {
 	t.Run("settings saves preserve overdue checks", func(t *testing.T) {
 		catalog, config := testCatalog(t)

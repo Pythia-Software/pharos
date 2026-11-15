@@ -1801,7 +1801,12 @@ the same schedule from one declaration (`backgroundItems`):
   last completion. Daily runs at the daily time (03:00 by default) or the
   first quiet moment after, and regardless of quiet 12 h past it. A pass
   runs the most frequent cadence with due work; the next pass takes the
-  next.
+  next. An hourly pass also takes the hourly items whose hour is up within
+  20 min (`hourlyJoin`), unless something else still holds them (a library
+  that is not quiet, a failure's retry, the battery policy, a queued
+  verification's own time): items whose clocks drifted apart run in one
+  pass and stay together, instead of each holding the library for a pass of
+  its own. The continuous items (Search, fingerprints) do not join.
 - **Costs.** Every scheduled run of an item records its own time in its
   pass in `background_item_runs` (per Mac, kept two weeks): the sum of the
   item's stages for a chain item, whether it was due or came along, and
