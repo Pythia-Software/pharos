@@ -137,7 +137,9 @@ func TestAuthorshipDetectsTemplatesButNotOneDayBroadcasts(t *testing.T) {
 	}
 	c := newClassifier(inputs)
 	for _, input := range inputs[:5] {
-		if spans := c.classify(input); categoryText(input.Text, spans, spanTyped) != "" || !strings.Contains(spans[0].Reason, "5 sessions on 5 days") {
+		// The counts grow with every later use, so they are not part of what
+		// is stored; the rule is.
+		if spans := c.classify(input); categoryText(input.Text, spans, spanTyped) != "" || spans[0].Reason != "Repeated prompt" || spanRule(spans[0]) != "Repeated prompt" {
 			t.Fatalf("template spans = %#v", spans)
 		}
 	}
@@ -2399,5 +2401,172 @@ func TestAuthorshipEstimatesForSelectedConversations(t *testing.T) {
 	c.authorship.rebuild.Unlock()
 	if !errors.Is(err, errWorkDomainBusy) {
 		t.Fatalf("a held lease: %v", err)
+	}
+}
+
+// The daily pass refines from the checkpoint quick estimates leave in place:
+// it classifies the day's messages only, rewrites no earlier row for a
+// template's growing counts, and still takes all history when a prompt
+// becomes a template, since that reclassifies its earlier uses.
+func TestAuthorshipDailyRefinementClassifiesOnlyNewWriting(t *testing.T) {
+	c, _ := testCatalog(t)
+	clock := authorAt(40 * 24 * 60)
+	c.now = func() time.Time { return clock }
+	// Frequent passes here only estimate, as when a suffix is not available.
+	override(t, &authorshipExactBudget, -time.Second)
+	statements := []string{`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`}
+	for i := range 8 {
+		statements = append(statements, fmt.Sprintf(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,started_at) VALUES('c%d','w','codex','local','c%d','codex','%s')`, i, i, formatTime(authorAt(0))))
+	}
+	execTx(t, c.DB, statements...)
+	saved, rising := "Please review the changes in this workspace and report every problem", "Summarize what changed on this branch since the last release"
+	send := func(id string, conversation, day int, text string) {
+		t.Helper()
+		if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES(?,?,?,'user','message',?,?,?)`, id, fmt.Sprintf("c%d", conversation), id, text, formatTime(authorAt(day*24*60+conversation)), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 5 {
+		send(fmt.Sprintf("saved%d", i), i, i, saved) // a template: 5 sessions on 5 days
+	}
+	for i := range 4 {
+		send(fmt.Sprintf("rising%d", i), i, 5+i/2, rising) // one session short of one
+	}
+	estimate := func() {
+		t.Helper()
+		want, _, _ := c.authorshipGenerations()
+		if err := c.UpdateAuthorship(t.Context(), want); err != nil {
+			t.Fatal(err)
+		}
+		if c.authorshipQuickPending() {
+			t.Fatal("estimates left a queue")
+		}
+	}
+	// refine runs the scheduled pass and reports its mode and what it wrote.
+	refine := func(force bool) (mode, wrote string) {
+		t.Helper()
+		ctx := withWorkProgress(t.Context(), func(work activityWork) {
+			if rest, ok := strings.CutPrefix(work.Phase, "authorship mode: "); ok {
+				mode = rest
+			} else if _, counts, ok := strings.Cut(work.Phase, "; messages="); ok && strings.HasPrefix(work.Phase, "authorship ") {
+				wrote = "messages=" + counts
+			}
+		})
+		if err := c.refineAuthorship(ctx, force); err != nil {
+			t.Fatal(err)
+		}
+		if pending, err := c.authorshipRefinementPending(t.Context()); err != nil || pending {
+			t.Fatalf("refinement left work pending: %v %v", pending, err)
+		}
+		// Whatever it classified, the result is the full classifier's.
+		inputs, launches, err := c.authorshipInputs(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		results, err := c.classifyInputs(t.Context(), inputs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan, err := c.planAuthorship(t.Context(), results, launches); err != nil || len(plan) != 0 {
+			t.Fatalf("%s differs from the full classifier: %v %v", mode, plan, err)
+		}
+		return mode, wrote
+	}
+	words := func(id, category string) (n int) {
+		t.Helper()
+		if err := c.DB.QueryRow(`SELECT `+category+`_words FROM message_authorship WHERE message_id=?`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	consumersPending := func() (n int) {
+		t.Helper()
+		if err := c.DB.QueryRow(`SELECT COUNT(*) FROM sync_deferred WHERE name IN ('labels','findings') AND generation>completed_generation`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	settle := func() {
+		t.Helper()
+		execSQL(t, c.DB, `UPDATE sync_deferred SET completed_generation=generation WHERE name IN ('labels','findings')`)
+	}
+	estimate()
+	if mode, _ := refine(false); !strings.HasPrefix(mode, "daily refinement") {
+		t.Fatalf("first refinement was %q", mode)
+	}
+	if words("saved0", "template") == 0 || words("rising0", "template") != 0 {
+		t.Fatal("fixture: saved is a template and rising is not yet")
+	}
+
+	// A day's writing: a new message and one more use of the template. Their
+	// estimates keep the checkpoint, so refinement classifies those two and
+	// rewrites nothing earlier, although the template's counts grew.
+	send("new", 6, 10, "Now look into why the importer drops the last row")
+	send("saved5", 5, 10, saved)
+	estimate()
+	var provisional int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM authorship_message_state WHERE provisional=1`).Scan(&provisional); err != nil || provisional != 2 {
+		t.Fatalf("estimates were not provisional: %d %v", provisional, err)
+	}
+	settle()
+	if mode, wrote := refine(false); mode != "suffix" || !strings.HasPrefix(wrote, "messages=0 ") {
+		// The estimates already hold what the full rules give these two.
+		t.Fatalf("a day's writing ran %q and wrote %q", mode, wrote)
+	}
+	if consumersPending() != 0 {
+		t.Fatal("refinement that changed no classification rescheduled labels or findings")
+	}
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM authorship_message_state WHERE provisional=1`).Scan(&provisional); err != nil || provisional != 0 {
+		t.Fatalf("refined messages stayed provisional: %d %v", provisional, err)
+	}
+	// The reader shows the counts as they now are.
+	rows := []map[string]any{{"id": "saved0", "text": saved}}
+	if err := c.attachAuthorship("c0", rows); err != nil {
+		t.Fatal(err)
+	}
+	shown := jsonText(rows[0]["authorship"])
+	if !strings.Contains(shown, "Repeated prompt: sent in 6 sessions on 6 days") {
+		t.Fatalf("reader reason: %s", shown)
+	}
+
+	// Rows stored before the counts left the reason read as the same
+	// classification: a full pass rewrites none of them, and marks nothing.
+	execTx(t, c.DB,
+		`UPDATE message_authorship SET spans_json=replace(spans_json,'"reason":"Repeated prompt"','"reason":"Repeated prompt: sent in 2 sessions on 2 days"')`,
+		`UPDATE message_authorship_spans SET reason='Repeated prompt: sent in 2 sessions on 2 days' WHERE reason='Repeated prompt'`)
+	settle()
+	if _, wrote := refine(true); !strings.HasPrefix(wrote, "messages=0 spans=0 ") || consumersPending() != 0 {
+		t.Fatalf("a full pass rewrote rows for their old reason text: %q, %d consumers pending", wrote, consumersPending())
+	}
+	var legacy int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM message_authorship_spans WHERE reason LIKE 'Repeated prompt: %'`).Scan(&legacy); err != nil || legacy != 6 {
+		t.Fatalf("old reasons kept: %d %v", legacy, err)
+	}
+
+	// The fifth session makes rising a template, for its four earlier
+	// messages too. That is history, so the pass classifies all of it.
+	send("rising4", 7, 11, rising)
+	estimate()
+	if words("rising4", "template") != 0 {
+		t.Fatal("fixture: the estimate cannot know the prompt crossed the threshold")
+	}
+	if mode, _ := refine(false); mode != "daily refinement, a repeated prompt became a template" {
+		t.Fatalf("a new template ran %q", mode)
+	}
+	for i := range 5 {
+		if id := fmt.Sprintf("rising%d", i); words(id, "template") == 0 || words(id, "typed") != 0 {
+			t.Fatalf("%s was not reclassified as a template", id)
+		}
+	}
+	if consumersPending() == 0 {
+		t.Fatal("reclassified messages left labels and findings current")
+	}
+
+	// A suffix is checked against all history once in a while.
+	send("later", 6, 12, "And check the exporter while you are there")
+	estimate()
+	clock = clock.Add(authorshipFullEvery)
+	if mode, _ := refine(false); mode != "daily refinement, periodic full pass" {
+		t.Fatalf("an overdue check ran %q", mode)
 	}
 }

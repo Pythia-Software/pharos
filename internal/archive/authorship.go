@@ -137,6 +137,13 @@ func (r spanReason) with(particulars string) spanReason {
 	return r
 }
 
+// bare returns the reason as its rule alone. A span records this form when
+// the particulars would move without the classification changing: a
+// template's session and day counts grow with every later use, and storing
+// them rewrote every earlier use of that template each day. Readers render
+// the live counts (templateReason); spanRule maps both forms to one rule.
+func (r spanReason) bare() spanReason { return spanReason{rule: r.rule} }
+
 // text returns the reason as a span records it.
 func (r spanReason) text() string {
 	if r.prefix == "" {
@@ -208,6 +215,9 @@ type authorshipState struct {
 	// A bounded first pass must not be repeated by page polling.
 	estimatesAttempted bool
 	lastError          string
+	// exactBlocked is the authorship_built_at of a checkpoint the frequent
+	// pass found unable to take an exact suffix (tryExactAuthorship).
+	exactBlocked string
 	// deferred records a follow-up a rebuild skipped while this process
 	// indexed; the ingest's end runs it (ingestEnded).
 	deferred atomic.Bool
@@ -563,6 +573,23 @@ func templateKey(text string) string {
 	return strings.ToLower(strings.Join(strings.Fields(text), " "))
 }
 
+// templateReason is the repeated-prompt reason with its counts, as a reader
+// shows it.
+func templateReason(sessions, days int) string {
+	return reasonRepeatedPrompt.with(fmt.Sprintf("sent in %d sessions on %d days", sessions, days)).text()
+}
+
+// stableSpanReason is reason without particulars that are not part of the
+// classification. Rows stored before the counts left the reason still carry
+// them; comparing this form keeps such a row until its message is classified
+// differently, instead of rewriting the library once on upgrade.
+func stableSpanReason(reason string) string {
+	if strings.HasPrefix(reason, reasonRepeatedPrompt.prefix) {
+		return reasonRepeatedPrompt.rule
+	}
+	return reason
+}
+
 // templateUse counts the sessions and days a template key was sent in.
 type templateUse struct {
 	sessions, days map[string]bool
@@ -710,7 +737,7 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	c.claimStructuredQuestionAnswers(l, input, replies)
 	sort.Slice(c.answers, func(i, j int) bool { return c.answers[i].Start < c.answers[j].Start })
 	if use := c.templates[templateKey(text)]; use != nil && use.template() {
-		l.claim(0, len(text), spanTemplate, reasonRepeatedPrompt.with(fmt.Sprintf("sent in %d sessions on %d days", len(use.sessions), len(use.days))), textOrigin{})
+		l.claim(0, len(text), spanTemplate, reasonRepeatedPrompt.bare(), textOrigin{})
 	}
 	if match := slashPattern.FindStringIndex(body); match != nil && !strings.Contains(body, "\n") {
 		l.claim(bodyStart+match[0], bodyStart+match[1], spanTemplate, reasonSlashCommand, textOrigin{})
@@ -1498,7 +1525,7 @@ func (c *Catalog) authorshipRunning() bool {
 // RebuildAuthorship links headless runs to the commands that launched them,
 // classifies user messages in send order and stores only changed rows.
 func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) error {
-	return c.withAuthorshipLease(func() error { return c.rebuildAuthorship(ctx, generation, false) })
+	return c.withAuthorshipLease(func() error { return c.rebuildAuthorship(ctx, generation, authorshipExact) })
 }
 
 func (c *Catalog) withAuthorshipLease(work func() error) error {
@@ -1518,22 +1545,65 @@ func (c *Catalog) withAuthorshipLease(work func() error) error {
 	return work()
 }
 
-func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, force bool) error {
+// authorshipPass says how much of history a classifier pass may skip.
+type authorshipPass int
+
+const (
+	// authorshipExact classifies the suffix since the checkpoint when that is
+	// provably what the full classifier would store, and all history otherwise.
+	authorshipExact authorshipPass = iota
+	// authorshipRefine is the daily pass: exact, but it must also settle every
+	// queued message and quick estimate, and checks its suffixes with a full
+	// pass every authorshipFullEvery.
+	authorshipRefine
+	// authorshipFull classifies all history: an explicit repair.
+	authorshipFull
+)
+
+func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, pass authorshipPass) error {
 	started := time.Now()
 	reportWork(ctx, "reading authorship inputs", "", 0, -1)
 	var run *authorshipIncremental
 	var err error
-	if force {
-		var checkpoint authorshipCheckpoint
-		checkpoint, err = c.authorshipCheckpoint(ctx)
-		run = &authorshipIncremental{checkpoint: checkpoint, reason: "daily refinement"}
-	} else {
+	if pass != authorshipFull {
 		run, err = c.incrementalAuthorship(ctx)
 	}
 	if err != nil {
 		return err
 	}
-	if run.reason == "unchanged" || run.reason == "no user suffix" {
+	idle := run != nil && (run.reason == "unchanged" || run.reason == "no user suffix")
+	// The reason a daily pass could not classify just a suffix stays in its
+	// progress, and so in the journal.
+	fullReason := ""
+	if idle {
+		// Nothing new to classify, but an estimate or queued message that no
+		// suffix reaches (a reconsidered mirror's) still needs the full rules.
+		if settled, err := c.authorshipSettled(ctx); err != nil {
+			return err
+		} else if !settled {
+			fullReason = "work outside the suffix"
+		}
+	} else if run != nil && run.classifier == nil {
+		fullReason = run.reason
+	}
+	if pass == authorshipRefine {
+		if last, err := c.metaValue(ctx, "authorship_full_refined_at"); err != nil {
+			return err
+		} else if at, ok := parseTime(last); !ok || c.clock().Sub(at) >= authorshipFullEvery {
+			fullReason = "periodic full pass"
+		}
+	}
+	if pass == authorshipFull || fullReason != "" {
+		checkpoint, err := c.authorshipCheckpoint(ctx)
+		if err != nil {
+			return err
+		}
+		run, idle = &authorshipIncremental{checkpoint: checkpoint, reason: fullReason}, false
+		if pass != authorshipExact {
+			run.reason = strings.TrimSuffix("daily refinement, "+fullReason, ", ")
+		}
+	}
+	if idle {
 		if err := c.writeTransaction(ctx, "complete unchanged authorship", func(tx *sql.Tx) error {
 			// A run can start before its first user turn arrives.
 			for _, launch := range run.added {
@@ -1550,6 +1620,19 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, forc
 			if !pending {
 				metadata["authorship_complete_at"] = now()
 			}
+			// The daily pass found every estimate refined already: only agent
+			// replies or unrelated rows moved the inputs. Acknowledge them, so
+			// the same revision is not refined again tomorrow.
+			if pass == authorshipRefine && !pending {
+				var revision string
+				if err := tx.QueryRowContext(ctx, "SELECT revision FROM authorship_dirty WHERE id=1").Scan(&revision); err != nil {
+					return err
+				}
+				if revision == run.checkpoint.revision {
+					metadata["authorship_refined_at"] = now()
+					metadata["authorship_refinement_inputs"] = authorshipRefinementKey(revision)
+				}
+			}
 			for key, value := range metadata {
 				if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 					return err
@@ -1563,6 +1646,9 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, forc
 		return nil
 	}
 	full := run.classifier == nil
+	if pass == authorshipRefine {
+		run.refinementKey = authorshipRefinementKey(run.checkpoint.revision)
+	}
 	if full {
 		run.refinementKey = authorshipRefinementKey(run.checkpoint.revision)
 		run.inputs, run.launches, err = c.authorshipInputs(ctx)
@@ -1586,7 +1672,7 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, forc
 	if !full {
 		since = &run.since
 	}
-	plan, err := c.planAuthorshipScope(ctx, results, run.launches, since)
+	plan, err := c.planAuthorshipScope(ctx, results, run.launches, since, run.stale)
 	if err != nil {
 		return err
 	}
@@ -1968,6 +2054,21 @@ func (c *Catalog) messageAuthorshipAttacher(conversationID any) (func(map[string
 			workspaces[firstString(row["id"])] = row
 		}
 	}
+	// A template's counts are read when shown, not stored (spanReason.bare).
+	templates := map[string]string{}
+	templateCounts := func(text, stored string) string {
+		key := templateKey(text)
+		if reason, ok := templates[key]; ok {
+			return reason
+		}
+		var sessions, days int
+		reason := stored
+		if err := c.reader().QueryRow(`SELECT (SELECT COUNT(*) FROM json_each(sessions_json)),(SELECT COUNT(*) FROM json_each(days_json)) FROM authorship_templates WHERE key=?`, key).Scan(&sessions, &days); err == nil && sessions > 0 {
+			reason = templateReason(sessions, days)
+		}
+		templates[key] = reason
+		return reason
+	}
 	return func(message map[string]any) {
 		id := firstString(message["id"])
 		row := byID[id]
@@ -1982,6 +2083,9 @@ func (c *Catalog) messageAuthorshipAttacher(conversationID any) (func(map[string
 				break
 			}
 			value := strings.TrimSpace(text[span.Start:span.End])
+			if span.Category == spanTemplate && stableSpanReason(span.Reason) == reasonRepeatedPrompt.rule {
+				span.Reason = templateCounts(text, span.Reason)
+			}
 			part := map[string]any{"start": span.Start, "end": span.End, "category": span.Category, "reason": nilIfEmpty(span.Reason), "words": wordCounts[position], "excerpt": excerpt(value, 120)}
 			if source := workspaces[span.Source]; source != nil {
 				part["source"] = map[string]any{"workspace_id": source["workspace_id"], "conversation_id": span.Source, "message_id": nilIfEmpty(span.Message), "title": source["title"]}
