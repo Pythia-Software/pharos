@@ -112,8 +112,8 @@ export function AskPharosSettings() {
     <dialog ref={consent} className="ask-consent" aria-labelledby="ask-settings-consent-title">
       <h2 id="ask-settings-consent-title">Ask in your own words</h2>
       <p>Ask Pharos finds pages for you using your installed, signed-in agent CLI. It also needs the Pharos MCP server turned on in Settings → MCP. Each question uses your agent account’s quota, and each chat is saved in your library like other conversations.</p>
-      <p>The agent can read your Pharos page visits and earlier Ask Pharos chats. Other MCP clients cannot see your page visits.</p>
-      <p>This is optional. Nothing else in Pharos sends your history to an AI provider. While Ask Pharos is off, Pharos never runs your agent CLIs.</p>
+      <p>To answer, the agent reads your library through the Pharos MCP tools. It can search and open your conversations and usage, your Pharos page visits and earlier Ask Pharos chats. Your question, anything you attach and whatever the agent reads are sent to the company behind that CLI (OpenAI, Anthropic or Google), under your account with them. Other MCP clients cannot see your page visits.</p>
+      <p>This is optional. While Ask Pharos is off, Pharos never runs your agent CLIs and sends none of your history to an AI provider.</p>
       <button type="button" disabled={busy} onClick={() => void save({ enabled: true, consent: true })}>Enable Ask Pharos</button>
       <button type="button" onClick={() => consent.current?.close()}>Not right now</button>
       <button type="button" disabled={busy} onClick={() => void save({ enabled: false, showInvitation: false })}>No, and don’t show this again</button>
