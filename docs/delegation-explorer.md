@@ -328,3 +328,26 @@ Analysis order, selected execution, collapsed branches, and viewport
 bounds are retained in the page URL. Transcript navigation retains conversation
 and launch/call-message IDs. Standalone Share exports keep their existing reader;
 the service-backed explorer is currently omitted from those exports.
+
+## One timeline, two pages
+
+The Timeline and the sticky timeline at the top of a conversation are the same
+components under two sets of parameters.
+
+| Piece | Shared component | The Timeline's parameters | The conversation reader's parameters |
+|---|---|---|---|
+| Rows: a session, its Message modes, Agent events, Tool actions and Human events | `TimelineRow` (`web/src/timeline-rows.tsx`), over a `TimelineLane` (what to draw, on which clock) and a `TimelineSurface` (how the page frames a row) | `laneSurface` in `timeline-session-lane.tsx`: identity and branch columns, the zoom window's clock, brushing, disclosures `delegation-labels:<session>:<row>` | `readerSurface` in `reader-navigator.tsx`: label and track, the whole session's clock (message order when untimed), disclosures `reader-timeline:<session>:<row>` |
+| Ribbon marks | `SessionRibbon` | `interaction: 'inspect'` (`'none'` in the sidebar preview) | `interaction: 'reveal'` |
+| Agent events on a clock | `timelineEventLayer`, `timelineRowEvents` | workspace-wide kind counts | the session's own counts |
+| Key | `TimelineLegend` over `timelineKeyContent(timelineLegendWindow(…))`, with `useTimelineVisibility` | `surface: 'timeline'` (`'preview'` beside a conversation), the zoom window's values | `surface: 'reader'`, the whole session's values |
+
+Hover and click follow one model (`useRibbonPointer`). Hovering a message span,
+tool dot or agent event shows its card on every timeline. A click pins that
+card with its links to the conversation on the Timeline, where the transcript
+is on another page; in the reader it goes to the mark's message in the
+transcript below, or to the message nearest that time. The disclosure keys and
+`timeline_visibility` are saved in URLs and are unchanged.
+
+What stays with each page is what only it has: the Timeline's overview, zoom,
+axis and resizable columns; the reader's Turns · context and voice rows, its
+viewport band and its keyboard control.

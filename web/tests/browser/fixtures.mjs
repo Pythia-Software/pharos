@@ -591,7 +591,7 @@ const idleBackground = backgroundView([
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
   backgroundItem("writing-refine", "Refine writing history", "daily", "current", { cost: { seconds: 240, runs: 7, class: "heavy", text: "about 4 min", typical: "Typically about 4 min" } }),
   backgroundItem("backup", "Back up to /Volumes/Backup Drive With A Long Name/Pharos Backup", "manual", "unavailable", { column: "daily", cost: null }),
-  ...[["labels", "Message labels"], ["agent_events", "Agent events"]].map(([id, label]) => backgroundItem(id, label, "manual", "disabled", { state_label: "Off", column: "hourly", usual_cadence: "hourly", next_at: null, cost: null })),
+  ...[["labels", "Message labels"], ["agent_events", "Agent events"], ["pull-request-reviews", "Pull request reviews"]].map(([id, label]) => backgroundItem(id, label, "manual", "disabled", { state_label: "Off", column: "hourly", usual_cadence: "hourly", next_at: null, cost: null })),
 ], { tone: "good", title: "Up to date", text: "Everything is on schedule." });
 const busyBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { fixed: true, choices: null }),
@@ -604,6 +604,7 @@ const busyBackground = backgroundView([
 export const backgroundDocument = {
   labels: { enabled: false, can_change: true, status: 'Off. Turn on to label messages in this library.', notice:'', execution: {device:'gpu', status:'GPU · Automatic', detail:'Confirmed by the last worker. GPU capacity is managed automatically.', confirmed:true}, threads: 4, threads_can_change: false },
   agent_events: { enabled: false, can_change: true, status: 'Off. Turn on to find agent events in this library.', notice:'', execution: {device:'cpu', status:'CPU · GPU unavailable', detail:'Confirmed by the last worker. Automatic GPU selection fell back to CPU.', confirmed:true}, threads: 4, threads_can_change: true, thread_choices: [1, 2, 4, 8, 16, 28] },
+  pull_request_reviews: { enabled: false, can_change: true, status: 'Off. Turn on to read reviews and comments on your workspaces’ pull requests from GitHub.', notice:'', execution: {device:'forge', status:'No pull request read yet'} },
   settings: { mode: "on", paused_until: null, interval_seconds: 300, daily_at: "03:00", hold_when_busy: true, overrides: {},
     battery: { frequent: "slower", hourly: "wait", daily: "wait", low_battery_waits: true }, battery_choices: { frequent: ["same", "slower", "wait"], hourly: ["same", "wait"], daily: ["same", "wait"] },
     battery_slower_minutes: 15, low_battery_percent: 20 },
@@ -1057,6 +1058,7 @@ export const defaultApi = {
   "POST /api/labels/settings": ({ body }) => ({ ...backgroundDocument,
     labels: { ...backgroundDocument.labels, ...('enabled' in body ? {enabled:body.enabled, status:body.enabled ? 'On, waiting for the labeling model.' : 'Off.'} : {}), ...('threads' in body ? {threads:body.threads} : {}) },
     agent_events: { ...backgroundDocument.agent_events, ...('agent_events_threads' in body ? {threads:body.agent_events_threads} : {}) } }),
+  "POST /api/pull-request-reviews/settings": ({ body }) => ({ ...backgroundDocument, pull_request_reviews: { ...backgroundDocument.pull_request_reviews, enabled: body.enabled === true } }),
   "POST /api/background/run": ({ body }) => ({ accepted: true, items: [body?.item].filter(Boolean) }),
   "GET /api/work": { engine: "classic", available: false },
   "POST /api/work": ({ body }) => ["recent", "backfill"].includes(body?.action) ? { request_id: 9, operation_id: "op-work-9", scope: body.action, state: "queued" }

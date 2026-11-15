@@ -12,7 +12,7 @@ import { preferences } from "./preferences";
 import { Icon } from "./icons";
 import { delegationRouteValues, delegationTabs, readDelegationRoute, type DelegationRoute } from "./delegation-route";
 import "./delegation.css";
-import {RecursiveSessionRibbon} from "./label-session-ribbon";
+import {RecursiveSessionRibbon} from "./timeline-session-lane";
 import {SessionIdentity,sessionBranchX} from "./session-identity";
 import {eventKindCounts} from "./event-merge";
 import {nativeTimelineLabels,type NativeTimelineMessage} from "./label-timeline-overlay";
@@ -28,8 +28,7 @@ import {timelineSessionBranches} from "./timeline-label-model";
 import {sessionOutsideWindow,launchAttemptNote,laneCoverage,segmentPosition,type ExecutionSegment,type LaunchAttempt,type SessionAncestry} from "./delegation-ancestry";
 import {delegationAliasRequests,normalizeDelegationView,readerSelection,unresolvedAliases,type DelegationAliases} from "./delegation-aliases";
 import {coverageSummary,eventsPendingNote,occurrenceNote,omittedSegmentsNote,parentNote,qualityMark,sessionCountText,timelineEventsPending,timelineEventsPendingNote,type ExecutionCoverage,type ParentCertainty} from "./delegation-coverage";
-import {TimelineLegend,timelineLegendWindow,timelineToolCategories} from "./timeline-legend";
-import {updateTimelineVisibility,type TimelineVisibility} from "./timeline-visibility";
+import {TimelineLegend,timelineKeyContent,timelineLegendWindow,timelineToolCategories,useTimelineVisibility} from "./timeline-legend";
 import {ribbonSourceURL,type RibbonObservation} from "./label-session-ribbon-model";
 
 // reader-model.js loads before the bundle and also supplies turn ages.
@@ -1693,7 +1692,7 @@ export function ParallelActivity({
   const actors=useMemo(()=>timeline?splitTimelineCallers(nativeLabels.messages,rows):{caller:[],messages:labelData?.messages??new Map()},[timeline,nativeLabels,rows,labelData]);
   const allMessages=useMemo(()=>[...nativeLabels.messages.values()].flat(),[nativeLabels]);
   const [timelineDisclosures]=useViewState<Record<string,boolean>>("disclosures",{},timeline);
-  const [timelineVisibility,setTimelineVisibility]=useViewState<TimelineVisibility>("timeline_visibility",{},timeline);
+  const [timelineVisibility,selectTimelineKey]=useTimelineVisibility(timeline);
   const recursive=timeline;
   const [brush, setBrush] = useState<Range | null>(null);
   const [workExpanded,setWorkExpanded]=useViewState<string[]>("delegation_expanded",[],location.pathname.startsWith("/work/"));
@@ -1816,6 +1815,8 @@ export function ParallelActivity({
     {id:`caller:${data.rows[0]?.workspace_id??endpoint}`,caller:true,messages:actors.caller,marks:visibleActivity?.lanes.flatMap(lane=>lane.marks)??[],neighbors:allMessages},
     ...shownLaneRows.map(node=>({id:node.id,messages:actors.messages.get(node.id)??[],marks:visibleActivity?.lanes.find(lane=>lane.session===node.id)?.marks??[],neighbors:nativeLabels.messages.get(node.id)})),
   ],range),[actors,visibleActivity,shownLaneRows,nativeLabels,allMessages,range[0],range[1]]);
+  const humanKeys=useMemo(()=>humanEventDimensions([...nativeLabels.human.values()].flat()).map(({id,name,className})=>({id,name,className})),[nativeLabels]);
+  const keyContent=useMemo(()=>timelineKeyContent(legend,{taxonomy:nativeLabels.taxonomy,events:[...nativeLabels.events.values()].flat(),human:humanKeys}),[legend,nativeLabels,humanKeys]);
   const eventsExpanded=!previewOnly&&legend.populated.some(id=>timelineDisclosures[`delegation-labels:${id}:session`]);
   const hideEvents=compact || previewOnly;
   const columns=useTimelineColumns(timeline,{eventsCollapsed:timeline&&!eventsExpanded});
@@ -1904,7 +1905,6 @@ export function ParallelActivity({
   const sourceHref=(node:Session,item:RibbonObservation)=>ribbonSourceURL(item,{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href);
   // A Human events marker opens its message in the conversation.
   const humanHref=(node:Session,e:HumanEvent)=>ribbonSourceURL({id:e.id,start:0,end:0,title:"",color:"",thinking:false,message:(labelData.messages.get(node.id)??[]).find(message=>message.id===e.message_id)??({id:e.message_id} as LabelMessage)},{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href);
-  const humanKeys=humanEventDimensions([...nativeLabels.human.values()].flat()).map(({id,name,className})=>({id,name,className}));
   const eventHref=(node:Session,e:AgentEventLink)=>withEventLink(ribbonSourceURL({id:e.id,start:0,end:0,title:"",color:"",thinking:false,message:{id:e.message_id} as LabelMessage},{workspace:node.workspace_id,conversation:node.conversation_id,session:node.id},location.href),e);
   return (
     <div className={`delegation-parallel ${previewOnly?"is-preview":""} ${recursive?"is-recursive":""} ${timeline?"is-timeline":""} ${hideEvents?"without-events":""}`} ref={track} style={timeline?columns.style:undefined}>
@@ -1922,7 +1922,7 @@ export function ParallelActivity({
         scale={fullScale}
         idle={timeline&&!previewOnly?{skip:skipIdle,set:setSkipIdle,gaps:gaps.length}:undefined}
       />
-      {timeline?<TimelineLegend previewOnly={previewOnly} onOpenTimeline={openOverview} data-view-field="timeline_visibility" visibility={timelineVisibility} onSelect={(section,values,action)=>setTimelineVisibility(previous=>updateTimelineVisibility(previous,section,values,action))} messages={legend.messages} origins={legend.origins} taxonomy={nativeLabels.taxonomy} tools={Object.fromEntries(Object.entries(categories).filter(([id])=>legend.tools.includes(id)))} error={legend.error} unknownTools={legend.unknownTools} events={[...nativeLabels.events.values()].flat()} human={humanKeys}/>:<div className="delegation-legend">
+      {timeline?<TimelineLegend surface={previewOnly?"preview":"timeline"} onOpenTimeline={openOverview} data-view-field="timeline_visibility" content={keyContent} visibility={timelineVisibility} onSelect={selectTimelineKey}/>:<div className="delegation-legend">
         {!timeline?<span>
           <i className="model" />
           Model / orchestration · inferred

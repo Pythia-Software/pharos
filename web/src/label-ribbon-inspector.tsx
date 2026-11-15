@@ -43,20 +43,23 @@ export function useRibbonInspector({interactive=false}:{interactive?:boolean}={}
 
 /** What the pointer or keyboard cursor is on in a ribbon: a message span, tool
  * dot or agent event. card renders its popover; pinned cards carry links. */
-export type RibbonHit={card:(pinned:boolean)=>React.ReactNode;hover?:()=>void};
+export type RibbonHit={card:(pinned:boolean)=>React.ReactNode;hover?:()=>void;/** The message a tool dot or event marker under the pointer belongs to. */message?:string};
 type Inspector=ReturnType<typeof useRibbonInspector>;
-/** The one hover, pin and keyboard model every ribbon mark uses (session
- * timeline rows and the conversation fingerprint): hover shows the card under
- * the pointer, a click pins it with its links, and on a focused ribbon the
- * arrow keys browse candidates and Enter pins one with its link focused. */
-export function useRibbonPointer({inspector,hitAt,candidates=[],pinnable=true,disabled=false,suspended=false,unhover}:{inspector:Inspector;hitAt:(event:React.MouseEvent<Element>)=>RibbonHit|null;candidates?:RibbonHit[];pinnable?:boolean;disabled?:boolean;suspended?:boolean;unhover?:()=>void}){
+/** The one hover, click and keyboard model every ribbon mark uses (the
+ * Timeline's lanes, the conversation reader's timeline and the conversation
+ * fingerprint): hover shows the card under the pointer. A click pins that card
+ * with its links, or, where the surface gives `activate` (the reader, whose
+ * transcript is on the page), goes to what was clicked instead, hit or not. On
+ * a focused pinnable ribbon the arrow keys browse candidates and Enter pins
+ * one with its link focused. */
+export function useRibbonPointer({inspector,hitAt,candidates=[],pinnable=true,disabled=false,suspended=false,unhover,activate}:{inspector:Inspector;hitAt:(event:React.MouseEvent<Element>)=>RibbonHit|null;candidates?:RibbonHit[];pinnable?:boolean;disabled?:boolean;suspended?:boolean;unhover?:()=>void;activate?:(event:React.MouseEvent<Element>,hit:RibbonHit|null)=>void}){
  const cursor=useRef(0);
  const show=(target:Element,hit:RibbonHit,x?:number)=>{hit.hover?.();inspector.show(target,hit.card(false),x);};
  const leave=()=>{unhover?.();inspector.leave();};
  return {
   onPointerMove:(event:React.PointerEvent<Element>)=>{if(disabled)return;if(suspended){inspector.close();return;}const hit=hitAt(event);if(hit)show(event.currentTarget,hit,event.clientX);else leave();},
   onPointerLeave:leave,
-  onClick:(event:React.MouseEvent<Element>)=>{if(disabled||!pinnable)return;const hit=hitAt(event);if(!hit)return;event.preventDefault();event.stopPropagation();hit.hover?.();inspector.pin(event.currentTarget,hit.card(true),event.clientX);},
+  onClick:(event:React.MouseEvent<Element>)=>{if(disabled)return;if(activate){event.preventDefault();event.stopPropagation();unhover?.();inspector.close();activate(event,hitAt(event));return;}if(!pinnable)return;const hit=hitAt(event);if(!hit)return;event.preventDefault();event.stopPropagation();hit.hover?.();inspector.pin(event.currentTarget,hit.card(true),event.clientX);},
   onFocus:(event:React.FocusEvent<Element>)=>{if(disabled)return;const hit=candidates[cursor.current]??candidates[0];if(hit)show(event.currentTarget,hit);},
   onBlur:leave,
   onKeyDown:(event:React.KeyboardEvent<Element>)=>{
