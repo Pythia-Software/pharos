@@ -20,7 +20,10 @@ package archive
 // v7: a Workflow's acknowledged run links each child to its issuing session.
 // v8: scoped source names and first human/request excerpts replace native-ID
 // labels, consistently across mirrored and continued recordings.
-const executionResolverVersion = "execution-v8"
+// v9: a launch call retained in a mirror of its transcript joins the
+// original call's execution (joinMirroredLaunches); its reported usage is a
+// second observation of that execution (MirroredLaunch).
+const executionResolverVersion = "execution-v9"
 
 // sourceKind names what a sourceRef locates.
 type sourceKind string

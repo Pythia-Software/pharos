@@ -352,6 +352,14 @@ intermediate transcript was compacted. Use namespaced native event IDs and
 retained history relationships; equal text or equal call ID in unrelated
 conversations is insufficient.
 
+A mirror (the same transcript retained again, such as Conductor's copy of a
+Claude Code session) retains each launch call again, and its copy may not
+name the transcript the call created. Two launches with one namespaced call
+ID in joined mirrors are one launch unless they acknowledge different
+transcripts. Neither is a copied launch: a mirror's usage reported on its
+launch is a second observation of the execution, counted only when no other
+stream reports usage.
+
 Identity reconciliation must also respect evidence of distinct executions. A
 verified creation edge from A to B constrains A and B to remain distinct; a
 weaker continuation/mirror claim must not union them into one self-delegating
@@ -467,7 +475,7 @@ The resolver chooses presentation metadata once:
   launch/request assignment, readable nickname or explicitly scoped task context.
   A missing retained request is stated explicitly; native IDs remain metadata,
   never primary labels. [Naming and backfill](conversation-naming.md) describe
-  the compact cache and source freshness rules used by resolver `execution-v8`.
+  the compact cache and source freshness rules used by resolver `execution-v9`.
   Nicknames remain available as metadata. The same agent is not renamed merely
   because its transcript is now selected.
 - **Order:** return a deterministic total sibling key from originating launch
