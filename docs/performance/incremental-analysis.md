@@ -111,9 +111,31 @@ reads workspace/link metadata globally, and daily aggregation reads all cube
 partitions on affected days. The measured speedup does not imply that every
 read is bounded by the changed call count. Competing publication is
 rejected; busy publication retries reuse temporary data. Full fallback handles
-upgrades, broad attribution/pricing changes, timezone changes, and repair.
+upgrades, timezone changes, and repair.
 A new day no longer forces it (November 2026): the cube groups each call by
-its own local day.
+its own local day. Nor do identity links, conversation moves, pricing, or a
+ledger generation that moved with no partition marked (November 2026). The
+cube reads none of them: links and moves only choose the mirrors, which every
+build recomputes from the linked workspaces and publishes as a difference, and
+their triggers mark the linked workspaces; a pricing change rotates
+`tool_rollup_price_revision`, which re-sums and re-prices every day of
+`tool_usage_daily` from the stored cube. Before this, one link per Codex or
+Claude continuation (39–296 a day) made nearly every production build a full
+one: about 87–110 seconds instead of about 2 on the owner's library, and every
+publish rewrote all 7,173 mirror rows, which marked the request exclusions
+stale and invalidated the query cache once per row.
+
+Measured on a clone of that library (classic engine, warm, one run each):
+
+| Change | Rollup before → after | Writer hold | Query-cache bumps | Mirror rows written |
+|---|---|---|---|---|
+| 50 conversations + 1 new link | 73.2 s (full) → 2.0 s | 9.8 s → 0.26 s | 201,707 → 3,797 | 14,354 → 1 |
+| 50 conversations | 0.39 s → 1.13 s (stage 2.87 s → 1.62 s: no exclusions rebuild) | 0.06 s → 0.06 s | 15,268 → 914 | 14,354 → 0 |
+| Harness edit only | 39.0 s (full) → 0.15 s | 8.9 s → 0.01 s | 201,698 → 0 | 14,354 → 0 |
+| A price row rewritten | full (not timed) → 13.3 s (re-price) | full → 3.2 s | not compared | 0 |
+
+The cube, daily table and mirrors after the incremental series matched a full
+rebuild on the same inputs row for row (386,873, 93,672 and 7,177 rows).
 
 Findings cache conversation inputs and static call classifications, with
 independent prompt-message revisions. Each refresh still performs full candidate
