@@ -1086,7 +1086,7 @@ func TestBackupBoundsTheCatalogWAL(t *testing.T) {
 	run := job.Run(context.Background(), nil)
 	close(stop)
 	<-done
-	if run.State != "failed" || len(run.Errors) == 0 || !strings.Contains(run.Errors[0].Error, "WAL grew") || run.CatalogWALPeak <= backupWALGrowth {
+	if run.State != "failed" || len(run.Errors) == 0 || !strings.Contains(run.Errors[0].Error, "changed too much while it was copied") || run.CatalogWALPeak <= backupWALGrowth {
 		t.Fatalf("backup under a writer (%d commits, error %v): %+v", commits.Load(), writeErr.Load(), run)
 	}
 	if backupFileExists(t, filepath.Join(dest, "catalog", "catalog.sqlite3"+backupTempSuffix)) {

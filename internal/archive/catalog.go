@@ -1117,10 +1117,10 @@ type SearchOptions struct {
 	Channel, MachineID, ExecutionMachineID                                                                                      string
 	// Has names kinds of content, separated by commas, that one of the
 	// workspace's conversations must hold all of (conversation_content.go).
-	Has string
-	PR                                                                                                                          *int
-	Minimum, Maximum                                                                                                            *float64
-	ChangedOnly                                                                                                                 bool
+	Has              string
+	PR               *int
+	Minimum, Maximum *float64
+	ChangedOnly      bool
 	// Substring adds matches inside words, from the substring index.
 	Substring     bool
 	Limit, Offset int

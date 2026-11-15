@@ -100,7 +100,7 @@ type claudeDownloads struct {
 	problem string
 }
 
-var errClaudeImportBusy = errors.New("the library is busy with another capture or index")
+var errClaudeImportBusy = errors.New("Another capture or index is running. Try again when it finishes.")
 
 var errBrowserOpenUnsupported = fmt.Errorf("opening download links in your browser needs macOS: %w", errors.ErrUnsupported)
 
@@ -585,7 +585,7 @@ func (d *claudeDownloads) advance(ctx context.Context, fetch *claudeFetch, expor
 			fetch.Message = "Every file is collected. Indexing starts when the library is free."
 			return nil, nil
 		} else if err != nil {
-			fetch.State, fetch.Message = claudeFetchPaused, "Every file is collected. Ingestion did not finish: "+err.Error()
+			fetch.State, fetch.Message = claudeFetchPaused, "Every file is collected. Indexing did not finish: "+err.Error()
 			return nil, nil
 		}
 		if fetch.Ingestion != nil {

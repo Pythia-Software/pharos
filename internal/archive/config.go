@@ -449,7 +449,7 @@ func sourceBlockLines(path, name string) (lines []string, start, end int, err er
 		}
 	}
 	if start < 0 {
-		return nil, 0, 0, fmt.Errorf("configured source not found: %s", name)
+		return nil, 0, 0, fmt.Errorf("No source named “%s” is set up for this Mac.", name)
 	}
 	return lines, start, end, nil
 }

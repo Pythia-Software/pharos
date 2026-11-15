@@ -137,7 +137,7 @@ func TestAuthorshipDetectsTemplatesButNotOneDayBroadcasts(t *testing.T) {
 	}
 	c := newClassifier(inputs)
 	for _, input := range inputs[:5] {
-		if spans := c.classify(input); categoryText(input.Text, spans, spanTyped) != "" || !strings.Contains(spans[0].Reason, "5 sessions on 5 days") {
+		if spans := c.classify(input); categoryText(input.Text, spans, spanTyped) != "" || !strings.Contains(spans[0].Reason, "5 conversations on 5 days") {
 			t.Fatalf("template spans = %#v", spans)
 		}
 	}

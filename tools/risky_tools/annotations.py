@@ -18,7 +18,7 @@ def inject(doc):
     # Screenshot capture needs the running app's image store. These files use
     # the existing local notes/copy path, with no service or network dependency.
     markup = re.sub(r'<button type="button" id="feedbackScreenshot">.*?</button>', '<button type="button" id="feedbackScreenshot" hidden></button>', markup)
-    markup = markup.replace('<textarea id="feedbackNote"', '<p class="research-note">Notes stay in this browser. Use Copy feedback and paste them into our chat. Current report controls are captured with each note.</p><textarea aria-label="Annotation feedback" id="feedbackNote"')
+    markup = markup.replace('<textarea id="feedbackNote"', '<p class="research-note">Notes stay in this browser. Use Copy annotations and paste them into our chat. Current report controls are captured with each note.</p><textarea aria-label="Annotation feedback" id="feedbackNote"')
     markup = markup.replace('<div class="feedback-toolbar-controls" data-feedback-drag>', '<div class="feedback-toolbar-controls" data-feedback-drag><button id="feedbackToggle" type="button" hidden data-feedback-ui></button>')
     symbols = []
     for name in ['target', 'close', 'grip', 'copy', 'edit', 'chevron-down']:

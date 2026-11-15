@@ -108,11 +108,11 @@ var freshnessReasons = map[string]string{
 	"not-indexed":          "Captured data is not indexed yet",
 	"stopped":              "Stopped by you",
 	"version":              "This version of Pharos rebuilds it",
-	"deferred-by-schedule": "Waits for Update everything now",
+	"deferred-by-schedule": "Waits for Index changes now",
 	"failed":               "The last update failed",
 	"never-built":          "Not built yet",
 	"changed":              "Changed since it was last built",
-	"daily-pass-due":       "Today's full pass has not run yet",
+	"daily-pass-due":       "Today’s full pass has not run yet",
 	"upgrade-available":    "An upgrade is available",
 	"never":                "No backup yet",
 	"retrying":             "The scheduled backup failed; it will try again",
@@ -134,8 +134,8 @@ var freshnessReasonOverrides = map[string]string{
 	"backups overdue":    "Older than its schedule",
 	"backup.cloud never": "No verified cloud backup yet",
 	"backup.local never": "No local backup yet",
-	"findings changed":   "New data since today's full pass",
-	"findings no-record": "Today's full pass ran on an older version of Pharos",
+	"findings changed":   "New data since today’s full pass",
+	"findings no-record": "Today’s full pass ran on an older version of Pharos",
 	"search empty":       "Nothing to index yet",
 	"upgrade empty":      "Nothing to upgrade yet",
 }
@@ -167,13 +167,13 @@ const (
 	nextManualIndex    = "updates with the next manual index"
 	nextOnItsOwn       = "carries on by itself"
 	nextResume         = "carries on when you resume it or Pharos next opens the library"
-	nextReadOrIndex    = "updates with the next manual index or Tools page"
+	nextReadOrIndex    = "updates with the next manual index, or when a page needs tool summaries"
 	nextUpgrade        = "updates when you run the library upgrade"
 	nextBackup         = "updates with your next backup"
 	nextCloudSchedule  = "updates with the next scheduled cloud backup"
 	nextCloudBackup    = "updates with your next cloud backup"
-	nextFindingsPass   = "updates with Refresh findings now, or the first index tomorrow"
-	nextFindingsManual = "updates with Refresh findings now, or the next manual index"
+	nextFindingsPass   = "updates with Run now for Findings, or the first index tomorrow"
+	nextFindingsManual = "updates with Run now for Findings, or the next manual index"
 	nextCapturesRead   = "updates when the capture folder can be read"
 )
 

@@ -42,7 +42,7 @@ var delegationMetrics = []delegationMetricSpec{
 	{"cost", "API cost", "usd", "API-rate estimate on the date of use, not billing. Partial values are lower bounds."},
 	{"calls", "Tool calls", "count", "Distinct retained tool invocations."}, {"errors", "Errors", "count", "Reported tool failures; not the outcome of the agent."},
 	{"events", "Agent events", "count", "Retained agent events at the display probability threshold, attributed through session message membership. Unprocessed messages may contain additional events."},
-	{"files", "Files Edited", "count", "Distinct file paths recorded by successful edit/write tools, including adds/deletes. Repeated edits count once; Self + children deduplicates across sessions. Shell edits and extra paths in multi-file patches may be unavailable."},
+	{"files", "Files edited", "count", "Distinct file paths recorded by successful edit/write tools, including adds/deletes. Repeated edits count once; Self + children deduplicates across sessions. Shell edits and extra paths in multi-file patches may be unavailable."},
 	{"filesRead", "Files read", "count", "Distinct file paths recorded by successful read tools. Repeated reads count once; Self + children deduplicates across sessions. Reads without retained paths are incomplete; search/list tools do not count as file reads."},
 	{"messages", "Messages", "count", "Messages recorded in the agent session."}, {"requests", "Model requests", "count", "Distinct recorded model requests."}, {"turns", "User turns", "count", "Retained user message starts; injected agent assignments do not count as user turns."},
 	{"clock", "Clock span", "ms", "Earliest to latest evidence across included sessions, including unclassified time."},
@@ -657,7 +657,11 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	}
 	s.Coverage.Missing = append([]string{}, res.Coverage.Missing...)
 	if unowned > 0 {
-		s.Warnings = append(s.Warnings, fmt.Sprintf("%d launch attempts have no resolved issuer.", unowned))
+		verb := "have"
+		if unowned == 1 {
+			verb = "has"
+		}
+		s.Warnings = append(s.Warnings, fmt.Sprintf("%s %s no known parent agent session.", plural(unowned, "launch attempt"), verb))
 	}
 	// Parents, ancestry and evidence come from the resolution. A conflicting,
 	// missing or cyclic parent leaves the row at the top of the layout with its
@@ -1726,7 +1730,7 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 	}
 	q := r.URL.Query()
 	if wanted := q.Get("snapshot"); wanted != "" && wanted != snapshot.ID {
-		writeJSON(w, map[string]any{"error": "Archive changed; refresh the explorer.", "code": "snapshot_changed"}, 409)
+		writeJSON(w, map[string]any{"error": "The library changed. Reload this view.", "code": "snapshot_changed"}, 409)
 		return
 	}
 	if timeline {
@@ -1869,7 +1873,7 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 			return
 		}
 		if cur.Snapshot != snapshot.ID || cur.Query != query {
-			writeJSON(w, map[string]any{"error": "Archive or query changed; restart pagination.", "code": "snapshot_changed"}, 409)
+			writeJSON(w, map[string]any{"error": "The library changed. Reload this view.", "code": "snapshot_changed"}, 409)
 			return
 		}
 		offset = cur.Offset
@@ -2051,7 +2055,7 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 		var err error
 		messageLanes, taxonomy, err = s.Catalog.delegationTimelineMessages(r.Context(), snapshot, ids, start, end)
 		if errors.Is(err, errDelegationSnapshotChanged) {
-			writeJSON(w, map[string]any{"error": "Archive changed; refresh the explorer.", "code": "snapshot_changed"}, 409)
+			writeJSON(w, map[string]any{"error": "The library changed. Reload this view.", "code": "snapshot_changed"}, 409)
 			return
 		}
 		if err != nil {

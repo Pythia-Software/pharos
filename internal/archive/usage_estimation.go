@@ -91,7 +91,7 @@ type usageEstimationResponse struct {
 	sender, nativeCreated, usageAt                        string
 	nontext                                               bool
 	inputUncounted                                        bool // an image or file whose content the input estimate could not count
-	contextCharacters                                     int // injected prompts and extracted attachment text
+	contextCharacters                                     int  // injected prompts and extracted attachment text
 	blocks                                                []usageEstimationBlock
 }
 type usageEstimationBuilder struct {

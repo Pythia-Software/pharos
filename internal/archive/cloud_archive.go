@@ -150,7 +150,7 @@ func cloudSnapshot(ctx context.Context, config Config, dir string, progress func
 	// This is an owned temporary snapshot, deliberately on the library volume.
 	// It is not a durable local backup and must never enter backups.json.
 	job := &backupJob{config: config, plan: plan, dest: dir, ephemeral: true, buffer: make([]byte, 1<<20), run: BackupRun{ID: randomToken(), Kind: "backup", State: "pending", Errors: []captureError{}, Warnings: []string{}, Missing: []string{}}}
-	run := job.Run(ctx, func(r BackupRun) { progress("Snapshot: " + r.Phase) })
+	run := job.Run(ctx, func(r BackupRun) { progress(cloudSnapshotPhase(r.Phase)) })
 	if run.State != "complete" || job.symlinks > 0 {
 		if len(run.Errors) > 0 {
 			return "", "", fmt.Errorf("snapshot failed: %s", run.Errors[0].Error)
@@ -158,6 +158,28 @@ func cloudSnapshot(ctx context.Context, config Config, dir string, progress func
 		return "", "", errors.New("snapshot is incomplete: check unavailable library folders or symbolic links")
 	}
 	return plan.catalog.Path, plan.files[0].Path, nil
+}
+
+// cloudSnapshotPhase names a backup item, as the page and Background
+// Processing show it while the cloud snapshot copies that item.
+func cloudSnapshotPhase(phase string) string {
+	switch phase {
+	case "catalog":
+		return "Copying the library index"
+	case "captures":
+		return "Copying captured history"
+	case "preserved":
+		return "Copying preserved packages"
+	case "hosts":
+		return "Copying machine records"
+	case "config":
+		return "Copying settings"
+	case "library_identity":
+		return "Copying the library ID"
+	case "finishing":
+		return "Finishing the snapshot"
+	}
+	return "Preparing the library snapshot"
 }
 func buildCloudArchive(ctx context.Context, d cloudDestination, r *cloudRun, config Config, dir string, progress func(string)) (string, cloudManifest, error) {
 	m := cloudManifest{Version: 1, RunID: r.ID, Kind: r.Kind, Files: []cloudFile{}}
@@ -610,7 +632,7 @@ func extractCloudArchive(ctx context.Context, config Config, payload io.Reader, 
 	}
 	if embedded.Kind == "full" {
 		if !seen[embedded.ConfigPath] || !seen[embedded.CatalogPath] || !seen[backupManifestName] {
-			return "", errors.New("restored library is missing its catalog, configuration or snapshot record")
+			return "", errors.New("restored library is missing its index, configuration or snapshot record")
 		}
 		dbpath := filepath.Join(directory, filepath.FromSlash(embedded.CatalogPath))
 		dsn := (&url.URL{Scheme: "file", Path: dbpath}).String() + "?mode=ro&immutable=1"
@@ -629,7 +651,7 @@ func extractCloudArchive(ctx context.Context, config Config, payload io.Reader, 
 			if e = rows.Scan(&result); e != nil || result != "ok" {
 				rows.Close()
 				db.Close()
-				return "", errors.New("recovered catalog failed SQLite integrity_check")
+				return "", errors.New("recovered library index failed its integrity check (SQLite integrity_check)")
 			}
 			count++
 		}
@@ -637,7 +659,7 @@ func extractCloudArchive(ctx context.Context, config Config, payload io.Reader, 
 		rows.Close()
 		db.Close()
 		if e != nil || count != 1 {
-			return "", errors.New("recovered catalog integrity check did not complete")
+			return "", errors.New("recovered library index integrity check did not complete")
 		}
 	}
 	complete = true

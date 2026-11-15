@@ -433,16 +433,18 @@ func TestSiteLinkRejectsWhatTheSiteMapCannotExpress(t *testing.T) {
 		return example.Path + "?" + values.Encode()
 	}
 	for name, link := range map[string]string{
-		"unknown parameter":    with(func(v url.Values) { v.Set("colour", "red") }),
-		"private parameter":    with(func(v url.Values) { v.Set("ask_chat", "chat-1") }),
-		"token parameter":      "/?token=secret",
-		"snapshot reference":   "/analyze?analyze_mode=query&analyze_topic=tokens&analyze_data=usage&q_usage=@snap-1",
-		"legacy alias":         "/tools",
-		"unknown page":         "/nowhere",
-		"other origin":         "https://example.com" + cases.Example.URL,
-		"coerced chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":3,"view":"trend","metric":"cost","split":"type"}`) }),
-		"older chart":          with(func(v url.Values) { v.Set("analyze_chart", `{"view":"trend","metric":"tokens"}`) }),
-		"version 2 chart":      with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"tokens","split":"provider"}`) }),
+		"unknown parameter":  with(func(v url.Values) { v.Set("colour", "red") }),
+		"private parameter":  with(func(v url.Values) { v.Set("ask_chat", "chat-1") }),
+		"token parameter":    "/?token=secret",
+		"snapshot reference": "/analyze?analyze_mode=query&analyze_topic=tokens&analyze_data=usage&q_usage=@snap-1",
+		"legacy alias":       "/tools",
+		"unknown page":       "/nowhere",
+		"other origin":       "https://example.com" + cases.Example.URL,
+		"coerced chart":      with(func(v url.Values) { v.Set("analyze_chart", `{"v":3,"view":"trend","metric":"cost","split":"type"}`) }),
+		"older chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"view":"trend","metric":"tokens"}`) }),
+		"version 2 chart": with(func(v url.Values) {
+			v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"tokens","split":"provider"}`)
+		}),
 		"invalid chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":3,"metric":"bogus"}`) }),
 		"window disagreement":  with(func(v url.Values) { v.Set("analyze_days", "90") }),
 		"unknown filter field": "/analyze?analyze_mode=query&analyze_topic=tokens&analyze_data=usage&q_usage=" + mustToken(t, site, `[{"field":"nope","op":"=","value":"x"}]`),
@@ -503,11 +505,21 @@ func TestSiteLinkWritesACardsOneDayWindowInTheSingular(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary := result["summary"].(string); summary != "Recorded error calls started in the last 1 day, split by tool." {
+	if summary := result["summary"].(string); summary != "Recorded error calls started in the last day, split by tool." {
 		t.Errorf("summary %q", summary)
 	}
 	if week, _ := site.linkTool(map[string]any{"card": "tool-failures", "days": float64(7)}); week["summary"] != "Recorded error calls started in the last 7 days, split by tool." {
 		t.Errorf("7-day summary %q", week["summary"])
+	}
+	// A Today card's trailing average reads "today", as on the card.
+	for in, want := range map[string]string{
+		"Calls over each trailing {days}-day period, across the last 90 days.": "Calls today.",
+		"Tokens over trailing {days} days":                                     "Tokens today",
+		"Calls in the last {days} days":                                        "Calls today",
+	} {
+		if got := todayCardText(in); got != want {
+			t.Errorf("todayCardText(%q) = %q; want %q", in, got, want)
+		}
 	}
 }
 

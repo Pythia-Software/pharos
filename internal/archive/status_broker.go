@@ -90,7 +90,7 @@ func (b *brokerOperations) statusDocumentChecked(ctx context.Context, fresh bool
 				Action: attentionAction{Label: "Open Libraries", Path: "/settings/libraries"}})
 		case "unavailable":
 			attention = append(attention, attentionItem{ID: "library-unavailable", Rule: 8, Severity: "error", Library: id,
-				Title: defaultString(name, "The selected library") + " is not open", Detail: "Its service is not running.",
+				Title: defaultString(name, "The selected library") + " is not open", Detail: "Pharos has not opened it.",
 				Action: attentionAction{Label: "Open Libraries", Path: "/settings/libraries"}})
 		}
 	}

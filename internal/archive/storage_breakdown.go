@@ -219,7 +219,7 @@ func storageBreakdown(sizes librarySizes, shares storageShares, current string) 
 		}), 0, ""),
 		"sources":   sources.list(label(nil, "Unknown source", nil), 0, ""),
 		"projects":  projects.list(label(shares.Projects, "No project", nil), storageProjectLimit, "Other projects"),
-		"estimated": "Project shares, and the catalog's division by Mac and source, are estimated from message counts.",
+		"estimated": "Project shares, and the catalog’s division by Mac and source, are estimated from message counts.",
 	}
 }
 

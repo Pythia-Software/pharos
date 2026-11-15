@@ -428,7 +428,7 @@ func labelsAssetStatus(asset labelsAsset) string {
 	case asset.present():
 		return "downloaded to " + asset.dir()
 	case !asset.pinned():
-		return "not available: this build pins no download (its release attaches the asset)"
+		return "not available: this build of Pharos includes no download for it"
 	case labelsFetchActive():
 		done := asset.downloaded()
 		return fmt.Sprintf("downloading: %d of %d MB (%.0f%%)", done>>20, asset.Size>>20, 100*float64(done)/float64(asset.Size))
