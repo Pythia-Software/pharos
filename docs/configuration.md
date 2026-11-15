@@ -880,16 +880,17 @@ and never open the catalog themselves, so they don't keep the drive busy (see
    - it closes the catalog, checkpointing its WAL, and exits.
 3. macOS ejects the drive, and Pharos stays open with its other libraries.
 
-If the release cannot finish within 7 seconds, Pharos says "Pharos is finishing a
-write; try ejecting again in a moment." The library's service still stops, so
+If the release cannot finish within 7 seconds, Pharos says "The library is still
+closing. Try ejecting again in a moment." The library's service still stops, so
 the next attempt usually succeeds. Eject is refused while a library operation (a
-transfer, restore or delivery) is running. Pharos says it is finishing, and you
-can eject once the operation ends.
+transfer, restore or delivery) is running. Pharos says "Pharos is finishing a
+library operation. Eject again when it is done."
 
 Pharos also watches each library's volume, by UUID, through DiskArbitration. An
 eject from Finder or `diskutil eject` asks Pharos to release the library first.
 The eject is approved once the release succeeds; otherwise it is refused with
-"Pharos could not release this library yet: …". Quitting Pharos stops every
+one of those messages, or "Pharos could not release the library on this
+drive: …" for any other failure. Quitting Pharos stops every
 library's service the same way. Agents' MCP tools then report that Pharos is
 offline until it is reopened.
 

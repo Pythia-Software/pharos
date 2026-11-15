@@ -895,7 +895,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/app/release-volume" {
 		if !m.operationMu.TryLock() {
-			writeError(w, fmt.Errorf("Pharos is finishing a library operation; wait and eject again"), 503)
+			writeError(w, fmt.Errorf("Pharos is finishing a library operation. Eject again when it is done."), 503)
 			return
 		}
 		defer m.operationMu.Unlock()
@@ -922,7 +922,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 				m.suspended[l.ID] = true
 				m.stopChildLocked(l.ID)
 				if m.children[l.ID] != nil {
-					releaseErr = fmt.Errorf("library is still closing; retry eject shortly")
+					releaseErr = fmt.Errorf("The library is still closing. Try ejecting again in a moment.")
 					writeError(w, releaseErr, 503)
 					return
 				}
