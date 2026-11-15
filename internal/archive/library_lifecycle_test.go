@@ -1564,6 +1564,12 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 		if purposes[len(purposes)-1] != "export" || purposes[0] != "" || !pickerPurposes["export"].File || pickerPurposes["source"].File {
 			t.Fatal("the picker is opened for what it chooses", purposes)
 		}
+		// A backup and a restore target are not asked for as a library.
+		for _, purpose := range []string{"backup", "restore"} {
+			if picker := pickerPurposes[purpose]; picker.Prompt == "" || picker.Prompt == pickerPurposes["library"].Prompt || picker.File {
+				t.Fatal("no folder prompt of its own for", purpose)
+			}
+		}
 		pickerError = fmt.Errorf("picker unavailable")
 		if w := request(http.MethodPost, "", m.token); w.Code != http.StatusInternalServerError {
 			t.Fatal("picker failure reported success", w.Body.String())

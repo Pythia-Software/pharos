@@ -23,7 +23,7 @@ export function CardLoading({ spec = { kind: "text", count: 3 } }: { spec?: Card
             : <><i className="query-loading-row-label" /><i className="query-loading-row-bar" style={{ width: `${heights[i % heights.length]}%` }} /></>}
         </span>)}</span>}
     </span>
-    <span className="query-preview-spinner" aria-hidden="true" /><span className="query-loading-label">{spec.kind === "text" || spec.kind === "table" ? "Loading preview" : spec.kind === "value" ? "Loading value" : "Loading chart"}</span>
+    <span className="query-preview-spinner" aria-hidden="true" /><span className="query-loading-label">{spec.kind === "text" || spec.kind === "table" ? "Loading preview…" : spec.kind === "value" ? "Loading value…" : "Loading chart…"}</span>
   </span>;
 }
 

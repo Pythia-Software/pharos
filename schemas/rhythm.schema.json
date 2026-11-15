@@ -2,7 +2,7 @@
   "$schema": "https://github.com/Pythia-Software/query-table/schema/query-table.schema.json",
   "name": "pharos_rhythm",
   "version": 1,
-  "description": "When you and your agents work, as activity facts: one row per local clock hour, actor and top-level conversation, over the last 400 local days. Your time is estimated from the messages you typed (each preceded by its typing time, joined across the engaged gap); agent time is Parallelism's turns, attributed by the message that started each turn. Delegated agents run inside their root's turns.",
+  "description": "When you and your agents work, as activity facts: one row per local clock hour, actor and top-level conversation, over the last 400 local days. Your time is estimated from the messages you typed (each preceded by its typing time, joined across the engaged gap); agent time is Parallelism's turns, attributed by the message that started each turn. Delegated agents run inside their top-level conversation’s turns.",
   "idField": "id",
   "defaultLimit": 50,
   "defaultSort": [{"field": "started_at", "dir": "desc"}],

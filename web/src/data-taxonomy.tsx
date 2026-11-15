@@ -139,7 +139,7 @@ export function DataTaxonomyModal() {
     opener={invoker.current} onClose={() => { previousFocus.current = null; invoker.current = null; setShown(false); }}>
     <header className="data-guide-header">
       <h2 id="dataGuideTitle">Data Guide</h2>
-      <ModalClose className="data-guide-close" label="Close data guide" onClick={() => dialog.current?.close()} />
+      <ModalClose className="data-guide-close" label="Close Data Guide" onClick={() => dialog.current?.close()} />
     </header>
     <div className="data-guide-body">
       <nav ref={termNavigation} className="data-guide-terms app-navigation-list" aria-label="Data Guide terms">

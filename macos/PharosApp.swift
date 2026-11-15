@@ -1536,12 +1536,16 @@ struct ArchiveWebView: NSViewRepresentable {
             panel.canChooseDirectories = true
             panel.canChooseFiles = purpose == "export"
             panel.allowsMultipleSelection = false
-            panel.canCreateDirectories = purpose == "library"
+            panel.canCreateDirectories = purpose == "library" || purpose == "restore"
             switch purpose {
             case "source":
                 panel.message = "Choose the folder that holds this tool’s conversations."
             case "export":
                 panel.message = "Choose the export you downloaded: its ZIP, conversations.json or manifest, or the folder that holds them."
+            case "backup":
+                panel.message = "Choose a completed backup or a self-contained copy of a library."
+            case "restore":
+                panel.message = "Choose where to put the restored library. Pharos creates a “Recovered Library” folder there."
             default:
                 panel.message = "Choose a Pharos library or a parent folder for a new library."
             }

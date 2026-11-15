@@ -72,7 +72,7 @@ export function TrendHeatmap({ title, controls, action, titleSlot, heatmap, peri
         </div>
       </ChartTooltip>}
     {!loading && !error ? <p className="usage-dashboard-note dashboard-heatmap-key"><span className="dashboard-heatmap-ramp" aria-hidden="true" />
-      <span>Each column is one period; each cell, the {noun} whose {label.toLowerCase()} falls in that bin, darkest at {peak}, shaded on a log scale so sparse bins still show.{heatmap.levels.length ? <> Lines trace each period's {heatmap.levels.map(level => percentileLabel(level).toLowerCase()).join(", ")}, read from the bins; hover a column for their values.</> : null}{placed.length ? " Dotted lines mark where each band starts." : ""} A hatched column had none.{smoothed}</span></p>
+      <span>Each column is one period and each cell one bin of {label.toLowerCase()}. Darker cells hold more {noun}, up to {peak}; shading is logarithmic so sparse bins still show.{heatmap.levels.length ? <> Lines trace each period's {heatmap.levels.map(level => percentileLabel(level).toLowerCase()).join(", ")}, read from the bins; hover a column for their values.</> : null}{placed.length ? " Dotted lines mark where each band starts." : ""} A hatched column has none.{smoothed}</span></p>
     : null}
   </div>;
 }

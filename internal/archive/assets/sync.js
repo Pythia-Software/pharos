@@ -6,7 +6,6 @@
   let activeRun = null;
   let verificationRun = null;
   let runningIds = new Set();
-  let openIssues = [];
   const node = (tag, text, className = '') => {
     const element = document.createElement(tag);
     element.textContent = text;
@@ -124,10 +123,10 @@
       for (const source of sources || []) query.append('source', source);
       call(`/api/sync/recovery?${query}`).then(value => {
         estimate.textContent = `${value.files} retained source parts (${memory(value.bytes)}), about ${value.groups} indexed groups. Copy estimate: ${value.capture_seconds == null ? 'unknown' : seconds(value.capture_seconds)}; committed-ingest estimate: ${value.index_seconds == null ? 'unknown' : seconds(value.index_seconds)}. ${value.note}`;
-      }).catch(() => { estimate.textContent = 'No complete throughput measurements yet. Capture, indexing, verification and library analysis can take a long time.'; });
+      }).catch(() => { estimate.textContent = 'Could not estimate how long this takes. Capture, indexing, verification and analysis can take a long time.'; });
     }
     dialog.append(node('p', mode === 'full'
-      ? 'Freshly copy available source evidence on this Mac, then reindex selected captures from every Mac. This can take a long time. It is stoppable and resumable. Historical evidence and catalog-only user records are preserved. Other Macs are re-indexed from retained captures, not recaptured remotely.'
+      ? 'Copy this Mac’s sources again, then reindex the saved copies from every Mac. This can take a long time; you can stop it and resume it later. Earlier history and anything stored only in the library are kept. Other Macs’ history is reindexed from their saved copies, not copied again.'
       : 'Rebuild search and analysis indexes, agent sessions, usage records and tool records from the messages the library already stores. No original source is required. This cannot recreate missing transcripts or source-only metadata. Your findings, preferences, identity links and retained history are preserved.'));
     if (sources?.length) dialog.append(node('p', `Scope: ${sources.join(', ')}`));
     const actions = node('div', '', 'sync-actions');
@@ -140,10 +139,11 @@
   }
 
   const verify = (repair, sources) => call('/api/sync/verify', {all: true, repair, sources});
+  const counted = (value, one, many) => `${number(value)} ${Number(value) === 1 ? one : many}`;
   const verificationSummary = run => {
     const v = run?.verification;
     if (!v) return '';
-    return `Verification ${run.state === 'running' ? 'in progress' : run.state === 'interrupted' ? 'stopped' : run.state === 'failed' ? 'failed' : 'finished'}: ${number(v.checked)} inputs checked · ${number(v.passed)} passed · ${number(v.reindexed || 0)} reindexed · ${number(v.mismatch)} still mismatch · ${number(v.deferred)} deferred · ${number(v.errors)} errors.`;
+    return `Verification ${run.state === 'running' ? 'in progress' : run.state === 'interrupted' ? 'stopped' : run.state === 'failed' ? 'failed' : 'finished'}: ${counted(v.checked, 'input', 'inputs')} checked · ${number(v.passed)} passed · ${number(v.reindexed || 0)} reindexed · ${counted(v.mismatch, 'still mismatches', 'still mismatch')} · ${number(v.deferred)} deferred · ${counted(v.errors, 'error', 'errors')}.`;
   };
 
   // Whether a run among `followed` (the ids running at the last poll) has
@@ -168,30 +168,12 @@
   }
 
   function renderHeader(activity) {
-    const action = document.getElementById('headerSync');
-    if (!action) return;
+    if (!document.getElementById('headerSync')) return;
     const active = runningRun(activity);
     const wasActive = Boolean(activeRun);
     activeRun = active || null;
     // status-panel.js owns the header's Index changes state.
-    if (window.pharosStatusStore?.enabled() === true) {
-      if (wasActive && !active) window.pharosLibrary?.refresh?.();
-      window.pharosLibrary?.refreshSyncControls?.();
-      return;
-    }
-    // A running sync is stopped from the drive panel, not the header.
-    if (active) {
-      action.disabled = true;
-      action.setAttribute('aria-busy', 'true');
-      const automatic = active.kind === 'automatic-sync';
-      action.title = automatic ? `Indexing changes: ${active.phase === 'verifying' ? 'verifying a conversation' : active.phase === 'checking' ? 'checking for changes' : `${active.conversations} conversations`}` : active.kind === 'manual-sync' ? `Manual sync: ${active.phase}` : `${active.kind}: ${active.phase}`;
-      action.setAttribute('aria-label', action.title);
-    } else {
-      action.setAttribute('aria-busy', 'false');
-      action.title = 'Index changes';
-      action.setAttribute('aria-label', 'Index changes');
-      if (wasActive) window.pharosLibrary?.refresh?.();
-    }
+    if (wasActive && !active) window.pharosLibrary?.refresh?.();
     window.pharosLibrary?.refreshSyncControls?.();
   }
 
@@ -215,7 +197,10 @@
     repairs.append(actions);
     if (verificationRun?.verification) dashboard.append(node('p', verificationSummary(verificationRun), 'sync-verification-summary'));
     for (const job of status.recovery_jobs || []) {
-      const line = node('p', `${job.mode} repair: ${job.state} · last progress ${when(job.updated_at)}${job.error ? ` · ${job.error}` : ''}`);
+      const repairName = {full: 'Full recapture & reindex', retained: 'Reindex from stored messages'}[job.mode] || 'Repair';
+      const repairState = {interrupted: 'interrupted', failed: 'failed', running: 'running', queued: 'waiting to start', complete: 'finished', cancelled: 'stopped'}[job.state] || job.state;
+      const age = when(job.updated_at);
+      const line = node('p', `${repairName}: ${repairState} · last progress ${age.charAt(0).toLowerCase()}${age.slice(1)}${job.error ? ` · ${job.error}` : ''}`);
       const resume = button('Resume repair', () => recovery(job.mode, undefined, job.id));
       resume.disabled = maintenanceBusy;
       line.append(resume); repairs.append(line);
@@ -224,7 +209,7 @@
       const preservation = source.preservation || {};
       const state = preservationState(preservation);
       if (state === 'untracked') continue;
-      const labels = {pending: preservation.error ? 'Acquisition failed; inputs remain pending' : 'Newer inputs pending', indexed: 'Latest retained acquisition indexed'};
+      const labels = {pending: preservation.error ? 'Could not copy the latest files; they stay queued' : 'Newer files waiting to be indexed', indexed: 'Latest saved copy indexed'};
       const line = node('p', `${source.source_name} · ${labels[state]} `);
       const repair = button('Repair this source…', () => recovery('full', [source.source_name]));
       repair.disabled = maintenanceBusy;
@@ -234,13 +219,13 @@
     dashboard.append(repairs);
     for (const issue of status.issues || []) {
       const warning = node('div', '', 'sync-warning');
-      warning.append(node('strong', 'Verifying indexed changes found a mismatch.'), node('p', `${issue.source_name} · ${issue.unit}`), node('p', 'Verify this source again to check whether the mismatch still exists. Repair reindexes only inputs that still mismatch and clears each warning after verification passes.'));
+      warning.append(node('strong', 'Indexed data no longer matches its saved source.'), node('p', `${issue.source_name} · ${issue.unit}`), node('p', 'Verify again to see whether it still differs. Repair reindexes only what still differs, then clears the warning once it passes.'));
       const issueActions = node('div', '', 'sync-actions');
       const verifyAgain = button('Verify this source again', () => verify(false, [issue.source_name]));
       const repair = button('Verify & repair this source', () => verify(true, [issue.source_name]));
       const recapture = button('Full recapture & reindex…', () => recovery('full', [issue.source_name]));
       for (const action of [verifyAgain, repair, recapture]) action.disabled = maintenanceBusy;
-      issueActions.append(verifyAgain, repair, button('View details / copy diagnostics', async () => {
+      issueActions.append(verifyAgain, repair, button('View details and diagnostics…', async () => {
         const data = await call('/api/sync/issues');
         const details = data.issues.find(item => item.id === issue.id);
         const dialog = node('dialog', '', 'sync-dialog');
@@ -288,13 +273,6 @@
         renderDashboard();
         window.dispatchEvent(new Event('pharos:sync-status'));
       }
-      // Open mismatches turn the drive chip's dot red; the drive panel lists them.
-      const issues = await call('/api/sync/issues');
-      const open = issues.issues?.filter(issue => issue.state === 'open') || [];
-      if (JSON.stringify(open.map(issue => issue.id)) !== JSON.stringify(openIssues.map(issue => issue.id))) {
-        openIssues = open;
-        window.pharosLibrary?.renderAlerts?.();
-      }
     } catch (error) { if (!status) showError(error.message); }
     finally { busy = false; schedule(); }
   }
@@ -309,7 +287,7 @@
   }
   document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else refresh({automatic: true}); });
   window.addEventListener('pharos:route', () => refresh());
-  window.pharosSync = {status: () => status, tableStatus: () => tableStatus, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
+  window.pharosSync = {status: () => status, tableStatus: () => tableStatus, refresh, recovery,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.
     finishedRunsChanged, runningRun, preservationState, verificationSummary, format: {seconds, memory, when, number, percent}};
   refresh();

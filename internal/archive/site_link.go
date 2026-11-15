@@ -1968,6 +1968,7 @@ func (site *siteMap) cardText(text string, days int) string {
 	// The card library writes "the last 1 days"; a link's title and summary
 	// read as prose.
 	if days == 1 {
+		text = strings.ReplaceAll(text, "the last {days} days", "the last day")
 		text = strings.ReplaceAll(text, "{days} days", "1 day")
 	}
 	for token, value := range site.Cards.TextWindows[strconv.Itoa(days)] {
@@ -2375,7 +2376,12 @@ func mapSiteWindowTerms(query qt.LinkQuery, change func([]qt.WhereTerm) []qt.Whe
 	return query, err
 }
 
+// trailingCardPeriod is curiosity-data.ts trailingPeriod: a per-period
+// average reads "today" in a Today window.
+var trailingCardPeriod = regexp.MustCompile(`(?:over each trailing|over trailing) \{days\}(?:-day period| days)(?:, across the last \d+ days)?`)
+
 func todayCardText(text string) string {
+	text = trailingCardPeriod.ReplaceAllString(text, "today")
 	for _, prefix := range []string{"in", "during", "over"} {
 		text = strings.ReplaceAll(text, prefix+" the last {days} days", "today")
 	}

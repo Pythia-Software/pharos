@@ -41,7 +41,7 @@
       "label": "Tool results"
     },
     {
-      "detail": "The model's reasoning.",
+      "detail": "The model’s reasoning.",
       "key": "reasoning",
       "label": "Thinking"
     },
@@ -51,26 +51,48 @@
       "label": "Message times"
     },
     {
-      "detail": "Which conversations an agent started.",
+      "detail": "Which agent sessions an agent started.",
       "key": "subagents",
-      "label": "Subagents"
+      "label": "Sub-agents"
     },
     {
-      "detail": "A name the tool gave the conversation.",
+      "detail": "A name the agent app gave the conversation.",
       "key": "title",
       "label": "Title"
     },
     {
-      "detail": "The version of the tool.",
+      "detail": "The agent app’s version.",
       "key": "harness_version",
-      "label": "Tool version"
+      "label": "Agent app version"
     },
     {
-      "detail": "A cost the tool reports. Without one, Pharos prices the tokens.",
+      "detail": "A cost the agent app reports. Without one, Pharos prices the tokens.",
       "key": "cost",
       "label": "Reported cost"
     }
   ],
+  "provider_names": {
+    "antigravity": "Antigravity",
+    "canonical": "Canonical export",
+    "chatgpt": "ChatGPT",
+    "claude": "Claude",
+    "claude-ai": "Claude.ai",
+    "claude-ai-settings": "Claude Chat settings",
+    "cline": "Cline",
+    "codex": "Codex",
+    "conductor": "Conductor",
+    "copilot": "Copilot CLI",
+    "cursor": "Cursor",
+    "cursor-cli": "Cursor CLI",
+    "gemini": "Gemini",
+    "hermes": "Hermes Agent",
+    "openclaw": "OpenClaw",
+    "opencode": "OpenCode",
+    "tl1": "TL1",
+    "tl1-export": "TL1 export",
+    "vscode-copilot": "VS Code Copilot",
+    "zed": "Zed"
+  },
   "providers": [
     {
       "automatic": true,
@@ -99,7 +121,7 @@
         {
           "key": "speed",
           "label": "Speed",
-          "note": "When the transcript records the request's speed or service tier.",
+          "note": "When the transcript records the request’s speed or service tier.",
           "support": "varies"
         },
         {
@@ -129,7 +151,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "support": "supported"
         },
         {
@@ -140,7 +162,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "support": "supported"
         },
         {
@@ -190,7 +212,7 @@
         {
           "key": "speed",
           "label": "Speed",
-          "note": "From releases that record the turn's service tier.",
+          "note": "From releases that record the turn’s service tier.",
           "support": "varies"
         },
         {
@@ -221,7 +243,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "note": "From releases that record which session started another.",
           "support": "varies"
         },
@@ -233,7 +255,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "support": "supported"
         },
         {
@@ -282,7 +304,7 @@
         {
           "key": "speed",
           "label": "Speed",
-          "note": "The chat's fast mode setting now, which stands for all of its requests.",
+          "note": "The chat’s fast mode setting now, which stands for all of its requests.",
           "support": "varies"
         },
         {
@@ -316,7 +338,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "support": "supported"
         },
         {
@@ -327,7 +349,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "support": "unsupported"
         },
         {
@@ -373,7 +395,7 @@
         {
           "key": "speed",
           "label": "Speed",
-          "note": "Fast mode is kept in the CLI's settings, which Pharos does not read.",
+          "note": "Fast mode is kept in the CLI’s settings, which Pharos does not read.",
           "support": "unsupported"
         },
         {
@@ -406,7 +428,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "support": "unsupported"
         },
         {
@@ -417,7 +439,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "support": "unsupported"
         },
         {
@@ -442,7 +464,7 @@
         {
           "key": "cwd",
           "label": "Folder",
-          "note": "The window's folder.",
+          "note": "The window’s folder.",
           "support": "varies"
         },
         {
@@ -464,13 +486,13 @@
         {
           "key": "speed",
           "label": "Speed",
-          "note": "Fast mode is a model of its own in Copilot's picker, so its requests count as standard.",
+          "note": "Fast mode is a model of its own in Copilot’s picker, so its requests count as standard.",
           "support": "unsupported"
         },
         {
           "key": "message_tokens",
           "label": "Token usage",
-          "note": "Some releases record only the last round's input.",
+          "note": "Some releases record only the last round’s input.",
           "support": "varies"
         },
         {
@@ -496,7 +518,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "support": "supported"
         },
         {
@@ -507,8 +529,8 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
-          "note": "The Copilot Chat extension's version.",
+          "label": "Agent app version",
+          "note": "The Copilot Chat extension’s version.",
           "support": "varies"
         },
         {
@@ -558,13 +580,13 @@
         {
           "key": "speed",
           "label": "Speed",
-          "note": "Fast mode is a model of its own in Copilot's picker, so its requests count as standard.",
+          "note": "Fast mode is a model of its own in Copilot’s picker, so its requests count as standard.",
           "support": "unsupported"
         },
         {
           "key": "message_tokens",
           "label": "Token usage",
-          "note": "Older releases record only the session's total.",
+          "note": "Older releases record only the session’s total.",
           "support": "varies"
         },
         {
@@ -590,7 +612,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "support": "supported"
         },
         {
@@ -601,7 +623,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "note": "When the session records it.",
           "support": "varies"
         },
@@ -657,7 +679,7 @@
         {
           "key": "message_tokens",
           "label": "Token usage",
-          "note": "When the conversation's database is present.",
+          "note": "When the conversation’s database is present.",
           "support": "varies"
         },
         {
@@ -683,7 +705,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "support": "supported"
         },
         {
@@ -694,8 +716,8 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
-          "note": "The installed app's version, seen on this Mac.",
+          "label": "Agent app version",
+          "note": "The installed app’s version, seen on this Mac.",
           "support": "varies"
         },
         {
@@ -773,7 +795,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "support": "supported"
         },
         {
@@ -784,13 +806,13 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "support": "supported"
         },
         {
           "key": "cost",
           "label": "Reported cost",
-          "note": "The session's total.",
+          "note": "The session’s total.",
           "support": "varies"
         }
       ],
@@ -864,8 +886,8 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
-          "note": "A teammate's transcripts aren't read.",
+          "label": "Sub-agents",
+          "note": "Pharos does not read a teammate’s transcripts.",
           "support": "unsupported"
         },
         {
@@ -876,14 +898,14 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "note": "When the session records it.",
           "support": "varies"
         },
         {
           "key": "cost",
           "label": "Reported cost",
-          "note": "The session's total.",
+          "note": "The session’s total.",
           "support": "varies"
         }
       ],
@@ -929,13 +951,13 @@
         {
           "key": "speed",
           "label": "Speed",
-          "note": "The thread's fast mode setting now, which stands for all of its requests.",
+          "note": "The thread’s fast mode setting now, which stands for all of its requests.",
           "support": "varies"
         },
         {
           "key": "message_tokens",
           "label": "Token usage",
-          "note": "Each turn's last request.",
+          "note": "Each turn’s last request.",
           "support": "varies"
         },
         {
@@ -957,12 +979,12 @@
         {
           "key": "timestamps",
           "label": "Message times",
-          "note": "Every message is given its thread's start.",
+          "note": "Every message is given its thread’s start.",
           "support": "unsupported"
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "note": "When the thread records it.",
           "support": "varies"
         },
@@ -974,7 +996,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "support": "unsupported"
         },
         {
@@ -1052,7 +1074,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "note": "Recorded by the Claude Code or Codex session it ran.",
           "support": "unsupported"
         },
@@ -1064,7 +1086,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "note": "When the Claude Code or Codex session it ran is also a source.",
           "support": "varies"
         },
@@ -1090,7 +1112,7 @@
         {
           "key": "cwd",
           "label": "Folder",
-          "note": "The repository's folder.",
+          "note": "The repository’s folder.",
           "support": "supported"
         },
         {
@@ -1146,7 +1168,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "note": "Codex runs that record which session started another.",
           "support": "varies"
         },
@@ -1157,14 +1179,14 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "note": "Claude Code runs only.",
           "support": "varies"
         },
         {
           "key": "cost",
           "label": "Reported cost",
-          "note": "From TL1's run summary.",
+          "note": "From TL1’s run summary.",
           "support": "varies"
         }
       ],
@@ -1241,7 +1263,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "note": "When the native history records it.",
           "support": "varies"
         },
@@ -1253,8 +1275,8 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
-          "note": "From the native database's schema metadata.",
+          "label": "Agent app version",
+          "note": "From the native database’s schema metadata.",
           "support": "varies"
         },
         {
@@ -1339,7 +1361,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "note": "When the native history records it.",
           "support": "varies"
         },
@@ -1351,7 +1373,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "support": "unsupported"
         },
         {
@@ -1431,7 +1453,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "support": "not-applicable"
         },
         {
@@ -1441,7 +1463,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "support": "not-applicable"
         },
         {
@@ -1525,7 +1547,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "note": "When the export holds it.",
           "support": "varies"
         },
@@ -1537,7 +1559,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "note": "When the export holds it.",
           "support": "varies"
         },
@@ -1617,7 +1639,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "note": "When the export holds it.",
           "support": "varies"
         },
@@ -1629,7 +1651,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "note": "When the export holds it.",
           "support": "varies"
         },
@@ -1706,7 +1728,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "support": "not-applicable"
         },
         {
@@ -1717,7 +1739,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "support": "not-applicable"
         },
         {
@@ -1791,7 +1813,7 @@
         },
         {
           "key": "subagents",
-          "label": "Subagents",
+          "label": "Sub-agents",
           "support": "not-applicable"
         },
         {
@@ -1802,7 +1824,7 @@
         },
         {
           "key": "harness_version",
-          "label": "Tool version",
+          "label": "Agent app version",
           "support": "not-applicable"
         },
         {

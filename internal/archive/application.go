@@ -140,7 +140,7 @@ func runApplicationCLI(args []string) error {
 			}
 		}
 		if err != nil {
-			message := fmt.Sprintf("Could not open the previous library: %v. Choose an available library or upgrade Pharos, then try again.", err)
+			message := fmt.Sprintf("Could not open the previous library: %v. Choose an available library or update Pharos, then try again.", err)
 			m.reportJob("paused", message)
 			fmt.Fprintln(os.Stderr, message)
 		}
@@ -218,10 +218,10 @@ func watchApplicationParent(ctx context.Context, pid int, cancel context.CancelF
 
 func (m *applicationManager) childLocked(id string) (*applicationChild, error) {
 	if m.suspended[id] {
-		return nil, fmt.Errorf("this library has been released; reconnect explicitly or reattach its drive")
+		return nil, fmt.Errorf("This library was released for eject. Reconnect it, or reattach its drive.")
 	}
 	if m.busy || m.released {
-		return nil, fmt.Errorf("Pharos is finishing a library operation; wait for it to complete")
+		return nil, fmt.Errorf("A library operation is still running. Try again when it finishes.")
 	}
 	if c := m.children[id]; c != nil {
 		select {
@@ -233,7 +233,7 @@ func (m *applicationManager) childLocked(id string) (*applicationChild, error) {
 	}
 	l := m.registry.library(id)
 	if l == nil {
-		return nil, fmt.Errorf("choose a library")
+		return nil, fmt.Errorf("Choose a library.")
 	}
 	config, err := LoadConfig(l.resolve())
 	if err != nil {
@@ -247,7 +247,7 @@ func (m *applicationManager) childLocked(id string) (*applicationChild, error) {
 		return nil, err
 	}
 	if d.ID != l.ID || d.Instance != l.Instance {
-		return nil, fmt.Errorf("the selected library was restored or replaced; recover or register it explicitly")
+		return nil, fmt.Errorf("This library’s folder now holds a restored or replaced copy. Add it again as an existing library, or restore it from a backup.")
 	}
 	trigger := m.startTrigger
 	if trigger == "" {
@@ -269,7 +269,7 @@ func (m *applicationManager) childLocked(id string) (*applicationChild, error) {
 
 // startChildLocked starts library l's service and waits for it to answer.
 func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, config Config, start *Op) (*applicationChild, error) {
-	start.Step("Start the library's service", "", -1)
+	start.Step("Open the library", "", -1)
 	path := filepath.Join(filepath.Dir(installationPath(m.id)), "service-"+l.ID+".json")
 	_ = os.Remove(path)
 	cmd := exec.Command(runningExecutable(), "--config", config.Path, "serve", "--dynamic", "--endpoint", path, "--application", m.registry.Application)
@@ -315,7 +315,7 @@ func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, c
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 			return nil, m.ctx.Err()
 		case <-c.done:
-			return nil, fmt.Errorf("Pharos could not open %s; inspect the service diagnostic", l.Name)
+			return nil, fmt.Errorf("Pharos could not open %s. Its log in %s says why.", l.Name, tildePath(logDir))
 		case <-timeout.C:
 			// Upgrades run before the service publishes its endpoint. Killing
 			// one here rolls back its migration and makes every retry start over.
@@ -329,7 +329,7 @@ func (m *applicationManager) startChildLocked(id string, l *registeredLibrary, c
 				continue
 			}
 			_ = cmd.Process.Signal(syscall.SIGTERM)
-			return nil, fmt.Errorf("opening %s took too long", l.Name)
+			return nil, fmt.Errorf("Opening %s took too long. Try again.", l.Name)
 		case <-ticker.C:
 			if time.Since(upgradeChecked) >= time.Second {
 				upgradeChecked = time.Now()
@@ -401,7 +401,7 @@ func (m *applicationManager) childIDsLocked() []string {
 
 func validLibraryName(name string) error {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") || len(name) > 160 {
-		return fmt.Errorf("choose a library name without path separators")
+		return fmt.Errorf("Enter a library name without slashes; shorten it if needed.")
 	}
 	return nil
 }
@@ -526,7 +526,7 @@ func (m *applicationManager) updateRefusal(ctx context.Context) string {
 // it (GET /api/release?for=update). A service that cannot say refuses.
 func libraryUpdateRefusal(ctx context.Context, client *http.Client, library brokerLibrary) string {
 	unanswered := func(err error) string {
-		return fmt.Sprintf("The service of the library %s did not say whether its work can stop (%v).", library.Name, err)
+		return fmt.Sprintf("The library %s did not say whether its work can stop (%v).", library.Name, err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, library.Child.URL+"/api/release?for=update", nil)
 	if err != nil {
@@ -573,7 +573,7 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !m.authorized(r) {
-		writeError(w, fmt.Errorf("open Pharos to connect to this application"), http.StatusUnauthorized)
+		writeError(w, fmt.Errorf("Open Pharos to connect to this app."), http.StatusUnauthorized)
 		return
 	}
 	// Liveness alone cannot tell the native window whether to retry a page:
@@ -702,7 +702,7 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	generation := m.generation
 	if scope := r.Header.Get("X-Pharos-Library"); scope != "" && scope != id {
 		m.mu.Unlock()
-		writeError(w, fmt.Errorf("the application switched libraries; reopen this page"), 409)
+		writeError(w, fmt.Errorf("Pharos switched libraries. Reload this page."), 409)
 		return
 	}
 	c, err := m.childLocked(id)
@@ -732,7 +732,7 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		current := m.generation == generation && m.registry.Selected == id && m.children[id] == c
 		m.mu.Unlock()
 		if !current {
-			return fmt.Errorf("the application changed libraries; reopen this page")
+			return fmt.Errorf("Pharos switched libraries. Reload this page.")
 		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/labels/settings" && response.StatusCode == http.StatusOK {
 			if config, err := loadConfig(configPath, false); err == nil {
@@ -832,7 +832,7 @@ func (m *applicationManager) mcp(ctx context.Context, request map[string]any) (m
 // quotes and newlines survive without shell interpolation.
 var applicationFolderPicker = func(ctx context.Context, purpose string) (string, error) {
 	if runtime.GOOS != "darwin" {
-		return "", fmt.Errorf("the folder picker requires macOS; enter the folder path instead")
+		return "", fmt.Errorf("The folder picker needs macOS. Enter the folder path instead.")
 	}
 	picker := pickerPurposes[purpose]
 	if picker.Prompt == "" {
@@ -854,11 +854,11 @@ try {
 }`
 	output, err := exec.CommandContext(ctx, "/usr/bin/osascript", "-l", "JavaScript", "-e", script).Output()
 	if err != nil {
-		return "", fmt.Errorf("could not open the folder picker; enter the folder path or try again: %w", err)
+		return "", fmt.Errorf("Could not open the folder picker (%w). Enter the folder path, or try again.", err)
 	}
 	var path string
 	if err = json.Unmarshal(output, &path); err != nil {
-		return "", fmt.Errorf("could not read the selected folder: %w", err)
+		return "", fmt.Errorf("Could not read the selected folder (%w).", err)
 	}
 	return path, nil
 }
@@ -873,6 +873,8 @@ var pickerPurposes = map[string]struct {
 	"library": {Prompt: "Choose a Pharos library or a parent folder for a new library."},
 	"source":  {Prompt: "Choose the folder that holds this tool’s conversations."},
 	"export":  {Prompt: "Choose the export you downloaded: its ZIP, conversations.json or manifest.", File: true},
+	"backup":  {Prompt: "Choose a completed backup or a self-contained copy of a library."},
+	"restore": {Prompt: "Choose where to put the restored library. Pharos creates a “Recovered Library” folder there."},
 }
 
 func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
@@ -919,7 +921,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/app/choose-folder" {
 		if !m.pickerMu.TryLock() {
-			writeError(w, fmt.Errorf("a folder picker is already open"), http.StatusConflict)
+			writeError(w, fmt.Errorf("A folder picker is already open."), http.StatusConflict)
 			return
 		}
 		defer m.pickerMu.Unlock()
@@ -984,7 +986,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	defer m.mu.Unlock()
 	defer m.publishLocked()
 	if m.busy && (r.URL.Path == "/api/app/create" || r.URL.Path == "/api/app/open" || r.URL.Path == "/api/app/connect") {
-		writeError(w, fmt.Errorf("wait for the current library operation to finish"), http.StatusConflict)
+		writeError(w, fmt.Errorf("A library operation is still running. Try again when it finishes."), http.StatusConflict)
 		return
 	}
 	var err error
@@ -997,11 +999,11 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 		path := firstString(body["path"])
 		location := firstString(body["location"])
 		if location != "" && location != "mac" && location != "ssd" {
-			err = fmt.Errorf("choose local or external library storage")
+			err = fmt.Errorf("Choose whether to keep the library on this Mac or on an external drive.")
 			break
 		}
 		if location == "ssd" && path == "" {
-			err = fmt.Errorf("choose a library folder on your external drive")
+			err = fmt.Errorf("Choose a library folder on your external drive.")
 			break
 		}
 		if path == "" {
@@ -1013,7 +1015,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 		} else {
 			path = expandPath(path)
 			if !filepath.IsAbs(path) {
-				err = fmt.Errorf("choose an absolute library location")
+				err = fmt.Errorf("Enter a full folder path, starting with / or ~/.")
 			} else if location != "ssd" && canonical(filepath.Dir(path)) == canonical(filepath.Join(pharosSupportDir(), "Libraries")) {
 				// Editing the proposed default sends an explicit path on a fresh
 				// install. Only this managed parent may be created implicitly.
@@ -1026,7 +1028,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if within(canonical(path), canonical(m.registry.Application)) {
-			err = fmt.Errorf("choose a library folder outside the application bundle")
+			err = fmt.Errorf("Choose a library folder outside the Pharos app.")
 			break
 		}
 		create := m.operations.begin(OperationSpec{Kind: "library.create", Subject: name, Trigger: triggerUser})
@@ -1053,7 +1055,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	case "/api/app/open":
 		path := expandPath(firstString(body["path"]))
 		if path == "" {
-			err = fmt.Errorf("choose an existing library folder or configuration file")
+			err = fmt.Errorf("Choose an existing library folder or its library.toml file.")
 			break
 		}
 		if info, e := os.Stat(path); e == nil && info.IsDir() {
@@ -1081,12 +1083,12 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	case "/api/app/disconnect":
 		id := firstString(body["id"])
 		if m.busy {
-			err = fmt.Errorf("wait for the current operation to finish")
+			err = fmt.Errorf("A library operation is still running. Try again when it finishes.")
 			break
 		}
 		m.stopChildLocked(id)
 		if m.children[id] != nil {
-			err = fmt.Errorf("library is still closing; retry shortly")
+			err = fmt.Errorf("The library is still closing. Try again in a moment.")
 			break
 		}
 		m.generation++
@@ -1098,7 +1100,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 		l := m.registry.library(firstString(body["id"]))
 		name := strings.TrimSpace(firstString(body["name"]))
 		if l == nil {
-			err = fmt.Errorf("choose a registered library")
+			err = fmt.Errorf("Choose one of your libraries.")
 			break
 		}
 		if err = validLibraryName(name); err != nil {
@@ -1117,7 +1119,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	case "/api/app/delivery":
 		a, b := firstString(body["source"]), firstString(body["target"])
 		if a != "" && (a == b || m.registry.library(a) == nil || m.registry.library(b) == nil) {
-			err = fmt.Errorf("choose two different registered libraries")
+			err = fmt.Errorf("Choose two different libraries.")
 			break
 		}
 		if a != "" {

@@ -86,7 +86,7 @@ type ProbeAcceptResult struct {
 type probeRequestError struct{ error }
 
 func errNotLibrary(config Config) error {
-	return probeRequestError{fmt.Errorf("%s is not a portable library (library = true), so probe results cannot be saved per Mac; add the [[sources]] you want to it by hand", config.Path)}
+	return probeRequestError{fmt.Errorf("%s is not a portable library (its settings do not say library = true), so Pharos cannot save sources for this Mac in it. Add the [[sources]] you want to it by hand.", config.Path)}
 }
 
 // AcceptProbe writes the selected candidates to this host's source file.

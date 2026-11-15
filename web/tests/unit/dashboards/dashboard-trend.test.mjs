@@ -464,8 +464,11 @@ test("hourly trends read the hourly ledger; several hours add theirs", async () 
 test("titles name the measure, period and breakdown", () => {
   assert.equal(trendTitle(catalog, { ...base, metric: "percent_cost", split: "model_family" }), "Share of API cost per day by model");
   assert.equal(trendTitle(catalog, { ...base, metric: "tokens", split: "type", display: "cumulative" }), "Cumulative tokens by token type");
-  assert.equal(trendTitle(catalog, { ...base, metric: "conversations", split: "none" }), "Conversations reached per day");
+  assert.equal(trendTitle(catalog, { ...base, metric: "conversations", split: "none" }), "Conversations with usage per day");
   assert.equal(trendTitle(catalog, { ...base, metric: "percent", split: "type", display: "cumulative" }), "Cumulative share of tokens by token type");
+  // An acronym keeps its capitals when a title lowercases the label's first letter.
+  assert.equal(trendTitle(catalog, { ...base, metric: "cost", split: "model_family", display: "cumulative" }), "Cumulative API cost (USD) by model");
+  assert.equal(trendTitle(catalog, { ...base, metric: "percent_cost", split: "model_family", display: "cumulative" }), "Cumulative share of API cost by model");
 });
 
 test("a selection outside shares is in the executed query: a scatter's selected group is drawn whatever the point limit", t => {
@@ -647,7 +650,7 @@ import {chartSeriesStyle} from '../../../src/chart-colors';
 test('Message Labels keeps all chart views centered on the ontology and migrates older views',()=>{
  assert.deepEqual(availableViews(messageLabelsCatalog).map(([id])=>id),['trend_line','trend_bar','compare']);
  assert.deepEqual(Object.keys(messageLabelsCatalog.breakdowns),['function_role','family','label']);
- assert.equal(messageLabelsCatalog.breakdowns.family.label,'General Label');
+ assert.equal(messageLabelsCatalog.breakdowns.family.label,'General label');
  assert.equal(trendSplit(messageLabelsCatalog,'none'),false);
  for(const view of ['trend','compare','distribution','scatter','cycle'])for(const split of ['none','repository_name','model','source','label_status']){
   const old={view,metric:'messages',split,unit:'conversation',selection:{values:['old-repository'],excluded:false}};

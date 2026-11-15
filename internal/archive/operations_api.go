@@ -30,9 +30,9 @@ var operationStateWords = map[string]string{opQueued: "Waiting to start", opBloc
 var operationReasons = map[string]string{
 	"capture-running":     "Waiting for a capture to finish",
 	"ingest-busy":         "Waiting for another index to finish",
-	"catalog-busy":        "Waiting for the catalog",
+	"catalog-busy":        "Waiting for another write to the library",
 	"interactive-query":   "Waiting for interactive queries to finish",
-	"search-stopped":      "Waiting for the Search view refresh to resume",
+	"search-stopped":      "Waiting for Search view indexing to resume",
 	"destination-busy":    "Waiting for the destination",
 	"waiting-for-drive":   "Waiting for the drive",
 	"waiting-for-network": "Waiting for the network",
@@ -52,9 +52,52 @@ func reasonSentence(reason string) string {
 		return sentence
 	}
 	if kind, ok := lookupOperationKind(strings.TrimPrefix(reason, "deferred-to-")); ok && strings.HasPrefix(reason, "deferred-to-") {
-		return "Left for " + lowerFirst(kind.Label)
+		return "Left for “" + kind.Label + "”"
 	}
 	return reason
+}
+
+// workBlockedSentences are the background work runner's blocker reasons in
+// words, as the Background Processing page's Work card says them.
+var workBlockedSentences = map[string]string{
+	workBlockedDependency: "Waiting for work it depends on", workBlockedCapacity: "Waiting for a free CPU slot", workBlockedPower: "Waiting until this Mac is plugged in",
+	workBlockedPolicy: "Waiting for background settings to allow it", workBlockedWriter: "Waiting for another write to the library",
+	workBlockedExternal: "Waiting for an outside service", workBlockedHeld: "Stopped until you resume it, or quit and reopen Pharos",
+	workBlockedFailed: "Stopped after a failure", workBlockedFailuresFull: "Stopped after too many failures",
+	workBlockedBackoff: "Trying again shortly after a failure", workBlockedExceedsCap: "Needs more CPU slots than the allowance",
+	workBlockedRequestMemory: "Waiting for memory", workBlockedRequestLimit: "Waiting for other requests to finish",
+	workBlockedRecentFirst: "Waiting for recent work to finish first", workBlockedPaused: "Background processing is paused",
+}
+
+// blockedSentence is a blocked operation's line, one clause per reason.
+//
+// A wait code (operationReasons) comes with the thing waited for as its
+// detail, a noun phrase such as "the capture on Mac B to finish": the line
+// is "Waiting for" that, or the code's own sentence when there is no detail.
+// The two are never joined, since they say the same thing.
+//
+// A work-runner reason (workBlockedSentences) comes with a free-form detail,
+// often a clause or an error: the line is the reason's sentence, then the
+// detail after a colon. A detail that only repeats the reason code or the
+// sentence, or follows a hold that says it all, is left out.
+func blockedSentence(reason, detail string) string {
+	if detail == reason {
+		detail = ""
+	}
+	if sentence := operationReasons[reason]; sentence != "" {
+		if detail == "" {
+			return sentence
+		}
+		return "Waiting for " + detail
+	}
+	sentence := workBlockedSentences[reason]
+	if sentence == "" {
+		sentence = "Waiting"
+	}
+	if detail == "" || reason == workBlockedHeld || strings.Contains(strings.ToLower(sentence), strings.ToLower(strings.TrimRight(detail, "."))) {
+		return sentence
+	}
+	return sentence + ": " + detail
 }
 
 // stateLabel is the operation's state word, the kind's verb while running.
@@ -69,10 +112,7 @@ func stateLabel(view opView) string {
 func stateDetail(view opView) string {
 	switch view.State {
 	case opBlocked:
-		if view.Detail != "" {
-			return "Waiting for " + view.Detail
-		}
-		return reasonSentence(view.Reason)
+		return blockedSentence(view.Reason, view.Detail)
 	case opFailed:
 		return "Failed: " + defaultString(view.Error, reasonSentence(view.Reason))
 	case opCancelled:
@@ -377,7 +417,7 @@ func (s *Server) serveOperations(w http.ResponseWriter, r *http.Request) {
 func (s *Server) stopOperation(w http.ResponseWriter, body map[string]any) {
 	op := s.ops.find(OpID(firstString(body["id"])))
 	if op == nil {
-		writeError(w, errors.New("no such operation in this service; work in another process cannot be stopped from Pharos"), http.StatusNotFound)
+		writeError(w, errors.New("Could not find this work. Work running in another Pharos process cannot be stopped from here."), http.StatusNotFound)
 		return
 	}
 	view := op.view()
@@ -415,7 +455,7 @@ func (s *Server) stopOperation(w http.ResponseWriter, body map[string]any) {
 		return
 	}
 	if !stopped {
-		writeError(w, errors.New("it is not at a point where it can be stopped; try again in a moment"), http.StatusConflict)
+		writeError(w, errors.New("It is not at a point where it can be stopped. Try again in a moment."), http.StatusConflict)
 		return
 	}
 	op.markStopping()
@@ -470,9 +510,9 @@ func unregisteredActivities(activities []libraryActivity, ops []opView, leases [
 			ok = running(kinds("maintenance.search.tool-output"))
 		case activity.Label == "Updating findings":
 			ok = running(kinds("analysis.findings"))
-		case activity.Label == "Classifying your writing":
+		case activity.Label == "Updating writing estimates":
 			ok = running(kinds("analysis.authorship", "analysis.authorship.refine"))
-		case activity.Label == "Indexing the Library view":
+		case activity.Label == "Indexing the Search view":
 			ok = running(kinds("maintenance.library-view"))
 		}
 		if !ok {

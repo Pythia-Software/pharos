@@ -15,7 +15,7 @@ test("outcome labels keep one order and wording in the page and the Library's fi
 
 test("a Git count outside a repository reads as not applicable, never zero", () => {
   assert.deepEqual(gitFactDisplay(null, "folder"), { text: "Not a repository", muted: true, title: "This project is a folder; Git facts do not apply." });
-  assert.equal(gitFactDisplay(null, "none").text, "No git data");
+  assert.equal(gitFactDisplay(null, "none").text, "No Git data");
   // Recorded Git data shows wherever it came from; a repository's zero is zero.
   assert.deepEqual(gitFactDisplay(2, "folder"), { text: "2", muted: false });
   assert.deepEqual(gitFactDisplay(0, "repository"), { text: "0", muted: false });

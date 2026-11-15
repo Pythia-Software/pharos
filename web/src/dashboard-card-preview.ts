@@ -51,9 +51,9 @@ async function thinkingPreview(address: string, schema: FieldSchema, target: Thi
     const data = thinking ?? await load();
     const grid = thinkingGrid(data, state), ready = Boolean(grid?.cells.some(row => row.some(cell => cell !== null)));
     return { state: ready ? "ready" : "empty", total: data.Timed, summary: thinkingCardTitle(target, state), action: DASHBOARD_CARD_ACTION, emptyLabel: "No observations in this range",
-      note: `${data.Timed.toLocaleString()} usable timing gaps from ${data.Retained.toLocaleString()} retained requests.`, ...grid && ready ? { grid, coverHeight: gridCoverHeight(grid) } : {} };
+      note: `${data.Timed.toLocaleString()} usable timing gaps from ${data.Retained.toLocaleString()} model requests.`, ...grid && ready ? { grid, coverHeight: gridCoverHeight(grid) } : {} };
   }
-  if (schema.name !== "pharos_model_requests") throw new Error("This dashboard card's dataset is unavailable.");
+  if (schema.name !== "pharos_model_requests") throw new Error("This dashboard card’s dataset is unavailable.");
   const recipe = thinkingCardRecipe(target, state);
   const query = { ...EMPTY_QUERY, where: [...recipe.where ?? [], ...where], aggregations: recipe.measures };
   let drawn: QueryPreview | undefined, failure: unknown;
@@ -66,7 +66,7 @@ async function thinkingPreview(address: string, schema: FieldSchema, target: Thi
   }
   if (target !== "thinking-compactions" || !result) return fittedPreview({ ...drawn, action: DASHBOARD_CARD_ACTION, preserveScale: true });
   const { buckets, series } = compactionColumns(result);
-  return fittedPreview({ state: buckets.length ? "ready" : "empty", total: buckets.length, summary: "Compactions by day", note: drawn.note, action: DASHBOARD_CARD_ACTION,
+  return fittedPreview({ state: buckets.length ? "ready" : "empty", total: buckets.length, summary: "Context compactions by day", note: drawn.note, action: DASHBOARD_CARD_ACTION,
     emptyLabel: "No compactions in this range", buckets, series, dashboardTrend: { prepared: true, xLabel: "day", yLabel: "Compactions", unit: "" } });
 }
 
@@ -77,7 +77,7 @@ function ribbonPreview(address: string, data: ConcurrencyData, now: number): Que
   const ready = cover.buckets.some(bucket => Object.keys(bucket.values).length);
   return { state: ready ? "ready" : "empty", total: cover.buckets.length, summary: ribbonCardTitle(settings), action: DASHBOARD_CARD_ACTION,
     emptyLabel: "No captured activity in this range", buckets: cover.buckets, series: cover.series,
-    note: `Average concurrent ${settings.counting === "agent" ? "conversations" : "workspaces"} in each period, including idle time, by repository.`,
+    note: `Average concurrent ${settings.counting === "agent" ? "conversations" : "workspaces"} in each period, including idle time, by project.`,
     dashboardTrend: { prepared: true, xLabel: cover.hourly ? "hours" : "day", yLabel: cover.label, unit: "" } };
 }
 
@@ -85,11 +85,11 @@ async function dashboardPreview(address: string, schema: FieldSchema, signal?: A
   const opened = readDashboardCard(address, new Date(now)), { topic, dataset, where, params } = opened;
   const counted = groups !== undefined && dashboardCardGroups(address);
   const state = counted && isTrendView(opened.state.view) ? { ...opened.state, seriesLimit: groups } : opened.state;
-  if (schema.name !== `pharos_${dataset}`) throw new Error("This dashboard card's dataset is unavailable.");
+  if (schema.name !== `pharos_${dataset}`) throw new Error("This dashboard card’s dataset is unavailable.");
   const calculator = window.pharosCarbon;
   if (topic === "carbon" && !calculator) throw new Error("Carbon assumptions are still loading. Refresh this card to try again.");
   const settings = topic === "carbon" ? JSON.parse(params.get("analyze_carbon") ?? "null") ?? calculator!.settingsSnapshot(factors) : undefined;
-  if (topic === "carbon" && (!settings || typeof settings !== "object" || Array.isArray(settings))) throw new Error("This card's Carbon assumptions are invalid.");
+  if (topic === "carbon" && (!settings || typeof settings !== "object" || Array.isArray(settings))) throw new Error("This card’s Carbon assumptions are invalid.");
   const parallelism = params.has("analyze_parallelism") ? normalizeConcurrencySettings(JSON.parse(params.get("analyze_parallelism")!)) : readConcurrencySettings();
   const catalog = analysisCatalogFor(topic, {
     parallelism: parallelism.counting,

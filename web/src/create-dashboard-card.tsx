@@ -91,7 +91,7 @@ export function CreateDashboardCard({ source, target = "chart" }: { source?: Das
         update({ groups: value, description: draft.description === dashboardCardDescription(draft.url, draft.target, from.schema, groups)
           ? dashboardCardDescription(draft.url, draft.target, from.schema, validCardGroups(count) ? count : undefined) : draft.description });
       }} /> : null}
-      <p className="home-editor-window-note">Name the card, describe it and choose its category and call to action in place. It keeps this chart’s current filters and time range; relative ranges keep moving as new data arrives.</p>
+      <p className="home-editor-window-note">Edit the title, description, category and call to action on the card. The card keeps this chart’s current filters and time range. A relative range, such as Last 7 days, keeps moving as new data arrives.</p>
       {draft.error ? <p role="alert">{draft.error}</p> : null}
       <div className="home-editor-actions"><button type="button" onClick={() => dialog.current?.close()}>Cancel</button><button type="submit">Create card</button></div>
     </form> : null}</Modal>

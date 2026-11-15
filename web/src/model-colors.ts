@@ -24,12 +24,11 @@ export function modelClass(name: string): string | undefined {
   return Object.hasOwn(models, key) ? models[key].class : matchModelClass(key, rules.providers)?.class ?? inferModelClass(key);
 }
 export const sourceProvider = (name: string): ModelProvider => Object.hasOwn(sources, name) ? sources[name].provider : Object.hasOwn(providerBrands, name) ? name as ModelProvider : "other";
-export const sourceLabel = (name: string) => ({ claude: "Claude", codex: "Codex", antigravity: "Antigravity", chatgpt: "ChatGPT", tl1: "TL1", canonical: "Canonical export" }[name] ?? name);
 const catalogDates = modelCatalogDates(prices.changes), dates = modelTimelineDates(prices.changes, rules.observed_dates);
 export const modelTimelineDate = (name: string) => dates.get(modelColorKey(name));
 export const modelDateLabel = (name: string) => {
   const key = modelColorKey(name), date = dates.get(key);
-  return date ? `${!catalogDates.has(key) && Object.hasOwn(rules.observed_dates, key) ? "First observed" : "Catalog date"} ${date}` : "Date unavailable";
+  return date ? `${!catalogDates.has(key) && Object.hasOwn(rules.observed_dates, key) ? "Reviewed first-seen date" : "Catalog date"} ${date}` : "Date unavailable";
 };
 // One catalog order drives settings, chart stacks and legends. Unknown
 // classes follow the reviewed classes without changing recorded model keys.
@@ -211,7 +210,7 @@ export function loadModelColors(inventory = false): Promise<ModelPalette> {
   pendingInventory = inventory;
   return pending = (async () => {
     const started = revision, response = await fetch(`/api/model-colors${inventory ? "?inventory=1" : ""}`);
-    if (!response.ok) throw new Error("Model and provider colors could not be loaded. Try again.");
+    if (!response.ok) throw new Error("Could not load model colors. Reopen this page to try again.");
     const next = await response.json() as ModelPalette;
     if (revision === started) installModelColors(next);
     else if (inventory) installModelColors({ ...next, overrides: palette.overrides });
@@ -220,7 +219,7 @@ export function loadModelColors(inventory = false): Promise<ModelPalette> {
 }
 async function persistModelColors(body: unknown) {
   const response = await fetch("/api/model-colors", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (!response.ok) throw new Error("Color could not be saved. Try again.");
+  if (!response.ok) throw new Error("Could not save model colors. Try again.");
   installModelColors(await response.json());
 }
 export const saveModelColor = (kind: ColorKind, key: string, color: string) => persistModelColors({ id: `${kind}:${key}`, color });

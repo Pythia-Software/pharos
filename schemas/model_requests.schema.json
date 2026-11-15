@@ -43,7 +43,7 @@
     {"name": "input_tokens_available", "label": "Input usage available", "type": "bool", "group": "Data quality", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "input_tokens_available", "synthetic": true}, "sqlite": {"expr": "r.\"input_tokens_available\""}}, "description": "Estimates fill missing source measurements. Generated output only; missing input and cache usage stays unavailable. Costs based on estimated output are partial."},
     {
       "name": "id",
-      "label": "Id",
+      "label": "ID",
       "type": "text",
       "group": "Request",
       "bindings": {
@@ -58,7 +58,7 @@
     },
     {
       "name": "conversation_id",
-      "label": "Conversation id",
+      "label": "Conversation ID",
       "type": "text",
       "group": "Request",
       "bindings": {
@@ -73,7 +73,7 @@
     },
     {
       "name": "agent_session_id",
-      "label": "Agent session id",
+      "label": "Agent session ID",
       "type": "text",
       "group": "Request",
       "bindings": {
@@ -88,7 +88,7 @@
     },
     {
       "name": "workspace_id",
-      "label": "Workspace id",
+      "label": "Workspace ID",
       "type": "text",
       "group": "Request",
       "bindings": {
@@ -103,7 +103,7 @@
     },
     {
       "name": "native_id",
-      "label": "Native id",
+      "label": "Native ID",
       "type": "text",
       "group": "Request",
       "bindings": {
@@ -198,7 +198,7 @@
     },
     {
       "name": "source_kind",
-      "label": "Source kind",
+      "label": "Source",
       "type": "text",
       "group": "Request",
       "bindings": {
@@ -218,7 +218,7 @@
     },
     {
       "name": "repository_name",
-      "label": "Repository name",
+      "label": "Repository",
       "type": "text",
       "group": "Request",
       "bindings": {
@@ -339,7 +339,7 @@
     },
     {
       "name": "week",
-      "label": "Week",
+      "label": "Week (Mon)",
       "type": "text",
       "group": "Request",
       "bindings": {
@@ -417,7 +417,7 @@
       "aggregate": {
         "groupable": true
       },
-      "description": "The observed wait's band on the Thinking dashboard's edges, from 0.1–0.2 s to 500–600 s. Empty without a usable wait.",
+      "description": "The observed wait's band, as the Waiting and Thinking dashboard draws them, from 0.1–0.2 s to 500–600 s. Empty without a usable wait.",
       "filter": {
         "editor": "set",
         "values": {
@@ -631,7 +631,7 @@
     },
     {
       "name": "model_effort",
-      "label": "Model effort",
+      "label": "Model + effort",
       "type": "text",
       "group": "Request",
       "bindings": {

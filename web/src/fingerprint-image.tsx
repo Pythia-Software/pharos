@@ -28,7 +28,7 @@ export function FingerprintImage({id, workspace = false, profile = 'wide', linkT
  if (!id) return <span className="muted">—</span>;
  const image = snapshot.image, src = image?.images[theme], height = profile === 'wide' ? 128 : 256;
  const label = `${workspace ? 'Workspace' : 'Conversation'} fingerprint`;
- const picture = src ? <img src={src} width={1024} height={height} alt={label} decoding="async" loading="lazy" onError={() => cache.failed(request)}/> : <span className="muted">{snapshot.error || (image?.state === 'not_found' ? 'No retained conversation' : image?.state === 'retrying' ? 'Fingerprint unavailable' : 'Preparing fingerprint…')}</span>;
+ const picture = src ? <img src={src} width={1024} height={height} alt={label} decoding="async" loading="lazy" onError={() => cache.failed(request)}/> : <span className="muted">{snapshot.error || (image?.state === 'not_found' ? `No retained ${workspace ? 'workspace' : 'conversation'}` : image?.state === 'retrying' ? 'Could not draw the fingerprint. Trying again…' : 'Preparing fingerprint…')}</span>;
  // A bounded sample, labels in progress and withheld events say so beside the image.
  const notes = messageLabelRibbonNotes(image), note = notes.map(n => n.note).join('. ');
  return <div className={'message-label-fingerprint fingerprint-image is-' + profile} title={[image?.stale ? 'Refreshing fingerprint' : snapshot.error, note].filter(Boolean).join('. ') || undefined}>

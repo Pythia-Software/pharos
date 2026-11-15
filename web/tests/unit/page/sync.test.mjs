@@ -1,6 +1,6 @@
 // sync.js: when Home refreshes after a run, when Index changes is busy, and
 // how the Sync page's run history is formatted (window.pharosSync).
-import { resultLabel, sourceNames, syncTables, runTables, operationHistoryTable, syncSchemas } from "../../../src/sync-table-model";
+import { resultLabel, sourceNames, syncTables, runTables, operationHistoryTable, syncSchemas, syncCellLabels, resultNeedsAttention } from "../../../src/sync-table-model";
 import { emptyLibraryState } from "../../../src/empty-library-model";
 import { applyQuery, EMPTY_QUERY, isFilterable, isSortable, isMeasurable, isGroupable, opsForField } from "@pythia-software/query-table-core";
 import { test } from "node:test";
@@ -34,7 +34,7 @@ test('issue diagnostics copy stays focusable, runs once while pending and settle
       fetch:async path=>{if(path==='/api/sync/status')refreshes++;return {ok:true,json:async()=>path==='/api/sync/status'?{settings:{},issues:[details]}:path==='/api/sync/issues'?{issues:[details]}:{runs:[]}};},
     });
     await new Promise(resolve=>setImmediate(resolve));
-    await elements(dashboard).find(el=>el.textContent==='View details / copy diagnostics').onclick();
+    await elements(dashboard).find(el=>el.textContent==='View details and diagnostics…').onclick();
     const dialog=body.children.find(el=>el.tagName==='DIALOG');
     const copy=elements(dialog).find(el=>el.textContent==='Copy diagnostics');
     const status=dialog.children.find(el=>el.tagName==='P');
@@ -63,7 +63,9 @@ test("verification summaries distinguish selective repairs from unresolved check
   assert.equal(pharosSync.verificationSummary(null), "");
   const verification = { checked: 5, passed: 2, reindexed: 1, mismatch: 1, deferred: 1, errors: 1 };
   const summary = pharosSync.verificationSummary({ state: "complete", verification });
-  for (const text of ["5 inputs checked", "2 passed", "1 reindexed", "1 still mismatch", "1 deferred", "1 errors"]) assert.ok(summary.includes(text));
+  for (const text of ["5 inputs checked", "2 passed", "1 reindexed", "1 still mismatches", "1 deferred", "1 error."]) assert.ok(summary.includes(text));
+  const several = pharosSync.verificationSummary({ state: "complete", verification: { ...verification, checked: 1, mismatch: 2, errors: 3 } });
+  for (const text of ["1 input checked", "2 still mismatch ·", "3 errors."]) assert.ok(several.includes(text), several);
   assert.match(pharosSync.verificationSummary({ state: "interrupted", verification }), /stopped/);
   assert.match(pharosSync.verificationSummary({ state: "running", verification }), /in progress/);
 });
@@ -122,10 +124,10 @@ test("maintenance actions yield scheduled work, while diagnostics remain availab
     const disabled = state.maintenance_busy ?? state.busy;
     const buttons = elements(dashboard).filter(el => el.tagName === "BUTTON");
     for (const button of buttons) {
-      assert.equal(Boolean(button.disabled), button.textContent === "View details / copy diagnostics" ? false : disabled, `${JSON.stringify(state)}: ${button.textContent}`);
+      assert.equal(Boolean(button.disabled), button.textContent === "View details and diagnostics…" ? false : disabled, `${JSON.stringify(state)}: ${button.textContent}`);
     }
     const before = detailsReads;
-    await buttons.find(el => el.textContent === "View details / copy diagnostics").onclick();
+    await buttons.find(el => el.textContent === "View details and diagnostics…").onclick();
     assert.ok(detailsReads > before);
     assert.ok(body.children.some(el => el.tagName === "DIALOG"));
   }
@@ -135,14 +137,14 @@ test("empty pages distinguish source setup, idle sources and a running sync", ()
   const message = status => emptyLibraryState(status)?.message ?? null;
   assert.equal(emptyLibraryState(null), null);
   assert.equal(emptyLibraryState({}), null);
-  assert.deepEqual(emptyLibraryState({ library_empty: true, has_sources: false, busy: false }), { message: "No sources configured yet", action: { label: "Configure", href: "/settings/sources" } });
+  assert.deepEqual(emptyLibraryState({ library_empty: true, has_sources: false, busy: false }), { message: "No sources configured yet", action: { label: "Add sources", href: "/settings/sources" } });
   // Configured sources alone do not mean anything is being pulled in: sync
   // may be off, or a source may have no sessions. Offer a way forward.
   const idle = emptyLibraryState({ library_empty: true, has_sources: true, busy: false });
   assert.doesNotMatch(idle.message, /^Pulling in conversations/);
   assert.equal(idle.action?.href, "/settings/sources");
   for (const status of [{ busy: true }, { has_sources: true, busy: true }]) {
-    assert.deepEqual(emptyLibraryState({ library_empty: true, ...status }), { message: "Pulling in conversations - this may take some time" });
+    assert.deepEqual(emptyLibraryState({ library_empty: true, ...status }), { message: "Pulling in conversations. This may take a while." });
   }
   for (const status of [{ has_sources: true }, { busy: true }, { has_sources: true, busy: true }]) {
     assert.equal(message({ library_empty: false, ...status }), null, "an existing library keeps its own results, including empty filtered results");
@@ -279,29 +281,11 @@ test("a run's sources come from its record, else from its results and per-source
   assert.deepEqual(plain(sourceNames({})), []);
 });
 
-test('run history queries use measured values across the entire retained history', () => {
-  const records = Array.from({ length: 7 }, (_, index) => ({ run_id: `run-${index}`, state: index === 2 ? 'failed' : index === 3 ? 'deferred' : 'complete',
-    finished_at: new Date(reference - index * 60000).toISOString(), seconds: [2, 100, 12, 1, 6, 60, 9][index], cpu_seconds: index,
-    conversations: index, messages_in_changed_groups: index * 10, rss_observed_peak_bytes: 1048576 * (index + 1), sources: ['codex'] }));
-  const { history } = syncTables({ history: records });
-  assert.equal(history.rows.length, records.length);
-  const query = { ...EMPTY_QUERY, where: [{ field: 'seconds', op: '>=', value: 9 }], orderBy: [{ field: 'seconds', dir: 'desc' }], limit: 2 };
-  const result = applyQuery(history.rows, query, history.schema);
-  assert.equal(result.total, 4);
-  assert.deepEqual(result.rows.map(row => row.id), ['run-1', 'run-5']);
-  assert.equal(history.rows[2].result, 'Failed');
-  // A run that left sources to the next one because a capture held them is not a failure.
-  assert.equal(history.rows[3].result, 'Capture was running');
-  assert.equal(history.rows[5].cpu_seconds, 5);
-  const recent = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{ field: 'finished_at', op: '>=', value: new Date(reference - 60000).toISOString() }] }, history.schema);
-  assert.deepEqual(recent.rows.map(row => row.id).sort(), ['run-0', 'run-1']);
-});
-
 test('work history queries include analyses and backups alongside indexing', () => {
   const operations = [
     { id: 'index', label: 'Index changes', kind: 'index.changes.manual', state: 'succeeded', started_at: new Date(reference - 20000).toISOString(), ended_at: new Date(reference).toISOString() },
     { id: 'analysis', label: 'Update findings', kind: 'analysis.findings', state: 'succeeded', started_at: new Date(reference - 120000).toISOString(), ended_at: new Date(reference - 60000).toISOString() },
-    { id: 'backup', label: 'Back up', kind: 'backup.local', state: 'failed', error: 'Drive unavailable', started_at: new Date(reference - 300000).toISOString(), ended_at: new Date(reference - 180000).toISOString() },
+    { id: 'backup', label: 'Back up', kind: 'backup.local', state: 'failed', error: 'Drive unavailable', trigger: 'schedule', started_at: new Date(reference - 300000).toISOString(), ended_at: new Date(reference - 180000).toISOString() },
   ];
   const history = operationHistoryTable(operations);
   for (const schema of Object.values(syncSchemas)) {
@@ -318,17 +302,30 @@ test('work history queries include analyses and backups alongside indexing', () 
   assert.deepEqual(result.rows.map(row => row.id), ['backup', 'analysis']);
   assert.equal(history.rows[2].result, 'Failed');
   assert.equal(history.rows[2].error, 'Drive unavailable');
+  // Rows keep the stored trigger, so a saved filter or link on it still
+  // matches; the cell and the filter picker show its label. An unknown
+  // trigger stays as recorded.
+  const started = operationHistoryTable([{ id: 'x', state: 'interrupted', trigger: 'mystery' }, { id: 'y', state: 'interrupted', trigger: 'user' }, { id: 'z', state: 'cancelled' }, ...operations]);
+  assert.deepEqual(started.rows.map(row => row.trigger), ['mystery', 'user', null, null, null, 'schedule']);
+  assert.deepEqual(applyQuery(started.rows, { ...EMPTY_QUERY, where: [{ field: 'trigger', op: '=', value: 'user' }] }, started.schema).rows.map(row => row.id), ['y']);
+  const triggerField = started.schema.fields.find(field => field.name === 'trigger');
+  assert.deepEqual(triggerField.filter.values.options.find(option => option.value === 'user'), { value: 'user', label: 'You' });
+  assert.deepEqual(['schedule', 'user', 'mystery'].map(syncCellLabels[triggerField.render]), ['Schedule', 'You', 'mystery']);
+  // Failed, stopped and interrupted work is highlighted from its stored state,
+  // whatever the state is called; a grouped cell has only the shown value.
+  assert.deepEqual(started.rows.map(row => [row.result, resultNeedsAttention(row.result, row)]), [['Interrupted', true], ['Interrupted', true], ['Stopped', true], ['Done', false], ['Done', false], ['Failed', true]]);
+  assert.equal(resultNeedsAttention('Renamed', { state: 'interrupted' }), true);
+  assert.deepEqual(['Interrupted', 'Stopped', 'Failed', 'Done', 'Running', 'Error', 'Needs capture', 'Up to date'].map(value => resultNeedsAttention(value)), [true, true, true, false, false, true, true, false]);
   const recent = applyQuery(history.rows, { ...EMPTY_QUERY, where: [{field:'started_at',op:'>=',value:new Date(reference - 120000).toISOString()}] }, history.schema);
   assert.deepEqual(recent.rows.map(row => row.id), ['index', 'analysis']);
 });
 
 test('run results distinguish postponed verification from errors and indexing failures', () => {
-  for (const [outcome, label] of [["deferred", "Success without verification"], ["read_error", "Verification failed"], ["mismatch", "Needs attention"], ["unknown", "Verification incomplete"]]) {
+  for (const [outcome, label] of [["deferred", "Indexed; verification postponed"], ["read_error", "Verification failed"], ["mismatch", "Needs attention"], ["unknown", "Verification incomplete"]]) {
     const record = { state: "complete", conversations: 3, audit: { outcome } };
     assert.equal(resultLabel(record), label);
-    assert.equal(syncTables({ history: [record] }).history.rows[0].result, label);
     assert.equal(resultLabel({ ...record, state: "failed" }), "Failed");
-    assert.equal(resultLabel({ ...record, state: "interrupted" }), "Stopped");
+    assert.equal(resultLabel({ ...record, state: "interrupted" }), "Interrupted");
   }
   assert.equal(resultLabel({ state: "complete", conversations: 3, audit: { outcome: "passed" } }), "Indexed");
   assert.equal(resultLabel({ state: "complete", conversations: 0, audit: { outcome: "passed" } }), "No changes");
@@ -336,18 +333,15 @@ test('run results distinguish postponed verification from errors and indexing fa
 });
 
 test('source status keeps error and preservation state while missing dates stay null', () => {
-  const { sources, history } = syncTables({ source_states: [
+  const { sources } = syncTables({ source_states: [
     { source_name: 'codex', pending_preservation: true, last_capture_at: '', succeeded_at: 'invalid' },
     { source_name: 'claude', pending_preservation: true, error: 'Permission denied', attempted_at: new Date(reference).toISOString() },
     { source_name: 'gemini' },
-  ], history: [{ finished_at: new Date(reference).toISOString(), state: 'complete', audit: { outcome: 'mismatch' } }] });
+  ] });
   assert.deepEqual(sources.rows.map(row => row.status), ['Needs capture', 'Error', 'Up to date']);
   assert.equal(sources.rows[0].last_capture_at, null);
   assert.equal(sources.rows[0].succeeded_at, null);
   assert.equal(sources.rows[1].error, 'Permission denied');
-  assert.equal(history.rows[0].id, new Date(reference).toISOString());
-  assert.equal(history.rows[0].result, 'Needs attention');
-  assert.equal(history.rows[0].seconds, null);
   const errors = applyQuery(sources.rows, { ...EMPTY_QUERY, where: [{ field: 'status', op: '=', value: 'Error' }] }, sources.schema);
   assert.deepEqual(errors.rows.map(row => row.id), ['claude']);
 });
@@ -363,26 +357,42 @@ test('diagnostic queries preserve separate numeric distributions and incomplete 
   assert.equal(tables.accuracy.rows[0].covered, null);
   assert.equal(tables.accuracy.rows[1].error_percent, 25);
   assert.equal(new Set(tables.coverage.rows.map(row => row.id)).size, 2);
+  // Checkpoints and verification results stay as stored, so filters on them
+  // match; they read as the same labels the run details use.
+  assert.deepEqual(tables.accuracy.rows.map(row => row.checkpoint), ['launch', 'discovered']);
+  assert.deepEqual(tables.accuracy.rows.map(row => syncCellLabels.sync_checkpoint(row.checkpoint)), ['At launch', 'After discovery']);
+  assert.deepEqual(tables.coverage.rows.map(row => row.outcome), ['passed', 'deferred']);
+  assert.deepEqual(tables.coverage.rows.map(row => syncCellLabels.sync_outcome(row.outcome)), ['Verified', 'Skipped']);
+  assert.deepEqual(applyQuery(tables.coverage.rows, { ...EMPTY_QUERY, where: [{ field: 'outcome', op: '=', value: 'deferred' }] }, tables.coverage.schema).rows.map(row => row.units), [1]);
+  for (const [table, name] of [[tables.accuracy, 'checkpoint'], [tables.coverage, 'outcome']]) {
+    const field = table.schema.fields.find(field => field.name === name);
+    for (const option of field.filter.values.options) assert.equal(syncCellLabels[field.render](option.value), option.label, `${name} ${option.value}`);
+  }
   assert.equal(tables.deferred.rows[0].completed_at, null);
   for (const table of Object.values(syncTables({}))) assert.deepEqual(table.rows, []);
-  // CPU and RSS this platform could not read arrive as null: missing, while
-  // a measured zero stays a zero.
-  const unmeasured = syncTables({ history: [{ run_id: 'a', seconds: 2, cpu_seconds: null, cpu_percent_one_core: null, rss_observed_peak_bytes: null, rss_baseline_bytes: 0 }],
+  // CPU and RSS this platform could not read arrive as null: missing.
+  const unmeasured = syncTables({
     statistics: { changes: { samples: 1, elapsed_seconds: { median: 2, p95: 2, last: 2 }, cpu_seconds: null, rss_observed_peak_bytes: null, estimated_cpu_duty_percent_one_core: null } } });
-  assert.deepEqual([unmeasured.history.rows[0].cpu_seconds, unmeasured.history.rows[0].cpu_percent_one_core, unmeasured.history.rows[0].rss_observed_peak_bytes, unmeasured.history.rows[0].rss_baseline_bytes], [null, null, null, 0]);
   assert.deepEqual([unmeasured.costs.rows[0].cpu_median, unmeasured.costs.rows[0].ram_last, unmeasured.costs.rows[0].cpu_duty, unmeasured.costs.rows[0].elapsed_median], [null, null, null, 2]);
 });
 
 test('run detail queries distinguish unknown work totals and forecasts from measured zeroes', () => {
   const tables = runTables({ source_results: [{ source: 'codex', yielded: true }, { source: 'claude', error: 'Unavailable' }, { source: 'gemini', pending: true, deferred: true }],
-    phases: [{ name: 'audit', seconds: 3, work: [
+    phases: [{ name: 'projections', seconds: 1 }, { name: 'codex', seconds: 1 }, { name: 'audit', seconds: 3, work: [
       { phase: 'discover', unit: 'group', done: 0, total: 0, total_known: true, seconds: 0, features: { load_one_minute: 0 } },
       { phase: 'index', unit: 'byte', done: 1024, total: 0, features: { bytes: 1024, bytes_basis: 'message_text' } },
     ] }], forecasts: [{ reason: 'launch', estimate: { predicted_steps: 0, remaining_steps: 3 } },
       { reason: 'discovered', estimate: { point_seconds: 10, low_seconds: 0, high_seconds: 15 }, actual_remaining_seconds: 0 },
       { reason: 'checkpoint', estimate: { point_seconds: 10 }, actual_remaining_seconds: 12 }] });
   assert.deepEqual(tables.sourceResults.rows.map(row => row.status), ['Partial', 'Failed', 'Capture was running']);
-  assert.equal(tables.phases.rows[0].name, 'Verification');
+  // Rows keep the stored phase; index-run phases read as labels and a
+  // source's phase keeps the source name.
+  assert.deepEqual(tables.phases.rows.map(row => row.name), ['projections', 'codex', 'audit']);
+  assert.deepEqual(tables.phases.rows.map(row => syncCellLabels.sync_phase(row.name)), ['Search view', 'codex', 'Verification']);
+  assert.equal(tables.stages.rows[0].stage, 'audit: discover');
+  assert.equal(syncCellLabels.sync_stage(tables.stages.rows[0].stage), 'Verification: discover');
+  assert.deepEqual(tables.forecasts.rows.map(row => row.checkpoint), ['launch', 'discovered', 'checkpoint']);
+  assert.deepEqual(tables.forecasts.rows.map(row => syncCellLabels.sync_checkpoint(row.checkpoint)), ['At launch', 'After discovery', 'checkpoint']);
   assert.equal(tables.stages.rows[0].total, 0);
   assert.equal(tables.stages.rows[0].load_one_minute, 0);
   assert.equal(tables.stages.rows[1].total, null);

@@ -16,7 +16,7 @@ type Access = { enabled: boolean; showInvitation: boolean; selection?: Selection
 type Status = { settings: Access; providers: Provider[] };
 async function askAPI<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`/api/ask/${path}`, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const result = await response.json(); if (!response.ok) throw new Error(result.error || "Ask Pharos request failed"); return result;
+  const result = await response.json(); if (!response.ok) throw new Error(result.error || "Could not reach Ask Pharos."); return result;
 }
 
 // Keep the existing search editor mounted in a portal. The conversation view
@@ -65,13 +65,13 @@ export function AskPharosSettings() {
   const consent = useRef<HTMLDialogElement>(null), [consenting, setConsenting] = useState(false);
   const refresh = async () => {
     try { const result = await askAPI<Status>("status"); setStatus(result); return result; }
-    catch (error) { setError(String(error)); return null; }
+    catch (error) { setError(error instanceof Error ? error.message : String(error)); return null; }
   };
   useEffect(() => { void refresh(); const update = () => { void refresh(); }; window.addEventListener("pharos:ask-config", update); return () => window.removeEventListener("pharos:ask-config", update); }, []);
   async function save(change: Partial<Access> & { consent?: boolean }) {
     setBusy(true); setError("");
     try { await askAPI("settings", change); consent.current?.close(); window.dispatchEvent(new Event("pharos:ask-config")); await refresh(); }
-    catch (error) { setError(String(error)); }
+    catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
   // Rediscover installed CLIs and drop each one's cached model list, so the
@@ -89,7 +89,7 @@ export function AskPharosSettings() {
   const enabled = Boolean(status?.settings.enabled), providers = status?.providers || [];
   const heading = <div>
     <h3 id="askPharosEnabledTitle">Ask Pharos</h3>
-    <p id="askPharosEnabledDescription" className="muted">Ask questions in plain language and find useful pages with your installed, authenticated Codex, Claude, or Antigravity CLI.{status && !providers.length && !enabled ? " Install and authenticate a supported CLI, then reopen this page." : ""}</p>
+    <p id="askPharosEnabledDescription" className="muted">Ask questions in plain language and find useful pages with your installed, signed-in Codex, Claude or Antigravity CLI. Ask Pharos uses the Pharos MCP server, so Settings → MCP must stay on.{status && !providers.length && !enabled ? " Install and sign in to a supported CLI, then reopen this page." : ""}</p>
   </div>;
   return <>
     <div className="layout-preference-card ask-preferences">
@@ -99,7 +99,7 @@ export function AskPharosSettings() {
       </>}>
         <div className="menu-bar-preferences-body ask-preferences-body">
           <p className="muted">{providers.length ? `Available CLIs: ${askList(providers.map(provider => provider.id))}.` : "No supported CLI found."} Choose the CLI, model and effort for each question in the Ask Pharos composer.</p>
-          <p className="muted">Turning Ask Pharos off stops active questions; ordinary search stays available. Conversations stay in this library and are indexed alongside past work. Page visits are kept separately for this Mac, are limited to the latest 1,000 entries, and are available only to Ask Pharos’s private navigation interface.</p>
+          <p className="muted">Turning Ask Pharos off stops active questions; regular search stays available. Chats stay in this library and are indexed alongside past work. Page visits are kept separately for this Mac, are limited to the latest 1,000 entries, and are available only to Ask Pharos; other MCP clients cannot see them.</p>
           <p className="ask-preferences-actions"><button type="button" disabled={refreshing} onClick={() => void refreshCLIs()}>{refreshing ? "Refreshing…" : "Refresh available CLIs"}</button><span className="muted" role="status">{refreshed}</span></p>
         </div>
       </ViewDisclosure> : <div className="optional-behavior">{heading}</div>}
@@ -112,9 +112,9 @@ export function AskPharosSettings() {
     {error && <p className="ask-preferences-error" role="alert">{error}</p>}
     <Modal open={consenting} dialogRef={consent} className="ask-consent" aria-labelledby="ask-settings-consent-title" dismissible={!busy} onClose={() => setConsenting(false)}>
       <h2 id="ask-settings-consent-title">Ask in your own words</h2>
-      <p>Ask Pharos navigates the app using your installed, authenticated CLI. Each question uses your agent account’s quota. These conversations will themselves be indexed by Pharos.</p>
-      <p>The agent can consult your Pharos page visits and previous Ask Pharos chats through a private interface. Page visits are never offered through the general MCP service.</p>
-      <p>This is optional. No other use of Pharos involves AI. When disabled, Pharos never accesses your agentic CLIs.</p>
+      <p>Ask Pharos finds pages for you using your installed, signed-in agent CLI. It also needs the Pharos MCP server turned on in Settings → MCP. Each question uses your agent account’s quota, and each chat is saved in your library like other conversations.</p>
+      <p>To answer, the agent can read anything in your library through the Pharos MCP tools: conversations with their tool output, code changes and file paths, your repositories and their Git history, and your usage. Ask Pharos also lets it look up your Pharos page visits and earlier Ask Pharos chats. Your question, anything you attach and whatever the agent reads are sent to the company behind that CLI (OpenAI, Anthropic or Google), under your account with them. Other MCP clients cannot see your page visits.</p>
+      <p>This is optional. While Ask Pharos is off, Pharos never runs your agent CLIs and sends none of your history to an AI provider.</p>
       <button type="button" disabled={busy} onClick={() => void save({ enabled: true, consent: true })}>Enable Ask Pharos</button>
       <button type="button" onClick={() => consent.current?.close()}>Not right now</button>
       <button type="button" disabled={busy} onClick={() => void save({ enabled: false, showInvitation: false })}>No, and don’t show this again</button>

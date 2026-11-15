@@ -57,16 +57,25 @@ type volumeFacts struct {
 }
 
 // displayName names the volume the way Finder does.
+// sentenceName is displayName at the start of a sentence: a generic phrase is
+// capitalized, a volume's own name is left as its owner wrote it.
+func (f volumeFacts) sentenceName() string {
+	if f.Location != "internal" && (f.Name != "" || f.MountPoint != "") {
+		return f.displayName()
+	}
+	return capitalize(f.displayName())
+}
+
 func (f volumeFacts) displayName() string {
 	switch {
 	case f.Location == "internal":
-		return "this Mac's internal disk"
+		return "this Mac’s internal disk"
 	case f.Name != "":
 		return f.Name
 	case f.MountPoint != "":
 		return filepath.Base(f.MountPoint)
 	}
-	return "the library's drive"
+	return "the library’s drive"
 }
 
 func inspectVolume(ctx context.Context, path string) volumeFacts {
@@ -727,14 +736,14 @@ func encryptionCheck(facts volumeFacts) driveCheck {
 	case facts.Encryption == "unknown":
 		return unknownCheck("encryption", facts)
 	case facts.Encryption == "filevault" && facts.Location == "internal":
-		check.Summary = "This Mac's internal disk is protected by FileVault."
+		check.Summary = "This Mac’s internal disk is protected by FileVault."
 	case facts.Encryption == "filevault":
-		check.Summary = fmt.Sprintf("%s is encrypted; it can be read only after its password is entered.", name)
+		check.Summary = fmt.Sprintf("%s is encrypted; it can be read only after its password is entered.", facts.sentenceName())
 	case facts.Encryption == "disk-image":
 		check.Summary = fmt.Sprintf("The library is on an encrypted disk image (%s).", facts.ImagePath)
 	case facts.Location == "internal":
 		check.Status = "problem"
-		check.Summary = "FileVault is off, so this Mac's internal disk unlocks without a password and anyone with the Mac can read the library."
+		check.Summary = "FileVault is off, so this Mac’s internal disk unlocks without a password and anyone with the Mac can read the library."
 		check.Recommendation = "Turn on FileVault. It encrypts in the background and keeps your data."
 		check.Action = "System Settings → Privacy & Security → FileVault → Turn On…"
 		check.Command = "sudo fdesetup enable"
@@ -745,13 +754,13 @@ func encryptionCheck(facts volumeFacts) driveCheck {
 		check.Action = "Disk Utility → File → New Image → Blank Image…, with Encryption set to 256-bit AES"
 	default:
 		check.Status = "problem"
-		check.Summary = fmt.Sprintf("%s is not encrypted: anyone who picks up the drive can read every archived conversation, including any secrets pasted into them.", name)
+		check.Summary = fmt.Sprintf("%s is not encrypted: anyone who picks up the drive can read every conversation in the library, including any secrets pasted into them.", facts.sentenceName())
 		if facts.Filesystem != "apfs" {
 			check.Recommendation = "macOS encrypts only APFS volumes; see the file system check first."
 			return check
 		}
 		check.Recommendation = "Encrypt the volume. It encrypts in the background, keeps everything on the drive, and the drive stays usable meanwhile. Keep the password in a password manager: without it the library cannot be read, on any Mac."
-		check.Action = fmt.Sprintf("In Finder, Control-click %q in the sidebar and choose Encrypt %q…", name, name)
+		check.Action = fmt.Sprintf("In Finder, Control-click “%s” in the sidebar and choose Encrypt “%s”…", name, name)
 		check.Command = "diskutil apfs encryptVolume " + shellWord(facts.MountPoint) + " -user disk"
 	}
 	return check
@@ -763,7 +772,7 @@ func spotlightCheck(facts volumeFacts, path string) driveCheck {
 	switch {
 	case facts.Spotlight == "unknown":
 		check.Status = "unknown"
-		check.Summary = "Could not read Spotlight's indexing status for " + name + "."
+		check.Summary = "Could not read Spotlight’s indexing status for " + name + "."
 	case facts.Spotlight == "disabled":
 		check.Summary = fmt.Sprintf("Spotlight does not index %s.", name)
 	case strings.Contains(path, ".noindex"):
@@ -772,13 +781,13 @@ func spotlightCheck(facts volumeFacts, path string) driveCheck {
 		// Turning indexing off for the startup disk would disable Spotlight
 		// for the whole Mac, and folder exclusions are not readable here.
 		check.Status = "info"
-		check.Summary = "Spotlight indexes this Mac's internal disk. Unless you have excluded the library's folder, its file names and any plain-text files are in the Mac's Spotlight index."
-		check.Recommendation = "Exclude the library's folder from Spotlight."
+		check.Summary = "Spotlight indexes this Mac’s internal disk. Unless you have excluded the library’s folder, its file names and any plain-text files are in the Mac’s Spotlight index."
+		check.Recommendation = "Exclude the library’s folder from Spotlight."
 		check.Action = fmt.Sprintf("System Settings → Spotlight → Search Privacy… (Spotlight Privacy… on older macOS), click +, and add %s", path)
 	default:
 		check.Status = "warning"
-		check.Summary = fmt.Sprintf("Spotlight indexes %s. It keeps an index of the drive's file names and any plain-text files on the drive, searchable from any Mac it is plugged into, and its indexer can keep the drive busy when you eject it.", name)
-		check.Recommendation = "Turn off Spotlight indexing for this drive. If another Mac starts indexing it again, doctor reports it there."
+		check.Summary = fmt.Sprintf("Spotlight indexes %s. It keeps an index of the drive’s file names and any plain-text files on the drive, searchable from any Mac it is plugged into, and its indexer can keep the drive busy when you eject it.", name)
+		check.Recommendation = "Turn off Spotlight indexing for this drive. If another Mac turns Spotlight indexing back on, Library health on that Mac reports it."
 		check.Command = "sudo mdutil -i off " + shellWord(facts.MountPoint)
 		check.Action = fmt.Sprintf("Or System Settings → Spotlight → Search Privacy… (Spotlight Privacy… on older macOS), click +, and choose %s", name)
 	}
@@ -787,7 +796,7 @@ func spotlightCheck(facts volumeFacts, path string) driveCheck {
 
 func filesystemCheck(facts volumeFacts) driveCheck {
 	check := driveCheck{ID: "filesystem", Status: "ok"}
-	name := facts.displayName()
+	name := facts.sentenceName()
 	switch facts.Filesystem {
 	case "apfs":
 		check.Summary = name + " uses APFS."
@@ -817,15 +826,15 @@ func locationCheck(facts volumeFacts, scope string) driveCheck {
 	check := driveCheck{ID: "location", Status: "ok"}
 	switch facts.Location {
 	case "external":
-		check.Summary = fmt.Sprintf("%s is an external drive (%s).", facts.displayName(), defaultString(facts.Protocol, "unknown bus"))
+		check.Summary = fmt.Sprintf("%s is an external drive (%s).", facts.sentenceName(), defaultString(facts.Protocol, "unknown bus"))
 	case "disk-image":
 		check.Status = "info"
-		check.Summary = fmt.Sprintf("%s is a disk image (%s); it travels only with the drive holding the image.", facts.displayName(), defaultString(facts.ImagePath, "path unknown"))
+		check.Summary = fmt.Sprintf("%s is a disk image (%s); it travels only with the drive holding the image.", facts.sentenceName(), defaultString(facts.ImagePath, "path unknown"))
 	case "internal":
 		check.Status = "info"
-		check.Summary = "The library is on this Mac's internal disk, so it does not travel with you."
+		check.Summary = "The library is on this Mac’s internal disk, so it does not travel with you."
 		if scope == "archive_root" {
-			check.Summary = "archive_root is on this Mac's internal disk."
+			check.Summary = "archive_root is on this Mac’s internal disk."
 		}
 	default:
 		return unknownCheck("location", facts)
@@ -835,20 +844,20 @@ func locationCheck(facts volumeFacts, scope string) driveCheck {
 
 func spaceCheck(facts volumeFacts, sizes librarySizes, free int64, history backupHistory) driveCheck {
 	check := driveCheck{ID: "free_space", Status: "ok"}
-	check.Summary = fmt.Sprintf("%s free on %s; the library uses %s there (catalog %s, captures %s, preserved %s).",
+	check.Summary = fmt.Sprintf("%s free on %s; the library uses %s there (index %s, captured history %s, preserved originals %s).",
 		humanBytes(free), facts.displayName(), humanBytes(sizes.LibraryBytes), humanBytes(sizes.CatalogBytes), humanBytes(sizes.CapturesBytes), humanBytes(sizes.PreservedBytes))
 	rate, days := history.growth()
 	if rate > 0 {
 		left := float64(free) / rate
-		check.Summary += fmt.Sprintf(" It grew about %s a day over the last %.0f days of backups; at that rate the free space lasts about %s.", humanBytes(int64(rate)), days, humanDays(left))
+		check.Summary += fmt.Sprintf(" It grew about %s a day over the last %s of backups; at that rate the free space lasts about %s.", humanBytes(int64(rate)), plural(int(math.Round(days)), "day"), humanDays(left))
 		switch {
 		case left < 30:
 			check.Status = "problem"
 		case left < 90:
 			check.Status = "warning"
 		}
-	} else if len(history.Backups) < 2 {
-		check.Summary += " Its growth rate appears once backups have run on at least two days."
+	} else if days < 1 {
+		check.Summary += " Its growth rate appears once two complete backups are at least a day apart."
 	}
 	switch {
 	case free < captureFreeMargin:
@@ -905,11 +914,11 @@ func backupCheck(config Config, history backupHistory, facts volumeFacts) driveC
 	command := shellWord(executablePath()) + " --config " + shellWord(config.Path) + " backup " + shellWord(destination)
 	if len(history.Backups) == 0 {
 		check.Status = "warning"
-		check.Summary = "No backup recorded of the catalog, captures and archive_root."
+		check.Summary = "No backup recorded of this Pharos data (index, captures and archive_root)."
 		if config.Library {
 			check.Summary = fmt.Sprintf("No backup recorded: %s holds the only copy of the library.", facts.displayName())
 		}
-		check.Recommendation = "Back up to another drive, or to a folder on a Mac you trust that has FileVault on. Later backups copy only what changed."
+		check.Recommendation = "Back up to another drive, or to a folder on a FileVault-protected Mac you trust. Later backups copy only what changed."
 		check.Command = command
 		return check
 	}
@@ -984,6 +993,9 @@ func humanDays(days float64) string {
 	}
 	if days >= 730 {
 		return fmt.Sprintf("%.0f years", days/365)
+	}
+	if days < 1 {
+		return "less than a day"
 	}
 	return plural(int(days), "day")
 }

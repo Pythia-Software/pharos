@@ -91,14 +91,14 @@ test("unknown totals retain completed counts, a current phase, and elapsed time"
 
 test("all operation kinds show their active child's progress and actual wait state", () => {
   const child = operation('child', {kind: 'analysis.git', label: 'Check repositories', state: 'blocked',
-    state_label: 'Waiting', detail: 'Waiting for the catalog writer',
+    state_label: 'Waiting', detail: 'Waiting for another write to the library',
     step: {name: 'Checking Git history', unit: 'repository', done: 2, total: 5, fraction: .4}});
   const parent = operation('parent', {step: {index: 2, count: 4, name: 'Analysis'}, children: [child]});
   const shown = plain(panel.operationLine(parent));
   assert.equal(shown.label, parent.label);
   assert.equal(shown.currentLabel, child.label);
   assert.deepEqual(shown.primary, ['Waiting', 'step 2 of 4', '2 of 5 repositories']);
-  assert.ok(shown.secondary.includes('Waiting for the catalog writer'));
+  assert.ok(shown.secondary.includes('Waiting for another write to the library'));
   assert.equal(shown.fraction, .4);
   assert.equal(shown.waiting, true);
   assert.equal(plain(panel.operationLine({...parent, state: 'stopping', state_label: 'Stopping…'})).state, 'stopping');
@@ -111,14 +111,14 @@ test("all operation kinds show their active child's progress and actual wait sta
   child.state = 'running';
   child.state_label = 'Checking repositories';
   child.detail = null;
-  const blocked = {...parent, state: 'blocked', state_label: 'Waiting', detail: 'Waiting for the catalog writer',
+  const blocked = {...parent, state: 'blocked', state_label: 'Waiting', detail: 'Waiting for another write to the library',
     time: {label: 'about 3 min'}};
   for (const ancestor of [blocked, {...parent, children: [{...blocked, id: 'chain', children: [child]}]}]) {
     const line = plain(panel.operationLine(ancestor));
     assert.equal(line.state, 'blocked');
     assert.equal(line.waiting, true);
     assert.ok(line.primary.includes('Waiting'));
-    assert.ok(line.secondary.includes('Waiting for the catalog writer'));
+    assert.ok(line.secondary.includes('Waiting for another write to the library'));
     assert.equal(line.currentLabel, child.label);
     assert.equal(line.fraction, .4);
     assert.equal(line.time, '', 'a blocked ancestor must not keep showing a running countdown');
@@ -195,7 +195,7 @@ test("the broker load remains visible during a service timeout, and partial rate
     resources: {cpu_percent: 12, cpu_partial: true, memory_bytes: 2e9, disk_bytes_per_second: 4e6, disk_partial: true, label: "Pharos is using resources"},
     lastLibrarySizes: {storage: 48e9, wal: 64e6}, appOperations: [], attention: []});
   assert.equal(unavailable.available, false);
-  assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["≥12%", "2.0 GB", "≥4.0 MB/s", "last 48 GB"]);
+  assert.deepEqual(unavailable.load.metrics.map(metric => metric.value), ["≥12%", "2.0 GB", "≥4.0 MB/s", "48 GB (last known)"]);
   for (const id of ["cpu", "io"]) assert.match(unavailable.load.metrics.find(metric => metric.id === id).warning, /waiting for another sample.*may undercount/);
   assert.equal(unavailable.load.metrics.find(metric => metric.id === "memory").warning, undefined);
   // A process whose memory could not be read makes the total a lower bound;
@@ -232,7 +232,7 @@ test("WAL appears only above one decimal GB, including a last known size", () =>
     assert.ok(!load(wal).metrics.some(metric => metric.id === "wal"));
   }
   assert.equal(load(1e9 + 1).metrics.find(metric => metric.id === "wal").value, "1.0 GB");
-  assert.equal(load(2e9, true).metrics.find(metric => metric.id === "wal").value, "last 2.0 GB");
+  assert.equal(load(2e9, true).metrics.find(metric => metric.id === "wal").value, "2.0 GB (last known)");
 });
 
 const at = Date.parse("2026-10-27T12:00:00Z");
@@ -283,7 +283,7 @@ test("the schedule is the server's headline, one row per cadence with its items"
   assert.equal(queued.rows[1].items[0].dot, "busy");
   // A running item's tooltip says what it feeds.
   const feeding = plain(panel.scheduleModel({ ...background, items: [{ ...background.items[1], feeds: "Writing pages" }] }, at));
-  assert.equal(feeding.rows[1].items[0].tooltip, "Writing pages update when this finishes.");
+  assert.equal(feeding.rows[1].items[0].tooltip, "Updates when this finishes: Writing pages.");
   // Routine headlines (up to date, or the item the rows already show
   // running) stay out; the out of the ordinary ones stay in.
   for (const tone of ["good", "busy"]) assert.equal(panel.scheduleModel({ ...background, headline: { tone, title: "T", text: "X" } }, at).headline, null, tone);
@@ -336,7 +336,7 @@ test("Eject appears only for an ejectable drive in the app, and acts only on a f
 test("Eject says what it does under the shown verdict", () => {
   const label = verdict => model(view({ eject: { verdict, summary: "S", blockers: [] } }), { nativeEject: true }).eject.label;
   assert.equal(label("safe"), "⏏ Eject");
-  assert.equal(label("safe-in"), "⏏ Stop and Eject");
+  assert.equal(label("safe-in"), "⏏ Stop and eject");
   assert.equal(label("busy"), "⏏ Eject when safe");
   assert.equal(label("unsafe"), "⏏ Eject when safe");
   assert.equal(model(view(), { nativeEject: true, ejectState: { phase: "checking" } }).eject.label, "Checking…");
@@ -461,7 +461,7 @@ test("without a snapshot the panel says why", () => {
 const historyNow = Date.parse("2026-11-07T12:00:00Z");
 const ago_ = seconds => historyNow - seconds * 1000;
 const history = (changes = {}) => ({
-  version: 1, available: true, scope: "this library service", now: historyNow, window_seconds: 900,
+  version: 1, available: true, scope: "this library", now: historyNow, window_seconds: 900,
   series: { cpu: { available: true, unit: "percent_one_core" }, memory: { available: true, unit: "bytes" }, disk: { available: false, unit: "bytes_per_second" }, gpu: { available: true, unit: "percent_driver_time" } },
   samples: { t: [ago_(60), ago_(58), ago_(56), ago_(20), ago_(18), ago_(16)], cpu: [null, 50, 250, 10, 12, null],
     memory: [1e9, 1e9, 1.2e9, 1e9, 1e9, 1e9], disk: [null, null, null, null, null, null],
@@ -492,7 +492,7 @@ test("history draws separate series, breaking lines at gaps and missing readings
   const zero = String(strip.height - 1);
   assert.ok(!gpu.paths.some(path => path.split(/[ML]/).filter(Boolean).some(point => point.split(" ")[1] === zero)), "a missing GPU value is never drawn as zero");
   assert.equal(strip.markers.length, 2);
-  assert.match(strip.caption, /15 min.*this library service.*2 processes/);
+  assert.match(strip.caption, /15 min.*this library.*2 processes/);
   assert.equal(strip.omitted.length, 1);
   for (const entry of strip.series) assert.ok(strip.summary.includes(entry.summary), "the accessible summary covers every series");
   assert.match(series("cpu").summary, /% of one core/);
@@ -538,7 +538,7 @@ test("inspecting the history shows the nearest values and the tasks running then
 test("the strip appears only beside a Load row, in the same scope", () => {
   const withLoad = model(view({ resources: { cpu_percent: 12, memory_bytes: 1e9 } }), { history: history() });
   assert.ok(withLoad.load && withLoad.history);
-  assert.equal(withLoad.history.scope, "this library service");
+  assert.equal(withLoad.history.scope, "this library");
   assert.equal(model(view({ resources: { cpu_percent: 12 } })).history, null, "no document, no strip");
   const unavailable = model({ library: null, service: { name: "Euclid", resources: null }, resources: null, appOperations: [], attention: [] }, { history: history() });
   assert.equal(unavailable.history, null);

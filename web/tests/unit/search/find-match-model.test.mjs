@@ -35,10 +35,10 @@ test('a card summary interleaves its messages with the counts between them', () 
     { kind: 'match', message_id: 'a', preview: 'first' }, { kind: 'match', message_id: 'b' }, { kind: 'match', message_id: 'c' }, { kind: 'last', message_id: 'z' },
   ] };
   assert.deepEqual(summaryEntries(matches, 9).map(entry => entry.label), [
-    'First ask · Match · 3 of 9 matching messages', '4 messages between', 'Match', 'Directly after', 'Match', '12 messages between', 'Latest response',
+    'First ask · Match · 3 of 9 matching messages', '4 messages between', 'Match', 'Directly after', 'Match', '12 messages between', 'Last reply',
   ]);
   const one = { complete: true, between: [1, 1], items: [{ kind: 'first', message_id: 'a' }, { kind: 'match', message_id: 'm' }, { kind: 'last', message_id: 'z' }] };
-  assert.deepEqual(summaryEntries(one, 1).map(entry => entry.label), ['First ask', '1 message between', 'Match', '1 message between', 'Latest response']);
+  assert.deepEqual(summaryEntries(one, 1).map(entry => entry.label), ['First ask', '1 message between', 'Match', '1 message between', 'Last reply']);
 });
 
 test('opening a match hands its marked terms to page Find', () => {

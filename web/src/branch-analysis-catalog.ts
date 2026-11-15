@@ -2,10 +2,11 @@ import type { AggregationClause, WhereTerm } from "@pythia-software/query-table-
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 import { projectBreakdown, projectLegacy } from "./project-analysis";
 import { tokenMetricFormat } from "./token-count";
+import { modelNotRecorded } from "./model-label";
 
-// Spend by branch over the branch_usage dataset: one record is one session's
-// priced usage on one branch, with one model, in one hour. Only sessions
-// in Git repositories have records. A session that switched branches spends
+// Spend by branch over the branch_usage dataset: one record is one workspace's
+// priced usage on one branch, with one model, in one hour. Only workspaces
+// in Git repositories have records. A workspace that switched branches spends
 // on each in turn (docs/projects-and-outcomes.md#spend-by-branch).
 
 const count = { kind: "number", decimals: 0 } as const, usd = { kind: "number", decimals: 2 } as const;
@@ -13,9 +14,9 @@ const onBranch: WhereTerm[] = [{ field: "coverage", op: "=", value: "on_branch" 
 
 const measures: Record<string, AnalysisMeasure> = {
   cost: { label: "API cost (USD)", unit: "USD", format: usd, op: "sum", field: "cost_usd", value: "cost_usd", additive: true,
-    note: "API-equivalent cost, priced as the Library prices it. Within an hour, a session's cost is split among its branches by the tokens each branch's turns used." },
+    note: "Estimated API list-price cost, not subscription spend. Within each hour, a workspace’s cost is split among its branches by the tokens its turns on each branch used." },
   tokens: { label: "Tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "tokens", value: "tokens", additive: true, note: "Reconciled tokens, split among branches the same way." },
-  sessions: { label: "Sessions", unit: "sessions", format: count, op: "count_distinct", field: "workspace_id", additive: false, note: "Distinct sessions; a session that switched branches counts once on each." },
+  sessions: { label: "Workspaces", unit: "workspaces", format: count, op: "count_distinct", field: "workspace_id", additive: false, note: "Distinct workspaces; a workspace that switched branches counts once on each branch." },
 };
 
 export const branchCoverageLabels: Record<string, string> = { on_branch: "On a branch", unknown: "Unknown branch", no_branch_data: "No branch data" };
@@ -26,20 +27,20 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
   branch: { label: "Branch name", fields: ["branch"], where: onBranch, empty: "No branch",
     note: "Usage on a recorded branch only; Coverage shows the rest. Branches with the same name in different projects are added together." },
   coverage: { label: "Coverage", fields: ["coverage"], order: Object.keys(branchCoverageLabels), values: branchCoverageLabels,
-    note: "Unknown branch: in a session that recorded a branch, but before its first, on a detached HEAD, or not placed on a turn. No branch data: a session that recorded none." },
+    note: "Unknown branch: usage before the first recorded branch, on a detached HEAD, or not tied to a turn. No branch data: usage in a workspace that recorded no branch." },
   project_name: projectBreakdown(),
   provider: { label: "Provider", fields: ["provider"], order: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"] },
-  model_family: { label: "Model", fields: ["model_family"], empty: "Unknown model" },
+  model_family: { label: "Model", fields: ["model_family"], empty: modelNotRecorded },
   source_kind: { label: "Source", fields: ["source_kind"],
     note: "The retained history source. Linked copies count once, so work started in Conductor can have a native Claude or Codex source." },
   channel: { label: "Channel", fields: ["channel"], empty: "Unknown channel",
-    note: "How the top-level conversation started. Linked helpers inherit that channel, including when their usage comes from a native Claude or Codex transcript. Channel attribution records whether this is direct, inherited or inferred." },
-  branch_source: { label: "Branch recorded", fields: ["branch_source"], where: onBranch, order: ["turn", "session"], values: { turn: "Per turn", session: "Per session" } },
+    note: "How the top-level conversation started. Linked helpers inherit that channel, including when their usage comes from a native Claude or Codex transcript. Channel attribution says how the channel was established: direct, inherited, inferred, or not established." },
+  branch_source: { label: "Branch recorded", fields: ["branch_source"], where: onBranch, order: ["turn", "session"], values: { turn: "Per turn", session: "Per workspace" } },
 };
 
 export const branchAnalysisCatalog: AnalysisCatalog = {
   dataset: "branch_usage", time: { first: "usage_at", last: "usage_at" }, measures, breakdowns,
-  records: { label: "Usage row", plural: "Usage rows", note: "One session's usage on one branch, with one model, in one hour." },
+  records: { label: "Usage row", plural: "Usage rows", note: "One workspace’s usage on one branch, with one model, in one hour." },
   units: {}, periods: {}, timestamp: "usage_at",
   cycle: { hour: { kind: "timestamp", field: "usage_at" }, weekday: { kind: "timestamp", field: "usage_at" } },
   trend: { metric: "cost", split: "coverage" }, scatter: ["cost", "tokens"], legacy: projectLegacy(),

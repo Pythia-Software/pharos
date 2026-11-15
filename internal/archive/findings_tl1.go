@@ -133,7 +133,7 @@ func tl1FindingCandidates(env *findingEnv, data *tl1Data, wanted map[string]find
 			candidate.Lever = steps[0].Lever
 			candidate.write = func(candidate *findingCandidate, stats findingStats) findingCard {
 				return findingCard{Title: fmt.Sprintf("%s keeps rerunning on the same candidates", flavor),
-					Explanation: fmt.Sprintf("%s of %s's runs this month were on a candidate it had already worked on.", capitalize(fractionPhrase(stats.Rate, "")), flavor),
+					Explanation: fmt.Sprintf("%s of %s’s runs in the last 28 days were on a candidate it had already worked on.", capitalize(sharePhrase(stats.Rate)), flavor),
 					ImpactNote:  countNoun(stats.Affected, "repeat run"), Steps: steps, ChartTitle: flavor + " runs on a candidate it already worked on", Rate: fractionPhrase(stats.Rate, "")}
 			}
 			output = append(output, candidate)
@@ -164,8 +164,8 @@ func tl1FindingCandidates(env *findingEnv, data *tl1Data, wanted map[string]find
 			candidate.Facts["median_cost_usd"] = median
 			candidate.write = func(candidate *findingCandidate, stats findingStats) findingCard {
 				return findingCard{Title: fmt.Sprintf("A few %s runs cost several times the usual", flavor),
-					Explanation: fmt.Sprintf("%s this month cost at least three times a typical %s run (%s). They took %s of the flavor's spend.",
-						capitalize(countNoun(stats.Affected, "run")), flavor, dollars(median), fractionPhrase(stats.Rate, "")),
+					Explanation: fmt.Sprintf("%s in the last 28 days cost at least three times a typical %s run (%s). %s took %s of the flavor’s spend.",
+						capitalize(countNoun(stats.Affected, "run")), flavor, dollars(median), theyOrIt(stats.Affected), sharePhrase(stats.Rate)),
 					ImpactNote: dollars(stats.CostUSD) + " above the usual", Steps: steps, ChartTitle: "Share of " + flavor + " spend from runs costing 3× the usual", Rate: fractionPhrase(stats.Rate, "")}
 			}
 			output = append(output, candidate)
@@ -200,7 +200,7 @@ func describeTL1Error(candidate *findingCandidate, flavor, signature, attributio
 	}
 	candidate.Lever = steps[0].Lever
 	candidate.write = func(candidate *findingCandidate, stats findingStats) findingCard {
-		explanation := fmt.Sprintf("%s failed this way this month: %s of all %s runs.", capitalize(countNoun(stats.Affected, flavor+" run")), fractionPhrase(stats.Rate, ""), flavor)
+		explanation := fmt.Sprintf("%s failed this way in the last 28 days: %s of the %s runs.", capitalize(countNoun(stats.Affected, flavor+" run")), sharePhrase(stats.Rate), flavor)
 		if why != "" {
 			explanation += " " + why
 		}

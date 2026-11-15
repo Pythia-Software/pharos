@@ -23,7 +23,7 @@ export function SearchDialog({ schema }: { schema: FieldSchema }) {
           const service = createQueryLinkService(schema.name, httpQuerySnapshotStore("/api/query-snapshots"));
           void service.resolve(location.href, "q_library", signal).then(query => {
             if (!signal.aborted && query) { params.set("q_library", encodeQuery(query)); replaceSearchDraft(restoreSearch(params, schema)); }
-          }).catch(error => { if (!signal.aborted) replaceSearchDraft({ ...freshSearch(schema), error: String(error) }); });
+          }).catch(error => { if (!signal.aborted) replaceSearchDraft({ ...freshSearch(schema), error: error instanceof Error ? error.message : String(error) }); });
         }
       }
       setOpen(true); window.pharosModal!.open(dialog, { onClose: () => { resolution.abort(); setOpen(false); } });

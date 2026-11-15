@@ -38,7 +38,7 @@ const measures: Record<string, AnalysisMeasure> = {
   conversations: { label: "Conversations", unit: "conversations", format: count, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct conversations with a matching message. A conversation in several groups counts once in each, so groups do not add up to the total." },
   typed_share: { label: "Typed share of words", unit: "percent", format: percent, op: "sum", ratio: ["typed_words", "words"], additive: false, note: "Typed words divided by all user words, pooled over each group's messages rather than averaging per-message shares." },
   words_per_message: { label: "Typed words per message", unit: "words", format: mean, op: "sum", ratio: ["typed_words", { op: "sum", expression: "IF([typed_words]>0,1,0)", label: "messages with typed text" }], additive: false, note: "Typed words divided by messages holding any, pooled; messages without typed text do not dilute it." },
-  copied_share: { label: "Copied-from-conversation share", unit: "percent", format: percent, op: "sum", ratio: [cue("has_source", "messages holding text copied from a conversation"), messages], additive: false, note: "Messages holding text matched to an earlier conversation, divided by all messages, pooled." },
+  copied_share: { label: "Share of messages with copied conversation text", unit: "percent", format: percent, op: "sum", ratio: [cue("has_source", "messages holding text copied from a conversation"), messages], additive: false, note: "Messages holding text matched to an earlier conversation, divided by all messages, pooled." },
 };
 
 const single = (entries: Array<[string, string]>): AnalysisCatalog["breakdowns"] => Object.fromEntries(entries.map(([field, label]) => [field, { label, fields: [field] }]));
@@ -64,7 +64,7 @@ export const humanAnalysisCatalog: AnalysisCatalog = {
   breakdowns: {
     ...peopleLabelBreakdowns("writing_messages"),
     project_name: projectBreakdown(),
-    ...single([["source_kind", "Source"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["main_category", "Mostly"]]),
+    ...single([["source_kind", "Source"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["main_category", "Main text source"]]),
     estimate: { label: "Estimate", fields: ["estimate"], order: ["refined", "provisional"], values: { refined: "Refined", provisional: "Provisional" },
       note: "Provisional words come from the frequent Update writing estimates pass and can change when the daily Refine writing history pass resolves copied text, templates and launches. Refined words have had the complete rules applied." },
   },
@@ -76,7 +76,7 @@ export const humanAnalysisCatalog: AnalysisCatalog = {
       breakdowns: { project_name: ["project_name"], source_kind: ["source_kind"], provider: ["provider"], ...origin },
       note: "A conversation is one recorded agent conversation; a delegated sub-agent's conversation is its own. Only its messages in the range count." },
     work: { label: "Workspace", plural: "Workspaces", key: "work_id", where: present("work_id"), breakdowns: { project_name: ["project_name"], source_kind: ["source_kind"] },
-      note: "Groups messages by workspace, including linked delegated activity, as Human words by workspace does. Only messages in the selected range count." },
+      note: "Groups messages by workspace, including linked delegated activity, as Writing by workspace does. Only messages in the selected range count." },
   },
   cycle: { hour: { kind: "timestamp", field: "sent_at" }, weekday: { kind: "timestamp", field: "sent_at" } },
   periods: { day: "day", week: "week", month: "month" }, timestamp: "sent_at",
@@ -88,7 +88,7 @@ humanAnalysisCatalog.breakdowns.provider.order = ["claude", "antigravity", "code
 // The series endpoint grouped a whole work by its combined providers,
 // channels or machines; messages are grouped by their own.
 for (const [split, label] of [["provider", "providers"], ["channel", "channels"], ["machine_id", "machines"], ["execution_machine_id", "execution machines"]]) {
-  humanAnalysisCatalog.breakdowns[split].note = `Each message counts under its own conversation's ${label.replace(/s$/, "")}, not its work's combined ${label}.`;
+  humanAnalysisCatalog.breakdowns[split].note = `Each message counts under its own conversation's ${label.replace(/s$/, "")}, not its workspace's combined ${label}.`;
 }
 
 // Filters older (unversioned) links wrote against the writing dataset, one

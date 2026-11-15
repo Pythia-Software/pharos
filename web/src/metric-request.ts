@@ -25,7 +25,7 @@ export function metricResults(response: MetricResponse, clauses: AggregationClau
   const byId = new Map((response.metrics ?? []).map(metric => [metric.id, metric]));
   return clauses.map(clause => {
     const metric = byId.get(clause.id);
-    if (!metric) throw new MetricRequestError(`The server omitted the metric ${clause.id}.`);
+    if (!metric) throw new MetricRequestError(`Pharos did not return every result this chart needs (metric ${clause.id}).`);
     if (metric.error) throw new MetricRequestError(metric.error, metric.errorCode === "resource_limit");
     return metric;
   });
@@ -55,7 +55,7 @@ export async function postQueryStateMetrics(dataset: string, schema: FieldSchema
   let handshake: { queryCapabilities?: QueryCapabilitiesV3; computedExecution?: ComputedExecution };
   try { handshake = await queryRequest<{ queryCapabilities?: QueryCapabilitiesV3; computedExecution?: ComputedExecution }>(`/api/query/${dataset}/capabilities`, { signal });
   } catch (error) { if (error instanceof QueryRequestError) throw new MetricRequestError(error.message, error.code === "resource_limit"); throw error; }
-  if (handshake.queryCapabilities?.version !== 3) throw new MetricRequestError("This server does not support Query Table V3. Reload after updating the service.");
+  if (handshake.queryCapabilities?.version !== 3) throw new MetricRequestError("This version of Pharos cannot answer this request. Quit and reopen Pharos, then reload the page.");
   const request = toQueryRequestV3(query, sourceExecutionSchema(schema, handshake.computedExecution), handshake.queryCapabilities, handshake.computedExecution, { rows: false, ...now === undefined ? {} : { now } });
   request.hostState = query.hostState;
   const response = await post<MetricResponse>(withParams(`/api/query/${dataset}/query-v3`, params), withEstimateMetrics(dataset, request), signal);

@@ -338,9 +338,9 @@ final class MenuFixture: URLProtocol {
             precondition(prefs["enabled"] == fixture["enabled"] as! Bool)
             precondition(MenuBarPreferences(prefs.saved).order == prefs.order, "Order must survive the native cache")
         }
-        let shortcuts = [("search", "Search conversations…", "/library"), ("analyze", "Analyze usage…", "/analyze"),
-                         ("optimize", "Optimize…", "/findings"), ("capture", "Background Processing…", "/settings/sync"),
-                         ("health", "Library health & backups…", "/settings"), ("sources", "Manage sources…", "/settings/sources")]
+        let shortcuts = [("search", "Search conversations", "/library"), ("analyze", "Analyze usage", "/analyze"),
+                         ("optimize", "Optimize", "/findings"), ("capture", "Background Processing", "/settings/sync"),
+                         ("health", "Library health", "/settings"), ("sources", "Manage sources", "/settings/sources")]
         precondition(shortcuts.allSatisfy { MenuBarPreferences()[$0.0] } && MenuBarPreferences()["finder"], "Shortcuts default on and remain customizable")
         controller.applyPreferences(["layoutVersion": 2, "order": ["open"] + shortcuts.map { $0.0 } + ["finder", "status", "settings", "quit"]])
         var shortcutOpened = false

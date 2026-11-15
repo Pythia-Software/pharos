@@ -1,16 +1,10 @@
 import React from "react";
 import { isSortable, MAX_ORDER_BY_TERMS, type FieldDef, type OrderByClause } from "@pythia-software/query-table-core";
-import type { QueryTableApi } from "@pythia-software/query-table-react";
 import { Icon } from "./icons";
 import { SearchHelp } from "./search-help";
 import { SearchSelect } from "./search-select";
 
-// Share the table controller so headers, saved views, and the query editor
-// always show the same ordering, including advanced saved sort clauses.
-export function SearchOrder<Row>({ api, batched }: { api: QueryTableApi<Row>; batched: boolean }) {
-  return <SearchOrderControl catalogue={api.computed.catalogue} order={api.query.orderBy.length ? api.query.orderBy : api.defaults.orderBy} onChange={api.setSort} batched={batched} />;
-}
-export function SearchOrderControl({ catalogue, order, onChange, batched = false, subject = "workspaces" }: { catalogue: FieldDef[]; order: OrderByClause[]; onChange: (order: OrderByClause[]) => void; batched?: boolean; subject?: string }) {
+export function SearchOrderControl({ catalogue, order, onChange }: { catalogue: FieldDef[]; order: OrderByClause[]; onChange: (order: OrderByClause[]) => void }) {
   const fields = [...new Map(catalogue.filter(isSortable).map(field => [field.sort?.field ?? field.name, field])).entries()];
   const available = fields.filter(([name]) => !order.some(term => term.field === name));
   const update = (index: number, patch: Partial<OrderByClause>) => onChange(order.map((term, i) => i === index ? { ...term, ...patch } : term));
@@ -34,7 +28,6 @@ export function SearchOrderControl({ catalogue, order, onChange, batched = false
       </div>
     </React.Fragment>)}
     {available.length && order.length < MAX_ORDER_BY_TERMS ? <SearchSelect className="text-add-sort" aria-label="Add sort field" value="" onChange={event => { if (event.target.value) onChange([...order, { field: event.target.value, dir: "asc" }]); }}><option value="">{order.length ? "+ then by" : "Choose field"}</option>{available.map(([name, field]) => <option key={name} value={name}>{field.label ?? name}</option>)}</SearchSelect> : null}
-    {batched ? <span className="text-sort-detail">This batch</span> : null}
-    {batched || order.some(term => term.extract || term.nulls === "first") ? <SearchHelp label="Result ordering">{batched ? `Sorting orders the matching ${subject} in the current search batch only; it does not change which messages the next batch checks. ` : ""}{order.some(term => term.extract || term.nulls === "first") ? "Regex extraction and empty-value ordering are edited in the table layout controls." : ""}</SearchHelp> : null}
+    {order.some(term => term.extract || term.nulls === "first") ? <SearchHelp label="Result ordering">Regex extraction and empty-value ordering are edited in the table layout controls.</SearchHelp> : null}
   </div>;
 }

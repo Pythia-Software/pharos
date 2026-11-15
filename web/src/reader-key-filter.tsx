@@ -60,7 +60,7 @@ window.pharosReaderDefaults = (host, synchronous = false) => readerRoot(host, sy
 type LineTag = { label: string; values: string[]; category?: { label: string; values: string[] }; all: string[]; shown: string[]; onChange: (shown: string[]) => void };
 function ReaderLineTag({ label, values, category, all, shown, onChange }: LineTag) {
   const state = readerKeyState(all, shown, values), scopes = readerLineScopes(values, category);
-  return <LegendMenu name={label} label={label} menuLabel={`Filter ${label}`} title={`Filter ${label}`} heading={label}
+  return <LegendMenu name={label} label={label} menuLabel={`Show or hide ${label}`} title={`Show or hide ${label}`} heading={label}
     active={state.active} dimmed={state.dimmed} mixed={state.mixed}>
     {choose => <>{scopes.map((scope, index) => {
       const current = readerKeyState(all, shown, scope.values);
@@ -75,7 +75,7 @@ function ReaderLineTag({ label, values, category, all, shown, onChange }: LineTa
       </React.Fragment>;
     })}
       {state.selectionActive ? <><hr className="usage-legend-menu-separator" role="separator" /><button type="button" role="menuitem" tabIndex={-1}
-        onClick={() => choose(() => onChange(updateReaderKeys(all, shown, values, "clear")))}>Show All</button></> : null}
+        onClick={() => choose(() => onChange(updateReaderKeys(all, shown, values, "clear")))}>Show all</button></> : null}
     </>}
   </LegendMenu>;
 }

@@ -5,10 +5,10 @@
 import { agentEventsFreshnessMark, agentEventsStillCountedNote, type AgentEventsCoverage } from "./agent-events-freshness";
 export const fixesRanks = ["priority", "work", "recent", "time", "spread"] as const;
 export type FixesRank = typeof fixesRanks[number];
-export const fixesRankLabels: Record<FixesRank, string> = { priority: "Priority", work: "Work items", recent: "Recent", time: "Time lost", spread: "Repositories" };
+export const fixesRankLabels: Record<FixesRank, string> = { priority: "Priority", work: "Workspaces", recent: "Recent", time: "Time lost", spread: "Repositories" };
 export const fixesRankExplanations: Record<FixesRank, string> = {
-  priority: "Work items, weighted down once a problem has been quiet longer than your setting, plus two per hour of agent time in the friction it started.",
-  work: "How many separate work items ran into it.",
+  priority: "Workspaces, weighted down once a problem has been quiet longer than your setting, plus two per hour of agent time (up to 20 hours) in the friction it started.",
+  work: "How many separate workspaces ran into it.",
   recent: "Latest occurrence first.",
   time: "Agent time in friction episodes its events started.",
   spread: "How many repositories it spans.",
@@ -16,7 +16,7 @@ export const fixesRankExplanations: Record<FixesRank, string> = {
 export const fixesKinds = ["env", "harness", "tool", "flaky", "knowledge", "stale", "obstacle"] as const;
 export type FixesKind = typeof fixesKinds[number];
 export const fixesKindLabels: Record<FixesKind, string> = {
-  env: "Environment or setup", harness: "Harness and shell behaviour", tool: "Tool or integration", flaky: "Known failing check",
+  env: "Environment or setup", harness: "Agent app and shell behavior", tool: "Tool or integration", flaky: "Known failing check",
   knowledge: "Codebase knowledge", stale: "Out-of-date docs", obstacle: "Recurring obstacle",
 };
 export type FixesState = "open" | "handed_off" | "dismissed";
@@ -109,7 +109,7 @@ export function fixesFacts(item: FixCard): string[] {
 export function fixesHiddenReason(item: Pick<FixCard, "hidden" | "status" | "work_items">, bounds: FixesBounds): string {
   if (item.hidden === "intended") return "Guidance already covers this: agents cite the rule they are following, so it is working as intended.";
   if (item.hidden === "stale") return `Not seen for ${plural(item.status.days_quiet, "day")}; your settings hide problems quiet longer than ${plural(bounds.hide_days, "day")}.`;
-  if (item.hidden === "rare") return `Seen in ${plural(item.work_items, "work item")}; your settings hide problems seen in fewer than ${bounds.min_work_items}.`;
+  if (item.hidden === "rare") return `Seen in ${plural(item.work_items, "workspace")}; your settings hide problems seen in fewer than ${bounds.min_work_items}.`;
   return "";
 }
 
@@ -118,7 +118,7 @@ export function fixesHiddenNote(hidden: { stale: number; rare: number; intended?
   if (!hidden.total) return "";
   const parts = [
     hidden.stale ? `${plural(hidden.stale, "problem")} not seen in the last ${plural(bounds.hide_days, "day")}` : "",
-    hidden.rare ? `${plural(hidden.rare, "problem")} seen in fewer than ${plural(bounds.min_work_items, "work item")}` : "",
+    hidden.rare ? `${plural(hidden.rare, "problem")} seen in fewer than ${plural(bounds.min_work_items, "workspace")}` : "",
   ].filter(Boolean);
   const intended = hidden.intended ? `${plural(hidden.intended, "problem")} the guidance causes on purpose` : "";
   if (!parts.length) return `Left out: ${intended}.`;
@@ -153,5 +153,5 @@ export function fixesLeadQuote(item: { title: string; lead?: string }): string {
  */
 export function fixesEventsFreshness(coverage: AgentEventsCoverage | null | undefined): { mark: string; note: string } {
   const note = agentEventsStillCountedNote(coverage);
-  return note ? { mark: agentEventsFreshnessMark(coverage), note: `${note} A fix's work items and events can change when they are rebuilt.` } : { mark: "", note: "" };
+  return note ? { mark: agentEventsFreshnessMark(coverage), note: `${note} A fix’s workspaces and events can change when they are rebuilt.` } : { mark: "", note: "" };
 }

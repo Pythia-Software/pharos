@@ -514,7 +514,7 @@
     },
     {
       "name": "title",
-      "label": "Conversation",
+      "label": "Workspace",
       "type": "text",
       "group": "Context",
       "render": "usage_conversation",
@@ -658,7 +658,7 @@
     },
     {
       "name": "workspace_id",
-      "label": "Conversation's work ID",
+      "label": "Workspace ID",
       "type": "text",
       "group": "Context",
       "select": {

@@ -38,6 +38,12 @@ test("per-day averages include idle days and ratios pool window totals", () => {
   assert.equal(averaged.pointTimes.at(-1), now, "today's endpoint is the calculation time");
   assert.match(averaged.sampleLabel, /^4 calls in the latest 7 days$/);
   assert.equal(observations, 6, "every observed day counts, inside or outside the latest window");
+  const one = [[{ id: "trend-value", op: "sum", groupBy: ["day"], coverage: "exact", buckets: [{ keys: [last], value: 5, count: 1 }] }, { id: "trend-rows", op: "count", groupBy: ["day"], coverage: "exact", buckets: [{ keys: [last], value: 1, count: 1 }] }]];
+  const { study: single } = buildCardTrend({ value: { op: "sum", field: "co2e_kg" }, valueLabel: "kg CO₂e · last {days} days", pointValueLabel: "", sample: "usage records", detail: "Each point: over its trailing {days} local days." }, 1, one, now);
+  assert.equal(single.sampleLabel, "1 usage record in the latest day", "one sample is singular");
+  assert.equal(single.valueLabel, "kg CO₂e · last day", "a one-day window reads as prose");
+  assert.equal(single.detail, "Each point: over its trailing local day.");
+  assert.equal(single.trendLabel, "Trailing day");
   const { study: pooled } = buildCardTrend({ value: { op: "sum", field: "duration_ms" }, per: { op: "count", field: "duration_ms" }, scale: 1 / 1000, lookback: 2, valueLabel: "", pointValueLabel: "", sample: "calls", detail: "" }, 2,
     results({ [last]: 9000, [shiftDay(last, -1)]: 1000 }, { [last]: 1, [shiftDay(last, -1)]: 9 }), now);
   assert.equal(pooled.points.at(-1), 1, "10 s over 10 timed calls, not the mean of 9 s and 0.11 s");

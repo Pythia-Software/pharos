@@ -123,11 +123,11 @@ function pharosClaudeRoutineDue(watch, now=Date.now()) {
 function pharosClaudeWatchLine(item) {
   const files=`${item.collected||0} of ${item.expected||0} files collected`;
   const ingestion=item.ingestion;
-  const stages={capturing:'Preserving collected files','discovering inputs':'Reading collected conversations',checking:'Checking for changed conversations',indexing:'Adding conversations to your library','waiting for catalog':'Waiting to save conversations','indexing retained snapshots':'Indexing retained snapshots','saving index':'Saving ingestion results',complete:'Finishing ingestion'};
-  const phase={queued:'Waiting for the library',indexing:stages[ingestion?.stage]||'Preparing ingestion'}[item.phase]||'Collecting export files';
+  const stages={capturing:'Preserving collected files','discovering inputs':'Reading collected conversations',checking:'Checking for changed conversations',indexing:'Adding conversations to your library','waiting for catalog':'Waiting to save conversations','indexing retained snapshots':'Indexing retained snapshots','saving index':'Saving the index',complete:'Finishing indexing'};
+  const phase={queued:'Waiting for the library',indexing:stages[ingestion?.stage]||'Preparing to index'}[item.phase]||'Collecting export files';
   const line={
     fetching:{text:item.waiting_file?`Waiting for ${item.waiting_file} from ${item.browser_label||'your browser'}`:phase,actions:['stop'],attention:false},
-    paused:{text:ingestion?'Ingestion paused':'Collection paused',actions:['retry','stop'],attention:true},
+    paused:{text:ingestion?'Indexing paused':'Collection paused',actions:['retry','stop'],attention:true},
     stopped:{text:'Stopped',actions:['retry'],attention:false},
     expired:{text:'Download links expired',actions:[],attention:true},
     imported:{text:'Ready in your library',actions:[],attention:false},
@@ -357,6 +357,9 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
     return section;
   }
   const plural = (count, unit) => `${Number(count).toLocaleString()} ${unit}${count === 1 ? '' : 's'}`;
+  // A found folder's probe status (probe.go), and an index run's phase, in words.
+  const STATUS_LABELS = {protected: 'Protected by macOS', unreadable: 'Could not read', empty: 'No history yet'};
+  const INDEX_PHASES = {starting: 'Starting', checking: 'Checking for changes', 'discovering inputs': 'Finding conversations', indexing: 'Reading conversations', 'waiting for catalog': 'Waiting to save', 'indexing retained snapshots': 'Reading retained snapshots', 'saving index': 'Saving', 'repairing-existing': 'Repairing existing conversations'};
   const size = value => {
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
     let amount = Number(value) || 0, power = 0;
@@ -392,7 +395,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
     title.htmlFor = id;
     head.append(title);
     if (configured) head.append(node('span', 'pharos-chip', `Added as ${configured.name}${configured.enabled ? '' : ' · paused'}`));
-    else if (candidate.status !== 'found' && candidate.status !== 'manual') head.append(node('span', 'pharos-chip', candidate.status));
+    else if (candidate.status !== 'found' && candidate.status !== 'manual') head.append(node('span', 'pharos-chip', STATUS_LABELS[candidate.status] || candidate.status));
     if (candidate.acceptable) {
       const box = node('input');
       box.type = 'checkbox';
@@ -616,7 +619,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
       kind.onchange=()=>{hint.textContent=HINTS[kind.value]||''};kind.onchange();
       custom.append(kind,hint,field.row,button('Check folder',false,()=>{
         const value=path.trim();
-        if(!value.startsWith('/')&&!value.startsWith('~/')){fail(Error('Enter an absolute folder path, or one starting with ~/.'));field.input.focus();return}
+        if(!value.startsWith('/')&&!value.startsWith('~/')){fail(Error('Enter a full folder path, starting with / or ~/.'));field.input.focus();return}
         const restore=wizard.checkpoint();
         if(!wizard.tools.includes(kind.value))wizard.choose(kind.value,true);
         if(!wizard.locations.some(l=>l.kind===kind.value&&l.path===value))wizard.locations.push({kind:kind.value,path:value});
@@ -675,7 +678,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
       next=button('Check these folders',true,()=>{
         const named=wizard.request();
         const bad=named.locations.find(location=>!location.path.startsWith('/')&&!location.path.startsWith('~/'));
-        if(bad){fail(Error(`Enter an absolute folder for ${toolName(bad.kind)}, or one starting with ~/.`));return}
+        if(bad){fail(Error(`Enter a full folder path for ${toolName(bad.kind)}, starting with / or ~/.`));return}
         discover('Checking the folders you named…','Only these folders. Nothing is added or copied yet.',renderFound,renderManual);
       });
       ready();
@@ -803,7 +806,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
       add=button('Import',true,async()=>{
         const submittingView=active;
         const value=path.trim();
-        if(!value.startsWith('/')&&!value.startsWith('~/')){fail(Error('Enter an absolute path, or one starting with ~/.'));field.input.focus();return}
+        if(!value.startsWith('/')&&!value.startsWith('~/')){fail(Error('Enter a full path, starting with / or ~/.'));field.input.focus();return}
         const buttons=[...actions.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);error.textContent='';
         try{if(chosen==='claude-ai'){await call('/api/claude-imports',{method:'POST',body:JSON.stringify({paths:[value]})});if(active!==submittingView||!field.input.isConnected)return;renderClaudeCollection(()=>renderImport(back),null,true)}else if(chosen==='chatgpt'&&value.toLowerCase().endsWith('.zip')){
           await call('/api/chatgpt-imports',{method:'POST',body:JSON.stringify({path:value})});
@@ -841,7 +844,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
   function renderContents(section,rows) {
     section.replaceChildren();section.hidden=!rows.length;
     if(!rows.length)return;
-    section.append(node('h3','','What Pharos can read from these tools'),node('p','pharos-muted','Each tool keeps a different record of its conversations, and Pharos can only show what it keeps. When a tool reports no cost, Pharos prices its tokens.'));
+    section.append(node('h3','','What Pharos can read from these tools'),node('p','pharos-muted','Each tool keeps a different record of its conversations, and Pharos can only show what it keeps. When a tool reports no cost, Pharos estimates its API cost from list prices.'));
     const scroll=node('div','pharos-table-scroll'),table=node('table','pharos-capabilities'),head=node('tr'),tbody=node('tbody'),thead=node('thead');
     scroll.tabIndex=0;scroll.setAttribute('role','region');scroll.setAttribute('aria-label','What each chosen tool records');
     const corner=node('th','','Records');corner.scope='col';head.append(corner);
@@ -858,7 +861,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
     const added = [...result.added, ...result.enabled];
     body.parentElement.querySelector('.pharos-onboard-intro')?.remove();
     body.replaceChildren();
-    body.append(node('p', '', added.length ? `Added ${added.join(', ')} for this Mac.` : 'Saved. No sources were added.'));
+    body.append(node('p', '', added.length ? `Added ${added.join(', ')} for this Mac.` : result.skipped.length && !result.declined.length ? 'No sources were added.' : 'Saved. No sources were added.'));
     if (result.declined.length) body.append(node('p', 'pharos-muted', `Kept as paused sources: ${result.declined.join(', ')}. Turn them on in Settings → Sources whenever you like.`));
     result.skipped.forEach(note => body.append(node('p', 'pharos-muted', note)));
     const done = node('button', 'primary', 'Done');
@@ -893,7 +896,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
       await new Promise(resolve=>setTimeout(resolve,500));
       const status=await call('/api/'+kind);
       const next=(status.runs||[]).find(item=>item.id===run.id);
-      if(!next)throw Error('This run is no longer available. Check Capture & index for progress.');
+      if(!next)throw Error('This run is no longer available. Check Settings → Background Processing for progress.');
       run=next;update?.(run);
     }
     return run;
@@ -979,10 +982,10 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
       const name = source.split('/').pop();
       let text = 'Waiting', cls = 'pharos-muted';
       if (done) {
-        text = done.error ? done.error : `${plural(done.conversations, 'conversation')} and ${plural(done.messages, 'message')} written${done.unchanged ? `, ${plural(done.unchanged, 'part')} unchanged` : ''}`;
+        text = done.error ? done.error : `${plural(done.conversations, 'conversation')} and ${plural(done.messages, 'message')} written${done.unchanged ? `, ${done.unchanged.toLocaleString()} unchanged files or conversations skipped` : ''}`;
         cls = done.error ? 'pharos-error' : 'pharos-muted';
       } else if (run.current_source === source) {
-        text = `Indexing · ${run.phase} · ${plural(run.conversations, 'conversation')} so far`;
+        text = `Indexing · ${INDEX_PHASES[run.phase] || run.phase} · ${plural(run.conversations, 'conversation')} so far`;
       }
       row.append(node('strong', '', name), node('span', cls, text));
       list.append(row);
@@ -994,7 +997,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
     const label = hostLabel(status), runs = libraryRuns();
     if(active)active.back=()=>{};
     const shown = () => document.body.contains(body);
-    setTitle(body, `Indexing ${label}`);
+    setTitle(body, 'Indexing captured history');
     const rows = node('div');
     rows.append(working('Starting the index…'));
     body.replaceChildren(node('p', 'pharos-lead', `Indexing what was captured from ${label}…`), rows,
@@ -1014,11 +1017,11 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
     const parsedParts = (run?.results || []).reduce((count, result) => count + (result.parsed || 0), 0);
     const skippedParts = (run?.results || []).reduce((count, result) => count + (result.unchanged || 0), 0);
     const summary = run?.state === 'complete'
-      ? !run.conversations && !parsedParts && !skippedParts && (alreadyCurrent || !run.results?.length) ? `${label} is already up to date; no conversations rewritten.`
-        : `Indexed ${plural(run.conversations, 'conversation')} (${plural(run.messages, 'message')}) from ${label}.${parsedParts ? ` ${plural(parsedParts, 'source part')} parsed.` : ''}${skippedParts ? ` ${skippedParts.toLocaleString()} unchanged history files or conversations skipped.` : ''}`
-      : run?.state === 'interrupted' ? `Indexing ${label} was interrupted; the next index resumes it.` : `Indexing ${label} finished with errors.`;
+      ? !run.conversations && !parsedParts && !skippedParts && (alreadyCurrent || !run.results?.length) ? 'Already up to date; no conversations were rewritten.'
+        : `Indexed ${plural(run.conversations, 'conversation')} (${plural(run.messages, 'message')}) from ${label}.${skippedParts ? ` ${skippedParts.toLocaleString()} unchanged history files or conversations skipped.` : ''}`
+      : run?.state === 'interrupted' ? 'Indexing was interrupted; the next index resumes it.' : 'Indexing finished with errors.';
     if (!shown()) return toast(summary);
-    setTitle(body, run?.state === 'complete' ? `${label} is in the library` : `Indexing ${label}`);
+    setTitle(body, run?.state === 'complete' ? 'Added to your library' : 'Indexing captured history');
     body.replaceChildren(node('p', 'pharos-lead', summary), indexRows(run));
     if(run?.state==='complete'){body.append(optionalBackup());if(typeof claudeSettingsBackfillNotice==='function')body.append(claudeSettingsBackfillNotice())}
     if (run?.error && run.state !== 'complete') body.append(node('p', 'pharos-error', run.error));
@@ -1092,7 +1095,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
     if(claudeWatch.root!==root){
       claudeWatch.root=root;
       const row=node('div','optional-behavior'),copy=node('div'),title=node('h3','','Import Claude exports from Downloads');title.id='claudeDownloadsWatchTitle';
-      const about=node('p','muted','Off by default. When a Claude export manifest arrives in Downloads, Pharos opens each of its download links in the browser you choose, one at a time, collects the ZIP files as they finish, and imports your conversations. Pharos opens only files named like a Claude export manifest (manifest-….json) and the files that manifest lists. It checks every 15 minutes while Pharos is running.');about.id='claudeDownloadsWatchDescription';
+      const about=node('p','muted','Off by default. When a Claude export manifest (manifest-….json) arrives in Downloads, Pharos opens its download links one at a time in the browser you choose, collects the ZIP files as they finish and imports your conversations. It opens no other files than the manifest and the files it lists, and checks every 15 minutes while Pharos is running.');about.id='claudeDownloadsWatchDescription';
       const toggle=node('button','toggle');toggle.id='claudeDownloadsWatch';toggle.type='button';toggle.setAttribute('role','switch');
       toggle.setAttribute('aria-labelledby',title.id);toggle.setAttribute('aria-describedby',about.id);
       toggle.onclick=async()=>{
@@ -1110,7 +1113,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
       const how=node('p','muted claude-watch-how','To start an export, open Claude, then Settings → Privacy → Export data. When Claude emails you, download the manifest from its link into Downloads. The links work for 24 hours.');
       const problem=node('p','sync-note badtext');problem.setAttribute('role','status');
       const list=node('div','claude-watch-exports'),library=node('div','claude-watch-library'),routine=claudeExportRoutine();routine.hidden=true;
-      const history=exportHistory(['Date','Files collected','Library status','Conversations added','Open'],'The number of conversations added by each export is not available. Exports can include conversations already in your library. The link opens all imported Claude.ai conversations.');
+      const history=exportHistory(['Exported','Files collected','Library status','Conversations added','Open'],'The number of conversations added by each export is not available. Exports can include conversations already in your library. The link opens all imported Claude.ai conversations.');
       root.replaceChildren(row,options,how,routine,problem,list,history,library);root.hidden=false;
     }
     refreshClaudeWatch();
@@ -1172,7 +1175,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
       const when=item.exported_at?new Date(item.exported_at).toLocaleString():'Claude export';
       row.append(node('h4','',`Export from ${when}`),node('p','',line.text));
       row.append(node('p','muted',line.files));
-      if(line.progress)row.append(node('p','',line.progress),node('p','muted','This update includes earlier exports in the source. Existing conversations are updated in place.'));
+      if(line.progress)row.append(node('p','',line.progress),node('p','muted','Counts include earlier exports in this source. Existing conversations are updated in place.'));
       if(line.detail)row.append(node('p',line.attention?'sync-note badtext':'muted',line.detail));
       if(line.actions.length){
         const actions=node('div','claude-watch-actions');
@@ -1235,7 +1238,7 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
       const signature=JSON.stringify(item),kept=existing.get(item.id);if(kept?.dataset.signature===signature)return kept;
       const line=pharosChatGPTWatchLine(item),row=node('div','source-card claude-watch-export'+(line.attention?' attention':''));row.dataset.id=item.id;row.dataset.signature=signature;
       row.append(node('h4','',item.filename||'ChatGPT export'),node('p','',line.text),node('p','muted',line.files));
-      if(line.progress)row.append(node('p','',line.progress),node('p','muted','Counts include earlier snapshots in this source. Conversations are updated in place.'));
+      if(line.progress)row.append(node('p','',line.progress),node('p','muted','Counts include earlier exports in this source. Existing conversations are updated in place.'));
       if(line.detail)row.append(node('p',line.attention?'sync-note badtext':'muted',line.detail));
       if(item.excluded?.length)row.append(node('p','muted',`Excluded account files: ${item.excluded.join(', ')}`));
       const actions=node('div','claude-watch-actions');
@@ -1254,8 +1257,8 @@ async function captureClaudeSettings(coverage,{call,runs,conversation='',progres
     const library=root.querySelector('.claude-watch-library'),status=watch.library;
     library.hidden=!status;
     if(status){
-      if(!library.firstChild)library.append(node('h4','','ChatGPT workspaces in your library'),node('p','chatgpt-library-counts'),node('ul','chatgpt-library-recent'),node('p','muted','Each ChatGPT conversation is grouped into a workspace.'),node('a','chatgpt-library-browse','Browse ChatGPT conversations →'));
-      library.querySelector('.chatgpt-library-counts').textContent=status.error||`${Number(status.workspaces).toLocaleString()} workspaces · ${Number(status.conversations).toLocaleString()} conversations`;
+      if(!library.firstChild)library.append(node('h4','','ChatGPT workspaces in your library'),node('p','chatgpt-library-counts'),node('ul','chatgpt-library-recent'),node('p','muted','Each ChatGPT conversation is grouped into a workspace.'),node('a','chatgpt-library-browse','Browse ChatGPT conversations'));
+      library.querySelector('.chatgpt-library-counts').textContent=status.error||`${plural(status.workspaces,'workspace')} · ${plural(status.conversations,'conversation')}`;
       const recent=library.querySelector('ul'),existing=new Map([...recent.children].map(row=>[row.dataset.id,row])),focused=recent.contains(document.activeElement)?document.activeElement.dataset.workspaceId:'';
       const entries=(status.recent||[]).map(workspace=>{const row=existing.get(workspace.id)||node('li');row.dataset.id=workspace.id;if(!row.firstChild){const link=node('a');link.dataset.workspaceId=workspace.id;row.append(link)}row.firstChild.href=workspace.url;row.firstChild.textContent=workspace.title;return row});
       if(entries.length!==recent.children.length||entries.some((row,index)=>recent.children[index]!==row))recent.replaceChildren(...entries);

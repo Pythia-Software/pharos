@@ -167,7 +167,7 @@ func syncResultSummary(value any) string {
 			parts = append(parts, name+": "+failure)
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s: %d workspaces, %d messages", name, integer(item["workspaces"]), integer(item["messages"])))
+		parts = append(parts, name+": "+plural(int(integer(item["workspaces"])), "workspace")+", "+plural(int(integer(item["messages"])), "message"))
 	}
 	return strings.Join(parts, " · ")
 }
