@@ -152,7 +152,13 @@ pass scores about 1,000 messages (`agentEventsChainLimit`); a larger backlog con
 Either backlog run (this one and message labels') can be stopped: Stop in its Background Processing item, or in the
 status panel, cancels it (`Op.setStopper`). Committed conversations remain; unfinished conversations are read again
 on the next run. Agent events prepares upcoming conversations with up to four CPU workers while the model
-scores the current window and a writer saves earlier results, one atomic transaction per conversation.
+scores the current window and a writer saves earlier results, one atomic transaction per conversation with rows
+to write. Conversations whose stored rows all stand (only their ledger row and dirty mark are written) share a
+transaction, up to 200 that are already waiting for the writer (`agentEventsStoreBatch`). Before each transaction
+the pass brings the execution dependency lookups its publication check reads up to date from a committed snapshot
+(`primeExecutionPublication`), so the transaction holds the catalog's write lock for its own rows only: on the
+audited 50,000-conversation library 200 such conversations commit in about a quarter of a second, where each alone
+took 0.1 to 1 s.
 A shared budget bounds queued candidates
 and message bookkeeping to three windows of about 512 rows, plus at most one conversation per preparation worker.
 Each preparation worker owns its builder state; results are handed off in conversation order, and a blocked

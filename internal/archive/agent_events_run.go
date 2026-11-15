@@ -492,9 +492,9 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 			return conversation, err
 		},
 		infer: infer,
-		store: func(conversation *agentEventsConversation, written *AgentEventsRunStats) (err error) {
+		store: func(conversations []*agentEventsConversation, written *AgentEventsRunStats) (err error) {
 			opFrom(ctx).RunIO(func() {
-				err = c.storeAgentEvents(ctx, verifier.identity, []*agentEventsConversation{conversation}, written)
+				err = c.storeAgentEvents(ctx, verifier.identity, conversations, written)
 			})
 			return err
 		},
@@ -793,12 +793,17 @@ func (c *Catalog) agentEventsConversation(ctx context.Context, builder *labelsIt
 // storeAgentEvents writes scored conversations in one transaction: each
 // message's row and its candidates at or above agentEventStoreFloor, rows of
 // messages that are no longer agent replies or thinking removed, the
-// conversation's ledger row, and the dirty mark this run read.
+// conversation's ledger row, and the dirty mark this run read. The pipeline
+// passes one conversation with rows to write, or several with none
+// (agentEventsStoreBatch).
 func (c *Catalog) storeAgentEvents(ctx context.Context, identity string, conversations []*agentEventsConversation, stats *AgentEventsRunStats) error {
 	lexicon, _ := agentEventLexicon()
 	at := now()
 	var removed, stored, eventsTotal int
 	stale := 0
+	// What the publication check reads is brought up to date before the
+	// writer is taken, so the transaction holds it for its own rows only.
+	c.primeExecutionPublication(ctx)
 	if beforeDerivedPublication != nil {
 		beforeDerivedPublication()
 	}

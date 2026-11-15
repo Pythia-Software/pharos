@@ -477,13 +477,15 @@ func (s *agentEventsSession) execute(parent context.Context, jobs []*agentEvents
 			return conversation, err
 		},
 		infer: infer,
-		store: func(conversation *agentEventsConversation, written *AgentEventsRunStats) (err error) {
+		store: func(conversations []*agentEventsConversation, written *AgentEventsRunStats) (err error) {
 			opFrom(ctx).RunIO(func() {
-				err = c.storeAgentEvents(ctx, verifier.identity, []*agentEventsConversation{conversation}, written)
+				err = c.storeAgentEvents(ctx, verifier.identity, conversations, written)
 			})
 			if err == nil {
 				storedMu.Lock()
-				stored[conversation.id] = true
+				for _, conversation := range conversations {
+					stored[conversation.id] = true
+				}
 				storedMu.Unlock()
 			}
 			return err

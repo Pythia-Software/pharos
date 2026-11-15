@@ -368,6 +368,35 @@ func (c *Catalog) primeDependencyInverse(ctx context.Context) {
 	_, _ = dependencyInverseIndex(ctx, reader)
 }
 
+// primeExecutionPublication brings what a publication guard reads up to the
+// committed source generation, outside any write transaction: the inverse
+// index (primeDependencyInverse) and, when a run's builder has read the
+// catalog-wide digests and evidence was written since, those digests, by
+// walking only the components changed since (patchDependencyDigests). The
+// publishing transaction that follows then reads lookups that are current,
+// unless another writer commits evidence in between, and that writer's rows
+// are all it patches them for. A ledger's run calls this before each
+// transaction that publishes. It is advisory: digests are never read whole
+// from here, and a failure leaves the transaction to read what it needs.
+func (c *Catalog) primeExecutionPublication(ctx context.Context) {
+	c.primeDependencyInverse(ctx)
+	reader := c.reader()
+	file, generation, err := dependencyCacheKey(ctx, reader)
+	if err != nil || file == "" {
+		return
+	}
+	dependencyDigestCache.Lock()
+	entry, ok := dependencyDigestCache.entries[file]
+	dependencyDigestCache.Unlock()
+	if !ok || entry.generation >= generation {
+		return
+	}
+	if changed, err := executionChangedSince(ctx, reader, entry.generation); err != nil || len(changed) > dependencyDigestPatchLimit {
+		return
+	}
+	_, _ = executionDependencyDigests(ctx, reader)
+}
+
 // dependencyInversePatchLimit is how many changed conversations a cached
 // inverse index is patched for; past it the index is read again.
 var dependencyInversePatchLimit = 5000
