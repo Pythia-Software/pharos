@@ -557,8 +557,11 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		op.begin("audit")
 		handle.RunIO(func() { audit = s.Catalog.auditPool(ctx, pool, run.ID) })
 		op.end("audit", ctx.Err() == nil && audit.Outcome != "read_error")
-		if audit.Outcome == "passed" {
-			workMeter.report(activityWork{Phase: "verifying", Unit: "input", TotalKnown: true, Done: 1, Total: 1})
+		if ctx.Err() == nil && audit.Outcome != "read_error" && eligible > 0 {
+			// The pass is over whatever it concluded: a deferred or mismatched
+			// input was still this stage's one unit of work, and the outcome is
+			// reported by the audit itself, not by a bar left at "0 of 1".
+			workMeter.report(activityWork{Phase: "verifying", Unit: "input", TotalKnown: true, Done: eligible, Total: eligible})
 		}
 		meter.endPhaseWork(phase, workMeter.finish(ctx.Err() == nil))
 	}

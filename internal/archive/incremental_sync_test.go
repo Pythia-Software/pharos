@@ -1299,6 +1299,14 @@ func TestIncrementalDiscoversAllSourcesBeforeReadingAndRetainsForecasts(t *testi
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Samples) != 1 || len(result.Samples[0].Forecasts) == 0 || result.Accuracy[automaticRunKind] == nil {
 		t.Fatalf("forecast evidence missing from history API: %s (%v)", response.Body.String(), err)
 	}
+	// Whatever the audit concluded, its stage ends with its counted work done.
+	for _, phase := range result.Samples[0].Phases {
+		for _, work := range phase.Work {
+			if work.Phase == "verifying" && (!work.TotalKnown || work.Done != work.Total) {
+				t.Errorf("verification ended short of its total: %+v", work)
+			}
+		}
+	}
 }
 
 func TestAutomaticCaptureBusyDefersWithoutFailure(t *testing.T) {
