@@ -1825,7 +1825,7 @@ the same schedule from one declaration (`backgroundItems`):
 - **Placement.** An adaptive item sits at the most frequent cadence where
   both hold (`placeCadence`): a run fits the cadence's limit (1 min
   Frequently, 10 min Hourly), and a day of its runs' fixed cost fits the
-  cadence's budget (15 min a day Frequently, 1 h a day Hourly); else Daily.
+  cadence's budget (30 min a day Frequently, 2 h a day Hourly); else Daily.
   The fixed cost is what a run with work costs before the work itself: for
   an item that counts its work, the median time of the half of its latest
   50 runs with the least work, less that work's own time; each unit's cost

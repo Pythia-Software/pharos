@@ -68,7 +68,7 @@ var cadenceLimit = map[string]float64{cadenceFrequent: 60, cadenceHourly: 600}
 // spend on the part of its runs that does not depend on how much changed: a
 // run's fixed cost, paid again by every run. A quick run repeated all day is
 // as heavy as a slow one.
-var cadenceDayBudget = map[string]float64{cadenceFrequent: 900, cadenceHourly: 3600}
+var cadenceDayBudget = map[string]float64{cadenceFrequent: 1800, cadenceHourly: 7200}
 
 // How often each cadence runs an item a day. Hourly and Daily are their
 // ceilings; Frequently follows the scheduled indexes that wrote something,
