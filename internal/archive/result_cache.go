@@ -60,8 +60,8 @@ var (
 	// is asked for again, but creates no standing background work.
 	resultReturnAfter = time.Hour
 	// resultRefreshPause is how long the refresher waits for the service to
-	// be idle again, and resultSweepEvery how often it looks for stale
-	// entries nobody has asked for since they went stale.
+	// be idle again, and resultSweepEvery how often it looks for entries
+	// whose data has changed and nobody has asked for since.
 	resultRefreshPause = 250 * time.Millisecond
 	resultSweepEvery   = 2 * time.Minute
 	// resultBuildDeadline bounds one background refresh.
@@ -518,14 +518,15 @@ func (s *Server) refreshResult(ctx context.Context) bool {
 	return true
 }
 
-// sweepResults queues the stale entries asked for lately that no request
-// has queued: what a page will want the next time it is opened.
+// sweepResults queues the entries asked for lately whose data has changed
+// since they were computed and that no request has queued: what a page will
+// want the next time it is opened.
 func (s *Server) sweepResults(ctx context.Context) {
 	cache := s.results()
 	if cache == nil {
 		return
 	}
-	rows, err := cache.db.QueryContext(ctx, `SELECT domain,key,version,scope,stamp,clock,built_at FROM entries WHERE returned AND used_at>=? ORDER BY used_at DESC LIMIT 1000`,
+	rows, err := cache.db.QueryContext(ctx, `SELECT domain,key,version,scope,stamp FROM entries WHERE returned AND used_at>=? ORDER BY used_at DESC LIMIT 1000`,
 		time.Now().Add(-resultRefreshRecent).UnixMilli())
 	if err != nil {
 		return
@@ -533,9 +534,7 @@ func (s *Server) sweepResults(ctx context.Context) {
 	var found []resultEntry
 	for rows.Next() {
 		var e resultEntry
-		var built int64
-		if rows.Scan(&e.domain, &e.key, &e.version, &e.scope, &e.stamp, &e.clock, &built) == nil {
-			e.builtAt = time.UnixMilli(built)
+		if rows.Scan(&e.domain, &e.key, &e.version, &e.scope, &e.stamp) == nil {
 			found = append(found, e)
 		}
 	}
@@ -552,8 +551,11 @@ func (s *Server) sweepResults(ctx context.Context) {
 				return
 			}
 		}
-		// An entry of another version is rebuilt too: its request is still good.
-		if e.version != d.version || d.state(&e, stamps[at], time.Now()) == "stale" {
+		// An entry of another version is rebuilt too: its request is still
+		// good. One that has only aged (its window ends "now", and its data
+		// is as it was) is left until it is asked for: rebuilding it would
+		// move its window, usually to the same answer, for nobody.
+		if e.version != d.version || e.stamp != stamps[at] {
 			cache.refreshSoon(e.domain, e.key, false)
 		}
 	}

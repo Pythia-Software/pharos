@@ -72,10 +72,21 @@ interactive query is running or waiting (its own queries are marked as
 background and not counted). Entries stored under another domain version
 are rebuilt the same way. Entries a request was just answered with go first, in
 the order they were asked for; after those, entries asked for in the last
-three days that have gone stale since, but only those someone came back to
-(asked for again an hour or more after they were first stored). A filter
-tried once is stored, and refreshed if it is asked for again, but creates no
-standing background work.
+three days whose data has changed since they were computed (their stamp is
+no longer the current one), but only those someone came back to (asked for
+again an hour or more after they were first stored). A filter tried once is
+stored, and refreshed if it is asked for again, but creates no standing
+background work.
+
+An entry that is stale only by age (a window ending now, over data that has
+not changed) is rebuilt when it is asked for and not before. Rebuilding it
+unasked only moves its window, which three times in four gives the same
+answer, and doing that every ten minutes for every such entry kept more than
+a core busy on a library nobody was looking at. The first request for it
+after any length of time is answered with the stored body as *stale*, with
+the time it was computed, and queues it at the front; the page follows up
+until the rebuilt answer arrives (see "How the frontend chooses"). A person
+is never shown an aged window as if it were current.
 
 The same refresher keeps the derived values behind the answers ready. Some
 datasets are computed in memory before any query over them can run (the
@@ -217,6 +228,10 @@ Keep per-person or per-session state out of a domain unless it is part of
   replace one with an older copy and its generation can later reach a number
   seen before. Delete the file after doing that. Libraries are not affected,
   because a restore changes their instance.
+- It does not keep a window ending now moving while nobody asks for it. A
+  page opened after more than ten minutes away draws its clock-relative
+  answers as they were last computed, marked with their age, and replaces
+  them as the refresher rebuilds them.
 - The refresher does not make the work cheaper. After a change that touches
   every card, Home's entries take a few minutes to catch up, in the
   background and only while the service is otherwise idle.

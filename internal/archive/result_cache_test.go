@@ -138,6 +138,24 @@ func TestResultCachePolicies(t *testing.T) {
 		t.Fatalf("aged clock entry is %s", state)
 	}
 	expect("no clock", resultCached, "a", "fresh", fmt.Sprint(builds-1))
+	// Age alone is no reason to rebuild an entry nobody is asking for: the
+	// sweep leaves it, and the next request for it is answered with it, told
+	// that it is stale, and has it rebuilt.
+	for server.refreshResult(t.Context()) {
+	}
+	before = builds
+	if server.sweepResults(t.Context()); server.refreshResult(t.Context()) || builds != before {
+		t.Fatalf("the sweep queued an entry that had only aged: %d builds", builds-before)
+	}
+	if state, build := ask(resultCached, "clock", true); state != "stale" || build != fmt.Sprint(before) {
+		t.Fatalf("an aged clock entry was served as %s from build %s", state, build)
+	}
+	if !server.refreshResult(t.Context()) || builds != before+1 {
+		t.Fatalf("a request for an aged clock entry did not have it rebuilt: %d builds", builds-before)
+	}
+	if state, build := ask(resultFresh, "clock", true); state != "live" || build != fmt.Sprint(before+2) {
+		t.Fatalf("a refresh of an aged clock entry answered %s from build %s", state, build)
+	}
 	// The file outlives the process, and another version's entries are not served.
 	_, stored := ask(resultCached, "a", false)
 	catalog.closeResults()
