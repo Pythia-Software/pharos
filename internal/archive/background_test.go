@@ -110,26 +110,89 @@ func TestLabelerDeviceSettings(t *testing.T) {
 // places an item, when each cadence's work is due, the pass that runs it,
 // and the settings that steer it.
 
-// An adaptive item takes the most frequent cadence its cost fits, with a
-// quarter's margin each way so a cost near a limit stays put.
+// An adaptive item takes the most frequent cadence where a run fits the
+// cadence's limit and a day of its runs' fixed cost fits the cadence's
+// budget, with a quarter's margin each way; it moves faster only when its
+// slower runs fit too, so an item whose runs come in two sizes stays put.
 func TestPlaceCadenceMovesByMeasuredCostWithoutFlapping(t *testing.T) {
+	perDay := map[string]float64{cadenceFrequent: 40, cadenceHourly: 24, cadenceDaily: 1}
 	for _, test := range []struct {
-		name, current string
-		seconds       float64
-		runs          int
-		want          string
+		name, current, fastest string
+		cost                   itemCost
+		frequentPerDay         float64
+		want                   string
 	}{
-		{"too few runs to move", cadenceFrequent, 900, placementRuns - 1, cadenceFrequent},
-		{"a slow frequent item moves to hourly", cadenceFrequent, 300, 5, cadenceHourly},
-		{"far past hourly goes to daily", cadenceFrequent, 900, 5, cadenceDaily},
-		{"just over its limit stays", cadenceFrequent, 70, 5, cadenceFrequent},
-		{"a fast hourly item moves to frequent", cadenceHourly, 30, 5, cadenceFrequent},
-		{"just under the faster limit stays", cadenceHourly, 55, 5, cadenceHourly},
-		{"a daily item that got faster", cadenceDaily, 120, 5, cadenceHourly},
+		{name: "too few runs to move", current: cadenceFrequent, cost: itemCost{Runs: placementRuns - 1, Fixed: 900}, want: cadenceFrequent},
+		{name: "far too slow goes to daily", current: cadenceFrequent, cost: itemCost{Runs: 5, Fixed: 900}, want: cadenceDaily},
+		{name: "just over its day stays", current: cadenceFrequent, cost: itemCost{Runs: 5, Fixed: 25}, want: cadenceFrequent},
+		{name: "a quick run repeated all day leaves frequent", current: cadenceFrequent, cost: itemCost{Runs: 5, Fixed: 30}, want: cadenceHourly},
+		{name: "a quick run repeated all day is not promoted", current: cadenceHourly, cost: itemCost{Runs: 5, Fixed: 30, Slow: 30}, want: cadenceHourly},
+		{name: "the same run where frequent passes are rare", current: cadenceHourly, cost: itemCost{Runs: 5, Fixed: 30, Slow: 30}, frequentPerDay: 5, want: cadenceFrequent},
+		{name: "a large fixed cost with little work a run runs daily", current: cadenceHourly, cost: itemCost{Runs: 5, Fixed: 493, Slow: 600, PerUnit: 0.1, UnitsPerDay: 960}, want: cadenceDaily},
+		{name: "a light item moves to frequent", current: cadenceHourly, cost: itemCost{Runs: 5, Fixed: 10, Slow: 12}, want: cadenceFrequent},
+		{name: "quick runs among slow ones stay", current: cadenceHourly, cost: itemCost{Runs: 5, Fixed: 10, Slow: 300}, want: cadenceHourly},
+		{name: "slow runs among quick ones stay too", current: cadenceFrequent, cost: itemCost{Runs: 5, Fixed: 10, Slow: 300}, want: cadenceFrequent},
+		{name: "a daily item that got faster", current: cadenceDaily, cost: itemCost{Runs: 5, Fixed: 60, Slow: 80}, want: cadenceHourly},
+		{name: "much work a day makes each frequent run long", current: cadenceFrequent, cost: itemCost{Runs: 5, Fixed: 5, Slow: 5, PerUnit: 1, UnitsPerDay: 6000}, want: cadenceHourly},
+		{name: "never faster than its fastest cadence", current: cadenceDaily, fastest: cadenceHourly, cost: itemCost{Runs: 5, Fixed: 1, Slow: 1}, want: cadenceHourly},
+		{name: "a placement faster than its fastest cadence is corrected unmeasured", current: cadenceFrequent, fastest: cadenceHourly, want: cadenceHourly},
 	} {
-		if got := placeCadence(test.current, itemCost{Seconds: test.seconds, Runs: test.runs}); got != test.want {
+		rates := perDay
+		if test.frequentPerDay > 0 {
+			rates = map[string]float64{cadenceFrequent: test.frequentPerDay, cadenceHourly: 24, cadenceDaily: 1}
+		}
+		if got := placeCadence(test.current, test.fastest, test.cost, rates); got != test.want {
 			t.Errorf("%s: placed %s, want %s", test.name, got, test.want)
 		}
+	}
+}
+
+// Placement reads what a run costs before its work, what each unit of work
+// adds and how much work arrives, from the item's own runs; runs that found
+// nothing, however quick, do not make a run with work look cheap. Frequently's
+// runs a day are this Mac's measured passes.
+func TestOwnCostSeparatesFixedFromPerUnitWork(t *testing.T) {
+	at := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	units := func(n int64) *int64 { return &n }
+	runs := []itemRun{}
+	// Four days of hourly runs, newest first: 500 s whenever anything
+	// changed plus 0.1 s a conversation, and a few seconds when nothing did.
+	for hour := range 96 {
+		run := itemRun{Item: "agent_events", Cadence: cadenceHourly, Started: at.Add(-time.Duration(hour+1) * time.Hour), Seconds: 5, Units: units(0)}
+		if hour%3 != 0 {
+			conversations := int64(20 + 400*(hour%4))
+			run.Seconds, run.Units = 500+0.1*float64(conversations), &conversations
+		}
+		runs = append(runs, run)
+	}
+	cost := ownCost(runs, at)
+	if cost.Fixed < 450 || cost.Fixed > 560 || cost.PerUnit < 0.05 || cost.PerUnit > 0.15 || cost.Slow < cost.Fixed || cost.UnitsPerDay <= 0 {
+		t.Fatalf("a 500 s + 0.1 s/conversation item: %+v", cost)
+	}
+	perDay := map[string]float64{cadenceFrequent: frequentRunsDefault, cadenceHourly: hourlyRunsPerDay, cadenceDaily: 1}
+	if got := placeCadence(cadenceHourly, "", cost, perDay); got != cadenceDaily {
+		t.Fatalf("its fixed cost every hour is hours a day: placed %s", got)
+	}
+	if note := placementNote(backgroundItem{Adaptive: true}, cadenceDaily, cost, true, perDay); !strings.Contains(note, "Hourly") || !strings.Contains(note, "a day") {
+		t.Fatalf("Settings says what keeps it from the faster schedule: %q", note)
+	}
+	// An item that does not count its work is all fixed cost.
+	plain := ownCost([]itemRun{{Seconds: 30, Started: at}, {Seconds: 10, Started: at}, {Seconds: 20, Started: at}, {Seconds: 90, Started: at}}, at)
+	if plain.Fixed != 25 || plain.Slow != 90 || plain.PerUnit != 0 {
+		t.Fatalf("an uncounted item: %+v", plain)
+	}
+	own := map[string][]itemRun{"agent_events": runs}
+	if got := frequentRunsPerDay(own, at); got != frequentRunsDefault {
+		t.Fatalf("no frequent passes measured: %v a day", got)
+	}
+	for pass := range 12 {
+		started := at.Add(-time.Duration(pass*4) * time.Hour)
+		// Two items of one pass are one pass.
+		own["tools"] = append(own["tools"], itemRun{Cadence: cadenceFrequent, Started: started})
+		own["repositories"] = append(own["repositories"], itemRun{Cadence: cadenceFrequent, Started: started})
+	}
+	if got := frequentRunsPerDay(own, at); got < 2.9 || got > 3.1 {
+		t.Fatalf("12 frequent passes over four days: %v a day", got)
 	}
 }
 
@@ -593,7 +656,7 @@ func TestBackgroundCostsAreMediansOfJournaledRuns(t *testing.T) {
 		statements = append(statements, fmt.Sprintf("INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES(%s,'r%d','2026-10-28T00:00:00Z','%s')", host, index, sample))
 	}
 	execTx(t, catalog.DB, statements...)
-	costs := catalog.backgroundCosts(context.Background())
+	costs, _ := catalog.backgroundCosts(context.Background())
 	near := func(got, want float64) bool { return got > want-0.01 && got < want+0.01 }
 	if cost := costs["writing"]; !near(cost.Seconds, 400) || cost.Runs != 3 {
 		t.Fatalf("writing: %+v, want the medians of both its stages' successful runs", cost)
@@ -625,7 +688,7 @@ func TestBackgroundCostsAreMediansOfJournaledRuns(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	costs = catalog.backgroundCosts(context.Background())
+	costs, _ = catalog.backgroundCosts(context.Background())
 	if cost := costs["writing"]; !near(cost.Seconds, 400) {
 		t.Fatalf("writing: %+v, want the journal's until it has enough runs of its own", cost)
 	}
@@ -1420,7 +1483,10 @@ func TestBackgroundPassHonorsHeldPrerequisites(t *testing.T) {
 		// Your writing is hourly, and the library is not quiet.
 		pending("authorship", time.Minute), pending("findings", time.Minute),
 		"INSERT INTO background_runs(host_id,item,succeeded_at) VALUES("+host+",'preserve',"+stamp(0)+"),("+host+",'review',"+stamp(0)+")",
+		// Findings was placed at Frequently before it had a fastest cadence;
+		// the person's own week at Frequently still stands.
 		"INSERT INTO background_settings(host_id,overrides_json,placements_json) VALUES("+host+",'{\"repositories\":\"manual\",\"writing\":\"hourly\"}','{\"findings\":\"frequent\"}')",
+		"INSERT INTO background_temporary_cadences(host_id,item,cadence,expires_at) VALUES("+host+",'findings','frequent',"+stamp(-time.Hour)+")",
 		setMetaSQL("findings_generation", findingsVersion+"/2026-10-26"))
 	completed := func(name string) int64 {
 		var generation int64
@@ -1434,6 +1500,10 @@ func TestBackgroundPassHonorsHeldPrerequisites(t *testing.T) {
 	}
 	if completed("tools") != 2 || completed("findings") != 2 {
 		t.Fatalf("the frequent items did not run: tools %d, findings %d", completed("tools"), completed("findings"))
+	}
+	findings, _ := backgroundItemByID("findings")
+	if settings, err := catalog.backgroundSettings(ctx, time.Now()); err != nil || settings.Placements["findings"] != cadenceHourly || settings.cadence(findings) != cadenceFrequent {
+		t.Fatalf("measurement places findings no faster than hourly, under the person's temporary schedule: %+v, %v", settings.Placements, err)
 	}
 	if completed("identities") != 1 || completed("git") != 1 {
 		t.Fatal("a pass brought along stages set to only when you ask")

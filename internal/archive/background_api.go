@@ -260,7 +260,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 	if err != nil {
 		return nil
 	}
-	costs := s.cachedCosts(ctx)
+	costs, perDay := s.cachedMeasures(ctx)
 	in := s.backgroundInputsFor(ctx, s.peekRequested())
 	plans := backgroundPlan(settings, in, at)
 	// The step details own model settings. Keep disabled models reachable in
@@ -342,8 +342,8 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			entry["cost"] = map[string]any{"seconds": cost.Seconds, "runs": cost.Runs, "class": costClass(cost, true), "text": durationWords(cost.Seconds),
 				"typical": typicalWords(cost)}
 		}
-		if item.Adaptive && settings.placed(item) != cadenceFrequent && entry["temporary_cadence"] == nil {
-			entry["note"] = "Moves to Frequently once a run usually takes under a minute."
+		if note := placementNote(item, settings.placed(item), cost, measured, perDay); note != "" && entry["temporary_cadence"] == nil {
+			entry["note"] = note
 		}
 		if item.ID == "writing" && in.writingBacklog.Pending > 0 {
 			entry["backlog"] = in.writingBacklog
@@ -476,6 +476,35 @@ func itemSub(item backgroundItem, in backgroundInputs) string {
 		}
 	}
 	return item.Feeds
+}
+
+// placementNote says, for an adaptive item measurement has not placed at
+// Frequently, what keeps it from the next faster schedule: the sentence under
+// its line in Settings. A run's own length, or what a day of runs would add
+// up to, with the numbers the rule used (placeCadence).
+func placementNote(item backgroundItem, placed string, cost itemCost, measured bool, perDay map[string]float64) string {
+	if !item.Adaptive || cadenceRank(placed) == 0 || cadenceRank(placed) >= len(cadences) {
+		return ""
+	}
+	faster := cadences[cadenceRank(placed)-1]
+	name := cadenceLabels[faster]
+	switch {
+	case item.fastest != "" && cadenceRank(faster) < cadenceRank(item.fastest):
+		return fmt.Sprintf("Runs %s at most: its results would be no better for running more often.", cadenceLabels[item.fastest])
+	case !measured || cost.Runs < placementRuns:
+		return fmt.Sprintf("Moves to %s once its runs are measured and fit there.", name)
+	}
+	fixed := max(cost.Slow, cost.Fixed)
+	run, day := cadenceLoad(faster, cost, fixed, perDay)
+	switch {
+	case day > 0.75*cadenceDayBudget[faster]:
+		return fmt.Sprintf("Stays %s: each run costs %s before any new work, and %s would repeat that about %d times a day (%s a day).",
+			cadenceLabels[placed], durationWords(fixed), name, int(math.Round(perDay[faster])), durationWords(day))
+	case run > 0.75*cadenceLimit[faster]:
+		return fmt.Sprintf("Stays %s: with the work that arrives, a run at %s would take %s, and %s is for runs well under %d min.",
+			cadenceLabels[placed], name, durationWords(run), name, int(cadenceLimit[faster]/60))
+	}
+	return fmt.Sprintf("Moves to %s at the next update: its runs now fit there.", name)
 }
 
 // itemChoices are the cadences an item may be set to: its placement or
@@ -676,8 +705,9 @@ func (s *Server) getBackground(w http.ResponseWriter, r *http.Request) {
 			"battery_choices": batteryChoices, "battery_slower_minutes": int(batterySlowerInterval.Minutes()), "low_battery_percent": lowBatteryPercent},
 		"power": s.cachedPower(r.Context()),
 		"view":  s.backgroundView(r.Context(), views, freshness, at),
-		"rule":  map[string]any{"frequent_seconds": cadenceLimit[cadenceFrequent], "hourly_seconds": cadenceLimit[cadenceHourly]},
-		"cost":  s.backgroundDayCost(r.Context(), settings, s.cachedCosts(r.Context()), at),
+		"rule": map[string]any{"frequent_seconds": cadenceLimit[cadenceFrequent], "hourly_seconds": cadenceLimit[cadenceHourly],
+			"frequent_day_seconds": cadenceDayBudget[cadenceFrequent], "hourly_day_seconds": cadenceDayBudget[cadenceHourly]},
+		"cost": s.backgroundDayCost(r.Context(), settings, s.cachedCosts(r.Context()), at),
 		"descriptions": map[string]any{cadenceFrequent: cadenceDescription(cadenceFrequent, settings), cadenceHourly: cadenceDescription(cadenceHourly, settings),
 			cadenceDaily: cadenceDescription(cadenceDaily, settings)},
 	}, 200)

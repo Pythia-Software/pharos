@@ -31,7 +31,8 @@ func backgroundExplicit(ctx context.Context) bool {
 // data has an automatic owner on one of three cadences: Frequently, with the
 // scheduled index; Hourly, once the library has been quiet; and Daily,
 // overnight. An adaptive item sits in the most frequent cadence its measured
-// cost allows, so it moves as it gets faster or slower. Permanent overrides
+// cost allows, a run and a day (placeCadence), so it moves as it gets faster
+// or slower. Permanent overrides
 // slow work down; a temporary override can move any item between all four columns.
 
 const (
@@ -62,6 +63,22 @@ func validBackgroundCadence(cadence string) bool {
 // cadenceLimit is the longest typical run, in seconds, each cadence takes.
 // Daily takes the rest.
 var cadenceLimit = map[string]float64{cadenceFrequent: 60, cadenceHourly: 600}
+
+// cadenceDayBudget is the most a day, in seconds, an item at each cadence may
+// spend on the part of its runs that does not depend on how much changed: a
+// run's fixed cost, paid again by every run. A quick run repeated all day is
+// as heavy as a slow one.
+var cadenceDayBudget = map[string]float64{cadenceFrequent: 900, cadenceHourly: 3600}
+
+// How often each cadence runs an item a day. Hourly and Daily are their
+// ceilings; Frequently follows the scheduled indexes that wrote something,
+// measured from this Mac's passes (frequentRunsPerDay), and until a day of
+// them is known it is taken to be frequentRunsDefault.
+const (
+	frequentRunsDefault = 40.0
+	hourlyRunsPerDay    = 24.0
+	frequentRunsWindow  = 7 * 24 * time.Hour
+)
 
 // The schedule's timings, package variables so tests can shorten them.
 var (
@@ -106,6 +123,9 @@ type backgroundItem struct {
 	requiresAsk bool
 	// afterChain items read what the chain writes, so a pass runs them last.
 	afterChain bool
+	// fastest is the most frequent cadence measurement may place an adaptive
+	// item at, where fresher results are of no use (empty: Frequently).
+	fastest string
 }
 
 // backgroundItems in the order they run within a pass (runBackgroundItems),
@@ -134,7 +154,8 @@ var backgroundItems = []backgroundItem{
 	{ID: "writing", Label: "Update writing estimates", Verb: "Updating writing estimates", Feeds: "Human Words cards, Analyze → Writing, and related conversations on Work pages", Cadence: cadenceFrequent,
 		Stages: []string{"authorship", "peers"}, Kinds: []string{"analysis.authorship", "analysis.peers"}, Why: "Updates a bounded batch of new or changed messages, then links reviews to the work they read or were pasted into. Estimates are refined overnight."},
 	{ID: "findings", Label: "Findings", Verb: "Updating findings", Feeds: "Optimize", Cadence: cadenceHourly, Adaptive: true,
-		Stages: []string{"findings"}, Kinds: []string{"analysis.findings/measure"}, Why: "Measures the findings you watch against new work."},
+		Stages: []string{"findings"}, Kinds: []string{"analysis.findings/measure"}, fastest: cadenceHourly,
+		Why: "Measures the findings you watch against new work. A watched finding is decided over days, so this never runs more than hourly on its own."},
 	{ID: "labels", Label: "Message labels", Verb: "Labeling messages", Feeds: "Local labels (pharos labels)", Cadence: cadenceHourly, Adaptive: true, requiresLabels: true,
 		Stages: []string{"labels"}, Kinds: []string{"analysis.labels/"}, Why: "Labels the messages that changed on this Mac, after your writing; a backlog continues when plugged in."},
 	{ID: "agent_events", Label: "Agent events", Verb: "Finding agent events", Feeds: "Analyze → Agent Experience", Cadence: cadenceHourly, Adaptive: true, requiresAgentEvents: true,
@@ -258,6 +279,10 @@ func (c *Catalog) backgroundPaused(ctx context.Context, at time.Time) bool {
 // for an adaptive item, else its declared cadence.
 func (settings backgroundSettings) placed(item backgroundItem) string {
 	if placement := settings.Placements[item.ID]; item.Adaptive && cadenceRank(placement) < len(cadences) {
+		// A placement stored before the item had a fastest cadence.
+		if cadenceRank(placement) < cadenceRank(item.fastest) && item.fastest != "" {
+			return item.fastest
+		}
 		return placement
 	}
 	return item.Cadence
@@ -297,6 +322,15 @@ type itemCost struct {
 	// 2–3 h".
 	Low  float64 `json:"low"`
 	High float64 `json:"high"`
+	// What placement reads (placeCadence). Fixed is what a run with work
+	// costs before the work itself, and Slow the same for the item's slower
+	// runs (the upper quartile); PerUnit is each unit of work on top and
+	// UnitsPerDay how much work arrives, both zero for an item that does not
+	// count its work, whose whole run is then its fixed cost.
+	Fixed       float64 `json:"fixed_seconds"`
+	Slow        float64 `json:"slow_seconds"`
+	PerUnit     float64 `json:"unit_seconds"`
+	UnitsPerDay float64 `json:"units_per_day"`
 }
 
 // typicalRange is the middle of sorted run times: the median and the runs
@@ -315,6 +349,9 @@ func typicalRange(sorted []float64) (median, low, high float64) {
 const (
 	costRuns      = 7
 	placementRuns = 3
+	// modelRuns is how many recent runs placement's cost model reads: enough
+	// that a few unusual runs do not move an item.
+	modelRuns = 50
 )
 
 // itemRun is one scheduled run of an item: its own time within its pass, and
@@ -392,9 +429,10 @@ func (c *Catalog) itemRuns(ctx context.Context) map[string][]itemRun {
 // from the journal instead, as the sum of its kinds' medians; the journal
 // keeps only longer runs, so that reads high for quick work. Scheduled
 // indexing is measured from its run history.
-func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
+func (c *Catalog) backgroundCosts(ctx context.Context) (map[string]itemCost, map[string]float64) {
 	costs := map[string]itemCost{}
 	own := c.itemRuns(ctx)
+	at := time.Now()
 	for _, item := range backgroundItems {
 		if item.ID == "conversations" {
 			if cost, ok := c.automaticIndexCost(ctx); ok {
@@ -403,7 +441,7 @@ func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 			continue
 		}
 		if runs := own[item.ID]; len(runs) >= placementRuns {
-			costs[item.ID] = ownCost(runs)
+			costs[item.ID] = ownCost(runs, at)
 			continue
 		}
 		total, low, high, runs := 0.0, 0.0, 0.0, -1
@@ -437,16 +475,103 @@ func (c *Catalog) backgroundCosts(ctx context.Context) map[string]itemCost {
 			}
 		}
 		if runs > 0 {
-			costs[item.ID] = itemCost{Seconds: total, Runs: runs, Low: low, High: high}
+			// The journal does not say what a run's time was spent on.
+			costs[item.ID] = itemCost{Seconds: total, Runs: runs, Low: low, High: high, Fixed: total, Slow: high}
 		}
 	}
-	return costs
+	return costs, map[string]float64{cadenceFrequent: frequentRunsPerDay(own, at), cadenceHourly: hourlyRunsPerDay, cadenceDaily: 1}
 }
 
-// ownCost is an item's typical run from its own runs, newest first: the
-// middle of the latest costRuns that had work, or of the latest costRuns
-// when none had.
-func ownCost(runs []itemRun) itemCost {
+// frequentRunsPerDay is how many Frequently passes a day this Mac ran over
+// the last week of kept item runs: the passes after scheduled indexes that
+// wrote something. Without a day of history, or any such pass in it, it is
+// frequentRunsDefault.
+func frequentRunsPerDay(own map[string][]itemRun, at time.Time) float64 {
+	passes, oldest := map[time.Time]bool{}, at
+	for _, runs := range own {
+		for _, run := range runs {
+			if run.Started.IsZero() || at.Sub(run.Started) > frequentRunsWindow {
+				continue
+			}
+			if run.Started.Before(oldest) {
+				oldest = run.Started
+			}
+			if run.Cadence == cadenceFrequent {
+				passes[run.Started] = true
+			}
+		}
+	}
+	days := at.Sub(oldest).Hours() / 24
+	if days < 1 || len(passes) == 0 {
+		return frequentRunsDefault
+	}
+	return float64(len(passes)) / days
+}
+
+// ownCost is an item's cost from its own runs, newest first. Its typical run
+// is the middle of the latest costRuns that had work (of the latest costRuns
+// when none had). Its placement model reads the latest modelRuns: for an
+// item that counts its work, Fixed is the median time of the half of its
+// runs with the least work, PerUnit the time beyond that over all its work,
+// and Slow the upper quartile of the runs' time less their work's; a run
+// that found no work says nothing about what one with work costs. An item
+// that does not count its work is all fixed cost.
+func ownCost(runs []itemRun, at time.Time) itemCost {
+	cost := typicalCost(runs)
+	recent := runs[:min(len(runs), modelRuns)]
+	counted, work, plain := true, []itemRun{}, []float64{}
+	for _, run := range recent {
+		counted = counted && run.Units != nil
+		if run.worked() {
+			plain = append(plain, run.Seconds)
+		}
+		if run.Units != nil && *run.Units > 0 {
+			work = append(work, run)
+		}
+	}
+	if !counted || len(work) < placementRuns {
+		if len(plain) == 0 {
+			for _, run := range recent {
+				plain = append(plain, run.Seconds)
+			}
+		}
+		sort.Float64s(plain)
+		cost.Fixed, _, cost.Slow = typicalRange(plain)
+		return cost
+	}
+	sort.SliceStable(work, func(i, j int) bool { return *work[i].Units < *work[j].Units })
+	units, seconds := 0.0, 0.0
+	for _, run := range work {
+		units += float64(*run.Units)
+		seconds += run.Seconds
+	}
+	// The two define each other, so settle them in a few rounds: the fixed
+	// cost is the small runs' time less their work's, and a unit's cost the
+	// time beyond the fixed cost over all the work.
+	for range 8 {
+		small := []float64{}
+		for _, run := range work[:(len(work)+1)/2] {
+			small = append(small, max(0, run.Seconds-cost.PerUnit*float64(*run.Units)))
+		}
+		sort.Float64s(small)
+		cost.Fixed, _, _ = typicalRange(small)
+		cost.PerUnit = max(0, (seconds-cost.Fixed*float64(len(work)))/units)
+	}
+	rest := []float64{}
+	for _, run := range work {
+		rest = append(rest, max(0, run.Seconds-cost.PerUnit*float64(*run.Units)))
+	}
+	sort.Float64s(rest)
+	_, _, cost.Slow = typicalRange(rest)
+	cost.Slow = max(cost.Slow, cost.Fixed)
+	// Work arrives over the time the runs cover, at least a day: a first
+	// run's backlog is not a day's work.
+	cost.UnitsPerDay = units / max(1, at.Sub(recent[len(recent)-1].Started).Hours()/24)
+	return cost
+}
+
+// typicalCost is the middle of an item's latest runs that had work.
+func typicalCost(runs []itemRun) itemCost {
 	values := []float64{}
 	for _, run := range runs {
 		if run.worked() && len(values) < costRuns {
@@ -508,28 +633,55 @@ func (c *Catalog) automaticSamples(ctx context.Context, limit int) []automaticSa
 	return samples
 }
 
+// cadenceLoad is what an item would cost at cadence: one run's time (its
+// fixed cost and the work that arrives between runs), and the seconds a day
+// its runs' fixed cost adds up to. The work itself costs the same whatever
+// the cadence, so only the fixed part is weighed by the day. fixed is the
+// fixed cost to use: the item's usual one, or its slower runs'.
+func cadenceLoad(cadence string, cost itemCost, fixed float64, perDay map[string]float64) (run, day float64) {
+	runs := max(1, perDay[cadence])
+	return fixed + cost.PerUnit*cost.UnitsPerDay/runs, runs * fixed
+}
+
 // placeCadence is where a measured cost puts an item now in current: the
-// most frequent cadence whose limit it fits. It moves to a faster cadence
-// only once it fits with a quarter to spare, and to a slower one only once
-// it is a quarter over, so a cost near a limit does not flap.
-func placeCadence(current string, cost itemCost) string {
+// most frequent cadence, no faster than fastest, where a run fits the
+// cadence's limit and a day of runs fits its budget. An item with a large
+// fixed cost and little work a run therefore runs less often, and a quick
+// run that would repeat all day does not move to Frequently.
+//
+// It does not flap. It moves to a slower cadence only once its usual run is a
+// quarter over, and to a faster one only once even its slower runs (the upper
+// quartile) fit with a quarter to spare: an item whose runs are sometimes
+// quick and sometimes slow stays where the slow ones fit.
+func placeCadence(current, fastest string, cost itemCost, perDay map[string]float64) string {
+	if cadenceRank(current) < cadenceRank(fastest) && fastest != "" {
+		current = fastest
+	}
 	if cost.Runs < placementRuns {
 		return current
 	}
-	target := cadenceDaily
-	for _, cadence := range []string{cadenceFrequent, cadenceHourly} {
-		if cost.Seconds <= cadenceLimit[cadence] {
-			target = cadence
-			break
+	fits := func(cadence string, fixed, slack float64) bool {
+		if cadence == cadenceDaily {
+			return true
+		}
+		run, day := cadenceLoad(cadence, cost, fixed, perDay)
+		return run <= slack*cadenceLimit[cadence] && day <= slack*cadenceDayBudget[cadence]
+	}
+	for _, cadence := range cadences {
+		allowed := fastest == "" || cadenceRank(cadence) >= cadenceRank(fastest)
+		if allowed && cadenceRank(cadence) < cadenceRank(current) && fits(cadence, max(cost.Slow, cost.Fixed), 0.75) {
+			return cadence
 		}
 	}
-	switch {
-	case cadenceRank(target) < cadenceRank(current) && cost.Seconds <= 0.75*cadenceLimit[target]:
-		return target
-	case cadenceRank(target) > cadenceRank(current) && cost.Seconds > 1.25*cadenceLimit[current]:
-		return target
+	if fits(current, cost.Fixed, 1.25) {
+		return current
 	}
-	return current
+	for _, cadence := range cadences {
+		if cadenceRank(cadence) > cadenceRank(current) && fits(cadence, cost.Fixed, 1) {
+			return cadence
+		}
+	}
+	return cadenceDaily
 }
 
 // costClass is the words for a typical run's weight.
@@ -968,7 +1120,9 @@ type backgroundState struct {
 	// retry stays scheduled demand.
 	fingerprintRetry string
 	costs            map[string]itemCost
-	costsAt          time.Time
+	// runsPerDay is how often each cadence runs an item, measured with costs.
+	runsPerDay map[string]float64
+	costsAt    time.Time
 	// power is the last power reading (cachedPower).
 	power   powerState
 	powerAt time.Time
@@ -999,12 +1153,19 @@ func (s *Server) cachedBackup(config Config) (string, string) {
 var costsMaxAge = time.Minute
 
 func (s *Server) cachedCosts(ctx context.Context) map[string]itemCost {
+	costs, _ := s.cachedMeasures(ctx)
+	return costs
+}
+
+// cachedMeasures is the items' costs and how often each cadence runs a day.
+func (s *Server) cachedMeasures(ctx context.Context) (map[string]itemCost, map[string]float64) {
 	s.background.mu.Lock()
 	defer s.background.mu.Unlock()
 	if s.background.costs == nil || time.Since(s.background.costsAt) > costsMaxAge {
-		s.background.costs, s.background.costsAt = s.Catalog.backgroundCosts(ctx), time.Now()
+		s.background.costs, s.background.runsPerDay = s.Catalog.backgroundCosts(ctx)
+		s.background.costsAt = time.Now()
 	}
-	return s.background.costs
+	return s.background.costs, s.background.runsPerDay
 }
 
 // wakeBackground makes the loop look for due work now.
@@ -1181,11 +1342,11 @@ func (s *Server) backgroundPass(ctx context.Context, at time.Time) bool {
 // updatePlacements moves adaptive items to where their measured cost puts
 // them, and stores the result when it changed.
 func (s *Server) updatePlacements(ctx context.Context, settings backgroundSettings) {
-	costs := s.cachedCosts(ctx)
+	costs, perDay := s.cachedMeasures(ctx)
 	placements := maps.Clone(settings.Placements)
 	for _, item := range backgroundItems {
 		if item.Adaptive {
-			placements[item.ID] = placeCadence(settings.placed(item), costs[item.ID])
+			placements[item.ID] = placeCadence(settings.placed(item), item.fastest, costs[item.ID], perDay)
 		}
 	}
 	if maps.Equal(placements, settings.Placements) {
