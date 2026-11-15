@@ -109,6 +109,11 @@ priority. A rebuild that fails or is interrupted is tried again at the next
 look. This needs the result cache: a library that has none (rule under "One
 file per library") relies on the maintenance pass alone.
 
+Rebuilding a stored answer nobody asked for (an entry the sweep found) reads
+derived values without counting as a request for them, so those rebuilds do
+not keep values warm that no person has asked for in half an hour. An answer
+rebuilt because a page was just shown it does count.
+
 **7. Entries leave by disuse or size.** An entry nobody asks for in 14 days
 is dropped, and the least recently used go first once the file holds more
 than 256 MB of bodies. An entry stored under another domain version is not

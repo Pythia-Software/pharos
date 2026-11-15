@@ -371,7 +371,9 @@ func (cache *resultCache) signal() {
 	}
 }
 
-func (cache *resultCache) nextRefresh() (resultKey, bool) {
+// nextRefresh takes the next queued entry, and reports whether a request
+// queued it (asked) and whether there was one at all.
+func (cache *resultCache) nextRefresh() (id resultKey, asked, ok bool) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	queue := &cache.asked
@@ -379,12 +381,13 @@ func (cache *resultCache) nextRefresh() (resultKey, bool) {
 		queue = &cache.swept
 	}
 	if len(*queue) == 0 {
-		return resultKey{}, false
+		return resultKey{}, false, false
 	}
-	id := (*queue)[0]
+	id = (*queue)[0]
 	*queue = (*queue)[1:]
+	asked = cache.queued[id]
 	delete(cache.queued, id)
-	return id, true
+	return id, asked, true
 }
 
 func writeCachedResult(w http.ResponseWriter, body []byte, state string, built time.Time) {
@@ -480,7 +483,7 @@ func (s *Server) refreshResult(ctx context.Context) bool {
 	if cache == nil {
 		return false
 	}
-	id, ok := cache.nextRefresh()
+	id, asked, ok := cache.nextRefresh()
 	if !ok {
 		return false
 	}
@@ -506,7 +509,13 @@ func (s *Server) refreshResult(ctx context.Context) bool {
 	if err != nil || entry.version == d.version && d.state(entry, stamp, time.Now()) != "stale" {
 		return true
 	}
-	build, cancel := context.WithTimeout(backgroundQuery(ctx), resultBuildDeadline)
+	build := backgroundQuery(ctx)
+	if !asked {
+		// Nobody is looking at this answer, so the derived values it reads
+		// are not kept warm on its account.
+		build = unaskedRead(build)
+	}
+	build, cancel := context.WithTimeout(build, resultBuildDeadline)
 	defer cancel()
 	built := time.Now()
 	body, err := d.build(build, s, entry.replay, time.Time{})
