@@ -276,7 +276,12 @@ def pull(run):
             mtime, _, relative = batch[0]
             if DATABASE.fullmatch(relative):
                 if info.get("sqlite3") == "yes":
-                    databases[relative] = transfer_database(run, remote, root, drop_dir, relative, mtime)
+                    try:
+                        databases[relative] = transfer_database(run, remote, root, drop_dir, relative, mtime)
+                    except (RuntimeError, OSError) as error:
+                        # Its stamp stays as it was, so the next run tries again;
+                        # one unreadable database must not hold back the rest.
+                        run.warn(f"{name}: {relative} skipped: {error}")
                 else:
                     run.warn(f"{name}: sqlite3 is not installed on {destination}; {relative} skipped")
                 received = {relative}

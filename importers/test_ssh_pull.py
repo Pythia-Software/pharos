@@ -160,6 +160,24 @@ class SSHPullTests(unittest.TestCase):
         self.assertEqual(len(delivered), len(self.pull()[1]))
         self.assertEqual(result["cursor"]["destination"], "alice@other-box")
 
+    def test_a_database_that_cannot_be_snapshotted_is_skipped_and_tried_again(self):
+        database = self.source("codex") / "state_5.sqlite"
+        good = database.read_bytes()
+        for sidecar in database.parent.glob("state_5.sqlite-*"):
+            sidecar.unlink()
+        database.write_bytes(b"not a database " * 100)
+        os.utime(database, (HOUR_AGO, HOUR_AGO))
+        result, delivered = self.pull()
+        self.assertEqual(result["status"], "complete", result)
+        expected = {(kind, relative) for kind, files in self.files.items() for relative in files}
+        self.assertEqual(set(delivered), expected)
+        self.assertTrue(any("state_5.sqlite skipped" in warning for warning in result["warnings"]), result["warnings"])
+        self.assertEqual(result["cursor"]["sources"]["codex"]["databases"], {})
+        database.write_bytes(good)
+        os.utime(database, (HOUR_AGO, HOUR_AGO))
+        again, delivered = self.pull(result["cursor"])
+        self.assertEqual((again["status"], set(delivered)), ("complete", {("codex", "state_5.sqlite")}))
+
     def test_compressed_rollouts_and_the_other_claude_folder_are_fetched(self):
         compressed = self.source("codex") / "archived_sessions/rollout-0.jsonl.zst"
         compressed.parent.mkdir(parents=True)
