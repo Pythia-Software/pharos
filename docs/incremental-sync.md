@@ -22,7 +22,7 @@ library starts with them off); **Pause for 1 hour**, **Pause for 1 day** and **O
 stop them. The interval is two, five (the default), fifteen or thirty
 minutes. The schedule is retained per host; an empty source selection
 (`sync_settings.sources_json`, no longer shown) means all supported, enabled
-sources. **Update everything now** (and the header button) runs that
+sources. **Index changes now** (and the header button) runs that
 incremental pipeline, then refreshes GitHub repository identities,
 library-wide identity links, local Git integration, tool rollups, Human
 Words, and a full findings pass. The manual run remains active until those

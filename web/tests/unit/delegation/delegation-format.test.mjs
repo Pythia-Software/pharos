@@ -21,14 +21,14 @@ test("estimated output stays distinct from a measured lower bound", () => {
   assert.match(workspaceTotalText({...estimate, value: .021}, "usd"), /^\$.*\*$/);
   assert.equal(workspaceTotalText(metric(10200, "partial"), "tokens"), "10.2K+");
   assert.equal(workspaceTotalText({...estimate, value: null}, "usd"), workspaceTotalText(metric(null), "usd"));
-  assert.match(cellTitle(estimate, spec("tokens", "tokens")), /estimated usage.*hidden system prompts are not counted/i);
-  assert.match(cellTitle(estimate, spec("cost", "usd")), /cost.*is partial/i);
+  assert.match(cellTitle(estimate, spec("tokens", "tokens")), /includes estimates.*hidden system prompts are not counted/i);
+  assert.match(cellTitle(estimate, spec("cost", "usd")), /API cost is partial/i);
   assert.equal(metricText(metric(10200, "partial"), "tokens"), "10.2K+");
 });
 
 test('snapshot recovery coalesces lane conflicts, stops repeated races and rearms after success', () => {
   assert.equal(snapshotChanged(new DelegationRequestError('changed', 409, 'snapshot_changed')), true);
-  for (const error of [new Error('Archive changed; refresh the explorer.'), new DelegationRequestError('changed', 500, 'snapshot_changed'), new DelegationRequestError('changed', 409, 'other')]) {
+  for (const error of [new Error('The library changed. Reload this view.'), new DelegationRequestError('changed', 500, 'snapshot_changed'), new DelegationRequestError('changed', 409, 'other')]) {
     assert.equal(snapshotChanged(error), false);
   }
   const recovery = new DelegationSnapshotRecovery();
@@ -119,10 +119,10 @@ test("metric cells use compact counts, durations and exact tooltips", () => {
   assert.equal(formatted(null), formatted(undefined, "usd"), "missing values share one placeholder");
   assert.match(cellTitle(metric(1000), spec("tokens", "count")).split("\n")[0], /^1[,.\s ]?000 count$/, "tooltips keep the exact value and unit");
   for (const [value, unit] of [[600, "count"], [450, "ms"], [12.34, "usd"]]) {
-    assert.match(cellTitle(metric(value), spec("value", unit)), /^Definition for value\nobserved · 1\/1 /, "unabbreviated values need only definition and coverage");
+    assert.match(cellTitle(metric(value), spec("value", unit)), /^Definition for value\nObserved · 1\/1 /, "unabbreviated values need only definition and coverage");
   }
   const missing = cellTitle(metric(null, "unknown"), spec("wait", "ms"));
-  assert.match(missing, /^Definition for wait\nunknown · 0\/1 /, "a missing value starts with its definition");
+  assert.match(missing, /^Definition for wait\nUnknown · 0\/1 /, "a missing value starts with its definition");
 });
 
 test("timeline ranges keep their duration and stay inside the workspace", () => {
