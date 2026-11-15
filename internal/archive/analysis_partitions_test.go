@@ -301,8 +301,8 @@ func TestToolRollupMirrorsPricesAndRollover(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The cube reads none of these: links and moves only choose the mirrors,
-	// which every build recomputes, and prices re-price the daily table from
-	// the stored cube.
+	// which every build recomputes, a harness edit moves only the shared
+	// ledger generation, and prices re-price the daily table from the cube.
 	link := `INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('conv-0','conv-1','mirror',1,'{}')`
 	for _, change := range []struct {
 		query   string
@@ -311,6 +311,7 @@ func TestToolRollupMirrorsPricesAndRollover(t *testing.T) {
 		{link, false},
 		{`UPDATE workspaces SET source_kind='codex',activity_at='2026-10-08T00:00:00.000Z' WHERE id='ws-1'`, false},
 		{`UPDATE conversations SET workspace_id='ws-2' WHERE id='conv-1'`, false},
+		{`UPDATE conversations SET harness='other' WHERE id='conv-3'`, false},
 		{`DELETE FROM conversation_identity_links`, false},
 		{`UPDATE cost_changes SET input_per_mtok=input_per_mtok+0.1 WHERE id=(SELECT id FROM cost_changes LIMIT 1)`, true},
 	} {

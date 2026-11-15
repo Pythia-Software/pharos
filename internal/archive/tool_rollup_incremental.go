@@ -108,14 +108,11 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	if _, err := snapshot.ExecContext(ctx, "CREATE INDEX temp.tool_dirty_build_idx ON tool_dirty_build(workspace_id)"); err != nil {
 		return build, err
 	}
-	var dirty int
-	if err := snapshot.QueryRowContext(ctx, "SELECT COUNT(*) FROM temp.tool_dirty_build").Scan(&dirty); err != nil {
-		return build, err
-	}
-	// Unpartitioned invalidation by an older writer cannot safely reuse the cube.
-	if generation != built && dirty == 0 {
-		build.full = true
-	}
+	// A ledger generation that moved with nothing marked rebuilds no
+	// partition: every writer of a table the cube reads marks its workspaces
+	// in the same transaction (the partition triggers live in the catalog, so
+	// older executables fire them too), and the generation also moves for
+	// authorship-only inputs. The mirrors below are still recomputed.
 	workspaces, err := queryMapsContext(ctx, snapshot, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w
  WHERE EXISTS(SELECT 1 FROM tool_calls t WHERE t.workspace_id=w.id)`)
 	if err != nil {
