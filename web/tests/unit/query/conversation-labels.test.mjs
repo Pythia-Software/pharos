@@ -343,9 +343,11 @@ test('tool dots take free lanes for overlapping calls, hit-test by position and 
  assert.equal(harnessWaitText(known),'');
  // The Key lists machine waits as a Tool actions chip. Hiding it leaves each
  // launch, so a window that holds only the wait draws nothing.
- const content=timelineKeyContent({messages:[],origins:[],tools:['run'],unknownTools:[],waitTools:['run'],error:false});
- assert.deepEqual(timelineLegendDomains(content).tools,['run','wait']);
- const hidden=updateTimelineVisibility({},'tools',['wait'],'hide');
+ const content=timelineKeyContent({messages:[],origins:[],tools:['run','wait'],unknownTools:[],waitTools:['run'],error:false});
+ assert.deepEqual(timelineLegendDomains(content).tools,['run','wait','machine_wait'],'Machine wait is its own value beside the Wait call category');
+ const hidden=updateTimelineVisibility({},'tools',['machine_wait'],'hide');
+ assert.equal(timelineWaitsVisible(updateTimelineVisibility({},'tools',['wait'],'hide')),true,'hiding Wait call keeps machine waits');
+ assert.equal(timelineValueVisible(hidden,'tools','wait'),true,'hiding Machine wait keeps wait calls');
  assert.equal(timelineWaitsVisible({}),true);assert.equal(timelineWaitsVisible(hidden),false);
  assert.equal(timelineWaitsVisible(updateTimelineVisibility({},'sections',['tools'],'hide')),false,'hiding all tool actions hides their waits');
  const [stripped]=visibleWaitMarks([wait],hidden);

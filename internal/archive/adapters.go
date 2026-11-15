@@ -1085,18 +1085,30 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	// conversation's active branch; an abandoned turn keeps its records, and
 	// its usage still counts, since it was sent.
 	onBranchIDs := claudeActiveBranch(events)
-	// A typed message queued mid-turn is kept unless the same text was also
-	// written as a user event; none has been seen, but one would count twice.
-	typedLater := map[string]bool{}
+	// A typed message queued mid-turn is kept unless the person's next user
+	// event repeats its text, as one written both ways would; none has been
+	// seen. Only that next event counts: "continue" sent hours apart is two.
+	queuedRepeated := map[int64]bool{}
+	queued := []map[string]any{}
 	for _, event := range events {
+		if attachment := mapValue(event["attachment"]); firstString(event["type"]) == "attachment" && firstString(attachment["type"]) == "queued_command" && firstString(attachment["commandMode"]) == "prompt" {
+			queued = append(queued, event)
+			continue
+		}
 		if firstString(event["type"]) != "user" {
 			continue
 		}
 		message := mapValue(event["message"])
 		text := strings.TrimSpace(messageText(firstNonNil(message["content"], event["content"])))
-		if text != "" && claudeInjectedSource(event, text) == "" {
-			typedLater[text] = true
+		if text == "" || claudeInjectedSource(event, text) != "" {
+			continue
 		}
+		for _, pending := range queued {
+			if strings.TrimSpace(firstString(mapValue(pending["attachment"])["prompt"])) == text {
+				queuedRepeated[integer(pending["_line"])] = true
+			}
+		}
+		queued = queued[:0]
 	}
 	pending, pendingSelected := 0, true
 	settle := func() {
@@ -1172,7 +1184,7 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 			switch {
 			case strings.HasPrefix(trimmed, "<task-notification>"):
 				messages = append(messages, injectedContext(base, "task_notification", prompt))
-			case firstString(attachment["commandMode"]) == "prompt" && trimmed != "" && !strings.HasPrefix(trimmed, "<cross-session-message") && !strings.HasPrefix(trimmed, "<agent-message") && !typedLater[trimmed]:
+			case firstString(attachment["commandMode"]) == "prompt" && trimmed != "" && !strings.HasPrefix(trimmed, "<cross-session-message") && !strings.HasPrefix(trimmed, "<agent-message") && !queuedRepeated[integer(event["_line"])]:
 				base.Role, base.Kind, base.Text, base.Sender = "user", "message", prompt, claudeSender(event)
 				if rootID != "" {
 					base.Role = agentRole

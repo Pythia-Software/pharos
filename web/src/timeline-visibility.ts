@@ -58,7 +58,8 @@ export function validTimelineVisibility(value:unknown):value is TimelineVisibili
  * it drops the waits from the marks a ribbon is built from (each launch
  * stays, so a window holding only a wait shows nothing) and checks Skip
  * machine waits (useTimelineVisibility). */
-export const timelineWaitKey='wait';
+// Distinct from the wait tool category (Wait call), which shares the tools section.
+export const timelineWaitKey='machine_wait';
 export const timelineWaitsVisible=(visibility:TimelineVisibility)=>timelineSectionVisible(visibility,'tools')&&timelineValueVisible(visibility,'tools',timelineWaitKey);
 export function visibleWaitMarks<T extends ActivityMark>(marks:T[],visibility:TimelineVisibility):T[]{
  return timelineWaitsVisible(visibility)||!marks.some(mark=>mark.wait_kind)?marks:marks.map(mark=>mark.wait_kind?{...mark,wait_kind:undefined,wait_end:undefined,wait_status:undefined,wait_events:undefined}:mark);
