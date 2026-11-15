@@ -34,7 +34,7 @@ function CarbonFilter({ field, choices, where, onFilter }: { field: "project_nam
   const label = originDimensions.find(([key]) => key===field)?.[1] ?? (field === "project_name" ? "Project" : "Provider");
   const value = multiple ? "selection" : selected.values.length ? `v:${selected.values[0] ?? ""}` : "all";
   return <ChartSelect label={label} value={value}
-    options={[["all", `All ${field === "project_name" ? "projects" : field === "provider" ? "providers" : label.toLowerCase()+" values"}`], ...values.map((name): [string, string] => [`v:${name}`, isOriginDimension(field) ? originLabel(field,name) : name ? field === "provider" ? providers[name] ?? name : name : field === "provider" ? "Unknown provider" : "No project"]), ...(multiple ? [["selection", "Multiple values / exclusions", "Filters restored from this link"] as [string, string, string]] : [])]}
+    options={[["all", `All ${field === "project_name" ? "projects" : field === "provider" ? "providers" : label.toLowerCase()+"s"}`], ...values.map((name): [string, string] => [`v:${name}`, isOriginDimension(field) ? originLabel(field,name) : name ? field === "provider" ? providers[name] ?? name : name : field === "provider" ? "Unknown provider" : "No project"]), ...(multiple ? [["selection", "Multiple values / exclusions", "Filters restored from this link"] as [string, string, string]] : [])]}
     onChange={next => onFilter(current => withSlice(current, field, { values: next === "all" ? [] : [next.slice(2) || null], excluded: false }))} />;
 }
 
@@ -57,7 +57,7 @@ export function CarbonImpact({ where, onFilter, usage: state, children }: { wher
   const data = useMemo(() => state.usage ? { ...state.usage, factors: factors as CarbonFactors } : null, [state.usage]), error = state.error;
   const scopeValue = (field: "project_name" | "repository_name" | "provider" | "channel" | "machine_id" | "execution_machine_id") => {
     const selection = readSlice(where, field);
-    if (!selection.values.length) return field === "project_name" ? "All projects" : field === "provider" ? "All providers" : `All ${originDimensions.find(([key]) => key===field)?.[1].toLowerCase()} values`;
+    if (!selection.values.length) return field === "project_name" ? "All projects" : field === "provider" ? "All providers" : `All ${originDimensions.find(([key]) => key===field)?.[1].toLowerCase()}s`;
     return `${selection.excluded ? "Except " : ""}${selection.values.map(value => isOriginDimension(field) ? originLabel(field,value) : value ? field === "provider" ? providers[value] ?? value : value : field === "provider" ? "Unknown provider" : field === "repository_name" ? "No repository" : "No project").join(", ")}`;
   };
   // A link from before projects filters repositories; it still does, so the
@@ -82,7 +82,7 @@ export function CarbonImpact({ where, onFilter, usage: state, children }: { wher
       </div>
     </section>
     {data && !data.windows.some(window => Object.values(window.tokens).some(counts => Object.values(counts).some(value => value > 0))) ? <p className="muted" role="status">No reported token usage matches these filters.</p> : null}
-    {error ? <button type="button" onClick={state.retry}>Retry carbon usage</button> : null}
+    {error ? <button type="button" onClick={state.retry}>Try again</button> : null}
     {children}
     <div className="data-readiness-region"><DataReadinessIndicator id="carbon:estimate" title="Filtered carbon estimate" dataset="usage" query={{where}} {...state.readiness} /><div id="carbonSummary" className="carbon-card carbon-summary" aria-label="Filtered carbon estimate" /></div>
     {data?.undated_tokens ? <p className="muted">{formatTokens(data.undated_tokens)} tokens have no usage date. They are included in the total but cannot be placed on the chart.</p> : null}

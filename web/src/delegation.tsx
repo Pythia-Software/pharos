@@ -27,6 +27,7 @@ import {useTimelineColumns} from "./timeline-columns";
 import {timelineSessionBranches} from "./timeline-label-model";
 import {sessionOutsideWindow,launchAttemptNote,laneCoverage,segmentPosition,type ExecutionSegment,type LaunchAttempt,type SessionAncestry} from "./delegation-ancestry";
 import {delegationAliasRequests,normalizeDelegationView,readerSelection,unresolvedAliases,type DelegationAliases} from "./delegation-aliases";
+import { estimateExplanation } from "./usage-estimate-model";
 import {coverageSummary,eventsPendingNote,occurrenceNote,omittedSegmentsNote,parentNote,qualityMark,sessionCountText,timelineEventsPending,timelineEventsPendingNote,type ExecutionCoverage,type ParentCertainty} from "./delegation-coverage";
 import {TimelineLegend,timelineLegendWindow,timelineToolCategories} from "./timeline-legend";
 import {updateTimelineVisibility,type TimelineVisibility} from "./timeline-visibility";
@@ -370,6 +371,8 @@ export function tokenAttributionText(session: Session) {
   if (a.unallocated_tokens > 0) parts.push(`${formatted(a.unallocated_tokens, "tokens")} tokens unallocated within this branch. Included in Self + children; child observations may overlap this amount. API cost for this remainder is included in the branch total.`);
   return parts.join(" ");
 }
+const qualityWords: Record<string, string> = { observed: "Observed", partial: "Partial", "reported-minimum": "Reported minimum", estimated: "Estimated", unknown: "Unknown", excluded: "Excluded", unverified: "Unverified", inferred: "Inferred" };
+const qualityLabel = (quality: string) => qualityWords[quality] ?? quality;
 export function cellTitle(metric: Metric, spec: Spec) {
   const raw = metric.value?.toLocaleString(undefined, { maximumFractionDigits: 6 });
   const shown = formatted(metric.value, spec.unit);
@@ -379,9 +382,9 @@ export function cellTitle(metric: Metric, spec: Spec) {
       : spec.unit === "date"
         ? `${localTime(metric.value)}\n`
         : `${raw} ${spec.unit}\n`;
-  const definition = metric.is_estimate && spec.id === "cost" ? "API-rate estimate, not billing." : spec.definition;
-  const estimate = metric.is_estimate ? "\nIncludes estimated usage for conversations without reported counts: generated output, and processed input where the visible conversation supports it. Hidden system prompts are not counted and the cache division is assumed, so API cost for those conversations is partial and may assume a saved conversation model selection." : "";
-  return `${exact}${definition}${estimate}${metric.quality === "reported-minimum" ? "\n* Reported minimum; may cover only the last request. Full session usage and token breakdown were not recorded." : ""}\n${metric.quality} · ${metric.known}/${metric.total} retained coverage. ${metric.value === null ? "No sufficient retained evidence." : "Source coverage may be incomplete."}`;
+  const definition = metric.is_estimate && spec.id === "cost" ? "Estimated list-price API cost, not your bill." : spec.definition;
+  const estimate = metric.is_estimate ? `\n${estimateExplanation.replace(/^\* /, "")}` : "";
+  return `${exact}${definition}${estimate}${metric.quality === "reported-minimum" ? "\n* Reported minimum; may cover only the last request. Full session usage and token breakdown were not recorded." : ""}\n${qualityLabel(metric.quality)} · ${metric.known}/${metric.total} retained coverage. ${metric.value === null ? "Not enough saved evidence." : "Source coverage may be incomplete."}`;
 }
 
 function ColumnPicker({
@@ -594,7 +597,7 @@ export function DelegationExplorer({
     const recovery = snapshotRecovery.current.changed(snapshot);
     if (recovery === 'ignore') return;
     if (recovery === 'exhausted') {
-      setError('The archive is still changing. Refresh analysis to try again.');
+      setError('The library is still changing. Choose Refresh analysis to try again.');
       return;
     }
     // Re-resolve selections and disclosures if execution identities changed.
@@ -996,8 +999,8 @@ export function DelegationExplorer({
       <h2>{shownSession.label}</h2>
       <small>
         {shownSession.provider} ·{" "}
-        {shownSession.model || "model unknown"} ·{" "}
-        {shownSession.effort || "unknown"}
+        {shownSession.model || "model not recorded"} ·{" "}
+        {shownSession.effort || "effort not recorded"}
         {parentNote(shownSession) ? ` · ${parentNote(shownSession)}` : ""}
         {occurrenceNote(shownSession.occurrence_partial) ? ` · ${occurrenceNote(shownSession.occurrence_partial)}` : ""}
       </small>
@@ -1039,7 +1042,7 @@ export function DelegationExplorer({
     );
   const totals = data && (
     <div className="delegation-totals">
-      <span title={data.session_count_uncertain ? "Some sessions' identity evidence is in an unresolved conflict, so this count is not exact." : "Sessions in this work."}>
+      <span title={data.session_count_uncertain ? "Some sessions' identity evidence is in an unresolved conflict, so this count is not exact." : "Agent sessions in this workspace."}>
         <small>Sessions</small>
         <strong>{data.session_count_uncertain ? "≈" : ""}{data.session_count.toLocaleString()}</strong>
       </span>
@@ -1060,7 +1063,7 @@ export function DelegationExplorer({
         const spec = data.metrics.find((m) => m.id === "cost")!;
         const group = data.group_totals.cost;
         return group && <span className="delegation-group-total" title={`This workspace and the related work shown among its agent sessions.\n${cellTitle(group, spec)}`}>
-          <small>With related work</small>
+          <small>API cost with related work</small>
           <strong>{workspaceTotalText(group, spec.unit)}</strong>
         </span>;
       })()}
@@ -1223,8 +1226,8 @@ export function DelegationExplorer({
                                   <div className="delegation-node">
                                     <SessionIdentity
                                       name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`}
-                                      metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{n.provider} · {n.model || "model unknown"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{n.events_pending ? ` · ${eventsPendingNote}` : ""}<SessionAge start={n.start} prefix=" · " /></>}
-                                      title={`${n.id} · ${n.coverage} coverage · ${n.parent_evidence || "root"}`}
+                                      metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{n.provider} · {n.model || "model not recorded"} · {n.effort || "effort not recorded"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{n.events_pending ? ` · ${eventsPendingNote}` : ""}<SessionAge start={n.start} prefix=" · " /></>}
+                                      title={`${n.id} · ${n.coverage} coverage`}
                                       depth={mode === "hierarchy" ? n.depth : 0}
                                       branch={mode === "hierarchy" ? sessionBranches.get(n.id) : undefined}
                                       folded={mode === "hierarchy" && !!n.child_count}
@@ -1280,7 +1283,7 @@ export function DelegationExplorer({
                           })}
                         </tbody>
                       </table>
-                      {!rows.length && <p>No agent sessions match these filters.</p>}
+                      {!rows.length && <p>No agent sessions are recorded in this workspace.</p>}
                       {coverageSummary(data.coverage).counts && <small className="delegation-truncation" role="note">{coverageSummary(data.coverage).counts}</small>}
                     </div>
                   </div>
@@ -1321,10 +1324,10 @@ export function DelegationExplorer({
                       ? "Loading…"
                       : `${data.offset + (data.rows.length ? 1 : 0)}–${data.offset + data.rows.length} of ${sessionCountText(data.total, data.session_count_uncertain)}`}
                     {data.ancestors.length
-                      ? ` · ${data.ancestors.length} ancestors retained as context`
+                      ? ` · ${data.ancestors.length} parent session${data.ancestors.length === 1 ? "" : "s"} shown for context`
                       : ""}
                     {data.ancestors_truncated
-                      ? " · additional ancestors omitted"
+                      ? " · more parent sessions not shown"
                       : ""}
                   </span>
                   <button data-view-field="delegation_page"
@@ -1350,11 +1353,12 @@ export function DelegationExplorer({
               )}
               {!single && !compact && !splitReader && <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Metric definitions & evidence">
                 <p>
-                  Self counts one agent session. Self + children includes its
-                  delegated sub-agents. Workspace totals count each recorded
-                  execution once. Unknown values are —; + denotes partial
-                  coverage; * marks a reported token minimum that may cover only the last request. Last evidence is not proof of completion. Source
-                  coverage and lifecycle boundaries may be incomplete.
+                  Self counts one agent session; Self + children adds every
+                  agent session delegated below it. Workspace totals count each
+                  agent session once. — means unknown, + means partial coverage,
+                  and * marks a reported token minimum that may cover only the
+                  last request. The last saved activity does not prove a session
+                  finished, and sources may not record every start or end.
                 </p>
                 {data.warnings.map((warning, i) => (
                   <p key={i}>{warning}</p>
@@ -1402,10 +1406,10 @@ function InboxSessions({ rows, data, shown, range, collapsed, toggle, openNode, 
   // Self usage keeps each session comparable; parallel children do not inflate its run time.
   const metrics = ["cost", "clock"].map(id => data.metrics.find(spec => spec.id === id)).filter((spec): spec is Spec => !!spec);
   return <div className="delegation-inbox-list" role="table" aria-label="Agent session hierarchy and usage">
-    <div className="delegation-inbox-heading" role="row"><span role="columnheader" title={sessionCountText(data.session_count, data.session_count_uncertain)}>Agent session{data.session_count_uncertain ? " ≈" : ""}</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.id === "clock" ? "Run time" : spec.label}</span>)}</div>
+    <div className="delegation-inbox-heading" role="row"><span role="columnheader" title={sessionCountText(data.session_count, data.session_count_uncertain)}>Agent session{data.session_count_uncertain ? " ≈" : ""}</span>{metrics.map(spec => <span key={spec.id} role="columnheader" title={`Self · ${spec.definition}`}>{spec.label}</span>)}</div>
     {rows.map(n => <div key={n.id} role="row" data-session-id={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }}>
       <div role="cell" className="delegation-inbox-session">
-        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{!sessionOutsideWindow(n, range) && (n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens)} tokens unallocated in branch` : "")}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
+        <SessionIdentity name={`${n.label}${n.external_child || n.navigation ? " ↗" : ""}`} metadata={<>{peerPrefix(n)}{n.subtitle ? `${n.subtitle} · ` : ""}{n.provider} · {n.model || "model not recorded"} · {n.effort || "effort not recorded"}{n.context_only ? " · Parent context" : ""}{parentNote(n) ? ` · ${parentNote(n)}` : ""}{n.attempts?.length ? ` · ${launchAttemptNote(n.attempts)}` : ""}{occurrenceNote(n.occurrence_partial) ? ` · ${occurrenceNote(n.occurrence_partial)}` : ""}{!sessionOutsideWindow(n, range) && (n.self.tokens?.quality === "reported-minimum" ? ` · ${tableMetricText(n.self.tokens)} tokens · Breakdown not recorded` : n.token_attribution?.unallocated_tokens ? ` · ${formatted(n.token_attribution.unallocated_tokens, "tokens")} tokens unallocated in branch` : "")}</>} depth={n.depth} branch={branches.get(n.id)} folded={!!n.child_count} current={n.id === shown} openSession={() => openNode(n)} />
         {!!n.child_count && <button className="delegation-chevron session-fold" style={{left: sessionBranchX(n.depth) - 8}} aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} title={collapsed.has(n.id) ? "Expand sessions" : "Collapse sessions"} aria-expanded={!collapsed.has(n.id)} onClick={() => toggle(n)}><Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /></button>}
         <RelativesButton node={n} show={showRelatives} />
       </div>
@@ -1415,7 +1419,7 @@ function InboxSessions({ rows, data, shown, range, collapsed, toggle, openNode, 
         return <span key={spec.id} role="cell" className="delegation-inbox-metric" title={outside ? "Outside the selected timeline window" : `${value ? cellTitle(value, spec) : "No retained evidence"}${tokenAttributionText(n) ? "\n" + tokenAttributionText(n) : ""}`}>{outside ? "" : metricText(value, spec.unit)}</span>;
       })}
     </div>)}
-    {!rows.length && <p>No saved agent sessions.</p>}
+    {!rows.length && <p>No agent sessions are recorded in this workspace.</p>}
   </div>;
 }
 
@@ -1551,7 +1555,7 @@ function TimelineOverview({
         <small>
           {pending?"Loading this window…":"drag to zoom and pan"}
         </small>
-        {idle?<label className="delegation-idle-toggle" title="Remove stretches of 15 minutes or more with nothing running in any session that end with the caller speaking. Each is marked with the time the session resumed.">
+        {idle?<label className="delegation-idle-toggle" title="Hide stretches of 15 minutes or more when no session was running and the next activity was a new prompt. Each cut shows when work resumed.">
           <input type="checkbox" data-view-field="timeline_idle" checked={idle.skip} onChange={event=>idle.set(event.currentTarget.checked)}/>
           Skip idle gaps{idle.skip&&idle.gaps?<small> · {idle.gaps}</small>:null}
         </label>:null}
@@ -1575,7 +1579,7 @@ function TimelineOverview({
             return <i key={i} style={{ height: `${(count / maxDensity) * 100}%`, ...(scale.compressed ? { left: `${percentage(from)}%`, width: `${Math.max(0, percentage(to) - percentage(from))}%` } : {}) }} />;
           })}
         </div>
-        {scale.cuts.map(cut => <i key={cut.end} className="delegation-idle-cut" style={{ left: `${cut.fraction * 100}%` }} title={`Idle ${duration(cut.end - cut.start)}, skipped; resumed ${localTime(cut.end)}`} />)}
+        {scale.cuts.map(cut => <i key={cut.end} className="delegation-idle-cut" style={{ left: `${cut.fraction * 100}%` }} title={`Nothing ran for ${duration(cut.end - cut.start)}; resumed ${localTime(cut.end)}`} />)}
         <div
           className="delegation-dim"
           style={{ left: 0, width: `${percentage(view[0])}%` }}
@@ -1952,7 +1956,7 @@ export function ParallelActivity({
       {laneRows.length < rows.length && (
         <p className="delegation-evidence-note">
           This window includes the current page and up to 100 lanes. Additional
-          ancestor context remains available in the hierarchy table.
+          parent context remains available in Hierarchy & usage.
         </p>
       )}
       <div
@@ -2005,8 +2009,8 @@ export function ParallelActivity({
           const laneNotes=(()=>{
             if(!lane)return [];
             const notes:React.ReactNode[]=[];
-            if(lane.truncated)notes.push("Showing first 2,400 marks; zoom in for remaining events.");
-            if(lane.messages_truncated)notes.push("Message display is limited to 2,400 observations per session. Zoom in to see more.");
+            if(lane.truncated)notes.push("Showing the earliest 2,400 tool-call marks; zoom in to see the rest.");
+            if(lane.messages_truncated)notes.push("Showing only the earliest messages in this window, up to 2,400 per session; zoom in to see the rest.");
             // Copies link to the session that owns the original when it is loaded.
             const owners=(lane.inherited_owners??[]).map(id=>data.focus.find(row=>row.id===id)??rows.find(row=>row.id===id)).filter((row):row is Session=>!!row);
             if(lane.inherited_messages)notes.push(<>{lane.inherited_messages.toLocaleString()} copied message{lane.inherited_messages===1?"":"s"} belong{lane.inherited_messages===1?"s":""} to {owners.length?owners.map((owner,i)=><React.Fragment key={owner.id}>{i?", ":""}<button type="button" className="delegation-inline-link" onClick={()=>openNode(owner)}>{owner.label}</button></React.Fragment>):lane.inherited_owners?.length?"another session":"a session whose original is not retained"}</>);
@@ -2172,10 +2176,11 @@ export function ParallelActivity({
       {selected && !previewOnly && (
         <ViewDisclosure viewKey="delegation:definitions" className="delegation-definitions" summary="Selected agent session · estimated activity periods">
           <p>
-            Clusters use tool/request timestamps and the first and last session
-            message timestamps. A gap over 30 minutes starts a new cluster;
-            intermediate message activity may be missing from this sample. These
-            are not asserted run boundaries. Usage stays at session level.
+            Activity periods group tool calls, model requests and the session’s
+            first and last messages; a gap over 30 minutes starts a new period.
+            Messages in between may be missing, so periods are estimates, not
+            when the agent started or stopped. Usage is still counted for the
+            whole session.
           </p>
           {lanes.get(selected)?.episodes.map((episode, i) => (
             <button
@@ -2187,7 +2192,7 @@ export function ParallelActivity({
                 ])
               }
             >
-              Cluster {i + 1} · {localTime(episode.start)} ·{" "}
+              Activity period {i + 1} · {localTime(episode.start)} ·{" "}
               {duration(episode.end - episode.start)}
             </button>
           ))}

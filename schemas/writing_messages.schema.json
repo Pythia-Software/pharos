@@ -161,7 +161,7 @@
     },
     {
       "name": "main_category",
-      "label": "Mostly",
+      "label": "Main category",
       "type": "enum",
       "group": "Message",
       "render": "authorship_category",
@@ -184,7 +184,7 @@
             },
             {
               "value": "quoted",
-              "label": "Copied"
+              "label": "Copied or quoted"
             },
             {
               "value": "resent",
@@ -278,7 +278,7 @@
             },
             {
               "value": "quoted",
-              "label": "Copied"
+              "label": "Copied or quoted"
             },
             {
               "value": "resent",
@@ -839,7 +839,7 @@
     },
     {
       "name": "title",
-      "label": "Conversation",
+      "label": "Workspace",
       "type": "text",
       "group": "Context",
       "render": "usage_conversation",
@@ -1002,11 +1002,11 @@
     {"name": "execution_machine_id", "label": "Execution machine", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine_id", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine_id\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran.", "render": "origin_execution_machine_id"},
     {"name": "execution_machine", "label": "Execution machine name", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
     {"name": "execution_machine_kind", "label": "Execution machine kind", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine_kind", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine_kind\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
-    {"name": "channel_status", "label": "Channel attribution", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "channel_status", "synthetic": true}, "sqlite": {"expr": "r.\"channel_status\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
-    {"name": "machine_status", "label": "Machine attribution", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machine_status", "synthetic": true}, "sqlite": {"expr": "r.\"machine_status\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
-    {"name": "execution_machine_status", "label": "Execution machine attribution", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine_status", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine_status\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
-    {"name": "origin_conversation_id", "label": "Initiating conversation", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "origin_conversation_id", "synthetic": true}, "sqlite": {"expr": "r.\"origin_conversation_id\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
-    {"name": "origin_evidence", "label": "Origin evidence", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "origin_evidence", "synthetic": true}, "sqlite": {"expr": "r.\"origin_evidence\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
+    {"name": "channel_status", "label": "Channel attribution", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "channel_status", "synthetic": true}, "sqlite": {"expr": "r.\"channel_status\""}}, "description": "How the channel was established."},
+    {"name": "machine_status", "label": "Machine attribution", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machine_status", "synthetic": true}, "sqlite": {"expr": "r.\"machine_status\""}}, "description": "How the machine was established."},
+    {"name": "execution_machine_status", "label": "Execution machine attribution", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machine_status", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machine_status\""}}, "description": "How the execution machine was established."},
+    {"name": "origin_conversation_id", "label": "Initiating conversation", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "origin_conversation_id", "synthetic": true}, "sqlite": {"expr": "r.\"origin_conversation_id\""}}, "description": "The conversation the channel and machine were inherited from."},
+    {"name": "origin_evidence", "label": "Origin evidence", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "origin_evidence", "synthetic": true}, "sqlite": {"expr": "r.\"origin_evidence\""}}, "description": "The recorded evidence for how the channel or machine was established."},
     {"name": "channels", "label": "Channels", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "channels", "synthetic": true}, "sqlite": {"expr": "r.\"channels\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
     {"name": "machines", "label": "Machines", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "machines", "synthetic": true}, "sqlite": {"expr": "r.\"machines\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
     {"name": "execution_machines", "label": "Execution machines", "type": "text", "group": "Origin", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "execution_machines", "synthetic": true}, "sqlite": {"expr": "r.\"execution_machines\""}}, "description": "Recorded channel or device details. Machine is where the top-level conversation started; Execution machine is where the agent session ran."},
@@ -1079,7 +1079,7 @@
           "id": "workspace_id"
         }
       },
-      "label": "Conversation's work ID",
+      "label": "Workspace ID",
       "type": "text",
       "group": "Context",
       "select": {
@@ -1097,7 +1097,7 @@
     },
     {
       "name": "work_id",
-      "label": "Work ID",
+      "label": "Writing workspace ID",
       "type": "text",
       "group": "Context",
       "select": {

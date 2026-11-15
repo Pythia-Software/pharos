@@ -16,6 +16,8 @@ export type HumanStudyPreview = {
   workspaceRows?: { label: string; location: string; count: number; total: number; value: number; url: string }[];
 };
 const day = 86400000;
+// "1 conversation", "2,400 conversations".
+const counted = (count: number, one: string, many = `${one}s`) => `${count.toLocaleString()} ${count === 1 ? one : many}`;
 type EvidenceBatch = { rows: StudyMessage[]; now: number };
 const messageCache = new Map<string, { at: number; batch: EvidenceBatch }>();
 const directoryCache = new Map<string, { at: number; rows: StudyWorkspace[] }>();
@@ -81,9 +83,9 @@ export function buildHumanStudy(kind: HumanStudy, allRows: StudyMessage[], works
     const bands = [{ label: "1–49 words", max: 50 }, { label: "50–199 words", max: 200 }, { label: "200–499 words", max: 500 }, { label: "500–999 words", max: 1000 }, { label: "1,000–1,999 words", max: 2000 }, { label: "2,000+ words", max: Infinity }];
     const counts = bands.map(() => 0);
     for (const total of totals.values()) counts[bands.findIndex(band => total < band.max)]++;
-    return { kind: "profile", valueLabel: "Human words per conversation", sampleLabel: `${totals.size} conversations · ${writing.length} written messages`,
+    return { kind: "profile", valueLabel: "Your words per conversation", sampleLabel: `${counted(totals.size, "conversation")} · ${counted(writing.length, "written message")}`,
       rows: bands.map((band, index) => ({ label: band.label, count: counts[index], value: totals.size ? counts[index] / totals.size : 0 })),
-      detail: `Fixed word-count bands use each conversation's human-written total over the last ${days} days. Bar length is the share of conversations in that band; a single very long conversation cannot stretch the other bands flat. Conversations without human writing are excluded.` };
+      detail: `Fixed word-count bands use each conversation’s human-written total over the ${days === 1 ? "last day" : `last ${days} days`}. Bar length is the share of conversations in that band; a single very long conversation cannot stretch the other bands flat. Conversations without human writing are excluded.` };
   }
   if (["volume", "message-average", "conversation-average", "workspace-average"].includes(kind)) {
     const measure = (rows: StudyMessage[]) => {
@@ -100,16 +102,16 @@ export function buildHumanStudy(kind: HumanStudy, allRows: StudyMessage[], works
     // evidence should keep this card out of recommendations.
     const hasVolumeHistory = kind !== "volume" || points.some(point => point !== null && point > 0);
     const selected = kind === "workspace-average" ? writing.filter(row => identity(row)) : writing;
-    const denominator = kind === "workspace-average" ? `${unique(selected.map(identity))} workspace directories · ${unique(selected.map(row => row.conversation_id))} conversations` : kind === "conversation-average" ? `${unique(writing.map(row => row.conversation_id))} conversations · ${writing.length} messages` : `${writing.length} written messages`;
-    return { kind: "trend", value: hasVolumeHistory ? points.at(-1) ?? undefined : undefined, valueLabel: kind === "volume" ? `words / trailing ${days}d` : kind === "message-average" ? "words / message" : kind === "conversation-average" ? "words / conversation" : "words / workspace directory", sampleLabel: denominator,
+    const denominator = kind === "workspace-average" ? `${counted(unique(selected.map(identity)), "workspace directory", "workspace directories")} · ${counted(unique(selected.map(row => row.conversation_id)), "conversation")}` : kind === "conversation-average" ? `${counted(unique(writing.map(row => row.conversation_id)), "conversation")} · ${counted(writing.length, "message")}` : counted(writing.length, "written message");
+    return { kind: "trend", value: hasVolumeHistory ? points.at(-1) ?? undefined : undefined, valueLabel: kind === "volume" ? `words / ${days === 1 ? "last day" : `trailing ${days} days`}` : kind === "message-average" ? "words / message" : kind === "conversation-average" ? "words / conversation" : "words / workspace directory", sampleLabel: denominator,
       points, pointTimes, lookbackDays: days, baseline: historical.length ? historical.reduce((a, b) => a + b, 0) / historical.length : undefined,
-      detail: kind === "workspace-average" ? `${writing.length - selected.length} written messages lack a mapped directory and are excluded. Workspaces sharing a repository and exact directory are combined, regardless of conversation or work ID.` : `Each point is a trailing ${days}-day ${kind === "volume" ? "word total" : "ratio of window totals"}. The norm is the mean of the prior 30 daily endpoints${kind === "volume" ? ", including zero-writing windows" : "; empty denominators remain gaps"}.` };
+      detail: kind === "workspace-average" ? `${writing.length - selected.length === 1 ? "1 written message lacks a mapped directory and is excluded." : `${(writing.length - selected.length).toLocaleString()} written messages lack a mapped directory and are excluded.`} Workspaces that share a repository and exact directory count as one.` : `Each point is a trailing ${days}-day ${kind === "volume" ? "word total" : "ratio of window totals"}. The norm is the mean of the prior 30 daily endpoints${kind === "volume" ? ", including zero-writing windows" : "; empty denominators remain gaps"}.` };
   }
   if (kind === "hours") {
     const format = new Intl.DateTimeFormat("en-US", { hour: "numeric", hourCycle: "h23", timeZone });
     const hours = Array.from({ length: 24 }, (_, hour) => ({ label: `${hour.toString().padStart(2, "0")}:00`, value: 0 }));
     for (const row of writing) hours[Number(format.format(new Date(row.sent_at)))].value += row.typed_words;
-    return { kind: "hours", timeZone, valueLabel: "Words by local hour", rows: hours, sampleLabel: `${writing.length} written messages · ${timeZone}`, detail: "All dates in the selected window are combined by local hour of day. Empty hours are zero. Repeated daylight-saving hours contribute to the same clock hour." };
+    return { kind: "hours", timeZone, valueLabel: "Words by local hour", rows: hours, sampleLabel: `${counted(writing.length, "written message")} · ${timeZone}`, detail: "All dates in the selected window are combined by local hour of day. Empty hours are zero. Repeated daylight-saving hours contribute to the same clock hour." };
   }
   const contributions = current.filter(human), assessed = contributions.filter(row => !row.text_truncated);
   const signals = assessed.map(row => ({ row, ...contributionSignals(row) }));
@@ -123,7 +125,7 @@ export function buildHumanStudy(kind: HumanStudy, allRows: StudyMessage[], works
     return { id: row.id, text: (kind === "examples" ? [typed, context].filter(Boolean).join("\n") : typed).slice(0, 220), label, url: queryURL("writing_messages", { ...EMPTY_QUERY, where: [{ field: "id", op: "=", value: row.id }] }) };
   });
   const ratio = (n: number, denominator = assessed.length) => denominator ? n / denominator : 0;
-  const samples = `${assessed.length} assessed contributions · ${contributions.length - assessed.length} clipped messages excluded`;
+  const samples = `${counted(assessed.length, "assessed contribution")} · ${counted(contributions.length - assessed.length, "clipped message")} excluded`;
   if (kind === "specific-feedback") {
     const authored = signals.filter(signal => signal.row.typed_words > 0);
     const matched = new Set(allRows.filter(row => row.typed_words > 0 && !row.text_truncated && contributionSignals(row).feedback).map(row => row.id));
@@ -132,9 +134,9 @@ export function buildHumanStudy(kind: HumanStudy, allRows: StudyMessage[], works
       return assessed.length ? assessed.filter(row => matched.has(row.id)).length / assessed.length : null;
     });
     const historical = points.slice(0, -1).filter((point): point is number => point !== null);
-    return { kind: "trend", format: "percent", value: authored.length ? feedback.length / authored.length : undefined, valueLabel: "with concrete feedback cues", sampleLabel: `${feedback.length} of ${authored.length} assessed written messages`, evidence, points, pointTimes, lookbackDays: days,
+    return { kind: "trend", format: "percent", value: authored.length ? feedback.length / authored.length : undefined, valueLabel: "with concrete feedback cues", sampleLabel: `${feedback.length.toLocaleString()} of ${authored.length === 1 ? "1 assessed written message" : `${authored.length.toLocaleString()} assessed written messages`}`, evidence, points, pointTimes, lookbackDays: days,
       baseline: historical.length ? historical.reduce((a, b) => a + b, 0) / historical.length : undefined,
-      detail: `Each point is the share of assessed human-written messages matching concrete feedback cues during the trailing ${days} days. The norm averages the preceding 30 daily ratios; empty denominators remain gaps. Requires a direction/correction/constraint cue plus a reason, condition, number, quoted target, path, URL, paste, or attachment. Clipped messages are excluded. These are candidates for inspection, not a quality score.` };
+      detail: `Each point is the share of assessed human-written messages matching concrete feedback cues during the ${days === 1 ? "last day" : `trailing ${days} days`}. The norm averages the preceding 30 daily ratios; empty denominators remain gaps. Requires a direction/correction/constraint cue plus a reason, condition, number, quoted target, path, URL, paste, or attachment. Clipped messages are excluded. These are candidates for inspection, not a quality score.` };
   }
   if (kind === "examples") {
     const groups = new Map<string, { rows: StudyMessage[]; workspace: StudyWorkspace; count: number }>();

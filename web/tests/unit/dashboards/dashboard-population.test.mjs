@@ -33,7 +33,7 @@ test("the legend's Leave out and Count only write terms on the breakdown's field
   // A second exclusion adds to the first; a missing value is left out by is_not_null.
   where = withPopulationGroup(catalog, where, "harness", "codex-cli", "drop");
   where = withPopulationGroup(catalog, where, "harness", "", "drop");
-  assert.deepEqual(chips(where), ["Harness is not antigravity-cli", "Harness is not codex-cli", "Harness is set"]);
+  assert.deepEqual(chips(where), ["Agent app is not antigravity-cli", "Agent app is not codex-cli", "Agent app is set"]);
   // Count only replaces the field's slice; leaving out one of several kept values narrows it.
   where = withPopulationGroup(catalog, where, "harness", "claude-code", "keep");
   assert.deepEqual(populationOf(catalog, where), [{ field: "harness", op: "=", value: "claude-code" }]);
@@ -56,8 +56,8 @@ test("a legend selection made the population keeps or leaves out each group", ()
 test("chips and the title suffix name values as the legend does, and other terms as the query editor does", () => {
   const where = [...range, leaveOut("archetype", "automated"), { field: "agent_kind", op: "=", value: "root" }, { field: "active_seconds", op: "is_not_null", value: "" }];
   const terms = describePopulation(catalog, schema.fields, populationOf(catalog, where), labels);
-  assert.deepEqual(terms.map(item => item.chip), ["Archetype is not Automated", "Agent depth is Root agent", "Active time (s) is not empty"]);
-  assert.equal(populationSuffix(terms), " · excluding Automated; only Root agent; active time (s) is not empty");
+  assert.deepEqual(terms.map(item => item.chip), ["Archetype is not Automated", "Agent kind is Main agent", "Active time (s) is not empty"]);
+  assert.equal(populationSuffix(terms), " · excluding Automated; only Main agent; active time (s) is not empty");
   assert.equal(populationSuffix([]), "");
 });
 
@@ -75,7 +75,7 @@ test("a population round-trips through analyze_filters and matches the link site
   const example = cases.population;
   const read = decodeQuery(new URL(example.url, "http://localhost").searchParams.get("analyze_filters")).where;
   assert.deepEqual(populationOf(catalog, read), example.filters);
-  assert.deepEqual(chips(read), ["Harness is not antigravity-cli", "Agent depth is Root agent"]);
+  assert.deepEqual(chips(read), ["Agent app is not antigravity-cli", "Agent kind is Main agent"]);
   // The page writes the same token back.
   assert.deepEqual(decodeQuery(encodeQuery({ ...EMPTY_QUERY, where: read })).where, read);
 });

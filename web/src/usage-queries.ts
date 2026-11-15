@@ -19,18 +19,18 @@ const ranked = [{ field: "usage_cost_usd", dir: "desc" as const, nulls: "last" a
 const grouped = (label: string, title: string, keys: string[], summaries = totals): UsageTablePreset => ({
   label, title, grouping: { keys, summaries, representative: null }, orderBy: ranked,
 });
-const calendar = (label: string, key: string) => ({ ...grouped(label, `Cost, tokens, distinct sessions and cache hit rate per ${label.toLowerCase()}`, [key]), orderBy: [{ field: key, dir: "desc" as const }] });
+const calendar = (label: string, key: string) => ({ ...grouped(label, `API cost, tokens, agent sessions and cache hit rate per ${label.toLowerCase()}`, [key]), orderBy: [{ field: key, dir: "desc" as const }] });
 // Usage titles come from the same workspace row for every fact. MAX retains
 // that one title without sorting and validating a representative per workspace.
 const workLink: SummaryColumn = { id: "usage_work", op: "link", label: "Workspace", link: { label: { column: "usage_work_title" }, to: { kind: "template", template: "/work/{field:workspace_id}" } } };
-const work = grouped("Workspace", "Rank work by cost across days and models; each workspace retains its own identity", ["workspace_id"], [{ id: "usage_work_title", op: "max", field: "title", label: "Title" }, workLink, ...totals]);
+const work = grouped("Workspace", "Rank workspaces by API cost across days and models", ["workspace_id"], [{ id: "usage_work_title", op: "max", field: "title", label: "Title" }, workLink, ...totals]);
 
 export const usageGroupPresets: UsageTablePreset[] = [
-  grouped("Projects", "Compare project cost, tokens, sessions and cache reuse", ["project_name"]),
+  grouped("Projects", "Compare project API cost, tokens, agent sessions and cache reuse", ["project_name"]),
   grouped("Models", "Compare models within each provider", ["provider", "model_family"]),
   grouped("Model + effort", "Keep each provider, model and recorded effort level separate, including missing effort", ["provider", "model_family", "effort"]),
-  ...[["channel", "Channels"], ["machine_id", "Machines"], ["execution_machine_id", "Execution machines"]].map(([field,label]) => grouped(label, `Compare usage by ${label.toLowerCase()}`, [field])),
-  grouped("Providers", "Compare provider cost, tokens, sessions and cache reuse", ["provider"]),
+  ...[["channel", "Channels", "channel"], ["machine_id", "Machines", "machine"], ["execution_machine_id", "Execution machines", "execution machine"]].map(([field, label, noun]) => grouped(label, `Compare usage by ${noun}`, [field])),
+  grouped("Providers", "Compare provider API cost, tokens, agent sessions and cache reuse", ["provider"]),
   grouped("Agents", "Compare main agents and sub-agents within each provider", ["provider", "session_kind"]),
   { ...work,
     columns: [workLink.id, "workspace_id", ...totals.map(column => column.id)] },
@@ -41,7 +41,7 @@ export const usageComparisonPresets: UsageTablePreset[] = [
   { ...grouped("Cache efficiency", "Compare weighted cache hit rates and cached, uncached and written input by model", ["provider", "model_family"], [
     ...totals, sum("uncached_input_tokens", "Uncached input"), sum("cache_read_input_tokens", "Cache reads"), sum("cache_creation_input_tokens", "Cache writes"),
   ]), orderBy: [{ field: cacheRate.id, dir: "asc", nulls: "last" }] },
-  grouped("Price coverage", "Keep priced, assumed, partial and unpriced usage visible alongside cost and tokens", ["price_status"]),
+  grouped("Price coverage", "Keep priced, assumed, partial and unpriced usage visible alongside API cost and tokens", ["price_status"]),
 ];
 
 // A preset owns the grouping and the result layout. Applying it keeps the

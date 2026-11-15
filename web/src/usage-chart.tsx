@@ -126,7 +126,7 @@ export function RangeControl({ bounds, onChange, onPresetChange, editable = true
   const mode = custom ?? (active ? null : timed ? "custom-times" : "custom");
   const picker = <ChartSelect label="Range" value={mode ?? active!}
     options={[...chartRanges.map(([range, text]): [string, string] => [range, range === "today" ? text : `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"], ["custom-times", "Custom times…"]] as Array<[string, string]> : active ? [] : [["custom", rangeLabel(bounds, timezone), "Dates selected in the chart or table"] as [string, string, string]]), ["all", "All time", history.ready ? undefined : "Loading conversation history…"]]}
-    title="Dates included in this usage view. Choose All time to clear the date filter."
+    title="Dates this chart includes. Choose All time to remove the date filter."
     onChange={range => {
       if (range === "custom" || range === "custom-times") {
         setCustom(range);
@@ -192,7 +192,7 @@ export function ControlSections({ data, view, onReset }: { data: React.ReactNode
     {shown(view) ? <ViewDisclosure viewKey="dashboard:view" className="dashboard-controls-view" summaryTarget="control:chart:view"
       summary={<><span className="dashboard-controls-heading">View</span>{onReset ? <span className="dashboard-controls-changed">changed</span> : null}</>}>
       <div className="dashboard-controls-view-body" role="group" aria-label="View">{view}
-        {onReset ? <button type="button" className="usage-preset-clear dashboard-controls-reset" title="Draw this chart as its data suggests" onClick={onReset}>Reset view</button> : null}</div>
+        {onReset ? <button type="button" className="usage-preset-clear dashboard-controls-reset" title="Return every View setting to this chart’s default" onClick={onReset}>Reset view</button> : null}</div>
     </ViewDisclosure> : null}
   </>;
 }
@@ -207,8 +207,8 @@ export type PeriodView = { period: ChartPeriod; hours: number; days: number };
 // supports: hour counts from a list, and at most maxDays days.
 export function PeriodControl({ view, onChange, disabled, every }: { view: PeriodView; onChange: (next: Partial<PeriodView>) => void; disabled?: Partial<Record<ChartPeriod, string>>; every?: { hours: readonly number[]; maxDays: number } }) {
   const custom = view.period === "hours" || view.period === "days" ? view.period : null;
-  return <div className="usage-chart-field usage-period-control" role="group" aria-label="Time Bucket">
-    <ChartSelect label="Time Bucket" value={view.period}
+  return <div className="usage-chart-field usage-period-control" role="group" aria-label="Time bucket">
+    <ChartSelect label="Time bucket" value={view.period}
       options={([["hour", "Hour"], ["day", "Day"], ["week", "Week"], ["month", "Month"], ["hours", "Custom hours…"], ["days", "Custom days…"]] as Array<[ChartPeriod, string]>).map(([period, text]): [ChartPeriod, string, string?] => [period, text, disabled?.[period]])}
       title="Time covered by each chart bucket" onChange={period => onChange({ period })} />
     {custom === "hours" && every ? <ChartSelect label="Hours" value={String(view.hours)} options={every.hours.map(n => [String(n), `${n} hours`])}
@@ -255,7 +255,7 @@ export function SmoothingControl({ value, unit, onChange, disabled = false, note
       <ChartSelect label="Smoothing" value={enabled ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]} disabled={disabled} note={enabled || disabled ? note : undefined}
         onChange={next => onChange(next === "off" ? 0 : previous.current)} />
       {enabled ? <label className="usage-smoothing-input"><input type="number" aria-label="Smoothing window" min={2} step={1} value={draft} disabled={disabled}
-        title="Trailing average window in intervals, including history before the selected range."
+        title="Trailing window, in intervals, including history before the selected range."
         onChange={event => { setDraft(event.target.value); if (validRollingPeriods(event.target.valueAsNumber) && event.target.valueAsNumber >= 2) onChange(event.target.valueAsNumber); }} onBlur={() => setDraft(String(value))} /><span>{unit}</span></label> : null}
     </div>
   </div>;
