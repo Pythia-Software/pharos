@@ -1,0 +1,18 @@
+{
+  "conversation": "c_6d1fQ0aZ",
+  "version": 1793718000000004,
+  "messages": [
+    {
+      "id": "m_0aZ81kQe",
+      "role": "user",
+      "kind": "message",
+      "created_at": "2026-10-30T09:12:00Z",
+      "text": "Fix the flaky upload test; the key is [redacted].",
+      "redacted": [
+        "secret:api-key"
+      ]
+    }
+  ],
+  "more": false,
+  "as_of": "2026-10-30T15:00:00Z"
+}

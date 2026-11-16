@@ -680,6 +680,7 @@ export function DelegationExplorer({
       setPages(result.previous); setCursor(result.cursor);
       return result.body;
     };
+    snapshotRecovery.current.started();
     loadPage()
       .then(
         (body) => {
@@ -709,7 +710,7 @@ export function DelegationExplorer({
           );
         },
         (e) => {
-          if (e.name !== "AbortError") setError(e.message);
+          if (e.name !== "AbortError") { snapshotRecovery.current.failed(); setError(e.message); }
         },
       )
       .finally(() => {

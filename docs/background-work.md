@@ -296,7 +296,7 @@ the words here are the words surfaces show (§8).
 | `background.capture` (variants `sources`, `preserve`) | Capture & index · Capturing and indexing | step of `background.update` | svc | D:w W:w I:w C(this):w | capt:this/\*, conv:\* | index | Stops between files and records; what was captured stays valid, and the next run resumes it. | batch | step | bg |
 | `capture.this-mac` | Capture this Mac · Capturing | user, onboarding | svc | D:w I:w C(this):w | capt:this/\* | — (today) | Stops between files; the next capture resumes it, and what was captured stays valid. | record | always | fg |
 | `capture.settings` | Collect Claude Chat settings · Collecting settings | schedule during a bounded recording session (`claudeSettingsRecording` daemon); chained capture and index | svc | D:w I:w C(this):w | capt:this/\* | work | Stops between reads; saved settings observations remain available to index. | record | >5 s or wrote | bg |
-| `capture.import` (variant `claude-ai`) | Collect Claude export · Collecting | user, cli, schedule (`claudeDownloads` daemon, only while this Mac's Downloads watch is on; its capture and index run as a chained `background.capture`) | svc, cli | D:w I:w C(this):w | capt:this/\* | — | Stops between reads; verified files and import jobs remain available to resume. | record | always | fg |
+| `capture.import` (variant `claude-ai`) | Collect Claude export · Collecting | user, cli, schedule (`claudeDownloads` daemon, only while this Mac's Downloads watch is on; its capture and index run as a chained `background.capture`). Variant `bucket` (Collect pushed captures): cli, and schedule as the Collect from other machines item; it writes the captures of the hosts it collects, not this Mac's | svc, cli | D:w I:w C(this):w | capt:this/\* | — | Stops between reads; verified files and import jobs remain available to resume. | record | always | fg |
 | `capture.cli` (variant `sqlite-records` for that command's writing subcommands) | Capture (Terminal) · Capturing | cli | cli (lease only; it never opens the catalog) | D:w C(this):w | capt:this/\* | — | Pharos cannot stop it; the drive stays busy until it ends. | none (to Pharos) | never (lease only) | fg |
 | `index.captures` | Index captures · Indexing captures | user, onboarding, cli | svc, cli | D:w W:w I:w X(c):w (`I` in the service only) | capt:\*, conv:\*, view, an.\*, findings | index (it waits as `blocked(capture-running)`) | Stops between records; the next index resumes it. It waits for a capture in progress to finish. | batch | always | fg |
 | `library.update` | Capture & index · Capturing and indexing | user | svc | D:w W:w I:w | capt:this/\*, conv:\*, an.\*, findings, upgrade | index (as `index.captures`; the browser then starts `library.upgrade`) | Stops between records; the next run resumes it. | batch | always | fg |
@@ -1801,6 +1801,7 @@ the same schedule from one declaration (`backgroundItems`):
 | Ask Pharos suggestions | the suggestion signals ([Ask suggestions](ask-suggestions.md)), only where Ask Pharos is enabled, when their inputs changed | Hourly, adaptive | `ask.suggestions` |
 | Findings review | the findings stage once today's full pass is due | Daily (fixed) | `analysis.findings` `full` |
 | Library upgrade | `RunUpgrade`, when the stored count has pending steps | Daily (fixed) | `library.upgrade` |
+| Collect from other machines | transcripts that other machines pushed to a connected bucket (`pharos capture-push`), then an index of the hosts that received something | Hourly; unavailable until a bucket is connected, when the item links to its setup in Settings → Sources | `capture.import` (variant `bucket`) |
 | Back up | a local backup to the last destination, when connected | only when chosen (opt-in Daily) | `backup.local` |
 
 - **Cadences.** Frequently follows each scheduled index that wrote
@@ -1883,7 +1884,20 @@ the same schedule from one declaration (`backgroundItems`):
     whose work is not inside `RunIO` has no CPU figure (shown as not
     measured). Short-lived commands the service starts (`git`) are not
     counted anywhere. Model loading happens before the worker's lease and
-    is not counted to it. Only the service is measured: Terminal commands
+    is not counted to it. A worker's counters cannot be read once it has
+    exited, so each lease keeps the latest reading of every worker the pool
+    reported (read every 5 s, outside the ledger's lock: the pool can hold
+    its own through a restart) and reads them once more before a stopped
+    run kills them. A worker that crashes mid-run loses at most the CPU
+    time since its last reading; the replacement's whole life, model
+    loading included, counts. A figure is a sum only when every worker gave
+    a reading after the lease opened: when one did not (GPU time is read
+    only at the ends, so a crashed worker's never is), the run's figure is
+    stored NULL and the gap is kept (`unmeasured` on both tables), so the
+    day and the 7-day figure it belongs to read "not measured yet" rather
+    than a part as the whole. A pid whose process changed is never read
+    again. Only the service is
+    measured: Terminal commands
     and the app's broker are not. A crash loses at most the totals not yet
     stored.
   - *Measured error.* On a clone of a real library (2026-11-15), items were
@@ -1899,8 +1913,16 @@ the same schedule from one declaration (`backgroundItems`):
     81 s): Repositories 3.1 against 2.7 (+15%), suggestions 3.6 against
     3.6 (+1%), Tools & usage 3.5 against 3.2 (+10%). Against the unscaled
     samples the same runs read 9–29% high, which is the profiler's
-    undercount. The labeling worker's figures were not checked this way:
-    the clone's labeling run never reached the worker. An earlier design
+    undercount. The labeling worker's figures were checked against
+    `proc_pid_rusage` and `ps` read every 0.5 s and `ioreg`'s
+    `accumulatedGPUTime` read every 1.5 s by a separate process: with a
+    warm worker, 2.113 s of worker CPU against 2.11 s, GPU time 1.7549 s
+    against 1.7549 s, and peak memory 4.74 GB against 4.57 GB (+4%); on a
+    cold start 2.109 s against 1.94–2.33 s (the lease begins inside the
+    worker's start-up burst) and peak memory 2.47 GB against 2.70 GB (−8%:
+    memory is read every 5 s); CPU-only, 588.47 s against 588.2–588.7 s,
+    with no GPU figure. There is no second source for GPU time without
+    root: both readings are the same driver counter. An earlier design
     that divided the process's CPU among the operations registered as
     running was 190–520% high on the same items, because blocked operations
     and requests use CPU too; it was dropped.

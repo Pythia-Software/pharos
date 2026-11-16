@@ -382,6 +382,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/status-store.js":      {"status-store.js", "text/javascript; charset=utf-8"},
 	"/assets/status-panel.js":      {"status-panel.js", "text/javascript; charset=utf-8"},
 	"/assets/cloud-backup.js":      {"cloud-backup.js", "text/javascript; charset=utf-8"},
+	"/assets/bucket-setup.js":      {"bucket-setup.js", "text/javascript; charset=utf-8"},
 	"/assets/sync.js":              {"sync.js", "text/javascript; charset=utf-8"},
 	"/assets/background.js":        {"background.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":            {"carbon.js", "text/javascript; charset=utf-8"},
@@ -435,6 +436,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		s.speech(w, r)
 	case path == "/api/claude-imports":
 		s.getClaudeImports(w, r)
+	case path == "/api/bucket-imports":
+		s.getBucketImports(w)
 	case path == "/api/markdown-link":
 		s.markdownLink(w, r)
 	case path == "/api/markdown-favicon":
@@ -1109,6 +1112,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.postChatGPTImports(w, body)
 	case path == "/api/claude-imports/watch":
 		s.postClaudeWatch(w, body)
+	case path == "/api/bucket-imports":
+		s.postBucketImports(r.Context(), w, body)
 	case path == "/api/claude-imports" || path == "/api/claude-imports/links" || path == "/api/claude-imports/cancel":
 		s.postClaudeImports(w, r, body)
 	case path == "/api/probe":

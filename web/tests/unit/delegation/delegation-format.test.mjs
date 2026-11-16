@@ -50,6 +50,14 @@ test('snapshot recovery coalesces lane conflicts, stops repeated races and rearm
   assert.equal(recovery.changed('c'), 'refresh');
   recovery.loaded('d');
   assert.equal(recovery.changed('d'), 'refresh', 'successful lanes replenish both retries');
+  recovery.reset();
+  recovery.started();
+  assert.equal(recovery.changed('d'), 'ignore', 'a refresh already loading brings the next snapshot');
+  recovery.loaded('e');
+  assert.equal(recovery.changed('e'), 'refresh', 'its own conflicts still refresh');
+  recovery.started();
+  recovery.failed();
+  assert.equal(recovery.changed('e'), 'refresh', 'a failed load leaves recovery to the lanes');
 });
 
 test('an archive refresh preserves a zoom while a full timeline follows its updated bounds', () => {

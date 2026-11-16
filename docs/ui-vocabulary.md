@@ -114,6 +114,12 @@ attention stylesheet and remain separate from keyboard focus.
 - **Channel** is how the initiating conversation started. **Machine** is where
   it started; **Execution machine** is where the particular agent ran. Helpers
   inherit the initiating channel/machine, even when their own runtime differs.
+- **Other machines** are machines that do not run Pharos and push their
+  transcripts to a bucket. Pharos **collects** from a **connected** bucket;
+  **Disconnect** stops collecting and keeps what was collected. A machine has
+  **checked in** when its first small upload is in the bucket, before any
+  conversation is. Count machines, not sandboxes: every sandbox of one pool is
+  one machine.
 - **Model** and **effort** are recorded settings. “Top-level” labels refer to
   the initiating conversation’s settings; helpers may use different settings.
 - **Dataset** is the table a query reads. Name each input row before describing

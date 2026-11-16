@@ -32,6 +32,8 @@ const repo = join(web, "..");
 const browserSource = join(web, "tests", "browser"), e2eSource = join(web, "tests", "e2e");
 // Starts one browser for the tier and closes it after the last file.
 const browserSetup = `--test-global-setup=${join(browserSource, "setup.mjs")}`;
+// Browser stress modes (harness.mjs) scale each test's time limit with the harness's.
+const browserTimeoutScale = Math.max(1, Number(process.env.PHAROS_BROWSER_SLOWDOWN) || 1) * (1 + Math.max(0, Number(process.env.PHAROS_BROWSER_JITTER) || 0) / 100);
 const browserTurn = fileURLToPath(new URL("./browser-turn.py", import.meta.url));
 const timingsReporter = fileURLToPath(new URL("./timings-reporter.mjs", import.meta.url));
 const valueFlags = new Set(["--test-name-pattern", "--test-skip-pattern", "--test-reporter", "--test-reporter-destination", "--test-concurrency", "--test-timeout", "--test-shard"]);
@@ -53,7 +55,7 @@ const tiers = {
   // each other's bundles.
   // The full matrix runs a few thousand preview comparisons in one test.
   unit: { cwd: web, source: unitSource, timeout: full ? 600000 : 60000, nodeFlags: ["--enable-source-maps"], testFlags: [], files: () => unitEntries().map(file => relative(unitSource, file)) },
-  browser: { cwd: web, source: browserSource, timeout: 30000, nodeFlags: [], testFlags: ["--test-concurrency=3", browserSetup], files: () => testFiles(browserSource) },
+  browser: { cwd: web, source: browserSource, timeout: 30000 * browserTimeoutScale, nodeFlags: [], testFlags: ["--test-concurrency=3", browserSetup], files: () => testFiles(browserSource) },
   // One go build, a disk image and a real service, shared by its tests, which
   // set their own bounds.
   e2e: { cwd: web, source: e2eSource, timeout: 900000, nodeFlags: [], testFlags: ["--test-concurrency=1", browserSetup], env: { PHAROS_E2E: "1" }, files: () => testFiles(e2eSource) },

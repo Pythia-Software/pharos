@@ -138,8 +138,7 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 		return nil, err
 	}
 	checked(6)
-	tools, err := count(`SELECT COUNT(*) FROM conversations c LEFT JOIN tool_ledger_state s ON s.conversation_id=c.id
-		WHERE s.conversation_id IS NULL OR s.version<>?`, toolLedgerVersion)
+	tools, err := count(toolLedgerPendingSQL("COUNT(*)"))
 	if err != nil {
 		return nil, err
 	}
@@ -540,7 +539,10 @@ const upgradeCountKey = "upgrade_count"
 // removal), how many conversations and workspaces carry each step's current
 // marker (set by ingest or a repair, or cleared to mark work), and the meta
 // versions the steps set. The steps' own versions change only with the
-// build, which is part of the inputs too. Each part is a small count.
+// build, which is part of the inputs too. Each part is a small count. The
+// tool ledger's is a count per stored version: which version is current
+// depends on the conversation (toolLedgerScopes), and a ledger that becomes
+// current or stale moves between these counts.
 func (c *Catalog) upgradeInputs(ctx context.Context) (string, error) {
 	var value string
 	err := c.reader().QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM meta WHERE key=?1),'')
@@ -550,11 +552,11 @@ func (c *Catalog) upgradeInputs(ctx context.Context) (string, error) {
 		||':'||(SELECT COUNT(*) FROM usage_attribution_state WHERE version=?2)
 		||':'||(SELECT COUNT(*) FROM reasoning_extraction_state WHERE version=?3)
 		||':'||(SELECT COUNT(*) FROM message_search_state WHERE version=?4)
-		||':'||(SELECT COUNT(*) FROM tool_ledger_state WHERE version=?5)
-		||':'||(SELECT COUNT(*) FROM conversation_instructions_state WHERE version=?6)
+		||':'||(SELECT COALESCE(group_concat(version||'='||n),'') FROM (SELECT version,COUNT(*) n FROM tool_ledger_state GROUP BY version ORDER BY version))
+		||':'||(SELECT COUNT(*) FROM conversation_instructions_state WHERE version=?5)
 		||':'||COALESCE((SELECT group_concat(key||'='||value) FROM (SELECT key,value FROM meta
 			WHERE key IN ('repository_merge_version','harness_version_upgrade','agent_session_model_version') ORDER BY key)),'')`,
-		initializedBuildKey, usageAttributionVersion, reasoningExtractionVersion, messageSearchVersion, toolLedgerVersion, instructionsVersion).Scan(&value)
+		initializedBuildKey, usageAttributionVersion, reasoningExtractionVersion, messageSearchVersion, instructionsVersion).Scan(&value)
 	return value, err
 }
 

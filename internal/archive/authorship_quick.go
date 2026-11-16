@@ -150,7 +150,7 @@ func (c *Catalog) tryExactAuthorship(ctx context.Context, generation string) (ex
 			block()
 		}
 	}()
-	run, err := c.incrementalAuthorship(ctx)
+	run, err := c.incrementalAuthorship(ctx, false)
 	if err != nil {
 		return false, err
 	}
@@ -173,7 +173,7 @@ func (c *Catalog) tryExactAuthorship(ctx context.Context, generation string) (ex
 	if err != nil {
 		return false, err
 	}
-	plan, err := c.planAuthorshipScope(ctx, results, run.launches, &run.since, run.stale)
+	plan, err := c.planAuthorshipScope(ctx, run.planned(results), run.launches, &run.since, run.stale)
 	if err != nil {
 		return false, err
 	}

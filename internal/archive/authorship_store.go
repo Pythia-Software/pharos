@@ -164,12 +164,25 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 	launchTable := authorshipTable{name: "conversation_launches", keys: 1, columns: []string{"child_id", "parent_id", "tool_call_id", "program"}}
 	names := authorshipTable{name: "workspace_names", keys: 1, columns: []string{"workspace_id", "authored_title", "authored_message_id", "authored_hash", "authored_at", "authored_version"}}
 	state := authorshipTable{name: "authorship_message_state", keys: 1, columns: []string{"message_id", "source_hash", "version", "provisional", "disposition", "representative_id"}}
-	named := map[string][]any{}
+	named, renamed := map[string][]any{}, map[string]bool{}
 	for _, launch := range launches {
 		launchTable.rows = append(launchTable.rows, []any{launch.child, launch.parent, launch.toolCall, launch.program})
 	}
+	title := func(result authorResult) {
+		input := result.Input
+		if _, seen := named[input.WorkspaceID]; !seen {
+			if title := authoredWorkspaceTitle(input.Text, result.Spans); title != "" {
+				named[input.WorkspaceID] = []any{input.WorkspaceID, title, input.ID, hashBytes([]byte(input.Text)), formatTime(input.SentAt), workspaceNamesVersion}
+			}
+		}
+	}
 	for _, result := range results {
 		input := result.Input
+		if result.naming == authorshipNameOnly {
+			title(result)
+			continue
+		}
+		renamed[input.WorkspaceID] = renamed[input.WorkspaceID] || result.naming == authorshipRenames
 		provisional := 0
 		if quickIDs != nil {
 			provisional = 1
@@ -194,11 +207,7 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 		for position, span := range result.Spans {
 			spans.rows = append(spans.rows, []any{input.ID, position, span.Category, spanRule(span), nilIfEmpty(span.Reason), span.Start, span.End, utf8.RuneCountInString(strings.TrimSpace(input.Text[span.Start:span.End])), wordCounts[position], nilIfEmpty(span.Source), nilIfEmpty(span.Message)})
 		}
-		if _, seen := named[input.WorkspaceID]; !seen {
-			if title := authoredWorkspaceTitle(input.Text, result.Spans); title != "" {
-				named[input.WorkspaceID] = []any{input.WorkspaceID, title, input.ID, hashBytes([]byte(input.Text)), formatTime(input.SentAt), workspaceNamesVersion}
-			}
-		}
+		title(result)
 	}
 	if quickIDs != nil {
 		plan := []authorshipMutation{}
@@ -216,8 +225,10 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 	if since != nil {
 		ids, works := []string{}, map[string]bool{}
 		for _, result := range results {
-			ids = append(ids, result.Input.ID)
-			works[result.Input.WorkspaceID] = true
+			if result.naming != authorshipNameOnly {
+				ids = append(ids, result.Input.ID)
+				works[result.Input.WorkspaceID] = true
+			}
 		}
 		messages.filter = " WHERE message_id IN (SELECT value FROM json_each(?))"
 		messages.args = []any{jsonText(append(ids, stale...))}
@@ -225,8 +236,13 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 		// As in a full pass, an outcome without a counting row (a suppressed
 		// mirror, an ineligible message) is kept as completion evidence.
 		state.filter, state.args = messages.filter+" AND (disposition IN ('counted','deferred') OR NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=authorship_message_state.message_id))", messages.args
-		query = "SELECT id FROM workspaces WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id"
-		args = []any{jsonText(sortedNameIDs(works))}
+		// A full pass names every workspace, with no authored title when no
+		// message gives one. New work can bring a workspace none of the
+		// suffix's messages is in (a mirror's, whose messages are not counted),
+		// so those no pass has named are named here too. Ingest writes each
+		// workspace's name row; a pass is what gives it authored_version.
+		query = "SELECT id FROM workspaces WHERE id IN (SELECT value FROM json_each(?)) OR NOT EXISTS(SELECT 1 FROM workspace_names n WHERE n.workspace_id=workspaces.id AND n.authored_version IS ?) ORDER BY id"
+		args = []any{jsonText(sortedNameIDs(works)), workspaceNamesVersion}
 	}
 	workspaces, err := queryMapsContext(ctx, c.DB, query, args...)
 	if err != nil {
@@ -234,7 +250,9 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 	}
 	for _, work := range workspaces {
 		id := asString(work["id"])
-		if since != nil {
+		// A workspace named before the suffix keeps its name, unless the pass
+		// restated the message that gave it.
+		if since != nil && !renamed[id] {
 			rows, err := queryMapsContext(ctx, c.DB, "SELECT authored_at FROM workspace_names WHERE workspace_id=?", id)
 			if err != nil {
 				return nil, err
