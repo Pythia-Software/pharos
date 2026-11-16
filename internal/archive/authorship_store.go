@@ -239,9 +239,10 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 		// A full pass names every workspace, with no authored title when no
 		// message gives one. New work can bring a workspace none of the
 		// suffix's messages is in (a mirror's, whose messages are not counted),
-		// so those without a name row are named here too.
-		query = "SELECT id FROM workspaces WHERE id IN (SELECT value FROM json_each(?)) OR NOT EXISTS(SELECT 1 FROM workspace_names n WHERE n.workspace_id=workspaces.id) ORDER BY id"
-		args = []any{jsonText(sortedNameIDs(works))}
+		// so those no pass has named are named here too. Ingest writes each
+		// workspace's name row; a pass is what gives it authored_version.
+		query = "SELECT id FROM workspaces WHERE id IN (SELECT value FROM json_each(?)) OR NOT EXISTS(SELECT 1 FROM workspace_names n WHERE n.workspace_id=workspaces.id AND n.authored_version IS ?) ORDER BY id"
+		args = []any{jsonText(sortedNameIDs(works)), workspaceNamesVersion}
 	}
 	workspaces, err := queryMapsContext(ctx, c.DB, query, args...)
 	if err != nil {

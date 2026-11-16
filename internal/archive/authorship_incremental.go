@@ -213,6 +213,44 @@ func (c *Catalog) authorshipGraph(ctx context.Context, watermark time.Time, lega
 		id := asString(row["id"])
 		startsLater[id], workspace[id] = ok && at.After(watermark), row["workspace_id"]
 	}
+	// A linked conversation is new work only if nothing of it is history. One
+	// that says it started later can still hold messages dated by the
+	// watermark (a copy of old history), which were classified or compared.
+	linkedLater := map[string]bool{}
+	for _, link := range identities {
+		for _, id := range []string{asString(link["left_id"]), asString(link["right_id"])} {
+			if startsLater[id] {
+				linkedLater[id] = true
+			}
+		}
+	}
+	if len(linkedLater) > 0 {
+		old, err := queryMapsContext(ctx, c.DB, `SELECT value id FROM json_each(?) WHERE EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=value AND m.created_at<=?)`, jsonText(sortedNameIDs(linkedLater)), formatTime(watermark))
+		if err != nil {
+			return "", "", time.Time{}, false, err
+		}
+		for _, row := range old {
+			startsLater[asString(row["id"])] = false
+		}
+	}
+	// Whether a headless run on a host is one nobody claimed depends on the
+	// host having a Conductor conversation at all (authorInputsScope), so the
+	// first one from a host changes history's runs there. historyHosts are
+	// the hosts the conversations started by the watermark give.
+	kinds := map[string]string{}
+	for _, work := range workspaces {
+		kinds[asString(work["id"])] = asString(work["source_kind"])
+	}
+	allHosts, historyHosts := map[string]bool{}, map[string]bool{}
+	for _, row := range conversations {
+		if host := asString(row["origin_host_id"]); row["origin_host_id"] != nil && kinds[asString(row["workspace_id"])] == "conductor" {
+			allHosts[host] = true
+			if !startsLater[asString(row["id"])] {
+				historyHosts[host] = true
+			}
+		}
+	}
+	hosts := sortedNameIDs(allHosts)
 	// newWork reports a link between two stored conversations that both
 	// started after the watermark.
 	newWork := func(link map[string]any) bool {
@@ -307,9 +345,15 @@ func (c *Catalog) authorshipGraph(ctx context.Context, watermark time.Time, lega
 				representative[id] = standsFor
 			}
 		}
-		return hashBytes([]byte(jsonText([]any{held, representative, kept, historical, time.Local.String(), zone, offset}))), lastRun, later
+		parts := []any{held, representative, kept, historical, time.Local.String(), zone, offset}
+		if !before {
+			parts = append(parts, hosts)
+		}
+		return hashBytes([]byte(jsonText(parts))), lastRun, later
 	}
-	if legacy {
+	// The earlier hash held history's conversations and so its hosts. A host
+	// that only new work gives is a change it could not see.
+	if legacy && len(allHosts) == len(historyHosts) {
 		previous, _, _ = digest(true)
 	}
 	graph, lastRun, later = digest(false)

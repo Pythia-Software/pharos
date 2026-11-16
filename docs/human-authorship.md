@@ -189,7 +189,18 @@ workspace that has history. The full path remains for:
   full path as well);
 - a link that makes a workspace with history a mirror, restores one, or
   changes its representative;
-- a removed or edited link.
+- a removed or edited link;
+- a link to a conversation that holds a message dated by the watermark,
+  whatever start it records;
+- the first Conductor conversation from a host. An SDK session is a run
+  nobody claimed only on a host whose Conductor is read, so that
+  conversation changes the host's old sessions. The fingerprint holds the
+  set of Conductor hosts.
+
+A suffix pass derives launches again only when new work holds a headless
+run. A linked pair holds none (the link claims the native session), and its
+commands come after every earlier run's start, so they can launch only later
+runs, which are new work themselves.
 
 A link that joins already-classified conversations is not local in general.
 Classified messages feed first-occurrence state that later messages were

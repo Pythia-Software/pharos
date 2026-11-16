@@ -1745,15 +1745,25 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 			statements = append(statements, fmt.Sprintf(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,started_at) VALUES('%s','old','codex','local','%s','codex','%s')`, id, id, formatTime(authorAt(i*24*60))),
 				send("p"+id, id, i*24*60+30, prompt), send("t"+id, id, i*24*60+1, fmt.Sprintf("Number %d: tidy the importer and explain each step you took afterwards", i)))
 		}
+		statements = append(statements,
+			// An SDK session on a Mac whose Conductor has not been read: typed.
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('solo','claude','local','solo','Solo','2026-09-01')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,origin_host_id,started_at) VALUES('lone','solo','claude','local','lone','claude-code/sdk-ts','other','`+formatTime(authorAt(5))+`')`,
+			send("lone-0", "lone", 6, "Summarize what the nightly backup wrote and flag anything missing"),
+			// A conversation that says it starts later than the messages it holds.
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('aside','codex','local','aside','Aside','2026-09-01')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,started_at) VALUES('stale','aside','codex','local','stale','codex','`+formatTime(authorAt(400*24*60))+`')`,
+			send("pstale", "stale", 45, "Rename the exporter flags so they match the importer ones"))
 		execTx(t, c.DB, statements...)
 		// session writes what one indexing transaction does for an app session
 		// started at minute: both conversations, their messages and the link.
+		host := "host"
 		session := func(name, provider, harness string, minute int, texts ...string) {
 			t.Helper()
 			statements := []string{
 				fmt.Sprintf(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('native-%[1]s','%[2]s','local','native-%[1]s','Native','2026-09-01'),('copy-%[1]s','conductor','local','copy-%[1]s','Copy','2026-09-01')`, name, provider),
 				fmt.Sprintf(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,origin_host_id,started_at) VALUES
-				 ('native-%[1]s','native-%[1]s','%[2]s','local','native-%[1]s','%[3]s','host','%[4]s'),('copy-%[1]s','copy-%[1]s','%[2]s','local','copy-%[1]s','conductor','host','%[4]s')`, name, provider, harness, formatTime(authorAt(minute))),
+				 ('native-%[1]s','native-%[1]s','%[2]s','local','native-%[1]s','%[3]s','%[5]s','%[4]s'),('copy-%[1]s','copy-%[1]s','%[2]s','local','copy-%[1]s','conductor','%[5]s','%[4]s')`, name, provider, harness, formatTime(authorAt(minute)), host),
 			}
 			for index, text := range texts {
 				statements = append(statements, send(fmt.Sprintf("native-%s-%d", name, index), "native-"+name, minute+1+index, text), send(fmt.Sprintf("copy-%s-%d", name, index), "copy-"+name, minute+1+index, text))
@@ -1826,6 +1836,45 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 			}
 		}
 
+		// The first Conductor session read from another Mac makes that Mac's
+		// unclaimed SDK sessions runs, in history too.
+		if typed, _, _, _ := row("lone-0"); typed == 0 {
+			t.Fatal("fixture: the other Mac's SDK session was not typed")
+		}
+		host = "other"
+		session("away", "claude", "claude-code/sdk-ts", day+120, "Check the backup schedule on the other machine and report any gaps")
+		host = "host"
+		if mode := rebuild(); mode == "suffix" {
+			t.Fatal("a new Conductor host was classified from the checkpoint")
+		}
+		if typed, _, automated, _ := row("lone-0"); typed != 0 || automated == 0 {
+			t.Fatalf("unclaimed session on a Conductor host: typed=%d automated=%d", typed, automated)
+		}
+
+		// Ingest names every workspace it writes, without an authored name
+		// yet. The copy's workspace has no counted message, and the suffix
+		// still records that it was named.
+		ingested := func(name string, minute int) {
+			t.Helper()
+			message := MessageRecord{NativeID: name + "-0", Role: "user", Kind: "message", Selected: true, CreatedAt: formatTime(authorAt(minute + 1)),
+				Text: "Ingested " + name + ": list the queue names the scheduler reads at startup"}
+			ingestRecords(t, c,
+				WorkspaceRecord{SourceID: name + "-native", SourceKind: "codex", Account: "local", Title: "Native", ActivityAt: formatTime(authorAt(minute + 1)),
+					Conversations: []ConversationRecord{{NativeID: name, Provider: "codex", Account: "local", Harness: "codex/codex_sdk_ts", StartedAt: formatTime(authorAt(minute)), Messages: []MessageRecord{message}}}},
+				WorkspaceRecord{SourceID: name + "-copy", SourceKind: "conductor", Account: "local", Title: "Copy", ActivityAt: formatTime(authorAt(minute + 1)),
+					Conversations: []ConversationRecord{{NativeID: name + "-app", Provider: "codex", Account: "local", Harness: "conductor", Aliases: []string{name}, StartedAt: formatTime(authorAt(minute)), Messages: []MessageRecord{message}}}})
+		}
+		ingested("first", day+180)
+		rebuild()
+		ingested("second", day+240)
+		if mode := rebuild(); mode != "suffix" {
+			t.Fatalf("an ingested linked session was classified as %q", mode)
+		}
+		var unnamed int
+		if err := c.DB.QueryRow(`SELECT COUNT(*) FROM workspace_names WHERE authored_version IS NOT ?`, workspaceNamesVersion).Scan(&unnamed); err != nil || unnamed != 0 {
+			t.Fatalf("%d workspaces left without a naming pass (%v)", unnamed, err)
+		}
+
 		// A fifth session makes the prompt a template in every earlier one.
 		// Those are restated from the sessions the checkpoint lists for it.
 		session("fifth", "codex", "codex/codex_sdk_ts", day+24*60, "First compare the two schedulers and say which one drops fewer tasks", prompt)
@@ -1836,6 +1885,16 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 			if _, template, _, _ := row(id); template == 0 {
 				t.Fatalf("%s did not become a template", id)
 			}
+		}
+
+		// A conversation that starts after the watermark is history all the
+		// same when it holds classified messages, and so is a link to it.
+		execTx(t, c.DB,
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('aside-copy','conductor','local','aside-copy','Aside','2026-09-01')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,origin_host_id,started_at) VALUES('stale-copy','aside-copy','codex','local','stale-copy','conductor','host','`+formatTime(authorAt(day+2*24*60))+`')`,
+			`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('stale','stale-copy','native-alias',1,'{}')`)
+		if mode := rebuild(); mode == "suffix" || mode == "unchanged" || mode == "no user suffix" {
+			t.Fatalf("a link to a conversation holding old messages was classified as %q", mode)
 		}
 
 		// A link to a conversation already classified changes history: its copy
