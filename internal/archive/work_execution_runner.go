@@ -285,6 +285,7 @@ type workRequest struct {
 	// request no longer targets.
 	changes, maskChanges uint64
 	reported             workBlocker // state and blocker last sent to RequestChanged
+	reports              uint64      // RequestChanged notifications queued, numbering their facts
 	reportedState        string
 	nSealed              int
 	nFailed              int
@@ -747,7 +748,9 @@ func (r *workRunner) requestChangedLocked(q *workRequest) {
 		return
 	}
 	q.reportedState, q.reported = q.state, q.blocker
+	q.reports++
 	facts := r.requestFactsLocked(q)
+	facts.Revision = q.reports
 	r.events = append(r.events, func() { r.hooks.RequestChanged(facts) })
 }
 
@@ -2084,6 +2087,10 @@ type workRequestFacts struct {
 	Unfinished  int                    `json:"unfinished"`
 	Bytes       int64                  `json:"bytes"`
 	Tasks       []workRequestTaskFacts `json:"tasks,omitempty"`
+	// Revision numbers RequestChanged notifications. Each unlock delivers its
+	// own events after releasing the lock, so two goroutines' notifications
+	// can arrive out of order; a receiver keeps the latest.
+	Revision uint64 `json:"-"`
 }
 
 type workRequestTaskFacts struct {

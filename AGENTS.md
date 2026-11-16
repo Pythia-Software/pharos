@@ -185,6 +185,10 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   `view-state.test.mjs` keeps one restoration test per URL-state mechanism.
   Known layout bugs are listed in `KNOWN` and run as todo.
   `PHAROS_UI_SCREENSHOTS=dir` saves screenshots; nothing asserts on them.
+  To hunt flakes, `PHAROS_BROWSER_JITTER=100` (with `PHAROS_BROWSER_SEED=n`
+  to replay) delays and reorders stub responses, and
+  `PHAROS_BROWSER_SLOWDOWN=3` throttles the page's CPU; both stretch time
+  limits, so a test's own limit is written as `stretch(ms)`.
   Run the browser tier when you change page markup, CSS, classic scripts or
   focus behaviour, filtered to the files and pages you touched.
 - **Manual only:** on macOS with Xcode Command Line Tools,
