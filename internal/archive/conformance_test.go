@@ -894,5 +894,19 @@ func conformanceTL1(t *testing.T) SourceConfig {
 	_, agent := conformanceCodexLines()
 	writeSourceFile(t, filepath.Join(root, "transcripts", "task-claude", "1-claude.jsonl"), strings.Join(main, "\n")+"\n")
 	writeSourceFile(t, filepath.Join(root, "transcripts", "task-claude", "1-codex.jsonl"), strings.Join(agent, "\n")+"\n")
+	// A Codex exec run that was resumed: the second part numbers its items
+	// from item_0 again, and its command fails where the first one's passed.
+	writeSourceFile(t, filepath.Join(root, "transcripts", "task-review", "1-codex.jsonl"), strings.Join([]string{
+		`{"type":"thread.started","thread_id":"thread-review"}`,
+		`{"type":"turn.started"}`,
+		`{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Reading the change."}}`,
+		`{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"git diff","aggregated_output":"a.go","exit_code":0,"status":"completed"}}`,
+		`{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":100,"reasoning_output_tokens":0}}`,
+		`{"type":"thread.started","thread_id":"thread-review"}`,
+		`{"type":"turn.started"}`,
+		`{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Running the tests."}}`,
+		`{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"go test ./...","aggregated_output":"FAIL","exit_code":1,"status":"completed"}}`,
+		`{"type":"turn.completed","usage":{"input_tokens":2000,"cached_input_tokens":1000,"output_tokens":100,"reasoning_output_tokens":0}}`,
+	}, "\n")+"\n")
 	return conformanceSource("tl1", registry)
 }
