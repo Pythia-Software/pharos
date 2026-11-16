@@ -3,8 +3,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EMPTY_QUERY, applyQuery, createGroupingModel, decodeQueryStrict, encodeQuery, filterValues, groupLinkQuery, resolveGroupLink, exitGrouping, prepareGrouping, toQueryRequestV3, readFieldValue, normalizeQueryState } from "@pythia-software/query-table-core";
 import { schemas, capabilities, execution } from "../helpers/recipes.mjs";
-import { applyQueryIdea, usageQueryIdeas, queryIdeaMatches, queryIdeasOpen, queryIdeasPreferenceKey } from "../../../src/usage-query-ideas-model";
-import { analyzeQueryDatasets } from "../../../src/usage-workspace-model";
+import { applyQueryIdea, datasetPhrase, moreIdeasLabel, usageQueryIdeas, queryIdeaMatches, queryIdeasOpen, queryIdeasPreferenceKey } from "../../../src/usage-query-ideas-model";
+import { analyzeQueryDatasets, usageDatasets } from "../../../src/usage-workspace-model";
 import { linkTargets } from "../../../src/query-link-targets";
 
 const baseRow = (schema, index) => ({
@@ -191,6 +191,16 @@ test("query ideas start open and remember independent boolean preferences for ea
   assert.equal(queryIdeasOpen(true), true);
   const keys = Object.keys(usageQueryIdeas).map(queryIdeasPreferenceKey);
   assert.equal(new Set(keys).size, keys.length);
+});
+
+test("the ideas intro names each dataset in a sentence, keeping proper names and acronyms", () => {
+  assert.equal(datasetPhrase(usageDatasets.mcp_calls.label), "Pharos MCP requests");
+  assert.equal(datasetPhrase(usageDatasets.tl1_attempts.label), "TL1 attempts");
+  assert.equal(datasetPhrase(usageDatasets.branch_usage.label), "spend by branch");
+  assert.equal(datasetPhrase(usageDatasets.usage.label), "daily usage by agent session");
+  for (const dataset of Object.keys(usageDatasets)) assert.doesNotMatch(datasetPhrase(usageDatasets[dataset].label), /pharos|mcp|tl1/, dataset);
+  assert.equal(moreIdeasLabel(1), "1 more idea");
+  assert.equal(moreIdeasLabel(3), "3 more ideas");
 });
 
 

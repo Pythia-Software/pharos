@@ -3,7 +3,8 @@ import { formatUSD } from "./currency";
 import { formatTokens } from "./token-count";
 import { ViewDisclosure } from "./view-disclosure";
 import { useViewState } from "./view-state";
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Modal } from "./modal";
 import "./findings.css";
 import { Icon } from "./icons";
 import { findingDetailURL, findingsRank, readFindingsRoute, type FindingsList, type FindingsRoute } from "./findings-route";
@@ -34,7 +35,7 @@ type Card = {
   regressed?: Row; reopened?: Row; inconclusive?: Row; undo?: Row; result?: Row;
 };
 type CartItem = { id: string; finding_id?: string; title: string; ticked: boolean; change_label: string; suggested_target: string; undo?: boolean; clone?: boolean };
-export type CartGroup = { target: string; label: string; handoff: Handoff | "review"; handoff_reason: string; ticked: number; items: CartItem[] };
+export type CartGroup = { target: string; label: string; handoff: Handoff | "review"; handoff_reason: string; ticked: number; items: CartItem[]; provider_name?: string; host_label?: string };
 export type Target = { target: string; label: string };
 type Checkpoint = { threshold: number; shown: number; typical_wait_days: number; clear_share: number };
 type Repository = { id: string; name: string; work: number; pr_share: number; handoff: Handoff; override: Handoff | null };
@@ -68,7 +69,7 @@ declare global {
 async function request<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const parsed = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(parsed.error || `Request failed with HTTP ${response.status}`);
+  if (!response.ok) throw new Error(parsed.error || `Could not complete the request (HTTP ${response.status}).`);
   return parsed as T;
 }
 const findingURL = (id: string) => `/api/findings/${encodeURIComponent(id)}`;
@@ -135,6 +136,7 @@ const counted = (n: number, one: string, many = `${one}s`) => `${n.toLocaleStrin
 const spelled = (n: number, one: string, many = `${one}s`) => `${numberWords[n] ?? n.toLocaleString()} ${n === 1 ? one : many}`;
 // Lowercases a label's first word to use it mid-sentence, keeping names as they are.
 const properNouns = /^(Claude|Codex|Conductor|Gemini|Antigravity|TL1|Pharos|GitHub|I)\b/;
+const upperFirst = (text: string) => text ? text[0].toUpperCase() + text.slice(1) : text;
 const lowerFirst = (text: string) => /^[A-Z]([a-z]|\s)/.test(text) && !properNouns.test(text) ? text[0].toLowerCase() + text.slice(1) : text;
 const num = (value: unknown) => { const n = Number(value); return Number.isFinite(n) ? n : 0; };
 
@@ -175,9 +177,9 @@ function estimateSentence(estimate: Estimate | undefined): string {
   if (!estimate) return "";
   const results = estimate.results ? ` (${counted(estimate.results, "result")} of yours so far)` : "";
   const cases = estimate.persist_cases ? ` (from ${counted(estimate.persist_cases, "pattern")} in this library)` : "";
-  return `The change could remove about ${about(estimate.removable)} of it. Changes like it work about ${about(estimate.takes)} of the time${results}. Left alone, about ${about(Math.min(estimate.persists, 1))} of patterns like it are still there a month later${cases}.`;
+  return `The change could remove about ${about(estimate.removable)} of it. Changes like it work about ${about(estimate.takes)} of the time${results}. Left alone, about ${about(Math.min(estimate.persists, 1))} of patterns like it are still there 28 days later${cases}.`;
 }
-const rankLabels: Record<Rank, string> = { usd: "Dollars", tokens: "Tokens", minutes: "Time", failures: "Failures" };
+const rankLabels: Record<Rank, string> = { usd: "API cost", tokens: "Tokens", minutes: "Agent time", failures: "Failures" };
 
 function parseDay(value: unknown): Date | null {
   if (!value) return null;
@@ -272,47 +274,16 @@ function Menu({ label, items, className = "", heading, align = "start", ariaLabe
   </span>;
 }
 
-/** A modal dialog: focus moves in, Tab stays inside, Escape closes, and focus returns to what opened it. */
+/** A modal dialog on the shared stack: focus moves to its title, and Escape, the backdrop and Tab behave as in every Pharos modal. */
 export function Dialog({ title, onClose, children, footer, wide }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
-  const box = useRef<HTMLDivElement>(null);
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    box.current?.querySelector<HTMLElement>("h2")?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); closeRef.current(); return; }
-      if (event.key !== "Tab" || !box.current) return;
-      // Tab moves focus here rather than in the engine: WebKit leaves buttons
-      // out of the tab order unless Full Keyboard Access is on, so a trap that
-      // only wraps from the first or last control never fires there.
-      const dialog = box.current;
-      const focusable = [...dialog.querySelectorAll<HTMLElement>("a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])")].filter(element => {
-        if (!element.getClientRects().length) return false;
-        // A radio group is one stop: its checked radio, or its first when none is.
-        if (!(element instanceof HTMLInputElement) || element.type !== "radio" || element.checked) return true;
-        const group = [...dialog.querySelectorAll<HTMLInputElement>("input[type=radio]")].filter(radio => radio.name === element.name);
-        return !group.some(radio => radio.checked) && group[0] === element;
-      });
-      event.preventDefault();
-      if (!focusable.length) return;
-      const active = document.activeElement ?? document.body;
-      const following = focusable.filter(element => active !== element && active.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
-      const preceding = focusable.filter(element => active.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_PRECEDING);
-      (event.shiftKey ? preceding[preceding.length - 1] ?? focusable[focusable.length - 1] : following[0] ?? focusable[0]).focus();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("keydown", onKey); opener?.focus?.(); };
-  }, []);
-  return <div className="findings-backdrop" onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div ref={box} className={`findings-dialog ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="findingsDialogTitle">
-      <div className="findings-dialog-body">
-        <h2 id="findingsDialogTitle" tabIndex={-1}>{title}</h2>
-        {children}
-      </div>
-      {footer ? <div className="findings-dialog-footer">{footer}</div> : null}
+  const titleId = useId();
+  return <Modal className={`findings-dialog ${wide ? "wide" : ""}`} aria-labelledby={titleId} initialFocus="h2" onClose={onClose}>
+    <div className="findings-dialog-body">
+      <h2 id={titleId} tabIndex={-1}>{title}</h2>
+      {children}
     </div>
-  </div>;
+    {footer ? <div className="findings-dialog-footer">{footer}</div> : null}
+  </Modal>;
 }
 
 function Tile({ label, value, detail, onClick, pressed }: { label: string; value: React.ReactNode; detail?: React.ReactNode; onClick?: () => void; pressed?: boolean }) {
@@ -327,7 +298,7 @@ function AddToPrompt({ card, act }: { card: Card; targets: Target[]; act: Act; c
     <span className="findings-in-cart-label"><Icon name="check" />In prompt for {card.cart.target_label}</span>
     <button type="button" className="findings-button quiet" onClick={() => void act(card.id, { action: "cart_remove" }, `Removed from the prompt for ${card.cart?.target_label}.`)}>Remove from prompt</button>
   </span>;
-  return <button type="button" className="findings-button primary" onClick={() => void act(card.id, { action: "cart_add" }, `Added to the prompt for ${card.target_label}.`)}>Add to Prompt Cart</button>;
+  return <button type="button" className="findings-button primary" onClick={() => void act(card.id, { action: "cart_add" }, `Added to the prompt for ${card.target_label}.`)}>Add to prompt</button>;
 }
 
 function SnoozeDismiss({ card, act }: { card: Card; act: Act }) {
@@ -340,16 +311,16 @@ function SnoozeDismiss({ card, act }: { card: Card; act: Act }) {
     <Menu label={<>Dismiss <Icon name="chevron-down" className="findings-caret" /></>} ariaLabel="Dismiss" heading="Dismiss" items={[
       { key: "not_real", label: "Not real", hint: "Pharos misread what happened", onSelect: () => void act(card.id, { action: "dismiss", reason: "not_real" }, "Dismissed as not real.") },
       { key: "not_worth_it", label: "Not worth it", onSelect: () => void act(card.id, { action: "dismiss", reason: "not_worth_it" }, "Dismissed as not worth it.") },
-      { key: "wont_fix", label: "Won't fix", onSelect: () => void act(card.id, { action: "dismiss", reason: "wont_fix" }, "Dismissed: won't fix.") },
+      { key: "wont_fix", label: "Won’t fix", onSelect: () => void act(card.id, { action: "dismiss", reason: "wont_fix" }, "Dismissed: won’t fix.") },
       ...(card.detector_label ? [
         { key: "all", label: "Dismiss all from this detector", hint: card.detector_label, onSelect: () => void act(card.id, { action: "dismiss_detector" }, `Dismissed every open “${card.detector_label}” finding.`) },
-        { key: "off", label: "Turn this detector off", hint: card.detector_label, danger: true, onSelect: () => void act(card.id, { action: "disable_detector" }, `“${card.detector_label}” findings are turned off. Turn them back on in Findings settings.`) },
+        { key: "off", label: "Turn this detector off", hint: card.detector_label, danger: true, onSelect: () => void act(card.id, { action: "disable_detector" }, `“${card.detector_label}” findings are turned off. Turn them back on in Efficiency settings → Kinds of findings.`) },
       ] : []),
     ]} />
   </>;
 }
 
-const dismissReasons: Record<string, string> = { not_real: "not real", not_worth_it: "not worth it", wont_fix: "won't fix" };
+const dismissReasons: Record<string, string> = { not_real: "not real", not_worth_it: "not worth it", wont_fix: "won’t fix" };
 
 const earlySignals: Record<string, { label: string; tone: string; explanation: string }> = {
   promising: { label: "Promising so far", tone: "good", explanation: "The pattern is substantially lower, with no measured check more than 10% worse." },
@@ -357,7 +328,7 @@ const earlySignals: Record<string, { label: string; tone: string; explanation: s
   similar: { label: "No clear change yet", tone: "muted", explanation: "The pattern is close to its earlier level. The estimate can still change as more work comes in." },
   higher: { label: "Higher so far", tone: "warn", explanation: "The pattern is higher than before. More work will help tell whether this continues." },
   mixed: { label: "Mixed signals", tone: "warn", explanation: "At least one other measured check got worse. A saving alone may not mean the change helped overall." },
-  too_early: { label: "Too early to tell", tone: "muted", explanation: "There isn't enough comparable work yet to describe a direction." },
+  too_early: { label: "Too early to tell", tone: "muted", explanation: "There isn’t enough comparable work yet to describe a direction." },
 };
 
 function stateChip(card: Card): { text: string; tone: string } {
@@ -384,8 +355,8 @@ function stateChip(card: Card): { text: string; tone: string } {
 function StateNote({ card }: { card: Card }) {
   if (card.undo) return <p className="findings-note bad"><Icon name="severity-high" /><span>This got worse after {lowerFirst(card.undo.change ?? "the last change")}{card.undo.copied_at ? ` (copied ${day(card.undo.copied_at)})` : ""}. {card.undo.sentence ? <Text text={card.undo.sentence} /> : null} The prompt asks the agent to undo it.</span></p>;
   if (card.regressed) return <p className="findings-note warn"><Icon name="refresh" /><span>Came back after {lowerFirst(card.regressed.change ?? "the change")}{card.regressed.at || card.regressed.regressed_at ? ` on ${day(card.regressed.at ?? card.regressed.regressed_at)}` : ""}. {card.regressed.sentence ? <Text text={card.regressed.sentence} /> : null} Its savings so far still count. Next: {lowerFirst(card.change_label)}.</span></p>;
-  if (card.reopened) return <p className="findings-note warn"><Icon name="refresh" /><span>The last change ({lowerFirst(card.reopened.change ?? "")}) didn't make this happen less often. {card.reopened.sentence ? <Text text={card.reopened.sentence} /> : null} Next: {lowerFirst(card.change_label)}.</span></p>;
-  if (card.inconclusive) return <p className="findings-note"><Icon name="info" /><span>{card.inconclusive.sentence ? <Text text={card.inconclusive.sentence} /> : `There wasn't enough of this work after ${lowerFirst(card.inconclusive.change ?? "the change")} to tell whether it helped.`}</span></p>;
+  if (card.reopened) return <p className="findings-note warn"><Icon name="refresh" /><span>The last change ({lowerFirst(card.reopened.change ?? "")}) didn’t make this happen less often. {card.reopened.sentence ? <Text text={card.reopened.sentence} /> : null} Next: {lowerFirst(card.change_label)}.</span></p>;
+  if (card.inconclusive) return <p className="findings-note"><Icon name="info" /><span>{card.inconclusive.sentence ? <Text text={card.inconclusive.sentence} /> : `There wasn’t enough of this work after ${lowerFirst(card.inconclusive.change ?? "the change")} to tell whether it helped.`}</span></p>;
   if (card.state === "watching" && card.watching) {
     const watching = card.watching;
     const early = watching.provisional;
@@ -418,10 +389,10 @@ function ImpactLine({ card, rank }: { card: Card; rank: Rank }) {
   const others = (["usd", "tokens", "minutes", "failures"] as Rank[]).filter(unit => unit !== rank && num(expected[unit]) > 0).map(unit => brief[unit](expected[unit]));
   const note = card.impact_note && !/token/i.test(card.impact_note) && !others.includes(plain(card.impact_note)) ? card.impact_note : "";
   return <div className="findings-impact">
-    <span className="findings-impact-lead"><strong>{aboutValue[rank](expected[rank])}</strong> a month</span>
-    <span className="findings-impact-stake" title={estimateSentence(card.estimate)}>likely, of {unitValue[rank](impact[rank])} at stake</span>
+    <span className="findings-impact-lead"><strong>{aboutValue[rank](expected[rank])}</strong> per 28 days</span>
+    <span className="findings-impact-stake" title={estimateSentence(card.estimate)}>likely, of {unitValue[rank](impact[rank])} at stake in the last 28 days</span>
     {note ? <span className="findings-impact-note"><Text text={note} /></span> : null}
-    {others.length ? <span className="findings-impact-rest" title="The likely saving in the other units, per month">{others.map(text => <span key={text}>{text}</span>)}</span> : null}
+    {others.length ? <span className="findings-impact-rest" title="The likely saving in the other units, per 28 days">{others.map(text => <span key={text}>{text}</span>)}</span> : null}
   </div>;
 }
 
@@ -492,13 +463,13 @@ export function CartPanel({ cart, targets, act, onReview, safety = false }: { ca
         <Menu className="findings-cart-move" align="end" label={<span aria-hidden="true">⋯</span>} ariaLabel={`${safety ? "Remove" : "Clone or delete"} “${plain(item.title)}”`}
           items={[
             ...safety ? [] : [{ key: "__clone", label: "Clone", onSelect: () => void act(item.id, { action: "cart_clone" }, "Cloned. Drag the copy to another prompt.") }],
-            { key: "__remove", label: "Delete", danger: true, onSelect: () => void act(item.id, { action: "cart_remove" }, "Deleted from the prompt cart.") },
+            { key: "__remove", label: "Delete", danger: true, onSelect: () => void act(item.id, { action: "cart_remove" }, "Removed from the prompt.") },
           ]} />
       </li>)}</ul>
       <button type="button" className="findings-button primary" disabled={!count || count !== group.ticked} onClick={() => onReview(group)}>Review prompt ({count} ticked)</button>
     </section>; })}
     {dragging ? targets.filter(target => !cart.some(group => group.target === target.target)).map(target => <div key={target.target} className="findings-cart-drop-zone" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); drop(target.target); }}>Drop in {target.label}</div>) : null}
-    <p className="findings-cart-note">{safety ? "Risky actions and efficiency use separate prompts. After copying, these notices leave Open and remain in Handed off." : "Risky action notices have their own baskets in Optimize → Risky actions."}</p>
+    <p className="findings-cart-note">{safety ? "Efficiency, risky actions and fixes use separate prompts. After copying, these notices leave Open and remain in Handed off." : "Efficiency, risky actions and fixes use separate prompts."}</p>
   </aside>;
 }
 
@@ -531,22 +502,28 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false, a
     return () => { cancelled = true; };
   }, [group.target, ids, handoff, repository, endpoint, mode, area]);
   const count = ids.length;
-  const global = group.label.match(/· (\S+) on (.+)$/);
+  // Findings send the provider and the Mac as fields. Fixes send only the
+  // label, which names both when the library has several Macs.
+  const named = group.label.match(/· (.+) on (.+)$/);
+  // A target with no provider is labelled for "agents" in general (providerLabel in findings_store.go).
+  const provider: string = group.provider_name || named?.[1] || "", mac: string = group.host_label || named?.[2] || "that Mac";
   const where = repository ? `an agent working in ${group.label}`
-    : group.target.startsWith("global:") ? (global ? `an agent on ${global[2]}; it changes the instructions every ${global[1]} session there reads` : "an agent on that Mac; it changes the instructions every session there reads")
+    : group.target.startsWith("global:") ? `an agent on ${mac}; it changes the instructions every ${provider && provider !== "agents" ? `${provider} ` : "agent "}session there reads`
       : `an agent working in the repository that defines ${group.label}`;
   async function start() {
     if (!prompt?.prompt) return;
     setState("copying"); setError("");
     try { await copy(prompt.prompt); } catch {
-      setState(""); setError("Pharos couldn't write to the clipboard, so nothing started. Select the text, copy it, and try again."); return;
+      setState(""); setError("Pharos could not write to the clipboard, so nothing started. Select the text, copy it, and try again."); return;
     }
     try {
       await request(`${endpoint}/copy`, { target: group.target, ids, handoff: repository ? handoff : prompt.handoff, ...(handsOff ? { preview_token: prompt.preview_token } : {}), ...(area === "fixes" ? { mode } : {}) });
       setState("done");
       window.setTimeout(onCopied, 1400);
     } catch (failure) {
-      setState(""); setError(`The prompt is on your clipboard, but Pharos couldn't ${handsOff ? "record the handoff" : "start measuring"}: ${(failure as Error).message}. Close and review the prompt again before pasting it.`);
+      // The server's message is usually a whole sentence; end it only when it does not end itself.
+      const reason = String((failure as Error).message || "").trim();
+      setState(""); setError(`The prompt is on your clipboard, but Pharos could not ${handsOff ? "record the handoff" : "start measuring"}: ${reason}${/[.!?…]$/.test(reason) ? "" : "."} Close and review the prompt again before pasting it.`);
     }
   }
   const lede = area === "safety" ? `${spelled(count, "notice")}. Paste this into your agent for ${group.label}. It will investigate and recommend next steps. Copying moves these notices to Handed off.`
@@ -555,7 +532,7 @@ export function ReviewDialog({ group, copy, onClose, onCopied, safety = false, a
   return <Dialog title={`Prompt for ${group.label}`} onClose={onClose} wide footer={<>
     <span className="findings-dialog-fine">{handsOff ? "Copying records a handoff. No returned report is required." : "Measured separately: each finding on its own rate."}</span>
     <span className="findings-dialog-buttons">
-      <button type="button" className="findings-button" onClick={onClose}>Keep in cart</button>
+      <button type="button" className="findings-button" onClick={onClose}>Keep in prompt</button>
       <button type="button" className="findings-button primary" disabled={!prompt?.prompt || state !== ""} onClick={() => void start()}>
         {state === "done" ? <><Icon name="check" />{handsOff ? "Copied · handed off" : "Copied · measuring"}</> : state === "copying" ? "Copying…" : handsOff ? "Copy prompt and hand off" : "Copy prompt and start measuring"}
       </button>
@@ -775,7 +752,7 @@ function ProvisionalResult({ detail }: { detail: Detail }) {
       <span><strong>Comparable work</strong> {counted(num(after.units), unit.slice(0, -1))} since · {counted(num(before.units), unit.slice(0, -1))} before</span>
       <span><strong>Other checks</strong> {num(after.units) === 0 ? "Waiting for work" : failed.length ? failed.map((guard: Row) => `${guard.name}: ${compact(guard.before)} → ${compact(guard.after)} (worse)`).join("; ") : "No measured check more than 10% worse"}</span>
     </div>
-    <p className="findings-early-footnote">An API-equivalent estimate against the expected no-change baseline, after added context costs. Other changes can contribute; this remains separate from confirmed savings. {detail.watching?.result_on ? <>Final evaluation <strong>{day(detail.watching.result_on)}</strong>, on the schedule set when the prompt was copied.</> : null}</p>
+    <p className="findings-early-footnote">An estimate in API cost against the expected no-change baseline, after added context costs. Other changes can contribute; this remains separate from confirmed savings. {detail.watching?.result_on ? <>Final evaluation <strong>{day(detail.watching.result_on)}</strong>, on the schedule set when the prompt was copied.</> : null}</p>
   </section>;
 }
 
@@ -814,8 +791,8 @@ function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied
     alongside.length ? ["Copied alongside", alongside.map((item: Row | string) => typeof item === "string" ? item : item.title).join("; ")] : null,
   ] : [
     ["How often", <>{detail.rate ?? chart?.baseline_phrase}</>],
-    ["Likely saving", <>{impactText(expectedOf(detail), aboutMoney)} a month</>],
-    ["At stake", <>{impactText(detail.impact, money)} a month</>],
+    ["Likely saving", <>{impactText(expectedOf(detail), aboutMoney)} per 28 days</>],
+    ["At stake", <>{impactText(detail.impact, money)} in the last 28 days</>],
     detail.estimate ? ["Why likely", estimateSentence(detail.estimate)] : null,
     detail.first_seen_at ? ["Found", fullDay(detail.first_seen_at)] : null,
     detail.last_seen ? ["Last seen", fullDay(detail.last_seen)] : null,
@@ -835,8 +812,8 @@ function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied
         {detail.state === "watching" ? <div className="findings-not-applied">
           {confirming ? <>
             <p>This stops the measurement and moves the finding back to open, as if the prompt was never copied.</p>
-            <div className="findings-actions"><button type="button" className="findings-button" onClick={() => { setConfirming(false); onNotApplied(); }}>Yes, I didn't apply it</button><button type="button" className="findings-button quiet" onClick={() => setConfirming(false)}>Cancel</button></div>
-          </> : <button type="button" className="findings-button quiet" onClick={() => setConfirming(true)}>I didn't apply this</button>}
+            <div className="findings-actions"><button type="button" className="findings-button" onClick={() => { setConfirming(false); onNotApplied(); }}>Yes, I didn’t apply it</button><button type="button" className="findings-button quiet" onClick={() => setConfirming(false)}>Cancel</button></div>
+          </> : <button type="button" className="findings-button quiet" onClick={() => setConfirming(true)}>I didn’t apply this</button>}
         </div> : null}
       </section>
       <section className="findings-panel" aria-labelledby="findingsAttemptsTitle">
@@ -883,7 +860,7 @@ function FindingDetail({ id, tab, overview, act, rank, onReview, newIds }: { id:
   // Actions reload the overview; the detail follows it.
   useEffect(() => { if (overview && detail) void load(); }, [overview]);
   const back = () => navigate(findingsReturnURL);
-  if (error) return <div className="findings-page"><button type="button" className="findings-crumb" onClick={() => navigate("/findings")}>Findings</button><p className="findings-error" role="alert">{error}</p></div>;
+  if (error) return <div className="findings-page"><button type="button" className="findings-crumb" onClick={() => navigate("/findings")}>Efficiency</button><p className="findings-error" role="alert">{error}</p></div>;
   if (!detail) return <div className="findings-page"><p className="findings-muted">Loading the finding…</p></div>;
   const chip = stateChip(detail);
   const stateName = { open: "Open", watching: "Watching", won: "Wins", dismissed: "Dismissed", snoozed: "Snoozed" }[detail.state] ?? "Open";
@@ -894,7 +871,7 @@ function FindingDetail({ id, tab, overview, act, rank, onReview, newIds }: { id:
   return <div className="findings-page findings-layout with-cart findings-detail-layout">
     <div className="findings-detail">
     <button type="button" className="findings-button findings-back" onClick={back}><Icon name="arrow-left" />Back to Optimize</button>
-    <nav className="findings-breadcrumb" aria-label="Breadcrumb"><button type="button" className="findings-crumb" onClick={() => navigate("/findings")}>Findings</button><span aria-hidden="true">›</span><button type="button" className="findings-crumb" onClick={back}>{stateName}</button></nav>
+    <nav className="findings-breadcrumb" aria-label="Breadcrumb"><button type="button" className="findings-crumb" onClick={() => navigate("/findings")}>Efficiency</button><span aria-hidden="true">›</span><button type="button" className="findings-crumb" onClick={back}>{stateName}</button></nav>
     <h1><Text text={detail.title} /></h1>
     <div className="findings-detail-chips">
       {detail.detector_label ? <span className="findings-chip detector" title="The detector that found this">{detail.detector_label}</span> : null}
@@ -945,9 +922,9 @@ function WinsHero({ overview }: { overview: Overview }) {
 function WinsView({ overview }: { overview: Overview }) {
   const wins = overview.wins ?? [];
   return <div className="findings-wins">
-    <p className="findings-wins-method">Each fix is credited with the decline beyond the half an untouched pattern fades to anyway, times the work done since, for 90 days, less the context the change added to every request.</p>
+    <p className="findings-wins-method">A change gets credit only for the drop beyond what an untouched pattern loses anyway (about half). Pharos counts that drop over the work done in the 90 days after copying, minus the cost of the context the change added to each request.</p>
     {wins.length ? <div className="findings-table-wrap"><table className="findings-table">
-      <thead><tr><th>What was fixed</th><th>Where</th><th>Change</th><th className="num">How often, before → now</th><th className="num">Saved</th><th>Status</th></tr></thead>
+      <thead><tr><th>Finding</th><th>Where</th><th>Change</th><th className="num">How often, before → now</th><th className="num">Saved</th><th>Status</th></tr></thead>
       <tbody>{wins.map(win => {
         const status = win.regressed_at ? { text: "Came back · reopened", tone: "warn" } : num(win.days_left) > 0 ? { text: `Counting savings for ${counted(num(win.days_left), "more day")}`, tone: "good" } : { text: "Done", tone: "good" };
         return <tr key={`${win.id}-${win.copied_at}`}>
@@ -1023,13 +1000,13 @@ function FindingsSettings({ overview, reload }: { overview: Overview | null; rel
           <Tile label="Typical wait for a result" value={`about ${selected.typical_wait_days} days`} detail="after you copy a prompt" />
           <Tile label="Results expected to be clear" value={share(selected.clear_share) === "nearly all" ? "nearly all" : share(selected.clear_share)} detail="the rest end with no clear answer" />
         </div>
-        <p className="findings-muted">A lower number shows more findings, sooner, but more of their results will be inconclusive: with little of the work before and after a change, a real improvement can't be told apart from chance. The recommendation is the lowest number at which a typical finding can still reach a clear result within 30 days at your library's pace.</p>
+        <p className="findings-muted">A lower number shows more findings, sooner, but more of their results will be inconclusive: with little of the work before and after a change, a real improvement can’t be told apart from chance. The recommendation is the lowest number at which a typical finding can still reach a clear result within 30 days at your library’s pace.</p>
       </> : <p className="findings-muted">The preview appears after findings are first computed.</p>}
     </section>
 
     {overview.detectors?.length ? <section className="findings-panel findings-setting" aria-labelledby="findingsDetectorsTitle">
       <h2 id="findingsDetectorsTitle">Kinds of findings</h2>
-      <p>Each detector looks for one kind of pattern. Turn one off to stop seeing its findings; anything you're already measuring keeps going.</p>
+      <p>Each detector looks for one kind of pattern. Turn one off to stop seeing its findings; anything you’re already measuring keeps going.</p>
       <div className="findings-radios">
         {overview.detectors.map(detector => <label key={detector.name} className="findings-check"><input type="checkbox" checked={detector.enabled} onChange={event => void save({ detector_enabled: { [detector.name]: event.target.checked } })} /> {detector.label}</label>)}
       </div>
@@ -1037,7 +1014,7 @@ function FindingsSettings({ overview, reload }: { overview: Overview | null; rel
 
     <section className="findings-panel findings-setting" aria-labelledby="findingsRankTitle">
       <h2 id="findingsRankTitle">Rank findings by</h2>
-      <p>Every finding shows all four; this decides the order and which number leads. Dollars are what the same tokens would cost at API prices, which on a subscription shows where your quota goes.</p>
+      <p>This decides the order and which number leads; a finding also shows the other amounts it has. API cost is what the same tokens would cost at API prices, which on a subscription shows where your quota goes.</p>
       <div className="findings-radios" role="radiogroup" aria-labelledby="findingsRankTitle">
         {(["usd", "tokens", "minutes", "failures"] as Rank[]).map(unit => <label key={unit}><input type="radio" name="findingsRank" checked={(overview.settings?.rank ?? "usd") === unit} onChange={() => void save({ rank: unit })} /> {unit === "minutes" ? "Agent time" : rankLabels[unit]}</label>)}
       </div>
@@ -1045,15 +1022,15 @@ function FindingsSettings({ overview, reload }: { overview: Overview | null; rel
 
     <section className="findings-panel findings-setting" aria-labelledby="findingsHandoffTitle">
       <h2 id="findingsHandoffTitle">What prompts ask the agent to do</h2>
-      <p>By default, Pharos follows each repository's habit: a pull request where its work usually ends in one, otherwise the diff for you to review. Changes to instruction files outside a repository always show the diff first.</p>
+      <p>By default, Pharos follows each repository’s habit: a pull request where its work usually ends in one, otherwise the diff for you to review. Changes to instruction files outside a repository always show the diff first.</p>
       <div className="findings-radios" role="radiogroup" aria-labelledby="findingsHandoffTitle">
         {([["auto", "Follow each repository"], ["pr", "Always open a pull request"], ["diff", "Always show the diff"]] as const).map(([value, label]) => <label key={value}><input type="radio" name="findingsHandoff" checked={handoff === value} onChange={() => void save({ handoff: value })} /> {label}</label>)}
       </div>
       {repositories.length ? <div className={`findings-table-wrap ${handoff !== "auto" ? "dimmed" : ""}`}><table className="findings-table">
-        <thead><tr><th>Repository</th><th className="num">Work ending in a PR</th><th>Prompts ask for</th></tr></thead>
+        <thead><tr><th>Repository</th><th className="num">Workspaces ending in a PR</th><th>Prompts ask for</th></tr></thead>
         <tbody>{shownRepositories.map(repository => <tr key={repository.id}>
           <td>{repository.name}</td>
-          <td className="num" title={`${repository.work.toLocaleString()} pieces of work in the last 90 days`}>{percent(num(repository.pr_share))}</td>
+          <td className="num" title={`${counted(repository.work, "workspace")} with edits in the last 60 days`}>{percent(num(repository.pr_share))}</td>
           <td><select aria-label={`What prompts for ${repository.name} ask for`} value={repository.override ?? "auto"} onChange={event => void save({ repository_handoff: { [repository.id]: event.target.value } })}>
             <option value="auto">{repository.override ? "Automatic" : `Automatic: ${repository.handoff === "pr" ? "pull request" : "diff"}`}</option>
             <option value="pr">Pull request</option>
@@ -1066,12 +1043,12 @@ function FindingsSettings({ overview, reload }: { overview: Overview | null; rel
 
     <section className="findings-panel findings-setting" aria-labelledby="findingsUpdateTitle">
       <h2 id="findingsUpdateTitle">Updating findings</h2>
-      <p>Findings are recomputed once a day after the first index, or when you ask. Findings you're watching update after every index.</p>
+      <p>Findings are recomputed once a day after the first index, or when you ask. Findings you’re watching update after every index.</p>
       <div className="findings-actions">
-        <button type="button" className="findings-button" disabled={running} onClick={() => void refresh()}>{running ? "Refreshing…" : "Refresh efficiency and risky actions now"}</button>
-        <span className="findings-muted" role="status">{running ? `${status.phase ? `${status.phase}…` : "Working…"}` : status.error ? `Last refresh failed: ${status.error}` : status.built_at ? `Last refreshed ${whenText(status.built_at)}${seconds(status.took_ms) ? ` · took ${seconds(status.took_ms)}` : ""}` : "Not computed yet"}</span>
+        <button type="button" className="findings-button" disabled={running} onClick={() => void refresh()}>{running ? "Updating…" : "Update Optimize now"}</button>
+        <span className="findings-muted" role="status">{running ? `${status.phase ? `${upperFirst(status.phase)}…` : "Working…"}` : status.error ? `The last update failed: ${status.error}` : status.built_at ? `Last updated ${whenText(status.built_at)}${seconds(status.took_ms) ? ` · took ${seconds(status.took_ms)}` : ""}` : "Not computed yet"}</span>
       </div>
-      {status.measured_at ? <p className="findings-muted">Findings you're watching were last measured {whenText(status.measured_at)}.</p> : null}
+      {status.measured_at ? <p className="findings-muted">Findings you’re watching were last measured {whenText(status.measured_at)}.</p> : null}
     </section>
   </div>;
 }
@@ -1092,8 +1069,8 @@ function EmptyOpen({ overview }: { overview: Overview }) {
 
 function Building({ status }: { status: Status }) {
   return <div className="findings-empty building" role="status">
-    <strong>{status.running ? "Pharos is looking for findings…" : "Findings haven't been computed yet."}</strong>
-    <p>{status.running ? `${status.phase ? `${status.phase}. ` : ""}This reads the catalog and takes about a minute on a large library. You can keep using Pharos.` : "They're computed once a day after the first index. You can also start now from Findings settings."}</p>
+    <strong>{status.running ? "Pharos is looking for findings…" : "Findings haven’t been computed yet."}</strong>
+    <p>{status.running ? `${status.phase ? `${upperFirst(status.phase)}. ` : ""}This reads your library and takes about a minute on a large library. You can keep using Pharos.` : "They’re computed once a day after the first index. You can also start now from Efficiency settings."}</p>
     {status.running ? <div className="findings-progress" aria-hidden="true"><span /></div> : null}
   </div>;
 }
@@ -1126,16 +1103,16 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
   return <div className="findings-page">
     <div className="view-heading findings-heading">
       <div><h1>Efficiency <DataReadinessIndicator id="findings:overview" title="Efficiency" dataset="findings" query={route} /></h1>
-        <p className="muted">Recurring patterns in your agents' work that a change to a repository, its instructions, or an agent app setting can fix. Each is measured before and after you hand it to an agent.</p>
+        <p className="muted">Recurring patterns in your agents’ work that a change to a repository, its instructions, or an agent app setting can fix. Each is measured before and after you hand it to an agent.</p>
         {built ? <p className="findings-updated">{status.running ? <>Updating{status.phase ? ` · ${status.phase}` : ""}… </> : null}Updated {whenText(status.built_at)} from {counted(Math.round(num(status.conversations_28d)), "conversation")}.</p> : null}
       </div>
     </div>
-    {status.error ? <p className="findings-error" role="alert">The last refresh failed: {status.error}</p> : null}
+    {status.error ? <p className="findings-error" role="alert">The last update failed: {status.error}</p> : null}
     {!built ? <Building status={status} /> : !findings.length && !overview.wins?.length && !overview.cart?.length ? <EmptyOpen overview={overview} /> : <>
       {route.list === "wins" ? <WinsHero overview={overview} /> : <div className="findings-tiles">
         <Tile label="Saved so far (estimate)" value={unitValue[rank](saved[rank])} detail={`${savings(saved[rank])} so far`} onClick={() => setList("wins")} />
-        <Tile label="Open" value={counts.open.toLocaleString()} detail={counts.open ? `Expected: ${savings(expected("open"))} a month` : "nothing to fix right now"} onClick={() => setList("open")} pressed={route.list === "open"} />
-        <Tile label="Watching" value={counts.watching.toLocaleString()} detail={counts.watching ? `Expected: ${savings(expected("watching"))} a month` : "copy a prompt to start"} onClick={() => setList("watching")} pressed={route.list === "watching"} />
+        <Tile label="Open" value={counts.open.toLocaleString()} detail={counts.open ? `Expected: ${savings(expected("open"))} per 28 days` : "nothing to fix right now"} onClick={() => setList("open")} pressed={route.list === "open"} />
+        <Tile label="Watching" value={counts.watching.toLocaleString()} detail={counts.watching ? `Expected: ${savings(expected("watching"))} per 28 days` : "copy a prompt to start"} onClick={() => setList("watching")} pressed={route.list === "watching"} />
         <Tile label="Wins" value={(summary.won ?? 0).toLocaleString()} detail={summary.won ? `${savings(saved[rank])} so far` : "none yet"} onClick={() => setList("wins")} />
       </div>}
       <div className="findings-toolbar">
@@ -1150,7 +1127,7 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
           {shown.map(card => <FindingCard key={card.id} card={card} rank={rank} targets={overview.targets ?? []} act={act} isNew={newIds.has(card.id)} />)}
           {!shown.length ? route.list === "open" && !route.repo ? <EmptyOpen overview={overview} />
             : <div className="findings-empty"><strong>{route.repo ? "Nothing here for this filter." : route.list === "watching" ? "Nothing is being measured." : "Nothing dismissed or snoozed."}</strong>
-              <p>{route.repo ? "Choose Everywhere to see every finding in this list." : route.list === "watching" ? "Copy a prompt from Prompts to copy; its findings are measured here until each has a result." : "Findings you dismiss or snooze wait here, and you can restore any of them."}</p></div> : null}
+              <p>{route.repo ? "Choose Everywhere to see every finding in this list." : route.list === "watching" ? "Copy a prompt from Efficiency prompts to copy; its findings are measured here until each has a result." : "Findings you dismiss or snooze wait here, and you can restore any of them."}</p></div> : null}
         </div>
         {showCart ? <CartPanel cart={overview.cart ?? []} targets={overview.targets ?? []} act={act} onReview={onReview} /> : null}
       </div>}
@@ -1228,7 +1205,7 @@ export function FindingsPage({ copy, table, safetyTable, fixesTable }: { copy: C
       await reload();
       if (done) say(done);
       return true;
-    } catch (failure) { say(`Couldn't do that: ${(failure as Error).message}`); return false; }
+    } catch (failure) { say(`Could not do that: ${(failure as Error).message}`); return false; }
   }, [reload, say]);
 
   useEffect(()=>{if(!reviewArea && overview && !rankOverride && location.pathname==="/findings" && route.view!=="settings")setRankOverride(findingsRank("", overview.settings?.rank).rank);},[overview?.settings?.rank,rankOverride,route.view,reviewArea]);
@@ -1236,7 +1213,7 @@ export function FindingsPage({ copy, table, safetyTable, fixesTable }: { copy: C
   const setRank = (next: Rank) => {
     const choice = findingsRank(rankOverride, overview?.settings?.rank, next);
     setRankOverride(choice.rank);
-    if (choice.save) void request("/api/findings/settings",choice.save).then(()=>reload()).catch(failure=>say(`Couldn’t save rank: ${failure.message}`));
+    if (choice.save) void request("/api/findings/settings",choice.save).then(()=>reload()).catch(failure=>say(`Could not save the ranking: ${failure.message}`));
   };
   const group = review ? overview?.cart?.find(item => item.target === review) : undefined;
 

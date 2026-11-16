@@ -63,7 +63,7 @@ var sharedNative = map[string]string{
 	"internal/archive/application.go|applicationFolderPicker|command:osascript":                                                                 "Existing Mac folder-picker implementation; shared UI uses host services.",
 	"internal/archive/application.go|api|native-path:/Volumes/":                                                                                 "Existing disconnected Mac-volume check.",
 	"internal/archive/application.go|runApplicationMCPCLI|native-path:/Volumes/":                                                                "Existing disconnected Mac-volume check.",
-	"internal/archive/authorship_sources.go|authorshipFileDestination|native-path:/proc/self/fd/":                                               "Reject recorded process-descriptor destinations; no procfs I/O.",
+	"internal/archive/shell_command.go|authorshipFileDestination|native-path:/proc/self/fd/":                                                    "Reject recorded process-descriptor destinations; no procfs I/O.",
 	"internal/archive/cli.go|Run|command:open":                                                                                                  "Existing Mac launch command.",
 	"internal/archive/devui.go|runDevUICLI|command:open":                                                                                        "Developer-only browser launch.",
 	"internal/archive/drive.go|inspectVolume|command:diskutil":                                                                                  "Existing Mac volume inspection.",

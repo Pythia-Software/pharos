@@ -1,0 +1,37 @@
+{
+  "plugin": "pharos-plugin/1",
+  "id": "software.pythia.bucket-importer",
+  "name": "Import from a bucket",
+  "publisher": "Pharos",
+  "version": "0.1.0",
+  "direction": "import",
+  "description": "Brings in Claude Code and Codex history that other machines pushed to your cloud bucket with pharos capture-push.",
+  "permissions": {
+    "produce": {
+      "kinds": [
+        "claude",
+        "codex"
+      ]
+    },
+    "fetches_from": [
+      "the bucket and prefix you set up"
+    ]
+  },
+  "triggers": [
+    {
+      "schedule": {
+        "every": "1h"
+      }
+    },
+    {
+      "manual": {}
+    }
+  ],
+  "limits": {
+    "max_runtime": "20m",
+    "max_bytes": "2GiB"
+  },
+  "run": {
+    "builtin": "bucket-import/1"
+  }
+}

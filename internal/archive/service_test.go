@@ -79,7 +79,7 @@ func TestUpdateReleaseWaitsForWorkThatCannotStopInTime(t *testing.T) {
 		}
 		return answer
 	}
-	if answer := check(); answer["releasable"] != false || !strings.Contains(fmt.Sprint(answer["error"]), "prepare the catalog") {
+	if answer := check(); answer["releasable"] != false || !strings.Contains(fmt.Sprint(answer["error"]), "prepare the library") {
 		t.Fatalf("check while preparing the catalog: %v", answer)
 	}
 	response := serveTest(server, http.MethodPost, "/api/release?for=update")

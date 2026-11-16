@@ -12,7 +12,7 @@ import (
 	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
-var errCatalogIngestBusy = errors.New("source indexing is already running for this catalog; retry when it finishes")
+var errCatalogIngestBusy = errors.New("Another capture or index is running. Try again when it finishes.")
 
 // Tests replace the mechanism serially to exercise acquisition failures.
 var lockCatalogIngestFile = filelock.Lock

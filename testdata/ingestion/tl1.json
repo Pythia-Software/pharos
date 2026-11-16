@@ -1,5 +1,5 @@
 {
-  "index_version": "tl1-analysis-v6-execution-model",
+  "index_version": "tl1-analysis-v7-codex-item-ids",
   "records": [
     {
       "SourceID": "install-1:task-claude",
@@ -553,7 +553,159 @@
         "terminal": true,
         "version": "v1"
       },
-      "Conversations": [],
+      "Conversations": [
+        {
+          "SessionBounds": {
+            "started_at": "2026-09-20T10:21:02.000Z",
+            "ended_at": "2026-09-20T10:21:04.000Z",
+            "source": "attempt-envelope"
+          },
+          "NativeID": "install-1:att-review:1-codex.jsonl",
+          "Provider": "codex",
+          "Model": "gpt-5.6-terra",
+          "Effort": "high",
+          "Account": "local",
+          "ParentNativeID": "",
+          "Origin": "$ROOT/002/transcripts/task-review/1-codex.jsonl",
+          "Coverage": "complete",
+          "StartedAt": "2026-09-20T10:21:02.000Z",
+          "EndedAt": "2026-09-20T10:21:04.000Z",
+          "Harness": "tl1",
+          "Aliases": [
+            "thread-review"
+          ],
+          "Messages": [
+            {
+              "NativeID": "item_0",
+              "Role": "assistant",
+              "Kind": "message",
+              "Text": "Reading the change.",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-codex.jsonl:3",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "item_1:call",
+              "Role": "assistant",
+              "Kind": "tool_call",
+              "Text": "{\"input\":{\"command\":\"git diff\"},\"tool\":\"shell\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "item_1",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-codex.jsonl:4",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "item_1:result",
+              "Role": "tool",
+              "Kind": "tool_result",
+              "Text": "{\"content\":\"a.go\",\"exit_code\":0,\"is_error\":false,\"tool\":\"shell\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "item_1",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-codex.jsonl:4",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "turn-1:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cached_input_tokens\":0,\"input_tokens\":1000,\"output_tokens\":100,\"reasoning_output_tokens\":0}}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-codex.jsonl:5",
+              "RawText": "{\"type\":\"turn.completed\",\"usage\":{\"cached_input_tokens\":0,\"input_tokens\":1000,\"output_tokens\":100,\"reasoning_output_tokens\":0}}",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "item_0~4",
+              "Role": "assistant",
+              "Kind": "message",
+              "Text": "Running the tests.",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-codex.jsonl:8",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "item_1~4:call",
+              "Role": "assistant",
+              "Kind": "tool_call",
+              "Text": "{\"input\":{\"command\":\"go test ./...\"},\"tool\":\"shell\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "item_1~4",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-codex.jsonl:9",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "item_1~4:result",
+              "Role": "tool",
+              "Kind": "tool_result",
+              "Text": "{\"content\":\"FAIL\",\"exit_code\":1,\"is_error\":true,\"tool\":\"shell\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "item_1~4",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-codex.jsonl:9",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "turn-2:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"type\":\"token_usage\",\"usage\":{\"cached_input_tokens\":1000,\"input_tokens\":2000,\"output_tokens\":100,\"reasoning_output_tokens\":0}}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-codex.jsonl:10",
+              "RawText": "{\"type\":\"turn.completed\",\"usage\":{\"cached_input_tokens\":1000,\"input_tokens\":2000,\"output_tokens\":100,\"reasoning_output_tokens\":0}}",
+              "SourceOrder": 0,
+              "Selected": true
+            }
+          ]
+        }
+      ],
       "WorkItems": [
         {
           "explicit": true,

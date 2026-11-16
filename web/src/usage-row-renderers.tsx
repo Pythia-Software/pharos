@@ -16,7 +16,7 @@ export function UsageSourceLink({ link, children }: { link: UsageRowLink; childr
 }
 export function UsageRowActions({ dataset, row }: { dataset: UsageDataset; row: Record<string, any> }) {
   const links = usageRowLinks(dataset, row, new URLSearchParams(location.search));
-  return links.length ? <span className="usage-row-links">{links.map(link => <UsageSourceLink key={link.label} link={link} />)}</span> : dataset === "mcp_calls" ? <span className="muted">No direct archive target in the recorded arguments.</span> : null;
+  return links.length ? <span className="usage-row-links">{links.map(link => <UsageSourceLink key={link.label} link={link} />)}</span> : dataset === "mcp_calls" ? <span className="muted">The recorded arguments name no conversation, workspace or message.</span> : null;
 }
 export function usageRowRenderers(dataset: UsageDataset): RenderRegistry<Record<string, any>> {
   return {
@@ -28,7 +28,7 @@ export function usageRowRenderers(dataset: UsageDataset): RenderRegistry<Record<
     usage_conversation: ({ row, value }) => {
       const text = String(value || row.conversation_id || "Untitled conversation");
       const href = primaryUsageSource(dataset, row);
-      return <span className="usage-row-title">{href ? <UsageSourceLink link={{ href, label: dataset === "parallelism" ? href.startsWith("/library?") ? "Workspaces at this checkout" : "Conversation near this hour" : "Open source conversation" }}>{text}</UsageSourceLink> : text}</span>;
+      return <span className="usage-row-title">{href ? <UsageSourceLink link={{ href, label: dataset === "parallelism" ? href.startsWith("/library?") ? "Workspaces at this checkout" : "Conversation near this time" : href.startsWith("/work/") ? "Open workspace" : "Open conversation" }}>{text}</UsageSourceLink> : text}</span>;
     },
     usage_code_snippet: ({ value, presentation }) => presentation === "property" ? <pre className="usage-row-code">{String(value ?? "")}</pre> : <span className="usage-row-snippet" title={String(value ?? "")}>{String(value ?? "")}</span>,
     usage_authorship_sources: ({ row }) => {

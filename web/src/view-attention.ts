@@ -3,6 +3,7 @@ import { readViewState, readClassicViewState, writeViewState, writeViewStates, i
 import { attentionTargets, viewContract, viewFields, retainNavigationView } from "./view-contract";
 import { adoptTextTargets, installPageFind } from "./page-find";
 import { preferences } from "./preferences";
+import { modalHost } from "./modal";
 import { attentionMutationMatters, attentionReferenceAt, attentionTargetNoun, createDetailLanding, toggleAttentionTarget, type AttentionNode } from "./view-attention-model";
 import "./view-attention.css";
 
@@ -136,7 +137,8 @@ function update() {
   syncDismissButtons(dismissTargets);
   if(highlights.length || reveal) {
     if(!status){status=document.createElement("aside");status.className="pharos-attention-status";status.setAttribute("aria-label","Linked highlights");statusText=document.createElement("span");statusText.setAttribute("role","status");const clear=document.createElement("button");clear.type="button";clear.textContent="Clear highlights";clear.onclick=clearAttention;status.append(statusText,clear);document.body.append(status);}
-    const message=missing.length ? `Targets not available in this view yet: ${missing.join(", ")}` : "Linked highlights";
+    const missingNouns=[...new Set(missing.map(reference=>attentionTargetNoun(reference).toLowerCase()))].join(", ");
+    const message=missing.length ? `${missing.length} linked ${missing.length===1?"item is":"items are"} not on this page yet (${missingNouns}).` : "Linked highlights";
     if(statusText!.textContent!==message)statusText!.textContent=message;
   }else{status?.remove();status=statusText=undefined;}
   // The pending list is observable without blocking the rest of the page.
@@ -165,7 +167,7 @@ export function installViewAttention() {
     const clear = document.createElement("button"); clear.type = "button"; clear.textContent = "Clear highlights";
     clear.onclick = () => { closeMenu(); clearAttention(); };
     const parentPopover = event.target instanceof Element ? event.target.closest(":popover-open") : null;
-    menu.append(clear); (parentPopover ?? document.querySelector("dialog:modal") ?? document.body).append(menu);
+    menu.append(clear); (parentPopover ?? modalHost()).append(menu);
     menu.showPopover();
     const rect = menu.getBoundingClientRect();
     menu.style.left = `${Math.max(0, Math.min(event.clientX, innerWidth - rect.width))}px`;

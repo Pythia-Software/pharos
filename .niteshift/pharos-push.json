@@ -1,0 +1,20 @@
+{
+  "contract": "pharos-push-config/1",
+  "access": "write",
+  "prefix": "pharos/{owner}",
+  "retention_days": 90,
+  "pool": "Niteshift · pharos",
+  "destination": {
+    "type": "gcs",
+    "bucket": "pythia-pharos-push-test",
+    "workload_identity_provider": "projects/123699028615/locations/global/workloadIdentityPools/pharos-push/providers/niteshift",
+    "identity_token": {
+      "command": [
+        "ns",
+        "oidc-token",
+        "--audience",
+        "//iam.googleapis.com/projects/123699028615/locations/global/workloadIdentityPools/pharos-push/providers/niteshift"
+      ]
+    }
+  }
+}

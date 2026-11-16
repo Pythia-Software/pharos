@@ -445,6 +445,9 @@ test('a right-click names the innermost target that resolves back to it, and hig
  assert.equal(attentionReferenceAt(node('TD',{},row),resolvesTo),'row:42','a cell names its row');
  assert.equal(attentionReferenceAt(node('DIV'),resolvesTo),null);
  assert.equal(attentionTargetNoun('call:toolu_1'),'Tool Call');
+ assert.equal(attentionTargetNoun('session:s1'),'Agent Session');
+ assert.equal(attentionTargetNoun('safety:n1'),'Notice');
+ assert.equal(attentionTargetNoun('fix:f1'),'Fix');
  assert.equal(attentionTargetNoun('unknown:x'),'Element');
  const step=(search,reference)=>'?'+toggleAttentionTarget(search,reference).toString();
  let search=step('?tab=1','card:a');

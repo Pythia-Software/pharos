@@ -1026,7 +1026,7 @@ func (r *labelsRun) releasePool(kill bool) {
 	}
 	r.stats.Restarts += r.runner.Pool().Restarts() - r.restartsBefore
 	if kill {
-		r.c.labelers.Kill(r.runner)
+		r.c.killLabeler(r.runner)
 	}
 	r.release()
 	r.runner, r.release = nil, nil

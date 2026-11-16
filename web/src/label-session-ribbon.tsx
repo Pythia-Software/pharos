@@ -7,6 +7,7 @@ import {harnessWaitEnd,harnessWaitText,ribbonLayers,ribbonCounts,ribbonMarkMessa
 import {shortLabel,specificLabels,stateColor,type LabelMessage,type Taxonomy} from './conversation-labels';
 import type {TimeRange} from './timeline-label-model';
 import {authorshipSegments,callerSource} from './timeline-caller-model';
+import {formatConcurrencyDuration} from './concurrency-data';
 import {markIds} from './event-merge';
 import {EventGlyph,EventLinkCard,EventLinkOverlay,eventHitTargets,eventLayout,eventTargetFocus,placeEvents,setEventLinkFocus,useEventLinkFocus} from './event-link-overlay';
 import {linkedTarget,type AgentEventLink} from './event-link-layout';
@@ -31,7 +32,7 @@ export type TimelineInteraction='inspect'|'reveal'|'none';
 export type RibbonReveal={message?:string;fraction:number};
 function SourceContent({item,sourceHref,close,children}:{item:RibbonObservation;sourceHref?:RibbonSourceHref;close?:()=>void;children:React.ReactNode}){
  const href=sourceHref?.(item);
- return href?<PageLink href={href} className="lt-observation-source" onClick={event=>{event.stopPropagation();close?.();}}>{children}<span>Show in conversation →</span></PageLink>:<>{children}</>;
+ return href?<PageLink href={href} className="lt-observation-source" onClick={event=>{event.stopPropagation();close?.();}}>{children}<span>Open in conversation</span></PageLink>:<>{children}</>;
 }
 function MessagePreview({message}:{message:LabelMessage}){
  const body=trimTimelineSnippet(timelinePreviewText(message.preview??message.text,{input:message.kind==='delegation',unwrap:message.role!=='user'||message.kind!=='message'})),characters=Array.from(body);
@@ -162,7 +163,7 @@ export function SessionRibbon({node,range,clock,brushHandlers,preview=null,calle
   {clock.cuts.map(cut=><line key={cut.end} className="lt-idle-cut-line" x1={cut.fraction*1000} x2={cut.fraction*1000} y1="0" y2="32" vectorEffect="non-scaling-stroke"/>)}
   {preview?<rect x={x(preview[0])} y="0" width={x(preview[1])-x(preview[0])} height="32" fill="var(--gold)" opacity=".25"/>:null}
   <EventFocusBand node={node} x={x}/>
- </svg>{eventLayer?.events.length?<EventLinkOverlay placed={placedEvents} layout={layout} width={width} height={height} label={`${placedEvents.reduce((n,p)=>n+(p.event.members?.length??1),0)} agent events`}/>:null}{inspector.portal}</div>;
+ </svg>{eventLayer?.events.length?<EventLinkOverlay placed={placedEvents} layout={layout} width={width} height={height} label={(n=>`${n} agent event${n===1?'':'s'}`)(placedEvents.reduce((n,p)=>n+(p.event.members?.length??1),0))}/>:null}{inspector.portal}</div>;
 }
 const ribbonIcons:Record<string,IconName>={activity:'settings',read:'read',write:'edit',run:'command',git:'tree',network:'web',delegate:'tree',wait:'more',poll:'refresh',other:'settings'};
 /** The standalone timeline and reader use the same row symbols and counts. */

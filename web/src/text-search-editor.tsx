@@ -1,9 +1,11 @@
 import React, { createContext, useContext, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./icons";
+import { modalHost } from "./modal";
 import { SearchSelect } from "./search-select";
 import { SearchInput, WrappingInput } from "./search-input";
-import { chooseScope, compileRules, refreshSearchToday, newGroup, newRule, optionScope, optionsInEffect, querySyntax, scopeChoice, scopes, searchDateValue, searchDateWindow, searchRequest, searchSentence, sourceLabel, textScopeNote, visualFromQuery, withSearchDateComparison, withSearchDateRange, withSearchDateWindow, type SentencePart, type RuleKind, type SearchDateComparison, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
+import { chooseScope, compileRules, refreshSearchToday, newGroup, newRule, optionScope, optionsInEffect, querySyntax, scopeChoice, scopes, searchDateValue, searchDateWindow, searchRequest, searchSentence, textScopeNote, visualFromQuery, withSearchDateComparison, withSearchDateRange, withSearchDateWindow, type SentencePart, type RuleKind, type SearchDateComparison, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
+import { providerName, sourceName } from "./provider-names";
 import "./text-search-editor.css";
 
 const EditorDOMPrefix = createContext("");
@@ -59,18 +61,18 @@ export function SearchPopover({ label, title, className, popupClassName = "", tr
       // Safari blurs the active control when clicking buttons or checkboxes.
       // Keep focus in the menu before the modal redirects it and dismisses it.
       if (event.button === 0 && control) { event.preventDefault(); control.focus(); }
-    }}>{children(() => setOpen(false))}</div>, trigger.current?.closest('dialog, [role="dialog"][aria-modal="true"]') ?? document.body) : null}
+    }}>{children(() => setOpen(false))}</div>, modalHost(trigger.current)) : null}
   </>;
 }
 function ConditionOptions({ node, path, scopeLabel, onExclude }: { node: TextCondition; path: string; scopeLabel: string; onExclude: (exclude: boolean) => void }) {
   const prefix = useContext(EditorDOMPrefix);
-  const type = node.kind === "group" ? "group" : "rule";
+  const type = node.kind === "group" ? "group" : "condition";
   return <SearchPopover label={`Options for ${type} ${path}`} title={`${type === "group" ? "Group" : "Condition"} options and help`} className="text-condition-options" triggerContent={<Icon name="more" />}>{close => <>
     <p>{node.kind === "group" ? "A group keeps its conditions together. AND NOT rejects a match only inside the enclosing group." : ruleHelp[node.kind]}</p>
-    <label>Use in {scopeLabel}<SearchSelect aria-label={`Include or exclude ${type} ${path}`} value={node.exclude ? "exclude" : "include"} onChange={event => {
+    <label>Use in {scopeLabel === "Entire search" ? "the entire search" : scopeLabel.toLowerCase()}<SearchSelect aria-label={`Include or exclude ${type} ${path}`} value={node.exclude ? "exclude" : "include"} onChange={event => {
       close(); onExclude(event.target.value === "exclude");
       requestAnimationFrame(() => (document.getElementById(`${prefix}${node.id}-${node.kind === "group" ? "join" : "text"}`) ?? document.getElementById(`${prefix}${firstRule(node).id}-text`))?.focus());
-    }}><option value="include">Match</option><option value="exclude">AND NOT</option></SearchSelect></label>
+    }}><option value="include">Include</option><option value="exclude">Exclude (AND NOT)</option></SearchSelect></label>
   </>}</SearchPopover>;
 }
 // The search read as English. Connecting words stay quiet; chosen values carry the weight.
@@ -132,7 +134,7 @@ function GroupEditor({ group, onChange, issues, heading, lead, path = "1", numbe
   const groupLabel = depth ? `Group ${number}` : "Entire search";
   const children = group.children.map((child, index) => ({ child, index }));
   const included = children.filter(({ child }) => !child.exclude), excluded = children.filter(({ child }) => child.exclude);
-  const joinChoice = <SearchSelect id={`${prefix}${group.id}-join`} aria-label={`Match rules in group ${path}`} value={group.join} onChange={e => onChange({ ...group, join: e.target.value as "all" | "any" })}><option value="all">and</option><option value="any">or</option></SearchSelect>;
+  const joinChoice = <SearchSelect id={`${prefix}${group.id}-join`} aria-label={`Match conditions in group ${path}`} value={group.join} onChange={e => onChange({ ...group, join: e.target.value as "all" | "any" })}><option value="all">and</option><option value="any">or</option></SearchSelect>;
   const renderConditions = (nodes: typeof children, join: "all" | "any", { lead, choice = false }: { lead?: string; choice?: boolean } = {}) => <div className="text-group-children">
     {nodes.map(({ child, index }, displayIndex) => {
       const childPath = `${path}.${index + 1}`;
@@ -146,15 +148,15 @@ function GroupEditor({ group, onChange, issues, heading, lead, path = "1", numbe
       const proximity = child.kind === "near" || child.kind === "pre";
       return <div key={child.id} className="text-condition">{connector}<div className="text-rule">
         <div className="text-rule-controls">
-          <SearchSelect aria-label={`Match type for rule ${childPath}`} value={child.kind} onChange={e => edit(index, { ...child, kind: e.target.value as RuleKind })}>{Object.entries(shortRuleLabels).map(([key, label]) => <option value={key} key={key}>{label}</option>)}</SearchSelect>
-          <WrappingInput id={`${prefix}${child.id}-text`} aria-label={`Text for rule ${childPath}`} aria-invalid={!!error} aria-describedby={error ? `${prefix}${child.id}-error` : undefined} value={child.text} onValue={text => edit(index, { ...child, text })} placeholder={child.kind === "prefix" ? "Start of a word, e.g. migrat" : proximity ? "First phrase" : child.kind === "phrase" ? "Exact phrase, e.g. race condition" : child.kind === "anyWords" ? "Any of these words" : "Words to find"} />
+          <SearchSelect aria-label={`Match type for condition ${childPath}`} value={child.kind} onChange={e => edit(index, { ...child, kind: e.target.value as RuleKind })}>{Object.entries(shortRuleLabels).map(([key, label]) => <option value={key} key={key}>{label}</option>)}</SearchSelect>
+          <WrappingInput id={`${prefix}${child.id}-text`} aria-label={`Text for condition ${childPath}`} aria-invalid={!!error} aria-describedby={error ? `${prefix}${child.id}-error` : undefined} value={child.text} onValue={text => edit(index, { ...child, text })} placeholder={child.kind === "prefix" ? "Start of a word, e.g. migrat" : proximity ? "First phrase" : child.kind === "phrase" ? "Exact phrase, e.g. race condition" : child.kind === "anyWords" ? "Any of these words" : "Words to find"} />
           <ConditionOptions node={child} path={childPath} scopeLabel={groupLabel} onExclude={exclude => edit(index, { ...child, exclude })} />
-          <RemoveButton label={`Remove rule ${childPath}`} onRemove={() => remove(index)} />
+          <RemoveButton label={`Remove condition ${childPath}`} onRemove={() => remove(index)} />
         </div>
         {proximity ? <div className="text-proximity">
           <span>{child.kind === "pre" ? "then" : "and"}</span>
-          <SearchInput aria-label={`Second phrase for rule ${childPath}`} aria-invalid={!!error} aria-describedby={error ? `${prefix}${child.id}-error` : undefined} value={child.other} onChange={e => edit(index, { ...child, other: e.target.value })} placeholder="Second phrase" />
-          <label>within <input type="number" min={0} max={100} aria-label={`Words between phrases in rule ${childPath}`} value={child.distance} onChange={e => edit(index, { ...child, distance: e.target.value })} /> words</label>
+          <SearchInput aria-label={`Second phrase for condition ${childPath}`} aria-invalid={!!error} aria-describedby={error ? `${prefix}${child.id}-error` : undefined} value={child.other} onChange={e => edit(index, { ...child, other: e.target.value })} placeholder="Second phrase" />
+          <label>within <input type="number" min={0} max={100} aria-label={`Words between phrases in condition ${childPath}`} value={child.distance} onChange={e => edit(index, { ...child, distance: e.target.value })} /> words</label>
         </div> : null}
         {error ? <p id={`${prefix}${child.id}-error`} className="text-editor-error">{error.message}</p> : null}
       </div></div>;
@@ -180,13 +182,13 @@ function GroupEditor({ group, onChange, issues, heading, lead, path = "1", numbe
     </div> : null}
     {groupIssue ? <p className="text-editor-error">{groupIssue.message}</p> : null}
   </>;
-  return depth ? <fieldset className="text-rule-group text-nested-group"><legend className="sr-only">Rule group {path}</legend>{content}</fieldset> : content;
+  return depth ? <fieldset className="text-rule-group text-nested-group"><legend className="sr-only">Condition group {path}</legend>{content}</fieldset> : content;
 }
 
 async function validate(request: Record<string, unknown>, signal: AbortSignal): Promise<TextQuery> {
   const response = await fetch("/api/search/text/validate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request), signal });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error ?? "Could not validate the search. Please try again.");
+  if (!response.ok) throw new Error(result.error ?? "Could not check the search. Try again.");
   return result.where;
 }
 const modes = [["advanced", "Boolean query syntax"], ["terms", "All words, with operators treated as words"], ["phrase", "Whole query as a phrase"], ["literal", "Exact text, including punctuation"], ["regex", "Regular expression (Go / RE2)"]];
@@ -245,7 +247,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
     finally { if (!controller.signal.aborted) setBusy(false); }
   };
   const editSyntax = () => {
-    if (optionsInEffect(draft).fuzzy) { setError("Turn off “Include word variations” in Options before switching to query syntax, so the converted query keeps the same matching rules."); return; }
+    if (optionsInEffect(draft).fuzzy) { setError("Turn off “Include word variations” in Options before switching to Syntax, so the converted query matches the same text."); return; }
     const node = draft.match === "rules" ? compileRules(draft.root).where : { op: draft.match, text: draft.text } as TextQuery;
     try {
       const text = node ? querySyntax(node, draft.separators) : "";
@@ -306,8 +308,8 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
       </SearchSelect>}
     </span>
     {textKind ? <div className="text-editor-tabs" role="group" aria-label="Search editor">
-      <button type="button" aria-label="Visual editor" aria-pressed={draft.editor === "visual"} disabled={busy} onClick={() => { if (draft.editor !== "visual") void editRules(); }}>Rules</button>
-      <button type="button" aria-label="Query syntax" aria-pressed={draft.editor === "syntax"} disabled={busy} onClick={() => { if (draft.editor !== "syntax") editSyntax(); }}>Syntax</button>
+      <button type="button" aria-label="Rules editor" aria-pressed={draft.editor === "visual"} disabled={busy} onClick={() => { if (draft.editor !== "visual") void editRules(); }}>Rules</button>
+      <button type="button" aria-label="Syntax editor" aria-pressed={draft.editor === "syntax"} disabled={busy} onClick={() => { if (draft.editor !== "syntax") editSyntax(); }}>Syntax</button>
     </div> : null}
     {targetNote ? <p className="text-target-note" id={`${filterID}-target`}>{targetNote}</p> : <span className="sr-only" id={`${filterID}-target`}>{targetDescription} {sameSpan}</span>}
   </div>;
@@ -334,7 +336,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
           }}><option value="all">all time</option><option value="today">today (local time)</option><option value="last" disabled={dateWindow?.duration !== "today" && !!draft.scope[field.key === "from" ? "to" : "from"]}>last</option><option value="from" disabled={field.key !== "from" && !!draft.scope.from}>on or after</option><option value="to" disabled={dateWindow?.duration !== "today" && field.key !== "to" && !!draft.scope.to}>on or before</option></SearchSelect> : null}
           {options && !choicesError ? <SearchSelect id={id} aria-label={name} value={value} onChange={e => scope({ [field.key]: e.target.value })}>
             <option value="">Any {field.label.toLowerCase()}</option>
-            {Array.from(new Set([...options, ...(value ? [value] : [])])).map(v => <option key={v} value={v}>{sourceLabel(v)}</option>)}
+            {Array.from(new Set([...options, ...(value ? [value] : [])])).map(v => <option key={v} value={v}>{field.key === "provider" ? providerName(v) : sourceName(v)}</option>)}
           </SearchSelect> : relative?.duration === "today" ? <span className="text-filter-note">Since local midnight</span> : relative ? <WrappingInput id={id} aria-label={name} value={relative.duration} placeholder="30d, 7d, 24h" aria-invalid={issueList.some(i => i.id === "dates")} aria-describedby={`${filterID}-dates`} onValue={duration => patch(withSearchDateWindow(draft, duration))} />
             : date ? <input id={id} aria-label={name} type="date" value={searchDateValue(value)} aria-invalid={issueList.some(i => i.id === "dates")} aria-describedby={`${filterID}-dates ${id}-utc`} onChange={e => scope({ [field.key]: e.target.value })} />
             : <WrappingInput id={id} aria-label={name} value={value} placeholder={field.placeholder} aria-invalid={date && issueList.some(i => i.id === "dates")} aria-describedby={date ? `${filterID}-dates ${id}-utc` : undefined} onValue={text => scope({ [field.key]: text })} />}
@@ -381,9 +383,9 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
   const optionCount = textKind ? [effect.caseSensitive, effect.separators, effect.fuzzy, draft.editor === "visual" ? draft.match !== "rules" : draft.mode !== "advanced"].filter(Boolean).length : Number(file.caseSensitive);
   const matchOptions = <SearchPopover label={`Match options${optionCount ? `, ${optionCount} changed` : ""}`} className="text-options-trigger" popupClassName="text-options-popup" triggerContent={<><Icon name="settings" />Options{optionCount ? <span className="text-options-count">{optionCount}</span> : null}</>}>{() => textKind ? <>
     <label className="text-option-mode">{draft.editor === "visual" ? <>Match using<SearchSelect value={draft.match} aria-label="Match using" onChange={e => patch({ match: e.target.value as TextSearchDraft["match"] })}><option value="rules">Words & phrases</option><option value="literal">Exact text</option><option value="regex">Regular expression</option></SearchSelect></> : <>Query format<SearchSelect aria-label="Query format" value={draft.mode} onChange={e => patch({ mode: e.target.value })}>{modes.map(([mode, label]) => <option key={mode} value={mode}>{label}</option>)}</SearchSelect></>}</label>
-    <MatchOption label="Match letter case" help="Uppercase and lowercase must match, so Cache won't match cache." checked={draft.caseSensitive} change={caseSensitive => patch({ caseSensitive })} />
+    <MatchOption label="Match letter case" help="Uppercase and lowercase must match, so Cache won’t match cache." checked={draft.caseSensitive} change={caseSensitive => patch({ caseSensitive })} />
     <MatchOption label="Keep phrase punctuation and spacing" help="Phrases keep the punctuation and spacing between their words. Exact text and regular expressions always do." checked={draft.separators} change={separators => patch({ separators })} disabled={!applies.separators} />
-    {!recordTarget ? <MatchOption label="Include word variations" help="Also match related word forms and close spellings. Applies to word rules only." checked={draft.fuzzy} change={fuzzy => patch({ fuzzy })} disabled={!applies.fuzzy} /> : null}
+    {!recordTarget ? <MatchOption label="Include word variations" help="Also match related word forms and close spellings. Applies to word conditions only." checked={draft.fuzzy} change={fuzzy => patch({ fuzzy })} disabled={!applies.fuzzy} /> : null}
   </> : <MatchOption label="Match letter case" help="Uppercase and lowercase must match exactly in file paths or URLs." checked={file.caseSensitive} change={file.onCase} />}</SearchPopover>;
   const patternCaption = draft.editor === "syntax" ? `${modes.find(([mode]) => mode === draft.mode)?.[1] ?? "Query syntax"}. Choose Rules to edit a supported query as conditions.` : draft.match === "literal" ? "Exact text, kept as typed: no quotes or escaping needed" : "Regular expression (Go / RE2), checked before searching"
   const reading = searchSentence(draft, { kind, file: file.text, fileCase: file.caseSensitive, workspace: workspaceScope.reading ?? workspaceScope.filters, workspaceLead: workspaceScope.sentenceLead, fixedContext });
@@ -427,7 +429,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
         {orderControl}
         {matchOptions}
         <div className="text-submit-actions">
-          {(textKind ? dirty : file.dirty) ? <p className="text-draft-status" role="status">Changes haven't been searched yet.</p> : null}
+          {(textKind ? dirty : file.dirty) ? <p className="text-draft-status" role="status">Changes have not been searched yet.</p> : null}
           {(textKind ? active : file.active) ? <button type="button" onClick={() => { pending.current?.abort(); if (textKind) onClear(); else file.onClear(); }}>Clear</button> : null}
           <button className="text-search-submit" type="submit" disabled={!!filterError || (textKind ? busy || !compiled.request : !file.text.trim())}><Icon name="search" />{textKind ? busy ? "Checking…" : recordTarget ? "Apply keyword filter" : "Search messages" : "Search"}</button>
         </div>
@@ -435,7 +437,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
     </form>
     <div id={workspaceID} hidden={!workspaceOpen} tabIndex={-1} className="text-workspace-controls" role="region" aria-label="Workspace properties and result layout">
       <div className="text-workspace-editor-heading"><strong>Workspace properties & result layout</strong><button type="button" onClick={() => setWorkspaceOpen(false)}>Done</button></div>
-      <p>Workspace filters select the containers to search. Filters and layout changes apply immediately.</p>
+      <p>Workspace filters choose which workspaces to search. Filter and layout changes apply at once.</p>
       {workspaceScope.editor}
     </div>
   </section></EditorDOMPrefix.Provider>;

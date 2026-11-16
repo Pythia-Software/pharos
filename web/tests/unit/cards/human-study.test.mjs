@@ -73,8 +73,8 @@ test("workspace average joins separate work records at repository plus directory
   const workspaces = [{ id: "a", location: "/repo/worktree/", repository_name: "repo" }, { id: "b", location: "/repo/worktree", repository_name: "repo" }];
   const study = buildHumanStudy("workspace-average", rows, workspaces, 7, now, "UTC");
   assert.equal(study.value, 100);
-  assert.match(study.sampleLabel, /1 workspace directories · 2 conversations/);
-  assert.match(study.detail, /1 written messages lack/);
+  assert.match(study.sampleLabel, /1 workspace directory · 2 conversations/);
+  assert.match(study.detail, /1 written message lacks/);
   const separated = buildHumanStudy("workspace-average", rows.slice(0, 2), [{ ...workspaces[0] }, { ...workspaces[1], repository_name: "other repo" }], 7, now, "UTC");
   assert.equal(separated.value, 50, "same path across different repositories stays separate");
 });

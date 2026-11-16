@@ -82,12 +82,27 @@ runs derive again only the readers that new evidence could link. Each
 conversation with a new tool call, or a new prompt or reply at the top level
 of work that edits files or looks at changes, opens a span from `peerRecheck` (3 hours) before its
 earliest new item to `peerWindow` after its latest; the readers are that
-work's own and those with diff or read calls inside a span. A call whose
-output arrived late leaves its span open-ended. Messages in work that never
+work's own and those with diff or read calls inside a span. A call changed
+in place keeps its rowid, so triggers note its conversation and start in
+`work_peer_links_changed`, and it opens the same span as a new call: one
+whose output arrived late, one deleted, one a replay of the tool ledger
+classified differently, or one whose command that shows changes was added,
+removed or reclassified. Only a call a link can be derived from is noted (an
+edit, a file read, a command that may show changes), and one whose start is
+not a time opens no span. The update triggers name and compare only the
+columns the pass's own statements read (`peerLedgerStatements`), so a replay
+that stores calls again with other columns different (a new ledger version
+usually does, for every conversation) notes nothing. When the conversation
+is deleted with its calls, its family is found by the workspace kept with
+the note and by links left anchored on a message that is gone. Builds before these triggers kept one
+earliest time for the library in `work_peer_links_dirty`; what is left there
+is still read, as an open-ended span. Messages in work that never
 edits or reads a diff (an imported chat, whatever its date) open nothing. A
 day of new work takes 2–11 seconds (every affected reader is read again in
 full). A prompt alone can confirm a review that read nothing new, and links
-whose work joined another family are dropped.
+whose work joined another family are dropped. A read link is anchored on the
+writer's latest write among the lines of the first read that showed them, so
+two rescans of the same data store the same rows.
 
 **Storage**: `work_peer_links`, directed edges between the mirror
 representatives of each family's root workspace, with message anchors and

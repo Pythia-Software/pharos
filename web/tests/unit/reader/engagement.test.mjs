@@ -308,7 +308,7 @@ test("dimensions have one-word display names with their own first letters, and R
 });
 
 test("a turn's hover card says what its header says", () => {
-  const at = "2026-09-20T12:00:00Z", turn = { human: { role: "user", kind: "message", text: "Check the importer again", created_at: at },
+  const at = "2026-09-20T12:00:00Z", turn = { human: { role: "user", kind: "message", text: "Check the importer again", created_at: at, authorship: { spans: [{ category: "typed", start: 0, end: 24 }] } },
     events: [{ kind: "message" }, { kind: "tool_call" }, { kind: "tool_call" }, { kind: "tool_result" }, { kind: "delegation" }, { kind: "message" }] };
   assert.deepEqual(plain(reader.turnCardView(turn, 1)), { title: "Turn 2 · You", at, prompt: "Check the importer again", stats: ["2 replies", "4 activities", "2 tool calls", "1 sub-agent"] });
   // Token usage records are left out of the count, as the turn's header leaves them out (turnActivities is what both count).
@@ -317,6 +317,10 @@ test("a turn's hover card says what its header says", () => {
   assert.equal(reader.turnActivities(metered).length, 5);
   const setup = plain(reader.turnCardView({ human: null, events: [{ kind: "message", created_at: at }] }, 0));
   assert.deepEqual([setup.title, setup.at, setup.prompt, setup.stats[0]], ["Turn 1", at, "Agent setup", "1 reply"]);
+  // A prompt without your writing (a parent agent's, a script's, or not yet classified) is not "You".
+  const relayed = { ...turn, human: { role: "user", kind: "message", text: "Check the importer again", created_at: at } };
+  assert.equal(plain(reader.turnCardView(relayed, 1)).title, "Turn 2 · Prompt");
+  assert.equal(reader.turnTitle(turn, 1), "Turn 2 · You");
 });
 
 test("hovering a stretch lights every annotation over it, end to end", () => {

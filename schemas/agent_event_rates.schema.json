@@ -631,7 +631,7 @@
             },
             {
               "value": "canonical",
-              "label": "Canonical"
+              "label": "Canonical export"
             }
           ]
         }
@@ -693,7 +693,7 @@
     },
     {
       "name": "harness",
-      "label": "Harness",
+      "label": "Agent app",
       "type": "text",
       "group": "Context",
       "select": {
@@ -711,7 +711,7 @@
     },
     {
       "name": "agent_role",
-      "label": "Main agent or subagent",
+      "label": "Main agent or sub-agent",
       "type": "enum",
       "group": "Context",
       "render": "option_label",
@@ -738,7 +738,7 @@
             },
             {
               "value": "subagent",
-              "label": "Subagent"
+              "label": "Sub-agent"
             }
           ]
         }
@@ -789,7 +789,7 @@
     },
     {
       "name": "workspace_id",
-      "label": "Conversation's work ID",
+      "label": "Workspace ID",
       "type": "text",
       "group": "Context",
       "select": {

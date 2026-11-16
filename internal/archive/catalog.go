@@ -443,6 +443,7 @@ func (c *Catalog) Initialize() error {
 		{"tool_calls", "test_failure", "ALTER TABLE tool_calls ADD COLUMN test_failure INTEGER NOT NULL DEFAULT 0"},
 		{"tool_calls", "repo_path", "ALTER TABLE tool_calls ADD COLUMN repo_path TEXT"},
 		{"tool_calls", "wait_kind", "ALTER TABLE tool_calls ADD COLUMN wait_kind TEXT"},
+		{"work_peer_links_changed", "workspace_id", "ALTER TABLE work_peer_links_changed ADD COLUMN workspace_id TEXT"},
 		{"tool_calls", "wait_ended_at", "ALTER TABLE tool_calls ADD COLUMN wait_ended_at TEXT"},
 		{"tool_calls", "wait_status", "ALTER TABLE tool_calls ADD COLUMN wait_status TEXT"},
 		{"tool_calls", "wait_end_source", "ALTER TABLE tool_calls ADD COLUMN wait_end_source TEXT"},
@@ -456,6 +457,8 @@ func (c *Catalog) Initialize() error {
 		{"background_item_runs", "worker_cpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN worker_cpu_seconds REAL"},
 		{"background_item_runs", "gpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN gpu_seconds REAL"},
 		{"background_item_runs", "peak_bytes", "ALTER TABLE background_item_runs ADD COLUMN peak_bytes INTEGER"},
+		{"background_item_runs", "unmeasured", "ALTER TABLE background_item_runs ADD COLUMN unmeasured INTEGER NOT NULL DEFAULT 0"},
+		{"background_cpu_days", "unmeasured", "ALTER TABLE background_cpu_days ADD COLUMN unmeasured INTEGER NOT NULL DEFAULT 0"},
 	} {
 		has, err := c.hasColumn(migration.table, migration.column)
 		if err != nil {
@@ -514,6 +517,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureCompactionBoundaries(); err != nil {
 		return fmt.Errorf("initialize compaction boundaries: %w", err)
+	}
+	if err := c.ensurePeerLinkTriggers(); err != nil {
+		return fmt.Errorf("initialize related conversations' triggers: %w", err)
 	}
 	if err := c.ensureConversationContent(); err != nil {
 		return fmt.Errorf("initialize conversation content: %w", err)

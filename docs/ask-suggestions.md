@@ -44,7 +44,7 @@ A new page therefore needs a question or a decision.
 `{scope}` becomes " in the NAME repository" only when two things hold: the
 signal found most of its evidence in one named repository, and the library
 has at least two named repositories. Otherwise it becomes nothing.
-`{period}` becomes "this week", "this month" or "lately", depending on when
+`{period}` becomes "in the last week", "over the last four weeks" or "lately", depending on when
 the signal's evidence falls.
 
 ## Signals
@@ -58,7 +58,7 @@ signal returns:
 | score | in [0, 1]; 0 means nothing worth asking about |
 | support | how much evidence the score rests on |
 | repository | the repository holding most of the evidence, if one does |
-| period | whether the evidence stands out this week or over the month |
+| period | whether the evidence stands out in the last week or over the last four weeks |
 | lead | one private sentence for the agent |
 
 Each signal requires real support before it scores. For example, failing

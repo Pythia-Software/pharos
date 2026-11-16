@@ -18,20 +18,20 @@ type contentCapability struct {
 // contentCapabilityList is every capability, in the order they are shown.
 // The comment on each names the record field it fills.
 var contentCapabilityList = []contentCapability{
-	{"cwd", "Folder", "The folder the agent worked in."},                                         // WorkspaceRecord.Location
-	{"git_branch", "Git branch", "The branch it worked on."},                                     // WorkspaceRecord.Metadata["branch"]
-	{"model", "Model", "The model that replied."},                                                // Model on conversations and messages
-	{"effort", "Effort", "The reasoning effort chosen."},                                         // Effort on conversations and messages
-	{"speed", "Speed", "Whether a request ran in fast mode. Without it, it counts as standard."}, // Speed and ServiceTier on messages
-	{"message_tokens", "Token usage", "The tokens each request used."},                           // usage records
-	{"tool_calls", "Tool calls", "The tools the agent called, with their input."},                // tool_call messages
-	{"tool_results", "Tool results", "What each tool returned."},                                 // tool_result messages
-	{"reasoning", "Thinking", "The model's reasoning."},                                          // reasoning messages
-	{"timestamps", "Message times", "When each message was sent."},                               // MessageRecord.CreatedAt
-	{"subagents", "Subagents", "Which conversations an agent started."},                          // ConversationRecord.ParentNativeID
-	{"title", "Title", "A name the tool gave the conversation."},                                 // WorkspaceRecord.Title
-	{"harness_version", "Tool version", "The version of the tool."},                              // HarnessVersionFirst and Last
-	{"cost", "Reported cost", "A cost the tool reports. Without one, Pharos prices the tokens."}, // a reported_cost metric
+	{"cwd", "Folder", "The folder the agent worked in."},                                              // WorkspaceRecord.Location
+	{"git_branch", "Git branch", "The branch it worked on."},                                          // WorkspaceRecord.Metadata["branch"]
+	{"model", "Model", "The model that replied."},                                                     // Model on conversations and messages
+	{"effort", "Effort", "The reasoning effort chosen."},                                              // Effort on conversations and messages
+	{"speed", "Speed", "Whether a request ran in fast mode. Without it, it counts as standard."},      // Speed and ServiceTier on messages
+	{"message_tokens", "Token usage", "The tokens each request used."},                                // usage records
+	{"tool_calls", "Tool calls", "The tools the agent called, with their input."},                     // tool_call messages
+	{"tool_results", "Tool results", "What each tool returned."},                                      // tool_result messages
+	{"reasoning", "Thinking", "The model’s reasoning."},                                               // reasoning messages
+	{"timestamps", "Message times", "When each message was sent."},                                    // MessageRecord.CreatedAt
+	{"subagents", "Sub-agents", "Which agent sessions an agent started."},                             // ConversationRecord.ParentNativeID
+	{"title", "Title", "A name the agent app gave the conversation."},                                 // WorkspaceRecord.Title
+	{"harness_version", "Agent app version", "The agent app’s version."},                              // HarnessVersionFirst and Last
+	{"cost", "Reported cost", "A cost the agent app reports. Without one, Pharos prices the tokens."}, // a reported_cost metric
 }
 
 // contentSupport is how much of one capability a provider records.

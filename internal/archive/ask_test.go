@@ -1356,7 +1356,9 @@ func TestAskCLIProcessCancellation(t *testing.T) {
 		for _, name := range []string{"Codex", "Claude", "Antigravity"} {
 			provider := askProvider{ID: name, path: cli, mcp: askMCPServer{Command: "/test/pharos", Args: []string{"mcp"}}, Models: []askModel{{ID: "test-model", Efforts: []string{"Default"}}}}
 			models, err := askDiscoverModels(t.Context(), provider)
-			if models != nil || !errors.Is(err, errProcessIsolationUnsupported) || strings.Contains(err.Error(), "authenticate") {
+			// The sign-in advice of a failed model listing ("Update it and
+			// sign in", "Sign in to agy") must not replace the refusal.
+			if advice := strings.ToLower(fmt.Sprint(err)); models != nil || !errors.Is(err, errProcessIsolationUnsupported) || strings.Contains(advice, "sign in") || strings.Contains(advice, "signed in") {
 				t.Fatalf("%s model discovery = %v, %v", name, models, err)
 			}
 			if _, err := askRunCLI(t.Context(), provider, askSelection{Provider: name, Model: "test-model", Effort: "Default"}, "prompt"); !errors.Is(err, errProcessIsolationUnsupported) {
@@ -1708,7 +1710,7 @@ func TestAskSiteLinkDestinations(t *testing.T) {
 			}
 			return invalidReply(ctx, p, selection, prompt)
 		})
-		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil || !strings.HasSuffix(err.Error(), "try again") {
+		if answer, err := s.answerAsk(t.Context(), askProvider{ID: "Codex"}, askSession{}, "UTC"); err == nil || !strings.HasSuffix(err.Error(), "Try again.") {
 			t.Errorf("%s: %+v accepted: %+v %v", name, destination, answer, err)
 		}
 		if calls != 2 {

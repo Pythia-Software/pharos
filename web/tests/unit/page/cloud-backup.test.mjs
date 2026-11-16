@@ -512,3 +512,21 @@ exit 1
     assert.equal(readFileSync(join(folder,file),'utf8'),'download fixture');
   }
 });
+
+test('removing a destination says what stops, what stays and what still holds the credential', () => {
+  const connected=cloud.removalConfirmation({name:'Offsite copy'},true),draft=cloud.removalConfirmation({name:'Offsite copy'},false);
+  for(const ask of [connected,draft]){
+    assert.match(ask.question,/“Offsite copy”/);
+    assert.equal(ask.confirm,'Remove destination');assert.equal(ask.cancel,'Cancel');
+    assert.ok(ask.done);
+  }
+  // A connected destination loses its uploads and stored credential; the bucket and earlier library backups do not change.
+  assert.match(connected.question,/uploads/i);
+  assert.match(connected.question,/bucket/i);
+  assert.match(connected.question,/credential/i);
+  assert.match(connected.question,/library backups made earlier/i);
+  // A destination that was only configured holds no credential to clear.
+  assert.doesNotMatch(draft.question,/credential|uploads/i);
+  assert.notEqual(draft.done,connected.done);
+  assert.match(cloud.removalConfirmation({name:'  '},false).question,/this destination/);
+});

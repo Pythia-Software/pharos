@@ -241,6 +241,24 @@ test("token usage records are never shown: no category row, no Find match, while
   assert.deepEqual([quiet.shown, quiet.hidden, quiet.hidden_kinds], [3, 1, ["usage"]]);
 });
 
+test("a context sample on an undrawn usage record is reached through the drawn message before it", () => {
+  const usage = id => ({ id, native_id: id, role: "system", kind: "metadata", text: JSON.stringify({ type: "token_count", info: {} }) });
+  const call = id => ({ id, native_id: id, role: "assistant", kind: "tool_call", text: JSON.stringify({ name: "Bash", input: { command: id } }) });
+  const owned = [usage("first"), call("a"), call("b"), usage("context")], order = new Map(owned.map((message, index) => [message, index]));
+  assert.equal(reader.contextJumpAnchor(owned, owned[3], order), owned[2]);
+  assert.equal(reader.contextJumpAnchor(owned, owned[1], order), owned[1], "a drawn message is its own anchor");
+  assert.equal(reader.contextJumpAnchor(owned, owned[0], order), null, "nothing drawn comes before it");
+  // Interleaved agents: each record anchors in its own stream.
+  const reply = (id, parent) => ({ id, native_id: id, role: "assistant", kind: "message", text: id, ...(parent ? { parent_native_id: parent } : {}) });
+  const delegation = { id: "run", native_id: "run", call_id: "call-run", role: "assistant", kind: "delegation", text: JSON.stringify({ name: "Task", input: { prompt: "child" } }) };
+  const nested = (message, parent) => ({ ...message, parent_native_id: parent });
+  const mixed = [reply("main"), delegation, nested(usage("child-first"), "call-run"), reply("child", "call-run"), usage("main-context"), nested(usage("child-context"), "call-run")];
+  const at = new Map(mixed.map((message, index) => [message, index]));
+  assert.equal(reader.contextJumpAnchor(mixed, mixed[4], at), mixed[0], "a main record skips the sub-agent's reply and its run");
+  assert.equal(reader.contextJumpAnchor(mixed, mixed[5], at), mixed[3], "a sub-agent record stays in its run");
+  assert.equal(reader.contextJumpAnchor(mixed, mixed[2], at), delegation, "a sub-agent record with nothing before it falls back to its run");
+});
+
 test("find patterns escape plain terms and respect case", () => {
   assert.equal(transcriptFindPattern("a.b(c)", false, false).test("A.B(C)"), true);
   assert.equal(transcriptFindPattern("a.b(c)", false, false).test("axb(c)"), false);
@@ -422,6 +440,10 @@ test("whole-key presets cover content, highlights, activity and timeline",()=>{
  assert.equal(reader.readerKeyPresetID({level:'all'},all,['labels:C.report'],[],{}),null);
  assert.match(reader.readerKeyLastNote(content),/All content shown.*Text highlighting shown: none.*Timeline elements hidden/);
  assert.match(reader.readerKeyLastNote(quiet),/Hidden: Usage & quota/);
+ // The note names saved exclusions and timeline filters as the Key shows them, not by their stored keys.
+ const edited=reader.readerKeyLastNote({...all,reader_highlight_hidden:['writing','engagement:rights','events:event-friction','labels:C.report','annotation:x'],timeline_visibility:{events:{values:['learning'],excluded:false},modes:{values:['?'],excluded:true}}});
+ assert.match(edited,/Highlight exclusions: Human writing, Engagement labels · Delegation, Agent events · Friction, Message labels · Report, 1 individual annotation\./);
+ assert.match(edited,/Timeline filters: Agent events: only Reactions and learning; Message modes: hidden Uncategorized\./);
  assert.equal(reader.readerKeyPresetValues('last'),null);
  assert.equal(reader.readerKeyPresetValues('unknown'),null);
 });

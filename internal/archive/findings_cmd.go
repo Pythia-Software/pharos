@@ -88,7 +88,7 @@ func runFindingsPreview(catalogPath string, args []string) error {
 		return estimates[candidates[i]].Expected["usd"] > estimates[candidates[j]].Expected["usd"]
 	})
 	writer := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(writer, "PASS\tAFFECTED\tRECENT\tLIVE\tDAYS\tWS\tRATE\t$/MO\tREMOVE\tTAKES\tPERSISTS\tLIKELY\tSCOPE\tTITLE")
+	fmt.Fprintln(writer, "PASS\tAFFECTED\tRECENT\tLIVE\tDAYS\tWS\tRATE\t$/28D\tREMOVE\tTAKES\tPERSISTS\tLIKELY\tSCOPE\tTITLE")
 	verbose := slices.Contains(args, "--verbose")
 	for _, candidate := range candidates {
 		if candidate.stats.Affected < findingCheckpoints[0] {
@@ -137,7 +137,7 @@ func runFindingsCLI(catalog *Catalog, args []string) error {
 	}
 	findings, _ := value["findings"].([]map[string]any)
 	for _, item := range findings {
-		fmt.Printf("%-9s %s\n          %s a month likely, of %s at stake\n", item["state"], item["title"],
+		fmt.Printf("%-9s %s\n          %s per 28 days likely, of %s at stake\n", item["state"], item["title"],
 			dollars(floatOr(mapValueDefault(item["expected"])["usd"])), dollars(floatOr(mapValueDefault(item["impact"])["usd"])))
 	}
 	return nil

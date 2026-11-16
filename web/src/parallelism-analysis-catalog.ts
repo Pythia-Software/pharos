@@ -18,7 +18,7 @@ const measures: Record<string, AnalysisMeasure> = {
   agent_hours: { label: "Agent hours", unit: "hours", format: hours, op: "sum", field: "unit_hours", value: "unit_hours", additive: true, note: "Agent hours count each active agent's time, so two agents working through one hour are two agent hours." },
   active_hours: { label: "Active hours", unit: "hours", format: hours, op: "sum", field: "elapsed_hours", value: "elapsed_hours", additive: true, note: "Active hours are wall time with any agent active. Each record holds its share of that time (one over the agents active at once), so groups add up to the wall time without counting an hour twice." },
   parallel_hours: { label: "Hours with two or more at once", unit: "hours", format: hours, op: "sum", field: "parallel_elapsed_hours", value: "parallel_elapsed_hours", additive: true, note: "Wall time with two or more agents active at once, shared among them as active hours are." },
-  at_once: { label: "Agents at once while active", unit: "agents", format: ratio, op: "sum", ratio: ["unit_ms", "elapsed_ms"], additive: false, note: "Agent time divided by wall time with any agent active, pooled over each group's records: the time-weighted number of agents working together while any is." },
+  at_once: { label: "At once while active", unit: "at once", format: ratio, op: "sum", ratio: ["unit_ms", "elapsed_ms"], additive: false, note: "Agent time divided by wall time with any agent active, pooled over each group's records: the time-weighted number of agents working together while any is." },
   agents: { label: "Agents", unit: "agents", format: count, op: "count_distinct", field: "unit_id", additive: false, note: "Distinct agents active in each group. One active in several groups counts in each." },
 };
 
@@ -36,7 +36,7 @@ export function parallelismAnalysisCatalog(counting?: ParallelismCounting): Anal
     ...measure,
     label: measure.label.replace(/Agent/g, title),
     unit: measure.unit === "agents" ? plural : measure.unit,
-    note: measure.note.replace(/Agent hours/g, `${title} hours`).replace(/agent hours/g, `${noun} hours`).replace(/agents/g, plural).replace(/agent/g, noun),
+    note: measure.note.replace(/Agent time/g, `${title} time`).replace(/Agent hours/g, `${title} hours`).replace(/agent hours/g, `${noun} hours`).replace(/agents/g, plural).replace(/agent/g, noun),
   }]));
   const catalog: AnalysisCatalog = {
     dataset: "parallelism", time: { first: "started_at", last: "started_at" }, measures: namedMeasures,
@@ -65,11 +65,11 @@ export const parallelismCatalogShape = parallelismAnalysisCatalog();
 // that is not what the page believes is saved (another window changed the
 // settings, say). returned lists the distinct settings the records carry.
 export function parallelismSettingsNote(returned: ParallelismSettings[], believed: ParallelismSettings): { note: string; warning?: string } {
-  const describe = ({ counting, gap }: ParallelismSettings) => `count ${counting === "agent" ? "top-level conversations" : "workspaces"} and join turns across gaps up to ${gap} minutes`;
+  const describe = ({ counting, gap }: ParallelismSettings) => `count ${counting === "agent" ? "top-level conversations" : "workspaces"} and ${gap ? `join turns across gaps up to ${gap} ${gap === 1 ? "minute" : "minutes"}` : "do not join turns across gaps"}`;
   // Provider and model belong to a top-level session.
   const agentOnly = believed.counting === "agent" ? "" : " Provider and Model breakdowns require Count by Conversations.";
   if (!returned.length) return { note: `No records in range; records are built with your saved Parallelism settings, which here ${describe(believed)}.${agentOnly}` };
-  const note = `These records ${returned.map(describe).join("; others ")}: the saved Parallelism settings the service built them with.${agentOnly}`;
+  const note = `Built with ${returned.length === 1 ? "your saved" : "saved"} Parallelism settings: ${returned.map(describe).join("; others ")}.${agentOnly}`;
   const differs = returned.some(item => item.counting !== believed.counting || item.gap !== believed.gap);
-  return differs ? { note, warning: `This page believes the saved settings ${describe(believed)}; the records were built with others, perhaps saved in another window. Reload to follow them.` } : { note };
+  return differs ? { note, warning: `This page’s saved settings ${describe(believed)}, but these records were built with others, perhaps saved in another window. Reload the page to match them.` } : { note };
 }

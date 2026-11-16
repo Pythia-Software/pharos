@@ -13,7 +13,7 @@ import { agentEventsAnalysisCatalog } from "./agent-events-analysis-catalog";
 import { agentEventRatesCatalog } from "./agent-event-rates-catalog";
 import { carbonAnalysisCatalog, carbonCatalogShape, type CarbonAssumptions } from "./carbon-analysis-catalog";
 import { habitsAnalysisCatalog } from "./habits-analysis-catalog";
-import { sessionShapeAnalysisCatalog } from "./session-shape-analysis-catalog";
+import { sessionShapeAnalysisCatalog, toolUseAnalysisCatalog, contextAnalysisCatalog } from "./session-shape-analysis-catalog";
 import { outcomesAnalysisCatalog } from "./outcomes-analysis-catalog";
 import { branchAnalysisCatalog } from "./branch-analysis-catalog";
 import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCounting } from "./parallelism-analysis-catalog";
@@ -23,6 +23,7 @@ import { parallelismAnalysisCatalog, parallelismCatalogShape, type ParallelismCo
 // reading and comparing links.
 export const analysisCatalogs: Partial<Record<string, AnalysisCatalog>> = {
   scatter: scatterAnalysisCatalog,
+  tool_use: toolUseAnalysisCatalog, context: contextAnalysisCatalog,
   compaction: compactionAnalysisCatalog, labels:messageLabelsCatalog,
   calls: toolTimeAnalysisCatalog, activity: conversationAnalysisCatalog, tokens: tokenAnalysisCatalog, tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: toolTimeAnalysisCatalog, skills: skillsAnalysisCatalog,
   human: humanAnalysisCatalog, carbon: carbonCatalogShape, parallelism: parallelismCatalogShape, work_hours: habitsAnalysisCatalog, agent_experience: agentEventsAnalysisCatalog, session_shape: sessionShapeAnalysisCatalog, outcomes: outcomesAnalysisCatalog, branches: branchAnalysisCatalog,

@@ -36,6 +36,7 @@ export function optimizePages(): NestedPage[] {
 // Every dashboard has one home; adding a topic requires choosing its section.
 const dashboardGroups: Record<UsageTopic, "People" | "Agents" | "Outcomes"> = {
   activity: "People", human: "People", work_hours: "People", habits: "People",
+  tool_use: "Agents", context: "Agents",
   compaction: "Agents", skills: "Agents", calls: "Agents", tools: "Agents", time: "Agents",
   parallelism: "Agents", mcp: "Agents", agent_experience: "Agents", labels: "Agents", session_shape: "Agents", agent_event_rates: "Agents",
   "thinking-overview": "Agents", "thinking-detail": "Agents",
@@ -125,7 +126,7 @@ export function appSections(settings: readonly NestedPage[], params: URLSearchPa
 
 /** Resolve old analysis links too: opening navigation never rewrites a query. */
 export function appLocation(path: string, params: URLSearchParams) {
-  if (path === "/cards") return { section: "home", current: "/cards" };
+  if (path === "/cards" || path === "/ask") return { section: "home", current: path };
   if (path === "/settings/optimization") return { section: "findings", current: "findings:settings" };
   if (path === logsRoute) return { section: "settings", current: logSourceNavigationID(logSourceFromParams(params)) };
   if (path.startsWith("/findings")) return { section: "findings", current: `${["safety", "fixes"].includes(params.get("optimize_area") ?? "") ? params.get("optimize_area") : "findings"}:${params.get("view") === "settings" ? "settings" : params.get("view") === "table" ? "table" : "dashboard"}` };
@@ -135,10 +136,14 @@ export function appLocation(path: string, params: URLSearchParams) {
     const state = readUsageWorkspace(new URL(canonicalAnalyzeURL(path, params), "http://localhost").searchParams);
     return { section: "analyze", current: `${state.mode}:${state.mode === "dashboards" ? state.topic : state.dataset}` };
   }
-  return { section: path === "/" || path === "/home" || path === "/ask" ? "home" : "library", current: "" };
+  return { section: path === "/" || path === "/home" ? "home" : "library", current: "" };
 }
+
+/** Full-screen Home pages with no sidebar of their own. */
+const homePages: Record<string, string> = { "/cards": "Card Library", "/ask": "Ask Pharos" };
 
 export function appLocationLabel(sections: readonly AppSection[], selected: ReturnType<typeof appLocation>) {
   const section = sections.find(item => item.id === selected.section) ?? sections[0];
-  return { section, page: selected.current === "/cards" ? { id: "/cards", label: "Card Library", href: "/cards" } : nestedPageTrail(section.pages, selected.current).at(-1) };
+  const homePage = homePages[selected.current];
+  return { section, page: homePage ? { id: selected.current, label: homePage, href: selected.current } : nestedPageTrail(section.pages, selected.current).at(-1) };
 }

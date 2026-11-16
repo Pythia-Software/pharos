@@ -1260,7 +1260,7 @@ func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body 
 		names = stringSlice(values)
 	}
 	if !s.acquireManualIngest() {
-		writeError(w, errors.New("a capture or index is already running"), 409)
+		writeError(w, errors.New("Another capture or index is running. Try again when it finishes."), 409)
 		return
 	}
 	variant := "sample"
@@ -1293,12 +1293,16 @@ func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body 
 				})
 			}, names, repair)
 			if summary.Errors > 0 {
-				result.Outcome, result.Detail = "read_error", fmt.Sprintf("%d inputs could not be verified; see verification coverage", summary.Errors)
+				result.Outcome, result.Detail = "read_error", plural(summary.Errors, "input")+" could not be verified. See Verification coverage."
 			} else if summary.Mismatch > 0 {
-				result.Outcome, result.Detail = "mismatch", fmt.Sprintf("%d inputs still mismatch; see verification issues", summary.Mismatch)
+				verb := " still do not match."
+				if summary.Mismatch == 1 {
+					verb = " still does not match."
+				}
+				result.Outcome, result.Detail = "mismatch", plural(summary.Mismatch, "input")+verb+" See the mismatch warning on this page."
 			} else if summary.Deferred > 0 {
 				result.Outcome = "deferred"
-				result.Detail = fmt.Sprintf("%d inputs deferred; see verification coverage", summary.Deferred)
+				result.Detail = plural(summary.Deferred, "input") + " deferred. See Verification coverage."
 			} else {
 				result.Outcome = "passed"
 			}
@@ -1326,7 +1330,7 @@ func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body 
 	}) {
 		end()
 		s.ingestMu.Unlock()
-		writeError(w, errors.New("service stopping"), 503)
+		writeError(w, errServiceStopping, 503)
 		return
 	}
 	writeJSON(w, map[string]any{"run_id": run.ID}, 202)

@@ -83,7 +83,8 @@ export function attentionReferenceAt<T extends AttentionNode>(start: T | null, r
   return null;
 }
 
-const targetNouns: Record<string, string> = { card: "Card", message: "Message", call: "Tool Call", session: "Conversation", row: "Row", section: "Section", control: "Control", safety: "Review" };
+// Title case: the Mac app's context menu reads "Highlight <Noun>".
+const targetNouns: Record<string, string> = { card: "Card", message: "Message", call: "Tool Call", session: "Agent Session", row: "Row", section: "Section", control: "Control", safety: "Notice", "safety-check": "Check", fix: "Fix" };
 export function attentionTargetNoun(reference: string): string { return targetNouns[reference.slice(0, reference.indexOf(":"))] ?? "Element"; }
 
 // Highlighting adds the target as the link's landing (`reveal`) when it has

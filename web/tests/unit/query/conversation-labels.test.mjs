@@ -149,7 +149,7 @@ test('timeline legend keeps specific labels with their parent modes without dupl
  assert.equal(byID('P.request').direct,true);assert.equal(byID('C.report').direct,false);
 });
 
-test('timeline Show and Hide preserve independent hidden values and Show All restores the Key',()=>{
+test('timeline Show and Hide preserve independent hidden values and Show all restores the Key',()=>{
  let state=updateTimelineVisibility({},'events',['choices'],'hide');
  state=updateTimelineVisibility(state,'tools',['error'],'hide');
  assert.equal(timelineValueVisible(state,'events','choices'),false);
@@ -472,7 +472,7 @@ test('Caller origin shares preserve mixed text and use recipient observations as
  assert.deepEqual(authorshipMix(prompt),[{category:'typed',bytes:40},{category:'quoted',bytes:60}]);
 });
 
-test('Caller text positions retain repeated origins and safely normalize missing or invalid composition',()=>{
+test('Text source positions retain repeated origins and safely normalize missing or invalid composition',()=>{
  const prompt=message('mixed','P.request',{authorship:[{category:'typed',bytes:2},{category:'quoted',bytes:6},{category:'typed',bytes:2},{category:'pasted',bytes:NaN},{category:'pasted',bytes:-1}]});
  assert.deepEqual(authorshipSegments(prompt).map(part=>[part.category,part.start,part.end]),[['typed',0,.2],['quoted',.2,.8],['typed',.8,1]]);
  assert.deepEqual(authorshipSegments(message('unknown','P.request')),[{category:'unknown',bytes:1,start:0,end:1}]);
@@ -689,7 +689,7 @@ test('agent events sit at their sentence\'s share of the message span, as messag
 test('a ribbon reports events left out for changed evidence apart from labels still being produced',()=>{
  assert.deepEqual(messageLabelRibbonNotes({truncated:false,pending:false,events_pending:0}),[]);
  assert.deepEqual(messageLabelRibbonNotes({events_pending:2}).map(n=>n.badge),['Events pending']);
- assert.match(messageLabelRibbonNotes({events_pending:1})[0].note,/^Events for 1 conversation are left out until they are rebuilt/);
+ assert.match(messageLabelRibbonNotes({events_pending:1})[0].note,/^Agent events for 1 conversation are left out until they are updated after a change$/);
  assert.deepEqual(messageLabelRibbonNotes({pending:true}).map(n=>n.badge),['Labeling']);
  assert.deepEqual(messageLabelRibbonNotes({truncated:true,pending:true,events_pending:3}).map(n=>n.badge),['Sample','Labeling','Events pending']);
 });

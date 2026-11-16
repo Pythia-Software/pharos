@@ -156,7 +156,10 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 | Library drive end to end (macOS, slow) | `npm --prefix web run test:e2e` (real build, disk image and service) |
 | JS checks before a PR | `npm --prefix web run check` (typecheck, schemas, recipe snapshot, bundle, unit tests) |
 | Python tools | `python3 -m unittest discover -s tools` |
+| Plugin contracts and the SSH importer | `python3 -m unittest discover -s contracts/plugins` and `python3 -m unittest discover -s importers` (need `jsonschema`) |
 | Frontend bundle | `npm --prefix web run build` after any `web/src` or `pricing/*.json` change; outputs are gitignored |
+| Importable kinds | `PHAROS_UPDATE_GOLDEN=1 go test -vet=off -run TestPluginKindsContract ./internal/archive` after changing a kind's `Import`, aliases, capture tables or content capabilities; it rewrites `contracts/plugins/kinds.json`, which the plugin schemas and `ssh_pull.py` are tested against |
+| Platform recipes | `PHAROS_UPDATE_GOLDEN=1 go test -vet=off -run TestPushPlatformsContract ./internal/archive` after changing `pushPlatforms`; it rewrites `contracts/plugins/platforms.json` |
 | Provider golden records | `PHAROS_UPDATE_GOLDEN=1 go test -vet=off -run TestProviderConformance ./internal/archive` after changing what an adapter reads; it rewrites `testdata/ingestion/<kind>.json`, and refuses a change without a new index version (`same-version` overrides) |
 | Recipe snapshot | `npm --prefix web run generate-recipes` after changing card recipes; it rewrites `implemented_recipes` in `docs/homepage-query-cards.json`, which Go's `TestHomeQueryRecipesV2` executes |
 | Site map | Rendered by `npm --prefix web run build` (and before unit tests) when one of its inputs changed: `internal/archive/assets/site-map.json`, `testdata/site-map-cases.json` and the Ask suggestion catalog `internal/archive/assets/ask-suggestions.json`. They are gitignored build outputs, like the bundles; never commit them. `npm --prefix web run generate-site-map` forces a render ([docs/site-map.md](docs/site-map.md), [docs/ask-suggestions.md](docs/ask-suggestions.md)) |
@@ -185,6 +188,10 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   `view-state.test.mjs` keeps one restoration test per URL-state mechanism.
   Known layout bugs are listed in `KNOWN` and run as todo.
   `PHAROS_UI_SCREENSHOTS=dir` saves screenshots; nothing asserts on them.
+  To hunt flakes, `PHAROS_BROWSER_JITTER=100` (with `PHAROS_BROWSER_SEED=n`
+  to replay) delays and reorders stub responses, and
+  `PHAROS_BROWSER_SLOWDOWN=3` throttles the page's CPU; both stretch time
+  limits, so a test's own limit is written as `stretch(ms)`.
   Run the browser tier when you change page markup, CSS, classic scripts or
   focus behaviour, filtered to the files and pages you touched.
 - **Manual only:** on macOS with Xcode Command Line Tools,

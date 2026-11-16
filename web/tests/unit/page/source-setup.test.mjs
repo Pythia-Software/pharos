@@ -5,6 +5,8 @@ import {join} from 'node:path';
 import vm from 'node:vm';
 import {assets} from '../helpers/classic-script.mjs';
 import registry from '../../../../testdata/providers.json';
+import {providerName,rowProviderName,sourceName} from '../../../src/provider-names';
+import {schemas} from '../helpers/recipes.mjs';
 const source=readFileSync(join(assets,'onboarding.js'),'utf8').split('// Source setup UI.')[0];
 const [makeWizard,capabilityRows,captureSettings]=vm.runInNewContext(source+';[createPharosSourceWizard,pharosCapabilityRows,captureClaudeSettings]');
 const create=()=>makeWizard(registry.providers);
@@ -216,7 +218,7 @@ test('a watched Claude export offers retrying only once Pharos has stopped openi
   assert.deepEqual(plain(indexing.actions),['stop']);
   assert.match(watchLine({state:'fetching',phase:'indexing',ingestion:{stage:'capturing'}}).text,/Preserving/);
   assert.match(watchLine({state:'fetching',phase:'indexing',ingestion:{stage:'waiting for catalog'}}).text,/Waiting to save/);
-  assert.equal(watchLine({state:'paused',phase:'indexing',ingestion:{stage:'failed'}}).text,'Ingestion paused');
+  assert.equal(watchLine({state:'paused',phase:'indexing',ingestion:{stage:'failed'}}).text,'Indexing paused');
   assert.equal(watchLine({state:'imported'}).text,'Ready in your library');
   const paused=watchLine({state:'paused',message:'No file arrived.',collected:3,expected:7});
   assert.deepEqual(plain(paused.actions),['retry','stop']);assert.equal(paused.attention,true);assert.equal(paused.detail,'No file arrived.');
@@ -273,4 +275,24 @@ test('source limitations use provider notes and fall back to the source lists',(
   assert.deepEqual(fallback.missing.map(item=>item.label),['Model']);
   assert.deepEqual(fallback.varying.map(item=>item.label),['Title']);
   assert.equal(limits({kind:'unknown'},[]).missing.length,0);
+});
+
+test('pages name sources and providers as the registry does, and keep an unknown key as stored',()=>{
+  for(const provider of registry.providers)assert.equal(sourceName(provider.kind),provider.display_name,provider.kind);
+  for(const [provider,name] of Object.entries(registry.provider_names))assert.equal(providerName(provider),name,provider);
+  // A provider is not its source: Claude Code and Claude.ai are both sources of the provider Claude.
+  assert.deepEqual([providerName('claude'),sourceName('claude'),sourceName('claude-ai')],['Claude','Claude Code','Claude.ai']);
+  assert.deepEqual([providerName('somebody-else'),sourceName('toString'),providerName('')],['somebody-else','toString','']);
+  // A table's static Source and Provider options carry the same names, each in its own key space.
+  let named=0;
+  for(const [dataset,schema] of Object.entries(schemas))for(const field of schema.fields){
+    const name=/(^|_)source_kind$/.test(field.name)?sourceName:field.name==='provider'?providerName:null,values=field.filter?.values;
+    if(!name||values?.source!=='static')continue;
+    for(const option of values.options)if(typeof option!=='string'){assert.equal(option.label,name(option.value),`${dataset}.${field.name} ${option.value}`);named++;}
+  }
+  assert.ok(named>0);
+  assert.equal(rowProviderName({provider:'codex',provider_name:'Codex CLI'}),'Codex CLI','the name a response sends wins');
+  assert.equal(rowProviderName({provider:'vscode-copilot'}),'VS Code Copilot');
+  assert.equal(rowProviderName({provider:''},'Agent'),'Agent');
+  assert.equal(rowProviderName(undefined,'Agent'),'Agent');
 });

@@ -23,7 +23,7 @@ export function usePreviewReload(
     void loadCardPreviews([job], (id, preview, error) => {
       if (controller.signal.aborted) return;
       if (preview) setPreviews(current => ({ ...current, [id]: preview }));
-      if (error) setErrors(current => ({ ...current, [id]: String(error) }));
+      if (error) setErrors(current => ({ ...current, [id]: error instanceof Error ? error.message : String(error) }));
     }, controller.signal, { policy: "live" }).finally(() => {
       if (pending.current.get(job.id) === controller) pending.current.delete(job.id);
     });

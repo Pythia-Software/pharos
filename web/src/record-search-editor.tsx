@@ -12,7 +12,7 @@ export const recordSearchTargets: Record<string, { label: string; field: string 
   writing_messages: { label: "User messages", field: "text" },
   tool_calls: { label: "Tool calls", field: "command" },
   mcp_calls: { label: "MCP calls", field: "arguments_json" },
-  tools: { label: "Tool summaries", field: "tool_name" },
+  tools: { label: "Daily tool summaries", field: "tool_name" },
   skill_usages: { label: "Skill uses", field: "skill_name" },
 };
 export function RecordSearchEditor<Row>({ api, dataset, layout, target = recordSearchTargets[dataset] }: { api: QueryTableApi<Row>; dataset: string; layout?: React.ReactNode; target?: { label: string; field: string } }) {
@@ -28,20 +28,20 @@ export function RecordSearchEditor<Row>({ api, dataset, layout, target = recordS
       <SearchReading parts={["Find ", target.label.toLowerCase(), ...(where.length ? [" where ", ...describeWhere(fields, where).flatMap((clause, i) => [...(i ? [" and "] : []), ...clause])] : [])]} empty={!where.length} />
       <div className="text-query-frame">
         <div className="text-query-conditions">
-          <div className="text-group-heading text-query-heading"><span className="text-join">Find</span><strong className="record-search-target">{target.label}</strong><SearchHelp label="Record search">Conditions match the records in this table. Rows, counts, and charts use the same applied filters. Available operators depend on the selected field. Message proximity and message-type search belong in Library.</SearchHelp></div>
+          <div className="text-group-heading text-query-heading"><span className="text-join">Find</span><strong className="record-search-target">{target.label}</strong><SearchHelp label="Record search">Conditions filter the rows of this table. Counts and charts use the same filters. The operators offered depend on the field. Message proximity and message-type search are on the Search page.</SearchHelp></div>
           {where.length ? <SearchFilters fields={fields} where={where} onChange={change} lead="with" /> : <div className="text-condition"><span className="text-join" aria-hidden="true" /><p className="record-search-empty">All {target.label.toLowerCase()}. Add a condition to narrow them.</p></div>}
         </div>
         <div className="text-query-tools"><AddFieldCondition fields={fields} first={target.field} onAdd={clause => setWhere([...where, clause])} /></div>
       </div>
       <div className="text-editor-messages">{issue ? <p role="alert" className="text-editor-error">{issue}</p> : null}</div>
       <div className="text-editor-footer">
-        <SearchOrderControl catalogue={fields} subject={target.label.toLowerCase()} order={order.length ? order : api.defaults.orderBy} onChange={setOrder} />
+        <SearchOrderControl catalogue={fields} order={order.length ? order : api.defaults.orderBy} onChange={setOrder} />
         <div className="text-submit-actions">
-          {dirty ? <p className="text-draft-status" role="status">Changes haven't been searched yet.</p> : null}
+          {dirty ? <p className="text-draft-status" role="status">Changes have not been searched yet.</p> : null}
           {where.length ? <button type="button" onClick={() => setWhere([])}>Clear</button> : null}
           <button type="submit" className="text-search-submit" disabled={!valid}><Icon name="search" />Search {target.label.toLowerCase()}</button>
         </div>
-        {layout ? <ViewDisclosure viewKey={`query:${dataset}:layout`} summary="Columns, metrics & saved queries">{layout}</ViewDisclosure> : null}
+        {layout ? <ViewDisclosure viewKey={`query:${dataset}:layout`} summary="Columns, metrics and saved views">{layout}</ViewDisclosure> : null}
       </div>
     </form>
   </section>;

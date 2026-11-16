@@ -217,7 +217,7 @@ func ExportCapture(ctx context.Context, root, host, source, outbox string) (Capt
 	}
 	defer stage.Close()
 
-	envelope, err := stageCaptureExport(ctx, rootDir, hostDir, sourceDir, stage, host, source)
+	envelope, err := stageCaptureExport(ctx, rootDir, hostDir, sourceDir, exportStageSink{stage}, host, source)
 	if err != nil {
 		return CaptureExport{}, err
 	}
@@ -764,9 +764,34 @@ func exportSegmentProblem(segment string) string {
 	return ""
 }
 
-// stageCaptureExport reads the frozen capture and copies its declared
-// closure into stage, writing the envelope last.
-func stageCaptureExport(ctx context.Context, rootDir, hostDir, sourceDir, stage *exportDir, host, source string) (CaptureExport, error) {
+// exportSink receives an export's files as the frozen capture is read.
+// ExportCapture's sink is a staging directory; capture-push's cuts the same
+// bytes into chunks and writes nothing to disk.
+type exportSink interface {
+	mkdir(rel string) error
+	writeFile(rel string, data []byte) error
+	// create returns where a member's stored bytes go. Close ends the member.
+	create(rel string, st exportStat) (io.WriteCloser, error)
+	// known returns the stored-byte digest of a member this sink has already
+	// read as exactly this file (same device, inode, size and modification
+	// time), so it need not be read again. A staging directory knows none.
+	known(rel string, st exportStat) (sha256 string, ok bool)
+}
+
+type exportStageSink struct{ stage *exportDir }
+
+func (s exportStageSink) mkdir(rel string) error { return mkdirExport(s.stage, rel) }
+func (s exportStageSink) writeFile(rel string, data []byte) error {
+	return writeExportFile(s.stage, rel, data)
+}
+func (s exportStageSink) create(rel string, _ exportStat) (io.WriteCloser, error) {
+	return createExportFile(s.stage, rel)
+}
+func (exportStageSink) known(string, exportStat) (string, bool) { return "", false }
+
+// stageCaptureExport reads the frozen capture and sends its declared closure
+// to sink, the envelope last.
+func stageCaptureExport(ctx context.Context, rootDir, hostDir, sourceDir *exportDir, sink exportSink, host, source string) (CaptureExport, error) {
 	if err := checkNoHistoryBackfill(rootDir); err != nil {
 		return CaptureExport{}, err
 	}
@@ -798,7 +823,7 @@ func stageCaptureExport(ctx context.Context, rootDir, hostDir, sourceDir, stage 
 	}
 
 	for _, dir := range c.dirs {
-		if err = mkdirExport(stage, dir); err != nil {
+		if err = sink.mkdir(dir); err != nil {
 			return CaptureExport{}, err
 		}
 	}
@@ -809,7 +834,7 @@ func stageCaptureExport(ctx context.Context, rootDir, hostDir, sourceDir, stage 
 		rel  string
 		data []byte
 	}{{path.Join(captureExportCaptures, host, captureHostName), hostRaw}, {manifestPath, manifestRaw}} {
-		if err = writeExportFile(stage, meta.rel, meta.data); err != nil {
+		if err = sink.writeFile(meta.rel, meta.data); err != nil {
 			return CaptureExport{}, err
 		}
 		sum := sha256.Sum256(meta.data)
@@ -822,11 +847,21 @@ func stageCaptureExport(ctx context.Context, rootDir, hostDir, sourceDir, stage 
 	}
 	sources := map[string]exportStat{}
 	copied := map[string]string{}
+	known := map[string]bool{}
 	for _, rel := range c.members {
 		if err = exportHook("copy", rel); err != nil {
 			return CaptureExport{}, err
 		}
-		file, st, err := copyExportMember(ctx, sourceDir, stage, c.prefix, rel, c.claims[rel], present[rel], budget)
+		if digest, ok := sink.known(c.prefix+rel, present[rel]); ok {
+			// Read and checked by this sink before, as this very file.
+			if budget.stored = addBounded(budget.stored, present[rel].Size, captureExportLimits.Stored); budget.stored < 0 {
+				return CaptureExport{}, fmt.Errorf("%w: the export exceeds %d stored bytes", errCaptureExportScope, captureExportLimits.Stored)
+			}
+			sources[rel], known[rel] = present[rel], true
+			envelope.Files = append(envelope.Files, CaptureExportFile{Path: c.prefix + rel, Size: present[rel].Size, SHA256: digest})
+			continue
+		}
+		file, st, err := copyExportMember(ctx, sourceDir, sink, c.prefix, rel, c.claims[rel], present[rel], budget)
 		if err != nil {
 			return CaptureExport{}, err
 		}
@@ -854,6 +889,16 @@ func stageCaptureExport(ctx context.Context, rootDir, hostDir, sourceDir, stage 
 	}
 	buffer := make([]byte, 1<<20)
 	for _, rel := range c.members {
+		if known[rel] {
+			again, ok, err := sourceDir.statPath(rel)
+			if err != nil {
+				return CaptureExport{}, err
+			}
+			if !ok || !again.sameFile(sources[rel]) {
+				return CaptureExport{}, fmt.Errorf("%s changed while it was exported", rel)
+			}
+			continue
+		}
 		if err = recheckExportMember(ctx, sourceDir, rel, sources[rel], copied[rel], buffer); err != nil {
 			return CaptureExport{}, err
 		}
@@ -869,7 +914,7 @@ func stageCaptureExport(ctx context.Context, rootDir, hostDir, sourceDir, stage 
 	if err != nil {
 		return CaptureExport{}, err
 	}
-	if err = writeExportFile(stage, captureExportEnvelope, append(data, '\n')); err != nil {
+	if err = sink.writeFile(captureExportEnvelope, append(data, '\n')); err != nil {
 		return CaptureExport{}, err
 	}
 	return envelope, nil
@@ -1200,7 +1245,7 @@ type exportBudget struct{ stored, decoded int64 }
 // open handle, hashing exactly the bytes it copies and checking them against
 // the manifest's claim, and requires the source file to be the one listed
 // and unchanged throughout.
-func copyExportMember(ctx context.Context, sourceDir, stage *exportDir, prefix, rel string, claim capturedVersion, listed exportStat, budget *exportBudget) (CaptureExportFile, exportStat, error) {
+func copyExportMember(ctx context.Context, sourceDir *exportDir, sink exportSink, prefix, rel string, claim capturedVersion, listed exportStat, budget *exportBudget) (CaptureExportFile, exportStat, error) {
 	f, before, err := sourceDir.openReadFile(rel)
 	if err != nil {
 		return CaptureExportFile{}, before, err
@@ -1209,7 +1254,7 @@ func copyExportMember(ctx context.Context, sourceDir, stage *exportDir, prefix, 
 	if before.Dev != listed.Dev || before.Ino != listed.Ino {
 		return CaptureExportFile{}, before, fmt.Errorf("%s changed while it was exported", rel)
 	}
-	dst, err := createExportFile(stage, prefix+rel)
+	dst, err := sink.create(prefix+rel, before)
 	if err != nil {
 		return CaptureExportFile{}, before, err
 	}

@@ -143,7 +143,7 @@ function initAskPromptEditor(element,{onInspect}={}){
   function makeChip(chip){
     chips.set(chip.id,{...chip});
     const node=askPromptChipNode(chip,{onInspect,onRemove:removeChip});node.draggable=true;node.tabIndex=0;
-    node.setAttribute('role','group');node.setAttribute('aria-label',chip.label+' context. Drag to move, or use Alt and arrow keys.');
+    node.setAttribute('role','group');node.setAttribute('aria-label',chip.label+' context. Drag to move, or use Option (Alt) and arrow keys.');
     node.addEventListener('keydown',event=>{
       if(event.target!==node)return;
       if(event.key==='Enter'){event.preventDefault();node.querySelector('.pharos-context-inspect').click();}

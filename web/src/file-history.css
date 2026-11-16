@@ -76,6 +76,7 @@ main > #files.view.active:has(.files-with-tree) { max-width: none; padding: 0; h
 .files-checkout-candidates { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; padding: 0; list-style: none; }
 .files-checkout-candidates button { max-width: 100%; text-align: left; overflow-wrap: anywhere; }
 .files-checkout-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.files-checkout-confirm { margin-top: 12px; }
 .files-checkout-form input { flex: 1 1 240px; min-width: 0; height: 30px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: var(--fs-sm) ui-monospace, SFMono-Regular, monospace; }
 
 .files-tabs { display: flex; flex-wrap: wrap; gap: 2px 4px; margin: 0 0 14px; border-bottom: 1px solid var(--line); }

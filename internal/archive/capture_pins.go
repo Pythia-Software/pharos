@@ -423,7 +423,7 @@ func waitCaptureLock(ctx context.Context, host string, acquire func() (*os.File,
 			waiting = true
 			reportWork(ctx, captureWaitPhase(host), "", 0, -1)
 			// After the report, which mirrors a new step into op.
-			op.Block("capture-running", "the capture on "+defaultString(host, "another Mac"))
+			op.Block("capture-running", "the capture on "+defaultString(host, "another Mac")+" to finish")
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
