@@ -87,6 +87,15 @@ func (cache *labelerProbeCache) probe(ctx context.Context, settings LabelerSetti
 	return result
 }
 
+// killLabeler kills runner's workers, as a stopped run does. What they used
+// is read first: a process's counters are gone once it exits.
+func (c *Catalog) killLabeler(runner *labelrt.Runner) {
+	if c.ops != nil {
+		c.ops.cpu.observeLeases(runner.Pool().PIDs())
+	}
+	c.labelers.Kill(runner)
+}
+
 type labelerWorkerObservation struct {
 	key   string
 	ready func() labelrt.WorkerInfo

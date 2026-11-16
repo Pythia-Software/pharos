@@ -4,10 +4,10 @@ import type { LibrarySearchKind } from "./text-search-editor";
 import { Icon } from "./icons";
 import "./explore-search.css";
 
-const targets: { kind: LibrarySearchKind; label: string }[] = [
-  { kind: "text", label: "Messages" },
-  { kind: "file", label: "Files" },
-  { kind: "url", label: "URLs" },
+const targets: { kind: LibrarySearchKind; label: string; noun: string }[] = [
+  { kind: "text", label: "Messages", noun: "message" },
+  { kind: "file", label: "Files", noun: "file" },
+  { kind: "url", label: "URLs", noun: "URL" },
 ];
 
 // A host-owned content condition in the native builder. QueryFilterRow still
@@ -24,7 +24,8 @@ export function ExploreSearch({ kind, active, summary, error, onClear, children 
   const [open, setOpen] = useState(Boolean(error));
   const [draftKind, setDraftKind] = useState(kind);
   const invoker = useRef<HTMLElement | null>(null);
-  const label = targets.find(target => target.kind === kind)?.label ?? "Messages";
+  const target = targets.find(target => target.kind === kind) ?? targets[0];
+  const label = target.label;
   const edit = (event: React.MouseEvent<HTMLButtonElement>, next = kind) => {
     invoker.current = event.currentTarget;
     setDraftKind(next);
@@ -35,7 +36,7 @@ export function ExploreSearch({ kind, active, summary, error, onClear, children 
       <div className="qt-qb-section-header"><span className="qt-qb-kw">search in</span></div>
       <div className="explore-content-controls">
         {active || error ? <>
-          <button type="button" className="qt-btn explore-content-chip" onClick={event => edit(event)} aria-label={`Edit ${label.toLowerCase()} search`}>
+          <button type="button" className="qt-btn explore-content-chip" onClick={event => edit(event)} aria-label={`Edit ${target.noun} search`}>
             <Icon name="search" /><strong>{label}</strong><span>{error ? "Search needs attention" : summary}</span><Icon name="edit" />
           </button>
           <button type="button" className="qt-link-btn" aria-label="Remove content search" onClick={onClear}><Icon name="close" /></button>
@@ -44,7 +45,7 @@ export function ExploreSearch({ kind, active, summary, error, onClear, children 
         </>}
       </div>
     </div>
-    {open ? <ModalSurface title="Search within this workspace" onClose={() => setOpen(false)} returnFocus={invoker.current} className="qt-modal explore-search-modal" initialFocus="textarea, input:not([type=checkbox])">
+    {open ? <ModalSurface title="Search messages, files and URLs" onClose={() => setOpen(false)} returnFocus={invoker.current} className="qt-modal explore-search-modal" initialFocus="textarea, input:not([type=checkbox])">
       <div className="qt-overlay-body">{children(() => setOpen(false), draftKind, setDraftKind)}</div>
     </ModalSurface> : null}
   </>;

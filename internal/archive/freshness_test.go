@@ -541,7 +541,7 @@ func TestFreshnessAfterAutomaticIndexSchedulesAnalyses(t *testing.T) {
 		}
 	}
 	group := summaryGroup(t, summarizeFreshness(rows), "analyses")
-	if group.State != freshBehind || group.Short != shortManual || group.Text != "behind, "+nextManualIndex || !group.Shown || !strings.Contains(group.Tooltip, "waits for Update everything now") {
+	if group.State != freshBehind || group.Short != shortManual || group.Text != "behind, "+nextManualIndex || !group.Shown || !strings.Contains(group.Tooltip, "waits for Index changes now") {
 		t.Fatalf("the summary says analyses wait for the next manual index: %+v", group)
 	}
 
@@ -1005,7 +1005,7 @@ func TestUpgradeCountKeepsTheNewerAnswer(t *testing.T) {
 	if pending := upgradeCountPending(t, stored(), "tools"); pending != 1 {
 		t.Fatalf("a new conversation was not counted: tools pending %d", pending)
 	}
-	f.exec(fmt.Sprintf(`INSERT INTO tool_ledger_state(conversation_id,version,tool_calls,updated_at) VALUES('c2',%s,0,'2026-10-27')`, sqlQuote(toolLedgerVersion)))
+	f.exec(fmt.Sprintf(`INSERT INTO tool_ledger_state(conversation_id,version,tool_calls,updated_at) VALUES('c2',%s,0,'2026-10-27')`, sqlQuote(toolLedgerVersionFor("claude", "claude"))))
 	f.catalog.refreshUpgradeCount(context.Background())
 	if pending := upgradeCountPending(t, stored(), "tools"); pending != 0 {
 		t.Fatalf("a ledger written since was not counted: tools pending %d", pending)

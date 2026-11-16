@@ -64,9 +64,9 @@ export function CalendarChart({ data, actor, weeks, weekends, selected = "", onS
 }
 
 function dayTitle(day: HabitsDay, actor: StreakActor) {
-  const what = actor === "you" ? `${formatHours(day.you.engaged_ms)} engaged, ${day.you.messages} messages`
+  const what = actor === "you" ? `${formatHours(day.you.engaged_ms)} engaged, ${day.you.messages.toLocaleString()} typed message${day.you.messages === 1 ? "" : "s"}`
     : actor === "agents" ? `${formatHours(day.agents_ms)} of agents you started`
-    : `${day.automated.turns} automatic agent runs`;
+    : `${day.automated.turns.toLocaleString()} automatic turn${day.automated.turns === 1 ? "" : "s"} started`;
   return `${formatDay(day.day)}: ${what}${day.vacation ? " · vacation" : day.excused ? " · not counted" : ""}`;
 }
 
@@ -86,7 +86,7 @@ export function PunchcardChart({ data, view, fit }: { data: HabitsSummary; view:
     rows: views.map((actor, index) => ({ label: punchcardViews.find(([id]) => id === actor)?.[1] ?? actor,
       value: `${Math.round(grids[index][weekday][hour])} min/week`, color: hourOfDayColor(hour),
       actors: actor === "agents" ? ["with_you", "unattended"] : [actor] as PunchcardActor[],
-    })), detail: `${view === "difference" ? `Difference: ${Math.round(value)} min/week. ` : ""}${formatDay(data.punchcard.from)} to ${formatDay(data.punchcard.to)} · ${data.punchcard.weeks[weekday][hour]} occurrences`,
+    })), detail: `${view === "difference" ? `Difference: ${Math.round(value)} min/week. ` : ""}${formatDay(data.punchcard.from)} to ${formatDay(data.punchcard.to)} · this hour occurs ${data.punchcard.weeks[weekday][hour]} time${data.punchcard.weeks[weekday][hour] === 1 ? "" : "s"} in the range`,
   }] : []));
   const bySlot = new Map(points.map(point => [point.key, point]));
   return <HabitsChartInspection chart="habits-punchcard" data={data} points={points} fit={Boolean(fit)}>{mark => <svg width={width} height={height} role={fit ? "img" : "group"} aria-label={`Punchcard of ${punchcardViews.find(([id]) => id === view)?.[1]}`}>
@@ -122,7 +122,7 @@ export function DaysChart({ data, count = 28, fit }: { data: HabitsSummary; coun
   const y = (hours: number) => top + (hours / span) * (height - top);
   const clock = (hours: number) => formatClock(hours + data.settings.dayStart);
   const points: HabitChartPoint[] = days.map(day => ({ key: day.day, heading: formatDay(day.day), selection: { day: day.day }, rows: [
-    { label: "Engaged time", value: `${day.engagedHours.toFixed(1)} h`, color: "var(--sea)", actors: ["you"] },
+    { label: "Engaged time", value: formatHours(day.engagedHours * 3_600_000), color: "var(--sea)", actors: ["you"] },
     { label: "Engaged blocks", value: String(day.blockCount) },
     { label: "First engaged", value: day.start === undefined ? "—" : clock(day.start) },
     { label: "Last engaged", value: day.end === undefined ? "—" : clock(day.end) },
@@ -131,7 +131,7 @@ export function DaysChart({ data, count = 28, fit }: { data: HabitsSummary; coun
     {[0, 6, 12, 18, 24].filter(hours => hours <= span).map(hours => <g key={hours}><line x1={left - 4} x2={width} y1={y(hours)} y2={y(hours)} className="habits-grid" /><text x={0} y={y(hours) + 4} className="habits-axis">{clock(hours)}</text></g>)}
     {days.map((day, index) => day.start !== undefined && day.end !== undefined ? <g key={day.day} {...mark(points[index])} className={day.vacation ? "habits-excused" : undefined}>
       <rect x={x(index)} y={y(day.start)} width={bar} height={Math.max(2, y(day.end) - y(day.start))} rx={2} className="habits-span">
-        {fit ? <title>{`${formatDay(day.day)}: ${clock(day.start)} to ${clock(day.end)}, ${day.engagedHours.toFixed(1)} h engaged in ${day.blockCount} ${day.blockCount === 1 ? "block" : "blocks"}`}</title> : null}</rect>
+        {fit ? <title>{`${formatDay(day.day)}: ${clock(day.start)} to ${clock(day.end)}, ${formatHours(day.engagedHours * 3_600_000)} engaged in ${day.blockCount} ${day.blockCount === 1 ? "block" : "blocks"}`}</title> : null}</rect>
       {day.blocks.map((piece, part) => <rect key={part} x={x(index)} y={y(piece.start)} width={bar} height={Math.max(1, y(piece.end) - y(piece.start))} style={{ fill: piece.color }} pointerEvents="none" />)}
     </g> : null)}
   </svg>}</HabitsChartInspection></div>;

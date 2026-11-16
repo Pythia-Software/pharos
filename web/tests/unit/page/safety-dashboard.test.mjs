@@ -49,7 +49,7 @@ test("a check is Recent when a notice was seen in the last three days", () => {
 
 test("danger ranks high checks first", () => {
   const checks = safetyDashboardChecks([
-    notice("p1", { rule: "process", title: "Every instance of a program stopped", danger: "low" }), notice("p2", { rule: "process", title: "Every instance of a program stopped", danger: "low" }), notice("p3", { rule: "process", title: "Every instance of a program stopped", danger: "low" }),
+    notice("p1", { rule: "process", title: "Program stopped by name", danger: "low" }), notice("p2", { rule: "process", title: "Program stopped by name", danger: "low" }), notice("p3", { rule: "process", title: "Program stopped by name", danger: "low" }),
     notice("c1", { rule: "credentials", title: "Credentials copied to another location", danger: "high" }),
     notice("d1", { rule: "boundary-delete", title: "Deletion outside the checkout", danger: "medium" }),
   ], "open", "");
@@ -133,7 +133,7 @@ test("check cards lead with what their notices share", () => {
   assert.deepEqual(credentials.resources, [{ name: "gcloud", count: 2 }, { name: "gcloud-config", count: 1 }], "a trailing slash names the same resource");
   assert.deepEqual([credentials.first_seen_at, credentials.last_seen_at], ["2026-10-08T00:00:00Z", "2026-11-01T12:00:00Z"]);
   assert.deepEqual([credentials.calls, credentials.fresh, credentials.inPrompt], [4, 1, 1]);
-  const spread = safetyDashboardChecks(["a", "b", "c", "d"].map((id, i) => notice(id, { rule: "process", title: "Every instance of a program stopped", subject: `x · ${id}`, target: `repo:${i}`, target_label: ["pharos", "pharos", "explo", "tl1"][i] })), "open", "")[0];
+  const spread = safetyDashboardChecks(["a", "b", "c", "d"].map((id, i) => notice(id, { rule: "process", title: "Program stopped by name", subject: `x · ${id}`, target: `repo:${i}`, target_label: ["pharos", "pharos", "explo", "tl1"][i] })), "open", "")[0];
   assert.deepEqual([spread.places, spread.morePlaces, spread.locations], [[{ label: "pharos", count: 2 }, { label: "explo", count: 1 }], 1, 4]);
   assert.equal(spread.moreResources, 1);
 });

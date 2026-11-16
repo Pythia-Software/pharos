@@ -2056,7 +2056,7 @@ func TestWorkLibraryFailuresCountOnce(t *testing.T) {
 	h.clock.Advance(5 * time.Second)
 	h.runner.Pump()
 	h.complete("maintenance.parallelism") // u2 commits
-	if q := h.request(id); q.State != opFailed || q.Failed != 1 || q.Detail != "1 units failed" {
+	if q := h.request(id); q.State != opFailed || q.Failed != 1 || q.Detail != "1 unit failed" {
 		t.Fatalf("request %+v", q)
 	}
 }

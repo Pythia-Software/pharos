@@ -73,9 +73,9 @@ export function HumanStudyCover({ study }: { study: HumanStudyPreview }) {
             </g>)}
           </svg>
         </span>
-        <span className="human-study-axis human-study-trend-axis"><span>{history} days ago</span><span>{study.trendLabel ?? `Trailing ${study.lookbackDays}d`} · now</span></span>
+        <span className="human-study-axis human-study-trend-axis"><span>{history === 1 ? "1 day ago" : `${history} days ago`}</span><span>{study.trendLabel ?? `Trailing ${study.lookbackDays}d`} · now</span></span>
       </span>
-    </> : study.kind === "hours" ? <><span className="human-study-hour-bars">{study.rows?.map((row, index) => <span key={row.label} data-chart-tooltip={`${row.label}–${String((index + 1) % 24).padStart(2, "0")}:00\n${number(row.value)} human-written words\n${study.timeZone ?? "Local time"}`} title=""><i style={{ height: `${row.value / rowMax * 100}%`, background: hourOfDayColor(index) }} /></span>)}</span><span className="human-study-axis"><span>00:00</span><span>12:00</span><span>23:00</span></span></>
+    </> : study.kind === "hours" ? <><span className="human-study-hour-bars">{study.rows?.map((row, index) => <span key={row.label} data-chart-tooltip={`${row.label}–${String((index + 1) % 24).padStart(2, "0")}:00\n${number(row.value)} of your words\n${study.timeZone ?? "Local time"}`} title=""><i style={{ height: `${row.value / rowMax * 100}%`, background: hourOfDayColor(index) }} /></span>)}</span><span className="human-study-axis"><span>00:00</span><span>12:00</span><span>23:00</span></span></>
       : <span className="human-study-rows">{study.rows?.map(row => <span className="human-study-row" key={row.label} data-chart-tooltip={study.kind === "profile" ? undefined : study.sampleLabel} title=""><span>{row.label}</span><strong>{percent(row.value)}{row.count !== undefined ? <small> · {row.count}</small> : null}</strong><i><span style={{ width: `${row.value * 100}%` }} /></i></span>)}</span>}
   </span>;
 }

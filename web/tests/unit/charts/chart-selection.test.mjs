@@ -128,10 +128,10 @@ test('mixed category Show and Hide act on all children while retaining outside c
 test('legend menus use the requested visible, hidden and mixed one-line actions',()=>{
  const labels=(visible,hidden,others)=>legendMenuItems(visible,hidden,others).map(item=>item.label);
  assert.deepEqual(labels(1,0,false),['Hide','Hide others']);
- assert.deepEqual(labels(1,0,true),['Hide','Hide others','Show All']);
- assert.deepEqual(labels(0,1,true),['Show','Show and Hide Others','Show All']);
- assert.deepEqual(labels(3,2,true),['Show 2 values','Hide 3 values','Show All']);
- assert.deepEqual(labels(1,1,true),['Show 1 value','Hide 1 value','Show All']);
+ assert.deepEqual(labels(1,0,true),['Hide','Hide others','Show all']);
+ assert.deepEqual(labels(0,1,true),['Show','Show and hide others','Show all']);
+ assert.deepEqual(labels(3,2,true),['Show 2 values','Hide 3 values','Show all']);
+ assert.deepEqual(labels(1,1,true),['Show 1 value','Hide 1 value','Show all']);
  assert.equal(legendMenuItems(3,2,true).at(-1).separator,true);
  for(const item of legendMenuItems(3,2,true))assert.ok(!item.label.includes('\n'));
 });

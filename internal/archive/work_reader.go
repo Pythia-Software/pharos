@@ -51,6 +51,11 @@ func (c *Catalog) workOverviewWithPeers(id string, includeUncertain bool) (map[s
 	if err != nil || result == nil {
 		return result, err
 	}
+	// The page shows display names, never the stored keys (provider_registry.go).
+	nameProviders(result["conversations"].([]map[string]any))
+	if kind := firstString(result["source_kind"]); kind != "" {
+		result["source_name"] = sourceDisplayName(kind)
+	}
 	for _, conversation := range result["conversations"].([]map[string]any) {
 		delete(conversation, "message_access")
 		var prompt *string

@@ -97,9 +97,16 @@ func projectionColumnReads(table string, columns []string, statements []string) 
 // projectionChangeCondition is the WHEN clause of table's UPDATE trigger:
 // true when the update changed a column the statements read.
 func projectionChangeCondition(q queryer, table string, statements []string) (string, error) {
+	condition, _, err := projectionChange(q, table, statements)
+	return condition, err
+}
+
+// projectionChange is projectionChangeCondition with the columns it
+// compares, for a trigger that also names them in UPDATE OF.
+func projectionChange(q queryer, table string, statements []string) (string, []string, error) {
 	rows, err := queryMaps(q, "SELECT name FROM pragma_table_info(?)", table)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	columns := make([]string, 0, len(rows))
 	for _, row := range rows {
@@ -107,13 +114,13 @@ func projectionChangeCondition(q queryer, table string, statements []string) (st
 	}
 	reads := projectionColumnReads(table, columns, statements)
 	if len(reads) == 0 {
-		return "", fmt.Errorf("projection triggers: no column of %s is read", table)
+		return "", nil, fmt.Errorf("projection triggers: no column of %s is read", table)
 	}
 	changed := make([]string, 0, len(reads))
 	for _, column := range reads {
 		changed = append(changed, fmt.Sprintf(`OLD."%s" IS NOT NEW."%s"`, column, column))
 	}
-	return strings.Join(changed, " OR "), nil
+	return strings.Join(changed, " OR "), reads, nil
 }
 
 // triggerDigest identifies a set of trigger statements. A projection stores

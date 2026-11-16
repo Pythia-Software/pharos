@@ -189,7 +189,7 @@ func TestBrokerCleansDeadAppLeases(t *testing.T) {
 // A release for an update refuses before stopping anything while a broker
 // operation runs or a library's service says its work cannot stop in time.
 func TestBrokerUpdateReleaseAsksEveryLibraryFirst(t *testing.T) {
-	refusal := "The update waits for prepare the catalog, which cannot stop in time."
+	refusal := "Pharos is running work that cannot stop in time: prepare the library. Install the update when it has finished."
 	busy := true
 	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/release" || r.URL.Query().Get("for") != "update" || r.Header.Get("Authorization") != "Bearer child-token" {

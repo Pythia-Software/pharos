@@ -169,7 +169,7 @@ func (c *Catalog) RunEngagement(ctx context.Context, labels LabelerSettings, set
 	defer func() {
 		if runner != nil && ctx.Err() != nil {
 			// A stop: batches already queued at the workers must not run on.
-			c.labelers.Kill(runner)
+			c.killLabeler(runner)
 		}
 		release()
 	}()

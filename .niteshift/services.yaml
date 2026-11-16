@@ -1,0 +1,7 @@
+# Uploads this task's agent transcripts to the team's Pharos bucket as they
+# change (docs/capture-push.md). Nothing secret is stored: the script trades
+# the task's identity token for short-lived access.
+services:
+  - name: pharos-push
+    command: sh .niteshift/pharos-push.sh
+    restart: always

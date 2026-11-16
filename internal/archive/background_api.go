@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ var runningItem = map[string]string{
 	"analysis.authorship.refine": "writing-refine", "analysis.tools": "tools", "analysis.authorship": "writing", "analysis.peers": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events", "analysis.engagement": "engagement",
 	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
 	"forge.reviews":   "pull-request-reviews",
-	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup",
+	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup", "capture.import/bucket": "bucket-import",
 }
 
 func itemOfView(view opView) string {
@@ -141,6 +142,24 @@ func clockWords(at time.Time) string {
 	return at.In(time.Local).Format("3:04 PM")
 }
 
+// untilWords is a time ahead of now: its clock time, with "tomorrow" or
+// its weekday when it is not today.
+func untilWords(until, now time.Time) string {
+	until, now = until.In(time.Local), now.In(time.Local)
+	day := func(at time.Time) time.Time {
+		return time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, time.Local)
+	}
+	switch days := int(day(until).Sub(day(now)).Hours()/24 + 0.5); {
+	case days <= 0:
+		return clockWords(until)
+	case days == 1:
+		return "tomorrow at " + clockWords(until)
+	case days < 7:
+		return until.Format("Monday") + " at " + clockWords(until)
+	}
+	return until.Format("Jan 2") + " at " + clockWords(until)
+}
+
 func dailyAtWords(dailyAt string) string {
 	clock, err := time.Parse("15:04", dailyAt)
 	if err != nil {
@@ -158,7 +177,7 @@ func cadenceDescription(cadence string, settings backgroundSettings) string {
 	case cadenceHourly:
 		return fmt.Sprintf("At most once an hour, after %d quiet minutes", int(hourlyQuiet.Minutes()))
 	case cadenceDaily:
-		return "Overnight at " + dailyAtWords(settings.DailyAt) + ", or the first quiet moment after"
+		return "Daily at " + dailyAtWords(settings.DailyAt) + ", or the first quiet moment after"
 	}
 	return ""
 }
@@ -250,7 +269,7 @@ func sourceDomains(config Config, other bool) []string {
 
 // stateLabels are the item and cadence states' words.
 var stateLabels = map[string]string{"running": "Updating now", "queued": "Up next", "failed": "Failed", "missed": "Missed its daily time", "paused": "Paused",
-	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "disabled": "Off", "power": "Waits until on outlet power"}
+	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "disabled": "Off", "power": "Waits until plugged in"}
 
 // stateRank orders states from the one a cadence's row should show first.
 var stateRank = []string{"failed", "running", "missed", "queued", "never", "power", "current", "paused", "manual", "unavailable", "disabled"}
@@ -298,7 +317,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			state = "disabled"
 		case in.requested[item.ID] || queued[item.ID]:
 			state = "queued"
-		case item.ID == "backup" && in.backupDestination == "":
+		case item.ID == "backup" && in.backupDestination == "", item.ID == "bucket-import" && in.bucketImports == 0:
 			state = "unavailable"
 		case plan.Cadence == cadenceManual:
 			state = "manual"
@@ -328,6 +347,11 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			"adaptive": item.Adaptive, "fixed": item.Fixed, "opt_in": item.OptIn, "override": settings.Overrides[item.ID],
 			"state": state, "state_label": stateLabels[state], "as_of": nullable(asOf), "next_at": nullableTime(plan.Next), "error": nullable(problem),
 			"choices": itemChoices(item, settings), "cost": nil, "note": nil}
+		// Where an item that is not set up yet is set up.
+		entry["setup"] = nil
+		if state == "unavailable" && item.ID == "bucket-import" {
+			entry["setup"] = map[string]any{"label": "Set up in Sources", "url": "/settings/sources?disclosures=" + url.QueryEscape(`{"bucketSetup":true}`) + "&reveal=" + url.QueryEscape("section:bucketSetup")}
+		}
 		entry["cadence_moves"] = itemCadenceMoves(item, settings)
 		// The running operation Stop ends, where it can be stopped.
 		entry["stop"] = nil
@@ -417,7 +441,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 		rowsOut = append(rowsOut, map[string]any{"id": cadence, "label": cadenceLabels[cadence], "description": cadenceDescription(cadence, settings),
 			"state": state, "state_label": label, "as_of": nullable(asOf), "next_at": nullableTime(next), "items": ids})
 	}
-	// Update everything now: a manual index, which runs the whole chain.
+	// Index changes now: a manual index, which runs the whole chain.
 	everything, heaviest, heaviestSeconds := 0.0, "", 0.0
 	for _, item := range backgroundItems {
 		if cost, ok := costs[item.ID]; ok && (item.ID == "conversations" || len(item.Stages) > 0) {
@@ -429,14 +453,14 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 	}
 	everythingText := ""
 	if everything > 0 {
-		everythingText = "Everything now takes " + durationWords(everything)
+		everythingText = "Index changes takes " + durationWords(everything)
 		if heaviestSeconds > everything/2 {
 			everythingText += ", mostly “" + heaviest + "”"
 		}
 		everythingText += "."
 	}
 	return map[string]any{"mode": settings.Mode, "paused_until": nullable(settings.PausedUntil), "items": items, "cadences": rowsOut, "unscheduled": unscheduled,
-		"headline": backgroundHeadline(settings, items, order, failed, missed, waiting, in.power), "power": in.power,
+		"headline": backgroundHeadline(settings, items, order, failed, missed, waiting, in.power, at), "power": in.power,
 		"everything": map[string]any{"seconds": everything, "text": everythingText}}
 }
 
@@ -458,19 +482,19 @@ func nullableTime(value time.Time) any {
 func itemSub(item backgroundItem, in backgroundInputs) string {
 	switch item.ID {
 	case "conversations":
-		return "Claude Code, Codex, Conductor and Antigravity"
+		return "Your automatic sources"
 	case "other-sources":
 		return strings.Join(in.otherSources, ", ")
 	case "labels":
 		if in.labelerProblem != "" {
-			return "Labeling can't run: " + in.labelerProblem
+			return "Labeling cannot run: " + in.labelerProblem
 		}
 		if in.labelsWaiting != "" {
 			return "Labeling is " + in.labelsWaiting
 		}
 	case "agent_events":
 		if in.labelerProblem != "" {
-			return "Finding agent events can't run: " + in.labelerProblem
+			return "Finding agent events cannot run: " + in.labelerProblem
 		}
 		if in.agentEventsWaiting != "" {
 			return "Finding agent events is " + in.agentEventsWaiting
@@ -515,14 +539,14 @@ func itemChoices(item backgroundItem, settings backgroundSettings) []map[string]
 		return nil
 	}
 	if item.OptIn {
-		return []map[string]any{{"value": "", "label": "Only when I ask"}, {"value": cadenceDaily, "label": "Daily"}}
+		return []map[string]any{{"value": "", "label": "Only when you ask"}, {"value": cadenceDaily, "label": "Daily"}}
 	}
 	placed := settings.placed(item)
 	choices := []map[string]any{{"value": "", "label": "Automatically (" + strings.ToLower(cadenceLabels[placed]) + ")"}}
 	for _, cadence := range cadences[cadenceRank(placed)+1:] {
 		choices = append(choices, map[string]any{"value": cadence, "label": cadenceLabels[cadence]})
 	}
-	return append(choices, map[string]any{"value": cadenceManual, "label": "Only when I ask"})
+	return append(choices, map[string]any{"value": cadenceManual, "label": "Only when you ask"})
 }
 
 // Every item can move to any of the other columns for a week. These
@@ -539,7 +563,7 @@ func itemCadenceMoves(item backgroundItem, settings backgroundSettings) []map[st
 
 // backgroundHeadline is the panel's first line: what is happening, and what
 // it means for the pages.
-func backgroundHeadline(settings backgroundSettings, items []map[string]any, running []string, failed []map[string]any, missed, waiting bool, power powerState) map[string]any {
+func backgroundHeadline(settings backgroundSettings, items []map[string]any, running []string, failed []map[string]any, missed, waiting bool, power powerState, at time.Time) map[string]any {
 	byID := map[string]map[string]any{}
 	for _, item := range items {
 		byID[item["id"].(string)] = item
@@ -547,16 +571,16 @@ func backgroundHeadline(settings backgroundSettings, items []map[string]any, run
 	switch {
 	case settings.Mode == "paused":
 		until, _ := parseTime(settings.PausedUntil)
-		return map[string]any{"tone": "paused", "title": "Background Processing paused until " + clockWords(until),
-			"text":   "New conversations aren’t being added, and nothing else updates until then.",
+		return map[string]any{"tone": "paused", "title": "Background Processing paused until " + untilWords(until, at),
+			"text":   "New conversations are not being added, and nothing else updates until then.",
 			"action": map[string]any{"label": "Resume now", "path": "/api/background/settings", "body": map[string]any{"mode": "on"}}}
 	case settings.Mode == "manual":
 		return map[string]any{"tone": "paused", "title": "Background Processing is off",
-			"text":   "Nothing updates until you choose Update everything now, or turn Background Processing on.",
+			"text":   "Nothing updates until you choose Index changes now, or turn Background Processing on.",
 			"action": map[string]any{"label": "Turn on", "path": "/api/background/settings", "body": map[string]any{"mode": "on"}}}
 	case len(running) > 0:
 		item := byID[running[0]]
-		return map[string]any{"tone": "busy", "title": item["verb"], "text": firstString(item["feeds"]) + " update when this finishes."}
+		return map[string]any{"tone": "busy", "title": item["verb"], "text": "Updates when this finishes: " + firstString(item["feeds"]) + "."}
 	case len(failed) > 0:
 		item := failed[0]
 		text := "Everything else is current."
@@ -566,12 +590,12 @@ func backgroundHeadline(settings backgroundSettings, items []map[string]any, run
 		if next, ok := parseTime(firstString(item["next_at"])); ok {
 			text += " Pharos tries again at " + clockWords(next) + "."
 		}
-		return map[string]any{"tone": "bad", "title": fmt.Sprintf("%s couldn’t update", item["label"]), "text": text, "tech": item["error"]}
+		return map[string]any{"tone": "bad", "title": fmt.Sprintf("%s could not update", item["label"]), "text": text, "tech": item["error"]}
 	case waiting:
 		return batteryHeadline(settings.Battery, power)
 	case missed:
 		return map[string]any{"tone": "behind", "title": "Catching up on daily work",
-			"text":   "Daily work didn’t run at its time, perhaps because this Mac was asleep or the library was away. It runs at the next quiet moment.",
+			"text":   "Daily work did not run at its time, perhaps because this Mac was asleep or the library was away. It runs at the next quiet moment.",
 			"action": map[string]any{"label": "Run daily work now", "path": "/api/background/run", "body": map[string]any{"cadence": cadenceDaily}}}
 	}
 	return map[string]any{"tone": "good", "title": "Up to date", "text": "Everything is on schedule."}

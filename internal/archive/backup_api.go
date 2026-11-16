@@ -141,8 +141,8 @@ func (s *Server) startBackup(w http.ResponseWriter, body map[string]any) {
 // mirrorBackup follows a backup's progress: its phase and bytes, and the
 // wait for a capture as a block.
 func mirrorBackup(op *Op, run BackupRun) {
-	if run.Phase == "waiting for a capture to finish" {
-		op.Block("capture-running", "a capture on this Mac")
+	if run.Phase == backupWaitingForCapture {
+		op.Block("capture-running", "a capture on this Mac to finish")
 		return
 	}
 	op.Unblock()

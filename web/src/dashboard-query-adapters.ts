@@ -29,7 +29,7 @@ export function thinkingQueryContext(state: ThinkingState, nativeWhere: WhereTer
   return { catalog: thinkingCatalog, now, zone: state.timezone || undefined, where: [...nativeWhere, ...thinkingWhere(state, now)],
     state: { view: overview || state.view === "time" ? "trend" : state.view === "calendar" ? "cycle" : "distribution", metric: state.view === "reasoning" && !overview ? "reasoning" : "wait",
       split: overview && state.groupBy === "none" ? "model" : state.groupBy, period: state.period, hours: state.hours, days: state.days, cycle: "hour", minSamples: 0 },
-    note: `Recorded request inputs for ${overview ? "Waiting" : "Thinking"}. ${state.view === "calendar" && !overview ? `Hourly inputs before ${state.calendarRows} calendar rows and ${state.calendarMetric === "ratio" ? "relative" : "raw"} display; the comparison uses ${state.hourA}:00 and ${state.hourB}:00. ` : ""}Waits are observed post-tool gaps; missing timing remains missing.` };
+    note: `Recorded request inputs for ${overview ? "Waiting" : "Thinking"}. ${state.view === "calendar" && !overview ? `Hourly values, before they are grouped into ${state.calendarRows} rows and shown as ${state.calendarMetric === "ratio" ? "relative" : "raw"} values. The comparison uses ${state.hourA}:00 and ${state.hourB}:00. ` : ""}Waits are observed post-tool gaps; missing timing remains missing.` };
 }
 
 // The ribbon and the lower analysis chart have different scopes. Only an
@@ -37,7 +37,7 @@ export function thinkingQueryContext(state: ThinkingState, nativeWhere: WhereTer
 export function ribbonQueryContext(selection: ConcurrencySelection): DashboardQueryContext {
   const query = parallelismSelectionQuery(selection);
   return { catalog: { ...parallelismAnalysisCatalog(selection.settings.counting), request: { params: { parallelism_settings: JSON.stringify({ counting: selection.settings.counting, gap: selection.settings.gap }) } } }, state: { view: "compare", metric: "agent_hours", split: "repository_name" },
-    where: query.where, supporting: query, note: "Follows the selected Parallelism ribbon, including its range, counting method and gap. Occupancy records touch the selected range." };
+    where: query.where, supporting: query, note: "Follows the selected Parallelism ribbon, including its range, counting method and gap. It includes activity that overlaps the selected range." };
 }
 
 export function habitsQueryContext(data: HabitsSummary, chart: HabitsView, view: HabitsCardView, selected = ""): DashboardQueryContext {

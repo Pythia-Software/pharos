@@ -28,6 +28,6 @@ export function CompactBoxPlot({ buckets, budget, colors, labels, compact = fals
       })}
     </div>
     <div className="query-box-axis">{axis.ticks.map((value, index) => <span key={value} style={{ left: left(value), transform: index === 0 ? "none" : index === axis.ticks.length - 1 ? "translateX(-100%)" : "translateX(-50%)" }}>{formatter ? format(value) : currency ? boxAxisCost(value) : duration || bytes || tokens ? format(value) : boxAxisNumber(value)}</span>)}</div>
-    <small className="query-box-key">Box: middle 50% · line: median · dots: sampled outliers and extremes</small>
+    <small className="query-box-key">Box: middle 50% · line: median · whiskers: range without outliers · dots: sampled outliers and extremes</small>
   </div>;
 }

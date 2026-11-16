@@ -1,7 +1,7 @@
 import React from "react";
 import { ChartTooltip } from "./chart-tooltip";
 import { heatmapBinLabel, trendHeatmap, type Heatmap } from "./dashboard-heatmap-model";
-import { percentileLabel, type AxisBins } from "./dashboard-analysis-model";
+import { percentileLabel, percentileName, type AxisBins } from "./dashboard-analysis-model";
 import "./dashboard-heatmap.css";
 
 // A record distribution over the value's fine bins (distributionBins): each
@@ -33,7 +33,7 @@ export function BinnedHistogram({ histogram, label, noun, format = String, onSel
   const tallest = Math.max(...column.cells);
   const marks = histogram.levels.flatMap((level, index) => { const at = column.levels[index]; return at ? [{ level, x: at.y, value: at.value }] : []; });
   return <ChartTooltip>
-    <div className="dashboard-histogram" role="img" aria-label={`${label}: ${noun} in each range of the value; ${marks.map(mark => `${percentileLabel(mark.level).toLowerCase()} ${format(mark.value)}`).join(", ")}.`}>
+    <div className="dashboard-histogram" role="img" aria-label={`${label}: ${noun} in each range of the value; ${marks.map(mark => `${percentileName(mark.level).toLowerCase()} ${format(mark.value)}`).join(", ")}.`}>
       <div className="dashboard-histogram-area">
         <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
           {histogram.ticks.map(tick => <line key={tick.value} x1={tick.y * width} x2={tick.y * width} y1={0} y2={height} className="dashboard-heatmap-gridline" vectorEffect="non-scaling-stroke" />)}

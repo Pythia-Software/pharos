@@ -15,7 +15,7 @@ export const scatterAnalysisCatalog: AnalysisCatalog = {
     breakdowns: Object.fromEntries(Object.entries(breakdowns).filter(([id]) => key !== "work" || id === "repository_name" || id === "project_name").map(([id, entry]) => [id, entry.fields])),
     note: key === "message" ? "Message points use only measurements recorded for that message; conversation costs and session durations are not assigned to individual messages."
       : key === "work" ? "A workspace pools records with the same recorded workspace identity."
-      : key === "agent_session" ? "One recorded agent session. Words, usage and ledger records belong to their recorded owner. Session Shape covers a conversation's own main stream; embedded helpers without their own transcript have no shape measurements."
+      : key === "agent_session" ? "One recorded agent session. Words, usage and tool index records belong to their recorded owner. Session Shape covers a conversation's own main stream; embedded helpers without their own transcript have no shape measurements."
       : "A conversation is one recorded transcript. Delegated transcripts are separate points; hourly activity metrics describe top-level conversations and their activity.",
   }])),
   records: { label: "Point", plural: "Points", note: "One matched entity and its independently measured values." },

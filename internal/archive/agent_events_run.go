@@ -442,7 +442,7 @@ func (c *Catalog) RunAgentEvents(ctx context.Context, labels LabelerSettings, se
 	release := func() {}
 	stopPool := func() {
 		if runner != nil {
-			c.labelers.Kill(runner)
+			c.killLabeler(runner)
 			release()
 			runner, release = nil, func() {}
 		}

@@ -215,7 +215,7 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 		return
 	}
 	if !s.acquireManualIngest() {
-		writeError(w, errors.New("a capture or index is already running"), http.StatusConflict)
+		writeError(w, errors.New("Another capture or index is running. Try again when it finishes."), http.StatusConflict)
 		return
 	}
 	session, err := beginCapture(config)

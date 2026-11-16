@@ -9,6 +9,7 @@ import { chartSeriesStyle, colorFields, keyColorTheme, metricSeriesColor } from 
 import { orderedValues } from "./session-shape-bands";
 import { isTrendView, changeState, canonicalState, clearView, viewChosen, cycleUnavailable, notTrended, sampleSubject, analysisResult, analysisLabels, analysisFields, comparisonComponentUnavailable, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, analysisViewValue, viewOptions, cycleResult, nativeCycleResult, cycleTotal, noSplit, normalizeAnalysis, scatterUnitChange, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, percentileLimit, distributionBins, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery } from "./analysis-request";
+import { lowerLabel } from "./text-search-model";
 import type { RequestParams } from "./metric-request";
 import { useDatasetRefresh } from "./use-dataset-refresh";
 import { loadFollowing, type ServedReadiness } from "./result-cache";
@@ -53,7 +54,7 @@ export function useAnalysisResult(dataset: string, schema: FieldSchema<any>, que
 export function AnalysisViewControl({ catalog, state, onChange }: { catalog: AnalysisCatalog; state: AnalysisState; onChange: (view: AnalysisView) => void }) {
   const options = viewOptions(catalog, state), blocked = options.find(([view, , reason]) => isTrendView(view) && reason)?.[2];
   const shown = analysisViewValue(catalog, state);
-  return <ChartSelect label="Analysis" value={shown} options={options} note={blocked} title="Over time, or one value per group across the range" onChange={onChange} />;
+  return <ChartSelect label="Analysis" value={shown} options={options} note={blocked} title="How the chart reads the data: over time, compared by group, as a distribution, as a scatter plot, or as an hour or weekday cycle" onChange={onChange} />;
 }
 
 // One control bar for every analysis: each shows only the controls it uses,
@@ -73,8 +74,8 @@ export function AnalysisControls({ catalog, view, asked, chosen = false, set, on
   const measure = catalog.measures[view.metric];
   const trend = isTrendView(view.view), limits = trendLimits(catalog, view);
   const grouped = (view.view === "compare" || view.view === "distribution" || view.view === "scatter") && Object.keys(catalog.units).length > 0;
-  const unitOptions: Array<[string, string, string?]> = [[records, catalog.records.plural, view.view === "scatter" ? "A scatter pairs two measures of each conversation, session or run." : view.view === "distribution" && !measure.value ? "This measure has no value per record." : undefined],
-    ...Object.entries(catalog.units).map(([id, item]): [string, string, string?] => [id, item.plural, view.view === "distribution" && item.recordsAlike && measure.value ? `Each is one ${catalog.records.label.toLowerCase()}, so ${catalog.records.plural} draws the same distribution` : undefined])];
+  const unitOptions: Array<[string, string, string?]> = [[records, catalog.records.plural, view.view === "distribution" && !measure.value ? "This measure has no value per record." : undefined],
+    ...Object.entries(catalog.units).map(([id, item]): [string, string, string?] => [id, item.plural, view.view === "distribution" && item.recordsAlike && measure.value ? `Each is one ${catalog.records.label.toLowerCase()}, so Count each “${catalog.records.plural}” gives the same distribution` : undefined])];
   const minimum = sampleThresholds.includes(view.minSamples) ? sampleThresholds : [...sampleThresholds, view.minSamples].sort((a, b) => a - b);
   const breakdowns: Array<[string, string, string?]> = [...catalog.allowNoSplit === false ? [] : [[noSplit, "None"] as [string, string]], ...Object.entries(catalog.breakdowns).map(([id, item]): [string, string, string?] => [id, item.label, item.views && !item.views.includes(view.view) ? "Use Over time or Compare groups" : item.measures && !item.measures.includes(view.metric) ? "Choose a message-count metric" : item.unavailable ?? (trend || splitValid(catalog, view.unit, id) ? undefined : `Not constant within one ${unit?.label.toLowerCase()}`)]),
     ...trend || view.view === "compare" ? Object.entries(catalog.components ?? {}).map(([id, item]): [string, string, string?] => [id, item.label, trend ? limits.component(id) : comparisonComponentUnavailable(catalog, view, id)]) : []];
@@ -92,7 +93,7 @@ export function AnalysisControls({ catalog, view, asked, chosen = false, set, on
     </>}
     {view.view !== "cycle" ? <ChartSelect label={view.view === "scatter" ? "Color by" : "Breakdown"} value={view.split} options={breakdowns} title={trend ? "How each period is divided into series" : undefined}
       onChange={split => set({ split, selection: { values: [], excluded: false }, ...trend ? { seriesLimit: 15 } : {} })} /> : null}
-    {view.view === "compare" && unit ? <ChartSelect label="Combine" value={view.reduce} options={analysisReductions.map(([id]): [AnalysisReduce, string, string?] => [id, reductionLabel(id, measure, unit), id === "total" && !unitTotal(measure) ? `${measure.label} does not add up across ${subjects}` : id === "total" && unit.recordsAlike ? `Each is one ${catalog.records.label.toLowerCase()}: Count each ${catalog.records.plural} shows the same totals` : undefined])} title={`How each group's ${subjects} combine`} onChange={reduce => set({ reduce })} /> : null}
+    {view.view === "compare" && unit ? <ChartSelect label="Combine" value={view.reduce} options={analysisReductions.map(([id]): [AnalysisReduce, string, string?] => [id, reductionLabel(id, measure, unit), id === "total" && !unitTotal(measure) ? `${measure.label} does not add up across ${subjects}` : id === "total" && unit.recordsAlike ? `Each is one ${catalog.records.label.toLowerCase()}, so Count each “${catalog.records.plural}” gives the same totals` : undefined])} title={`How each group's ${subjects} combine`} onChange={reduce => set({ reduce })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Summarize" value={view.reduce} options={[["median", "Distribution"], ["mean", measure.additive ? "Mean" : "Unweighted mean"], ["total", "Total", cycleTotal(measure) ? undefined : `${measure.label} does not add up across ${view.cycle === "hour" ? "hours" : "days"}`]]} title="Each bar summarizes every complete day or hour that falls on it" onChange={reduce => set({ reduce })} /> : null}
     {(view.view === "distribution" || view.view === "compare" && view.compareAs !== "share") && view.split !== noSplit && !catalog.components?.[view.split] ? <ChartSelect label="Minimum" value={String(view.minSamples)} options={minimum.map(value => [String(value), value ? `${value.toLocaleString()} ${sampleSubject(catalog, view)}` : "No minimum"])} title={`Hide groups with fewer ${sampleSubject(catalog, view)}`} onChange={value => set({ minSamples: Number(value) })} /> : null}
     {view.view === "cycle" ? <ChartSelect label="Cycle" value={view.cycle} options={[["hour", "Hour of day", cycleUnavailable(catalog, "hour")], ["weekday", "Day of week", cycleUnavailable(catalog, "weekday")]]} onChange={cycle => set({ cycle })} /> : null}
@@ -108,7 +109,7 @@ export function AnalysisControls({ catalog, view, asked, chosen = false, set, on
   const drawing = <>
     {trend ? <DisplayControl value={view.display} disabled={limits.cumulative} heatmap={{ disabled: limits.heatmap }} onChange={display => set({ display })} /> : null}
     {trend && view.display !== "heatmap" ? <ChartSelect label="Show as" value={view.share ? "share" : view.nonzero ? "nonzero" : "values"} options={[["values", "Values"], ["nonzero", "Values without zeroes"], ["share", "Share of total", limits.share]]}
-      title="Values; values without zeroes, which leaves out periods with nothing drawn and passes lines over a series' zeroes; or each series' share of its period's total" onChange={shown => set({ share: shown === "share", nonzero: shown === "nonzero" })} /> : null}
+      title="Values: as recorded. Values without zeroes: skips empty periods and draws lines across a series’ zeroes. Share of total: each series as a share of its period’s total." onChange={shown => set({ share: shown === "share", nonzero: shown === "nonzero" })} /> : null}
     {view.view === "compare" ? <ChartSelect label="Show as" value={view.compareAs} options={[["bars", "Bars"], ["share", "Share of total", shareable(catalog, { ...view, compareAs: "share" }) ? undefined : "Only additive totals and counts form shares"]]} onChange={compareAs => set({ compareAs })} /> : null}
     {trend ? view.display === "heatmap" ? null : <ScaleControl value={view.scale!} percent={view.share} onChange={scale => set({ scale })} />
       : !(view.view === "compare" && view.compareAs === "share") ? <ChartSelect label={view.view === "scatter" ? "X scale" : "Scale"} value={axis(view.scale)} options={scales} onChange={scale => set({ scale })} /> : null}
@@ -117,7 +118,7 @@ export function AnalysisControls({ catalog, view, asked, chosen = false, set, on
       note={view.rollingOp === "sum" && !(view.display === "heatmap" && measure.heatmapUnit && view.split === noSplit) ? "Trailing total · includes preceding history" : limits.rollingSum && measure.ratio ? "Pooled over the window · includes preceding history" : undefined} /> : null}
     {trend && view.rollingPeriods > 1 && view.display !== "cumulative" && view.display !== "heatmap" ? <ChartSelect label="Window" value={view.rollingOp} options={[["mean", measure.ratio ? "Pooled" : "Average"], ["sum", "Total", limits.rollingSum]]} title="Each point's trailing window: its average per period, or its total" onChange={rollingOp => set({ rollingOp })} /> : null}
     {trend ? <PercentileControl value={view.percentiles} limit={level => percentileLimit(catalog, view, level)} onChange={percentiles => set({ percentiles, norm: undefined })}
-      title={view.display === "heatmap" ? "Lines tracing each period's percentiles, read from its bins" : `Reference lines at levels of the ${view.normPeriods} periods before the latest point, whatever the range`} /> : null}
+      title={view.display === "heatmap" ? "Lines tracing each period's percentiles, read from its bins" : `Reference lines at the mean or percentiles of the ${view.normPeriods} periods before the latest point, regardless of the selected range`} /> : null}
   </>;
   const content = <ControlSections data={data} view={drawing} onReset={chosen ? () => set(clearView) : undefined} />;
   // The trend's chart lays out its own control row.
@@ -128,7 +129,7 @@ const selectionNote = (group: string, unit: AnalysisUnit | undefined, selection:
   (selection.share ? `Your ${group} legend selection is drawn as slices and every other group as Other; shares are of every group in your filters.`
     : `Only your ${group} legend selection is drawn; your filters are unchanged.`)
   + (selection.mapped && unit ? ` Each ${unit.label.toLowerCase()} is counted in its top-level ${group} group, so the selection is shown as the top-level ${group}.` : "")
-  + (selection.late ? ` The selection holds more conditions than one query allows (${MAX_WHERE_CLAUSES} with your filters), so it is drawn from the ${unit ? unit.plural.toLowerCase() : "groups"} the query returns; one beyond its limit is not drawn.` : "")
+  + (selection.late ? ` The selection holds more conditions than one query allows (${MAX_WHERE_CLAUSES} with your filters), so it is drawn from the ${unit ? unit.plural.toLowerCase() : "groups"} the query returns; selected groups beyond that limit are not drawn.` : "")
   + (missing ? ` ${missing.toLocaleString()} selected ${missing === 1 ? "group is" : "groups are"} not among the largest groups returned; any ${missing === 1 ? "value it has is" : "values they have are"} ${selection.share ? "counted in Other" : "not drawn"}.` : "");
 
 // The folded cycle's slots are not dataset fields; name them for the chart,
@@ -159,17 +160,17 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const selected = analysisResult(analysis, result.results);
   let clause: AggregationClause = analysis.clause, entry: AggregationResultEntry | undefined = selected, error = analysis.problem ?? selected?.error ?? result.error, slots = "";
   if (view.view === "cycle" && entry) {
-    const per = view.cycle === "hour" ? "hours" : "days";
+    const per = (count: number) => view.cycle === "hour" ? count === 1 ? "hour" : "hours" : count === 1 ? "day" : "days";
     try {
       if (analysis.native) {
         // Query Table computed the slots; the chart draws them as returned.
         const native = nativeCycleResult(analysis, entry);
-        if (native.slots !== undefined) slots = `${native.slots.toLocaleString()} complete ${per} in ${zone}.`;
+        if (native.slots !== undefined) slots = `${native.slots.toLocaleString()} complete ${per(native.slots)} in ${zone}.`;
       } else {
         const now = Date.now();
         const folded = cycleResult(catalog, view, entry, { from: bounds.from?.getTime(), to: Math.min(bounds.to?.getTime() ?? now, now) }, zone);
         clause = folded.clause; entry = folded.result;
-        slots = `${folded.slots.toLocaleString()} complete ${per} in ${zone}.${folded.earlier ? ` ${folded.earlier.toLocaleString()} earlier recorded ${folded.earlier === 1 ? "date was" : "dates were"} left out: recorded in another time zone, ${folded.earlier === 1 ? "it holds" : "they hold"} only part of a day in your range.` : ""}`;
+        slots = `${folded.slots.toLocaleString()} complete ${per(folded.slots)} in ${zone}.${folded.earlier ? ` ${folded.earlier.toLocaleString()} earlier recorded ${folded.earlier === 1 ? "date was" : "dates were"} left out: recorded in another time zone, ${folded.earlier === 1 ? "it holds" : "they hold"} only part of a day in your range.` : ""}`;
       }
     } catch (failure) { error = failure instanceof Error ? failure.message : String(failure); entry = undefined; }
   }
@@ -217,7 +218,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
         }} /><CreateDashboardCard source={{ catalog, state, where, schema }} /></div>}</DataReadinessEmpty>
     <UsageEstimateNote results={result.results} dataset={dataset} />
-    {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote((catalog.breakdowns[view.split] ?? catalog.components![view.split]).label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}
+    {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote(lowerLabel((catalog.breakdowns[view.split] ?? catalog.components![view.split]).label), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}
       {analysis.selection ? <> <button type="button" className="usage-preset-clear" onClick={() => set({ selection: { values: [], excluded: false } })}>Show every group</button></> : null}
       {analysis.selection && catalog.population ? <> <button type="button" className="usage-preset-clear" onClick={() => {
         // The selection becomes the population, so every other view and breakdown counts it too.
@@ -226,6 +227,6 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
       }}>Make this the population</button></> : null}</p> : null}
     {children}
     <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} context={{ catalog, state: view, where, supporting: analysis.supporting }} />
-    <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" && !analysis.native ? "" : ` Select a ${view.view === "scatter" ? "point" : view.compareAs === "share" ? "slice" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>
+    <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" && !analysis.native ? "" : ` Select a ${view.view === "scatter" ? "point" : view.compareAs === "share" ? "slice" : "bar or box"} to open its ${subjects}.`}</p>
   </section>;
 }

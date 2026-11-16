@@ -1,6 +1,7 @@
 import React from "react";
 import { dataEntities, type DataEntity } from "./data-taxonomy-model";
 import { Icon } from "./icons";
+import { lowerLabel } from "./text-search-model";
 
 type ExampleProps = {
   entity: DataEntity;
@@ -16,7 +17,7 @@ function highlight(entity: DataEntity, term: DataEntity) {
 function ExampleTerm({ term, entity, onSelect, children, className = "", highlightSelection = true, label }: Pick<ExampleProps, "entity" | "onSelect"> & {
   term: DataEntity; children: React.ReactNode; className?: string; highlightSelection?: boolean; label?: string;
 }) {
-  return <button data-view-field="guide_entity" type="button" className={`guide-example-term ${className}${highlightSelection ? highlight(entity, term) : ""}`} aria-label={label ?? `Explain ${dataEntities[term].label.toLowerCase()}`} aria-pressed={entity === term} onClick={() => onSelect(term)}>{children}</button>;
+  return <button data-view-field="guide_entity" type="button" className={`guide-example-term ${className}${highlightSelection ? highlight(entity, term) : ""}`} aria-label={label ?? `Explain ${lowerLabel(dataEntities[term].label)}`} aria-pressed={entity === term} onClick={() => onSelect(term)}>{children}</button>;
 }
 
 function WindowLights() {
@@ -75,7 +76,7 @@ function FinderExample(props: ExampleProps) {
   return <div className="guide-desktop-stage"><div className="guide-native-window guide-finder" aria-label="Finder window"><WindowBar title={applications ? "Applications" : "History locations"} /><div className="guide-finder-body">
     <div className="guide-finder-sidebar"><small>Favorites</small><button type="button" data-view-field="guide_entity" aria-label="Show Applications" aria-pressed={applications} className={applications ? "is-current" : ""} onClick={() => props.onSelect("sources")}><Icon name="compass" />Applications</button><span><Folder />Downloads</span><small>Locations</small><button type="button" data-view-field="guide_entity" aria-label="Show Pharos library" aria-pressed={!applications} className={!applications ? "is-current" : ""} onClick={() => props.onSelect("libraries")}><Icon name="read" />External SSD</button></div>
     {applications ? <ApplicationsContents {...props} /> : <div className="guide-finder-files"><div className="guide-finder-columns"><span>Name</span><span>Location</span></div>{rows.map(row => <ExampleTerm {...props} term={row.term} className="guide-finder-row" key={row.name}><span><Folder file={row.name.endsWith(".zip")} />{row.name}</span><span>{row.location}</span></ExampleTerm>)}</div>}
-  </div><div className="guide-finder-path"><Folder /><span>{applications ? "Macintosh HD › Applications" : "Search results · 3 history locations"}</span>{applications ? <span>{sourceApps.length} items</span> : null}</div></div></div>;
+  </div><div className="guide-finder-path"><Folder /><span>{applications ? "Macintosh HD › Applications" : "Search results · 3 items"}</span>{applications ? <span>{sourceApps.length} items</span> : null}</div></div></div>;
 }
 
 function TaskExample(props: ExampleProps) {
@@ -198,11 +199,11 @@ const captions: Record<Exclude<DataEntity, "machines">, string> = {
   agent_apps: "SomeGPT for Mac is the desktop app running the agent. Its helpers use SomeGPT CLI, shown on their descriptions. They still share the Desktop starting channel of the main conversation.",
   channels: "The Mac window shows that this conversation started in a desktop app. The helpers use a CLI app but keep Desktop as their starting channel. A separately started terminal or browser conversation would have its own channel.",
   models: "The composer’s model selector sets the model and reasoning effort. These settings can change during a session, and helpers may use different settings.",
-  tokens: "Each response has input and output usage. Input can include earlier messages, instructions and tool results. The costs illustrate API usage, separately from a subscription bill.",
+  tokens: "Each response has input and output usage. Input can include earlier messages, instructions and tool results. The costs are estimated API list prices for that usage, not a subscription bill.",
   skills: "“Using search-checks” marks a skill invocation. Its reusable instructions guide how the agent checks search behavior. An invocation alone does not prove the instructions were followed.",
 };
 export function DataGuideExample(props: ExampleProps) {
   const scene = guideSceneForEntity(props.entity);
   const caption = props.entity === "machines" ? null : captions[props.entity];
-  return <figure className="data-guide-example" aria-label={`Illustration of ${dataEntities[props.entity].label.toLowerCase()}`}><div className="guide-example-scene">{scene === "finder" ? <FinderExample {...props} /> : scene === "project" ? <ProjectExample {...props} /> : scene === "task" ? <TaskExample {...props} /> : scene === "machines" ? <MachinesExample {...props} /> : <ChatExample {...props} />}</div>{caption ? <figcaption>{caption}</figcaption> : null}</figure>;
+  return <figure className="data-guide-example" aria-label={`Illustration of ${lowerLabel(dataEntities[props.entity].label)}`}><div className="guide-example-scene">{scene === "finder" ? <FinderExample {...props} /> : scene === "project" ? <ProjectExample {...props} /> : scene === "task" ? <TaskExample {...props} /> : scene === "machines" ? <MachinesExample {...props} /> : <ChatExample {...props} />}</div>{caption ? <figcaption>{caption}</figcaption> : null}</figure>;
 }

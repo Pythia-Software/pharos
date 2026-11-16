@@ -795,7 +795,7 @@ func outcomeWhySQL(w string) string {
 		WHEN so.rework_removed_lines>0 THEN printf('%d %s changed; later workspaces removed %d of the %d lines it added within %d days (transcript).',so.files_changed,
 			` + files + `,so.rework_removed_lines,so.kept_lines,so.rework_days)
 		ELSE printf('%d %s changed; no later workspace removed its lines within %d days (transcript).',so.files_changed,` + files + `,so.rework_days)
-		END FROM session_outcomes so LEFT JOIN session_git sg ON sg.workspace_id=so.workspace_id AND sg.status='checked' WHERE so.workspace_id=` + w + `.id),'Not derived yet.')`
+		END FROM session_outcomes so LEFT JOIN session_git sg ON sg.workspace_id=so.workspace_id AND sg.status='checked' WHERE so.workspace_id=` + w + `.id),'Not worked out yet.')`
 }
 
 // gitCheckSQL is whether local Git was asked about workspace w's session:

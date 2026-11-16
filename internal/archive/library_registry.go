@@ -132,7 +132,7 @@ func readLibraryDescriptor(config Config) (LibraryDescriptor, error) {
 		return d, err
 	}
 	if d.Inode != inode {
-		return d, fmt.Errorf("this is a copied library; use Recover library to create its independent writable identity")
+		return d, errors.New("This is a copied library folder. To use it on its own, restore it as a new library: Settings → Libraries → Restore from a backup…, then choose this folder.")
 	}
 	return d, nil
 }

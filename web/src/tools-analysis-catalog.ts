@@ -18,9 +18,9 @@ const measures: Record<string, AnalysisMeasure> = {
   failures: { label: "Failed calls", unit: "calls", format: count, op: "sum", field: "error_count", additive: true, note: "Calls flagged as errors. A shell command’s non-zero exit can be expected, such as a search with no matches." },
   failure_rate: { label: "Failure rate", unit: "percent", format: percent, op: "sum", ratio: ["error_count", "call_count"], additive: false, note: "Failed calls divided by all calls, pooled over each group's calls rather than averaging daily rates." },
   truncation_rate: { label: "Truncation rate", unit: "percent", format: percent, op: "sum", ratio: ["truncated_count", "call_count"], additive: false, note: "Calls whose recorded result was truncated, divided by all calls, pooled over each group's calls." },
-  time: { label: "Recorded tool time", unit: "ms", format: duration, op: "sum", field: "total_duration_ms", additive: true, note: "Summed recorded durations can overlap and include approval waits. Calls without timing contribute no recorded duration." },
+  time: { label: "Recorded tool time", unit: "ms", format: duration, op: "sum", field: "total_duration_ms", additive: true, note: "Summed recorded durations can overlap and may include approval waits. Calls without timing contribute no recorded duration." },
   mean_time: { label: "Mean timed call duration", unit: "ms", format: duration, op: "sum", ratio: ["total_duration_ms", "timed_count"], additive: false, note: "Total recorded duration divided by calls with timing, pooled over each group's calls. Untimed calls are excluded." },
-  context_added: { label: "Context added", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "result_tokens", additive: true, note: "Tokens added by tool results. These are estimates from retained result text." },
+  context_added: { label: "Context added", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "result_tokens", additive: true, note: "Tokens added by tool results, measured or estimated from retained result text." },
   context_carried: { label: "Context carried", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "carried_tokens", additive: true, note: "Result tokens counted again as later model requests re-read them, until compaction. This measures repeated context consumption." },
 };
 
@@ -50,7 +50,7 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
 const time: TimeFields = { first: "day", last: "day" };
 export const toolsAnalysisCatalog: AnalysisCatalog = {
   dataset: "tools", time, measures, breakdowns, units: {},
-  records: { label: "Daily tool summary", plural: "Daily tool summaries", note: "A daily tool summary is one recorded day's calls of one tool, command, model, project and origin: a daily summary rather than an individual call. Follow a summary's Calls link to its individual calls." },
+  records: { label: "Daily tool summary", plural: "Daily tool summaries", note: "A daily tool summary is one recorded day's calls of one tool, command, model, project and origin: a daily summary rather than an individual call. Follow a summary's Matching calls link to its individual calls." },
   periods: { day: "day", week: "week", month: "month" },
   trend: { metric: "calls", split: "tool_category" }, legacy: projectLegacy(),
   rangeNote: "Tool summaries record whole local days, so the range snaps to whole days: a range starting mid-day counts that whole day.",

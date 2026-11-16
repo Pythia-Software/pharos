@@ -132,7 +132,7 @@
     },
     {
       "name": "main_category",
-      "label": "Mostly",
+      "label": "Main category",
       "type": "enum",
       "group": "Message",
       "render": "authorship_category",
@@ -155,7 +155,7 @@
             },
             {
               "value": "quoted",
-              "label": "Copied"
+              "label": "Copied or quoted"
             },
             {
               "value": "resent",
@@ -171,7 +171,7 @@
             },
             {
               "value": "harness",
-              "label": "Harness"
+              "label": "App instructions"
             },
             {
               "value": "automated",
@@ -217,7 +217,7 @@
             },
             {
               "value": "quoted",
-              "label": "Copied"
+              "label": "Copied or quoted"
             },
             {
               "value": "resent",
@@ -233,7 +233,7 @@
             },
             {
               "value": "harness",
-              "label": "Harness"
+              "label": "App instructions"
             },
             {
               "value": "automated",
@@ -292,7 +292,10 @@
             "Environment context",
             "Project instructions",
             "Plugin recommendations",
-            "Harness context",
+            {
+              "value": "Harness context",
+              "label": "App instructions"
+            },
             "Launched by a command",
             "Sent by a headless claude -p run",
             "Sent by a codex exec run",
@@ -534,7 +537,7 @@
     },
     {
       "name": "machine_words",
-      "label": "Harness and automation words",
+      "label": "App instruction and automation words",
       "type": "number",
       "group": "Other input",
       "render": "number",
@@ -649,7 +652,7 @@
     },
     {
       "name": "harness_words",
-      "label": "Harness words",
+      "label": "App instruction words",
       "type": "number",
       "group": "Other input",
       "render": "number",
@@ -764,7 +767,7 @@
     },
     {
       "name": "title",
-      "label": "Conversation",
+      "label": "Workspace",
       "type": "text",
       "group": "Context",
       "render": "usage_conversation",
@@ -852,7 +855,7 @@
             },
             {
               "value": "claude",
-              "label": "Claude"
+              "label": "Claude Code"
             },
             {
               "value": "chatgpt",
@@ -864,7 +867,7 @@
             },
             {
               "value": "canonical",
-              "label": "Canonical"
+              "label": "Canonical export"
             }
           ]
         }
@@ -914,7 +917,7 @@
             },
             {
               "value": "canonical",
-              "label": "Canonical"
+              "label": "Canonical export"
             }
           ]
         }
@@ -1319,7 +1322,7 @@
     },
     {
       "name": "workspace_id",
-      "label": "Conversation's work ID",
+      "label": "Workspace ID",
       "type": "text",
       "group": "Context",
       "select": {
@@ -1337,7 +1340,7 @@
     },
     {
       "name": "work_id",
-      "label": "Work ID",
+      "label": "Writing workspace ID",
       "type": "text",
       "group": "Context",
       "select": {
@@ -1501,7 +1504,7 @@
         "groupable": true
       },
       "render": "number",
-      "description": "1 on a human message event (a classified user message holding text besides harness instructions and automated prompts); 0 on output events.",
+      "description": "1 on a human message event (a classified user message holding text besides app instructions and automated prompts); 0 on output events.",
       "select": {
         "default": false
       }
@@ -1548,7 +1551,7 @@
     },
     {
       "name": "root_title",
-      "label": "Root conversation",
+      "label": "Top-level conversation",
       "type": "text",
       "group": "Attribution",
       "select": {
@@ -2078,7 +2081,7 @@
     },
     {
       "name": "label",
-      "label": "Specific Label",
+      "label": "Specific label",
       "type": "text",
       "group": "Context",
       "bindings": {
@@ -2101,7 +2104,7 @@
     },
     {
       "name": "family",
-      "label": "General Label",
+      "label": "General label",
       "type": "text",
       "group": "Context",
       "bindings": {
@@ -2236,7 +2239,7 @@
     },
     {
       "name": "source_conversation_id",
-      "label": "Source Conversation Id",
+      "label": "Source conversation ID",
       "type": "text",
       "select": {
         "default": false
@@ -2256,7 +2259,7 @@
     },
     {
       "name": "source_workspace_id",
-      "label": "Source Workspace Id",
+      "label": "Source workspace ID",
       "type": "text",
       "select": {
         "default": false

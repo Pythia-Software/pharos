@@ -213,8 +213,8 @@ func detectOrientation(env *findingEnv) ([]*findingCandidate, error) {
 			name := env.repositories[repository]
 			top := hot[0]
 			return findingCard{Title: fmt.Sprintf("Agents in %s read `%s` before starting work", name, baseName(top)),
-				Explanation: fmt.Sprintf("Before their first edit, agents read %s in %s this month. On average they read %s before starting.",
-					joinWords(backticked(hot[:min(2, len(hot))])), countNoun(stats.Affected, "conversation"), tokensPhrase(stats.Rate)),
+				Explanation: fmt.Sprintf("Before their first edit, agents read %s in %s in the last 28 days. Across all conversations in %s, agents read an average of %s before their first edit.",
+					joinWords(backticked(hot[:min(2, len(hot))])), countNoun(stats.Affected, "conversation"), name, tokensPhrase(stats.Rate)),
 				ImpactNote: countNoun(readers[top], "read") + " of " + baseName(top), Steps: steps, ChartTitle: "Average tokens read before the first edit",
 				Rate: tokensPhrase(stats.Rate)}
 		}
@@ -279,7 +279,7 @@ func detectExploration(env *findingEnv) ([]*findingCandidate, error) {
 			obs.RemovableTokens = max(phase.Carried-phase.InPhase-summary, 0)
 			obs.Removable = env.toolCallCost(conv.Provider, phase.Model, conv.Day, 0, obs.RemovableTokens, 0)
 			obs.At = conv.Started.UTC().Format(timeLayout)
-			candidate.addEvidence(findingHandle{At: obs.At, ConversationID: id, WorkspaceID: conv.WorkspaceID, Where: env.evidenceWhere(conv) + " · " + providerLabel(conv.Provider),
+			candidate.addEvidence(findingHandle{At: obs.At, ConversationID: id, WorkspaceID: conv.WorkspaceID, Where: env.evidenceWhereBy(conv, conv.Provider),
 				Did: thousands(int(phase.Calls)) + " reads, searches, and commands before the first edit", Happened: formatTokens(float64(phase.Carried)) + " tokens carried afterwards"})
 		}
 		candidate.Obs[id] = obs
@@ -299,14 +299,14 @@ func detectExploration(env *findingEnv) ([]*findingCandidate, error) {
 			how = "Codex's spawned agents, Claude's Explore agent"
 		}
 		steps := []findingStep{
-			{Lever: "repo-instructions", Label: "A line in the instructions", Change: fmt.Sprintf("Ask agents to hand broad exploration to a sub-agent that returns a short summary (%s), and to start editing from that summary. Phrase it for the harnesses that do most of the work here, and check each version supports it.", how)},
+			{Lever: "repo-instructions", Label: "A line in the instructions", Change: fmt.Sprintf("Ask agents to hand broad exploration to a sub-agent that returns a short summary (%s), and to start editing from that summary. Phrase it for the agent apps that do most of the work here, and check each version supports it.", how)},
 			{Lever: "repo-tooling", Label: "An exploration skill", Change: "Add a skill or sub-agent definition that explores this repository and returns the files and functions a task touches."},
 		}
 		candidate.Lever = steps[0].Lever
 		candidate.Facts["main_provider"] = main
 		candidate.write = func(candidate *findingCandidate, stats findingStats) findingCard {
 			return findingCard{Title: fmt.Sprintf("Agents in %s explore at length before changing anything", env.repositories[repository]),
-				Explanation: fmt.Sprintf("In %s this month, agents made %d or more reads, searches, and commands before their first edit, and every later request re-read those results. A sub-agent could explore and hand back a summary.",
+				Explanation: fmt.Sprintf("In %s in the last 28 days, agents made %d or more reads, searches, and commands before their first edit, and every later request re-read those results. A sub-agent could explore and hand back a summary.",
 					countNoun(stats.Affected, "conversation"), delegableCalls),
 				ImpactNote: "up to " + tokensPhrase(float64(stats.Tokens)) + " carried", Steps: steps, ChartTitle: "Average tokens carried from exploration before the first edit",
 				Rate: tokensPhrase(stats.Rate)}
@@ -553,7 +553,7 @@ func detectHeavyOutput(env *findingEnv) ([]*findingCandidate, error) {
 			share := heavyRemovable(shape, firstString(item.row["command"]))
 			obs.Removable, obs.RemovableTokens = obs.CostUSD*share, int64(float64(obs.Tokens)*share)
 			candidate.addEvidence(findingHandle{At: obs.At, ConversationID: item.conv.ID, WorkspaceID: item.conv.WorkspaceID, ToolCallID: obs.Unit,
-				MessageID: firstString(item.row["message_id"]), Where: env.evidenceWhere(item.conv) + " · " + providerLabel(provider),
+				MessageID: firstString(item.row["message_id"]), Where: env.evidenceWhereBy(item.conv, provider),
 				Did: "ran `" + clipText(firstLine(firstString(item.row["command"])), 80) + "`", Happened: formatTokens(float64(result)) + " tokens back, re-read " + formatTokens(float64(carried)) + " more"})
 		}
 		candidate.Obs[obs.Unit] = obs
@@ -617,8 +617,8 @@ func detectHeavyOutput(env *findingEnv) ([]*findingCandidate, error) {
 		candidate.write = func(candidate *findingCandidate, stats findingStats) findingCard {
 			where := env.scopeName(candidate.Spec.Scope)
 			return findingCard{Title: fmt.Sprintf("%s %s", providerLabel(provider), words.title) + map[bool]string{true: env.hostSuffix(candidate.Spec.Scope), false: " in " + where}[global],
-				Explanation: fmt.Sprintf("%s %s %s this month. Each result averaged %s, which every later request re-read.",
-					providerLabel(provider), words.did, countNoun(stats.Occurrences, "time"), tokensPhrase(stats.Rate)),
+				Explanation: fmt.Sprintf("%s %s %s in the last 28 days with a result of at least %s. Counting every call like these, large or small, a result averaged %s, which every later request re-read.",
+					providerLabel(provider), words.did, countNoun(stats.Occurrences, "time"), tokensPhrase(heavyResultTokens), tokensPhrase(stats.Rate)),
 				ImpactNote: tokensPhrase(float64(stats.Tokens)), Steps: steps, ChartTitle: "Average tokens returned per `" + words.command + "` call", Rate: tokensPhrase(stats.Rate)}
 		}
 		output = append(output, candidate)
@@ -672,7 +672,7 @@ func detectOutliers(env *findingEnv) ([]*findingCandidate, error) {
 				if cause == "oversized" {
 					detail = "a request with " + formatTokens(float64(conv.PeakInput)) + " tokens of context"
 				}
-				candidate.addEvidence(findingHandle{At: obs.At, ConversationID: conv.ID, WorkspaceID: conv.WorkspaceID, Where: env.evidenceWhere(conv) + " · " + providerLabel(conv.Provider),
+				candidate.addEvidence(findingHandle{At: obs.At, ConversationID: conv.ID, WorkspaceID: conv.WorkspaceID, Where: env.evidenceWhereBy(conv, conv.Provider),
 					Did: "ran one conversation to " + tokensPhrase(float64(conv.Tokens)), Happened: detail})
 			}
 			candidate.Obs[conv.ID] = obs
@@ -702,14 +702,14 @@ func detectOutliers(env *findingEnv) ([]*findingCandidate, error) {
 		candidate.Lever = steps[0].Lever
 		candidate.write = func(candidate *findingCandidate, stats findingStats) findingCard {
 			if cause == "runaway" {
-				return findingCard{Title: fmt.Sprintf("A few very long conversations in %s use much of its tokens", repository),
-					Explanation: fmt.Sprintf("%s this month ran past %s requests or %d compactions. They used %s of the repository's tokens.",
-						capitalize(countNoun(stats.Affected, "conversation")), thousands(int(runawayRequests)), runawayCompactions, fractionPhrase(stats.Rate, "")),
+				return findingCard{Title: fmt.Sprintf("A few very long conversations use a large share of %s’s tokens", repository),
+					Explanation: fmt.Sprintf("%s in the last 28 days ran past %s requests or %d compactions. %s used %s of the repository’s tokens.",
+						capitalize(countNoun(stats.Affected, "conversation")), thousands(int(runawayRequests)), runawayCompactions, theyOrIt(stats.Affected), sharePhrase(stats.Rate)),
 					ImpactNote: tokensPhrase(float64(stats.Tokens)), Steps: steps, ChartTitle: "Share of tokens from very long conversations", Rate: fractionPhrase(stats.Rate, "")}
 			}
 			return findingCard{Title: fmt.Sprintf("Conversations in %s carry very large contexts", repository),
-				Explanation: fmt.Sprintf("%s this month sent a request with more than %s tokens of context. They used %s of the repository's tokens.",
-					capitalize(countNoun(stats.Affected, "conversation")), formatTokens(oversizedInput), fractionPhrase(stats.Rate, "")),
+				Explanation: fmt.Sprintf("%s in the last 28 days sent a request with more than %s tokens of context. %s used %s of the repository’s tokens.",
+					capitalize(countNoun(stats.Affected, "conversation")), formatTokens(oversizedInput), theyOrIt(stats.Affected), sharePhrase(stats.Rate)),
 				ImpactNote: tokensPhrase(float64(stats.Tokens)), Steps: steps, ChartTitle: "Share of tokens from conversations with very large contexts", Rate: fractionPhrase(stats.Rate, "")}
 		}
 		output = append(output, candidate)

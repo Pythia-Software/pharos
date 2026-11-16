@@ -90,7 +90,7 @@ func TestDriftDetector(t *testing.T) {
 	if codex == nil || codex.Stats.Affected != 10 || codex.Stats.Exposure != 28 {
 		t.Fatalf("codex drift: %+v", codex)
 	}
-	if !strings.Contains(codex.Card.Title, "Codex can't find alpha's instructions") || !strings.Contains(codex.Card.Explanation, "searching for AGENTS.md and reading CLAUDE.md by hand") {
+	if !strings.Contains(codex.Card.Title, "Codex can’t find alpha’s instructions") || !strings.Contains(codex.Card.Explanation, "searching for AGENTS.md and reading CLAUDE.md by hand") {
 		t.Fatalf("wording: %q / %q", codex.Card.Title, codex.Card.Explanation)
 	}
 	if codex.Lever != "repo-tooling" || len(codex.Card.Steps) < 2 {

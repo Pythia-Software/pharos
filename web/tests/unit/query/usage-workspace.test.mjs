@@ -942,6 +942,9 @@ test("Usage source links retain exact messages, encoded identity and distinct ev
   assert.equal(conversationRowURL({}, "missing"), undefined);
   assert.deepEqual(usageRowLinks("skill_usages", {}), []);
   assert.equal(usageRowLinks("parallelism", { unit_id: "/worktree", counting: "workspace" }).length, 0);
+  // The fallback label names the page the link opens.
+  assert.equal(usageRowLinks("branch_usage", { conversation_id: "c1" })[0].label, "Open conversation");
+  assert.equal(usageRowLinks("branch_usage", { workspace_id: "w1" })[0].label, "Open workspace");
 });
 
 test("Aggregate time and cross-query links express their source scope", () => {
@@ -970,7 +973,7 @@ test("Authored Details retains classified text beyond the cell preview and repor
   assert.doesNotMatch(cell, /Retained end/);
   assert.match(detail, /Retained end/);
   assert.match(detail, /Full harness instructions/);
-  assert.match(detail, /truncated/);
+  assert.match(detail, /Only the start of this message is shown/);
   assert.match(detail, /data-category="typed"/);
 });
 
@@ -1087,7 +1090,12 @@ test("writing freshness distinguishes a partial turn from caught up", () => {
   assert.doesNotMatch(text, /current as of/);
   assert.match(authorshipStatusText({...status, pending_messages: 0, stale: false}), /current as of/);
   assert.doesNotMatch(authorshipStatusText({...status, pending_messages: 0, stale: false, complete_at: null}), /current as of/);
-  assert.match(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 1}), /await overnight refinement/);
+  assert.match(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 1}), /1 large message awaits overnight refinement\./);
+  assert.match(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 2}), /2 large messages await overnight refinement\./);
+  assert.match(text, /12 messages await an estimate\./);
+  assert.match(authorshipStatusText({...status, pending_messages: 1}), /1 message awaits an estimate\./);
+  assert.match(authorshipStatusText({...status, provisional_messages: 1}), /1 message has a provisional estimate\./);
+  assert.match(authorshipStatusText({...status, provisional_messages: 3}), /3 messages have provisional estimates\./);
   assert.doesNotMatch(authorshipStatusText({...status, pending_messages: 0, stale: false, deferred_messages: 1}), /current as of/);
 });
 

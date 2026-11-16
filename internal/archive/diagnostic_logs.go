@@ -894,7 +894,11 @@ func (s *Server) diagnosticSource(ctx context.Context, id string, at time.Time) 
 			} else if run.Problems > 0 {
 				raiseAttention(summary, "warning")
 				if summary.Headline == "" {
-					summary.Headline = fmt.Sprintf("%d lines mention an error", run.Problems)
+					verb := " mention an error"
+					if run.Problems == 1 {
+						verb = " mentions an error"
+					}
+					summary.Headline = plural(run.Problems, "line") + verb
 				}
 			}
 		}

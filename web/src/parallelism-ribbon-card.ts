@@ -10,24 +10,25 @@ const hour = 60 * minute;
 const periods = [hour, 3 * hour, 6 * hour, 12 * hour, 24 * hour, 7 * 24 * hour];
 const maxColumns = 48;
 
-const units = (settings: ConcurrencySettings) => settings.counting === "agent" ? "sessions" : "workspaces";
+const units = (settings: ConcurrencySettings) => settings.counting === "agent" ? "conversations" : "workspaces";
+const zoomTime = (at: number) => new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(at);
 
 export function ribbonCardTitle(settings: ConcurrencySettings): string {
   return `Concurrent ${units(settings)}${settings.mode === "model" ? " with model activity" : " over time"}${settings.repository ? ` in ${settings.repository}` : ""}`;
 }
 
 export function ribbonCardDescription(settings: ConcurrencySettings): string {
-  const range = settings.zoom ? `Selected interval ${new Date(settings.zoom[0]).toISOString()} to ${new Date(settings.zoom[1]).toISOString()}.`
+  const range = settings.zoom ? `Selected interval ${zoomTime(settings.zoom[0])} to ${zoomTime(settings.zoom[1])}.`
     : settings.range === "custom" ? `Dates ${settings.startDay || settings.day || "latest day"} to ${settings.endDay || settings.startDay || settings.day || "latest day"}.`
     : settings.range === "day" && settings.day ? `Date ${settings.day}.` : "";
-  return `${range ? `${range} ` : ""}Average concurrent ${units(settings)}, stacked by repository${settings.repository ? `, limited to ${settings.repository}` : ""}. ${settings.mode === "model" ? "Model activity intervals." : `Agent turns; join activity across gaps up to ${settings.gap} minutes.`}`;
+  return `${range ? `${range} ` : ""}Average concurrent ${units(settings)}, stacked by project${settings.repository ? `, limited to ${settings.repository}` : ""}. ${settings.mode === "model" ? "Model activity intervals." : `Agent turns; ${settings.gap ? `join activity across gaps up to ${settings.gap} minutes` : "no bridging between turns"}.`}`;
 }
 
 export function ribbonCardWindow(settings: ConcurrencySettings): string {
   if (settings.zoom) return "Saved range";
   if (settings.range === "today") return "Today";
   const preset = concurrencyRangePresets.find(([key]) => key === settings.range);
-  return preset ? `Past ${preset[1]} days` : settings.range === "all" ? "All time" : settings.range === "day" && !settings.day ? "Latest day" : "Saved range";
+  return preset ? `Last ${preset[1]} days` : settings.range === "all" ? "All time" : settings.range === "day" && !settings.day ? "Latest day" : "Saved range";
 }
 
 export function ribbonCover(data: ConcurrencyData, settings: ConcurrencySettings, now = new Date()) {

@@ -3,6 +3,7 @@ import { chartSeriesStyle } from "./chart-colors";
 import {
   thinkingBrush,
   thinkingCount,
+  thinkingCountOf,
   thinkingDuration,
   thinkingPercentiles,
   thinkingStyle,
@@ -238,7 +239,7 @@ export function ThinkingDistribution({
         <ThinkingFigure
           key={g.key}
           title={g.label}
-          note={`${thinkingCount(g.stats.n)} observations / ${thinkingCount(g.Retained)} retained · ${g.Conversations} conversations${g.stats.n < 30 ? " · sparse sample" : ""}`}
+          note={`${thinkingCount(g.stats.n)} timed / ${thinkingCountOf(g.Retained, "retained model request")} · ${thinkingCountOf(g.Conversations, "conversation")}${g.stats.n < 30 ? " · sparse sample" : ""}`}
         >
           {(width) => {
             const x = 48,
@@ -320,8 +321,8 @@ export function ThinkingDistribution({
                         <title>
                           {g.label} · {p} · {thinkingDuration(data.edges[b])}–
                           {thinkingDuration(data.edges[b + 1])}: {n} /{" "}
-                          {c.stats.n} usable gaps · {c.conversations}{" "}
-                          conversations
+                          {thinkingCountOf(c.stats.n, "timed model request")} ·{" "}
+                          {thinkingCountOf(c.conversations, "conversation")}
                         </title>
                       </rect>
                     ));
@@ -407,10 +408,12 @@ export function ThinkingDistribution({
                               ? v.toFixed(2) + "×"
                               : thinkingDuration(v)}{" "}
                             ·{" "}
-                            {state.calendarMetric === "ratio"
-                              ? c?.Adjusted
-                              : c?.N}{" "}
-                            requests
+                            {thinkingCountOf(
+                              (state.calendarMetric === "ratio"
+                                ? c?.Adjusted
+                                : c?.N) ?? 0,
+                              "timed model request",
+                            )}
                           </title>
                         </rect>
                       );
@@ -495,7 +498,8 @@ export function ThinkingDistribution({
                     >
                       <title>
                         {thinkingDuration(data.edges[i])}–
-                        {thinkingDuration(data.edges[i + 1])}: {n} requests (
+                        {thinkingDuration(data.edges[i + 1])}:{" "}
+                        {thinkingCountOf(n, "timed model request")} (
                         {((100 * n) / Math.max(1, g.stats.n)).toFixed(1)}%)
                       </title>
                     </rect>
@@ -590,7 +594,8 @@ export function ThinkingBoxes({
                             {reasoning
                               ? formatTokens(st.median) + " tokens"
                               : thinkingDuration(st.median)}{" "}
-                            · {st.n} observations / {g.Retained} retained
+                            · {thinkingCount(st.n)} /{" "}
+                            {thinkingCountOf(g.Retained, "retained model request")}
                           </title>
                           <line
                             x1={scale(st.low)}
@@ -632,7 +637,7 @@ export function ThinkingBoxes({
                 >
                   {reasoning
                     ? "Reported reasoning tokens · log1p scale"
-                    : "Observed gap · seconds"}
+                    : "Observed wait"}
                 </text>
               </svg>
             );
@@ -708,7 +713,8 @@ export function ThinkingHourly({
                     <g key={i}>
                       <title>
                         {thinkingWindow(b.hour)} · {b.Ratio.toFixed(2)}× ·{" "}
-                        {b.days} qualifying days · {b.n} modeled gaps
+                        {thinkingCountOf(b.days, "qualifying day")} ·{" "}
+                        {thinkingCountOf(b.n, "model request")} with workload estimates
                       </title>
                       <line
                         x1={x + ((i + 0.5) * w) / 8}
@@ -757,7 +763,7 @@ export function ThinkingCDF({
     <ThinkingFigure
       title={title}
       action={action}
-      note="Curves require 100 usable gaps from five conversations. Each curve is an individual-request quantile function at 1% steps."
+      note="Curves require 100 timed model requests from five conversations. Each curve is an individual-request quantile function at 1% steps."
     >
       {(width) => {
         const height = 315,
@@ -799,7 +805,7 @@ export function ThinkingCDF({
                     strokeWidth="2"
                   >
                     <title>
-                      {g.label} · {g.Timed} usable gaps
+                      {g.label} · {thinkingCountOf(g.Timed, "timed model request")}
                     </title>
                   </path>
                 ))}
@@ -954,7 +960,7 @@ export function ThinkingCompactions({
           <span>Compaction events</span>
           <strong>{events.length}</strong>
           <small>
-            {new Set(events.map((e) => e.Conversation)).size} conversations
+            {thinkingCountOf(new Set(events.map((e) => e.Conversation)).size, "conversation")}
           </small>
         </div>
       </div>
@@ -971,7 +977,7 @@ export function ThinkingConversation({
   return (
     <ThinkingFigure
       title={trace.Model + " · selected conversation stream"}
-      note={`${trace.Points.length} of ${trace.Count} matching requests shown in source order${trace.Count > 1000 ? "; trace is limited to the first 1,000 requests" : ""}. Trailing mean uses up to 11 requests, requires six timed gaps and resets at compaction.`}
+      note={`${thinkingCount(trace.Points.length)} of ${thinkingCountOf(trace.Count, "matching model request")} shown in source order${trace.Count > 1000 ? "; the stream is limited to its first 1,000 model requests" : ""}. The trailing mean uses up to 11 model requests, needs six timed ones and resets at compaction.`}
     >
       {(width) => {
         const height = 620,
@@ -999,7 +1005,7 @@ export function ThinkingConversation({
             {[
               ["Input context", maxContext, 20],
               ["Output tokens", maxOutput, 215],
-              ["Observed gap (seconds)", maxGap, 410],
+              ["Observed wait (seconds)", maxGap, 410],
             ].map(([title, max, offset]) => (
               <g key={String(title)}>
                 <text className="thinking-label" x={x} y={Number(offset) - 5}>
@@ -1012,7 +1018,7 @@ export function ThinkingConversation({
                   y={Number(offset)}
                   yTicks={[0, Number(max)].map((v) => ({
                     value: ys(v, Number(max), Number(offset)),
-                    label: title === "Observed gap (seconds)" ? fmt(v) : formatTokens(v),
+                    label: title === "Observed wait (seconds)" ? fmt(v) : formatTokens(v),
                   }))}
                   xTicks={[]}
                 />

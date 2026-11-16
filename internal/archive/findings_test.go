@@ -41,6 +41,31 @@ func TestFindingWording(t *testing.T) {
 	if got := fractionPhrase(0.33, ""); got != "1 in 3" {
 		t.Errorf("bare ratio = %q", got)
 	}
+	// A share reads before "of the …" for every rate: "They used about 35% of the tokens".
+	for rate, want := range map[float64]string{0: "none", 0.004: "under 1%", 0.07: "about 7%", 0.33: "about 35%", 0.5: "about half",
+		0.26: "about 25%", 0.8: "about 80%", 0.97: "nearly all", 1: "nearly all"} {
+		if got := sharePhrase(rate); got != want {
+			t.Errorf("sharePhrase(%v) = %q, want %q", rate, got, want)
+		}
+	}
+	if got := resultSentence("outliers", findingMetric{Kind: "share", Unit: "conversations"}, windowStats{Rate: 0.5}, windowStats{Rate: 0.33}, interventionUnchanged); got != "Since the change, this accounts for about 35% of the total instead of about half." {
+		t.Errorf("share result = %q", got)
+	}
+	if got := resultSentence("cli", findingMetric{Kind: "rate", Unit: "engagements"}, windowStats{Rate: 0.34}, windowStats{Rate: 0.2, Hits: 2, Units: 10}, interventionUnchanged); got != "Since the change, this happens in 1 of every 5 conversations instead of 1 in 3." {
+		t.Errorf("rate result = %q", got)
+	}
+	// Orientation measures what was read before the first edit; exploration
+	// measures what later requests re-read of it. Each sentence says which.
+	preEditMetric := findingMetric{Kind: "mean", Unit: "conversations", Value: "tokens"}
+	if got := resultSentence("orientation", preEditMetric, windowStats{Median: 40000}, windowStats{Median: 12000}, interventionImproved); got != "Since the change, a typical conversation used 12K tokens before its first edit, instead of 40K tokens." {
+		t.Errorf("orientation result = %q", got)
+	}
+	if got := resultSentence("exploration", preEditMetric, windowStats{Median: 900000}, windowStats{Median: 300000}, interventionImproved); !strings.Contains(got, "re-read 300K tokens") || !strings.Contains(got, "instead of 900K tokens") || strings.Contains(got, "used") {
+		t.Errorf("exploration result = %q", got)
+	}
+	if theyOrIt(1) != "It" || theyOrIt(2) != "They" {
+		t.Errorf("theyOrIt: %q %q", theyOrIt(1), theyOrIt(2))
+	}
 	if countNoun(2, "search") != "2 searches" || countNoun(1, "lookup") != "1 lookup" || countNoun(12000, "token") != "12,000 tokens" {
 		t.Errorf("countNoun: %q %q %q", countNoun(2, "search"), countNoun(1, "lookup"), countNoun(12000, "token"))
 	}
@@ -311,7 +336,7 @@ func TestFindingLifecycle(t *testing.T) {
 	if result.Status != interventionImproved {
 		t.Fatalf("status %q result %v", result.Status, result.Result)
 	}
-	if !strings.Contains(firstString(result.Result["sentence"]), "Since the change, it hasn't happened in") {
+	if !strings.Contains(firstString(result.Result["sentence"]), "Since the change, it hasn’t happened in") {
 		t.Fatalf("sentence %q", result.Result["sentence"])
 	}
 	if result.Savings.Weeks == 0 || result.Savings.Failures <= 0 {
@@ -396,7 +421,7 @@ func TestFindingPromptTargets(t *testing.T) {
 	for target, want := range map[string]string{
 		"global:h:opencode":       "OpenCode's global instructions on this Mac (~/.config/opencode/AGENTS.md)",
 		"global:h:vscode-copilot": "VS Code Copilot's global instructions on this Mac (~/.copilot/copilot-instructions.md)",
-		"global:h:cursor":         "drafting lines for Cursor's global instructions, which the person keeps in Cursor's User Rules (Cursor Settings → Rules)",
+		"global:h:cursor":         "drafting lines for Cursor's global instructions, which the person keeps in Cursor’s User Rules (Cursor Settings → Rules)",
 		"global:h:gemini":         "Gemini's global instructions on this Mac (~/.gemini/GEMINI.md)",
 		"global:h:unknown":        "Unknown's global instructions on this Mac (your global agent instructions)",
 	} {
@@ -404,13 +429,31 @@ func TestFindingPromptTargets(t *testing.T) {
 			t.Fatalf("%s prompt lacks %q:\n%s", target, want, prompt)
 		}
 	}
-	for provider, want := range map[string]string{"claude": "CLAUDE.md", "zed": "AGENTS.md", "copilot": "copilot-instructions.md", "cline": "a file in Rules", "chatgpt": "ChatGPT's custom instructions", "": "the instructions"} {
+	for provider, want := range map[string]string{"claude": "CLAUDE.md", "zed": "AGENTS.md", "copilot": "copilot-instructions.md", "cline": "a file in Rules", "chatgpt": "ChatGPT’s custom instructions", "": "the instructions"} {
 		if got := shortInstructionFile(globalInstructionFile(provider)); got != want {
 			t.Fatalf("%q steps say a line in %q, want %q", provider, got, want)
 		}
 	}
 	if providerLabel("vscode-copilot") != "VS Code Copilot" || providerLabel("opencode") != "OpenCode" || providerLabel("claude") != "Claude" {
 		t.Fatalf("labels name providers as the registry does: %s, %s", providerLabel("vscode-copilot"), providerLabel("opencode"))
+	}
+	// A page reads a global target's provider and Mac from fields, since a
+	// display name can be several words and a Mac can have no name.
+	if provider, mac, ok := findingTargetParts("global:h:vscode-copilot", map[string]string{"h": "Studio"}); !ok || provider != "VS Code Copilot" || mac != "Studio" {
+		t.Fatal(provider, mac, ok)
+	}
+	if provider, mac, ok := findingTargetParts("global:other:claude", map[string]string{"h": "Studio"}); !ok || provider != "Claude" || mac != "" {
+		t.Fatal(provider, mac, ok)
+	}
+	if _, _, ok := findingTargetParts("repo:r1", nil); ok {
+		t.Fatal("a repository target has no provider of its own")
+	}
+	// A provider and a source are different keys: "claude" is the provider of
+	// Claude Code sessions and Claude.ai chats, and the kind of the first's
+	// source. An unknown key keeps its stored spelling in a page.
+	if providerDisplayName("claude") != "Claude" || sourceDisplayName("claude") != "Claude Code" || sourceDisplayName("claude-ai") != "Claude.ai" ||
+		providerDisplayName("somebody-else") != "somebody-else" || providerLabel("") != "agents" || providerLabel("gemini") != "Gemini" {
+		t.Fatal(providerDisplayName("claude"), sourceDisplayName("claude"), providerDisplayName("somebody-else"))
 	}
 	repo := renderFindingPrompt("repo:r", "alpha", "/src/alpha", "pr", []cartItem{{Row: row, Step: row.Card.Steps[0], Attempt: 1}})
 	if !strings.Contains(repo, "You are working in the alpha repository (/src/alpha).") || !strings.HasSuffix(repo, "Open a pull request.") {

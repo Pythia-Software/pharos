@@ -4,7 +4,7 @@ import { foldSeries, type ChartBucket, type ChartSeries } from "./chart-series";
 import type { QueryRecipe } from "./curiosity-data";
 import type { QueryCategory } from "./query-categories";
 import { thinkingCardRecipes } from "./thinking-card-recipes";
-import { initialThinking, isThinkingTopic, orderThinkingGroups, thinkingFixedOrder, type ThinkingGroup, thinkingBreakdowns, thinkingCount, thinkingDuration, thinkingWhere, type ThinkingResponse, type ThinkingState } from "./thinking-model";
+import { initialThinking, isThinkingTopic, orderThinkingGroups, thinkingFixedOrder, type ThinkingGroup, thinkingBreakdowns, thinkingCount, thinkingCountOf, thinkingDuration, thinkingWhere, type ThinkingResponse, type ThinkingState } from "./thinking-model";
 import { gridTicks, type GridCover } from "./grid-cover";
 import { periodLabel as chartPeriodLabel } from "./chart-period";
 
@@ -31,9 +31,9 @@ export function readThinkingCard(address: string, now = new Date()): { topic: "t
   const url = new URL(address, location.origin), params = url.searchParams, topic = params.get("analyze_topic") ?? "";
   if (url.origin !== location.origin || url.pathname !== "/analyze" || params.get("analyze_mode") !== "dashboards" || !isThinkingTopic(topic)) throw new Error("This dashboard card is unavailable.");
   const filters = params.get("analyze_filters"), native = filters ? decodeQueryStrict(filters) : EMPTY_QUERY;
-  if (!native || native.grouping) throw new Error("This card's Thinking filters are invalid.");
+  if (!native || native.grouping) throw new Error("This card’s Thinking filters are invalid.");
   let state: ThinkingState;
-  try { state = initialThinking(params); } catch { throw new Error("This card's Thinking view is invalid."); }
+  try { state = initialThinking(params); } catch { throw new Error("This card’s Thinking view is invalid."); }
   return { topic, state, where: [...native.where, ...thinkingWhere(state, now.getTime())], native: native.where, filters: filters ?? "" };
 }
 
@@ -86,7 +86,7 @@ export function orderedBoxes(result: AggregationResultEntry, groups: ThinkingGro
 function waitBoxes(groupBy: string[], label: string): QueryRecipe {
   const base = recipe("thinking-model-effort");
   return { ...base, cover: { mode: "source", metricId: "wait_efforts", kind: "box", maxGroups: 8, density: "compact" }, measures: base.measures.map(measure => ({ ...measure, groupBy, groupLimit: 10000, label })),
-    note: "Individual post-tool gaps. Compact boxes use Tukey whiskers; Thinking uses p10–p90 whiskers and shows every group with its support counts." };
+    note: "Individual post-tool waits. Compact boxes use Tukey whiskers; Thinking uses P10–P90 whiskers and shows every group with its support counts." };
 }
 
 // Compactions draw as the page's compaction days do: a column per day,
@@ -119,7 +119,7 @@ export function thinkingCardDescription(target: ThinkingCardTarget, state: Think
   const sorted = state.groupBy !== "none" && ["histogram", "wait-box", "reasoning", "heatmap"].includes(state.view);
   const controls = target !== "thinking-distributions" ? [] : [
     sorted ? thinkingFixedOrder(state) ? "Effort ordered low to high, with Unreported last; models follow the shared model order"
-      : `Groups ordered by ${state.sortBy === "volume" ? state.view === "reasoning" ? "report count" : "request count" : `${state.sortBy} ${state.view === "reasoning" ? "reported reasoning" : "wait"}`}, ${state.sortDirection === "asc" ? "ascending" : "descending"}` : "",
+      : `Groups ordered by ${state.sortBy === "volume" ? state.view === "reasoning" ? "report count" : "timed model requests" : `${state.sortBy === "p95" ? "P95" : state.sortBy} ${state.view === "reasoning" ? "reported reasoning" : "wait"}`}, ${state.sortDirection === "asc" ? "ascending" : "descending"}` : "",
     state.view === "time" ? `Periods: ${chartPeriodLabel(state.period, state.period === "hours" ? state.hours : state.period === "days" ? state.days : 1)}` : "",
     state.view === "calendar" ? `Rows: ${state.calendarRows}; hours and dates in ${state.timezone}` : "",
     state.view === "histogram" || state.view === "wait-box" ? "Card shows wait distributions as box plots" : "",
@@ -129,17 +129,17 @@ export function thinkingCardDescription(target: ThinkingCardTarget, state: Think
 }
 
 function thinkingCardReading(target: ThinkingCardTarget, state: ThinkingState): string {
-  if (thinkingGridView(target, state)) return state.view === "heatmap" ? `Each row is a group and each column a range of waits, shaded by ${state.normalization === "share" ? "its share of the group's waits" : "its requests"}.`
-    : state.view === "time" ? `Each column is a time period and each row a range of waits, shaded by ${state.normalization === "share" ? "its share of that period's waits" : "its requests"}.`
+  if (thinkingGridView(target, state)) return state.view === "heatmap" ? `Each row is a group and each column a range of waits, shaded by ${state.normalization === "share" ? "its share of the group’s waits" : "its number of timed model requests"}.`
+    : state.view === "time" ? `Each column is a time period and each row a range of waits, shaded by ${state.normalization === "share" ? "its share of that period’s waits" : "its number of timed model requests"}.`
     : state.calendarMetric === "ratio" ? "The median wait in each hour of each day against its workload estimate: warmer is slower than the workload suggests."
     : "The median wait in each hour of each day: darker is longer.";
   if (target === "thinking-compactions") return "Requests that follow a context compaction, day by day by model.";
   if (target === "thinking-distributions" && state.view === "reasoning") return "Positive reasoning reports, including requests without timing; zero cannot distinguish no reasoning from unreported reasoning.";
-  if ((target === "thinking-distributions" || target === "thinking-waits") && state.groupBy !== "none") return `Observed post-tool waits by ${breakdownLabel(state)}. Missing timing stays missing.`;
-  return "Post-tool request gaps: a coarse proxy for how long an agent waits before its next step. Missing timing stays missing.";
+  if ((target === "thinking-distributions" || target === "thinking-waits") && state.groupBy !== "none") return `Gaps from a tool result to the next model request, by ${breakdownLabel(state)}. Requests without timing are left out.`;
+  return "Gaps from a tool result to the next model request: a coarse proxy for how long an agent waits before its next step. Requests without timing are left out.";
 }
 
-const rangeLabels: Record<ThinkingState["range"], string> = { all: "All time", today: "Today", "1d": "Past day", "7d": "Past 7 days", "30d": "Past 30 days", "90d": "Past 90 days", "6m": "Past 6 months", "1y": "Past year", custom: "Saved range" };
+const rangeLabels: Record<ThinkingState["range"], string> = { all: "All time", today: "Today", "1d": "Last 24 hours", "7d": "Last 7 days", "30d": "Last 30 days", "90d": "Last 90 days", "6m": "Last 6 months", "1y": "Last 365 days", custom: "Saved range" };
 export const thinkingCardWindow = (state: ThinkingState): string => rangeLabels[state.range];
 
 export function thinkingCardPresentation(target: ThinkingCardTarget, state: ThinkingState): { category: QueryCategory; loading: CardLoadingSpec } {
@@ -176,7 +176,7 @@ export function thinkingGrid(data: ThinkingResponse, state: ThinkingState): Grid
     const { cells, top } = contrast(shown.map(group => used.map(i => group.stats.n ? share ? group.counts[i] / group.stats.n : group.counts[i] : null)));
     return { rows: shown.map(group => group.label), columns: used.map(i => bins[i].split("–")[0]), tone: "sequential", rowTicks: shown.map((_, i) => i), columnTicks: used.flatMap((bin, i) => decades.includes(bin) ? [i] : []), cells,
       values: shown.map(group => used.map(i => `${bins[i]}: ${thinkingCount(group.counts[i])} of ${thinkingCount(group.stats.n)} (${((100 * group.counts[i]) / Math.max(1, group.stats.n)).toFixed(1)}%)`)),
-      legend: share ? ["0%", `${percent(top)} of a group`] : ["0", `${thinkingCount(Math.round(top))}+ requests`], caption: notes.join(" · ") || undefined };
+      legend: share ? ["0%", `${percent(top)} of a group`] : ["0", `${thinkingCount(Math.round(top))}+ timed model requests`], caption: notes.join(" · ") || undefined };
   }
   if (state.view === "time") {
     const periods = data.periods.slice(-gridPeriods), order = usedBins(periods.map(period => first.periods[period]?.counts ?? []), bins.length).reverse();
@@ -184,8 +184,8 @@ export function thinkingGrid(data: ThinkingResponse, state: ThinkingState): Grid
     const { cells, top } = contrast(order.map(bin => periods.map(period => { const cell = first.periods[period]; return cell ? share ? cell.counts[bin] / Math.max(1, cell.stats.n) : cell.counts[bin] : null; })));
     return { rows: order.map(i => thinkingDuration(data.edges[i])), columns: periods.map(periodLabel), tone: "sequential",
       rowTicks: order.flatMap((bin, row) => decades.includes(bin) ? [row] : []), columnTicks: gridTicks(periods.length, 4), cells,
-      values: order.map(bin => periods.map(period => { const cell = first.periods[period]; return cell ? `${bins[bin]}: ${thinkingCount(cell.counts[bin])} of ${thinkingCount(cell.stats.n)} waits` : null; })),
-      legend: share ? ["0%", `${percent(top)} of a period`] : ["0", `${thinkingCount(Math.round(top))}+ requests`], caption: notes.join(" · ") || undefined };
+      values: order.map(bin => periods.map(period => { const cell = first.periods[period]; return cell ? `${bins[bin]}: ${thinkingCount(cell.counts[bin])} of ${thinkingCount(cell.stats.n)} timed model requests` : null; })),
+      legend: share ? ["0%", `${percent(top)} of a period`] : ["0", `${thinkingCount(Math.round(top))}+ timed model requests`], caption: notes.join(" · ") || undefined };
   }
   const periods = data.calendarPeriods.slice(-gridPeriods), hours = Array.from({ length: 24 }, (_, hour) => hour);
   if (data.calendarPeriods.length > periods.length) notes.push(`last ${periods.length} of ${data.calendarPeriods.length} ${state.calendarRows}s`);
@@ -196,7 +196,7 @@ export function thinkingGrid(data: ThinkingResponse, state: ThinkingState): Grid
     cells: ratio ? periods.map(period => hours.map(hour => { const value = cells.get(`${period}|${hour}`)?.Ratio;
       return value == null ? null : Math.sign(value - 1) * Math.min(1, Math.abs(value - 1) * 1.8); })) : raw.cells,
     values: periods.map(period => hours.map(hour => { const cell = cells.get(`${period}|${hour}`), value = ratio ? cell?.Ratio : cell?.Raw;
-      return value == null ? null : `${ratio ? value.toFixed(2) + "×" : thinkingDuration(value)} · ${thinkingCount((ratio ? cell?.Adjusted : cell?.N) ?? 0)} requests · ${data.timezone}`; })),
+      return value == null ? null : `${ratio ? value.toFixed(2) + "×" : thinkingDuration(value)} · ${thinkingCountOf((ratio ? cell?.Adjusted : cell?.N) ?? 0, "timed model request")} · ${data.timezone}`; })),
     legend: ratio ? ["≤0.5×", "≥1.5×"] : ["0 s", `${thinkingDuration(raw.top)}+`], caption: notes.join(" · ") || undefined };
 }
 // The bins from the first to the last that any count fell in.

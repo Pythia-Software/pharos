@@ -67,7 +67,7 @@ export function QueryRecovery({ busy, error, recovered = false, onRetry, onReset
   }, [busy, identity]);
   if (!slow && !error && !recovered) return null;
   return <div className="query-recovery" role="status">
-    <span>{error ? error.message : slow ? "This query is taking longer than expected." : "This table's default saved query failed last time, so it was skipped. Choose a saved view, or Try again to run the default."}</span>
+    <span>{error ? error.message : slow ? "This query is taking longer than expected." : "This table’s default saved view failed last time, so Pharos skipped it. Choose another saved view, or select Try again to run the default."}</span>
     {error || recovered ? <button type="button" onClick={onRetry}>Try again</button> : null}
     <button type="button" onClick={onReset}>Reset table</button>
     <ResetPage />

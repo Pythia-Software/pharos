@@ -38,7 +38,7 @@ function fixture(t, mutate = result => result, { rows: selectRows = rows => rows
   return requests;
 }
 
-test('90-day provider cost shares smooth amounts before normalizing, matching Machine Tokens pricing', async t => {
+test('90-day provider cost shares smooth amounts before normalizing, matching Tokens and Cost pricing', async t => {
   const requests = fixture(t), item = instantiateRecipe(recipe, recipe.days[0]);
   const preview = await loadQueryPreview('usage', item.query, schema, { recipe: item, cover: item.cover, window: item.window, url: item.url });
   assert.equal(preview.state, 'ready');

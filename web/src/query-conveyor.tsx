@@ -201,19 +201,19 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
   actions.current = { open: onOpen, keep: onKeep, reveal: (index: number) => slide(index - start, true, true), dragStart: onDragStart, dragEnd: onDragEnd };
   // A slow preview must not hold the cards that are already ready to browse.
   const held = paused || interacting || suspended || Boolean(movement) || !canNavigate;
-  return <section ref={section} className="home-conveyor" aria-label="Dashboard Catalog" aria-busy={populating} tabIndex={-1}
+  return <section ref={section} className="home-conveyor" aria-label="From the Card Library" aria-busy={populating} tabIndex={-1}
     style={{ "--belt-viewport-width": `${layout.width}px`, "--conveyor-edge": `${layout.edge}px`, "--query-card-stride": `${STRIDE}px` } as React.CSSProperties}
     onKeyDown={event => {
       if (!event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
         event.preventDefault(); if (canNavigate) { section.current?.focus({ preventScroll: true }); step(event.key === "ArrowLeft" ? -1 : 1); }
       }
     }}>
-    <div ref={heading} className="home-conveyor-head"><h2><Icon name="compass" />Dashboard Catalog</h2><div className="home-conveyor-actions">
-      <button type="button" className="home-all-cards" onClick={onAllCards}>All Cards<Icon name="arrow-right" /></button>
+    <div ref={heading} className="home-conveyor-head"><h2><Icon name="compass" />From the Card Library</h2><div className="home-conveyor-actions">
+      <button type="button" className="home-all-cards" onClick={onAllCards}>Open Card Library<Icon name="arrow-right" /></button>
       <CarouselCountdown held={held} paused={paused} reset={clockReset} advance={() => step(1, false)} /><div className="home-conveyor-controls">
       <button data-view-field="conveyor_paused" type="button" className="home-play" aria-label={paused ? "Play suggestions" : "Pause suggestions"} onClick={() => setPaused(value => !value)}>{paused ? "▶ Play" : "Ⅱ Pause"}</button>
-      <button type="button" aria-label={`Previous ${counted(navigationStep)} suggestions`} title="Previous suggestions" disabled={!canNavigate} onClick={() => step(-1)}><Icon name="chevron-left" /></button>
-      <button type="button" aria-label={`Next ${counted(navigationStep)} suggestions`} title="Next suggestions" disabled={!canNavigate} onClick={() => step(1)}><Icon name="chevron-right" /></button>
+      <button type="button" aria-label={navigationStep === 1 ? "Previous suggestion" : `Previous ${counted(navigationStep)} suggestions`} title="Previous suggestions" disabled={!canNavigate} onClick={() => step(-1)}><Icon name="chevron-left" /></button>
+      <button type="button" aria-label={navigationStep === 1 ? "Next suggestion" : `Next ${counted(navigationStep)} suggestions`} title="Next suggestions" disabled={!canNavigate} onClick={() => step(1)}><Icon name="chevron-right" /></button>
       <button type="button" aria-label="Refresh suggestions" title="Refresh suggestions" onClick={() => { running.current = null; pendingFocus.current = undefined; leans.current.clear(); setMovement(null); setPublished([]); setCenter(undefined); setEntering([]); lastReveal.current = 0; setClockReset(value => value + 1); onRefresh(); }}><Icon name="refresh" /></button>
     </div></div></div>
     <div className="home-belt-viewport" style={{ width: layout.width, marginLeft: -layout.overhang }}
@@ -225,7 +225,7 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
           <BeltCard item={item} preview={previews[item.instanceId]} xray={xray} lean={lean} index={index} revealable={onscreen} actions={actions} />
         </div>)}
       </div>
-      {!items.length ? <p className="home-discovery-empty">{loading ? "Looking for interesting angles in your library…" : hasErrors ? "Some previews could not load. Refresh to try again." : "No matching angles in these recent windows yet. As your library grows, new views will appear here."}<a href="/library" onClick={event => { event.preventDefault(); onOpen("/library"); }}>Explore the library <Icon name="arrow-right" /></a></p> : null}
+      {!items.length ? <p className="home-discovery-empty">{loading ? "Finding cards with results in your library…" : hasErrors ? "Some previews could not load. Refresh to try again." : "No suggested cards have results in recent windows yet. More will appear as your library grows."}<a href="/library" onClick={event => { event.preventDefault(); onOpen("/library"); }}>Open Search <Icon name="arrow-right" /></a></p> : null}
     </div>
   </section>;
 }

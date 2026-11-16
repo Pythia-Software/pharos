@@ -2,6 +2,7 @@ import {sliceSelectionActive} from './chart-selection';
 import { EMPTY_QUERY, type AggregationClause, type AggregationResultEntry, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabel, periodStart, shiftPeriod } from "./chart-period";
 import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart } from "./chart-range";
+import { modelFieldLabel } from "./model-label";
 import { otherSeriesColor } from "./chart-colors";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, withoutZeroes, type ChartBucket, type ChartSeries } from "./chart-series";
 import { binOf } from "./value-bins";
@@ -176,7 +177,9 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     return result(id).map(bucket => [plotted(bucket.keys[0]), name(bucket.keys.slice(1)), Number(bucket.value) || 0]);
   };
   const byKey = (buckets: ChartBucket[]) => new Map(buckets.map(bucket => [bucket.key, bucket]));
-  const valueLabel = (field: string, value: unknown) => value === null || value === undefined || value === "" ? breakdown?.empty ?? "Unknown" : breakdown?.values?.[String(value)] ?? catalog.labels?.[field]?.(String(value)) ?? label(field, value);
+  // The stored model sentinel reads as it does everywhere else; the series
+  // key, colour and selection stay on the stored value.
+  const valueLabel = (field: string, value: unknown) => value === null || value === undefined || value === "" ? breakdown?.empty ?? "No value" : breakdown?.values?.[String(value)] ?? catalog.labels?.[field]?.(String(value)) ?? modelFieldLabel(field, label(field, value));
   const seriesLabel = (text: string) => breakdown!.fields.length === 1 ? valueLabel(breakdown!.fields[0], text) : (JSON.parse(text) as unknown[]).map((value, index) => valueLabel(breakdown!.fields[index], value)).join(" · ");
   const chosen = state.selection ?? { values: [], excluded: false };
   const picked = chosen.values;
@@ -226,7 +229,7 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     series = foldSeries(seriesRows, byKey(weighted), seriesLabel, breakdown.order, picked, catalog.trend.allSeries ? Infinity : state.seriesLimit, breakdown.fields.length === 1 ? breakdown.fields[0] : state.split);
     // Series are keyed by their raw values; a label two of them share (Agent
     // Time's command:foo and tool:foo) names the value too.
-    series = series.map(item => item.value !== undefined && series.some(other => other !== item && other.label === item.label) ? { ...item, label: `${item.label} (${item.value})` } : item);
+    series = series.map(item => item.value !== undefined && item.value !== "" && series.some(other => other !== item && other.label === item.label) ? { ...item, label: `${item.label} (${item.value})` } : item);
     const shown = new Set(series.flatMap(item => item.value === undefined ? [] : [item.value]));
     const assign = (entries: Rows, buckets: ChartBucket[]) => {
       const targets = byKey(buckets);
@@ -319,6 +322,8 @@ export function trendTitle(catalog: AnalysisCatalog, input: AnalysisState): stri
   // bins hold: "Sessions per day by messages per session".
   const heatmap = state.display === "heatmap" ? heatmapAxis(catalog, state) : undefined;
   if (heatmap) return `${heatmap.unit ? catalog.units[heatmap.unit].plural : heatmap.counted ? catalog.records.plural : measure.label} per ${periodLabel(state.period, trendPeriodCount(state))} by ${heatmap.bins.label.toLowerCase()}`;
-  const cumulative = state.display === "cumulative", name = state.share ? `Share of ${measure.label.replace(/ \(USD\)$/, "").replace(/^(?!API)\w/, letter => letter.toLowerCase())}` : measure.label;
-  return `${cumulative ? "Cumulative " : ""}${cumulative ? name[0].toLowerCase() + name.slice(1) : name}${cumulative ? "" : ` per ${periodLabel(state.period, trendPeriodCount(state))}`}${split ? ` by ${split.toLowerCase()}` : ""}`;
+  // Lowercase a label's first letter, but keep an acronym ("API", "MCP", "CO₂e") intact.
+  const lower = (text: string) => /^[A-Z]{2}/.test(text) ? text : text.slice(0, 1).toLowerCase() + text.slice(1);
+  const cumulative = state.display === "cumulative", name = state.share ? `Share of ${lower(measure.label.replace(/ \(USD\)$/, ""))}` : measure.label;
+  return `${cumulative ? "Cumulative " : ""}${cumulative ? lower(name) : name}${cumulative ? "" : ` per ${periodLabel(state.period, trendPeriodCount(state))}`}${split ? ` by ${split.toLowerCase()}` : ""}`;
 }

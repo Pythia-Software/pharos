@@ -321,7 +321,7 @@ func describeCLI(env *findingEnv, candidate *findingCandidate) {
 			title = fmt.Sprintf("Agents in %s call `%s` the wrong way", where, program)
 		}
 		if automation && strings.HasPrefix(scope, "automation:") {
-			title = fmt.Sprintf("%s runs look up `%s` every time", strings.TrimSuffix(strings.TrimPrefix(where, "TL1's "), " runs"), program)
+			title = fmt.Sprintf("%s runs keep looking up how to use `%s`", strings.TrimSuffix(strings.TrimPrefix(where, "TL1's "), " runs"), program)
 		}
 		parts := []string{}
 		if help > 0 {
@@ -330,7 +330,7 @@ func describeCLI(env *findingEnv, candidate *findingCandidate) {
 		if usage > 0 {
 			parts = append(parts, fmt.Sprintf("called it wrongly %s", countNoun(usage, "time")))
 		}
-		explanation := fmt.Sprintf("Agents %s this month, in %s that used `%s`.", joinWords(parts), fractionPhrase(stats.Rate, "conversations"), program)
+		explanation := fmt.Sprintf("Agents %s in the last 28 days, in %s that used `%s`.", joinWords(parts), fractionPhrase(stats.Rate, "conversations"), program)
 		if automation {
 			explanation += " These runs start from a script's prompt, which doesn't say how to call it."
 		}
@@ -424,7 +424,7 @@ func detectDocsHosts(env *findingEnv) ([]*findingCandidate, error) {
 			}
 			candidates[key].addEvidence(findingHandle{At: obs.At, ConversationID: item.conv.ID, WorkspaceID: item.conv.WorkspaceID, ToolCallID: firstString(item.row["call_id"]),
 				MessageID: firstString(item.row["message_id"]), Where: env.evidenceWhere(item.conv), Did: "fetched " + clipText(firstString(item.row["url"]), 80),
-				Happened: countNoun(obs.Occurrences, "page") + " from " + host})
+				Happened: docsFetchNoun(host, obs.Occurrences) + " " + docsHostName(host)})
 		}
 	}
 	for key, spec := range wanted {
@@ -445,10 +445,9 @@ func detectDocsHosts(env *findingEnv) ([]*findingCandidate, error) {
 		for id, obs := range hits[key] {
 			candidate.Obs[id] = obs
 		}
-		host := candidate.Spec.Params["host"]
-		if server, ok := strings.CutPrefix(host, "mcp:"); ok {
-			host = "the " + server + " MCP server"
-		}
+		raw := candidate.Spec.Params["host"]
+		host := docsHostName(raw)
+		_, mcp := strings.CutPrefix(raw, "mcp:")
 		steps := []findingStep{
 			{Lever: "repo-tooling", Label: "A local copy of the reference", Change: fmt.Sprintf("Save the parts of %s that agents keep reading into the repository (for example `docs/reference/`), and point the instructions at them.", host)},
 			{Lever: "repo-tooling", Label: "A skill", Change: fmt.Sprintf("Add a skill that summarizes what agents look up on %s, with links for the rest.", host)},
@@ -456,11 +455,30 @@ func detectDocsHosts(env *findingEnv) ([]*findingCandidate, error) {
 		candidate.Lever = steps[0].Lever
 		candidate.write = func(candidate *findingCandidate, stats findingStats) findingCard {
 			return findingCard{Title: fmt.Sprintf("Agents in %s keep reading %s", env.scopeName(candidate.Spec.Scope), host),
-				Explanation: fmt.Sprintf("Agents fetched pages from %s in %s this month, looking up the same reference each time.", host, fractionPhrase(stats.Rate, "conversations")),
-				ImpactNote:  countNoun(stats.Occurrences, "page fetch"), Steps: steps, ChartTitle: "Conversations that fetched " + host, Rate: fractionPhrase(stats.Rate, "")}
+				Explanation: fmt.Sprintf("%s in %s in the last 28 days, looking up reference material.", map[bool]string{true: "Agents called " + host, false: "Agents fetched pages from " + host}[mcp], fractionPhrase(stats.Rate, "conversations")),
+				ImpactNote:  map[bool]string{true: countNoun(stats.Occurrences, "MCP call"), false: countNoun(stats.Occurrences, "page fetch")}[mcp], Steps: steps,
+				ChartTitle: map[bool]string{true: "Conversations that called ", false: "Conversations that fetched "}[mcp] + host, Rate: fractionPhrase(stats.Rate, "")}
 		}
 		output = append(output, candidate)
 	}
 	sort.Slice(output, func(i, j int) bool { return output[i].Spec.id() < output[j].Spec.id() })
 	return output, nil
+}
+
+// docsHostName names a documentation host for people: a web host as it is,
+// an MCP server as "the context7 MCP server".
+func docsHostName(host string) string {
+	if server, ok := strings.CutPrefix(host, "mcp:"); ok {
+		return "the " + server + " MCP server"
+	}
+	return host
+}
+
+// docsFetchNoun counts one conversation's reference lookups: pages from a web
+// host, calls to an MCP server.
+func docsFetchNoun(host string, n int) string {
+	if strings.HasPrefix(host, "mcp:") {
+		return countNoun(n, "call") + " to"
+	}
+	return countNoun(n, "page") + " from"
 }

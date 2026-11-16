@@ -2,7 +2,7 @@
 
 The header's **Data updates** tool and the icons on shared charts, native query
 tables and query cards open one read-only processing dialog. They use the normal
-header tool registry (including More and Layout Preferences), the Data Guide
+header tool registry (including More and Layout), the Data Guide
 modal shell, a database-and-clock glyph and the activity panel's progress tracks.
 The existing Background Processing page owns all schedule and run actions. Its
 new Now section reuses the activity panel model, showing current work and the
@@ -112,7 +112,7 @@ with an explanation that the check time is unavailable). Scheduled changes say
 work, without promising a start time. Step names describe actions (“Read tool
 calls,” “Summarize tool use”), and progress reads “58 of 128 messages.” Raw job
 identifiers and service diagnostics stay out of this surface. The link to the
-existing Background Processing page reads “Update settings.”
+existing Background Processing page reads “Background Processing.”
 
 ## Output availability and preview isolation
 

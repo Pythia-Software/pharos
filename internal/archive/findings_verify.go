@@ -495,7 +495,7 @@ func (env *findingEnv) result(candidate *findingCandidate, item *findingInterven
 		guardsOK = guard("error rate", before.ErrorRate, after.ErrorRate, true) && guardsOK
 	}
 	if metric.GuardSuccess {
-		guardsOK = guard("engagements ending in success", before.SuccessRate, after.SuccessRate, false) && guardsOK
+		guardsOK = guard("conversations whose last call to the program succeeded", before.SuccessRate, after.SuccessRate, false) && guardsOK
 		// Help and usage errors must both fall, not trade places.
 		guardsOK = guard("help calls", before.HelpRate, after.HelpRate, true) && guardsOK
 		guardsOK = guard("usage errors", before.UsageRate, after.UsageRate, true) && guardsOK
@@ -510,7 +510,7 @@ func (env *findingEnv) result(candidate *findingCandidate, item *findingInterven
 		outcome = interventionWorse
 	}
 	result := map[string]any{"outcome": outcome, "before": before, "after": after, "ratio": finiteOrNil(ratio), "p_lower": pLower, "p_upper": pUpper,
-		"guards": guards, "sentence": resultSentence(metric, before, after, outcome)}
+		"guards": guards, "sentence": resultSentence(candidate.Spec.Detector, metric, before, after, outcome)}
 	// What else changed: harness versions, other findings copied in the same
 	// scope, and the same pattern elsewhere.
 	if note := env.harnessNote(candidate, plan); note != "" {
@@ -553,21 +553,40 @@ func finiteOrNil(value float64) any {
 
 // resultSentence states a result in the finding's own words, as an
 // observation rather than proof of cause.
-func resultSentence(metric findingMetric, before, after windowStats, outcome string) string {
+func resultSentence(detector string, metric findingMetric, before, after windowStats, outcome string) string {
 	if outcome == interventionInconclusive {
 		return "There hasn't been enough of this work since the change to tell."
 	}
 	switch metric.Kind {
 	case "mean":
-		return fmt.Sprintf("Since the change, a typical %s has %s instead of %s.", strings.TrimSuffix(metric.Unit, "s"), tokensPhrase(after.Median), tokensPhrase(before.Median))
+		// Mean metrics measure one call's result (heavy output), what a
+		// conversation's tools returned before its first edit (orientation),
+		// or how much of that later requests re-read (exploration).
+		if metric.Unit == "calls" {
+			return fmt.Sprintf("Since the change, a typical call returned %s, instead of %s.", tokensPhrase(after.Median), tokensPhrase(before.Median))
+		}
+		if detector == "exploration" {
+			return fmt.Sprintf("Since the change, later requests in a typical %s re-read %s of what it explored before its first edit, instead of %s.", strings.TrimSuffix(metric.Unit, "s"), tokensPhrase(after.Median), tokensPhrase(before.Median))
+		}
+		return fmt.Sprintf("Since the change, a typical %s used %s before its first edit, instead of %s.", strings.TrimSuffix(metric.Unit, "s"), tokensPhrase(after.Median), tokensPhrase(before.Median))
 	case "share":
-		return fmt.Sprintf("Since the change, this accounts for %s of the total instead of %s.", fractionPhrase(after.Rate, ""), fractionPhrase(before.Rate, ""))
+		return fmt.Sprintf("Since the change, this accounts for %s of the total instead of %s.", sharePhrase(after.Rate), sharePhrase(before.Rate))
 	}
-	unit := strings.TrimSuffix(metric.Unit, "s")
+	units := resultUnits(metric)
 	if after.Hits == 0 {
-		return fmt.Sprintf("Since the change, it hasn't happened in %s; before, it happened in %s.", countNoun(after.Units, unit), fractionPhrase(before.Rate, ""))
+		return fmt.Sprintf("Since the change, it hasn’t happened in %s; before, it happened in %s.", countNoun(after.Units, strings.TrimSuffix(units, "s")), fractionPhrase(before.Rate, units))
 	}
-	return fmt.Sprintf("Since the change, this happens in %s instead of %s.", fractionPhrase(after.Rate, metric.Unit), fractionPhrase(before.Rate, ""))
+	return fmt.Sprintf("Since the change, this happens in %s instead of %s.", fractionPhrase(after.Rate, units), fractionPhrase(before.Rate, ""))
+}
+
+// resultUnits names what a rate metric counts in a sentence. The CLI
+// detector's stored unit, "engagements", is one conversation's use of a
+// program, so it reads as conversations.
+func resultUnits(metric findingMetric) string {
+	if metric.Unit == "engagements" {
+		return "conversations"
+	}
+	return metric.Unit
 }
 
 // harnessNote says when the harness version changed during a result's

@@ -264,7 +264,8 @@ func agentEventsFreshnessNote(ctx context.Context, q queryer) (string, error) {
 	}
 	switch freshness["state"] {
 	case "pending":
-		return fmt.Sprintf(" Events for %d conversations are waiting to be rebuilt, so these counts may change.", integer(freshness["pending_conversations"])), nil
+		pending := int(integer(freshness["pending_conversations"]))
+		return fmt.Sprintf(" %s %s waiting for events to be rebuilt. These counts may change.", countNoun(pending, "conversation"), map[bool]string{true: "is", false: "are"}[pending == 1]), nil
 	}
 	return "", nil
 }
