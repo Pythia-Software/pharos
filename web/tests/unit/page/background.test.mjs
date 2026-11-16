@@ -470,6 +470,11 @@ test("the table lists every source with every measure; sources past the limit fo
   assert.deepEqual(model.table.map(row => row.gpu), ["30 s", "", "", "", ""]);
   assert.equal(model.gpu, true);
   assert.equal(plain(background.usageModel({ ...usage, rows: usage.rows.map(row => ({ ...row, gpu_seconds: null })) })).gpu, false, "no GPU column when none was measured");
+  // GPU time part of which could not be read is said, not left blank like work that has none.
+  const gap = plain(background.usageModel({ ...usage, rows: usage.rows.map(row => ({ ...row, gpu_seconds: null, gpu_unmeasured: row.source === "item:labels" })) }));
+  assert.equal(gap.gpu, true);
+  assert.deepEqual(gap.table.map(row => row.gpu), ["not measured yet", "", "", "", ""]);
+  assert.deepEqual(gap.rows[0].popover.rows.find(row => row.label === "GPU time"), { label: "GPU time", value: "not measured yet" });
 });
 
 test("nothing measured yet is an empty chart, not zeros", () => {

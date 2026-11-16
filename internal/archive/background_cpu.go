@@ -990,8 +990,11 @@ type cpuSourceRow struct {
 	CPUSeconds       *float64 `json:"cpu_seconds"`
 	WorkerCPUSeconds *float64 `json:"worker_cpu_seconds"`
 	GPUSeconds       *float64 `json:"gpu_seconds"`
-	Seconds          float64  `json:"seconds"`
-	Runs             float64  `json:"runs"`
+	// GPUUnmeasured is work that may use the GPU with part of its GPU time
+	// not read: no figure, which is different from work that has none.
+	GPUUnmeasured bool    `json:"gpu_unmeasured,omitempty"`
+	Seconds       float64 `json:"seconds"`
+	Runs          float64 `json:"runs"`
 	// PeakBytes is the most over the window, not a daily figure.
 	PeakBytes *int64       `json:"peak_bytes"`
 	Days      []cpuDayCell `json:"days"`
@@ -1075,6 +1078,7 @@ func cpuUsage(days map[cpuDayKey]cpuDay, at time.Time) map[string]any {
 			return new(*value / measured)
 		}
 		row.CPUSeconds, row.WorkerCPUSeconds, row.GPUSeconds, row.PeakBytes = perDay(total.total()), perDay(total.worker()), perDay(total.gpu()), total.Peak
+		row.GPUUnmeasured = total.Gaps&gapGPU != 0
 		for _, name := range window {
 			day := days[cpuDayKey{name, source}]
 			row.Days = append(row.Days, cpuDayCell{Day: name, CPUSeconds: day.total(), Seconds: day.Seconds})

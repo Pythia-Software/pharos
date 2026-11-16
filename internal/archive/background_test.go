@@ -2086,6 +2086,22 @@ func TestCPUUsageAveragesTheDaysMeasured(t *testing.T) {
 	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM background_cpu_days").Scan(&kept); err != nil || kept != 7 {
 		t.Fatalf("days past the kept window are dropped: %d kept, %v", kept, err)
 	}
+	// A run keeps its own gap: its GPU time is stored as not measured and
+	// read back that way, and its worker CPU time, which was whole, is kept.
+	if err := catalog.writeTransaction(ctx, "item runs", func(tx *sql.Tx) error {
+		return insertItemRuns(ctx, tx, []itemRun{
+			{Item: "agent_events", Cadence: "hourly", Started: at, Seconds: 60, Use: cpuUse{CPU: f(30), Worker: f(90), GPU: f(7), Gaps: gapGPU}},
+			{Item: "labels", Cadence: "hourly", Started: at, Seconds: 60, Use: cpuUse{CPU: f(30), Worker: f(90), GPU: f(7), Gaps: gapWorker}}})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runs := catalog.itemRuns(ctx)
+	if run := runs["agent_events"][0].Use; run.Gaps != gapGPU || run.GPU != nil || run.gpu() != nil || *run.worker() != 90 || *run.total() != 120 {
+		t.Fatalf("a run with a GPU gap: %+v", run)
+	}
+	if run := runs["labels"][0].Use; run.Gaps != gapWorker || run.Worker != nil || run.total() != nil || *run.gpu() != 7 {
+		t.Fatalf("a run with a worker gap: %+v", run)
+	}
 	// What has not been stored yet is read too.
 	catalog.ops = newOpRegistry("service")
 	catalog.ops.cpu = newCPULedger()
@@ -2095,7 +2111,7 @@ func TestCPUUsageAveragesTheDaysMeasured(t *testing.T) {
 	if usage["measured_days"] != 3 || len(rows) != 5 || rows[0].Source != "item:labels" || rows[len(rows)-1].Source != cpuSourceOther {
 		t.Fatalf("three measured days, labels first and the rest last: %v days, %+v", usage["measured_days"], rows)
 	}
-	if events := rows[1]; events.Source != "item:agent_events" || *events.CPUSeconds != 80 || *events.WorkerCPUSeconds != 60 || events.GPUSeconds != nil {
+	if events := rows[1]; events.Source != "item:agent_events" || *events.CPUSeconds != 80 || *events.WorkerCPUSeconds != 60 || events.GPUSeconds != nil || !events.GPUUnmeasured || rows[0].GPUUnmeasured {
 		t.Fatalf("a window with an incomplete GPU day has no GPU figure: %+v", events)
 	}
 	labels := rows[0]
