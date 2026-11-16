@@ -58,6 +58,7 @@ The framework's own ticking is small: about 1.8% of a core idle.
 | Peers is told of a call changed in place by conversation, and only when a column a link is derived from changed | After the tool-ledger rebuild for a new version (v15 → v16, 50,558 conversations): the one library-wide time moved back to 2025-11-09; the next pass took 318 s, 28.4 GB allocated, 7,959 readers | No conversation noted; 0.6 s, under 0.1 MB, 0 readers. Same 3,419 links. One call from June reclassified: 1 conversation noted, 12.3 s, 0.6 GB, 378 readers |
 | Fixes is rebuilt at most daily from agent events passes | About 7.6 rebuilds a day at about 671 s each | At most one (projected: about 85 → 11 min/day) |
 | Authorship changes no longer mark agent events dirty; a full refine rewrites only real changes | Refine rewrote 3,652 rows (3,647 a counter in the reason text), each marking labels, agent events and findings | 5 rows |
+| A new app session's identity link, and rows without a time, no longer discard the writing checkpoint | One new linked session (1 link, 949 messages): full refine, 280.6 s, 44.9 GB allocated, 3.4 GB peak. A morning's arrivals (23 links, 48 conversations, 143 prompts): full refine, about 300 s, 44.5 GB | 5.5 s, 2.65 GB allocated, 1.0 GB peak, 1 row rewritten. 19.0 s (14.2 s of it one writer hold), 2.71 GB, 1.0 GB peak, 5 rows. Stored rows identical to the old build's full pass |
 | The result cache's unasked sweep, derived-value use marks and debounce | See "Result cache" below | |
 | Findings measure is never placed faster than Hourly; placement weighs a day's fixed cost, with hysteresis | 17 cadence moves in 5.9 days (replay) | 2 |
 | Ask suggestions refresh by day and six-hour bucket, not after every index | 12 or more runs a day | About 6 (projected) |
@@ -162,8 +163,17 @@ the columns that build defines differently.
 
 Not done, largest first by the audit's estimate:
 
-- **Refine is still a full pass on most days.** New identity links, mirror
-  changes and old-dated imports each force one (44.5 GB allocated).
+- **Refine is still a full pass on most days.** A new session's identity
+  link and undated rows no longer force one (see below), but each of these
+  still does (44.5 GB allocated):
+  - A repeated prompt crossing the template threshold. This refused the one
+    22-hour replay period that had no other cause (49 links, 296 prompts).
+  - A copy that arrives after its original was classified. Its old-dated
+    messages and its link both change history. In the newest 1,000 links,
+    every TL1 copy and 25% of Conductor copies were first seen more than two
+    minutes after the other copy.
+  - Old-dated imports, and mirror representatives changing among workspaces
+    with history.
 - **Every written record marks all nine analysis stages.** Narrower marks
   need ingest to say what changed.
 - **Ingest rewrites carried counts** on every tool call still in context on

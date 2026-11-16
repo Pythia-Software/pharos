@@ -143,7 +143,8 @@ message cannot anchor a link into its representative.
 
 For explicit exact rebuilds, the full classifier remains the fallback for
 missing/old/interrupted state,
-identity or mirror changes, launch overlap, historical edits/deletions or
+identity links into classified history, mirror changes among workspaces with
+history, launch overlap, historical edits/deletions or
 backfills, equal-time additions, and suffixes exceeding 2,000 user messages.
 A template crossing its threshold also takes the full path: its earlier uses
 change category. Another use of a prompt that already is a template does not.
@@ -174,6 +175,55 @@ one, so a new conversation, workspace or run no longer forces the full
 fallback. A new conversation dates its dirty evidence by its start rather than
 by the time it was indexed. Upgrading to version 3 runs one full pass (about four minutes on
 a 110 GB catalog).
+
+An identity link is new work too when both conversations it joins started
+after the watermark. Ingest writes an app session's native transcript, its
+app copy and the link between them together, so none of the three is history.
+The fingerprint leaves such a link out, and its insert trigger dates it by the
+earlier of the two starts instead of as all history. The suffix then applies
+the link as the full classifier does: the claimed session is not a headless
+run, and the mirror's messages are not counted, so they add nothing to
+template counts. The fingerprint still holds the representative of every
+workspace that has history. The full path remains for:
+
+- a link to a conversation that was already classified (a copy that arrives
+  after its original was classified, whose own old-dated messages need the
+  full path as well);
+- a link that makes a workspace with history a mirror, restores one, or
+  changes its representative;
+- a removed or edited link;
+- a link to a conversation that holds a message dated by the watermark,
+  whatever start it records;
+- the first Conductor conversation from a host. An SDK session is a run
+  nobody claimed only on a host whose Conductor is read, so that
+  conversation changes the host's old sessions. The fingerprint holds the
+  set of Conductor hosts.
+
+A suffix pass derives launches again only when new work holds a headless
+run. A linked pair holds none (the link claims the native session), and its
+commands come after every earlier run's start, so they can launch only later
+runs, which are new work themselves.
+
+A link that joins already-classified conversations is not local in general.
+Classified messages feed first-occurrence state that later messages were
+compared with (re-sent text, reused lines, template counts), and a copy's
+agent replies join the seven-day corpus every later message is compared with.
+
+A tool call, command or new message without a time dates nothing. No
+classifier query reads one: inputs need a sent time, and replies and commands
+are read by time. App copies bring such rows, and each used to date all
+history. A changed or removed undated message still does, because a dated
+tool call may read its text.
+
+This did not need a new checkpoint version. A checkpoint stored by an earlier
+release is recognized by its old fingerprint, computed without the links of
+new work, and kept; replacing the triggers dates nothing. It is not
+recognized when it already held a link between two conversations newer than
+its watermark, or when history changed before the upgrade; the next pass is
+then full, as it would have been without upgrading.
+
+A pass from the checkpoint is still refused when a repeated prompt crosses
+the template threshold, which happens often on a library that reuses prompts.
 
 Checkpoint publication is chunked too. Its version is invalidated before
 output writes and restored with the generation only after all state writes

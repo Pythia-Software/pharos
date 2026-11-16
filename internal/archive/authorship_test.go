@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1722,6 +1723,218 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 		plan, err := c.planAuthorship(t.Context(), results, launches)
 		if err != nil || len(plan) != 0 {
 			t.Fatalf("mirror ingest differs: %v (%v)", plan, err)
+		}
+	})
+
+	// A session run by an app arrives as its native transcript, the app's copy
+	// and the identity link between them. All three are new work: the link
+	// claims the session and mirrors the copy, and the checkpoint stands.
+	t.Run("new sessions arrive with their links", func(t *testing.T) {
+		c, _ := testCatalog(t)
+		prompt := "Please review the changes in this workspace and report every problem"
+		statements := []string{
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('old','codex','local','old','Old','2026-09-01'),('app','conductor','local','app','App','2026-09-01')`,
+			// A Mac whose Conductor is read: its unclaimed SDK sessions are runs.
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,origin_host_id,started_at) VALUES('app0','app','codex','local','app0','conductor','host','` + formatTime(authorAt(0)) + `')`,
+		}
+		send := func(id, conversation string, minute int, text string) string {
+			return fmt.Sprintf(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('%s','%s','%s','user','message','%s','%s','%s')`, id, conversation, id, text, formatTime(authorAt(minute)), id)
+		}
+		for i := range 3 { // the prompt in three sessions on three days
+			id := fmt.Sprintf("h%d", i)
+			statements = append(statements, fmt.Sprintf(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,started_at) VALUES('%s','old','codex','local','%s','codex','%s')`, id, id, formatTime(authorAt(i*24*60))),
+				send("p"+id, id, i*24*60+1, prompt), send("t"+id, id, i*24*60+30, fmt.Sprintf("Number %d: tidy the importer and explain each step you took afterwards", i)))
+		}
+		statements = append(statements,
+			// An SDK session on a Mac whose Conductor has not been read: typed.
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('solo','claude','local','solo','Solo','2026-09-01')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,origin_host_id,started_at) VALUES('lone','solo','claude','local','lone','claude-code/sdk-ts','other','`+formatTime(authorAt(5))+`')`,
+			send("lone-0", "lone", 6, "Summarize what the nightly backup wrote and flag anything missing"),
+			// A conversation that says it starts later than the messages it holds.
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('aside','codex','local','aside','Aside','2026-09-01')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,started_at) VALUES('stale','aside','codex','local','stale','codex','`+formatTime(authorAt(400*24*60))+`')`,
+			send("pstale", "stale", 45, "Rename the exporter flags so they match the importer ones"))
+		execTx(t, c.DB, statements...)
+		// session writes what one indexing transaction does for an app session
+		// started at minute: both conversations, their messages and the link.
+		host := "host"
+		session := func(name, provider, harness string, minute int, texts ...string) {
+			t.Helper()
+			statements := []string{
+				fmt.Sprintf(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('native-%[1]s','%[2]s','local','native-%[1]s','Native','2026-09-01'),('copy-%[1]s','conductor','local','copy-%[1]s','Copy','2026-09-01')`, name, provider),
+				fmt.Sprintf(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,origin_host_id,started_at) VALUES
+				 ('native-%[1]s','native-%[1]s','%[2]s','local','native-%[1]s','%[3]s','%[5]s','%[4]s'),('copy-%[1]s','copy-%[1]s','%[2]s','local','copy-%[1]s','conductor','%[5]s','%[4]s')`, name, provider, harness, formatTime(authorAt(minute)), host),
+			}
+			for index, text := range texts {
+				statements = append(statements, send(fmt.Sprintf("native-%s-%d", name, index), "native-"+name, minute+1+index, text), send(fmt.Sprintf("copy-%s-%d", name, index), "copy-"+name, minute+1+index, text))
+			}
+			// The app's copy records some replies and tool calls without a time.
+			// Nothing reads those, so they date nothing.
+			statements = append(statements, fmt.Sprintf(`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('copy-%[1]s','native-%[1]s','native-alias',1,'{}')`, name),
+				fmt.Sprintf(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES
+				 ('copy-%[1]s-reply','copy-%[1]s','copy-%[1]s-reply','assistant','message','Done, see the summary above.','copy-%[1]s-reply'),
+				 ('copy-%[1]s-call','copy-%[1]s','copy-%[1]s-call','assistant','tool_call','{"tool":"Bash","input":{"command":"ls"}}','copy-%[1]s-call')`, name),
+				fmt.Sprintf(`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,program,command,call_message_id,status)
+				 VALUES('copy-%[1]s-call','copy-%[1]s','copy-%[1]s',1,'%[2]s','tool_call','Bash','command','ls','ls','copy-%[1]s-call','ok')`, name, provider),
+				fmt.Sprintf(`INSERT INTO tool_commands(tool_call_id,position,program,subcommand,command) VALUES('copy-%[1]s-call',0,'ls','','ls')`, name))
+			execTx(t, c.DB, statements...)
+		}
+		// rebuild runs the pass a frequent update does and requires its stored
+		// rows to be the full classifier's.
+		rebuild := func() (mode string) {
+			t.Helper()
+			want, _, _ := c.authorshipGenerations()
+			ctx := withWorkProgress(t.Context(), func(work activityWork) {
+				if rest, ok := strings.CutPrefix(work.Phase, "authorship mode: "); ok {
+					mode = rest
+				}
+			})
+			if err := c.RebuildAuthorship(ctx, want); err != nil {
+				t.Fatal(err)
+			}
+			inputs, launches, err := c.authorshipInputs(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			results, err := c.classifyInputs(t.Context(), inputs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan, err := c.planAuthorship(t.Context(), results, launches); err != nil || len(plan) != 0 {
+				t.Fatalf("%s differs from the full classifier: %v (%v)", mode, plan, err)
+			}
+			return mode
+		}
+		row := func(id string) (typed, template, automated int, found bool) {
+			t.Helper()
+			err := c.DB.QueryRow(`SELECT typed_words,template_words,automated_words FROM message_authorship WHERE message_id=?`, id).Scan(&typed, &template, &automated)
+			if err != nil && err != sql.ErrNoRows {
+				t.Fatal(err)
+			}
+			return typed, template, automated, err == nil
+		}
+		rebuild()
+
+		// The copy is a mirror: its prompt is not a fifth session, so the
+		// prompt stays under the template threshold. The link claims the Claude
+		// SDK session, which is otherwise a run nobody recorded starting.
+		day := 10 * 24 * 60
+		session("codex", "codex", "codex/codex_sdk_ts", day, prompt, "Then compare the importer with the exporter and list what differs between them")
+		session("claude", "claude", "claude-code/sdk-ts", day+60, "Walk through the scheduler and say which queue each task waits in")
+		if mode := rebuild(); mode != "suffix" {
+			t.Fatalf("new linked sessions were classified as %q, not from the checkpoint", mode)
+		}
+		if _, template, _, found := row("native-codex-0"); !found || template != 0 {
+			t.Fatalf("prompt in a fourth session: template=%d found=%v", template, found)
+		}
+		if typed, _, automated, found := row("native-claude-0"); !found || typed == 0 || automated != 0 {
+			t.Fatalf("claimed session: typed=%d automated=%d found=%v", typed, automated, found)
+		}
+		for _, id := range []string{"copy-codex-0", "copy-codex-1", "copy-claude-0"} {
+			if _, _, _, found := row(id); found {
+				t.Fatalf("mirror message %s was counted", id)
+			}
+		}
+
+		// The first Conductor session read from another Mac makes that Mac's
+		// unclaimed SDK sessions runs, in history too.
+		if typed, _, _, _ := row("lone-0"); typed == 0 {
+			t.Fatal("fixture: the other Mac's SDK session was not typed")
+		}
+		host = "other"
+		session("away", "claude", "claude-code/sdk-ts", day+120, "Check the backup schedule on the other machine and report any gaps")
+		host = "host"
+		if mode := rebuild(); mode == "suffix" {
+			t.Fatal("a new Conductor host was classified from the checkpoint")
+		}
+		if typed, _, automated, _ := row("lone-0"); typed != 0 || automated == 0 {
+			t.Fatalf("unclaimed session on a Conductor host: typed=%d automated=%d", typed, automated)
+		}
+
+		// Ingest names every workspace it writes, without an authored name
+		// yet. The copy's workspace has no counted message, and the suffix
+		// still records that it was named.
+		ingested := func(name string, minute int) {
+			t.Helper()
+			message := MessageRecord{NativeID: name + "-0", Role: "user", Kind: "message", Selected: true, CreatedAt: formatTime(authorAt(minute + 1)),
+				Text: "Ingested " + name + ": list the queue names the scheduler reads at startup"}
+			ingestRecords(t, c,
+				WorkspaceRecord{SourceID: name + "-native", SourceKind: "codex", Account: "local", Title: "Native", ActivityAt: formatTime(authorAt(minute + 1)),
+					Conversations: []ConversationRecord{{NativeID: name, Provider: "codex", Account: "local", Harness: "codex/codex_sdk_ts", StartedAt: formatTime(authorAt(minute)), Messages: []MessageRecord{message}}}},
+				WorkspaceRecord{SourceID: name + "-copy", SourceKind: "conductor", Account: "local", Title: "Copy", ActivityAt: formatTime(authorAt(minute + 1)),
+					Conversations: []ConversationRecord{{NativeID: name + "-app", Provider: "codex", Account: "local", Harness: "conductor", Aliases: []string{name}, StartedAt: formatTime(authorAt(minute)), Messages: []MessageRecord{message}}}})
+		}
+		ingested("first", day+180)
+		rebuild()
+		ingested("second", day+240)
+		if mode := rebuild(); mode != "suffix" {
+			t.Fatalf("an ingested linked session was classified as %q", mode)
+		}
+		var unnamed int
+		if err := c.DB.QueryRow(`SELECT COUNT(*) FROM workspace_names WHERE authored_version IS NOT ?`, workspaceNamesVersion).Scan(&unnamed); err != nil || unnamed != 0 {
+			t.Fatalf("%d workspaces left without a naming pass (%v)", unnamed, err)
+		}
+
+		// A fifth session makes the prompt a template in every earlier one,
+		// which only the full classifier can restate.
+		session("fifth", "codex", "codex/codex_sdk_ts", day+24*60, prompt)
+		if mode := rebuild(); mode == "suffix" {
+			t.Fatal("a prompt crossing the template threshold was classified from the checkpoint")
+		}
+		if _, template, _, _ := row("ph0"); template == 0 {
+			t.Fatal("the earliest use did not become a template")
+		}
+
+		// A conversation that starts after the watermark is history all the
+		// same when it holds classified messages, and so is a link to it.
+		execTx(t, c.DB,
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('aside-copy','conductor','local','aside-copy','Aside','2026-09-01')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,origin_host_id,started_at) VALUES('stale-copy','aside-copy','codex','local','stale-copy','conductor','host','`+formatTime(authorAt(day+2*24*60))+`')`,
+			`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('stale','stale-copy','native-alias',1,'{}')`)
+		if mode := rebuild(); mode == "suffix" || mode == "unchanged" || mode == "no user suffix" {
+			t.Fatalf("a link to a conversation holding old messages was classified as %q", mode)
+		}
+
+		// A link to a conversation already classified changes history: its copy
+		// arriving late makes the old workspace's conversation a claimed one.
+		execTx(t, c.DB,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness,origin_host_id,started_at) VALUES('late','app','codex','local','late','conductor','host','`+formatTime(authorAt(day+3*24*60))+`')`,
+			`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('h0','late','native-alias',1,'{}')`)
+		if mode := rebuild(); mode == "suffix" || mode == "unchanged" || mode == "no user suffix" {
+			t.Fatalf("a link into history was classified as %q", mode)
+		}
+
+		// A checkpoint stored by a release that hashed every link is carried
+		// over on upgrade: the trigger is replaced without dating anything, and
+		// the next new session still classifies from the checkpoint.
+		var watermark string
+		if err := c.DB.QueryRow(`SELECT value FROM meta WHERE key='authorship_state_watermark'`).Scan(&watermark); err != nil {
+			t.Fatal(err)
+		}
+		at, _ := parseTime(watermark)
+		_, previous, _, _, err := c.authorshipGraph(t.Context(), at, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		execTx(t, c.DB, `DROP TRIGGER authorship_input_conversation_identity_links_INSERT_v2`,
+			`CREATE TRIGGER authorship_input_conversation_identity_links_INSERT AFTER INSERT ON conversation_identity_links BEGIN UPDATE authorship_dirty SET revision=hex(randomblob(16)),earliest=MIN(COALESCE(earliest,''),'') WHERE id=1; END`)
+		if _, err := c.DB.Exec(`UPDATE meta SET value=? WHERE key='authorship_state_graph'`, previous); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.ensureAuthorshipState(); err != nil {
+			t.Fatal(err)
+		}
+		var earliest sql.NullString
+		if err := c.DB.QueryRow(`SELECT earliest FROM authorship_dirty`).Scan(&earliest); err != nil || earliest.Valid {
+			t.Fatalf("upgrade dated history: %v (%v)", earliest, err)
+		}
+		session("upgraded", "codex", "codex/codex_sdk_ts", day+4*24*60, "After the upgrade, check that the exporter still writes every attachment it lists")
+		if mode := rebuild(); mode != "suffix" {
+			t.Fatalf("the first session after an upgrade was classified as %q", mode)
+		}
+		var graph string
+		if err := c.DB.QueryRow(`SELECT value FROM meta WHERE key='authorship_state_graph'`).Scan(&graph); err != nil || !strings.HasPrefix(graph, authorshipGraphFormat) {
+			t.Fatalf("carried checkpoint graph: %q (%v)", graph, err)
 		}
 	})
 
