@@ -835,7 +835,7 @@ func TestToolLedgerReplayChangesOnlyRowsThatDiffer(t *testing.T) {
 		"CREATE TRIGGER replay_insert AFTER INSERT ON tool_calls BEGIN INSERT INTO replay_writes VALUES(NEW.id); END",
 		// One call as an older version stored it, and one it derived that
 		// this version does not.
-		"UPDATE tool_calls SET tool_category='as an older version had it' WHERE id=(SELECT MIN(id) FROM tool_calls WHERE started_at IS NOT NULL)",
+		"UPDATE tool_calls SET tool_category='as an older version had it' WHERE id=(SELECT MIN(id) FROM tool_calls WHERE started_at IS NOT NULL AND tool_category IN ('edit','read'))",
 		// One that started at another time, as a version stored it before a
 		// column was derived that no related-conversations link reads.
 		`UPDATE tool_calls SET wait_events=wait_events+7 WHERE id=(SELECT MAX(id) FROM tool_calls WHERE started_at<>(SELECT started_at FROM tool_calls WHERE tool_category='as an older version had it'))`,
@@ -843,6 +843,7 @@ func TestToolLedgerReplayChangesOnlyRowsThatDiffer(t *testing.T) {
 		"INSERT INTO tool_commands(tool_call_id,position,command) VALUES('no-longer-derived',0,'true')",
 		"DELETE FROM replay_writes",
 		"DELETE FROM work_peer_links_changed",
+		"DELETE FROM work_peer_links_dirty",
 		"UPDATE tool_ledger_state SET version='an older version'")
 	var corrected string
 	if err := catalog.DB.QueryRow("SELECT started_at FROM tool_calls WHERE tool_category='as an older version had it'").Scan(&corrected); err != nil {
@@ -864,5 +865,10 @@ func TestToolLedgerReplayChangesOnlyRowsThatDiffer(t *testing.T) {
 	var first, last string
 	if err := catalog.DB.QueryRow("SELECT first,last FROM work_peer_links_changed").Scan(&first, &last); err != nil || first != corrected || last != corrected {
 		t.Fatalf("related conversations recheck %q to %q, want the corrected call's start %q (%v)", first, last, corrected, err)
+	}
+	// Nothing else is told to them: no other conversation, and no time for
+	// the whole library, which would have every reader since derived again.
+	if noted, since := countRows(t, catalog, "SELECT COUNT(*) FROM work_peer_links_changed"), countRows(t, catalog, "SELECT COUNT(*) FROM work_peer_links_dirty"); noted != 1 || since != 0 {
+		t.Fatalf("the replay noted %d conversations and %d library-wide times for related conversations, want 1 and 0", noted, since)
 	}
 }

@@ -72,16 +72,28 @@ const (
 // peerDiffCall selects ledger calls that show changes: their added lines are
 // unmerged work. A call's program is its first command's, so a compound call
 // (`git status && git diff`) is checked command by command.
-const peerDiffCall = `(` + peerDiffCommandT + ` OR t.command_count>1 AND EXISTS(SELECT 1 FROM tool_commands tc
+const peerDiffCall = `(` + peerDiffCommand + ` OR ` + peerCompoundCall + ` AND EXISTS(SELECT 1 FROM tool_commands tc
  WHERE tc.tool_call_id=t.id AND ` + peerDiffCommandTC + `))`
 
-// A command that shows changes: a call t's own first command, a compound
-// call's command tc, and the row a tool_commands trigger fires for.
+// What makes a call t one a link can be derived from. The statements below
+// and the triggers (peerTriggerDDL, which reads these for the row written)
+// share them, so a call the statements can use is one the triggers note.
 const (
-	peerDiffCommandT   = `t.program IN ('git','gh','jj') AND t.subcommand IN ('diff','show','pr')`
-	peerDiffCommandTC  = `tc.program IN ('git','gh','jj') AND tc.subcommand IN ('diff','show','pr')`
-	peerDiffCommandRow = `%[1]s.program IN ('git','gh','jj') AND %[1]s.subcommand IN ('diff','show','pr')`
+	// A command that shows changes: a call's own first command, and a
+	// compound call's command tc.
+	peerDiffCommand   = `t.program IN ('git','gh','jj') AND t.subcommand IN ('diff','show','pr')`
+	peerDiffCommandTC = `tc.program IN ('git','gh','jj') AND tc.subcommand IN ('diff','show','pr')`
+	peerCompoundCall  = `t.command_count>1`
+	// A call that wrote lines, and one that read a file.
+	peerWriteCall = `(t.tool_category='edit' OR t.has_heredoc=1)`
+	peerFileRead  = `t.tool_category='read'`
 )
+
+// peerCallBears is whether the written row of tool_calls can be a write, a
+// read or a look at changes: no link is derived from any other call.
+func peerCallBears(row string) string {
+	return "(" + strings.ReplaceAll(peerWriteCall+" OR "+peerFileRead+" OR "+peerDiffCommand+" OR "+peerCompoundCall, "t.", row+".") + ")"
+}
 
 // The statements that read the tool ledger. The triggers that note a call
 // changed in place (peerTriggerDDL) compare the columns these read, so every
@@ -91,23 +103,23 @@ const (
 	peerNewCallsQuery = `SELECT conversation_id,MIN(started_at),MAX(started_at) FROM tool_calls WHERE rowid>? AND started_at IS NOT NULL GROUP BY +conversation_id`
 	// Conversations with a call that writes or shows changes.
 	peerLinkableQuery = `SELECT j.value FROM json_each(?) j WHERE EXISTS(SELECT 1 FROM tool_calls t
- WHERE t.conversation_id=j.value AND (t.tool_category='edit' OR t.has_heredoc=1 OR ` + peerDiffCall + `))`
+ WHERE t.conversation_id=j.value AND (` + peerWriteCall + ` OR ` + peerDiffCall + `))`
 	// Readers: conversations with a call that shows changes. The unary +
 	// lets a later run take the start-time index rather than scan the ledger
 	// in conversation order for DISTINCT.
 	peerReadersQuery      = `SELECT DISTINCT +t.conversation_id FROM tool_calls t WHERE ` + peerDiffCall
 	peerReadersAmongQuery = `SELECT j.value FROM json_each(?) j WHERE EXISTS(SELECT 1 FROM tool_calls t WHERE t.conversation_id=j.value AND ` + peerDiffCall + `)`
 	// Conversations that read or looked at changes in a span of time.
-	peerReadSinceQuery = `SELECT DISTINCT +t.conversation_id FROM tool_calls t WHERE (` + peerDiffCall + ` OR t.tool_category='read') AND t.started_at>=?`
+	peerReadSinceQuery = `SELECT DISTINCT +t.conversation_id FROM tool_calls t WHERE (` + peerDiffCall + ` OR ` + peerFileRead + `) AND t.started_at>=?`
 	peerReadUntil      = ` AND t.started_at<=?`
 	// A reader's diff and file-read calls, oldest first.
 	peerReadsQuery = `SELECT t.result_message_id,COALESCE(t.started_at,''),COALESCE(` + peerDiffCall + `,0) FROM tool_calls t
- WHERE t.conversation_id IN (SELECT value FROM json_each(?)) AND t.result_message_id IS NOT NULL AND (` + peerDiffCall + ` OR t.tool_category='read')
- ORDER BY t.started_at`
+ WHERE t.conversation_id IN (SELECT value FROM json_each(?)) AND t.result_message_id IS NOT NULL AND (` + peerDiffCall + ` OR ` + peerFileRead + `)
+ ORDER BY t.started_at,t.id`
 	// A day's edit calls with what they wrote.
 	peerWritesQuery = `SELECT t.conversation_id,COALESCE(t.call_message_id,''),t.started_at,m.text FROM tool_calls t
  JOIN messages m ON m.id=t.call_message_id
- WHERE t.started_at>=? AND t.started_at<? AND (t.tool_category='edit' OR t.has_heredoc=1)`
+ WHERE t.started_at>=? AND t.started_at<? AND ` + peerWriteCall
 )
 
 var peerLedgerStatements = []string{peerNewCallsQuery, peerLinkableQuery, peerReadersQuery, peerReadersAmongQuery,
@@ -124,26 +136,46 @@ var peerLedgerCalls = map[string]func(row string) string{
 	},
 }
 
+// peerLedgerWorkspace is the workspace of that call, kept with the note for
+// when the conversation is gone. A call that only moves workspace changes no
+// link, so this is not part of what the update triggers compare.
+var peerLedgerWorkspace = map[string]func(row string) string{
+	"tool_calls": func(row string) string { return row + ".workspace_id" },
+	"tool_commands": func(row string) string {
+		return "(SELECT workspace_id FROM tool_calls WHERE id=" + row + ".tool_call_id)"
+	},
+}
+
 // peerTriggerDDL notes the ledger writes a refresh would not otherwise see:
 // the conversation of a call that changed in place, with the call's start,
 // so the readers around it are derived again. A new call has a new rowid,
-// which the refresh reads. A call deleted, or updated in a column a link is
-// derived from (projectionChangeCondition over peerLedgerStatements), is
-// noted with its start before and after; so is the call of a command that
-// shows changes when that command is added, removed or changed. A call
-// stored again with only other columns different, as a replay of the ledger
-// for a new version stores most, notes nothing.
+// which the refresh reads. A call that can bear on a link (peerCallBears)
+// and is deleted, or updated in a column a link is derived from
+// (projectionChange over peerLedgerStatements), is noted with its start
+// before and after; so is the call of a command that shows changes when
+// that command is added, removed or changed. A call stored again with only
+// other columns different, as a replay of the ledger for a new version
+// stores most, notes nothing, and neither does any other kind of call.
 func peerTriggerDDL(q queryer) ([]string, error) {
 	note := func(table, row string) string {
-		return "INSERT INTO work_peer_links_changed(conversation_id,first,last,revision) SELECT conversation_id,started_at,started_at,hex(randomblob(8)) FROM (" +
-			peerLedgerCalls[table](row) + ") WHERE started_at IS NOT NULL ON CONFLICT(conversation_id) DO UPDATE SET first=min(first,excluded.first),last=max(last,excluded.last),revision=excluded.revision;"
+		return "INSERT INTO work_peer_links_changed(conversation_id,first,last,revision,workspace_id) SELECT conversation_id,started_at,started_at,hex(randomblob(8))," +
+			peerLedgerWorkspace[table](row) + " FROM (" + peerLedgerCalls[table](row) + ") WHERE started_at IS NOT NULL ON CONFLICT(conversation_id) DO UPDATE SET" +
+			" first=min(first,excluded.first),last=max(last,excluded.last),revision=excluded.revision,workspace_id=COALESCE(excluded.workspace_id,workspace_id);"
 	}
-	shows := func(row string) string { return "(" + fmt.Sprintf(peerDiffCommandRow, row) + ")" }
-	// Only a command that shows changes, before or after, bears on a link.
-	relevant := map[string]map[string]string{"tool_commands": {"INSERT": shows("NEW"), "DELETE": shows("OLD"), "UPDATE": "(" + shows("OLD") + " OR " + shows("NEW") + ")"}}
+	shows := func(row string) string {
+		return "(" + strings.ReplaceAll(peerDiffCommandTC, "tc.", row+".") + ")"
+	}
+	// Only a call a link can be derived from, and only a command that shows
+	// changes, before or after, bears on a link.
+	relevant := map[string]map[string]string{
+		"tool_calls":    {"DELETE": peerCallBears("OLD"), "UPDATE": "(" + peerCallBears("OLD") + " OR " + peerCallBears("NEW") + ")"},
+		"tool_commands": {"INSERT": shows("NEW"), "DELETE": shows("OLD"), "UPDATE": "(" + shows("OLD") + " OR " + shows("NEW") + ")"},
+	}
 	statements := []string{}
 	for _, table := range slices.Sorted(maps.Keys(peerLedgerCalls)) {
-		changed, err := projectionChangeCondition(q, table, append(slices.Clone(peerLedgerStatements), peerLedgerCalls[table]("NEW")))
+		// The columns compared are the ones named in UPDATE OF, so an
+		// update of other columns does not evaluate the trigger at all.
+		changed, columns, err := projectionChange(q, table, append(slices.Clone(peerLedgerStatements), peerLedgerCalls[table]("NEW")))
 		if err != nil {
 			return nil, err
 		}
@@ -161,7 +193,11 @@ func peerTriggerDDL(q queryer) ([]string, error) {
 			case "DELETE":
 				body = note(table, "OLD")
 			}
-			statement := "CREATE TRIGGER work_peer_links_" + table + "_" + strings.ToLower(event) + " AFTER " + event + " ON " + table
+			statement := "CREATE TRIGGER work_peer_links_" + table + "_" + strings.ToLower(event) + " AFTER " + event
+			if event == "UPDATE" {
+				statement += ` OF "` + strings.Join(columns, `","`) + `"`
+			}
+			statement += " ON " + table
 			if len(when) > 0 {
 				statement += " WHEN " + strings.Join(when, " AND ")
 			}
@@ -217,6 +253,8 @@ func (c *Catalog) ensurePeerLinkTriggers() error {
 type peerFamilies struct {
 	root map[string]string   // conversation → root workspace
 	top  map[string][]string // root workspace → its top-level conversations
+	// within is the root workspaces of the conversations a workspace holds.
+	within map[string]map[string]bool
 }
 
 func (c *Catalog) loadPeerFamilies(ctx context.Context, q queryer) (*peerFamilies, error) {
@@ -260,7 +298,7 @@ func (c *Catalog) loadPeerFamilies(ctx context.Context, q queryer) (*peerFamilie
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	f := &peerFamilies{root: map[string]string{}, top: map[string][]string{}}
+	f := &peerFamilies{root: map[string]string{}, top: map[string][]string{}, within: map[string]map[string]bool{}}
 	ids := make([]string, 0, len(convs))
 	for id := range convs {
 		ids = append(ids, id)
@@ -283,6 +321,10 @@ func (c *Catalog) loadPeerFamilies(ctx context.Context, q queryer) (*peerFamilie
 			workspace = rep
 		}
 		f.root[id] = workspace
+		if f.within[convs[id].workspace] == nil {
+			f.within[convs[id].workspace] = map[string]bool{}
+		}
+		f.within[convs[id].workspace][workspace] = true
 		if top == id && convs[id].workspace == workspace {
 			f.top[workspace] = append(f.top[workspace], id)
 		}
@@ -643,14 +685,15 @@ func (c *Catalog) peerEvidence(ctx context.Context, query string, after int64) (
 }
 
 // peerChange is a conversation whose calls changed in place, with the span of
-// their starts. A start that cannot be read as a time leaves its end open.
+// their starts and their workspace. No link is derived from a call whose
+// start cannot be read as a time, so a span such starts hide has no ends.
 type peerChange struct {
-	conversation, revision string
-	from, to               *time.Time
+	conversation, revision, workspace string
+	from, to                          *time.Time
 }
 
 func (c *Catalog) peerChanges(ctx context.Context) ([]peerChange, error) {
-	rows, err := c.reader().QueryContext(ctx, `SELECT conversation_id,first,last,revision FROM work_peer_links_changed ORDER BY conversation_id`)
+	rows, err := c.reader().QueryContext(ctx, `SELECT conversation_id,first,last,revision,COALESCE(workspace_id,'') FROM work_peer_links_changed ORDER BY conversation_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -659,14 +702,18 @@ func (c *Catalog) peerChanges(ctx context.Context) ([]peerChange, error) {
 	for rows.Next() {
 		var first, last string
 		change := peerChange{}
-		if err := rows.Scan(&change.conversation, &first, &last, &change.revision); err != nil {
+		if err := rows.Scan(&change.conversation, &first, &last, &change.revision, &change.workspace); err != nil {
 			return nil, err
 		}
+		// The ends are the least and greatest start as text. When only one
+		// reads as a time, it is the one known start.
 		if from, ok := parseTime(first); ok {
-			change.from = &from
+			change.from, change.to = &from, &from
 		}
 		if to, ok := parseTime(last); ok {
-			change.to = &to
+			if change.to = &to; change.from == nil {
+				change.from = &to
+			}
 		}
 		changes = append(changes, change)
 	}
@@ -698,7 +745,9 @@ type peerSpan struct {
 // that writes or shows changes: without one it is neither side of a link.
 //
 // A call changed in place, or deleted, concerns the same readers as a new
-// one at its start, whether or not its conversation still exists.
+// one at its start. When its conversation is gone too, its family is found
+// by what remains: the families of its workspace, and any reader whose link
+// is anchored on a message that no longer exists.
 func (c *Catalog) peerReadScope(ctx context.Context, f *peerFamilies, calls, turns []peerEvidence, changed []peerChange, late sql.NullString) (*peerScope, error) {
 	scope := &peerScope{roots: map[string]bool{}}
 	add := func(e peerEvidence) {
@@ -745,25 +794,43 @@ func (c *Catalog) peerReadScope(ctx context.Context, f *peerFamilies, calls, tur
 			}
 		}
 	}
+	gone := false
 	for _, change := range changed {
 		if root := f.root[change.conversation]; root != "" {
 			scope.roots[root] = true
+		} else {
+			gone = true
+			if change.workspace != "" {
+				scope.roots[change.workspace] = true
+				for root := range f.within[change.workspace] {
+					scope.roots[root] = true
+				}
+			}
 		}
-		span := peerSpan{}
 		if change.from != nil {
-			span.from = change.from.Add(-peerRecheck)
-		}
-		if change.from != nil && change.to != nil {
 			to := change.to.Add(peerWindow)
-			span.to = &to
+			scope.spans = append(scope.spans, peerSpan{change.from.Add(-peerRecheck), &to})
 		}
-		scope.spans = append(scope.spans, span)
+	}
+	if gone {
+		orphaned, err := queryStrings(ctx, c.reader(), `SELECT DISTINCT l.right_workspace_id FROM work_peer_links l WHERE l.kind='read_written_by'
+ AND (l.right_message_id<>'' AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=l.right_message_id)
+  OR l.left_message_id<>'' AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=l.left_message_id))`)
+		if err != nil {
+			return nil, err
+		}
+		for _, root := range orphaned {
+			scope.roots[root] = true
+		}
 	}
 	if at, ok := parseTime(late.String); ok && late.Valid {
 		scope.spans = append(scope.spans, peerSpan{from: at.Add(-peerRecheck)})
 	}
 	if len(scope.spans) == 0 {
-		return nil, nil
+		if len(scope.roots) == 0 {
+			return nil, nil
+		}
+		return scope, nil
 	}
 	sort.Slice(scope.spans, func(i, j int) bool { return scope.spans[i].from.Before(scope.spans[j].from) })
 	merged := scope.spans[:1]
@@ -913,9 +980,10 @@ func (c *Catalog) derivePeerReads(ctx context.Context, f *peerFamilies, scope *p
 // peerReadLink picks the writer whose lines a reader read, if one stands out.
 func (c *Catalog) peerReadLink(ctx context.Context, text *sql.Stmt, index *peerWriteIndex, clock *peerClock, f *peerFamilies, reader string, reads []peerRead) (*peerLink, error) {
 	type tally struct {
-		added, shown               int
-		writeMsg, readMsg, diffMsg string
-		firstRead                  time.Time
+		added, shown     int
+		write            *peerWrite
+		readMsg, diffMsg string
+		firstRead        time.Time
 	}
 	tallies := map[string]*tally{}
 	// A line counts once as shown and once as added: one first seen in a
@@ -944,14 +1012,20 @@ func (c *Catalog) peerReadLink(ctx context.Context, text *sql.Stmt, index *peerW
 			if newAdded {
 				seenAdded[hash] = true
 			}
-			writer, message, ok := index.uniqueWriter(hash, read.at, reader)
-			if !ok {
+			write := index.uniqueWriter(hash, read.at, reader)
+			if write == nil {
 				continue
 			}
+			writer := write.root
 			t := tallies[writer]
 			if t == nil {
-				t = &tally{writeMsg: message, readMsg: read.message, firstRead: read.at}
+				t = &tally{write: write, readMsg: read.message, firstRead: read.at}
 				tallies[writer] = t
+			} else if read.message == t.readMsg && t.write.before(write) {
+				// The lines of a read come in no order: of those the first
+				// read showed, anchor on the writer's latest write, so a
+				// rescan stores the same link every time.
+				t.write = write
 			}
 			if newShown {
 				t.shown++
@@ -1027,7 +1101,7 @@ func (c *Catalog) peerReadLink(ctx context.Context, text *sql.Stmt, index *peerW
 		readMsg = t.diffMsg
 	}
 	return &peerLink{left: writer, right: reader, kind: "read_written_by", confidence: confidence,
-		leftMessage: t.writeMsg, rightMessage: readMsg, at: formatTime(t.firstRead),
+		leftMessage: t.write.message, rightMessage: readMsg, at: formatTime(t.firstRead),
 		evidence: map[string]any{"basis": basis, "lines": top, "runner_up": second, "timing": timing, "reader_lines": own}}, nil
 }
 
@@ -1207,9 +1281,16 @@ func (x *peerWriteIndex) evictBefore(t time.Time) {
 	}
 }
 
-// uniqueWriter returns the one other family that wrote a line in the window
-// before at. A line several families wrote is shared code, not evidence.
-func (x *peerWriteIndex) uniqueWriter(hash uint64, at time.Time, reader string) (string, string, bool) {
+// before orders writes for choosing an anchor: by time, and by message for
+// writes at one time, so the choice never depends on the order they are met.
+func (w *peerWrite) before(other *peerWrite) bool {
+	return other.at.After(w.at) || other.at.Equal(w.at) && other.message > w.message
+}
+
+// uniqueWriter returns the latest write of a line by the one other family
+// that wrote it in the window before at, or nil. A line several families
+// wrote is shared code, not evidence.
+func (x *peerWriteIndex) uniqueWriter(hash uint64, at time.Time, reader string) *peerWrite {
 	var chosen *peerWrite
 	for _, w := range x.lines[hash] {
 		if w.at.After(at) || w.at.Before(at.Add(-peerWindow)) {
@@ -1217,20 +1298,17 @@ func (x *peerWriteIndex) uniqueWriter(hash uint64, at time.Time, reader string) 
 		}
 		if w.root == reader {
 			// The reader wrote it too: its own work, not another's.
-			return "", "", false
+			return nil
 		}
 		if chosen != nil && chosen.root != w.root {
-			return "", "", false
+			return nil
 		}
 		// Anchor on the latest write of the line before the read.
-		if chosen == nil || w.at.After(chosen.at) {
+		if chosen == nil || chosen.before(w) {
 			chosen = w
 		}
 	}
-	if chosen == nil {
-		return "", "", false
-	}
-	return chosen.root, chosen.message, true
+	return chosen
 }
 
 // writtenBy counts the lines a family wrote in the window before t.

@@ -443,6 +443,7 @@ func (c *Catalog) Initialize() error {
 		{"tool_calls", "test_failure", "ALTER TABLE tool_calls ADD COLUMN test_failure INTEGER NOT NULL DEFAULT 0"},
 		{"tool_calls", "repo_path", "ALTER TABLE tool_calls ADD COLUMN repo_path TEXT"},
 		{"tool_calls", "wait_kind", "ALTER TABLE tool_calls ADD COLUMN wait_kind TEXT"},
+		{"work_peer_links_changed", "workspace_id", "ALTER TABLE work_peer_links_changed ADD COLUMN workspace_id TEXT"},
 		{"tool_calls", "wait_ended_at", "ALTER TABLE tool_calls ADD COLUMN wait_ended_at TEXT"},
 		{"tool_calls", "wait_status", "ALTER TABLE tool_calls ADD COLUMN wait_status TEXT"},
 		{"tool_calls", "wait_end_source", "ALTER TABLE tool_calls ADD COLUMN wait_end_source TEXT"},

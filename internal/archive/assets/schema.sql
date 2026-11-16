@@ -1634,7 +1634,10 @@ CREATE TABLE IF NOT EXISTS work_peer_links_changed (
   conversation_id TEXT PRIMARY KEY,
   first TEXT NOT NULL,
   last TEXT NOT NULL,
-  revision TEXT NOT NULL) WITHOUT ROWID;
+  revision TEXT NOT NULL,
+  -- The call's workspace: what is left to find its family by once the
+  -- conversation is deleted.
+  workspace_id TEXT) WITHOUT ROWID;
 -- What builds before work_peer_links_changed noted instead: the earliest such
 -- start in the library. Still read, since such a build may have written it.
 CREATE TABLE IF NOT EXISTS work_peer_links_dirty (
