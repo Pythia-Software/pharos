@@ -236,7 +236,8 @@ new classification is the full classifier's because:
 A use that named its workspace has no typed words as a template. The name
 passes to the workspace's next message with typed words: an earlier one's
 stored classification is read for it, in the full classifier's order, before
-the suffix's own messages. More than 2,000 earlier uses take the full path.
+the suffix's own messages. More than 2,000 earlier uses take the full path,
+and a frequent pass leaves a crossing to the daily pass.
 
 A copy that arrives after its original was classified is not handled, and
 cannot be by restating rows. In eight days of links (2026-11-06 to 11-13)

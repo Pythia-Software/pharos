@@ -1878,6 +1878,11 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 		// A fifth session makes the prompt a template in every earlier one.
 		// Those are restated from the sessions the checkpoint lists for it.
 		session("fifth", "codex", "codex/codex_sdk_ts", day+24*60, "First compare the two schedulers and say which one drops fewer tasks", prompt)
+		// Restating reads whole sessions, so a frequent pass leaves it.
+		generation, _, _ := c.authorshipGenerations()
+		if exact, err := c.tryExactAuthorship(t.Context(), generation); err != nil || exact {
+			t.Fatalf("a frequent pass restated a new template: exact=%v (%v)", exact, err)
+		}
 		if mode := rebuild(); mode != "suffix" {
 			t.Fatalf("a prompt crossing the template threshold was classified as %q", mode)
 		}
@@ -1943,7 +1948,11 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 		// the name passes to the workspace's next typed message.
 		opening := "Open the release checklist and tell me which steps are still unchecked"
 		for i := range 4 {
-			session(fmt.Sprintf("opening%d", i), "codex", "codex/codex_sdk_ts", day+(5+i*2/3)*24*60+i, opening, fmt.Sprintf("Step %d of the checklist looks wrong to me, please verify it by hand", i))
+			next := fmt.Sprintf("Step %d of the checklist looks wrong to me, please verify it by hand", i)
+			if i == 0 {
+				next = "?" // typed text without a word names a workspace too
+			}
+			session(fmt.Sprintf("opening%d", i), "codex", "codex/codex_sdk_ts", day+(5+i*2/3)*24*60+i, opening, next)
 		}
 		if mode := rebuild(); mode != "suffix" {
 			t.Fatalf("four sessions of a prompt were classified as %q", mode)
@@ -1958,6 +1967,11 @@ func TestAuthorshipIncrementalMirrorIngest(t *testing.T) {
 		var naming sql.NullString
 		if err := c.DB.QueryRow(`SELECT authored_message_id FROM workspace_names WHERE workspace_id='native-opening0'`).Scan(&naming); err != nil || naming.String != "native-opening0-1" {
 			t.Fatalf("workspace named by %q after its opening became a template (%v)", naming.String, err)
+		}
+		// Typed text without a word names a workspace too.
+		var title sql.NullString
+		if err := c.DB.QueryRow(`SELECT authored_title FROM workspace_names WHERE workspace_id='native-opening0'`).Scan(&title); err != nil || title.String != "?" {
+			t.Fatalf("workspace named %q by a typed mark (%v)", title.String, err)
 		}
 	})
 

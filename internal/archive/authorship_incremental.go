@@ -455,7 +455,9 @@ func (c *Catalog) authorshipSettled(ctx context.Context) (bool, error) {
 	return !waiting, err
 }
 
-func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncremental, error) {
+// restate lets the pass classify again the earlier uses of a prompt its
+// suffix makes a template (restateTemplates).
+func (c *Catalog) incrementalAuthorship(ctx context.Context, restate bool) (*authorshipIncremental, error) {
 	checkpoint, err := c.authorshipCheckpoint(ctx)
 	if err != nil {
 		return nil, err
@@ -565,9 +567,15 @@ func (c *Catalog) incrementalAuthorship(ctx context.Context) (*authorshipIncreme
 		return nil, err
 	}
 	if len(classifier.crossed) > 0 {
-		restated, ok, err := c.restateTemplates(ctx, classifier, representative, claimed, run.launches, since)
-		if err != nil {
-			return nil, err
+		// Restating reads every session that sent the prompt, which a frequent
+		// pass's limits do not bound: it leaves a crossing to the daily pass.
+		var restated []authorResult
+		ok := false
+		if restate {
+			restated, ok, err = c.restateTemplates(ctx, classifier, representative, claimed, run.launches, since)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if !ok {
 			run.reason = "a repeated prompt became a template"
@@ -673,7 +681,7 @@ func (c *Catalog) restateTemplates(ctx context.Context, suffix *classifier, repr
 // not among restated, whose stored classification gives a name.
 func (c *Catalog) nextAuthoredName(ctx context.Context, workspace, limit string, restated []string) (*authorResult, error) {
 	rows, err := c.reader().QueryContext(ctx, `SELECT a.message_id,a.sent_at,a.spans_json,m.text FROM message_authorship a JOIN messages m ON m.id=a.message_id
-		WHERE a.workspace_id=? AND a.typed_words>0 AND a.sent_at<? AND a.message_id NOT IN (SELECT value FROM json_each(?)) ORDER BY a.sent_at,a.message_id`, workspace, limit, jsonText(restated))
+		WHERE a.workspace_id=? AND a.typed_chars>0 AND a.sent_at<? AND a.message_id NOT IN (SELECT value FROM json_each(?)) ORDER BY a.sent_at,a.message_id`, workspace, limit, jsonText(restated))
 	if err != nil {
 		return nil, err
 	}

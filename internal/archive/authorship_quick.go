@@ -150,7 +150,7 @@ func (c *Catalog) tryExactAuthorship(ctx context.Context, generation string) (ex
 			block()
 		}
 	}()
-	run, err := c.incrementalAuthorship(ctx)
+	run, err := c.incrementalAuthorship(ctx, false)
 	if err != nil {
 		return false, err
 	}

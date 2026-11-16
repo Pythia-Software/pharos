@@ -1613,7 +1613,7 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, pass
 	var run *authorshipIncremental
 	var err error
 	if pass != authorshipFull {
-		run, err = c.incrementalAuthorship(ctx)
+		run, err = c.incrementalAuthorship(ctx, true)
 	}
 	if err != nil {
 		return err
