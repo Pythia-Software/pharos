@@ -1035,6 +1035,11 @@ pharos capture              # every enabled source of this Mac
 pharos capture claude codex # just these (a named source is captured even if disabled)
 ```
 
+A machine that does not run Pharos (a cloud sandbox, a CI runner) captures
+and uploads with [`pharos capture-push`](capture-push.md) instead, and
+**Settings → Sources → Collect from other machines** sets that up and
+connects the bucket to this library.
+
 The command prints a JSON summary, exits non-zero if anything failed, and never
 opens the catalog. The service offers the same as `POST /api/capture` (optional
 body `{"sources": ["claude"]}`), which starts a run in the background and

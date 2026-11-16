@@ -781,6 +781,11 @@
     const line = (label, value) => { const p = node('p'); p.append(node('strong', '', `${label}: `), value); return p; };
     detail.append(line('Feeds', item.feeds), line('Usually takes', item.cost?.text || 'not measured yet'));
     if (item.why) detail.append(node('p', 'muted', item.why));
+    if (item.setup) {
+      const setup = node('a', 'bg-setup', item.setup.label);
+      setup.href = item.setup.url;
+      detail.append(setup);
+    }
     if (item.schedules?.rows.length && item.state !== 'disabled') detail.append(renderScheduleCosts(item));
     if (item.error) detail.append(node('p', 'bg-error', item.error));
     if (item.sources?.length) detail.append(sourcePicker(item.sources));

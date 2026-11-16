@@ -149,6 +149,8 @@ var backgroundItems = []backgroundItem{
 		Kinds: []string{"background.capture/sources"}, Why: "These sources can’t be checked for small changes, so each update reads them in full."},
 	{ID: "preserve", Label: "Preserve originals", Verb: "Preserving originals", Feeds: "Recovery, and history from your other Macs", Cadence: cadenceDaily,
 		Kinds: []string{"background.capture/preserve"}, Why: "Copies this Mac’s transcripts into the library, so they survive tools deleting them, and indexes what your other Macs captured."},
+	{ID: "bucket-import", Label: "Collect from other machines", Verb: "Collecting from other machines", Feeds: "Conversations from sandboxes and other machines that push to your bucket", Cadence: cadenceHourly,
+		Kinds: []string{"capture.import/bucket"}, Why: "Reads the bucket your other machines push transcripts to, and adds what is new. It runs only once a bucket is connected."},
 	{ID: "verification", Label: "Verify indexed data", Verb: "Verifying indexed data", Feeds: "Index integrity checks", Cadence: cadenceHourly,
 		Kinds: []string{"index.verify"}, Why: "Checks larger inputs that quick indexing skipped, a batch at a time while the library is quiet. Completed checks survive interruptions; remaining inputs stay queued."},
 	{ID: "upgrade", Label: "Library upgrade", Verb: "Upgrading the library", Feeds: "Everything, after a Pharos update", Cadence: cadenceDaily, Fixed: true,
@@ -896,8 +898,10 @@ type backgroundInputs struct {
 	upgradePending               bool
 	otherSources                 []string
 	backupDestination            string
-	lastBackup                   string
-	requested                    map[string]bool
+	// bucketImports counts the buckets this Mac collects from.
+	bucketImports int
+	lastBackup    string
+	requested     map[string]bool
 	// power is this Mac's power source, for the battery policy.
 	power            powerState
 	verificationNext time.Time
@@ -1118,6 +1122,12 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			if plan.Pending {
 				standaloneNext(&plan, settings, quiet, at)
 			}
+		case item.ID == "bucket-import":
+			if in.bucketImports == 0 {
+				break
+			}
+			plan.Pending = true
+			standaloneNext(&plan, settings, quiet, at)
 		case item.ID == "backup":
 			if in.backupDestination == "" {
 				break
@@ -1356,6 +1366,7 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 		}
 	}
 	in.backupDestination, in.lastBackup = s.cachedBackup(config)
+	in.bucketImports = len(savedBucketImports(config))
 	in.requested = requested
 	in.power = s.cachedPower(ctx)
 	if config.Labels.Enabled {

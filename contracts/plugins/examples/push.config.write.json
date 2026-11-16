@@ -1,0 +1,16 @@
+{
+  "contract": "pharos-push-config/1",
+  "access": "write",
+  "prefix": "pharos/{owner}",
+  "retention_days": 90,
+  "pool": "CI runners",
+  "destination": {
+    "type": "s3",
+    "bucket": "example-pharos-transcripts",
+    "region": "us-east-1",
+    "access_key_id": "AKIAEXAMPLEWRITEONLY",
+    "secret_access_key": {
+      "env": "PHAROS_PUSH_SECRET"
+    }
+  }
+}

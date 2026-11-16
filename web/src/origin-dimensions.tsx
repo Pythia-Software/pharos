@@ -3,7 +3,7 @@ import type { RenderRegistry } from "@pythia-software/query-table-ui";
 
 export const originDimensions = [["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"]] as const;
 export type OriginDimension = typeof originDimensions[number][0];
-export const channelLabels: Record<string, string> = { conductor: "Conductor", tl1: "TL1", cli: "CLI", desktop: "Desktop app", web: "Web", ide: "IDE", api: "API / integration" };
+export const channelLabels: Record<string, string> = { conductor: "Conductor", tl1: "TL1", cli: "CLI", desktop: "Desktop app", web: "Web", ide: "IDE", api: "API / integration", niteshift: "Niteshift" };
 const machines = new Map<string, string>([["environment:web", "Web (device unknown)"]]);
 let revision = 0, loading: Promise<void> | undefined;
 const listeners = new Set<() => void>();

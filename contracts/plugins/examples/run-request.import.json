@@ -1,0 +1,41 @@
+{
+  "contract": "pharos-run/1",
+  "direction": "import",
+  "plugin": {
+    "id": "software.pythia.ssh-importer",
+    "version": "0.1.0"
+  },
+  "run_id": "run_20261102T150000Z_9c1d",
+  "started_at": "2026-11-02T15:00:00Z",
+  "deadline": "2026-11-02T15:20:00Z",
+  "dry_run": false,
+  "trigger": {
+    "kind": "schedule"
+  },
+  "limits": {
+    "max_bytes": 2147483648,
+    "max_memory": 536870912
+  },
+  "api": {
+    "url": "http://127.0.0.1:53817/connector/v1",
+    "token": "pht_5JzQm2v8Lr4Xc9Wn7Ty3Kd6Hs1Pa0Bf8Ge2Uj4Ni"
+  },
+  "output_dir": "/Volumes/euclid/Pharos/staging/plugins/software.pythia.ssh-importer/run_20261102T150000Z_9c1d/out",
+  "cursor": {
+    "version": 1,
+    "destination": "alice@lab-box",
+    "sources": {
+      "claude": {
+        "since": 1793116800,
+        "databases": {}
+      }
+    }
+  },
+  "params": {
+    "destination": "alice@lab-box",
+    "sources": [
+      "claude",
+      "codex"
+    ]
+  }
+}

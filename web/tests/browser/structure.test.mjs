@@ -301,6 +301,18 @@ const ROUTES = [
     await guide.getByRole('button',{name:'Import',exact:true}).click();await guide.getByRole('switch').waitFor();
     assert.deepEqual(await layoutProblems(page),[],'managed ZIP collection report fits the setup dialog');
   }:undefined})),
+  // The setup guide's commands and files are long lines in scrolling blocks.
+  {name:'Bucket setup guide',url:'/settings/sources?disclosures='+encodeURIComponent('{"bucketSetup":true}'),ready:'#bucketImportsSection .bucket-connected .source-card',api:{
+    'GET /api/bucket-imports':{buckets:[{id:'bucket',type:'gcs',bucket:'example-team-pharos',prefix:'pharos/66666666-7777-8888-9999-000000000000',machines:2,collected_at:'2026-11-15T10:00:00Z'}]},
+  },check:async(page,app)=>{
+    const section=page.locator('#bucketImportsSection');
+    await section.locator('#bucketSetup-bucket').fill('example-team-pharos');
+    await section.locator('#bucketSetup-number').fill('123456789012');
+    await section.locator('.bucket-step pre',{hasText:'example-team-pharos'}).first().waitFor();
+    assert.equal(await section.locator('#bucketSetup-number').evaluate(element=>element===document.activeElement),true,'typing a name keeps focus while the commands are rewritten');
+    await app.settled();
+    assert.deepEqual(await layoutProblems(page),[],'filled-in commands scroll inside their blocks');
+  }},
   {name:'ChatGPT Downloads watch',url:'/settings/sources',ready:'#chatGPTDownloadsWatchSection .claude-watch-export',api:{
     'GET /api/chatgpt-imports':{enabled:true,available:true,exports:[{id:'chat-export',filename:'a'.repeat(64)+'-2026-11-11-21-59-32-'+ 'b'.repeat(32)+'.zip',state:'fetching',phase:'indexing',collected:1,expected:1,ingestion:{stage:'indexing',processed:2,conversations:2,messages:10}}],library:{workspaces:2,conversations:2,recent:[{id:workID,title:'An imported ChatGPT conversation',url:work}]}},
   },check:async(page,app)=>{

@@ -1,0 +1,8 @@
+{
+  "token_type": "Bearer",
+  "access_token": "eyJhbGciOiJFUzI1NiJ9.e30.sig",
+  "expires_in": 3600,
+  "refresh_token": "rt_Vq8m2LxP9cN4wT7z",
+  "salt": "org_salt_2YbQ8tKz3mWn5rVc9hJx4dLs7aPe1uGf",
+  "receiver_name": "Acme Corp on Pythia"
+}
