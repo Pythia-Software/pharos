@@ -47,30 +47,30 @@ func (s *Server) askAttachmentRoot() string {
 
 func (s *Server) validateAskAttachments(items []askAttachment) error {
 	if len(items) > askAttachmentCount {
-		return fmt.Errorf("attach at most %d items", askAttachmentCount)
+		return fmt.Errorf("Attach at most %d items.", askAttachmentCount)
 	}
 	seen, size := map[string]bool{}, int64(0)
 	for _, a := range items {
 		if !askID.MatchString(a.ID) || seen[a.ID] || strings.TrimSpace(a.Name) == "" || len(a.Name) > 1200 || a.Offset < 0 || a.Offset > 12000 {
-			return fmt.Errorf("invalid attachment identity or name")
+			return fmt.Errorf("An attachment has an invalid identity or name.")
 		}
 		seen[a.ID] = true
 		switch a.Kind {
 		case "url", "element":
 			if !askSafeURL(a.URL) || a.Path != "" || a.MIME != "" || a.Size != 0 || len(a.Selector) > 4000 || (a.Kind == "element" && strings.TrimSpace(a.Selector) == "") || (a.Kind == "url" && a.Selector != "") {
-				return fmt.Errorf("invalid page or element attachment")
+				return fmt.Errorf("A page or element attachment is not valid.")
 			}
 		case "file":
 			if strings.ContainsAny(a.Name, "/\\") || a.Name == "." || a.Name == ".." || a.Path != filepath.Join(s.askAttachmentRoot(), a.ID, a.Name) || a.URL != "" || a.Selector != "" || len(a.MIME) > 150 || a.Size < 0 || a.Size > askAttachmentFileBytes {
-				return fmt.Errorf("invalid temporary file attachment; attach the original file again")
+				return fmt.Errorf("A file attachment is not valid. Attach the original file again.")
 			}
 			size += a.Size
 		default:
-			return fmt.Errorf("unsupported attachment kind")
+			return fmt.Errorf("Pharos does not support this kind of attachment.")
 		}
 	}
 	if size > askAttachmentBytes {
-		return fmt.Errorf("files must total at most 50 MiB")
+		return fmt.Errorf("Files must total at most 50 MiB.")
 	}
 	return nil
 }
@@ -119,7 +119,7 @@ func askFilesAvailable(items []askAttachment) error {
 		}
 		info, err := os.Lstat(item.Path)
 		if err != nil || !info.Mode().IsRegular() || info.Size() != item.Size {
-			return fmt.Errorf("%s is no longer available in temporary storage; attach the original file again", item.Name)
+			return fmt.Errorf("%s is no longer in temporary storage. Attach the original file again.", item.Name)
 		}
 	}
 	return nil
@@ -130,18 +130,18 @@ func (s *Server) askUpload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, askAttachmentFileBytes+(1<<20))
 	reader, err := r.MultipartReader()
 	if err != nil {
-		writeError(w, fmt.Errorf("choose a file to attach"), 400)
+		writeError(w, fmt.Errorf("Choose a file to attach."), 400)
 		return
 	}
 	part, err := reader.NextPart()
 	if err != nil || part.FormName() != "file" || part.FileName() == "" {
-		writeError(w, fmt.Errorf("choose a file to attach"), 400)
+		writeError(w, fmt.Errorf("Choose a file to attach."), 400)
 		return
 	}
 	defer part.Close()
 	name := part.FileName()
 	if len(name) > 300 || strings.ContainsAny(name, "/\\") || name == "." || name == ".." {
-		writeError(w, fmt.Errorf("invalid file name"), 400)
+		writeError(w, fmt.Errorf("The file name is not valid."), 400)
 		return
 	}
 	root := s.askAttachmentRoot()
@@ -151,7 +151,7 @@ func (s *Server) askUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil || resolved != root {
-		writeError(w, fmt.Errorf("temporary attachment directory is unavailable"), 500)
+		writeError(w, fmt.Errorf("Could not open the temporary attachment folder."), 500)
 		return
 	}
 	dir, err := os.MkdirTemp(root, "file-")
@@ -174,7 +174,7 @@ func (s *Server) askUpload(w http.ResponseWriter, r *http.Request) {
 	size, copyErr := io.Copy(file, io.LimitReader(part, askAttachmentFileBytes+1))
 	closeErr := file.Close()
 	if copyErr != nil || size > askAttachmentFileBytes {
-		writeError(w, fmt.Errorf("files must be at most 20 MiB each"), 400)
+		writeError(w, fmt.Errorf("Files must be at most 20 MiB each."), 400)
 		return
 	}
 	if closeErr != nil {

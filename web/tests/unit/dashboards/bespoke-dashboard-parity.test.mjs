@@ -359,7 +359,7 @@ test("parallel-hours, parallel-active-weekday and parallel-weekday: agent hours 
 test("Parallelism names the settings its records carry, warns when they differ, and offers provider and model only under agent counting", () => {
   assert.equal(parallelism.request, undefined, "no built-under filter: the service serves only the saved settings' records");
   const workspace = { counting: "workspace", gap: 60 };
-  assert.deepEqual(parallelismSettingsNote([workspace], workspace), { note: "These records count workspaces and join turns across gaps up to 60 minutes: the saved Parallelism settings the service built them with. Provider and Model breakdowns require Count by Conversations." });
+  assert.deepEqual(parallelismSettingsNote([workspace], workspace), { note: "Built with your saved Parallelism settings: count workspaces and join turns across gaps up to 60 minutes. Provider and Model breakdowns require Count by Conversations." });
   assert.doesNotMatch(parallelismSettingsNote([{ counting: "agent", gap: 60 }], { counting: "agent", gap: 60 }).note, /need agent counting/);
   // Links are read with the shape, so a Provider link opened under
   // workspace counting draws the default breakdown instead of failing.
@@ -369,8 +369,10 @@ test("Parallelism names the settings its records carry, warns when they differ, 
   assert.equal(normalizeAnalysis(parallelismAnalysisCatalog("workspace"), provider).split, "level_band");
   const stale = parallelismSettingsNote([{ counting: "agent", gap: 15 }], workspace);
   assert.match(stale.note, /count top-level conversations and join turns across gaps up to 15 minutes/);
-  assert.match(stale.warning, /believes the saved settings count workspaces/);
+  assert.match(stale.warning, /page’s saved settings count workspaces/);
   assert.match(parallelismSettingsNote([], workspace).note, /No records in range/);
+  assert.match(parallelismSettingsNote([{ counting: "workspace", gap: 0 }], { counting: "workspace", gap: 0 }).note, /count workspaces and do not join turns across gaps\./, "a zero gap is no bridging, not gaps up to 0 minutes");
+  assert.match(parallelismAnalysisCatalog("workspace").measures.at_once.note, /^Workspace time divided by wall time with any workspace active/, "measure notes name the counting unit");
   assert.equal(parallelismAnalysisCatalog("workspace").breakdowns.provider, undefined);
   assert.equal(parallelismAnalysisCatalog("workspace").breakdowns.model, undefined);
   assert.ok(parallelismAnalysisCatalog("agent").breakdowns.provider && parallelismAnalysisCatalog("agent").units.agent.breakdowns.provider);
@@ -408,7 +410,7 @@ test("old Human Words links: filters that cannot keep their meaning for messages
   // A versioned link is in message terms already: typed_words > 0 is a card's population.
   const card = [{ field: "typed_words", op: ">", value: "0" }];
   assert.deepEqual(readHumanLink(card, true), { where: card, unsupported: [] });
-  assert.match(human.breakdowns.provider.note, /not its work's combined providers/);
+  assert.match(human.breakdowns.provider.note, /not its workspace's combined providers/);
 });
 
 test("old Carbon chart links keep their chart: the dashboard reads it in its terms", () => {

@@ -37,6 +37,8 @@ export function boundedLog(raw: string): string {
   // Leave room for replacement of a partial UTF-8 rune at the tail boundary.
   return new TextDecoder().decode(bytes.slice(-65532));
 }
+// An error's own text, without the "Error: " that String(error) adds.
+export function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 export function changeTags(existing: string[], value: string, remove = false): string[] {
   const tag = value.trim(); return remove ? existing.filter(t => t !== tag) : [...new Set([...existing, tag])];
 }

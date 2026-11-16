@@ -28,7 +28,7 @@ export const carbonUsageMetrics: AggregationClause[] = [
 
 // The filters offer every value in the retained usage, so one filter cannot
 // hide another's options or strand a selection that now matches nothing.
-export const carbonChoiceFields = ["repository_name", "provider", "channel", "machine_id", "execution_machine_id"] as const;
+export const carbonChoiceFields = ["project_name", "provider", "channel", "machine_id", "execution_machine_id"] as const;
 export const carbonChoiceMetrics: AggregationClause[] = carbonChoiceFields.map(field => ({ id: `choices:${field}`, op: "count", groupBy: [field] }));
 
 export type CarbonTokens = { key?: string; tokens: CarbonCounts };
@@ -43,9 +43,9 @@ export type CarbonUsage = {
 // A list cut short would misstate what fell back to the default tier, or
 // hide filter options: it fails the read instead.
 function complete(metric: MetricResult | undefined, id: string): MetricResult {
-  if (!metric) throw new Error(`The server omitted ${id}.`);
+  if (!metric) throw new Error("Could not read complete carbon usage.");
   if (metric.coverage === "partial" || metric.groupCount !== undefined && metric.groupCount > metric.buckets.length || metric.buckets.some(bucket => bucket.error))
-    throw new Error("Carbon usage is incomplete.");
+    throw new Error("Could not read complete carbon usage.");
   return metric;
 }
 const amount = (value: unknown) => Number(value ?? 0);

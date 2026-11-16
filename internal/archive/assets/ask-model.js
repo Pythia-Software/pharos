@@ -13,13 +13,19 @@ function askAddAttachments(current, added) {
   if(askAttachmentSize(result)>askAttachmentByteLimit)throw new Error('Files must total at most 50 MiB.');
   return result;
 }
+function askFileSize(bytes) {
+  const n=Number(bytes)||0;
+  if(n<1024)return n+(n===1?' byte':' bytes');
+  const [value,unit]=n<1024**2?[n/1024,'KiB']:[n/1024**2,'MiB'];
+  return (value<10?value.toFixed(1):Math.round(value))+' '+unit;
+}
 function askAttachmentDetails(item) {
-  return item.kind==='file'?[['File',item.name],['Temporary path',item.path],['Type',item.mime||'application/octet-stream'],['Size',item.size+' bytes']]:[
+  return item.kind==='file'?[['File',item.name],['Temporary path',item.path],['Type',item.mime||'application/octet-stream'],['Size',askFileSize(item.size)]]:[
     ['URL',item.url],...(item.kind==='element'?[['Element',item.name],['Selector',item.selector]]:[])
   ];
 }
 function askAttachmentChip(item) {
-  return {id:item.id,type:item.kind,label:item.kind==='element'?'Highlighted element':item.kind==='url'?'Page URL':item.name,value:item.id};
+  return {id:item.id,type:item.kind,label:item.kind==='element'?'Page element':item.kind==='url'?'Page URL':item.name,value:item.id};
 }
 // Offsets count plain-text UTF-16 units; attachments at the same offset keep
 // their order. The stored metadata can reconstruct the editor on any surface.
@@ -85,7 +91,7 @@ function askSuggestionRetryDelay(attempt) {
 async function askReadResponse(response, onProgress) {
   if (!response.ok || !response.headers.get('Content-Type')?.includes('application/x-ndjson')) {
     const result=await response.json();
-    if(!response.ok){const error=new Error(result.error||'Ask Pharos request failed');error.status=response.status;throw error;}
+    if(!response.ok){const error=new Error(result.error||'Could not reach Ask Pharos.');error.status=response.status;throw error;}
     return result;
   }
   const reader=response.body.getReader(),decoder=new TextDecoder();
@@ -94,7 +100,7 @@ async function askReadResponse(response, onProgress) {
     while(true){
       const {value,done}=await reader.read();
       buffer+=decoder.decode(value,{stream:!done});
-      if(buffer.length>8*1024*1024)throw new Error('Ask Pharos response is too large');
+      if(buffer.length>8*1024*1024)throw new Error('The Ask Pharos response was too large.');
       let newline;
       while((newline=buffer.indexOf('\n'))>=0){
         const line=buffer.slice(0,newline);buffer=buffer.slice(newline+1);
@@ -103,7 +109,7 @@ async function askReadResponse(response, onProgress) {
         if(event.type==='progress')onProgress?.(event.activity);
         if(event.type==='result'&&event.session)return event.session;
       }
-      if(done)throw new Error('Ask Pharos connection ended before the answer arrived');
+      if(done)throw new Error('The Ask Pharos connection ended before the answer arrived.');
     }
   } finally { reader.releaseLock(); }
 }
@@ -179,7 +185,7 @@ function askPuzzleMotion(host, {random=Math.random, media=matchMedia('(prefers-r
 }
 function askComposerActions({draft = '', turns = [], pending = false, opening = false, enabled = false, model = ''}) {
   const populated = turns.length > 0 || draft.length > 0;
-  return {send: enabled && !!model && !pending && !opening && !!draft.trim(), stop: pending, history: true, clear: populated, clearLabel: turns.length ? 'New Chat' : 'Clear', modelLocked: turns.length > 0};
+  return {send: enabled && !!model && !pending && !opening && !!draft.trim(), stop: pending, history: true, clear: populated, clearLabel: turns.length ? 'New chat' : 'Clear', modelLocked: turns.length > 0};
 }
 // Carry the visible conversation into a fresh, editable prompt for another model.
 function askRetryContext({turns = [], draft = '', draftAttachments = []}) {
@@ -290,7 +296,7 @@ function askRequestRegistry(){
     get size(){return requests.size;},
     get:id=>requests.get(id),values:()=>requests.values(),
     forEach:callback=>requests.forEach(callback),
-    start(run){if(requests.has(run.id))throw new Error('This chat is already answering.');requests.set(run.id,run);},
+    start(run){if(requests.has(run.id))throw new Error('This chat is already answering a question.');requests.set(run.id,run);},
     release(run){if(requests.get(run.id)===run)requests.delete(run.id);},
   };
 }
@@ -353,7 +359,7 @@ function askHistoryRow(session, {now = Date.now(), labels = {}} = {}) {
   const started = session.createdAt && session.createdAt !== session.updatedAt ? 'Started ' + askHistoryFullDate(session.createdAt) : '';
   return {
     title: session.conversation?.[0]?.prompt || session.draft || 'Untitled chat',
-    turns: turns ? turns + (turns === 1 ? ' turn' : ' turns') : 'Draft',
+    turns: turns ? turns + (turns === 1 ? ' question' : ' questions') : '',
     models,
     modelSummary: models.map(model => model.label).join(', '),
     stamp: askHistoryStamp(session.updatedAt, now),
@@ -464,7 +470,7 @@ function askFloatingState(turn, {navigated = false} = {}) {
   if (turn.status === 'loading') return {message: askWaitStatus(turn).message, ready: false};
   if (turn.status === 'error') return {message: 'Question failed · Review or retry', ready: true};
   if (turn.status === 'canceled') return {message: 'Question canceled', ready: false};
-  return {message: turn.status === 'clarification' ? 'Pharos has a question for you' : 'Your response is ready', ready: true};
+  return {message: turn.status === 'clarification' ? 'Pharos has a question for you' : turn.status === 'feedback' ? 'Feedback draft ready' : 'Answer ready', ready: true};
 }
 function askFloatingPosition({x, y, width, height, viewportWidth, viewportHeight}) {
   return {x: Math.max(8, Math.min(x, viewportWidth - width - 8)), y: Math.max(8, Math.min(y, viewportHeight - height - 8))};

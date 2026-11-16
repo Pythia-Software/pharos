@@ -280,6 +280,7 @@ func capturedHost(dir, id string) Host {
 		host.Label, host.User = defaultString(record.Label, id), record.User
 		host.MachineID = record.MachineID
 	}
+	applyBucketImport(dir, &host)
 	return host
 }
 

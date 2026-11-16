@@ -11,7 +11,7 @@ import { optimizeCount, optimizeSelectionPlan, type OptimizeItem, type OptimizeN
 async function post<T>(url: string, body: unknown): Promise<T> {
   const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const value = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(value.error ?? `Request failed (${response.status})`);
+  if (!response.ok) throw new Error(value.error ?? `Could not complete the request (HTTP ${response.status}).`);
   return value as T;
 }
 
@@ -129,10 +129,10 @@ export function OptimizeSelectionBar<T extends OptimizeItem & { title: string }>
     const n = ids.length;
     if (!await bulk(action, ids)) return;
     selection.clear();
-    setMessage(action === "dismiss" ? `Acknowledged and closed ${count(n)}. Bring them back at any time.` : `Brought back ${count(n)} to Open.`);
+    setMessage(action === "dismiss" ? `Acknowledged and closed ${count(n)}. Bring ${n === 1 ? "it" : "them"} back at any time.` : `Brought back ${count(n)} to Open.`);
   }
   const promptLabel = groups.length > 1 ? `Copy ${groups.length} prompts…` : "Copy prompt…";
-  const addLabel = groups.length > 1 ? `Add to ${groups.length} ${place.one} prompts` : groups.length === 1 ? `Add to ${groups[0]!.label} prompt` : "Add to prompt";
+  const addLabel = groups.length > 1 ? `Add to ${groups.length} prompts, one per ${place.one}` : groups.length === 1 ? `Add to ${groups[0]!.label} prompt` : "Add to prompt";
   return <div className={`safety-selection ${className}`}>
     <SelectionToolbar selection={selection} className="safety-selection-toolbar" actions={() => <>
       <button type="button" className="findings-button primary" disabled={busy || Boolean(blocked)} onClick={copyPrompts}>{promptLabel}</button>
@@ -142,7 +142,7 @@ export function OptimizeSelectionBar<T extends OptimizeItem & { title: string }>
     </>} />
     {ids.length ? <p className="safety-selection-note">{blocked || (groups.length > 1
       ? `These ${noun.many} come from ${groups.length} ${place.many}. A prompt asks an agent working in one ${place.one}, so they become one prompt per ${place.one}: ${places(groups)}.`
-      : `A prompt for an agent working in ${groups[0]?.label ?? `this ${place.one}`}. Copying hands these ${noun.many} off; adding keeps them in that ${place.one}'s prompt to copy later.`)}</p> : null}
+      : `A prompt for an agent working in ${groups[0]?.label ?? `this ${place.one}`}. Copying hands these ${noun.many} off; adding keeps them in that ${place.one}’s prompt to copy later.`)}</p> : null}
     {message ? <p className="safety-notice" role="status">{message}</p> : null}
     {choosing ? <Dialog title={`Copy a prompt for one ${place.one}`} onClose={() => setChoosing(false)}>
       <p>A prompt asks an agent working in one {place.one}, so the {count(ids.length)} you selected become one prompt per {place.one}. Copy them one at a time; each copied prompt hands its {noun.many} off.</p>

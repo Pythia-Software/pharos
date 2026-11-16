@@ -234,7 +234,7 @@ Three levels, and only three:
    index, the index inside Capture & index, the transfer inside a delivery.
    A stage is one step of its parent's plan; it may have its own steps.
 3. **Step**: a named unit of progress inside a run or stage (a source, a
-   discovery pass, "Save the catalog"). Steps have a name, unit, done and
+   discovery pass, "Save the library"). Steps have a name, unit, done and
    total, and no lifecycle of their own beyond `skipped` in the plan.
 
 Example, a manual index:
@@ -249,7 +249,7 @@ index.changes.manual                          run, plan: discover, 3 sources, au
    └─ analysis.tools   analysis.authorship  analysis.peers  analysis.findings
 ```
 
-The same `analysis.findings` kind started by "Refresh findings now" is a
+The same `analysis.findings` kind started by "Update Optimize now" is a
 top-level run with trigger `user`. Grouping is by `Parent`, never by label.
 
 ## 3. The kinds table
@@ -291,21 +291,21 @@ the words here are the words surfaces show (§8).
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `index.changes.automatic` | Index changes · Indexing changes | schedule | svc | D:w W:w I:w | conv:\*, view | index | Stops between workspaces; the next index resumes it. | batch | >10 s | bg |
-| `index.changes.manual` | Index changes · Indexing changes | user | svc | D:w W:w I:w | conv:\*, view, an.\*, findings | index | Stops between workspaces; the next index resumes it. The chain after the sources ignores Stop and stops only on release. | batch | always | fg |
+| `index.changes.manual` | Index changes · Indexing changes | user | svc | D:w W:w I:w | conv:\*, view, an.\*, findings | index (the chain after the sources ignores Stop and stops only on release) | Stops between workspaces; the next index resumes it. The analyses that follow ignore Stop and stop only when Pharos releases the library. | batch | always | fg |
 | `background.update` (variants `frequent`, `hourly`, `daily`, `requested`) | Background update · Updating in the background | schedule (`backgroundLoop`, §11), user (Run now) | svc | D:w W:w I:w | capt:this/\*, conv:\*, an.\*, findings, upgrade | index | Stops after the record in progress; each item runs again at its next time. | batch | >10 s | bg |
 | `background.capture` (variants `sources`, `preserve`) | Capture & index · Capturing and indexing | step of `background.update` | svc | D:w W:w I:w C(this):w | capt:this/\*, conv:\* | index | Stops between files and records; what was captured stays valid, and the next run resumes it. | batch | step | bg |
 | `capture.this-mac` | Capture this Mac · Capturing | user, onboarding | svc | D:w I:w C(this):w | capt:this/\* | — (today) | Stops between files; the next capture resumes it, and what was captured stays valid. | record | always | fg |
 | `capture.settings` | Collect Claude Chat settings · Collecting settings | schedule during a bounded recording session (`claudeSettingsRecording` daemon); chained capture and index | svc | D:w I:w C(this):w | capt:this/\* | work | Stops between reads; saved settings observations remain available to index. | record | >5 s or wrote | bg |
-| `capture.import` (variant `claude-ai`) | Collect Claude export · Collecting | user, cli, schedule (`claudeDownloads` daemon, only while this Mac's Downloads watch is on; its capture and index run as a chained `background.capture`) | svc, cli | D:w I:w C(this):w | capt:this/\* | — | Stops between reads; verified files and import jobs remain available to resume. | record | always | fg |
+| `capture.import` (variant `claude-ai`) | Collect Claude export · Collecting | user, cli, schedule (`claudeDownloads` daemon, only while this Mac's Downloads watch is on; its capture and index run as a chained `background.capture`). Variant `bucket` (Collect pushed captures): cli, and schedule as the Collect from other machines item; it writes the captures of the hosts it collects, not this Mac's | svc, cli | D:w I:w C(this):w | capt:this/\* | — | Stops between reads; verified files and import jobs remain available to resume. | record | always | fg |
 | `capture.cli` (variant `sqlite-records` for that command's writing subcommands) | Capture (Terminal) · Capturing | cli | cli (lease only; it never opens the catalog) | D:w C(this):w | capt:this/\* | — | Pharos cannot stop it; the drive stays busy until it ends. | none (to Pharos) | never (lease only) | fg |
-| `index.captures` | Index captures · Indexing captures | user, onboarding, cli | svc, cli | D:w W:w I:w X(c):w (`I` in the service only) | capt:\*, conv:\*, view, an.\*, findings | index | Stops between records; the next index resumes it. Waits for a running capture (`blocked(capture-running)`). | batch | always | fg |
-| `library.update` | Capture & index · Capturing and indexing | user | svc | D:w W:w I:w | capt:this/\*, conv:\*, an.\*, findings, upgrade | index | As `index.captures`; the browser then starts `library.upgrade`. | batch | always | fg |
-| `library.rebuild` (variants `full`, `retained`) | Full recapture & reindex / Reindex from stored messages · Rebuilding | user, resume | svc | D:w W:w I:w | conv:\*, view, an.\*, findings | index | Stops between workspaces; resuming the repair continues it (`sync_recovery_jobs`). | batch | always | fg |
+| `index.captures` | Index captures · Indexing captures | user, onboarding, cli | svc, cli | D:w W:w I:w X(c):w (`I` in the service only) | capt:\*, conv:\*, view, an.\*, findings | index (it waits as `blocked(capture-running)`) | Stops between records; the next index resumes it. It waits for a capture in progress to finish. | batch | always | fg |
+| `library.update` | Capture & index · Capturing and indexing | user | svc | D:w W:w I:w | capt:this/\*, conv:\*, an.\*, findings, upgrade | index (as `index.captures`; the browser then starts `library.upgrade`) | Stops between records; the next run resumes it. | batch | always | fg |
+| `library.rebuild` (variants `full`, `retained`) | Full recapture & reindex / Reindex from stored messages · Rebuilding | user, resume | svc | D:w W:w I:w | conv:\*, view, an.\*, findings | index (resumed from `sync_recovery_jobs`) | Stops between workspaces; resuming the repair continues it. | batch | always | fg |
 | `index.verify` (variants `sample`, `all`, `repair`) | Verify retained inputs · Verifying | user; `sample` is a step of index runs; `repair` explicitly affects `conv:*`, `view`, `an.*` | svc | D:w W:w I:w (reads retained inputs; writes `sync_verifications` and integrity issues) | — | index | Stops between inputs. | record | always (`all`, `repair`); step only (`sample`) | fg |
-| `index.sources.legacy` | Index sources (legacy API) · Indexing | user (API) | svc | D:w W:w I:w | conv:\* | — | Runs inside the request, with the service's lifetime merged into its context: a release stops it between workspaces. | batch | always | fg |
+| `index.sources.legacy` | Index sources (legacy API) · Indexing | user (API) | svc | D:w W:w I:w | conv:\* | — (runs inside the request, with the service's lifetime merged into its context) | Stops between workspaces when Pharos releases the library. | batch | always | fg |
 | `ingest.cli` (variants `ingest`, `repair-existing`) | Index (Terminal) · Indexing | cli | cli | D:w W:w (no `I` today) | conv:\* | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
 | `host.add` | Add this Mac (Terminal) · Adding this Mac | cli | cli | D:w W:w | conv:\* | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
-| `capture.history-backfill` (variants by subcommand) | Capture history backfill (Terminal) · Backfilling history | cli | cli (lease only) | D:w C(h):w | capt:h/\* | — | Pharos cannot stop it; its native-snapshot pause blocks ordinary capture of the chosen sources until released. | none (to Pharos) | never (lease only) | fg |
+| `capture.history-backfill` (variants by subcommand) | Capture history backfill (Terminal) · Backfilling history | cli | cli (lease only) | D:w C(h):w | capt:h/\* | — (its native-snapshot pause holds until released) | Pharos cannot stop it; while it runs, ordinary capture of the chosen sources waits. | none (to Pharos) | never (lease only) | fg |
 
 Notes:
 
@@ -330,18 +330,18 @@ Scheduled indexing never runs it; it marks `sync_deferred` instead (§5).
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `analysis.chain` | Update analyses · Updating analyses | chained | svc | D:w W:w | an.\*, findings | — | Stops on release only; it runs again after the next index. | batch | step of its parent | parent's |
-| `analysis.github` | Check GitHub for renamed repositories · Checking GitHub | chained | svc (+`gh`) | — (network only) | an.identities | — | Stops on release only. | record | step | parent's |
-| `analysis.identities` | Link identities · Linking identities | chained | svc | D:w W:w | an.identities | — | Stops on release only. | batch | step | parent's |
-| `analysis.git` | Look up merges in Git · Looking up merges in Git | chained, startup (one-time backfill), after a legacy sync | svc (+`git`) | D:w W:w | an.git | — | Stops; it runs again after the next index. Each `git` call has a 5 s limit (Conductor's git has none). | batch | >5 s when not a stage | bg |
-| `analysis.tools` | Update tool summaries · Updating tool summaries | chained, read (a Query Table request, or a Thinking read with request timings pending), version | svc | D:w W:w | an.tools | — | Stops; it runs again on the next index or Tools request. | batch | >5 s when not a stage | bg; fg when read-started |
+| `analysis.chain` | Update analyses · Updating analyses | chained | svc | D:w W:w | an.\*, findings | — | Ignores Stop; it stops when Pharos releases the library, and runs again after the next index. | batch | step of its parent | parent's |
+| `analysis.github` | Check GitHub for renamed repositories · Checking GitHub | chained | svc (+`gh`) | — (network only) | an.identities | — | Ignores Stop; it stops when Pharos releases the library. | record | step | parent's |
+| `analysis.identities` | Link identities · Linking identities | chained | svc | D:w W:w | an.identities | — | Ignores Stop; it stops when Pharos releases the library. | batch | step | parent's |
+| `analysis.git` | Look up merges in Git · Looking up merges in Git | chained, startup (one-time backfill), after a legacy sync | svc (+`git`) | D:w W:w | an.git | — (each `git` call has a 5 s limit; Conductor's git has none) | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
+| `analysis.tools` | Update tool summaries · Updating tool summaries | chained, read (a Query Table request, or a Thinking read with request timings pending), version | svc | D:w W:w | an.tools | — | Stops; it runs again after the next index, or when a page needs it. | batch | >5 s when not a stage | bg; fg when read-started |
 | `analysis.authorship` | Update writing estimates · Updating writing estimates | chained, read (`/api/authorship`, usage summary, native menu usage poll) | svc | D:w W:w | an.authorship | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
 | `analysis.peers` | Link related conversations · Linking related conversations | chained | svc | D:w W:w | an.peers | — | Stops; it runs again after the next index. | batch | >5 s when not a stage | bg |
 | `analysis.authorship.refine` | Refine writing history · Refining writing history | daily, requested | svc | D:w W:w | an.authorship.refined | work | Stops; historical refinement runs again on its daily schedule. | batch | always | bg |
 | `analysis.labels` (variant `backlog`) | Label messages · Labeling messages | chained (the last stage, when `labels_enabled` is on; background item Message labels), cli (`pharos labels run`); `backlog` is chained after a stage that left more than its share, plugged in only, and stops if this Mac goes onto battery | svc, cli (+ worker process) | D:w W:w | an.labels | work | Stops between batches; the next run resumes it. | batch | >5 s when not a stage | bg |
 | `analysis.agent_events` (variant `backlog`) | Find agent events · Finding agent events | chained (after labels, when the Agent Experience switch or `agent_events_enabled` is on; background item Agent events; the first run downloads the verifier if the broker has not), user (turning the switch on runs the item), cli (`pharos agent-events run`); `backlog` as for `analysis.labels` | svc, cli (+ worker process) | D:w W:w | an.agent_events | work | Stops between chunks of conversations; the next run resumes it. | batch | >5 s when not a stage | bg |
 | `analysis.engagement` | Label engagement · Labeling engagement | chained (the last stage, only where `engagement_enabled` is on; background item Engagement labels; it downloads nothing), cli (`pharos engagement run`) | svc, cli (+ worker process) | D:w W:w | an.engagement | work | Stops between chunks of messages; the next run resumes it. | batch | >5 s when not a stage | bg |
-| `analysis.findings` | Update findings · Updating findings | chained, user ("Refresh findings now"), read (`GET /api/findings` before the first build) | svc | D:w W:w | findings | — | Stops; it runs again after the next index. | batch | >5 s when not a stage; always for `user` | bg; fg for `user` |
+| `analysis.findings` | Update findings · Updating findings | chained, user ("Update Optimize now"), read (`GET /api/findings` before the first build) | svc | D:w W:w | findings | — | Stops; it runs again after the next index. | batch | >5 s when not a stage; always for `user` | bg; fg for `user` |
 | `analysis.refresh` | Update analyses · Updating analyses | chained (after a legacy source sync: Git, then tools, then findings) | svc | D:w W:w | an.git, an.tools, findings | — | Stops; it runs again after the next index. | batch | >5 s | bg |
 
 Notes:
@@ -378,13 +378,13 @@ operation.
 | `maintenance.search.tool-output` | Remove tool output from word search · Removing tool output from word search | version | svc | D:w W:w | search.words | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |
 | `maintenance.search.text` | Build text search · Building text search | version, chained | svc | D:w W:w | search.text | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.search.tools` | Build tool search · Building tool search | version, chained | svc | D:w W:w | search.tools | — | Stops between batches; it carries on later. | batch | >30 s | bg |
-| `maintenance.search.query` | Build Query Table text indexes · Building table search | version, chained | svc | D:w W:w | search.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
+| `maintenance.search.query` | Build table search · Building table search | version, chained | svc | D:w W:w | search.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.labels.query` | Index message labels · Indexing message labels | version, chained | svc | D:w W:w | labels.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.upgrade-count` | Count upgrade steps · Counting upgrade steps | version (once the service serves, when the stored count is not this build's) | svc | D:w W:w | upgrade, an.ledger | — | Stops; it counts again the next time Pharos opens the library. | batch | >5 s | bg |
-| `maintenance.checkpoint` (variants `bound`, `after-run`, `close`) | Save the catalog · Saving the catalog | daemon pass (WAL over 64 MiB, every 10 s), chained, release | svc | D:w W:w | — | — | Not interruptible; short. | record | >1 s | bg |
+| `maintenance.checkpoint` (variants `bound`, `after-run`, `close`) | Save the library · Saving the library | daemon pass (WAL over 64 MiB, every 10 s), chained, release | svc | D:w W:w | — | — | Not stoppable; it finishes quickly. | record | >1 s | bg |
 | `maintenance.origins` | Publish conversation origins · Publishing conversation origins | daemon pass (`maintainLibrary`: every pass while no ingest runs, at most once a minute during one); the end of each ingest and the Tools rollup publish them as part of their own operation | svc | D:w W:w | — | — | Stops; it publishes them on its next pass. | batch | never | bg |
-| `maintenance.mcp-history` | Store MCP call history · Storing MCP call history | read (an MCP call through the service queues its record; one background writer stores the queue, so no request waits for the writer; a direct MCP call stores its own record when it closes the catalog, after its answer is out) | svc, mcp | D:w W:w | — | — | Stops; closing the catalog stores what is still queued. | record | never | bg |
-| `ask.save` | Save an Ask Pharos answer · Saving an Ask Pharos answer | user (a finished Ask turn whose save missed its deadline is retried in the background for up to 5 min) | svc | D:w W:w | — | — | Stops retrying; an answer not yet saved is lost, as when the service stops. | record | never | bg |
+| `maintenance.mcp-history` | Store MCP call history · Storing MCP call history | read (an MCP call through the service queues its record; one background writer stores the queue, so no request waits for the writer; a direct MCP call stores its own record when it closes the catalog, after its answer is out) | svc, mcp | D:w W:w | — | — | Stops; closing the library stores what is still queued. | record | never | bg |
+| `ask.save` | Save an Ask Pharos answer · Saving an Ask Pharos answer | user (a finished Ask turn whose save missed its deadline is retried in the background for up to 5 min) | svc | D:w W:w | — | — | Stops retrying; an answer not yet saved is lost, as when Pharos quits. | record | never | bg |
 | `ask.suggestions` | Choose Ask Pharos suggestions · Choosing Ask Pharos suggestions | chained (background item Ask Pharos suggestions, only where Ask Pharos is enabled, when the analyses, safety reviews or findings it reads changed or a day passed), user (enabling Ask Pharos), read (`GET /api/ask/suggestions` before the first run requests the item) | svc | D:w W:w (one `meta` row) | — | — | Stops; the suggestions already chosen stay until the next run. | record | >5 s | bg |
 | `forge.reviews` | Read pull request reviews · Reading pull request reviews | chained (background item Pull request reviews, only where `pull_request_reviews_enabled` is on, when a pull request is due to be read), user (turning the switch on) | svc (+`gh`) | — (network; each answer is one short write) | — | work | Stops between pull requests; what was read stays, and the next run reads the rest. | record | >5 s | bg |
 | `ask.models` | Check Ask Pharos models · Checking Ask Pharos models | read (the model picker asks for a CLI whose list is missing or over an hour old; it answers from the old list meanwhile), user (enabling Ask Pharos), startup (Ask Pharos enabled) | svc (+ the AI CLI) | — (subprocess only) | — | — | Stops. | record | never | bg |
@@ -493,8 +493,8 @@ WAL, operations, open reads with their stacks, and every goroutine's stack.
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `catalog.initialize` | Prepare the catalog · Preparing the catalog | every writable catalog open (skipped when `meta.initialized_build` matches this executable) | svc, cli, mcp | D:w W:w Z:w | all derived domains | — | Cannot be stopped; the service has no API until it ends. A kill rolls back the step in progress, and the next open re-runs from the last committed `meta` key. | none | >2 s | fg |
-| `library.upgrade` | Upgrade the library · Upgrading the library | chained (after an index finds pending steps, or the browser after Capture & index), user (`POST /api/upgrade`), cli | svc, cli | D:w W:w | upgrade, an.tools, an.ledger | — | Stops after the unit in progress; starting the upgrade again resumes it. | record | always | fg |
+| `catalog.initialize` | Prepare the library · Preparing the library | every writable catalog open (skipped when `meta.initialized_build` matches this executable) | svc, cli, mcp | D:w W:w Z:w | all derived domains | — (the next open re-runs from the last committed `meta` key) | Cannot be stopped; Pharos cannot answer until it finishes. If Pharos is killed, the step in progress is rolled back and the next open carries on from there. | none | >2 s | fg |
+| `library.upgrade` | Upgrade the library · Upgrading the library | chained (after an index finds pending steps, or the browser after Capture & index), user (`POST /api/upgrade`), cli | svc, cli | D:w W:w | upgrade, an.tools, an.ledger | — | Stops after the step in progress; starting the upgrade again resumes it. | record | always | fg |
 | `catalog.repair` (variants `refine-usage`, `repair-usage-attribution`, `repair-session-models`) | Repair usage (Terminal) · Repairing usage | cli | cli | D:w W:w | an.tools, an.authorship | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
 | `catalog.execution-evidence` | Derive execution evidence (Terminal) · Deriving execution evidence | cli (`execution-evidence run`) | cli | D:w W:w | an.labels, an.agent_events | — | Stops between batches; running it again resumes it. | record | always | fg |
 | `repositories.merge` | Merge repositories (Terminal) · Merging repositories | cli (`repositories --merge --apply`) | cli | D:w W:w | an.identities, an.git | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
@@ -530,28 +530,28 @@ Notes:
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `backup.local` | Back up · Backing up | user, cli | svc, cli (lease only) | D:w B(d):w C(\*):r (reads the library; writes its `backups.json`) | backup.local | backup (service only) | Stops; the next backup carries on from what was copied. Waits for each host's capture (`blocked(capture-running)`; today's phase "waiting for a capture to finish"). | record | always (service); never (CLI, lease only) | fg |
+| `backup.local` | Back up · Backing up | user, cli | svc, cli (lease only) | D:w B(d):w C(\*):r (reads the library; writes its `backups.json`) | backup.local | backup (service only; it waits as `blocked(capture-running)`; today's phase "waiting for a capture to finish") | Stops; the next backup carries on from what was copied. It waits for any capture in progress to finish. | record | always (service); never (CLI, lease only) | fg |
 | `cloud.connect` | Test a cloud backup destination · Testing the destination | user | svc (inside the request, merged with `s.life.ctx`) | D:w K:w (a probe file in staging) | — | cloud | Stops the test; connect the destination again afterwards. | instant | always | fg |
 | `cloud.upload` (variants `sample`, `full`) | Upload a cloud backup · Uploading a cloud backup | user, schedule | svc | D:w K(d):w (staging; reads a catalog snapshot) | backup.cloud:d | cloud | Stops the upload and deletes its staged archive; the last completed cloud backup is unchanged. It starts again from the beginning when started again, or at the schedule's next time. | batch (snapshot), record (upload: the S3 abort and the final save have 2 s limits each, then the staging is removed) | always | fg (`user`), bg (`schedule`) |
 | `cloud.verify` | Verify a cloud backup · Verifying a cloud backup | user, cli (`cloud-backup verify`, required for password-protected backups) | svc, cli (catalog writer: journal and lease) | D:w K(d):w W:w (staging; saves the verification state) | backup.cloud:d | cloud (service only) | Stops and removes the partly recovered copy; run the verification again. | record | always | fg |
-| `cloud.reconcile` | Record interrupted cloud backups · Recording interrupted cloud backups | read (`GET /api/cloud-backup` that finds a run whose process is gone), schedule (each schedule tick records such runs and settles the schedules of finished ones in a pass, discarded when it stored nothing) | svc | D:w W:w (and removes the run's staging) | — | — | Stops; the next Cloud page load or schedule tick records them. | record | never | bg |
-| `cloud.restore` | Restore from the cloud (Terminal) · Restoring | cli (`cloud-restore`) | cli | — (a new location; out of scope) | — | — | **Out of status scope.** It restores to a new location, often on a Mac with no library or Pharos configuration (`cloud_cli.go`), so there is no library whose status could show it. It takes no lease and writes no journal. | — | never | fg |
-| `library.transfer` (variants `copy`, `move`) | Copy library / Move library · Copying the library | user (Libraries page), cli (`library-transfer`) | brk, cli | O:w D(source):w D(target):w | (target) conv:\* | — | Not stoppable; eject of either drive must wait. | none | always (broker registry) | fg |
+| `cloud.reconcile` | Record interrupted cloud backups · Recording interrupted cloud backups | read (`GET /api/cloud-backup` that finds a run whose process is gone), schedule (each schedule tick records such runs and settles the schedules of finished ones in a pass, discarded when it stored nothing) | svc | D:w W:w (and removes the run's staging) | — | — (the next Cloud page load or schedule tick records them) | Stops; Pharos records them the next time it checks cloud backups. | record | never | bg |
+| `cloud.restore` | Restore from the cloud (Terminal) · Restoring | cli (`cloud-restore`) | cli | — (a new location; out of scope) | — | — (**out of status scope**: it restores to a new location, often on a Mac with no library or Pharos configuration (`cloud_cli.go`), so there is no library whose status could show it; it takes no lease and writes no journal) | Pharos cannot stop it; it restores to a new location, outside any library. | — | never | fg |
+| `library.transfer` (variants `copy`, `move`) | Copy library / Move library · Copying the library | user (Libraries page), cli (`library-transfer`) | brk, cli | O:w D(source):w D(target):w | (target) conv:\* | — | Not stoppable; ejecting either drive must wait. | none | always (broker registry) | fg |
 | `library.recover` | Restore a backup · Restoring a backup | user, cli (`library-recover`) | brk, cli | O:w D(target):w | (target) all | — | Not stoppable; eject must wait. | none | always (broker registry) | fg |
 | `library.compact` | Compact the catalog · Compacting the catalog | user (Library health → Storage) | brk | O:w D(target):w | — | — | Not stoppable; eject must wait. Quitting Pharos stops it and keeps the original catalog. | none | always (broker registry) | fg |
-| `library.deliver` | Deliver captured history · Delivering history | schedule (every 5 min while a pair is set), device (target attached) | brk | O:w M:w D(source):w D(target):w (`M` while stopping children) | (target) conv:\* | — | Not stoppable; it stops both libraries' services first (§4.4). | none | always (broker registry) | bg |
-| `library.deliver.capture` | Capture into the pending library · Capturing pending history | stage of `library.deliver` | brk | D(source):w | — | — | As its parent. | none | step | bg |
-| `library.adopt` | Move this Mac's archive into a library · Moving the archive | onboarding, cli | cli, svc | D(source):w D(target):w | all | — | Not stoppable. | none | always | fg |
-| `library.create` | Create a library · Creating the library | user | brk | D(target):w | — | — | Not stoppable; short. | none | >5 s (broker registry) | fg |
+| `library.deliver` | Deliver captured history · Delivering history | schedule (every 5 min while a pair is set), device (target attached) | brk | O:w M:w D(source):w D(target):w (`M` while stopping children) | (target) conv:\* | — (it stops both libraries' services first (§4.4)) | Not stoppable; it closes both libraries first, so eject must wait. | none | always (broker registry) | bg |
+| `library.deliver.capture` | Capture into the pending library · Capturing pending history | stage of `library.deliver` | brk | D(source):w | — | — (as its parent) | Not stoppable; it is part of delivering captured history. | none | step | bg |
+| `library.adopt` | Move this Mac’s history into a library · Moving this Mac’s history | onboarding, cli | cli, svc | D(source):w D(target):w | all | — | Not stoppable. | none | always | fg |
+| `library.create` | Create a library · Creating the library | user | brk | D(target):w | — | — | Not stoppable; it finishes quickly. | none | >5 s (broker registry) | fg |
 
 ### 3.7 G. Process and device lifecycle
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `service.start` | Open the library · Opening the library | user (select), startup, respawn | brk | M:w D:w (`M` today, for up to 2 min, or for as long as a catalog upgrade runs) | — | — | Not stoppable. The broker gives up after 2 min and SIGTERMs the child (§10, G2), except while the catalog's initialize lock is held: then it waits, step "Upgrade the library's catalog" with the upgrade's progress (§3.5). | none | always (broker registry) | fg |
-| `library.release` | Release the library · Releasing the library | user (eject, quit, switch through the API), device (volume release), signal (SIGTERM/SIGINT), parent-exited, error | svc, brk | D:w | — | — | Is the stop. Fails after 7 s with "Pharos is finishing a write". | — | always | fg |
+| `library.release` | Release the library · Releasing the library | user (eject, quit, switch through the API), device (volume release), signal (SIGTERM/SIGINT), parent-exited, error | svc, brk | D:w | — | — | This is the stop itself. If work does not stop within 7 s, the release fails and Pharos says it is finishing a write. | — | always | fg |
 | `labels.fetch` | Download the labeling model · Downloading the labeling model | startup (a library with `labels_enabled` opens on a Mac without the model or ONNX Runtime, or one with `agent_events_enabled` without the verifier or the runtime; retried 15 min after a failure), cli (`pharos labels fetch`, `pharos agent-events fetch`) | brk, cli | — (network and this Mac's support directory only) | — | — | Stops; it touches no library, and the next attempt resumes the download. | record | always (broker registry) | bg |
-| `app.update` | Update Pharos · Updating Pharos | schedule, user (Sparkle) | app | update-lock:w (native) | — | — | Native; bridged to the header ring as today. | — | never (Sparkle keeps its own) | bg |
+| `app.update` | Update Pharos · Updating Pharos | schedule, user (Sparkle) | app | update-lock:w (native) | — | — (native; bridged to the header ring) | The Pharos app installs the update itself; it cannot be stopped from here. | — | never (Sparkle keeps its own) | bg |
 
 Not kinds: the broker's 5 s maintain loop (a daemon whose respawns are
 `service.start` with trigger `respawn`), the native 5 s state watch, the
@@ -1279,7 +1279,7 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
                  "detail": "…", "action": {"label": "Open Backups", "path": "/settings/backups"}}],
   "freshness": [{"domain": "an.tools", "group": "analyses", "label": "Tool summaries", "as_of": "…",
                  "behind": {"state": "behind", "count": null, "unit": null}, "state_label": "Behind",
-                 "reason": {"code": "deferred-by-schedule", "text": "Waits for Update everything now"},
+                 "reason": {"code": "deferred-by-schedule", "text": "Waits for Index changes now"},
                  "catching_up": null, "catching_up_label": null, "next": "updates with the next manual index"}],
   "freshness_summary": {"all_current": false, "checked_at": null, "groups": [{"group": "analyses", "label": "Analyses", "state": "behind",
                          "short": "waits for manual index", "text": "behind, updates with the next manual index", "as_of": "…", "shown": true}]},
@@ -1409,15 +1409,15 @@ positives fixed in phase 0:
 
 | # | Rule | Severity | Action |
 |---|---|---|---|
-| 1 | The latest attempt for an enabled source on this Mac (across `source_states` and `automatic_source_states`) has an error other than `interrupted:` | error | Open Capture & index |
+| 1 | The latest attempt for an enabled source on this Mac (across `source_states` and `automatic_source_states`) has an error other than `interrupted:` | error | Open Background Processing |
 | 2 | Index verification has open mismatches (`sync_integrity_issues`, state `open`) | error | Review… |
-| 3 | The latest finished index on this Mac failed, was not stopped by the user, and covered an enabled source (or failed before choosing sources). A run that only deferred sources to a capture is not a failure. | error | Open Capture & index |
-| 4 | The latest finished index was interrupted (not by the user) and nothing has run since | warning | Open Capture & index |
-| 5 | The latest capture failed for an enabled source, or failed as a whole | error | Open Capture & index |
+| 3 | The latest finished index on this Mac failed, was not stopped by the user, and covered an enabled source (or failed before choosing sources). A run that only deferred sources to a capture is not a failure. | error | Open Background Processing |
+| 4 | The latest finished index was interrupted (not by the user) and nothing has run since | warning | Open Background Processing |
+| 5 | The latest capture failed for an enabled source, or failed as a whole | error | Open Background Processing |
 | 6 | The latest local backup failed | error | Open Backups (`/settings/backups`) |
 | 7 | A scheduled cloud backup failed (the schedule has `failures > 0`) or the latest verification failed | error | Open Backups |
 | 8 | The library is unavailable, was disconnected, or setup is needed (native rules today) | error | as today |
-| 9 | The WAL is over 1 GiB and its checkpoint has stopped advancing: frames are left to copy and `nBackfill` did not move between two busy bound checks (a busy truncation alone, with every frame copied, is not a stall). The item says how big the log is and for how long it has not been folded in, and who holds them back when Pharos can tell (another process by pid and command, and what it holds; or this process, with its catalog reads and running operations open since before the stall); otherwise it says it could not tell. It names the stall's report file when one was written. It clears once a checkpoint succeeds, the checkpoint advances, or the log is under 1 GiB. | warning | Open Capture & index |
+| 9 | The WAL is over 1 GiB and its checkpoint has stopped advancing: frames are left to copy and `nBackfill` did not move between two busy bound checks (a busy truncation alone, with every frame copied, is not a stall). The item says how big the log is and for how long it has not been folded in, and who holds them back when Pharos can tell (another process by pid and command, and what it holds; or this process, with its catalog reads and running operations open since before the stall); otherwise it says it could not tell. It names the stall's report file when one was written. It clears once a checkpoint succeeds, the checkpoint advances, or the log is under 1 GiB. | warning | Open Background Processing |
 
 Rule 4 is today's web rule (the native menu ignores interruptions). The
 first rule that applies sets the menu's single line; the snapshot lists all.
@@ -1515,8 +1515,6 @@ What that means now:
 
 - `status-store.js` connects on every page, and `status-panel.js` is the
   one renderer of the header chip, its panel and Index changes' state.
-  `library.js` and `sync.js` still ask `pharosStatusStore.enabled()`,
-  which is always true, until their old drive panel paths are removed.
 - `/api/menu-bar/status` always carries `unified_activity: true`, so the
   native menu also polls the snapshot. The shipped `MenuBar.swift` still
   reads the field.
@@ -1538,8 +1536,8 @@ an activity; and the verdict is never `safe` while `libraryActivities`
 lists a writer (§4.3).
 
 **Dual-write, no retirement.** Existing endpoints, fields and pollers keep
-working unchanged; the old drive panel's code stays, though nothing opens
-it now. Removing them is a later phase, not part of this series.
+working unchanged. Removing them is a later phase, not part of this series;
+the old drive panel's code in `library.js` has since been removed.
 
 **Unregistered work is a test failure.** A Go test parses the package's
 non-test files and fails on any `spawn(`, `runBackground(` or `go func`
@@ -1803,6 +1801,7 @@ the same schedule from one declaration (`backgroundItems`):
 | Ask Pharos suggestions | the suggestion signals ([Ask suggestions](ask-suggestions.md)), only where Ask Pharos is enabled, when their inputs changed | Hourly, adaptive | `ask.suggestions` |
 | Findings review | the findings stage once today's full pass is due | Daily (fixed) | `analysis.findings` `full` |
 | Library upgrade | `RunUpgrade`, when the stored count has pending steps | Daily (fixed) | `library.upgrade` |
+| Collect from other machines | transcripts that other machines pushed to a connected bucket (`pharos capture-push`), then an index of the hosts that received something | Hourly; unavailable until a bucket is connected, when the item links to its setup in Settings → Sources | `capture.import` (variant `bucket`) |
 | Back up | a local backup to the last destination, when connected | only when chosen (opt-in Daily) | `backup.local` |
 
 - **Cadences.** Frequently follows each scheduled index that wrote
@@ -2019,7 +2018,7 @@ the same schedule from one declaration (`backgroundItems`):
   `power`, `current`, `paused`, `manual`, `unavailable`) with `as_of` and
   `next_at`, one row per cadence, `unscheduled` (the items set to Only
   when you ask, Back up unless chosen: on no schedule, so in no cadence's
-  row), and the cost of Update everything now. A measured item's cost
+  row), and the cost of Index changes now. A measured item's cost
   carries `typical`, the middle of its recent runs ("Typically 2–3 h",
   between the runs a quarter of the way in from each end), which leads its
   line in Settings.
@@ -2104,7 +2103,7 @@ against current code before starting it.
   5 s / 16 MiB budget, writer contention or the capture lock is the cause.
 - **Retire the old status paths.** This is the phase that follows this
   contract's rollout. The flag is gone (§9); once the panel has been
-  stable, remove the old drive panel in `library.js`, the menu bar's
+  stable, remove the menu bar's
   legacy path, the run-record progress fields, the `detail` strings, client grouping by
   label, the duplicate pollers and the three older freshness rules (§5).
 - **SQLite maintenance as operation kinds.** A periodic `ANALYZE` refresh

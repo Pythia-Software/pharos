@@ -3,13 +3,13 @@ import {trimTimelineSnippet} from './timeline-preview';
 
 export type AuthorshipPart = {category:string;bytes:number};
 export const callerSources = [
-  {id:'typed',name:'Typed',pattern:'solid',hint:'Inferred human writing or dictation; no other authorship rule claimed it.'},
+  {id:'typed',name:'Typed or dictated',pattern:'solid',hint:'Inferred human writing or dictation; no other authorship rule claimed it.'},
   {id:'pasted',name:'Likely pasted',pattern:'diagonal',hint:'Inferred from code, logs, formatting or arrival rate; not a clipboard recording.'},
-  {id:'quoted',name:'Copied / quoted',pattern:'diagonal',hint:'Explicit quotation or a match to previously retained content.'},
+  {id:'quoted',name:'Copied or quoted',pattern:'diagonal',hint:'Explicit quotation or a match to previously retained content.'},
   {id:'resent',name:'Re-sent',pattern:'diagonal',hint:'Matches text sent previously.'},
   {id:'template',name:'Template',pattern:'grid',hint:'Retained prompt-template classification.'},
   {id:'attachment',name:'Attachment',pattern:'rings',hint:'Attachment or image placeholder.'},
-  {id:'harness',name:'App context',pattern:'crosshatch',hint:'Context supplied by the agent app.'},
+  {id:'harness',name:'App instructions',pattern:'crosshatch',hint:'Context supplied by the agent app.'},
   {id:'automated',name:'Automated input',pattern:'dashes',hint:'Recorded as coming from a script or another agent.'},
   {id:'unknown',name:'Unknown origin',pattern:'dots',hint:'No retained authorship classification; user role alone does not establish human writing.'},
 ] as const;

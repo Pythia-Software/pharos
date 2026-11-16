@@ -228,9 +228,9 @@ func fileGitSize(ctx context.Context, target fileGitTarget) (int64, string) {
 
 func fileGitError(err error) error {
 	if errors.Is(err, errGitTimeout) {
-		return fmt.Errorf("git took too long to read the checkout")
+		return errors.New("Git took too long to read the checkout.")
 	}
-	return fmt.Errorf("git could not read the checkout: %w", err)
+	return fmt.Errorf("Git could not read the checkout: %w", err)
 }
 
 func formatSize(bytes int64) string {
@@ -482,7 +482,7 @@ func (c *Catalog) CommitDetail(ctx context.Context, options FileGitOptions) (map
 	}
 	commit := gitLogCommit(strings.SplitN(string(output), "\n", 2)[0])
 	if commit == nil {
-		return nil, fmt.Errorf("git could not read commit %s", target.Commit)
+		return nil, fmt.Errorf("Git could not read commit %s.", target.Commit)
 	}
 	if fields := strings.SplitN(string(output), "\x1f", 7); len(fields) == 7 {
 		commit["body"] = strings.TrimSpace(fields[6])

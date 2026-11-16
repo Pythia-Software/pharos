@@ -30,7 +30,8 @@ test('Ask attachments preserve URLs, element identity and original file pointers
   assert.equal(movedItems[0].id,file.id);assert.equal(movedItems[0].offset,0);
   assert.deepEqual(plain(model.askAttachmentParts(prompt.askPromptText(moved),movedItems)),plain(moved));
   assert.deepEqual(plain(model.askAttachmentParts('🧭!', [{...page,offset:1}])),[plain(model.askAttachmentChip(page)),'🧭!'],'never split a surrogate pair');
-  assert.equal(model.askAttachmentChip(element).label,'Highlighted element');
+  assert.equal(model.askAttachmentChip(element).label,'Page element');
+  assert.deepEqual([1,1536,20*1024*1024].map(model.askFileSize),['1 byte','1.5 KiB','20 MiB']);
 });
 
 test('Ask progress puzzles produce distinct solvable shuffles using adjacent moves',()=>{
@@ -307,8 +308,8 @@ test('Ask composer keeps search available while draft and conversation controls 
   assert.deepEqual(actions({}), {send:false, stop:false, history:true, clear:false, clearLabel:'Clear', modelLocked:false});
   assert.deepEqual(actions({draft:'  '}), {send:false, stop:false, history:true, clear:true, clearLabel:'Clear', modelLocked:false});
   assert.deepEqual(actions({draft:'Find my work'}), {send:true, stop:false, history:true, clear:true, clearLabel:'Clear', modelLocked:false});
-  assert.deepEqual(actions({turns:[{prompt:'Find my work'}]}), {send:false, stop:false, history:true, clear:true, clearLabel:'New Chat', modelLocked:true});
-  assert.equal(actions({draft:'Follow up',turns:[{prompt:'First question'}],pending:true}).clearLabel,'New Chat');
+  assert.deepEqual(actions({turns:[{prompt:'Find my work'}]}), {send:false, stop:false, history:true, clear:true, clearLabel:'New chat', modelLocked:true});
+  assert.equal(actions({draft:'Follow up',turns:[{prompt:'First question'}],pending:true}).clearLabel,'New chat');
   assert.equal(actions({draft:'Follow up', pending:true}).send, false);
   assert.equal(actions({draft:'Find', enabled:false}).send, false);
   assert.equal(actions({draft:'Find', model:''}).send, false);
@@ -464,13 +465,13 @@ test('history keeps server matches from later messages and only adds the current
   assert.deepEqual(entries({current}).map(session=>session.id),['initial','newer']);
   assert.deepEqual(entries({query:'later topic',current,sessions:[]}),[],'an unmatched current chat must not leak into search results');
 });
-test('history rows name their turns, models and when the chat was last active', () => {
+test('history rows name their questions, models and when the chat was last active', () => {
   const now=new Date(2026,10,7,15,30).getTime(),at=(month,day,hour=9,year=2026)=>new Date(year,month,day,hour).getTime();
   const summary={id:'s',createdAt:at(10,7,8),updatedAt:at(10,7,14),questionCount:3,selection:{provider:'Codex',model:'gpt'},conversation:[{prompt:'Where did time go?',cli:'Codex'}],
     models:[{cli:'Claude',model:'opus',label:'Opus'},{cli:'Codex',model:'gpt',label:''}]};
   const row=plain(model.askHistoryRow(summary,{now,labels:{Codex:{gpt:'GPT-5'}}}));
   assert.equal(row.title,'Where did time go?');
-  assert.equal(row.turns,'3 turns');
+  assert.equal(row.turns,'3 questions');
   assert.deepEqual(row.models.map(use=>use.label),['Opus','GPT-5'],'summaries keep their most recent model first and fill missing labels from the catalog');
   assert.equal(row.stamp,new Date(summary.updatedAt).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}));
   assert.match(row.when,/^Last active .* · Started /);
@@ -479,12 +480,12 @@ test('history rows name their turns, models and when the chat was last active', 
     {prompt:'First',cli:'Codex',model:'gpt',modelLabel:'GPT-5'},{prompt:'Second',cli:'Claude',model:'opus',modelLabel:'Opus'},{prompt:'Third',cli:'Codex',model:'gpt',modelLabel:'GPT-5'}]};
   const openRow=plain(model.askHistoryRow(open,{now}));
   assert.deepEqual(openRow.models.map(use=>use.cli),['Codex','Claude']);
-  assert.equal(openRow.turns,'3 turns');
+  assert.equal(openRow.turns,'3 questions');
   assert.equal(openRow.stamp,new Date(open.updatedAt).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}));
   assert.ok(!openRow.when.includes('Started'),'an unchanged start date is not repeated');
   const draft=plain(model.askHistoryRow({id:'d',updatedAt:at(10,2),draft:'Half a thought',selection:{provider:'Claude',model:'opus'},conversation:[]},{now,labels:{Claude:{opus:'Opus'}}}));
-  assert.deepEqual([draft.title,draft.turns,draft.modelSummary],['Half a thought','Draft','Opus'],'a draft names the model it will ask');
-  assert.equal(model.askHistoryRow({...summary,questionCount:1},{now}).turns,'1 turn');
+  assert.deepEqual([draft.title,draft.turns,draft.modelSummary],['Half a thought','','Opus'],'a draft names the model it will ask, and its state label alone says Draft');
+  assert.equal(model.askHistoryRow({...summary,questionCount:1},{now}).turns,'1 question');
   assert.match(model.askHistoryStamp(at(0,3,9,2025),now),/2025/);
 });
 test('private visit writes preserve deletion order and recover after a failed update', async () => {
@@ -752,6 +753,7 @@ test('floating progress reflects the latest state and distinguishes completion f
   const streaming=model.askFloatingState({status:'loading',message:'Starting Codex…',elapsedMs:7000,activity:[{message:'Browsing available views…',elapsedMs:2000},{message:'Searching archived work…',elapsedMs:4000}]});
   assert.equal(streaming.message,'Searching archived work…');assert.equal(streaming.ready,false);
   for (const status of ['single','multiple','clarification','error']) assert.equal(model.askFloatingState({status}).ready,true);
+  assert.deepEqual(['single','feedback'].map(status=>model.askFloatingState({status}).message),['Answer ready','Feedback draft ready']);
   assert.equal(model.askFloatingState({status:'canceled'}).ready,false);
   const opened=model.askFloatingState({status:'single'},{navigated:true});
   assert.match(opened.message,/follow-up/);assert.equal(opened.ready,false);
@@ -818,7 +820,7 @@ test('Ask combines preview kinds so each link renders with the first kind that c
 
 test('work previews identify the run in two lines: where and when, then who and how much', () => {
   const metric = (value, quality='observed') => ({value,quality,known:1,total:1});
-  const specs = [['cost','API cost','usd'],['clock','Clock span','ms'],['children','Children','count'],['turns','User turns','count'],['files','Files Edited','count']].map(([id,label,unit])=>({id,label,unit,definition:label+' definition'}));
+  const specs = [['cost','API cost','usd'],['clock','Clock span','ms'],['children','Children','count'],['turns','User turns','count'],['files','Files edited','count']].map(([id,label,unit])=>({id,label,unit,definition:label+' definition'}));
   const models = [{model:'claude-opus-4-5-20251101',provider:'claude',sessions:3,tokens:9},{model:'gpt-5',provider:'codex',sessions:1,tokens:5},{model:'gemini',provider:'antigravity',sessions:1,tokens:2}];
   const now = Date.parse('2026-11-01T18:00:00Z'), start = Date.parse('2026-10-30T20:14:00Z');
   const workspace = {start,end:null,sessions:7,models,totals:{cost:metric(41.2,'partial'),clock:metric(3_600_000*3+12*60_000),children:metric(6),turns:metric(1),files:metric(null)}};
@@ -829,15 +831,15 @@ test('work previews identify the run in two lines: where and when, then who and 
   assert.match(work.where[0].title,/2026/);
   assert.equal(work.where[1].text,'3h 12m');
   assert.equal(work.where[2].text,'pharos · gbdubs/fix','the place truncates first');
-  assert.deepEqual(text(work.what),['6 subagents','claude-opus-4-5, gpt-5 +1','1 turn','$41.20+'],'unknown measures are omitted; partial ones are marked');
-  assert.match(work.what[1].title,/claude-opus-4-5-20251101 \(claude\): 3 sessions/);
+  assert.deepEqual(text(work.what),['6 sub-agents','claude-opus-4-5, gpt-5 +1','1 turn','$41.20+ API cost'],'unknown measures are omitted; partial ones are marked');
+  assert.match(work.what[1].title,/claude-opus-4-5-20251101 \(claude\): 3 agent sessions/);
   assert.match(workPreviewView(preview,Date.parse('2027-02-01T00:00:00Z')).where[0].text,/2026/,'other years are named');
   // Independent top-level conversations are sessions, not subagents; partial
   // counts keep their marker even when only one item was seen.
   const conversation = {start:null,end:null,sessions:2,models:models.slice(1,2),totals:{children:metric(0),turns:metric(1,'partial'),files:metric(4,'partial')}};
   const scoped = workPreviewView({metrics:specs,workspace,conversation},now);
   assert.deepEqual(text(scoped.where),[],'nothing known about where or when is left out');
-  assert.deepEqual(text(scoped.what),['0 subagents','gpt-5','1+ turns','4+ files']);
+  assert.deepEqual(text(scoped.what),['0 sub-agents','gpt-5','1+ turns','4+ files edited']);
 });
 
 test('retained Ask charts revalidate on reopening and their own data or calendar refresh until disposed', () => {

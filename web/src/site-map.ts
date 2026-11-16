@@ -685,7 +685,9 @@ export function cardURL(card: SiteCard, days: number | null): string {
   return `${card.url.path}?${params}`;
 }
 // A card's title or description at a window, as describeRecipeText writes it.
-export const cardText = (text: string, days: number) => Object.entries(recipeTextWindows[String(days)]).reduce((result, [token, value]) => result.replaceAll(token, value), text);
+// One day reads "the last day", never "the last 1 days", as on the card.
+export const cardText = (text: string, days: number) => Object.entries(recipeTextWindows[String(days)]).reduce((result, [token, value]) => result.replaceAll(token, value),
+  days === 1 ? text.replaceAll("the last {days} days", "the last day").replaceAll("{days} days", "1 day") : text);
 
 // ----- Settings pages ----------------------------------------------------------
 
@@ -745,6 +747,7 @@ const dashboardLinks: Record<UsageTopic, DashboardLinks> = {
   agent_experience: { catalog: true },
   agent_event_rates: { catalog: true },
   session_shape: { catalog: true },
+  tool_use: { catalog: true }, context: { catalog: true },
   outcomes: { catalog: true }, branches: { catalog: true },
   "thinking-overview": { options: thinkingOptions(false), days: thinkingDaysOption },
   "thinking-detail": { options: thinkingOptions(true), days: thinkingDaysOption },

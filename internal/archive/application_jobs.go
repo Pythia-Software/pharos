@@ -16,7 +16,7 @@ func (m *applicationManager) reportJob(state, phase string) {
 
 func (m *applicationManager) startOperation(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	if !m.operationMu.TryLock() {
-		writeError(w, fmt.Errorf("another library operation is running"), 409)
+		writeError(w, fmt.Errorf("A library operation is still running. Try again when it finishes."), 409)
 		return
 	}
 	m.mu.Lock()
@@ -26,7 +26,7 @@ func (m *applicationManager) startOperation(w http.ResponseWriter, r *http.Reque
 	if !recovering {
 		a, b := m.registry.library(firstString(body["source"])), m.registry.library(firstString(body["target"]))
 		if a == nil || b == nil || a.ID == b.ID {
-			err = fmt.Errorf("choose two different libraries")
+			err = fmt.Errorf("Choose two different libraries.")
 		} else {
 			source, err = a.load()
 			if err == nil {
@@ -100,7 +100,7 @@ var compactCloseWait = 30 * time.Second
 // shows its progress and reopens the library when it finishes.
 func (m *applicationManager) startCompaction(w http.ResponseWriter, body map[string]any) {
 	if !m.operationMu.TryLock() {
-		writeError(w, fmt.Errorf("another library operation is running"), 409)
+		writeError(w, fmt.Errorf("A library operation is still running. Try again when it finishes."), 409)
 		return
 	}
 	m.mu.Lock()
@@ -108,9 +108,9 @@ func (m *applicationManager) startCompaction(w http.ResponseWriter, body map[str
 	var config Config
 	var err error
 	if l := m.registry.library(id); l == nil {
-		err = fmt.Errorf("choose a library")
+		err = fmt.Errorf("Choose a library.")
 	} else if m.suspended[id] {
-		err = fmt.Errorf("this library has been released; reconnect it first")
+		err = fmt.Errorf("This library was released for eject. Reconnect it first.")
 	} else {
 		config, err = l.load()
 	}
@@ -147,7 +147,7 @@ func (m *applicationManager) startCompaction(w http.ResponseWriter, body map[str
 				case <-closing.done:
 				case <-time.After(5 * time.Second):
 					// Fail as a job, so the startup window reopens the library.
-					err := fmt.Errorf("the library is still closing; compact again shortly")
+					err := fmt.Errorf("The library is still closing. Compact it again in a moment.")
 					m.reportJob("failed", err.Error())
 					return err
 				}
@@ -231,11 +231,16 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 	var target Config
 	var targetErr error
 	b = m.registry.library(targetID)
+	// Names for the job's messages, read under the lock a rename takes.
+	sourceName, targetName := a.Name, ""
+	if b != nil {
+		targetName = b.Name
+	}
 	switch {
 	case b == nil || b.Instance != source.DeliveryTargetInstance:
-		targetErr = fmt.Errorf("archive registration changed; pending history stays local")
+		targetErr = fmt.Errorf("The library to deliver to was changed or removed. History stays in %s.", sourceName)
 	case m.suspended[targetID]:
-		targetErr = fmt.Errorf("archive is released; pending history stays local until its drive returns")
+		targetErr = fmt.Errorf("%s is released. History stays in %s until its drive returns.", targetName, sourceName)
 	default:
 		target, targetErr = b.load()
 	}
@@ -255,7 +260,7 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 	defer func() { m.mu.Lock(); m.busy = false; m.publishLocked(); m.mu.Unlock() }()
 	progress := func(s string) { m.reportJob("running", s); deliver.Step(s, "", -1) }
 	if plan.Capture && !plan.Resume {
-		progress("Capturing approved sources into the pending library")
+		progress("Capturing approved sources into " + sourceName)
 		_, capture := deliver.Child(OperationSpec{Kind: "library.deliver.capture", Libraries: []string{sourceID}, Trigger: triggerChained})
 		// Delivery is background: with the flag on, its IO runs at the
 		// utility tier (§10), as the move's below does.
@@ -269,7 +274,7 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 			plan.Transfer, _, err = pendingHistory(m.ctx, source)
 		}
 		if err == nil && !plan.Transfer {
-			m.reportJob("complete", "Pending capture is current; no history to deliver")
+			m.reportJob("complete", "Capture is up to date. Nothing new to deliver.")
 			return
 		}
 	}
@@ -289,7 +294,7 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 	if err != nil {
 		m.reportJob("paused", err.Error())
 	} else {
-		m.reportJob("complete", "Pending history delivered; local history is empty")
+		m.reportJob("complete", fmt.Sprintf("History delivered to %s. %s is now empty.", targetName, sourceName))
 	}
 }
 
@@ -320,7 +325,7 @@ func capturePendingLibrary(ctx context.Context, config Config) error {
 		return err
 	}
 	if !summary.OK {
-		return fmt.Errorf("pending capture is incomplete; all data was retained")
+		return fmt.Errorf("Capture did not finish. Everything captured was kept.")
 	}
 	inputs, err := pendingCaptureReceipt(config, summary.Sources)
 	if err != nil {
@@ -367,10 +372,10 @@ func capturePendingLibrary(ctx context.Context, config Config) error {
 		}
 		result := catalog.IndexCapture(ctx, target, nil)
 		if result.Error != nil {
-			return fmt.Errorf("index pending history: %s", result.Error)
+			return fmt.Errorf("Could not index captured history: %s.", result.Error)
 		}
 		if result.Pending || result.Deferred {
-			return fmt.Errorf("index pending history is unfinished; retained inputs will be retried")
+			return fmt.Errorf("Indexing captured history did not finish. Pharos will try again with what it kept.")
 		}
 	}
 	return recordPendingCapture(ctx, catalog, inputs)

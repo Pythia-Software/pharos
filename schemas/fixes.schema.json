@@ -154,7 +154,7 @@
           "expr": "r.\"shown\""
         }
       },
-      "description": "Whether Open lists it under your Fixes settings: shown, or hidden as quiet too long, seen in too few work items, or guidance working as intended. Handed-off and closed fixes are always listed.",
+      "description": "Whether the Open list shows it under your Fixes settings: shown, or hidden as quiet too long, seen in too few workspaces, or guidance working as intended. Handed-off and closed fixes are always listed.",
       "filter": {
         "editor": "set",
         "values": {
@@ -170,7 +170,7 @@
             },
             {
               "value": "rare",
-              "label": "Hidden: too few work items"
+              "label": "Hidden: too few workspaces"
             },
             {
               "value": "intended",
@@ -206,7 +206,7 @@
             },
             {
               "value": "harness",
-              "label": "Harness and shell behaviour"
+              "label": "Agent app and shell behavior"
             },
             {
               "value": "tool",
@@ -266,7 +266,7 @@
             },
             {
               "value": "unclear",
-              "label": "Too little activity since to tell"
+              "label": "Too little activity since then to tell"
             },
             {
               "value": "unknown",
@@ -374,7 +374,7 @@
     },
     {
       "name": "work_items",
-      "label": "Work items",
+      "label": "Workspaces",
       "type": "number",
       "group": "Fix",
       "bindings": {
@@ -478,7 +478,7 @@
         }
       },
       "render": "number",
-      "description": "Work items, weighted down once quiet past your setting, plus two per hour of agent time lost.",
+      "description": "Workspaces, weighted down once quiet past your setting, plus two per hour of agent time lost.",
       "aggregate": {
         "groupable": true
       }

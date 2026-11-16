@@ -14,7 +14,7 @@ import { decodeQueryStrict, EMPTY_QUERY } from "@pythia-software/query-table-cor
 import { assets } from "../helpers/classic-script.mjs";
 import map from "../../../../internal/archive/assets/site-map.json";
 import cases from "../../../../testdata/site-map-cases.json";
-import { cardURL, chartVerdict, dashboardURL, drawChart, judgeChart, readChart, viewChart, settingsPages, siteSchemas, viewTitles, windowTerms } from "../../../src/site-map";
+import { cardText, cardURL, chartVerdict, dashboardURL, drawChart, judgeChart, readChart, viewChart, settingsPages, siteSchemas, viewTitles, windowTerms } from "../../../src/site-map";
 import { analysisCatalogs } from "../../../src/analysis-catalogs";
 import { dashboardDefaults } from "../../../src/dashboard-defaults";
 import { canonicalState, normalizeAnalysis, readAnalysisLink, validAnalysisState } from "../../../src/dashboard-analysis-model";
@@ -27,6 +27,7 @@ import { readFindingsRoute } from "../../../src/findings-route";
 import { readDelegationRoute } from "../../../src/delegation-route";
 import { readViewState } from "../../../src/view-state";
 import { legacyRoutes, idSources, readerParams } from "../../../src/site-routes";
+import { describeRecipeText } from "../../../src/curiosity-data";
 
 globalThis.location ??= new URL("http://localhost/");
 const archive = dirname(assets), ui = readFileSync(join(assets, "ui.py"), "utf8");
@@ -172,6 +173,13 @@ test("the sampled card links rebuild from the site map and open their dashboards
   }
   assert.equal(new Set(cases.cards.map(item => item.id)).size, map.cards.items.length, "every card has a case");
   assert.ok(map.cards.items.some(card => card.window && cases.cards.filter(item => item.id === card.id).length === card.window.days.length), "some cards have every window");
+});
+
+test("a card's link text at a window reads as the card does, one day in the singular", () => {
+  for (const text of ["Calls in the last {days} days, by tool.", "Tokens over {days} days", "{lastDays} of {period} use"]) for (const days of [1, 7, 30]) {
+    assert.equal(cardText(text, days), describeRecipeText(text, days), `${text} at ${days}`);
+  }
+  assert.equal(cardText("Calls in the last {days} days.", 1), "Calls in the last day.");
 });
 
 test("every other page's link reads back through its page's reader", () => {

@@ -13,12 +13,12 @@ export function readRecordKeywordSearch(token: string | null, fields: FieldDef[]
     const restored = readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(stored.draft) }));
     if (restored.error || !restored.active || restored.draft.fuzzy || JSON.stringify(restored.draft.scope) !== JSON.stringify(emptyTextSearch().scope)) throw new Error();
     return { value: { field: stored.field, draft: restored.draft }, error: "" };
-  } catch { return { value: null, error: "This record keyword filter could not be read. Edit it or remove it before running the query." }; }
+  } catch { return { value: null, error: "This keyword filter could not be read. Edit or remove it, then run the query again." }; }
 }
 export function recordKeywordRequest(search: RecordKeywordSearch): string {
   if (JSON.stringify(search).length > 28000) throw new Error("This keyword filter is too large. Remove some conditions.");
   const { request } = searchRequest(search.draft);
-  if (!request || request.fuzzy) throw new Error("Invalid record keyword conditions");
+  if (!request || request.fuzzy) throw new Error("This keyword filter is not valid. Edit or remove it.");
   const { where, query, mode, case_sensitive, separators } = request;
   return JSON.stringify({ field: search.field, ...(where ? { where } : { query, mode }), case_sensitive, separators });
 }

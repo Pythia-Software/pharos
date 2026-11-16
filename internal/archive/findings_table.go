@@ -14,7 +14,7 @@ var findingLeverLabels = map[string]string{
 	"repo-instructions":   "Repository instructions",
 	"global-instructions": "Global instructions",
 	"repo-tooling":        "Repository tools & skills",
-	"harness-settings":    "Harness settings",
+	"harness-settings":    "Agent app settings",
 	"automation-prompt":   "Automation prompts",
 }
 

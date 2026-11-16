@@ -49,7 +49,7 @@
   "fields": [
     {
       "name": "id",
-      "label": "Work ID",
+      "label": "Workspace ID",
       "type": "text",
       "select": {
         "default": false
@@ -66,7 +66,7 @@
     },
     {
       "name": "title",
-      "label": "Conversation",
+      "label": "Workspace",
       "type": "text",
       "group": "Context",
       "render": "usage_conversation",
@@ -142,7 +142,7 @@
             },
             {
               "value": "claude",
-              "label": "Claude"
+              "label": "Claude Code"
             },
             {
               "value": "chatgpt",
@@ -265,7 +265,7 @@
     },
     {
       "name": "typed_turns",
-      "label": "Typed turns",
+      "label": "Typed messages",
       "type": "number",
       "group": "Your writing",
       "render": "number",
@@ -291,7 +291,7 @@
     },
     {
       "name": "user_turns",
-      "label": "User turns",
+      "label": "User messages",
       "type": "number",
       "group": "Your writing",
       "render": "number",

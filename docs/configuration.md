@@ -75,7 +75,7 @@ data lives on a separate drive.
 
 ## Layout preferences
 
-**Settings → Layout Preferences** brings the macOS menu bar, header, and Quick
+**Settings → Layout** brings the macOS menu bar, header, and Quick
 Stats editors together in expandable cards. Each editor saves changes immediately
 with the library and has its own **Reset to default** action.
 
@@ -121,11 +121,11 @@ toolbox button to add it, or click a handle for move and Remove actions. With
 a handle focused, Alt+Left/Right moves its control and Delete returns it to the
 toolbox. Settings stays available in every layout.
 
-The default header is **Back only**, **Drive & sync status**, **Quick Stats**,
+The default header is **Back only**, **Library status**, **Quick Stats**,
 **Ask Pharos**, **Send feedback**, and **Settings**, in that order. Back/forward,
 Search, Data updates, Data Guide, theme, navigation bar, and agent annotations
 remain available in the toolbox. **Back only** replaces the back/forward combo,
-and **Sync only** replaces the drive and sync group with just Index changes.
+and **Index changes only** replaces the library group with just Index changes.
 Clicking either variant keeps the existing position; dragging chooses its new
 position. **Reset to default** restores the default arrangement.
 Changes apply immediately and are saved with the library, including when it
@@ -770,13 +770,10 @@ searchable. Settings → Sources keeps the ways to add sources, source
 configuration, and enable switches, with **Open Background Processing** linking to
 the controls. Settings → Background Processing shows what Pharos keeps current
 on its own, Frequently, Hourly and Daily, with each item's measured cost, and
-offers **Capture & index**: capture
-this Mac, index captures from every Mac, then any pending library upgrade.
-The same button is in the drive panel the header's library disk opens.
-Expand **Capture or index separately** for **Capture this Mac**, which copies
-enabled local sources into the library, or **Index captured files**, which
-indexes captures from every Mac. Progress and the index **Stop** control are
-on that page too. The header button beside the library disk runs **Index
+offers **Index changes now** and a **Run now** on each item, including the
+captures and any pending library upgrade. Progress and each running item's
+**Stop** control are on that page too. The header button beside the library
+chip runs **Index
 changes**: it indexes what changed in this Mac's sources, without capturing
 them. Settings → Background Processing also offers the schedule's controls
 (on, paused, only when I ask; the interval and the daily time), measured
@@ -869,7 +866,7 @@ and never open the catalog themselves, so they don't keep the drive busy (see
 [MCP access](#mcp-access)).
 
 **Ejecting.**
-1. **Eject in Pharos** (native menu or drive panel) first saves the open UI
+1. **Eject in Pharos** (native menu or Background Processing panel) first saves the open UI
    session.
 2. It then asks the broker to release the library's volume
    (`POST /api/app/release-volume`). The broker stops that library's service as a
@@ -972,13 +969,13 @@ progress is, and the next run redoes it.
   or a cloud upload, verification or destination test, which stage files on
   the drive),
   `git` (the main-branch merge lookup that follows a sync or an index, or the
-  first scan of a catalog), and `maintenance` (among others, Library view rows
+  first scan of a catalog), and `maintenance` (among others, Search view rows
   still to be indexed, listed once that has run for 15 seconds: those an
   index writes are indexed within seconds of each record).
   `stoppable` work carries the `stop_path` to POST to stop it (below), and
   `stopping` once it has been asked to.
 - `library_refresh`: `stopped`, and while it is, `pending` (workspaces left
-  to index). See **Stopping Library view indexing** below.
+  to index). See **Stopping Search view indexing** below.
 - `idle` (nothing running), `writing` (something writes to the drive), and
   `safe_to_unplug`, which equals `idle`, as does `GET /api/capture`'s field of
   that name.
@@ -1002,9 +999,9 @@ of the same stage on this Mac; the whole-operation forecast predicts each
 remaining step from that step's history and is withheld until every
 remaining step has some. See [Progress and time estimates](progress-estimates.md).
 
-**Stopping Library view indexing.** `POST /api/library/refresh/stop`
-(the **Stop** beside "Indexing the Library view" in the drive panel) stops
-recomputing Library view rows and answers `{"stopped": true}`, or `false` if
+**Stopping Search view indexing.** `POST /api/library/refresh/stop`
+(the **Stop** beside "Indexing the Search view" in the Background Processing panel) stops
+recomputing Search view rows and answers `{"stopped": true}`, or `false` if
 it was already stopped. The batch in progress is abandoned, not committed, so
 its workspaces stay pending with the rest. Nothing is lost: the Library works
 out a pending workspace's row as it shows it, which is slower on a large
@@ -1012,7 +1009,7 @@ backlog. It stays stopped, and off the list of running work, until
 `POST /api/library/refresh/resume` (the panel's **Resume**), a Capture & index
 (`POST /api/library/update`), or the next start of Pharos.
 
-In the app, the drive panel's title has **⏏ Eject** at its right when the
+In the app, the Background Processing panel's title has **⏏ Eject** at its right when the
 library is on a drive that can be ejected. With nothing running it ejects at
 once; otherwise it first lists the work an eject stops, with what stopping
 each one does (an index resumes on its next run; a cloud upload starts over),
@@ -1038,6 +1035,11 @@ pharos capture              # every enabled source of this Mac
 pharos capture claude codex # just these (a named source is captured even if disabled)
 ```
 
+A machine that does not run Pharos (a cloud sandbox, a CI runner) captures
+and uploads with [`pharos capture-push`](capture-push.md) instead, and
+**Settings → Sources → Collect from other machines** sets that up and
+connects the bucket to this library.
+
 The command prints a JSON summary, exits non-zero if anything failed, and never
 opens the catalog. The service offers the same as `POST /api/capture` (optional
 body `{"sources": ["claude"]}`), which starts a run in the background and
@@ -1046,7 +1048,7 @@ per-source progress (files and bytes copied, snapshots, errors) and
 `safe_to_unplug`, which is true when nothing at all is running, as reported by
 [`GET /api/library/status`](#library-status-and-eject): no capture (by the
 service, the CLI, or anything else on this Mac holding the capture lock), sync,
-index, backup, Git lookup, or Library view indexing. Even then the service has
+index, backup, Git lookup, or Search view indexing. Even then the service has
 the catalog open, so eject the drive rather than pulling it.
 
 ```toml

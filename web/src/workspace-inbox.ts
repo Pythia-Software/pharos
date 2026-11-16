@@ -80,7 +80,7 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   divider.className = "workspace-divider";divider.dataset.viewField="sidebar_width";
   divider.setAttribute("role", "separator");
   divider.setAttribute("aria-orientation", "vertical");
-  divider.title = "Drag to resize · arrow keys resize · double-click resets";
+  divider.title = "Drag to resize · arrow keys adjust · Home or End: narrowest or widest · double-click resets";
   const viewer = document.createElement("section");
   viewer.className = "workspace-reader";
   viewer.setAttribute("aria-label", "Conversation viewer");

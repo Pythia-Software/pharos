@@ -34,6 +34,10 @@ type storageShares struct {
 	Originals, Catalog []storageShare
 	Hosts              map[string]string // host ID to label
 	Projects           map[string]string // project ID to name
+	// Sources names this library's configured sources (sourceLabel). A
+	// source only another Mac configures is named for its kind when its name
+	// is one, and keeps its name otherwise.
+	Sources map[string]string
 	// CatalogFree is the catalog's free pages: space deleted data left in
 	// the file, which only compacting gives back to the drive.
 	CatalogFree int64
@@ -190,13 +194,15 @@ func storageBreakdown(sizes librarySizes, shares storageShares, current string) 
 		projects.add(share.Project).Catalog += part
 	}
 
-	label := func(names map[string]string, empty string, mark func(string) string) func(*storageRow) {
+	label := func(names map[string]string, empty string, mark, fallback func(string) string) func(*storageRow) {
 		return func(row *storageRow) {
 			switch {
 			case row.ID == "":
 				row.Label = empty
 			case names[row.ID] != "":
 				row.Label = names[row.ID]
+			case fallback != nil:
+				row.Label = fallback(row.ID)
 			default:
 				row.Label = row.ID
 			}
@@ -216,10 +222,10 @@ func storageBreakdown(sizes librarySizes, shares storageShares, current string) 
 				return " (this Mac)"
 			}
 			return ""
-		}), 0, ""),
-		"sources":   sources.list(label(nil, "Unknown source", nil), 0, ""),
-		"projects":  projects.list(label(shares.Projects, "No project", nil), storageProjectLimit, "Other projects"),
-		"estimated": "Project shares, and the catalog's division by Mac and source, are estimated from message counts.",
+		}, nil), 0, ""),
+		"sources":   sources.list(label(shares.Sources, "Unknown source", nil, func(name string) string { return sourceLabel(name, "") }), 0, ""),
+		"projects":  projects.list(label(shares.Projects, "No project", nil, nil), storageProjectLimit, "Other projects"),
+		"estimated": "Project shares, and the catalog’s division by Mac and source, are estimated from message counts.",
 	}
 }
 
@@ -316,7 +322,12 @@ func (s *Server) storageBreakdown() map[string]any {
 	if state == nil {
 		return map[string]any{"status": "measuring"}
 	}
-	result := storageBreakdown(state.sizes, state.shares, currentHost().ID)
+	shares := state.shares
+	shares.Sources = map[string]string{}
+	for _, source := range config.Sources {
+		shares.Sources[source.Name] = sourceLabel(source.Name, source.Kind)
+	}
+	result := storageBreakdown(state.sizes, shares, currentHost().ID)
 	_, path := driveScope(config)
 	total, free := diskUsage(path)
 	result["status"] = "measured"

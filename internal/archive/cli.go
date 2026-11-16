@@ -66,6 +66,14 @@ func Run(arguments []string) error {
 	if command == "capture-export-verify" {
 		return runCaptureExportVerifyCLI(args)
 	}
+	// Capture push reads its own configuration and state folder only.
+	if command == "capture-push" {
+		// --config names the push configuration here, not a library's.
+		if configPath != "" {
+			args = append([]string{"--config", configPath}, args...)
+		}
+		return runCapturePushCLI(args)
+	}
 	// Labeling never opens the catalog through OpenCatalog: prepare reads a
 	// read-only snapshot, and plan and status read only a dataset.
 	if command == "labeling" {
@@ -201,6 +209,9 @@ func Run(arguments []string) error {
 	// Capturing and backing up only copy files; they never open the catalog
 	// for writing.
 	// Each holds a lease under the capture root while it writes (§6.5).
+	if command == "bucket-import" {
+		return runBucketImportCLI(config, args)
+	}
 	if command == "claude-import" {
 		return runClaudeImportCommand(config, args)
 	}
@@ -625,7 +636,7 @@ func firstOf(args []string) string {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,claude-import,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,repair-session-models,repair-session-bounds,upgrade,build-tools,agent-events,engagement,execution-evidence,conversation-names,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,capture-export,capture-export-verify,capture-push,bucket-import,claude-import,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,repair-session-models,repair-session-bounds,upgrade,build-tools,agent-events,engagement,execution-evidence,conversation-names,pricing,search,tl1,findings,labeling,labels,health,doctor,dev-ui,mcp,probe,volume-id}")
 
 }
 func urlQueryEscape(value string) string {

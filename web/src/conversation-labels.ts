@@ -9,8 +9,8 @@ export const labelFamilies = [
   {id:"C.report",name:"Report",color:"var(--label-report)"},
   {id:"C.difficulty",name:"Difficulty",color:"var(--label-difficulty)"},
   {id:"root",name:"Generic",color:"var(--muted)"},
-  {id:"none",name:"No match",color:"color-mix(in srgb,var(--muted) 45%,var(--panel))"},
-  {id:"unknown",name:"Unlabeled",color:"var(--line)"},
+  {id:"none",name:"No matching label",color:"color-mix(in srgb,var(--muted) 45%,var(--panel))"},
+  {id:"unknown",name:"Not labeled yet",color:"var(--line)"},
 ] as const;
 export type Family = typeof labelFamilies[number]["id"];
 export type LabelMessage = {preview?:string;preview_truncated?:boolean;authorship?:{category:string;bytes:number;text?:string;truncated?:boolean}[];generation_model?:string;session_id?:string;conversation_id?:string;work_id?:string;order?:number|null;call_id?:string|null;id:string;role:string;kind:string;at:string|null;segment:string;labels:[string,number][];text:string;text_source:string;truncated:boolean;chunks:number};
@@ -80,9 +80,9 @@ export function compareStates(a:string,b:string):number {
   return root(a)-root(b)||rank(a)-rank(b)||a.localeCompare(b);
 }
 export function stateName(id:string,taxonomy:Taxonomy=[]):string {
-  if(id==="P")return "Sender Generic";
-  if(id==="C")return "Receiver Generic";
-  if(id==="?")return "Unlabeled boundary";
+  if(id==="P")return "Generic (sender)";
+  if(id==="C")return "Generic (receiver)";
+  if(id==="?")return "Uncategorized";
   return taxonomy.find(row=>row.id===id)?.name??labelFamilies.find(f=>f.id===id)?.name??id.split('.').at(-1)!;
 }
 export function functionStates(m:LabelMessage,resolution:Resolution="family"):string[] {

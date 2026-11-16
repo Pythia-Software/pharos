@@ -1,0 +1,620 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharos.pythia.software/contracts/plugins/push.schema.json",
+  "title": "Pushed captures (pharos-push/1)",
+  "description": "What `pharos capture-push` writes to a bucket and `bucket-import/1` reads. Keys under the prefix: chunks/<sha256 hex> (a piece of a member, named by its content), exports/<pusher>/<source>/<time>-<id>.json (an export, written after its chunks) and hello/<pusher>.json. No chunk or export key is ever written with different bytes, so nothing a reader depends on is overwritten; a pusher's hello is the one object it rewrites.",
+  "$defs": {
+    "pusher": {
+      "description": "One capture root. Random, made with the root, and replaced when the root is found on another machine.",
+      "type": "string",
+      "pattern": "^psh_[A-Za-z0-9]{10,40}$"
+    },
+    "export": {
+      "description": "One envelope of one source. <time> in its key is pushed_at as YYYYMMDDTHHMMSSZ and <id> is envelope.id.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "pusher",
+        "pushed_at",
+        "previous",
+        "envelope",
+        "chunking",
+        "members"
+      ],
+      "properties": {
+        "contract": {
+          "const": "pharos-push/1"
+        },
+        "pusher": {
+          "$ref": "#/$defs/pusher"
+        },
+        "pushed_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "previous": {
+          "description": "The key, below exports/<pusher>/<source>/, of the export this one follows, or null for the first. An export contains everything its predecessors did.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pool": {
+          "description": "The pool this machine belongs to, if any.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "retention_days": {
+          "description": "The bucket's lifecycle the pusher was told about. It uploads a chunk again before half of this has passed.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "envelope": {
+          "description": "The capture-export envelope (docs/capture-export.md), verbatim. The importer rebuilds the folder it describes and verifies it.",
+          "type": "object",
+          "required": [
+            "format",
+            "version",
+            "id",
+            "host_id",
+            "source_name",
+            "source_kind",
+            "files"
+          ]
+        },
+        "chunking": {
+          "description": "How members were cut. gear-v1 is the content-defined chunking of docs/claude-export-storage.md.",
+          "const": "gear-v1"
+        },
+        "members": {
+          "description": "One entry per envelope file, in the envelope's order. Concatenating the chunks gives the member's stored bytes.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "chunks"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "chunks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "sha256",
+                    "size"
+                  ],
+                  "properties": {
+                    "sha256": {
+                      "$ref": "common.schema.json#/$defs/sha256"
+                    },
+                    "size": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "platform": {
+          "$ref": "#/$defs/platform"
+        },
+        "initiator": {
+          "$ref": "#/$defs/initiator"
+        },
+        "owner": {
+          "$ref": "#/$defs/owner"
+        }
+      }
+    },
+    "hello": {
+      "description": "Written by `capture-push --check` and by a pusher's first push, so setup can show that a machine reached the bucket before any conversation exists. The one object a pusher rewrites.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "pusher",
+        "at",
+        "version"
+      ],
+      "properties": {
+        "contract": {
+          "const": "pharos-push/1"
+        },
+        "pusher": {
+          "$ref": "#/$defs/pusher"
+        },
+        "at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "version": {
+          "description": "The pharos version that wrote it.",
+          "type": "string"
+        },
+        "os": {
+          "enum": [
+            "linux",
+            "windows",
+            "darwin",
+            "other"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "pool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "sources": {
+          "description": "Source kinds found on the machine.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "platform": {
+          "$ref": "#/$defs/platform"
+        },
+        "initiator": {
+          "$ref": "#/$defs/initiator"
+        },
+        "owner": {
+          "$ref": "#/$defs/owner"
+        }
+      }
+    },
+    "config": {
+      "description": "pharos-push.json (access write, for machines that push) and pharos-read.json (access read, imported by Pharos). Bucket setup writes both. A secret is given inline, or as {\"env\": NAME} or {\"file\": PATH} so it can live in a secret store.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "access",
+        "destination"
+      ],
+      "properties": {
+        "contract": {
+          "const": "pharos-push-config/1"
+        },
+        "access": {
+          "enum": [
+            "write",
+            "read"
+          ]
+        },
+        "prefix": {
+          "description": "Key prefix inside the bucket, without a leading or trailing slash. A push configuration may contain {owner}, so a team's sandboxes file each person's work apart; a read configuration names one owner's prefix, or the folder above them all.",
+          "type": "string",
+          "pattern": "^(?!/)(?!.*/$).*$"
+        },
+        "retention_days": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "owner": {
+          "description": "Whose work this machine holds, for a prefix with {owner}. The environment variable PHAROS_PUSH_OWNER does the same; without either, the platform's identifier for the person who started the task is used.",
+          "$ref": "#/$defs/owner"
+        },
+        "automation": {
+          "description": "Declares that nobody started this machine's runs: the name of the automation that does, such as \"Sentry autofix\". The owner is then shared unless one is given. PHAROS_PUSH_AUTOMATION does the same.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "sources": {
+          "description": "Folders to capture, instead of the usual folders of every kind that can be pushed.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "kind",
+              "path"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+              },
+              "kind": {
+                "$ref": "common.schema.json#/$defs/transcript_kind"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "destination": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "bucket"
+              ],
+              "properties": {
+                "type": {
+                  "const": "s3"
+                },
+                "bucket": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "region": {
+                  "type": "string"
+                },
+                "endpoint": {
+                  "description": "For S3-compatible stores.",
+                  "type": "string",
+                  "format": "uri"
+                },
+                "access_key_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "secret_access_key": {
+                  "$ref": "#/$defs/secret"
+                },
+                "role_arn": {
+                  "description": "Keyless: the role to assume with the identity token.",
+                  "type": "string",
+                  "pattern": "^arn:"
+                },
+                "identity_token": {
+                  "$ref": "#/$defs/identity_token"
+                }
+              },
+              "oneOf": [
+                {
+                  "required": [
+                    "access_key_id",
+                    "secret_access_key"
+                  ]
+                },
+                {
+                  "required": [
+                    "role_arn",
+                    "identity_token"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "bucket"
+              ],
+              "oneOf": [
+                {
+                  "required": [
+                    "access_key_id",
+                    "secret_access_key"
+                  ]
+                },
+                {
+                  "required": [
+                    "service_account_key"
+                  ]
+                },
+                {
+                  "required": [
+                    "workload_identity_provider",
+                    "identity_token"
+                  ]
+                },
+                {
+                  "required": [
+                    "access_token"
+                  ]
+                }
+              ],
+              "properties": {
+                "type": {
+                  "const": "gcs"
+                },
+                "bucket": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "access_key_id": {
+                  "description": "An HMAC key's access ID.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "secret_access_key": {
+                  "$ref": "#/$defs/secret"
+                },
+                "service_account_key": {
+                  "$ref": "#/$defs/secret"
+                },
+                "workload_identity_provider": {
+                  "description": "Keyless: the provider's full resource name.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "service_account": {
+                  "description": "Keyless: a service account to impersonate, when the bucket is not granted to the federated identity directly.",
+                  "type": "string"
+                },
+                "identity_token": {
+                  "$ref": "#/$defs/identity_token"
+                },
+                "access_token": {
+                  "description": "Where a Google access token comes from, for a machine already signed in by other means (for example the command `gcloud auth print-access-token`). It is asked for again every few minutes.",
+                  "$ref": "#/$defs/identity_token"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "azure"
+                },
+                "sas_url": {
+                  "description": "A SAS URL for the container.",
+                  "$ref": "#/$defs/secret"
+                },
+                "account": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "container": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "tenant_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "client_id": {
+                  "description": "Keyless: the app registration or managed identity with a federated credential for the token's issuer and subject.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "identity_token": {
+                  "$ref": "#/$defs/identity_token"
+                }
+              },
+              "oneOf": [
+                {
+                  "required": [
+                    "sas_url"
+                  ]
+                },
+                {
+                  "required": [
+                    "account",
+                    "container",
+                    "tenant_id",
+                    "client_id",
+                    "identity_token"
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "url_template"
+              ],
+              "properties": {
+                "type": {
+                  "const": "http"
+                },
+                "url_template": {
+                  "description": "An HTTPS URL with {key} where the object key goes. Write access needs PUT; read access needs GET and a listing, so plain HTTP destinations are for pushing.",
+                  "type": "string",
+                  "pattern": "^https://.*\\{key\\}"
+                },
+                "header": {
+                  "description": "One request header, such as an authorization, as \"Name: value\".",
+                  "$ref": "#/$defs/secret"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "destination": {
+            "properties": {
+              "type": {
+                "const": "http"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "access": {
+            "const": "write"
+          }
+        }
+      }
+    },
+    "secret": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "env"
+          ],
+          "properties": {
+            "env": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ],
+          "properties": {
+            "file": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "platform": {
+      "description": "Where a sandbox runs, as far as the platform exposes it (docs/plugin-import-platforms.md). name is the recipe's key and becomes the conversation's channel.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,39}$"
+        },
+        "environment": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "task": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "task_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "started_from": {
+          "description": "What started the task inside the platform, such as slack, linear or sentry.",
+          "type": "string",
+          "maxLength": 80
+        }
+      }
+    },
+    "initiator": {
+      "description": "Who or what started the work. An automation has no person, and its exports go to the owner shared.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "person",
+            "automation"
+          ]
+        },
+        "name": {
+          "description": "For an automation, its name, used as the automation:<name> sender.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "automation"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "name"
+        ]
+      }
+    },
+    "owner": {
+      "description": "The {owner} a push resolved: the platform's identifier for the person the task was started for, or shared when the platform says there is none.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$"
+    },
+    "identity_token": {
+      "description": "Where a signed identity token (OIDC) for this sandbox comes from. It is fetched again for every pass and traded for short-lived access; nothing secret is stored.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command"
+          ],
+          "properties": {
+            "command": {
+              "description": "An argument vector that prints the token.",
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "env"
+          ],
+          "properties": {
+            "env": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ],
+          "properties": {
+            "file": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    }
+  }
+}

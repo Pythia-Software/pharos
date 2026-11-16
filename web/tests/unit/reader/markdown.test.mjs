@@ -210,7 +210,7 @@ test("the reader offers each highlight the conversation has marks for, each show
   assert.equal(options[1].note, '');
   // Events awaiting a rebuild stay inspectable here, but never read as current.
   const rebuilding = reader.readerHighlightOptions({ ...conversation, agent_events: { messages_read: 1, pending: true } }, [human, agent]);
-  assert.match(rebuilding[1].note, /^Waiting to be rebuilt .* may change$/);
+  assert.match(rebuilding[1].note, /^Waiting to be updated after a change; these events may move to other messages$/);
   assert.deepEqual(plain(options[2].legend), [{ name: 'Report', family: 'C.report' }]);
   // Writing and classifier marks are on by default; a link
   // wins over the saved choice, which wins over the default.

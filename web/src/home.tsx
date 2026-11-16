@@ -1,4 +1,5 @@
-import { readWindowChoice } from "./day-window";
+import { readWindowChoice, windowLabel } from "./day-window";
+import { Modal } from "./modal";
 import React, { useEffect, useRef, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
@@ -92,7 +93,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     ];
     const arrivals = batchPreviewArrivals(batch => {
       setPreviews(current => { const next = { ...current }; for (const { id, preview } of batch) { if (preview) next[id] = preview; else delete next[id]; } return next; });
-      setErrors(current => { const next = { ...current }; for (const { id, preview, error } of batch) { if (preview) delete next[id]; else next[id] = String(error); } return next; });
+      setErrors(current => { const next = { ...current }; for (const { id, preview, error } of batch) { if (preview) delete next[id]; else next[id] = error instanceof Error ? error.message : String(error); } return next; });
     });
     void loadCardPreviews(jobs.flatMap(job => job.spec ? [{ id: job.id, dataset: job.spec.dataset, query: job.spec.query, schema: schemas[job.spec.dataset], options: { ...job.options, window: job.spec.window } }] : []), (id, preview, error) => {
       if (!controller.signal.aborted) arrivals.publish(id, preview, error);
@@ -126,7 +127,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   useEffect(() => {
     if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(timeWindowValue(queryFromURL(editing.url, editing.query))); const metricId = editing.coverMetricId ?? editing.cover?.metricId ?? ""; setEditCover(coverChoices.some(choice => choice.id === metricId) ? metricId : ""); setEditGroups(editing.maxGroups === undefined ? "" : String(editing.maxGroups));
       if (editing.dashboard) { let category: QueryCategory = "usage"; try { category = dashboardCardPresentation(editing.url, editing.dashboardTarget).category; } catch { /* The preview reports the invalid definition. */ } setEditAction(editing.action ?? DASHBOARD_CARD_ACTION); setEditCategory(editing.category ?? category); }
-      setEditError(""); editor.current?.showModal(); editor.current?.querySelector<HTMLInputElement>(".query-title")?.focus(); }
+      setEditError(""); }
   }, [editing]);
 
   async function keep(item: QuerySuggestion, before?: string) {
@@ -135,7 +136,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       if (before) moveBookmark(saved.id, before);
       setMessage(`Collected “${item.title}”.`); setUndo(null);
       setPreviews(current => ({ ...current, [saved.id]: current[item.instanceId] }));
-    } catch (error) { setMessage(String(error)); }
+    } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   }
   function drop(event: React.DragEvent, before?: string) {
     if (!drag) return;
@@ -207,7 +208,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       onRefresh={() => { refreshPolicy.current = "fresh"; clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag}
       onAllCards={() => navigate("/cards")} />
     <RecentConversations active={active && !hidden} generation={generation} />
-    <dialog ref={editor} className="home-editor card-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {
+    <Modal open={editing !== null} dialogRef={editor} className="home-editor card-editor" aria-labelledby="homeEditorTitle" backdropDismiss={false} initialFocus=".query-title" onClose={() => setEditing(null)}><form onSubmit={event => {
       event.preventDefault(); if (!editing) return;
       try {
         const updated = updateBookmark(editing.id, editTitle, editDescription, !canEditWindow ? undefined : editDays === "all" ? null : editDays ? readWindowChoice(editDays) : undefined, editCover,
@@ -218,33 +219,33 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
           setErrors(current => { const next = { ...current }; delete next[editing.id]; return next; });
         }
         editor.current?.close(); setMessage("Saved your changes.");
-      } catch (error) { setEditError(String(error)); }
+      } catch (error) { setEditError(error instanceof Error ? error.message : String(error)); }
     }}>
-      <h2 id="homeEditorTitle">Make this view yours</h2>
+      <h2 id="homeEditorTitle">Edit card</h2>
       {editing && editingCard ? <div className="card-editor-stage">
         <QueryCard id="card-draft" {...editingCard} title={editTitle} description={editDescription} onOpen={() => {}}
           {...editing.dashboard ? { actionLabel: editAction, category: editCategory } : {}}
           editing={{ onTitle: setEditTitle, onDescription: setEditDescription, ...editing.dashboard ? { onAction: setEditAction, onCategory: setEditCategory } : {} }} />
       </div> : null}
-      <p className="home-editor-window-note">{editing?.dashboard ? "Name the card, describe it and choose its category and call to action in place. An empty call to action uses the default." : "Name the card and describe it in place."}</p>
+      <p className="home-editor-window-note">{editing?.dashboard ? "Edit the title, description, category and call to action on the card. An empty call to action uses the default." : "Edit the title and description on the card."}</p>
       {Boolean(coverChoices.length) ? <label>Cover metric<select aria-label="Cover metric" aria-describedby="homeCoverHelp" value={editCover} onChange={event => setEditCover(event.target.value)}>
         <option value="">First metric</option>
         {coverChoices.map(metric => <option key={metric.id} value={metric.id}>{metric.label}</option>)}
-      </select><small id="homeCoverHelp">Choose the value shown on this bookmark. The full comparison stays in the saved view.</small></label> : null}
+      </select><small id="homeCoverHelp">Choose the value this card shows. Its full comparison stays in the view it opens.</small></label> : null}
       {editingGroups ? <CardGroupsField groups={editingGroups} value={editGroups} onChange={setEditGroups} /> : null}
       {canEditWindow ? <label>Time window<select value={editDays} aria-describedby="homeWindowHelp" onChange={event => setEditDays(event.target.value)}>
         {!editingSpec?.window ? <option value="">Keep saved range</option> : null}
         {canChooseToday ? <option value="today">Today</option> : null}
-        {rollingWindowDays.map(days => <option key={days} value={days}>{days === 1 ? "Past 24 hours" : days === 365 ? "Last year" : days === 180 ? "Last 180d" : `Past ${days} days`}</option>)}
+        {rollingWindowDays.map(days => <option key={days} value={days}>{windowLabel(days)}</option>)}
         <option value="all">All time</option>
-      </select><small id="homeWindowHelp">{editDays === "today" ? "Since local midnight, through now. Follows the current day when this query runs." : editDays === "all" ? "Removes the saved date range. Other query filters stay in place." : editDays === "365" ? "Last 365 days, through now. Evaluated when this query runs." : editDays ? "Last N days, through now. Evaluated when this query runs." : "Keeps the dates and time filters already in this view."}</small></label>
-        : <p className="home-editor-window-note">This bookmarked page uses its own time controls.</p>}
+      </select><small id="homeWindowHelp">{editDays === "today" ? "Since local midnight, through now. Follows the current day each time the card runs." : editDays === "all" ? "Removes the saved date range. Other filters stay in place." : editDays ? `${windowLabel(readWindowChoice(editDays))}, through now. Measured back from now each time the card runs.` : "Keeps the dates and time filters already saved with this card."}</small></label>
+        : <p className="home-editor-window-note">{editingRecipe?.period === "current" ? "This card always shows the current state." : editingRecipe?.period === "all" ? "This card always covers all recorded history." : editing?.dashboard ? "This card keeps the time range of the dashboard view it was made from." : editingSpec ? "This card’s time range cannot be changed here." : "This bookmarked page uses its own time controls."}</p>}
       {editError ? <p role="alert">{editError}</p> : null}
       {editingRecipe?.exploration && !editingSpec?.query.grouping ? <div className="home-editor-upgrade"><button type="button" onClick={() => {
         const next = instantiateRecipe(editingRecipe, editDays === "today" ? "today" : Number(editDays) || 30);
         editor.current?.close(); navigate(next.url);
       }}>Try grouped comparison <Icon name="arrow-right" /></button><small>Open the latest version of this question. Save it from the table to keep it.</small></div> : null}
       <div className="home-editor-actions"><button type="button" onClick={() => editor.current?.close()}>Cancel</button><button type="submit">Save changes</button></div>
-    </form></dialog>
+    </form></Modal>
   </div>;
 }

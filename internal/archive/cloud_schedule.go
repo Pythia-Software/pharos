@@ -186,7 +186,7 @@ func (c *Catalog) setCloudSchedule(ctx context.Context, id string, enabled bool,
 			return err
 		}
 		if !verified {
-			return errors.New("validate a downloaded full backup before enabling scheduled backups")
+			return errors.New("verify a downloaded full backup before enabling scheduled backups")
 		}
 	}
 	host := currentHost()
@@ -337,7 +337,7 @@ func (s *Server) startCloudRun(ctx context.Context, id, kind, trigger string, at
 			return run, err
 		}
 		if !verified {
-			return run, errors.New("verify a downloaded small test before starting a full backup")
+			return run, errors.New("verify the downloaded test archive before starting a full backup")
 		}
 		if trigger == "scheduled" {
 			verified, err = s.Catalog.cloudHasVerified(ctx, id, "full")

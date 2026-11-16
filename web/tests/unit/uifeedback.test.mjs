@@ -5,7 +5,7 @@ import { join } from "node:path";
 import vm from "node:vm";
 import { transformSync } from "esbuild";
 import { assets, loadClassicScript } from "./helpers/classic-script.mjs";
-import { safeURL, boundedLog, changeTags, pendingSubmission, normalizeEntry } from "../../src/uifeedback/model.ts";
+import { safeURL, boundedLog, changeTags, pendingSubmission, normalizeEntry, errorText } from "../../src/uifeedback/model.ts";
 import { annotationForUpload, createAskFeedbackSender, feedbackReceipt, restoreReview } from "../../src/uifeedback/pharos-model.ts";
 
 test('annotation screenshot export reads the stored image and requires a confirmed local file', async () => {
@@ -146,6 +146,8 @@ test("tag actions preserve other tags and allow clearing a tag", () => {
   assert.deepEqual(changeTags(["ui", "fixed"], "ui"), ["ui", "fixed"]);
   assert.deepEqual(changeTags(["ui", "fixed"], "fixed", true), ["ui"]);
   assert.deepEqual(changeTags(["ui"], "ui", true), []);
+  assert.equal(errorText(new Error("Could not send feedback.")), "Could not send feedback.");
+  assert.equal(errorText("offline"), "offline");
 });
 test("unchanged retries keep identity while edited submissions acquire another ID", () => {
   const value = { version: 1, application: { name: "Pharos" }, kind: "prompt", comment: "Make this easier", annotations: [] };

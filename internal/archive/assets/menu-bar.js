@@ -7,26 +7,26 @@ const MENU_BAR_TOOLS = [
   {id: 'index', label: 'Index changes now', on: true, group: 'status', description: 'Start indexing from the menu.'},
   {id: 'words', label: 'Words typed', on: true, group: 'usage', description: 'Estimated human words · last 24 hours.'},
   {id: 'tokens', label: 'Tokens used', on: true, group: 'usage', description: 'Combined token usage · last 24 hours.'},
-  {id: 'cost', label: 'Estimated API cost', on: true, group: 'usage', description: 'API-equivalent cost at list prices · last 24 hours.'},
+  {id: 'cost', label: 'Estimated API cost', on: true, group: 'usage', description: 'API cost at list prices · last 24 hours.'},
   {id: 'carbon', label: 'Estimated CO₂e', on: true, group: 'usage', description: 'Carbon impact using your settings · last 24 hours.'},
   {id: 'streak', label: 'Your streak', on: true, group: 'habits', description: 'Days in a row with a message you typed, and whether today counts yet.'},
   {id: 'agent_streak', label: 'Agent streak', on: true, group: 'habits', description: 'Days in a row your agents worked, with you or unattended, and whether today counts yet.'},
   {id: 'backup', label: 'Last backup', on: true, group: 'library', description: 'When the library was last fully backed up.'},
-  {id: 'space', label: 'Library size', on: true, group: 'library', description: 'Archive size and free space on its drive.'},
-  {id: 'search', label: 'Search conversations…', on: true, group: 'navigation', description: 'Find a conversation or search the archive.'},
-  {id: 'analyze', label: 'Analyze usage…', on: true, group: 'navigation', description: 'Open usage, cost, writing, and carbon analysis.'},
-  {id: 'optimize', label: 'Optimize…', on: true, group: 'navigation', description: 'Review findings and opportunities to improve agent work.'},
-  {id: 'capture', label: 'Background Processing…', on: true, group: 'manage', description: 'Open the background update schedule, capture and indexing controls, and recent runs.'},
-  {id: 'health', label: 'Library health & backups…', on: true, group: 'manage', description: 'Check storage and recent activity, or choose a backup destination.'},
-  {id: 'sources', label: 'Manage sources…', on: true, group: 'manage', description: 'Choose which conversation files Pharos reads on this Mac.'},
+  {id: 'space', label: 'Library size', on: true, group: 'library', description: 'Library size and free space on its drive.'},
+  {id: 'search', label: 'Search conversations', on: true, group: 'navigation', description: 'Open Search to find workspaces, conversations and messages in the library.'},
+  {id: 'analyze', label: 'Analyze usage', on: true, group: 'navigation', description: 'Open usage, cost, writing, and carbon analysis.'},
+  {id: 'optimize', label: 'Optimize', on: true, group: 'navigation', description: 'Review findings and opportunities to improve agent work.'},
+  {id: 'capture', label: 'Background Processing', on: true, group: 'manage', description: 'Open the background update schedule, capture and indexing controls, and recent runs.'},
+  {id: 'health', label: 'Library health', on: true, group: 'manage', description: 'Check the library’s size, storage and recent activity.'},
+  {id: 'sources', label: 'Manage sources', on: true, group: 'manage', description: 'Choose which conversation files Pharos reads on this Mac.'},
   {id: 'finder', label: 'Show library in Finder', on: true, group: 'manage', description: 'Reveal the connected library folder in Finder.'},
-  {id: 'logs', label: 'Logs & crash reports', on: true, group: 'manage', description: 'Open recent page errors, slow requests, service output and crash reports, marking the ones to read first.'},
+  {id: 'logs', label: 'Logs & crash reports', on: true, group: 'manage', description: 'Open recent page errors, slow requests, Pharos’s own output and crash reports, marking the ones to read first.'},
   {id: 'settings', label: 'Settings…', required: true, group: 'settings'},
-  {id: 'eject', label: 'Eject library', on: true, group: 'quit', description: 'Safely eject the library. Appears when its drive is ejectable.'},
+  {id: 'eject', label: 'Eject library', on: true, group: 'quit', description: 'Release the library and eject its drive. Appears when the drive can be ejected.'},
   {id: 'quit', label: 'Quit Pharos', required: true, group: 'quit'},
 ];
 const MENU_BAR_SEPARATOR = {id: 'separator', label: 'Separator', separator: true, group: 'separator',
-  description: 'Drag a divider into the menu, or click to add one. Add as many as you need.'};
+  description: 'A divider line. Add as many as you need.'};
 function isMenuBarSeparator(id) { return typeof id === 'string' && /^separator:[1-9][0-9]*$/.test(id); }
 function menuBarTool(id) {
   return id === 'separator' || isMenuBarSeparator(id) ? {...MENU_BAR_SEPARATOR, id} : MENU_BAR_TOOLS.find(tool => tool.id === id);
@@ -113,9 +113,12 @@ function editMenuBarSettings(saved, id, destination) {
       case 'status': return [`Pharos · ${status()}`];
       case 'indexed': return [snapshot ? (ago(snapshot.indexed_at) ? `Indexed ${ago(snapshot.indexed_at)}` : 'Not indexed yet') : 'Checking last index…'];
       case 'words': return metric('Words typed', usage?.human_words?.toLocaleString());
-      case 'tokens': return metric('Tokens used', usage && pharosTokens.formatTokens(usage.tokens));
-      case 'cost': return metric('Estimated API cost', usage && pharosCurrency.formatUSD(usage.cost_usd));
-      case 'carbon': return metric('Estimated CO₂e', usage && `${new Intl.NumberFormat(undefined, {maximumSignificantDigits: 3}).format(usage.co2e_g >= 1000 ? usage.co2e_g / 1000 : usage.co2e_g)} ${usage.co2e_g >= 1000 ? 'kg' : 'g'}`);
+      // Mark estimates (*) and partly priced costs (+) as the native menu does.
+      case 'tokens': return metric('Tokens used', usage && pharosTokens.formatTokens(usage.tokens) + (usage.is_estimate ? '*' : ''));
+      case 'cost': return metric('Estimated API cost', usage && (Number.isFinite(usage.cost_usd)
+        ? pharosCurrency.formatUSD(usage.cost_usd) + (usage.cost_is_estimate ? '*' : ['partial', 'unpriced'].includes(usage.price_status) ? '+' : '')
+        : Number(usage.tokens) > 0 ? 'Unpriced' : pharosCurrency.formatUSD(0)));
+      case 'carbon': return metric('Estimated CO₂e', usage && window.pharosCarbon.mass(usage.co2e_g) + (usage.is_estimate ? '*' : ''));
       case 'streak': return metric('Your streak', usage?.streaks?.you);
       case 'agent_streak': return metric('Agent streak', usage?.streaks?.agents);
       case 'backup': return metric('Last backup', snapshot && (ago(snapshot.backup_at) ?? 'Never'));
@@ -179,7 +182,7 @@ function editMenuBarSettings(saved, id, destination) {
     const next = editMenuBarSettings(settings, id, destination), tool = definition(id);
     if (next.order.join() === settings.order.join()) return;
     const focusId = id === 'separator' ? next.order.find(item => !settings.order.includes(item)) : id;
-    commit(next, destination === null ? `${tool.label} removed from the menu.` : `${tool.label} is in position ${next.order.indexOf(focusId) + 1}.`, focusId);
+    commit(next, destination === null ? `${tool.label} moved to the toolbox.` : `${tool.label} is in position ${next.order.indexOf(focusId) + 1}.`, focusId);
   }
   function prepareMenu(tool, handle, index) {
     closeMenu();
@@ -220,7 +223,7 @@ function editMenuBarSettings(saved, id, destination) {
       }
       const handle = element('button', 'menu-bar-handle'); handle.type = 'button'; handle.append(glyph('grip'));
       handle.setAttribute('aria-label', `Arrange ${tool.label}${tool.separator ? ' ' + id.split(':')[1] : ''}`);
-      handle.title = 'Drag to move. Click for actions. Alt+↑/↓ to reorder; Delete to remove.';
+      handle.title = 'Drag to move. Click for actions. ⌥↑/↓ to reorder; Delete to remove.';
       handle.setAttribute('popovertarget', 'menuBarToolMenu'); handle.onclick = () => prepareMenu(tool, handle, index);
       handle.onkeydown = event => {
         if (event.altKey && ['ArrowUp', 'ArrowDown'].includes(event.key)) {

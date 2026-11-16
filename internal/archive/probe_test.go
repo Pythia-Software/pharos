@@ -616,7 +616,7 @@ func TestProbeAcceptWritesHostFileAndReloadsSources(t *testing.T) {
 	if _, err := server.configuredSource("claude-work"); err == nil {
 		t.Fatal("the removed source is still running")
 	}
-	if code, result := probeCall(t, server, http.MethodPost, "/api/sources/claude-work/remove", `{}`); code != 400 || !strings.Contains(firstString(result["error"]), "not found") {
+	if code, result := probeCall(t, server, http.MethodPost, "/api/sources/claude-work/remove", `{}`); code != 400 || !strings.Contains(firstString(result["error"]), "No source named “claude-work”") {
 		t.Fatalf("second removal = %d %v", code, result)
 	}
 	// Told to check only a named folder, setup counts no new history in the
@@ -662,11 +662,11 @@ func TestImportSourceChecksTheExport(t *testing.T) {
 	probePut(t, filepath.Join(home, "notes.txt"), "x")
 	for body, problem := range map[string]string{
 		`{"kind":"claude","path":"~/.claude"}`:                             "not a kind of export",
-		`{"kind":"chatgpt","path":"Downloads/chatgpt.zip"}`:                "absolute path",
-		`{"kind":"chatgpt","path":"~/Downloads/missing.zip"}`:              "nothing is at",
+		`{"kind":"chatgpt","path":"Downloads/chatgpt.zip"}`:                "full path",
+		`{"kind":"chatgpt","path":"~/Downloads/missing.zip"}`:              "Nothing is at",
 		`{"kind":"chatgpt","path":"~/Downloads/photos.zip"}`:               "holds no conversations.json",
-		`{"kind":"chatgpt","path":"~/notes.txt"}`:                          "choose the ChatGPT export",
-		`{"kind":"claude-ai","path":"~/Downloads"}`:                        "choose the Claude.ai export",
+		`{"kind":"chatgpt","path":"~/notes.txt"}`:                          "Choose the ChatGPT export",
+		`{"kind":"claude-ai","path":"~/Downloads"}`:                        "Choose the Claude.ai export",
 		`{"kind":"chatgpt","path":"~/Downloads/chatgpt.zip","name":"a b"}`: "must start with",
 	} {
 		if code, result := probeCall(t, server, http.MethodPost, "/api/sources/import", body); code != 400 || !strings.Contains(firstString(result["error"]), problem) {

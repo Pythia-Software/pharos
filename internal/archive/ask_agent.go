@@ -68,7 +68,7 @@ var askMCPExecutable = runningExecutable
 func (s *Server) askMCP(path string, attachments ...askAttachment) (askMCPServer, error) {
 	executable := askMCPExecutable()
 	if executable == "" {
-		return askMCPServer{}, fmt.Errorf("locate the Pharos executable")
+		return askMCPServer{}, fmt.Errorf("Could not find the Pharos executable.")
 	}
 	config := s.Config()
 	configPath, err := filepath.Abs(config.Path)
@@ -88,13 +88,13 @@ func (s *Server) askMCP(path string, attachments ...askAttachment) (askMCPServer
 
 func askValidateClarification(c *askClarification) error {
 	if strings.TrimSpace(c.Question) == "" || len(c.Question) > 600 || len(c.Options) < 1 || len(c.Options) > 3 {
-		return fmt.Errorf("the agent returned an invalid clarification question; try again")
+		return fmt.Errorf("The agent returned an invalid clarification question. Try again.")
 	}
 	seen := map[string]bool{}
 	for _, option := range c.Options {
 		key := strings.ToLower(strings.TrimSpace(option))
 		if key == "" || key == "other" || len(option) > 160 || seen[key] {
-			return fmt.Errorf("the agent returned invalid clarification choices; try again")
+			return fmt.Errorf("The agent returned invalid clarification choices. Try again.")
 		}
 		seen[key] = true
 	}
@@ -109,11 +109,11 @@ var askSections = sync.OnceValue(func() []askCard {
 		{ID: "home", Title: "Home", Description: "Your collected views and starting points", Href: "/"},
 		{ID: "search", Title: "Search past work", Description: "Search conversation text, files, and workspaces", Href: "/library"},
 		{ID: "cards", Title: "Card Library", Description: "Browse all questions and analysis views", Href: "/cards"},
-		{ID: "analyze", Title: "Analyze your work", Description: "Usage, tokens, costs, human effort, concurrency, tools, and MCP calls", Href: "/analyze"},
-		{ID: "findings", Title: "Opportunities to improve", Description: "Recurring patterns, instructions and agent failures", Href: "/findings"},
-		{ID: "settings", Title: "App preferences", Description: "Configure Pharos", Href: "/settings/preferences"},
-		{ID: "sources", Title: "Conversation sources", Description: "Configure the sources Pharos indexes", Href: "/settings/sources"},
-		{ID: "sync", Title: "Capture and index", Description: "Refresh sources, automatic schedules and sync history", Href: "/settings/sync"},
+		{ID: "analyze", Title: "Analyze", Description: "Usage, tokens, API cost, your writing, parallelism, tools and MCP calls", Href: "/analyze"},
+		{ID: "findings", Title: "Optimize", Description: "Recurring patterns, instructions and agent failures", Href: "/findings"},
+		{ID: "settings", Title: "App preferences", Description: "Ask Pharos, highlight shortcuts, lighthouse and activity preferences, feedback email", Href: "/settings/preferences"},
+		{ID: "sources", Title: "Sources", Description: "The history locations Pharos reads", Href: "/settings/sources"},
+		{ID: "sync", Title: "Background Processing", Description: "When and how Pharos updates your library, and what it has done", Href: "/settings/sync"},
 		{ID: "ask-settings", Title: "Ask Pharos settings", Description: "Turn Ask Pharos on or off, refresh available CLIs, and manage its invitation", Href: "/settings/preferences?reveal=section:askPharosSettings"},
 	}
 	// A section's kind is its page's section, as it is for the same page
@@ -194,7 +194,7 @@ func askDestinationError(err error) error {
 	if len(reason) > 300 {
 		reason = reason[:300] + "…"
 	}
-	return fmt.Errorf("the agent suggested a link Pharos cannot open (%s); try again", strings.ToValidUTF8(reason, ""))
+	return fmt.Errorf("The agent suggested a link Pharos cannot open (%s). Try again.", strings.ToValidUTF8(reason, ""))
 }
 
 // askDestination resolves one returned destination: a section, lookup or
@@ -206,13 +206,13 @@ func askDestination(ctx context.Context, allowed map[string]askCard, rawID, rawU
 	}
 	id, link := strings.TrimSpace(rawID), strings.TrimSpace(rawURL)
 	if (id == "") == (link == "") {
-		return askCard{}, fmt.Errorf("the agent returned a destination without exactly one of an id and a url; try again")
+		return askCard{}, fmt.Errorf("The agent returned a destination without exactly one of an id and a url. Try again.")
 	}
 	if len(title) > 300 {
-		return askCard{}, fmt.Errorf("the agent returned a destination title that was too long; try again")
+		return askCard{}, fmt.Errorf("The agent returned a destination title that was too long. Try again.")
 	}
 	if len(description) > 1000 {
-		return askCard{}, fmt.Errorf("the agent returned a destination description that was too long; try again")
+		return askCard{}, fmt.Errorf("The agent returned a destination description that was too long. Try again.")
 	}
 	card, ok := allowed[id]
 	if link != "" {
@@ -221,7 +221,7 @@ func askDestination(ctx context.Context, allowed map[string]askCard, rawID, rawU
 			return askCard{}, askDestinationError(err)
 		}
 	} else if !ok {
-		return askCard{}, fmt.Errorf("the agent suggested an unknown destination; try again")
+		return askCard{}, fmt.Errorf("The agent suggested an unknown destination. Try again.")
 	}
 	if title = strings.TrimSpace(title); title != "" {
 		card.Title = title
@@ -235,14 +235,14 @@ func askDestination(ctx context.Context, allowed map[string]askCard, rawID, rawU
 func (s *Server) answerAsk(ctx context.Context, p askProvider, session askSession, zone string) (askAnswer, error) {
 	enabled, err := s.Catalog.MCPEnabled()
 	if err != nil {
-		return askAnswer{}, fmt.Errorf("check Pharos MCP access: %w", err)
+		return askAnswer{}, fmt.Errorf("Could not check Pharos MCP access: %w", err)
 	}
 	if !enabled {
-		return askAnswer{}, fmt.Errorf("Pharos MCP is turned off. Enable it in Settings → MCP, then retry")
+		return askAnswer{}, fmt.Errorf("Pharos MCP is turned off. Turn it on in Settings → MCP, then try again.")
 	}
 	dir, err := os.MkdirTemp("", "pharos-ask-mcp-")
 	if err != nil {
-		return askAnswer{}, fmt.Errorf("configure Pharos MCP: %w", err)
+		return askAnswer{}, fmt.Errorf("Could not configure Pharos MCP: %w", err)
 	}
 	defer os.RemoveAll(dir)
 	files, seenFiles := []askAttachment{}, map[string]bool{}
@@ -257,7 +257,7 @@ func (s *Server) answerAsk(ctx context.Context, p askProvider, session askSessio
 	}
 	p.mcp, err = s.askMCP(filepath.Join(dir, "service.json"), files...)
 	if err != nil {
-		return askAnswer{}, fmt.Errorf("configure Pharos MCP: %w", err)
+		return askAnswer{}, fmt.Errorf("Could not configure Pharos MCP: %w", err)
 	}
 	p.recordSession = func(ctx context.Context, id string) error {
 		return s.Catalog.writeTransaction(ctx, "ask-native-session", func(tx *sql.Tx) error {
@@ -342,21 +342,21 @@ You have a private Pharos interface through lookup. Choose kind "visits" to sear
 		}
 		var response askAgentResponse
 		if len(raw) > 128<<10 || json.Unmarshal(raw, &response) != nil {
-			return askAnswer{}, fmt.Errorf("%s returned an invalid navigation response; try again", p.ID)
+			return askAnswer{}, fmt.Errorf("%s returned an invalid navigation response. Try again.", p.ID)
 		}
 		if response.Feedback != nil {
 			f := response.Feedback
 			if (f.Kind != "feature" && f.Kind != "bug" && f.Kind != "feedback") || strings.TrimSpace(f.Comment) == "" || len(f.Comment) > 16000 || len(response.Message) > 8000 {
-				return askAnswer{}, fmt.Errorf("the agent returned invalid feedback; try again")
+				return askAnswer{}, fmt.Errorf("The agent returned an invalid feedback draft. Try again.")
 			}
 			if response.Clarification != nil || len(response.Destinations) != 0 || response.Lookup.Kind != "none" && response.Lookup.Kind != "" {
-				return askAnswer{}, fmt.Errorf("the agent combined feedback with another action; try again")
+				return askAnswer{}, fmt.Errorf("The agent combined a feedback draft with another action. Try again.")
 			}
 			return askAnswer{Message: response.Message, Cards: []askCard{}, Feedback: f}, nil
 		}
 		if response.Clarification != nil {
 			if len(response.Message) > 8000 || len(response.Destinations) != 0 || response.Lookup.Kind != "none" && response.Lookup.Kind != "" {
-				return askAnswer{}, fmt.Errorf("the agent combined a clarification with another action; try again")
+				return askAnswer{}, fmt.Errorf("The agent combined a clarification question with another action. Try again.")
 			}
 			if err := askValidateClarification(response.Clarification); err != nil {
 				return askAnswer{}, err
@@ -365,9 +365,9 @@ You have a private Pharos interface through lookup. Choose kind "visits" to sear
 		}
 		if response.Lookup.Kind != "none" && response.Lookup.Kind != "" {
 			if len(lookupResults) == 2 || correction != nil {
-				return askAnswer{}, fmt.Errorf("the agent needed more lookups; refine your question and retry")
+				return askAnswer{}, fmt.Errorf("The agent needed more lookups than Pharos allows. Make your question more specific, then try again.")
 			}
-			label := map[string]string{"visits": "Reading your page visit history…", "chats": "Searching your earlier Ask chats…", "work": "Searching archived work…"}[response.Lookup.Kind]
+			label := map[string]string{"visits": "Reading your page visit history…", "chats": "Searching your earlier Ask chats…", "work": "Searching past work…"}[response.Lookup.Kind]
 			if label != "" {
 				p.reportProgress(label)
 			}
@@ -385,7 +385,7 @@ You have a private Pharos interface through lookup. Choose kind "visits" to sear
 		}
 		answer := askAnswer{Message: response.Message, Cards: []askCard{}}
 		if len(answer.Message) > 8000 || len(response.Destinations) > 3 {
-			return askAnswer{}, fmt.Errorf("the agent response was too large")
+			return askAnswer{}, fmt.Errorf("The agent’s answer was too large. Try again.")
 		}
 		// One destination Pharos cannot open costs only that destination: the
 		// others are still the agent's answer. If none remain, give the agent
@@ -421,19 +421,19 @@ You have a private Pharos interface through lookup. Choose kind "visits" to sear
 			return askAnswer{}, refused
 		}
 		if strings.TrimSpace(answer.Message) == "" && len(answer.Cards) == 0 {
-			return askAnswer{}, fmt.Errorf("the agent returned an empty response; try again")
+			return askAnswer{}, fmt.Errorf("The agent returned an empty answer. Try again.")
 		}
 		return answer, nil
 	}
 }
 func (s *Server) askLookup(ctx context.Context, q askLookup, current string) (any, []askCard, error) {
 	if len(q.Query) > 500 {
-		return nil, nil, fmt.Errorf("lookup query was too long")
+		return nil, nil, fmt.Errorf("The agent’s lookup query was too long. Try again.")
 	}
 	for _, bound := range []string{q.From, q.To} {
 		if bound != "" {
 			if _, err := time.Parse(time.RFC3339, bound); err != nil {
-				return nil, nil, fmt.Errorf("agent returned an invalid date range")
+				return nil, nil, fmt.Errorf("The agent returned an invalid date range. Try again.")
 			}
 		}
 	}
@@ -453,7 +453,7 @@ func (s *Server) askLookup(ctx context.Context, q askLookup, current string) (an
 			if id == "" {
 				continue
 			}
-			cards = append(cards, askCard{ID: "work:" + id, Title: defaultString(item["title"], "Past work"), Description: firstString(item["purpose"]), Kind: "Past work", Href: "/work/" + url.PathEscape(id)})
+			cards = append(cards, askCard{ID: "work:" + id, Title: defaultString(item["title"], "Untitled workspace"), Description: firstString(item["purpose"]), Kind: "Workspace", Href: "/work/" + url.PathEscape(id)})
 		}
 		return map[string]any{"destinations": cards, "bounded": true}, cards, nil
 	case "chats":
@@ -555,7 +555,7 @@ func (s *Server) askLookup(ctx context.Context, q askLookup, current string) (an
 		}
 		return map[string]any{"visits": items, "seenViewKeys": seenKeys, "seenPages": seenPages, "seenCards": seenCards, "coverage": "At most the 1000 visits retained on this Mac. Missing entries do not prove a view has never been visited.", "retained": len(visits), "oldestAt": oldest, "bounded": true}, cards, nil
 	}
-	return nil, nil, fmt.Errorf("agent requested an unsupported private lookup")
+	return nil, nil, fmt.Errorf("The agent requested a lookup Pharos does not support. Try again.")
 }
 
 // askView identifies the view a URL opens. Key ignores parameter order while

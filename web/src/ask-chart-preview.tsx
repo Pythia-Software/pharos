@@ -27,7 +27,7 @@ export function createAskChartPreviews(schemas: Partial<Record<QueryDataset, Fie
   };
 }
 
-const unavailable = "Chart preview unavailable. Open the linked view to explore it.";
+const unavailable = "Could not show this chart.";
 
 // The chart is a Card Library card for its own dashboard address: the plus
 // button collects that address to Home, which renders the same chart.
@@ -67,8 +67,8 @@ function AskChartPreview({ job, card, openings, eager, onOpen }: { job: PreviewJ
     const controller = new AbortController();
     setResult(previous => ({ preview: previous.preview ? { ...previous.preview, refreshing: true, refreshError: undefined } : undefined }));
     void loadCardPreviews([job], (_id, preview, error) => {
-      if (!controller.signal.aborted) setResult({ preview, error: error ? String(error) : undefined });
-    }, controller.signal).catch(error => { if (!controller.signal.aborted) setResult({ error: String(error) }); });
+      if (!controller.signal.aborted) setResult({ preview, error: error ? error instanceof Error ? error.message : String(error) : undefined });
+    }, controller.signal).catch(error => { if (!controller.signal.aborted) setResult({ error: error instanceof Error ? error.message : String(error) }); });
     return () => controller.abort();
   }, [job, visible, revision]);
   function keep() {

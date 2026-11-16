@@ -1,0 +1,12 @@
+{
+  "contract": "pharos-push-config/1",
+  "access": "read",
+  "prefix": "pharos",
+  "retention_days": 90,
+  "destination": {
+    "type": "azure",
+    "sas_url": {
+      "file": "pharos-read.sas"
+    }
+  }
+}

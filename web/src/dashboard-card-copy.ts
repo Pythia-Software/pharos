@@ -56,15 +56,15 @@ export function analysisCardContext(catalog: AnalysisCatalog, input: AnalysisSta
   return [
     analysisCardSelection(catalog, state),
     thresholded(state, catalog) ? `Minimum ${state.minSamples} ${sampleSubject(catalog, state)} per group` : "",
-    trend ? `${state.display === "heatmap" ? "Heatmap" : state.display === "cumulative" ? "Cumulative" : "Interval"} values per ${periodLabel(state.period, trendPeriodCount(state))}`
+    trend ? `${state.display === "heatmap" ? "Heatmap values" : state.display === "cumulative" ? "Running total" : "Values"} per ${periodLabel(state.period, trendPeriodCount(state))}`
       : state.view === "cycle" ? "Whole calendar periods, including idle periods" : `One observation per ${state.unit === records ? catalog.records.label.toLowerCase() : catalog.units[state.unit].label.toLowerCase()}`,
-    heatmapUnit ? `Each ${catalog.units[heatmapUnit].label.toLowerCase()} is counted by its ${measure.label.toLowerCase()} total in each period` : "",
+    heatmapUnit ? `Each ${catalog.units[heatmapUnit].label.toLowerCase()} is counted by its ${lower(measure.label)} total in each period` : "",
     trend && state.completePeriods ? "Whole periods only" : "",
     trend && state.display !== "heatmap" && state.nonzero && !state.share ? "Zero values omitted" : "",
     trend && state.norm ? `Reference: mean of ${state.normPeriods} earlier periods` : "",
     usesScale && state.scale === "logarithmic" ? "Logarithmic scale" : "",
     state.view === "scatter" && state.scaleY === "logarithmic" ? "Logarithmic Y scale" : "",
-    groups ? `Show up to ${groups} groups` : "",
+    groups ? `Show up to ${groups} ${groups === 1 ? "group" : "groups"}` : "",
     measure.note,
     state.view === "scatter" ? catalog.measures[state.metricY].note : "",
     catalog.breakdowns[state.split]?.note ?? "",

@@ -21,7 +21,7 @@ export type ReadinessStage = {id: string; label: string; state: string; reason: 
 export type ReadinessTone = 'current' | 'minutes' | 'recent' | 'hours' | 'orange' | 'days' | 'unknown';
 export type ReadinessModel = {kind: 'current'|'scheduled'|'behind'|'missing'|'unknown'|'saved'; tone: ReadinessTone; lagMs: number | null; label: string; sentence: string; checkedAt: number | null; nextAt: number | null; stages: ReadinessStage[]; scopes: ReadinessScope[]; preview: boolean};
 export const readinessScenarios = [
-  ['clear','Up to date'],['minutes','3 minutes behind'],['recent','45 minutes behind'],['hours','3 hours behind'],['orange','9 hours behind'],['days','2 days behind'],['missing','First results not ready'],['running','Update in progress'],['paused','Automatic updates paused'],['failed','Last update failed'],['unknown','Update status unavailable'],
+  ['clear','Up to date'],['minutes','3 minutes behind'],['recent','45 minutes behind'],['hours','3 hours behind'],['orange','9 hours behind'],['days','2 days behind'],['missing','First results not ready'],['running','Update in progress'],['paused','Automatic updates paused'],['failed','Last update failed'],['unknown','Update status unknown'],
 ] as const;
 export type ReadinessScenario = typeof readinessScenarios[number][0];
 // Delay comes from observed input, not the last time a job ran. Unknown age
@@ -87,46 +87,46 @@ const itemFor=(domain: string,taskID?:string)=>taskID??(domain==='view'||domain.
 export function readinessStageLabel(id:string, label?:string):string {
   if(id.startsWith('conv:'))return id==='conv:*'?'Read new conversations':(label??'Conversations').replace(/^Conversations/,'Read new conversations');
   if(id.startsWith('capt:'))return (label??'Captures').replace(/^Captures/,'Read saved conversations');
-  return ({view:'Update search results','an.authorship':'Estimate your writing','an.authorship.refined':'Refine writing estimates','an.ledger':'Read tool calls','an.tools':'Summarize tool use',findings:'Find patterns in your work','@labels':'Label messages','@agent_events':'Find events in agent messages','@mcp':'Read calls to Pharos'})[id]??'Check for updates';
+  return ({view:'Update search results','an.authorship':'Estimate your writing','an.authorship.refined':'Refine writing estimates','an.ledger':'Build the tool index','an.tools':'Summarize tool use',findings:'Find patterns in your work','@labels':'Label messages','@agent_events':'Find events in agent messages','@mcp':'Read Pharos MCP requests'})[id]??'Check this data';
 }
 const stageReasons:Record<string,string>={
   indexing:'Reading new or changed conversations.', 'capture-running':'Saving conversation files.',
   refreshing:'Updating these results.', building:'Preparing these results.', running:'Updating these results.',
   'never-indexed':'Conversations need to be read before results can appear.',
-  'source-error':'Pharos couldn’t read the latest conversations.',
+  'source-error':'Pharos could not read the latest conversations.',
   'capture-busy':'Waiting for conversation files to finish saving.',
   'needs-capture':'New conversations are waiting to be added.',
   'schedule-off':'Automatic updates are off for this step.',
-  'manual-only':'This step runs when you request an update in settings.',
+  'manual-only':'This step runs only when you ask, from Settings → Background Processing.',
   'scheduled-frequent':'Waiting for the next regular update.',
   'scheduled-hourly':'Waiting for the next hourly update.',
   'scheduled-daily':'Waiting for the next daily update.',
-  late:'The scheduled update hasn’t started yet.', interrupted:'The last update stopped before it finished.',
-  overdue:'This step hasn’t been checked on schedule.', 'not-indexed':'Saved conversations are waiting to be read.',
+  late:'The scheduled update has not started yet.', interrupted:'The last update stopped before it finished.',
+  overdue:'This step has not been checked on schedule.', 'not-indexed':'Saved conversations are waiting to be read.',
   stopped:'You stopped this update.', version:'This step needs to run again after the Pharos update.',
-  'deferred-by-schedule':'This step runs when you request an update in settings.',
-  failed:'The last update couldn’t finish. Check update settings.',
+  'deferred-by-schedule':'This step runs only when you ask, from Settings → Background Processing.',
+  failed:'The last update could not finish. Open Settings → Background Processing.',
   'never-built':'This step needs to finish before results can appear.',
-  changed:'New changes are waiting to be included.', 'daily-pass-due':'Today’s update hasn’t run yet.',
+  changed:'New changes are waiting to be included.', 'daily-pass-due':'Today’s update has not run yet.',
   'upgrade-available':'The library needs an upgrade.', paused:'Automatic updates are paused for this step.',
   'no-record':'This step needs a new check after the Pharos update.',
-  blocked:'An earlier step couldn’t finish. Check update settings.',
+  blocked:'An earlier step could not finish. Open Settings → Background Processing.',
   'no-schedule':'No automatic update is scheduled for this step.',
-  'not-counted':'Pharos can’t check this step’s update status yet.',
-  unreadable:'Pharos can’t read the saved conversation files.', empty:'There’s no data to check yet.',
+  'not-counted':'Pharos cannot tell yet whether this step is up to date.',
+  unreadable:'Pharos cannot read the saved conversation files.', empty:'There is no data to check yet.',
 };
 const nextChecks:Record<string,string>={
   'updates with the next scheduled index':'Runs with the next scheduled update.',
   'updates within minutes':'Scheduled to check again within a few minutes.',
   'updates with the next hourly update':'Runs with the next hourly update.',
   'updates with the next daily update':'Runs with the next daily update.',
-  'updates with the next manual index':'Runs when you request an update in settings.',
+  'updates with the next manual index':'Runs when you ask, from Settings → Background Processing.',
   'carries on by itself':'Continues automatically.',
   'carries on when you resume it or Pharos next opens the library':'Continues when you resume it or reopen the library.',
-  'updates with the next manual index or Tools page':'Runs when you request an update or open Tools.',
+  'updates with the next manual index, or when a page needs tool summaries':'Runs when you ask, from Settings → Background Processing.',
   'updates when you run the library upgrade':'Runs when you upgrade the library.',
-  'updates with Refresh findings now, or the first index tomorrow':'Runs when you request a findings update or with tomorrow’s library update.',
-  'updates with Refresh findings now, or the next manual index':'Runs when you request a findings update or a library update.',
+  'updates with Run now for Findings, or the first index tomorrow':'Runs with tomorrow’s first update, or when you choose Run now for Findings in Settings → Background Processing.',
+  'updates with Run now for Findings, or the next manual index':'Runs when you ask, from Settings → Background Processing.',
   'updates when the capture folder can be read':'Continues when the saved conversation files can be read.',
 };
 export function readinessStageDescription(stage:ReadinessStage):string {
@@ -137,10 +137,10 @@ export function readinessStageDescription(stage:ReadinessStage):string {
   // Captured data waits only for the task that reads it; say which schedule.
   if(code==='not-indexed'&&nextChecks[stage.next])return nextChecks[stage.next];
   if(code&&stageReasons[code])return stageReasons[code];
-  return stage.state==='unknown'?'Pharos can’t check this part of the data yet.':stage.state==='paused'?'Automatic updates are paused.':stage.state==='failed'?'The last update couldn’t finish. Check update settings.':stage.state==='blocked'?'Waiting for another update to finish.':'';
+  return stage.state==='unknown'?'Pharos cannot check this part of the data yet.':stage.state==='paused'?'Automatic updates are paused.':stage.state==='failed'?'The last update could not finish. Open Settings → Background Processing.':stage.state==='blocked'?'Waiting for another update to finish.':'';
 }
 export function readinessStageState(stage:ReadinessStage):string {
-  return ({running:'Updating',current:'Done',scheduled:'Scheduled',unknown:'Status unavailable',behind:'Waiting',blocked:'Waiting',failed:'Couldn’t finish',paused:'Paused',queued:'Waiting to start',disabled:'Turned off',stopped:'Stopped',interrupted:'Stopped'})[stage.operation?.state??stage.state]??'Status unavailable';
+  return ({running:'Updating',current:'Done',scheduled:'Scheduled',unknown:'Status unavailable',behind:'Waiting',blocked:'Waiting',failed:'Could not finish',paused:'Paused',queued:'Waiting to start',disabled:'Turned off',stopped:'Stopped',interrupted:'Stopped'})[stage.operation?.state??stage.state]??'Status unavailable';
 }
 export function readinessProgressText(stage:ReadinessStage):string {
   const done=stage.operation?.step?.done??stage.done,total=stage.operation?.step?.total??stage.total;
@@ -155,7 +155,7 @@ export function readinessHasProgress(stage:ReadinessStage):boolean {
   const number=(value:unknown)=>typeof value==='number'&&Number.isFinite(value);
   return Boolean(stage.operation)||number(stage.operation?.step?.done??stage.done)||number(stage.operation?.step?.total??stage.total)||number(stage.count);
 }
-export const readinessClock=(at:number|null,now=Date.now())=>at===null?'Time unavailable':new Date(at).toLocaleString(undefined,{...(new Date(at).toDateString()===new Date(now).toDateString()?{}:{month:'short',day:'numeric'}),hour:'numeric',minute:'2-digit'});
+export const readinessClock=(at:number|null,now=Date.now())=>at===null?'Unknown':new Date(at).toLocaleString(undefined,{...(new Date(at).toDateString()===new Date(now).toDateString()?{}:{month:'short',day:'numeric'}),hour:'numeric',minute:'2-digit'});
 export function readinessNextText(at:number|null,now=Date.now()):string {
   if(at===null)return '';
   if(at<=now)return `Due since ${readinessClock(at,now)}`;
@@ -229,8 +229,8 @@ function readinessDoneSteps(stages:ReadinessStage[]):string[] {
 // refreshingFrom is when a stored answer now being recomputed was computed.
 function readinessCopy(kind:ReadinessModel['kind'],checkedAt:number|null,lag:number|null,now:number,refreshingFrom:number|null=null) {
   if(kind==='saved'&&refreshingFrom!==null)return {label:`Showing results from ${readinessAge(Math.max(0,now-refreshingFrom))} ago`,sentence:'Pharos is updating these results; they will change here when it finishes.'};
-  const label=kind==='unknown'?'Update status unavailable':kind==='missing'?'No results yet':kind==='saved'?'Showing saved results':kind==='scheduled'?'Update scheduled':kind==='current'?checkedAt===null?'No updates waiting':`Up to date as of ${readinessAge(Math.max(0,now-checkedAt))} ago`:lag===null?'Update needed':`${readinessAge(lag)} behind`;
-  const sentence=kind==='unknown'?'Pharos can’t tell whether all the data shown here is up to date.':kind==='missing'?'Pharos needs to finish these steps before it can show results.':kind==='saved'?'Refresh this view to check for newer results.':kind==='scheduled'?'Some changes are waiting for the next scheduled update.':kind==='current'?checkedAt===null?'The last check time is unavailable.':'Activity since then may not appear here yet.':'Some changes are not included in these results yet.';
+  const label=kind==='unknown'?'Update status unknown':kind==='missing'?'No results yet':kind==='saved'?'Showing saved results':kind==='scheduled'?'Update scheduled':kind==='current'?checkedAt===null?'No changes waiting':`Up to date ${readinessAge(Math.max(0,now-checkedAt))} ago`:lag===null?'Update needed':`${readinessAge(lag)} behind`;
+  const sentence=kind==='unknown'?'Pharos cannot tell whether all the data shown here is up to date.':kind==='missing'?'Pharos needs to finish these steps before it can show results.':kind==='saved'?'Refresh this view to check for newer results.':kind==='scheduled'?'Some changes are waiting for the next scheduled update.':kind==='current'?checkedAt===null?'The last check time is unavailable.':'Activity since then may not appear here yet.':'Some changes are not included in these results yet.';
   return {label,sentence};
 }
 // The service's words for each cadence, as nextChecks reads them.
@@ -260,7 +260,7 @@ export function readinessModel(snapshot: ReadinessSnapshot | null, scopes: Readi
     // A scheduled item alone doesn't prove that an output is current. In
     // particular labels and agent events don't yet have ledger domains.
     stages.push({id:pattern,label:readinessStageLabel(pattern),
-      state:'unknown',reason:'Pharos can’t check this part of the data yet.',next:item?.cadence_label??'',nextAt:item?.next_at,item});
+      state:'unknown',reason:'Pharos cannot check this part of the data yet.',next:item?.cadence_label??'',nextAt:item?.next_at,item});
   }
   const sourceRows=stages.flatMap(stage=>stage.id.startsWith('conv:')&&stage.row?[stage.row]:[]);
   const checks=sourceRows.map(row=>timeValue(row.as_of));
@@ -311,5 +311,5 @@ export function readinessPreview(model: ReadinessModel, scenario?: ReadinessScen
   const tone:ReadinessTone=scenario==='clear'?'current':scenario==='unknown'?'unknown':readinessTone(lag*minute);
   const copy=readinessCopy(kind,now-6*minute,lag*minute,now);
   return {...model,kind,tone,lagMs:kind==='current'?0:kind==='behind'?lag*minute:null,...copy,preview:true,checkedAt:now-6*minute,nextAt:scenario==='paused'||scenario==='unknown'?null:now+3*minute,
-    stages:stages.map((stage,index)=>({...stage,state:index===stages.length-1?state:scenario==='hours'||scenario==='days'?'behind':'current',reason:index===stages.length-1?scenario==='paused'?'Automatic updates are paused.':scenario==='failed'?'The last update couldn’t finish.':copy.sentence:'',next:'Next scheduled check',nextAt:scenario==='paused'||scenario==='unknown'?null:new Date(now+3*minute).toISOString(),count:128,unit:'messages',done:scenario==='running'?58:0,total:scenario==='unknown'?null:128,operation:undefined,row:undefined,item:stage.item?{...stage.item,state, next_at:scenario==='paused'||scenario==='unknown'?null:new Date(now+3*minute).toISOString()}:undefined})),};
+    stages:stages.map((stage,index)=>({...stage,state:index===stages.length-1?state:scenario==='hours'||scenario==='days'?'behind':'current',reason:index===stages.length-1?scenario==='paused'?'Automatic updates are paused.':scenario==='failed'?'The last update could not finish.':copy.sentence:'',next:'Next scheduled check',nextAt:scenario==='paused'||scenario==='unknown'?null:new Date(now+3*minute).toISOString(),count:128,unit:'messages',done:scenario==='running'?58:0,total:scenario==='unknown'?null:128,operation:undefined,row:undefined,item:stage.item?{...stage.item,state, next_at:scenario==='paused'||scenario==='unknown'?null:new Date(now+3*minute).toISOString()}:undefined})),};
 }

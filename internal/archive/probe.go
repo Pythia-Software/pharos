@@ -443,7 +443,7 @@ func (r *probeRun) locate(kind, path, foundBy string) (*ProbeCandidate, string) 
 	}
 	switch status {
 	case "protected":
-		candidate.Detail = "Not scanned: " + resolved + " is " + errProtected.Error() + ". Adding it may make macOS ask for access when Pharos syncs."
+		candidate.Detail = "Not scanned: " + resolved + " is " + errProtected.Error() + ". Adding it may make macOS ask for access when Pharos captures it."
 	case "unreadable":
 		candidate.Detail = "Could not be read: " + err.Error()
 	}
