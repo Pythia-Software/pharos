@@ -549,6 +549,19 @@
     return element;
   };
   const host = () => document.getElementById('backgroundSchedule');
+  // A press on a draggable item becomes a drag only on the next move, so a
+  // redraw in between would replace the item and lose the drag; redraws wait
+  // for the release, or for the drag, which holds them until it ends. A held
+  // redraw runs after the release's click, which it would otherwise lose.
+  let pressed = false, held = false;
+  document.addEventListener('pointerdown', event => { if (event.target.closest?.('#backgroundSchedule .bg-item[draggable="true"]')) pressed = true; }, true);
+  for (const name of ['pointerup', 'pointercancel']) document.addEventListener(name, () => {
+    if (!pressed) return;
+    pressed = false;
+    if (held) { held = false; setTimeout(() => render()); }
+  }, true);
+  // WebKit sends neither once a drag starts; the item's dragstart sets dragging just after this.
+  document.addEventListener('dragstart', () => { pressed = false; held = false; }, true);
   const toast = message => window.pharosLibrary?.toast?.(message) ?? window.feedbackToast?.(message);
   async function call(path, body) {
     const response = await fetch(path, body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
@@ -947,7 +960,8 @@
 
   function render({allowFocusedSelect = false} = {}) {
     const target = host();
-    // A drag keeps the items it is over.
+    // A press that may become a drag keeps its item; a drag keeps the items it is over.
+    if (pressed) { held = true; return; }
     if (!target || !document_ || labelsSaving || dragging) return;
     // Keep an open CPU select in place while its live status and the rest
     // of the page update. Other settings selects retain their old edit rule.

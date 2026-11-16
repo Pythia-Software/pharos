@@ -494,12 +494,20 @@ a.asset-card{text-decoration:none;cursor:pointer}a.asset-card:hover{border-color
     const isRaw=key=>key==='pharos-theme'||key==='pharos-usage-view'||key==='tl1-project'||key.startsWith('query-table:default:');
     const parse=raw=>{try{return JSON.parse(raw)}catch{return raw}};
     const send=body=>{const text=JSON.stringify(body);return fetch('/api/preferences',{method:'POST',headers:{'Content-Type':'application/json'},body:text,keepalive:text.length<60000}).then(response=>{if(!response.ok)throw new Error('HTTP '+response.status);dispatchEvent(new CustomEvent('pharos:preferences-saved',{detail:body}))})};
-    let pending={set:{},delete:new Set()},timer=0;
+    let pending={set:{},delete:new Set()},timer=0,unconfirmed=0;
+    // A save still in flight when the page reloads can reach the library after the reload has read its values. This tab keeps its unconfirmed changes until every save holding them succeeds, and the next page replays them over the library's values.
+    const UNSAVED='pharos-preferences-unsaved',unsaved={
+      read(){try{const saved=JSON.parse(sessionStorage.getItem(UNSAVED)||'null');return saved&&typeof saved==='object'&&saved.set&&typeof saved.set==='object'&&Array.isArray(saved.delete)&&Date.now()-saved.at<60000?saved:null}catch{return null}},
+      add(body){try{const saved=unsaved.read()||{set:{},delete:[]},set={...saved.set,...body.set},deleted=new Set(saved.delete.filter(key=>!(key in body.set)));for(const key of body.delete){delete set[key];deleted.add(key)}sessionStorage.setItem(UNSAVED,JSON.stringify({at:Date.now(),set,delete:[...deleted]}))}catch{}},
+      clear(){try{sessionStorage.removeItem(UNSAVED)}catch{}}
+    };
     // flush resolves once queued changes are saved (or failed), for callers that refetch server values derived from them.
-    function flush(){clearTimeout(timer);timer=0;const body={set:pending.set,delete:[...pending.delete]};if(!Object.keys(body.set).length&&!body.delete.length)return Promise.resolve();pending={set:{},delete:new Set()};return send(body).catch(error=>console.warn('Could not save preferences',error))}
+    function flush(){clearTimeout(timer);timer=0;const body={set:pending.set,delete:[...pending.delete]};if(!Object.keys(body.set).length&&!body.delete.length)return Promise.resolve();pending={set:{},delete:new Set()};unconfirmed++;unsaved.add(body);return send(body).then(()=>{if(!--unconfirmed)unsaved.clear()},error=>console.warn('Could not save preferences',error))}
     const queue=()=>{if(!timer)timer=setTimeout(flush,250)};
     if(values){
       addEventListener('pagehide',flush);
+      const replay=unsaved.read();unsaved.clear();
+      if(replay){Object.assign(values,replay.set);for(const key of replay.delete)delete values[key];pending={set:{...replay.set},delete:new Set(replay.delete)};queue()}
       // This web view's earlier copies move into the library once. A copy the library already has is left alone, so a second Mac's values are never overwritten.
       const moved={};
       try{for(let index=0;index<localStorage.length;index++){const key=localStorage.key(index);if(key&&!(key in values)&&(LEGACY.has(key)||LEGACY_PREFIXES.some(prefix=>key.startsWith(prefix))))moved[key]=isRaw(key)?localStorage.getItem(key):parse(localStorage.getItem(key))}}catch{}

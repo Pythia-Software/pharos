@@ -11,7 +11,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { activateHeaderTool, open, skip } from "./harness.mjs";
+import { activateHeaderTool, open, skip, stretch } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
 import { claudeImportFixture, claudeSettingsCoverageFixture, defaultApi, projectColorFixture, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, loadSchema, withGroupingKeys } from "@pythia-software/query-table-core";
@@ -324,14 +324,14 @@ const ROUTES = [
     await toggle.click();await page.waitForFunction(()=>document.querySelector('#chatGPTDownloadsWatch').getAttribute('aria-checked')==='false');
     await toggle.click();await page.waitForFunction(()=>document.querySelector('#chatGPTDownloadsWatch').getAttribute('aria-checked')==='true');
     report={...report,exports:[{id:'discovered-later',filename:'new-export.zip',state:'fetching',phase:'indexing',collected:1,expected:1}]};
-    await root.locator('[data-id="discovered-later"]').getByRole('button',{name:'Stop',exact:true}).waitFor({timeout:10000});
+    await root.locator('[data-id="discovered-later"]').getByRole('button',{name:'Stop',exact:true}).waitFor({timeout:stretch(10000)});
     report={...report,exports:[],library:{workspaces:3,conversations:3,recent:[]}};
-    await root.getByText('3 workspaces · 3 conversations',{exact:true}).waitFor({timeout:10000});
+    await root.getByText('3 workspaces · 3 conversations',{exact:true}).waitFor({timeout:stretch(10000)});
     const check=root.getByRole('button',{name:'Check Downloads now',exact:true});
     await check.click();await page.waitForFunction(()=>!document.querySelector('#chatGPTDownloadsCheck').disabled);
     await toggle.focus();
     report={...report,problem:'Downloads access needs attention.',library:{workspaces:4,conversations:4,recent:[]}};
-    await root.getByText('4 workspaces · 4 conversations',{exact:true}).waitFor({timeout:10000});
+    await root.getByText('4 workspaces · 4 conversations',{exact:true}).waitFor({timeout:stretch(10000)});
     await root.getByText('Downloads access needs attention.',{exact:true}).waitFor();
     assert.equal(await toggle.evaluate(element=>element===document.activeElement),true,'empty-watch refresh preserves focus');
   }},
@@ -359,7 +359,7 @@ const ROUTES = [
     await stop.focus();
     // Let the next automatic poll restore the original fixture: both the
     // recent workspace list and the focused export's progress change.
-    await page.waitForResponse(response=>new URL(response.url()).pathname==='/api/claude-imports',{timeout:10000});
+    await page.waitForResponse(response=>new URL(response.url()).pathname==='/api/claude-imports',{timeout:stretch(10000)});
     await app.settled();
     assert.ok(await stop.evaluate(element=>element===document.activeElement),'automatic ingestion polling lost the focused Stop button');
     await workspace.click();
@@ -1444,7 +1444,8 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
   assert.equal(await toggle.getAttribute('aria-expanded'),'true');
   // Full screen gives the row the window's width, so it reads more cards at once.
   // Its suggestions give way to a draft, so clear the one chosen above.
-  await page.goto(new URL('/ask',page.url()).href);await editor.waitFor();await editor.fill('');
+  await page.goto(new URL('/ask',page.url()).href);
+  await page.waitForFunction(text=>document.getElementById('pharos-question')?.value===text,prompt);await editor.fill('');
   await viewport.waitFor();await settled();
   assert.ok(await viewport.locator('[data-reading]').count()>3,'a wide full screen row shows more than three suggestions');
   assert.deepEqual(await layoutProblems(page),[]);
@@ -1513,8 +1514,11 @@ test("Background Processing items drag between all four columns for a week", { s
   for (const id of document.view.items.filter(item => item.state !== 'disabled').map(item => item.id)) {
     for (const cadence of ['manual', 'frequent', 'hourly', 'daily']) {
       const item = schedule.locator(`.bg-item[data-item="${id}"]`);
+      // Each move is saved before the next; the held save above covers moves made while one is in flight.
+      const saved = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/api/background/settings'));
       await item.locator('.bg-grip').dragTo(schedule.locator(`.bg-col[data-cadence="${cadence}"]`));
       await schedule.locator(`.bg-col[data-cadence="${cadence}"] .bg-item[data-item="${id}"]`).waitFor();
+      await saved;
     }
   }
   assert.ok(calls.some(call => call.method === 'POST' && call.path === '/api/background/settings'
@@ -1745,7 +1749,8 @@ test('Recent conversation links open the selected conversation and search', { sk
   await settled();
   await page.goBack();
   await page.locator('.home-recent-search').click();
-  await page.waitForURL(url => url.pathname === '/library' && url.searchParams.get('view') === 'conversation');
+  // The Library turns ?view=conversation into its own query state as it loads.
+  await page.waitForURL(url => url.pathname === '/library');
   await page.locator('#queryTableLibrary .conversation-result-card').first().waitFor();
 });
 
@@ -1841,6 +1846,9 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
           await route.open(app.page);
           await app.page.locator(route.shown).first().waitFor();
           await app.settled();
+          // Reaching a control can scroll main sideways past a wide table;
+          // the checks below measure from its left edge.
+          await app.page.evaluate(() => document.querySelector("main").scrollTo({ left: 0 }));
         }
         // A fitted table stops scrolling sideways at desktop widths. One that
         // still scrolls once the wait ends is a problem, so KNOWN can name it.
@@ -2316,10 +2324,12 @@ test("model color editors preview and save inline while retaining focus", { skip
   assert.equal(await model.evaluate(element => element === document.activeElement), true);
   await card.scrollIntoViewIfNeeded();
   await shot("model-colors-inline-editor");
-  await page.getByRole("button", { name: "Save palette for OpenAI", exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('[aria-label="Restore recommended shade for gpt-6-sol"]')?.disabled === false);
+  const savePalette = page.getByRole("button", { name: "Save palette for OpenAI", exact: true });
+  await savePalette.click();
+  // The drafts, and with them Save, go once the library has the palette.
+  await savePalette.waitFor({ state: "detached" });
   await page.reload();
-  assert.equal(await provider.inputValue(), "#7547b3");
+  await page.waitForFunction(() => document.querySelector('[aria-label="Color for OpenAI"]')?.value === "#7547b3");
   await page.getByRole("button", {name: "Edit color for gpt-6-sol", exact: true}).click();
   await model.waitFor();
   assert.equal(await model.inputValue(), "#ee1122");
