@@ -1886,12 +1886,18 @@ the same schedule from one declaration (`backgroundItems`):
     measured). Short-lived commands the service starts (`git`) are not
     counted anywhere. Model loading happens before the worker's lease and
     is not counted to it. A worker's counters cannot be read once it has
-    exited, so each lease keeps the latest reading of every worker it has
-    seen (taken with the 5 s settlement) and reads them once more before a
-    stopped run kills them: a worker that crashes mid-run loses at most the
-    CPU time since its last reading and its GPU time for the lease, and the
-    replacement's whole life, model loading included, counts. GPU time
-    nothing read is stored as not measured, never zero. Only the service is
+    exited, so each lease keeps the latest reading of every worker the pool
+    reported (read every 5 s, outside the ledger's lock: the pool can hold
+    its own through a restart) and reads them once more before a stopped
+    run kills them. A worker that crashes mid-run loses at most the CPU
+    time since its last reading; the replacement's whole life, model
+    loading included, counts. A figure is a sum only when every worker gave
+    a reading after the lease opened: when one did not (GPU time is read
+    only at the ends, so a crashed worker's never is), the run's figure is
+    stored NULL and the gap is kept (`unmeasured` on both tables), so the
+    day and the 7-day figure it belongs to read "not measured yet" rather
+    than a part as the whole. A pid whose process changed is never read
+    again. Only the service is
     measured: Terminal commands
     and the app's broker are not. A crash loses at most the totals not yet
     stored.

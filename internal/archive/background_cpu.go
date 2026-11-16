@@ -68,6 +68,34 @@ type cpuUse struct {
 	// Peak is the most memory Pharos held while the work ran: the service,
 	// and the workers the work was using.
 	Peak *int64
+	// Gaps are the worker figures part of which could not be read (a worker
+	// that exited before it was read again). Such a figure is not a sum of
+	// what was read: it is not measured (worker, gpu, total).
+	Gaps cpuGaps
+}
+
+// cpuGaps names the figures of a cpuUse that are incomplete.
+type cpuGaps uint8
+
+const (
+	gapWorker cpuGaps = 1 << iota
+	gapGPU
+)
+
+// worker is the workers' CPU time, nil when any of it was not measured.
+func (use cpuUse) worker() *float64 {
+	if use.Gaps&gapWorker != 0 {
+		return nil
+	}
+	return use.Worker
+}
+
+// gpu is the workers' GPU time, nil when any of it was not measured.
+func (use cpuUse) gpu() *float64 {
+	if use.Gaps&gapGPU != 0 {
+		return nil
+	}
+	return use.GPU
 }
 
 func addTo(total **float64, value float64) {
@@ -86,6 +114,7 @@ func (use *cpuUse) raisePeak(bytes int64) {
 // add folds other into use.
 func (use *cpuUse) add(other cpuUse) {
 	use.Seconds += other.Seconds
+	use.Gaps |= other.Gaps
 	for _, pair := range []struct {
 		to   **float64
 		from *float64
@@ -100,9 +129,9 @@ func (use *cpuUse) add(other cpuUse) {
 }
 
 // total is the CPU time of the work: the service's share and its workers'.
-// It is nil when neither was measured.
+// It is nil when neither was measured, or part of the workers' was not.
 func (use cpuUse) total() *float64 {
-	if use.CPU == nil && use.Worker == nil {
+	if use.CPU == nil && use.Worker == nil || use.Gaps&gapWorker != 0 {
 		return nil
 	}
 	sum := 0.0
@@ -461,11 +490,11 @@ func (l *cpuLedger) settleLocked() {
 			at.use.Seconds += elapsed
 		}
 		held, known := memory, memoryOK
+		// The workers' memory as last read: reading them can wait on the
+		// pool, which this lock must not.
 		for lease := range l.leases {
-			if lease.span == span {
-				if bytes, ok := lease.observe(); ok {
-					held, known = held+bytes, true
-				}
+			if lease.span == span && lease.memoryOK {
+				held, known = held+lease.memory, true
 			}
 		}
 		if !known {
@@ -482,9 +511,17 @@ func (l *cpuLedger) settleLocked() {
 // running time lands on the day it was used.
 func (l *cpuLedger) tick() {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	if len(l.runningLocked()) > 0 {
 		l.settleLocked()
+	}
+	leases := make([]*cpuLease, 0, len(l.leases))
+	for lease := range l.leases {
+		leases = append(leases, lease)
+	}
+	l.mu.Unlock()
+	// Whatever their span is doing: a worker that exits keeps this reading.
+	for _, lease := range leases {
+		lease.observe()
 	}
 }
 
@@ -493,111 +530,152 @@ type cpuLease struct {
 	ledger *cpuLedger
 	span   *cpuSpan
 	pids   func() []int
-	// start is each worker's counters when the lease first saw it (no CPU
-	// time for one the pool started during the lease: all it used counts),
-	// and last its latest reading. A worker that exits before the lease ends
-	// (a crash and restart, a stopped run) keeps what it had used when last
-	// read; its counters cannot be read once it is gone.
-	start, last map[int]processUsage
-	// banked is the CPU time of a worker whose pid another process then took.
-	banked float64
-	// gpuStart and gpuLast are the same for GPU time, in nanoseconds; gpuOK
-	// is whether the lease reads it at all.
-	gpuStart, gpuLast map[int]uint64
-	gpuOK             bool
+	// workers are the pool's workers the lease has seen, by pid, and retired
+	// the ones whose pid the pool gave to a later worker. The ledger's lock
+	// guards these and the fields below.
+	workers map[int]*leaseWorker
+	retired []*leaseWorker
+	// gpu is whether the workers may use the GPU, and gpuOK whether their
+	// GPU time could be read when the lease opened.
+	gpu, gpuOK bool
+	// stopping is a run about to kill these workers: one with no GPU client
+	// after that is gone, not idle.
+	stopping bool
+	// memory is the workers' memory when last read.
+	memory   int64
+	memoryOK bool
 	// sharers is the most leases that held the same workers at once.
 	sharers int
-	peak    int64
-	peakOK  bool
 	once    sync.Once
 }
 
-// observe reads the lease's workers now, the ones the pool reports and the
-// ones seen before, and reports their memory. The ledger's lock is held.
-func (lease *cpuLease) observe() (int64, bool) {
+// leaseWorker is one worker process of a lease. A process's counters cannot
+// be read once it has exited, so the lease keeps its latest reading: a
+// worker that crashes, or that a stopped run kills, keeps what it had used
+// when last read.
+type leaseWorker struct {
+	// start is its counters when the lease first saw it (no CPU time for one
+	// the pool started during the lease: all it used counts), and last its
+	// latest reading. read is whether it was read after the lease opened.
+	start, last processUsage
+	read        bool
+	// gone is a worker that is no longer read: the pool dropped it, it could
+	// not be read, or another process has its pid.
+	gone bool
+	// The same for GPU time, in nanoseconds.
+	gpuStart, gpuLast uint64
+	gpuRead           bool
+}
+
+// observe reads the workers the pool reports now. It takes the pids, which
+// can wait for as long as a worker takes to restart, and reads the processes
+// before it takes the ledger's lock.
+func (lease *cpuLease) observe() {
+	l := lease.ledger
 	pids := lease.pids()
-	for pid := range lease.last {
-		if !slices.Contains(pids, pid) {
-			pids = append(pids, pid)
+	readings := map[int]processUsage{}
+	for _, pid := range pids {
+		if usage, err := l.readProcess(pid); err == nil {
+			readings[pid] = usage
+		}
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, open := l.leases[lease]; !open {
+		return
+	}
+	for pid, worker := range lease.workers {
+		if usage, ok := readings[pid]; !ok || !usage.Known.has(counterOwnCPU) || usage.Started != worker.start.Started {
+			// Only the pool says which processes are its workers, and a
+			// pid whose process changed is someone else's now.
+			worker.gone = true
 		}
 	}
 	total, known := int64(0), false
 	for _, pid := range pids {
-		usage, err := lease.ledger.readProcess(pid)
-		if err != nil {
+		usage, ok := readings[pid]
+		if !ok || !usage.Known.has(counterOwnCPU) {
 			continue
+		}
+		worker := lease.workers[pid]
+		switch {
+		case worker == nil:
+			worker = &leaseWorker{start: processUsage{Started: usage.Started}, last: usage, read: true}
+			lease.workers[pid] = worker
+		case worker.gone:
+			continue
+		case usage.CPUSeconds >= worker.last.CPUSeconds:
+			worker.last, worker.read = usage, true
 		}
 		if usage.Known.has(counterMemory) {
 			total, known = total+int64(usage.Footprint), true
 		}
-		if !usage.Known.has(counterOwnCPU) {
-			continue
-		}
-		before, held := lease.start[pid]
-		if held && before.Started != usage.Started {
-			lease.banked += max(0, lease.last[pid].CPUSeconds-before.CPUSeconds)
-		}
-		if !held || before.Started != usage.Started {
-			lease.start[pid] = processUsage{Started: usage.Started}
-			delete(lease.gpuStart, pid)
-			delete(lease.gpuLast, pid)
-		}
-		lease.last[pid] = usage
 	}
-	if known && total > lease.peak {
-		lease.peak, lease.peakOK = total, true
+	lease.memory, lease.memoryOK = total, known
+	// The span holds these workers whether or not its own work is running.
+	if own, ok := l.readMemory(); ok && known {
+		l.dayLocked(lease.span.source).raisePeak(own + total)
+		for at := lease.span; at != nil; at = at.parent {
+			at.use.raisePeak(own + total)
+		}
 	}
-	return total, known
 }
 
-// observeGPU reads the GPU time of the lease's workers. A worker with no
-// GPU client that is still running has used none; one that is gone keeps its
-// last reading, or has none. The ledger's lock is not held: the read forks.
+// observeGPU reads the GPU time of the lease's workers, after observe. A
+// running worker with no GPU client has used none. The read forks, so the
+// ledger's lock is not held over it.
 func (lease *cpuLease) observeGPU() {
 	l := lease.ledger
 	l.mu.Lock()
-	pids := make([]int, 0, len(lease.last))
-	for pid := range lease.last {
-		pids = append(pids, pid)
+	pids := []int{}
+	for pid, worker := range lease.workers {
+		if !worker.gone {
+			pids = append(pids, pid)
+		}
 	}
 	l.mu.Unlock()
 	times, ok := l.gpuTimes(pids)
 	if !ok {
 		return
 	}
-	alive := map[int]bool{}
-	for _, pid := range pids {
-		usage, err := l.readProcess(pid)
-		alive[pid] = err == nil && usage.Known.has(counterOwnCPU)
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, pid := range pids {
+		worker := lease.workers[pid]
+		if worker == nil || worker.gone {
+			continue
+		}
 		if ns, found := times[pid]; found {
-			lease.gpuLast[pid] = max(ns, lease.gpuLast[pid])
-		} else if _, read := lease.gpuLast[pid]; !read && alive[pid] {
-			lease.gpuLast[pid] = lease.gpuStart[pid]
+			worker.gpuLast, worker.gpuRead = max(ns, worker.gpuLast), true
+		} else if !worker.gpuRead && !lease.stopping {
+			worker.gpuLast, worker.gpuRead = worker.gpuStart, true
 		}
 	}
 }
 
-// observeLeases reads every open lease's workers, GPU time included. A run
-// that is about to kill its workers calls it first.
-func (l *cpuLedger) observeLeases() {
+// observeLeases reads the workers pids names, GPU time included, for every
+// open lease that holds one of them. A run that is about to kill its workers
+// calls it first.
+func (l *cpuLedger) observeLeases(pids []int) {
 	if l == nil {
 		return
 	}
 	l.mu.Lock()
-	leases := make([]*cpuLease, 0, len(l.leases))
+	leases := []*cpuLease{}
 	for lease := range l.leases {
-		lease.observe()
-		leases = append(leases, lease)
+		if slices.ContainsFunc(pids, func(pid int) bool { return lease.workers[pid] != nil }) {
+			leases = append(leases, lease)
+		}
 	}
 	l.mu.Unlock()
 	for _, lease := range leases {
+		lease.observe()
 		if lease.gpuOK {
 			lease.observeGPU()
 		}
+		l.mu.Lock()
+		lease.stopping = true
+		l.mu.Unlock()
 	}
 }
 
@@ -628,22 +706,24 @@ func leaseWorkers(ctx context.Context, pids func() []int, gpu bool) func() {
 		return func() {}
 	}
 	l := span.ledger
-	lease := &cpuLease{ledger: l, span: span, pids: pids, start: map[int]processUsage{}, last: map[int]processUsage{},
-		gpuStart: map[int]uint64{}, gpuLast: map[int]uint64{}, sharers: 1}
+	lease := &cpuLease{ledger: l, span: span, pids: pids, workers: map[int]*leaseWorker{}, gpu: gpu, sharers: 1}
 	current := pids()
 	for _, pid := range current {
 		if usage, err := l.readProcess(pid); err == nil && usage.Known.has(counterOwnCPU) {
-			lease.start[pid], lease.last[pid] = usage, usage
+			lease.workers[pid] = &leaseWorker{start: usage, last: usage}
 		}
 	}
 	if gpu {
 		if times, ok := l.gpuTimes(current); ok {
-			lease.gpuStart, lease.gpuOK = times, true
+			lease.gpuOK = true
+			for pid, worker := range lease.workers {
+				worker.gpuStart = times[pid]
+			}
 		}
 	}
 	l.mu.Lock()
 	for other := range l.leases {
-		if slices.ContainsFunc(current, func(pid int) bool { _, held := other.start[pid]; return held }) {
+		if slices.ContainsFunc(current, func(pid int) bool { return other.workers[pid] != nil }) {
 			lease.sharers++
 			other.sharers = max(other.sharers, lease.sharers)
 		}
@@ -655,9 +735,7 @@ func leaseWorkers(ctx context.Context, pids func() []int, gpu bool) func() {
 
 func (lease *cpuLease) end() {
 	l := lease.ledger
-	l.mu.Lock()
 	lease.observe()
-	l.mu.Unlock()
 	if lease.gpuOK {
 		lease.observeGPU()
 	}
@@ -665,29 +743,42 @@ func (lease *cpuLease) end() {
 	defer l.mu.Unlock()
 	l.settleLocked()
 	delete(l.leases, lease)
-	cpu, measured := lease.banked, len(lease.last) > 0
-	for pid, usage := range lease.last {
-		cpu += max(0, usage.CPUSeconds-lease.start[pid].CPUSeconds)
+	seen := lease.retired
+	for _, worker := range lease.workers {
+		seen = append(seen, worker)
 	}
-	// GPU time is measured when some worker's was read after the start.
-	var gpu *float64
-	for pid, ns := range lease.gpuLast {
-		if gpu == nil {
-			gpu = new(float64)
+	if len(seen) == 0 {
+		return
+	}
+	// A figure is a sum only when every worker gave a reading after the
+	// lease opened. One that did not (it exited first) leaves the figure
+	// not measured: part of a sum would read as the whole.
+	cpu, gpu, gaps := 0.0, 0.0, cpuGaps(0)
+	if lease.gpu && !lease.gpuOK {
+		gaps |= gapGPU
+	}
+	for _, worker := range seen {
+		if !worker.read {
+			gaps |= gapWorker
 		}
-		if ns >= lease.gpuStart[pid] {
-			*gpu += float64(ns-lease.gpuStart[pid]) / 1e9
+		cpu += max(0, worker.last.CPUSeconds-worker.start.CPUSeconds)
+		if lease.gpu && !worker.gpuRead {
+			gaps |= gapGPU
+		}
+		if worker.gpuLast >= worker.gpuStart {
+			gpu += float64(worker.gpuLast-worker.gpuStart) / 1e9
 		}
 	}
 	// Workers several leases held at once: an equal part each.
 	share := 1 / float64(max(1, lease.sharers))
 	day := l.dayLocked(lease.span.source)
 	credit := func(use *cpuUse) {
-		if measured {
+		use.Gaps |= gaps
+		if gaps&gapWorker == 0 {
 			addTo(&use.Worker, cpu*share)
 		}
-		if gpu != nil {
-			addTo(&use.GPU, *gpu*share)
+		if lease.gpu && gaps&gapGPU == 0 {
+			addTo(&use.GPU, gpu*share)
 		}
 	}
 	credit(&day.cpuUse)
@@ -761,13 +852,14 @@ func storeCPUDays(ctx context.Context, tx *sql.Tx, totals map[cpuDayKey]*cpuDay)
 		if day.Peak != nil {
 			peak = *day.Peak
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO background_cpu_days(host_id,day,source,runs,seconds,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes)
-			VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(host_id,day,source) DO UPDATE SET runs=runs+excluded.runs, seconds=seconds+excluded.seconds,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO background_cpu_days(host_id,day,source,runs,seconds,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes,unmeasured)
+			VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(host_id,day,source) DO UPDATE SET runs=runs+excluded.runs, seconds=seconds+excluded.seconds,
+			unmeasured=unmeasured|excluded.unmeasured,
 			cpu_seconds=CASE WHEN excluded.cpu_seconds IS NULL THEN cpu_seconds ELSE COALESCE(cpu_seconds,0)+excluded.cpu_seconds END,
 			worker_cpu_seconds=CASE WHEN excluded.worker_cpu_seconds IS NULL THEN worker_cpu_seconds ELSE COALESCE(worker_cpu_seconds,0)+excluded.worker_cpu_seconds END,
 			gpu_seconds=CASE WHEN excluded.gpu_seconds IS NULL THEN gpu_seconds ELSE COALESCE(gpu_seconds,0)+excluded.gpu_seconds END,
 			peak_bytes=CASE WHEN excluded.peak_bytes IS NULL THEN peak_bytes ELSE MAX(COALESCE(peak_bytes,0),excluded.peak_bytes) END`,
-			currentHost().ID, key.day, key.source, day.runs, day.Seconds, nullFloat(day.CPU), nullFloat(day.Worker), nullFloat(day.GPU), peak); err != nil {
+			currentHost().ID, key.day, key.source, day.runs, day.Seconds, nullFloat(day.CPU), nullFloat(day.worker()), nullFloat(day.gpu()), peak, int(day.Gaps)); err != nil {
 			return err
 		}
 	}
@@ -843,7 +935,7 @@ func (l *cpuLedger) flushDueNow() bool {
 func (c *Catalog) cpuDays(ctx context.Context, since time.Time) map[cpuDayKey]cpuDay {
 	first := since.Local().Format("2006-01-02")
 	days := map[cpuDayKey]cpuDay{}
-	rows, err := c.reader().QueryContext(ctx, `SELECT day,source,runs,seconds,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes
+	rows, err := c.reader().QueryContext(ctx, `SELECT day,source,runs,seconds,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes,unmeasured
 		FROM background_cpu_days WHERE host_id=? AND day>=?`, currentHost().ID, first)
 	if err == nil {
 		defer rows.Close()
@@ -852,7 +944,7 @@ func (c *Catalog) cpuDays(ctx context.Context, since time.Time) map[cpuDayKey]cp
 			var day cpuDay
 			var cpu, worker, gpu sql.NullFloat64
 			var peak sql.NullInt64
-			if rows.Scan(&key.day, &key.source, &day.runs, &day.Seconds, &cpu, &worker, &gpu, &peak) != nil {
+			if rows.Scan(&key.day, &key.source, &day.runs, &day.Seconds, &cpu, &worker, &gpu, &peak, &day.Gaps) != nil {
 				continue
 			}
 			for _, pair := range []struct {
@@ -982,7 +1074,7 @@ func cpuUsage(days map[cpuDayKey]cpuDay, at time.Time) map[string]any {
 			}
 			return new(*value / measured)
 		}
-		row.CPUSeconds, row.WorkerCPUSeconds, row.GPUSeconds, row.PeakBytes = perDay(total.total()), perDay(total.Worker), perDay(total.GPU), total.Peak
+		row.CPUSeconds, row.WorkerCPUSeconds, row.GPUSeconds, row.PeakBytes = perDay(total.total()), perDay(total.worker()), perDay(total.gpu()), total.Peak
 		for _, name := range window {
 			day := days[cpuDayKey{name, source}]
 			row.Days = append(row.Days, cpuDayCell{Day: name, CPUSeconds: day.total(), Seconds: day.Seconds})

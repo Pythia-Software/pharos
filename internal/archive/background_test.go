@@ -1797,7 +1797,7 @@ func TestCPULedgerMeasuresEachSpansThread(t *testing.T) {
 	cpu, memory := 0.0, int64(1<<30)
 	threads, thread, threadOK := map[uint64]float64{}, uint64(1), true
 	workers := map[int]processUsage{}
-	gpu := map[int]uint64{}
+	gpu, gpuDown := map[int]uint64{}, false
 	ledger := &cpuLedger{now: func() time.Time { return at }, readCPU: func() (float64, bool) { return cpu, true }, readMemory: func() (int64, bool) { return memory, true },
 		readThread: func() (float64, uint64, bool) { return threads[thread], thread, threadOK },
 		readProcess: func(pid int) (processUsage, error) {
@@ -1808,6 +1808,9 @@ func TestCPULedgerMeasuresEachSpansThread(t *testing.T) {
 			return usage, nil
 		},
 		readGPU: func() (gpuSnapshot, error) {
+			if gpuDown {
+				return gpuSnapshot{}, errors.New("timed out")
+			}
 			snapshot := gpuSnapshot{supported: true}
 			for pid, ns := range gpu {
 				snapshot.clients = append(snapshot.clients, gpuClient{id: uint64(pid), pid: pid, ns: ns, known: true})
@@ -1865,17 +1868,7 @@ func TestCPULedgerMeasuresEachSpansThread(t *testing.T) {
 	}
 	// A worker process the item leased: its own counters, GPU time apart.
 	workers[41], gpu[41] = processUsage{CPUSeconds: 100, Footprint: 2 << 30, Started: 7, Known: counterOwnCPU | counterMemory}, 5e9
-	// One that is there when the lease starts and crashes during it: what it
-	// had used when last read still counts. Its GPU time after the start
-	// was never read, so it adds none rather than a guess.
-	workers[43], gpu[43] = processUsage{CPUSeconds: 10, Started: 8, Known: counterOwnCPU | counterMemory}, 1e9
-	pids := []int{41, 42, 43}
-	release := leaseWorkers(ctx, func() []int { return pids }, true)
-	workers[43], gpu[43] = processUsage{CPUSeconds: 16, Started: 8, Known: counterOwnCPU | counterMemory}, 3e9
-	ledger.tick()
-	delete(workers, 43)
-	delete(gpu, 43)
-	pids = []int{41, 42}
+	release := leaseWorkers(ctx, func() []int { return []int{41, 42} }, true)
 	workers[41], gpu[41] = processUsage{CPUSeconds: 130, Footprint: 2 << 30, Started: 7, Known: counterOwnCPU | counterMemory}, 9e9
 	// One the pool started during the lease: everything it used.
 	workers[42] = processUsage{CPUSeconds: 5, Footprint: 1 << 30, Started: 9, Known: counterOwnCPU | counterMemory}
@@ -1887,23 +1880,89 @@ func TestCPULedgerMeasuresEachSpansThread(t *testing.T) {
 	workers[51], gpu[51] = processUsage{CPUSeconds: 20, Started: 11, Known: counterOwnCPU | counterMemory}, 2e9
 	stopped := leaseWorkers(ctx, func() []int { return []int{51} }, true)
 	workers[51], gpu[51] = processUsage{CPUSeconds: 27, Started: 11, Known: counterOwnCPU | counterMemory}, 5e9
-	ledger.observeLeases()
+	ledger.observeLeases([]int{51})
 	delete(workers, 51)
 	delete(gpu, 51)
 	stopped()
-	// Workers that were gone before anything was read again: their GPU time
-	// is not measured, which is not zero.
+	// A worker that crashes during the lease keeps the CPU time it had used
+	// when last read, with a healthy one beside it. Its GPU time after the
+	// lease opened was never read, so the lease's GPU time is not measured:
+	// the healthy worker's alone would read as the whole. Its span is
+	// waiting on a child operation, and the workers are read all the same.
+	workers[43], gpu[43] = processUsage{CPUSeconds: 10, Started: 8, Known: counterOwnCPU | counterMemory}, 1e9
+	workers[44], gpu[44] = processUsage{CPUSeconds: 0, Started: 8, Known: counterOwnCPU | counterMemory}, 0
+	crash := ledger.begin(nil, source("item:agent_events"), false)
+	crashed := leaseWorkers(withCPUSpan(context.Background(), crash), func() []int { return []int{43, 44} }, true)
+	inside := ledger.begin(crash, source("item:agent_events"), false)
+	workers[43], gpu[43] = processUsage{CPUSeconds: 16, Started: 8, Known: counterOwnCPU | counterMemory}, 3e9
+	workers[44], gpu[44] = processUsage{CPUSeconds: 2, Started: 8, Known: counterOwnCPU | counterMemory}, 2e9
+	ledger.tick()
+	inside.end(false)
+	// Another process takes the dead worker's pid while the pool still
+	// lists it: nothing of that process is the lease's.
+	workers[43], gpu[43] = processUsage{CPUSeconds: 500, Footprint: 64 << 30, Started: 99, Known: counterOwnCPU | counterMemory}, 400e9
+	crashed()
+	if use := crash.end(true); !near(use.worker(), 6+2) || use.GPU != nil || use.gpu() != nil || use.Gaps != gapGPU || *use.Peak > 8<<30 {
+		t.Fatalf("a crashed worker beside a healthy one: %+v worker %v", use, use.worker())
+	}
+	// The GPU read fails just before a stop kills the worker, and after the
+	// kill the worker has no GPU client: that is not a worker that used none.
+	workers[81], gpu[81] = processUsage{CPUSeconds: 1, Started: 14, Known: counterOwnCPU | counterMemory}, 1e9
+	late := ledger.begin(nil, source("item:writing-refine"), false)
+	killed := leaseWorkers(withCPUSpan(context.Background(), late), func() []int { return []int{81} }, true)
+	workers[81], gpuDown = processUsage{CPUSeconds: 4, Started: 14, Known: counterOwnCPU | counterMemory}, true
+	ledger.observeLeases([]int{81})
+	gpuDown = false
+	delete(gpu, 81)
+	killed()
+	if use := late.end(true); !near(use.worker(), 3) || use.gpu() != nil || use.Gaps != gapGPU {
+		t.Fatalf("GPU time that could not be read before a kill: %+v", use)
+	}
+	// A worker that was gone before anything was read again: neither its
+	// CPU nor its GPU time is measured, which is not zero.
 	workers[61], gpu[61] = processUsage{CPUSeconds: 1, Started: 12, Known: counterOwnCPU | counterMemory}, 1e9
-	_, lost := beginItemSpan(withCPUSpan(context.Background(), pass), "labels")
+	lost := ledger.begin(nil, source("item:labels"), false)
 	gone := leaseWorkers(withCPUSpan(context.Background(), lost), func() []int { return []int{61} }, true)
 	delete(workers, 61)
 	delete(gpu, 61)
 	gone()
-	if use := lost.end(true); use.GPU != nil {
-		t.Fatalf("GPU time nothing read is not measured: %v", *use.GPU)
+	if use := lost.end(true); use.Worker != nil || use.GPU != nil || use.worker() != nil || use.gpu() != nil || use.Gaps != gapWorker|gapGPU || use.total() != nil {
+		t.Fatalf("a worker nothing read again is not measured: %+v", use)
 	}
+	// The pool holds its slot's lock through a worker's restart, which can
+	// take a minute. Reading the workers waits for it; no other work does.
+	entered, unblock := make(chan struct{}), make(chan struct{})
+	workers[71] = processUsage{CPUSeconds: 1, Started: 13, Known: counterOwnCPU | counterMemory}
+	restarting := false
+	slow := leaseWorkers(ctx, func() []int {
+		if restarting {
+			close(entered)
+			<-unblock
+		}
+		return []int{71}
+	}, false)
+	restarting = true
+	ticked := make(chan struct{})
+	go func() { ledger.tick(); close(ticked) }()
+	<-entered
+	free := make(chan struct{})
+	go func() {
+		span := ledger.begin(nil, source("kind:free"), false)
+		span.setPaused(true)
+		span.end(false)
+		close(free)
+	}()
+	select {
+	case <-free:
+	case <-time.After(10 * time.Second):
+		t.Fatal("other work waits for a restarting worker's pool")
+	}
+	restarting = false
+	close(unblock)
+	<-ticked
+	slow()
 	use := item.end(true)
-	if !near(use.CPU, 8+2+3) || !near(use.Worker, 35+6+7) || !near(use.GPU, 4+3) || use.Seconds != 12 {
+	if !near(use.CPU, 8+2+3) || !near(use.Worker, 35+7) || !near(use.GPU, 4+3) || use.Gaps != 0 || use.Seconds != 12 {
 		t.Fatalf("the item used %+v CPU %v worker %v GPU %v", use, *use.CPU, *use.Worker, *use.GPU)
 	}
 	if use.Peak == nil || *use.Peak != 6<<30 {
@@ -1919,8 +1978,12 @@ func TestCPULedgerMeasuresEachSpansThread(t *testing.T) {
 	if other := pending[cpuDayKey{day, cpuSourceOther}]; !near(other.CPU, 2+4+1) || other.runs != 0 {
 		t.Fatalf("CPU no measured thread used is the rest: %+v", other)
 	}
-	if tools := pending[cpuDayKey{day, "item:tools"}]; tools.runs != 1 || !near(tools.CPU, 10) || !near(tools.Worker, 48) {
+	if tools := pending[cpuDayKey{day, "item:tools"}]; tools.runs != 1 || !near(tools.CPU, 10) || !near(tools.Worker, 42) {
 		t.Fatalf("the item's day: %+v", tools)
+	}
+	// A day keeps the gap: its figure is not a sum of the runs that had one.
+	if labels := pending[cpuDayKey{day, "item:labels"}]; labels.Gaps != gapWorker|gapGPU || labels.worker() != nil || labels.total() != nil {
+		t.Fatalf("a day with a gap: %+v", labels)
 	}
 	if search := pending[cpuDayKey{day, "item:search"}]; search.runs != 1 || !near(search.CPU, 3) {
 		t.Fatalf("the other item's day: %+v", search)
@@ -2008,7 +2071,11 @@ func TestCPUUsageAveragesTheDaysMeasured(t *testing.T) {
 		{day(2), "item:labels"}:                 {cpuUse: cpuUse{Seconds: 600, CPU: f(300), Worker: f(900), GPU: f(60), Peak: &peak}, runs: 3},
 		{day(0), "item:labels"}:                 {cpuUse: cpuUse{Seconds: 300, CPU: f(150)}, runs: 1},
 		{day(1), "kind:maintenance.checkpoint"}: {cpuUse: cpuUse{Seconds: 30, CPU: f(6)}, runs: 9},
-		{day(1), cpuSourceOther}:                {cpuUse: cpuUse{CPU: f(9000)}},
+		// A day with a run whose GPU time could not all be read, among days
+		// that measured it: the window's GPU time is not measured.
+		{day(1), "item:agent_events"}: {cpuUse: cpuUse{Seconds: 60, CPU: f(30), Worker: f(90), Gaps: gapGPU}, runs: 1},
+		{day(0), "item:agent_events"}: {cpuUse: cpuUse{Seconds: 60, CPU: f(30), Worker: f(90), GPU: f(12)}, runs: 1},
+		{day(1), cpuSourceOther}:      {cpuUse: cpuUse{CPU: f(9000)}},
 		// Before the window, and too old to keep.
 		{day(12), "item:tools"}: {cpuUse: cpuUse{Seconds: 5, CPU: f(5)}, runs: 1},
 		{at.Add(-2 * cpuDaysKept).Local().Format("2006-01-02"), "item:tools"}: {cpuUse: cpuUse{Seconds: 5, CPU: f(5)}, runs: 1},
@@ -2016,7 +2083,7 @@ func TestCPUUsageAveragesTheDaysMeasured(t *testing.T) {
 	// A second write adds to the day rather than replacing it.
 	store(map[cpuDayKey]*cpuDay{{day(0), "item:labels"}: {cpuUse: cpuUse{Seconds: 300, CPU: f(150)}, runs: 1}})
 	var kept int
-	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM background_cpu_days").Scan(&kept); err != nil || kept != 5 {
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM background_cpu_days").Scan(&kept); err != nil || kept != 7 {
 		t.Fatalf("days past the kept window are dropped: %d kept, %v", kept, err)
 	}
 	// What has not been stored yet is read too.
@@ -2025,8 +2092,11 @@ func TestCPUUsageAveragesTheDaysMeasured(t *testing.T) {
 	catalog.ops.cpu.pending[cpuDayKey{day(0), "item:tools"}] = &cpuDay{cpuUse: cpuUse{Seconds: 9}, runs: 1}
 	usage := cpuUsage(catalog.cpuDays(ctx, at.AddDate(0, 0, -cpuWindowDays)), at)
 	rows := usage["rows"].([]cpuSourceRow)
-	if usage["measured_days"] != 3 || len(rows) != 4 || rows[0].Source != "item:labels" || rows[len(rows)-1].Source != cpuSourceOther {
+	if usage["measured_days"] != 3 || len(rows) != 5 || rows[0].Source != "item:labels" || rows[len(rows)-1].Source != cpuSourceOther {
 		t.Fatalf("three measured days, labels first and the rest last: %v days, %+v", usage["measured_days"], rows)
+	}
+	if events := rows[1]; events.Source != "item:agent_events" || *events.CPUSeconds != 80 || *events.WorkerCPUSeconds != 60 || events.GPUSeconds != nil {
+		t.Fatalf("a window with an incomplete GPU day has no GPU figure: %+v", events)
 	}
 	labels := rows[0]
 	if labels.Label != "Message labels" || labels.Item != "labels" || *labels.CPUSeconds != 500 || *labels.WorkerCPUSeconds != 300 || *labels.GPUSeconds != 20 ||
@@ -2037,7 +2107,7 @@ func TestCPUUsageAveragesTheDaysMeasured(t *testing.T) {
 		t.Fatalf("each day's own figure, and none for a day without runs: %+v", labels.Days)
 	}
 	// A source whose CPU was never read is listed without a figure.
-	if tools := rows[2]; tools.Source != "item:tools" || tools.CPUSeconds != nil || tools.Seconds != 3 {
+	if tools := rows[3]; tools.Source != "item:tools" || tools.CPUSeconds != nil || tools.Seconds != 3 {
 		t.Fatalf("unmeasured CPU is not zero: %+v", tools)
 	}
 	if empty := cpuUsage(map[cpuDayKey]cpuDay{}, at); empty["measured_days"] != 0 || empty["cpu_seconds"] != nil {

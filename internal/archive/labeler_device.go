@@ -91,7 +91,7 @@ func (cache *labelerProbeCache) probe(ctx context.Context, settings LabelerSetti
 // is read first: a process's counters are gone once it exits.
 func (c *Catalog) killLabeler(runner *labelrt.Runner) {
 	if c.ops != nil {
-		c.ops.cpu.observeLeases()
+		c.ops.cpu.observeLeases(runner.Pool().PIDs())
 	}
 	c.labelers.Kill(runner)
 }
