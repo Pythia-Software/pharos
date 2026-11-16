@@ -31,7 +31,7 @@ const timeMeasures: Record<string, AnalysisMeasure> = {
   failures: { label: "Failed calls", unit: "calls", format: count, op: "sum", field: "error_count", additive: true, note: "Calls recorded as errors. A shell command’s non-zero exit can be expected, such as a search with no matches." },
   failure_rate: { label: "Failure rate", unit: "percent", format: percent, op: "sum", ratio: ["error_count", { op: "count", field: "id" }], additive: false, note: "Failed calls divided by all matching calls, pooled over each group." },
   truncation_rate: { label: "Truncation rate", unit: "percent", format: percent, op: "sum", ratio: [{ op: "sum", expression: "IF([truncated],1,0)", label: "truncated calls" }, { op: "count", field: "id" }], additive: false, note: "Calls with truncated results divided by all matching calls." },
-  conversations: { label: "Conversations reached", unit: "conversations", format: count, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct agent conversations with matching calls; a conversation can appear in several groups." },
+  conversations: { label: "Conversations with matching calls", unit: "conversations", format: count, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct conversations with matching calls; a conversation can appear in several groups." },
   projects: projectsReached("reached"),
   carried_tokens: { label: "Context carried", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "carried_tokens", value: "carried_tokens", additive: true, note: "Attributed tool-result tokens carried into later requests." },
   result_tokens: { label: "Result tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "result_tokens", value: "result_tokens", additive: true, note: "Tokens a call's result added to the context, measured or estimated from retained result text." },
@@ -43,7 +43,7 @@ export const toolTimeAnalysisCatalog: AnalysisCatalog = {
     activity: { label: "Activity", fields: ["activity"] },
     ...single([["tool_category", "Tool category"], ["tool_name", "Tool"], ["operation_name", "Operation"], ["command_name", "Command"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"]]),
     project_name: projectBreakdown(),
-    ...single([["error_signature", "Error signature"], ["error_type", "Failure kind"], ["repo_path", "Repository path"], ["host", "Research host"], ["url", "Source URL"], ["search_query", "Search query"], ["mcp_server", "MCP server"], ["mcp_method", "MCP method"], ["source_kind", "Source"]]),
+    ...single([["error_signature", "Error signature"], ["error_type", "Failure kind"], ["repo_path", "Repository path"], ["host", "Research host"], ["url", "URL"], ["search_query", "Search query"], ["mcp_server", "MCP server"], ["mcp_method", "MCP method"], ["source_kind", "Source"]]),
     // A path is relative to the repository holding the file, which can differ
     // from the session's project; files outside Git have neither.
     repository_path: { label: "Repository + path", fields: ["path_repository", "repo_path"], note: "Only files in a Git checkout have a repository path, so calls in a folder without Git are left out." },
@@ -59,11 +59,11 @@ export const toolTimeAnalysisCatalog: AnalysisCatalog = {
   labels: { activity: value => activityPresentation(value).label },
   records: { label: "Tool call", plural: "Tool calls", note: "Calls are placed by their start time and keep their full recorded duration." },
   units: {
-    conversation: { label: "Agent conversation", plural: "Agent conversations", key: "conversation_id", where: present("conversation_id"), breakdowns: conversationSplits,
-      note: "An agent conversation is one recorded agent transcript; delegated sub-agents are conversations of their own. Calls without a conversation are left out." },
-    path_conversation: { label: "Path in a conversation", plural: "Conversation/path pairs", key: ["conversation_id", "path_repository", "repo_path"], where: [...present("conversation_id"), ...present("repo_path")],
-      breakdowns: { repository_path: ["path_repository", "repo_path"], ...conversationSplits }, note: "Calls to one repository path in one agent conversation form one observation. Only files in a Git checkout have a repository path, so calls in a folder without Git are left out." },
-    tool_conversation: { label: "Tool in a conversation", plural: "Tool/conversation pairs", key: ["conversation_id", "tool_name"], where: present("conversation_id"),
+    conversation: { label: "Conversation", plural: "Conversations", key: "conversation_id", where: present("conversation_id"), breakdowns: conversationSplits,
+      note: "A conversation is one recorded agent transcript; delegated sub-agents are conversations of their own. Calls without a conversation are left out." },
+    path_conversation: { label: "Path in a conversation", plural: "Paths in a conversation", key: ["conversation_id", "path_repository", "repo_path"], where: [...present("conversation_id"), ...present("repo_path")],
+      breakdowns: { repository_path: ["path_repository", "repo_path"], ...conversationSplits }, note: "Calls to one repository path in one conversation form one observation. Only files in a Git checkout have a repository path, so calls in a folder without Git are left out." },
+    tool_conversation: { label: "Tool in a conversation", plural: "Tools in a conversation", key: ["conversation_id", "tool_name"], where: present("conversation_id"),
       breakdowns: { tool_name: ["tool_name"], tool_category: ["tool_category"], ...conversationSplits },
       note: "A tool in a conversation is one tool's calls in one recorded agent transcript, so a conversation using several tools is one observation under each." },
   },
@@ -81,8 +81,8 @@ toolTimeAnalysisCatalog.breakdowns.provider.order = providerOrder;
 const skillMeasures: Record<string, AnalysisMeasure> = {
   records: { label: "Evidence records", unit: "records", format: count, op: "count", additive: true, note: "Observed invocations, file loads and app-reported loads. A load does not prove a skill was followed." },
   body: { label: "Saved instruction size", unit: "bytes", format: count, op: "sum", field: "content_bytes", value: "content_bytes", additive: true, where: [{ field: "content_bytes", op: ">", value: "0" }],
-    note: "Body volume sums known positive recorded sizes, including repeated loads; evidence without a recorded size is left out." },
-  conversations: { label: "Conversations reached", unit: "conversations", format: count, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct conversations with skill evidence. A conversation with several skills counts once in each, so groups do not add up to the total." },
+    note: "Saved instruction size sums known positive recorded sizes, including repeated loads; evidence without a recorded size is left out." },
+  conversations: { label: "Conversations with skill evidence", unit: "conversations", format: count, op: "count_distinct", field: "conversation_id", additive: false, note: "Distinct conversations with skill evidence. A conversation with several skills counts once in each, so groups do not add up to the total." },
   projects: projectsReached("holding matching skill evidence"),
   loads: { label: "Distinct file-load calls", unit: "loads", format: count, op: "count_distinct", field: "tool_call_id", additive: false, note: "Distinct tool calls that loaded a skill file; duplicate evidence for one call counts once." },
 };
@@ -98,7 +98,7 @@ export const skillsAnalysisCatalog: AnalysisCatalog = {
   units: {
     conversation: { label: "Conversation", plural: "Conversations", key: "conversation_id", where: present("conversation_id"), breakdowns: { provider: ["provider"], project_name: ["project_name"], ...origin },
       note: "A conversation is one recorded agent conversation with skill evidence; evidence without a conversation is left out." },
-    skill_path: { label: "Skill path in a conversation", plural: "Conversation/path pairs", key: ["conversation_id", "skill_path"], where: [...present("conversation_id"), ...present("skill_path")],
+    skill_path: { label: "Skill path in a conversation", plural: "Skill paths in a conversation", key: ["conversation_id", "skill_path"], where: [...present("conversation_id"), ...present("skill_path")],
       breakdowns: { skill_name: ["skill_name"], provider: ["provider"], project_name: ["project_name"], ...origin },
       note: "A skill path in a conversation is the evidence for one skill file in one recorded conversation, so a conversation loading several skills is one observation under each." },
   },

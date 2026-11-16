@@ -84,7 +84,7 @@ export function summaryEntries(matches: WorkMatches, total: number): SummaryEntr
   let first = true;
   matches.items.forEach((item, index) => {
     if (index) { const count = matches.between[index - 1] ?? 0; entries.push({ type: "gap", count, label: betweenLabel(count) }); }
-    const prefix = item.preview === "first" || item.kind === "first" ? "First ask" : item.preview === "last" || item.kind === "last" ? "Latest response" : "";
+    const prefix = item.preview === "first" || item.kind === "first" ? "First ask" : item.preview === "last" || item.kind === "last" ? "Last reply" : "";
     let label = prefix;
     if (item.kind === "match") { label = `${prefix ? `${prefix} · ` : ""}Match${first ? tally : ""}`; first = false; }
     entries.push({ type: "message", item, label });

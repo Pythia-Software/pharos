@@ -160,7 +160,7 @@ func (s *Server) startIndex(w http.ResponseWriter, body map[string]any) {
 		targets = slices.DeleteFunc(targets, func(target captureTarget) bool { return !needed[target.label()] })
 	}
 	if !s.acquireManualIngest() {
-		writeError(w, errors.New("source indexing is already running"), http.StatusConflict)
+		writeError(w, errors.New("Another capture or index is running. Try again when it finishes."), http.StatusConflict)
 		return
 	}
 	labels := []string{}
@@ -213,7 +213,7 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 	ctx = withOperationForecast(ctx, op)
 	op.add("discovery", "capture-discovery-v1", "Discover captured inputs", workFeatures{}, false)
 	op.add("index", "", "Index captured inputs", workFeatures{}, false)
-	op.add("checkpoint", "checkpoint-v1", "Save the catalog", workFeatures{}, true)
+	op.add("checkpoint", "checkpoint-v1", "Save the library", workFeatures{}, true)
 	addAnalysisForecast(op, false)
 	op.checkpoint("launch")
 	workMeter := &runWorkMeter{server: s, runID: runID, kind: "index", model: "analysis-v1"}

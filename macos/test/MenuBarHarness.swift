@@ -259,6 +259,31 @@ final class MenuFixture: URLProtocol {
         precondition(!whileCreating.noLibrary && whileCreating.activeOperation == "Creating the library")
         precondition(whileCreating.withBrokerOperations([]).noLibrary, "Once it ends, no library again")
         precondition(recovering.withBrokerOperations([]).activeOperation == "Restoring the backup", "An older broker's job still counts")
+        // A service start waiting for a catalog upgrade carries its step and
+        // estimate; ended operations and other ones carry none.
+        let upgrading: [String: Any] = ["app": ["operations": [
+            ["state": "succeeded", "catalog_upgrade": ["step": 1, "steps": 8, "step_name": "Old"]],
+            ["state": "running", "verb": "Starting the library's service", "step": ["name": "Upgrade the library's catalog"],
+             "catalog_upgrade": ["step": 3, "steps": 8, "step_name": "Update request timings", "work": ["Build a new index on tool_calls (2.0M rows)"],
+                                 "started_at": "2026-11-15T03:01:02.134Z", "label": "about 3–6 min left", "basis": "Estimated from earlier upgrades and table sizes"]]]]]
+        var upgradingOperation = ((upgrading["app"] as! [String: Any])["operations"] as! [[String: Any]])
+        var upgradeValue = upgradingOperation[1]["catalog_upgrade"] as! [String: Any]
+        upgradeValue["segments"] = [["name": "Update tables and indexes", "state": "done", "fraction": 0.3, "seconds": 37.4],
+                                    ["name": "Update request timings", "state": "running", "fraction": 0.7]]
+        upgradeValue["fraction_done"] = 0.3
+        upgradingOperation[1]["catalog_upgrade"] = upgradeValue
+        let segmented = CatalogUpgrade.running(["app": ["operations": upgradingOperation]])!
+        precondition(segmented.done == 0.3 && segmented.finishedSteps == 1 && segmented.segments[0].seconds == 37.4 && segmented.segments[1].seconds == nil)
+        precondition(CatalogUpgrade.duration(37.4) == "37 s" && CatalogUpgrade.duration(197) == "3 min 17 s" && CatalogUpgrade.duration(0.3) == "<1 s")
+        let upgrade = CatalogUpgrade.running(upgrading)!
+        precondition(upgrade.segments.isEmpty && upgrade.done == 0, "An older broker's upgrade has no bar")
+        precondition(upgrade.stepLine == "Step 3 of 8: Update request timings" && upgrade.work == ["Build a new index on tool_calls (2.0M rows)"])
+        precondition(upgrade.basis == "Estimated from earlier upgrades and table sizes")
+        let started = upgrade.startedAt!
+        precondition(upgrade.timeLine(at: started.addingTimeInterval(130)) == "about 3–6 min left · 2 min 10 s so far")
+        precondition(CatalogUpgrade.running(creating) == nil && CatalogUpgrade.running(["error": "x"]) == nil)
+        precondition(CatalogUpgrade(["label": "No estimate yet"]).timeLine(at: Date()) == "No estimate yet" && CatalogUpgrade([:]).stepLine == nil)
+        precondition(ManagedLibraryStatus.runningBrokerOperations(upgrading) == ["Upgrade the library's catalog"])
         // The unified activity flag's line comes from the snapshot's words.
         let indexing: [String: Any] = ["eject": ["verdict": "safe-in"], "operations": [
             ["state": "running", "label": "Index changes", "priority": "foreground", "step": ["index": 3, "count": 6, "name": "Claude Code"], "time": ["label": "about 3–6 min"]],
@@ -298,7 +323,7 @@ final class MenuFixture: URLProtocol {
         pump { menu.items.contains { $0.title == "Pharos · Idle" } }
         let indexed = visible.firstIndex { $0.hasPrefix("Indexed ") }!
         precondition(visible[indexed + 1] == "Index changes now")
-        precondition(visible.suffix(2) == ["Eject Archive SSD…", "Quit Pharos"])
+        precondition(visible.suffix(2) == ["Eject Archive SSD", "Quit Pharos"])
         let metrics = visible.filter { ["Words typed", "Tokens used", "Estimated CO₂e", "Estimated API cost", "Last backup", "Library size"].contains($0) }
         precondition(metrics == ["Words typed", "Tokens used", "Estimated API cost", "Estimated CO₂e", "Last backup", "Library size"])
         controller.applyPreferences(["words": false, "tokens": true, "carbon": true])
@@ -313,9 +338,9 @@ final class MenuFixture: URLProtocol {
             precondition(prefs["enabled"] == fixture["enabled"] as! Bool)
             precondition(MenuBarPreferences(prefs.saved).order == prefs.order, "Order must survive the native cache")
         }
-        let shortcuts = [("search", "Search conversations…", "/library"), ("analyze", "Analyze usage…", "/analyze"),
-                         ("optimize", "Optimize…", "/findings"), ("capture", "Capture & index…", "/settings/sync"),
-                         ("health", "Library health & backups…", "/settings"), ("sources", "Manage sources…", "/settings/sources")]
+        let shortcuts = [("search", "Search conversations", "/library"), ("analyze", "Analyze usage", "/analyze"),
+                         ("optimize", "Optimize", "/findings"), ("capture", "Background Processing", "/settings/sync"),
+                         ("health", "Library health", "/settings"), ("sources", "Manage sources", "/settings/sources")]
         precondition(shortcuts.allSatisfy { MenuBarPreferences()[$0.0] } && MenuBarPreferences()["finder"], "Shortcuts default on and remain customizable")
         controller.applyPreferences(["layoutVersion": 2, "order": ["open"] + shortcuts.map { $0.0 } + ["finder", "status", "settings", "quit"]])
         var shortcutOpened = false

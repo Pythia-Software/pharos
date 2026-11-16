@@ -76,6 +76,64 @@ func TestToolCommandSearchIndex(t *testing.T) {
 	}
 	check()
 
+	// A catalog from the previous release has these update triggers without
+	// guards. Opening reinstalls them, so an upsert that rewrites a call with
+	// the same command, program and facts leaves the search rows alone, while
+	// a real change still re-indexes. Removing the call's rows first shows
+	// which updates write them.
+	for _, name := range []string{"tool_command_fts_update", "tool_query_text_update", "tool_query_facts_update", "human_query_text_body_update"} {
+		var body string
+		if err := catalog.DB.QueryRow("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", name).Scan(&body); err != nil {
+			t.Fatal(name, err)
+		}
+		when, begin := strings.Index(body, "WHEN "), strings.Index(body, "BEGIN")
+		if when < 0 || when > begin {
+			t.Fatalf("%s has no guard: %s", name, body)
+		}
+		if _, err := catalog.DB.Exec("DROP TRIGGER " + name + "; " + body[:when] + body[begin:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := catalog.ensureQueryFactTriggers(); err != nil {
+		t.Fatal(err)
+	}
+	var rowID int64
+	if err := catalog.DB.QueryRow("SELECT rowid FROM tool_calls WHERE id='call-3'").Scan(&rowID); err != nil {
+		t.Fatal(err)
+	}
+	searchRows := func() [3]bool {
+		t.Helper()
+		var command, text, facts int
+		if err := catalog.DB.QueryRow(`SELECT
+			(SELECT COUNT(*) FROM tool_command_fts WHERE tool_command_fts MATCH (SELECT '"'||replace(command,'"','""')||'"' FROM tool_calls WHERE rowid=?1) AND rowid=?1),
+			(SELECT COUNT(*) FROM tool_query_text_fts WHERE tool_query_text_fts MATCH (SELECT '"'||replace(qt_lower(command),'"','""')||'"' FROM tool_calls WHERE rowid=?1) AND rowid=?1),
+			(SELECT COUNT(*) FROM tool_query_facts WHERE rowid=?1)`, rowID).Scan(&command, &text, &facts); err != nil {
+			t.Fatal(err)
+		}
+		return [3]bool{command == 1, text == 1, facts == 1}
+	}
+	if got := searchRows(); got != [3]bool{true, true, true} {
+		t.Fatalf("call-3 not indexed: %v", got)
+	}
+	if _, err := catalog.DB.Exec("DELETE FROM tool_command_fts WHERE rowid=?1; DELETE FROM tool_query_text_fts WHERE rowid=?1; DELETE FROM tool_query_facts WHERE rowid=?1", rowID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.DB.Exec(`UPDATE tool_calls SET command=command,program=program,subcommand=subcommand,id=id,workspace_id=workspace_id,
+		started_at=started_at,duration_ms=duration_ms,provider=provider,tool_category=tool_category,command_category=command_category,
+		tool_name=tool_name,mcp_server=mcp_server WHERE rowid=?`, rowID); err != nil {
+		t.Fatal(err)
+	}
+	if got := searchRows(); got != [3]bool{} {
+		t.Fatalf("unchanged rewrite re-indexed call-3: %v", got)
+	}
+	if _, err := catalog.DB.Exec("UPDATE tool_calls SET command='git status --short',program='git',subcommand='status',duration_ms=7 WHERE rowid=?", rowID); err != nil {
+		t.Fatal(err)
+	}
+	if got := searchRows(); got != [3]bool{true, true, true} {
+		t.Fatalf("changed call-3 not re-indexed: %v", got)
+	}
+	check()
+
 	// Simulate upgrading a catalog whose calls predate the index.
 	if _, err := catalog.DB.Exec(`DELETE FROM meta WHERE key IN ('tool_command_fts_version','tool_command_fts_cursor')`); err != nil {
 		t.Fatal(err)
@@ -281,8 +339,38 @@ func TestQueryTextIndexesMatchTypedSubstringFilters(t *testing.T) {
 					t.Fatalf("scalar projection drift: %d, %v", mismatched, err)
 				}
 			} else {
+				// Rewriting a message with its own text leaves its search row
+				// alone (it was removed here to show that); new text replaces it.
+				var rowID int64
+				if err := c.DB.QueryRow("SELECT rowid FROM message_authorship WHERE message_id='a'").Scan(&rowID); err != nil {
+					t.Fatal(err)
+				}
+				indexed := func(needle string) int {
+					t.Helper()
+					var n int
+					if err := c.DB.QueryRow(`SELECT COUNT(*) FROM human_query_text_fts WHERE human_query_text_fts MATCH ? AND rowid=?`, `"`+needle+`"`, rowID).Scan(&n); err != nil {
+						t.Fatal(err)
+					}
+					return n
+				}
+				var original string
+				if err := c.DB.QueryRow("SELECT qt_lower(text) FROM messages WHERE id='a'").Scan(&original); err != nil {
+					t.Fatal(err)
+				}
+				if indexed(original) != 1 {
+					t.Fatal("message a not indexed")
+				}
+				if _, err := c.DB.Exec(`DELETE FROM human_query_text_fts WHERE rowid=?; UPDATE messages SET text=text WHERE id='a'`, rowID); err != nil {
+					t.Fatal(err)
+				}
+				if indexed(original) != 0 {
+					t.Fatal("unchanged message text re-indexed")
+				}
 				if _, err := c.DB.Exec(`UPDATE messages SET text='UPDATED test' WHERE id='a'; DELETE FROM message_authorship WHERE message_id='b'`); err != nil {
 					t.Fatal(err)
+				}
+				if indexed("updated test") != 1 {
+					t.Fatal("changed message text not re-indexed")
 				}
 			}
 			check(true)

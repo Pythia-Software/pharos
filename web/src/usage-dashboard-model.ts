@@ -14,7 +14,7 @@ export function readDashboardQuery(params: URLSearchParams, fallback: QueryState
     const query = decodeQueryStrict(token);
     if (query && !query.grouping) return { query, error: "" };
   } catch { /* A broken filter link must not broaden the requested population. */ }
-  return { query: fallback, error: "This dashboard link has invalid filters. Open the legacy view or choose another dashboard." };
+  return { query: fallback, error: "This dashboard link has invalid filters. Choose another dashboard to reset it." };
 }
 
 // A dashboard link as the page opens it: its chart over the dashboard's
@@ -103,9 +103,9 @@ export function parallelismSelectionQuery(selection: ConcurrencySelection): Quer
     ...settings.repository ? [{ field: "project_name", op: "=" as const, value: settings.repository }] : [],
     ...selected ? [{ field: "unit_id", op: "=" as const, value: settings.counting === "agent" ? selected.root_conversation_id || selected.conversation_id : selected.workspace_id }] : [],
   ], aggregations: [
-    { id: "active_units", op: "sum", field: "unit_hours", groupBy: ["project_name"], label: "Active unit hours" },
-    { id: "wall_time", op: "sum", field: "elapsed_hours", groupBy: ["project_name"], label: "Threaded wall hours" },
-    { id: "parallel_time", op: "sum", field: "parallel_elapsed_hours", groupBy: ["project_name"], label: "Parallel threaded wall hours" },
+    { id: "active_units", op: "sum", field: "unit_hours", groupBy: ["project_name"], label: "Unit hours" },
+    { id: "wall_time", op: "sum", field: "elapsed_hours", groupBy: ["project_name"], label: "Elapsed hours" },
+    { id: "parallel_time", op: "sum", field: "parallel_elapsed_hours", groupBy: ["project_name"], label: "Parallel elapsed hours" },
   ] };
 }
 
@@ -153,14 +153,14 @@ export type AuthorshipStatus = {
 export function authorshipStatusText(status: AuthorshipStatus): string {
   const pending = status.pending_messages ?? 0;
   const complete = status.complete_at === undefined ? status.built_at : status.complete_at;
-  const parts = [status.error ? `Writing update failed: ${status.error}`
+  const parts = [status.error ? `Could not update writing estimates: ${status.error}`
     : status.refining ? "Refining writing history… Recent estimates may change."
     : status.running ? "Updating writing estimates…"
     : pending || status.stale || status.deferred_messages ? "Writing estimates are catching up."
     : complete ? `Writing estimates current as of ${new Date(complete).toLocaleString()}.`
     : "Waiting for writing estimates."];
   if (pending) {
-    parts.push(`${pending.toLocaleString()} messages await an estimate.`);
+    parts.push(`${pending.toLocaleString()} ${pending === 1 ? "message awaits" : "messages await"} an estimate.`);
     if (status.pending_recent_messages !== undefined && status.pending_historical_messages !== undefined) {
       parts.push(`${status.pending_recent_messages.toLocaleString()} recent; ${status.pending_historical_messages.toLocaleString()} historical.`);
     }
@@ -168,8 +168,8 @@ export function authorshipStatusText(status: AuthorshipStatus): string {
     if (status.oldest_pending_sent_at) parts.push(`Oldest pending message sent ${new Date(status.oldest_pending_sent_at).toLocaleString()}.`);
     if (status.complete_at) parts.push(`Last caught up ${new Date(status.complete_at).toLocaleString()}.`);
   }
-  if (status.provisional_messages) parts.push(`${status.provisional_messages.toLocaleString()} messages have provisional estimates.`);
-  if (status.deferred_messages) parts.push(`${status.deferred_messages.toLocaleString()} large messages await overnight refinement.`);
+  if (status.provisional_messages) parts.push(`${status.provisional_messages.toLocaleString()} ${status.provisional_messages === 1 ? "message has a provisional estimate" : "messages have provisional estimates"}.`);
+  if (status.deferred_messages) parts.push(`${status.deferred_messages.toLocaleString()} ${status.deferred_messages === 1 ? "large message awaits" : "large messages await"} overnight refinement.`);
   if (status.refined_at) parts.push(`History refined ${new Date(status.refined_at).toLocaleString()}.`);
   if (status.refinement_pending) parts.push("Historical refinement is scheduled overnight.");
   return parts.join(" ");

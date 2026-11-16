@@ -23,7 +23,7 @@ test('dollar displays share cents below $100 and whole dollars at and above it',
   ]) {
     for (const format of formats) assert.equal(format(value), expected, String(value));
     const title = cellTitle({ value, quality: 'observed', known: 1, total: 1 }, { unit: 'usd', definition: 'API equivalent' });
-    assert.match(title, /^API equivalent\nobserved · 1\/1 retained coverage/, 'hover explains the metric and coverage');
+    assert.match(title, /^API equivalent\nObserved · 1\/1 retained coverage/, 'hover explains the metric and coverage');
   }
 });
 

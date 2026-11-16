@@ -8,8 +8,8 @@ views does not start inference. Configure labeling in
 ## Dashboard and query pages
 
 **Analyze → Message Labels** (`/analyze?analyze_topic=labels`) offers
-**Over time - line**, **Over time - bar**, and **Compare groups**. Charts always
-break down by Sender / Receiver, General Label or Specific Label. Repository,
+**Over time · line**, **Over time · bar**, and **Compare groups**. Charts always
+break down by Sender / receiver, General label or Specific label. Repository,
 generation model, text source and coverage remain filters. The shared chart
 components provide brushing, smoothing, log scales, legend selection, pinned
 inspection and supporting-query links. The selected line/bar form survives
@@ -139,6 +139,17 @@ messages and at most 128 conversations, and resumes after restart. It adjusts
 the message budget toward 250 ms of catalog-writer time; one conversation stays
 atomic and can exceed that target. Edits to messages, authorship, accepted labels, coverage or taxonomy
 invalidate affected conversations. Titles and repositories are read at source.
+
+The facts hold each conversation's labels as the ledger stores them, whether
+or not they are current. Whether labels are pending is decided when a query
+reads: a conversation with a label dirty mark (`message_labels_dirty`) or
+unmarked execution changes is left out of the stored rows and projected live,
+where its messages read as not labeled. Marking a conversation dirty, and a
+label rebuild that rewrites none of its labels, therefore queue no facts; only
+a label row that is inserted, changed or deleted does, along with a
+conversation's first build. Opening a catalog an earlier build maintained
+queues the conversations whose marks stand at that moment, once, because that
+build stored them as not labeled.
 
 Preparation reads a consistent snapshot into connection-local temporary tables
 without holding the catalog writer. A conversation-leading partial index covers

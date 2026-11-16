@@ -394,12 +394,9 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 .mcp-history .mcp-card-heading { margin: 0 0 12px; }
 .mcp-history .usage-presets { margin: 2px 0 10px; }
 .mcp-detail-button { padding: 3px 8px; border-radius: 4px; cursor: pointer; }
-.mcp-dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: #1118; }
-.mcp-dialog { width: min(680px, 100%); max-height: min(80vh, 700px); overflow: auto; padding: 22px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 20px 70px #0003; }
+.mcp-dialog { width: min(680px, 100%); max-height: min(80vh, 700px); overflow: auto; padding: 22px; }
 .mcp-dialog h3 { margin: 18px 0 7px; font-size: var(--fs-md); }
 .mcp-dialog .mcp-code { max-height: 240px; }
-dialog.mcp-dialog { color: var(--ink); }
-dialog.mcp-dialog::backdrop { background: #1118; }
 .mcp-metrics { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 10px; margin: 17px 0; }
 .mcp-metric { min-width: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 5px; }
 .mcp-metric span,.mcp-metric strong { display: block; }

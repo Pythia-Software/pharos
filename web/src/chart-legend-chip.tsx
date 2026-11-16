@@ -110,8 +110,8 @@ export function ChartLegendChip({ item, active, dimmed, selectionActive, onActio
   const options = legendMenuItems(visibleCount ?? (dimmed ? 0 : 1), hiddenCount ?? (dimmed ? 1 : 0), selectionActive);
   const category = groupSize !== undefined, name = category ? `${item.label} category` : item.label;
   const marker = swatch === undefined ? !category ? <span className="usage-swatch" style={{ background: item.color }} /> : null : swatch;
-  return <LegendMenu name={name} label={item.label} menuLabel={`Filter ${name}`} title="Filter this series"
-    heading={<>{marker}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'label' : 'labels'}` : ''}</>}
+  return <LegendMenu name={name} label={item.label} menuLabel={`Show or hide ${name}`} title="Show or hide this series"
+    heading={<>{marker}{item.label}{category ? ` · ${groupSize} ${groupSize === 1 ? 'value' : 'values'}` : ''}</>}
     marker={marker} suffix={suffix} active={active} dimmed={dimmed} mixed={mixed} category={category}
     iconOnly={iconOnly} description={description} readOnly={readOnly} onActivate={onActivate}>
     {choose => <>{options.map(option => <React.Fragment key={option.action}>

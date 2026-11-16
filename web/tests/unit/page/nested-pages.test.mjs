@@ -40,7 +40,7 @@ test("the app tree resolves global, nested, and legacy destinations without chan
   const settings = [{ id: '/settings', href: '/settings', label: 'Library health' }, { id: '/settings/sources', href: '/settings/sources', label: 'Sources' }];
   const sections = appSections(settings, params);
   const active = appLocation('/analyze', params);
-  assert.equal(appLocationLabel(sections, active).page.label, 'Token usage');
+  assert.equal(appLocationLabel(sections, active).page.label, 'Daily usage by agent session');
   const link = new URL(appLocationLabel(sections, active).page.href, 'https://pharos.test');
   assert.deepEqual(decodeQueryStrict(link.searchParams.get('q_usage')).where, [], 'dataset navigation opens the complete source');
   assert.equal(params.toString(), before, 'building navigation never mutates the current URL');
@@ -50,6 +50,9 @@ test("the app tree resolves global, nested, and legacy destinations without chan
   assert.equal(cards.section.id, 'home');
   assert.equal(cards.page.label, 'Card Library');
   assert.deepEqual(cards.section.pages, [], 'the library is reached through the catalog, without adding a Home sidebar');
+  const ask = appLocationLabel(sections, appLocation('/ask', new URLSearchParams()));
+  assert.equal(ask.section.id, 'home');
+  assert.equal(ask.page.label, 'Ask Pharos', 'the full-screen Ask page is named, not shown as Home');
   for (const [path, query, current] of [
     ['/analyze', 'analyze_view=writing', 'dashboards:human'],
     ['/analyze', 'analyze_view=writing&writing=messages', 'query:writing_messages'],

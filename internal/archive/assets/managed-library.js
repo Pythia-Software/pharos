@@ -11,7 +11,7 @@ function pharosLibraryProposal(name, parent, storage) {
     throw Error('Enter a library name without slashes; shorten it if needed.');
   if (!['mac', 'ssd'].includes(storage)) throw Error('Choose where to store your library.');
   if (storage === 'ssd' && !parent) throw Error('Choose a parent folder on the external drive.');
-  if (parent && !parent.startsWith('/') && !parent.startsWith('~/')) throw Error('Choose an absolute folder path, or one starting with ~/.');
+  if (parent && !parent.startsWith('/') && !parent.startsWith('~/')) throw Error('Enter a full folder path, starting with / or ~/.');
   return {name, path: parent ? parent.replace(/\/+$/, '') + '/' + name : '', location: storage};
 }
 // What a library does besides holding history, in the words its card shows.
@@ -162,7 +162,7 @@ async function changePharosLibrary(operation, {flush, navigate, destination = '/
     const external = (library.config || '').startsWith('/Volumes/');
     const tag = document.createElement('span'); tag.className = 'tag';
     const where = external ? 'External drive' : 'This Mac';
-    tag.textContent = selected ? 'Connected · ' + where : !library.available ? 'Not connected · attach its drive' : where;
+    tag.textContent = selected ? 'Connected · ' + where : !library.available ? (external ? 'Not connected · attach its drive' : 'Unavailable') : where;
     if (renaming === library.id) heading.append(renameForm(library));
     else {
       const title = document.createElement('h3'); title.textContent = library.name;
@@ -227,7 +227,7 @@ async function changePharosLibrary(operation, {flush, navigate, destination = '/
     $('delivery-form').hidden = !open;
     $('delivery').textContent = delivering ? 'Save changes' : 'Start delivery';
     $('delivery-summary').textContent = delivering ? 'On: captures into ' + nameOf(state.delivery_source) + ' and delivers to ' + nameOf(state.delivery_target) + ' whenever it’s connected.'
-      : open ? 'Choose the libraries, then start delivery.' : 'Off. Keep capturing on this Mac while your archive drive is away.';
+      : open ? 'Choose the libraries, then start delivery.' : 'Off. Keep capturing on this Mac while your library’s drive is away.';
   }
   function options(id, libraries, preferred) {
     const select = $(id), kept = select.value;
@@ -303,8 +303,9 @@ async function changePharosLibrary(operation, {flush, navigate, destination = '/
   };
   for (const button of page.querySelectorAll('[data-library-pick]')) button.onclick = async () => {
     await action(async () => {
-      const result = await call('choose-folder', {});
       const target = button.dataset.libraryPick;
+      const purpose = {'library-settings-backup': 'backup', 'library-settings-recover-path': 'restore'}[target];
+      const result = await call('choose-folder', purpose ? {purpose} : {});
       if (result.path) document.getElementById(target).value = result.path + (target === 'library-settings-recover-path' ? '/Recovered Library' : '');
       proposal();
     });
@@ -374,7 +375,7 @@ async function changePharosLibrary(operation, {flush, navigate, destination = '/
     void action(async () => {
       await call('delivery', {source: '', target: ''});
       deliveryOpen = false;
-      notice('Delivery is off. Pending history stays where it is.');
+      notice('Delivery is off. History not yet delivered stays where it is.');
       await refresh();
     });
   };

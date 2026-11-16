@@ -77,6 +77,10 @@ type Config struct {
 	// AgentEvents configures the agent events pass (docs/agent-events.md);
 	// it runs on the labeler's worker and budget.
 	AgentEvents AgentEventSettings
+	// PullRequestReviews is whether Pharos asks forges about workspaces'
+	// pull requests (pull_request_reviews.go): off unless
+	// pull_request_reviews_enabled is set.
+	PullRequestReviews bool
 	// Engagement configures the engagement labels preview
 	// (docs/engagement-labels.md): off unless engagement_enabled is set.
 	Engagement EngagementSettings
@@ -224,6 +228,7 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 	config.AgentEvents = agentEventSettingsFrom(root, base)
 	config.Labels = config.AgentEvents.withPeer(config.Labels)
 	config.Engagement = engagementSettingsFrom(root, base)
+	config.PullRequestReviews = boolValue(root, "pull_request_reviews_enabled", false)
 	// The engine is a comparison switch chosen at process start, never stored
 	// with a library: a drive opened by another binary or Mac runs classic
 	// unless that process asks otherwise. Anything but "scheduled" is classic.
@@ -449,7 +454,7 @@ func sourceBlockLines(path, name string) (lines []string, start, end int, err er
 		}
 	}
 	if start < 0 {
-		return nil, 0, 0, fmt.Errorf("configured source not found: %s", name)
+		return nil, 0, 0, fmt.Errorf("No source named “%s” is set up for this Mac.", name)
 	}
 	return lines, start, end, nil
 }

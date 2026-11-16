@@ -9,7 +9,7 @@ import tracker from "../../../../docs/homepage-query-cards.json";
 import { queryRecipes, supportsToday, instantiateRecipe, loadQueryPreview, clearPreviewCache, suggestionWindowLabel } from "../../../src/curiosity-data";
 import { queryFromURL, queryHasTimeFilter, queryURL, resolveRollingQuery, rollingQueryMatches } from "../../../src/query-links";
 import { migrateSavedQueries, readBookmarks, removeBookmark, savedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
-import { cardChart, cardCoverQuery, cardGroupsFor, defaultCardCover, withCardGroups } from "../../../src/card-cover";
+import { cardKind, cardChart, cardCoverQuery, cardGroupsFor, defaultCardCover, withCardGroups } from "../../../src/card-cover";
 import { wishlistCardRecipes } from "../../../src/wishlist-card-recipes";
 import { updateQueryWindowURL } from "../../../src/query-links";
 import { parallelismSelectionQuery, readDashboardQuery, readDashboardLink } from "../../../src/usage-dashboard-model";
@@ -115,7 +115,7 @@ test("All time saved preview copy follows its source query window", t => {
     assert.equal(job.options.window, undefined);
     assert.equal(job.options.recipe.window, undefined);
     assert.equal(job.options.recipe.title, "All-time writing");
-    assert.equal(job.options.recipe.description, "Human-written words sent across all time, by the day they were sent; provisional estimates are shaded lighter until the daily refinement.");
+    assert.equal(job.options.recipe.description, "Human-written words sent across all time, by the day they were sent; estimated counts are shaded lighter until Pharos refines them each day.");
     assert.equal(queryHasTimeFilter(job.query, recipe.field), false);
     const restored = savedCardPreviewJob(updateQueryWindowURL(job.options.url, days), schemas[recipe.dataset]);
     assert.equal(restored.options.recipe.title, item.title);
@@ -130,10 +130,17 @@ test("All time saved preview copy follows its source query window", t => {
   const trend = queryRecipes.find(recipe => recipe.id === "token-volume-trend");
   const all = savedCardPreviewJob(updateQueryWindowURL(instantiateRecipe(trend, 180, clock).url, null), schemas.usage);
   assert.equal(all.options.recipe.description, "Daily tokens by provider across all time, averaged over seven calendar days including idle days.");
+  // A sparkline with its own lookback always draws its last 30 days, so its
+  // text names that fixed history whatever window the card was opened at.
+  for (const id of ["human-messages-per-day", "human-conversations-per-day", "session-failure-trend", "machine-call-trend", "machine-latency-trend"]) {
+    const fixed = queryRecipes.find(recipe => recipe.id === id);
+    assert.ok(fixed.trend.lookback, id);
+    for (const days of [7, 30, 90, null]) assert.match(instantiateRecipe(fixed, days, clock).description, /seven complete days, across the last 30 days\.$/, `${id} at ${days}`);
+  }
   const volume = queryRecipes.find(recipe => recipe.id === "human-word-total");
   assert.equal(savedCardPreviewJob(updateQueryWindowURL(instantiateRecipe(volume, 7, clock).url, null), schemas[volume.dataset]).options.recipe.title, "All-time writing volume over time");
   const cumulative = queryRecipes.find(recipe => recipe.id === "cumulative-api-cost");
-  assert.equal(savedCardPreviewJob(updateQueryWindowURL(instantiateRecipe(cumulative, 365, clock).url, null), schemas.usage).options.recipe.description, "API-equivalent cost accumulated from the start of recorded history, split by provider; fully priced facts only.");
+  assert.equal(savedCardPreviewJob(updateQueryWindowURL(instantiateRecipe(cumulative, 365, clock).url, null), schemas.usage).options.recipe.description, "API cost accumulated from the start of recorded history, split by provider; fully priced usage only.");
   const custom = instantiateRecipe({ ...trend, title: "My workload", description: "Keep my wording." }, 7, clock);
   const customAll = savedCardPreviewJob(updateQueryWindowURL(custom.url, null), schemas.usage);
   assert.equal(customAll.options.recipe.title, custom.title);
@@ -614,6 +621,8 @@ test("eligible Today cards preserve calendar intent through saved windows and re
   for (const recipe of queryRecipes.filter(supportsToday)) {
     const card = instantiateRecipe(recipe, "today", clock);
     assert.equal(suggestionWindowLabel(card), "Today", recipe.id);
+    // A trend's trailing period becomes the day itself, not "trailing today’s period".
+    for (const text of [card.title, card.description]) assert.doesNotMatch(text, /trailing today|today’s period|today, across/, recipe.id);
     const spec = queryFromURL(card.url, card.query);
     assert.equal(spec.window.mode, "today", recipe.id);
     const tomorrow = new Date(clock); tomorrow.setDate(tomorrow.getDate() + 1);
@@ -762,6 +771,14 @@ test("saved cards migrate to the full dashboard mapping while preserving their s
   assert.deepEqual(saved.query, original.query);
   assert.deepEqual(saved.cover, original.cover);
   migrateSavedQueries(); assert.deepEqual(readBookmarks(), [saved], "migration is idempotent");
+  // A card saved before its recipe gained a breakdown key keeps its saved
+  // grouping; the cover must not group the saved result by the new key.
+  const words = queryRecipes.find(recipe => recipe.id === "human-words"), current = instantiateRecipe(words, 7, clock).query;
+  assert.ok(current.grouping.keys.some(key => core.groupKeyFields([key])[0] === "estimate"));
+  const older = { ...current, grouping: { ...current.grouping, keys: current.grouping.keys.filter(key => core.groupKeyFields([key])[0] !== "estimate") } };
+  const [metric] = cardCoverQuery(older, words, defaultCardCover(words)).query.aggregations;
+  assert.deepEqual(metric.groupBy, core.groupKeyFields(older.grouping.keys));
+  assert.deepEqual(cardCoverQuery(current, words, defaultCardCover(words)).query.aggregations[0].groupBy, core.groupKeyFields(current.grouping.keys));
 });
 
 
@@ -816,4 +833,26 @@ test("direct older card links resolve durable sources and report unavailable sou
   await assert.rejects(resolveCardDashboardURL(legacy.href));
   legacy.searchParams.set(`q_${recipe.dataset}`, "invalid-inline-query");
   await assert.rejects(resolveCardDashboardURL(legacy.href));
+});
+
+
+test("card topics follow the measured subject rather than the source records", () => {
+  const groups = {
+    tools: ["session-repository-verification", "session-length-tool-calls", "session-autonomy", "session-autonomy-trend", "batched-tools", "machine-time", "machine-activities", "machine-operations", "machine-call-trend", "machine-latency-trend"],
+    errors: ["session-model-failure-rates", "session-kind-failure-rates", "session-failure-trend"],
+    context: ["session-context-trend", "session-model-context"],
+    cost: ["origin-cost-channel", "origin-cost-machine_id", "origin-cost-execution_machine_id"],
+    delegation: ["largest-subagent-depth", "largest-subagent-weight", "session-delegation-count"],
+    human: ["human-labels-trend"], thinking: ["thinking-labels-trend"],
+    sessions: ["session-length-mix", "session-archetype-mix", "session-count-trend"],
+  };
+  for (const [category, ids] of Object.entries(groups)) for (const id of ids) {
+    assert.equal(queryRecipes.find(recipe => recipe.id === id)?.category, category, id);
+  }
+  const example = queryRecipes.find(recipe => recipe.id === "session-length-tool-calls");
+  assert.equal(cardKind(example), "Heatmap");
+  assert.equal(example.destination.topic, "tool_use");
+  const item = instantiateRecipe(example, 30), params = new URL(item.url, "http://localhost").searchParams;
+  const state = normalizeAnalysis(analysisCatalogs.tool_use, JSON.parse(params.get("analyze_chart")));
+  assert.deepEqual([state.metric, state.split, state.display, state.rollingPeriods], ["tool_calls", "length_band", "heatmap", 7]);
 });

@@ -73,13 +73,13 @@ import {timelinePreviewText,trimTimelineSnippet} from '../../../src/timeline-pre
 import {nativeTimelineLabels} from '../../../src/label-timeline-overlay.tsx';
 
 import {timelineKeyContent,timelineModeGroups,timelineLegendWindow,timelineLegendDomains,timelineLegendCounts} from '../../../src/timeline-legend.tsx';
-import {timelineValueVisible,timelineSectionVisible,timelineEventVisible,updateTimelineVisibility,visibleTimelineTree} from '../../../src/timeline-visibility';
+import {timelineValueVisible,timelineSectionVisible,timelineEventVisible,updateTimelineVisibility,visibleTimelineTree,visibleWaitMarks,timelineWaitsVisible,timelineWaitsSkip} from '../../../src/timeline-visibility';
 
 import {workflowSessions} from '../../../src/conversation-labels.ts';
 
 import {conversationRibbon,fingerprintMessageAt} from '../../../src/conversation-fingerprint-model.ts';
 
-import {ribbonMarkMessage,agentEventClock,textTime,sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,toolVisualEnd,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
+import {ribbonMarkMessage,agentEventClock,textTime,sessionRibbonTree,ribbonCounts,ribbonEventCount,ribbonHits,ribbonLayers,ribbonToolPlacement,toolVisualEnd,harnessWaitText,ribbonPointerHits,ribbonSourceURL} from '../../../src/label-session-ribbon-model.ts';
 import {overlapping} from '../../../src/ribbon-marks';
 
 import {labelIntervals,recordedToolMarks,activityCategory} from '../../../src/label-session-ribbon-model.ts';
@@ -149,7 +149,7 @@ test('timeline legend keeps specific labels with their parent modes without dupl
  assert.equal(byID('P.request').direct,true);assert.equal(byID('C.report').direct,false);
 });
 
-test('timeline Show and Hide preserve independent hidden values and Show All restores the Key',()=>{
+test('timeline Show and Hide preserve independent hidden values and Show all restores the Key',()=>{
  let state=updateTimelineVisibility({},'events',['choices'],'hide');
  state=updateTimelineVisibility(state,'tools',['error'],'hide');
  assert.equal(timelineValueVisible(state,'events','choices'),false);
@@ -328,6 +328,45 @@ test('tool dots take free lanes for overlapping calls, hit-test by position and 
  assert.equal(guide.x1-guide.x,50);
  const guideHit=ribbonPointerHits(visualItems,3.5,0,{x:35,y:guide.y},[{...guide,ids:[guide.id]}]);
  assert.equal(guideHit.items[0].mark.end_known,false);
+ // A harness wait reaches its recorded end; its observation spans the wait,
+ // so a window that holds only the wait still draws it. One whose end was
+ // not recorded gets the guide after its launch.
+ const wait={...known,start:2000,end:2003,name:'Bash',tool_id:'wait',wait_kind:'background_command',wait_end:9000,wait_status:'completed'};
+ assert.equal(toolVisualEnd(wait,10000),9000);
+ assert.equal(toolVisualEnd({...wait,wait_end:null},10000),7003);
+ assert.equal(sessionRibbonTree([],[wait],[],[],[5000,6000]).items[0].end,9000);
+ assert.deepEqual(sessionRibbonTree([],[{...wait,wait_end:null}],[],[],[5000,6000]).items,[]);
+ assert.equal(harnessWaitText({...wait,start:0,wait_end:43*60000}),'Background command · waited 43m · completed');
+ // Rounds to whole minutes before splitting off hours.
+ assert.deepEqual([59_600,59*60000+40000,119*60000+40000,3_600_000].map(ms=>harnessWaitText({...wait,start:0,wait_end:ms}).split(' · ')[1]),['waited 1m','waited 1h 0m','waited 2h 0m','waited 1h 0m']);
+ assert.equal(harnessWaitText({...wait,wait_kind:'monitor',wait_end:null,wait_status:'',wait_events:2}),'Monitor watch · end not recorded · 2 events');
+ assert.equal(harnessWaitText(known),'');
+ // The Key lists machine waits as a Tool actions chip. Hiding it leaves each
+ // launch, so a window that holds only the wait draws nothing.
+ const content=timelineKeyContent({messages:[],origins:[],tools:['run','wait'],unknownTools:[],waitTools:['run'],error:false});
+ const domains=timelineLegendDomains(content);
+ assert.deepEqual([domains.tools,domains.waits],[['run','wait'],['machine_wait']],'Machine wait is its own choice beside the Wait call category');
+ const hidden=updateTimelineVisibility({},'waits',['machine_wait'],'hide');
+ assert.equal(timelineWaitsVisible({}),true);assert.equal(timelineWaitsVisible(hidden),false);
+ assert.equal(timelineValueVisible(hidden,'tools','wait'),true,'hiding Machine wait keeps wait calls');
+ assert.equal(timelineWaitsVisible(updateTimelineVisibility(hidden,'waits',['machine_wait'],'toggle')),true,'a click flips it back');
+ // Category choices never touch machine waits or Skip machine waits.
+ for(const [values,action] of [[['wait'],'hide'],[['run'],'only'],[['run'],'toggle'],[['run','wait'],'exclude']]){
+  const next=updateTimelineVisibility({},'tools',values,action);
+  assert.equal(timelineWaitsVisible(next),true,`${action} ${values}`);assert.equal(timelineWaitsSkip({},next,'tools',values),null);
+ }
+ assert.equal(timelineWaitsSkip({},hidden,'waits',['machine_wait']),true,'hiding Machine wait skips waits');
+ assert.equal(timelineWaitsSkip(hidden,{},'waits',['machine_wait']),false,'showing it again stops skipping');
+ assert.equal(timelineWaitsSkip(hidden,updateTimelineVisibility(hidden,'tools',['run'],'clear'),'tools',['run']),null,'Show all keeps the checkbox');
+ const noTools=updateTimelineVisibility({},'sections',['tools'],'hide');
+ assert.equal(timelineWaitsVisible(noTools),false,'hiding Tool actions hides their waits');
+ assert.equal(timelineWaitsSkip({},noTools,'sections',['tools']),true);
+ assert.equal(timelineWaitsVisible(updateTimelineVisibility(noTools,'waits',['machine_wait'],'show')),true,'showing Machine wait shows its section');
+ const [stripped]=visibleWaitMarks([wait],hidden);
+ assert.equal(stripped.wait_kind,undefined);assert.equal(stripped.end,wait.end);
+ assert.equal(visibleWaitMarks([wait],{})[0],wait);
+ assert.deepEqual(sessionRibbonTree([],visibleWaitMarks([wait],hidden),[],[],[5000,6000]).items,[]);
+ assert.equal(timelineValueVisible(hidden,'tools','run'),true,'the launch keeps its category');
 });
 
 test('compressed fingerprint segments preserve every original message for informative inspection',()=>{
@@ -433,7 +472,7 @@ test('Caller origin shares preserve mixed text and use recipient observations as
  assert.deepEqual(authorshipMix(prompt),[{category:'typed',bytes:40},{category:'quoted',bytes:60}]);
 });
 
-test('Caller text positions retain repeated origins and safely normalize missing or invalid composition',()=>{
+test('Text source positions retain repeated origins and safely normalize missing or invalid composition',()=>{
  const prompt=message('mixed','P.request',{authorship:[{category:'typed',bytes:2},{category:'quoted',bytes:6},{category:'typed',bytes:2},{category:'pasted',bytes:NaN},{category:'pasted',bytes:-1}]});
  assert.deepEqual(authorshipSegments(prompt).map(part=>[part.category,part.start,part.end]),[['typed',0,.2],['quoted',.2,.8],['typed',.8,1]]);
  assert.deepEqual(authorshipSegments(message('unknown','P.request')),[{category:'unknown',bytes:1,start:0,end:1}]);
@@ -515,7 +554,7 @@ test('every timeline builds its key the same way from what its ribbons draw',()=
  const drawn=timelineLegendWindow([{messages:[message('a','C.report.finding',{at:at(0)})],marks}],[0,100]);
  const human=[{id:'tone',name:'Tone',className:'eng-tone'}],content=timelineKeyContent(drawn,{human});
  assert.deepEqual(Object.entries(content.tools),[['run','Run / build / test'],['custom','custom']],'known tool actions keep the Key\'s order; an unknown category is named as recorded');
- assert.deepEqual(timelineLegendDomains(content),{modes:['C.report.finding'],events:[],tools:['run','custom','error'],origins:[],human:['tone']});
+ assert.deepEqual(timelineLegendDomains(content),{modes:['C.report.finding'],events:[],tools:['run','custom','error'],waits:[],origins:[],human:['tone']});
  assert.deepEqual(content.unknownTools,['error']);
  assert.deepEqual(timelineLegendDomains(timelineKeyContent({...drawn,tools:['read','run','git']})).tools,['read','run','git','error']);
 });
@@ -650,7 +689,7 @@ test('agent events sit at their sentence\'s share of the message span, as messag
 test('a ribbon reports events left out for changed evidence apart from labels still being produced',()=>{
  assert.deepEqual(messageLabelRibbonNotes({truncated:false,pending:false,events_pending:0}),[]);
  assert.deepEqual(messageLabelRibbonNotes({events_pending:2}).map(n=>n.badge),['Events pending']);
- assert.match(messageLabelRibbonNotes({events_pending:1})[0].note,/^Events for 1 conversation are left out until they are rebuilt/);
+ assert.match(messageLabelRibbonNotes({events_pending:1})[0].note,/^Agent events for 1 conversation are left out until they are updated after a change$/);
  assert.deepEqual(messageLabelRibbonNotes({pending:true}).map(n=>n.badge),['Labeling']);
  assert.deepEqual(messageLabelRibbonNotes({truncated:true,pending:true,events_pending:3}).map(n=>n.badge),['Sample','Labeling','Events pending']);
 });

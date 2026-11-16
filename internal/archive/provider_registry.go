@@ -161,7 +161,7 @@ func init() {
 		{
 			Kind: "claude", DisplayName: "Claude Code", Summary: "Conversations from the Claude Code app and CLI.", FolderHint: "The Claude configuration folder holding projects (usually ~/.claude), or its projects folder.", Instructions: "~/.claude/CLAUDE.md", Mutation: "retrieval-only", Automatic: true, Setup: 1, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd git_branch model message_tokens tool_calls tool_results reasoning timestamps subagents harness_version", Varies: "effort speed title",
-				Notes: map[string]string{"effort": "When the transcript records it.", "speed": "When the transcript records the request's speed or service tier.", "title": "When Claude Code named the session."}},
+				Notes: map[string]string{"effort": "When the transcript records it.", "speed": "When the transcript records the request’s speed or service tier.", "title": "When Claude Code named the session."}},
 			New:  func(base baseAdapter) Adapter { return &jsonlAdapter{baseAdapter: base, provider: "claude"} },
 			Plan: (*capturePlan).claude,
 			Import: &providerImport{Forms: []string{importFiles, importCaptureExport}, Roots: []string{".claude/projects", ".config/claude/projects"},
@@ -191,7 +191,7 @@ func init() {
 		{
 			Kind: "codex", DisplayName: "Codex", Summary: "Sessions from the Codex app and CLI.", FolderHint: "The Codex home folder holding sessions (usually ~/.codex).", Instructions: "~/.codex/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 2, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd git_branch model message_tokens tool_calls tool_results timestamps harness_version", Varies: "effort speed reasoning subagents title",
-				Notes: map[string]string{"effort": "From releases that record it.", "speed": "From releases that record the turn's service tier.", "reasoning": "A summary, or only that it reasoned when the reasoning is encrypted.", "subagents": "From releases that record which session started another.", "title": "When Codex named the session."}},
+				Notes: map[string]string{"effort": "From releases that record it.", "speed": "From releases that record the turn’s service tier.", "reasoning": "A summary, or only that it reasoned when the reasoning is encrypted.", "subagents": "From releases that record which session started another.", "title": "When Codex named the session."}},
 			Resolve: resolveRolloutSource,
 			New:     func(base baseAdapter) Adapter { return &jsonlAdapter{baseAdapter: base, provider: "codex"} },
 			Plan:    (*capturePlan).codex,
@@ -214,7 +214,7 @@ func init() {
 		{
 			Kind: "copilot", DisplayName: "Copilot CLI", Summary: "Sessions from GitHub Copilot in the terminal.", FolderHint: "The Copilot CLI folder holding session-state (usually ~/.copilot).", Instructions: "~/.copilot/copilot-instructions.md", Mutation: "retrieval-only", Automatic: true, Setup: 6, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd model tool_calls tool_results timestamps subagents", Varies: "git_branch effort message_tokens reasoning title harness_version",
-				Notes: map[string]string{"speed": "Fast mode is a model of its own in Copilot's picker, so its requests count as standard.", "message_tokens": "Older releases record only the session's total.", "reasoning": "A summary for OpenAI models, or only that it reasoned."}, VariesNote: "When the session records it."},
+				Notes: map[string]string{"speed": "Fast mode is a model of its own in Copilot’s picker, so its requests count as standard.", "message_tokens": "Older releases record only the session’s total.", "reasoning": "A summary for OpenAI models, or only that it reasoned."}, VariesNote: "When the session records it."},
 			New:          func(base baseAdapter) Adapter { return &copilotAdapter{base} },
 			Plan:         (*capturePlan).copilot,
 			Preservation: retainedInputs,
@@ -235,7 +235,7 @@ func init() {
 		{
 			Kind: "opencode", DisplayName: "OpenCode", Summary: "Sessions from OpenCode.", FolderHint: "The OpenCode data folder holding opencode.db (usually ~/.local/share/opencode).", Instructions: "~/.config/opencode/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 8, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd model message_tokens tool_calls reasoning timestamps subagents harness_version", Varies: "speed tool_results title cost",
-				Notes: map[string]string{"speed": "The tier an OpenAI reply reports. A fast mode chosen as a model of its own is not told apart.", "tool_results": "For calls that finished.", "title": "When OpenCode named the session.", "cost": "The session's total."}},
+				Notes: map[string]string{"speed": "The tier an OpenAI reply reports. A fast mode chosen as a model of its own is not told apart.", "tool_results": "For calls that finished.", "title": "When OpenCode named the session.", "cost": "The session’s total."}},
 			New:          func(base baseAdapter) Adapter { return &opencodeAdapter{baseAdapter: base} },
 			Plan:         (*capturePlan).opencode,
 			Preservation: sqliteGroupPreservation, Acquisition: acquireSQLiteGroup, CaptureTables: opencodeKept(),
@@ -258,7 +258,7 @@ func init() {
 		{
 			Kind: "cline", DisplayName: "Cline", Summary: "Sessions from Cline.", FolderHint: "The Cline data folder holding sessions (usually ~/.cline/data).", Instructions: "~/Documents/Cline/Rules/", Mutation: "retrieval-only", Automatic: true, Setup: 9, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "cwd model message_tokens tool_calls tool_results timestamps", Varies: "git_branch reasoning title harness_version cost",
-				Notes: map[string]string{"speed": "Cline has no fast mode.", "reasoning": "Redacted thinking records only that it reasoned.", "cost": "The session's total.", "subagents": "A teammate's transcripts aren't read."}, VariesNote: "When the session records it."},
+				Notes: map[string]string{"speed": "Cline has no fast mode.", "reasoning": "Redacted thinking records only that it reasoned.", "cost": "The session’s total.", "subagents": "Pharos does not read a teammate’s transcripts."}, VariesNote: "When the session records it."},
 			New:          func(base baseAdapter) Adapter { return &clineAdapter{base} },
 			Plan:         (*capturePlan).cline,
 			Preservation: retainedInputs,
@@ -279,7 +279,7 @@ func init() {
 		{
 			Kind: "vscode-copilot", DisplayName: "VS Code Copilot", Summary: "Chats from GitHub Copilot in VS Code.", FolderHint: "The VS Code User folder (in ~/Library/Application Support/Code).", Instructions: "~/.copilot/copilot-instructions.md", Mutation: "retrieval-only", Automatic: true, Setup: 5, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls tool_results reasoning subagents", Varies: "cwd model message_tokens timestamps title harness_version",
-				Notes: map[string]string{"speed": "Fast mode is a model of its own in Copilot's picker, so its requests count as standard.", "cwd": "The window's folder.", "model": "Auto is known once it replied.", "message_tokens": "Some releases record only the last round's input.", "timestamps": "Per request, not per message.", "title": "When the chat was renamed.", "harness_version": "The Copilot Chat extension's version."}},
+				Notes: map[string]string{"speed": "Fast mode is a model of its own in Copilot’s picker, so its requests count as standard.", "cwd": "The window’s folder.", "model": "Auto is known once it replied.", "message_tokens": "Some releases record only the last round’s input.", "timestamps": "Per request, not per message.", "title": "When the chat was renamed.", "harness_version": "The Copilot Chat extension’s version."}},
 			New:          func(base baseAdapter) Adapter { return &vscodeCopilotAdapter{base} },
 			Plan:         (*capturePlan).vscodeCopilot,
 			Preservation: retainedInputs,
@@ -303,9 +303,9 @@ func init() {
 			},
 		},
 		{
-			Kind: "cursor", DisplayName: "Cursor", Summary: "Chats from the Cursor editor and Cursor CLI.", FolderHint: "The Cursor User folder (in ~/Library/Application Support/Cursor).", Instructions: "Cursor's User Rules (Cursor Settings → Rules)", Mutation: "retrieval-only", Automatic: true, Setup: 3, MirrorRank: 1,
+			Kind: "cursor", DisplayName: "Cursor", Summary: "Chats from the Cursor editor and Cursor CLI.", FolderHint: "The Cursor User folder (in ~/Library/Application Support/Cursor).", Instructions: "Cursor’s User Rules (Cursor Settings → Rules)", Mutation: "retrieval-only", Automatic: true, Setup: 3, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls subagents", Varies: "cwd model speed message_tokens tool_results reasoning timestamps title",
-				Notes: map[string]string{"speed": "The chat's fast mode setting now, which stands for all of its requests.", "message_tokens": "Before Cursor 3. Cursor 3 records only the size of the context.", "tool_results": "For calls that finished.", "timestamps": "Some messages are given the time of the one before."}, VariesNote: "When the chat records it."},
+				Notes: map[string]string{"speed": "The chat’s fast mode setting now, which stands for all of its requests.", "message_tokens": "Before Cursor 3. Cursor 3 records only the size of the context.", "tool_results": "For calls that finished.", "timestamps": "Some messages are given the time of the one before."}, VariesNote: "When the chat records it."},
 			New:          func(base baseAdapter) Adapter { return &cursorAdapter{baseAdapter: base} },
 			Plan:         (*capturePlan).cursor,
 			Preservation: liveSQLite, Acquisition: acquireNever, CaptureTables: cursorCaptureTables,
@@ -324,7 +324,7 @@ func init() {
 		{
 			Kind: "cursor-cli", DisplayName: "Cursor CLI", Summary: "Chats from Cursor CLI.", FolderHint: "The ~/.cursor folder holding chats.", SetupWith: "cursor", Mutation: "retrieval-only", Automatic: true, Setup: 4, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls tool_results", Varies: "cwd model reasoning timestamps title",
-				Notes: map[string]string{"speed": "Fast mode is kept in the CLI's settings, which Pharos does not read.", "message_tokens": "Only the size of the context.", "reasoning": "Encrypted: only that it reasoned.", "timestamps": "Prompts only; replies are placed after them."}, VariesNote: "When the chat records it."},
+				Notes: map[string]string{"speed": "Fast mode is kept in the CLI’s settings, which Pharos does not read.", "message_tokens": "Only the size of the context.", "reasoning": "Encrypted: only that it reasoned.", "timestamps": "Prompts only; replies are placed after them."}, VariesNote: "When the chat records it."},
 			New:          func(base baseAdapter) Adapter { return &cursorCLIAdapter{baseAdapter: base} },
 			Plan:         (*capturePlan).cursorCLI,
 			Preservation: liveSQLite, Acquisition: acquireNever, CaptureTables: cursorCLICaptureTables,
@@ -343,7 +343,7 @@ func init() {
 		{
 			Kind: "zed", DisplayName: "Zed", Summary: "Threads from Zed’s agent panel.", FolderHint: "Zed’s folder holding threads (in ~/Library/Application Support).", Instructions: "~/.config/zed/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 10, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls tool_results", Varies: "cwd model effort speed message_tokens reasoning subagents title",
-				Notes: map[string]string{"speed": "The thread's fast mode setting now, which stands for all of its requests.", "message_tokens": "Each turn's last request.", "reasoning": "Or only that it was redacted.", "timestamps": "Every message is given its thread's start."}, VariesNote: "When the thread records it."},
+				Notes: map[string]string{"speed": "The thread’s fast mode setting now, which stands for all of its requests.", "message_tokens": "Each turn’s last request.", "reasoning": "Or only that it was redacted.", "timestamps": "Every message is given its thread’s start."}, VariesNote: "When the thread records it."},
 			New:          func(base baseAdapter) Adapter { return &zedAdapter{baseAdapter: base} },
 			Plan:         (*capturePlan).zed,
 			Preservation: sqliteGroupPreservation, Acquisition: acquireSQLiteGroup, CaptureTables: zedCaptureTables,
@@ -364,7 +364,7 @@ func init() {
 		{
 			Kind: "antigravity", DisplayName: "Antigravity", Summary: "Conversations from Antigravity.", FolderHint: "The Antigravity profile folder (usually ~/.gemini/antigravity).", Instructions: "~/.gemini/GEMINI.md", Mutation: "retrieval-only", Automatic: true, Setup: 7, MirrorRank: 1,
 			Content: contentCapabilities{Supported: "tool_calls tool_results timestamps subagents", Varies: "cwd model effort message_tokens title harness_version",
-				Notes: map[string]string{"reasoning": "Only how many tokens it spent thinking.", "message_tokens": "When the conversation's database is present.", "harness_version": "The installed app's version, seen on this Mac."}, VariesNote: "When the conversation records it."},
+				Notes: map[string]string{"reasoning": "Only how many tokens it spent thinking.", "message_tokens": "When the conversation’s database is present.", "harness_version": "The installed app’s version, seen on this Mac."}, VariesNote: "When the conversation records it."},
 			New:          func(base baseAdapter) Adapter { return &antigravityAdapter{baseAdapter: base} },
 			Plan:         (*capturePlan).antigravity,
 			Preservation: sqliteGroupPreservation, Acquisition: acquireSQLiteGroup,
@@ -414,7 +414,7 @@ func init() {
 		{
 			Kind: "tl1", DisplayName: "TL1", Summary: "Agent runs, tasks and project context from TL1.", FolderHint: "The TL1 folder holding registry.json or workspaces.json.", OfferWhenFound: true, Mutation: "retrieval-only", Setup: 12, MirrorRank: 0,
 			Content: contentCapabilities{Supported: "cwd model effort tool_calls title", Varies: "git_branch speed message_tokens tool_results reasoning timestamps subagents harness_version cost",
-				Notes: map[string]string{"cwd": "The repository's folder.", "message_tokens": "Per request for Claude Code runs, per turn for Codex.", "timestamps": "Not in Codex exec runs.", "subagents": "Codex runs that record which session started another.", "harness_version": "Claude Code runs only.", "cost": "From TL1's run summary."}, VariesNote: "When the run records it."},
+				Notes: map[string]string{"cwd": "The repository’s folder.", "message_tokens": "Per request for Claude Code runs, per turn for Codex.", "timestamps": "Not in Codex exec runs.", "subagents": "Codex runs that record which session started another.", "harness_version": "Claude Code runs only.", "cost": "From TL1’s run summary."}, VariesNote: "When the run records it."},
 			New: func(base baseAdapter) Adapter { return &tl1Adapter{baseAdapter: base} },
 			Plan: func(p *capturePlan, ctx context.Context, source SourceConfig, info fs.FileInfo) error {
 				return p.tl1(source)
@@ -436,7 +436,7 @@ func init() {
 		},
 		{
 			Kind: "openclaw", DisplayName: "OpenClaw", Summary: "Conversations and agent sessions from OpenClaw.", FolderHint: "The OpenClaw state folder (usually ~/.openclaw), an agent folder, or a native transcript database.", Instructions: "~/.openclaw/workspace/AGENTS.md", Mutation: "retrieval-only", Automatic: true, Setup: 13, MirrorRank: 2,
-			Content: contentCapabilities{Varies: "cwd model effort message_tokens tool_calls tool_results reasoning timestamps subagents title harness_version", Notes: map[string]string{"message_tokens": "Per model response when the transcript records usage.", "harness_version": "From the native database's schema metadata."}, VariesNote: "When the native history records it."},
+			Content: contentCapabilities{Varies: "cwd model effort message_tokens tool_calls tool_results reasoning timestamps subagents title harness_version", Notes: map[string]string{"message_tokens": "Per model response when the transcript records usage.", "harness_version": "From the native database’s schema metadata."}, VariesNote: "When the native history records it."},
 			New:     func(base baseAdapter) Adapter { base.config.Kind = "openclaw"; return &personalAgentAdapter{base} },
 			Plan:    (*capturePlan).personalAgents, Preservation: retainedInputs, CaptureTables: personalAgentKept("openclaw"),
 			Probe: &providerProbe{
@@ -480,7 +480,7 @@ func init() {
 			Plan:    (*capturePlan).canonical, Preservation: retainedInputs,
 		},
 		{
-			Kind: "chatgpt", DisplayName: "ChatGPT", Export: "In ChatGPT, open Settings → Data controls → Export data. Allow about 24 hours for the export email; delivery time can vary. Download its ZIP into Downloads, then choose it here.", Instructions: "ChatGPT's custom instructions (Settings → Personalization)", KindAliases: []string{"chatgpt-export"}, Mutation: "retrieval-only", MirrorRank: 1,
+			Kind: "chatgpt", DisplayName: "ChatGPT", Export: "In ChatGPT, open Settings → Data controls → Export data. Allow about 24 hours for the export email; delivery time can vary. Download its ZIP into Downloads, then choose it here.", Instructions: "ChatGPT’s custom instructions (Settings → Personalization)", KindAliases: []string{"chatgpt-export"}, Mutation: "retrieval-only", MirrorRank: 1,
 			Content: contentCapabilities{Supported: "timestamps", Varies: "model tool_calls tool_results effort speed reasoning title", NotApplicable: "cwd git_branch subagents harness_version",
 				Notes: map[string]string{"model": "Some exports record only an opaque label such as bidi; the underlying model is unknown.", "tool_calls": "Some exports retain search references and tool icons without the calls themselves.", "tool_results": "Only when explicit tool replies are exported.", "speed": "When the export records the tier.", "reasoning": "Or only how long it thought.", "message_tokens": "Exports have no token counts."}, VariesNote: "When the export holds it."},
 			New:  func(base baseAdapter) Adapter { return &chatGPTAdapter{baseAdapter: base} },
@@ -612,6 +612,72 @@ func providerFor(kind string) (*providerSpec, bool) {
 		}
 	}
 	return nil, false
+}
+
+// providerBrands name the conversation providers whose stored key is not
+// the name of a source kind. "claude" is the provider of Claude Code sessions
+// and of Claude.ai chats alike, so it is named for neither source.
+var providerBrands = map[string]string{"claude": "Claude", "gemini": "Gemini"}
+
+// sourceDisplayName names a source kind (workspaces.source_kind) to people,
+// as the registry does. A kind it does not know keeps its stored key.
+func sourceDisplayName(kind string) string {
+	if spec, ok := providerFor(kind); ok {
+		return spec.DisplayName
+	}
+	return kind
+}
+
+// providerDisplayName names a conversation's provider (conversations.provider)
+// to people. Most providers are stored under their source's kind; a key no
+// source declares keeps its stored spelling. Model makers ("anthropic") and
+// agent apps ("claude-code/cli") are other key spaces.
+func providerDisplayName(provider string) string {
+	if name := providerBrands[strings.ToLower(provider)]; name != "" {
+		return name
+	}
+	return sourceDisplayName(provider)
+}
+
+// providerDisplayNames is every provider key Pharos can name, for pages that
+// hold only the stored keys (GET /api/providers).
+func providerDisplayNames() map[string]string {
+	names := map[string]string{}
+	for _, spec := range providerRegistry {
+		names[spec.Kind] = providerDisplayName(spec.Kind)
+	}
+	for provider, name := range providerBrands {
+		names[provider] = name
+	}
+	return names
+}
+
+// nameProviders adds provider_name beside each row's stored provider, so a
+// page shows the display name without keeping its own list.
+func nameProviders(rows []map[string]any) {
+	for _, row := range rows {
+		if provider := firstString(row["provider"]); provider != "" {
+			row["provider_name"] = providerDisplayName(provider)
+		}
+	}
+}
+
+// sourceLabel names one configured source (its name in library.toml) for a
+// list of sources: its kind's display name, with the source's own name when
+// that says more. Antigravity's apps are separate sources of one kind, named
+// for their data folders.
+func sourceLabel(name, kind string) string {
+	if product := antigravityProducts[name]; product != "" && (kind == "" || strings.EqualFold(kind, "antigravity")) {
+		return product
+	}
+	spec, known := providerFor(defaultString(kind, name))
+	if !known {
+		return name
+	}
+	if strings.EqualFold(name, spec.Kind) || slices.Contains(spec.KindAliases, strings.ToLower(name)) {
+		return spec.DisplayName
+	}
+	return spec.DisplayName + " (" + name + ")"
 }
 
 // globalInstructionPaths are the files and folders, home-relative, where

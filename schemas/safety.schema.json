@@ -201,7 +201,7 @@
             },
             {
               "value": "process",
-              "label": "Every instance of a program stopped"
+              "label": "Program stopped by name"
             },
             {
               "value": "publication",
@@ -221,7 +221,7 @@
             },
             {
               "value": "safeguard-restriction",
-              "label": "Agent got around a harness or tool restriction"
+              "label": "Agent got around an agent app or tool restriction"
             },
             {
               "value": "safeguard-test",

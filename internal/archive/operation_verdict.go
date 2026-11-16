@@ -157,7 +157,7 @@ func computeEjectVerdict(in verdictInput) ejectVerdict {
 			continue // a dead lease holds nothing
 		}
 		if probe.Err != nil || probe.Info == nil {
-			blockers = append(blockers, ejectBlocker{Label: "A Pharos process whose lease cannot be read", Verdict: verdictUnsafe,
+			blockers = append(blockers, ejectBlocker{Label: "A Pharos process that cannot be identified", Verdict: verdictUnsafe,
 				OnEject: "Pharos cannot tell what it is doing, so ejecting is not safe until it ends."})
 			continue
 		}
@@ -170,10 +170,10 @@ func computeEjectVerdict(in verdictInput) ejectVerdict {
 	for _, lock := range in.locks {
 		what := "A capture"
 		if lock.Kind == "index" {
-			what = "An index of a capture"
+			what = "Indexing of a capture"
 		}
 		blockers = append(blockers, ejectBlocker{Label: what + " by a process Pharos does not know", Verdict: verdictUnsafe,
-			OnEject: "Another process holds " + filepath.Base(lock.Path) + " without a Pharos lease (an older Pharos, or one that just started); wait for it to finish."})
+			OnEject: "Another process (an older Pharos, or one that just started) is using " + filepath.Base(lock.Path) + "; wait for it to finish."})
 	}
 	for _, label := range in.unregistered {
 		blockers = append(blockers, ejectBlocker{Label: label, Verdict: verdictUnsafe, OnEject: "This work is not registered as an operation, so Pharos cannot say when it stops."})
@@ -183,7 +183,7 @@ func computeEjectVerdict(in verdictInput) ejectVerdict {
 			OnEject: "Pharos could not read a capture or its lock (" + failure + "), so it cannot tell whether something is writing it."})
 	}
 	if in.unreachable != "" {
-		blockers = append(blockers, ejectBlocker{Label: "The library's service", Verdict: verdictUnsafe, OnEject: in.unreachable})
+		blockers = append(blockers, ejectBlocker{Label: "The library’s Pharos process", Verdict: verdictUnsafe, OnEject: in.unreachable})
 	}
 	sort.SliceStable(blockers, func(i, j int) bool { return verdictRank[blockers[i].Verdict] > verdictRank[blockers[j].Verdict] })
 	result := ejectVerdict{Verdict: verdictSafe, Blockers: blockers}
@@ -236,7 +236,7 @@ func updateRefusal(v ejectVerdict) string {
 			labels = append(labels, blocker.Label)
 		}
 	}
-	return "The update waits for " + lowerFirst(joinLabels(labels)) + ", which cannot stop in time."
+	return "Pharos is running work that cannot stop in time: " + lowerFirst(joinLabels(labels)) + ". Install the update when it has finished."
 }
 
 // leaseLabel names a lease's work for people: "Capture (Terminal), in
@@ -336,10 +336,19 @@ func secondsLabel(seconds float64) string {
 	return fmt.Sprintf("%d min", int(math.Ceil(seconds/60)))
 }
 
+// properFirstWords are names that keep their capital inside a sentence.
+var properFirstWords = map[string]bool{"Pharos": true, "Git": true, "GitHub": true, "Claude": true, "Codex": true,
+	"Conductor": true, "Search": true, "Spotlight": true, "Finder": true, "Ask": true}
+
 // lowerFirst lowers a label's first letter for use inside a sentence, unless
-// it starts a proper name (two capitals, as in "MCP").
+// it starts a proper name: two capitals, as in "MCP", or a name such as
+// "Pharos".
 func lowerFirst(text string) string {
 	if len(text) < 2 || text[0] < 'A' || text[0] > 'Z' || text[1] >= 'A' && text[1] <= 'Z' {
+		return text
+	}
+	word, _, _ := strings.Cut(text, " ")
+	if properFirstWords[strings.TrimRight(word, ",.;:’'")] {
 		return text
 	}
 	return strings.ToLower(text[:1]) + text[1:]

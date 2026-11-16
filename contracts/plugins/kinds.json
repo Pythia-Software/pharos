@@ -36,7 +36,7 @@
         ],
         "notes": {
           "effort": "When the transcript records it.",
-          "speed": "When the transcript records the request's speed or service tier.",
+          "speed": "When the transcript records the request’s speed or service tier.",
           "title": "When Claude Code named the session."
         }
       }
@@ -85,7 +85,7 @@
         "notes": {
           "effort": "From releases that record it.",
           "reasoning": "A summary, or only that it reasoned when the reasoning is encrypted.",
-          "speed": "From releases that record the turn's service tier.",
+          "speed": "From releases that record the turn’s service tier.",
           "subagents": "From releases that record which session started another.",
           "title": "When Codex named the session."
         }

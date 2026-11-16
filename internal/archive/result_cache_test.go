@@ -40,7 +40,9 @@ func TestResultCachePolicies(t *testing.T) {
 	server := testServer(t, config, catalog)
 	stamp, builds, broken := "1", 0, false
 	domain := registerResultDomain(&resultDomain{name: "test", version: "1", maxAge: time.Hour,
-		stamp: func(context.Context, *Server, string) (string, error) { return stamp, nil },
+		stamp: func(_ context.Context, _ *Server, scope string) (string, error) {
+			return stamp + strings.TrimPrefix(scope, "all"), nil
+		},
 		build: func(ctx context.Context, _ *Server, replay []byte, _ time.Time) ([]byte, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err
@@ -118,11 +120,12 @@ func TestResultCachePolicies(t *testing.T) {
 	for server.refreshResult(t.Context()) {
 	}
 	override(t, &resultReturnAfter, 0)
+	override(t, &resultSettle, 0)
 	if state, _ := ask(resultCached, "a", false); state != "fresh" {
 		t.Fatal(state)
 	}
 	stamp = "4"
-	server.sweepResults(t.Context())
+	server.sweepResults(t.Context(), time.Now())
 	before := builds
 	for server.refreshResult(t.Context()) {
 	}
@@ -138,6 +141,93 @@ func TestResultCachePolicies(t *testing.T) {
 		t.Fatalf("aged clock entry is %s", state)
 	}
 	expect("no clock", resultCached, "a", "fresh", fmt.Sprint(builds-1))
+	// Age alone is no reason to rebuild an entry nobody is asking for: the
+	// sweep leaves it, and the next request for it is answered with it, told
+	// that it is stale, and has it rebuilt.
+	for server.refreshResult(t.Context()) {
+	}
+	before = builds
+	if server.sweepResults(t.Context(), time.Now()); server.refreshResult(t.Context()) || builds != before {
+		t.Fatalf("the sweep queued an entry that had only aged: %d builds", builds-before)
+	}
+	if state, build := ask(resultCached, "clock", true); state != "stale" || build != fmt.Sprint(before) {
+		t.Fatalf("an aged clock entry was served as %s from build %s", state, build)
+	}
+	if !server.refreshResult(t.Context()) || builds != before+1 {
+		t.Fatalf("a request for an aged clock entry did not have it rebuilt: %d builds", builds-before)
+	}
+	if state, build := ask(resultFresh, "clock", true); state != "live" || build != fmt.Sprint(before+2) {
+		t.Fatalf("a refresh of an aged clock entry answered %s from build %s", state, build)
+	}
+	// Data that keeps changing is not chased. The sweep queues what a change
+	// left behind only once the data has stayed the same for resultSettle,
+	// and each further change starts the wait again; an entry someone asks
+	// for meanwhile is rebuilt at once.
+	override(t, &resultSettle, time.Hour)
+	changed := time.Now()
+	swept := func(after time.Duration) int {
+		t.Helper()
+		server.sweepResults(t.Context(), changed.Add(after))
+		before := builds
+		for server.refreshResult(t.Context()) {
+		}
+		return builds - before
+	}
+	stamp = "5"
+	if n := swept(0); n != 0 {
+		t.Fatalf("the sweep rebuilt %d entries as soon as the data changed", n)
+	}
+	if state, _ := ask(resultCached, "a", false); state != "stale" || !server.refreshResult(t.Context()) {
+		t.Fatalf("an entry asked for while the data settles was %s and not rebuilt", state)
+	}
+	stamp = "6"
+	if n := swept(50*time.Minute) + swept(100*time.Minute); n != 0 {
+		t.Fatalf("the sweep rebuilt %d entries within the wait a second change started", n)
+	}
+	if n := swept(111 * time.Minute); n != 2 {
+		t.Fatalf("the sweep rebuilt %d entries once the data had settled, want the two returned to", n)
+	}
+	if n := swept(112 * time.Minute); n != 0 {
+		t.Fatalf("the sweep rebuilt %d entries that were current", n)
+	}
+	// A build that fails is not tried again by every sweep: the entry waits
+	// for a request, or for its data to change again.
+	stamp, broken = "7", true
+	tried := func(after time.Duration) (tries int) {
+		t.Helper()
+		server.sweepResults(t.Context(), changed.Add(after))
+		for server.refreshResult(t.Context()) {
+			tries++
+		}
+		return tries
+	}
+	if first, again := tried(4*time.Hour)+tried(6*time.Hour), tried(7*time.Hour); first != 2 || again != 0 {
+		t.Fatalf("the sweep tried %d failing builds, then %d again with nothing changed", first, again)
+	}
+	if state, _ := ask(resultCached, "a", false); state != "stale" || !server.refreshResult(t.Context()) {
+		t.Fatalf("a request for an entry whose build failed was %s and not queued", state)
+	}
+	stamp, broken = "8", false
+	if n := swept(8*time.Hour) + swept(10*time.Hour); n != 2 {
+		t.Fatalf("the sweep rebuilt %d entries after another change, want the two whose builds had failed", n)
+	}
+	// An entry stored when its request read another scope (by a build that
+	// scoped it differently) is rebuilt for the scope the request reads now.
+	narrowed := func() string {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, "/test", nil)
+		r.Header.Set(resultCacheHeader, resultCached)
+		w := httptest.NewRecorder()
+		server.serveResult(w, r, domain, resultRequest{replay: []byte("scoped"), scope: "narrow"})
+		return w.Header().Get(resultCacheHeader)
+	}
+	if state, _ := ask(resultCached, "scoped", false); state != "live" {
+		t.Fatal(state)
+	}
+	if first, rebuilt, then := narrowed(), server.refreshResult(t.Context()), narrowed(); first != "stale" || !rebuilt || then != "fresh" {
+		t.Fatalf("an entry stored under another scope was %s, then %s after its rebuild", first, then)
+	}
+	override(t, &resultSettle, 0)
 	// The file outlives the process, and another version's entries are not served.
 	_, stored := ask(resultCached, "a", false)
 	catalog.closeResults()
@@ -147,7 +237,7 @@ func TestResultCachePolicies(t *testing.T) {
 	expect("new version", resultCached, "b", "live", fmt.Sprint(builds+1))
 	// The sweep rebuilds the other version's entries, which no longer count
 	// as stale, so that they are ready before they are asked for.
-	server.sweepResults(t.Context())
+	server.sweepResults(t.Context(), time.Now())
 	for server.refreshResult(t.Context()) {
 	}
 	expect("rebuilt for the new version", resultCached, "a", "fresh", fmt.Sprint(builds))

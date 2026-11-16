@@ -291,7 +291,7 @@ const inspection = {
   ],
   tasks: [
     { kind: "analysis.authorship", state: "running", running: { kind: "analysis.authorship", batch: 9, units: 12, cpus: 2 }, batches: 3 },
-    { kind: "analysis.labels", state: "blocked", blocker: { reason: "held", detail: "stopped until Resume or a service restart" }, failures: 2,
+    { kind: "analysis.labels", state: "blocked", blocker: { reason: "held", detail: "stopped until you resume it, or quit and reopen Pharos" }, failures: 2,
       failure_examples: [{ kind: "analysis.labels", unit: { id: "c1" }, attempts: 3, error: "Error A", exhausted: true }] },
     { kind: "maintenance.parallelism", batches: 0 },
     { kind: "maintenance.labels.query", state: "blocked", blocker: { reason: "power" } },
@@ -371,7 +371,7 @@ test("tasks: Stop while they have work, Resume while held, Retry after failures;
   assert.match(byKind["analysis.authorship"].text, /12 conversations\D+2 CPU/);
   assert.deepEqual(byKind["analysis.labels"].actions, ["resume", "retry"]);
   assert.equal(byKind["analysis.labels"].state, "held");
-  assert.ok(!byKind["analysis.labels"].text.includes("service restart"), "a hold's implementation detail is not repeated");
+  assert.ok((byKind["analysis.labels"].text.match(/quit and reopen Pharos/gi) ?? []).length <= 1, "a hold's detail is not repeated");
   assert.deepEqual(byKind["analysis.labels"].examples, ["Error A"]);
   assert.deepEqual(byKind["maintenance.labels.query"].actions, ["stop"]);
   assert.deepEqual(model.idleTasks, ["Measure parallel work"]);
@@ -399,4 +399,79 @@ test("action bodies match POST /api/work and refuse a target it would reject", (
   for (const action of ["stop", "resume", "retry"]) assert.deepEqual(plain(background.workRequestBody(action, { kind: "analysis.labels" })), { action, kind: "analysis.labels" });
   assert.equal(background.workRequestBody("stop", {}), null);
   assert.equal(background.workRequestBody("delete", { kind: "analysis.labels" }), null);
+});
+
+test("amounts of time and memory keep two significant figures, and a small measured amount is not nothing", () => {
+  assert.deepEqual([0.2, 42, 59.6, 358, 3540, 3600, 5400, 12 * 3600].map(background.amount), ["under 1 s", "42 s", "1 min", "6 min", "59 min", "1 h", "1.5 h", "12 h"]);
+  assert.deepEqual([512, 340e6, 1.24e9, 9.96e9, 64e9].map(background.memory), ["512 B", "340 MB", "1.2 GB", "10 GB", "64 GB"]);
+});
+
+test("each schedule's cost: the current one marked, bounds in words, and an unmeasured figure said, never zero", () => {
+  const costs = { reason: "Reason words", rows: [
+    { cadence: "frequent", label: "Row A", current: false, per: "day", bound: "up_to", seconds: 2460, cpu_seconds: 720, gpu_seconds: 90, peak_bytes: 1.2e9 },
+    { cadence: "hourly", label: "Row B", current: true, per: "day", bound: "about", seconds: 600, cpu_seconds: null, gpu_seconds: null, peak_bytes: null },
+    { cadence: "daily", label: "Row C", current: false, per: "day", bound: "at_least", seconds: 0, cpu_seconds: 0, gpu_seconds: null, peak_bytes: 0 },
+    { cadence: "manual", label: "Row D", current: false, per: "run", bound: "about", seconds: null, cpu_seconds: null, gpu_seconds: null, peak_bytes: null },
+  ] };
+  const model = plain(background.scheduleCostModel(costs));
+  assert.deepEqual(model.rows.map(row => row.current), [false, true, false, false]);
+  assert.equal(model.reason, "Reason words");
+  const [frequent, hourly, daily, manual] = model.rows;
+  assert.deepEqual([frequent.running, frequent.cpu, frequent.gpu, frequent.memory], ["up to 41 min a day", "up to 12 min a day", "GPU 2 min a day", "up to 1.2 GB"]);
+  assert.deepEqual([hourly.running, hourly.cpu, hourly.gpu, hourly.memory, hourly.cpuMeasured, hourly.memoryMeasured], ["about 10 min a day", "not measured yet", "", "not measured yet", false, false]);
+  assert.deepEqual([daily.running, daily.cpu, daily.measured, daily.cpuMeasured], ["under 1 s a day", "under 1 s a day", true, true], "a measured zero is a figure");
+  assert.deepEqual([manual.running, manual.cpu, manual.memory, manual.measured], ["not measured yet", "not measured yet", "not measured yet", false]);
+  assert.notEqual(plain(background.scheduleCostModel({ rows: [{ ...costs.rows[1], measured: true }] })).caption, model.caption, "a single measured schedule is not captioned as a comparison");
+  assert.deepEqual(plain(background.scheduleCostModel(null)).rows, [], "an older service sends no costs");
+  const item = plain(background.scheduleModel({ ...document, schedule_costs: { writing: costs } }, at)).columns[1].items[0];
+  assert.equal(item.schedules.rows.length, 4, "an item carries its own schedules' costs");
+  assert.deepEqual(plain(background.scheduleModel(document, at)).columns[1].items[0].schedules.rows, []);
+});
+
+const usage = { window_days: 7, measured_days: 2, cpu_seconds: 1500, days: ["2026-10-28", "2026-10-29"], rows: [
+  { source: "item:labels", label: "Source A", item: "labels", cpu_seconds: 900, worker_cpu_seconds: 600, gpu_seconds: 30, seconds: 400, runs: 2.5, peak_bytes: 3e9,
+    days: [{ day: "2026-10-28", cpu_seconds: 1200, seconds: 500 }, { day: "2026-10-29", cpu_seconds: null, seconds: 0 }] },
+  { source: "item:tools", label: "Source B", item: "tools", cpu_seconds: 300, worker_cpu_seconds: null, gpu_seconds: null, seconds: 200, runs: 40, peak_bytes: 1e9, days: [] },
+  { source: "kind:x", label: "Source C", cpu_seconds: 0.2, worker_cpu_seconds: null, gpu_seconds: null, seconds: 1, runs: 100, peak_bytes: null, days: [] },
+  { source: "kind:y", label: "Source D", cpu_seconds: null, worker_cpu_seconds: null, gpu_seconds: null, seconds: 30, runs: 1, peak_bytes: null, days: [] },
+  { source: "other", label: "Source E", cpu_seconds: 300, worker_cpu_seconds: null, gpu_seconds: null, seconds: 0, runs: 0, peak_bytes: null, days: [] },
+] };
+
+test("the CPU chart: one bar a source in the server's order, widths against the largest, the rest marked", () => {
+  const model = plain(background.usageModel(usage));
+  assert.equal(model.empty, false);
+  assert.deepEqual(model.rows.map(row => row.source), ["item:labels", "item:tools", "kind:x", "kind:y", "other"]);
+  assert.deepEqual(model.rows.map(row => Math.round(row.width * 100)), [100, 33, 0, 0, 33]);
+  assert.deepEqual(model.rows.map(row => row.value), ["15 min", "5 min", "under 1 s", "not measured yet", "5 min"]);
+  assert.deepEqual(model.rows.map(row => row.measured), [true, true, true, false, true], "a source whose CPU was never read has no bar, not an empty one");
+  assert.deepEqual(model.rows.map(row => row.rest), [false, false, false, false, true]);
+  assert.equal(model.days, 2);
+  assert.ok(model.total.startsWith("25 min"));
+});
+
+test("a bar's hover detail: its measures, the worker and GPU apart, and each measured day", () => {
+  const [labels, tools, , , other] = plain(background.usageModel(usage)).rows.map(row => row.popover);
+  assert.equal(labels.heading, "Source A");
+  assert.deepEqual(labels.rows.map(row => row.value), ["15 min", "10 min", "30 s", "7 min", "2.5", "3.0 GB"]);
+  assert.equal(labels.totals.length, 1, "only days with a measured figure are listed");
+  assert.equal(labels.totals[0][1], "20 min");
+  assert.deepEqual(tools.rows.map(row => row.value), ["5 min", "3 min", "40", "1.0 GB"]);
+  assert.deepEqual(other.rows.map(row => row.value), ["5 min"], "the rest has no runs or running time");
+});
+
+test("the table lists every source with every measure; sources past the limit fold into one bar", () => {
+  const model = plain(background.usageModel(usage, 2));
+  assert.deepEqual(model.rows.map(row => row.source), ["item:labels", "item:tools", "folded", "other"]);
+  const folded = model.rows[2];
+  assert.equal(folded.value, "under 1 s");
+  assert.deepEqual(folded.popover.rows.slice(-2).map(row => row.label), ["Source C", "Source D"]);
+  assert.equal(model.table.length, 5);
+  assert.deepEqual(model.table.map(row => row.share), ["60%", "20%", "under 1%", "", "20%"]);
+  assert.deepEqual(model.table.map(row => row.gpu), ["30 s", "", "", "", ""]);
+  assert.equal(model.gpu, true);
+  assert.equal(plain(background.usageModel({ ...usage, rows: usage.rows.map(row => ({ ...row, gpu_seconds: null })) })).gpu, false, "no GPU column when none was measured");
+});
+
+test("nothing measured yet is an empty chart, not zeros", () => {
+  for (const value of [null, undefined, { window_days: 7, measured_days: 0, rows: [] }]) assert.equal(background.usageModel(value).empty, true);
 });

@@ -35,7 +35,6 @@
 .storage-compact-actions{display:flex;flex-wrap:wrap;gap:8px}
 @media(max-width:500px){.storage-legend li{white-space:normal}.storage-table .storage-split{display:none}.storage-table .storage-name{width:45%}.storage-table .num{width:25%}.storage-breakdown{padding:14px}}
 `;
-  const SOURCES = {claude: 'Claude Code', codex: 'Codex', conductor: 'Conductor', tl1: 'TL1', antigravity: 'Antigravity', 'antigravity-cli': 'Antigravity CLI'};
   const VIEWS = [['machines', 'By Mac'], ['sources', 'By source'], ['projects', 'By project']];
   // Each part's color: its group's hue, lighter for the smaller parts.
   const FILLS = {
@@ -68,8 +67,8 @@
       .map(part => ({...part, bytes: Number(part.bytes), fill: FILLS[part.key] || FILLS.other, share: percent(Number(part.bytes), total)}));
     const rows = (data?.[selected] || []).map(row => {
       const originals = Number(row.originals_bytes) || 0, catalog = Number(row.catalog_bytes) || 0;
-      const label = selected === 'sources' ? SOURCES[row.id] || row.label : row.label;
-      return {id: row.id, label, originals, catalog, total: originals + catalog};
+      // The server names every row, sources from the provider registry.
+      return {id: row.id, label: row.label, originals, catalog, total: originals + catalog};
     });
     const largest = Math.max(0, ...rows.map(row => row.total));
     for (const row of rows) {
@@ -99,7 +98,7 @@
   function table(shown, bytes) {
     const element = node('table', 'storage-table'), head = node('tr');
     const name = view === 'machines' ? 'Mac' : view === 'sources' ? 'Source' : 'Project';
-    for (const [label, className] of [[name, 'storage-name'], ['', 'storage-split-bar'], ['Originals', 'num storage-split'], ['Catalog', 'num storage-split'], ['Total', 'num']]) {
+    for (const [label, className] of [[name, 'storage-name'], ['', 'storage-split-bar'], ['Originals', 'num storage-split'], ['Catalog and caches', 'num storage-split'], ['Total', 'num']]) {
       const cell = node('th', className, label);
       cell.scope = 'col';
       head.append(cell);
@@ -118,7 +117,7 @@
       }
       const label = node('th', 'storage-name', row.label);
       label.scope = 'row';
-      label.title = `${row.label}: ${bytes(row.originals)} originals, ${bytes(row.catalog)} catalog`;
+      label.title = `${row.label}: ${bytes(row.originals)} originals, ${bytes(row.catalog)} catalog and caches`;
       const barCell = node('td');
       barCell.append(bar);
       line.append(label, barCell, node('td', 'num storage-split', bytes(row.originals)), node('td', 'num storage-split', bytes(row.catalog)), node('td', 'num', bytes(row.total)));
@@ -232,7 +231,7 @@
         render(root, data);
         return;
       }
-      root.replaceChildren(node('div', 'meta', 'Storage'), node('div', 'big', 'Measuring…'), node('div', 'meta health-detail', 'Sizing the catalog and each Mac’s captures'));
+      root.replaceChildren(node('div', 'meta', 'Storage'), node('div', 'big', 'Measuring…'), node('div', 'meta health-detail', 'Sizing the catalog and each Mac’s originals'));
       await new Promise(resolve => setTimeout(resolve, 2000));
       if (!current()) return;
     }

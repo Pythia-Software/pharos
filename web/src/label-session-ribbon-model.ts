@@ -4,18 +4,34 @@ import {eventTime,type TimeRange} from './timeline-label-model';
 import {authorshipSegments,authorshipExcerpt,callerSource} from './timeline-caller-model';
 import {laneCandidates,laneMark,nearestMark,placeMarks,type HitTarget,type PlacedMark} from './ribbon-marks';
 
-export type ActivityMark={start:number;end:number;end_known:boolean;category:string;count:number;error:boolean;tool_id?:string;message_id?:string;preview?:string;preview_truncated?:boolean;status?:string;name:string};
+/** A tool call on a ribbon. A harness wait (a background command, Monitor
+ * watch or scheduled wakeup: harness_waits.go) runs on from `end`, its launch
+ * acknowledgement, to `wait_end`, which is null when no end was recorded. */
+export type ActivityMark={start:number;end:number;end_known:boolean;category:string;count:number;error:boolean;tool_id?:string;message_id?:string;preview?:string;preview_truncated?:boolean;status?:string;name:string;wait_kind?:string;wait_end?:number|null;wait_status?:string;wait_events?:number};
 export type RibbonObservation={event?:AgentEventLink;id:string;start:number;end:number;title:string;color:string;thinking:boolean;label?:string;message?:LabelMessage;mark?:ActivityMark;inferred?:boolean;authorship?:string;excerpt?:{text:string;truncated:boolean}|null;composition?:{start:number;end:number};share?:number;attribution?:'preceding'|'following'|'instant'};
 export type RibbonNode={id:string;title:string;items:RibbonObservation[];children:RibbonNode[]};
 const isThinking=(m:LabelMessage)=>m.kind==='thinking'||m.kind==='reasoning';
-const activityNames:Record<string,string>={read:'Read',write:'Write',run:'Run',git:'Git',network:'Network',delegate:'Delegation',wait:'Wait',poll:'Poll',other:'Other',model:'Model / orchestration · inferred'};
+const waitKinds:Record<string,string>={background_command:'Background command',monitor:'Monitor watch',wakeup:'Scheduled wakeup'};
+const waitStatuses:Record<string,string>={completed:'completed',failed:'failed',killed:'stopped by the agent',stopped:'stopped',expired:'expired',fired:'fired',replaced:'replaced by a later wakeup',cancelled:'cancelled',pending:'not yet fired'};
+/** The recorded end of a harness wait, or null (not a wait, or its end was not recorded). */
+export function harnessWaitEnd(mark:Pick<ActivityMark,'start'|'wait_kind'|'wait_end'>){return mark.wait_kind&&typeof mark.wait_end==='number'&&Number.isFinite(mark.wait_end)&&mark.wait_end>=mark.start?mark.wait_end:null;}
+/** One line about a harness wait: what kind, how long, how it ended. */
+export function harnessWaitText(mark:Pick<ActivityMark,'start'|'end'|'end_known'|'wait_kind'|'wait_end'|'wait_status'|'wait_events'>){
+ if(!mark.wait_kind)return '';
+ const end=harnessWaitEnd(mark),minutes=(ms:number)=>{const seconds=Math.round(ms/1000),whole=Math.round(ms/60_000);return seconds<60?`${seconds}s`:whole<60?`${whole}m`:`${Math.floor(whole/60)}h ${whole%60}m`;};
+ const status=mark.wait_status?waitStatuses[mark.wait_status]??mark.wait_status:'';
+ return [waitKinds[mark.wait_kind]??'Machine wait',end===null?'end not recorded':`waited ${minutes(end-mark.start)}`,status,mark.wait_events?`${mark.wait_events} event${mark.wait_events===1?'':'s'}`:''].filter(Boolean).join(' · ');
+}
+const activityNames:Record<string,string>={read:'Read',write:'Write',run:'Run',git:'Git',network:'Network',delegate:'Delegation',wait:'Wait',poll:'Poll',other:'Other',model:'Inferred orchestration'};
+// A message's row name: what it is to the reader, not its stored role and kind.
+const messageRowName=(m:LabelMessage)=>{const name=isThinking(m)?'Thinking':m.role==='user'?'Prompt':m.role==='assistant'?'Reply':m.role?m.role.charAt(0).toUpperCase()+m.role.slice(1):'Message';return !isThinking(m)&&m.kind&&m.kind!=='message'?`${name} · ${m.kind.replace(/_/g,' ')}`:name;};
 const group=(id:string,title:string,children:RibbonNode[]):RibbonNode=>({id,title,children,items:children.flatMap(child=>child.items)});
 
 
 export function activityCategory(tool:Pick<LabelTool,'name'|'category'|'command_category'>):string{
  const name=tool.name.toLowerCase(),cat=(tool.category??'').toLowerCase(),command=(tool.command_category??'').toLowerCase();
  if(['wait_agent','wait','taskoutput'].includes(name))return 'wait';
- if(/sleep|poll/.test(name)||name==='write_stdin')return 'poll';
+ if(/sleep|poll/.test(name)||['write_stdin','monitor','schedulewakeup'].includes(name))return 'poll';
  if(cat==='agent'||/delegate|spawn/.test(name)||name==='task')return 'delegate';
  if(['read','search'].includes(cat)||/read|search|glob/.test(name))return 'read';
  if(['edit','write'].includes(cat)||/patch|write/.test(name)||name==='edit')return 'write';
@@ -62,8 +78,8 @@ export function ribbonOriginParts(item:RibbonObservation):RibbonObservation[]{
 export function sessionRibbonTree(messages:LabelMessage[],marks:ActivityMark[],inferred:{start:number;end:number}[],taxonomy:Taxonomy,range:TimeRange,detail=true,caller=false,neighbors=messages,boundaryMarks=marks,events:AgentEventLink[]=[]):RibbonNode{
  const intervals=labelIntervals(messages,boundaryMarks,30*60*1000,neighbors);
  const labels:RibbonObservation[]=intervals.flatMap(({message,start,end,attribution})=>{if(start>range[1]||end<range[0])return [];const ids=functionStates(message,detail?'label':'family');return (ids.length?ids:['?']).map(label=>({id:JSON.stringify(['label',message.id,label]),start,end,attribution,title:shortLabel(label,taxonomy),color:stateColor(label),thinking:isThinking(message),label,message}));});
- const activities:RibbonObservation[]=[...marks.flatMap(mark=>mark.start>range[1]||Math.max(mark.start,mark.end_known?mark.end:mark.start)<range[0]?[]:[{id:JSON.stringify(['activity',mark.message_id,mark.tool_id,mark.name,mark.start,mark.end,mark.category]),start:mark.start,end:mark.end_known?Math.max(mark.start,mark.end):mark.start,title:mark.name,color:mark.error?'var(--activity-error)':`var(--activity-${mark.category})`,thinking:false,mark}]),...inferred.filter(span=>span.start<=range[1]&&span.end>=range[0]).map(span=>({id:JSON.stringify(['inferred',span.start,span.end]),...span,title:'Inferred orchestration',color:'var(--activity-model)',thinking:false,inferred:true}))];
- const leaves=(items:RibbonObservation[],path:string):RibbonNode[]=>items.map(item=>({id:path+':'+item.id,title:item.message?`${item.message.role} · ${item.message.kind} · ${new Date(item.start).toLocaleTimeString()}`:item.title,items:[item],children:[]}));
+ const activities:RibbonObservation[]=[...marks.flatMap(mark=>{const end=Math.max(mark.start,mark.end_known?mark.end:mark.start,harnessWaitEnd(mark)??-Infinity);return mark.start>range[1]||end<range[0]?[]:[{id:JSON.stringify(['activity',mark.message_id,mark.tool_id,mark.name,mark.start,mark.end,mark.category]),start:mark.start,end,title:mark.name,color:mark.error?'var(--activity-error)':`var(--activity-${mark.category})`,thinking:false,mark}];}),...inferred.filter(span=>span.start<=range[1]&&span.end>=range[0]).map(span=>({id:JSON.stringify(['inferred',span.start,span.end]),...span,title:'Inferred orchestration',color:'var(--activity-model)',thinking:false,inferred:true}))];
+ const leaves=(items:RibbonObservation[],path:string):RibbonNode[]=>items.map(item=>({id:path+':'+item.id,title:item.message?`${messageRowName(item.message)} · ${new Date(item.start).toLocaleTimeString()}`:item.title,items:[item],children:[]}));
  function taxonomyNode(id:string,items:RibbonObservation[],path:string):RibbonNode{
   const exact=items.filter(item=>item.label===id),childIDs=[...new Set(items.filter(item=>item.label!==id).map(item=>item.label!.split('.').slice(0,id.split('.').length+1).join('.')))].sort(compareStates);
   const children=childIDs.map(child=>taxonomyNode(child,items.filter(item=>item.label===child||item.label!.startsWith(child+'.')),path+':'+child));
@@ -84,9 +100,9 @@ export function sessionRibbonTree(messages:LabelMessage[],marks:ActivityMark[],i
   const ids=functionStates(message,detail?'label':'family'),labels=ids.length?ids:['?'],path='authorship:'+message.id;
   const tracks=labels.map(label=>ribbonOriginParts({id:'',start,end,title:'',color:stateColor(label),thinking:false,label,message}));
   const parts=tracks[0].map((part,index)=>({id:path+':'+index,title:part.title,items:tracks.map(track=>track[index]),children:[]}));
-  return [group(path,`${message.role} · ${new Date(start).toLocaleTimeString()}`,parts)];
+  return [group(path,`${messageRowName(message)} · ${new Date(start).toLocaleTimeString()}`,parts)];
  }):[];
- const authorship=group('authorship','Text origin',originMessages);
+ const authorship=group('authorship','Text source',originMessages);
  // Agent events decompose like Tool actions: group, then kind, then each event.
  // They draw through the event overlay (shapes and arcs), not as ribbon glyphs.
  const clock=agentEventClock(messages,boundaryMarks,neighbors);
@@ -121,9 +137,14 @@ export function ribbonHits(items:RibbonObservation[],at:number,tolerance:number)
  * other call or event marker, so simultaneous and near-simultaneous calls sit
  * apart whenever the row has room. x maps a time to the ribbon's pixels. */
 export const TOOL_RADIUS=3,MARK_GAP=.5,UNKNOWN_TOOL_TAIL_MS=5000;
-/** Display-only placeholder: never changes a call's recorded end or duration. */
+/** Display-only placeholder: never changes a call's recorded end or duration.
+ * A harness wait reaches its recorded end; one whose end was not recorded
+ * gets the same short unknown tail after its launch. */
 export function toolVisualEnd(mark:ActivityMark,rangeEnd:number){
- return mark.end_known?mark.end:Math.max(mark.start,Math.min(mark.start+UNKNOWN_TOOL_TAIL_MS,rangeEnd));
+ const wait=harnessWaitEnd(mark);
+ if(wait!==null)return Math.max(mark.start,wait);
+ const from=mark.wait_kind&&mark.end_known?mark.end:mark.start;
+ return mark.end_known&&!mark.wait_kind?mark.end:Math.max(from,Math.min(from+UNKNOWN_TOOL_TAIL_MS,rangeEnd));
 }
 export function ribbonToolPlacement(items:RibbonObservation[],x:(at:number)=>number,height:number,occupied:PlacedMark[]=[],{r=TOOL_RADIUS,gap=MARK_GAP,visualEnd=(item:RibbonObservation)=>item.end}:{r?:number;gap?:number;visualEnd?:(item:RibbonObservation)=>number}={}){
  const lanes=laneCandidates(height,r,gap),tools=[...new Map(items.filter(item=>item.mark).map(item=>[item.id,item])).values()];

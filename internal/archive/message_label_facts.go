@@ -75,13 +75,17 @@ func messageLabelWithoutLedger(table sqlDataset) sqlDataset {
 
 // unmarked is executionUnmarkedSQL for the labels ledger.
 func messageLabelStoredFrom(ledger bool, fields []string, unmarked string) string {
-	// Conversations with unmarked execution changes are projected live like
-	// dirty ones, where their labels read as pending. Without a ledger there
-	// are no labels to hold back.
+	// Stored facts hold a conversation's labels as the ledger has them, whether
+	// or not they are current. Conversations whose labels are dirty, or have
+	// unmarked execution changes, are held back here and projected live like
+	// those with dirty facts, where their labels read as pending. Marking and
+	// clearing a label mark therefore rebuilds no facts: only a label that is
+	// really rewritten does. Without a ledger there are no labels to hold back.
 	pending, hold := "SELECT conversation_id FROM message_label_facts_dirty", ""
 	if ledger {
-		pending += " UNION " + unmarked
-		hold = "\n AND stored.conversation_id NOT IN (" + unmarked + ")"
+		pending += " UNION SELECT conversation_id FROM message_labels_dirty UNION " + unmarked
+		hold = "\n AND NOT EXISTS(SELECT 1 FROM message_labels_dirty relabel WHERE relabel.conversation_id=stored.conversation_id)" +
+			"\n AND stored.conversation_id NOT IN (" + unmarked + ")"
 	} else {
 		unmarked = ""
 	}
@@ -202,7 +206,29 @@ func (c *Catalog) ensureMessageLabelFacts(ctx context.Context) error {
 // Install after both core schema migration and optional classifier-ledger
 // creation. These triggers queue only real changes, in the source transaction,
 // including writes from another process or an older executable.
+//
+// The facts hold what the ledger's label rows say, and whether the
+// conversation was ever built; readers apply the labels' dirty marks
+// themselves (messageLabelStoredFrom). So a dirty mark, and a rebuild that
+// only restamps message_labels_conversations, queue nothing.
 func messageLabelFactTriggers(ctx context.Context, tx *sql.Tx) error {
+	// Earlier builds stored a dirty conversation's facts as unlabeled and
+	// queued them again when the mark cleared. Where their triggers are still
+	// installed (an upgrade, or an older executable opened the catalog since),
+	// requeue the conversations whose marks stand now: only their facts can
+	// hold that pending state. Nothing else is marked.
+	var legacy int
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name='message_label_facts_dirty_message_labels_dirty_insert'").Scan(&legacy); err != nil {
+		return err
+	}
+	if legacy > 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO message_label_facts_dirty(conversation_id) SELECT conversation_id FROM message_labels_dirty WHERE 1 ON CONFLICT(conversation_id) DO NOTHING;
+ DROP TRIGGER IF EXISTS message_label_facts_dirty_message_labels_dirty_insert;
+ DROP TRIGGER IF EXISTS message_label_facts_dirty_message_labels_dirty_update;
+ DROP TRIGGER IF EXISTS message_label_facts_dirty_message_labels_dirty_delete`); err != nil {
+			return err
+		}
+	}
 	mark := func(expression string) string {
 		return "INSERT INTO message_label_facts_dirty(conversation_id) SELECT " + expression + " WHERE " + expression + " IS NOT NULL ON CONFLICT(conversation_id) DO NOTHING;"
 	}
@@ -229,8 +255,7 @@ func messageLabelFactTriggers(ctx context.Context, tx *sql.Tx) error {
 		"message_authorship":           "message_id,conversation_id,typed_words",
 		"conversations":                "model",
 		"message_labels":               "message_id,conversation_id,segment,labels,model,labeled_at",
-		"message_labels_conversations": "conversation_id,structure,units,built_at",
-		"message_labels_dirty":         "conversation_id,token",
+		"message_labels_conversations": "conversation_id",
 	} {
 		var exists int
 		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&exists); err != nil {
@@ -292,8 +317,10 @@ var errMessageLabelFactsStale = errors.New("message label query inputs changed d
 
 func messageLabelFactsSource(selector string, ledger bool) sqlDataset {
 	// Stored facts keep the labels as built; readers hold back the
-	// conversations whose execution changes are unmarked (messageLabelStoredFrom).
+	// conversations whose labels are dirty or whose execution changes are
+	// unmarked (messageLabelStoredFrom).
 	live := messageLabelLiveDatasetFor(selector, "")
+	live.from = strings.Replace(live.from, messageLabelNotDirtySQL, "", 1)
 	// These indexes are installed on writable catalogs. Keep the ordinary live
 	// dataset compatible with older read-only snapshots that do not have them.
 	live.from = strings.Replace(live.from, "INDEXED BY messages_conversation_idx", "INDEXED BY messages_label_conversation_idx", 1)

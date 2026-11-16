@@ -469,6 +469,24 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	if _, err := tx.Exec(`INSERT INTO remote_assets(url,mime_type,content,fetched_at,attempts) VALUES('https://img.example/lake.png','image/png',x'89504e47','2026-10-04T12:00:00Z',1)`); err != nil {
 		t.Fatal(err)
 	}
+	// Nor is what a forge said of a pull request, which it may stop serving.
+	for _, statement := range []string{
+		`INSERT INTO pull_requests(id,host,number,url) VALUES('pr-reviewed','github.com',5,'https://github.com/acme/app/pull/5')`,
+		`INSERT INTO pull_request_fetches(pr_id,status,fetched_at,content_hash) VALUES('pr-reviewed','fetched','2026-10-04T12:00:00Z','h')`,
+		`INSERT INTO pull_request_details(pr_id,state,review_status) VALUES('pr-reviewed','merged','approved')`,
+		`INSERT INTO pull_request_commits(pr_id,hash,position) VALUES('pr-reviewed','abc',0)`,
+		`INSERT INTO pull_request_reviews(pr_id,review_id,state,body) VALUES('pr-reviewed','r1','approved','Ship it.')`,
+		`INSERT INTO pull_request_comments(pr_id,comment_id,kind,body) VALUES('pr-reviewed','c1','inline','Rename this.')`,
+		// Two more, for a destination that already knows them (below).
+		`INSERT INTO pull_requests(id,host,number,url) VALUES('pr-held','github.com',6,'https://github.com/acme/app/pull/6'),('pr-retried','github.com',7,'https://github.com/acme/app/pull/7')`,
+		`INSERT INTO pull_request_fetches(pr_id,status,fetched_at,content_hash) VALUES('pr-held','fetched','2026-10-04T12:00:00Z','h'),('pr-retried','fetched','2026-10-04T12:00:00Z','h')`,
+		`INSERT INTO pull_request_details(pr_id,state,comments) VALUES('pr-held','open',1),('pr-retried','open',1)`,
+		`INSERT INTO pull_request_comments(pr_id,comment_id,kind,body) VALUES('pr-held','incoming','inline','From the source.'),('pr-retried','incoming','inline','From the source.')`,
+	} {
+		if _, err := tx.Exec(statement); err != nil {
+			t.Fatal(statement, err)
+		}
+	}
 	// The receiving library read the same conversation with a parser that
 	// made a card and a source more, and its own fetch of the image failed:
 	// the accepted copy's rows replace its own, and the image it lacks arrives.
@@ -525,6 +543,11 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 		if err := db.QueryRow(`SELECT (SELECT COUNT(*) FROM message_assets)||' '||(SELECT COUNT(*) FROM message_sources)||' '||(SELECT name||':'||json_extract(details,'$.url') FROM message_assets)||' '||(SELECT url||':'||cited FROM message_sources)||' '||(SELECT hex(content) FROM remote_assets)||' '||(SELECT COUNT(*)||details FROM message_notes)`).Scan(&attached); err != nil ||
 			attached != `1 1 Lake:https://img.example/lake.png https://lakes.example/a:1 89504E47 1{"spoken_chars":3}` {
 			t.Fatalf("attachments, sources, notes and fetched images in %s: %q (%v)", path, attached, err)
+		}
+		var reviewed string
+		if err := db.QueryRow(`SELECT d.review_status||' '||f.status||' '||(SELECT hash FROM pull_request_commits WHERE pr_id=p.id)||' '||(SELECT body FROM pull_request_reviews WHERE pr_id=p.id)||' '||(SELECT body FROM pull_request_comments WHERE pr_id=p.id)
+			FROM pull_requests p JOIN pull_request_details d ON d.pr_id=p.id JOIN pull_request_fetches f ON f.pr_id=p.id WHERE p.number=5`).Scan(&reviewed); err != nil || reviewed != "approved fetched abc Ship it. Rename this." {
+			t.Fatalf("pull request reviews in %s: %q (%v)", path, reviewed, err)
 		}
 	}
 	for id, expression := range map[string]string{"seconds": "[duration_ms]/1000", "double_seconds": "[@computed/seconds]*2"} {
@@ -584,9 +607,28 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	if catalogCount(t, b, "message_authorship_spans") != 1 {
 		t.Fatal("compound integer identities were not retained")
 	}
+	// A forge's answer is taken or left whole. Here the destination reads
+	// pull request 6 itself, differently, and its latest read then fails: it
+	// keeps its own rows, which its summary counts. It holds only a failed
+	// read of pull request 7, and takes the source's answer and fetch record.
+	c = reopenCatalog(t, b.CatalogPath)
+	execTx(t, c.DB,
+		`DELETE FROM pull_request_comments WHERE pr_id IN (SELECT id FROM pull_requests WHERE number IN (6,7))`,
+		`INSERT INTO pull_request_comments(pr_id,comment_id,kind,body) SELECT id,'here','inline','Read here.' FROM pull_requests WHERE number=6`,
+		`UPDATE pull_request_fetches SET status='failed' WHERE pr_id IN (SELECT id FROM pull_requests WHERE number IN (6,7))`,
+		`DELETE FROM pull_request_details WHERE pr_id IN (SELECT id FROM pull_requests WHERE number=7)`)
+	c.Close()
 	again, err := TransferLibrary(context.Background(), a, b, false, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	c = reopenCatalog(t, b.CatalogPath)
+	var held, retried string
+	err = c.DB.QueryRow(`SELECT (SELECT f.status||' '||(SELECT GROUP_CONCAT(body) FROM pull_request_comments WHERE pr_id=p.id) FROM pull_requests p JOIN pull_request_fetches f ON f.pr_id=p.id WHERE p.number=6),
+		(SELECT f.status||' '||(SELECT GROUP_CONCAT(body) FROM pull_request_comments WHERE pr_id=p.id) FROM pull_requests p JOIN pull_request_fetches f ON f.pr_id=p.id JOIN pull_request_details d ON d.pr_id=p.id WHERE p.number=7)`).Scan(&held, &retried)
+	c.Close()
+	if err != nil || held != "failed Read here." || retried != "fetched From the source." {
+		t.Fatalf("pull request answers mixed: held=%q retried=%q (%v)", held, retried, err)
 	}
 	if receipt.ID != again.ID || catalogCount(t, b, "messages") != 3 {
 		snapshot, _ := openReadOnlySQLite(filepath.Join(b.CaptureRoot, ".imports", receipt.ID, "history.sqlite3"))
@@ -1188,17 +1230,21 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 			t.Fatal("readiness started a library service")
 		}
 	})
-	t.Run("both shells load shared host services before their callers", func(t *testing.T) {
+	t.Run("both shells load shared host services and the modal stack before their callers", func(t *testing.T) {
 		for name, page := range map[string]string{"library": appHTML(), "startup": applicationHTML()} {
-			include := `<script src="/assets/host-services.js"></script>`
-			adapter := strings.Index(page, include)
 			caller := strings.Index(page, `<script src="/assets/onboarding.js"`)
-			if strings.Count(page, include) != 1 || adapter < 0 || caller < adapter {
-				t.Fatalf("%s shell must load shared host services once before callers", name)
+			for _, script := range []string{"host-services.js", "modal.js"} {
+				include := `<script src="/assets/` + script + `"></script>`
+				adapter := strings.Index(page, include)
+				if strings.Count(page, include) != 1 || adapter < 0 || caller < adapter {
+					t.Fatalf("%s shell must load %s once before callers", name, script)
+				}
 			}
 		}
-		if data, err := assets.ReadFile("assets/host-services.js"); err != nil || len(data) == 0 {
-			t.Fatal("host services are not embedded", err)
+		for _, script := range []string{"host-services.js", "modal.js"} {
+			if data, err := assets.ReadFile("assets/" + script); err != nil || len(data) == 0 {
+				t.Fatal(script, "is not embedded", err)
+			}
 		}
 	})
 	t.Run("switch, open, create and rename move MCP with the selection", func(t *testing.T) {
@@ -1517,6 +1563,12 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 		m.ServeHTTP(httptest.NewRecorder(), r)
 		if purposes[len(purposes)-1] != "export" || purposes[0] != "" || !pickerPurposes["export"].File || pickerPurposes["source"].File {
 			t.Fatal("the picker is opened for what it chooses", purposes)
+		}
+		// A backup and a restore target are not asked for as a library.
+		for _, purpose := range []string{"backup", "restore"} {
+			if picker := pickerPurposes[purpose]; picker.Prompt == "" || picker.Prompt == pickerPurposes["library"].Prompt || picker.File {
+				t.Fatal("no folder prompt of its own for", purpose)
+			}
 		}
 		pickerError = fmt.Errorf("picker unavailable")
 		if w := request(http.MethodPost, "", m.token); w.Code != http.StatusInternalServerError {

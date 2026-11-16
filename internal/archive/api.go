@@ -135,6 +135,7 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		catalog.ops = server.ops
 		// Background work's IO runs at the utility tier (§10).
 		server.ops.lowerIO = true
+		server.ops.cpu = newCPULedger()
 		server.journal = newJournalWriter(catalog, server.ops)
 		catalog.recordInitialize(server.ops, triggerStartup)
 		server.leases.dirs = func() []string { return leaseDirs(server.Config()) }
@@ -219,6 +220,7 @@ func (s *Server) Serve() error {
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("backgroundLoop", s.backgroundLoop)
+	s.daemon("cpuLedger", s.cpuLedgerLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
 	s.daemon("compressCaptures", s.compressCapturesLoop)
@@ -368,6 +370,7 @@ func isUIPage(path string) bool {
 // uiAssets maps each static asset URL the UI loads to its file under assets/.
 var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/host-services.js":     {"host-services.js", "text/javascript; charset=utf-8"},
+	"/assets/modal.js":             {"modal.js", "text/javascript; charset=utf-8"},
 	"/assets/dictation.js":         {"dictation.js", "text/javascript; charset=utf-8"},
 	"/assets/data-guide.js":        {"data-guide.js", "text/javascript; charset=utf-8"},
 	"/assets/data-guide.css":       {"data-guide.css", "text/css; charset=utf-8"},
@@ -449,7 +452,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/probe":
 		writeJSON(w, ProbeSources(s.Config(), s.Catalog), http.StatusOK)
 	case path == "/api/providers":
-		writeJSON(w, map[string]any{"providers": providerInfos(), "capabilities": contentCapabilityList}, http.StatusOK)
+		writeJSON(w, map[string]any{"providers": providerInfos(), "provider_names": providerDisplayNames(), "capabilities": contentCapabilityList}, http.StatusOK)
 	case path == "/api/probe/tools":
 		home, _ := os.UserHomeDir()
 		writeJSON(w, map[string]any{"tools": probeTools(home, s.Config())}, http.StatusOK)
@@ -1057,6 +1060,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.postSessionPreferences(w, body)
 	case path == "/api/labels/settings":
 		s.postLabelsSettings(w, r, body)
+	case path == "/api/pull-request-reviews/settings":
+		s.postPullRequestReviewsSettings(w, r, body)
 	case path == "/api/capture":
 		s.startCapture(w, body)
 	case path == "/api/index":
@@ -1155,7 +1160,7 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.Config().Path == "" {
-			writeError(w, fmt.Errorf("the running service has no writable configuration path"), 400)
+			writeError(w, errors.New("This library has no settings file Pharos can write, so this source cannot be paused or turned on."), 400)
 			return
 		}
 		if err := s.setSourceEnabled(source.Name, enabled); err != nil {
@@ -1224,7 +1229,7 @@ func (s *Server) configuredSource(name string) (SourceConfig, error) {
 			return source, nil
 		}
 	}
-	return SourceConfig{}, fmt.Errorf("configured source not found: %s", name)
+	return SourceConfig{}, fmt.Errorf("No source named “%s” is set up for this Mac.", name)
 }
 
 // setSourceEnabled writes a toggle to the file defining the source and
@@ -1238,7 +1243,7 @@ func (s *Server) setSourceEnabled(name string, enabled bool) error {
 	defer s.configMu.Unlock()
 	index := slices.IndexFunc(s.config.Sources, func(source SourceConfig) bool { return source.Name == name })
 	if index < 0 {
-		return fmt.Errorf("configured source not found: %s", name)
+		return fmt.Errorf("No source named “%s” is set up for this Mac.", name)
 	}
 	hostFileMu.Lock()
 	// A library host's own sources live in its hosts/<id>.toml.
@@ -1264,7 +1269,7 @@ func (s *Server) removeSource(name string) error {
 	config := s.Config()
 	index := slices.IndexFunc(config.Sources, func(source SourceConfig) bool { return source.Name == name })
 	if index < 0 {
-		return probeRequestError{fmt.Errorf("configured source not found: %s", name)}
+		return probeRequestError{fmt.Errorf("No source named “%s” is set up for this Mac.", name)}
 	}
 	if file := config.Sources[index].File; file == "" || file != hostConfigPath(config) {
 		return probeRequestError{fmt.Errorf("%s is set up for every Mac in %s; remove it there", name, defaultString(file, config.Path))}
@@ -1366,7 +1371,7 @@ func (s *Server) sourceInventory() (map[string]any, error) {
 
 func (s *Server) syncSources(w http.ResponseWriter, sources []SourceConfig) {
 	if !s.acquireManualIngest() {
-		writeJSON(w, map[string]any{"error": "source indexing is already running"}, http.StatusConflict)
+		writeJSON(w, map[string]any{"error": "Another capture or index is running. Try again when it finishes."}, http.StatusConflict)
 		return
 	}
 	defer s.ingestMu.Unlock()

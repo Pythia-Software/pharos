@@ -8,6 +8,7 @@
 // the tests skip with an install hint.
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { extname, join, normalize, sep } from "node:path";
 import { after } from "node:test";
@@ -45,11 +46,47 @@ function asset(path, root = assetRoot) {
 // Every browser test skips, with the install hint, when the engine cannot run.
 export const skip = launchPlan().skip ?? false;
 
+// Stress modes that make timing-dependent failures reproducible:
+//   PHAROS_BROWSER_SLOWDOWN=N  throttles each page's CPU N times (Chromium) and
+//                              scales the harness's timeouts to match, so a slow
+//                              but correct test still passes and a race fails.
+//   PHAROS_BROWSER_JITTER=ms   delays each API response by a random 0..ms, which
+//                              reorders concurrent responses. Each delay comes
+//                              from PHAROS_BROWSER_SEED, the test's name and the
+//                              request, so a seed replays the same delays.
+// Both scale every time limit (run.mjs computes the same scale for each test's
+// own); a test that sets a limit of its own writes it as stretch(ms).
+const slowdown = Math.max(1, Number(process.env.PHAROS_BROWSER_SLOWDOWN) || 1);
+const jitter = Math.max(0, Number(process.env.PHAROS_BROWSER_JITTER) || 0);
+const timeoutScale = slowdown * (1 + jitter / 100);
+export const stretch = ms => ms * timeoutScale;
+function jitterDelays(name) {
+  // Each request's delay depends on what it asks for, not on arrival order.
+  const seen = new Map();
+  return call => {
+    const key = `${call.method} ${call.path}?${call.query}`, nth = (seen.get(key) ?? 0) + 1;
+    seen.set(key, nth);
+    return createHash("sha256").update(`${process.env.PHAROS_BROWSER_SEED ?? "0"}:${name}:${key}:${nth}`).digest().readUInt32LE(0) / 2 ** 32 * jitter;
+  };
+}
+
 // A configured header tool can be inline or in More at the current width.
+// The header moves tools in and out of More whenever its contents change width
+// (header.js layout), and some tools appear only once their data loads, so the
+// choice is made from what is shown now and retried if it goes stale.
 export async function activateHeaderTool(page, id) {
-  const tool = page.locator(`#${id}`);
-  if (!await tool.isVisible()) await page.getByRole('button', { name: 'More tools', exact: true }).click();
-  await tool.click();
+  const tool = page.locator(`#${id}`), more = page.getByRole('button', { name: 'More tools', exact: true });
+  const end = Date.now() + 5000 * timeoutScale, attempt = { timeout: 1000 * timeoutScale };
+  for (;;) {
+    try {
+      await page.waitForFunction(id => [document.getElementById(id), document.getElementById('headerMore')].some(element => element?.getClientRects().length), id, { timeout: Math.max(1, end - Date.now()) });
+      if (!await tool.isVisible()) await more.click(attempt);
+      await tool.click(attempt);
+      return;
+    } catch (error) {
+      if (Date.now() >= end) throw error;
+    }
+  }
 }
 
 let connection;
@@ -74,7 +111,7 @@ const json = (response, status, body) => {
 
 // Serves one test's page: the shell for every page route, assets from memory,
 // /assets/preferences.js from `state.preferences`, and the API from `routes`.
-function serve(routes, state, record) {
+function serve(routes, state, record, delay) {
   return createServer(async (request, response) => {
     const url = new URL(request.url, "http://localhost");
     const path = url.pathname;
@@ -90,6 +127,17 @@ function serve(routes, state, record) {
       return response.end(body);
     }
     if (!path.startsWith("/api/")) {
+      // A page route the server redirects, as /conversation/{id} goes to its
+      // work (redirectConversation): a stub returning { __redirect: path }.
+      for (const route of routes) {
+        const params = route.method === "GET" && route.match(path);
+        if (!params || typeof route.handler !== "function") continue;
+        const target = (await route.handler({ method: "GET", path, query: url.searchParams, params, state }))?.__redirect;
+        if (target) {
+          response.writeHead(302, { Location: target + url.search, "Cache-Control": "no-store" });
+          return response.end();
+        }
+      }
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       if (state.inbox) return response.end(asset("index.html", inboxRoot));
       if (path === "/app") return response.end(applicationHTML());
@@ -113,6 +161,7 @@ function serve(routes, state, record) {
     try { body = text ? JSON.parse(text) : undefined; } catch { body = text; }
     const call = { method: request.method, path, query: url.searchParams, body };
     record(call);
+    if (delay) await new Promise(resolve => setTimeout(resolve, delay(call)));
     for (const route of routes) {
       if (route.method !== request.method && route.method !== "*") continue;
       const params = route.match(path);
@@ -160,7 +209,7 @@ export async function open(t, { url = "/", viewport = { width: 1440, height: 900
   const errors = [], failed = [], calls = [], inflight = new Set();
   let wake = () => {};
   const routes = [...routeTable(api), ...(inbox ? [] : routeTable(defaultApi))];
-  const server = serve(routes, state, call => calls.push(call));
+  const server = serve(routes, state, call => calls.push(call), jitter ? jitterDelays(t.fullName ?? t.name) : null);
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const context = await (await browser()).newContext({ viewport, timezoneId: "America/Denver", locale: "en-US", reducedMotion: "reduce" });
@@ -179,10 +228,11 @@ export async function open(t, { url = "/", viewport = { width: 1440, height: 900
     assert.ok(!found.length, `${t.name}\n  ${found.join("\n  ")}`);
   });
   const page = await context.newPage();
-  page.setDefaultTimeout(5000);
+  if (slowdown > 1 && engine === "chromium") await (await context.newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate: slowdown });
+  page.setDefaultTimeout(5000 * timeoutScale);
   // Loading the 1.7 MB bundle in a fresh context is the one slow step on a
   // loaded machine; every wait after it keeps the 5 s limit.
-  page.setDefaultNavigationTimeout(20000);
+  page.setDefaultNavigationTimeout(20000 * timeoutScale);
   page.on("pageerror", error => errors.push(`pageerror: ${error.stack || error.message}`));
   page.on("console", message => { if (message.type() === "error") errors.push(`console: ${message.text()} (${message.location().url}:${message.location().lineNumber})`); });
   // A request counts as in flight until its response headers arrive: Chrome
@@ -221,10 +271,10 @@ export async function open(t, { url = "/", viewport = { width: 1440, height: 900
   });
 
   // Resolves once no request is in flight across two animation frames. The
-  // Dashboard Catalog previews every card through the fake server, which takes
+  // The Card Library carousel previews every card through the fake server, which takes
   // several seconds on a busy machine; the limit only bounds a page that never
   // settles.
-  async function settled(timeout = 20000) {
+  async function settled(timeout = 20000 * timeoutScale) {
     const end = Date.now() + timeout;
     for (;;) {
       while (inflight.size) {

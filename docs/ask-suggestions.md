@@ -44,7 +44,7 @@ A new page therefore needs a question or a decision.
 `{scope}` becomes " in the NAME repository" only when two things hold: the
 signal found most of its evidence in one named repository, and the library
 has at least two named repositories. Otherwise it becomes nothing.
-`{period}` becomes "this week", "this month" or "lately", depending on when
+`{period}` becomes "in the last week", "over the last four weeks" or "lately", depending on when
 the signal's evidence falls.
 
 ## Signals
@@ -58,7 +58,7 @@ signal returns:
 | score | in [0, 1]; 0 means nothing worth asking about |
 | support | how much evidence the score rests on |
 | repository | the repository holding most of the evidence, if one does |
-| period | whether the evidence stands out this week or over the month |
+| period | whether the evidence stands out in the last week or over the last four weeks |
 | lead | one private sentence for the agent |
 
 Each signal requires real support before it scores. For example, failing
@@ -89,13 +89,20 @@ three areas scoring 0.3 or more whose pages have never been visited.
 The Background Processing item Ask Pharos suggestions (`ask.suggestions`)
 exists only where Ask Pharos is enabled. It runs Hourly by default and is
 adaptive. Its inputs are:
-- the completed generation of each analysis-chain stage;
-- the safety and findings build markers;
-- the local day, since every window moves daily.
+- the local day, since every window moves daily, and its quarter (00–06,
+  06–12, 12–18, 18–24), so new activity shows within six hours;
+- the safety build marker and the findings review generation.
+
+Analysis stages completing and findings measure passes are not inputs: they
+follow every index, and re-reading every signal several times an hour (about
+a minute with a cold page cache) bought nothing for questions that change over
+days.
 
 When the inputs change, the item runs every signal, each with a 30 s deadline.
-A failed signal is recorded in the row's `errors` and leaves only its own
-areas out. The result is written as one `meta` row (`ask_suggestions`), with
+A failed signal is recorded in the row's `errors` and logged, and leaves only
+its own areas out. A signal that hits its deadline keeps its previous score
+instead (its error says so), so a cold page cache does not drop an area. The
+result is written as one `meta` row (`ask_suggestions`), with
 each signal's time in `timingsMs`. Enabling Ask Pharos requests a run, and so
 does the first suggestions request before any run.
 

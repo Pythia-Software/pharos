@@ -63,6 +63,10 @@ still be served; nothing is deleted when data changes.
 | stale | serve it, queue a refresh | compute; if the service is busy or computing fails, serve it and queue a refresh | compute |
 | none | compute | compute | compute |
 
+An entry is stored with the scope its request read (the argument of the
+domain's stamp). When a build changes which scope a request reads, the first
+request for a stored entry moves it to the new scope, and it is rebuilt there.
+
 The response header `X-Pharos-Cache` says what happened (`fresh`, `stale` or
 `live`) and `X-Pharos-Cache-Built` says when the body was computed.
 
@@ -72,10 +76,39 @@ interactive query is running or waiting (its own queries are marked as
 background and not counted). Entries stored under another domain version
 are rebuilt the same way. Entries a request was just answered with go first, in
 the order they were asked for; after those, entries asked for in the last
-three days that have gone stale since, but only those someone came back to
-(asked for again an hour or more after they were first stored). A filter
-tried once is stored, and refreshed if it is asked for again, but creates no
-standing background work.
+three days whose data has changed since they were computed (their stamp is
+no longer the current one), but only those someone came back to (asked for
+again an hour or more after they were first stored). A filter tried once is
+stored, and refreshed if it is asked for again, but creates no standing
+background work.
+
+The sweep waits for the data to settle. It queues the entries of a scope only
+once that scope's stamp has been the same for 15 minutes (`resultSettle`), and
+every further change starts the wait again; a service that has just started
+waits the same time before its first round. Any write to a table behind the
+cached views makes every entry of its scope stale, and one round of rebuilds
+is minutes of CPU, nearly all of it (97% measured) to store the answer that
+was already there. Without the wait, a library gaining a few messages every
+few minutes was rebuilt continuously, each round stale before anyone saw it.
+Fifteen minutes is the default interval of the scheduled index: a round
+starts once an index has come and gone without writing anything, which is
+when its answers will last. This delays only work nobody asked for. An entry
+a request is answered with is queued at once, ahead of the sweep's, whether
+or not the data has settled.
+
+A background build that fails (an error, or a query that runs past the
+two-minute limit) leaves the stale entry as it is. The sweep does not queue
+that entry again until its data changes again; a request for it still does.
+
+An entry that is stale only by age (a window ending now, over data that has
+not changed) is rebuilt when it is asked for and not before. Rebuilding it
+unasked only moves its window, which three times in four gives the same
+answer, and doing that every ten minutes for every such entry kept more than
+a core busy on a library nobody was looking at. The first request for it
+after any length of time is answered with the stored body as *stale*, with
+the time it was computed, and queues it at the front; the page follows up
+until the rebuilt answer arrives (see "How the frontend chooses"). A person
+is never shown an aged window as if it were current.
 
 The same refresher keeps the derived values behind the answers ready. Some
 datasets are computed in memory before any query over them can run (the
@@ -97,6 +130,11 @@ It runs as the maintenance pass's cache warming does, at background I/O
 priority. A rebuild that fails or is interrupted is tried again at the next
 look. This needs the result cache: a library that has none (rule under "One
 file per library") relies on the maintenance pass alone.
+
+Rebuilding a stored answer nobody asked for (an entry the sweep found) reads
+derived values without counting as a request for them, so those rebuilds do
+not keep values warm that no person has asked for in half an hour. An answer
+rebuilt because a page was just shown it does count.
 
 **7. Entries leave by disuse or size.** An entry nobody asks for in 14 days
 is dropped, and the least recently used go first once the file holds more
@@ -217,6 +255,18 @@ Keep per-person or per-session state out of a domain unless it is part of
   replace one with an older copy and its generation can later reach a number
   seen before. Delete the file after doing that. Libraries are not affected,
   because a restore changes their instance.
+- It does not keep a window ending now moving while nobody asks for it. A
+  page opened after more than ten minutes away draws its clock-relative
+  answers as they were last computed, marked with their age, and replaces
+  them as the refresher rebuilds them.
 - The refresher does not make the work cheaper. After a change that touches
   every card, Home's entries take a few minutes to catch up, in the
-  background and only while the service is otherwise idle.
+  background, only while the service is otherwise idle, and only once the
+  data has been still for 15 minutes. A page opened before then draws the
+  stored answers as stale and has them rebuilt first.
+- A stamp is as wide as its scope: a write to any table behind the cached
+  views makes every entry of the scope stale, although most answers do not
+  read that table. Narrower stamps (per dataset, from the tables it reads)
+  would avoid most rebuilds, but a table left out of a dataset's list would
+  serve a wrong answer as fresh, so they wait for a checked declaration of
+  what each dataset reads.

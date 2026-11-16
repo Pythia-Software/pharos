@@ -42,7 +42,7 @@ var delegationMetrics = []delegationMetricSpec{
 	{"cost", "API cost", "usd", "API-rate estimate on the date of use, not billing. Partial values are lower bounds."},
 	{"calls", "Tool calls", "count", "Distinct retained tool invocations."}, {"errors", "Errors", "count", "Reported tool failures; not the outcome of the agent."},
 	{"events", "Agent events", "count", "Retained agent events at the display probability threshold, attributed through session message membership. Unprocessed messages may contain additional events."},
-	{"files", "Files Edited", "count", "Distinct file paths recorded by successful edit/write tools, including adds/deletes. Repeated edits count once; Self + children deduplicates across sessions. Shell edits and extra paths in multi-file patches may be unavailable."},
+	{"files", "Files edited", "count", "Distinct file paths recorded by successful edit/write tools, including adds/deletes. Repeated edits count once; Self + children deduplicates across sessions. Shell edits and extra paths in multi-file patches may be unavailable."},
 	{"filesRead", "Files read", "count", "Distinct file paths recorded by successful read tools. Repeated reads count once; Self + children deduplicates across sessions. Reads without retained paths are incomplete; search/list tools do not count as file reads."},
 	{"messages", "Messages", "count", "Messages recorded in the agent session."}, {"requests", "Model requests", "count", "Distinct recorded model requests."}, {"turns", "User turns", "count", "Retained user message starts; injected agent assignments do not count as user turns."},
 	{"clock", "Clock span", "ms", "Earliest to latest evidence across included sessions, including unclassified time."},
@@ -52,7 +52,7 @@ var delegationMetrics = []delegationMetricSpec{
 	{"toolSum", "Tool duration sum", "ms", "Sum of recorded call durations; overlapping calls accumulate."},
 	{"wait", "Blocking wait", "ms", "Requires explicit blocking boundaries. Launch acknowledgements and polling are excluded."},
 	{"modelTime", "Model processing", "ms", "Requires measured model start/end boundaries. Inferred timeline backgrounds are excluded."},
-	{"backgroundTime", "Background process", "ms", "Requires process lifecycle boundaries. A background launch is insufficient."},
+	{"backgroundTime", "Machine waits", "ms", "Clock time covered by background commands, Monitor watches and scheduled wakeups, from launch to the notice that ended them. Overlap counts once. Waits whose end was not recorded are excluded; agent apps that do not record these are unknown."},
 	{"episodes", "Activity periods", "count", "Groups of tool calls, model requests and first/last message timestamps separated by more than 30 minutes. These are estimated activity periods; they do not establish when an agent finished."},
 	{"children", "Children", "count", "Self counts directly delegated agent sessions; Self + children counts all delegated descendants once."},
 	{"leaves", "Agents without children", "count", "Included agent sessions with no known delegated children."}, {"depth", "Depth", "count", "Greatest number of delegation levels below the main agent among included agent sessions."},
@@ -189,6 +189,12 @@ type delegationTool struct {
 	Start     *float64 `json:"start"`
 	End       *float64 `json:"end"`
 	Duration  *float64 `json:"duration"`
+	// A harness wait the call started (harness_waits.go) runs on after End
+	// to WaitEnd, which is nil when the transcript does not show its end.
+	WaitKind   string   `json:"wait_kind,omitempty"`
+	WaitEnd    *float64 `json:"wait_end,omitempty"`
+	WaitStatus string   `json:"wait_status,omitempty"`
+	WaitEvents int      `json:"wait_events,omitempty"`
 }
 type delegationSnapshot struct {
 	ID       string
@@ -346,7 +352,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	}
 	defer tx.Rollback()
 	var workspaceTitle string
-	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(title,'Untitled work') FROM workspaces WHERE id=?", workspace).Scan(&workspaceTitle); err == sql.ErrNoRows {
+	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(title,'Untitled workspace') FROM workspaces WHERE id=?", workspace).Scan(&workspaceTitle); err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
@@ -549,11 +555,28 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		// does not decide whether their reported usage overlaps.
 		reporting := 0
 		missingInput := false
-		for _, row := range rows {
+		reports := func(row map[string]any) bool {
 			usage := firstString(row["usage_status"])
-			if usage == "" || usage == "unavailable" || usage == "in-child-conversation" || row["id"] != lead["id"] && integer(row["total_tokens"]) == 0 {
+			return !(usage == "" || usage == "unavailable" || usage == "in-child-conversation" || row["id"] != lead["id"] && integer(row["total_tokens"]) == 0)
+		}
+		// A mirrored launch reports the same work again (Conductor records each
+		// agent's usage on its copy of the call): it counts only when no other
+		// stream here reports, and then only once.
+		primary, secondary := false, false
+		for _, row := range rows {
+			primary = primary || reports(row) && !res.MirroredLaunch(firstString(row["id"]))
+		}
+		for _, row := range rows {
+			if !reports(row) {
 				continue
 			}
+			if res.MirroredLaunch(firstString(row["id"])) {
+				if primary || secondary {
+					continue
+				}
+				secondary = true
+			}
+			usage := firstString(row["usage_status"])
 			reporting++
 			estimated := estimateFlag(row["is_estimate"])
 			// An estimate carries input only when its row says so.
@@ -657,7 +680,11 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	}
 	s.Coverage.Missing = append([]string{}, res.Coverage.Missing...)
 	if unowned > 0 {
-		s.Warnings = append(s.Warnings, fmt.Sprintf("%d launch attempts have no resolved issuer.", unowned))
+		verb := "have"
+		if unowned == 1 {
+			verb = "has"
+		}
+		s.Warnings = append(s.Warnings, fmt.Sprintf("%s %s no known parent agent session.", plural(unowned, "launch attempt"), verb))
 	}
 	// Parents, ancestry and evidence come from the resolution. A conflicting,
 	// missing or cyclic parent leaves the row at the top of the layout with its
@@ -675,7 +702,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		}
 		var launch sourceRef
 		n.ParentID = p.nodeID(x.Parent.ParentID)
-		n.ParentEvidence, launch = p.parentEvidence(x)
+		n.ParentEvidence, launch = p.parentEvidence(x, workspace)
 		n.ParentCertainty = x.Parent.Certainty.String()
 		switch {
 		case launch.Kind == sourceSession:
@@ -862,7 +889,7 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		}
 	}
 	// Only compact ledger fields are streamed; transcript bodies never enter the snapshot.
-	tools, err := tx.QueryContext(ctx, `SELECT id,agent_session_id,conversation_id,call_message_id,tool_name,tool_category,command_category,status,started_at,ended_at,duration_ms,file_path,path_absolute,repo_path,path_repository_id FROM tool_calls WHERE workspace_id=?`, workspace)
+	tools, err := tx.QueryContext(ctx, `SELECT id,agent_session_id,conversation_id,call_message_id,tool_name,tool_category,command_category,status,started_at,ended_at,duration_ms,file_path,path_absolute,repo_path,path_repository_id,wait_kind,wait_ended_at,wait_status,wait_events FROM tool_calls WHERE workspace_id=?`, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -874,9 +901,10 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			return nil, fmt.Errorf("workspace exceeds the 500,000-event analysis limit")
 		}
 		var id, cid, name, cat, status string
-		var sid, msg, command, start, end, file, absolute, repoPath, repoID sql.NullString
+		var sid, msg, command, start, end, file, absolute, repoPath, repoID, waitKind, waitEnd, waitStatus sql.NullString
 		var duration sql.NullFloat64
-		if err = tools.Scan(&id, &sid, &cid, &msg, &name, &cat, &command, &status, &start, &end, &duration, &file, &absolute, &repoPath, &repoID); err != nil {
+		var waitEvents int
+		if err = tools.Scan(&id, &sid, &cid, &msg, &name, &cat, &command, &status, &start, &end, &duration, &file, &absolute, &repoPath, &repoID, &waitKind, &waitEnd, &waitStatus, &waitEvents); err != nil {
 			tools.Close()
 			return nil, err
 		}
@@ -889,7 +917,13 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		if n == nil || !own(n, obs, sid.String, cid, "calls", "errors", "toolSum", "files", "filesRead") {
 			continue
 		}
-		t := delegationTool{ID: id, MessageID: msg.String, Name: name, Category: delegationCategory(name, cat, command.String), Status: status, Start: delegationTime(start.String), End: delegationTime(end.String)}
+		t := delegationTool{ID: id, MessageID: msg.String, Name: name, Category: delegationCategory(name, cat, command.String), Status: status, Start: delegationTime(start.String), End: delegationTime(end.String),
+			WaitKind: waitKind.String, WaitStatus: waitStatus.String, WaitEvents: waitEvents}
+		if t.WaitKind != "" {
+			if at := delegationTime(waitEnd.String); at != nil && t.Start != nil && *at >= *t.Start {
+				t.WaitEnd = at
+			}
+		}
 		if duration.Valid {
 			v := duration.Float64
 			t.Duration = &v
@@ -1280,6 +1314,14 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 			n.Self["toolTime"] = delegationNumber(delegationUnion(spans), quality, known, len(n.tools))
 			n.Self["toolAgent"] = n.Self["toolTime"]
 		}
+		// Waits none of whose ends were recorded are unknown, not 0 ms.
+		if waits, known, total := delegationWaitSpans(n.tools); total > 0 && known > 0 {
+			quality := "observed"
+			if known < total {
+				quality = "partial"
+			}
+			n.Self["backgroundTime"] = delegationNumber(delegationUnion(waits), quality, known, total)
+		}
 		v := n.Self["toolSum"]
 		v.Total = len(n.tools)
 		if v.Known < len(n.tools) {
@@ -1662,6 +1704,13 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 				}
 			}
 			value = delegationUnion(spans)
+		case "backgroundTime":
+			spans := []delegationSpan{}
+			for _, n := range nodes {
+				waits, _, _ := delegationWaitSpans(n.tools)
+				spans = append(spans, waits...)
+			}
+			value = delegationUnion(spans)
 		case "children":
 			value = float64(max(0, len(nodes)-1))
 		}
@@ -1674,6 +1723,22 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 	return result
 }
 
+// delegationWaitSpans lists the harness waits among tools with a recorded
+// end, from launch to that end, and how many waits there are in all.
+func delegationWaitSpans(tools []delegationTool) (spans []delegationSpan, known, total int) {
+	for _, t := range tools {
+		if t.WaitKind == "" {
+			continue
+		}
+		total++
+		if t.Start != nil && t.WaitEnd != nil {
+			spans = append(spans, delegationSpan{*t.Start, *t.WaitEnd})
+			known++
+		}
+	}
+	return spans, known, total
+}
+
 // delegationCategory groups a call by its tool, or for a shell call by what
 // its primary command does, so "cat" and "rg" read and "git" is Git.
 func delegationCategory(name, cat, commandCategory string) string {
@@ -1682,7 +1747,7 @@ func delegationCategory(name, cat, commandCategory string) string {
 	switch {
 	case name == "wait_agent" || name == "wait" || name == "taskoutput":
 		return "wait"
-	case strings.Contains(name, "sleep") || strings.Contains(name, "poll") || name == "write_stdin":
+	case strings.Contains(name, "sleep") || strings.Contains(name, "poll") || name == "write_stdin" || name == "monitor" || name == "schedulewakeup":
 		return "poll"
 	case cat == "agent" || strings.Contains(name, "delegate") || strings.Contains(name, "spawn") || name == "task":
 		return "delegate"
@@ -1726,7 +1791,7 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 	}
 	q := r.URL.Query()
 	if wanted := q.Get("snapshot"); wanted != "" && wanted != snapshot.ID {
-		writeJSON(w, map[string]any{"error": "Archive changed; refresh the explorer.", "code": "snapshot_changed"}, 409)
+		writeJSON(w, map[string]any{"error": "The library changed. Reload this view.", "code": "snapshot_changed"}, 409)
 		return
 	}
 	if timeline {
@@ -1869,7 +1934,7 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 			return
 		}
 		if cur.Snapshot != snapshot.ID || cur.Query != query {
-			writeJSON(w, map[string]any{"error": "Archive or query changed; restart pagination.", "code": "snapshot_changed"}, 409)
+			writeJSON(w, map[string]any{"error": "The library changed. Reload this view.", "code": "snapshot_changed"}, 409)
 			return
 		}
 		offset = cur.Offset
@@ -2006,6 +2071,12 @@ type delegationMark struct {
 	Preview          string  `json:"preview,omitempty"`
 	PreviewTruncated bool    `json:"preview_truncated,omitempty"`
 	Status           string  `json:"status,omitempty"`
+	// A harness wait runs on from End to WaitEnd (nil: not recorded). The
+	// call's own End stays its launch acknowledgement.
+	WaitKind   string   `json:"wait_kind,omitempty"`
+	WaitEnd    *float64 `json:"wait_end,omitempty"`
+	WaitStatus string   `json:"wait_status,omitempty"`
+	WaitEvents int      `json:"wait_events,omitempty"`
 }
 
 func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request, snapshot *delegationSnapshot) {
@@ -2051,7 +2122,7 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 		var err error
 		messageLanes, taxonomy, err = s.Catalog.delegationTimelineMessages(r.Context(), snapshot, ids, start, end)
 		if errors.Is(err, errDelegationSnapshotChanged) {
-			writeJSON(w, map[string]any{"error": "Archive changed; refresh the explorer.", "code": "snapshot_changed"}, 409)
+			writeJSON(w, map[string]any{"error": "The library changed. Reload this view.", "code": "snapshot_changed"}, 409)
 			return
 		}
 		if err != nil {
@@ -2082,13 +2153,22 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 			if t.End != nil && *t.End >= *t.Start {
 				stop = *t.End
 			}
-			if stop < start || *t.Start > end {
+			reach := stop
+			if t.WaitEnd != nil {
+				reach = max(reach, *t.WaitEnd)
+			}
+			if reach < start || *t.Start > end {
 				continue
 			}
-			knots = append(knots, *t.Start, stop)
-			mark := delegationMark{Start: *t.Start, End: stop, EndKnown: t.End != nil && *t.End >= *t.Start, Category: t.Category, Count: 1, Error: t.Status == "error", ToolID: t.ID, MessageID: t.MessageID, Name: t.Name}
-			// Small neighboring calls share a mark. Errors retain their own reference.
-			if q.Get("labels") != "1" && stop-*t.Start < bucket && len(marks) < 2000 && !mark.Error {
+			// Only a launch inside the window informs the model-activity
+			// guess; one hours earlier would invent orchestration at the window's edge.
+			if stop >= start {
+				knots = append(knots, *t.Start, stop)
+			}
+			mark := delegationMark{Start: *t.Start, End: stop, EndKnown: t.End != nil && *t.End >= *t.Start, Category: t.Category, Count: 1, Error: t.Status == "error", ToolID: t.ID, MessageID: t.MessageID, Name: t.Name,
+				WaitKind: t.WaitKind, WaitEnd: t.WaitEnd, WaitStatus: t.WaitStatus, WaitEvents: t.WaitEvents}
+			// Small neighboring calls share a mark. Errors and waits retain their own reference.
+			if q.Get("labels") != "1" && stop-*t.Start < bucket && len(marks) < 2000 && !mark.Error && mark.WaitKind == "" {
 				key := fmt.Sprintf("%s:%d", t.Category, int((*t.Start-start)/bucket))
 				if existing := groups[key]; existing != nil {
 					existing.End = max(existing.End, stop)

@@ -1,7 +1,8 @@
 import React, { useEffect, useId, useRef, useState } from "react";
+import "../modal";
 import { createRoot } from "react-dom/client";
 import { toJpeg } from "html-to-image";
-import { boundedLog, pendingSubmission, safeURL, type Annotation, type Diagnostics, type Screenshot, type Submission } from "./model";
+import { boundedLog, errorText, pendingSubmission, safeURL, type Annotation, type Diagnostics, type Screenshot, type Submission } from "./model";
 import { Icon } from "../icons";
 import { preferences } from "../preferences";
 import { SearchHelp } from "../search-help";
@@ -28,7 +29,7 @@ function db(): Promise<IDBDatabase> {
     const request = indexedDB.open("uifeedback.v1", 1);
     request.onupgradeneeded = () => { for (const name of ["screenshots", "outbox"]) request.result.createObjectStore(name); };
     request.onsuccess = () => resolve(request.result); request.onerror = () => { database = null; reject(new Error("Local feedback storage is unavailable.")); };
-    request.onblocked = () => reject(new Error("Close another Pharos tab to enable feedback storage."));
+    request.onblocked = () => reject(new Error("Close other Pharos windows or tabs to enable feedback storage."));
   });
   return database;
 }
@@ -94,7 +95,7 @@ async function completeAskFeedback(id: string, submission: Submission): Promise<
     object.put(feedbackReceipt(submission), prefix + "sent");
     for (const name of ["pending", "review", "draft"]) object.delete(prefix + name);
     tx.oncomplete = () => resolve();
-    tx.onerror = tx.onabort = () => reject(new Error("Feedback was received, but its receipt could not be saved. Retry to confirm delivery."));
+    tx.onerror = tx.onabort = () => reject(new Error("Feedback was received, but its receipt could not be saved. Send again, without editing, to confirm delivery."));
   });
 }
 function feedbackBody(submission: Submission): string {
@@ -106,7 +107,7 @@ async function submitFeedback(submission: Submission, body = feedbackBody(submis
   const res = await fetch("/api/feedback/submit", { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(55000) });
   if (!res.ok) { const value = await res.json().catch(() => ({})); throw new Error(value.error || "Could not send feedback. Your draft is saved; try again."); }
   const value = await res.json();
-  if (value.id !== submission.id || !value.received) throw new Error("Receipt could not be confirmed. Retry to confirm delivery.");
+  if (value.id !== submission.id || !value.received) throw new Error("Could not confirm that feedback was received. Send again, without editing, to confirm delivery.");
 }
 const askFeedbackSender = createAskFeedbackSender({ prepare: prepareAskFeedback, submit: submitFeedback, complete: completeAskFeedback });
 async function capture(element: HTMLElement, id: string): Promise<Screenshot> {
@@ -165,8 +166,9 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
   const sentHere = useRef(false), wasCollapsed = useRef(false), receiptMessage = useRef<HTMLParagraphElement>(null);
   const busyRef = useRef(busy); busyRef.current = busy;
   const closeRef = useRef<() => void>(() => close?.()); closeRef.current = () => { void keepDraft(); };
-  useEffect(() => { if (proposal) return; const el = dialog.current!, previous = document.activeElement, header = document.getElementById("feedbackSubmitToggle"); el.showModal(); header?.setAttribute("aria-expanded", "true"); const cancel = (e: Event) => { e.preventDefault(); if (!busyRef.current) closeRef.current(); }; el.addEventListener("cancel", cancel);
-    return () => { el.removeEventListener("cancel", cancel); el.close(); header?.setAttribute("aria-expanded", "false"); if (previous instanceof HTMLElement) restoreFocus(previous); };
+  useEffect(() => { if (proposal) return; const el = dialog.current!, previous = document.activeElement, header = document.getElementById("feedbackSubmitToggle"); // Escape keeps the draft and closes, except while sending; the owner restores focus.
+    window.pharosModal!.open(el, { backdrop: false, restoreFocus: false, dismiss: () => { if (!busyRef.current) closeRef.current(); } }); header?.setAttribute("aria-expanded", "true");
+    return () => { el.close(); header?.setAttribute("aria-expanded", "false"); if (previous instanceof HTMLElement) restoreFocus(previous); };
   }, []);
   useEffect(() => {
     let mounted = true;
@@ -180,15 +182,15 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
       if (wasDiscarded && !sent) setDiscarded(true);
       if (pending) {
         try { const outcome = await pending; if (mounted) applyOutcome(outcome); }
-        catch (e) { if (mounted) setError(String(e)); }
+        catch (e) { if (mounted) setError(errorText(e)); }
         finally { if (mounted) { busyRef.current = false; setBusy(false); } }
       }
-    }, e => { if (mounted) { setError(String(e)); busyRef.current = false; setBusy(false); } });
+    }, e => { if (mounted) { setError(errorText(e)); busyRef.current = false; setBusy(false); } });
     return () => { mounted = false; };
   }, []);
-  useEffect(() => { if (receipt || proposal) return; try { localStorage.setItem(draftKey, JSON.stringify(draft)); } catch { setError("Could not save this draft. Check local storage before sending."); } }, [draft, receipt]);
-  useEffect(() => { if (proposal && ready && !receipt && !discarded) void saveAskDraft(proposal.id, { draft }).catch(e => setError(String(e))); }, [draft, ready, receipt, discarded]);
-  useEffect(() => { if (ready && !receipt && !discarded) void saveReview().catch(e => setError(String(e))); }, [annotations, sourceIDs, diagnostics, logs, ready, receipt, discarded]);
+  useEffect(() => { if (receipt || proposal) return; try { localStorage.setItem(draftKey, JSON.stringify(draft)); } catch { setError("Could not save this draft on this Mac. Send it now or copy the text before closing."); } }, [draft, receipt]);
+  useEffect(() => { if (proposal && ready && !receipt && !discarded) void saveAskDraft(proposal.id, { draft }).catch(e => setError(errorText(e))); }, [draft, ready, receipt, discarded]);
+  useEffect(() => { if (ready && !receipt && !discarded) void saveReview().catch(e => setError(errorText(e))); }, [annotations, sourceIDs, diagnostics, logs, ready, receipt, discarded]);
   useEffect(() => { if (discarded && discardedHere.current) discardMessage.current?.focus({ preventScroll: true }); }, [discarded]);
   useEffect(() => {
     if (!collapsed && (wasCollapsed.current || receipt && sentHere.current)) {
@@ -219,7 +221,7 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
       }
       discardedHere.current = true; setDiscarded(true);
       setDraft({ kind: proposal.kind, comment: "" }); setDiagnostics(null); setLogs(false);
-    } catch (e) { setError(String(e)); }
+    } catch (e) { setError(errorText(e)); }
     finally { busyRef.current = false; setBusy(false); }
   }
   // Clears the manual report everywhere it is kept, including its annotations
@@ -234,7 +236,7 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
       await stored("outbox", key("review"), "delete"); await stored("outbox", key("pending"), "delete");
       localStorage.removeItem(draftKey);
       close?.();
-    } catch (e) { busyRef.current = false; setBusy(false); setError(String(e)); }
+    } catch (e) { busyRef.current = false; setBusy(false); setError(errorText(e)); }
   }
   async function keepDraft(afterClose?: () => void) {
     if (busyRef.current) return;
@@ -245,7 +247,7 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
       if (proposal) { setCollapsed(true); busyRef.current = false; setBusy(false); } else close?.();
       afterClose?.();
     }
-    catch (e) { busyRef.current = false; setError(String(e)); setBusy(false); }
+    catch (e) { busyRef.current = false; setError(errorText(e)); setBusy(false); }
   }
   function update(patch: Partial<Draft>) { setDraft(value => ({ ...value, ...patch })); }
   async function includeLogs(on: boolean) {
@@ -254,7 +256,7 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
     try {
       const res = await fetch("/api/feedback/diagnostics"); if (!res.ok) throw new Error("Could not collect service diagnostics. Try again, or send without logs.");
       const data = await res.json(); setDiagnostics({ browser: boundedLog(`Browser: ${navigator.userAgent}\n${browserErrors}`), requests: boundedLog(failedRequests), service: boundedLog(String(data.service || "")) }); setLogs(true);
-    } catch (e) { setError(String(e)); } finally { setCollecting(false); }
+    } catch (e) { setError(errorText(e)); } finally { setCollecting(false); }
   }
   async function send() {
     if (!ready || busyRef.current || receipt || discarded || !Array.from(fields.current?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("input,textarea,select") ?? []).every(field => field.reportValidity())) return;
@@ -278,8 +280,8 @@ function Composer({ close, proposal }: { close?: () => void; proposal?: AskFeedb
         await stored("outbox", key("pending"), "delete"); await stored("outbox", key("review"), "delete");
         for (const a of annotations) await stored("screenshots", a.id, "delete"); localStorage.removeItem(draftKey);
       }
-      catch { setError("Feedback was received, but this device could not clear its saved draft."); }
-    } catch (e) { setError(String(e)); } finally { busyRef.current = false; setBusy(false); }
+      catch { setError("Feedback was received, but this Mac could not clear its saved draft."); }
+    } catch (e) { setError(errorText(e)); } finally { busyRef.current = false; setBusy(false); }
   }
   if (proposal && discarded && !receipt) return <section className="uifeedback-inline" aria-label="Feedback draft discarded" data-feedback-ui>
     <p role="status" tabIndex={-1} ref={discardMessage}>Draft discarded.</p>

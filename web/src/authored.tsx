@@ -1,4 +1,5 @@
 import { useViewEntry } from "./view-state";
+import { providerName, sourceName } from "./provider-names";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { authorshipCategories } from "./authorship-categories";
 import { createPortal } from "react-dom";
@@ -22,10 +23,10 @@ const ruleHelp: Record<string, string> = {
   "Code block": "Text inside ``` fences.",
   "Log, trace, code, or data": "At least three lines of program output or code (logs, stack traces, diffs, JSON, file:line, shell prompts, source) with at most two prose lines between them.",
   "Table": "Two or more markdown table rows.",
-  "Formatted like agent output": "A region with two or more headings or three or more bolded bullets, the way agents format replies.",
+  "Formatted like agent output": "A region with two or more headings, three or more bolded bullets, or a heading and two bolded bullets, the way agents format replies.",
   "Mostly identifiers, paths, or code": "A line whose words are mostly identifiers: paths, IDs, selectors, or code.",
   "Path, URL, or ID": "A run of identifiers 20 or more characters long inside a typed sentence.",
-  "Sent faster than typing": "The rest of the message arrived faster than 20 characters a second after your previous message in this conversation.",
+  "Sent faster than typing": "The rest of the message arrived faster than 20 characters a second after your previous message in this conversation (checked only when 600 or more characters are left).",
   "Generated page feedback": "The generated labels, selectors, page text, styles, and instructions around a feedback comment.",
   "Human feedback comment": "The comment entered in a recognized page-feedback report; generated context is counted separately.",
   "Matches agent-written content": "Matches newly authored file content or added patch lines from the preceding seven days, including short review items anchored to that same source.",
@@ -36,7 +37,7 @@ const ruleHelp: Record<string, string> = {
   "Matches recent agent output": "A run of 12 or more words matching one agent source from the preceding seven days, or a short review item anchored to that same source.",
   "Already sent earlier": "A run of 12 or more words matching a message you sent before, however long ago.",
   "Line already sent in other conversations": "A line of 8 or more words already sent in 2 other conversations.",
-  "Repeated prompt": "The same text was sent in 5 or more sessions on 3 or more days: a button or saved prompt.",
+  "Repeated prompt": "The same text was sent in 5 or more conversations on 3 or more days: a button or saved prompt.",
   "Slash command": "A leading slash command. Its arguments stay typed.",
   "Attachment reference": "A Conductor attachment marker, an attachment path, or an image placeholder.",
   "Launched by a command": "A headless run linked to the shell command, in another conversation, that started it.",
@@ -46,12 +47,16 @@ const ruleHelp: Record<string, string> = {
   "Sent by automation": "Conductor recorded an API key as its sender.",
 };
 // These are stored classifier identities; vocabulary changes belong in the
-// displayed explanation, never in the lookup keys.
+// displayed explanation and label, never in the lookup keys.
+const ruleLabels: Record<string, string> = { "Harness context": "App instructions" };
+/** A stored rule or reason as people read it. The Rules filter's options in
+ * the schemas carry the same labels. */
+export const authorshipRuleLabel = (rule: string) => Object.hasOwn(ruleLabels, rule) ? ruleLabels[rule] : rule;
 const harnessRules = new Set(["Conductor system instruction", "System reminder", "Environment context", "Project instructions", "Plugin recommendations", "Harness context"]);
 export function explainAuthorshipRule(rule: string | undefined, category: string | undefined): string {
   if (rule && ruleHelp[rule]) return ruleHelp[rule];
-  if (rule && harnessRules.has(rule)) return "A block the agent app adds at the start of the message. It stays part of the prompt; only this count sets it apart.";
-  if (rule?.startsWith("Sent by a headless") || rule === "Sent by a codex exec run") return "The run's transcript or logs show it was started headlessly, by a script or another agent.";
+  if (rule && harnessRules.has(rule)) return "A block the agent app adds to the start of the message. It is still sent as part of the prompt; Pharos only leaves it out of your writing.";
+  if (rule?.startsWith("Sent by a headless") || rule === "Sent by a codex exec run") return "The run’s transcript or logs show it was started headlessly, by a script or another agent.";
   return categoryByKey.get(category ?? "")?.description ?? "";
 }
 
@@ -99,7 +104,7 @@ function SpanTip({ tip, onEnter, onLeave, onClose }: { tip: Tip; onEnter: () => 
       <strong>{category?.label ?? "Unclassified"}</strong>
       <span className="muted">{words.toLocaleString()} word{words === 1 ? "" : "s"}</span>
     </div>
-    <div className="authored-tip-reason">{segment.reason || segment.rule || "No other rule matched"}</div>
+    <div className="authored-tip-reason">{authorshipRuleLabel(segment.reason || segment.rule || "No other rule matched")}</div>
     <p className="authored-tip-help">{explainAuthorshipRule(segment.rule, segment.category)}</p>
     {source?.workspace_id ? <button type="button" className="authored-tip-source" onClick={() => { onClose(); openMessage(source.workspace_id, source.conversation_id, source.message_id); }}>
       Open the matching text in {source.title || "its conversation"}
@@ -150,7 +155,7 @@ export function AuthoredText({ segments }: { segments: Segment[] }) {
   return <div className="authored-text">
     {segments.map((segment, index) => segment.category
       ? <mark key={index} className={`authored-span${tip?.segment === segment ? " active" : ""}`} data-category={segment.category} tabIndex={0}
-        aria-label={`${categoryLabel(segment.category)}: ${segment.reason || segment.rule || ""}`}
+        aria-label={`${categoryLabel(segment.category)}: ${authorshipRuleLabel(segment.reason || segment.rule || "")}`}
         onMouseEnter={event => show(segment, event.currentTarget, event.clientX, event.clientY)} onMouseLeave={leave}
         onFocus={event => show(segment, event.currentTarget)} onBlur={leave}
         onClick={event => {
@@ -167,13 +172,15 @@ export function AuthoredText({ segments }: { segments: Segment[] }) {
   </div>;
 }
 
+const wordCount = (words: number) => `${words.toLocaleString()} word${words === 1 ? "" : "s"}`;
+
 // A row's words per category, as a thin stacked bar.
 function CategoryBar({ row }: { row: Row }) {
   const parts = authorshipCategories.map(category => [category, Number(row[`${category.key}_words`]) || 0] as const).filter(([, words]) => words > 0);
   const total = parts.reduce((sum, [, words]) => sum + words, 0);
   if (!total) return null;
-  return <div className="authored-bar" role="img" aria-label={parts.map(([category, words]) => `${category.label} ${words} words`).join(", ")}>
-    {parts.map(([category, words]) => <i key={category.key} data-category={category.key} style={{ flex: words }} title={`${category.label}: ${words.toLocaleString()} words (${Math.round(100 * words / total)}%)`} />)}
+  return <div className="authored-bar" role="img" aria-label={parts.map(([category, words]) => `${category.label}: ${wordCount(words)}`).join(", ")}>
+    {parts.map(([category, words]) => <i key={category.key} data-category={category.key} style={{ flex: words }} title={`${category.label}: ${wordCount(words)} (${Math.round(100 * words / total)}%)`} />)}
   </div>;
 }
 
@@ -187,7 +194,7 @@ function AuthoredMessageCard({ row }: { row: Row }) {
   const collapsible = length > collapsedChars;
   const typed = Number(row.typed_words) || 0, other = Number(row.other_words) || 0;
   const sent = row.sent_at ? new Date(row.sent_at) : null;
-  const meta = [sent ? sent.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "", row.repository_name, row.source_kind, row.provider, row.subagent ? "Sub-agent" : ""].filter(Boolean);
+  const meta = [sent ? sent.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "", row.repository_name, row.source_kind ? sourceName(String(row.source_kind)) : "", row.provider ? providerName(String(row.provider)) : "", row.subagent ? "Sub-agent" : ""].filter(Boolean);
   return <article className="authored-card" data-pharos-target={`section:authored:message:${row.id}`}>
     <div className="authored-head">
       <div className="authored-summary">
@@ -198,7 +205,7 @@ function AuthoredMessageCard({ row }: { row: Row }) {
     </div>
     <div className="authored-facts">
       <span className="authored-fact" data-category="typed"><i className="authored-swatch" data-category="typed" />{typed.toLocaleString()} word{typed === 1 ? "" : "s"} typed</span>
-      {other ? <span className="authored-fact">{other.toLocaleString()} from elsewhere</span> : null}
+      {other ? <span className="authored-fact">{wordCount(other)} from elsewhere</span> : null}
       {row.main_category && row.main_category !== "typed" ? <span className="authored-fact"><i className="authored-swatch" data-category={row.main_category} />Mostly {categoryLabel(row.main_category).toLowerCase()}</span> : null}
       {row.typed_share !== null && row.typed_share !== undefined ? <span className="authored-fact muted">{Number(row.typed_share).toLocaleString()}% typed</span> : null}
     </div>
@@ -249,11 +256,11 @@ export const authoredRenderers = {
       const text = !detail && segment.category === "harness" ? "[App instructions] " : segment.text.slice(0, limit - used);
       used += text.length;
       shown.push(segment.category
-        ? <mark key={index} className="authored-span" data-category={segment.category} title={`${categoryLabel(segment.category)} · ${segment.reason || segment.rule || ""}${segment.words ? ` · ${segment.words} words` : ""}`}>{text}</mark>
+        ? <mark key={index} className="authored-span" data-category={segment.category} title={`${categoryLabel(segment.category)} · ${authorshipRuleLabel(segment.reason || segment.rule || "")}${segment.words ? ` · ${wordCount(segment.words)}` : ""}`}>{text}</mark>
         : <React.Fragment key={index}>{text}</React.Fragment>);
     }
     const Content = detail ? "div" : "span";
-    return <Content className={detail ? "usage-authored-detail" : "usage-authored-snippet"}>{shown}{!detail && segmentsOf(row).reduce((n, s) => n + s.text.length, 0) > used ? "…" : null}{detail && row.text_truncated ? <p className="muted">Retained preview is truncated. Open the source message to read further.</p> : null}</Content>;
+    return <Content className={detail ? "usage-authored-detail" : "usage-authored-snippet"}>{shown}{!detail && segmentsOf(row).reduce((n, s) => n + s.text.length, 0) > used ? "…" : null}{detail && row.text_truncated ? <p className="muted">Only the start of this message is shown. Open it in its conversation to read the rest.</p> : null}</Content>;
   },
   authorship_category({ value }: CellContext<Row>) {
     return value ? <CategoryPill category={String(value)} /> : "";
@@ -262,7 +269,7 @@ export const authoredRenderers = {
     return Array.isArray(value) ? <span className="authored-pills">{value.map(category => <CategoryPill key={category} category={category} />)}</span> : "";
   },
   authorship_rules({ value }: CellContext<Row>) {
-    return Array.isArray(value) ? <span>{value.join(", ")}</span> : "";
+    return Array.isArray(value) ? <span>{value.map(rule => authorshipRuleLabel(String(rule))).join(", ")}</span> : "";
   },
 };
 

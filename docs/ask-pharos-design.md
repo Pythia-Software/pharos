@@ -158,7 +158,7 @@ and repositioning animate gently; reduced motion disables those animations.
 Opening chat never automatically attaches the page. A plus menu in the composer
 offers Attach files, Attach current URL, and Select a page element. Removable
 attachment chips sit inline with the draft, wrap naturally, and use distinct URL,
-file and selection icons. Element chips say “Highlighted element”; URL chips say
+file and selection icons. Element chips say “Page element”; URL chips say
 “Page URL”, and file names truncate to a compact width. The + button sits in the
 normal composer action row. Dragging a chip, or using Alt + Left/Right, moves it
 between words. Drafts, history and the agent prompt preserve that placement.

@@ -353,7 +353,7 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		}
 		op.add("source:"+source.Name, model, "Index "+source.Name, workFeatures{}, false)
 	}
-	op.add("projections", "analysis-v1", "Refresh the Library view", workFeatures{}, true)
+	op.add("projections", "analysis-v1", "Index the Search view", workFeatures{}, true)
 	op.add("audit", "audit-v1", "Verify changed inputs", workFeatures{}, true)
 	if manual {
 		addAnalysisForecast(op, true)
@@ -491,7 +491,7 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 						work = plan.work(phase, source.Name, model, processed)
 						work.Kind = "incremental"
 					}
-					work.Next = "Refresh the Library view and verify changed inputs"
+					work.Next = "Index the Search view and verify changed inputs"
 					workMeter.report(work)
 				})
 			})
@@ -527,10 +527,10 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 	}
 	if len(changedWorkspaces) > 0 && ctx.Err() == nil {
 		op.begin("projections")
-		s.updateRun(run.ID, func(run *SyncRun) { run.Phase, run.CurrentSource = "refreshing the Library view", nil })
+		s.updateRun(run.ID, func(run *SyncRun) { run.Phase, run.CurrentSource = "indexing the Search view", nil })
 		phase := meter.beginPhase("projections")
 		workMeter.model = "analysis-v1:projections"
-		workMeter.report(activityWork{Phase: "refreshing the Library view"})
+		workMeter.report(activityWork{Phase: "indexing the Search view"})
 		ids := []string{}
 		for id := range changedWorkspaces {
 			ids = append(ids, id)
@@ -550,11 +550,18 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		phase := meter.beginPhase("audit")
 		workMeter.model = "analysis-v1:audit"
 		workMeter.report(activityWork{Phase: "verifying", Unit: "input", TotalKnown: true, Total: float64(min(1, len(pool.units)))})
+		// A pass audits at most one input, or finds none eligible and returns
+		// at once: the two are different work, so they are forecast apart.
+		eligible := float64(min(1, len(pool.units)))
+		op.declareUnits("audit", eligible)
 		op.begin("audit")
 		handle.RunIO(func() { audit = s.Catalog.auditPool(ctx, pool, run.ID) })
 		op.end("audit", ctx.Err() == nil && audit.Outcome != "read_error")
-		if audit.Outcome == "passed" {
-			workMeter.report(activityWork{Phase: "verifying", Unit: "input", TotalKnown: true, Done: 1, Total: 1})
+		if ctx.Err() == nil && audit.Outcome != "read_error" && eligible > 0 {
+			// The pass is over whatever it concluded: a deferred or mismatched
+			// input was still this stage's one unit of work, and the outcome is
+			// reported by the audit itself, not by a bar left at "0 of 1".
+			workMeter.report(activityWork{Phase: "verifying", Unit: "input", TotalKnown: true, Done: eligible, Total: eligible})
 		}
 		meter.endPhaseWork(phase, workMeter.finish(ctx.Err() == nil))
 	}
@@ -891,7 +898,7 @@ func (s *Server) postIncrementalSync(w http.ResponseWriter, r *http.Request, bod
 			}
 			return nil
 		}) {
-			writeError(w, errors.New("service stopping"), 503)
+			writeError(w, errServiceStopping, 503)
 			return
 		}
 		writeJSON(w, map[string]any{"accepted": true}, 202)

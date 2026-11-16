@@ -636,9 +636,12 @@ func (c *Catalog) recentJournal(ctx context.Context, limit int) ([]journalRow, e
 	return scanJournalRows(rows)
 }
 
-// openJournal reads this host's open rows that another instance owns.
+// openJournal reads this host's open rows that another instance owns, oldest
+// first. The unary + keeps the planner off operation_journal_recent, which
+// matches host_id too but walks every row the host ever journaled; the
+// partial operation_journal_open holds only the few open rows.
 func (c *Catalog) openJournal(ctx context.Context, exceptInstance string) ([]journalRow, error) {
-	rows, err := c.reader().QueryContext(ctx, "SELECT "+journalColumns+" FROM operation_journal WHERE host_id=? AND ended_at IS NULL AND instance<>? ORDER BY started_at",
+	rows, err := c.reader().QueryContext(ctx, "SELECT "+journalColumns+" FROM operation_journal WHERE +host_id=? AND ended_at IS NULL AND instance<>? ORDER BY started_at",
 		currentHost().ID, exceptInstance)
 	if err != nil {
 		return nil, err

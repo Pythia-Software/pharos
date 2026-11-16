@@ -32,7 +32,7 @@ export type ExecutionCoverage = {
 };
 
 const capabilityNotes: Record<string, string> = {
-  "typed-execution-evidence": "Parts of this library were indexed before session provenance was recorded, so some parent links and copied history cannot be verified.",
+  "typed-execution-evidence": "Parts of this library were indexed before Pharos recorded which session started which, so some parent links and copied history cannot be verified.",
   "cursor-copy-evidence": "Cursor forks indexed earlier may still include history copied from the conversation they forked.",
 };
 
@@ -78,7 +78,7 @@ export function sessionCountText(total: number, uncertain = 0): string {
 }
 
 /** A row or lane whose agent events the server withheld or is rebuilding. */
-export const eventsPendingNote = "agent events are being rebuilt for changed session evidence";
+export const eventsPendingNote = "agent events are being updated after a change";
 
 /**
  * The Timeline's own pending-events status: sessions whose agent events the
@@ -102,7 +102,7 @@ export function timelineEventsPending(
 /** The sentence for timelineEventsPending, or "" when nothing is pending. */
 export function timelineEventsPendingNote({ sessions, notShown }: { sessions: number; notShown: number }): string {
   if (!sessions) return "";
-  const lead = `Agent events for ${sessions.toLocaleString()} session${sessions === 1 ? " are" : "s are"} left out until they are rebuilt`;
+  const lead = `Agent events for ${sessions.toLocaleString()} agent session${sessions === 1 ? " are" : "s are"} left out until they are updated after a change`;
   return notShown ? `${lead} · ${notShown === sessions ? (sessions === 1 ? "it is" : "they are") : `${notShown.toLocaleString()} of them ${notShown === 1 ? "is" : "are"}`} not shown here` : lead;
 }
 
@@ -113,8 +113,8 @@ export function qualityMark(quality: string): string {
 }
 
 const occurrenceNotes: Record<string, string> = {
-  "untyped-ancestry/v1": "indexed before session provenance was recorded",
-  "retained-history-undeclared/v1": "its history declaration was not read again",
+  "untyped-ancestry/v1": "indexed before Pharos recorded which session started which",
+  "retained-history-undeclared/v1": "its copied-history record has not been reread",
   "declared-copy-source-missing/v1": "the conversation it copied is not retained",
   "unresolved-observations": "some messages could not be told apart from copies",
 };
@@ -132,5 +132,5 @@ export function occurrenceNote(reason: string | undefined): string {
 export function omittedSegmentsNote(segments: readonly { workspace_id: string }[] | undefined): string {
   const n = segments?.length ?? 0;
   if (!n) return "";
-  return `${n.toLocaleString()} segment${n === 1 ? "" : "s"} retained in other work ${n === 1 ? "is" : "are"} not shown here`;
+  return `${n.toLocaleString()} segment${n === 1 ? "" : "s"} saved in other workspaces ${n === 1 ? "is" : "are"} not shown here`;
 }

@@ -2,7 +2,7 @@ import { DataReadinessIndicator } from "./data-readiness";
 import { cardReadinessSource, type CardReadinessSource } from "./data-readiness-card";
 import { formatUSD } from "./currency";
 import { cardNavigationURL } from "./card-exploration";
-import React, { memo, useRef } from "react";
+import React, { memo, useRef, useState } from "react";
 import { CompactColumns } from "./column-marks";
 import { compactMetricPresentation } from "./card-presentation";
 import { boxCoverHeight } from "./compact-box-model";
@@ -20,6 +20,16 @@ import { CompactGrid } from "./compact-grid";
 
 export function QueryChip({ title, description, active, onClick }: { title: string; description: string; active?: boolean; onClick: () => void }) {
   return <button type="button" className="query-chip" title={description} aria-pressed={active} onClick={onClick}><Icon name="compass" /><span>{title}</span><Icon name="arrow-right" /></button>;
+}
+
+// The window chip's hover says what kind of window its label names.
+export function windowChipTitle(label: string): string | undefined {
+  if (label === "Saved" || label === "Saved range") return "The date range saved with this card";
+  if (label === "All time") return "All recorded history";
+  if (label === "Now") return "Current state; not limited to a date range";
+  if (label === "Today") return "Since local midnight, through now";
+  if (/^(Last|Past) /.test(label)) return "Rolling window, measured back from now each time the card runs";
+  return undefined;
 }
 
 // Daily covers chart durations in hours (see previewOf) and carbon in kilograms.
@@ -66,6 +76,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
   onDragStart?: (event: React.DragEvent) => void; onDragEnd?: () => void; onDrop?: (event: React.DragEvent) => void;
 }) {
   const card = useRef<HTMLElement>(null);
+  const [copied, setCopied] = useState<"" | "copied" | "failed">("");
   const style = queryCategories[category];
   const presentation = preview && compactMetricPresentation(preview);
   const coverMetric = preview?.metrics?.find(metric => metric.clause.id === preview.coverMetricId)?.clause;
@@ -87,25 +98,37 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
     onKeyDown: onMove ? event => { if (event.altKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) { event.preventDefault(); onMove(event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1); } } : undefined,
   };
   const savedLabel = preview?.savedReason ? `Showing saved preview${preview.updatedAt ? ` from ${new Date(preview.updatedAt).toLocaleString()}` : ""}. ${preview.savedReason}` : "";
-  const cover = <ChartTooltip><span className={`query-cover${denseList ? " query-cover-dense-list" : ""}${presentation?.kind === "box" ? " query-cover-box" : ""}${headlineMetric ? " query-cover-headline" : ""}`} style={{ height: error || !preview ? loadingSpec?.height : coverHeight }} title={error} aria-busy={!preview && !error || undefined} aria-label={error ? "Preview unavailable" : preview ? `${coverLabel}${savedLabel ? `. ${savedLabel}` : ""}${preview.note ? `. ${preview.note}` : ""}` : "Loading preview"}>
+  const cover = <ChartTooltip><span className={`query-cover${denseList ? " query-cover-dense-list" : ""}${presentation?.kind === "box" ? " query-cover-box" : ""}${headlineMetric ? " query-cover-headline" : ""}`} style={{ height: error || !preview ? loadingSpec?.height : coverHeight }} aria-busy={!preview && !error || undefined} aria-label={error ? "Couldn't load this card" : preview ? `${coverLabel}${savedLabel ? `. ${savedLabel}` : ""}${preview.note ? `. ${preview.note}` : ""}` : "Loading preview"}>
         <span className="query-cover-head"><Icon name="grip" />{editing?.onCategory ? <select className="query-category" aria-label="Category" value={category} onChange={event => editing.onCategory!(event.target.value as QueryCategory)}>
           {(Object.keys(queryCategories) as QueryCategory[]).map(key => <option key={key} value={key}>{queryCategories[key].label}</option>)}
         </select> : <span className="query-category">{style.label}</span>}{preview?.refreshError ? <span className="query-preview-refresh is-error" role="status" aria-label="Showing saved preview; refresh failed"
           title={`Could not refresh: ${preview.refreshError}${preview.updatedAt ? `. Last updated ${new Date(preview.updatedAt).toLocaleString()}` : ""}`}><Icon name="severity-high" /></span> : savedLabel ? <span className="query-preview-saved" role="status" aria-label={savedLabel} title={savedLabel}>Saved</span> : preview?.refreshing ? <span className="query-preview-refresh is-refreshing" role="status"
-          aria-label="Refreshing preview" title={`Refreshing${preview.updatedAt ? `. Last updated ${new Date(preview.updatedAt).toLocaleString()}` : ""}`}><Icon name="refresh" /></span> : null}<span className="query-window" title={windowLabel === "Saved" ? "The time range saved with this query" : "Rolling lookback; evaluated when the query runs"}>{windowLabel}</span></span>
-        {error ? <span className="query-preview-unavailable" role="status">
-          <svg className="query-unavailable-symbol" viewBox="0 0 56 56" aria-hidden="true" focusable="false">
-            {["  ###  ", " #   # ", "#     #", "#     #", "#     #", " #   # ", "  ###  "].flatMap((row, y) => [...row].flatMap((cell, x) => cell === "#" ? [<rect key={`${x}:${y}`} x={x * 8 + 1} y={y * 8 + 1} width="6" height="6" rx="1" />] : []))}
-            <path d="M41 1h6v6h-6z M41 9h6v6h-6z M33 17h6v6h-6z M25 25h6v6h-6z M17 33h6v6h-6z M9 41h6v6H9z M9 49h6v6H9z" />
+          aria-label="Refreshing preview" title={`Refreshing${preview.updatedAt ? `. Last updated ${new Date(preview.updatedAt).toLocaleString()}` : ""}`}><Icon name="refresh" /></span> : null}<span className="query-window" title={windowChipTitle(windowLabel)}>{windowLabel}</span></span>
+        {error ? <span className="query-preview-error" role="status">
+          <svg className="query-error-symbol" viewBox="0 0 56 56" aria-hidden="true" focusable="false">
+            {/* A blocky warning sign, drawn like the card's other pixel marks: a dim outline and a brighter exclamation mark. */}
+            {["   #   ", "  # #  ", "  # #  ", " #   # ", " #   # ", "#     #", "#######"].flatMap((row, y) => [...row].flatMap((cell, x) => cell === "#" ? [<rect key={`${x}:${y}`} x={x * 8 + 1} y={y * 8 + 1} width="6" height="6" rx="1" />] : []))}
+            <path d="M25 17h6v6h-6z M25 25h6v6h-6z M25 41h6v6h-6z" />
           </svg>
-          <span className="query-preview-status">Preview unavailable</span>
-          {onReload && !xray ? <button type="button" className="query-preview-reload" aria-label={`Reload preview for ${title}`} onClick={event => {
-            event.stopPropagation(); onReload();
-            requestAnimationFrame(() => card.current?.querySelector<HTMLAnchorElement>(".query-card-open")?.focus({ preventScroll: true }));
-          }}><Icon name="refresh" />Reload preview</button> : null}
+          <span className="query-preview-status">Couldn't load this card</span>
+          {xray ? null : <span className="query-preview-error-actions">
+            {/* The full error is copied, not drawn: it is for a bug report or an agent, not for reading in a card. */}
+            <button type="button" className="query-preview-action" title="Copy error to clipboard" onClick={event => {
+              event.stopPropagation();
+              // ui.py installs the shell clipboard wrapper, the shared host clipboard owner.
+              const report = `Pharos card "${title}" (${id}) couldn't load.\n${error}`;
+              void (window.pharosCopyText?.(report) ?? Promise.reject()).then(() => "copied" as const, () => "failed" as const).then(result => {
+                setCopied(result); setTimeout(() => setCopied(""), 2000);
+              });
+            }}><Icon name={copied === "copied" ? "check" : "copy"} />{copied === "copied" ? "Copied" : copied === "failed" ? "Couldn't copy" : "Copy error"}</button>
+            {onReload ? <button type="button" className="query-preview-action" aria-label={`Reload ${title}`} onClick={event => {
+              event.stopPropagation(); onReload();
+              requestAnimationFrame(() => card.current?.querySelector<HTMLAnchorElement>(".query-card-open")?.focus({ preventScroll: true }));
+            }}><Icon name="refresh" />Reload</button> : null}
+          </span>}
         </span> : preview?.state === "ready" ? <>
           <CardVisualization preview={preview} />
-        </> : preview ? <span className="query-preview-status">{preview.emptyLabel ?? "No recent matches"}</span> : <CardLoading spec={loadingSpec} />}
+        </> : preview ? <span className="query-preview-status">{preview.emptyLabel ?? "No matches"}</span> : <CardLoading spec={loadingSpec} />}
       </span></ChartTooltip>;
   const caption = <span className="query-caption">{editing ? <>
           <input className="query-title" aria-label="Title" placeholder="Name this card" required maxLength={200} value={title} onChange={event => editing.onTitle(event.target.value)} />
@@ -122,7 +145,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
     {editing ? null : error ? <div className="query-card-unavailable">{cover}<a className="query-card-open" {...linkProps}>{caption}</a></div>
       : <a className="query-card-open" {...linkProps}>{cover}{caption}</a>}
     {editing ? null : xray ? onReveal ? <button type="button" className="query-xray-open" aria-label={`Bring ${title} into view`} title="Bring into view" onClick={onReveal} /> : null : <>
-      <span className="query-card-tools">{!discovery && onReload ? <button type="button" aria-label={`Refresh ${title}`} title="Refresh this card" onClick={onReload}><Icon name="refresh" /></button> : null}<DataReadinessIndicator id={`card:${id}`} title={title} dataset={readiness.dataset} query={readiness.query} empty={preview?.state==="empty"} updatedAt={preview?.updatedAt} refreshing={preview?.refreshing} refreshError={preview?.refreshError} className="query-card-readiness" />{!discovery ? <><button type="button" aria-label={`Edit ${title}`} title="Edit saved view" onClick={onEdit}><Icon name="edit" /></button><button type="button" aria-label={`Remove ${title}`} title="Remove from collection" onClick={onRemove}><Icon name="close" /></button></> : null}</span>
+      <span className="query-card-tools">{!discovery && onReload ? <button type="button" aria-label={`Refresh ${title}`} title="Refresh this card" onClick={onReload}><Icon name="refresh" /></button> : null}<DataReadinessIndicator id={`card:${id}`} title={title} dataset={readiness.dataset} query={readiness.query} empty={preview?.state==="empty"} updatedAt={preview?.updatedAt} refreshing={preview?.refreshing} refreshError={preview?.refreshError} className="query-card-readiness" />{!discovery ? <><button type="button" aria-label={`Edit ${title}`} title="Edit card" onClick={onEdit}><Icon name="edit" /></button><button type="button" aria-label={`Remove ${title}`} title="Remove from collection" onClick={onRemove}><Icon name="close" /></button></> : null}</span>
       {discovery && onKeep ? <button className="query-keep" type="button" aria-label={`Collect ${title}`} title="Add to your collection" onClick={onKeep}><Icon name="plus" /></button> : null}
     </>}
   </article>;

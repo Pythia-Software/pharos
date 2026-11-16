@@ -210,7 +210,7 @@ test("the reader offers each highlight the conversation has marks for, each show
   assert.equal(options[1].note, '');
   // Events awaiting a rebuild stay inspectable here, but never read as current.
   const rebuilding = reader.readerHighlightOptions({ ...conversation, agent_events: { messages_read: 1, pending: true } }, [human, agent]);
-  assert.match(rebuilding[1].note, /^Waiting to be rebuilt .* may change$/);
+  assert.match(rebuilding[1].note, /^Waiting to be updated after a change; these events may move to other messages$/);
   assert.deepEqual(plain(options[2].legend), [{ name: 'Report', family: 'C.report' }]);
   // Writing and classifier marks are on by default; a link
   // wins over the saved choice, which wins over the default.
@@ -398,4 +398,41 @@ test("source text is cut into comments, strings, numbers and keywords by its ext
   // Every character is kept, in order, whatever the language; an unknown one is left plain.
   for (const name of ["points.js", "shape.py", "q.sql", "page.html", "notes.txt"]) assert.equal(plain(highlightCode(script, name)).map(run => run.text).join(""), script);
   assert.deepEqual(plain(highlightCode(script, "notes.txt")), [{ kind: "", text: script }]);
+  // Language names (a Markdown fence's) and extensionless build files name a family too; a directory does not.
+  assert.deepEqual(runs("const x = 1", "typescript"), [["keyword", "const"], ["number", "1"]]);
+  assert.deepEqual(runs("echo hi # done", "shell"), [["keyword", "echo"], ["comment", "# done"]]);
+  assert.deepEqual(runs("# base\nFROM go", "/repo/Dockerfile"), [["comment", "# base"]]);
+  for (const name of ["/repo/go", "constructor", "toString", "text"]) assert.deepEqual(plain(highlightCode(script, name)), [{ kind: "", text: script }], name);
+});
+
+test("fenced Markdown code is highlighted by its language, keeping Find's highlights", () => {
+  const { codeFenceName } = reader;
+  assert.equal(codeFenceName("ts"), "ts");
+  assert.equal(codeFenceName("python title=demo.py"), "python");
+  assert.equal(codeFenceName("rust:src/main.rs"), "src/main.rs");
+  assert.equal(codeFenceName("{.go}"), "go");
+  assert.equal(codeFenceName("", ' {"a": 1}'), "json", "an unnamed fence holding JSON");
+  assert.equal(codeFenceName("", "plain words"), "");
+  const block = markdownTree("```js\nconst a = 'b'\n```").children[0], code = block.children[0];
+  assert.deepEqual(plain(code.children.map(child => typeof child === "string" ? child : [child.className, text(child)])), [["tok-keyword", "const"], " a = ", ["tok-string", "'b'"]]);
+  assert.equal(code.language, "js");
+  // A Find highlight crossing tokens is cut inside each, and the text is unchanged.
+  const source = "```py\nreturn 'x'\n```", start = source.indexOf("rn"), mask = "0".repeat(start) + "1".repeat(5) + "0".repeat(source.length - start - 5);
+  const marked = markdownTree(source, 0, mask).children[0].children[0];
+  assert.equal(text(marked), "return 'x'");
+  assert.deepEqual(plain(elements(marked).filter(element => element.tag === "mark").map(text)), ["rn", " ", "'x"]);
+  assert.equal(text(markdownTree("```\nplain\n```").children[0]), "plain");
+});
+
+test("a file is highlighted whole and cut into lines, and a numbered read keeps its numbers plain", () => {
+  const { highlightCodeLines, highlightNumberedCode } = reader;
+  const lines = plain(highlightCodeLines("/* one\ntwo */\nlet x", "a.js"));
+  assert.deepEqual(lines, [[{ kind: "comment", text: "/* one" }], [{ kind: "comment", text: "two */" }], [{ kind: "keyword", text: "let" }, { kind: "", text: " x" }]]);
+  assert.deepEqual(plain(highlightCodeLines("a\n\nb", "a.txt")), [[{ kind: "", text: "a" }], [], [{ kind: "", text: "b" }]]);
+  const read = "     1→# head\n     2→x = 1\n\n<system-reminder>note</system-reminder>";
+  const runs = plain(highlightNumberedCode(read, "a.py"));
+  assert.equal(runs.map(run => run.text).join(""), read);
+  assert.deepEqual(runs.filter(run => run.kind).map(run => [run.kind, run.text]), [["gutter", "     1→"], ["comment", "# head"], ["gutter", "     2→"], ["number", "1"]]);
+  assert.deepEqual(plain(highlightNumberedCode(read, "notes.txt")), [{ kind: "", text: read }]);
+  assert.deepEqual(plain(highlightNumberedCode("x = 2", "a.py")).filter(run => run.kind), [{ kind: "number", text: "2" }]);
 });

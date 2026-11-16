@@ -161,8 +161,10 @@ Macs. Source paths are disabled until you opt in. More libraries can be created,
 opened or switched in **Settings → Libraries** (see
 [Libraries and application setup](library-management.md)).
 
-To update, quit Pharos, drag `Pharos.app` from the image onto Applications,
-choose **Replace**, then open the new app and approve macOS access prompts.
+To update, choose **Pharos → Check for Updates…** (see [In-app updates](#in-app-updates)).
+To replace the app by hand instead, quit Pharos, drag `Pharos.app` from the image
+onto Applications, choose **Replace**, then open the new app and approve macOS
+access prompts.
 Libraries, including those on drives, are separate folders, so an app update
 never touches them. If macOS blocks an ad hoc signed build, use **System
 Settings → Privacy & Security → Open Anyway** after trying to open it.
@@ -570,13 +572,13 @@ copy of a real library, including disk budget and destination. Fixture tests do
 not substitute for that rollout validation; no production backfill is implied.
 
 A new version can derive more from the transcripts a library already holds.
-When it opens a catalog indexed by an older version, Pharos includes the
-required upgrade in **Capture & index**, in the drive panel and on Settings →
-Capture & index. The same action captures and indexes sources, then starts any
-pending upgrade. It also runs the upgrade when this Mac has no enabled
-sources. The drive panel shows one Capture & index line with its current step
-and progress; **Upgrade details** opens the upgrade steps
-and repository merge preview. A library already current has no upgrade work.
+When it opens a catalog indexed by an older version, Pharos runs the
+required upgrade as background work: the **Library upgrade** item in Settings →
+Background Processing runs on the schedule while steps are pending, and its
+**Run now** starts it at once. It also runs when this Mac has no enabled
+sources. The Background Processing panel, which the header's library chip
+opens, shows it with its current step and progress. A library already current
+has no upgrade work.
 
 The upgrade runs these steps in order, as one background job:
 
@@ -584,9 +586,9 @@ The upgrade runs these steps in order, as one background job:
    different remote URLs, renames, worktrees, or checkouts without a remote
    become one. Pharos always checks with GitHub, through the `gh`
    command-line tool, which repositories were renamed or moved; nothing else
-   contacts the network. **Preview repository merges** lists the merges first.
+   contacts the network. `pharos upgrade --preview` lists the merges first.
    Without `gh`, or when it isn't signed in (`gh auth login`), the step still
-   runs, the panel says renamed repositories may stay separate, and the
+   runs, renamed repositories may stay separate, and the
    service merges them a few minutes after `gh` works. A new version of
    Pharos that recognizes more split repositories raises the repository
    merge's version, and a library that ran the older one is offered just this
@@ -616,8 +618,8 @@ retained messages; the harness and instructions steps also read source files
 and captures where they still exist. Transcripts are never changed.
 
 The job commits in small units. Closing the panel doesn't stop it, and the
-drive badge shows its progress. Ejecting stops it after the unit in
-progress, and using **Capture & index** again resumes where it stopped. Saved
+library chip shows its progress. Ejecting stops it after the unit in
+progress, and its next run resumes where it stopped. Saved
 table views that filter on a repository name the merge retired are pointed at
 the surviving name.
 

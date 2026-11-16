@@ -26,11 +26,13 @@ the menu lists it either way: with no events it says so.
 
 `refreshFixes` (`fixes_store.go`) runs at three points:
 
-- after the agent events pass, at most hourly (`fixesChainInterval`);
-- at the end of the events backlog;
-- in the full Findings pass, after risky actions.
+- after an agent events pass or its backlog, at most once a day
+  (`fixesChainInterval`): a rebuild regroups the whole 90-day window, so it
+  does not follow every pass that stored an event;
+- in the full Findings pass, after risky actions (daily).
 
-Opening the page never starts it. A fingerprint skips the run when nothing it reads
+Events found since the last rebuild join the groups at the next one, and the
+page shows when the grouping was built. Opening the page never starts it. A fingerprint skips the run when nothing it reads
 has changed: event count, latest event, messages read, latest day and today's date.
 
 The grouping in `fixes.go` and `fixes_grouping.go` is a port of the Agent Experience
@@ -50,7 +52,7 @@ lab's "v3" grouping:
    - a leader join needs two shared concepts, one of them a key term;
    - similar groups then merge by centroid;
    - this runs once per pass: friction, learning, confusion and stale guidance.
-3. **Keep groups that recur.** A group must span at least two work items and be
+3. **Keep groups that recur.** A group must span at least two workspaces and be
    cohesive.
 4. **Merge groups into items.** Groups that share a key term, a kind of fix and a
    destination become one item.
@@ -149,12 +151,12 @@ Three library settings, stored in `finding_settings`, keep the menu useful:
 |---|---|---|
 | Rank lower once quiet for (`fixes_quiet_days`) | 7 days | Priority × 0.6 past it, × 0.3 past three times it |
 | Hide once quiet for (`fixes_hide_days`) | 30 days (0 = never) | Off Open until it recurs |
-| Hide when seen in fewer than (`fixes_min_work_items`) | 3 work items | Off Open |
+| Hide when seen in fewer than (`fixes_min_work_items`) | 3 workspaces | Off Open |
 
 "Quiet" counts days before the latest day the events pass read, not before today. A
 library that has not been read for a while therefore does not hide everything.
 
-Priority is work items × the quiet weight, plus 2 × the hours of friction episodes
+Priority is workspaces × the quiet weight, plus 2 × the hours of friction episodes
 the problem started or reported (at most 20 hours). An episode reported in a reply
 after the fact runs from the turn's first failed call to the report. Harnesses that
 record no call times (TL1 Codex) have no measurable time lost. It is computed when the page is read, so a

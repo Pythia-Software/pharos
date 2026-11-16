@@ -812,3 +812,88 @@ func shellScript(line string) (string, bool) {
 	}
 	return "", false
 }
+
+// Shell redirection helpers shared by shellCategory and authorship sources.
+// They stay in this file so tools/risky_tools can compile it on its own.
+
+// Mark shell syntax outside quotes, escapes, comments and substitutions.
+func authorshipShellSyntax(text string) []bool {
+	syntax := make([]bool, len(text))
+	var quote byte
+	for i := 0; i < len(text); i++ {
+		char := text[i]
+		if quote != 0 {
+			if quote == '"' && (char == '`' || strings.HasPrefix(text[i:], "$(") || strings.HasPrefix(text[i:], "${")) {
+				if end := matchSubstitution(text, i); end > i {
+					i = end - 1
+					continue
+				}
+			}
+			if char == '\\' && quote != '\'' {
+				i++
+			} else if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if char == '\\' {
+			i++
+			continue
+		}
+		if char == '\'' || char == '"' {
+			quote = char
+			continue
+		}
+		if char == '`' || strings.HasPrefix(text[i:], "$(") || strings.HasPrefix(text[i:], "${") {
+			if end := matchSubstitution(text, i); end > i {
+				i = end - 1
+				continue
+			}
+		}
+		if char == '#' && (i == 0 || strings.ContainsRune(" \t", rune(text[i-1]))) {
+			break
+		}
+		syntax[i] = true
+	}
+	return syntax
+}
+
+func authorshipFileDestination(value string) bool {
+	return value != "" && value != "-" && value != "/dev/null" && value != "/dev/stdout" && value != "/dev/stderr" &&
+		!strings.HasPrefix(value, "/dev/fd/") && !strings.HasPrefix(value, "/proc/self/fd/")
+}
+
+func authorshipRedirectFD(text string, at int, syntax []bool, fallback string) string {
+	start := at
+	for start > 0 && text[start-1] >= '0' && text[start-1] <= '9' && syntax[start-1] {
+		start--
+	}
+	if start < at && (start == 0 || strings.ContainsRune(" \t", rune(text[start-1]))) {
+		return text[start:at]
+	}
+	return fallback
+}
+
+func authorshipOutputFile(text string, syntax []bool) bool {
+	writes := false
+	for i := 0; i < len(text); i++ {
+		if text[i] != '>' || !syntax[i] || i > 0 && text[i-1] == '>' && syntax[i-1] {
+			continue
+		}
+		if authorshipRedirectFD(text, i, syntax, "1") != "1" {
+			continue // Redirecting stderr does not write the heredoc body.
+		}
+		end := i + 1
+		if end < len(text) && text[end] == '>' {
+			end++
+		}
+		rest := strings.TrimLeft(text[end:], " \t")
+		if strings.HasPrefix(rest, "&") {
+			writes = false
+			continue // Descriptor duplication is not a file destination.
+		}
+		words := shellWords(rest)
+		writes = len(words) > 0 && authorshipFileDestination(words[0])
+	}
+	return writes
+}

@@ -176,7 +176,7 @@ func TestFixesGroupingAndDestination(t *testing.T) {
 		{members("codex", "claude"), nil, "~/.claude/CLAUDE.md (empty today)"},
 		{members("cline"), rules, "~/Documents/Cline/Rules/"},
 		{members("cline"), opencode, "~/Documents/Cline/Rules/ (empty today)"},
-		{members("cursor"), nil, "Cursor's User Rules (Cursor Settings → Rules)"},
+		{members("cursor"), nil, "Cursor’s User Rules (Cursor Settings → Rules)"},
 		{members("gemini"), nil, "~/.gemini/GEMINI.md (empty today)"},
 	} {
 		if got := fixesGlobalFile(test.events, test.global); got != test.want {
@@ -404,8 +404,21 @@ func TestFixesProjectionTriageAndHandoff(t *testing.T) {
 		t.Fatal("unchanged inputs don't rebuild")
 	}
 	seedFixes(t, c, "2026-10-26", 2)
-	if err := c.refreshFixes(t.Context(), false); err != nil {
+	// An agent events pass asks for a rebuild at most once per interval,
+	// however many events arrived; the daily pass (refreshFixes) always checks.
+	if err := c.refreshFixesSoon(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	if again, _ := c.metaValue(t.Context(), "fixes_built_at"); again != built {
+		t.Fatal("new events within the interval wait for the next daily rebuild")
+	}
+	c.now = func() time.Time { return time.Now().Add(fixesChainInterval + time.Minute) }
+	if err := c.refreshFixesSoon(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	c.now = nil
+	if again, _ := c.metaValue(t.Context(), "fixes_built_at"); again == built {
+		t.Fatal("new events past the interval rebuild")
 	}
 	if s := state(); s["state"] != "open" || s["recurred"] != true {
 		t.Fatalf("a recurrence after the handoff reopens it: %v", s)

@@ -337,7 +337,7 @@
       "label": "Fully priced API cost (USD)",
       "type": "number",
       "group": "Tokens and Cost",
-      "description": "Only fully priced usage (price_status=priced) is included; assumed, partial and unpriced usage is left out of every measure in this view.",
+      "description": "Only usage with a complete list price is included; assumed, partial and unpriced usage is left out of every measure in this view.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"tokens_priced_cost\"",
@@ -414,7 +414,7 @@
     },
     {
       "name": "tokens_delegating_share",
-      "label": "Conversations using delegation",
+      "label": "Share of conversations using delegation",
       "type": "number",
       "group": "Tokens and Cost",
       "description": "Top-level conversations with an active delegated execution divided by all top-level conversations with matching usage. Over time computes each period separately; smoothing averages those period shares.",
@@ -449,7 +449,7 @@
       "label": "Top-level conversations with usage",
       "type": "number",
       "group": "Tokens and Cost",
-      "description": "Distinct top-level conversations with matching usage, delegated runs folded into their roots.",
+      "description": "Distinct top-level conversations with matching usage, delegated runs folded into their top-level conversations.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"tokens_root_conversations\"",
@@ -670,10 +670,10 @@
     },
     {
       "name": "calls_conversations",
-      "label": "Conversations reached",
+      "label": "Conversations with matching calls",
       "type": "number",
       "group": "Tool Calls and Time",
-      "description": "Distinct agent conversations with matching calls; a conversation can appear in several groups.",
+      "description": "Distinct conversations with matching calls; a conversation can appear in several groups.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"calls_conversations\"",
@@ -753,7 +753,7 @@
       "label": "Saved instruction size",
       "type": "number",
       "group": "Skills",
-      "description": "Body volume sums known positive recorded sizes, including repeated loads; evidence without a recorded size is left out.",
+      "description": "Saved instruction size sums known positive recorded sizes, including repeated loads; evidence without a recorded size is left out.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"skills_body\"",
@@ -766,7 +766,7 @@
     },
     {
       "name": "skills_conversations",
-      "label": "Conversations reached",
+      "label": "Conversations with skill evidence",
       "type": "number",
       "group": "Skills",
       "description": "Distinct conversations with skill evidence. A conversation with several skills counts once in each, so groups do not add up to the total.",
@@ -817,7 +817,7 @@
       "label": "Compactions",
       "type": "number",
       "group": "Compaction",
-      "description": "Counts boundary events, including consecutive compactions and boundaries without later usage. Human means manual; machine means automatic. Claude records the trigger; Codex infers it from turn position. Unknown triggers remain separate.",
+      "description": "Counts boundary events, including consecutive compactions and boundaries without later usage. Claude records the trigger; Codex infers it from turn position. Unknown triggers remain separate.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"compaction_compactions\"",
@@ -913,7 +913,7 @@
       "label": "Typed human messages",
       "type": "number",
       "group": "Session Shape",
-      "description": "User messages holding text you typed or dictated. Pasted, quoted, re-sent, template, harness and automated text does not count. Only sessions whose prompts are all classified.",
+      "description": "User messages holding text you typed or dictated. Text classed as pasted, copied or quoted, re-sent, template, app instructions or automated does not count. Only sessions whose prompts are all classified.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"session_shape_typed_messages\"",
@@ -929,7 +929,7 @@
       "label": "Tool calls",
       "type": "number",
       "group": "Session Shape",
-      "description": "The session's own tool calls, in sessions the tool ledger covers.",
+      "description": "The session's own tool calls, in sessions the tool index covers.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"session_shape_tool_calls\"",
@@ -1057,7 +1057,7 @@
       "label": "Verified handbacks",
       "type": "number",
       "group": "Session Shape",
-      "description": "Handbacks after an edit in which a test or build command ran after the last edit, divided by handbacks after an edit, pooled.",
+      "description": "Handbacks after an edit in which a test, build or lint command ran after the last edit, divided by handbacks after an edit, pooled.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"session_shape_verification\"",
@@ -1169,7 +1169,7 @@
       "label": "Edit–verify–edit retries",
       "type": "number",
       "group": "Session Shape",
-      "description": "Within one human turn, an edit to a file, then a test or build command, then another edit to that file. Read-only commands are not verification.",
+      "description": "Within one human turn, an edit to a file, then a test, build or lint command, then another edit to that file. Read-only commands are not verification.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"session_shape_thrash_retries\"",
@@ -1214,7 +1214,7 @@
     },
     {
       "name": "session_shape_context_pressure",
-      "label": "Sessions over 90% of context",
+      "label": "Context pressure",
       "type": "number",
       "group": "Session Shape",
       "description": "Sessions whose peak context exceeded 90% of the model's window; only sessions whose window is known.",
@@ -1249,7 +1249,7 @@
       "label": "Long unprompted runs",
       "type": "number",
       "group": "Session Shape",
-      "description": "Runs of more than 150 tool calls with no typed human message between them.",
+      "description": "Runs of 150 or more tool calls with no typed human message between them.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"session_shape_long_unprompted_runs\"",
@@ -1361,7 +1361,7 @@
       "label": "Share in thinking",
       "type": "number",
       "group": "Agent Experience",
-      "description": "Events found in agents' private reasoning, divided by all matching events. Visible replies are the rest.",
+      "description": "Events found in agents’ private reasoning, divided by all matching events. Visible replies are the rest.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"agent_experience_thinking_share\"",
@@ -1377,7 +1377,7 @@
       "label": "Share with a stated cause",
       "type": "number",
       "group": "Agent Experience",
-      "description": "Events whose cause the model found in a sentence other than the event's own, divided by all matching events.",
+      "description": "Events whose cause the model found in a sentence other than the event’s own, divided by all matching events.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"agent_experience_explained_share\"",
@@ -1441,7 +1441,7 @@
       "label": "Share of conversations with an event",
       "type": "number",
       "group": "Agent Events",
-      "description": "Conversations with at least one matching event, divided by the conversations with a message read. A conversation counts in every group it has messages in; a delegated subagent is a conversation of its own.",
+      "description": "Conversations with at least one matching event, divided by the conversations with a message read. A conversation counts in every group it has messages in; where the source records a delegated sub-agent separately, it counts as its own conversation.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"agent_event_rates_conversation_share\"",
@@ -1553,7 +1553,7 @@
       "label": "Estimated CO₂e (g)",
       "type": "number",
       "group": "Carbon Impact",
-      "description": "Estimated with your Carbon Impact assumptions (estimate range, facility overhead, grid and input sensitivity); token counts are reported, energy and CO₂e are modeled. Models are assigned to size tiers by name; unmatched models use the default tier.",
+      "description": "Estimated with your Carbon Impact assumptions (energy scenario, facility overhead (PUE), electricity grid and input sensitivity); token counts are as recorded; energy and CO₂e are estimates. Models are assigned to size tiers by name; models with no matching tier use the default tier.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"carbon_co2\"",
@@ -1569,7 +1569,7 @@
       "label": "Estimated electricity (Wh)",
       "type": "number",
       "group": "Carbon Impact",
-      "description": "Facility electricity: IT energy times facility overhead (PUE). Estimated with your Carbon Impact assumptions (estimate range, facility overhead, grid and input sensitivity); token counts are reported, energy and CO₂e are modeled. Models are assigned to size tiers by name; unmatched models use the default tier.",
+      "description": "Facility electricity: server energy times facility overhead (PUE). Estimated with your Carbon Impact assumptions (energy scenario, facility overhead (PUE), electricity grid and input sensitivity); token counts are as recorded; energy and CO₂e are estimates. Models are assigned to size tiers by name; models with no matching tier use the default tier.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"carbon_energy\"",
@@ -1614,7 +1614,7 @@
     },
     {
       "name": "work_hours_parallel_hours",
-      "label": "Hours with parallel agents",
+      "label": "Hours with parallel conversations",
       "type": "number",
       "group": "Work Hours",
       "description": "Wall time with two or more agents active at once, shared among them as wall hours are.",
@@ -1678,7 +1678,7 @@
     },
     {
       "name": "work_hours_at_once",
-      "label": "Agents at once during work hours",
+      "label": "Conversations at once during work hours",
       "type": "number",
       "group": "Work Hours",
       "description": "Active time over wall time, pooled: the time-weighted number of agents working together while any is. For you it is always one.",
@@ -1758,10 +1758,10 @@
     },
     {
       "name": "parallelism_at_once",
-      "label": "Workspaces at once while active",
+      "label": "At once while active",
       "type": "number",
       "group": "Parallelism",
-      "description": "Agent time divided by wall time with any workspace active, pooled over each group's records: the time-weighted number of workspaces working together while any is.",
+      "description": "Workspace time divided by wall time with any workspace active, pooled over each group's records: the time-weighted number of workspaces working together while any is.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"parallelism_at_once\"",
@@ -1950,10 +1950,10 @@
     },
     {
       "name": "model_requests_gap_seconds",
-      "label": "Response wait",
+      "label": "Post-tool wait",
       "type": "number",
       "group": "Waiting and Thinking",
-      "description": "Mean recorded wait after tool results, in seconds; requests without timing are excluded.",
+      "description": "Mean recorded wait after tool results; model requests without timing are excluded.",
       "bindings": {
         "sqlite": {
           "expr": "r.\"model_requests_gap_seconds\"",
@@ -2110,7 +2110,7 @@
     },
     {
       "name": "session_shape_subagents",
-      "label": "Delegated agents",
+      "label": "Delegated agent sessions",
       "type": "number",
       "group": "Session Shape",
       "description": "Delegated runs the session launched: embedded and linked sub-agent sessions, and headless agent runs its shell commands started.",
@@ -2158,7 +2158,7 @@
     },
     {
       "name": "session_shape_turn_cycle_p90_seconds",
-      "label": "Turn cycle p90",
+      "label": "Turn cycle P90",
       "type": "number",
       "group": "Session Shape",
       "description": "90th percentile of the same gaps.",

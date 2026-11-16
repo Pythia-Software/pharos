@@ -108,6 +108,41 @@
 .bg-work-more{margin-top:12px;font-size:var(--fs-sm);min-width:0}
 .bg-work-more summary{cursor:pointer;font-weight:600}
 .bg-work-more p{overflow-wrap:anywhere}
+.bg-costs{width:100%;margin:8px 0 6px;border-collapse:collapse;table-layout:fixed;font-size:var(--fs-sm)}
+.bg-costs caption{text-align:left;font-weight:600;padding-bottom:2px}
+.bg-costs th{font-weight:500;color:var(--muted);text-align:left}
+.bg-costs th,.bg-costs td{padding:4px 8px 4px 0;border-top:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
+.bg-costs thead th{border-top:0}
+.bg-costs tbody th{color:var(--ink);width:28%}
+.bg-costs td{font-variant-numeric:tabular-nums}
+.bg-costs tr[aria-current=true] :is(th,td){font-weight:650}
+.bg-costs .bg-now{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--accent);border-radius:10px;color:var(--accent);font-size:var(--fs-xs);font-weight:500;white-space:nowrap}
+.bg-costs .bg-unmeasured,.bg-costs .bg-gpu{color:var(--muted);font-weight:400}
+.bg-costs .bg-gpu{display:block}
+.bg-reason{color:var(--muted)}
+.bg-usage-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 16px}
+.bg-usage-total{font-size:var(--fs-sm);color:var(--muted);font-variant-numeric:tabular-nums}
+.bg-bars{display:grid;grid-template-columns:minmax(0,max-content) minmax(40px,1fr) max-content;gap:7px 12px;align-items:center;margin:14px 0 0;padding:0;list-style:none;font-size:var(--fs-sm)}
+.bg-bar{display:grid;grid-template-columns:subgrid;grid-column:1/-1;align-items:center;min-width:0;border-radius:4px}
+.bg-bar-label{min-width:0;max-width:260px;overflow-wrap:anywhere}
+.bg-bar-track{height:12px;border-radius:3px;background:color-mix(in srgb,var(--line) 55%,transparent);min-width:0}
+.bg-bar-fill{display:block;height:100%;min-width:2px;border-radius:3px;background:var(--accent)}
+.bg-bar.bg-bar-rest .bg-bar-fill{background:var(--muted)}
+.bg-bar.bg-bar-rest .bg-bar-label{color:var(--muted)}
+.bg-bar:hover .bg-bar-fill{filter:brightness(1.15)}
+.bg-bar-value{font-variant-numeric:tabular-nums;white-space:nowrap;text-align:right}
+.bg-usage-note{color:var(--muted)}
+.bg-usage-table{margin-top:12px;font-size:var(--fs-sm);min-width:0}
+.bg-usage-table summary{cursor:pointer;font-weight:600}
+.bg-usage-scroll{overflow-x:auto;margin-top:8px}
+.bg-usage-table table{width:100%;border-collapse:collapse}
+.bg-usage-table th{font-weight:500;color:var(--muted);text-align:left}
+.bg-usage-table :is(th,td){padding:5px 12px 5px 0;border-top:1px solid var(--line);vertical-align:top}
+.bg-usage-table thead th{border-top:0;white-space:nowrap}
+.bg-usage-table tbody th{color:var(--ink);overflow-wrap:anywhere;min-width:120px}
+.bg-usage-table :is(td,th).num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+@container (max-width:560px){.bg-bars{grid-template-columns:minmax(0,1fr) max-content;gap:2px 12px}.bg-bar-track{grid-column:1/-1;grid-row:2;margin-bottom:8px}.bg-bar-label{max-width:none}
+  .bg-costs thead{display:none}.bg-costs caption{display:block}.bg-costs,.bg-costs tbody,.bg-costs tr,.bg-costs th,.bg-costs td{display:block;width:auto}.bg-costs tbody th{width:auto;padding-bottom:0}.bg-costs td{border-top:0;padding:1px 0}.bg-costs td::before{content:attr(data-label) ": ";color:var(--muted);font-weight:400}.bg-costs td:last-child{padding-bottom:6px}}
 @media(max-width:900px){.bg-cols,.bg-battery{grid-template-columns:minmax(0,1fr)}}
 @container (max-width:560px){.bg-cols{grid-template-columns:minmax(0,1fr)}}`;
 
@@ -147,6 +182,96 @@
     return `${(value / 3600).toFixed(value < 36000 ? 1 : 0)} h`;
   }
 
+  // An amount of time in two significant figures: a run's length, or CPU
+  // time. A measured amount too small to round to a second still says so.
+  function amount(seconds) {
+    const value = Math.max(0, Number(seconds) || 0);
+    if (value < 0.5) return 'under 1 s';
+    if (value < 59.5) return `${Math.round(value)} s`;
+    if (value < 3570) return `${Math.round(value / 60)} min`;
+    const hours = value / 3600;
+    return `${hours < 9.95 ? hours.toFixed(1).replace(/\.0$/, '') : Math.round(hours)} h`;
+  }
+  // Memory in two significant figures: "340 MB", "1.2 GB".
+  function memory(bytes) {
+    let value = Math.max(0, Number(bytes) || 0), unit = 0;
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    while (value >= 999.5 && unit < units.length - 1) { value /= 1000; unit++; }
+    return `${value < 9.95 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+  }
+  const measured = value => value !== null && value !== undefined && Number.isFinite(Number(value));
+  const UNMEASURED = 'not measured yet';
+
+  // What each schedule would cost an item a day (schedule_costs): one row a
+  // schedule, the current one marked, each figure in words or "not measured
+  // yet". A projection is "about"; where the item's runs can only bound a
+  // schedule it is "up to" or "at least" (scheduleCosts in background_api.go).
+  function scheduleCostModel(costs) {
+    const rows = (costs?.rows || []).map(row => {
+      const per = row.per === 'run' ? 'a run' : 'a day';
+      const bound = {up_to: 'up to', at_least: 'at least'}[row.bound] || 'about';
+      const time = value => !measured(value) ? UNMEASURED : value < 0.5 ? `${amount(value)} ${per}` : `${bound} ${amount(value)} ${per}`;
+      return {cadence: row.cadence, label: row.label || '', current: Boolean(row.current),
+        running: time(row.seconds), cpu: time(row.cpu_seconds), gpu: measured(row.gpu_seconds) ? `GPU ${amount(row.gpu_seconds)} ${per}` : '',
+        memory: measured(row.peak_bytes) ? `up to ${memory(row.peak_bytes)}` : UNMEASURED,
+        measured: measured(row.seconds), cpuMeasured: measured(row.cpu_seconds), memoryMeasured: measured(row.peak_bytes)};
+    });
+    return {rows, reason: costs?.reason || '',
+      // One schedule only, measured over real days rather than projected.
+      caption: rows.length === 1 && costs?.rows?.[0]?.measured ? 'What it used a day, measured' : rows.length === 1 ? 'What it costs' : 'What each schedule would cost'};
+  }
+
+  // The chart of CPU time by analysis (usage): one bar a source, largest
+  // first, the unnamed rest last; sources past limit fold into one bar. Each
+  // bar carries its hover detail as the shared chart popover's content, and
+  // the table lists every source with every measure.
+  function usageModel(usage, limit = 12) {
+    const days = Number(usage?.measured_days) || 0;
+    const all = Array.isArray(usage?.rows) ? usage.rows : [];
+    if (!days || !all.length) return {empty: true, rows: [], table: [], days: 0, total: '', note: ''};
+    const dayLabel = value => {
+      const [year, month, day] = String(value).split('-').map(Number);
+      return new Date(year, month - 1, day).toLocaleDateString([], {weekday: 'short', month: 'short', day: 'numeric'});
+    };
+    const cpu = value => measured(value) ? amount(value) : UNMEASURED;
+    const named = all.filter(row => row.source !== 'other'), rest = all.filter(row => row.source === 'other');
+    const shown = named.slice(0, limit), folded = named.slice(limit);
+    const bars = shown.map(row => ({...row}));
+    if (folded.length) {
+      const sum = key => folded.some(row => measured(row[key])) ? folded.reduce((total, row) => total + (Number(row[key]) || 0), 0) : null;
+      bars.push({source: 'folded', label: `${folded.length} smaller kinds of work`, cpu_seconds: sum('cpu_seconds'), worker_cpu_seconds: sum('worker_cpu_seconds'), gpu_seconds: sum('gpu_seconds'),
+        seconds: sum('seconds') || 0, runs: sum('runs') || 0, peak_bytes: null, days: [],
+        parts: folded.map(row => [row.label, cpu(row.cpu_seconds)])});
+    }
+    bars.push(...rest);
+    const peak = Math.max(...bars.map(row => Number(row.cpu_seconds) || 0), 0);
+    const total = all.reduce((sum, row) => sum + (Number(row.cpu_seconds) || 0), 0);
+    const share = value => !(total > 0 && measured(value)) ? '' : value > 0 && value / total < 0.005 ? 'under 1%' : `${Math.round(100 * value / total)}%`;
+    const rows = bars.map(row => {
+      const notes = [`A day, over ${days === 1 ? 'the 1 day' : `the ${days} days`} measured`];
+      const details = [{label: 'CPU time', value: cpu(row.cpu_seconds)}];
+      if (measured(row.worker_cpu_seconds) && row.worker_cpu_seconds > 0) details.push({label: 'of it, in the labeling worker', value: amount(row.worker_cpu_seconds)});
+      if (measured(row.gpu_seconds)) details.push({label: 'GPU time', value: amount(row.gpu_seconds)});
+      if (row.source !== 'other') details.push({label: 'Running', value: amount(row.seconds)}, {label: 'Runs', value: String(Math.round(row.runs * 10) / 10)});
+      if (measured(row.peak_bytes)) details.push({label: 'Most memory', value: memory(row.peak_bytes)});
+      if (row.parts) details.push(...row.parts.slice(0, 6).map(([label, value]) => ({label, value})));
+      const recent = (row.days || []).filter(day => measured(day.cpu_seconds)).map(day => [dayLabel(day.day), amount(day.cpu_seconds)]);
+      return {source: row.source, label: row.label, rest: row.source === 'other', value: cpu(row.cpu_seconds), measured: measured(row.cpu_seconds),
+        width: peak > 0 && measured(row.cpu_seconds) ? Math.max(0, Math.min(1, row.cpu_seconds / peak)) : 0,
+        popover: {heading: row.label, notes, rows: details, ...recent.length ? {totals: recent} : {}}};
+    });
+    const table = all.map(row => ({label: row.label, cpu: cpu(row.cpu_seconds), share: share(row.cpu_seconds),
+      // Only work that leases the labeling worker has GPU time to measure.
+      gpu: measured(row.gpu_seconds) ? amount(row.gpu_seconds) : '',
+      running: row.source === 'other' ? '' : amount(row.seconds), memory: measured(row.peak_bytes) ? memory(row.peak_bytes) : row.source === 'other' ? '' : UNMEASURED,
+      runs: row.source === 'other' ? '' : String(Math.round(row.runs * 10) / 10)}));
+    return {empty: false, rows, table, days, total: measured(usage.cpu_seconds) ? `${amount(usage.cpu_seconds)} of CPU time a day` : '',
+      gpu: all.some(row => measured(row.gpu_seconds)),
+      note: `Average a day over ${days === 1 ? 'the 1 day' : `the ${days} days`} measured on this Mac while Pharos was open. `
+        + 'Each figure is the CPU time of the work’s own thread, plus the labeling worker’s where it uses one, so it is a little under the full cost: '
+        + 'memory management and helper threads are counted under “Pages and everything else”, with the pages you open. Terminal commands are not included.'};
+  }
+
   // An item's or a cadence's state line: the server's label, then the age
   // or the next time that goes with it.
   function stateText(entry, now = Date.now()) {
@@ -172,7 +297,7 @@
     const view = document?.view;
     if (!view) return null;
     const items = (view.items || []).map(item => {
-      const model = itemModel(item, now);
+      const model = itemModel(item, now, document.schedule_costs?.[item.id] || null);
       if (!Object.hasOwn(pendingCadences, item.id)) return model;
       const cadence = pendingCadences[item.id];
       return {...model, column: cadence || model.usual, temporary: cadence ? {cadence} : null,
@@ -203,7 +328,7 @@
     return {mode, pause: mode === 'paused' ? pauseLength(document.settings?.paused_until || view.paused_until, now) : '',
       settings: document.settings || {}, columns, unscheduled, unscheduledRunnable, everything: view.everything?.text || '',
       rule: document.rule || null, headline: view.headline || null, battery: batteryModel(document), labels: document.labels || null,
-      agentEvents: document.agent_events || null};
+      agentEvents: document.agent_events || null, pullRequestReviews: document.pull_request_reviews || null};
   }
 
   // Which pause choice a pause is: one that ends within the hour is the
@@ -230,7 +355,7 @@
     };
   }
 
-  function itemModel(item, now = Date.now()) {
+  function itemModel(item, now = Date.now(), costs = null) {
     // How long a run typically takes leads the state line, so its cost
     // reads beside its schedule.
     const text = [item.cost?.typical || '', stateText(item, now)].filter(Boolean).join(' · ');
@@ -238,6 +363,7 @@
       dot: DOTS[item.state] ?? '', state: item.state, text, error: item.error || '',
       adaptive: Boolean(item.adaptive), column: item.cadence === 'manual' ? 'manual' : item.column || '', usual: item.usual_cadence || '',
       cost: item.cost ? {class: item.cost.class || '', text: item.cost.text || ''} : null,
+      schedules: scheduleCostModel(costs),
       choices: item.choices || [], override: item.override || '', cadenceLabel: item.cadence_label || '', fixed: Boolean(item.fixed),
       moves: item.cadence_moves || [], temporary: item.temporary_cadence || null, stop: item.stop?.id ? {id: item.stop.id} : null,
       sources: Array.isArray(item.sources) ? item.sources.map(source => ({name: source.name, selected: Boolean(source.selected)})) : null};
@@ -294,9 +420,9 @@
   const WORK_STATES = {queued: 'Waiting to start', running: 'Running', blocked: 'Waiting', stopping: 'Stopping', succeeded: 'Done',
     failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted', skipped: 'Skipped'};
   const WORK_REASONS = {
-    dependency: 'Waiting for work it depends on', capacity: 'Waiting for a free CPU slot', power: 'Waiting for power',
+    dependency: 'Waiting for work it depends on', capacity: 'Waiting for a free CPU slot', power: 'Waiting until this Mac is plugged in',
     policy: 'Waiting for background settings to allow it', writer: 'Waiting for another write to the library', external: 'Waiting for an outside service',
-    held: 'Stopped until you resume it or Pharos restarts', failed: 'Stopped after a failure', 'failures-full': 'Stopped after too many failures',
+    held: 'Stopped until you resume it, or quit and reopen Pharos', failed: 'Stopped after a failure', 'failures-full': 'Stopped after too many failures',
     'retry-backoff': 'Trying again shortly after a failure', 'allocation-exceeds-cap': 'Needs more CPU slots than the allowance',
     'request-memory': 'Waiting for memory', 'request-limit': 'Waiting for other requests to finish', 'recent-first': 'Waiting for recent work to finish first',
     paused: 'Background processing is paused', 'inputs-keep-changing': 'Its conversations kept changing; they stay queued for the next update',
@@ -323,11 +449,11 @@
     const max = Math.max(1, Math.floor(Number(work.max_cpu_slots)) || 1);
     const value = Math.min(max, Math.max(1, Math.floor(Number(work.cpu_slots)) || 1));
     const canChange = work.can_change === true;
-    const locked = canChange ? '' : work.locked_reason || 'Set by PHAROS_BACKGROUND_CPUS when Pharos started. Restart without it to change it here.';
+    const locked = canChange ? '' : work.locked_reason || 'Set by PHAROS_BACKGROUND_CPUS when Pharos started. Quit Pharos and reopen it without PHAROS_BACKGROUND_CPUS to change it here.';
     let inUse = '';
     if (authority) {
       const cap = Math.max(1, Number(authority.cpu_cap) || value), used = Math.max(0, Number(authority.cpu_allocated) || 0);
-      const parts = [`${used} of ${cap} in use`];
+      const parts = [`${used} of ${cap} slots in use`];
       if (authority.cpu_waiters > 0) parts.push(`${authority.cpu_waiters} waiting`);
       if (authority.cpu_over_budget > 0) parts.push(`${plural(authority.cpu_over_budget, 'slot')} over until current work reaches a safe point`);
       inUse = parts.join(' · ');
@@ -423,6 +549,19 @@
     return element;
   };
   const host = () => document.getElementById('backgroundSchedule');
+  // A press on a draggable item becomes a drag only on the next move, so a
+  // redraw in between would replace the item and lose the drag; redraws wait
+  // for the release, or for the drag, which holds them until it ends. A held
+  // redraw runs after the release's click, which it would otherwise lose.
+  let pressed = false, held = false;
+  document.addEventListener('pointerdown', event => { if (event.target.closest?.('#backgroundSchedule .bg-item[draggable="true"]')) pressed = true; }, true);
+  for (const name of ['pointerup', 'pointercancel']) document.addEventListener(name, () => {
+    if (!pressed) return;
+    pressed = false;
+    if (held) { held = false; setTimeout(() => render()); }
+  }, true);
+  // WebKit sends neither once a drag starts; the item's dragstart sets dragging just after this.
+  document.addEventListener('dragstart', () => { pressed = false; held = false; }, true);
   const toast = message => window.pharosLibrary?.toast?.(message) ?? window.feedbackToast?.(message);
   async function call(path, body) {
     const response = await fetch(path, body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
@@ -493,14 +632,15 @@
     const run = button('', async () => {
       if (waitingForMoves()) return;
       await call('/api/background/run', body);
-      toast(`${label} runs now.`);
+      toast(body.cadence ? `Everything in “${label}” runs next.` : `${label} runs next.`);
       refresh(true);
     }, 'bg-run');
     run.append(play());
     run.dataset.focusKey = 'run:' + (body.item || body.cadence);
     run.disabled = disabled || waitingForMoves();
-    run.title = `Run ${label} now`;
-    run.setAttribute('aria-label', `Run ${label} now`);
+    const name = body.cadence ? `Run everything in “${label}” now` : `Run ${label} now`;
+    run.title = name;
+    run.setAttribute('aria-label', name);
     return run;
   }
 
@@ -545,14 +685,14 @@
       } else if (column.id === 'daily') {
         const hours = ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00', '06:00', '12:00', '18:00', '22:00', '23:00'];
         const label = value => new Date(`2000-01-01T${value}:00`).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
-        when.append('Overnight at ', select(hours.map(value => [value, label(value)]), model.settings.daily_at || '03:00', value => save({daily_at: value}), 'Daily update time'), ', or the first quiet moment after');
+        when.append('Daily at ', select(hours.map(value => [value, label(value)]), model.settings.daily_at || '03:00', value => save({daily_at: value}), 'Daily update time'), ', or the first quiet moment after');
       } else {
         when.textContent = column.description;
       }
       section.append(head);
       if (column.id === 'hourly' || column.id === 'daily') {
         const hold = node('label', 'bg-busy');
-        hold.title = 'Shared by Hourly and Daily';
+        hold.title = 'Applies to Hourly and Daily. Work that is very late runs anyway.';
         const box = node('input');
         box.type = 'checkbox';
         box.setAttribute('role', 'switch');
@@ -646,10 +786,12 @@
       setup.href = item.setup.url;
       detail.append(setup);
     }
+    if (item.schedules?.rows.length && item.state !== 'disabled') detail.append(renderScheduleCosts(item));
     if (item.error) detail.append(node('p', 'bg-error', item.error));
     if (item.sources?.length) detail.append(sourcePicker(item.sources));
     if (item.id === 'labels' && model.labels) detail.append(renderLabelSettings(model.labels));
     if (item.id === 'agent_events' && model.agentEvents) detail.append(renderAgentEventSettings(model.agentEvents));
+    if (item.id === 'pull-request-reviews' && model.pullRequestReviews) detail.append(renderPullRequestReviewSettings(model.pullRequestReviews));
     const row = node('div', 'bg-row');
     if (item.choices.length && item.state !== 'disabled') {
       const label = node('label', '', item.temporary ? 'Normally ' : 'Run ');
@@ -686,6 +828,119 @@
     return entry;
   }
 
+  // What each schedule would cost the item a day: running time, CPU time
+  // and memory, with the schedule it runs on now marked and why it is there.
+  function renderScheduleCosts(item) {
+    const fragment = document.createDocumentFragment();
+    const table = node('table', 'bg-costs');
+    table.append(node('caption', '', item.schedules.caption));
+    const head = node('tr');
+    for (const text of ['Schedule', 'Running', 'CPU time', 'Memory']) { const cell = node('th', '', text); cell.scope = 'col'; head.append(cell); }
+    const thead = node('thead'), body = node('tbody');
+    thead.append(head);
+    for (const row of item.schedules.rows) {
+      const line = node('tr'), name = node('th', '', row.label);
+      name.scope = 'row';
+      if (row.current) { line.setAttribute('aria-current', 'true'); name.append(node('span', 'bg-now', 'now')); }
+      line.append(name);
+      for (const [label, text, known, extra] of [['Running', row.running, row.measured], ['CPU time', row.cpu, row.cpuMeasured, row.gpu], ['Memory', row.memory, row.memoryMeasured]]) {
+        const cell = node('td', known ? '' : 'bg-unmeasured', text);
+        cell.dataset.label = label;
+        if (extra) cell.append(node('span', 'bg-gpu', extra));
+        line.append(cell);
+      }
+      body.append(line);
+    }
+    table.append(thead, body);
+    fragment.append(table);
+    if (item.schedules.reason) fragment.append(node('p', 'bg-reason', item.schedules.reason));
+    return fragment;
+  }
+
+  // The shared chart popover (chart-popover.css), as Cloud Backup's forecast
+  // uses it: one bubble on the page, filled from the bar under the pointer.
+  let usageTip = null;
+  function hideUsageTip() { if (usageTip) usageTip.hidden = true; }
+  function showUsageTip(content, x, y) {
+    if (!usageTip) {
+      usageTip = node('div', 'usage-chart-tip chart-tooltip');
+      usageTip.id = 'backgroundUsageTooltip';
+      usageTip.setAttribute('role', 'tooltip');
+      document.body.append(usageTip);
+      window.addEventListener('scroll', hideUsageTip, true);
+      window.addEventListener('resize', hideUsageTip);
+    }
+    const row = (label, value, className = '') => {
+      const element = node('div', `usage-chart-tip-row ${className}`.trim());
+      element.append(node('span', 'usage-chart-tip-label', label), node('span', 'usage-chart-tip-value', value));
+      return element;
+    };
+    usageTip.replaceChildren(node('div', 'usage-chart-tip-head', content.heading), ...(content.notes || []).map(note => node('div', 'usage-chart-tip-more', note)),
+      ...content.rows.map(entry => row(entry.label, entry.value)),
+      ...(content.totals || []).map(([label, value], index) => row(label, value, index ? '' : 'usage-chart-tip-total')),
+      ...content.detail ? [node('div', 'usage-chart-tip-more', content.detail)] : []);
+    usageTip.hidden = false;
+    const bounds = usageTip.getBoundingClientRect();
+    usageTip.style.left = Math.max(8, Math.min(x + 12, window.innerWidth - bounds.width - 8)) + 'px';
+    const below = y + 16, above = y - bounds.height - 12;
+    usageTip.style.top = Math.max(8, Math.min(below + bounds.height > window.innerHeight - 8 ? above : below, window.innerHeight - bounds.height - 8)) + 'px';
+  }
+
+  // CPU time by analysis: sorted bars with their values, hover detail, and
+  // the same figures as a table.
+  function renderUsage(model) {
+    const card = node('section', 'bg-card');
+    card.dataset.card = 'usage';
+    const head = node('div', 'bg-usage-head');
+    head.append(node('h3', '', 'CPU time by analysis'));
+    if (model.total) head.append(node('span', 'bg-usage-total', model.total));
+    card.append(head);
+    if (model.empty) {
+      card.append(node('p', 'muted', 'Not measured yet. Pharos measures the CPU time and memory of each analysis as it runs; the first figures appear after the next update.'));
+      return card;
+    }
+    const list = node('ul', 'bg-bars');
+    list.setAttribute('aria-label', 'CPU time a day by analysis');
+    for (const row of model.rows) {
+      const bar = node('li', `bg-bar${row.rest ? ' bg-bar-rest' : ''}`);
+      const track = node('span', 'bg-bar-track'), fill = node('span', 'bg-bar-fill');
+      track.setAttribute('aria-hidden', 'true');
+      fill.style.width = `${(100 * row.width).toFixed(2)}%`;
+      if (row.measured) track.append(fill);
+      bar.append(node('span', 'bg-bar-label', row.label), track, node('span', `bg-bar-value${row.measured ? '' : ' muted'}`, row.value));
+      const point = event => { if (event.pointerType !== 'touch' || event.type === 'click') showUsageTip(row.popover, event.clientX, event.clientY); };
+      bar.onpointermove = point;
+      bar.onclick = point;
+      bar.onpointerleave = hideUsageTip;
+      list.append(bar);
+    }
+    card.append(list, node('p', 'bg-usage-note', model.note));
+    const details = node('details', 'bg-usage-table');
+    details.dataset.viewKey = 'background:usage:table';
+    details.dataset.viewDefault = 'false';
+    details.open = window.pharosView?.read('disclosures', {})[details.dataset.viewKey] === true;
+    details.append(node('summary', '', 'Show as a table'));
+    const scroll = node('div', 'bg-usage-scroll'), table = node('table'), thead = node('thead'), body = node('tbody'), heading = node('tr');
+    const columns = [['Analysis', 'label', false], ['CPU time a day', 'cpu', true], ['Share', 'share', true], ...model.gpu ? [['GPU time a day', 'gpu', true]] : [],
+      ['Running a day', 'running', true], ['Most memory', 'memory', true], ['Runs a day', 'runs', true]];
+    for (const [text, , numeric] of columns) { const cell = node('th', numeric ? 'num' : '', text); cell.scope = 'col'; heading.append(cell); }
+    thead.append(heading);
+    for (const row of model.table) {
+      const line = node('tr');
+      for (const [, key, numeric] of columns) {
+        const cell = node(key === 'label' ? 'th' : 'td', numeric ? 'num' : '', row[key]);
+        if (key === 'label') cell.scope = 'row';
+        line.append(cell);
+      }
+      body.append(line);
+    }
+    table.append(thead, body);
+    scroll.append(table);
+    details.append(scroll);
+    card.append(details);
+    return card;
+  }
+
   // The sources scheduled indexing reads: all of them (stored as none
   // chosen, so a new source is read too) or the ones checked; at least one.
   function sourcePicker(sources) {
@@ -710,7 +965,8 @@
 
   function render({allowFocusedSelect = false} = {}) {
     const target = host();
-    // A drag keeps the items it is over.
+    // A press that may become a drag keeps its item; a drag keeps the items it is over.
+    if (pressed) { held = true; return; }
     if (!target || !document_ || labelsSaving || dragging) return;
     // Keep an open CPU select in place while its live status and the rest
     // of the page update. Other settings selects retain their old edit rule.
@@ -729,9 +985,9 @@
     const card = node('section', 'bg-card');
     const mode = node('div', 'bg-mode');
     const intro = node('div');
-    intro.append(node('h3', '', 'Task Schedule'),
-      node('p', 'muted', {on: 'Everything below runs automatically. Pharos measures every run and moves work between schedules as it gets faster or slower.',
-        paused: 'Paused; everything resumes at the end of the pause.', manual: 'Nothing runs until you choose Update everything now.'}[model.mode] || ''));
+    intro.append(node('h3', '', 'Task schedule'),
+      node('p', 'muted', {on: 'Scheduled work runs automatically. Pharos measures each run and moves adaptive work to a faster or slower schedule.',
+        paused: 'Paused; everything resumes at the end of the pause.', manual: 'Nothing runs on a schedule. Use Run now on an item, or Index changes now.'}[model.mode] || ''));
     const seg = node('div', 'bg-seg');
     seg.setAttribute('role', 'group');
     seg.setAttribute('aria-label', 'Background Processing');
@@ -743,9 +999,9 @@
       choice.setAttribute('aria-pressed', String(pressed));
       seg.append(choice);
     }
-    const everything = button('Update everything now', async () => {
+    const everything = button('Index changes now', async () => {
       await call('/api/sync/check', {});
-      toast('Updating everything now: new conversations first, then every analysis.');
+      toast('Indexing changes: new conversations first, then the analyses that depend on them.');
     });
     everything.prepend(play());
     mode.append(intro, seg, everything);
@@ -753,17 +1009,20 @@
     card.append(mode, renderColumns(model));
     if (model.rule) {
       const rule = node('div', 'bg-rule');
-      rule.append(node('strong', '', 'How work is placed:'), ...[`usually under ${duration(model.rule.frequent_seconds)} → Frequently`,
-        `under ${duration(model.rule.hourly_seconds)} → Hourly`, 'longer → Daily', 'Choose an item for its cost, or to change or run it; drag one to another schedule for a week.'].map(text => node('span', '', text)));
+      // A run's own length, and what a day of its runs' fixed cost adds up to.
+      const aDay = seconds => seconds ? `, and under ${duration(seconds)} a day of repeated work` : '';
+      rule.append(node('strong', '', 'How work is placed:'), ...[`runs usually under ${duration(model.rule.frequent_seconds)}${aDay(model.rule.frequent_day_seconds)} → Frequently`,
+        `under ${duration(model.rule.hourly_seconds)}${aDay(model.rule.hourly_day_seconds)} → Hourly`, 'longer → Daily', 'Choose an item for its cost, or to change or run it; drag one to another schedule for a week.'].map(text => node('span', '', text)));
       card.append(rule);
     }
     content.append(card);
+    if (document_.usage) content.append(renderUsage(usageModel(document_.usage)));
     const work = workModel(document_, work_);
     if (work) content.append(renderWork(work));
     if (model.battery) {
       const battery = node('section', 'bg-card');
       battery.dataset.card = 'battery';
-      battery.append(node('h3', '', 'On battery'), node('p', 'muted', `${model.battery.status} Choose what keeps running when this Mac is unplugged; Update everything now and Run now always run.`));
+      battery.append(node('h3', '', 'On battery'), node('p', 'muted', `${model.battery.status} Choose what keeps running when this Mac is unplugged; Index changes now and Run now always run.`));
       const rows = node('div', 'bg-battery');
       for (const row of model.battery.rows) {
         const label = node('label', 'bg-battery-row');
@@ -814,7 +1073,7 @@
 
   function renderAgentEventSettings(events) {
     return labelSwitch('agentEventsEnabled', 'agentEvents', 'Agent events (preview)',
-      'Find obstacles, discoveries and workarounds in agent replies from the last 90 days. Turning this off keeps its results.', events,
+      'Find obstacles, discoveries and workarounds in agent replies and thinking from the last 90 days. Turning this off keeps its results.', events,
       async enabled => {
         window.pharosPrefs.set(AGENT_EVENTS_KEY, enabled);
         await window.pharosPrefs.flush?.();
@@ -822,6 +1081,14 @@
         return call('/api/background');
       },
       threads => call('/api/labels/settings', {agent_events_threads: threads}));
+  }
+
+  // Reading reviews asks a forge over the network, so it is off until chosen.
+  function renderPullRequestReviewSettings(reviews) {
+    return labelSwitch('pullRequestReviewsEnabled', 'pullRequestReviews', 'Pull request reviews',
+      'Ask GitHub, through the gh tool’s login on this Mac, for the reviews and comments on pull requests your workspaces opened or committed to, and keep them in this library. Turning this off keeps what was read.', reviews,
+      enabled => call('/api/pull-request-reviews/settings', {enabled}),
+      async () => call('/api/background'));
   }
 
   // Each model keeps its effective CPU control and returns the next document.
@@ -916,7 +1183,7 @@
     card.dataset.key = 'work';
     const allowance = model.allowance;
     card.append(node('h3', '', 'Background CPU'),
-      node('p', 'muted', `How many CPU-heavy background workers ${allowance.scope} may run at once. Other Pharos processes have their own allowance; interactive pages are not limited by it.`));
+      node('p', 'muted', 'How many CPU-heavy background tasks Pharos may run at once for this library. Other Pharos processes have their own allowance; pages you open are not limited by it.'));
     const cpu = node('div', 'bg-work-cpu');
     const label = node('label', '', 'Allowance ');
     const choice = select(allowance.choices.map(value => [value, String(value)]), allowance.value, async value => {
@@ -936,18 +1203,18 @@
     }, 'Background CPU allowance');
     choice.dataset.focusKey = 'work:cpu';
     choice.disabled = !allowance.canChange;
-    label.append(choice, ` of ${plural(allowance.max, 'CPU')}`);
+    label.append(choice, ` of ${plural(allowance.max, 'slot')}`);
     cpu.append(label);
     if (allowance.inUse) cpu.append(node('span', 'bg-state', allowance.inUse));
-    card.append(cpu, node('p', 'muted', allowance.locked || 'This shares out work; it is not measured CPU use, which Load in the activity panel shows. A lower allowance applies once current work reaches a safe point.'));
+    card.append(cpu, node('p', 'muted', allowance.locked || 'This shares out work; it is not measured CPU use, which the Load row in the Background Processing panel shows. A lower allowance applies once current work reaches a safe point.'));
     if (model.paused) card.append(node('p', 'muted', 'Background processing is paused; requests wait until it resumes.'));
 
     const actions = node('div', 'bg-work-actions');
-    const recent = button('Bring last 2 days up to date', () => workAction('recent', {}, 'Bringing the last 2 days up to date first; older history continues afterward.', 'work:recent'));
+    const recent = button('Update analyses for the last 2 days', () => workAction('recent', {}, 'Updating analyses for the last 2 days first; older history continues afterward.', 'work:recent'));
     recent.prepend(play());
     recent.dataset.focusKey = 'work:recent';
     recent.disabled = model.recentLive;
-    const history = button('Catch up all history', () => workAction('backfill', {}, 'Catching up all history at low priority, after recent work.', 'work:backfill'));
+    const history = button('Update analyses for all history', () => workAction('backfill', {}, 'Updating analyses for all history at low priority, after recent work.', 'work:backfill'));
     history.dataset.focusKey = 'work:backfill';
     history.disabled = model.backfillLive;
     history.title = 'Runs after recent work, at low priority. Cancel it at any time.';
@@ -1021,10 +1288,10 @@
     row.append(copy);
     // Stop and Resume share a focus key: one replaces the other.
     const words = {
-      stop: ['Stop', `Stopping ${task.label} at its next safe point. It stays stopped until you resume it or Pharos restarts.`,
-        'Stops at the next safe point and holds it until you resume it or Pharos restarts. Requests that need it wait.'],
-      resume: ['Resume', `${task.label} resumed.`, 'Lets it run again.'],
-      retry: ['Retry', `Trying ${task.label}'s failures again.`, 'Tries what failed again.'],
+      stop: ['Stop', `Stopping ${task.label} at its next safe point. It stays stopped until you resume it, or quit and reopen Pharos.`,
+        'Stops at the next safe point and holds it until you resume it, or quit and reopen Pharos. Requests that need it wait.'],
+      resume: ['Resume', `Resumed ${task.label}.`, 'Lets it run again.'],
+      retry: ['Retry', `Retrying what failed in ${task.label}.`, 'Tries what failed again.'],
     };
     for (const action of task.actions) {
       const [text, message, title] = words[action];
@@ -1090,7 +1357,7 @@
 
   window.pharosBackground = {refresh, render,
     // Pure helpers, for web/tests/unit/page/background.test.mjs.
-    scheduleModel, itemModel, batteryModel, labelingControls, createSettingsQueue, stateText, dropCadence, pauseLength, ago, until, duration,
+    scheduleModel, itemModel, scheduleCostModel, usageModel, amount, memory, batteryModel, labelingControls, createSettingsQueue, stateText, dropCadence, pauseLength, ago, until, duration,
     workModel, cpuAllowance, requestModel, taskModel, workReason, workRequestBody};
   if (host()) start(); else document.addEventListener('DOMContentLoaded', start, {once: true});
 })();

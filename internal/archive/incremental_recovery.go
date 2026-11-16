@@ -14,7 +14,7 @@ import (
 
 func (s *Server) recoveryEstimate(ctx context.Context, names []string) (map[string]any, error) {
 	result := map[string]any{"files": 0, "bytes": int64(0), "groups": int64(0), "capture_seconds": nil, "index_seconds": nil,
-		"note": "Estimates use measured copy and committed-ingest throughput, not parse speed alone. Verification and library-wide analysis add time. Missing measurements are shown as unknown; other Macs use retained evidence."}
+		"note": "Estimates come from how fast this Mac has copied and indexed before, not from parsing speed alone. Verification and library-wide analysis take extra time. An estimate shows as unknown until Pharos has measured it. Other Macs’ sources are rebuilt from what the library already holds."}
 	targets, err := captureTargets(s.Config().CaptureRoot, nil, true, nil)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -130,7 +130,7 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 		}
 	}
 	if !s.acquireManualIngest() {
-		writeError(w, errors.New("a capture or index is already running"), 409)
+		writeError(w, errors.New("Another capture or index is running. Try again when it finishes."), 409)
 		return
 	}
 	// Updating the library resumes a Library view refresh the user stopped.
@@ -358,7 +358,7 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 	if !started {
 		end()
 		s.ingestMu.Unlock()
-		writeError(w, errors.New("service stopping"), 503)
+		writeError(w, errServiceStopping, 503)
 		return
 	}
 	writeJSON(w, map[string]any{"accepted": true, "run_id": run.ID, "job_id": job}, 202)
@@ -427,12 +427,23 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 		measure = func(_ string, work func() error) error { return work() }
 	}
 	invoke := func(name string, work func(context.Context) error) error {
-		stageCtx, stage := chain.childFrom(ctx, OperationSpec{Kind: "analysis." + name, Trigger: triggerChained})
+		spec := OperationSpec{Kind: "analysis." + name, Trigger: triggerChained}
+		if name == "findings" {
+			// A full pass takes minutes and measuring seconds: the journal
+			// says which this was, so neither is costed by the other.
+			spec.Variant = "measure"
+			if forceFindings || findings == findingsAuto && s.Catalog.findingsFullDue(ctx) {
+				spec.Variant = "full"
+			}
+		}
+		stageCtx, stage := chain.childFrom(ctx, spec)
 		// A background stage (Git, tools, authorship, findings) runs at its
 		// priority class; foreground ones as they are.
 		var err error
 		stage.RunIO(func() { err = measure(name, func() error { return work(stageCtx) }) })
+		reportStageUnits(ctx, name, stage)
 		stage.Finish(err)
+		reportStageUse(ctx, name, stage)
 		return err
 	}
 	op := operationOf(ctx)
@@ -461,9 +472,13 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 		{"git", func(ctx context.Context) error { return s.Catalog.refreshMainIntegrations(ctx) }},
 		// Commit links (outcome_git.go) start from the outcomes the rollup
 		// derives, so they follow it here, never on a page's request, as
-		// does spend by branch (branch_usage.go).
+		// does spend by branch (branch_usage.go). Which pull requests are a
+		// workspace's own follows both (pull_request_reviews.go): it reads
+		// no forge, so it runs whether or not reading reviews is on, and a
+		// pull request a session just opened is there for the next reading
+		// pass to find due.
 		{"tools", func(ctx context.Context) error {
-			return errors.Join(s.Catalog.ensureToolRollup(ctx), s.Catalog.refreshSessionGit(ctx), s.Catalog.refreshBranchUsage(ctx))
+			return errors.Join(s.Catalog.ensureToolRollup(ctx), s.Catalog.refreshSessionGit(ctx), s.Catalog.refreshBranchUsage(ctx), s.Catalog.refreshPullRequestWorkspaces(ctx))
 		}},
 		{"authorship", func(ctx context.Context) error {
 			// A page may already be estimating older inputs. Wait for that
@@ -621,10 +636,10 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			}
 		}
 	}
-	// The freshness ledger's upgrade count (§5), cheap next to the whole
-	// chain; a background stage leaves it to the daily pass.
+	// The freshness ledger's upgrade count (§5), counted again only when
+	// what it reads changed; a background stage leaves it to the daily pass.
 	if only == nil {
-		s.Catalog.storeUpgradeCount(ctx)
+		s.Catalog.refreshUpgradeCount(ctx)
 	}
 	return nil
 }

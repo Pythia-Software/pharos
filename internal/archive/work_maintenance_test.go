@@ -554,6 +554,17 @@ func TestAwaitedRequestsWithdrawWhenHeld(t *testing.T) {
 	if blocker := workRequestHold(workRequestFacts{State: opBlocked, Kinds: []string{kindGit}, Blocker: &workBlocker{Reason: workBlockedWriter}}); blocker != nil {
 		t.Fatal("an ordinary writer wait must not withdraw unrelated work")
 	}
+	// Each unlock delivers its own notifications, so an older one can arrive
+	// after the hold. The awaiter must still see the hold, or it never returns.
+	const late = 1 << 40
+	w.requestChanged(workRequestFacts{ID: late, State: opBlocked, Blocker: &workBlocker{Reason: workBlockedPaused}, Revision: 2})
+	w.requestChanged(workRequestFacts{ID: late, State: opRunning, Revision: 1})
+	w.mu.Lock()
+	facts := w.requests[late].facts
+	w.mu.Unlock()
+	if workRequestHold(facts) == nil {
+		t.Fatalf("a late notification replaced the hold: %+v", facts)
+	}
 }
 
 // A page's writing request records an interruption, such as recent

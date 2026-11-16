@@ -571,7 +571,11 @@ func (a *jsonlAdapter) partExtractor() string { return a.provider + ":" + a.extr
 // not Codex's: v2 selects the active branch, counts once a reply several of a
 // session's transcripts hold, and counts advisor iterations. v3 keeps synthetic
 // errors out of the inherited execution model while retaining their evidence.
-const claudeExtractor = "claude-v3-execution-model"
+// v4 keeps a background task's notice delivered mid-turn (a queued_command
+// attachment) as task_notification context, as one delivered as a user event,
+// and what the person typed mid-turn as their message; a ScheduleWakeup's
+// prompt is scheduled_wakeup context.
+const claudeExtractor = "claude-v4-queued-input"
 
 func (a *jsonlAdapter) extractorVersion() string {
 	if a.provider == "claude" {
@@ -1081,6 +1085,31 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	// conversation's active branch; an abandoned turn keeps its records, and
 	// its usage still counts, since it was sent.
 	onBranchIDs := claudeActiveBranch(events)
+	// A typed message queued mid-turn is kept unless the person's next user
+	// event repeats its text, as one written both ways would; none has been
+	// seen. Only that next event counts: "continue" sent hours apart is two.
+	queuedRepeated := map[int64]bool{}
+	queued := []map[string]any{}
+	for _, event := range events {
+		if attachment := mapValue(event["attachment"]); firstString(event["type"]) == "attachment" && firstString(attachment["type"]) == "queued_command" && firstString(attachment["commandMode"]) == "prompt" {
+			queued = append(queued, event)
+			continue
+		}
+		if firstString(event["type"]) != "user" {
+			continue
+		}
+		message := mapValue(event["message"])
+		text := strings.TrimSpace(messageText(firstNonNil(message["content"], event["content"])))
+		if text == "" || claudeInjectedSource(event, text) != "" {
+			continue
+		}
+		for _, pending := range queued {
+			if strings.TrimSpace(firstString(mapValue(pending["attachment"])["prompt"])) == text {
+				queuedRepeated[integer(pending["_line"])] = true
+			}
+		}
+		queued = queued[:0]
+	}
 	pending, pendingSelected := 0, true
 	settle := func() {
 		for i := pending; i < len(messages); i++ {
@@ -1142,6 +1171,26 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 		}
 		if firstString(event["type"]) == "attachment" && firstString(mapValue(event["attachment"])["type"]) == "invoked_skills" {
 			messages = append(messages, MessageRecord{NativeID: defaultString(event["uuid"], fmt.Sprintf("skills-%d", integer(event["_line"]))), Role: "system", Kind: "metadata", Text: jsonText(event), CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
+		}
+		// What arrives while the agent is mid-turn is delivered into that turn
+		// as a queued command, not a user event: a background task's notice,
+		// or what the person typed meanwhile (commandMode "prompt"), recorded
+		// when they sent it. Messages from other sessions (cross-session and
+		// agent messages) are not the person's and stay out.
+		if attachment := mapValue(event["attachment"]); firstString(event["type"]) == "attachment" && firstString(attachment["type"]) == "queued_command" {
+			prompt := firstString(attachment["prompt"])
+			trimmed := strings.TrimSpace(prompt)
+			base := MessageRecord{NativeID: defaultString(event["uuid"], fmt.Sprintf("queued-%d", integer(event["_line"]))), Model: model, Effort: effort, PreviousNativeID: firstString(event["parentUuid"]), CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
+			switch {
+			case strings.HasPrefix(trimmed, "<task-notification>"):
+				messages = append(messages, injectedContext(base, "task_notification", prompt))
+			case firstString(attachment["commandMode"]) == "prompt" && trimmed != "" && !strings.HasPrefix(trimmed, "<cross-session-message") && !strings.HasPrefix(trimmed, "<agent-message") && !queuedRepeated[integer(event["_line"])]:
+				base.Role, base.Kind, base.Text, base.Sender = "user", "message", prompt, claudeSender(event)
+				if rootID != "" {
+					base.Role = agentRole
+				}
+				messages = append(messages, base)
+			}
 		}
 		message := mapValue(event["message"])
 		if message == nil {

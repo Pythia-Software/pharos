@@ -55,13 +55,13 @@ test("a missing value has its own label, never a blank", () => {
   assert.deepEqual(outcomesAnalysisCatalog.breakdowns.branch.where, [{ field: "project_kind", op: "=", value: "repository" }]);
   assert.equal(branchDisplay(null, "folder").text, "Not a repository");
   assert.equal(branchDisplay("", "repository").text, "No branch");
-  assert.equal(branchDisplay(null, "none").text, "No git data");
+  assert.equal(branchDisplay(null, "none").text, "No Git data");
   assert.deepEqual(branchDisplay("main", "repository"), { text: "main", muted: false });
 });
 
 test("a Tier 2 breakdown is disabled with its reason when no session reached Tier 2", () => {
   const plain = outcomeCatalogFor(outcomeTiersReached([{ keys: ["transcript"], value: 12 }, { keys: ["none"], value: 3 }, { keys: ["local_git"], value: 0 }]));
-  assert.match(plain.breakdowns.git_check.unavailable, /No session has local Git evidence/);
+  assert.match(plain.breakdowns.git_check.unavailable, /No workspace has local Git evidence/);
   assert.deepEqual(catalogProblems(plain), []);
   // Disabled, it cannot be chosen, and a link asking for it draws without it.
   assert.equal(splitValid(plain, "records", "git_check"), false);
@@ -69,8 +69,19 @@ test("a Tier 2 breakdown is disabled with its reason when no session reached Tie
   assert.equal(normalizeAnalysis(plain, { view: "compare", metric: "cost", split: "git_check" }).split, "none");
   // Every other breakdown stays, and a library with Tier 2 offers it.
   assert.equal(plain.breakdowns.outcome_label.unavailable, undefined);
-  assert.equal(outcomeCatalogFor(["local_git", "transcript"]), outcomesAnalysisCatalog);
+  assert.equal(outcomeCatalogFor(["local_git", "transcript", "forge"]), outcomesAnalysisCatalog);
   assert.equal(outcomesAnalysisCatalog.breakdowns.git_check.unavailable, undefined);
+  // Review breakdowns (Tier 3) need a pull request read from its forge: with
+  // none they say how to turn that on, and Local Git's stays offered.
+  const unread = outcomeCatalogFor(outcomeTiersReached([{ keys: ["local_git"], value: 4 }], [{ keys: [], value: null }]));
+  assert.match(unread.breakdowns.review_status.unavailable, /Pull request reviews in Settings/);
+  assert.equal(unread.breakdowns.git_check.unavailable, undefined);
+  assert.equal(splitValid(unread, "records", "review_status"), false);
+  assert.deepEqual(catalogProblems(unread), []);
+  assert.equal(outcomeCatalogFor(outcomeTiersReached([{ keys: ["local_git"], value: 4 }], [{ keys: [], value: 3 }])), outcomesAnalysisCatalog);
+  // A workspace with no pull request read is not "not reviewed".
+  assert.equal(outcomeGroupLabel("review_status", ""), "No pull request read");
+  assert.equal(outcomeGroupLabel("review_status", "none"), "Not reviewed");
   // Until the tiers are read (loading, or the read failed), every breakdown
   // stands: a link to the Git breakdown draws it, never "no Git evidence".
   assert.equal(outcomeCatalogFor(undefined), outcomesAnalysisCatalog);

@@ -16,7 +16,7 @@ export const thinkingCardRecipes: QueryRecipe[] = [
     id: "thinking-wait-distribution",
     title: "Model wait distribution",
     description:
-      "Post-tool request gaps over the last {days} days. Missing timing stays missing.",
+      "Gaps from a tool result to the next model request over the last {days} days. Requests without timing are left out.",
     measures: [
       {
         id: "waits",
@@ -140,7 +140,7 @@ export const thinkingCardRecipes: QueryRecipe[] = [
     id: "thinking-timing-coverage",
     title: "Timing evidence coverage",
     description:
-      "Retained requests grouped by timing evidence over the last {days} days.",
+      "Model requests grouped by timing evidence over the last {days} days.",
     measures: [
       {
         id: "timing_quality",

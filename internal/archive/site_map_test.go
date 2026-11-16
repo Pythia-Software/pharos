@@ -433,16 +433,18 @@ func TestSiteLinkRejectsWhatTheSiteMapCannotExpress(t *testing.T) {
 		return example.Path + "?" + values.Encode()
 	}
 	for name, link := range map[string]string{
-		"unknown parameter":    with(func(v url.Values) { v.Set("colour", "red") }),
-		"private parameter":    with(func(v url.Values) { v.Set("ask_chat", "chat-1") }),
-		"token parameter":      "/?token=secret",
-		"snapshot reference":   "/analyze?analyze_mode=query&analyze_topic=tokens&analyze_data=usage&q_usage=@snap-1",
-		"legacy alias":         "/tools",
-		"unknown page":         "/nowhere",
-		"other origin":         "https://example.com" + cases.Example.URL,
-		"coerced chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":3,"view":"trend","metric":"cost","split":"type"}`) }),
-		"older chart":          with(func(v url.Values) { v.Set("analyze_chart", `{"view":"trend","metric":"tokens"}`) }),
-		"version 2 chart":      with(func(v url.Values) { v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"tokens","split":"provider"}`) }),
+		"unknown parameter":  with(func(v url.Values) { v.Set("colour", "red") }),
+		"private parameter":  with(func(v url.Values) { v.Set("ask_chat", "chat-1") }),
+		"token parameter":    "/?token=secret",
+		"snapshot reference": "/analyze?analyze_mode=query&analyze_topic=tokens&analyze_data=usage&q_usage=@snap-1",
+		"legacy alias":       "/tools",
+		"unknown page":       "/nowhere",
+		"other origin":       "https://example.com" + cases.Example.URL,
+		"coerced chart":      with(func(v url.Values) { v.Set("analyze_chart", `{"v":3,"view":"trend","metric":"cost","split":"type"}`) }),
+		"older chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"view":"trend","metric":"tokens"}`) }),
+		"version 2 chart": with(func(v url.Values) {
+			v.Set("analyze_chart", `{"v":2,"view":"trend","metric":"tokens","split":"provider"}`)
+		}),
 		"invalid chart":        with(func(v url.Values) { v.Set("analyze_chart", `{"v":3,"metric":"bogus"}`) }),
 		"window disagreement":  with(func(v url.Values) { v.Set("analyze_days", "90") }),
 		"unknown filter field": "/analyze?analyze_mode=query&analyze_topic=tokens&analyze_data=usage&q_usage=" + mustToken(t, site, `[{"field":"nope","op":"=","value":"x"}]`),
@@ -503,11 +505,21 @@ func TestSiteLinkWritesACardsOneDayWindowInTheSingular(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary := result["summary"].(string); summary != "Recorded error calls started in the last 1 day, split by tool." {
+	if summary := result["summary"].(string); summary != "Recorded error calls started in the last day, split by tool." {
 		t.Errorf("summary %q", summary)
 	}
 	if week, _ := site.linkTool(map[string]any{"card": "tool-failures", "days": float64(7)}); week["summary"] != "Recorded error calls started in the last 7 days, split by tool." {
 		t.Errorf("7-day summary %q", week["summary"])
+	}
+	// A Today card's trailing average reads "today", as on the card.
+	for in, want := range map[string]string{
+		"Calls over each trailing {days}-day period, across the last 90 days.": "Calls today.",
+		"Tokens over trailing {days} days":                                     "Tokens today",
+		"Calls in the last {days} days":                                        "Calls today",
+	} {
+		if got := todayCardText(in); got != want {
+			t.Errorf("todayCardText(%q) = %q; want %q", in, got, want)
+		}
 	}
 }
 
@@ -821,7 +833,7 @@ func TestSiteLinkFullQueriesViewStateAndAttention(t *testing.T) {
 		`{"page":"analyze/thinking-detail","view":{"thinking":{"view":"calendar","groupBy":"model_effort","timezone":"America/Denver","range":"30d","hiddenPercentiles":["p95"],"hours":6}}}`,
 		`{"page":"cards","view":{"card_window":"today","card_filters":false},"highlight":["card:tool-failures"],"reveal":"text:failed command"}`,
 		`{"page":"work","options":{"work_id":"w","conversation":"c"},"view":{"find":"failed command","find_case":true,"reader_expanded":["message:m"],"reader_filter":["prompts","response"],"reader_hidden_tags":["Write","tag:[\"poll\",\"Write\"]","show:tag:[\"write\",\"Write\"]"],"reader_highlight_hidden":["events:event-friction","labels:C.report","engagement:bounds","engagement:eng-slot-2"],"reader_engagement":true,"reader_navigator":["timeline","context","turns"],"delegation_columns":["tokens","cost"],"delegation_tint":"sort"},"reveal":"message:m"}`,
-		`{"page":"work","options":{"work_id":"w"},"view":{"timeline_visibility":{"modes":{"values":["C.report.finding","?"],"excluded":false},"events":{"values":["friction"],"excluded":true},"tools":{"values":["error"],"excluded":true},"origins":{"values":["typed"],"excluded":false}}}}`,
+		`{"page":"work","options":{"work_id":"w"},"view":{"timeline_visibility":{"modes":{"values":["C.report.finding","?"],"excluded":false},"events":{"values":["friction"],"excluded":true},"tools":{"values":["error"],"excluded":true},"waits":{"values":["machine_wait"],"excluded":true},"origins":{"values":["typed"],"excluded":false}}}}`,
 	} {
 		result, err := site.linkTool(linkArgs(t, input))
 		if err != nil {

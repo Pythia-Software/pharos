@@ -22,7 +22,7 @@ library starts with them off); **Pause for 1 hour**, **Pause for 1 day** and **O
 stop them. The interval is two, five (the default), fifteen or thirty
 minutes. The schedule is retained per host; an empty source selection
 (`sync_settings.sources_json`, no longer shown) means all supported, enabled
-sources. **Update everything now** (and the header button) runs that
+sources. **Index changes now** (and the header button) runs that
 incremental pipeline, then refreshes GitHub repository identities,
 library-wide identity links, local Git integration, tool rollups, Human
 Words, and a full findings pass. The manual run remains active until those
@@ -44,16 +44,15 @@ messages. Times use compact durations and relative timestamps; hover a
 timestamp for the exact date and time. Performance distributions,
 verification coverage, and repair controls are in expandable sections.
 
-The page's **Capture & index** section runs the same action as the drive
-panel's **Capture & index** button. **Capture or index separately** exposes
-**Capture this Mac** and **Index captured files** when only one step is needed.
-Their progress, errors, and index **Stop** control appear here. All of these
+The page's **Index changes now** runs the same action as the header's
+**Index changes**; each scheduled item also has its own **Run now**.
+Their progress, errors, and **Stop** control appear here. All of these
 share one busy state. Settings → Sources keeps discovery, configuration,
 and source status, with a link here instead of its own capture/index controls.
 
 The header's **Index changes** shares its busy state with automatic indexing,
 Capture & index, verification, and repair. **Stop**, beside the running work
-in the drive panel, cancels it; already committed groups remain usable. Runs
+in the Background Processing panel, cancels it; already committed groups remain usable. Runs
 do not overlap or queue missed timer ticks. The next interval starts after a
 run finishes. A capture or index started by hand cancels and waits for
 automatic work before taking the coordinator.

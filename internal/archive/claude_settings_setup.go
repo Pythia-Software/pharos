@@ -34,7 +34,7 @@ func sourceNamed(sources []SourceConfig, name string) (SourceConfig, bool) {
 func claudeSettingsForImport(config Config, importName string) (claudeSettingsSetup, error) {
 	export, ok := sourceNamed(config.Sources, importName)
 	if !ok || export.Kind != "claude-ai" {
-		return claudeSettingsSetup{}, probeRequestError{errors.New("choose a configured Claude.ai export source")}
+		return claudeSettingsSetup{}, probeRequestError{errors.New("Choose a Claude.ai export source that is set up for this Mac.")}
 	}
 	account := defaultString(export.Account, "local")
 	return claudeSettingsForAccount(config, account)
@@ -76,7 +76,7 @@ func claudeSettingsForAccount(config Config, account string) (claudeSettingsSetu
 func enableClaudeSettingsForImport(config Config, importName, path string) (claudeSettingsSetup, error) {
 	export, ok := sourceNamed(config.Sources, importName)
 	if !ok || export.Kind != "claude-ai" {
-		return claudeSettingsSetup{}, probeRequestError{errors.New("choose a configured Claude.ai export source")}
+		return claudeSettingsSetup{}, probeRequestError{errors.New("Choose a Claude.ai export source that is set up for this Mac.")}
 	}
 	return configureClaudeSettings(config, defaultString(export.Account, "local"), path, true)
 }
@@ -184,7 +184,7 @@ func (s *Server) postClaudeSettingsSetup(w http.ResponseWriter, body map[string]
 		if readErr != nil {
 			err = readErr
 		} else if request.Account == "" || len(coverage) != 1 || coverage[0].Account != request.Account {
-			err = probeRequestError{errors.New("choose an account with imported Claude Chat conversations")}
+			err = probeRequestError{errors.New("Choose an account with imported Claude.ai conversations.")}
 		} else {
 			setup, err = configureClaudeSettings(s.Config(), request.Account, request.Path, false)
 		}

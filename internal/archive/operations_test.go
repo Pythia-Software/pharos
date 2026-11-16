@@ -53,7 +53,7 @@ func TestOperationLifecycleFollowsTheContract(t *testing.T) {
 	if step := operationStep(op.view()); step["index"] != 3 || step["count"] != 3 {
 		t.Fatalf("the next planned task did not advance: %+v", step)
 	}
-	op.Block("capture-running", "the capture on Mac B")
+	op.Block("capture-running", "the capture on Mac B to finish")
 	state(op, opBlocked)
 	op.Unblock()
 	state(op, opRunning)
@@ -345,6 +345,31 @@ func TestMaintenanceProgressCountsOnlyCommittedWorkAndRefreshesInventory(t *test
 	step := operationStep(catalog.ops.views()[0])
 	if step == nil || step["fraction"] != float64(1) || step["unit"] != "conversation" {
 		t.Fatalf("committed work did not reach the status API: %+v", step)
+	}
+	// A few arrivals in a long queue leave the total, and so the measured
+	// rate, alone; many revise it, and the queue never appears to finish early.
+	execTx(t, catalog.DB, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<95) INSERT INTO progress_items SELECT 100+i FROM n")
+	batch(true)
+	execTx(t, catalog.DB, "INSERT INTO progress_items VALUES(300),(301)")
+	batch(true)
+	if beforeCommit.Done != 7 || beforeCommit.Total != 100 {
+		t.Fatalf("slight growth must not restart the estimate: %+v", beforeCommit)
+	}
+	execTx(t, catalog.DB, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<10) INSERT INTO progress_items SELECT 400+i FROM n")
+	batch(true)
+	if beforeCommit.Done != 8 || beforeCommit.Total != 112 {
+		t.Fatalf("growth past the tolerance must revise the denominator: %+v", beforeCommit)
+	}
+	execTx(t, catalog.DB, "DELETE FROM progress_items WHERE id>(SELECT min(id)+1 FROM progress_items); INSERT INTO progress_items VALUES(500)")
+	batch(true)
+	if beforeCommit.Done != 9 || beforeCommit.Total != 11 {
+		t.Fatalf("a shrunken queue must revise the denominator: %+v", beforeCommit)
+	}
+	for range 2 {
+		batch(true)
+	}
+	if beforeCommit.Done != 11 || beforeCommit.Total != 11 {
+		t.Fatalf("drained queue after held growth: %+v", beforeCommit)
 	}
 }
 

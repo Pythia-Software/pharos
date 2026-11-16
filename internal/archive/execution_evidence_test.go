@@ -1062,6 +1062,21 @@ func dependencyDigestsBoth(t *testing.T, catalog *Catalog, ids ...string) (map[s
 			t.Fatalf("%s: catalog-wide digest %q, component walk %q", id, all[id], scoped[id])
 		}
 	}
+	// A publication guard at the cached generation reads the catalog-wide
+	// digests instead of walking: the same digests, members included, and ""
+	// for a conversation that is gone.
+	if _, cached, err := cachedDependencyDigestEntry(context.Background(), catalog.DB); err != nil || !cached {
+		t.Fatalf("the catalog-wide read did not fill the cache (%v)", err)
+	}
+	asked := append(slices.Clone(ids), "no-such-conversation")
+	walked, err := executionDependencyDigestsFor(context.Background(), catalog.DB, asked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := publicationDigests(context.Background(), catalog.DB, asked)
+	if err != nil || !reflect.DeepEqual(published, walked) {
+		t.Fatalf("publication digests from the cache %v, component walk %v (%v)", published, walked, err)
+	}
 	return all, scoped
 }
 
@@ -1408,6 +1423,15 @@ func TestLabelsFollowExecutionEvidenceElsewhere(t *testing.T) {
 		beforeDerivedPublication = nil
 		if _, err := catalog.DB.Exec(`UPDATE agent_sessions SET child_conversation_id=NULL WHERE id='s-late'`); err != nil {
 			t.Error(err)
+		}
+		// A reader brings the cached digests to the retraction's generation:
+		// the publication compares against those (the events test above
+		// leaves them behind, and its publication walks).
+		if _, err := executionDependencyDigests(t.Context(), catalog.DB); err != nil {
+			t.Error(err)
+		}
+		if _, cached, err := cachedDependencyDigestEntry(t.Context(), catalog.DB); err != nil || !cached {
+			t.Errorf("digests not cached at the publication's generation (%v)", err)
 		}
 	})
 	if _, err := catalog.DB.Exec(`INSERT INTO message_labels_dirty(conversation_id,token) VALUES('c-new','force') ON CONFLICT(conversation_id) DO UPDATE SET token='force'`); err != nil {

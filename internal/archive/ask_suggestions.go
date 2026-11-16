@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"math"
 	"net"
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -702,9 +704,11 @@ func (run *askSignalRun) agentEvents(ctx context.Context, kinds []string) (askSi
 		return askSignal{}, nil
 	}
 	// Only events the verifier is confident of, as everywhere else they are
-	// shown; one conversation with several kinds counts once.
+	// shown; one conversation with several kinds counts once. CROSS JOIN
+	// keeps the window's events (agent_events_day_idx) as the outer loop
+	// rather than every conversation's events.
 	query := `SELECT e.conversation_id,COALESCE(r.display_name,''),e.family,COUNT(*) FROM agent_events e
- JOIN conversations c ON c.id=e.conversation_id JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
+ CROSS JOIN conversations c ON c.id=e.conversation_id JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
  WHERE e.day>=? AND e.probability>=? AND e.family IN (` + strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",") + `) GROUP BY 1,2,3`
 	args := []any{askDay(run.now, 27), agentEventThreshold}
 	for _, kind := range kinds {
@@ -934,21 +938,24 @@ func askBackupsSignal(ctx context.Context, run *askSignalRun) (askSignal, error)
 	return askSignal{Score: 0.45, Support: workspaces, Lead: "This library has no local or cloud backup on record."}, nil
 }
 
-// askSuggestionInputs changes when anything a signal reads may have: an
-// analysis stage completing, safety reviews being rebuilt, or the day.
+// askSuggestionInputs changes when the signals may say something new: the
+// day (every window moves daily), its quarter (askSuggestionBucketHours), a
+// findings review or a safety rebuild. It leaves out each analysis stage's
+// completed generation and the findings measure pass on purpose: those move
+// after every index, which re-ran every signal (about a minute with a cold
+// page cache) several times an hour for a slate that changes over days.
 func (c *Catalog) askSuggestionInputs(ctx context.Context, now time.Time) string {
-	parts := []string{askDay(now, 0)}
-	if deferred, err := c.freshnessDeferred(ctx); err == nil {
-		for _, stage := range stageOrder {
-			parts = append(parts, fmt.Sprintf("%s:%d", stage, deferred[stage].completed))
-		}
-	}
-	for _, key := range []string{"safety_built_at", "findings_generation", "findings_measured_at"} {
+	parts := []string{askDay(now, 0), strconv.Itoa(now.In(time.Local).Hour() / askSuggestionBucketHours)}
+	for _, key := range []string{"safety_built_at", "findings_generation"} {
 		value, _ := c.metaValue(ctx, key)
 		parts = append(parts, value)
 	}
 	return strings.Join(parts, "|")
 }
+
+// askSuggestionBucketHours is how long new activity may wait before the
+// signals read it.
+const askSuggestionBucketHours = 6
 
 func (c *Catalog) askSuggestionState(ctx context.Context) (askSuggestionState, bool) {
 	var state askSuggestionState
@@ -985,6 +992,7 @@ func computeAskSignals(ctx context.Context, c *Catalog, server *Server, now time
 		at := time.Now()
 		signalCtx, cancel := context.WithTimeout(ctx, askSignalTimeout)
 		signal, err := askSignalFuncs[name](signalCtx, run)
+		timedOut := errors.Is(signalCtx.Err(), context.DeadlineExceeded)
 		cancel()
 		state.Timings[name] = time.Since(at).Milliseconds()
 		reportWork(ctx, "Checking Ask suggestion signals", "check", index+1, len(names))
@@ -992,7 +1000,12 @@ func computeAskSignals(ctx context.Context, c *Catalog, server *Server, now time
 			if state.Errors == nil {
 				state.Errors = map[string]string{}
 			}
-			state.Errors[name] = err.Error()
+			message := err.Error()
+			if timedOut {
+				message = askSignalTimedOut + ": " + message
+			}
+			state.Errors[name] = message
+			log.Printf("ask suggestions: signal %s failed after %s: %s", name, time.Since(at).Round(time.Millisecond), message)
 			continue
 		}
 		if signal.Score > 0 {
@@ -1004,6 +1017,25 @@ func computeAskSignals(ctx context.Context, c *Catalog, server *Server, now time
 	return state
 }
 
+// askSignalTimedOut begins the error of a signal that hit askSignalTimeout.
+const askSignalTimedOut = "timed out"
+
+// keepTimedOutSignals keeps the previous score of a signal that hit its
+// deadline, usually on a cold page cache, rather than dropping its areas
+// until the inputs next change. The error stays recorded. A signal that
+// failed any other way, or that scored nothing before, stays out.
+func keepTimedOutSignals(state *askSuggestionState, previous askSuggestionState) {
+	for name, message := range state.Errors {
+		if !strings.HasPrefix(message, askSignalTimedOut) {
+			continue
+		}
+		if signal, ok := previous.Signals[name]; ok {
+			state.Signals[name] = signal
+			state.Errors[name] = message + " (kept the previous score)"
+		}
+	}
+}
+
 // refreshAskSuggestions is the background item: compute and store.
 func (s *Server) refreshAskSuggestions(ctx context.Context) error {
 	now := time.Now()
@@ -1011,6 +1043,9 @@ func (s *Server) refreshAskSuggestions(ctx context.Context) error {
 	state := computeAskSignals(ctx, s.Catalog, s, now)
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if previous, ok := s.Catalog.askSuggestionState(ctx); ok {
+		keepTimedOutSignals(&state, previous)
 	}
 	state.BuiltAt, state.Inputs = now.UTC().Format(timeLayout), inputs
 	reportWork(ctx, "Saving Ask suggestion signals", "", 0, -1)
@@ -1253,7 +1288,7 @@ func askSuggestionText(family askSuggestionFamily, signal askSignal, in askRankI
 	if signal.Repository != "" && in.Repositories >= 2 && askHash(in.Seed, family.ID, "scope") < 0.6 {
 		scope = " in the " + signal.Repository + " repository"
 	}
-	period := map[string]string{"week": "this week", "month": "this month"}[signal.Period]
+	period := map[string]string{"week": "in the last week", "month": "over the last four weeks"}[signal.Period]
 	if period == "" {
 		period = "lately"
 	}

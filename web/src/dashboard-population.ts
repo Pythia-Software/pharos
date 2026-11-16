@@ -4,6 +4,7 @@ import { withTimeRange } from "./chart-range";
 import { selectionWhere, type AnalysisCatalog } from "./dashboard-analysis-model";
 import { lowerLabel, sentenceText } from "./text-search-model";
 import { describeWhere } from "./search-filters";
+import { modelFieldLabel } from "./model-label";
 
 // A catalog dashboard's population: the analyze_filters terms other than its
 // range, as ordinary Query Table where terms. Every view, breakdown and panel
@@ -28,7 +29,7 @@ export function populationLabels(catalog: AnalysisCatalog, fields: FieldDef[], o
     if (value === null || value === "") return breakdown?.empty ?? "No value";
     const option = fields.find(item => item.name === field)?.filter?.values;
     const listed = option?.source === "static" ? option.options.find(item => typeof item !== "string" && item.value === value) : undefined;
-    return breakdown?.values?.[value] ?? (listed && typeof listed !== "string" ? listed.label : undefined) ?? catalog.labels?.[field]?.(value) ?? origin?.(field, value) ?? value;
+    return breakdown?.values?.[value] ?? (listed && typeof listed !== "string" ? listed.label : undefined) ?? catalog.labels?.[field]?.(value) ?? origin?.(field, value) ?? modelFieldLabel(field, value);
   };
 }
 

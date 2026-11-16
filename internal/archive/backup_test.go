@@ -378,6 +378,10 @@ func TestBackupWaitsForARunningCapture(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the backup did not wait for the capture lock")
 	}
+	// A cloud backup's snapshot is this same job: its line names the wait.
+	if line := cloudSnapshotPhase(waitingPhase); !strings.Contains(line, "capture") || line == cloudSnapshotPhase("") {
+		t.Fatalf("a cloud snapshot waiting for a capture shows %q, without its reason", line)
+	}
 	if _, err := os.Stat(filepath.Join(dest, "captures", "host-a")); err == nil {
 		t.Fatal("captures were copied while a capture held the lock")
 	}
@@ -1086,7 +1090,7 @@ func TestBackupBoundsTheCatalogWAL(t *testing.T) {
 	run := job.Run(context.Background(), nil)
 	close(stop)
 	<-done
-	if run.State != "failed" || len(run.Errors) == 0 || !strings.Contains(run.Errors[0].Error, "WAL grew") || run.CatalogWALPeak <= backupWALGrowth {
+	if run.State != "failed" || len(run.Errors) == 0 || !strings.Contains(run.Errors[0].Error, "changed too much while it was copied") || run.CatalogWALPeak <= backupWALGrowth {
 		t.Fatalf("backup under a writer (%d commits, error %v): %+v", commits.Load(), writeErr.Load(), run)
 	}
 	if backupFileExists(t, filepath.Join(dest, "catalog", "catalog.sqlite3"+backupTempSuffix)) {

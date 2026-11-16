@@ -62,7 +62,7 @@ func (table authorshipTable) plan(ctx context.Context, q queryer) ([]authorshipM
 		key := jsonText(values[:table.keys])
 		prior, exists := previous[key]
 		delete(previous, key)
-		if exists && jsonText(prior) == jsonText(values) {
+		if exists && (jsonText(prior) == jsonText(values) || jsonText(table.classification(prior)) == jsonText(table.classification(values))) {
 			continue
 		}
 		args := append([]any{}, values...)
@@ -85,6 +85,34 @@ func (table authorshipTable) plan(ctx context.Context, q queryer) ([]authorshipM
 	return changes, nil
 }
 
+// classification is a row without the reason particulars that are not part
+// of it (stableSpanReason), so a stored row is rewritten, and its consumers
+// marked pending, only when what the classifier decided changed.
+func (table authorshipTable) classification(values []any) []any {
+	if table.name != "message_authorship" && table.name != "message_authorship_spans" {
+		return values
+	}
+	stable := append([]any{}, values...)
+	for i, col := range table.columns {
+		switch col {
+		case "reason":
+			if reason, ok := stable[i].(string); ok {
+				stable[i] = stableSpanReason(reason)
+			}
+		case "spans_json":
+			var spans []authorSpan
+			if json.Unmarshal([]byte(asString(stable[i])), &spans) != nil {
+				continue
+			}
+			for index := range spans {
+				spans[index].Reason = stableSpanReason(spans[index].Reason)
+			}
+			stable[i] = spans
+		}
+	}
+	return stable
+}
+
 // Compute folding against the proposed launches, so dry-run probes and the
 // store share the same plan without publishing launches just to read parents.
 func authorshipParents(ctx context.Context, q queryer, launches []conversationLaunch) (map[string]string, error) {
@@ -97,16 +125,19 @@ func authorshipParents(ctx context.Context, q queryer, launches []conversationLa
 }
 
 func (c *Catalog) planAuthorship(ctx context.Context, results []authorResult, launches []conversationLaunch) ([]authorshipMutation, error) {
-	return c.planAuthorshipScope(ctx, results, launches, nil)
+	return c.planAuthorshipScope(ctx, results, launches, nil, nil)
 }
 
-func (c *Catalog) planAuthorshipScope(ctx context.Context, results []authorResult, launches []conversationLaunch, since *time.Time) ([]authorshipMutation, error) {
-	return c.planAuthorshipScopeMode(ctx, results, launches, since, nil)
+// With since, the plan covers only the suffix's results, and stale: its
+// queued messages that are no longer inputs, whose counting rows it removes
+// as a full pass would.
+func (c *Catalog) planAuthorshipScope(ctx context.Context, results []authorResult, launches []conversationLaunch, since *time.Time, stale []string) ([]authorshipMutation, error) {
+	return c.planAuthorshipScopeMode(ctx, results, launches, since, nil, stale)
 }
 
 // quickIDs restricts provisional writes to the queue entries read by this pass.
 // It never publishes launch links or names from incomplete historical evidence.
-func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorResult, launches []conversationLaunch, since *time.Time, quickIDs []string) ([]authorshipMutation, error) {
+func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorResult, launches []conversationLaunch, since *time.Time, quickIDs, stale []string) ([]authorshipMutation, error) {
 	parents := map[string]string{}
 	var err error
 	if quickIDs == nil {
@@ -189,9 +220,11 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 			works[result.Input.WorkspaceID] = true
 		}
 		messages.filter = " WHERE message_id IN (SELECT value FROM json_each(?))"
-		messages.args = []any{jsonText(ids)}
+		messages.args = []any{jsonText(append(ids, stale...))}
 		spans.filter, spans.args = messages.filter, messages.args
-		state.filter, state.args = messages.filter, messages.args
+		// As in a full pass, an outcome without a counting row (a suppressed
+		// mirror, an ineligible message) is kept as completion evidence.
+		state.filter, state.args = messages.filter+" AND (disposition IN ('counted','deferred') OR NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=authorship_message_state.message_id))", messages.args
 		query = "SELECT id FROM workspaces WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id"
 		args = []any{jsonText(sortedNameIDs(works))}
 	}

@@ -123,6 +123,8 @@ var toolCallDataset = sqlDataset{
 		"status": "t.status", "error_type": "t.error_type", "error_signature": "t.error_signature", "test_failure": "t.test_failure", "exit_code": "t.exit_code", "interrupted": "t.interrupted", "truncated": "t.truncated",
 		"call_count": "1", "error_count": "(t.status='error')",
 		"duration_is_estimate": "t.duration_is_estimate", "duration_ms": "t.duration_ms", "duration_source": "t.duration_source",
+		"wait_kind": "t.wait_kind", "wait_ended_at": "t.wait_ended_at", "wait_status": "t.wait_status", "wait_end_source": "t.wait_end_source", "wait_events": "t.wait_events",
+		"wait_ms":     "CASE WHEN t.wait_ended_at IS NOT NULL THEN CAST(ROUND((julianday(t.wait_ended_at)-julianday(t.started_at))*86400000) AS INTEGER) END",
 		"input_bytes": "t.input_bytes", "result_bytes": "t.result_bytes", "result_tokens": "t.result_tokens",
 		"result_tokens_source": "t.result_tokens_source", "output_tokens": "t.output_tokens", "parallel_count": "t.parallel_count",
 		"carried_requests": "t.carried_requests", "carried_tokens": "t.carried_tokens",

@@ -22,7 +22,7 @@ export const thinkingViews = [
   ["calendar", "Time of day"],
 ] as const;
 export const thinkingBreakdowns = [
-  ["none", "None · all requests"],
+  ["none", "None · all model requests"],
   ["model", "Model"],
   ["model_effort", "Model + effort"],
   ["speed", "Speed"],
@@ -178,7 +178,7 @@ export function initialThinking(params: URLSearchParams): ThinkingState {
   // Once mounted, the shared thinking view field owns every applied control.
   if (params.has("thinking")) {
     const v = JSON.parse(params.get("thinking")!);
-    if (!validateThinking(v)) throw Error("Invalid Thinking view.");
+    if (!validateThinking(v)) throw Error("This link’s Thinking view is invalid.");
     state = { ...state, ...v };
     state.groupBy = legacyThinkingGroups[state.groupBy] ?? state.groupBy;
   }
@@ -189,7 +189,7 @@ export function initialThinking(params: URLSearchParams): ThinkingState {
     const token = params.get("analyze_filters"),
       decoded = token ? decodeQueryStrict(token) : EMPTY_QUERY;
     if (!decoded || decoded.grouping)
-      throw Error("Invalid Thinking population filters.");
+      throw Error("This link’s Thinking filters are invalid.");
     const q = decoded;
     const bounds = timeBounds(q.where, {
       first: "requested_at",
@@ -498,6 +498,9 @@ export const thinkingDuration = (n: number | null) =>
       : n.toLocaleString(undefined, { maximumFractionDigits: n < 10 ? 2 : 1 }) +
         " s";
 export const thinkingCount = (n: number) => n.toLocaleString();
+// A localized count with its unit, singular for 1.
+export const thinkingCountOf = (n: number, one: string, many = one + "s") =>
+  `${n.toLocaleString()} ${n === 1 ? one : many}`;
 export const thinkingWindow = (h: number) =>
   String(h).padStart(2, "0") + ":00–" + String(h + 3).padStart(2, "0") + ":00";
 

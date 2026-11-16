@@ -16,7 +16,7 @@ const breakdown = {
     { key: "preserved", label: "Preserved packages", bytes: 0 },
   ],
   machines: [{ id: "a", label: "Studio", originals_bytes: 300, catalog_bytes: 100 }, { id: "b", label: "Air", originals_bytes: 100, catalog_bytes: 100 }],
-  sources: [{ id: "antigravity-cli", label: "antigravity-cli", originals_bytes: 10, catalog_bytes: 0 }, { id: "mine", label: "mine", originals_bytes: 1, catalog_bytes: 1 }],
+  sources: [{ id: "antigravity-cli", label: "Antigravity CLI", originals_bytes: 10, catalog_bytes: 0 }, { id: "mine", label: "mine", originals_bytes: 1, catalog_bytes: 1 }],
 };
 
 test("parts leave out empty ones and give each a share of the total", () => {
@@ -32,7 +32,7 @@ test("rows total their originals and catalog, scaled to the largest row", () => 
   assert.deepEqual(plain(rows.map(row => [row.label, row.total, row.originalsWidth, row.catalogWidth])), [["Studio", 400, 75, 25], ["Air", 200, 25, 25]]);
 });
 
-test("known source names read as their tools; configured names stay", () => {
+test("source rows show the names the server gives them", () => {
   assert.deepEqual(plain(model(breakdown, "sources").rows.map(row => row.label)), ["Antigravity CLI", "mine"]);
 });
 

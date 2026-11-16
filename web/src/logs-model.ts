@@ -6,7 +6,7 @@ export const logSources = [
   { id: "overview", label: "Overview", description: "What to read first when a page stays blank or Pharos stops, and a report to hand an agent." },
   { id: "page", label: "Page errors", description: "Errors the page hit: uncaught exceptions, failed and stalled requests, scripts that did not load, and web processes that stopped." },
   { id: "requests", label: "Slow & failed requests", description: "Requests the service answered slowly, with an error, or after an internal error, and those it is answering now." },
-  { id: "service", label: "Service output", description: "This library's service output by run. A run that ended in a panic or exited with an error is a crash." },
+  { id: "service", label: "Service output", description: "This library’s service output by run. A run that ended in a panic or exited with an error is a crash." },
   { id: "app", label: "App output", description: "Everything the Pharos app and its library services printed, by launch." },
   { id: "background", label: "Background work", description: "Background operations on this Mac that failed or were interrupted in the last week." },
   { id: "crashes", label: "Crash reports", description: "Reports macOS wrote in the last week when a Pharos process, or a web process the app started, crashed or used too many resources." },

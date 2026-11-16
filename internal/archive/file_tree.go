@@ -740,7 +740,7 @@ func (c *Catalog) FileCommit(ctx context.Context, options FileCommitOptions) (ma
 	}
 	result["git"] = git
 	if len(rows) != 1 {
-		result["note"] = "Local Git did not keep this commit: it is older than the history read (git.commits_since), on no branch read, or not in this repository."
+		result["note"] = "Pharos has no record of this commit. It may be older than the history Pharos reads (the git.commits_since setting), on a branch Pharos does not read, or from another repository."
 		if len(rows) > 1 {
 			result["note"] = "Several commits start with " + hash + "; give more of the hash."
 		}

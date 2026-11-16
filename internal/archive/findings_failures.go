@@ -389,6 +389,16 @@ func failureExposures(env *findingEnv, needed map[string]bool) (map[string]map[s
 
 // evidenceWhere names where an example happened: the repository, or the
 // harness for work outside one.
+// evidenceWhereBy is evidenceWhere followed by the provider, unless
+// evidenceWhere already fell back to the provider's name.
+func (env *findingEnv) evidenceWhereBy(conv *findingConversation, provider string) string {
+	where, by := env.evidenceWhere(conv), providerLabel(provider)
+	if where == "" || where == by {
+		return by
+	}
+	return where + " · " + by
+}
+
 func (env *findingEnv) evidenceWhere(conv *findingConversation) string {
 	if conv == nil {
 		return ""
@@ -447,11 +457,11 @@ var failurePatterns = []failurePattern{
 	{name: "worktree-guard", match: regexp.MustCompile(`(?i)too complex to verify that it stays inside`), title: func(string, string) string { return "Claude can't check that commands stay in the worktree" }, harness: true,
 		why: "Claude Code blocks compound commands in an isolated worktree when it can't verify where they write.", change: "tell agents to run one simple command per call in worktrees, without `cd` chains or subshells", lever: "global-instructions"},
 	{name: "ssl-verify", match: regexp.MustCompile(`(?i)certificate verify failed|ssl: certificate`), title: func(program, _ string) string {
-		return "`" + defaultString(program, "A script") + "` can't verify SSL certificates"
+		return codeOr(program, "A script") + " can’t verify SSL certificates"
 	},
 		why: "The request fails before it reaches the server, because the script doesn't trust the certificate chain.", change: "point the script at the right CA bundle (for example `certifi` or the system store); an instruction can't fix this", lever: "repo-tooling", label: "A fix to the script"},
 	{name: "sandbox-write", match: regexp.MustCompile(`(?i)operation not permitted`), title: func(program, _ string) string {
-		return "The sandbox stops `" + defaultString(program, "a command") + "`"
+		return "The sandbox stops " + codeOr(program, "a command")
 	},
 		why: "The agent's sandbox refuses the write, so the command fails however it is phrased.", change: "allow that path in the agent app’s sandbox settings, or move the write inside the workspace", lever: "harness-settings", label: "A sandbox setting"},
 	{name: "test-imports", match: regexp.MustCompile(`(?i)importerror while importing test module|no module named`), title: func(program, scope string) string { return "Tests" + scopeIn(scope) + " fail on imports" },
@@ -539,7 +549,7 @@ func describeFailure(env *findingEnv, candidate *findingCandidate, calls []failu
 	candidate.Facts = map[string]any{"signature": signature, "program": nilIfEmpty(program), "exposure": map[string]string{"kind": exposure.Kind, "key": exposure.Key},
 		"commands": topKeys(commands, 5), "repositories": sortedFindingKeys(repositories), "automated_share": ratio(automated, len(convs))}
 	candidate.write = func(candidate *findingCandidate, stats findingStats) findingCard {
-		title := "`" + defaultString(program, "A tool") + "` fails with “" + clipText(signature, 70) + "”"
+		title := codeOr(program, "A tool") + " fails with “" + clipText(signature, 70) + "”"
 		why := ""
 		if known != nil {
 			title = known.title(program, map[bool]string{true: "", false: strings.TrimSuffix(name, " runs")}[global])
@@ -555,12 +565,12 @@ func describeFailure(env *findingEnv, candidate *findingCandidate, calls []failu
 		}
 		exposureWords := map[string]string{"program": "conversations that ran `" + exposure.Key + "`", "tool": "conversations that used " + exposure.Key,
 			"shell": "conversations that ran shell commands"}[exposure.Kind]
-		explanation := strings.TrimSpace(why + fmt.Sprintf(" %s, it happened in %s this month.", where, fractionPhrase(stats.Rate, exposureWords)))
+		explanation := strings.TrimSpace(why + fmt.Sprintf(" %s, it happened in %s in the last 28 days.", where, fractionPhrase(stats.Rate, exposureWords)))
 		if recovery := firstString(candidate.Facts["recovery"]); recovery != "" {
 			explanation += " Agents usually recovered by " + recovery + "."
 		}
 		if provider, share := stats.mainProvider(); share >= 0.8 && provider != "" && len(stats.Providers) > 1 {
-			explanation += fmt.Sprintf(" Nearly all were %s.", providerLabel(provider))
+			explanation += fmt.Sprintf(" %s were %s conversations.", map[bool]string{true: "Nearly all", false: "Most"}[share >= 0.95], providerLabel(provider))
 		}
 		card := findingCard{Title: title, Explanation: explanation, ImpactNote: countNoun(stats.Occurrences, "failed "+map[bool]string{true: "command", false: "call"}[exposure.Kind != "tool"]),
 			Steps: steps, ChartTitle: capitalize(exposureWords) + " that hit this", Rate: fractionPhrase(stats.Rate, "")}
@@ -890,4 +900,13 @@ func joinWords(parts []string) string {
 		return parts[0] + " and " + parts[1]
 	}
 	return strings.Join(parts[:len(parts)-1], ", ") + ", and " + parts[len(parts)-1]
+}
+
+// codeOr writes a program name as code, or a plain placeholder when no
+// program is known.
+func codeOr(program, placeholder string) string {
+	if program == "" {
+		return placeholder
+	}
+	return "`" + program + "`"
 }

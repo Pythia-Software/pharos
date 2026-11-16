@@ -180,15 +180,42 @@ func TestPeerLinksFromReadDiffsCopiesAndTL1(t *testing.T) {
 	if err := c.RefreshPeerLinks(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// An import of old chats holds no tool call, so it is neither side of a
+	// link: no reader is derived again, however far back its turns are dated.
 	f := newPeerFixture(t, c.DB)
+	f.seq = 50
+	f.work("chat", "An old chat")
+	f.message("chat-ask", "chat-c", "user", "message", "What does this error mean?", -200*24*60)
+	f.message("chat-reply", "chat-c", "assistant", "message", "The file is missing.", -200*24*60+1)
+	commitSeed(t, f.tx)
+	var progress []activityWork
+	watched := withWorkProgress(ctx, func(work activityWork) {
+		if work.Unit == "conversations" {
+			progress = append(progress, work)
+		}
+	})
+	if err := c.RefreshPeerLinks(watched); err != nil {
+		t.Fatal(err)
+	}
+	if len(progress) != 0 || len(storedPeerLinks(t, c)) != 3 {
+		t.Fatalf("imported chats re-derived readers: %v", progress)
+	}
+	var seen bool
+	if err := c.DB.QueryRow(`SELECT CAST(value AS INTEGER)=(SELECT MAX(rowid) FROM messages) FROM meta WHERE key='peer_links_message_rowid'`).Scan(&seen); err != nil || !seen {
+		t.Fatalf("imported chats stay unseen for the next run: %v %v", seen, err)
+	}
+	f = newPeerFixture(t, c.DB)
 	f.seq = 100
 	f.work("second", "Second review")
 	f.message("second-ask", "second-c", "user", "message", "Review again", 30)
 	f.read("second-c", 31, true, written...)
 	f.message("second-done", "second-c", "assistant", "message", "Looks good.", 35)
 	commitSeed(t, f.tx)
-	if err := c.RefreshPeerLinks(ctx); err != nil {
+	if err := c.RefreshPeerLinks(watched); err != nil {
 		t.Fatal(err)
+	}
+	if last := progress[len(progress)-1]; last.Done != last.Total || last.Total == 0 {
+		t.Fatalf("progress ended at %v of %v readers", last.Done, last.Total)
 	}
 	links = storedPeerLinks(t, c)
 	if second, ok := links["read_written_by:impl>second"]; !ok || second.confidence != peerLow || !strings.Contains(second.evidence, `"timing":""`) {
@@ -430,6 +457,10 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 		out := map[string]string{}
 		for _, p := range get("/api/work/" + workspace)["peers"].([]any) {
 			peer := p.(map[string]any)
+			// A chip shows the provider's display name beside its stored key.
+			if provider := firstString(peer["provider"]); provider != "" && firstString(peer["provider_name"]) != providerDisplayName(provider) {
+				t.Fatalf("peer %v names its provider %q", peer["workspace_id"], peer["provider_name"])
+			}
 			out[firstString(peer["workspace_id"])] = firstString(peer["role"]) + "/" + firstString(peer["confidence"]) + "/" + firstString(peer["via"])
 		}
 		return out
@@ -504,6 +535,9 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 		otherConversation := false
 		for _, item := range overview["peer_conversations"].([]any) {
 			conversation := item.(map[string]any)
+			if provider := firstString(conversation["provider"]); provider != "" && firstString(conversation["provider_name"]) != providerDisplayName(provider) {
+				t.Fatalf("peer conversation %v names its provider %q", conversation["id"], conversation["provider_name"])
+			}
 			if conversation["id"] == "other-c" {
 				otherConversation = true
 				if conversation["peer_confidence"] != "low" {

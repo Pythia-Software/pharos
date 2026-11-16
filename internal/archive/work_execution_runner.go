@@ -285,6 +285,7 @@ type workRequest struct {
 	// request no longer targets.
 	changes, maskChanges uint64
 	reported             workBlocker // state and blocker last sent to RequestChanged
+	reports              uint64      // RequestChanged notifications queued, numbering their facts
 	reportedState        string
 	nSealed              int
 	nFailed              int
@@ -747,7 +748,9 @@ func (r *workRunner) requestChangedLocked(q *workRequest) {
 		return
 	}
 	q.reportedState, q.reported = q.state, q.blocker
+	q.reports++
 	facts := r.requestFactsLocked(q)
+	facts.Revision = q.reports
 	r.events = append(r.events, func() { r.hooks.RequestChanged(facts) })
 }
 
@@ -870,7 +873,7 @@ func (q *workRequest) settled(i int) bool {
 func (r *workRunner) kindBlockerLocked(ks *workKindState, now time.Time) workBlocker {
 	switch {
 	case ks.held:
-		return workBlocker{Reason: workBlockedHeld, Detail: "stopped until Resume or a service restart"}
+		return workBlocker{Reason: workBlockedHeld, Detail: "stopped until you resume it, or quit and reopen Pharos"}
 	case ks.full:
 		return workBlocker{Reason: workBlockedFailuresFull, Detail: fmt.Sprintf("%d failures are remembered; Retry clears them", workFailureLimit)}
 	}
@@ -1572,7 +1575,11 @@ func (r *workRunner) coverTaskLocked(q *workRequest, t *workRequestTask, now tim
 				break
 			}
 		}
-		t.blocker = workBlocker{Reason: workBlockedDependency, DependsOn: dependsOn, Detail: fmt.Sprintf("%d units wait for a prerequisite", waiting)}
+		verb := " wait for a prerequisite"
+		if waiting == 1 {
+			verb = " waits for a prerequisite"
+		}
+		t.blocker = workBlocker{Reason: workBlockedDependency, DependsOn: dependsOn, Detail: plural(waiting, "unit") + verb}
 	default:
 		// Counted once, when the task is done: a backoff that keeps the
 		// task open must not count the same exhausted unit again.
@@ -1699,9 +1706,9 @@ func (r *workRunner) updateRequestLocked(q *workRequest) {
 	if remaining == 0 {
 		switch {
 		case failedTask || q.nFailed > 0 || q.libraryFail > 0:
-			r.finishRequestLocked(q, opFailed, workUnitsFailed, fmt.Sprintf("%d units failed", q.nFailed+q.libraryFail))
+			r.finishRequestLocked(q, opFailed, workUnitsFailed, plural(q.nFailed+q.libraryFail, "unit")+" failed")
 		case q.nExhausted > 0:
-			r.finishRequestLocked(q, opInterrupted, workInputsKeepChanging, fmt.Sprintf("%d units kept changing", q.nExhausted))
+			r.finishRequestLocked(q, opInterrupted, workInputsKeepChanging, plural(q.nExhausted, "unit")+" kept changing")
 		default:
 			r.finishRequestLocked(q, opSucceeded, "", "")
 		}
@@ -2080,6 +2087,10 @@ type workRequestFacts struct {
 	Unfinished  int                    `json:"unfinished"`
 	Bytes       int64                  `json:"bytes"`
 	Tasks       []workRequestTaskFacts `json:"tasks,omitempty"`
+	// Revision numbers RequestChanged notifications. Each unlock delivers its
+	// own events after releasing the lock, so two goroutines' notifications
+	// can arrive out of order; a receiver keeps the latest.
+	Revision uint64 `json:"-"`
 }
 
 type workRequestTaskFacts struct {

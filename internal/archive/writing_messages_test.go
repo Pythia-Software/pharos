@@ -248,10 +248,17 @@ func TestSpanRulesMatchTheSchema(t *testing.T) {
 		if field.Name != "rules" {
 			continue
 		}
+		// An option is the stored rule, or the stored rule with the label
+		// people see when the two differ ("Harness context" is shown as
+		// "App instructions"; the stored value never changes).
 		for _, raw := range field.Filter.Values.Options {
 			var option string
+			var labelled struct{ Value, Label string }
 			if err := json.Unmarshal(raw, &option); err != nil {
-				t.Fatalf("rule option %s is not a string", raw)
+				if err := json.Unmarshal(raw, &labelled); err != nil || labelled.Value == "" || labelled.Label == "" {
+					t.Fatalf("rule option %s is neither a rule nor a labelled rule", raw)
+				}
+				option = labelled.Value
 			}
 			options = append(options, option)
 		}

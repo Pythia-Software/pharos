@@ -1,5 +1,5 @@
 import { useViewState } from "./view-state";
-import { readWindowChoice, type WindowChoice } from "./day-window";
+import { readWindowChoice, windowLabel, type WindowChoice } from "./day-window";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { clearPreviewCache, instantiateRecipe, suggestionWindowLabel, type QueryPreview, type QueryRecipe, type QuerySuggestion } from "./curiosity-data";
@@ -72,8 +72,8 @@ export function CardLibraryPage({ schemas }: { schemas: Record<QueryDataset, Fie
   async function keep(item: QuerySuggestion) {
     try {
       await collectCardTemplate(item);
-      setMessage(`Collected “${item.title}”.`);
-    } catch (error) { setMessage(String(error)); }
+      setMessage(`Added “${item.title}” to Home.`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   }
   if (!active) return null;
   return <div className="card-library-page">
@@ -163,7 +163,7 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
       if (batch.some(item => item.preview)) setPreviews(current => { const next = { ...current }; for (const { id, preview } of batch) if (preview) next[id] = preview; return next; });
       setErrors(current => {
         const next = { ...current };
-        for (const { id, preview, error } of batch) { if (preview) delete next[id]; if (error) next[id] = String(error); }
+        for (const { id, preview, error } of batch) { if (preview) delete next[id]; if (error) next[id] = error instanceof Error ? error.message : String(error); }
         return Object.keys(next).length || Object.keys(current).length ? next : current;
       });
     });
@@ -180,7 +180,7 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     const items = recipes.map(recipe => instantiateRecipe(recipe, cardDays(recipe, days === "default" ? "default" : readWindowChoice(days))));
     const arrivals = batchPreviewArrivals(batch => setPrepared(current => {
       const next = { ...current };
-      for (const { id, preview, error } of batch) next[id] = cardInterest(preview, { ...judging.get(id), error: error === undefined ? undefined : String(error) });
+      for (const { id, preview, error } of batch) next[id] = cardInterest(preview, { ...judging.get(id), error: error === undefined ? undefined : error instanceof Error ? error.message : String(error) });
       return next;
     }), 400);
     void (async () => {
@@ -213,10 +213,10 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
         if (!search && event.target.value && topic !== ALL) setChosen(ALL);
         filter(setSearch)(event.target.value);
       }} /></label>
-      <label>Dataset<select aria-label="Dataset" value={dataset} onChange={event => filter(setDataset)(event.target.value)}><option value="">All data</option>{Object.entries(cardDatasets).filter(([key]) => recipes.some(recipe => recipe.dataset === key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+      <label>Dataset<select aria-label="Dataset" value={dataset} onChange={event => filter(setDataset)(event.target.value)}><option value="">All datasets</option>{Object.entries(cardDatasets).filter(([key]) => recipes.some(recipe => recipe.dataset === key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       <label>Card kind<select aria-label="Card kind" value={kind} onChange={event => filter(setKind)(event.target.value)}><option value="">All kinds</option>{[...new Set(recipes.map(cardKind))].sort().map(kind => <option key={kind}>{kind}</option>)}</select></label>
       <label>Sort by<select aria-label="Sort by" value={sort} onChange={event => filter(setSort)(event.target.value)}>{cardSorts.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-      <label>Preview window<select data-view-field="card_window" aria-label="Preview window" value={days} onChange={event => setDays(event.target.value === "default" ? "default" : readWindowChoice(event.target.value))}><option value="default">Card defaults</option><option value="today">Today (eligible cards)</option>{[1, 7, 30, 90].map(days => <option key={days} value={days}>Past {days === 1 ? "24 hours" : `${days} days`}</option>)}</select></label>
+      <label>Preview window<select data-view-field="card_window" aria-label="Preview window" value={days} onChange={event => setDays(event.target.value === "default" ? "default" : readWindowChoice(event.target.value))}><option value="default">Card defaults</option><option value="today">Today (others keep their own window)</option>{[1, 7, 30, 90].map(days => <option key={days} value={days}>{windowLabel(days)}</option>)}</select></label>
     </div> : null}
     <div ref={tabs} className="card-library-tabs" role="tablist" aria-label="Card topics" onKeyDown={event => {
       const next = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: tabKeys.length - 1 }[event.key];
@@ -240,9 +240,9 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
     <div id="card-library-panel" className="card-library-grid" role="tabpanel" aria-labelledby={`card-library-tab-${topic}`} aria-busy={loading}>{shown.map(item => <div className="card-library-entry" id={`card-${item.id}`} data-card-definition={item.id} data-card-idea={item.idea} key={item.id}>
       <QueryCard discovery id={item.id} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={suggestionWindowLabel(item)} category={item.category} loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={previews[item.id]} error={errors[item.id]}
         readinessSource={{dataset:item.dataset,query:item.query}} onOpen={onOpen} onKeep={() => onKeep(item)} onReload={() => reloadPreview(job(item))} />
-      {collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> Added to your collection</span> : null}
+      {collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> On Home</span> : null}
     </div>)}</div>
-    {!shown.length && cards.length ? <p className="card-library-empty">None of these cards has enough data in this window. <button type="button" data-view-field="card_all" onClick={() => setShowAll(true)}>Show all cards</button></p> : null}
+    {!shown.length && cards.length ? <p className="card-library-empty">None of these cards has enough data in its window. <button type="button" data-view-field="card_all" onClick={() => setShowAll(true)}>Show all cards</button></p> : null}
     {!cards.length ? <p className="card-library-empty">No cards match these filters. <button type="button" onClick={clearFilters}>Clear filters</button></p> : null}
   </section>;
 }

@@ -11,7 +11,7 @@ export const outcomeLabels: { id: OutcomeLabel; label: string; description: stri
   { id: "changed_kept", label: "Changed and kept", description: "Edits whose lines later workspaces mostly kept through the rework window." },
   { id: "changed_recent", label: "Changed, too recent", description: "Edits younger than the rework window, so rework cannot be judged yet." },
   { id: "reworked", label: "Reworked", description: "Later workspaces removed at least half of the lines it added, or its commits were reverted, within the rework window." },
-  { id: "no_changes", label: "No changes", description: "The workspace changed no files: research, review and questions are normal." },
+  { id: "no_changes", label: "No changes", description: "The workspace changed no files. That is normal for research, review and questions." },
   { id: "unknown", label: "Unknown", description: "Not enough evidence, such as a source that records no tool calls, or edits that could not be read line by line, so rework was not judged." },
 ];
 
@@ -37,15 +37,15 @@ export type ProjectKind = "repository" | "folder" | "none";
 // that recorded none says so; neither is a blank.
 export function branchDisplay(value: unknown, kind: unknown): { text: string; muted: boolean; title?: string } {
   if (value != null && value !== "") return { text: String(value), muted: false };
-  if (kind === "repository") return { text: "No branch", muted: true, title: "The session recorded no branch." };
+  if (kind === "repository") return { text: "No branch", muted: true, title: "This workspace recorded no branch." };
   return gitFactDisplay(null, kind);
 }
 
 export function gitFactDisplay(value: unknown, kind: unknown, check?: unknown, reason?: unknown): { text: string; muted: boolean; title?: string } {
   if (value != null && value !== "") return { text: Number(value).toLocaleString("en-US"), muted: false };
   if (kind === "folder") return { text: "Not a repository", muted: true, title: "This project is a folder; Git facts do not apply." };
-  if (kind === "none") return { text: "No git data", muted: true, title: "This workspace has no working folder." };
+  if (kind === "none") return { text: "No Git data", muted: true, title: "This workspace has no working folder." };
   if (check === "not_checked") return { text: "Not checked", muted: true, title: String(reason || "Local Git has not been checked.") };
-  if (check === "not_applicable") return { text: "Not applicable", muted: true, title: "The session changed no file in a repository." };
+  if (check === "not_applicable") return { text: "Not applicable", muted: true, title: "This workspace changed no files in a repository." };
   return { text: "", muted: false };
 }

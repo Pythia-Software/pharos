@@ -194,21 +194,26 @@ func (c *Catalog) RefreshPeerLinks(ctx context.Context) error {
 		fmt.Sscan(stored, &lastRow)
 	}
 	var maxRow int64
-	var since sql.NullString
-	if err := c.reader().QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid),0),MIN(started_at) FROM tool_calls WHERE rowid>?`, lastRow).Scan(&maxRow, &since); err != nil {
+	if err := c.reader().QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid),0) FROM tool_calls WHERE rowid>?`, lastRow).Scan(&maxRow); err != nil {
 		return err
 	}
 	if maxRow < lastRow {
 		maxRow = lastRow
+	}
+	// What is new is kept by conversation, with the span of its times: one
+	// earliest time for the whole library made a single old-dated import
+	// (months of chats, which hold no tool call) rescan every reader since.
+	var calls, turns []peerEvidence
+	if !full {
+		if calls, err = c.peerEvidence(ctx, `SELECT conversation_id,MIN(started_at),MAX(started_at) FROM tool_calls WHERE rowid>? AND started_at IS NOT NULL GROUP BY +conversation_id`, lastRow); err != nil {
+			return err
+		}
 	}
 	// A call stored before its result came back gets the result in place,
 	// keeping its rowid; a trigger keeps the earliest such call's start.
 	var updated, revision sql.NullString
 	if err := c.reader().QueryRowContext(ctx, `SELECT since,revision FROM work_peer_links_dirty WHERE id=1`).Scan(&updated, &revision); err != nil && err != sql.ErrNoRows {
 		return err
-	}
-	if !full && updated.Valid && (!since.Valid || updated.String < since.String) {
-		since = updated
 	}
 	// Timing comes from prompts and replies, so one that arrives without a
 	// tool call (the writer's next prompt after a review) rechecks too.
@@ -219,14 +224,11 @@ func (c *Catalog) RefreshPeerLinks(ctx context.Context) error {
 			return err
 		}
 		fmt.Sscan(stored, &lastMessage)
-		var said sql.NullString
-		if err := c.reader().QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid),0),MIN(CASE WHEN +kind='message' THEN created_at END) FROM messages WHERE rowid>?`, lastMessage).Scan(&maxMessage, &said); err != nil {
+		if err := c.reader().QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid),0) FROM messages WHERE rowid>?`, lastMessage).Scan(&maxMessage); err != nil {
 			return err
 		}
-		if at, ok := parseTime(said.String); ok && said.Valid {
-			if current, ok := parseTime(since.String); !since.Valid || !ok || at.Before(current) {
-				since = sql.NullString{String: formatTime(at), Valid: true}
-			}
+		if turns, err = c.peerEvidence(ctx, `SELECT conversation_id,MIN(created_at),MAX(created_at) FROM messages WHERE rowid>? AND +kind='message' AND created_at IS NOT NULL GROUP BY +conversation_id`, lastMessage); err != nil {
+			return err
 		}
 	} else if err := c.reader().QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid),0) FROM messages`).Scan(&maxMessage); err != nil {
 		return err
@@ -234,15 +236,33 @@ func (c *Catalog) RefreshPeerLinks(ctx context.Context) error {
 	if maxMessage < lastMessage {
 		maxMessage = lastMessage
 	}
-	readsDirty := full || since.Valid
 	contentDirty := full || builtAuthorship != authorship || builtTL1 != tl1
-	if !readsDirty && !contentDirty {
+	if !full && !contentDirty && len(calls) == 0 && len(turns) == 0 && !updated.Valid {
 		return nil
 	}
 	reportWork(ctx, "linking related conversations", "", 0, -1)
 	families, err := c.loadPeerFamilies(ctx, c.reader())
 	if err != nil {
 		return err
+	}
+	var scope *peerScope
+	if !full {
+		if scope, err = c.peerReadScope(ctx, families, calls, turns, updated); err != nil {
+			return err
+		}
+	}
+	readsDirty := full || scope != nil
+	if !readsDirty && !contentDirty {
+		// Only turns that no link can involve arrived (an import of chats):
+		// remember they were seen, so the next run does not weigh them again.
+		return c.writeTransaction(ctx, "note related conversations' inputs", func(tx *sql.Tx) error {
+			for key, value := range map[string]string{"peer_links_tool_rowid": fmt.Sprint(maxRow), "peer_links_message_rowid": fmt.Sprint(maxMessage)} {
+				if err := setMeta(tx, key, value); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 	}
 	var copies, tasks []peerLink
 	if contentDirty {
@@ -256,16 +276,7 @@ func (c *Catalog) RefreshPeerLinks(ctx context.Context) error {
 	var reads []peerLink
 	var readers []string
 	if readsDirty {
-		// Recheck readers that read shortly before the new calls as well:
-		// the writer's next prompt, which confirms a review, comes after it.
-		from := ""
-		if !full && since.Valid {
-			from = since.String
-			if at, ok := parseTime(from); ok {
-				from = formatTime(at.Add(-peerRecheck))
-			}
-		}
-		if reads, readers, err = c.derivePeerReads(ctx, families, from); err != nil {
+		if reads, readers, err = c.derivePeerReads(ctx, families, scope); err != nil {
 			return err
 		}
 	}
@@ -440,20 +451,169 @@ type peerRead struct {
 	diff    bool
 }
 
+// peerEvidence is the span of one conversation's new calls or turns.
+type peerEvidence struct {
+	conversation string
+	from, to     time.Time
+}
+
+func (c *Catalog) peerEvidence(ctx context.Context, query string, after int64) ([]peerEvidence, error) {
+	rows, err := c.reader().QueryContext(ctx, query, after)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	evidence := []peerEvidence{}
+	for rows.Next() {
+		var conversation, first, last string
+		if err := rows.Scan(&conversation, &first, &last); err != nil {
+			return nil, err
+		}
+		from, ok := parseTime(first)
+		to, also := parseTime(last)
+		if ok && also {
+			evidence = append(evidence, peerEvidence{conversation, from, to})
+		}
+	}
+	return evidence, rows.Err()
+}
+
+// peerScope is the readers new evidence can have changed: the families it
+// arrived in, and those that read while it could count.
+type peerScope struct {
+	roots map[string]bool
+	// spans are merged; a nil end is open (a late result is dated by time
+	// alone).
+	spans []peerSpan
+}
+
+type peerSpan struct {
+	from time.Time
+	to   *time.Time
+}
+
+// peerReadScope turns what arrived since the last run into the readers to
+// derive again, or nil when no read link can have changed.
+//
+// A new call or turn at t concerns its own family, and any reader that read
+// between t-peerRecheck (the writer's next prompt confirms a review that
+// came before it) and t+peerWindow (lines count for that long after they
+// are written). A turn concerns anyone only in a family's top-level
+// conversation, where timing is read, and only if that family has a call
+// that writes or shows changes: without one it is neither side of a link.
+func (c *Catalog) peerReadScope(ctx context.Context, f *peerFamilies, calls, turns []peerEvidence, late sql.NullString) (*peerScope, error) {
+	scope := &peerScope{roots: map[string]bool{}}
+	add := func(e peerEvidence) {
+		to := e.to.Add(peerWindow)
+		scope.roots[f.root[e.conversation]] = true
+		scope.spans = append(scope.spans, peerSpan{e.from.Add(-peerRecheck), &to})
+	}
+	for _, e := range calls {
+		if f.root[e.conversation] != "" {
+			add(e)
+		}
+	}
+	top := map[string]bool{}
+	for _, list := range f.top {
+		for _, cv := range list {
+			top[cv] = true
+		}
+	}
+	spoke := map[string]bool{}
+	for _, e := range turns {
+		if root := f.root[e.conversation]; root != "" && top[e.conversation] {
+			spoke[root] = true
+		}
+	}
+	if len(spoke) > 0 {
+		members := []string{}
+		for cv, root := range f.root {
+			if spoke[root] {
+				members = append(members, cv)
+			}
+		}
+		sort.Strings(members)
+		involved, err := queryStrings(ctx, c.reader(), `SELECT j.value FROM json_each(?) j WHERE EXISTS(SELECT 1 FROM tool_calls t
+ WHERE t.conversation_id=j.value AND (t.tool_category='edit' OR t.has_heredoc=1 OR `+peerDiffCall+`))`, jsonText(members))
+		if err != nil {
+			return nil, err
+		}
+		linkable := map[string]bool{}
+		for _, cv := range involved {
+			linkable[f.root[cv]] = true
+		}
+		for _, e := range turns {
+			if top[e.conversation] && linkable[f.root[e.conversation]] {
+				add(e)
+			}
+		}
+	}
+	if at, ok := parseTime(late.String); ok && late.Valid {
+		scope.spans = append(scope.spans, peerSpan{from: at.Add(-peerRecheck)})
+	}
+	if len(scope.spans) == 0 {
+		return nil, nil
+	}
+	sort.Slice(scope.spans, func(i, j int) bool { return scope.spans[i].from.Before(scope.spans[j].from) })
+	merged := scope.spans[:1]
+	for _, span := range scope.spans[1:] {
+		last := &merged[len(merged)-1]
+		switch {
+		case last.to == nil:
+		case span.from.After(*last.to):
+			merged = append(merged, span)
+		case span.to == nil || span.to.After(*last.to):
+			last.to = span.to
+		}
+	}
+	scope.spans = merged
+	return scope, nil
+}
+
+// peerScopeSince is the scope of everything read at or after from.
+func peerScopeSince(from time.Time) *peerScope {
+	return &peerScope{roots: map[string]bool{}, spans: []peerSpan{{from: from}}}
+}
+
 // derivePeerReads finds, for each conversation that looked at changes (ran
-// a diff), the work whose freshly written lines it read. With from set, only
-// readers with a diff call at or after from are redone, together with
-// everything they read.
-func (c *Catalog) derivePeerReads(ctx context.Context, f *peerFamilies, from string) ([]peerLink, []string, error) {
+// a diff), the work whose freshly written lines it read. With a scope, only
+// its readers are redone, together with everything they read.
+func (c *Catalog) derivePeerReads(ctx context.Context, f *peerFamilies, scope *peerScope) ([]peerLink, []string, error) {
 	q := c.reader()
 	// Readers: families with a call that shows changes.
 	// The unary + lets a later run take the start-time index rather than
 	// scan the ledger in conversation order for DISTINCT.
 	readerQuery := `SELECT DISTINCT +t.conversation_id FROM tool_calls t WHERE ` + peerDiffCall
 	args := []any{}
-	if from != "" {
-		readerQuery += ` AND t.started_at>=?`
-		args = append(args, from)
+	if scope != nil {
+		// Candidates read or looked at changes within a span, or are the
+		// families the evidence arrived in; of them, readers have a diff.
+		candidates := map[string]bool{}
+		for root := range scope.roots {
+			candidates[root] = true
+		}
+		for _, span := range scope.spans {
+			query, bounds := `SELECT DISTINCT +t.conversation_id FROM tool_calls t WHERE (`+peerDiffCall+` OR t.tool_category='read') AND t.started_at>=?`, []any{formatTime(span.from)}
+			if span.to != nil {
+				query, bounds = query+` AND t.started_at<=?`, append(bounds, formatTime(*span.to))
+			}
+			convs, err := queryStrings(ctx, q, query, bounds...)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, cv := range convs {
+				candidates[f.root[cv]] = true
+			}
+		}
+		members := []string{}
+		for cv, root := range f.root {
+			if root != "" && candidates[root] {
+				members = append(members, cv)
+			}
+		}
+		sort.Strings(members)
+		readerQuery = `SELECT j.value FROM json_each(?) j WHERE EXISTS(SELECT 1 FROM tool_calls t WHERE t.conversation_id=j.value AND ` + peerDiffCall + `)`
+		args = append(args, jsonText(members))
 	}
 	readerConvs, err := queryStrings(ctx, q, readerQuery, args...)
 	if err != nil {
@@ -538,6 +698,8 @@ func (c *Catalog) derivePeerReads(ctx context.Context, f *peerFamilies, from str
 			links = append(links, *link)
 		}
 	}
+	// The loop reports each reader as it starts; end on all of them done.
+	reportWork(ctx, "linking related conversations", "conversations", len(all), len(all))
 	return links, readers, nil
 }
 

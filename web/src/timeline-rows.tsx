@@ -79,16 +79,16 @@ export function timelineRowEvents(node:RibbonNode,layer:EventLayer|undefined,roo
  return {...layer,events:root||node.id==='events'?mergeAgentEvents(events,counts??eventKindCounts(layer.events)):events};
 }
 
-/** One row and, folded out, the rows under it. `flat` draws the row alone, for a page that repeats the session under it. */
-export function TimelineRow({node,lane,level=0,flat=false}:{node:RibbonNode;lane:TimelineLane;level?:number;flat?:boolean}){
+/** One row and, folded out, the rows under it. */
+export function TimelineRow({node,lane,level=0}:{node:RibbonNode;lane:TimelineLane;level?:number}){
  const {surface}=lane,root=level===0;
  const viewKey=surface.viewKey(node.id),[open]=useViewEntry('disclosures',viewKey,false);
  const inspector=useRibbonInspector();
  const eventKey=node.items.flatMap(item=>item.event?[item.event.id]:[]).join(' ');
  const eventLayer=useMemo(()=>timelineRowEvents(node,lane.events,root,lane.eventCounts),[lane.events,lane.eventCounts,root,node.id,eventKey]);
  // A session's Human events hang off its own row, which therefore folds out while it has any to show, even with every other section hidden in the Key.
- const human=root&&!flat?lane.human:undefined,humanGroups=human?.groups.length??0;
- const expands=!flat&&timelineRowExpands(node.children.length,humanGroups);
+ const human=root?lane.human:undefined,humanGroups=human?.groups.length??0;
+ const expands=timelineRowExpands(node.children.length,humanGroups);
  const row:TimelineRowState={root,level,expands,count:ribbonEventCount(node.items)};
  const ribbon=<SessionRibbon visibility={lane.visibility} node={node} range={lane.range} clock={lane.scale} brushHandlers={lane.brushHandlers} preview={lane.preview} caller={lane.caller} inspector={inspector} sourceHref={lane.sourceHref} interaction={surface.interaction} onReveal={lane.onReveal} showUnknownTail={lane.showUnknownTail} eventLayer={eventLayer}/>;
  const label=surface.labels?<span {...surface.label(row)}>{root?surface.rootLabel(node,row):<RibbonNodeDetails node={node}/>} {surface.caret(expands)}</span>:null;

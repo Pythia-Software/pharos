@@ -64,7 +64,7 @@ var (
 
 // Scope labels, as the panel shows them.
 const (
-	resourceScopeService  = "this library service"
+	resourceScopeService  = "this library"
 	resourceScopeApp      = "Pharos app (covered processes)"
 	resourceOmitNativeApp = "Pharos Mac app: ownership is not verified, so it is not measured"
 	resourceOmitSelfOnly  = "Other processes: this platform reads only this process's own usage"

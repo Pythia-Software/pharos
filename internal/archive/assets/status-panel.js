@@ -234,7 +234,7 @@
       rows};
   }
   const scheduleItem = (item, text) => ({id: item.id, label: item.label, dot: SCHEDULE_DOTS[item.state] ?? '', text,
-    tooltip: item.state === 'running' && item.feeds ? `${item.feeds} update when this finishes.` : ''});
+    tooltip: item.state === 'running' && item.feeds ? `Updates when this finishes: ${item.feeds}.` : ''});
 
   // A step's measured progress: "812 MB of 2 GB", "42 of 100 conversations".
   function stepAmount(step) {
@@ -249,8 +249,8 @@
   const running = operation => operation && !TERMINAL.has(operation.state);
   const RANK = {safe: 0, 'safe-in': 1, busy: 2, unsafe: 3};
   const VERDICT_DOT = {safe: '', 'safe-in': 'busy', busy: 'warn', unsafe: 'bad'};
-  // Work that the header's Index changes waits for, as headerBusy in
-  // library.js does for activities: captures, indexes and the upgrade.
+  // Work that the header's Index changes waits for: captures, indexes and
+  // the upgrade.
   const INDEX_KINDS = /^(index\.|capture\.|ingest\.|library\.(update|rebuild|upgrade)$|host\.add$)/;
 
   // One line per top-level operation. The primary part is label · the state
@@ -327,7 +327,7 @@
   };
   const PANEL_TITLE = 'Background Processing';
   const baseName = path => String(path || '').replace(/\/+$/, '').split('/').pop() || '';
-  const LOCATIONS = {external: 'External drive', 'disk-image': 'Disk image', internal: "This Mac's internal disk"};
+  const LOCATIONS = {external: 'External drive', 'disk-image': 'Disk image', internal: 'This Mac’s internal disk'};
 
   // What runs for the selected library: the app's operations that touch it
   // (a transfer, a delivery), then its own.
@@ -383,7 +383,8 @@
       library: {name: view.service?.name || baseName(library.library?.path) || 'Library', drive: drive.ejectable ? drive.name || 'its drive' : 'this Mac',
         of: view.service?.count > 1 ? `${view.service.position}/${view.service.count}` : '',
         path: [LOCATIONS[drive.location] || (drive.ejectable ? 'Drive' : ''), library.library?.path].filter(Boolean).join(' · ')},
-      verdict: {verdict: eject.verdict || 'unsafe', text, dot: VERDICT_DOT[eject.verdict] ?? 'bad', checked: eject.checked || null,
+      // Whether ejecting is safe, only for a drive there is to eject.
+      verdict: !drive.ejectable ? null : {verdict: eject.verdict || 'unsafe', text, dot: VERDICT_DOT[eject.verdict] ?? 'bad', checked: eject.checked || null,
         tooltip: [eject.summary !== text ? eject.summary : '', ...(eject.blockers || []).map(blocker => [blocker.label, blocker.on_eject].filter(Boolean).join(': '))].filter(Boolean).join('\n')},
       // Null without a schedule (an older service).
       schedule: scheduleModel(library.background, now),
@@ -424,8 +425,8 @@
     if (gpu) metrics.push({id: 'gpu', icon: 'cpu', label: 'GPU', value: Number.isFinite(gpu.utilization_percent) ? `${Math.round(gpu.utilization_percent)}%` : '—'});
     metrics.push({id: 'memory', label: 'RAM', value: Number.isFinite(resources.memory_bytes) ? size(resources.memory_bytes) : '—'});
     if ('disk_bytes_per_second' in resources) metrics.push({id: 'io', label: 'I/O', value: Number.isFinite(resources.disk_bytes_per_second) ? `${size(resources.disk_bytes_per_second)}/s` : '—'});
-    metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? `${sizesStale ? 'last ' : ''}${size(storage)}` : '—'});
-    if (Number.isFinite(wal) && wal > 1e9) metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: `${sizesStale ? 'last ' : ''}${size(wal)}`});
+    metrics.push({id: 'disk', label: 'Storage', value: Number.isFinite(storage) ? `${size(storage)}${sizesStale ? ' (last known)' : ''}` : '—'});
+    if (Number.isFinite(wal) && wal > 1e9) metrics.push({id: 'wal', icon: 'disk', label: 'WAL', value: `${size(wal)}${sizesStale ? ' (last known)' : ''}`});
     for (const metric of metrics) {
       const partial = metric.id === 'cpu' ? resources.cpu_partial : metric.id === 'gpu' ? gpu?.partial
         : metric.id === 'io' ? resources.disk_partial : metric.id === 'memory' ? resources.memory_partial : false;
@@ -504,7 +505,7 @@
       const partial = points.some(point => point.partial);
       const gaps = runs.length > 1 || points.some(point => point.value === null);
       const summary = `${spec.label} (${spec.unit}): now ${current}${peak !== null ? `, peak ${historyText(spec.id, peak)}` : ''} over the last ${minutes} min`
-        + `${gaps ? ', with gaps' : ''}${partial ? ', some samples are lower bounds' : ''}.`
+        + `${gaps ? '; with gaps' : ''}${partial ? '; some samples are lower bounds' : ''}.`
         + (history.series?.[spec.source]?.note ? ` ${history.series[spec.source].note}` : '');
       series.push({id: spec.id, label: spec.label, unit: spec.unit, current: latest?.partial && latest.value !== null ? `≥${current}` : current,
         peak: peak !== null ? historyText(spec.id, peak) : null, paths, gaps, partial, summary, basis: history.series?.[spec.source]?.basis || ''});
@@ -611,7 +612,7 @@
     const grant = resources.allocation?.current;
     if (grant && (grant.cpu_slots || grant.gpu)) {
       add('allocation', `${[grant.cpu_slots ? `${grant.cpu_slots} CPU ${unitName('slot', grant.cpu_slots)}` : '', grant.gpu ? 'GPU' : ''].filter(Boolean).join(' and ')} allowed, not usage`,
-        'A share of the Background CPU allowance (Settings → Background Processing). A grant, not CPU used.', ALLOWANCE_PATH);
+        'A share of Background CPU (Settings → Background Processing): an allowance, not CPU used.', ALLOWANCE_PATH);
     }
     const active = resources.time?.active;
     if (Number.isFinite(active?.value)) add('active', `active ${duration(active.value)}`, active.coverage || '');
@@ -622,10 +623,10 @@
     // The service process's CPU and memory are shared by every task in it.
     const service = figure(resources.cpu?.go_process, cpuSeconds), serviceMemory = figure(resources.memory?.process, size);
     if (service && serviceMemory && !service.known && !serviceMemory.known && service.text === serviceMemory.text) {
-      add('service', `service CPU and memory ${service.text}`, [service.note, serviceMemory.note].filter(Boolean).join(' '));
+      add('service', `Pharos process CPU and memory ${service.text}`, [service.note, serviceMemory.note].filter(Boolean).join(' '));
     } else {
-      if (service) add('service', `service CPU ${service.text}`, service.note);
-      if (serviceMemory) add('service-memory', `service memory ${serviceMemory.text}`, serviceMemory.note);
+      if (service) add('service', `Pharos process CPU ${service.text}`, service.note);
+      if (serviceMemory) add('service-memory', `Pharos process memory ${serviceMemory.text}`, serviceMemory.note);
     }
     const gpu = figure(resources.gpu?.time, duration);
     if (gpu && (gpu.known || grant?.gpu)) add('gpu', `GPU time ${gpu.text}`, gpu.note);
@@ -672,7 +673,7 @@
     if (phase === 'ejecting') return message || 'Ejecting…';
     if (phase === 'waiting') return 'Waiting to eject…';
     const decision = ejectDecision(shown);
-    return decision === 'eject' ? '⏏ Eject' : decision === 'confirm' ? '⏏ Stop and Eject' : '⏏ Eject when safe';
+    return decision === 'eject' ? '⏏ Eject' : decision === 'confirm' ? '⏏ Stop and eject' : '⏏ Eject when safe';
   }
 
   // What the fresh verdict lets Eject do: go ahead, ask first (work stops at
@@ -696,7 +697,8 @@
     const name = driveName(view);
     const first = operations.find(operation => operation.priority !== 'background') || operations[0];
     const dot = alert || (operations.length ? 'busy' : '');
-    const status = attention[0]?.title || (first ? lineText(operationLine(first)) : view.library?.eject?.headline || view.library?.eject?.summary || '');
+    const ejectable = Boolean(view.library?.library?.drive?.ejectable);
+    const status = attention[0]?.title || (first ? lineText(operationLine(first)) : ejectable ? view.library?.eject?.headline || view.library?.eject?.summary || '' : '');
     return {name, dot, state: operations.length ? 'busy' : 'idle', title: status ? `${name}: ${status}` : name};
   }
 
@@ -746,7 +748,7 @@
     live(target, content);
     target.dataset.state = model.state;
     target.title = model.title;
-    target.setAttribute('aria-label', `Library drive: ${model.title}`);
+    target.setAttribute('aria-label', `Background Processing: ${model.title || model.name}`);
     target.setAttribute('aria-expanded', String(Boolean(panel)));
   }
 
@@ -885,7 +887,7 @@
     for (const id of [...stopRequested]) if (!currentOperations(state?.view).some(operation => operation.id === id && operation.state !== 'stopping')) stopRequested.delete(id);
     const model = panelModel(state?.view, {ejectState, verdict: currentVerdict(), nativeEject: Boolean(nativeEjectAvailable()), stopRequested, history: state?.history,
       labels: operationLabels(state?.view, knownLabels),
-      unavailable: state?.error ? (state.error.status === 503 ? 'Pharos is stopping; it has released or is releasing the library.' : `Could not read the library's status: ${state.error.message}`) : null});
+      unavailable: state?.error ? (state.error.status === 503 ? 'Pharos is stopping; it has released or is releasing the library.' : `Could not read the library’s status: ${state.error.message}`) : null});
     displayedHistory = model.history;
     displayedHistoryDocument = state?.history || null;
     // A pinned time that has left the window is let go.
@@ -932,18 +934,20 @@
       return;
     }
     // Whether ejecting is safe, under the drive's name.
-    const verdict = node('div', 'pharos-status-eject');
-    verdict.dataset.key = 'eject-verdict';
-    verdict.append(node('span', 'pharos-dot small' + (model.verdict.dot ? ` ${model.verdict.dot}` : '')), node('span', '', model.verdict.text));
-    if (model.verdict.tooltip) verdict.title = model.verdict.tooltip;
-    content.append(verdict);
+    if (model.verdict) {
+      const verdict = node('div', 'pharos-status-eject');
+      verdict.dataset.key = 'eject-verdict';
+      verdict.append(node('span', 'pharos-dot small' + (model.verdict.dot ? ` ${model.verdict.dot}` : '')), node('span', '', model.verdict.text));
+      if (model.verdict.tooltip) verdict.title = model.verdict.tooltip;
+      content.append(verdict);
+    }
     if (model.eject && ['confirm', 'waiting', 'error'].includes(model.eject.phase)) {
       const flow = node('div', 'pharos-row');
       flow.dataset.key = `eject-${model.eject.phase}`;
       if (model.eject.phase === 'waiting') flow.append(node('p', 'pharos-note', `Pharos ejects ${model.eject.name} as soon as it is safe, stopping what it can now. Waiting for:`));
       else flow.append(node('p', 'pharos-note' + (model.eject.phase === 'confirm' ? '' : ' pharos-error'), model.eject.text));
       for (const blocker of model.eject.blockers) flow.append(node('p', 'pharos-note pharos-sub', blocker));
-      if (model.eject.phase === 'confirm') flow.append(button(`Stop and Eject ${model.eject.name}`, 'primary', confirmEject));
+      if (model.eject.phase === 'confirm') flow.append(button(`Stop and eject ${model.eject.name}`, 'primary', confirmEject));
       else if (model.eject.phase === 'error') flow.append(button('Check again', '', checkEject));
       flow.append(button('Cancel', '', cancelEject));
       content.append(flow);
@@ -1029,7 +1033,7 @@
     caption.dataset.key = 'caption';
     caption.append(node('span', '', model.caption));
     if (model.omitted.length) {
-      const omitted = node('span', '', `${model.omitted.length} not measured`);
+      const omitted = node('span', '', `${model.omitted.length} ${unitName('process', model.omitted.length)} not measured`);
       omitted.title = model.note;
       caption.append(omitted);
     }
@@ -1221,7 +1225,7 @@
       const profile = node('span', 'pharos-sub pharos-status-step');
       profile.dataset.key = 'profile';
       profile.append(download(model.profile, 'Record a 5 s CPU profile', 'Runs only when you click; the download arrives after 5 seconds.'),
-        ' of the whole service process. Samples are labeled with the task that ran them; it is not any one task\'s own CPU.');
+        ' of Pharos. It covers every task in the process, each sample labeled with its task, so it is not this task’s CPU alone.');
       now.append(profile);
     }
     content.append(sectionHeading('Running now', 'now-heading'), now);
@@ -1248,7 +1252,7 @@
       link.onclick = event => { event.preventDefault(); navigate(item.link); };
       element.append(link);
     });
-    if (line.export) element.append(' · ', download(line.export, 'finished records (JSON)', 'The recent finished tasks of this kind, as the service keeps them: figures with their bases, no conversation content.'));
+    if (line.export) element.append(' · ', download(line.export, 'finished records (JSON)', 'The recent finished tasks of this kind, as Pharos keeps them: figures with their bases, no conversation content.'));
     if (line.resources.tooltip) element.title = line.resources.tooltip;
     return element;
   }
@@ -1287,12 +1291,12 @@
           event.preventDefault();
           event.stopPropagation();
           post('/api/background/run', {cadence: row.run.cadence});
-          toast(`${row.label} runs now.`);
+          toast(`Everything in “${row.label}” runs next.`);
         });
         run.dataset.key = 'run';
         run.disabled = row.run.disabled;
-        run.title = `Run ${row.label} now`;
-        run.setAttribute('aria-label', `Run ${row.label} now`);
+        run.title = `Run everything in “${row.label}” now`;
+        run.setAttribute('aria-label', `Run everything in “${row.label}” now`);
         name.append(run);
       }
       summary.append(node('span', 'pharos-status-icon', row.icon), name, node('span', 'pharos-status-state', row.text), node('span', 'pharos-status-what', row.what));
@@ -1346,13 +1350,12 @@
 
   function open({fromURL = false, focus = true} = {}) {
     if (!chip() || panel) return;
-    window.pharosLibrary?.closePanel?.({fromURL: true});
     if (!fromURL) window.pharosView?.write('overlay', 'drive');
     panel = node('section', 'pharos-drive-panel pharos-status-panel');
     panel.id = 'pharosStatusPanel';
     panel.tabIndex = -1;
     panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-label', 'Library drive');
+    panel.setAttribute('aria-label', 'Background Processing');
     document.body.append(panel);
     inspect = null;
     announcement = '';
