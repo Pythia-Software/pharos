@@ -93,6 +93,14 @@ func buildLabelsItems(ctx context.Context, db labelingReader, occurrences func(c
 	if p.occurrences, err = occurrences(ctx, snapshot); err != nil {
 		return nil, err
 	}
+	// What this snapshot resolves for components no derivative rests on yet,
+	// for the publications of this builder's output to record
+	// (stampExecutionResults).
+	if resolution, index, err := p.occurrences.resolved(ctx); err != nil {
+		return nil, err
+	} else if err := rememberBuilderResults(ctx, snapshot, p.executionDigests, resolution, index); err != nil {
+		return nil, err
+	}
 	_, _, sessions, _, err := loadLabelingPass(ctx, snapshot, p)
 	if err != nil {
 		return nil, err

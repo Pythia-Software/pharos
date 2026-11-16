@@ -577,11 +577,15 @@ func duplicateArgs(args []any, times int) []any {
 }
 
 // componentDigest hashes a component's evidence rows and the keys its claims
-// name that no member answers to, with the versions that interpret them. The
-// rows already hold the occurrence facts as decided, so only their encoding
-// is named, not the rules' version (occurrenceDependencyVersion).
+// name that no member answers to. No rules version is part of it: the first
+// three lines name only the rows' encoding (executionDigestResolver,
+// executionDigestEvidence and occurrenceDependencyEncoding, each the rules
+// version it was split from). What the resolver's and the evidence reading's
+// rules make of the rows is recorded beside the digest instead, as the
+// component's resolved result (execution_results.go), so a rules change
+// supersedes only the derivatives of components whose result it changes.
 func componentDigest(members []*dependencyConversation) string {
-	lines := []string{executionResolverVersion, executionEvidenceVersion, occurrenceDependencyEncoding}
+	lines := []string{executionDigestResolver, executionDigestEvidence, occurrenceDependencyEncoding}
 	answered := map[string]bool{}
 	for _, c := range members {
 		for _, key := range c.keys {
@@ -1089,6 +1093,13 @@ func storedExecutionCurrent(ctx context.Context, q queryer, ledger, conversation
 	if stored == "" {
 		return false, nil
 	}
+	// Built under other rules and not reconciled yet: pending until the
+	// reconciliation has compared its result (executionUnmarkedDependents).
+	if state, err := executionPropagationState(ctx, q); err != nil {
+		return false, err
+	} else if state.tracked && !state.consistent() {
+		return false, nil
+	}
 	if digests, err := cachedExecutionDependencyDigests(ctx, q); err != nil || digests != nil {
 		return digests[conversation] == stored, err
 	}
@@ -1171,6 +1182,14 @@ func storedExecutionStale(ctx context.Context, q queryer, ledger string) (int, e
 	if len(rows) == 0 {
 		return 0, nil
 	}
+	if state, err := executionPropagationState(ctx, q); err != nil {
+		return 0, err
+	} else if state.tracked && !state.consistent() {
+		// Built under other rules: what the next mark would mark, by digest
+		// or by resolved result.
+		unmarked, err := executionUnmarked(ctx, q, ledger)
+		return len(unmarked), err
+	}
 	digests, err := executionDependencyDigests(ctx, q)
 	if err != nil {
 		return 0, err
@@ -1226,19 +1245,24 @@ var executionDependentLedgers = [][2]string{{"message_labels_conversations", "me
 // markExecutionDependents would mark. Writers that call it leave nothing
 // unmarked, but another writer, or another process's older executable,
 // leaves its changes past the cursor until the next mark; a catalog that has
-// never marked, or marked under other resolver or evidence versions, has
-// every derivative to compare. executionUnmarked computes that set exactly,
-// with the mark's own function (executionUnmarkedDependents), without
-// writing.
+// never marked has every derivative's digest to compare. executionUnmarked
+// computes that set exactly, with the mark's own function
+// (executionUnmarkedDependents), without writing. A catalog marked under
+// other rules has every derivative's resolved result to compare as well,
+// which only the reconciliation does: until then every derivative is in the
+// set.
 
 // executionUnmarkedFallbackSQL is a SQL subquery for readers that cannot
 // compute executionUnmarked: every conversation built in ledger while
-// anything is unmarked (executionPropagation.behind), and every derivative
-// built before digests were recorded. It is broader than the exact set,
-// never narrower.
+// anything is unmarked (executionPropagation.behind: the cursor is behind,
+// or the recorded rules or the recorded results' rules are not this
+// executable's), and every derivative built before digests were recorded. It
+// is broader than the exact set, never narrower.
 func executionUnmarkedFallbackSQL(ledger string) string {
+	versions := executionDependentsVersions()
 	return `SELECT conversation_id id FROM ` + ledger + ` WHERE execution_digest=''
- OR COALESCE((SELECT value FROM meta WHERE key='` + executionDependentsVersionsKey + `'),'')<>'` + executionDependentsVersions() + `'
+ OR COALESCE((SELECT value FROM meta WHERE key='` + executionDependentsVersionsKey + `'),'')<>'` + versions + `'
+ OR COALESCE((SELECT value FROM meta WHERE key='` + executionResultStampsKey + `'),'') NOT IN ('','` + versions + `')
  OR (SELECT value FROM execution_source_generation WHERE id=1)>COALESCE((SELECT CAST(value AS INTEGER) FROM meta WHERE key='` + executionDependentsKey + `'),0)`
 }
 
@@ -1534,13 +1558,25 @@ func publishExecutionDependents(ctx context.Context, tx *sql.Tx, ledger string, 
 	if err != nil {
 		return nil, err
 	}
+	// Built under this executable's rules, which the catalog's unmarked
+	// derivatives must agree with: after another executable recorded other
+	// rules, nothing is published until propagateExecutionChanges has
+	// reconciled them (the builder ran before that mark, or beside it).
+	state, err := executionPropagationState(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	foreign := state.tracked && state.recorded != "" && state.recorded != executionDependentsVersions()
 	out := &executionPublication{current: make(map[string]bool, len(ids))}
 	built := map[string]bool{}
 	for _, id := range ids {
-		out.current[id] = captured[id] != "" && digests[id] == captured[id]
+		out.current[id] = !foreign && captured[id] != "" && digests[id] == captured[id]
 		if out.current[id] {
 			built[captured[id]] = true
 		}
+	}
+	if err := stampExecutionResults(ctx, tx, state, built); err != nil {
+		return nil, err
 	}
 	for id, digest := range digests {
 		if !built[digest] {
@@ -1579,24 +1615,31 @@ func (p *executionPublication) finish(ctx context.Context, tx *sql.Tx) error {
 	for _, ledger := range ledgers {
 		held += ` AND NOT EXISTS(SELECT 1 FROM ` + ledger[0] + ` l WHERE l.execution_digest=execution_dependency_members.digest)`
 	}
-	_, err = tx.ExecContext(ctx, `DELETE FROM execution_dependency_members WHERE digest IN (SELECT value FROM json_each(?))`+held, jsonText(p.replaced))
-	if err != nil && strings.Contains(err.Error(), "no such table") {
-		err = nil
+	// The components' recorded results go with their members.
+	for _, table := range []string{"execution_dependency_members", "execution_result_stamps"} {
+		_, err = tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE digest IN (SELECT value FROM json_each(?))`+strings.ReplaceAll(held, "execution_dependency_members", table), jsonText(p.replaced))
+		if err != nil && !strings.Contains(err.Error(), "no such table") {
+			return err
+		}
 	}
-	return err
+	return nil
 }
 
 // executionDependentsKey (meta) is the execution source generation whose
 // changes markExecutionDependents has propagated, and
-// executionDependentsVersionsKey the resolver and evidence versions it
-// compared digests under.
+// executionDependentsVersionsKey the rules the unmarked derivatives agree
+// with (executionDependentsVersions). A mark records the rules only when it
+// has compared the derivatives under them (reconcileExecutionResults).
 const (
 	executionDependentsKey         = "execution_dependents_through"
 	executionDependentsVersionsKey = "execution_dependents_versions"
 )
 
+// executionDependentsVersions names the rules unmarked derivatives agree
+// with: the resolver's and the evidence reading's (executionRulesVersion)
+// and the occurrence rules'.
 func executionDependentsVersions() string {
-	return executionResolverVersion + "/" + executionEvidenceVersion + "/" + occurrenceDependencyVersion
+	return executionRulesVersion + "/" + occurrenceDependencyVersion
 }
 
 // executionPropagation is where marking stands in a snapshot.
@@ -1604,11 +1647,16 @@ type executionPropagation struct {
 	tracked             bool
 	generation, through int64
 	// whole: no cursor (a catalog that has never marked, or an upgraded
-	// one), or one recorded under other resolver, evidence or occurrence
-	// versions, whose digests may differ with no source change. Every
-	// derivative is then compared with the whole catalog's digests, and one
-	// whose digest still holds stays current.
+	// one). Every derivative is then compared with the whole catalog's
+	// digests, and one whose digest still holds stays current.
 	whole bool
+	// recorded is the rules the last mark recorded
+	// (executionDependentsVersionsKey, which every executable writes);
+	// stamped and encoding are the rules and the encoding the recorded
+	// results were written under (executionResultStampsKey and
+	// executionResultEncodingKey, which only executables that record results
+	// write).
+	recorded, stamped, encoding string
 }
 
 func executionPropagationState(ctx context.Context, q queryer) (executionPropagation, error) {
@@ -1617,7 +1665,8 @@ func executionPropagationState(ctx context.Context, q queryer) (executionPropaga
 		return executionPropagation{}, err
 	}
 	state := executionPropagation{tracked: true, generation: generation, whole: true}
-	rows, err := queryMapsContext(ctx, q, `SELECT key,value FROM meta WHERE key IN (?,?)`, executionDependentsKey, executionDependentsVersionsKey)
+	rows, err := queryMapsContext(ctx, q, `SELECT key,value FROM meta WHERE key IN (?,?,?,?)`, executionDependentsKey, executionDependentsVersionsKey,
+		executionResultStampsKey, executionResultEncodingKey)
 	if err != nil {
 		return executionPropagation{}, err
 	}
@@ -1625,20 +1674,52 @@ func executionPropagationState(ctx context.Context, q queryer) (executionPropaga
 	for _, row := range rows {
 		meta[firstString(row["key"])] = firstString(row["value"])
 	}
-	if through, ok := meta[executionDependentsKey]; ok && meta[executionDependentsVersionsKey] == executionDependentsVersions() {
+	state.recorded, state.stamped, state.encoding = meta[executionDependentsVersionsKey], meta[executionResultStampsKey], meta[executionResultEncodingKey]
+	if through, ok := meta[executionDependentsKey]; ok {
 		state.whole = false
 		state.through, _ = strconv.ParseInt(through, 10, 64)
 	}
 	return state, nil
 }
 
+// consistent reports that every unmarked derivative whose digest holds was
+// built under this executable's rules, so digests alone decide what is
+// stale. That holds when the last mark recorded these rules and no results
+// were recorded under others, and for a catalog that has never marked nor
+// recorded results when these rules are the ones the digest encoding was
+// split from (only executables with those rules wrote such digests).
+// Otherwise the rules changed and the derivatives are reconciled against the
+// recorded results (planExecutionReconcile).
+func (p executionPropagation) consistent() bool {
+	versions := executionDependentsVersions()
+	return p.recorded == versions && (p.stamped == "" || p.stamped == versions) ||
+		p.recorded == "" && p.stamped == "" && executionRulesVersion == executionLegacyRules
+}
+
+// comparable reports that the recorded results say what the unmarked
+// derivatives were built on: they were written under the rules the last mark
+// recorded, in this executable's encoding. An executable that records no
+// results leaves stamped behind when it marks under other rules; what it
+// then published is unknown, and nothing is comparable.
+func (p executionPropagation) comparable() bool {
+	return p.stamped != "" && p.stamped == p.recorded && p.encoding == executionResultEncoding
+}
+
+// stamping reports that results are recorded under this executable's rules
+// and encoding, so a publication may add its own.
+func (p executionPropagation) stamping() bool {
+	versions := executionDependentsVersions()
+	return p.tracked && p.recorded == versions && p.stamped == versions && p.encoding == executionResultEncoding
+}
+
 // behind is how far marking is behind: the source generations not yet
-// propagated, or the whole generation when every derivative is compared.
+// propagated, or the whole generation when every derivative is compared (no
+// cursor, or rules to reconcile).
 func (p executionPropagation) behind() int64 {
 	switch {
 	case !p.tracked:
 		return 0
-	case p.whole:
+	case p.whole, !p.consistent():
 		return max(1, p.generation)
 	}
 	return max(0, p.generation-p.through)
@@ -1655,8 +1736,19 @@ func (p executionPropagation) behind() int64 {
 // is covered by the next that does (ingestion, the evidence backfill and
 // recovery, and each labels or agent events run before it plans).
 //
-// What it marks is executionUnmarkedDependents, which readers compute too.
+// What it marks is executionDigestStaleDependents. A rules change
+// (executionPropagation.consistent) is not reconciled here: that needs the
+// whole catalog's resolution, which propagateExecutionChanges reads outside
+// the writer. Until it has, this moves only the cursor, and readers hold
+// every derivative back (executionUnmarkedDependents).
 func markExecutionDependents(ctx context.Context, tx *sql.Tx) error {
+	return markExecutionDependentsIn(ctx, tx, false)
+}
+
+// markExecutionDependentsIn is markExecutionDependents; with reconcile it
+// also reconciles a rules change and brings the recorded results to this
+// executable's rules and encoding (reconcileExecutionResults).
+func markExecutionDependentsIn(ctx context.Context, tx *sql.Tx, reconcile bool) error {
 	state, err := executionPropagationState(ctx, tx)
 	if err != nil || !state.tracked {
 		return err
@@ -1665,7 +1757,11 @@ func markExecutionDependents(ctx context.Context, tx *sql.Tx) error {
 	if err != nil {
 		return err
 	}
-	if state.behind() == 0 {
+	consistent := state.consistent()
+	if reconcile && (!consistent || !state.stamping()) {
+		return reconcileExecutionResults(ctx, tx, ledgers, state)
+	}
+	if !state.whole && state.generation <= state.through {
 		// Nothing to propagate; derivatives published without a digest
 		// (another executable's) still wait for a rebuild.
 		return markUndigestedDependents(ctx, tx, ledgers)
@@ -1678,13 +1774,18 @@ func markExecutionDependents(ctx context.Context, tx *sql.Tx) error {
 		// A writer that has changed nothing yet reads what a committed
 		// snapshot already worked out (propagateExecutionChanges primes it),
 		// rather than walking the changed components while it holds the lock.
-		stale, primed := map[string]map[string]bool{}, true
+		// Before a reconciliation the cached sets also hold what that will
+		// mark, so they are not read.
+		stale, primed := map[string]map[string]bool{}, consistent
 		for _, name := range names {
+			if !primed {
+				break
+			}
 			ids, ok, err := executionUnmarkedCached(ctx, tx, name, state)
 			if err != nil {
 				return err
 			}
-			if primed = primed && ok; !primed {
+			if primed = ok; !primed {
 				break
 			}
 			stale[name] = map[string]bool{}
@@ -1693,7 +1794,7 @@ func markExecutionDependents(ctx context.Context, tx *sql.Tx) error {
 			}
 		}
 		if !primed {
-			if stale, err = executionUnmarkedDependents(ctx, tx, names, state); err != nil {
+			if stale, err = executionDigestStaleDependents(ctx, tx, names, state); err != nil {
 				return err
 			}
 		}
@@ -1705,13 +1806,20 @@ func markExecutionDependents(ctx context.Context, tx *sql.Tx) error {
 			}
 		}
 	}
-	for key, value := range map[string]string{executionDependentsKey: strconv.FormatInt(state.generation, 10), executionDependentsVersionsKey: executionDependentsVersions()} {
+	meta := map[string]string{executionDependentsKey: strconv.FormatInt(state.generation, 10)}
+	if consistent {
+		meta[executionDependentsVersionsKey] = executionDependentsVersions()
+	}
+	return recordExecutionPropagation(ctx, tx, ledgers, meta)
+}
+
+// recordExecutionPropagation records where marking stands and invalidates
+// the views that read a ledger's output.
+func recordExecutionPropagation(ctx context.Context, tx *sql.Tx, ledgers [][2]string, meta map[string]string) error {
+	for key, value := range meta {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
 			return err
 		}
-	}
-	if len(ledgers) == 0 {
-		return nil
 	}
 	// Moving the cursor changes what executionUnmarked reads, which no
 	// cached-view trigger sees when nothing was marked: invalidate the views
@@ -1720,14 +1828,11 @@ func markExecutionDependents(ctx context.Context, tx *sql.Tx) error {
 	// reads neither is kept. This never touches execution_source_generation,
 	// so the resolver's caches are not invalidated by it.
 	for _, ledger := range ledgers {
-		if err = advanceCacheGeneration(ctx, tx, queryCacheDomains[ledger[0]]); err != nil {
-			if !strings.Contains(err.Error(), "no such table") {
-				return err
-			}
-			err = nil
+		if err := advanceCacheGeneration(ctx, tx, queryCacheDomains[ledger[0]]); err != nil && !strings.Contains(err.Error(), "no such table") {
+			return err
 		}
 	}
-	return err
+	return nil
 }
 
 // markUndigestedDependents marks the derivatives in ledgers built without a
@@ -1765,11 +1870,37 @@ func markExecutionDependent(ctx context.Context, tx *sql.Tx, ledger [2]string, i
 }
 
 // executionUnmarkedDependents lists, per ledger, the derivatives state has
-// not marked whose stored digest does not hold: built before digests were
-// recorded (an empty digest), or, when every derivative is compared (state.whole), every
-// mismatch with the whole catalog's digests, else executionStaleDependents of
-// the changes past the cursor.
+// not marked that readers hold back. After a rules change that is not
+// reconciled yet that is every derivative: which of them the reconciliation
+// will leave is known only from a resolution of the whole catalog, which a
+// reader (a request) never performs. They read as pending until the next
+// propagateExecutionChanges (background work) has compared them, and it then
+// marks only the ones whose result changed. Otherwise it is
+// executionDigestStaleDependents.
 func executionUnmarkedDependents(ctx context.Context, q queryer, ledgers []string, state executionPropagation) (map[string]map[string]bool, error) {
+	if state.tracked && !state.consistent() {
+		out := map[string]map[string]bool{}
+		for _, ledger := range ledgers {
+			rows, err := queryMapsContext(ctx, q, `SELECT conversation_id FROM `+ledger)
+			if err != nil {
+				return nil, err
+			}
+			out[ledger] = map[string]bool{}
+			for _, row := range rows {
+				out[ledger][firstString(row["conversation_id"])] = true
+			}
+		}
+		return out, nil
+	}
+	return executionDigestStaleDependents(ctx, q, ledgers, state)
+}
+
+// executionDigestStaleDependents lists, per ledger, the derivatives state
+// has not marked whose stored digest does not hold: built before digests were
+// recorded (an empty digest), or, when every derivative is compared
+// (state.whole), every mismatch with the whole catalog's digests, else
+// executionStaleDependents of the changes past the cursor.
+func executionDigestStaleDependents(ctx context.Context, q queryer, ledgers []string, state executionPropagation) (map[string]map[string]bool, error) {
 	out := map[string]map[string]bool{}
 	if !state.tracked {
 		return out, nil
@@ -1795,7 +1926,7 @@ func executionUnmarkedDependents(ctx context.Context, q queryer, ledgers []strin
 		}
 		return out, nil
 	}
-	if state.behind() > 0 {
+	if state.generation > state.through {
 		changed, err := executionChangedSince(ctx, q, state.through)
 		if err != nil {
 			return nil, err
@@ -1926,20 +2057,26 @@ func executionUndigestedUnmarked(ctx context.Context, q queryer) (bool, error) {
 }
 
 // propagateExecutionChanges runs markExecutionDependents when the source
-// generation moved past it, or a derivative without a digest is unmarked,
-// taking the writer only then.
+// generation moved past it, a derivative without a digest is unmarked, or
+// the rules or the recorded results are not this executable's, taking the
+// writer only then. It is where a rules change is reconciled: what the
+// reconciliation reads (the whole catalog's digests, and the resolved result
+// of every component a derivative rests on, from the catalog's cached
+// resolution) is read here from a committed snapshot, so the writer compares
+// and marks without resolving anything unless evidence commits in between.
 func (c *Catalog) propagateExecutionChanges(ctx context.Context) error {
 	state, err := executionPropagationState(ctx, c.reader())
-	if err != nil {
+	if err != nil || !state.tracked {
 		return err
 	}
-	if state.behind() == 0 {
+	reconcile := !state.consistent() || !state.stamping()
+	if state.behind() == 0 && !reconcile {
 		undigested, err := executionUndigestedUnmarked(ctx, c.reader())
 		if err != nil || !undigested {
 			return err
 		}
 	}
-	if state.whole {
+	if state.whole || reconcile {
 		// Every derivative is compared with the catalog-wide digests: read
 		// them from a committed snapshot first, so the writer patches them for
 		// what committed since instead of reading the whole catalog.
@@ -1947,15 +2084,23 @@ func (c *Catalog) propagateExecutionChanges(ctx context.Context) error {
 			return err
 		}
 	}
+	if reconcile {
+		if err := c.primeExecutionResults(ctx, state); err != nil {
+			return err
+		}
+	}
+	if executionPrimedHook != nil {
+		executionPrimedHook()
+	}
 	c.primeDependencyInverse(ctx)
 	// Work out what to mark from a committed snapshot; the writer walks the
 	// changed components itself only if something commits in between.
-	if ledgers, err := executionLedgersPresent(ctx, c.reader()); err == nil && !state.whole {
+	if ledgers, err := executionLedgersPresent(ctx, c.reader()); err == nil && !state.whole && !reconcile {
 		for _, ledger := range ledgers {
 			if _, err := executionUnmarked(ctx, c.reader(), ledger[0]); err != nil {
 				return err
 			}
 		}
 	}
-	return c.writeTransaction(ctx, "propagate execution evidence changes", func(tx *sql.Tx) error { return markExecutionDependents(ctx, tx) })
+	return c.writeTransaction(ctx, "propagate execution evidence changes", func(tx *sql.Tx) error { return markExecutionDependentsIn(ctx, tx, true) })
 }

@@ -321,8 +321,12 @@ the evidence digest. The facts depend on the copy's ancestors' event IDs and
 memberships. So a parent's original arriving or being deleted, or a
 correction of its event ID, changes the copy's digest. An unrelated append
 to the parent (an event ID no copy shares) leaves it equal. The digest's
-version lines include `occurrence-dependency/v4-undeclared-history`, as they include the
-resolver and evidence versions.
+first three lines name its encoding: `execution-v9`, `execution-evidence-v5`
+and `occurrence-dependency/v4-undeclared-history`. They are constants
+(`executionDigestResolver`, `executionDigestEvidence`,
+`occurrenceDependencyEncoding`), each the rules version it was split from,
+and they do not follow the rules versions (see "Rules versions and resolved
+results" below).
 
 The digest is part of each ledger's structure fingerprint, so a late
 acknowledgement in another conversation rebuilds the affected component on
@@ -351,10 +355,13 @@ the mark and for every reader alike:
 - a derivative built without a digest (`''`, an older executable's output)
   is pending;
 - with no propagation cursor (`meta.execution_dependents_through`: a catalog
-  that has never marked, or an upgraded one), or a cursor recorded under
-  other resolver or evidence versions (`meta.execution_dependents_versions`,
-  for example after `execution-v5`), every derivative is compared with the
-  catalog-wide digests;
+  that has never marked, or an upgraded one), every derivative is compared
+  with the catalog-wide digests;
+- when the rules recorded by the last mark
+  (`meta.execution_dependents_versions`) are not the executable's, every
+  derivative is compared with the catalog-wide digests and, where its digest
+  holds, with the resolved result recorded for its component (see "Rules
+  versions and resolved results");
 - otherwise the source changes past the cursor are walked: their components,
   the components that shared a changed conversation's stored digest, and the
   components the changed conversations were recorded members of. That covers
@@ -464,18 +471,134 @@ status and event withholding), then the ordinary runs.
 | Fixes (`FixesOverview`), Safety (`SafetyOverview`), Ask agent-event signals | `events_freshness` / the lead: `pending` with counts while anything is dirty, unmarked or withheld, else `current` |
 | Agent Experience datasets (`agent_events`, `agent_event_messages` Query Tables), the explorer, ribbon and item lookup | rows of conversations in `agentEventsWithheld` are left out: marked stale (cleared at publication) or unmarked. Each query-v3 response carries `coverage` (`agentEventsCoverage`: `state`, `pending_conversations`, `withheld_conversations`), so missing rows read as pending, not as no events. Stored rows and inference are kept. |
 
-Both ledgers rebuild once after upgrading, since their structures include
-the digest. The occurrence version is part of the recorded versions
-(`executionDependentsVersions`), so a catalog marked before occurrence facts
-were in the digest compares every derivative on its next mark and reads
-pending until then.
+### Rules versions and resolved results
 
-A change to the occurrence rules (`occurrenceDependencyVersion`) is not part
-of the digest. The next mark compares every derivative with its
-conversation's facts under the new rules, and only conversations whose facts
-changed are rebuilt. `occurrenceDependencyEncoding`, the resolver version and
-the evidence version are part of the digest: changing one of them rebuilds
-the labels and agent events of every conversation.
+Three versions name the rules that turn stored evidence into what labels and
+agent events are built on: `executionResolverVersion`,
+`executionEvidenceVersion` and `occurrenceDependencyVersion`. None of them
+is part of a digest. `meta.execution_dependents_versions` records the three
+the unmarked derivatives agree with.
+
+What the rules made of a component is recorded beside its digest:
+`execution_result_stamps(digest, result)`. The result is a hash of
+`executionResultLines` for every conversation of the component, which
+writes what the builders read from the resolution and the occurrence index:
+
+| Reader | What it reads | In the result as |
+|---|---|---|
+| Labels and agent events builder (`labelingPass.inheritedHistory`), per selected record | `occurrenceIndex.Lookup`: role, the original it copies, the deciding rule | `occurrence` lines: observation, claim kind, object, context, role, original, owner, navigation target, rule chain |
+| The same, per record without an occurrence claim | `Bind` of the stream that recorded it (a copied launch's stream is inherited history) | `stream` lines: each stream the transcript retains, its binding state and execution, its main session, launch attempt, mirrored launch |
+| The same, per transcript | `occurrenceIndex.Partial` | `partial` line |
+| Usage lineage (`usageAttributionFrom`); the labels and agent events builders do not read it, authorship does (below) | execution, parent, root, depth, their quality and conflicts, mirrors, children | `execution` lines: identity, segments, streams, parent state and parent, family root, ancestry state, depth, root, certainty, chain, children, evidence kind |
+
+Not in the result, because no builder of a stored derivative reads them: an
+execution's label and sibling order, its workspace and provider, and the
+claims a decision cites. **A builder that starts to read anything else from
+the resolution must add it to `executionResultLines` and change
+`executionResultEncoding`.** Otherwise a rules change that moves only that
+value leaves the builder's output stale. `TestExecutionResultCoversBuilderInputs`
+checks each line against the value it stands for.
+
+**Authorship is not redone by a rules change.** `authorshipContinuations`
+reads the usage lineage (a conversation with a root but no run of its own is
+a continuation) into stored `message_authorship`, which the labels builder
+reads. Authorship's generation follows its inputs and `authorshipVersion`,
+not the resolver's rules. A rules change that flips a continuation moves the
+`execution` lines, so that conversation's labels are marked and rebuilt, but
+from the authorship stored before the change. This was so before results
+were recorded too (a resolver bump rebuilt every label from unchanged
+authorship). Bump `authorshipVersion` with a resolver change that can move a
+continuation.
+
+Results are recorded at three points: when a ledger publishes (from the
+resolution its builder read, for every digest it publishes at); when
+`propagateExecutionChanges` first finds a catalog without them; and when it
+reconciles a rules change. `meta.execution_result_stamps_versions` and
+`execution_result_stamps_encoding` say which rules and encoding they were
+written under.
+
+**A rules change.** When an executable whose three versions differ from the
+recorded ones opens the catalog:
+
+1. Readers hold every derivative back (`executionUnmarkedDependents`):
+   labels and agent events read as pending, as after any earlier bump. Which
+   of them the rules left alone is known only from a resolution of the whole
+   catalog, and a request never performs one.
+2. A writer's own mark (ingestion, the backfill) still propagates source
+   changes but leaves the recorded rules alone, and no ledger publishes
+   until they are reconciled.
+3. The next `propagateExecutionChanges` (each labels or agent events run
+   before it plans, the end of a library upgrade and of an analysis chain)
+   reads the catalog-wide digests and the catalog's cached resolution and
+   occurrence index from a committed snapshot, then in one write transaction
+   marks every derivative whose digest does not hold, whose component
+   resolves to another result than the recorded one, or whose digest has no
+   comparable result; rewrites the recorded results; and records the rules
+   and the cursor. Interrupted, none of it is stored and the next call
+   starts again. The writer resolves nothing: a component it has no result
+   from the snapshot for (evidence, or a publication, committed in between)
+   is marked. After it, only the marked derivatives read as pending.
+
+So a version bump costs one resolution of the catalog, and rebuilds the
+labels and agent events (and with them label facts and fingerprints) of the
+components whose result it changed.
+
+**Bumping a version.**
+
+- `executionResolverVersion`: change it with every change to what
+  `resolveExecutions` decides. Nothing else is needed.
+- `occurrenceDependencyVersion`: as before; the occurrence facts are digest
+  rows, so a rule change supersedes the digests of the conversations whose
+  facts it changes.
+- `executionEvidenceVersion`: **an evidence version bump still rebuilds
+  widely.** The version is not a line of the digest, but the digest's rows
+  follow it. Until a conversation is re-derived its typed evidence is not
+  current, so the legacy launch results (`dependencyLaunchResults`) and the
+  untyped coverage of every conversation with launches or recorded ancestry
+  enter the rows; re-deriving it (`pharos execution-evidence run`, or the
+  next provider read) then rewrites its stored state and claims, which are
+  rows too. Both supersede the component's digest like any evidence change.
+  Comparing results instead would need the mark for source changes to
+  resolve the changed components, which it does not do.
+- `executionResultEncoding`: change it when `executionResultLines` changes.
+  Alone, the recorded results are rewritten and nothing is marked. In the
+  same release as a rules version, recorded results cannot be compared and
+  every derivative is marked: release the two apart.
+- `executionDigestResolver`, `executionDigestEvidence`,
+  `occurrenceDependencyEncoding`: change one only when the digest's rows
+  change format. That supersedes every stored digest and rebuilds every
+  conversation's labels and agent events.
+
+**Other executables.** Results cannot be compared when the catalog holds
+none under the recorded rules:
+
+- A catalog from a release before results were recorded (v0.9.8 and earlier,
+  `execution-v8`): its digests are in another encoding, so every derivative
+  is marked once, as any earlier upgrade did.
+- A catalog an `execution-v9` build without results marked: its digests and
+  rules are this encoding's, so its derivatives stay current and their
+  results are recorded on the first `propagateExecutionChanges`.
+- An older executable opening the catalog afterwards compares digests only.
+  One with another digest encoding (v0.9.8) marks and rebuilds everything,
+  and so does this build when it next opens the catalog: each alternation
+  between the two rebuilds the library, as before. One that records results
+  marks only what its rules resolve differently.
+- An executable without results that marks under other rules leaves
+  `execution_result_stamps_versions` behind `execution_dependents_versions`.
+  What it published is then unknown, and the next reconciliation marks every
+  derivative.
+- **Exposure: an `execution-v9` build without results, used after the rules
+  have advanced past v9.** Its digests are these (frozen at the v9 literals),
+  so it compares digests only: it reads derivatives built under the later
+  rules as current, records its own rules, and can publish its v9 reading at
+  a digest that still holds, clearing a mark. No release is in that state
+  (v0.9.8 is `execution-v8`); only development builds of master between the
+  v9 resolver and this change are. When this build next opens the catalog
+  the recorded rules are not the results' and every derivative is marked, so
+  the cost is one library-wide pass per alternation and nothing stays stale.
+  The two running against one catalog at once is not covered. There is no
+  guard such a build would honour short of changing a digest line, which
+  would rebuild every catalog already at v9; none was added.
 
 `TestUnmarkedSetFollowsEventLedgerWrites` checks the ledger stamp on its own.
 An events-only publication by another executable, with no labels write and

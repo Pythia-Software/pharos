@@ -80,6 +80,9 @@ and builds no occurrence index when there is no stored activity to compare.
 Parallelism and origins record their own derivation version together with
 `executionResolverVersion`. A resolver upgrade therefore supersedes stored
 projections once even with unchanged source data; subsequent opens stay idle.
+Labels and agent events do not: after a resolver upgrade they are marked only
+where a component's resolved result changed
+([Rules versions and resolved results](execution-evidence-backfill.md#rules-versions-and-resolved-results)).
 Scope discovery still walks the compact in-memory graph; these follow-ups have
 no new library-scale benchmark. Request accounting and raw source records remain
 unchanged. Transfer tests cover both request usage links and skill message links

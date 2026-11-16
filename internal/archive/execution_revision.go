@@ -122,6 +122,12 @@ func installExecutionSourceGeneration(tx *sql.Tx) error {
  CREATE INDEX IF NOT EXISTS execution_source_changes_generation_idx ON execution_source_changes(generation)`); err != nil {
 		return err
 	}
+	// Created with the catalog rather than by the first reconciliation: a
+	// table added while the service runs makes every open connection read
+	// the schema again.
+	if _, err := tx.Exec(executionResultStampsDDL); err != nil {
+		return err
+	}
 	for _, statement := range executionSourceIndexes {
 		if _, err := tx.Exec(statement); err != nil {
 			return err

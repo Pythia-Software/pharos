@@ -8,6 +8,12 @@ package archive
 
 // executionResolverVersion names the resolution rules. It is not part of any
 // execution ID, so a rule change re-resolves without renaming executions.
+// Nor is it part of a component digest: after a change, the catalog is
+// resolved once under the new rules and labels and agent events are marked
+// only where a component's resolved result differs from the one recorded
+// (execution_results.go). Change it with every change to what resolveExecutions
+// decides; if a builder of a stored derivative reads something from the
+// resolution that executionResultLines does not write, add it there first.
 // v2: ancestry certainty, inference and identity conflict propagate along
 // the chain (executionAncestry) and enter Fingerprint.
 // v3: a launch identifies only transcripts named at its strongest authority

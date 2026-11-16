@@ -48,6 +48,7 @@ The framework's own ticking is small: about 1.8% of a core idle.
 
 | Change | Before | After |
 |---|---|---|
+| A resolver or occurrence rules version is no longer part of the execution digests; the catalog is resolved once and labels and agent events are marked only where a component's resolved result changed ([how](../execution-evidence-backfill.md#rules-versions-and-resolved-results)) | A resolver bump marked every conversation: 50,558 labels rebuilds (442 s, 507 CPU-s; 90 messages inferred, all new) and 40,679 agent events rebuilds (383 s, 469 CPU-s; 80 scored), then their label facts and fingerprints. | A bump that changes no result: 0 marked; digests and results read in 12 s warm (54 s cold) before the writer, writer held 0.10 s, 620 MB peak. A bump that stops joining mirrored launches: exactly the 8,761 conversations of the 216 components it changes, writer held 1.8 s; rebuilding them took 82 s and 51 s, and the stored labels and agent events equal a forced full rebuild by the same build (322 s and 297 s) |
 | Label facts rebuild only when stored labels change; "pending" is applied at read time | 5,100 marked conversations: facts loop processed 11,073 conversations, wrote 151,054 rows, 78.7 s, writer held 24.2 s | 200 conversations, 3,366 rows, 2.9 s, 0.51 s. Final tables byte-identical |
 | Library view and workspace metrics are marked only when a column they read changes | Usage replay on 300 workspaces: 285 marks. Stamping 10,107 pull requests: 5,936 marks, 61.9 s | 12 marks. 0 marks, 0.22 s |
 | Each Library view column has its own version; a changed column is computed alone, in the background | A definition change dropped the table and marked every workspace: 56,980 whole rows, 428.5 s on the clone (8,434 s for the 11-12 bump in production) | Opening a catalog from the previous build marks 0 workspaces and keeps all 57,680 rows (the step takes 0.5 s). The four columns below, for every workspace: 75.6 s, writer held 5.2 s in all, 5.1 ms at worst |
@@ -181,6 +182,22 @@ Not done, largest first by the audit's estimate:
     messages (72–588 here) in every suffix pass. Not built.
   - Old-dated imports, and mirror representatives changing among workspaces
     with history.
+- **An evidence version bump still rebuilds widely.** The digests' rows
+  include each conversation's stored evidence state and claims, and the
+  legacy reading of a conversation whose state is not current, so they
+  change with the version and again when it is re-derived. Upgrading from
+  a release that recorded no results (v0.9.8 and earlier) also marks
+  everything once, and each alternation between such a release and a
+  newer build rebuilds the library.
+- **Until a rules change is reconciled every label and agent event reads
+  as pending.** Requests never resolve the catalog; the first labels or
+  agent events run, or the end of an upgrade, compares the results (12 s
+  warm, 54 s cold on this library) and leaves only the changed ones marked.
+- **Authorship does not follow the resolver's rules**, although it reads
+  the usage lineage: a resolver change that moves a continuation needs an
+  `authorshipVersion` bump.
+- **Origins and parallelism record the resolver version** with their own,
+  so a resolver bump recomputes both for every conversation.
 - **Every written record marks all nine analysis stages.** Narrower marks
   need ingest to say what changed.
 - **Ingest rewrites carried counts** on every tool call still in context on
