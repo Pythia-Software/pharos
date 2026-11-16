@@ -8,7 +8,7 @@ import "@pythia-software/query-table-ui/theme.css";
 import "./inbox.css";
 // This standalone inbox has no Pharos shell; bundle its clipboard adapter here.
 import "../../../internal/archive/assets/host-services.js";
-import { changeTags, normalizeEntry, type Entry, type Summary } from "./model";
+import { changeTags, errorText, normalizeEntry, type Entry, type Summary } from "./model";
 
 type Row = Summary & { application_name: string; application_version: string };
 const schema = loadSchema<Row>({ name: "uifeedback_submissions_v1", version: 1, idField: "id", defaultLimit: 25,
@@ -38,8 +38,8 @@ function Inbox() {
     feedback_time: ({ value }: { value: unknown }) => typeof value === "string" ? <time dateTime={value}>{new Date(value).toLocaleString()}</time> : "",
     feedback_open: ({ value }: { value: unknown }) => typeof value === "string" && /^[0-9a-f-]{36}$/.test(value) ? <button onClick={() => void open(value)}>Open</button> : "",
   }), []);
-  async function refresh() { setLoading(true); try { const data = await request<{ submissions: Summary[] }>("/api/submissions"); setRows(data.submissions.map(r => ({ ...r, application_name: r.application.name, application_version: r.application.version ?? "" }))); setError(""); } catch (e) { setError(String(e)); } finally { setLoading(false); } }
-  async function open(id: string) { try { setDetail(normalizeEntry(await request<Entry>(`/api/submissions/${id}`))); const u = new URL(location.href); u.searchParams.set("submission", id); history.replaceState(null, "", u); } catch (e) { setError(String(e)); } }
+  async function refresh() { setLoading(true); try { const data = await request<{ submissions: Summary[] }>("/api/submissions"); setRows(data.submissions.map(r => ({ ...r, application_name: r.application.name, application_version: r.application.version ?? "" }))); setError(""); } catch (e) { setError(errorText(e)); } finally { setLoading(false); } }
+  async function open(id: string) { try { setDetail(normalizeEntry(await request<Entry>(`/api/submissions/${id}`))); const u = new URL(location.href); u.searchParams.set("submission", id); history.replaceState(null, "", u); } catch (e) { setError(errorText(e)); } }
   useEffect(() => { void refresh(); const id = new URLSearchParams(location.search).get("submission"); if (id) void open(id); }, []);
   async function copyReport() {
     if (!detail || copyPending.current) return;
@@ -61,7 +61,7 @@ function Inbox() {
       }
       api.selection.clear(); setNotice(`${done} report${done === 1 ? "" : "s"} ${action === "delete" ? "deleted" : "updated"}.`);
       await refresh(); if (detail && action !== "delete") await open(detail.id);
-    } catch (e) { await refresh(); setError(`${done} completed. ${String(e)}`); } finally { setBusy(false); }
+    } catch (e) { await refresh(); setError(`${action === "delete" ? "Deleted" : "Updated"} ${done} of ${ids.length} reports. ${errorText(e)}`); } finally { setBusy(false); }
   }
   const actions = (ids: string[]) => <><input aria-label="Tag" placeholder="Tag" maxLength={80} value={tag} onChange={e => setTag(e.target.value)} /><button disabled={busy || !tag.trim()} onClick={() => void mutate(ids, "add")}>Add tag</button><button disabled={busy || !tag.trim()} onClick={() => void mutate(ids, "remove")}>Remove tag</button><button className="danger" disabled={busy} onClick={() => void mutate(ids, "delete")}>Delete</button></>;
   return <main className="feedback-inbox"><header><div><p className="eyebrow">Pythia Software</p><h1>Feedback inbox</h1><p>Reports and prompts from your applications · retained for 90 days</p></div><nav><button disabled={loading || busy} onClick={() => void refresh()}>Refresh</button><a href="/auth/login">Sign in</a><form action="/auth/logout" method="post"><button>Sign out</button></form></nav></header>

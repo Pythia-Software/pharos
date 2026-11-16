@@ -323,7 +323,7 @@ final class MenuFixture: URLProtocol {
         pump { menu.items.contains { $0.title == "Pharos · Idle" } }
         let indexed = visible.firstIndex { $0.hasPrefix("Indexed ") }!
         precondition(visible[indexed + 1] == "Index changes now")
-        precondition(visible.suffix(2) == ["Eject Archive SSD…", "Quit Pharos"])
+        precondition(visible.suffix(2) == ["Eject Archive SSD", "Quit Pharos"])
         let metrics = visible.filter { ["Words typed", "Tokens used", "Estimated CO₂e", "Estimated API cost", "Last backup", "Library size"].contains($0) }
         precondition(metrics == ["Words typed", "Tokens used", "Estimated API cost", "Estimated CO₂e", "Last backup", "Library size"])
         controller.applyPreferences(["words": false, "tokens": true, "carbon": true])
@@ -338,9 +338,9 @@ final class MenuFixture: URLProtocol {
             precondition(prefs["enabled"] == fixture["enabled"] as! Bool)
             precondition(MenuBarPreferences(prefs.saved).order == prefs.order, "Order must survive the native cache")
         }
-        let shortcuts = [("search", "Search conversations…", "/library"), ("analyze", "Analyze usage…", "/analyze"),
-                         ("optimize", "Optimize…", "/findings"), ("capture", "Capture & index…", "/settings/sync"),
-                         ("health", "Library health & backups…", "/settings"), ("sources", "Manage sources…", "/settings/sources")]
+        let shortcuts = [("search", "Search conversations", "/library"), ("analyze", "Analyze usage", "/analyze"),
+                         ("optimize", "Optimize", "/findings"), ("capture", "Background Processing", "/settings/sync"),
+                         ("health", "Library health", "/settings"), ("sources", "Manage sources", "/settings/sources")]
         precondition(shortcuts.allSatisfy { MenuBarPreferences()[$0.0] } && MenuBarPreferences()["finder"], "Shortcuts default on and remain customizable")
         controller.applyPreferences(["layoutVersion": 2, "order": ["open"] + shortcuts.map { $0.0 } + ["finder", "status", "settings", "quit"]])
         var shortcutOpened = false

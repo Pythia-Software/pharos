@@ -59,7 +59,7 @@ export function CompactColumns({ buckets: sourceBuckets, series, unit = "", show
   // The hover bubble lists a period as the dashboard's popover does.
   const periodDetails = (bucket: typeof buckets[number]) => ({ "data-chart-popover": JSON.stringify(periodPopover(bucket, series, {
     heading: dateLabel(bucket.date, true), additive, format: value => tooltipValue(value, percent ? "percent" : unit), empty: "Nothing in this period", references: references.map(item => ({ label: percentileLabel(item.level), value: item.value })),
-    notes: [accumulated ? "Cumulative from range start" : rollingPeriods > 1 ? `${bucket.windowSize}d rolling average` : undefined, scale === "logarithmic" && !percent ? "Log scale" : undefined].filter(Boolean) as string[],
+    notes: [accumulated ? "Cumulative from range start" : rollingPeriods > 1 ? `${bucket.windowSize}-day rolling average` : undefined, scale === "logarithmic" && !percent ? "Log scale" : undefined].filter(Boolean) as string[],
   })) });
   return <span className="query-cover-timeline" aria-hidden="true">
     <span className="query-timeline-plot">

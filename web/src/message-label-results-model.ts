@@ -29,7 +29,7 @@ export function messageLabelRibbonNotes(value:{truncated?:boolean;pending?:boole
  return [
   value.truncated?{badge:'Sample',note:'Fingerprint uses a bounded retained-message sample'}:null,
   value.pending?{badge:'Labeling',note:'Some labels are still being produced'}:null,
-  events?{badge:'Events pending',note:`Events for ${events.toLocaleString()} conversation${events===1?' are':'s are'} left out until they are rebuilt for changed session evidence`}:null,
+  events?{badge:'Events pending',note:`Agent events for ${events.toLocaleString()} conversation${events===1?'':'s'} are left out until they are updated after a change`}:null,
  ].filter((n):n is {badge:string;note:string}=>Boolean(n));
 }
 export function messageLabelConversationQuery(source:QueryState):QueryState {

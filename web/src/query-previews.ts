@@ -28,6 +28,7 @@ import { gridCoverHeight, type GridCover } from "./grid-cover";
 import { heatmapGrid, trendHeatmap } from "./dashboard-heatmap-model";
 import { binnedFields } from "./session-shape-bands";
 import { invalidateConcurrencyData } from "./concurrency-store";
+import { defaultConcurrencySettings, readConcurrencySettings } from "./concurrency-settings";
 import type { CompactTimelineOptions } from "./column-marks";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
@@ -74,6 +75,16 @@ function sweepPreviewCache() {
   (cacheSweep as { unref?: () => void }).unref?.();
 }
 export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); invalidateConcurrencyData(); }
+
+// A count's unit, singular for exactly one: "1 call", "1 message read",
+// "1 event per 1,000 messages". Units without a plural word stay as they are.
+export function unitFor(count: number, unit: string): string {
+  if (count !== 1) return unit;
+  const words = unit.split(" "), at = words.findIndex(word => /^[a-z-]+[^s]s$/.test(word));
+  if (at < 0) return unit;
+  words[at] = words[at].endsWith("ies") ? `${words[at].slice(0, -3)}y` : words[at].slice(0, -1);
+  return words.join(" ");
+}
 
 export function formatPreviewValue(value: number, unit: string): string {
   if (unit === "bytes") return value >= 1048576 ? `${(value / 1048576).toFixed(1)} MiB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value} B`;
@@ -248,7 +259,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   }
   if (!query.aggregations?.length) {
     const total = Number(payload.total) || 0, row = payload.rows?.[0];
-    return { state: total > 0 ? "ready" : "empty", total, summary: total > 0 ? `${formatPreviewValue(total, "")} matching ${recipe?.unit ?? "rows"}` : searchNote ? "No matches in this search batch" : "No matching observations", excerpt: String(row?.text ?? row?.title ?? row?.command ?? "Open the saved view").slice(0, 180), note: [recipe?.note, searchNote].filter(Boolean).join(" · ") || undefined };
+    return { state: total > 0 ? "ready" : "empty", total, summary: total > 0 ? `${formatPreviewValue(total, "")} matching ${unitFor(total, recipe?.unit ?? "rows")}` : searchNote ? "No matches in this search batch" : "No matching observations", excerpt: String(row?.text ?? row?.title ?? row?.command ?? "Open the saved view").slice(0, 180), note: [recipe?.note, searchNote].filter(Boolean).join(" · ") || undefined };
   }
   const metrics = query.aggregations.map(clause => {
     const result = payload.metrics?.find(item => item.id === clause.id);
@@ -275,7 +286,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
       hours[hour].value += Number(bucket.value);
     }
     const total = hours.reduce((sum, hour) => sum + hour.value, 0), count = result.buckets.reduce((sum, bucket) => sum + bucket.count, 0);
-    const study: HumanStudyPreview = { kind: "hours", timeZone, valueLabel: "Words by local hour", rows: hours, sampleLabel: `${count.toLocaleString()} written messages · ${timeZone}`, detail: "All dates are combined by local hour of day. Empty hours are zero. Repeated daylight-saving hours contribute to the same clock hour." };
+    const study: HumanStudyPreview = { kind: "hours", timeZone, valueLabel: "Words by local hour", rows: hours, sampleLabel: `${count.toLocaleString()} ${count === 1 ? "written message" : "written messages"} · ${timeZone}`, detail: "All dates are combined by local hour of day. Empty hours are zero. Repeated daylight-saving hours contribute to the same clock hour." };
     return { state: total > 0 ? "ready" : "empty", total, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, coverHeight: (options.cover ?? recipe.cover)?.height, study };
   }
   if (usesWeekdayCover(recipe, clause, options.cover ?? recipe?.cover, query)) {
@@ -286,7 +297,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     const cover = options.cover ?? recipe?.cover;
     const ready = weekday.days > 0 && weekday.observations > 0;
     weekday.metric.display = { ...weekday.metric.display, kind: "box", maxGroups: cover?.maxGroups ?? 7 };
-    return { state: ready ? "ready" : "empty", total: weekday.days, emptyLabel: "No complete days with recorded activity", summary: `${weekday.days} complete local days · ${weekday.zone}`, note: [recipe?.note, searchNote].filter(Boolean).join(" · ") || undefined, action: recipe?.action,
+    return { state: ready ? "ready" : "empty", total: weekday.days, emptyLabel: "No complete days with recorded activity", summary: `${weekday.days.toLocaleString()} complete local ${weekday.days === 1 ? "day" : "days"} · ${weekday.zone}`, note: [recipe?.note, searchNote].filter(Boolean).join(" · ") || undefined, action: recipe?.action,
       density: cover?.density, coverHeight: cover?.height,
       metrics: [{ clause: weekday.metric, result: weekday.result }], fields: [...schema.fields, { name: "weekday", label: "Weekday", type: "text", source: { kind: "derived" } }], coverMetricId: clause.id };
   }
@@ -297,16 +308,16 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   // distribution medians or paired axes to manufacture a grand total.
   const additive = !clause.expression && !clause.expressionY && !clause.distribution && ["sum", "count"].includes(clause.op);
   const total = additive ? numeric.reduce((sum, bucket) => sum + Number(bucket.value), 0) : result.processedRows ?? values.reduce((sum, bucket) => sum + bucket.count, 0);
-  const countUnit = ({ tool_calls: "calls", messages: "messages", writing_messages: "messages", skill_usages: "records", tl1_attempts: "attempts", findings: "findings" } as Partial<Record<QueryDataset, string>>)[job.dataset] ?? "rows";
+  const countUnit = ({ tool_calls: "calls", messages: "messages", writing_messages: "messages", skill_usages: "records", tl1_attempts: "attempts", findings: "findings", library: "workspaces", mcp_calls: "calls", compactions: "compactions", model_requests: "model requests" } as Partial<Record<QueryDataset, string>>)[job.dataset] ?? "rows";
   const unit = clause.display?.format ? "" : clause.op === "count" ? countUnit : clause.field?.includes("cost") ? "USD" : clause.field?.includes("tokens") ? "tokens" : clause.field?.includes("words") ? "words" : clause.field === "duration_ms" ? "ms" : clause.field?.endsWith("_count") ? countUnit : recipe?.unit ?? "";
   const scalar = !clause.groupBy.length && values.length === 1 && !clause.distribution;
   // Groups hidden by minCount are outside groupCount and Other, so the shown buckets are not the whole population.
   const hidden = result.hiddenGroups ?? 0;
   const limited = result.coverage === "partial" || hidden > 0 || result.groupCount !== undefined && result.groupCount > result.buckets.length;
   const pairCount = values.filter(bucket => typeof bucket.value === "number" && Number.isFinite(bucket.value) && typeof bucket.y === "number" && Number.isFinite(bucket.y) && !bucket.error && !bucket.yError).length;
-  const summary = clause.expressionY ? `${pairCount.toLocaleString()} ${clause.label ?? "paired points"}${limited ? ` shown of ${result.groupCount?.toLocaleString() ?? "more"}` : ""}` : additive ? `${limited ? "Shown: " : ""}${formatPreviewValue(total, unit)}${unit && !["USD", "ms"].includes(unit) ? ` ${unit}` : ""}`
+  const summary = clause.expressionY ? `${pairCount.toLocaleString()} ${clause.label ?? "paired points"}${limited ? ` shown of ${result.groupCount?.toLocaleString() ?? "more"}` : ""}` : additive ? `${limited ? "Shown: " : ""}${formatPreviewValue(total, unit)}${unit && !["USD", "ms"].includes(unit) ? ` ${unitFor(total, unit)}` : ""}`
     : scalar ? formatMetricOutput(values[0].value, clause.display?.format).text
-    : `${formatPreviewValue(result.processedRows ?? total, "")} observations · ${clause.label ?? clause.op}`;
+    : `${formatPreviewValue(result.processedRows ?? total, "")} ${(result.processedRows ?? total) === 1 ? "observation" : "observations"} · ${clause.label ?? clause.op}`;
   const notes = [recipe?.note, searchNote, options.sourceCover ? "Chart covers source observations before grouped filters" : undefined, result.scope === "shownRows" ? "Covers the saved table page" : undefined, result.coverage === "partial" ? "Partial results" : undefined,
     result.groupCount !== undefined && result.groupCount > result.buckets.length ? "Open the view for all results" : undefined,
     hidden ? `${hidden.toLocaleString()} ${hidden === 1 ? "group" : "groups"} hidden (fewer than ${metricMinCountText(clause, field => schema.fields.find(item => item.name === field)?.label ?? field)})` : undefined,
@@ -325,7 +336,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   }
   const minimum = (options.cover ?? recipe?.cover)?.minSamples;
   if (!ready && recipe?.emptyLabel) preview.emptyLabel = recipe.emptyLabel;
-  if (!ready && minimum && (clause.distribution?.kind === "box" || clause.expressionY)) preview.emptyLabel = `No groups with at least ${minimum} ${(options.cover ?? recipe?.cover)?.sampleUnit ?? (!query.grouping && ["tool_calls", "mcp_calls"].includes(job.dataset) ? "calls" : "conversations")}`;
+  if (!ready && minimum && (clause.distribution?.kind === "box" || clause.expressionY)) preview.emptyLabel = `No groups with at least ${minimum} ${unitFor(minimum, (options.cover ?? recipe?.cover)?.sampleUnit ?? (!query.grouping && ["tool_calls", "mcp_calls"].includes(job.dataset) ? "calls" : "conversations"))}`;
   if (query.grouping && recipe?.exploration?.context && payload.rows?.length) {
     preview.groupEvidence = Object.fromEntries(payload.rows.map(row => [JSON.stringify(groupKeyFields(query.grouping!.keys).map(key => row[key] ?? null)), recipe.exploration!.context!.map(item => typeof row[item.field] === "number" ? `${formatPreviewValue(row[item.field] as number, item.unit ?? "")} ${item.label}` : "").filter(Boolean).join(" · ")]));
   }
@@ -353,7 +364,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
       const evidence = companion?.result.buckets.find(item => JSON.stringify(item.keys) === JSON.stringify(bucket.keys));
       return { label: bucket.keys.map(key => String(key ?? "Unspecified")).join(" · "),
         value: clause.display?.format ? formatMetricOutput(bucket.value, clause.display.format).text : formatPreviewValue(Number(bucket.value), unit),
-        context: evidence && typeof evidence.value === "number" ? `${formatPreviewValue(evidence.value, "")} ${companion!.clause.label ?? "records"}` : `${bucket.count.toLocaleString()} ${countUnit}` };
+        context: evidence && typeof evidence.value === "number" ? `${formatPreviewValue(evidence.value, "")} ${companion!.clause.label ?? "records"}` : `${bucket.count.toLocaleString()} ${unitFor(bucket.count, countUnit)}` };
     });
   }
   // Covers name grouped keys the way their pages do: machine activities, and
@@ -421,14 +432,17 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   // A headline is a real complete additive measure, never a sum of rates,
   // distributions, errors, or the returned subset of a ranked population.
   if ((options.cover ?? recipe?.cover)?.showHeadline !== false && ready && additive && !limited && !preview.groupSummary && numeric.length === values.length && !result.buckets.some(bucket => bucket.error || bucket.yError) && Number.isFinite(total)) {
-    preview.headlineMetric = { value: clause.display?.format ? formatMetricOutput(total, clause.display.format).text : formatPreviewValue(total, unit), unit: unit && !["USD", "ms"].includes(unit) ? unit : "", ...(unit === "USD" ? { label: job.dataset === "findings" ? "likely a month" : "API equivalent" } : {}) };
+    preview.headlineMetric = { value: clause.display?.format ? formatMetricOutput(total, clause.display.format).text : formatPreviewValue(total, unit), unit: unit && !["USD", "ms"].includes(unit) ? unitFor(total, unit) : "", ...(unit === "USD" ? { label: job.dataset === "findings" ? "likely a month" : "API cost" } : {}) };
   }
   // Hours by concurrency band summarize as the share of active hours with more than one agent,
   // since the plain total (hours with any agent active) says nothing about parallelism.
   const band = clause.groupBy.indexOf("level_band");
   if (preview.headlineMetric && job.dataset === "parallelism" && clause.field === "elapsed_hours" && band >= 0 && total > 0) {
     const multiple = numeric.reduce((sum, bucket) => sum + (String(bucket.keys[band]) === "1" ? 0 : Number(bucket.value)), 0);
-    preview.headlineMetric = { value: (multiple / total).toLocaleString(undefined, { style: "percent", maximumFractionDigits: 0 }), unit: "", label: "of active hours had 2+ agents" };
+    // The server counts with the saved Parallelism setting, as this does.
+    let counting = defaultConcurrencySettings.counting;
+    try { counting = readConcurrencySettings().counting; } catch { /* No preferences outside a page. */ }
+    preview.headlineMetric = { value: (multiple / total).toLocaleString(undefined, { style: "percent", maximumFractionDigits: 0 }), unit: "", label: `of active hours had 2+ ${counting === "agent" ? "conversations" : "workspaces"} at once` };
   }
   preview.action = recipe?.action ?? recipe?.exploration?.action;
   return preview;
@@ -474,7 +488,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       pending = (async () => {
         const [handshake, definitions] = await Promise.all([
           fetchPreview<{ queryCapabilities: QueryCapabilitiesV3; computedExecution: ComputedExecution }>(`/api/query/${job.dataset}/capabilities`, signal),
-          fetchPreview<ComputedColumn[]>(`/api/query-computed-columns?dataset=${encodeURIComponent(job.schema.name)}`, signal).then(raw => { if (!Array.isArray(raw)) throw new Error("Invalid computed column catalogue."); return raw.map(validateComputedColumn); }),
+          fetchPreview<ComputedColumn[]>(`/api/query-computed-columns?dataset=${encodeURIComponent(job.schema.name)}`, signal).then(raw => { if (!Array.isArray(raw)) throw new Error("Could not read this dataset’s computed columns."); return raw.map(validateComputedColumn); }),
         ]);
         if (handshake.queryCapabilities?.version !== 3 || !handshake.computedExecution?.profile) throw new Error("This dataset does not support metric previews.");
         const fields = definitions.flatMap(definition => {

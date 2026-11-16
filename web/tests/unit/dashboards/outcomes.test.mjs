@@ -55,13 +55,13 @@ test("a missing value has its own label, never a blank", () => {
   assert.deepEqual(outcomesAnalysisCatalog.breakdowns.branch.where, [{ field: "project_kind", op: "=", value: "repository" }]);
   assert.equal(branchDisplay(null, "folder").text, "Not a repository");
   assert.equal(branchDisplay("", "repository").text, "No branch");
-  assert.equal(branchDisplay(null, "none").text, "No git data");
+  assert.equal(branchDisplay(null, "none").text, "No Git data");
   assert.deepEqual(branchDisplay("main", "repository"), { text: "main", muted: false });
 });
 
 test("a Tier 2 breakdown is disabled with its reason when no session reached Tier 2", () => {
   const plain = outcomeCatalogFor(outcomeTiersReached([{ keys: ["transcript"], value: 12 }, { keys: ["none"], value: 3 }, { keys: ["local_git"], value: 0 }]));
-  assert.match(plain.breakdowns.git_check.unavailable, /No session has local Git evidence/);
+  assert.match(plain.breakdowns.git_check.unavailable, /No workspace has local Git evidence/);
   assert.deepEqual(catalogProblems(plain), []);
   // Disabled, it cannot be chosen, and a link asking for it draws without it.
   assert.equal(splitValid(plain, "records", "git_check"), false);

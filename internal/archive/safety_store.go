@@ -255,7 +255,7 @@ func safetySelection(items []safetyCase, target string, ids []string) ([]safetyC
 	for _, id := range ids {
 		item, ok := index[id]
 		if !ok || seen[id] || item.State != "open" || item.Cart == nil || !item.Cart.Ticked || item.Cart.Target != target {
-			return nil, fmt.Errorf("risky action basket changed or contains an unavailable notice; check it again")
+			return nil, fmt.Errorf("The prompt changed or holds a notice that is no longer listed. Check it again.")
 		}
 		seen[id] = true
 		selected = append(selected, item)
@@ -350,7 +350,7 @@ func (c *Catalog) SafetyOverview(ctx context.Context) (map[string]any, error) {
 			"state": item.State, "last_seen_at": item.Last, "first_seen_at": item.First, "cart": item.Cart, "handed_at": item.HandedAt, "material_change": item.Material, "calls": item.Calls})
 	}
 	return map[string]any{"cases": cards, "summary": counts, "cart": carts, "targets": targets, "built_at": nilIfEmpty(built), "scanned_calls": scanned,
-		"scanned_events": scannedEvents, "events_freshness": freshness, "coverage": "Supported shell commands in the last 28 days, and agents saying they got around a test, restriction, rule or instruction (agent events). Embedded interpreter code, indirect scripts, arbitrary native/MCP mutations, dynamic values and filesystem effects are not comprehensively interpreted. No open notices is not a safety assessment.", "version": safetyVersion}, nil
+		"scanned_events": scannedEvents, "events_freshness": freshness, "coverage": "Supported shell commands in the last 28 days, and agents saying they got around a test, restriction, rule or instruction (agent events). Embedded interpreter code, indirect scripts, arbitrary native/MCP mutations, dynamic values and filesystem effects are not comprehensively interpreted. Having no open notices does not mean agents acted safely.", "version": safetyVersion}, nil
 }
 
 func (c *Catalog) SafetyDetail(ctx context.Context, id string) (*safetyCase, error) {
@@ -422,7 +422,7 @@ func safetyApply(tx *sql.Tx, items []safetyCase, id string, body map[string]any,
 		}
 	}
 	if item == nil {
-		return fmt.Errorf("unknown safety case")
+		return fmt.Errorf("That risky action notice is no longer listed.")
 	}
 	action := firstString(body["action"])
 	switch action {
@@ -438,7 +438,7 @@ func safetyApply(tx *sql.Tx, items []safetyCase, id string, body map[string]any,
 		return err
 	case "cart_add", "cart_move":
 		if item.State != "open" {
-			return fmt.Errorf("bring this case back before adding it to a prompt")
+			return fmt.Errorf("Bring this notice back before adding it to a prompt.")
 		}
 		target := defaultString(body["target"], item.Target)
 		if _, ok := labels[target]; !ok {
@@ -457,7 +457,7 @@ func safetyApply(tx *sql.Tx, items []safetyCase, id string, body map[string]any,
 	case "cart_tick":
 		value, ok := body["ticked"].(bool)
 		if !ok || item.Cart == nil {
-			return fmt.Errorf("select an existing basket item")
+			return fmt.Errorf("Select a notice that is in the prompt.")
 		}
 		_, err = tx.Exec("UPDATE safety_cart SET ticked=?,revision=? WHERE case_id=?", value, randomToken(), id)
 		return err
@@ -471,11 +471,11 @@ func safetyApply(tx *sql.Tx, items []safetyCase, id string, body map[string]any,
 			}
 		}
 		if len(index) != len(ids) {
-			return fmt.Errorf("risky action basket changed; reload before reordering")
+			return fmt.Errorf("The prompt changed. Reload, then reorder.")
 		}
 		for pos, key := range ids {
 			if !index[key] {
-				return fmt.Errorf("invalid basket order")
+				return fmt.Errorf("Could not reorder the prompt: the order does not match its notices.")
 			}
 			delete(index, key)
 			if _, err := tx.Exec("UPDATE safety_cart SET position=?,revision=? WHERE case_id=?", pos, randomToken(), key); err != nil {
@@ -521,7 +521,7 @@ func (c *Catalog) SafetyCopy(ctx context.Context, target string, ids []string, t
 			return err
 		}
 		if token == "" || token != preview["preview_token"] {
-			return fmt.Errorf("risky action basket changed; review the prompt again before copying")
+			return fmt.Errorf("The prompt changed. Review it again before copying.")
 		}
 		selected, _ := safetySelection(items, target, ids)
 		stamp := formatTime(c.clock())
@@ -572,7 +572,7 @@ func (s *Server) getSafety(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, err, 500)
 	} else if value == nil {
-		writeJSON(w, map[string]any{"error": "Risky action notice unavailable"}, 404)
+		writeJSON(w, map[string]any{"error": "That risky action notice is no longer listed."}, 404)
 	} else {
 		writeJSON(w, value, 200)
 	}

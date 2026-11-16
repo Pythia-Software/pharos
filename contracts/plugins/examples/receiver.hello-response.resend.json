@@ -1,0 +1,24 @@
+{
+  "need": {
+    "resend": {
+      "items": [
+        {
+          "dataset": "library/1",
+          "id": "w_9tq3LmA2"
+        }
+      ],
+      "periods": [
+        {
+          "series": "daily-usage",
+          "period": "2026-10-21T00:00:00-06:00"
+        }
+      ]
+    }
+  },
+  "accepts": [
+    "usage/1",
+    "library/1"
+  ],
+  "max_batch_bytes": 4194304,
+  "max_version": 1793700000000004
+}

@@ -59,10 +59,10 @@ export function SessionIdentity({ name, metadata, notes, title, depth, branch, f
     // it and stretches over the cell rather than containing it.
     return <span {...props}>
       <SessionBranches depth={depth} branch={branch} folded={folded} />
-      {interactive ? <button type="button" className="lt-session-open" aria-label={`Open session ${name}`} onClick={open}><strong data-overflow-title="">{name}</strong></button> : <strong data-overflow-title="">{name}</strong>}
+      {interactive ? <button type="button" className="lt-session-open" aria-label={`Open agent session ${name}`} onClick={open}><strong data-overflow-title="">{name}</strong></button> : <strong data-overflow-title="">{name}</strong>}
       <small className="lt-session-metadata"><span data-overflow-title="">{metadata}</span><SessionNotice notes={notes} name={name} /></small>
     </span>;
   }
   const content = <><SessionBranches depth={depth} branch={branch} folded={folded} /><strong data-overflow-title="">{name}</strong><small data-overflow-title="">{metadata}</small></>;
-  return interactive ? <button {...props} type="button" aria-label={`Open session ${name}`} onClick={open}>{content}</button> : <span {...props}>{content}</span>;
+  return interactive ? <button {...props} type="button" aria-label={`Open agent session ${name}`} onClick={open}>{content}</button> : <span {...props}>{content}</span>;
 }

@@ -101,6 +101,35 @@ func fractionPhrase(rate float64, noun string) string {
 	return fmt.Sprintf("%d of every %d %s", a, b, noun)
 }
 
+// sharePhrase says how large a part is, to go before "of the …": "about
+// 35%", "about half", "nearly all", "none". Unlike fractionPhrase's bare
+// ratio ("1 in 3"), it reads correctly in "They used … of the tokens".
+func sharePhrase(rate float64) string {
+	switch {
+	case rate <= 0:
+		return "none"
+	case rate >= 0.95:
+		return "nearly all"
+	case rate < 0.01:
+		return "under 1%"
+	case rate >= 0.45 && rate <= 0.55:
+		return "about half"
+	}
+	percent := rate * 100
+	if percent >= 10 {
+		return fmt.Sprintf("about %d%%", int(math.Round(percent/5)*5))
+	}
+	return fmt.Sprintf("about %d%%", int(math.Round(percent)))
+}
+
+// theyOrIt is the pronoun for n things that start the next sentence.
+func theyOrIt(n int) string {
+	if n == 1 {
+		return "It"
+	}
+	return "They"
+}
+
 // dollars rounds money the way a person would say it.
 func dollars(value float64) string {
 	switch {

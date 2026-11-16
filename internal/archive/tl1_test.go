@@ -227,6 +227,101 @@ func TestTL1IngestCapturesWorkflowAndCodexTranscripts(t *testing.T) {
 	}
 }
 
+// A resumed Codex run appends to the attempt's file and numbers its items
+// from item_0 again. Every item must be kept, each call with its own result,
+// and under the same IDs however much the file later grows.
+func TestTL1CodexItemNumberingRestarts(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	registry := tl1Fixture(t, 0)
+	path := filepath.Join(filepath.Dir(registry), "transcripts", "task-impl", "1-codex.jsonl")
+	command := func(id, command string, exit int) string {
+		return fmt.Sprintf(`{"type":"item.completed","item":{"id":%q,"type":"command_execution","command":%q,"aggregated_output":%q,"exit_code":%d,"status":"completed"}}`, id, command, "output of "+command, exit)
+	}
+	usage := `{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}`
+	lines := []string{
+		`{"type":"thread.started","thread_id":"thread-1"}`,
+		`{"type":"turn.started"}`,
+		`{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"First run."}}`,
+		command("item_1", "make build", 0),
+		usage,
+		`{"type":"thread.started","thread_id":"thread-1"}`,
+		`{"type":"turn.started"}`,
+		`{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Second run."}}`,
+		command("item_1", "make check", 1),
+		command("item_2", "make lint", 0),
+		usage,
+	}
+	type call struct{ command, status, result string }
+	ingest := func() (map[string]string, map[string]call) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		adapter, err := MakeAdapter(SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result := catalog.Ingest(adapter, nil); result.Error != nil {
+			t.Fatalf("ingest failed: %v", result.Error)
+		}
+		rows, err := queryMaps(catalog.DB, `SELECT m.native_id,m.id FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id='install-1:att-impl:1-codex.jsonl'`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages := map[string]string{}
+		for _, row := range rows {
+			messages[firstString(row["native_id"])] = firstString(row["id"])
+		}
+		rows, err = queryMaps(catalog.DB, `SELECT t.call_id,t.command,t.status,json_extract(r.text,'$.content') result FROM tool_calls t
+			JOIN conversations c ON c.id=t.conversation_id LEFT JOIN messages r ON r.id=t.result_message_id WHERE c.native_id='install-1:att-impl:1-codex.jsonl'`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		calls := map[string]call{}
+		for _, row := range rows {
+			calls[firstString(row["call_id"])] = call{firstString(row["command"]), firstString(row["status"]), firstString(row["result"])}
+		}
+		return messages, calls
+	}
+	messages, calls := ingest()
+	// Two replies, three calls with their results, and two usage records.
+	if len(messages) != 10 {
+		t.Fatalf("stored %d of 10 messages: %v", len(messages), messages)
+	}
+	if messages["item_0"] == "" || messages["item_1:call"] == "" || messages["item_2:result"] == "" {
+		t.Fatalf("IDs that never repeat changed: %v", messages)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("ledger holds %d of 3 calls: %+v", len(calls), calls)
+	}
+	statuses := map[string]string{}
+	for id, call := range calls {
+		if call.result != "output of "+call.command {
+			t.Fatalf("call %s (%s) took another call's result %q", id, call.command, call.result)
+		}
+		statuses[call.command] = call.status
+	}
+	if statuses["make build"] != "ok" || statuses["make check"] != "error" || statuses["make lint"] != "ok" {
+		t.Fatalf("statuses: %v", statuses)
+	}
+
+	lines = append(lines, `{"type":"thread.started","thread_id":"thread-1"}`, `{"type":"turn.started"}`, command("item_1", "make again", 0), command("item_2", "make more", 2), usage)
+	grown, calls := ingest()
+	for native, id := range messages {
+		if grown[native] != id {
+			t.Fatalf("message %s changed identity when the file grew: %q, was %q", native, grown[native], id)
+		}
+	}
+	if len(grown) != 15 || len(calls) != 5 {
+		t.Fatalf("after growth: %d of 15 messages, %d of 5 calls", len(grown), len(calls))
+	}
+	for id, call := range calls {
+		if call.result != "output of "+call.command {
+			t.Fatalf("after growth, call %s (%s) took another call's result %q", id, call.command, call.result)
+		}
+	}
+}
+
 func TestTL1AttemptSessionEnvelopeScope(t *testing.T) {
 	registry := tl1Fixture(t, 0)
 	installation := tl1Installation{ID: "install", Transcripts: filepath.Join(filepath.Dir(registry), "transcripts")}

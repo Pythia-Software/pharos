@@ -1309,18 +1309,23 @@ CREATE TABLE IF NOT EXISTS background_runs (
 CREATE TABLE IF NOT EXISTS background_item_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, host_id TEXT NOT NULL, item TEXT NOT NULL, cadence TEXT NOT NULL,
   started_at TEXT NOT NULL, seconds REAL NOT NULL, units INTEGER,
-  cpu_seconds REAL, worker_cpu_seconds REAL, gpu_seconds REAL, peak_bytes INTEGER
+  cpu_seconds REAL, worker_cpu_seconds REAL, gpu_seconds REAL, peak_bytes INTEGER,
+  unmeasured INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS background_item_runs_host ON background_item_runs(host_id,started_at);
 -- What background work used on this Mac, per local day and source: a
 -- background item ("item:labels"), another operation kind
 -- ("kind:maintenance.checkpoint"), or "other" for the rest of the service's CPU time,
 -- which no measured work's thread used. Totals are added as runs end, never per sample; a NULL figure
--- was not measured. Days older than five weeks are dropped.
+-- was not measured. Days older than five weeks are dropped. unmeasured (here and
+-- on background_item_runs) is a bit set of the worker figures part of which
+-- could not be read (1 worker CPU time, 2 GPU time): such a figure is not
+-- measured, whatever was added to its column.
 CREATE TABLE IF NOT EXISTS background_cpu_days (
   host_id TEXT NOT NULL, day TEXT NOT NULL, source TEXT NOT NULL, runs INTEGER NOT NULL DEFAULT 0,
   seconds REAL NOT NULL DEFAULT 0, cpu_seconds REAL, worker_cpu_seconds REAL,
-  gpu_seconds REAL, peak_bytes INTEGER, PRIMARY KEY(host_id,day,source)
+  gpu_seconds REAL, peak_bytes INTEGER, unmeasured INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(host_id,day,source)
 );
 CREATE TABLE IF NOT EXISTS background_temporary_cadences (
   host_id TEXT NOT NULL, item TEXT NOT NULL, cadence TEXT NOT NULL, expires_at TEXT NOT NULL,
@@ -1626,17 +1631,24 @@ BEGIN
  INSERT INTO session_shape_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
  INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
 END;
--- The earliest start among tool calls whose result arrived after the call was
--- stored. The ledger updates such calls in place, so their rowid is old and
--- the related-work refresh would not see a diff's output otherwise.
+-- Conversations whose tool calls changed in place, with the span of those
+-- calls' starts. Such a call keeps its rowid, so the related-work refresh,
+-- which reads new rows, would not see it otherwise. Its triggers are
+-- generated from the statements the refresh reads (peerTriggerDDL).
+CREATE TABLE IF NOT EXISTS work_peer_links_changed (
+  conversation_id TEXT PRIMARY KEY,
+  first TEXT NOT NULL,
+  last TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  -- The call's workspace: what is left to find its family by once the
+  -- conversation is deleted.
+  workspace_id TEXT) WITHOUT ROWID;
+-- What builds before work_peer_links_changed noted instead: the earliest such
+-- start in the library. Still read, since such a build may have written it.
 CREATE TABLE IF NOT EXISTS work_peer_links_dirty (
   id INTEGER PRIMARY KEY CHECK(id=1),
   since TEXT NOT NULL,
   revision TEXT NOT NULL);
-CREATE TRIGGER IF NOT EXISTS work_peer_links_result_update AFTER UPDATE OF result_message_id ON tool_calls
-WHEN new.result_message_id IS NOT NULL AND old.result_message_id IS NOT new.result_message_id AND new.started_at IS NOT NULL BEGIN
- INSERT INTO work_peer_links_dirty VALUES(1,new.started_at,hex(randomblob(8))) ON CONFLICT(id) DO UPDATE SET since=min(since,excluded.since),revision=excluded.revision;
-END;
 CREATE TRIGGER IF NOT EXISTS session_shape_requests_insert AFTER INSERT ON model_requests
 BEGIN
  INSERT INTO session_shape_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;

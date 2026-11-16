@@ -25,7 +25,95 @@ import (
 // tool-block timestamps before replaying the ledger. v16 records harness
 // waits (background commands, Monitor watches, scheduled wakeups) to the
 // notice that ends them (harness_waits.go).
+//
+// This is the version of every conversation, so changing it rebuilds the
+// whole library's ledger: an hour or more on a large one. A change that can
+// alter only some conversations' rows adds a toolLedgerScopes entry instead.
 const toolLedgerVersion = "tools-v16-harness-waits"
+
+// toolLedgerScope names the conversations one change to the derivation can
+// affect, and the revision that change gives their ledgers. A conversation is
+// in the scope when each field set here matches it:
+//
+//   - Provider is conversations.provider, the transcript format the ledger
+//     reads ("claude", "codex", "antigravity", ...). Conductor and TL1
+//     workspaces hold both Claude Code and Codex conversations, so a change
+//     to how one format's tool calls are read names the provider.
+//   - SourceKind is workspaces.source_kind, the adapter that stored the
+//     messages ("claude-ai", "chatgpt", "tl1", ...). A change to one
+//     adapter's replay (as claudeAIRetainedToolTime is) names the source kind.
+//
+// Both are part of a stored conversation's identity. conversations.harness
+// is not: it is filled in later, and names clients rather than formats.
+type toolLedgerScope struct {
+	Provider, SourceKind string
+	// Revision says what changed, like "codex-code-mode-patches". It is
+	// unique in the list and holds no "+".
+	Revision string
+}
+
+// toolLedgerScopes are the changes since toolLedgerVersion that reach only
+// some conversations. A conversation's ledger version is toolLedgerVersion
+// followed by "+" and the revision of each scope it is in, in this order
+// (toolLedgerVersionFor), so adding an entry rebuilds that scope's
+// conversations and no others. Rules:
+//
+//   - Add entries at the end. Removing, reordering or renaming one rebuilds
+//     its conversations again.
+//   - A second change to the same scope replaces that entry's revision.
+//   - A change that can alter any conversation's rows changes
+//     toolLedgerVersion and empties this list in the same change: everything
+//     is rebuilt once anyway.
+//   - When unsure which conversations a change reaches, prefer the wider
+//     scope. One that is too narrow leaves stale rows that nothing finds.
+//
+// With no entries every conversation's version is toolLedgerVersion itself,
+// which is what builds without scopes stored and expect: they rebuild a
+// scoped conversation to the plain version, and this build rebuilds it back.
+var toolLedgerScopes = []toolLedgerScope{}
+
+func (scope toolLedgerScope) matches(provider, sourceKind string) bool {
+	return (scope.Provider == "" || scope.Provider == provider) && (scope.SourceKind == "" || scope.SourceKind == sourceKind)
+}
+
+// toolLedgerVersionFor is the ledger version of a conversation of this
+// provider in a workspace of this source kind.
+func toolLedgerVersionFor(provider, sourceKind string) string {
+	version := toolLedgerVersion
+	for _, scope := range toolLedgerScopes {
+		if scope.matches(provider, sourceKind) {
+			version += "+" + scope.Revision
+		}
+	}
+	return version
+}
+
+// toolLedgerVersionSQL is toolLedgerVersionFor as an SQL expression over a
+// conversations row and its workspaces row (which may be absent), named by
+// these aliases.
+func toolLedgerVersionSQL(conversations, workspaces string) string {
+	expression := quoteSQLText(toolLedgerVersion)
+	for _, scope := range toolLedgerScopes {
+		conditions := []string{"1"}
+		if scope.Provider != "" {
+			conditions = append(conditions, conversations+".provider="+quoteSQLText(scope.Provider))
+		}
+		if scope.SourceKind != "" {
+			conditions = append(conditions, workspaces+".source_kind="+quoteSQLText(scope.SourceKind))
+		}
+		expression += "||CASE WHEN " + strings.Join(conditions, " AND ") + " THEN " + quoteSQLText("+"+scope.Revision) + " ELSE '' END"
+	}
+	return "(" + expression + ")"
+}
+
+// toolLedgerPendingSQL selects columns of the conversations (c, with their
+// workspaces w and ledger state s) whose ledger is missing or was built by
+// another version than theirs. A caller appends its own AND conditions.
+func toolLedgerPendingSQL(columns string) string {
+	return `SELECT ` + columns + ` FROM conversations c LEFT JOIN workspaces w ON w.id=c.workspace_id
+		LEFT JOIN tool_ledger_state s ON s.conversation_id=c.id
+		WHERE (s.conversation_id IS NULL OR s.version<>` + toolLedgerVersionSQL("c", "w") + `)`
+}
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the

@@ -36,7 +36,7 @@ disable layout animations. Standalone Share exports keep their original reader.
 
 A workspace with one conversation that has no parent conversation skips that
 split: `/work/{workspace}` opens its conversation directly, with the workspace
-heading, totals, controls, and Archive details leading the transcript in a single
+heading, totals, controls, and Preservation details leading the transcript in a single
 scrolling pane. There is no sidebar, sessions table, or overview to return to.
 Sessions load afterwards; if they form a hierarchy after all (more than one
 session, or a parent or child in another workspace), the page reverts to the
@@ -92,7 +92,7 @@ follow the shared [token rule](ui-vocabulary.md#amounts)); metric tooltips
 retain exact values. A global tint control replaces per-cell percentages. Tint uses a
 softened logarithmic curve and each column's fixed, whole-workspace maximum.
 Pagination and collapsed branches do not change those maxima or spend totals.
-Files Edited counts distinct paths from successful edit/write ledger calls;
+Files edited counts distinct paths from successful edit/write ledger calls;
 inclusive values deduplicate shared paths across agents. Missing paths/results
 and first-path-only patch evidence show partial or unknown coverage. Shell edits
 without recorded file paths are outside this metric. Pages show up to 40 sessions;

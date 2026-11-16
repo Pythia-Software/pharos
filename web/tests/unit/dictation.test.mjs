@@ -181,8 +181,8 @@ test("typing, Escape and failures end dictation without losing text", async () =
   denied.replies[0].resolve({ available: true });
   await settle();
   denied.button.fire("click");
-  denied.replies[1].reject(new Error("Pharos doesn't have microphone access."));
+  denied.replies[1].reject(new Error("Pharos does not have microphone access."));
   await settle();
-  assert.deepEqual(denied.errors, ["Pharos doesn't have microphone access."]);
+  assert.deepEqual(denied.errors, ["Pharos does not have microphone access."]);
   assert.equal(denied.button.dataset.state, "idle");
 });

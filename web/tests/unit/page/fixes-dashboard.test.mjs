@@ -64,10 +64,10 @@ test("cards, notes and the settings preview describe the bounds", () => {
   assert.match(fixesFacts(items[1]).join(" · "), /^6 events · 2 repositories · .+ · 3 h of agent time$/);
   assert.equal(fixesFacts(items[0])[1], "Alpha");
   assert.equal(fixesHiddenNote({ stale: 1, rare: 0, total: 1 }, bounds), "Your settings hide 1 problem not seen in the last 30 days.");
-  assert.equal(fixesHiddenNote({ stale: 2, rare: 3, total: 5 }, bounds), "Your settings hide 2 problems not seen in the last 30 days and 3 problems seen in fewer than 3 work items.");
+  assert.equal(fixesHiddenNote({ stale: 2, rare: 3, total: 5 }, bounds), "Your settings hide 2 problems not seen in the last 30 days and 3 problems seen in fewer than 3 workspaces.");
   assert.equal(fixesHiddenNote({ stale: 0, rare: 0, total: 0 }, bounds), "");
   assert.match(fixesHiddenReason(items[2], bounds), /40 days.*30 days/);
-  assert.match(fixesHiddenReason(items[3], bounds), /2 work items.*fewer than 3/);
+  assert.match(fixesHiddenReason(items[3], bounds), /2 workspaces.*fewer than 3/);
   // The preview mirrors the server's rule: stale before rare; Open only.
   assert.deepEqual(fixesBoundsPreview(items, bounds), { stale: 1, rare: 1, shown: 3 });
   assert.deepEqual(fixesBoundsPreview(items, { ...bounds, hide_days: 0 }), { stale: 0, rare: 1, shown: 4 });
@@ -107,7 +107,7 @@ test("fixes counts read as approximate while the events they group wait for a re
   const pending = fixesEventsFreshness({ state: "pending", pending_conversations: 3, withheld_conversations: 1 });
   assert.equal(pending.mark, "≈");
   // Fixes keep counting those events, so the note never says they are left out.
-  assert.match(pending.note, /^Events for 3 conversations are waiting to be rebuilt .* still count here\. These counts may change\. /);
+  assert.match(pending.note, /^Events for 3 conversations are waiting to be updated after a change and still count here\. These counts may change\. /);
   assert.doesNotMatch(pending.note, /left out/);
   assert.match(fixesEventsFreshness({ state: "unknown" }).note, /^Conversations changed since the last events run/);
 });

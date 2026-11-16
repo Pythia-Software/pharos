@@ -325,6 +325,15 @@ func (a carbonAssumptions) key() string {
 
 type carbonPreferencesKey struct{}
 
+// carbonSettingNames names each linked setting as the Carbon Impact page
+// labels it, for error text.
+var carbonSettingNames = map[string]string{
+	"scenario": "energy scenario", "pueScenario": "facility overhead (PUE) setting",
+	"inputSensitivity": "input sensitivity", "customGrid": "custom grid carbon intensity",
+	"grid": "electricity grid", "vehicle": "comparison vehicle",
+	"flightFrom": "flight origin", "flightTo": "flight destination",
+}
+
 // Linked Usage views carry their own assumptions. The override is scoped to
 // this request; opening a link must never overwrite another reader's settings.
 func withCarbonPreferences(ctx context.Context, encoded string) (context.Context, error) {
@@ -333,29 +342,32 @@ func withCarbonPreferences(ctx context.Context, encoded string) (context.Context
 	}
 	var prefs map[string]any
 	if len(encoded) > 4096 || json.Unmarshal([]byte(encoded), &prefs) != nil || prefs == nil {
-		return ctx, fmt.Errorf("invalid Carbon assumptions")
+		return ctx, fmt.Errorf("Could not read this link’s Carbon Impact settings.")
+	}
+	invalid := func(setting string) error {
+		return fmt.Errorf("Could not use this link’s Carbon Impact settings: the %s is invalid.", setting)
 	}
 	for key, value := range prefs {
 		switch key {
 		case "scenario", "pueScenario":
 			if value != "low" && value != "central" && value != "high" {
-				return ctx, fmt.Errorf("invalid Carbon %s", key)
+				return ctx, invalid(carbonSettingNames[key])
 			}
 		case "inputSensitivity":
 			if value != "current" && value != "third" {
-				return ctx, fmt.Errorf("invalid Carbon input sensitivity")
+				return ctx, invalid(carbonSettingNames[key])
 			}
 		case "customGrid":
 			n, ok := value.(float64)
 			if !ok || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
-				return ctx, fmt.Errorf("invalid Carbon grid intensity")
+				return ctx, invalid(carbonSettingNames[key])
 			}
 		case "grid", "vehicle", "flightFrom", "flightTo":
 			if _, ok := value.(string); !ok {
-				return ctx, fmt.Errorf("invalid Carbon %s", key)
+				return ctx, invalid(carbonSettingNames[key])
 			}
 		default:
-			return ctx, fmt.Errorf("unknown Carbon assumption %q", key)
+			return ctx, fmt.Errorf("Could not use this link’s Carbon Impact settings: %q is not a Carbon Impact setting.", key)
 		}
 	}
 	return context.WithValue(ctx, carbonPreferencesKey{}, prefs), nil
@@ -499,4 +511,3 @@ func (c *Catalog) carbonHealthContext(ctx context.Context) (map[string]any, erro
 func (c *Catalog) CarbonHealth(ctx context.Context) (map[string]any, error) {
 	return cachedValue(ctx, c, "health:carbon", c.carbonHealthContext)
 }
-

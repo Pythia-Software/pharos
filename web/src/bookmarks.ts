@@ -4,7 +4,7 @@ import { queryRecipes } from "./curiosity-data";
 import { cardDestination } from "./card-destinations";
 import type { WindowChoice } from "./day-window";
 import { encodeQuery, normalizeQueryState, type QueryState, type SavedQuery, createQueryLinkService, httpQuerySnapshotStore } from "@pythia-software/query-table-core";
-import { validCardGroups, type CardCover } from "./card-cover";
+import { cardGroupsMax, validCardGroups, type CardCover } from "./card-cover";
 import { preferences } from "./preferences";
 import { normalizedDashboardChart } from "./analysis-catalogs";
 import { queryCategories, type QueryCategory } from "./query-categories";
@@ -126,7 +126,7 @@ export function collectQuery(dataset: QueryDataset, query: QueryState, title: st
     return spec?.dataset === dataset && encodeQuery(spec.query) === encodeQuery(query) && dashboardContext(item.url) === dashboardContext(url);
   });
   if (existing && options.dedupe !== false) return existing;
-  if (savedQueries(dataset).length >= 100) throw new Error("This table already has 100 saved queries.");
+  if (savedQueries(dataset).length >= 100) throw new Error("There are already 100 cards and saved views from this data. Remove one to add another.");
   const id = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, item: Bookmark = {
     id, savedQueryId: id, dataset, query: normalizeQueryState(query), url, title: title.trim(), description: options.description,
     cover: options.cover, templateId: options.templateId, savedAt: options.savedAt ?? Date.now(),
@@ -149,14 +149,14 @@ export function cardLabels(labels: CardLabels): CardLabels {
 export function updateBookmark(id: string, title: string, description: string, days?: WindowChoice | null, coverMetricId?: string, labels?: CardLabels, groups?: number | null): Bookmark {
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
   const items = readBookmarks(), current = items.find(item => item.id === id), spec = current && queryFromURL(current.url, current.query);
-  if (!current) throw new Error("This saved view is no longer in your collection.");
-  if (spec && items.some(item => item.id !== id && item.title === title.trim() && queryFromURL(item.url, item.query)?.dataset === spec.dataset)) throw new Error("Another saved query in this table has that name.");
+  if (!current) throw new Error("This card is no longer on Home.");
+  if (spec && items.some(item => item.id !== id && item.title === title.trim() && queryFromURL(item.url, item.query)?.dataset === spec.dataset)) throw new Error("Another card or saved view from the same data already has this title. Choose a different title.");
   const updated: Bookmark & { description: string } = { ...current, title: title.trim(), description: description.trim() };
   if (labels) { delete updated.action; delete updated.category; Object.assign(updated, cardLabels(labels)); }
-  if (groups !== undefined && groups !== null && !validCardGroups(groups)) throw new Error("Choose a whole number of groups to show.");
+  if (groups !== undefined && groups !== null && !validCardGroups(groups)) throw new Error(`Enter a whole number of groups from 1 to ${cardGroupsMax}.`);
   if (groups === null) delete updated.maxGroups; else if (groups !== undefined) updated.maxGroups = groups;
   if (coverMetricId !== undefined) {
-    if (coverMetricId && !validCoverValue(spec?.query, coverMetricId)) throw new Error("Choose a metric from this saved view.");
+    if (coverMetricId && !validCoverValue(spec?.query, coverMetricId)) throw new Error("Choose a metric this card shows.");
     if (coverMetricId) {
       updated.coverMetricId = coverMetricId;
       updated.cover = { ...(current.cover?.metricId === coverMetricId ? current.cover : {}), mode: spec?.query.grouping?.summaries.some(column => column.id === coverMetricId) ? "result" : "source", metricId: coverMetricId };
@@ -220,7 +220,7 @@ export async function collectDurableQuery(dataset: QueryDataset, query: QuerySta
 
 export function replaceSavedQuery(dataset: QueryDataset, id: string, query: QueryState, savedAt: number, url: string): SavedQuery {
   const items = readBookmarks(), current = items.find(item => (item.dataset ?? queryFromURL(item.url, item.query)?.dataset) === dataset && (item.savedQueryId ?? item.id) === id);
-  if (!current) throw new Error("This saved query no longer exists.");
+  if (!current) throw new Error("This saved view no longer exists.");
   const updated = { ...current, dataset, query: normalizeQueryState(query), url, savedAt };
   if (updated.coverMetricId && !validCoverValue(query, updated.coverMetricId)) delete updated.coverMetricId;
   if (updated.cover && !validCoverValue(query, updated.cover.metricId)) delete updated.cover;

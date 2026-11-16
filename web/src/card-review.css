@@ -54,7 +54,6 @@
 .human-review-overall p { color:var(--muted); font-size:12px; line-height:1.6; }
 .human-review-overall textarea { min-height:110px; margin-bottom:14px; background:var(--bg); }
 .human-review-export { width:min(750px,90vw); max-height:85vh; padding:24px; background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:8px; }
-.human-review-export::backdrop { background:#0008; }
 .human-review-export p { color:var(--muted); font-size:12px; }
 .human-review-export textarea { height:50vh; font:12px/1.6 ui-monospace,SFMono-Regular,monospace; margin:16px 0; }
 .human-review-error { font-size:10px; color:var(--muted); overflow-wrap:anywhere; }

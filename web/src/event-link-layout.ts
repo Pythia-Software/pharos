@@ -133,6 +133,6 @@ export function targetDescription(t:EventTarget|null):string{
 }
 export function targetEvidence(t:EventTarget):string{
  if(t.method==='quote')return t.strong?'Exact: the event quotes these words.':'Exact, but one quoted word in agent text: weaker.';
- if(t.method==='overlap')return `Rule: shares ${(t.shared??[]).slice(0,4).join(', ')}${t.score!=null?` (score ${t.score})`:''}.`;
+ if(t.method==='overlap')return `Matched by shared words: ${(t.shared??[]).slice(0,4).join(', ')}${t.score!=null?` (score ${t.score})`:''}.`;
  return '';
 }

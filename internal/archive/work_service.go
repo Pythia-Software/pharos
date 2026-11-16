@@ -270,8 +270,8 @@ func (w *workService) requestChanged(facts workRequestFacts) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	record := w.requestLocked(facts.ID, facts.Trigger)
-	if record.state != "" {
-		return // an older notification may follow terminal delivery
+	if record.state != "" || facts.Revision < record.facts.Revision {
+		return // an older notification may follow a newer one, or terminal delivery
 	}
 	waitKind := ""
 	if facts.State == opQueued || facts.State == opBlocked {

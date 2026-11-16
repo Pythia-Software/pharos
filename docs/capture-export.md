@@ -17,6 +17,9 @@ parser, or start an HTTP server. Ctrl-C or SIGTERM cancels the command up to
 the rename that publishes the export, leaving nothing in the outbox. After
 that rename the export exists, and only its flush remains.
 
+[`capture-push`](capture-push.md) sends the same export to a bucket in
+chunks, reading the capture through the same code and checks.
+
 The export is a transport format only. Pharos has no import yet, and an
 export can be neither unpacked into a library nor used as a source. It does
 not delete or move anything in the capture.

@@ -16,7 +16,7 @@
 
 /* The hover bubble: portalled to the page, sized to its widest row, never
    in the pointer's way. */
-.usage-chart-tip.chart-tooltip { position: fixed; z-index: 10000; pointer-events: none; min-width: 0; width: max-content; max-width: min(320px, calc(100vw - 16px)); }
+.usage-chart-tip.chart-tooltip { position: fixed; z-index: var(--z-tooltip, 10000); pointer-events: none; min-width: 0; width: max-content; max-width: min(320px, calc(100vw - 16px)); }
 .chart-tooltip-host { display: contents; }
 /* Hover lines show clipped labels in full, paths and ids included: wrap
    unbroken text rather than spill past the bubble. */

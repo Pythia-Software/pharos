@@ -22,14 +22,14 @@ const count = { kind: "number", decimals: 0 } as const, usd = { kind: "currency"
 const repository: WhereTerm[] = [{ field: "project_kind", op: "=", value: "repository" }];
 
 const measures: Record<string, AnalysisMeasure> = {
-  sessions: { label: "Workspaces", unit: "workspaces", format: count, op: "count", additive: true, note: "Each Library workspace counts once, at its start." },
-  cost: { label: "API cost (USD)", unit: "USD", format: usd, op: "sum", field: "cost_usd", value: "cost_usd", additive: true, note: "A session's whole API-equivalent cost counts at its start, priced as the Library prices it; unpriced usage adds nothing." },
-  tokens: { label: "Tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "tokens", value: "tokens", additive: true, note: "A session's reconciled tokens count at its start." },
-  files_changed: { label: "Files changed", unit: "files", format: count, op: "sum", field: "files_changed", value: "files_changed", additive: true, note: "Files each session edited, from its own tool calls." },
-  lines_added: { label: "Lines added", unit: "lines", format: count, op: "sum", field: "lines_added", value: "lines_added", additive: true, note: "Lines the sessions' edits added, where the harness records line counts." },
-  lines_removed: { label: "Lines removed", unit: "lines", format: count, op: "sum", field: "lines_removed", value: "lines_removed", additive: true, note: "Lines the sessions' edits removed, where the harness records line counts." },
+  sessions: { label: "Workspaces", unit: "workspaces", format: count, op: "count", additive: true, note: "Each workspace counts once, at its start." },
+  cost: { label: "API cost (USD)", unit: "USD", format: usd, op: "sum", field: "cost_usd", value: "cost_usd", additive: true, note: "A workspace's whole API cost counts at its start, priced as the library prices it; unpriced usage adds nothing." },
+  tokens: { label: "Tokens", unit: "tokens", format: tokenMetricFormat, op: "sum", field: "tokens", value: "tokens", additive: true, note: "A workspace's reconciled tokens count at its start." },
+  files_changed: { label: "Files changed", unit: "files", format: count, op: "sum", field: "files_changed", value: "files_changed", additive: true, note: "Files each workspace edited, from its own tool calls." },
+  lines_added: { label: "Lines added", unit: "lines", format: count, op: "sum", field: "lines_added", value: "lines_added", additive: true, note: "Lines the workspaces' edits added, where the agent app records line counts." },
+  lines_removed: { label: "Lines removed", unit: "lines", format: count, op: "sum", field: "lines_removed", value: "lines_removed", additive: true, note: "Lines the workspaces' edits removed, where the agent app records line counts." },
   rework_rate: { label: "Rework rate", unit: "percent", format: percent, op: "sum", ratio: ["rework_removed_lines", "kept_lines"], additive: false,
-    note: "Of the lines workspaces added and kept, the share later sessions removed within the rework window, pooled over every workspace's lines rather than averaged per workspace. Lines whose window is still open wait until it closes." },
+    note: "Of the lines workspaces added and kept, the share later workspaces removed within the rework window, pooled over every workspace's lines rather than averaged per workspace. Lines whose window is still open wait until it closes." },
   cost_per_kept_change: { label: "Cost per kept change (USD)", unit: "USD", format: usd, op: "sum", ratio: [{ op: "sum", field: "judged_cost_usd", label: "cost of judged workspaces" }, { op: "sum", field: "kept_priced", label: "priced kept changes" }], additive: false,
     note: "The cost of judged workspaces (Landed, Committed, Changed and kept, or Reworked) divided by those whose changes were kept: what a kept change cost, reworked attempts included. Changes too recent to judge, No changes and Unknown count in neither part, and nor does a workspace without a price." },
   kept_share: { label: "Kept share", unit: "percent", format: percent, op: "sum", ratio: ["kept_change", { op: "sum", field: "judged", label: "judged workspaces" }], additive: false,
@@ -57,7 +57,7 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
   evidence_tier: { label: "Evidence tier", fields: ["evidence_tier"], order: ["local_git", "transcript", "none"], values: outcomeTierLabels },
   project_name: projectBreakdown(),
   provider: { label: "Main provider", fields: ["provider"], order: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"], empty: "No usage" },
-  model_family: { label: "Main model", fields: ["model_family"], empty: "No usage", note: "A session's main model is the one that took most of its cost." },
+  model_family: { label: "Main model", fields: ["model_family"], empty: "No usage", note: "A workspace's main model is the one that took most of its cost." },
   source_kind: { label: "Source", fields: ["source_kind"] },
   // Git facts: branch is only for sessions in a repository, and local Git
   // only where it checked something (outcomeCatalogFor).
@@ -75,13 +75,13 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
 // not an evidence_tier value, since it never decides a label.
 export const outcomeTierBreakdowns: Record<string, "local_git" | "forge"> = { git_check: "local_git", review_status: "forge", reviewer_kind: "forge", pull_request_state: "forge" };
 const tierMissing = {
-  local_git: "No session has local Git evidence: local Git checks only repositories on this Mac",
+  local_git: "No workspace has local Git evidence: local Git checks only repositories on this Mac",
   forge: "No pull request has been read: turn on Pull request reviews in Settings → Background Processing",
 };
 
 export const outcomesAnalysisCatalog: AnalysisCatalog = {
   dataset: "outcomes", time: { first: "started_at", last: "started_at" }, measures, breakdowns,
-  records: { label: "Workspace", plural: "Workspaces", note: "One Library workspace, counted at its start." },
+  records: { label: "Workspace", plural: "Workspaces", note: "One workspace, counted at its start." },
   units: {}, periods: {}, timestamp: "started_at",
   cycle: { hour: { kind: "timestamp", field: "started_at" }, weekday: { kind: "timestamp", field: "started_at" } },
   trend: { metric: "cost", split: "outcome_label" }, scatter: ["cost", "files_changed"], legacy: projectLegacy(),

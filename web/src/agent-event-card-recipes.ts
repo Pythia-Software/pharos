@@ -35,8 +35,8 @@ export const agentEventNotObstacle: WhereTerm = { field: "family", op: "!=", val
 // In thinking, workarounds and assumptions mostly narrate ordinary steps of
 // the work; in replies they are what the agent told the person.
 const inReplies: WhereTerm = { field: "source", op: "=", value: "reply" };
-export const agentEventsRead = "Rates divide by the agent replies and thinking blocks the events pass read under the same filters, not by all messages, in turns a person or a delegating agent started: scripted runs are left out. Opening the dashboard does not run the pass.";
-export const agentEventsEmpty = "No agent messages read for events in this window. Turn on Agent Experience in Settings → Background Processing to run the events pass.";
+export const agentEventsRead = "Rates divide by the agent replies and thinking blocks the events pass read, under the same filters, not by all messages. Only turns a person or a delegating agent started count; scripted runs are left out. Opening the dashboard does not run the pass.";
+export const agentEventsEmpty = "No agent messages read for events in this window. Turn on Agent events (preview) in Settings → Background Processing to run the events pass.";
 
 export const agentEventCardRecipes: QueryRecipe[] = [
   { ...base, days, id: "agent-events-repository-friction", title: "Where agents hit friction", unit: "events per 1,000 messages",
@@ -54,8 +54,8 @@ export const agentEventCardRecipes: QueryRecipe[] = [
     measures: [rate("failures_by_repository", ["repository_name"], "Pre-existing failures per 1,000 messages read", { minCount: floor })], cover: bars("failures_by_repository"),
     action: "Read the failures", emptyLabel: agentEventsEmpty, emptyIsSetup: true,
     note: `A failure every agent steps around costs each of them the time to rule it out. Open a bar for the sentences; Fixes lists the checks that keep failing. ${agentEventsRead}` },
-  { ...base, days, id: "agent-events-unseen-choices", title: "Choices agents made without asking", unit: "events per 1,000 replies",
-    description: "Deferred work, risks, unchecked claims, workarounds and assumptions per 1,000 agent replies over the last {days} days, by repository and kind.", where: [choices, inReplies, inRepository, ...agentEventWorkTurns],
+  { ...base, days, id: "agent-events-unseen-choices", title: "Choices you may not see", unit: "events per 1,000 replies",
+    description: "Deferred work, technical debt, risks, unchecked claims, workarounds and assumptions per 1,000 agent replies over the last {days} days, by repository and kind.", where: [choices, inReplies, inRepository, ...agentEventWorkTurns],
     measures: [rate("choices_by_repository", ["repository_name", "family"], "Unseen choices per 1,000 replies read", { minCount: floor })], cover: bars("choices_by_repository"),
     action: "Review the choices", emptyLabel: agentEventsEmpty, emptyIsSetup: true,
     note: `These are decisions an agent stated in a reply, such as a check it did not run or a step it did by hand, that are easy to read past. Replies only: in thinking the same kinds mostly narrate ordinary steps, at about three times the rate. Open a bar to review them in their conversations. Risky actions lists the risky commands themselves. ${agentEventsRead}` },

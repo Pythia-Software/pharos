@@ -75,7 +75,7 @@ export function readHabitsCardView(params: URLSearchParams): HabitsCardView {
 
 const actorLabel = (actor: StreakActor) => streakActors.find(item => item.id === actor)!.label;
 const viewLabel = (view: PunchcardView) => punchcardViews.find(([id]) => id === view)![1];
-const rangeLabel = (range: string) => range === "all" ? "All time" : range === "365" ? "Past year" : `Past ${range} days`;
+const rangeLabel = (range: string) => range === "all" ? "All time" : `Last ${range} days`;
 
 // Standalone names describe the chart without needing the Habits page around it.
 // The page, library and creation dialog share these readings of the controls.
@@ -94,20 +94,20 @@ export function habitsCardDescription(target: HabitsCardTarget, view: HabitsCard
   switch (target) {
     case "habits-streaks": return `Days in a row with a message you typed${view.mode === "weekdays" ? ", counting weekdays only" : ""}; your longest run; and your engaged time yesterday and over the last seven days.`;
     case "habits-calendar": return `${habitsCardWindow(target, view)}${view.weekends ? "" : ", weekdays only"}. Each square shows ${view.calendar === "you" ? "your engaged time" : `time with ${actorLabel(view.calendar).toLowerCase()}`}; darker is more time.${view.weeks > cardCalendarWeeks ? ` Open the dashboard for all ${view.weeks} weeks.` : ""}`;
-    case "habits-punchcard": return `${rangeLabel(view.range)}. ${view.punchcard === "difference" ? "Agent time minus your engaged time" : `Time for ${view.punchcard === "you" ? "you" : viewLabel(view.punchcard).toLowerCase()}`} in each weekday hour, in minutes per week, coloured by time of day.`;
-    case "habits-days": return `Each of the last ${view.shapeDays} days, from your first engaged minute to your last, with the blocks you were engaged coloured by time of day.`;
+    case "habits-punchcard": return `${rangeLabel(view.range)}. ${view.punchcard === "difference" ? "Agent time minus your engaged time" : `Time for ${view.punchcard === "you" ? "you" : viewLabel(view.punchcard).toLowerCase()}`} in each weekday hour, in minutes per week, colored by time of day.`;
+    case "habits-days": return `Each of the last ${view.shapeDays} days, from your first engaged minute to your last, with the blocks you were engaged colored by time of day.`;
     case "habits-pace": return "Days off, your typical engaged day, agent time while you're away, and focus, over the last four weeks.";
-    case "habits-automations": return `${rangeLabel(view.range)}. What started agents without a message from you: schedules, scripts, orchestrators and other agents, by runs.`;
+    case "habits-automations": return `${rangeLabel(view.range)}. What started agents without a message from you: schedules, scripts, orchestrators and other agents, ranked by number of runs.`;
   }
 }
 
 export function habitsCardWindow(target: HabitsCardTarget, view: HabitsCardView): string {
   switch (target) {
     case "habits-streaks": return "Today";
-    case "habits-calendar": return `Past ${Math.min(view.weeks, cardCalendarWeeks)} weeks`;
+    case "habits-calendar": return `Last ${Math.min(view.weeks, cardCalendarWeeks)} weeks`;
     case "habits-punchcard": case "habits-automations": return rangeLabel(view.range);
-    case "habits-days": return `Past ${view.shapeDays} days`;
-    default: return "Past 28 days";
+    case "habits-days": return `Last ${view.shapeDays} days`;
+    default: return "Last 28 days";
   }
 }
 
@@ -144,7 +144,7 @@ export function habitsCardPreview(target: HabitsCardTarget, view: HabitsCardView
       const health = healthStats(summary.days, 28);
       return { ...base, state: health.days ? "ready" : "empty", headline: "The last four weeks", insights: [
         { label: "Days off", value: String(health.restDays), context: `longest run without one: ${streakDays(health.longestWithoutRest)}` },
-        { label: "Typical day", value: health.typicalHours === undefined ? "—" : `${health.typicalHours.toFixed(1)} h`, context: "median engaged time on days you worked" },
+        { label: "Typical day", value: health.typicalHours === undefined ? "—" : formatHours(health.typicalHours * 3_600_000), context: "median engaged time on days you worked" },
         { label: "Agents while you're away", value: health.leverage === undefined ? "—" : `${health.leverage.toFixed(1)}×`, context: "unattended agent hours per engaged hour" },
         { label: "Focus", value: percent(health.focusShare), context: "of engaged time in blocks of 25 min or more" },
       ] };
@@ -160,11 +160,11 @@ export function habitsCardPreview(target: HabitsCardTarget, view: HabitsCardView
         note: `${streakActors.find(actor => actor.id === view.calendar)!.rule(summary.settings)}${view.weeks > cardCalendarWeeks ? ` The card shows the last ${cardCalendarWeeks} weeks; open it for ${view.weeks === 53 ? "the year" : `all ${view.weeks}`}.` : ""}`,
         coverHeight: view.weekends ? 130 : 105, habits: { chart: "calendar", summary, actor: view.calendar, weeks: Math.min(view.weeks, cardCalendarWeeks), weekends: view.weekends } };
     case "habits-punchcard":
-      return { ...base, state: "ready", note: `Minutes per week in each hour, ${formatDay(summary.punchcard.from)} to ${formatDay(summary.punchcard.to)}. Colours are the time of day.`,
+      return { ...base, state: "ready", note: `Minutes per week in each hour, ${formatDay(summary.punchcard.from)} to ${formatDay(summary.punchcard.to)}. Colors are the time of day.`,
         coverHeight: 115, habits: { chart: "punchcard", summary, view: view.punchcard } };
     case "habits-days":
       return { ...base, state: summary.days.slice(-view.shapeDays).some(day => day.you.first !== undefined) ? "ready" : "empty", emptyLabel: `No engaged time in the last ${view.shapeDays} days`,
-        note: "From your first engaged minute to your last; solid pieces are when you were engaged, coloured by time of day.",
+        note: "From your first engaged minute to your last; solid pieces are when you were engaged, colored by time of day.",
         coverHeight: 160, habits: { chart: "days", summary, count: view.shapeDays } };
   }
 }

@@ -253,7 +253,7 @@ func libraryDriveOf(config Config) libraryDrive {
 		drive.VolumeUUID = strings.TrimPrefix(config.VolumeID, "uuid:")
 	}
 	if drive.Location == "internal" {
-		drive.Name = "this Mac's internal disk"
+		drive.Name = "this Mac’s internal disk"
 	}
 	drive.Ejectable = drive.Mounted && strings.HasPrefix(drive.MountPoint, "/Volumes/") && drive.Location != "internal"
 	return drive
@@ -285,10 +285,10 @@ func (s *Server) libraryActivitiesProbing(probeLocks bool) []libraryActivity {
 			OnEject: "Stops between workspaces; the next index resumes it.", Stoppable: true, StopPath: "/api/index/cancel", Stopping: run.StopRequested}
 		if run.Kind == automaticRunKind {
 			activity.Automatic = true
-			activity.Label = "Automatic sync in progress"
+			activity.Label = "Automatic index in progress"
 		}
 		if run.Kind == manualSyncRunKind {
-			activity.Label = "Manual sync in progress"
+			activity.Label = "Manual index in progress"
 		}
 		if run.Kind == "library-update" {
 			activity.Label = "Capture & index"
@@ -427,14 +427,14 @@ func (s *Server) libraryActivitiesProbing(probeLocks bool) []libraryActivity {
 		"backtesting findings", "saving findings", "measuring findings results",
 	) {
 		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Updating findings",
-			Detail: "Looking for recurring patterns and measuring the ones you're watching (" + phase + ")", Writes: true,
+			Detail: "Looking for recurring patterns and measuring the ones you’re watching (" + phase + ")", Writes: true,
 			OnEject: "Stops; it runs again after the next index."})
 	}
 	if s.Catalog.authorshipRunning() && !runReports(
 		"refreshing authorship", "reading authorship inputs", "classifying authorship", "saving authorship",
 	) {
-		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Classifying your writing",
-			Detail: "Rebuilding human authorship for Usage", Writes: true,
+		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Updating writing estimates",
+			Detail: "Estimating which words in your conversations you wrote", Writes: true,
 			OnEject: "Stops; it runs again after the next index."})
 	}
 	if progress, err := s.Catalog.substringIndexProgress(context.Background()); err == nil && !progress.Ready && progress.Total > 0 {
@@ -459,7 +459,7 @@ func (s *Server) libraryActivitiesProbing(probeLocks bool) []libraryActivity {
 	// refreshed within seconds of each commit.
 	if s.Catalog.libraryCatchingUp() {
 		if pending, err := s.Catalog.libraryPending(100_000); err == nil && pending > 0 {
-			activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Indexing the Library view",
+			activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Indexing the Search view",
 				Detail: plural(pending, "workspace") + " to index", Writes: true,
 				OnEject: "Stops; it carries on when Pharos next opens the library.", Stoppable: true, StopPath: "/api/library/refresh/stop"})
 		}

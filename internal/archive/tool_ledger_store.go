@@ -68,11 +68,16 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 }
 
 func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord) error {
-	var priorVersion string
-	if err := tx.QueryRow("SELECT version FROM tool_ledger_state WHERE conversation_id=?", conversationID).Scan(&priorVersion); err != nil && err != sql.ErrNoRows {
+	// The version is the stored conversation's (toolLedgerScopes), read here
+	// so that every writer agrees with the queries that look for stale ledgers.
+	var provider, sourceKind, prior sql.NullString
+	if err := tx.QueryRow(`SELECT c.provider,w.source_kind,s.version FROM conversations c
+		LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN tool_ledger_state s ON s.conversation_id=c.id WHERE c.id=?`,
+		conversationID).Scan(&provider, &sourceKind, &prior); err != nil && err != sql.ErrNoRows {
 		return err
 	}
-	if priorVersion != toolLedgerVersion {
+	priorVersion, version := prior.String, toolLedgerVersionFor(provider.String, sourceKind.String)
+	if priorVersion != version {
 		// Another version's rows are all offered again, whatever fingerprints
 		// were kept for them. They are not deleted first: most come out the
 		// same, and a row that is replaced by itself costs every index and
@@ -96,7 +101,7 @@ func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversatio
 	needsWrite := func(kind, id string, value any) (bool, error) {
 		key := kind + ":" + id
 		retained[key] = true
-		fingerprint := hashBytes([]byte(toolLedgerVersion + ":" + workspaceID + ":" + conversation.Provider + ":" + jsonText(value)))
+		fingerprint := hashBytes([]byte(version + ":" + workspaceID + ":" + conversation.Provider + ":" + jsonText(value)))
 		if inputs[key] == fingerprint {
 			return false, nil
 		}
@@ -228,17 +233,10 @@ func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversatio
 			return err
 		}
 		defer urlStatement.Close()
-		// A replay of another version's rows keeps their rowids, so related
-		// conversations (RefreshPeerLinks), which look for new rows, would not
-		// see a call whose classification the replay corrected. Its start is
-		// recorded as a result that arrives late is.
-		replay, corrected := priorVersion != "" && priorVersion != toolLedgerVersion, ""
-		changes := func(result sql.Result, err error) (int64, error) {
-			if err != nil {
-				return 0, err
-			}
-			return result.RowsAffected()
-		}
+		// A replay of another version's rows keeps their rowids. Related
+		// conversations (RefreshPeerLinks), which look for new rows, learn of
+		// a call the replay classified differently from the triggers on these
+		// tables (peerTriggerDDL), and of no call it only stored again.
 		for _, call := range calls {
 			id := stableID("tool-call", conversationID, call.Key)
 			write, err := needsWrite("call", id, call)
@@ -248,7 +246,6 @@ func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversatio
 			if !write {
 				continue
 			}
-			var rewritten int64
 			commandPositions, urlPositions := []int{}, []int{}
 			for _, command := range call.Commands {
 				commandPositions = append(commandPositions, command.Position)
@@ -257,13 +254,11 @@ func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversatio
 				urlPositions = append(urlPositions, address.Position)
 			}
 			for table, positions := range map[string][]int{"tool_commands": commandPositions, "tool_urls": urlPositions} {
-				n, err := changes(tx.Exec("DELETE FROM "+table+" WHERE tool_call_id=? AND position NOT IN (SELECT value FROM json_each(?))", id, jsonText(positions)))
-				if err != nil {
+				if _, err := tx.Exec("DELETE FROM "+table+" WHERE tool_call_id=? AND position NOT IN (SELECT value FROM json_each(?))", id, jsonText(positions)); err != nil {
 					return err
 				}
-				rewritten += n
 			}
-			n, err := changes(callStatement.Exec(id, workspaceID, conversationID, sessionID(call.Stream), nilIfEmpty(call.CallID),
+			if _, err := callStatement.Exec(id, workspaceID, conversationID, sessionID(call.Stream), nilIfEmpty(call.CallID),
 				messageID(call.CallNativeID), messageID(call.ResultNativeID), call.Sequence, conversation.Provider, nilIfEmpty(call.Model), nilIfEmpty(call.Effort),
 				call.Kind, call.ToolName, call.Category, nilIfEmpty(call.MCPServer), nilIfEmpty(call.Command), nilIfEmpty(call.Program),
 				nilIfEmpty(call.Subcommand), nilIfEmpty(call.CommandCategory), call.CommandCount, boolInt(call.HasPipe), boolInt(call.HasRedirect),
@@ -273,31 +268,19 @@ func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversatio
 				nilIfEmpty(call.ResultTokensSource), requestID(call.RequestKey), requestID(call.NextRequestKey), call.ParallelCount,
 				call.OutputTokens, call.CarriedRequests, call.CarriedTokens, nullableInt(call.LinesAdded), nullableInt(call.LinesRemoved),
 				nilIfEmpty(call.URL), nilIfEmpty(call.Host), nilIfEmpty(call.Hosts), call.URLCount, nilIfEmpty(call.SearchQuery), nilIfEmpty(call.ErrorSignature), boolInt(call.TestFailure), nilIfEmpty(call.RepoPath), nilIfEmpty(call.PathRepository), nilIfEmpty(call.PathRepositoryID), nilIfEmpty(call.PathScope), nilIfEmpty(call.PathAbsolute),
-				nilIfEmpty(call.WaitKind), nilIfEmpty(call.WaitEndedAt), nilIfEmpty(call.WaitStatus), nilIfEmpty(call.WaitEndSource), call.WaitEvents))
-			if err != nil {
+				nilIfEmpty(call.WaitKind), nilIfEmpty(call.WaitEndedAt), nilIfEmpty(call.WaitStatus), nilIfEmpty(call.WaitEndSource), call.WaitEvents); err != nil {
 				return err
 			}
-			rewritten += n
 			for _, command := range call.Commands {
-				n, err := changes(commandStatement.Exec(id, command.Position, nilIfEmpty(command.Operator), command.Command, nilIfEmpty(command.Program),
-					nilIfEmpty(command.Subcommand), nilIfEmpty(command.Category), nullableInt(command.ExitCode), nullableInt(command.DurationMS)))
-				if err != nil {
+				if _, err := commandStatement.Exec(id, command.Position, nilIfEmpty(command.Operator), command.Command, nilIfEmpty(command.Program),
+					nilIfEmpty(command.Subcommand), nilIfEmpty(command.Category), nullableInt(command.ExitCode), nullableInt(command.DurationMS)); err != nil {
 					return err
 				}
-				rewritten += n
-			}
-			if replay && rewritten > 0 && call.StartedAt != "" && (corrected == "" || call.StartedAt < corrected) {
-				corrected = call.StartedAt
 			}
 			for _, address := range call.URLs {
 				if _, err := urlStatement.Exec(id, address.Position, address.URL, address.Host, address.Source); err != nil {
 					return err
 				}
-			}
-		}
-		if corrected != "" {
-			if _, err := tx.Exec(`INSERT INTO work_peer_links_dirty VALUES(1,?,hex(randomblob(8))) ON CONFLICT(id) DO UPDATE SET since=min(since,excluded.since),revision=excluded.revision`, corrected); err != nil {
-				return err
 			}
 		}
 	}
@@ -360,7 +343,7 @@ func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversatio
 	if _, err := tx.Exec(`INSERT INTO tool_ledger_state(conversation_id,version,tool_calls,updated_at) VALUES(?,?,?,?)
 		ON CONFLICT(conversation_id) DO UPDATE SET version=excluded.version,tool_calls=excluded.tool_calls,updated_at=excluded.updated_at
 		WHERE tool_ledger_state.version<>excluded.version OR tool_ledger_state.tool_calls<>excluded.tool_calls`,
-		conversationID, toolLedgerVersion, len(calls), now()); err != nil {
+		conversationID, version, len(calls), now()); err != nil {
 		return err
 	}
 	// Request writes invalidate the projection; fill pending summaries even
@@ -450,9 +433,7 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 		return 0, fmt.Errorf("a tool index build is already running")
 	}
 	defer state.backfill.Unlock()
-	pending, err := queryMapsContext(ctx, c.DB, `SELECT c.id,c.workspace_id,c.provider,c.model FROM conversations c
-		LEFT JOIN tool_ledger_state s ON s.conversation_id=c.id
-		WHERE s.conversation_id IS NULL OR s.version<>? ORDER BY c.started_at DESC`, toolLedgerVersion)
+	pending, err := queryMapsContext(ctx, c.DB, toolLedgerPendingSQL("c.id")+` ORDER BY c.started_at DESC`)
 	if err != nil {
 		return 0, err
 	}
@@ -542,9 +523,9 @@ func (c *Catalog) toolLedgerProgress() toolLedgerBuild {
 // ToolLedgerStatus reports ledger coverage and any in-process backfill.
 func (c *Catalog) ToolLedgerStatus(ctx context.Context) (map[string]any, error) {
 	var conversations, current, calls int64
-	if err := c.reader().QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM conversations),
-		(SELECT COUNT(*) FROM tool_ledger_state WHERE version=?),
-		(SELECT COALESCE(SUM(tool_calls),0) FROM tool_ledger_state WHERE version=?)`, toolLedgerVersion, toolLedgerVersion).Scan(&conversations, &current, &calls); err != nil {
+	if err := c.reader().QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM conversations),COUNT(*),COALESCE(SUM(s.tool_calls),0)
+		FROM tool_ledger_state s JOIN conversations c ON c.id=s.conversation_id LEFT JOIN workspaces w ON w.id=c.workspace_id
+		WHERE s.version=`+toolLedgerVersionSQL("c", "w")).Scan(&conversations, &current, &calls); err != nil {
 		return nil, err
 	}
 	state := &c.tools

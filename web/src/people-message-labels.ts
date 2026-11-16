@@ -32,7 +32,7 @@ export function peopleMessageLabelCatalog(catalog: AnalysisCatalog, state: Analy
     ...measures[metric], op: 'count', field: 'message_id', value: undefined, expression: undefined,
     additive: true,
     where: [{ field: 'people_scope', op: '=', value: scope }, ...measures[metric].where ?? []],
-    note: measures[metric].note + ' Each message counts once under its highest-confidence specific label, or that label’s family at general resolution. Groups add up to the message total. Missing labels remain visible as Uncategorized.',
+    note: measures[metric].note + ' Each message counts once, under its highest-confidence specific label or, in the general breakdown, that label’s general label. Groups add up to the message total. Missing labels remain visible as Uncategorized.',
   };
   return {
     ...catalog, dataset: 'people_message_labels', measures, trend: { ...catalog.trend, allSeries: true },

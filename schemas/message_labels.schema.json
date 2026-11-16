@@ -260,7 +260,7 @@
     },
     {
       "name": "label",
-      "label": "Specific Label",
+      "label": "Specific label",
       "type": "text",
       "group": "Context",
       "bindings": {
@@ -280,7 +280,7 @@
     },
     {
       "name": "family",
-      "label": "General Label",
+      "label": "General label",
       "type": "text",
       "group": "Context",
       "bindings": {

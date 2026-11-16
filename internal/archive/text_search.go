@@ -503,7 +503,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		}
 		small := o.Surface == "prose" || o.Surface == "user" || o.Surface == "assistant" || o.Surface == "reasoning" || span
 		if !scoped && (!small || !ready) {
-			return result, fmt.Errorf("this scan needs a conversation or workspace filter (or a ready small-surface index); token searches can cover the full archive")
+			return result, fmt.Errorf("This search needs a conversation or workspace filter, unless it searches only message text and that index is ready. Word searches can cover the whole library.")
 		}
 		if ready && small {
 			hasDocuments = true

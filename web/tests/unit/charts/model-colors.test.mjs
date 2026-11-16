@@ -357,8 +357,8 @@ test('failed reads and saves retain the palette; an old read cannot undo a succe
   t.after(() => installModelColors(palette()));
   installModelColors(palette({ 'provider:openai': '#123456' }));
   t.mock.method(globalThis, 'fetch', async () => ({ ok: false }));
-  await assert.rejects(saveModelColor('provider', 'openai', '#abcdef'), /could not be saved/);
-  await assert.rejects(loadModelColors(), /could not be loaded/);
+  await assert.rejects(saveModelColor('provider', 'openai', '#abcdef'), /Could not save model colors/);
+  await assert.rejects(loadModelColors(), /Could not load model colors/);
   assert.equal(effectiveModelColor('provider', 'openai'), '#123456');
   const oldRead = Promise.withResolvers();
   t.mock.method(globalThis, 'fetch', async (_url, options) => {
@@ -396,7 +396,7 @@ test('a palette save sends all drafts and removals together and installs only a 
     assert.deepEqual(JSON.parse(options.body), {changes});
     return {ok:succeed, json:async () => palette({'provider:openai':'#7547b3', 'model:gpt-6-luna':'#abcdef', 'model:sonnet-4-5':'#aa7755'})};
   });
-  await assert.rejects(saveModelColors(changes), /could not be saved/);
+  await assert.rejects(saveModelColors(changes), /Could not save model colors/);
   assert.deepEqual(modelPalette().overrides, before);
   succeed = true;
   await saveModelColors(changes);

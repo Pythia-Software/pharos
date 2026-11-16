@@ -26,6 +26,11 @@ type Host struct {
 	MachineID string `json:"machine_id,omitempty"`
 	Label     string `json:"label"`
 	User      string `json:"user"`
+	// A host collected from a bucket may belong to a pool of short-lived
+	// machines, which is its machine, and may declare the platform its
+	// work was started through, which is its conversations' channel.
+	machineLabel, machineKind string
+	channel, channelEvidence  string
 	// Fallback marks an ID derived from the hostname, because neither ioreg
 	// nor an earlier run could name this Mac's hardware. Such an ID is not
 	// this Mac's lasting identity, so nothing is recorded under it (see
@@ -149,10 +154,16 @@ func commandOutput(name string, args ...string) string {
 func (c *Catalog) registerHost(host Host, seen string) error {
 	seen = defaultString(seen, now())
 	if host.MachineID != "" {
-		if _, err := c.DB.Exec(`INSERT INTO machines VALUES(?,?,'device') ON CONFLICT(id) DO UPDATE SET label=excluded.label WHERE machines.label<>excluded.label`, host.MachineID, host.Label); err != nil {
+		if _, err := c.DB.Exec(`INSERT INTO machines VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET label=excluded.label,kind=excluded.kind WHERE machines.label<>excluded.label OR machines.kind<>excluded.kind`,
+			host.MachineID, defaultString(host.machineLabel, host.Label), defaultString(host.machineKind, "device")); err != nil {
 			return err
 		}
 		if _, err := c.DB.Exec(`INSERT INTO host_machines VALUES(?,?) ON CONFLICT(host_id) DO UPDATE SET machine_id=excluded.machine_id WHERE host_machines.machine_id<>excluded.machine_id`, host.ID, host.MachineID); err != nil {
+			return err
+		}
+	}
+	if host.channel != "" {
+		if _, err := c.DB.Exec(`INSERT INTO host_channels VALUES(?,?,?) ON CONFLICT(host_id) DO UPDATE SET channel=excluded.channel,evidence=excluded.evidence`, host.ID, host.channel, host.channelEvidence); err != nil {
 			return err
 		}
 	}

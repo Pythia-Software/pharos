@@ -49,7 +49,7 @@ func statisticsFixture(t *testing.T) *Catalog {
 		}
 	}
 	for _, id := range []string{"c1", "c2"} {
-		if _, err := c.DB.Exec("INSERT INTO tool_ledger_state VALUES(?,?,0,'x')", id, toolLedgerVersion); err != nil {
+		if _, err := c.DB.Exec("INSERT INTO tool_ledger_state VALUES(?,?,0,'x')", id, toolLedgerVersionFor("codex", "codex")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -717,6 +717,43 @@ func TestStatisticsPendingProjectionRetainsRecordedEvidence(t *testing.T) {
 	}
 	if len(s.Rows) != 1 || s.Rows[0].Metrics["total_tokens"].Status != "pending" || s.Rows[0].Metrics["total_tokens"].effective("available") != nil || *s.Rows[0].Metrics["total_tokens"].Value != 1800000 {
 		t.Fatalf("pending evidence %#v", s.Rows)
+	}
+}
+
+// Tool counts are pending only for a conversation whose own ledger version
+// is behind, which a scoped revision (toolLedgerScopes) makes it and a
+// revision for other conversations does not.
+func TestStatisticsToolCountsFollowTheLedgerScope(t *testing.T) {
+	override(t, &toolLedgerScopes, nil)
+	c := statisticsFixture(t)
+	status := func() string {
+		t.Helper()
+		execTx(t, c.DB, "INSERT OR IGNORE INTO mcp_metric_dirty SELECT id FROM workspaces")
+		if _, err := c.refreshMetricProjections(t.Context(), 10); err != nil {
+			t.Fatal(err)
+		}
+		r, err := parseMetricRequest("query_statistics", map[string]any{"select": []string{"tool_call_count"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := c.buildStatisticsSnapshot(t.Context(), r)
+		if err != nil || len(s.Rows) != 1 {
+			t.Fatalf("snapshot %#v, %v", s.Rows, err)
+		}
+		return s.Rows[0].Metrics["tool_call_count"].Status
+	}
+	if got := status(); got != "complete" {
+		t.Fatalf("current ledgers: tool calls are %q", got)
+	}
+	toolLedgerScopes = []toolLedgerScope{{SourceKind: "claude-ai", Revision: "other-source"}, {Provider: "claude", Revision: "other-provider"}}
+	if got := status(); got != "complete" {
+		t.Fatalf("revisions for other conversations: tool calls are %q", got)
+	}
+	for _, scope := range []toolLedgerScope{{SourceKind: "codex", Revision: "this-source"}, {Provider: "codex", Revision: "this-provider"}} {
+		toolLedgerScopes = []toolLedgerScope{scope}
+		if got := status(); got != "pending" {
+			t.Fatalf("%+v: tool calls are %q", scope, got)
+		}
 	}
 }
 

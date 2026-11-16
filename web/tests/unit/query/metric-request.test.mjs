@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { core, schemas } from "../helpers/recipes.mjs";
 import { queryCapabilities, answerQuery, population } from "../../support/query-server.mjs";
-import { MetricRequestError, metricRequest, metricResults, postMetrics } from "../../../src/metric-request";
+import { MetricRequestError, metricRequest, metricRequestBatches, metricResults, postMetrics } from "../../../src/metric-request";
+import { carbonUsage, carbonUsageMetrics } from "../../../src/carbon-usage";
 import { queryRequest, queryFetch, QueryRequestError, shouldSkipQueryOnRestore } from "../../../src/query-request";
 import { tokenSummaryMetrics, tokenTypes } from "../../../src/token-chart-request";
 import { trendQuery } from "../../../src/dashboard-trend-model";
@@ -40,7 +41,7 @@ test("a failed or missing metric fails the read instead of reading as zero", () 
   const failed = { metrics: [ok.metrics[1], { id: "b", buckets: [], error: "group population exceeds host budget", errorCode:"resource_limit" }] };
   assert.throws(() => metricResults(failed, clauses), error => error instanceof MetricRequestError && error.resourceLimit && /group population/.test(error.message));
   assert.throws(() => metricResults({ metrics: [{ id: "b", buckets: [], error: "type_error" }, ok.metrics[1]] }, clauses), error => error instanceof MetricRequestError && !error.resourceLimit);
-  assert.throws(() => metricResults({ metrics: [ok.metrics[1]] }, clauses), /omitted the metric b/);
+  assert.throws(() => metricResults({ metrics: [ok.metrics[1]] }, clauses), /did not return every result this chart needs \(metric b\)/);
   assert.throws(() => metricResults({ metrics: [ok.metrics[1], { id: "b", buckets: [], error: "group population exceeds the 50,000-group host budget" }] }, clauses), error => !error.resourceLimit, "Machine Time's own budget is not one a larger executor answers");
 });
 
@@ -67,6 +68,18 @@ test("standalone charts run the same metrics through /query-v3 without rows", as
   const kept = rows.filter(row => row.status === "ok");
   assert.equal(calls.buckets[0].value, kept.length);
   assert.equal(time.buckets.reduce((total, bucket) => total + bucket.value, 0), kept.reduce((total, row) => total + row.duration_ms, 0));
+});
+
+test("a read larger than the service's metric limit, estimate companions included, goes out in batches", async t => {
+  const { requests } = server(t, "usage");
+  const metrics = await postMetrics("usage", schemas.usage, [], carbonUsageMetrics);
+  const posted = requests.filter(request => request.path.endsWith("/query-v3"));
+  assert.ok(posted.length > 1);
+  assert.ok(posted.every(request => request.body.metrics.length <= core.MAX_AGGREGATIONS));
+  assert.deepEqual(metrics.map(metric => metric.id), carbonUsageMetrics.map(metric => metric.id));
+  assert.doesNotThrow(() => carbonUsage(metrics), "Carbon reads its complete usage");
+  const small = metricRequest(schemas.usage, [], carbonUsageMetrics.slice(0, 2), queryCapabilities);
+  assert.equal(metricRequestBatches("usage", small).length, 1, "a read within the limit stays one request");
 });
 
 test("the Tokens trend sums by its period's field and split; cost by type is by provider", () => {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -263,8 +264,133 @@ func TestPeerLinksFromReadDiffsCopiesAndTL1(t *testing.T) {
 	if l, ok := storedPeerLinks(t, c)["read_written_by:impl>pending"]; !ok || l.rightMessage != pending {
 		t.Fatalf("a diff whose output arrived later was not read: %+v", l)
 	}
-	if err := c.DB.QueryRow(`SELECT 1 FROM work_peer_links_dirty`).Scan(new(int)); err != sql.ErrNoRows {
-		t.Fatalf("late output stays marked after the refresh read it: %v", err)
+	noted := func() int {
+		return countRows(t, c, `SELECT (SELECT COUNT(*) FROM work_peer_links_changed)+(SELECT COUNT(*) FROM work_peer_links_dirty)`)
+	}
+	if noted() != 0 {
+		t.Fatal("late output stays noted after the refresh read it")
+	}
+	// Whatever was written, the links are those a rescan of everything finds.
+	rescanned := func(step string) {
+		t.Helper()
+		if err := c.RefreshPeerLinks(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if noted() != 0 {
+			t.Fatalf("%s: stays noted after the refresh", step)
+		}
+		incremental := storedPeerLinks(t, c)
+		execSQL(t, c.DB, `DELETE FROM meta WHERE key='peer_links_version'`)
+		if err := c.RefreshPeerLinks(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if full := storedPeerLinks(t, c); !maps.Equal(incremental, full) {
+			t.Fatalf("%s: links %v, a full rescan finds %v", step, incremental, full)
+		}
+	}
+	rescanned("late output")
+	// A replay of the ledger for a new version stores every call again with
+	// columns no link is derived from: nothing is noted, however old the
+	// calls, and no reader is derived again.
+	execSQL(t, c.DB, `INSERT INTO tool_commands(tool_call_id,position,command,program,subcommand) SELECT id,0,'ls','ls',NULL FROM tool_calls`,
+		`UPDATE tool_calls SET wait_kind='monitor',wait_events=wait_events+1,ended_at=started_at,duration_ms=5,status='error',command='x',result_bytes=9,tool_name=tool_name,tool_category=tool_category`,
+		`UPDATE tool_commands SET command='ls -l',category='list',exit_code=0`,
+		`DELETE FROM tool_commands`)
+	progress = nil
+	if err := c.RefreshPeerLinks(watched); err != nil {
+		t.Fatal(err)
+	}
+	if noted() != 0 || len(progress) != 0 {
+		t.Fatalf("calls stored again with nothing a link reads changed: %d conversations noted, readers derived again %v", noted(), progress)
+	}
+	// One that classifies a call differently notes its conversation, and
+	// only that: the diff is no longer one, so its link goes.
+	changed := func(step string, want bool) {
+		t.Helper()
+		var conversation string
+		if err := c.DB.QueryRow(`SELECT conversation_id FROM work_peer_links_changed WHERE first=?1 AND last=?1`, f.at(43)).Scan(&conversation); err != nil || conversation != "pending-c" {
+			t.Fatalf("%s: noted %q, want the changed call's conversation and start (%v)", step, conversation, err)
+		}
+		rescanned(step)
+		if _, ok := storedPeerLinks(t, c)["read_written_by:impl>pending"]; ok != want {
+			t.Fatalf("%s: linked=%v, want %v", step, ok, want)
+		}
+	}
+	execSQL(t, c.DB, `UPDATE tool_calls SET subcommand='status',command_count=2 WHERE id='`+pending+`'`)
+	changed("a diff classified as another command", false)
+	// So do a compound call's commands, when one of them shows changes.
+	execSQL(t, c.DB, `INSERT INTO tool_commands(tool_call_id,position,command,program,subcommand) VALUES('`+pending+`',0,'git status --short','git','status'),('`+pending+`',1,'git diff','git','diff')`)
+	changed("a command that shows changes added", true)
+	execSQL(t, c.DB, `UPDATE tool_commands SET subcommand='log' WHERE tool_call_id='`+pending+`' AND position=1`)
+	changed("a command classified as not showing changes", false)
+	execSQL(t, c.DB, `UPDATE tool_commands SET subcommand='show' WHERE tool_call_id='`+pending+`' AND position=1`)
+	changed("a command classified as showing changes", true)
+	execSQL(t, c.DB, `DELETE FROM tool_commands WHERE tool_call_id='`+pending+`' AND position=1`)
+	changed("a command that shows changes removed", false)
+	execSQL(t, c.DB, `UPDATE tool_calls SET subcommand='diff' WHERE id='`+pending+`'`)
+	changed("a call classified as a diff", true)
+	// A removed call is noted as well.
+	execSQL(t, c.DB, `DELETE FROM tool_calls WHERE id='`+pending+`'`)
+	changed("a diff removed", false)
+	// A call no link can be derived from is not noted, whatever changes.
+	execSQL(t, c.DB, `INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,program,started_at,status)
+ VALUES('listing','impl','impl-c',900,'codex','tool_call','Bash','command','ls','`+f.at(2)+`','ok')`)
+	if err := c.RefreshPeerLinks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, c.DB, `UPDATE tool_calls SET result_message_id='impl-done',started_at='`+f.at(3)+`',subcommand='-l' WHERE id='listing'`, `DELETE FROM tool_calls WHERE id='listing'`)
+	if noted() != 0 {
+		t.Fatalf("a call no link reads noted %d conversations", noted())
+	}
+	// A start that is no time opens no span: one such call must not have
+	// every reader in the library derived again.
+	execSQL(t, c.DB, `INSERT INTO work_peer_links_changed(conversation_id,first,last,revision) VALUES('impl-c','not a time','not a time','r')`)
+	progress = nil
+	if err := c.RefreshPeerLinks(watched); err != nil {
+		t.Fatal(err)
+	}
+	for _, work := range progress {
+		if work.Total != 0 {
+			t.Fatalf("a start that is no time derived %v readers again", work.Total)
+		}
+	}
+	rescanned("a start that is no time")
+	// A deleted conversation takes its calls and messages with it, and its
+	// family is found by what remains: its workspace, or a link left
+	// anchored on a message that is gone.
+	for _, gone := range []struct{ conversation, link, forget string }{
+		{"second-c", "read_written_by:impl>second", ""},
+		{"review-helper", "read_written_by:impl>review", `UPDATE work_peer_links_changed SET workspace_id=NULL`},
+	} {
+		if _, ok := storedPeerLinks(t, c)[gone.link]; !ok {
+			t.Fatalf("fixture: %s is not linked", gone.link)
+		}
+		execSQL(t, c.DB, `DELETE FROM tool_calls WHERE conversation_id='`+gone.conversation+`'`, `DELETE FROM messages WHERE conversation_id='`+gone.conversation+`'`,
+			`DELETE FROM conversations WHERE id='`+gone.conversation+`'`)
+		if gone.forget != "" {
+			execSQL(t, c.DB, gone.forget)
+		}
+		rescanned("deleted " + gone.conversation)
+		if _, ok := storedPeerLinks(t, c)[gone.link]; ok {
+			t.Fatalf("%s outlived the conversation that read the lines", gone.link)
+		}
+	}
+	// What a build before these triggers noted, the earliest start alone, is
+	// still read.
+	execSQL(t, c.DB, `INSERT INTO work_peer_links_dirty VALUES(1,'`+f.at(0)+`','legacy')`)
+	rescanned("an earlier build's note")
+	// A catalog from such a build gets these triggers in place of its own
+	// when it opens, with nothing noted and so nothing derived again; that
+	// build puts its trigger back if it opens the catalog later.
+	execSQL(t, c.DB, `DROP TRIGGER work_peer_links_tool_calls_update`,
+		`CREATE TRIGGER work_peer_links_result_update AFTER UPDATE OF result_message_id ON tool_calls BEGIN
+ INSERT INTO work_peer_links_dirty VALUES(1,new.started_at,hex(randomblob(8))) ON CONFLICT(id) DO UPDATE SET since=min(since,excluded.since),revision=excluded.revision; END`)
+	if err := c.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, c.DB, `UPDATE tool_calls SET result_message_id=result_message_id,wait_events=wait_events+1`)
+	if triggers := countRows(t, c, `SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name IN ('work_peer_links_tool_calls_update','work_peer_links_result_update')`); triggers != 1 || noted() != 0 {
+		t.Fatalf("opening an earlier build's catalog: %d of its and this build's update triggers, %d conversations noted", triggers, noted())
 	}
 	// A family that joins another (here, launched by the review) stops being
 	// related work of its own.
@@ -293,7 +419,7 @@ func TestPeerLinksFromReadDiffsCopiesAndTL1(t *testing.T) {
 func TestPeerLinkConfidence(t *testing.T) {
 	c, _ := testCatalog(t)
 	f := newPeerFixture(t, c.DB)
-	for _, id := range []string{"writer", "busy", "untimed", "busy-late", "reader", "rival", "tied", "writer2", "returner", "writer3", "rereader", "compound"} {
+	for _, id := range []string{"writer", "busy", "untimed", "busy-late", "reader", "rival", "tied", "writer2", "returner", "writer3", "rereader", "compound", "writer4", "anchored"} {
 		f.work(id, id)
 	}
 	lines := peerLines("Writer", 6)
@@ -348,6 +474,16 @@ func TestPeerLinkConfidence(t *testing.T) {
 	compound := f.read("compound-c", 905, true, lines3...)
 	f.exec(`UPDATE tool_calls SET subcommand='status',command_count=2 WHERE id=?`, compound)
 	f.exec(`INSERT INTO tool_commands(tool_call_id,position,command,program,subcommand) VALUES(?,0,'git status --short','git','status'),(?,1,'git diff','git','diff')`, compound, compound)
+	// Lines from two of a writer's edits, shown by one diff: the link is
+	// anchored on the later edit, whatever order the lines are met in.
+	early, later := peerLines("Early", 4), peerLines("Later", 4)
+	f.message("writer4-ask", "writer4-c", "user", "message", "Write the fourth part", 1000)
+	f.edit("writer4-c", 1001, early...)
+	f.edit("writer4-c", 1002, later...)
+	anchor := fmt.Sprintf("edit-%d", f.seq)
+	f.message("writer4-done", "writer4-c", "assistant", "message", "Written.", 1003)
+	f.message("anchored-ask", "anchored-c", "user", "message", "Review the fourth part", 1004)
+	f.read("anchored-c", 1005, true, append(early, later...)...)
 	// A short quote is uncertain; a reply quoted days later is not linked.
 	for _, quote := range []struct {
 		id            string
@@ -370,6 +506,18 @@ func TestPeerLinkConfidence(t *testing.T) {
 		"read_written_by:writer2>returner": peerHigh + "/return",
 		"read_written_by:writer3>rereader": peerHigh + "/start",
 		"read_written_by:writer3>compound": peerHigh + "/start",
+		"read_written_by:writer4>anchored": peerHigh + "/start",
+	}
+	// A rescan stores the same links every time.
+	for range 6 {
+		execSQL(t, c.DB, `DELETE FROM meta WHERE key='peer_links_version'`)
+		if err := c.RefreshPeerLinks(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		again := storedPeerLinks(t, c)
+		if l := again["read_written_by:writer4>anchored"]; l.leftMessage != anchor || !maps.Equal(again, links) {
+			t.Fatalf("a rescan anchored the link on %q, want the writer's later edit %q; links %v, first %v", l.leftMessage, anchor, again, links)
+		}
 	}
 	if l := links["read_written_by:writer3>rereader"]; l.rightMessage != rediff {
 		t.Fatalf("a diff link is anchored on %q, not the diff %q", l.rightMessage, rediff)
@@ -457,6 +605,10 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 		out := map[string]string{}
 		for _, p := range get("/api/work/" + workspace)["peers"].([]any) {
 			peer := p.(map[string]any)
+			// A chip shows the provider's display name beside its stored key.
+			if provider := firstString(peer["provider"]); provider != "" && firstString(peer["provider_name"]) != providerDisplayName(provider) {
+				t.Fatalf("peer %v names its provider %q", peer["workspace_id"], peer["provider_name"])
+			}
 			out[firstString(peer["workspace_id"])] = firstString(peer["role"]) + "/" + firstString(peer["confidence"]) + "/" + firstString(peer["via"])
 		}
 		return out
@@ -531,6 +683,9 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 		otherConversation := false
 		for _, item := range overview["peer_conversations"].([]any) {
 			conversation := item.(map[string]any)
+			if provider := firstString(conversation["provider"]); provider != "" && firstString(conversation["provider_name"]) != providerDisplayName(provider) {
+				t.Fatalf("peer conversation %v names its provider %q", conversation["id"], conversation["provider_name"])
+			}
 			if conversation["id"] == "other-c" {
 				otherConversation = true
 				if conversation["peer_confidence"] != "low" {

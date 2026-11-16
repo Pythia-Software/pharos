@@ -14,7 +14,7 @@ export function agentEventsFreshnessNote(coverage: AgentEventsCoverage | null | 
   if (!coverage || coverage.state === "current") return "";
   const withheld = Number(coverage.withheld_conversations) || 0, pending = Number(coverage.pending_conversations) || 0;
   const parts = [
-    withheld ? `Events for ${withheld.toLocaleString()} conversation${withheld === 1 ? "" : "s"} are left out until they are rebuilt for changed session evidence.` : "",
+    withheld ? `Events for ${withheld.toLocaleString()} conversation${withheld === 1 ? " are left out until Pharos re-reads it; its recorded session changed." : "s are left out until Pharos re-reads them; their recorded sessions changed."}` : "",
     pending ? `${pending.toLocaleString()} conversation${pending === 1 ? " is" : "s are"} waiting for events to be rebuilt.` : "",
   ].filter(Boolean);
   if (coverage.state === "unknown") parts.unshift("Conversations changed since the last events run.");
@@ -29,8 +29,8 @@ export function agentEventsFreshnessNote(coverage: AgentEventsCoverage | null | 
 export function agentEventsStillCountedNote(coverage: AgentEventsCoverage | null | undefined): string {
   if (!coverage || coverage.state === "current") return "";
   const waiting = Math.max(Number(coverage.pending_conversations) || 0, Number(coverage.withheld_conversations) || 0);
-  const lead = waiting ? `Events for ${waiting.toLocaleString()} conversation${waiting === 1 ? " are" : "s are"} waiting to be rebuilt for changed transcripts or session evidence and still count here.`
-    : coverage.state === "unknown" ? "Conversations changed since the last events run, and their events still count here." : "Some events are waiting to be rebuilt and still count here.";
+  const lead = waiting ? `Events for ${waiting.toLocaleString()} conversation${waiting === 1 ? " are" : "s are"} waiting to be updated after a change and still count here.`
+    : coverage.state === "unknown" ? "Conversations changed since the last events run, and their events still count here." : "Some events are waiting to be updated and still count here.";
   return `${lead} These counts may change.`;
 }
 
@@ -42,8 +42,8 @@ export function agentEventsStillCountedNote(coverage: AgentEventsCoverage | null
  */
 export function agentEventItemPendingMessage(dataset: string, answer: { row?: unknown; pending?: boolean; coverage?: AgentEventsCoverage } | null | undefined): string | null {
   if (!(agentEventDatasets as readonly string[]).includes(dataset) || !answer || answer.row || answer.pending !== true) return null;
-  const noun = dataset === "agent_events" ? "This event" : "This message's events";
-  return `${noun} will be back once events are rebuilt for changed session evidence; until then it is left out rather than shown with an outdated attribution. Retry after the next events run.`;
+  const one = dataset === "agent_events";
+  return `${one ? "This event is" : "This message’s events are"} hidden until Pharos re-reads its conversation, which changed since ${one ? "it was" : "they were"} found. Try again after the next agent events run.`;
 }
 
 /**

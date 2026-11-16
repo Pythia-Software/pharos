@@ -14,13 +14,13 @@ func (s *Server) workSettings() map[string]any {
 	config := s.Config()
 	locked := ""
 	if _, ok := backgroundCPUsFromEnv(); ok {
-		locked = "PHAROS_BACKGROUND_CPUS sets this allowance at process start."
+		locked = "Set by PHAROS_BACKGROUND_CPUS when Pharos started. Quit Pharos and reopen it without PHAROS_BACKGROUND_CPUS to change it here."
 	} else if config.Path == "" {
-		locked = "This service has no writable configuration path."
+		locked = "This library has no settings file Pharos can write, so this allowance cannot be changed here."
 	}
 	return map[string]any{"available": s.work != nil, "engine": defaultString(config.WorkEngine, "classic"), "cpu_slots": max(1, config.BackgroundCPUs), "max_cpu_slots": runtime.NumCPU(),
 		"scope": "this process", "can_change": s.work != nil && locked == "", "locked_reason": locked,
-		"description": "Shared background worker allowance for this library service. Other Pharos processes have separate allowances; interactive queries remain available.",
+		"description": "Shared background worker allowance for this library. Other Pharos processes have separate allowances; interactive queries remain available.",
 		"enforcement": "Cooperative Go pools and native worker threads; an allowance is not measured CPU use or an OS affinity limit."}
 }
 

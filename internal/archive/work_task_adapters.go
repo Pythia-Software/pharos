@@ -299,7 +299,7 @@ func runConversationWork(ctx context.Context, c *Catalog, selection workSelectio
 			}
 		}
 		out.Superseded = append(out.Superseded, workRetargetedFailures(selection.Units, before, result.Failed...).Superseded...)
-		return out, workUnitFailed(fmt.Errorf("%d conversations could not be processed; their domain work remains pending", len(failed)), failed...)
+		return out, workUnitFailed(fmt.Errorf("Could not process %s; %s queued", plural(len(failed), "conversation"), stayQueued(len(failed))), failed...)
 	}
 	// Domain-limited progress may leave a conversation pending without changing
 	// its revision. It is work, not a transient error and not supersession,
@@ -315,7 +315,7 @@ func runConversationWork(ctx context.Context, c *Catalog, selection workSelectio
 				}
 			}
 			out.Superseded = append(out.Superseded, workRetargetedFailures(selection.Units, before, result.Remaining...).Superseded...)
-			return out, workUnitFailed(fmt.Errorf("%d conversations made no progress; their domain work remains pending", len(stalled)), stalled...)
+			return out, workUnitFailed(fmt.Errorf("%s made no progress; %s queued", plural(len(stalled), "conversation"), stayQueued(len(stalled))), stalled...)
 		}
 		out.Work = 1
 	}
@@ -579,13 +579,13 @@ func (t *modelWorkTask) Next(ctx context.Context, pop *workPopulation) (workSele
 	config := t.config(ctx, power)
 	if !config.enabled {
 		t.closeSession()
-		return workSelection{Blocker: workBlocker{Reason: workBlockedPolicy, Detail: "this analysis is disabled"}}, nil
+		return workSelection{Blocker: workBlocker{Reason: workBlockedPolicy, Detail: "it is turned off in its own settings"}}, nil
 	}
 	if !fresh {
 		return workSelection{Phase: "power", CPUs: 1}, nil
 	}
 	if pop.Library() && !config.bulk {
-		return workSelection{Blocker: workBlocker{Reason: workBlockedPower, Detail: "historical model work waits for external power"}}, nil
+		return workSelection{Blocker: workBlocker{Reason: workBlockedPower, Detail: "older history only"}}, nil
 	}
 	// Discovery is serial and starts no worker: one CPU. The compute
 	// envelope is the session's own, fixed when it is made.
@@ -687,7 +687,7 @@ func (t *modelWorkTask) RunBatch(ctx context.Context, selection workSelection, a
 	t.failed.charged(selection, err, workRevisionNow(t.server.Catalog))
 	if errors.Is(err, errLabelsSessionStale) || errors.Is(err, errAgentEventsSessionStale) {
 		t.closeSession()
-		t.server.work.runner.InterruptKinds([]string{t.kind}, "the analysis model changed; reissue the request for its new input policy")
+		t.server.work.runner.InterruptKinds([]string{t.kind}, "the model changed; start the request again to use it")
 		return workBatchResult{Work: 1, Remaining: true}, nil
 	}
 	return out, err
@@ -716,4 +716,12 @@ func (s *Server) recentWork(ctx context.Context) (uint64, *workOperation, error)
 	}
 	until := s.Catalog.clock()
 	return s.work.requestRecent(ctx, s.currentPopulationKinds(), until.Add(-48*time.Hour), until, true)
+}
+
+// stayQueued is "it stays" or "they stay", for count conversations.
+func stayQueued(count int) string {
+	if count == 1 {
+		return "it stays"
+	}
+	return "they stay"
 }

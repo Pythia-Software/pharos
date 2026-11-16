@@ -1,9 +1,9 @@
 import { localeDate, localeDateTime, localeNumber } from "./locale-format";
-import type { ChartPeriod } from "./chart-period";
+import { chartPeriods, type ChartPeriod } from "./chart-period";
 import type { ChartBucket, ChartSeries } from "./chart-series";
 import { gridTicks, type GridCover } from "./grid-cover";
 import { binsSpanning, nextEdge, type BinScheme } from "./value-bins";
-import { heatmapPercentiles, percentileFraction, percentileLabel, type PercentileLevel } from "./dashboard-analysis-model";
+import { heatmapPercentiles, percentileFraction, percentileName, type PercentileLevel } from "./dashboard-analysis-model";
 
 // The trend's heatmap: a value on a continuous axis over time. Each column
 // is a period, each row one fine bin of the value (value-bins.ts), and each
@@ -135,18 +135,22 @@ const counted = (value: number, rollingPeriods: number) => localeNumber(value, {
 
 // A cell's tooltip: the period, the bin, the amount in it and its share of
 // the period. A smoothed column's amounts are averages over its window.
+// A smoothed amount's window, named in the chart's periods: "a 7-day average";
+// a multiple period ("3 days") stays "a 7-period average".
+const smoothedText = (rollingPeriods: number, period: ChartPeriod) => rollingPeriods > 1
+  ? `, a ${rollingPeriods}-${period === "hours" || period === "days" ? "period" : chartPeriods[period].unit} average` : "";
 export function heatmapCellText(heatmap: Heatmap, row: number, column: number, { period, noun, label, format = String, amount, rollingPeriods = 0 }: CellOptions): string {
   const item = heatmap.columns[column], value = item.cells[row], when = heatmapPeriodLabel(item.date, period);
   const bin = `${label} ${heatmapBinLabel(heatmap.rows[row], heatmap.scheme, format)}`;
   if (item.total <= 0) return `${when}\n${bin}\nNo ${noun} in this period`;
-  const smoothed = rollingPeriods > 1 ? `, a ${rollingPeriods}-period average` : "";
+  const smoothed = smoothedText(rollingPeriods, period);
   const share = localeNumber(100 * value / item.total, { maximumFractionDigits: 1 });
   return [`${when}\n${bin}\n${amount ? amount(value) : counted(value, rollingPeriods)} ${noun} (${share}% of ${amount ? amount(item.total) : counted(item.total, rollingPeriods)})${smoothed}`, ...heatmapLevelLines(heatmap, column, format)].join("\n");
 }
 
-// What the traced lines are at a column: "Median: 35", "90th %ile: 280".
+// What the traced lines are at a column: "Median line: 35", "90th percentile line: 280".
 export function heatmapLevelLines(heatmap: Heatmap, column: number, format: (value: number) => string = String): string[] {
-  return heatmap.levels.flatMap((level, index) => { const at = heatmap.columns[column].levels[index]; return at ? [`${percentileLabel(level)} line: ${format(at.value)}`] : []; });
+  return heatmap.levels.flatMap((level, index) => { const at = heatmap.columns[column].levels[index]; return at ? [`${percentileName(level)} line: ${format(at.value)}`] : []; });
 }
 
 // A column's own tooltip, for a place in it with no cell: the period, its
@@ -154,7 +158,7 @@ export function heatmapLevelLines(heatmap: Heatmap, column: number, format: (val
 export function heatmapColumnText(heatmap: Heatmap, column: number, { period, noun, format = String, amount, rollingPeriods = 0 }: CellOptions): string {
   const item = heatmap.columns[column], when = heatmapPeriodLabel(item.date, period);
   if (item.total <= 0) return `${when}\nNo ${noun} in this period`;
-  return [`${when}\n${amount ? amount(item.total) : counted(item.total, rollingPeriods)} ${noun}${rollingPeriods > 1 ? `, a ${rollingPeriods}-period average` : ""}`, ...heatmapLevelLines(heatmap, column, format)].join("\n");
+  return [`${when}\n${amount ? amount(item.total) : counted(item.total, rollingPeriods)} ${noun}${smoothedText(rollingPeriods, period)}`, ...heatmapLevelLines(heatmap, column, format)].join("\n");
 }
 
 // The heatmap as a card's grid cover (grid-cover.ts): the highest bin at the

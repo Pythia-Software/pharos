@@ -42,7 +42,7 @@
     {"name":"agent_session_id","label":"Agent session ID","type":"text","group":"Context","select":{"default":false},"aggregate":{"groupable":true},"bindings":{"sqlite":{"expr":"r.\"agent_session_id\""}},"description":"Recorded owner of this message or ledger record; ambiguous ownership is missing."},
     {
       "name": "id",
-      "label": "Id",
+      "label": "ID",
       "type": "text",
       "group": "Evidence",
       "bindings": {
@@ -60,7 +60,7 @@
     },
     {
       "name": "message_id",
-      "label": "Message id",
+      "label": "Message ID",
       "type": "text",
       "group": "Evidence",
       "bindings": {
@@ -78,7 +78,7 @@
     },
     {
       "name": "conversation_id",
-      "label": "Conversation id",
+      "label": "Conversation ID",
       "type": "text",
       "group": "Evidence",
       "bindings": {
@@ -96,7 +96,7 @@
     },
     {
       "name": "workspace_id",
-      "label": "Workspace id",
+      "label": "Workspace ID",
       "type": "text",
       "group": "Evidence",
       "bindings": {
@@ -427,7 +427,7 @@
     },
     {
       "name": "week",
-      "label": "Week",
+      "label": "Week (Mon)",
       "type": "text",
       "group": "Time",
       "bindings": {

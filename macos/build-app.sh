@@ -44,6 +44,8 @@ case "${PHAROS_DEBUG_SYMBOLS:-0}" in
     1) GO_LDFLAGS= ;;
     *) echo "PHAROS_DEBUG_SYMBOLS must be 0 or 1." >&2; exit 2 ;;
 esac
+# capture-push reports this version in what it uploads.
+GO_LDFLAGS="$GO_LDFLAGS -X github.com/gbdubs/pharos/internal/archive.pushVersion=$VERSION"
 case "$VERSION" in
     *[!0-9.]*|.*|*.|*..*) echo "PHAROS_VERSION must be major.minor.patch (numeric)." >&2; exit 2 ;;
 esac

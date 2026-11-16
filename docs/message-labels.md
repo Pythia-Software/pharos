@@ -8,8 +8,8 @@ views does not start inference. Configure labeling in
 ## Dashboard and query pages
 
 **Analyze → Message Labels** (`/analyze?analyze_topic=labels`) offers
-**Over time - line**, **Over time - bar**, and **Compare groups**. Charts always
-break down by Sender / Receiver, General Label or Specific Label. Repository,
+**Over time · line**, **Over time · bar**, and **Compare groups**. Charts always
+break down by Sender / receiver, General label or Specific label. Repository,
 generation model, text source and coverage remain filters. The shared chart
 components provide brushing, smoothing, log scales, legend selection, pinned
 inspection and supporting-query links. The selected line/bar form survives

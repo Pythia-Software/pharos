@@ -68,7 +68,7 @@ func fixesAboutRequest(family, sentence string) bool {
 // fixesCategories are the kinds of fix: a label and what it means.
 var fixesCategories = []struct{ Key, Label, Explanation string }{
 	{"env", "Environment or setup", "Something agents need is missing, too slow or the wrong version where they run."},
-	{"harness", "Harness and shell behaviour", "The agent's shell, sandbox, tools or workspace manager behave in a way agents keep rediscovering."},
+	{"harness", "Agent app and shell behavior", "The agent’s shell, sandbox, tools or workspace manager behave in a way agents keep rediscovering."},
 	{"tool", "Tool or integration", "A CLI, integration or account keeps failing the same way."},
 	{"flaky", "Known failing check", "A test or check fails for reasons unrelated to the work, so every agent re-investigates it."},
 	{"knowledge", "Codebase knowledge", "A fact about the code that agents keep working out again."},
@@ -546,7 +546,7 @@ func fixesScope(events []fixesEvent) (scope, repository, reason string) {
 		if n := len(events) - total; n > 0 {
 			outside = fmt.Sprintf(", and %d outside any repository", n)
 		}
-		return "global", "", fmt.Sprintf("Hit in %d repositories (%s%s), so the cause is probably shared: the machine, the harness or a common tool.", len(ranked), strings.Join(parts, ", "), outside)
+		return "global", "", fmt.Sprintf("Hit in %d repositories (%s%s), so the cause is probably shared: the machine, the agent app or a common tool.", len(ranked), strings.Join(parts, ", "), outside)
 	}
 	parts := []string{}
 	if total > top.Count {
@@ -634,7 +634,7 @@ func fixesDestination(category, scope, label string, repository *fixesRepository
 		case "env":
 			return "Environment", "Machine setup: shell profile, version manager default, installed tools, sandbox limits"
 		case "harness":
-			return "Global guidance", "Global agent guidance: " + global + "; or the harness's own settings (sandbox, workspace manager)"
+			return "Global guidance", "Global agent guidance: " + global + "; or the agent app’s own settings (sandbox, workspace manager)"
 		case "tool":
 			return "Shared tool", "A shared tool or wrapper on PATH, with a line in " + global
 		case "flaky":
@@ -650,9 +650,9 @@ func fixesDestination(category, scope, label string, repository *fixesRepository
 	case "env":
 		return "Environment / setup", fmt.Sprintf("%s's setup (%s), plus a line in %s/%s on what to do when it's missing", label, setup, label, guide)
 	case "harness":
-		return "Repo guidance", label + "/" + guide
+		return "Repository guidance", label + "/" + guide
 	case "tool":
-		return "Repo tooling", fmt.Sprintf("%s's scripts, or a line in %s/%s", label, label, guide)
+		return "Repository tooling", fmt.Sprintf("%s's scripts, or a line in %s/%s", label, label, guide)
 	case "flaky":
 		where := "The failing test itself"
 		if code != "" {
@@ -667,7 +667,7 @@ func fixesDestination(category, scope, label string, repository *fixesRepository
 		if doc != "" {
 			where += " (" + doc + ")"
 		}
-		return "Repo guidance or docs", where
+		return "Repository guidance or docs", where
 	case "stale":
 		target := doc
 		if target == "" && len(files) > 0 {
@@ -691,7 +691,7 @@ func fixesSuggestion(category, key, lead string) string {
 	case "env":
 		return fmt.Sprintf("Make what agents needed (%s) available where they run, at the right version and fast enough, so it works without their help; then say in one line what to do when it doesn't.", k)
 	case "harness":
-		return fmt.Sprintf("Add one short rule with the behaviour and the command that works. Start from the agents' own words: “%s”", lead)
+		return fmt.Sprintf("Add one short rule with the behavior and the command that works. Start from the agents' own words: “%s”", lead)
 	case "tool":
 		return fmt.Sprintf("Replace or wrap the failing call (%s) with one that works, and name it in the guidance so agents use it first.", k)
 	case "flaky":
@@ -1002,7 +1002,7 @@ func fixesStatus(input fixesInput, events []fixesEvent, terms []string) fixStatu
 		if status.Expected != nil {
 			expected = *status.Expected
 		}
-		status.State, status.Label = "unclear", "Too little activity since to tell"
+		status.State, status.Label = "unclear", "Too little activity since then to tell"
 		status.Detail = fmt.Sprintf("None in %s, but at its earlier rate only about %s would be expected.", plural(status.DaysQuiet, "day"), fixesNumber(expected))
 	}
 	return status

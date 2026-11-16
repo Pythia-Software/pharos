@@ -1,6 +1,6 @@
 import type { QueryRequestV3 } from "@pythia-software/query-table-core";
 
-export const estimateExplanation = "* Includes estimated usage for conversations without reported counts: generated output, and processed input where the visible conversation supports it. Hidden system prompts are not counted and the cache division is assumed, so cost is partial and may assume a saved conversation model selection.";
+export const estimateExplanation = "* Includes estimates for conversations whose source did not report token counts: output, and input where the visible conversation allows. Hidden system prompts are not counted and the cache split is assumed, so API cost is partial and may use the conversation’s saved model choice.";
 // An estimated row's cache reads and writes are an assumed pricing scenario,
 // so cache rates read recorded usage only. Sums of these tokens still include it.
 export const recordedCacheReads = "IF([is_estimate],0,[cache_read_input_tokens])";

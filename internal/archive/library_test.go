@@ -269,6 +269,7 @@ func projectionTriggerCases() []struct {
 	}{
 		{"Search view", "workspace_library_", "workspace_library_dirty", libraryViewStatements(), library},
 		{"workspace metrics", "mcp_metric_", "mcp_metric_dirty", metricProjectionStatements, metricDependencies},
+		{"related conversations", "work_peer_links_", "work_peer_links_changed", peerLedgerStatements, peerLedgerCalls},
 	}
 }
 

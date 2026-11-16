@@ -445,13 +445,13 @@ func TestCatalogWriterWaitReportsProgressAndRestoresState(t *testing.T) {
 		t.Fatalf("writer wait failed to resume: %v (%s)", err, op.State())
 	}
 	op.Block("waiting-for-network", "the network")
-	resume := op.waitFor("catalog-busy", "the catalog writer")
+	resume := op.waitFor("catalog-busy", "another write to the library")
 	resume()
 	if view := reg.views()[0]; view.State != opBlocked || view.Reason != "waiting-for-network" {
 		t.Fatalf("a nested wait replaced another owner's state: %+v", view)
 	}
 	op.Unblock()
-	resume = op.waitFor("catalog-busy", "the catalog writer")
+	resume = op.waitFor("catalog-busy", "another write to the library")
 	op.Finish(context.Canceled)
 	resume()
 	if op.State() != opFailed {

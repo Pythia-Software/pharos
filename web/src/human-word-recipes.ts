@@ -70,15 +70,15 @@ export function refineHumanRecipe(recipe: QueryRecipe): QueryRecipe {
 
 const humanCardCopy: Record<string, { title: string; description: string; action: string }> = {
   "human-word-total": { title: "{period} writing volume over time", description: "Human-written words over each trailing {days}-day period, with 30 days of history for comparison.", action: "Explore daily writing trends" },
-  "human-words": { title: "{lastDays} of writing", description: "Human-written words sent during the last {days} days, by the day they were sent; provisional estimates are shaded lighter until the daily refinement.", action: "Explore daily word counts" },
+  "human-words": { title: "{lastDays} of writing", description: "Human-written words sent during the last {days} days, by the day they were sent; estimated counts are shaded lighter until Pharos refines them each day.", action: "Explore daily word counts" },
   "explaining-repos": { title: "Words written per project", description: "Human-written words over the last {days} days, grouped by project.", action: "See breakdown by project" },
   "human-words-per-message": { title: "Words per message", description: "Average human-written words per message over each trailing {days}-day period; excludes messages without human writing.", action: "Inspect message lengths" },
   "human-words-per-conversation": { title: "Words per conversation", description: "Average human-written words per conversation over each trailing {days}-day period, including conversations started earlier.", action: "Explore conversation writing" },
-  "human-words-per-work": { title: "Words per workspace directory", description: "Average human-written words per workspace directory over trailing {days} days, combining conversations sharing that directory.", action: "Inspect contributing messages" },
+  "human-words-per-work": { title: "Words per workspace directory", description: "Average human-written words per workspace directory over each trailing {days}-day period, combining conversations sharing that directory.", action: "Inspect contributing messages" },
   "human-repo-conversation-depth": { title: "Conversation words by project", description: "Average human-written words per conversation in the last {days} days, compared across projects with sample counts.", action: "Compare project averages" },
   "human-message-lengths": { title: "Conversation size profile", description: "Conversations grouped by human-written word totals over the last {days} days; each bar shows a size band.", action: "Compare conversation totals" },
   "human-word-mix": { title: "Authorship by project", description: "Human-written share of retained user-message text over the last {days} days, grouped by project.", action: "Explore authorship by project" },
-  "writing-hours": { title: "When you work", description: "Human-written words by local clock hour across all time; includes all dates combined.", action: "Explore writing times" },
+  "writing-hours": { title: "When you write", description: "Human-written words by local clock hour across all time; includes all dates combined.", action: "Explore writing times" },
   "human-specific-feedback": { title: "Feedback with concrete detail", description: "Share of assessed human-written messages with concrete feedback cues over each trailing {days}-day period.", action: "Read source messages" },
   "human-example-phrases": { title: "Supplied examples and context", description: "Human contributions containing images, pasted text, or file references during the last {days} days; categories overlap.", action: "Inspect human contributions" },
 };

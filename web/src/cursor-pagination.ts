@@ -10,7 +10,7 @@ export class CursorPagination {
   }
 
   async load<T extends { next_cursor?: string }>(scope: string, wanted: number, request: (cursor: string) => Promise<T>, signal: AbortSignal) {
-    if (!Number.isInteger(wanted) || wanted < 0 || wanted > 250) throw new Error("Choose a session page from 0 to 250.");
+    if (!Number.isInteger(wanted) || wanted < 0 || wanted > 250) throw new Error("The page number must be a whole number from 0 to 250.");
     if (this.scope !== scope) {
       this.scope = scope;
       this.cursors = [""];

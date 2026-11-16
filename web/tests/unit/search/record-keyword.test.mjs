@@ -49,5 +49,5 @@ test('record syntax and literal options preserve their matching definition', () 
   const result=readRecordKeywordSearch(JSON.stringify(search),fields);
   assert.equal(result.error,'');
   assert.deepEqual(JSON.parse(recordKeywordRequest(result.value)), {field:'command',query:search.draft.text,mode:'advanced',case_sensitive:true,separators:true});
-  assert.throws(()=>recordKeywordRequest(freshRecordKeywordSearch('command')),/Invalid/);
+  assert.throws(()=>recordKeywordRequest(freshRecordKeywordSearch('command')),/not valid/);
 });

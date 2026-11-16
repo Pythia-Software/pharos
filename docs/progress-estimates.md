@@ -129,7 +129,7 @@ or send conversation content.
 
 Implementation: `operation_forecast.go`, `activity_progress.go`,
 ingestion/capture progress hooks, and
-`assets/library.js`. Regression coverage includes uneven transcript sizes,
+`assets/status-panel.js`. Regression coverage includes uneven transcript sizes,
 resumption, warm-up, stale observations, workload changes, history isolation,
 concurrent jobs, accessible bars, narrow panels, and upgrade handoffs.
 
