@@ -49,7 +49,7 @@ func statisticsFixture(t *testing.T) *Catalog {
 		}
 	}
 	for _, id := range []string{"c1", "c2"} {
-		if _, err := c.DB.Exec("INSERT INTO tool_ledger_state VALUES(?,?,0,'x')", id, toolLedgerVersion); err != nil {
+		if _, err := c.DB.Exec("INSERT INTO tool_ledger_state VALUES(?,?,0,'x')", id, toolLedgerVersionFor("codex", "codex")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -724,6 +724,7 @@ func TestStatisticsPendingProjectionRetainsRecordedEvidence(t *testing.T) {
 // is behind, which a scoped revision (toolLedgerScopes) makes it and a
 // revision for other conversations does not.
 func TestStatisticsToolCountsFollowTheLedgerScope(t *testing.T) {
+	override(t, &toolLedgerScopes, nil)
 	c := statisticsFixture(t)
 	status := func() string {
 		t.Helper()
@@ -744,7 +745,7 @@ func TestStatisticsToolCountsFollowTheLedgerScope(t *testing.T) {
 	if got := status(); got != "complete" {
 		t.Fatalf("current ledgers: tool calls are %q", got)
 	}
-	override(t, &toolLedgerScopes, []toolLedgerScope{{SourceKind: "claude-ai", Revision: "other-source"}, {Provider: "claude", Revision: "other-provider"}})
+	toolLedgerScopes = []toolLedgerScope{{SourceKind: "claude-ai", Revision: "other-source"}, {Provider: "claude", Revision: "other-provider"}}
 	if got := status(); got != "complete" {
 		t.Fatalf("revisions for other conversations: tool calls are %q", got)
 	}

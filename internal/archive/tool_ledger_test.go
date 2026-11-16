@@ -875,6 +875,10 @@ func TestToolLedgerScopeRebuildsOnlyItsConversations(t *testing.T) {
 		}
 		revisions[scope.Revision] = true
 	}
+	// The fixture is stored as a build without scopes stores it, which is also
+	// what every later step expects of the conversations it does not name.
+	override(t, &toolLedgerScopes, nil)
+	plain := toolLedgerVersion
 	catalog, _ := testCatalog(t)
 	for _, c := range [][3]string{{"claude", "claude", "code"}, {"conductor", "codex", "wrapped"}, {"codex", "codex", "native"}, {"claude-ai", "claude", "export"}} {
 		ingestRecords(t, catalog, WorkspaceRecord{SourceID: c[2], SourceKind: c[0], Account: "local", Conversations: []ConversationRecord{{
@@ -883,10 +887,6 @@ func TestToolLedgerScopeRebuildsOnlyItsConversations(t *testing.T) {
 				{NativeID: "result", Role: "tool", Kind: "tool_result", CallID: "call", Text: "ok", CreatedAt: "2026-11-01T10:00:05Z", Selected: true},
 			}}}})
 	}
-	// What a build without scopes stores, and what every later step expects
-	// of the conversations it does not name.
-	plain := toolLedgerVersion
-	override(t, &toolLedgerScopes, nil)
 	list := func(query string) string {
 		t.Helper()
 		rows, err := queryMaps(catalog.DB, query)

@@ -116,6 +116,9 @@ type forecastStore struct {
 func analysisForecastModel(name string) string {
 	switch name {
 	case "tools":
+		// The tools stage's cost per unit changes with the derivation, not with
+		// which conversations a scoped revision rebuilds (toolLedgerScopes): that
+		// rebuild is the upgrade's step, which has no forecast here.
 		return "analysis-v1:" + toolLedgerVersion + ":" + toolRollupVersion
 	case "authorship":
 		return "analysis-v1:" + authorshipVersion

@@ -517,7 +517,7 @@ func TestLibraryUpgradeRepairsSplitRepositories(t *testing.T) {
 	// checkout's path names no single repository until they merge.
 	exec(`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status,path_absolute,repo_path,path_repository,path_scope)
 		VALUES('t2','w6','c1',2,'codex','call','Edit','edit','ok','/Users/t/conductor/workspaces/xlsxl-agy/three/a.go','a.go','xlsxl-agy','repo')`)
-	exec(`INSERT INTO tool_ledger_state(conversation_id,version,tool_calls,updated_at) VALUES('c1',?,2,'t')`, toolLedgerVersion)
+	exec(`INSERT INTO tool_ledger_state(conversation_id,version,tool_calls,updated_at) VALUES('c1',?,2,'t')`, toolLedgerVersionFor("codex", "codex"))
 	exec(`DELETE FROM meta WHERE key IN ('repository_merge_version')`)
 	exec(`INSERT INTO meta(key,value) VALUES('repository_merge_version','1')`)
 	// The rest of the upgrade is current; only the repository step is pending.
