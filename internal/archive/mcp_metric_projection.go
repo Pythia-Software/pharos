@@ -451,9 +451,13 @@ func (c *Catalog) projectMetrics(ctx context.Context, tx *sql.Tx, book priceBook
 type metricInputs struct {
 	counts, calls map[string]map[string]any
 	ledger        map[string]string
-	usage         map[string][]map[string]any
-	delegates     map[string]bool
-	fallback      map[[2]string][]map[string]any
+	// sourceKinds is each workspace's source kind, read only when a tool-ledger
+	// scope names one (toolLedgerScopes). It is part of a workspace's identity,
+	// so no trigger watches it.
+	sourceKinds map[string]string
+	usage       map[string][]map[string]any
+	delegates   map[string]bool
+	fallback    map[[2]string][]map[string]any
 }
 
 // The projection's statements. metricTriggerDDL reads them to find the
@@ -520,6 +524,15 @@ func loadMetricInputs(ctx context.Context, tx *sql.Tx, workspaces, conversations
 	}
 	for _, row := range rows {
 		in.ledger[firstString(row["conversation_id"])] = firstString(row["version"])
+	}
+	if slices.ContainsFunc(toolLedgerScopes, func(scope toolLedgerScope) bool { return scope.SourceKind != "" }) {
+		if rows, err = queryMapsContext(ctx, tx, "SELECT id,source_kind FROM workspaces WHERE id"+metricChosen, workspaces); err != nil {
+			return in, err
+		}
+		in.sourceKinds = map[string]string{}
+		for _, row := range rows {
+			in.sourceKinds[firstString(row["id"])] = firstString(row["source_kind"])
+		}
 	}
 	rows, err = queryMapsContext(ctx, tx, metricUsageSQL, conversations)
 	if err != nil {
@@ -596,7 +609,7 @@ func projectWorkspaceMetrics(book priceBook, id string, conversations []map[stri
 		}
 		calls := in.calls[cid]
 		status := "complete"
-		if in.ledger[cid] != toolLedgerVersion {
+		if in.ledger[cid] != toolLedgerVersionFor(firstString(conv["provider"]), in.sourceKinds[id]) {
 			status = "pending"
 		}
 		for _, pair := range [][3]string{{"tool_call_count", "calls", "own_calls"}, {"tool_error_count", "errors", "own_errors"}} {

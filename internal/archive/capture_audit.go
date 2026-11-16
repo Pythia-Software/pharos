@@ -87,9 +87,7 @@ func pendingAuditLedgers(ctx context.Context, q *sql.Tx, record WorkspaceRecord)
 	if err != nil || workspace == "" {
 		return nil, err
 	}
-	rows, err := queryMapsContext(ctx, q, `SELECT c.id,c.provider,c.account,c.native_id FROM conversations c
-		LEFT JOIN tool_ledger_state s ON s.conversation_id=c.id
-		WHERE c.workspace_id=? AND (s.conversation_id IS NULL OR s.version<>?)`, workspace, toolLedgerVersion)
+	rows, err := queryMapsContext(ctx, q, toolLedgerPendingSQL("c.id,c.provider,c.account,c.native_id")+` AND c.workspace_id=?`, workspace)
 	if err != nil {
 		return nil, err
 	}

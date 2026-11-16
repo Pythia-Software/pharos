@@ -52,6 +52,7 @@ The framework's own ticking is small: about 1.8% of a core idle.
 | Library view and workspace metrics are marked only when a column they read changes | Usage replay on 300 workspaces: 285 marks. Stamping 10,107 pull requests: 5,936 marks, 61.9 s | 12 marks. 0 marks, 0.22 s |
 | Each Library view column has its own version; a changed column is computed alone, in the background | A definition change dropped the table and marked every workspace: 56,980 whole rows, 428.5 s on the clone (8,434 s for the 11-12 bump in production) | Opening a catalog from the previous build marks 0 workspaces and keeps all 57,680 rows (the step takes 0.5 s). The four columns below, for every workspace: 75.6 s, writer held 5.2 s in all, 5.1 ms at worst |
 | Fingerprint triggers watch only what the renderer reads | Rewriting all agent-session tokens re-queued 50,558 conversations and 41,971 workspaces; a new labels model row re-queued everything | 0 and 0. A 50-conversation delta queues 8, not 50 |
+| A tool-ledger change names the conversations it can reach, by provider, source kind or both (`toolLedgerScopes`); see [Changing the ledger's derivation](../tool-analytics.md#changing-the-ledgers-derivation) | `tools-v15` changed how 194 Claude.ai export conversations are replayed and rebuilt all 50,558: 2,704 s in production. Three such bumps cost about 14,100 s in six days | A `claude-ai` source-kind revision on a clone already at `tools-v16`: 194 conversations pending, the whole upgrade 10.6 s (the ledger step 5.6 s). The scheme itself marks nothing: a catalog the previous build rebuilt to `tools-v16` has 0 pending, and one on `tools-v15` gets the one `tools-v16` rebuild (50,558 conversations, 2,004 s on the clone), with rows identical to the previous build's on the 5,736 conversations compared |
 | A new identity link or a moved ledger generation no longer forces a full tool rollup | 50 conversations plus one link: 73.2 s, writer held 9.8 s, 201,707 query-cache bumps | 2.0 s, 0.26 s, 3,797. Cube, daily table and mirrors identical to a full rebuild |
 | Peers rescans only where new evidence could link | After an old-dated chat import: 307 s, 26 GB allocated, 6,920 readers | 1.6 s, 51 MB, 0 readers, identical links |
 | Peers is told of a call changed in place by conversation, and only when a column a link is derived from changed | After the tool-ledger rebuild for a new version (v15 → v16, 50,558 conversations): the one library-wide time moved back to 2025-11-09; the next pass took 318 s, 28.4 GB allocated, 7,959 readers | No conversation noted; 0.6 s, under 0.1 MB, 0 readers. Same 3,419 links. One call from June reclassified: 1 conversation noted, 12.3 s, 0.6 GB, 378 readers |
@@ -163,8 +164,6 @@ Not done, largest first by the audit's estimate:
 
 - **Refine is still a full pass on most days.** New identity links, mirror
   changes and old-dated imports each force one (44.5 GB allocated).
-- **Tool-ledger version is global.** A bump for one source rebuilds all
-  conversations (three bumps cost about 14,100 s in six days).
 - **Every written record marks all nine analysis stages.** Narrower marks
   need ingest to say what changed.
 - **Ingest rewrites carried counts** on every tool call still in context on

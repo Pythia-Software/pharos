@@ -872,3 +872,158 @@ func TestToolLedgerReplayChangesOnlyRowsThatDiffer(t *testing.T) {
 		t.Fatalf("the replay noted %d conversations and %d library-wide times for related conversations, want 1 and 0", noted, since)
 	}
 }
+
+// A change that reaches only some conversations (toolLedgerScopes) rebuilds
+// those, by provider, by source kind or by both, and leaves every other
+// conversation's ledger alone. Ledgers stored before there were scopes stay
+// current, and an older catalog is still rebuilt once, all of it.
+func TestToolLedgerScopeRebuildsOnlyItsConversations(t *testing.T) {
+	revisions := map[string]bool{}
+	for _, scope := range toolLedgerScopes {
+		if scope.Revision == "" || strings.ContainsAny(scope.Revision, "+'") || revisions[scope.Revision] || scope.Provider+scope.SourceKind == "" {
+			t.Fatalf("scope %+v needs a provider or source kind and a unique revision without + (a change to every conversation changes toolLedgerVersion)", scope)
+		}
+		revisions[scope.Revision] = true
+	}
+	// The fixture is stored as a build without scopes stores it, which is also
+	// what every later step expects of the conversations it does not name.
+	override(t, &toolLedgerScopes, nil)
+	plain := toolLedgerVersion
+	catalog, _ := testCatalog(t)
+	for _, c := range [][3]string{{"claude", "claude", "code"}, {"conductor", "codex", "wrapped"}, {"codex", "codex", "native"}, {"claude-ai", "claude", "export"}} {
+		ingestRecords(t, catalog, WorkspaceRecord{SourceID: c[2], SourceKind: c[0], Account: "local", Conversations: []ConversationRecord{{
+			NativeID: c[2], Provider: c[1], Account: "local", Messages: []MessageRecord{
+				{NativeID: "call", Role: "assistant", Kind: "tool_call", CallID: "call", Text: `{"tool":"Bash","input":{"command":"go test ./..."}}`, CreatedAt: "2026-11-01T10:00:00Z", Selected: true},
+				{NativeID: "result", Role: "tool", Kind: "tool_result", CallID: "call", Text: "ok", CreatedAt: "2026-11-01T10:00:05Z", Selected: true},
+			}}}})
+	}
+	list := func(query string) string {
+		t.Helper()
+		rows, err := queryMaps(catalog.DB, query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		for _, row := range rows {
+			out = append(out, firstString(row["v"]))
+		}
+		return strings.Join(out, " ")
+	}
+	versions := func() string {
+		return list("SELECT c.native_id||'='||s.version v FROM tool_ledger_state s JOIN conversations c ON c.id=s.conversation_id ORDER BY 1")
+	}
+	pending := func() string { return list(toolLedgerPendingSQL("c.native_id v") + " ORDER BY 1") }
+	ledger := func() string {
+		return list("SELECT json_group_array(json_array(id,conversation_id,tool_name,command,status,started_at,ended_at)) v FROM tool_calls ORDER BY id") +
+			list("SELECT COUNT(*) v FROM tool_commands")
+	}
+	if got := versions(); got != "code="+plain+" export="+plain+" native="+plain+" wrapped="+plain || pending() != "" {
+		t.Fatalf("ingest stored %q, pending %q", got, pending())
+	}
+	want := ledger()
+	if !strings.Contains(want, "go test") {
+		t.Fatalf("fixture has no tool calls: %s", want)
+	}
+	execTx(t, catalog.DB, "CREATE TABLE scope_writes(conversation TEXT, row TEXT)",
+		"CREATE TRIGGER scope_state AFTER UPDATE ON tool_ledger_state BEGIN INSERT INTO scope_writes SELECT native_id,'state' FROM conversations WHERE id=NEW.conversation_id; END",
+		"CREATE TRIGGER scope_call_update AFTER UPDATE ON tool_calls BEGIN INSERT INTO scope_writes VALUES(NEW.conversation_id,'call'); END",
+		"CREATE TRIGGER scope_call_insert AFTER INSERT ON tool_calls BEGIN INSERT INTO scope_writes VALUES(NEW.conversation_id,'call'); END",
+		"CREATE TRIGGER scope_call_delete AFTER DELETE ON tool_calls BEGIN INSERT INTO scope_writes VALUES(OLD.conversation_id,'call'); END")
+	writes := func() string {
+		t.Helper()
+		got := list("SELECT DISTINCT conversation||':'||row v FROM scope_writes ORDER BY 1")
+		execTx(t, catalog.DB, "DELETE FROM scope_writes")
+		return got
+	}
+	inputs := func() string {
+		t.Helper()
+		value, err := catalog.upgradeInputs(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+
+	// One provider's revision, as the whole upgrade runs and reports it.
+	toolLedgerScopes = []toolLedgerScope{{Provider: "codex", Revision: "codex-change"}}
+	if got := pending(); got != "native wrapped" {
+		t.Fatalf("a Codex revision makes %q pending", got)
+	}
+	if steps := upgradePending(t, catalog); steps["tools"] != 2 {
+		t.Fatalf("the upgrade counts %d conversations for a Codex revision", steps["tools"])
+	}
+	before, total := inputs(), 0
+	if err := catalog.RunUpgrade(t.Context(), func(step string, done, of int) {
+		if step == "tools" {
+			total = max(total, of)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := versions(); total != 2 || got != "code="+plain+" export="+plain+" native="+plain+"+codex-change wrapped="+plain+"+codex-change" || pending() != "" {
+		t.Fatalf("the upgrade reported %d conversations and stored %q, pending %q", total, got, pending())
+	}
+	// Their rows come out the same, so only their versions were written.
+	if got := writes(); got != "native:state wrapped:state" || ledger() != want {
+		t.Fatalf("a Codex revision wrote %q\n%s\n%s", got, ledger(), want)
+	}
+	if inputs() == before {
+		t.Fatal("the stored upgrade count would not be taken again after the rebuild")
+	}
+	if steps := upgradePending(t, catalog); steps["tools"] != 0 {
+		t.Fatalf("after the rebuild the upgrade counts %d", steps["tools"])
+	}
+
+	// A source kind's revision, and one for a provider within a source kind,
+	// are added after it: the other Codex conversation is not rebuilt again.
+	toolLedgerScopes = append(toolLedgerScopes, toolLedgerScope{SourceKind: "claude-ai", Revision: "export-change"},
+		toolLedgerScope{Provider: "codex", SourceKind: "conductor", Revision: "wrapped-change"})
+	if got := pending(); got != "export wrapped" {
+		t.Fatalf("source-kind revisions make %q pending", got)
+	}
+	total = 0
+	if built, err := catalog.BackfillToolLedger(t.Context(), func(done, of int) { total = of }); err != nil || built != 2 || total != 2 {
+		t.Fatalf("rebuilt %d of %d, %v", built, total, err)
+	}
+	if got := versions(); got != "code="+plain+" export="+plain+"+export-change native="+plain+"+codex-change wrapped="+plain+"+codex-change+wrapped-change" || pending() != "" {
+		t.Fatalf("stored %q, pending %q", got, pending())
+	}
+	if got := writes(); got != "export:state wrapped:state" || ledger() != want {
+		t.Fatalf("source-kind revisions wrote %q", got)
+	}
+	if status, err := catalog.ToolLedgerStatus(t.Context()); err != nil || status["current_conversations"] != int64(4) || status["pending_conversations"] != int64(0) || status["tool_calls"] != int64(4) {
+		t.Fatalf("status %v, %v", status, err)
+	}
+
+	// A build without these scopes expects the plain version: it rebuilds the
+	// scoped conversations, and never the one no scope names.
+	toolLedgerScopes = nil
+	if got := pending(); got != "export native wrapped" {
+		t.Fatalf("a build without scopes finds %q pending", got)
+	}
+	if built, err := catalog.BackfillToolLedger(t.Context(), nil); err != nil || built != 3 {
+		t.Fatalf("rebuilt %d, %v", built, err)
+	}
+	if got := writes(); got != "export:state native:state wrapped:state" {
+		t.Fatalf("a build without scopes wrote %q", got)
+	}
+
+	// A catalog from before toolLedgerVersion is rebuilt once, all of it,
+	// whatever scopes there are.
+	toolLedgerScopes = []toolLedgerScope{{Provider: "codex", Revision: "codex-change"}}
+	execTx(t, catalog.DB, "UPDATE tool_ledger_state SET version='tools-v15-claude-ai-tool-time'", "DELETE FROM scope_writes")
+	if built, err := catalog.BackfillToolLedger(t.Context(), nil); err != nil || built != 4 || pending() != "" {
+		t.Fatalf("an older catalog rebuilt %d, pending %q, %v", built, pending(), err)
+	}
+	if built, err := catalog.BackfillToolLedger(t.Context(), nil); err != nil || built != 0 || ledger() != want {
+		t.Fatalf("a second pass rebuilt %d, %v", built, err)
+	}
+	// Ingest stores a new conversation's own version, so it is never pending.
+	ingestRecords(t, catalog, WorkspaceRecord{SourceID: "later", SourceKind: "tl1", Account: "local", Conversations: []ConversationRecord{{
+		NativeID: "later", Provider: "codex", Account: "local", Messages: []MessageRecord{
+			{NativeID: "call", Role: "assistant", Kind: "tool_call", CallID: "call", Text: `{"tool":"Bash","input":{"command":"ls"}}`, CreatedAt: "2026-11-02T10:00:00Z", Selected: true},
+		}}}})
+	if got := versions(); !strings.Contains(got, "later="+plain+"+codex-change ") || pending() != "" {
+		t.Fatalf("ingest under a scope stored %q, pending %q", got, pending())
+	}
+}

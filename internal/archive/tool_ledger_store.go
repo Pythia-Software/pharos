@@ -68,11 +68,16 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 }
 
 func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord) error {
-	var priorVersion string
-	if err := tx.QueryRow("SELECT version FROM tool_ledger_state WHERE conversation_id=?", conversationID).Scan(&priorVersion); err != nil && err != sql.ErrNoRows {
+	// The version is the stored conversation's (toolLedgerScopes), read here
+	// so that every writer agrees with the queries that look for stale ledgers.
+	var provider, sourceKind, prior sql.NullString
+	if err := tx.QueryRow(`SELECT c.provider,w.source_kind,s.version FROM conversations c
+		LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN tool_ledger_state s ON s.conversation_id=c.id WHERE c.id=?`,
+		conversationID).Scan(&provider, &sourceKind, &prior); err != nil && err != sql.ErrNoRows {
 		return err
 	}
-	if priorVersion != toolLedgerVersion {
+	priorVersion, version := prior.String, toolLedgerVersionFor(provider.String, sourceKind.String)
+	if priorVersion != version {
 		// Another version's rows are all offered again, whatever fingerprints
 		// were kept for them. They are not deleted first: most come out the
 		// same, and a row that is replaced by itself costs every index and
@@ -96,7 +101,7 @@ func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversatio
 	needsWrite := func(kind, id string, value any) (bool, error) {
 		key := kind + ":" + id
 		retained[key] = true
-		fingerprint := hashBytes([]byte(toolLedgerVersion + ":" + workspaceID + ":" + conversation.Provider + ":" + jsonText(value)))
+		fingerprint := hashBytes([]byte(version + ":" + workspaceID + ":" + conversation.Provider + ":" + jsonText(value)))
 		if inputs[key] == fingerprint {
 			return false, nil
 		}
@@ -338,7 +343,7 @@ func writeToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversatio
 	if _, err := tx.Exec(`INSERT INTO tool_ledger_state(conversation_id,version,tool_calls,updated_at) VALUES(?,?,?,?)
 		ON CONFLICT(conversation_id) DO UPDATE SET version=excluded.version,tool_calls=excluded.tool_calls,updated_at=excluded.updated_at
 		WHERE tool_ledger_state.version<>excluded.version OR tool_ledger_state.tool_calls<>excluded.tool_calls`,
-		conversationID, toolLedgerVersion, len(calls), now()); err != nil {
+		conversationID, version, len(calls), now()); err != nil {
 		return err
 	}
 	// Request writes invalidate the projection; fill pending summaries even
@@ -428,9 +433,7 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 		return 0, fmt.Errorf("a tool index build is already running")
 	}
 	defer state.backfill.Unlock()
-	pending, err := queryMapsContext(ctx, c.DB, `SELECT c.id,c.workspace_id,c.provider,c.model FROM conversations c
-		LEFT JOIN tool_ledger_state s ON s.conversation_id=c.id
-		WHERE s.conversation_id IS NULL OR s.version<>? ORDER BY c.started_at DESC`, toolLedgerVersion)
+	pending, err := queryMapsContext(ctx, c.DB, toolLedgerPendingSQL("c.id")+` ORDER BY c.started_at DESC`)
 	if err != nil {
 		return 0, err
 	}
@@ -520,9 +523,9 @@ func (c *Catalog) toolLedgerProgress() toolLedgerBuild {
 // ToolLedgerStatus reports ledger coverage and any in-process backfill.
 func (c *Catalog) ToolLedgerStatus(ctx context.Context) (map[string]any, error) {
 	var conversations, current, calls int64
-	if err := c.reader().QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM conversations),
-		(SELECT COUNT(*) FROM tool_ledger_state WHERE version=?),
-		(SELECT COALESCE(SUM(tool_calls),0) FROM tool_ledger_state WHERE version=?)`, toolLedgerVersion, toolLedgerVersion).Scan(&conversations, &current, &calls); err != nil {
+	if err := c.reader().QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM conversations),COUNT(*),COALESCE(SUM(s.tool_calls),0)
+		FROM tool_ledger_state s JOIN conversations c ON c.id=s.conversation_id LEFT JOIN workspaces w ON w.id=c.workspace_id
+		WHERE s.version=`+toolLedgerVersionSQL("c", "w")).Scan(&conversations, &current, &calls); err != nil {
 		return nil, err
 	}
 	state := &c.tools
