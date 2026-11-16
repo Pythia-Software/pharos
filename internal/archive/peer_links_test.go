@@ -457,6 +457,10 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 		out := map[string]string{}
 		for _, p := range get("/api/work/" + workspace)["peers"].([]any) {
 			peer := p.(map[string]any)
+			// A chip shows the provider's display name beside its stored key.
+			if provider := firstString(peer["provider"]); provider != "" && firstString(peer["provider_name"]) != providerDisplayName(provider) {
+				t.Fatalf("peer %v names its provider %q", peer["workspace_id"], peer["provider_name"])
+			}
 			out[firstString(peer["workspace_id"])] = firstString(peer["role"]) + "/" + firstString(peer["confidence"]) + "/" + firstString(peer["via"])
 		}
 		return out
@@ -531,6 +535,9 @@ func TestWorkPeersOnTheWorkPage(t *testing.T) {
 		otherConversation := false
 		for _, item := range overview["peer_conversations"].([]any) {
 			conversation := item.(map[string]any)
+			if provider := firstString(conversation["provider"]); provider != "" && firstString(conversation["provider_name"]) != providerDisplayName(provider) {
+				t.Fatalf("peer conversation %v names its provider %q", conversation["id"], conversation["provider_name"])
+			}
 			if conversation["id"] == "other-c" {
 				otherConversation = true
 				if conversation["peer_confidence"] != "low" {

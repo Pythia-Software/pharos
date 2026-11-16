@@ -19,7 +19,7 @@ export function restoreSearch(params: URLSearchParams, schema: FieldSchema): Sea
     state.window = readRollingWindow(params, "library");
     state.query = resolveRollingQuery(decodeQueryStrict(snapshot?.token ?? token), state.window);
   } }
-  catch { state.error = "The saved workspace filters could not be read. Reset the search to start again."; }
+  catch { state.error = "Could not read the search in this link. Select Clear to start a new search."; }
   state.kind = params.get("kind") === "file" ? "file" : params.get("kind") === "url" ? "url" : "text";
   state.text = text.draft; state.file = params.get("search") ?? ""; state.fileCase = params.get("case") === "1";
   state.error ||= text.error;

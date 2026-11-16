@@ -4,6 +4,7 @@ import { formatMetricOutput } from "@pythia-software/query-table-ui";
 import { metricSeriesColor } from "./chart-colors";
 import { ChartLegend } from "./chart-legend";
 import { scatterAxis, scatterTick } from "./scatter-axis";
+import { unitFor } from "./query-previews";
 
 const detailValue = (value: MetricValue | undefined, format?: MetricValueFormat) =>
   typeof value === "number" && (!format || format.kind === "number") ? value.toLocaleString(undefined, { maximumSignificantDigits: 12 }) : formatMetricOutput(value, format).text;
@@ -52,7 +53,7 @@ export function CompactScatterPlot({ clause, result, budget, labels }: {
         <g clipPath={`url(#${clipId})`}>{drawable.map((bucket, index) => {
           const label = labels?.[JSON.stringify(bucket.keys)] ?? bucket.keys.map(key => String(key ?? "Unspecified")).join(" · ");
           const color = metricSeriesColor(clause.groupBy, bucket.keys);
-          const detail = `${label}\n${detailValue(bucket.value, display?.xFormat)} / ${detailValue(bucket.y, display?.yFormat)}\n${bucket.count.toLocaleString()} rows`;
+          const detail = `${label}\n${detailValue(bucket.value, display?.xFormat)} / ${detailValue(bucket.y, display?.yFormat)}\n${bucket.count.toLocaleString()} ${unitFor(bucket.count, "rows")}`;
           return <g key={index} className="qt-metric-mark" aria-label={detail}>
             <circle cx={x(Number(bucket.value))} cy={y(Number(bucket.y))} r="3.5" fill={color} />
             <circle cx={x(Number(bucket.value))} cy={y(Number(bucket.y))} r="9" fill="transparent" />

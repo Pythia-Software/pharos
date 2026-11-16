@@ -26,8 +26,8 @@ export function legendMenuItems(visibleCount:number,hiddenCount:number,othersHid
   const items:LegendMenuItem[]=mixed
     ? [{label:`Show ${hiddenCount} ${hiddenCount===1?'value':'values'}`,action:'show'},{label:`Hide ${visibleCount} ${visibleCount===1?'value':'values'}`,action:'hide'}]
     : visibleCount>0 ? [{label:'Hide',action:'hide'},{label:'Hide others',action:'only'}]
-      : [{label:'Show',action:'show'},{label:'Show and Hide Others',action:'only'}];
-  if(mixed||hiddenCount>0||othersHidden)items.push({label:'Show All',action:'clear',separator:true});
+      : [{label:'Show',action:'show'},{label:'Show and hide others',action:'only'}];
+  if(mixed||hiddenCount>0||othersHidden)items.push({label:'Show all',action:'clear',separator:true});
   return items;
 }
 

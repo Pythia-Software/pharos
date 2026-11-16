@@ -96,6 +96,8 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
     if (!recipe.retired && !legacyCopy.has(recipe.id)) {
       assert.doesNotMatch(suggestion.description, /[{}]|sparkline|in this window|selected window/i);
       assert.doesNotMatch(suggestion.title, /[?{}]/);
+      // One day reads "over the last day", not "the last 1 days".
+      for (const text of [suggestion.title, suggestion.description]) assert.doesNotMatch(text, /\b1 days\b|\bPast \d/, `copy @${days}d`);
     }
   }
   if (!recipe.retired && !legacyCopy.has(recipe.id)) assert.ok(recipe.action, "active cards name their destination");

@@ -58,6 +58,16 @@ test("usage sensitivity diagnostics scope to owned messages; canonical estimates
   assert.match(split.detail,/Full call-to-result span: 6 s/);
   const zero = reader.toolDurationEstimatePresentation({duration_estimate:{status:"observed",seconds:{expected:5,lower:5,upper:5},execution_seconds:{expected:0,lower:0,upper:0},execution_status:"observed"}});
   assert.match(zero.label,/Recorded execution: 0 s/);
+  // Durations read as durations, not token counts; recorded values are not rounded like estimates.
+  const long = reader.toolDurationEstimatePresentation({duration_estimate:{status:"observed",seconds:{expected:1234,lower:1234,upper:1234},execution_seconds:{expected:125,lower:125,upper:125},execution_status:"observed"}});
+  assert.equal(long.label,"Recorded execution: 2 min 5 s");
+  assert.match(long.detail,/Full call-to-result span: 20 min 34 s\./);
+  assert.doesNotMatch(long.detail,/K s/);
+  assert.equal(reader.toolDurationEstimatePresentation({duration_estimate:{status:"observed",seconds:{expected:4000,lower:4000,upper:4000}}}).label,"Recorded tool span: 1 h 7 min");
+  const estimated = reader.toolDurationEstimatePresentation({duration_estimate:{status:"estimated",seconds:{expected:125,lower:30,upper:1234}}});
+  assert.equal(estimated.label,"Estimated call-to-result span: ~2 min 10 s*");
+  assert.match(estimated.detail,/30 s to 20 min/);
+  assert.match(split.detail,/Execution sensitivity range: 0–5 s/);
 });
 
 test("all source accounting formats reconcile against shared fixtures", () => {

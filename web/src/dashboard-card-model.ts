@@ -16,6 +16,8 @@ import { ribbonCardDescription, ribbonCardTitle, ribbonCardWindow } from "./para
 import { isHabitsCardAddress, readHabitsCard, habitsTargetParams, habitsViewTarget, readHabitsView, habitsCardDescription, habitsCardPresentation, habitsCardTitle, habitsCardWindow, isHabitsCardTarget, readHabitsCardView, type HabitsCardTarget } from "./habits-card";
 import { isThinkingCardAddress, isThinkingCardTarget, readThinkingCard, thinkingCardDescription, thinkingCardPresentation, thinkingCardTitle, thinkingCardWindow, thinkingTopicTargets, type ThinkingCardTarget } from "./thinking-card";
 import { analysisCardCopy, analysisCardTitle, dashboardCardCopy, type DashboardCardCopy } from "./dashboard-card-copy";
+import { windowLabel } from "./day-window";
+import carbonFactors from "../../carbon/co2_factors.json";
 
 // The dashboard URL is the card definition. Keep requested filters relative;
 // execution (including Today) resolves them anew whenever the card refreshes.
@@ -68,7 +70,7 @@ export function dashboardCardTargets(address: string, schema?: FieldSchema): Arr
 export function dashboardCardRibbon(address: string) {
   const encoded = new URL(address, location.origin).searchParams.get("analyze_parallelism");
   if (encoded === null) return readConcurrencySettings();
-  try { return normalizeConcurrencySettings(JSON.parse(encoded)); } catch { throw new Error("This dashboard card's ribbon settings are invalid."); }
+  try { return normalizeConcurrencySettings(JSON.parse(encoded)); } catch { throw new Error("This dashboard card’s ribbon settings are invalid."); }
 }
 
 // The records a dashboard card reads, for any dashboard page.
@@ -105,7 +107,7 @@ export function collectDashboardCard(url: string, title: string, description: st
   url = dashboardCardTargetURL(url, target);
   if (!dashboardCardTargets(url).some(item => item.id === target)) throw new Error("This chart cannot be a card.");
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
-  if (groups !== undefined && (!dashboardCardGroups(url, target) || !validCardGroups(groups))) throw new Error("Choose a whole number of groups to show.");
+  if (groups !== undefined && (!dashboardCardGroups(url, target) || !validCardGroups(groups))) throw new Error(`Enter a whole number of groups from 1 to ${cardGroupsMax}.`);
   const items = readBookmarks();
   const item: Bookmark = { id: crypto.randomUUID(), dashboard: true, url, ...target === "chart" ? {} : { dashboardTarget: target }, title: title.trim(), description: description.trim(), ...templateId ? { templateId } : {}, ...dashboardCardLabels(url, target, labels), ...groups !== undefined ? { maxGroups: groups } : {}, savedAt: Date.now() };
   writeBookmarks([...items, item]);
@@ -161,19 +163,23 @@ export function dashboardCardMetadata(address: string, target: DashboardCardTarg
     [window, ...dashboardSettingsContext(topic, params)]);
 }
 
+const carbonScenarioLabels: Record<string, string> = { low: "Low", central: "Central", high: "High" };
 function dashboardSettingsContext(topic: string, params: URLSearchParams): string[] {
   if (topic === "parallelism") {
     const settings = dashboardCardRibbon(`/analyze?${params}`);
-    return [`Count ${settings.counting === "agent" ? "top-level conversations" : "workspaces"}; join turns across gaps up to ${settings.gap} minutes`];
+    return [`Count ${settings.counting === "agent" ? "top-level conversations" : "workspaces"}; ${settings.gap ? `join turns across gaps up to ${settings.gap} ${settings.gap === 1 ? "minute" : "minutes"}` : "turns not joined across gaps"}`];
   }
   if (topic === "carbon" && params.has("analyze_carbon")) {
     const settings = JSON.parse(params.get("analyze_carbon")!);
-    if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("This card's Carbon assumptions are invalid.");
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("This card’s Carbon Impact settings are invalid.");
+    // The names the Carbon Impact page shows for each stored setting.
+    const scenario = (key: string) => carbonScenarioLabels[key] ?? key;
+    const grid = (key: string) => carbonFactors.grids.find(item => item.key === key)?.label ?? key.replaceAll("_", " ");
     return [
-      typeof settings.scenario === "string" ? `Energy estimate: ${settings.scenario}` : "",
-      typeof settings.pueScenario === "string" ? `Facility overhead: ${settings.pueScenario}` : "",
-      typeof settings.grid === "string" ? `Grid: ${settings.grid === "custom" ? `${Math.max(0, Number(settings.customGrid) || 0)} g CO₂e/kWh` : settings.grid.replaceAll("_", " ")}` : "",
-      settings.inputSensitivity === "third" ? "Watershed input sensitivity" : settings.inputSensitivity === "current" ? "Labs input sensitivity" : "",
+      typeof settings.scenario === "string" ? `Energy scenario: ${scenario(settings.scenario)}` : "",
+      typeof settings.pueScenario === "string" ? `Facility overhead (PUE): ${scenario(settings.pueScenario)}` : "",
+      typeof settings.grid === "string" ? `Electricity grid: ${settings.grid === "custom" ? `${Math.max(0, Number(settings.customGrid) || 0)} g CO₂e/kWh` : grid(settings.grid)}` : "",
+      settings.inputSensitivity === "third" ? "Watershed input sensitivity" : settings.inputSensitivity === "current" ? "Price ratio input sensitivity" : "",
     ].filter(Boolean);
   }
   return [];
@@ -191,7 +197,7 @@ export function dashboardCardWindow(address: string, target: DashboardCardTarget
   if (params.get("analyze_window") === "today") return "Today";
   const dates = where.filter(term => "field" in term && [time.first, time.last].includes(term.field));
   const relative = dates.find(term => "field" in term && term.op === ">=" && /^-\d+d$/.test(term.value));
-  return relative && "field" in relative ? `Past ${relative.value.slice(1, -1)} days` : dates.length ? "Saved range" : "All time";
+  return relative && "field" in relative ? windowLabel(Number(relative.value.slice(1, -1))) : dates.length ? "Saved range" : "All time";
 }
 
 // A card can show more or fewer of the chart's groups than its dashboard,

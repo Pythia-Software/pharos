@@ -262,7 +262,7 @@ func TestSiteLinkAnswersThroughMCP(t *testing.T) {
 		return value, result["isError"] == true
 	}
 	value, failed := call(map[string]any{"page": "findings", "options": map[string]any{"list": "wins", "repo": "pharos"}})
-	if failed || value["url"] != "/findings?list=wins&repo=pharos" || value["title"] != "Findings" {
+	if failed || value["url"] != "/findings?list=wins&repo=pharos" || value["title"] != "Optimize" {
 		t.Fatalf("findings link: %v", value)
 	}
 	if again, failed := call(map[string]any{"url": value["url"]}); failed || again["url"] != value["url"] || again["canonical"] != true {

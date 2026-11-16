@@ -8,7 +8,7 @@ test('agent-event counts the server withheld or is rebuilding never read as conf
   assert.equal(freshness.agentEventsFreshnessNote({ state: 'current', pending_conversations: 0, withheld_conversations: 0 }), '');
   assert.equal(freshness.agentEventsFreshnessNote(null), '');
   const pending = { state: 'pending', pending_conversations: 2, withheld_conversations: 1 };
-  assert.match(freshness.agentEventsFreshnessNote(pending), /Events for 1 conversation are left out until they are rebuilt/);
+  assert.match(freshness.agentEventsFreshnessNote(pending), /Events for 1 conversation are left out until Pharos re-reads it/);
   assert.match(freshness.agentEventsFreshnessNote(pending), /2 conversations are waiting for events to be rebuilt\. These counts may change\./);
   assert.match(freshness.agentEventsFreshnessNote({ state: 'unknown' }), /^Conversations changed since the last events run\./);
   assert.equal(freshness.agentEventsFreshnessMark(pending), '≈');
@@ -40,8 +40,8 @@ test('agent-event cards mark their summary and explain pending coverage', () => 
 test('a saved event the dataset withholds reads pending, never not found', () => {
   const { agentEventItemPendingMessage } = freshness;
   const coverage = { state: 'pending', pending_conversations: 1, withheld_conversations: 1 };
-  assert.match(agentEventItemPendingMessage('agent_events', { row: null, pending: true, coverage }), /^This event will be back once events are rebuilt/);
-  assert.match(agentEventItemPendingMessage('agent_event_messages', { row: null, pending: true, coverage }), /^This message's events/);
+  assert.match(agentEventItemPendingMessage('agent_events', { row: null, pending: true, coverage }), /^This event is hidden until Pharos re-reads its conversation/);
+  assert.match(agentEventItemPendingMessage('agent_event_messages', { row: null, pending: true, coverage }), /^This message’s events/);
   // Truly gone, present, or another dataset: the ordinary unavailable state.
   assert.equal(agentEventItemPendingMessage('agent_events', { row: null, pending: false, coverage }), null);
   assert.equal(agentEventItemPendingMessage('agent_events', { row: { id: 'e1' }, pending: true }), null);

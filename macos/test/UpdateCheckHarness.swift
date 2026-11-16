@@ -393,7 +393,7 @@ final class HeaderTestWindow: NSWindow {
         expect(recorder.results[true]?["pharosClipboard"] == "Error: Clipboard content must be text.", "the main document keeps clipboard payload validation without writing")
         expect(recorder.results[true]?["pharosDictation"] == "Error: Unknown dictation action.", "the main document keeps dictation payload validation without recording")
         for error in recorder.results[false]!.values {
-            expect(error.contains("main window document"), "every iframe reply reports a native sender rejection: \(error)")
+            expect(error.contains("main Pharos window"), "every iframe reply reports a native sender rejection: \(error)")
         }
         expect(recorder.results[true]?["chooseFolder"] == "ok" && pickerCount == 1, "only the real main-document sender creates a picker")
         expect(recorder.replies[true] == 5 && recorder.replies[false] == 5, "each real WebKit reply finishes once")
@@ -539,7 +539,7 @@ final class HeaderTestWindow: NSWindow {
             expect(reconnected >= 0 && flock(reconnected, LOCK_SH | LOCK_NB) == 0, "failed install releases the exclusive CLI lease")
             close(reconnected)
             try lease.recover(version: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "")
-            expect(service.url == nil && service.error?.contains("The service has stopped.") == true, "a stopped service shows recovery instructions instead of a dead loading screen")
+            expect(service.url == nil && service.error?.contains("Pharos stopped its library service") == true, "a stopped service shows recovery instructions instead of a dead loading screen")
             var deferralRequested = false
             service.deferUpdate = { completion in
                 deferralRequested = true
@@ -706,7 +706,7 @@ final class HeaderTestWindow: NSWindow {
             StartupResponse.ready = false
             StartupResponse.busy = false
             var workBusy = false
-            let refusal = "The update waits for test work, which cannot stop in time."
+            let refusal = "Pharos is running work that cannot stop in time: test work. Install the update when it has finished."
             let service = ArchiveService(plan: .library(directory), releaseService: { _, _, forUpdate in
                 if forUpdate && workBusy { return .stopping(#"{"released":false,"error":"\#(refusal)"}"#) }
                 return StartupResponse.busy ? .stopping("test write in progress") : .notRunning

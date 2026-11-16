@@ -7,9 +7,13 @@ import { predicatesOf, type WhereTerm } from "@pythia-software/query-table-core"
 // A duration in seconds, as people say it: 42 s, 12 min, 1 h 20 min.
 export function formatSeconds(value: number): string {
   if (!Number.isFinite(value)) return "—";
-  if (value < 60) return `${Math.round(value)} s`;
-  if (value < 3600) return `${Math.round(value / 60)} min`;
-  const hours = Math.floor(value / 3600), minutes = Math.round((value % 3600) / 60);
+  // Round once, to the unit shown, before splitting, so 59.6 s reads
+  // "1 min" and 7,190 s "2 h", never "60 s" or "1 h 60 min".
+  const seconds = Math.round(value);
+  if (seconds < 60) return `${seconds} s`;
+  const total = Math.round(value / 60);
+  if (total < 60) return `${total} min`;
+  const hours = Math.floor(total / 60), minutes = total % 60;
   return minutes ? `${hours} h ${minutes} min` : `${hours} h`;
 }
 
@@ -40,8 +44,8 @@ export const signalDefinitions: SignalDefinition[] = [
   { id: "mid_task_compactions", label: "Mid-task compactions", numerator: "mid_task_compactions", denominator: "tool_sessions", scale: "per100", per: "sessions", evidence: "tool_sessions", note: "Compactions in the middle of a task, per 100 sessions." },
   { id: "context_pressure", label: "Context pressure", numerator: "context_pressure", denominator: "window_sessions", scale: "percent", evidence: "window_sessions", note: "Sessions whose peak context exceeded 90% of the window, over sessions whose window is known." },
   { id: "corrections", label: "Steering load", numerator: "corrections", denominator: "typed_human_messages", scale: "percent", evidence: "authored_sessions", note: "Typed messages with a correction cue, over typed messages." },
-  { id: "unverified_handbacks", label: "Verified handbacks", numerator: "verified_handbacks", denominator: "edit_handbacks", scale: "percent", evidence: "both_sessions", note: "Handbacks after an edit with a test or build after the last edit, over handbacks after an edit." },
-  { id: "long_unprompted_runs", label: "Long unprompted runs", numerator: "long_unprompted_runs", denominator: "both_sessions", scale: "per100", per: "sessions", evidence: "both_sessions", note: "Runs of more than 150 tool calls without a typed message, per 100 sessions." },
+  { id: "unverified_handbacks", label: "Verified handbacks", numerator: "verified_handbacks", denominator: "edit_handbacks", scale: "percent", evidence: "both_sessions", note: "Handbacks after an edit with a test, build or lint command after the last edit, over handbacks after an edit." },
+  { id: "long_unprompted_runs", label: "Long unprompted runs", numerator: "long_unprompted_runs", denominator: "both_sessions", scale: "per100", per: "sessions", evidence: "both_sessions", note: "Runs of 150 or more tool calls without a typed message, per 100 sessions." },
   { id: "ended_on_failure", label: "Ended on a failed call", numerator: "ended_on_failure", denominator: "both_sessions", scale: "percent", evidence: "both_sessions", note: "Experimental. Sessions whose last tool call failed with nothing typed after it, over sessions." },
 ];
 // The signals the sessions table can list sessions by: each with its count field.

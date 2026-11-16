@@ -53,7 +53,7 @@ func TestOperationLifecycleFollowsTheContract(t *testing.T) {
 	if step := operationStep(op.view()); step["index"] != 3 || step["count"] != 3 {
 		t.Fatalf("the next planned task did not advance: %+v", step)
 	}
-	op.Block("capture-running", "the capture on Mac B")
+	op.Block("capture-running", "the capture on Mac B to finish")
 	state(op, opBlocked)
 	op.Unblock()
 	state(op, opRunning)

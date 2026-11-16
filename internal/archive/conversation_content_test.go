@@ -25,7 +25,7 @@ func TestConversationsAreFoundByWhatTheyHold(t *testing.T) {
 				asset("document", "generated", assetStored, map[string]any{"fragment": true}),
 				asset("artifact", "generated", assetNotExported, nil), asset("image", "web", assetRemote, map[string]any{"url": "https://birds.example/a.png"})},
 			Sources: []SourceRecord{{MessageNativeID: "reply", URL: "https://birds.example/a"}, {MessageNativeID: "reply", URL: "https://birds.example/b"}},
-			Notes: []NoteRecord{{MessageNativeID: "reply", Details: map[string]any{"spoken_chars": 4, "citations": []any{}}}, {MessageNativeID: "second", Details: map[string]any{"cut_off": true}}}}}}
+			Notes:   []NoteRecord{{MessageNativeID: "reply", Details: map[string]any{"spoken_chars": 4, "citations": []any{}}}, {MessageNativeID: "second", Details: map[string]any{"cut_off": true}}}}}}
 	plain := WorkspaceRecord{SourceKind: "chatgpt", SourceID: "plain", Account: "local", Title: "Plain", ActivityAt: "2026-10-04T12:00:00Z",
 		Conversations: []ConversationRecord{{NativeID: "plain", Provider: "chatgpt", Messages: []MessageRecord{reply("reply")}}}}
 	ingestRecords(t, c, rich, plain)

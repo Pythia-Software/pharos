@@ -75,15 +75,15 @@ test('Quick Stats mark message and tool-call counts approximate when copied hist
   for (const field of ['message_count', 'user_messages', 'assistant_messages', 'tool_calls', 'failed_tool_calls', 'tool_failure_rate']) {
     const coverage = stats.quickStatsOccurrenceCoverage(field, partial);
     assert.equal(coverage?.mark, '≈', field);
-    assert.match(coverage.note, /3 retained observations/);
+    assert.match(coverage.note, /3 (messages|tool calls) could not be told apart/);
   }
-  assert.match(stats.quickStatsOccurrenceCoverage('tool_calls', partial).note, /5 tool calls are retained/);
+  assert.match(stats.quickStatsOccurrenceCoverage('tool_calls', partial).note, /5 tool calls are recorded/);
   // Complete coverage, and metrics copies cannot affect, stay exact.
   assert.equal(stats.quickStatsOccurrenceCoverage('message_count', {...partial, occurrence_coverage: 'complete'}), null);
   assert.equal(stats.quickStatsOccurrenceCoverage('tokens', partial), null);
   assert.equal(stats.quickStatsOccurrenceCoverage('message_count', {}), null);
   // A transcript-level partial without unresolved observations still explains itself.
-  assert.match(stats.quickStatsOccurrenceCoverage('message_count', {occurrence_coverage: 'partial', unresolved_occurrences: 0, occurrence_partial_conversations: 2}).note, /2 transcripts may include copied history/);
+  assert.match(stats.quickStatsOccurrenceCoverage('message_count', {occurrence_coverage: 'partial', unresolved_occurrences: 0, occurrence_partial_conversations: 2}).note, /2 agent sessions may include copied history/);
 });
 
 test('Quick Stats never show conversation or run counts as exact when ancestry or identity is unresolved', () => {
@@ -92,8 +92,8 @@ test('Quick Stats never show conversation or run counts as exact when ancestry o
   for (const field of ['active_conversations', 'delegated_runs']) {
     const coverage = stats.quickStatsAncestryCoverage(field, partial);
     assert.equal(coverage?.mark, '≈', field);
-    assert.match(coverage.note, /1 active transcript has no known top-level conversation/);
-    assert.match(coverage.note, /2 transcripts have unresolved execution identity/);
+    assert.match(coverage.note, /1 active agent session has no known top-level conversation/);
+    assert.match(coverage.note, /2 agent sessions have conflicting records of the run/);
   }
   const qualified = stats.quickStatsAncestryCoverage('delegated_runs', {ancestry_coverage: 'qualified', ancestry_qualified_conversations: 3});
   assert.equal(qualified?.mark, '?');

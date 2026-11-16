@@ -452,6 +452,10 @@ test('common MCP families unwrap native and Codex responses without receipt boil
   assert.ok(groups.facts.some(([key,value])=>key==='Population'&&value==='Incomplete'));
   const gmail=present('mcp__Gmail__search_threads',{query:'from:example.com'},{structured_content:{threads:[],resultCountEstimate:'1'}});
   assert.deepEqual(plain(gmail.facts),[['Threads retained','0'],['Estimated matches','1']]);
+  // Labels say what happened once the outcome is recorded, and what was asked until then.
+  assert.equal(gmail.label,'Searched email threads');
+  assert.equal(reader.mcpPresentation(event('call','tool_call',{tool:'mcp__Gmail__search_threads',input:{}})).label,'Search email threads');
+  assert.equal(present('mcp__chrome__get_page_text',{},{content:[{type:'text',text:'Page'}]}).label,'Get page text','browser methods are sentence-cased');
   const link=present('mcp__pharos__site_link',{}, {title:'Habits',summary:'Recorded view',url:'/analyze?analyze_days=30'});
   assert.equal(link.href,'/analyze?analyze_days=30');
   assert.equal(present('mcp__pharos__site_link',{}, {url:'javascript:alert(1)'}).href,'');

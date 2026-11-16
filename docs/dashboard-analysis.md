@@ -665,7 +665,7 @@ no sum, cumulative or share.
   and let it transform them.
 - **Controls.** `AnalysisControls` is the one control bar for every view,
   in two groups (`ControlSections`). **Data** chooses what the chart
-  holds: Analysis (Over time - line, Over time - bar, Over time - heatmap
+  holds: Analysis (Over time · line, Over time · bar, Over time · heatmap
   where the selected measure and breakdown support it, Compare groups, Distribution, Scatter plot,
   cycle; the state's `view` key), Count each, Metric, Breakdown, Combine
   or Summarize, Minimum, Cycle, Population, Range, and for the trend Time
@@ -1057,7 +1057,7 @@ around it. Its default view is the one it always opened on.
   "query view" link is unchanged. Beneath it, the engine's views read the
   `parallelism` records: agent hours (`unit_hours`), active hours
   (`elapsed_hours`: each record's share of the wall time, so groups add up),
-  hours with two or more at once, agents at once while active (the pooled
+  hours with two or more at once, at once while active (the pooled
   ratio of `unit_ms` over `elapsed_ms`) and agents (distinct), by agents at
   once, repository, workspace and the origin fields (provider and model
   only under agent counting, the only counting for which the service
@@ -1232,11 +1232,11 @@ rate is in `record-dashboard-parity.test.mjs`:
 | `carbon-trend` | Carbon, trend, CO₂e, 7-day total including today, norm (`buildCardTrend`) |
 | `carbon-tiers`, `carbon-providers`, `carbon-effort` | Carbon, compare, share, CO₂e by model tier, provider or effort |
 | `carbon-repositories`, `carbon-models` | Carbon, compare, CO₂e by repository or model |
-| `parallel-days` | Parallelism, trend, active hours by agents at once |
-| `parallel-trend` | Parallelism, trend, agents at once while active, 7-day pooled, whole periods, norm (`buildCardTrend`) |
+| `parallel-days` | Parallelism, trend, active hours by number at once |
+| `parallel-trend` | Parallelism, trend, at once while active, 7-day pooled, whole periods, norm (`buildCardTrend`) |
 | `parallel-hours` | Parallelism, hour cycle, total agent hours (the card's `hour_of_day`) |
 | `parallel-repositories` | Parallelism, compare, agent hours by repository |
-| `parallel-active-weekday`, `parallel-weekday` | Parallelism, weekday cycle, active hours or agents at once while active (`weekdayMetric`) |
+| `parallel-active-weekday`, `parallel-weekday` | Parallelism, weekday cycle, active hours or at once while active (`weekdayMetric`) |
 | `archive-empty-search-rate` | Pharos MCP, compare, empty-search rate by tool, minimum 10 requests |
 
 A Carbon card reports kilograms and the dashboard grams; the tests scale.
@@ -1375,8 +1375,8 @@ selections, which the sections above describe.
 
 ## Message labels
 
-The Message Labels catalog offers Over time - line, Over time - bar, and Compare groups, always broken
-down by Sender / Receiver, General Label or Specific Label. Repository, generation
+The Message Labels catalog offers Over time · line, Over time · bar, and Compare groups, always broken
+down by Sender / receiver, General label or Specific label. Repository, generation
 model, source and coverage remain filters. Old links for other views/breakdowns
 open an ontology-focused trend. Nested legend outlines show roles, general labels
 and their specific descendants.

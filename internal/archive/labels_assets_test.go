@@ -372,11 +372,11 @@ func TestLabelsWaitForTheModelDownload(t *testing.T) {
 	srv.configMu.Lock()
 	srv.config.Labels.Worker = ""
 	srv.configMu.Unlock()
-	if status := srv.labelsSettings()["status"].(string); !strings.HasPrefix(status, "On, but labeling can't run: this Pharos has no labeling worker") ||
+	if status := srv.labelsSettings()["status"].(string); !strings.HasPrefix(status, "On, but labeling cannot run: this copy of Pharos has no labeling worker") ||
 		!strings.Contains(status, "also waiting for the download") {
 		t.Fatalf("Settings without a worker says %q", status)
 	}
-	if sub := itemSub(backgroundItem{ID: "labels"}, srv.backgroundInputsFor(t.Context(), nil)); !strings.HasPrefix(sub, "Labeling can't run") {
+	if sub := itemSub(backgroundItem{ID: "labels"}, srv.backgroundInputsFor(t.Context(), nil)); !strings.HasPrefix(sub, "Labeling cannot run") {
 		t.Fatalf("the labels item without a worker says %q", sub)
 	}
 	srv.configMu.Lock()

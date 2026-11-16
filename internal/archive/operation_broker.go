@@ -515,11 +515,11 @@ func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool,
 				}
 			}
 			if own == nil {
-				unreachable = "Its service answered without an eject verdict (an older Pharos), so Pharos cannot tell what it is doing."
+				unreachable = "It answered without saying whether ejecting is safe (it is probably an older Pharos), so Pharos cannot tell what it is doing."
 			}
 		case library.Child != nil:
 			service["state"] = "running"
-			unreachable = "Its service did not answer: " + failures[index].Error()
+			unreachable = "It did not answer: " + failures[index].Error()
 			errorText = failures[index].Error()
 		case starting:
 			service["state"] = "starting"

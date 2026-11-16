@@ -11,7 +11,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { activateHeaderTool, open, skip } from "./harness.mjs";
+import { activateHeaderTool, open, skip, stretch } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
 import { claudeImportFixture, claudeSettingsCoverageFixture, defaultApi, projectColorFixture, cloudScheduledStatus, rootConversation, workID, peerWorkID, relatedWork, eventStream, idleStatus, busyStatus, managedStatus, temporaryBackgroundDocument, workBackgroundDocument, workInspection, pendingEvidenceApi } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, loadSchema, withGroupingKeys } from "@pythia-software/query-table-core";
@@ -235,6 +235,8 @@ const backgroundTaskStatus = { ...busyStatus,
 };
 const askFeedbackAPI = {...askAPI,"GET /api/ask/session":{...askSession,conversation:[{...askSession.conversation[0],status:"feedback",cards:[],feedback:{kind:"feature",comment:"Add Markdown export of selected conversations so I can share a review.\nPreserve message order and tool-call context."}}]}};
 const ROUTES = [
+  { name: "Tool Use dashboard", url: "/analyze?analyze_topic=tool_use", ready: '.usage-tool-use-dashboard section[aria-label="Over time"][aria-busy="false"] .dashboard-heatmap' },
+  { name: "Context dashboard", url: "/analyze?analyze_topic=context", ready: '.usage-context-dashboard section[aria-label="Over time"][aria-busy="false"]' },
   {name:"Scatter Plots",url:"/analyze?analyze_topic=scatter&analyze_data=scatter",ready:".usage-scatter-dashboard"},
   {name:"Compaction comparison",url:"/analyze?"+new URLSearchParams({analyze_topic:"compaction",analyze_data:"compactions",analyze_chart:JSON.stringify({view:"compare",metric:"compactions",split:"trigger_provider"})}),ready:analysisReady},
   {name:"Compaction",url:"/analyze?analyze_topic=compaction&analyze_data=compactions",ready: `.usage-compaction-dashboard ${overTimeReady}`},
@@ -299,6 +301,18 @@ const ROUTES = [
     await guide.getByRole('button',{name:'Import',exact:true}).click();await guide.getByRole('switch').waitFor();
     assert.deepEqual(await layoutProblems(page),[],'managed ZIP collection report fits the setup dialog');
   }:undefined})),
+  // The setup guide's commands and files are long lines in scrolling blocks.
+  {name:'Bucket setup guide',url:'/settings/sources?disclosures='+encodeURIComponent('{"bucketSetup":true}'),ready:'#bucketImportsSection .bucket-connected .source-card',api:{
+    'GET /api/bucket-imports':{buckets:[{id:'bucket',type:'gcs',bucket:'example-team-pharos',prefix:'pharos/66666666-7777-8888-9999-000000000000',machines:2,collected_at:'2026-11-15T10:00:00Z'}]},
+  },check:async(page,app)=>{
+    const section=page.locator('#bucketImportsSection');
+    await section.locator('#bucketSetup-bucket').fill('example-team-pharos');
+    await section.locator('#bucketSetup-number').fill('123456789012');
+    await section.locator('.bucket-step pre',{hasText:'example-team-pharos'}).first().waitFor();
+    assert.equal(await section.locator('#bucketSetup-number').evaluate(element=>element===document.activeElement),true,'typing a name keeps focus while the commands are rewritten');
+    await app.settled();
+    assert.deepEqual(await layoutProblems(page),[],'filled-in commands scroll inside their blocks');
+  }},
   {name:'ChatGPT Downloads watch',url:'/settings/sources',ready:'#chatGPTDownloadsWatchSection .claude-watch-export',api:{
     'GET /api/chatgpt-imports':{enabled:true,available:true,exports:[{id:'chat-export',filename:'a'.repeat(64)+'-2026-11-11-21-59-32-'+ 'b'.repeat(32)+'.zip',state:'fetching',phase:'indexing',collected:1,expected:1,ingestion:{stage:'indexing',processed:2,conversations:2,messages:10}}],library:{workspaces:2,conversations:2,recent:[{id:workID,title:'An imported ChatGPT conversation',url:work}]}},
   },check:async(page,app)=>{
@@ -322,14 +336,14 @@ const ROUTES = [
     await toggle.click();await page.waitForFunction(()=>document.querySelector('#chatGPTDownloadsWatch').getAttribute('aria-checked')==='false');
     await toggle.click();await page.waitForFunction(()=>document.querySelector('#chatGPTDownloadsWatch').getAttribute('aria-checked')==='true');
     report={...report,exports:[{id:'discovered-later',filename:'new-export.zip',state:'fetching',phase:'indexing',collected:1,expected:1}]};
-    await root.locator('[data-id="discovered-later"]').getByRole('button',{name:'Stop',exact:true}).waitFor({timeout:10000});
+    await root.locator('[data-id="discovered-later"]').getByRole('button',{name:'Stop',exact:true}).waitFor({timeout:stretch(10000)});
     report={...report,exports:[],library:{workspaces:3,conversations:3,recent:[]}};
-    await root.getByText('3 workspaces · 3 conversations',{exact:true}).waitFor({timeout:10000});
+    await root.getByText('3 workspaces · 3 conversations',{exact:true}).waitFor({timeout:stretch(10000)});
     const check=root.getByRole('button',{name:'Check Downloads now',exact:true});
     await check.click();await page.waitForFunction(()=>!document.querySelector('#chatGPTDownloadsCheck').disabled);
     await toggle.focus();
     report={...report,problem:'Downloads access needs attention.',library:{workspaces:4,conversations:4,recent:[]}};
-    await root.getByText('4 workspaces · 4 conversations',{exact:true}).waitFor({timeout:10000});
+    await root.getByText('4 workspaces · 4 conversations',{exact:true}).waitFor({timeout:stretch(10000)});
     await root.getByText('Downloads access needs attention.',{exact:true}).waitFor();
     assert.equal(await toggle.evaluate(element=>element===document.activeElement),true,'empty-watch refresh preserves focus');
   }},
@@ -357,7 +371,7 @@ const ROUTES = [
     await stop.focus();
     // Let the next automatic poll restore the original fixture: both the
     // recent workspace list and the focused export's progress change.
-    await page.waitForResponse(response=>new URL(response.url()).pathname==='/api/claude-imports',{timeout:10000});
+    await page.waitForResponse(response=>new URL(response.url()).pathname==='/api/claude-imports',{timeout:stretch(10000)});
     await app.settled();
     assert.ok(await stop.evaluate(element=>element===document.activeElement),'automatic ingestion polling lost the focused Stop button');
     await workspace.click();
@@ -565,7 +579,7 @@ const ROUTES = [
     await page.locator('.export-document').waitFor();
     await page.locator('.tool-event > summary').filter({hasText:'synthetic-doc'}).getByText('Details',{exact:true}).click();
     await page.locator('.mcp-presentation a.markdown-link').waitFor();
-    await page.locator('.tool-event > summary').filter({hasText:'Query statistics'}).click();
+    await page.locator('.tool-event > summary').filter({hasText:'Queried statistics'}).click();
     await page.locator('.mcp-presentation table').waitFor();
   }, shown: ".tool-event[open] .tool-output", check: async (page,app) => {
     const headingContext=page.locator('#detail .work-heading > .meta').first();
@@ -772,17 +786,17 @@ const ROUTES = [
         assert.equal(clipped, false, "the selected message's highlight has room outside its edges");
         return;
       }
-      await page.getByRole("button", selection === "summary" ? { name: /^Browse turns: / } : { name: "Browse", exact: true }).click();
-      if (selection === "summary") assert.ok(await page.getByRole("button", { name: "Collapse turns", exact: true }).evaluate(button => button === document.activeElement), "opening from the compact summary keeps keyboard focus on the collapse control");
+      await page.getByRole("button", selection === "summary" ? { name: /^Browse turns: / } : { name: "Browse turns", exact: true }).click();
+      if (selection === "summary") assert.ok(await page.getByRole("button", { name: "Hide turns", exact: true }).evaluate(button => button === document.activeElement), "opening from the compact summary keeps keyboard focus on the collapse control");
       const outline = page.getByRole("navigation", { name: "Conversation outline", exact: true });
       await outline.getByRole("button", { name: /^Turn 1/ }).first().waitFor();
       if (selection === "sub-agent") {
-        await outline.locator("summary").filter({ hasText: "Sub-agent conversation · codex" }).click();
+        await outline.locator("summary").filter({ hasText: "Sub-agent conversation · Codex" }).click();
         await outline.getByRole("button", { name: /Turn 1.*Review the change/ }).click();
       } else await outline.getByRole("button", { name: /^Turn 3/ }).first().click();
       await page.getByRole("region", { name: "Selected turn preview" }).locator(".result-message").first().waitFor();
       if (selection === "accordion") {
-        const toggle = page.getByRole("button", { name: /^(Browse|Collapse turns)$/ });
+        const toggle = page.getByRole("button", { name: /^(Browse turns|Hide turns)$/ });
         await toggle.focus();
         await page.keyboard.press("Enter");
         assert.equal(await toggle.getAttribute("aria-expanded"), "false");
@@ -792,7 +806,7 @@ const ROUTES = [
         await outline.getByRole("button", { name: /^Turn 3/ }).first().waitFor();
         assert.equal(await outline.getByRole("button", { name: /^Turn 3/ }).first().getAttribute("aria-current"), "true", "reopening preserves the selected turn");
         await page.reload();
-        await page.getByRole("button", { name: "Collapse turns", exact: true }).waitFor();
+        await page.getByRole("button", { name: "Hide turns", exact: true }).waitFor();
         await outline.getByRole("button", { name: /^Turn 3/ }).first().waitFor();
         assert.equal(await outline.getByRole("button", { name: /^Turn 3/ }).first().getAttribute("aria-current"), "true", "the URL restores the selected turn after reload");
       }
@@ -906,7 +920,7 @@ const ROUTES = [
     q_usage: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "first_usage_at", op: ">=", value: "-7d" }, { field: "first_usage_at", op: "<", value: "+0s" }] }), window_mode: "relative", window_days: "7", window_field: "first_usage_at", window_dataset: "usage",
     analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "first_usage_at", op: ">=", value: "-7d" }, { field: "first_usage_at", op: "<", value: "+0s" }] }), analyze_chart: JSON.stringify({ period: "day", metric: "cost", split: "repository_name" }) })}`,
     ready: ".usage-dashboard .usage-chart", open: async page => {
-      await page.getByRole("combobox", { name: "Time Bucket", exact: true }).selectOption("hour");
+      await page.getByRole("combobox", { name: "Time bucket", exact: true }).selectOption("hour");
       await page.getByRole("combobox", { name: "Range", exact: true }).selectOption("custom-times");
       await page.getByLabel("From date and time", { exact: true }).waitFor();
     }, shown: ".usage-dashboard .usage-chart" },
@@ -1030,7 +1044,7 @@ const ROUTES = [
   } },
   ...[false, true].map(details => ({ name: `Background Processing deferred verification${details ? ' details' : ''}`, url: "/settings/sync", ready: "#syncHistoryTables .qt-row", api: {
     "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [{ ...defaultApi["GET /api/sync/status"].history[0], audit: { outcome: "deferred", discovered_units: 10, deferred_units: 1, detail: "large group queued for manual verification" } }] },
-  }, ...(details ? { open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
+  }, ...(details ? { open: page => page.getByRole("region", { name: "Recent background work", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" } : {}) })),
   { name: "Background Processing schedule", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Update writing estimates" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing message labels waiting", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", api: {
     "GET /api/background": { ...defaultApi["GET /api/background"], labels: { enabled: true, can_change: true,
@@ -1050,10 +1064,10 @@ const ROUTES = [
   { name: "Background Processing sources", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "New conversations" }).click(), shown: "#backgroundSchedule .bg-sources" },
   { name: "Background Processing queued verification", url: "/settings/sync", ready: "#backgroundSchedule .bg-col", open: page => page.locator("#backgroundSchedule .bg-item-head", { hasText: "Verify indexed data" }).click(), shown: "#backgroundSchedule .bg-detail:not([hidden])" },
   { name: "Background Processing diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },
-  { name: "Background Processing run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent run history", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
+  { name: "Background Processing run details", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByRole("region", { name: "Recent background work", exact: true }).getByRole("button", { name: "Details", exact: true }).first().click(), shown: ".sync-run-dialog .qt-row" },
   { name: "Background Processing empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
   { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
-  { name: "Layout Preferences", url: "/settings/layout", ready: "#headerExpand" },
+  { name: "Layout", url: "/settings/layout", ready: "#headerExpand" },
   { name: "Header settings", url: "/settings/layout", ready: "#headerExpand", open: page => page.locator('#headerExpand').click(), shown: '#headerActive .header-tool' },
   { name: "Quick Stats settings", url: "/settings/layout", ready: "#quickStatsExpand", open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsEditor button' },
   { name: "Quick Stats toolbox", url: "/settings/layout", ready: "#quickStatsExpand", preferences: { "pharos-quick-stats-v1": { metrics: ['human_words', 'tokens'], windows: ['today', '24h'] } }, open: page => page.locator('#quickStatsExpand').click(), shown: '#quickStatsPreview td' },
@@ -1442,7 +1456,8 @@ test('Ask Pharos suggestions stay readable, prefill the editor and remember bein
   assert.equal(await toggle.getAttribute('aria-expanded'),'true');
   // Full screen gives the row the window's width, so it reads more cards at once.
   // Its suggestions give way to a draft, so clear the one chosen above.
-  await page.goto(new URL('/ask',page.url()).href);await editor.waitFor();await editor.fill('');
+  await page.goto(new URL('/ask',page.url()).href);
+  await page.waitForFunction(text=>document.getElementById('pharos-question')?.value===text,prompt);await editor.fill('');
   await viewport.waitFor();await settled();
   assert.ok(await viewport.locator('[data-reading]').count()>3,'a wide full screen row shows more than three suggestions');
   assert.deepEqual(await layoutProblems(page),[]);
@@ -1511,8 +1526,11 @@ test("Background Processing items drag between all four columns for a week", { s
   for (const id of document.view.items.filter(item => item.state !== 'disabled').map(item => item.id)) {
     for (const cadence of ['manual', 'frequent', 'hourly', 'daily']) {
       const item = schedule.locator(`.bg-item[data-item="${id}"]`);
+      // Each move is saved before the next; the held save above covers moves made while one is in flight.
+      const saved = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/api/background/settings'));
       await item.locator('.bg-grip').dragTo(schedule.locator(`.bg-col[data-cadence="${cadence}"]`));
       await schedule.locator(`.bg-col[data-cadence="${cadence}"] .bg-item[data-item="${id}"]`).waitFor();
+      await saved;
     }
   }
   assert.ok(calls.some(call => call.method === 'POST' && call.path === '/api/background/settings'
@@ -1547,7 +1565,7 @@ test("Background Processing shares the busy switch across Hourly and Daily and s
   await settled();
   assert.equal(await hourly.isChecked(), true);
   assert.equal(calls.filter(call => call.method === 'POST' && call.path === '/api/background/settings' && 'hold_when_busy' in call.body).length, 2);
-  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
+  const history = page.getByRole('region', { name: 'Recent background work', exact: true });
   for (const work of ['Index changes', 'Update findings', 'Back up']) assert.ok(await history.getByText(work, { exact: true }).count());
   await history.getByRole('button', { name: 'Add filter', exact: true }).click();
   await page.getByRole('button', { name: /^Operation(?:\s|$)/ }).click();
@@ -1743,7 +1761,8 @@ test('Recent conversation links open the selected conversation and search', { sk
   await settled();
   await page.goBack();
   await page.locator('.home-recent-search').click();
-  await page.waitForURL(url => url.pathname === '/library' && url.searchParams.get('view') === 'conversation');
+  // The Library turns ?view=conversation into its own query state as it loads.
+  await page.waitForURL(url => url.pathname === '/library');
   await page.locator('#queryTableLibrary .conversation-result-card').first().waitFor();
 });
 
@@ -1768,7 +1787,7 @@ test('Habits daily bars use the available width when the window and range change
   await page.setViewportSize({ width: 1920, height: 1050 });
   await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
   await activateHeaderTool(page, 'pharosDrive');
-  const panel = page.getByRole('dialog', { name: 'Library drive', exact: true });
+  const panel = page.getByRole('dialog', { name: 'Background Processing', exact: true });
   const settings = panel.getByRole('button', { name: 'Open Background Processing settings', exact: true });
   await settings.waitFor();
   await panel.getByRole('button', { name: 'Stop', exact: true }).waitFor();
@@ -1795,7 +1814,7 @@ test('pages without section menus use the full window', { skip }, async t => {
   await primary.getByRole('button', { name: 'Home', exact: true }).click();
   await page.locator('.home-belt-row .query-card').first().waitFor();
   await fillsWindow();
-  await page.getByRole('button', { name: 'All Cards', exact: true }).click();
+  await page.getByRole('button', { name: 'Open Card Library', exact: true }).click();
   await page.locator('.card-library-entry .query-card').first().waitFor();
   await fillsWindow();
   await primary.getByRole('button', { name: 'Search', exact: true }).click();
@@ -1839,6 +1858,9 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
           await route.open(app.page);
           await app.page.locator(route.shown).first().waitFor();
           await app.settled();
+          // Reaching a control can scroll main sideways past a wide table;
+          // the checks below measure from its left edge.
+          await app.page.evaluate(() => document.querySelector("main").scrollTo({ left: 0 }));
         }
         // A fitted table stops scrolling sideways at desktop widths. One that
         // still scrolls once the wait ends is a problem, so KNOWN can name it.
@@ -2121,11 +2143,11 @@ test("Card dashboard opens from the Card Library, fits, and supports changing vi
   await page.locator('.usage-dashboard .usage-query-destinations a').first().waitFor();
   await app.settled();
   assert.deepEqual(await layoutProblems(page), []);
-  await view.selectOption('trend');
-  await page.waitForFunction(() => JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).view === 'trend');
+  const [trend] = await view.selectOption({ label: 'Over time · bar' });
+  await page.waitForFunction(value => JSON.parse(new URLSearchParams(location.search).get('analyze_chart')).view === value, trend);
   await page.reload();
   await page.getByRole('combobox', { name: 'Analysis', exact: true }).waitFor();
-  assert.equal(await page.getByRole('combobox', { name: 'Analysis', exact: true }).inputValue(), 'trend');
+  assert.equal(await page.getByRole('combobox', { name: 'Analysis', exact: true }).inputValue(), trend);
   await app.settled();
   assert.deepEqual(app.problems(), []);
 });
@@ -2184,11 +2206,11 @@ test('Tokens and Cost keeps missing pricing actionable across refresh, chart vie
   await notice.waitFor();
   assert.ok(await refresh.evaluate(element => document.activeElement === element), 'loading pricing moved focus');
   await page.evaluate(() => { window.pharosCopyText = async text => { window.copiedPricingPrompt = text; }; });
-  await notice.getByRole('button', { name: 'Copy refresh prices prompt' }).click();
+  await notice.getByRole('button', { name: 'Copy pricing prompt' }).click();
   await notice.getByRole('status').waitFor();
   assert.equal(await page.evaluate(() => window.copiedPricingPrompt), missingPrices.prompt);
   await notice.locator('summary').click();
-  const prompt = page.getByRole('textbox', { name: 'Pricing refresh prompt' });
+  const prompt = page.getByRole('textbox', { name: 'Pricing prompt' });
   assert.equal(await prompt.inputValue(), missingPrices.prompt);
   await page.waitForFunction(() => JSON.parse(new URLSearchParams(location.search).get('disclosures') || '{}')['tokens.pricing-prompt'] === true);
   await page.reload();
@@ -2314,10 +2336,12 @@ test("model color editors preview and save inline while retaining focus", { skip
   assert.equal(await model.evaluate(element => element === document.activeElement), true);
   await card.scrollIntoViewIfNeeded();
   await shot("model-colors-inline-editor");
-  await page.getByRole("button", { name: "Save palette for OpenAI", exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('[aria-label="Restore recommended shade for gpt-6-sol"]')?.disabled === false);
+  const savePalette = page.getByRole("button", { name: "Save palette for OpenAI", exact: true });
+  await savePalette.click();
+  // The drafts, and with them Save, go once the library has the palette.
+  await savePalette.waitFor({ state: "detached" });
   await page.reload();
-  assert.equal(await provider.inputValue(), "#7547b3");
+  await page.waitForFunction(() => document.querySelector('[aria-label="Color for OpenAI"]')?.value === "#7547b3");
   await page.getByRole("button", {name: "Edit color for gpt-6-sol", exact: true}).click();
   await model.waitFor();
   assert.equal(await model.inputValue(), "#ee1122");

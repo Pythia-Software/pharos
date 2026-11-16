@@ -1,6 +1,7 @@
 import React,{useEffect,useLayoutEffect,useMemo,useRef,useSyncExternalStore} from 'react';
 import {createPortal} from 'react-dom';
 import {Icon,type IconName} from './icons';
+import {Modal,ModalClose} from './modal';
 import {readinessDial} from './data-readiness-icon';
 import {PageLink,useLocationRevision} from './nested-pages';
 import {useViewState} from './view-state';
@@ -86,16 +87,17 @@ export function DataReadinessModal(){
   const scopes=displayedReadinessScopes(),selected=scope==='page'?scopes:scopes.filter(item=>item.id===scope);
   const model=modelFor(selected),scopeName=scope==='page'?'This page':selected[0]?.title??'This result';
   useEffect(()=>{const show=(event:Event)=>{const context=(event as CustomEvent<{id:string;invoker?:HTMLElement}>).detail;invoker.current=context.invoker??document.activeElement as HTMLElement;setScope(context.id);setShown(true);};window.addEventListener('pharos:open-readiness',show);return()=>window.removeEventListener('pharos:open-readiness',show);},[]);
-  useEffect(()=>{const element=dialog.current!;if(shown&&!element.open)element.showModal();else if(!shown&&element.open)element.close();},[shown]);
-  useEffect(()=>{const element=dialog.current!;const close=()=>{setShown(false);const target=invoker.current;invoker.current=null;if(!target)return;const replacement=target.dataset.readinessResult?document.querySelector<HTMLElement>(`[data-readiness-result="${CSS.escape(target.dataset.readinessResult)}"]`):null;for(const control of [target,replacement,document.getElementById('dataReadinessToggle'),document.getElementById('headerMore')])if(control?.isConnected&&control.getClientRects().length){control.focus({preventScroll:true});break;}};element.addEventListener('close',close);return()=>element.removeEventListener('close',close);},[]);
+  // Focus returns to the control that opened the details, or to the same
+  // result's control when the page redrew it, then to the header.
+  const restoreFocus=()=>{const target=invoker.current;invoker.current=null;if(!target)return null;const replacement=target.dataset.readinessResult?document.querySelector<HTMLElement>(`[data-readiness-result="${CSS.escape(target.dataset.readinessResult)}"]`):null;return [target,replacement,document.getElementById('dataReadinessToggle'),document.getElementById('headerMore')].find(control=>control?.isConnected&&control.getClientRects().length)??null;};
   const previewEnabled=scenario()!==null;
   const settings=readinessSettingsURL(model);
-  return <dialog ref={dialog} id="dataReadinessDialog" data-view-field="readiness_open" className="data-guide data-readiness-dialog" aria-labelledby="dataReadinessTitle" aria-describedby="dataReadinessDescription" onClick={event=>{if(event.target!==event.currentTarget)return;const r=event.currentTarget.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)event.currentTarget.close();}}>
-    <header className="data-guide-header"><div><small>{model.preview?'Preview · ':''}{scopeName}</small><h2 id="dataReadinessTitle">{model.label}</h2></div><button type="button" className="data-guide-close" data-view-field="readiness_open" aria-label="Close update details" onClick={()=>dialog.current?.close()}><Icon name="close"/></button></header>
+  return <Modal open={shown} dialogRef={dialog} id="dataReadinessDialog" data-view-field="readiness_open" className="data-guide data-readiness-dialog" aria-labelledby="dataReadinessTitle" aria-describedby="dataReadinessDescription" opener={null} restoreFocus={restoreFocus} onClose={()=>setShown(false)}>
+    <header className="data-guide-header"><div><small>{model.preview?'Preview · ':''}{scopeName}</small><h2 id="dataReadinessTitle">{model.label}</h2></div><ModalClose className="data-guide-close" data-view-field="readiness_open" label="Close update details" onClick={()=>dialog.current?.close()}/></header>
     {previewEnabled?<div className="data-readiness-preview"><label htmlFor="readinessPreviewState">Preview example</label><select id="readinessPreviewState" data-view-field="readiness_preview" value={preview} onChange={event=>setPreview(event.target.value as ReadinessScenario)}>{readinessScenarios.map(([id,label])=><option key={id} value={id}>{label}</option>)}</select></div>:null}
-    <div className="data-guide-body"><p id="dataReadinessDescription" className="muted">{model.sentence}</p><dl className="data-readiness-times"><div><dt>Last checked</dt><dd>{model.checkedAt===null?'Time unavailable':readinessAge(Math.max(0,Date.now()-model.checkedAt))+' ago'}</dd></div><div><dt>Next planned check</dt><dd>{clock(model.nextAt)}</dd></div></dl>{!['current','saved'].includes(model.kind)?<ProgressList model={model}/>:null}<p className="data-readiness-evidence">{model.preview?'Example updates. Your data and settings are unchanged.':'Saved results may need a refresh to show the latest updates.'}{model.kind==='behind'&&model.lagMs!==null?' A full clock means 12 hours behind or more.':''}</p></div>
-    <footer className="data-readiness-footer"><PageLink data-view-field="readiness_open" href={settings} onClick={()=>{invoker.current=null;dialog.current?.close();}}>Update settings<Icon name="arrow-right"/></PageLink></footer>
-  </dialog>;
+    <div className="data-guide-body"><p id="dataReadinessDescription" className="muted">{model.sentence}</p><dl className="data-readiness-times"><div><dt>Last checked</dt><dd>{model.checkedAt===null?'Unknown':readinessAge(Math.max(0,Date.now()-model.checkedAt))+' ago'}</dd></div><div><dt>Next planned check</dt><dd>{model.nextAt===null?model.kind==='unknown'?'Unknown':'None scheduled':clock(model.nextAt)}</dd></div></dl>{!['current','saved'].includes(model.kind)?<ProgressList model={model}/>:null}<p className="data-readiness-evidence">{model.preview?'Example states. Your data and settings are unchanged.':'Saved results may need a refresh to show the latest changes.'}{model.kind==='behind'&&model.lagMs!==null?' A full clock means 12 hours behind or more.':''}</p></div>
+    <footer className="data-readiness-footer"><PageLink data-view-field="readiness_open" href={settings} onClick={()=>{invoker.current=null;dialog.current?.close();}}>Background Processing<Icon name="arrow-right"/></PageLink></footer>
+  </Modal>;
 }
 
 

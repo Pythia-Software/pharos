@@ -34,14 +34,14 @@ export function apiCostTrendQuery(source: QueryState, from: number, to: number):
 // A truncated group set must be split and fetched again, never summed as if
 // complete. Coverage errors are different and cannot be repaired by splitting.
 export function apiCostTrendFacts(result?: AggregationResultEntry): CostTimeBucket[] | undefined {
-  if (!result || result.error || result.coverage !== "exact" || result.buckets.some(bucket => bucket.error)) throw new Error("Complete API cost history is unavailable.");
+  if (!result || result.error || result.coverage !== "exact" || result.buckets.some(bucket => bucket.error)) throw new Error("Could not load complete API cost history.");
   if (result.groupCount !== undefined && result.groupCount > result.buckets.length) return;
   const facts = result.buckets.map(bucket => {
     const key = bucket.keys[0], at = typeof key === "number" ? key : Date.parse(String(key));
-    if (bucket.keys.length !== 1 || !Number.isFinite(at) || typeof bucket.value !== "number" || !Number.isFinite(bucket.value) || bucket.value < 0 || !Number.isInteger(bucket.count) || bucket.count <= 0) throw new Error("Invalid API cost history value.");
+    if (bucket.keys.length !== 1 || !Number.isFinite(at) || typeof bucket.value !== "number" || !Number.isFinite(bucket.value) || bucket.value < 0 || !Number.isInteger(bucket.count) || bucket.count <= 0) throw new Error("Could not read a value in the API cost history.");
     return { at, cost: bucket.value, count: bucket.count };
   });
-  if (result.processedRows !== undefined && facts.reduce((n, fact) => n + fact.count, 0) !== result.processedRows) throw new Error("Incomplete API cost history counts.");
+  if (result.processedRows !== undefined && facts.reduce((n, fact) => n + fact.count, 0) !== result.processedRows) throw new Error("Could not load complete API cost history counts.");
   return facts;
 }
 
@@ -50,7 +50,7 @@ export function buildApiCostTrend(facts: CostTimeBucket[], days: number, now: nu
   const sum = (rows: CostTimeBucket[]) => rows.reduce((n, row) => n + row.cost, 0);
   const current = window(now, days), count = current.reduce((n, fact) => n + fact.count, 0);
   const pointTimes = Array.from({ length: 31 }, (_, i) => now - (30 - i) * day), points = pointTimes.map(end => sum(window(end, 7)) / 7);
-  return { kind: "trend", format: "USD", value: count ? sum(current) : undefined, valueLabel: "API equivalent", pointValueLabel: "API equivalent / day", trendLabel: "7d avg / day", sampleLabel: `${count.toLocaleString()} priced usage records · last ${days} days`,
+  return { kind: "trend", format: "USD", value: count ? sum(current) : undefined, valueLabel: "API cost", pointValueLabel: "API cost / day", trendLabel: "7-day average / day", sampleLabel: `${count.toLocaleString()} priced usage ${count === 1 ? "record" : "records"} · ${days === 1 ? "last day" : `last ${days} days`}`,
     points, pointTimes, lookbackDays: 7, baseline: points.slice(0, -1).reduce((total, value) => total + value, 0) / 30,
-    detail: "Headline: selected-period API equivalent. Each sparkline point: summed fully priced cost in its trailing seven elapsed days divided by seven, including zero-activity days. History spans the last 30 days; the dashed norm is the mean of the prior 30 daily endpoints. All values use the same retained usage-record time placement as the period total." };
+    detail: "The headline is the API cost for the selected period. Each sparkline point is the average daily fully priced API cost over the seven days before it, counting days with no usage as zero. The sparkline covers the last 30 days; the dashed line is the average of the 30 earlier points. Costs are placed in time the same way as the period total." };
 }

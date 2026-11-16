@@ -73,7 +73,7 @@ extra("Tokens and Cost", "usage", "first_usage_at", sessionKeys, [
   ["reasoning_output_tokens", "Reasoning tokens", "Reasoning output reported by the source; unavailable measurements remain missing."],
 ]);
 extra("Waiting and Thinking", "model_requests", "requested_at", sessionKeys, [
-  ["gap_seconds", "Response wait", "Mean recorded wait after tool results, in seconds; requests without timing are excluded.", "avg"],
+  ["gap_seconds", "Post-tool wait", "Mean recorded wait after tool results; model requests without timing are excluded.", "avg"],
   ["input_tokens", "Mean request input", "Mean input tokens per recorded model request.", "avg"],
   ["output_tokens", "Mean request output", "Mean output tokens per recorded model request.", "avg"],
 ]);
@@ -84,21 +84,21 @@ extra("Tool Calls and Time", "tool_calls", "started_at", { ...sessionKeys, messa
 // Numeric session diagnostics are already maintained in the session schema.
 // Offer the ones the guided dashboard has not yet put in its metric menu.
 const sessionExtras: Array<[string, string, AnalysisMeasure["op"]?]> = [
-  ["wall_seconds", "Wall time"], ["idle_seconds", "Idle time"], ["files_edited", "Files edited"], ["subagents", "Delegated agents"],
-  ["turn_cycles", "Turn cycles"], ["first_response_seconds", "First response wait", "avg"], ["turn_cycle_p90_seconds", "Turn cycle p90", "avg"],
-  ["max_unprompted_tool_calls", "Longest unprompted tool run", "max"], ["rejections", "Rejected calls"], ["interrupts", "Interrupts"],
+  ["wall_seconds", "Wall time"], ["idle_seconds", "Idle time"], ["files_edited", "Files edited"], ["subagents", "Delegated agent sessions"],
+  ["turn_cycles", "Turn cycles"], ["first_response_seconds", "First response wait", "avg"], ["turn_cycle_p90_seconds", "Turn cycle P90", "avg"],
+  ["max_unprompted_tool_calls", "Longest unprompted tool run", "max"], ["rejections", "Rejected tool calls"], ["interrupts", "Interrupts"],
   ["hook_blocks", "Hook blocks"], ["failure_streak_max", "Longest failure streak", "max"], ["identical_retries", "Identical retries"],
   ["thrash_retries", "Alternating retries"], ["churned_files", "Churned files"], ["mid_task_compactions", "Mid-task compactions"],
   ["context_peak_tokens", "Peak context tokens", "max"], ["corrections", "Human corrections"], ["verified_handbacks", "Verified handbacks"],
-  ["unverified_handbacks", "Unverified handbacks"], ["ended_on_failure", "Sessions ending on failure"],
+  ["unverified_handbacks", "Unverified handbacks"], ["ended_on_failure", "Agent sessions ending on failure"],
 ];
 extra("Session Shape", "session_shape", "started_at", sessionKeys, sessionExtras.map(([field, label, op]) => [field, label, sessions.fields.find(item => item.name === field)?.description ?? `Recorded ${label.toLowerCase()} across agent sessions.`, op]));
 
 const names: Record<string, string> = {
   activity_conversations: "Active conversations", activity_output: "Conversation output tokens",
   tokens_conversations: "Conversations with usage", tokens_root_conversations: "Top-level conversations with usage",
-  work_hours_typed_words: "Typed words during activity hours", work_hours_messages: "Typed messages during activity hours", work_hours_conversations: "Conversations with activity hours", work_hours_at_once: "Agents at once during work hours", parallelism_agents: "Active conversations",
-  work_hours_wall_hours: "Agent wall hours", work_hours_active_hours: "Active agent hours", work_hours_parallel_hours: "Hours with parallel agents",
+  work_hours_typed_words: "Typed words during activity hours", work_hours_messages: "Typed messages during activity hours", work_hours_conversations: "Conversations with activity hours", work_hours_at_once: "Conversations at once during work hours", parallelism_agents: "Active conversations",
+  work_hours_wall_hours: "Agent wall hours", work_hours_active_hours: "Active agent hours", work_hours_parallel_hours: "Hours with parallel conversations",
   human_words: "User words", human_words_per_message: "Typed words per typed message", human_copied_share: "Messages with copied text (%)",
   tokens_cost: "API cost (USD)", tokens_priced_cost: "Fully priced API cost (USD)", tokens_cache_read_share: "Cache read share (%)",
   tokens_output_share: "Output token share (%)", calls_time: "Recorded tool time", calls_mean_time: "Mean tool call duration",

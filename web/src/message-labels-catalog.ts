@@ -16,7 +16,7 @@ export const messageLabelsCatalog:AnalysisCatalog={
   labels:{label:'Distinct labels',unit:'labels',format:{kind:'number',decimals:0},op:'count_distinct',field:'label',additive:false,note:'Different accepted specific labels, including explicit coverage states.'},
   observations:{label:'Label matches',unit:'matches',format:{kind:'number',decimals:0},op:'count',additive:true,note:'One observation per most-specific accepted label, or one coverage observation when no label is accepted. Messages with several labels contribute several matches.'},
  },
- breakdowns:{function_role:{label:'Sender / Receiver',fields:['function_role'],order:['Sender','Receiver','Coverage']},family:{label:'General Label',fields:['family']},label:{label:'Specific Label',fields:['label']}},
+ breakdowns:{function_role:{label:'Sender / receiver',fields:['function_role'],order:['Sender','Receiver','Coverage']},family:{label:'General label',fields:['family']},label:{label:'Specific label',fields:['label']}},
  labels:{source:value=>sourceNames[value]??value,label_status:value=>coverageNames[value]??value,label:id=>id==='?'?'Uncategorized':shortLabel(id),family:id=>id==='?'?'Uncategorized':shortLabel(id)},
  records:{label:'Label observation',plural:'Label observations',note:'Stored message classifications. No labeling runs when this page opens.'},
  units:{},

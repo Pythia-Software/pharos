@@ -205,7 +205,7 @@ const work = {
 // The delegation explorer's analysis of the workspace's three sessions.
 const metricKeys = ["start", "tokens", "cost", "calls", "events", "errors", "files", "filesRead", "messages", "requests", "turns", "clock", "total", "toolTime", "toolAgent", "toolSum", "wait", "modelTime", "backgroundTime", "episodes", "children", "leaves", "depth", "input", "uncached", "cacheRead", "cacheWrite", "output", "reasoning", "remainder"];
 const durations = new Set(["clock", "total", "toolTime", "toolAgent", "toolSum", "wait", "modelTime", "backgroundTime"]);
-const metricSpecs = metricKeys.map(id => ({ id, label: { start: "First evidence", tokens: "Tokens", cost: "API cost", calls: "Tool calls", messages: "Messages", events: "Agent events", filesRead: "Files read", errors: "Errors", files: "Files Edited", clock: "Clock span", total: "Session spans", toolTime: "Tool elapsed" }[id] || id,
+const metricSpecs = metricKeys.map(id => ({ id, label: { start: "First evidence", tokens: "Tokens", cost: "API cost", calls: "Tool calls", messages: "Messages", events: "Agent events", filesRead: "Files read", errors: "Errors", files: "Files edited", clock: "Clock span", total: "Session spans", toolTime: "Tool elapsed" }[id] || id,
   unit: id === "cost" ? "usd" : durations.has(id) ? "ms" : id === "start" ? "date" : "count", definition: `Definition for ${id}` }));
 const metric = (value, quality = "observed") => ({ value, quality, known: value === null ? 0 : 1, total: 1 });
 const sessionEnd = start + 300000;
@@ -245,11 +245,11 @@ function parallel(query) {
 
 // Findings: open, in-cart and watching cards with a detail chart.
 const repoTarget = "repo:repo_explo";
-const openCard = { id: "drift:repo:repo_explo:abc", state: "open", title: "Codex can't find explo's instructions", explanation: "explo keeps its agent instructions in `CLAUDE.md`, which only Claude reads.",
+const openCard = { id: "drift:repo:repo_explo:abc", state: "open", title: "Codex can’t find explo’s instructions", explanation: "explo keeps its agent instructions in `CLAUDE.md`, which only Claude reads.",
   impact: { usd: 41.2, tokens: 150e6, minutes: 12, failures: 330, window_days: 28 }, impact_note: "330 searches", rate: "1 in 3", change: "Make one instructions file that both Claude and Codex read.", change_label: "One shared instructions file", attempt: 1,
   detector: "drift", detector_label: "Instruction drift", target: repoTarget, target_label: "explo", scope_label: "explo", repository_id: "repo_explo", first_seen_at: iso(20 * day), last_seen: iso(day), active: true, new: true };
 const cartCard = { ...openCard, id: "failure:repo:repo_explo:def", title: `${longTitle} in explo`, explanation: "Agents read gzipped files as text.", impact: { usd: 3, tokens: 1e6, minutes: 1, failures: 36 }, impact_note: "34 failed commands", new: false, cart: { target: repoTarget, target_label: "explo", ticked: true } };
-const watchingCard = { ...openCard, id: "drift:repo:repo_tl1:ghi", state: "watching", title: "Codex can't find tl1's instructions", new: false, target: "repo:repo_tl1", target_label: "tl1", scope_label: "tl1", repository_id: "repo_tl1", change_label: "A shared instructions file", change: "A shared instructions file",
+const watchingCard = { ...openCard, id: "drift:repo:repo_tl1:ghi", state: "watching", title: "Codex can’t find tl1’s instructions", new: false, target: "repo:repo_tl1", target_label: "tl1", scope_label: "tl1", repository_id: "repo_tl1", change_label: "A shared instructions file", change: "A shared instructions file",
   watching: { before: "1 in 3", change: "A shared instructions file", copied_at: iso(12 * day), day: 12, of_days: 28, result_on: new Date(now + 16 * day).toISOString().slice(0, 10), saved_usd: 3.2, target_label: "tl1",
     provisional: { signal: "promising", ratio: 0.2, before: { units: 48, rate: 5 / 12, exposure: 48 }, after: { units: 24, rate: 1 / 12, exposure: 24 },
       through: iso(day).slice(0, 10), guards: [{ name: "tokens per conversation", before: 100000, after: 90000, ok: true }],
@@ -284,7 +284,7 @@ export const fixesFixtures = {
   items: [fixCard,
     { ...fixCard, id: "fix_global", title: "gh pr edit fails with a GraphQL error about Projects (classic)", category: "tool", category_label: "Tool or integration", target: "global", target_label: "Global setup", scope: "global", scope_reason: "Seen in 3 repositories; none holds more than 85%.", destination_kind: "Global guidance", destination: "~/.claude/CLAUDE.md", terms: ["gh pr edit"], files: [], repositories: [{ key: "explo", count: 2 }, { key: "tl1", count: 2 }, { key: "corpus", count: 1 }], guidance_hit: null, groups: 1, safeguards: 0, cart: null, work_items: 4, events: 5, hours: 0, priority: 4 },
     { ...fixCard, id: "fix_rare", title: "The fixture loader expects UTC timestamps", category: "knowledge", category_label: "Codebase knowledge", tentative: true, work_items: 2, events: 2, hidden: "rare", cart: null, guidance_hit: null, groups: 1, safeguards: 0, priority: 2 },
-    { ...fixCard, id: "fix_handed", title: "The sandbox blocks writes to ~/.cache", category: "harness", category_label: "Harness and shell behaviour", state: "handed_off", handed_at: iso(2 * day), cart: null, groups: 1, status: { ...fixStatus, state: "quiet", label: "Quiet since handoff", days_quiet: 8 }, deprioritized: true }],
+    { ...fixCard, id: "fix_handed", title: "The sandbox blocks writes to ~/.cache", category: "harness", category_label: "Agent app and shell behavior", state: "handed_off", handed_at: iso(2 * day), cart: null, groups: 1, status: { ...fixStatus, state: "quiet", label: "Quiet since handoff", days_quiet: 8 }, deprioritized: true }],
   summary: { open: 2, handed_off: 1, dismissed: 0 }, hidden: { stale: 0, rare: 1, total: 1 },
   bounds: { quiet_days: 7, hide_days: 30, min_work_items: 3 }, default_bounds: { quiet_days: 7, hide_days: 30, min_work_items: 3 },
   cart: [{ target: repoTarget, label: "explo", ticked: 1, handoff: "review", handoff_reason: "Investigate and propose, or make the change; you choose before copying.", items: [{ id: "fix_sample", title: fixCard.title, ticked: true, change_label: "Environment or setup", suggested_target: repoTarget }] }],
@@ -305,9 +305,9 @@ export const safetyFixtures = {
   summary: { open: 2, handed_off: 1, dismissed: 0 },
   cart: [{ target: repoTarget, label: "explo", ticked: 1, handoff: "review", handoff_reason: "Investigate and recommend; make no changes.", items: [{ id: safetyCard.id, rule: safetyCard.rule, danger: safetyCard.danger, title: safetyCard.title, ticked: true, change_label: "Investigate and recommend", suggested_target: repoTarget }] }],
   targets: [{ target: repoTarget, label: "explo" }, { target: "machine:studio", label: "Mac Studio" }], built_at: iso(3600000), scanned_calls: "807",
-  coverage: "Supported shell commands in the last 28 days. Embedded interpreter code and arbitrary native/MCP mutations are not comprehensively interpreted. No open notices is not a safety assessment.",
+  coverage: "Supported shell commands in the last 28 days. Embedded interpreter code and arbitrary native/MCP mutations are not comprehensively interpreted. Having no open notices does not mean agents acted safely.",
 };
-export const safetyDetailFixture = { ...safetyCard, subject: "/Users/example/repo/.build/gcloud", questions: ["Which sources contain credentials rather than configuration?", "Was the destination uploaded, published, or later cleaned up?"], evidence: [{ id: "safety_evidence_sample", call_id: "tool-call_sample", message_id: "m-1", at: iso(day), command: "cp -R ~/.config/gcloud .build/gcloud", cwd: "/Users/example/repo", cwd_basis: "tool input", status: "no_result", outcome: "Execution and effects need context", conditional: false, path: `/work/${workID}?conversation=${rootConversation}&message=m-1` }] };
+export const safetyDetailFixture = { ...safetyCard, subject: "/Users/example/repo/.build/gcloud", questions: ["Which sources contain credentials rather than configuration?", "Was the destination uploaded, published, or later cleaned up?"], evidence: [{ id: "safety_evidence_sample", call_id: "tool-call_sample", message_id: "m-1", at: iso(day), command: "cp -R ~/.config/gcloud .build/gcloud", cwd: "/Users/example/repo", cwd_basis: "From the tool call’s input", status: "no_result", outcome: "Execution and effects need context", conditional: false, path: `/work/${workID}?conversation=${rootConversation}&message=m-1` }] };
 // Keep the sample settings catalog complete, even when there are only three example reviews.
 export const safetySettingsFixture = { rules: [
   {
@@ -423,7 +423,7 @@ export const safetySettingsFixture = { rules: [
   },
   {
     "id": "process",
-    "title": "Every instance of a program stopped",
+    "title": "Program stopped by name",
     "explanation": "A process signal matched a program by name, so it can stop other tasks' processes too.",
     "questions": [
       "What could the selector match?",
@@ -446,7 +446,7 @@ export const safetySettingsFixture = { rules: [
   {
     "id": "local-history",
     "title": "Shared Git work discarded",
-    "explanation": "A command force-deleted a shared branch, or dropped a stash entry by position. Every worktree shares one stash.",
+    "explanation": "A command force-deleted a shared branch, dropped a stash entry by position, or cleared the stash. Every worktree shares one stash.",
     "questions": [
       "Which refs or saved work were selected?",
       "Was the work preserved, and whose work was it?"
@@ -523,7 +523,7 @@ const idleLedger = [
   domain("an.identities", "analyses", "Identity links", "current", { as_of: iso(3 * 3600000) }),
   domain("an.tools", "analyses", "Tools rollup", "current", { as_of: iso(3 * 3600000) }),
   domain("findings", "findings", "Findings", "scheduled", { as_of: iso(3 * 3600000), state_label: "Scheduled",
-    reason: { code: "changed", text: "New data since today's full pass; the next one runs tomorrow" }, next: "updates with Refresh findings now, or the first index tomorrow" }),
+    reason: { code: "changed", text: "New data since today's full pass; the next one runs tomorrow" }, next: "updates with Run now for Findings, or the first index tomorrow" }),
   // A scheduled cloud backup within its schedule: a local one, which has no
   // schedule, would be unknown.
   domain("backup.cloud:archive", "backups", "Cloud backup (Archive bucket)", "current", { as_of: iso(2 * day) }),
@@ -531,7 +531,7 @@ const idleLedger = [
 const idleSummary = { all_current: true, text: "All current", checked_label: "checked", checked_at: iso(180000), groups: [
   { group: "conversations", label: "Conversations", state: "current", short: "", short_age: false, text: "current", as_of: iso(180000), as_of_label: "", catching_up: null, shown: false },
   { group: "analyses", label: "Analyses", state: "current", short: "", short_age: false, text: "current", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false },
-  { group: "findings", label: "Findings", state: "scheduled", short: "updates tomorrow", short_age: false, text: "scheduled, updates with Refresh findings now, or the first index tomorrow", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false, muted: true },
+  { group: "findings", label: "Findings", state: "scheduled", short: "updates tomorrow", short_age: false, text: "scheduled, updates with Run now for Findings, or the first index tomorrow", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false, muted: true },
   { group: "backups", label: "Backups", state: "current", short: "", short_age: false, text: "current", as_of: iso(2 * day), as_of_label: "", catching_up: null, shown: false },
 ] };
 const deferred = { reason: { code: "deferred-by-schedule", text: "Scheduled indexing skips analyses" }, next: "updates with the next manual index", behind: { state: "behind", count: null, unit: null } };
@@ -568,7 +568,7 @@ const backgroundItem = (id, label, cadence, state, changes = {}) => ({
   })),
   adaptive: false, fixed: false, opt_in: false, override: "", state, state_label: { current: "Updated", running: "Updating now", failed: "Failed", queued: "Up next", unavailable: "Not set up" }[state],
   as_of: iso(41 * 60000), next_at: iso(-19 * 60000), error: null, note: null, cost: { seconds: 40, runs: 7, class: "light", text: "about 40 s", typical: "Typically 30–45 s" },
-  choices: [{ value: "", label: "Automatically" }, { value: "daily", label: "Daily" }, { value: "manual", label: "Only when I ask" }], ...changes,
+  choices: [{ value: "", label: "Automatically" }, { value: "daily", label: "Daily" }, { value: "manual", label: "Only when you ask" }], ...changes,
 });
 const backgroundView = (items, headline) => ({
   mode: "on", paused_until: null, items, headline,
@@ -579,7 +579,7 @@ const backgroundView = (items, headline) => ({
       as_of: iso(41 * 60000), next_at: iso(-19 * 60000), items: members.map(item => item.id) };
   }),
   unscheduled: items.filter(item => item.cadence === "manual").map(item => item.id),
-  everything: { seconds: 540, text: "Everything now takes about 9 min, mostly “Your writing”." },
+  everything: { seconds: 540, text: "Index changes takes about 9 min, mostly “Your writing”." },
 });
 const idleBackground = backgroundView([
   backgroundItem("conversations", "New conversations", "frequent", "current", { sub: "claude (1 of 2 sources)", fixed: true, choices: null,
@@ -587,7 +587,7 @@ const idleBackground = backgroundView([
   backgroundItem("repositories", "Repositories & merges", "frequent", "current"),
   backgroundItem("writing", "Update writing estimates", "frequent", "current", { cost: { seconds: 2, runs: 7, class: "light", text: "a few seconds", typical: "Typically a few seconds" } }),
   backgroundItem("findings", "Findings", "hourly", "current"),
-  backgroundItem("verification", "Verify indexed data", "hourly", "queued", { sub: "Integrity checks deferred by quick indexing", why: "Checks a bounded batch of larger inputs once the library is quiet.", cost: { seconds: 1, runs: 2, class: "light", text: "about 1 s" } }),
+  backgroundItem("verification", "Verify indexed data", "hourly", "queued", { sub: "Index integrity checks", why: "Checks larger inputs that quick indexing skipped, a batch at a time while the library is quiet.", cost: { seconds: 1, runs: 2, class: "light", text: "about 1 s" } }),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
   backgroundItem("writing-refine", "Refine writing history", "daily", "current", { cost: { seconds: 240, runs: 7, class: "heavy", text: "about 4 min", typical: "Typically about 4 min" } }),
   backgroundItem("backup", "Back up to /Volumes/Backup Drive With A Long Name/Pharos Backup", "manual", "unavailable", { column: "daily", cost: null }),
@@ -600,7 +600,7 @@ const busyBackground = backgroundView([
   backgroundItem("findings", "Findings", "hourly", "queued"),
   backgroundItem("preserve", "Preserve originals", "daily", "current"),
   backgroundItem("backup", "Back up to /Users/someone/PharosBackup", "manual", "manual", { column: "daily", state_label: "Only when you ask", as_of: iso(26 * 3600000), next_at: null }),
-], { tone: "busy", title: "Updating your writing", text: "Human Words cards, and Analyze → Writing update when this finishes.", tech: null });
+], { tone: "busy", title: "Updating your writing", text: "Updates when this finishes: Analyze → Human Words, its cards, and related conversations on workspace pages.", tech: null });
 // What each schedule would cost an item a day, and CPU time a day by
 // analysis: a projected item with a GPU figure, one whose CPU is not measured
 // yet, a long source name, a source with no CPU figure, and the rest.
@@ -639,7 +639,7 @@ export const backgroundDocument = {
     battery_slower_minutes: 15, low_battery_percent: 20 },
   power: { battery: true, on_battery: true, percent: 64, low_power_mode: false },
   view: idleBackground, rule: { frequent_seconds: 60, hourly_seconds: 600 },
-  descriptions: { frequent: "Every 5 min, as soon as there’s new work", hourly: "At most once an hour, after 10 quiet minutes", daily: "Overnight at 3:00 AM, or the first quiet moment after" },
+  descriptions: { frequent: "Every 5 min, as soon as there’s new work", hourly: "At most once an hour, after 10 quiet minutes", daily: "Daily at 3:00 AM, or the first quiet moment after" },
   cost: { window_hours: 24, seconds: 18000, text: "about 5 h", peak_bytes: 9.5e9, cadences: [
     { id: "frequent", label: "Frequently", seconds: 10800, measured: true, text: "197 checks, 54 found nothing new" },
     { id: "hourly", label: "Hourly", seconds: 6840, measured: false, text: "projected: about 8 min × 14, mostly Your writing" },
@@ -672,7 +672,7 @@ export const workInspection = () => ({ engine: "scheduled", scope: "this process
     requested_at: iso(3 * 3600000), members: 900, sealed: 880, unfinished: 20, bytes: 0 }],
   tasks: [
     { kind: "analysis.authorship", state: "running", running: { kind: "analysis.authorship", batch: 3, units: 12, cpus: 2, demanders: [7] }, batches: 3, committed_units: 30, work: 30, active_ns: 4e9, select_ns: 1e6 },
-    { kind: "analysis.labels", state: "blocked", blocker: { reason: "held", detail: "stopped until Resume or a service restart" }, batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0, failures: 1,
+    { kind: "analysis.labels", state: "blocked", blocker: { reason: "held", detail: "stopped until you resume it, or quit and reopen Pharos" }, batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0, failures: 1,
       failure_examples: [{ kind: "analysis.labels", unit: { id: "c1", revision: "r1" }, attempts: 3, error: "labeler worker exited: /Users/someone/Library/Application Support/Pharos/models/a-model-with-a-very-long-name-that-has-to-wrap.onnx", exhausted: true }] },
     { kind: "maintenance.parallelism", batches: 0, committed_units: 0, work: 0, active_ns: 0, select_ns: 0 },
   ],
@@ -742,7 +742,7 @@ export const managedStatus = snapshot => ({
 // samples with a gap, irregular GPU samples, a task marker and an omission,
 // so the panel's strip draws every case. A since= request gets the same
 // document; the store merges it without repeating a time.
-export const resourceHistory = (scope = "this library service") => {
+export const resourceHistory = (scope = "this library") => {
   const t = Array.from({ length: 60 }, (_, index) => now - (240 - index * 4) * 1000).filter((_, index) => index < 30 || index > 34);
   const wave = index => Math.round((60 + 50 * Math.sin(index / 4)) * 10) / 10;
   return {
@@ -783,14 +783,14 @@ export function thinkingFixture(query) {
 
 const askSuggestionTexts = [
   ["verification-latency", "Find the causes of testing latency in the pharos repository."],
-  ["context-crowding", "What's crowding my agents' context?"],
-  ["spend-change", "How has my token use changed this week?"],
+  ["context-crowding", "What’s crowding my agents’ context?"],
+  ["spend-change", "How has my token use changed in the last week?"],
   ["writing-improve", "How could I steer my agents with less back-and-forth in the query-table repository?"],
   ["risk-review", "Is there anything risky in what my agents have been doing lately?"],
   ["recall-similar", "Help me find a past conversation where we solved something similar."],
   ["models-fit", "Am I using the right models for the right work?"],
-  ["findings-best", "What's the single best change I could make to how I work with agents?"],
-  ["parallel-pattern", "What happens when I run several agents at the same time?"],
+  ["findings-best", "What’s the single best change I could make to how I work with agents?"],
+  ["parallel-pattern", "What happens when I run several conversations at the same time?"],
 ];
 // A seeded rotation, as the service varies its slate for Refresh.
 const askSuggestionFixture = seed => askSuggestionTexts.map((_, i) => askSuggestionTexts[(i + seed * 2) % askSuggestionTexts.length]).map(([id, text]) => ({ id, text }));
@@ -858,6 +858,8 @@ export const defaultApi = {
   "GET /api/chatgpt-imports":{enabled:false,available:true,exports:[],library:{workspaces:0,conversations:0,recent:[]}},
   "POST /api/chatgpt-imports":{enabled:false,available:true,exports:[],library:{workspaces:0,conversations:0,recent:[]}},
   "GET /api/claude-imports":{jobs:[],run:{running:false},watch:claudeWatchFixture},
+  "GET /api/bucket-imports":{buckets:[]},
+  "POST /api/bucket-imports":{buckets:[]},
   "POST /api/claude-imports/watch":{...claudeWatchFixture,enabled:false},
   "GET /api/thinking": ({query}) => thinkingFixture(query),
   "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},
@@ -1053,7 +1055,7 @@ export const defaultApi = {
   "GET /api/health/carbon": { factors: carbonFactors, windows: [{ key: "all", co2e_g: { central: 123456 } }, { key: "30d", co2e_g: { central: 23456 } }] },
   "GET /api/health/storage/breakdown": {
     status: "measured", measured_at: iso(60000), volume_name: "Pharos SSD", volume_total_bytes: 2_000_000_000_000, volume_free_bytes: 400_000_000_000, total_bytes: 170_000_000_000,
-    estimated: "Repository shares, and the catalog's division by Mac and source, are estimated from message counts.",
+    estimated: "Project shares, and the catalog’s division by Mac and source, are estimated from message counts.",
     parts: [["originals_latest", "Originals: latest copies", 46e9], ["originals_history", "Originals: earlier versions", 15e9], ["originals_other", "Originals: manifests and indexes", 2e8],
       ["catalog_database", "Pharos catalog", 94e9], ["catalog_log", "Catalog write-ahead log", 12e9], ["catalog_sidecar", "Search and analysis caches", 1e9], ["preserved", "Preserved packages", 0], ["other", "App, settings and staging", 1.8e9]]
       .map(([key, label, bytes]) => ({ key, label, bytes })),

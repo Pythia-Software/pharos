@@ -1,0 +1,21 @@
+{
+  "sender_id": "snd_3f9cA1",
+  "library_instance": "inst_Rz5Kc1Mn8D",
+  "plugin": {
+    "id": "software.pythia.usage",
+    "version": "1.4.0"
+  },
+  "permissions_hash": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "datasets": [
+    "usage/1",
+    "library/1"
+  ],
+  "as_of": "2026-10-30T15:00:00Z",
+  "export_delay_seconds": 259200,
+  "receipt": "rcpt_000148",
+  "run_id": "run_20261104T090000Z_a01b",
+  "takeover": {
+    "id": "tko_4Wc8Hn2Qs",
+    "replaces_instance": "inst_7Hq2Lx9Wv4"
+  }
+}

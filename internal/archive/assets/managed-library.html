@@ -47,7 +47,7 @@
             <div class="library-settings-folder"><input id="library-settings-backup" autocomplete="off" spellcheck="false" required><button type="button" data-library-pick="library-settings-backup">Choose folder…</button></div>
             <label for="library-settings-recover-path">New library folder</label>
             <div class="library-settings-folder"><input id="library-settings-recover-path" autocomplete="off" spellcheck="false" required aria-describedby="library-settings-recover-note"><button type="button" data-library-pick="library-settings-recover-path">Choose parent folder…</button></div>
-            <p id="library-settings-recover-note" class="muted">Choose a folder that doesn’t exist yet. For a cloud backup, first download it from Settings → Backups.</p>
+            <p id="library-settings-recover-note" class="muted">Choose a folder that doesn’t exist yet. For a cloud backup, first download and verify it with the commands in Settings → Backups, then choose that folder as the backup.</p>
             <div class="library-settings-actions"><button class="primary" type="submit">Restore and verify</button><button type="button" data-library-cancel="restore">Cancel</button></div>
           </fieldset>
         </form>
@@ -67,7 +67,7 @@
                 <label><input type="radio" name="library-settings-mode" value="copy" checked><span><strong>Copy</strong><span class="muted">Keep the history in both libraries.</span></span></label>
                 <label><input type="radio" name="library-settings-mode" value="move"><span><strong>Move</strong><span class="muted">Remove it from the first library once the copy is verified.</span></span></label>
               </div>
-              <p class="muted">Pharos verifies everything at the destination; saved views and preferences stay with each library. Both libraries close while this runs, and Pharos reopens this library when it finishes.</p>
+              <p class="muted">Pharos verifies the copy at the destination. Saved views and preferences stay with each library. Every library closes while this runs, so agents’ MCP calls fail until Pharos reopens this library.</p>
               <div class="library-settings-actions"><button id="library-settings-transfer" class="primary" type="submit">Copy history</button></div>
             </fieldset>
           </form>
@@ -78,7 +78,7 @@
             <button id="library-settings-delivery-toggle" class="toggle" type="button" role="switch" aria-checked="false" aria-labelledby="library-settings-delivery-title" aria-describedby="library-settings-delivery-summary" aria-controls="library-settings-delivery-form"></button>
           </div>
           <form id="library-settings-delivery-form" class="library-settings-form" hidden>
-            <p class="muted">For an archive on an external drive. While the drive is away, Pharos keeps capturing into a library on this Mac; when the drive returns, it moves that history into the archive and empties the local library.</p>
+            <p class="muted">For a library on an external drive. While the drive is away, Pharos keeps capturing into a library on this Mac; when the drive returns, it moves that history into the drive’s library and empties the library on this Mac.</p>
             <fieldset>
               <div class="library-settings-pair">
                 <div><label for="library-settings-pending">Capture into</label><select id="library-settings-pending"></select></div>

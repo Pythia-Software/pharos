@@ -102,7 +102,7 @@ function Overview({ copy, summary }: { copy: (text: string) => Promise<void>; su
         return <li key={source.id}>
           <LevelIcon level={entry?.attention} />
           <div><PageLink href={logSourceURL(source.id)}>{source.label}</PageLink><p className="muted">{entry?.headline ?? source.description}</p></div>
-          <span className="muted logs-count">{entry?.count ? `${entry.count.toLocaleString()} recorded` : "Empty"}</span>
+          <span className="muted logs-count">{entry?.count ? `${entry.count.toLocaleString()} recorded` : "Nothing recorded"}</span>
         </li>;
       })}</ul>
     </section>
@@ -159,8 +159,8 @@ function Runs({ source, runs }: { source: LogSourceId; runs: OutputRun[] }) {
       const state = run.running ? "Running" : run.crashed ? `Crashed · ${run.crash}` : run.exit ? `Ended · ${run.exit}` : "Ended";
       const level: Attention | "info" = run.crashed && !run.running ? "error" : run.problems ? "warning" : "info";
       return <ViewDisclosure key={run.started_at ?? `before-${index}`} viewKey={`logs:${source}:run:${run.started_at ?? "earlier"}`} defaultOpen={index === 0 || run.crashed} className={`logs-run ${level}`}
-        summary={<><LevelIcon level={level} /><span>{run.started_at ? `Started ${formatLogTime(run.started_at)}` : "Earlier output"}</span><span className="muted">{state}{run.problems ? ` · ${run.problems} lines mention an error` : ""}</span></>}>
-        {run.omitted ? <p className="muted">{run.omitted.toLocaleString()} earlier lines are in the full log.</p> : null}
+        summary={<><LevelIcon level={level} /><span>{run.started_at ? `Started ${formatLogTime(run.started_at)}` : "Earlier output"}</span><span className="muted">{state}{run.problems ? ` · ${run.problems.toLocaleString()} ${run.problems === 1 ? "line mentions" : "lines mention"} an error` : ""}</span></>}>
+        {run.omitted ? <p className="muted">{run.omitted === 1 ? "1 earlier line is" : `${run.omitted.toLocaleString()} earlier lines are`} in the full log.</p> : null}
         <pre className="logs-output">{run.lines.length ? run.lines.join("\n") : "No output."}</pre>
       </ViewDisclosure>;
     }) : <p className="muted">No output recorded yet.</p>}
@@ -203,7 +203,10 @@ function CrashText({ name }: { name: string }) {
   const [text, setText] = useState("");
   useEffect(() => {
     if (!open || text) return;
-    fetch(`/api/logs/crash?name=${encodeURIComponent(name)}`).then(response => response.text()).then(setText).catch(error => setText(String(error)));
+    fetch(`/api/logs/crash?name=${encodeURIComponent(name)}`)
+      .then(async response => { const body = await response.text(); if (!response.ok) { let message = `HTTP ${response.status}`; try { message = (JSON.parse(body) as { error?: string }).error || message; } catch { /* not JSON */ } throw new Error(message); } return body; })
+      .then(setText)
+      .catch(error => setText(`Could not read this report: ${error instanceof Error ? error.message : String(error)}`));
   }, [open, name, text]);
   return <ViewDisclosure viewKey={key} summary="Full report" className="logs-detail"><pre>{text || "Loading…"}</pre></ViewDisclosure>;
 }

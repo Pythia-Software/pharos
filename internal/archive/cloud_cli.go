@@ -17,7 +17,7 @@ func runCloudCLI(config Config, args []string) error {
 		return errors.New("usage: pharos [--config PATH] cloud-backup verify RUN_ID DOWNLOADED_ARCHIVE")
 	}
 	if _, err := os.Stat(config.CatalogPath); err != nil {
-		return errors.New("the library catalog is unavailable")
+		return errors.New("could not open the library: its index file is not available")
 	}
 	// It saves the verification state, so it is a catalog writer: a lease
 	// beside the catalog, taken before it opens it, and a journal row (§6.5).
@@ -65,7 +65,7 @@ func verifyCloudCLI(config Config, catalog *Catalog, args []string) error {
 	if err = catalog.finishCloudVerification(ctx, config, &run, args[2], password); err != nil {
 		return err
 	}
-	fmt.Printf("Verified %d files (%s). Recovered copy: %s\nReturn to Pharos to continue. The active library was not changed.\n", run.Files, humanBytes(run.FileBytes), run.RestoredDirectory)
+	fmt.Printf("Verified %s (%s). Recovered copy: %s\nReturn to Pharos to continue. The active library was not changed.\n", countNoun(run.Files, "file"), humanBytes(run.FileBytes), run.RestoredDirectory)
 	return nil
 }
 

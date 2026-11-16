@@ -147,8 +147,19 @@ func TestStorageBreakdownDividesOriginalsAndCatalog(t *testing.T) {
 		t.Fatalf("machines %+v", machines)
 	}
 	sources := rows("sources")
-	if sources["claude"].Originals != 1000 || sources["claude"].Catalog != 800 || sources["conductor"].Originals != 90 || sources["conductor"].Catalog != 400 {
+	// Sources are named as the provider registry names their kinds.
+	if sources["Claude Code"].ID != "claude" || sources["Claude Code"].Originals != 1000 || sources["Claude Code"].Catalog != 800 || sources["Conductor"].Originals != 90 || sources["Conductor"].Catalog != 400 {
 		t.Fatalf("sources %+v", sources)
+	}
+	// A configured source is named for its kind, with its own name when that
+	// says more; one nothing here knows keeps its name.
+	for name, want := range map[[2]string]string{
+		{"claude", "claude"}: "Claude Code", {"work", "claude"}: "Claude Code (work)", {"antigravity-cli", "antigravity"}: "Antigravity CLI",
+		{"antigravity-cli", ""}: "Antigravity CLI", {"mine", ""}: "mine", {"codex", ""}: "Codex",
+	} {
+		if got := sourceLabel(name[0], name[1]); got != want {
+			t.Fatalf("source %v is labelled %q, want %q", name, got, want)
+		}
 	}
 	// host-a's Claude capture is split three to one; its host files and the
 	// undivided Conductor capture have no project. A folder is a project as

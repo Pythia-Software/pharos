@@ -23,7 +23,7 @@ export const conversationAnalysisCatalog: AnalysisCatalog = {
   },
   breakdowns,
   records: { label: "Activity record", plural: "Activity records", note: "One recorded conversation activity event." },
-  units: { conversation: { label: "Whole conversation", plural: "Whole conversations", key: "root_conversation_id", where: [{ field: "root_conversation_id", op: "is_not_null", value: "" }, { field: "root_conversation_id", op: "!=", value: "" }],
+  units: { conversation: { label: "Top-level conversation", plural: "Top-level conversations", key: "root_conversation_id", where: [{ field: "root_conversation_id", op: "is_not_null", value: "" }, { field: "root_conversation_id", op: "!=", value: "" }],
     // Project belongs to the event's workspace; delegation can cross
     // projects within one whole conversation.
     breakdowns: { provider: breakdowns.provider.fields, model_family: breakdowns.model_family.fields, provider_model: breakdowns.provider_model.fields, effort: breakdowns.effort.fields }, note: "A top-level conversation includes its attributed delegated activity. Only activity in the selected range counts." } },

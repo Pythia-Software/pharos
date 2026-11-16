@@ -182,19 +182,19 @@ func render(scale: Int) -> Data {
     text("Drag Pharos to one place", x: left, top: 22, width: contentWidth, size: 21, weight: .bold)
     text("Portable · a folder on your SSD", x: left, top: 70, width: contentWidth, size: 15,
          weight: .semibold, foreground: gold)
-    text("Drag Pharos to your SSD in Finder. Open it to create or choose a library. Nothing captures while this app’s SSD is away.",
+    text("Drag Pharos into a folder on your SSD. Open it to create or choose a library. Nothing is captured while the SSD is away.",
          x: left, top: 94, width: contentWidth, size: 13, foreground: soft)
     text("This Mac · Applications", x: left, top: 162, width: contentWidth, size: 15,
          weight: .semibold, foreground: gold)
-    text("Drag Pharos onto Applications. Open it to choose a library on this Mac or an SSD, independently of the app.",
+    text("Drag Pharos onto Applications. Open it to create or choose a library, on this Mac or on an SSD.",
          x: left, top: 186, width: contentWidth, size: 13, foreground: soft)
     text("Updating · wherever Pharos lives now", x: left, top: 270, width: contentWidth, size: 15,
          weight: .semibold, foreground: gold)
-    text("Quit Pharos. Drag this app over your installed copy, on the SSD or in Applications, and choose Replace. Then reopen it and approve access prompts.",
+    text("In Pharos, choose Check for Updates… from the Pharos menu. Or quit Pharos, drag this app over your installed copy, choose Replace, and reopen it.",
          x: left, top: 294, width: contentWidth, size: 13, foreground: soft)
     text("Updating the app leaves your libraries in place.",
          x: left, top: 376, width: contentWidth, size: 12, weight: .semibold, foreground: cream)
-    text("Blocked by macOS? Privacy & Security → Open Anyway.",
+    text("Blocked? System Settings → Privacy & Security → Open Anyway.",
          x: left, top: 398, width: contentWidth, size: 12, foreground: cream)
 
     NSGraphicsContext.restoreGraphicsState()

@@ -44,7 +44,7 @@ func (s *Server) labelsSettings() map[string]any {
 		waiting := settings.labelsWaiting()
 		if problem := settings.labelerProblem(); problem != "" {
 			// No download fixes this, so it leads.
-			status = "On, but labeling can't run: " + problem + "."
+			status = "On, but labeling cannot run: " + problem + "."
 			if waiting != "" {
 				status += " It is also " + waiting + "."
 			}
@@ -87,7 +87,7 @@ func (s *Server) agentEventsSettings(ctx context.Context) map[string]any {
 		}
 		waiting := config.AgentEvents.waiting(config.Labels)
 		if problem := config.Labels.withAssets().labelerProblem(); problem != "" {
-			status = "On, but agent events can't be found: " + problem + "."
+			status = "On, but Pharos cannot find agent events: " + problem + "."
 			if waiting != "" {
 				status += " It is also " + waiting + "."
 			}
@@ -113,7 +113,7 @@ func (s *Server) agentEventsSettings(ctx context.Context) map[string]any {
 func (settings LabelerSettings) labelerProblem() string {
 	switch {
 	case settings.Worker == "":
-		return "this Pharos has no labeling worker; install a Pharos build that includes it, or configure a local worker"
+		return "this copy of Pharos has no labeling worker; install the Pharos app, which includes one, or configure a local worker"
 	case !fileExists(settings.Worker):
 		return "the configured labeling worker " + settings.Worker + " is missing"
 	case settings.Runtime != "" && !fileExists(settings.Runtime):
@@ -135,7 +135,7 @@ func (s *Server) postLabelsSettings(w http.ResponseWriter, r *http.Request, body
 		}
 		value, valid := raw.(float64)
 		if !valid || value != float64(int(value)) || value < 1 || int(value) > runtime.NumCPU() {
-			writeError(w, fmt.Errorf("%s must be a whole number from 1 to %d", key, runtime.NumCPU()), http.StatusBadRequest)
+			writeError(w, fmt.Errorf("The number of threads must be a whole number from 1 to %d.", runtime.NumCPU()), http.StatusBadRequest)
 			return
 		}
 		threads[key] = int(value)
@@ -146,7 +146,7 @@ func (s *Server) postLabelsSettings(w http.ResponseWriter, r *http.Request, body
 		return
 	}
 	if s.Config().Path == "" {
-		writeError(w, fmt.Errorf("the running service has no writable configuration path"), http.StatusBadRequest)
+		writeError(w, fmt.Errorf("This library has no settings file Pharos can write, so this setting cannot be changed here."), http.StatusBadRequest)
 		return
 	}
 	if len(threads) > 0 {

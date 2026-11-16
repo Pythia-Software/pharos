@@ -49,7 +49,7 @@ var writingMessageDataset = func() sqlDataset {
 		"main_category": "ma.main_category", "categories": "ma.categories", "rules": "ma.rules",
 		// A quick estimate is provisional until the daily refinement; rows
 		// without a state row predate the queue and were refined.
-		"estimate": "CASE WHEN ae.provisional=1 THEN 'provisional' ELSE 'refined' END",
+		"estimate":       "CASE WHEN ae.provisional=1 THEN 'provisional' ELSE 'refined' END",
 		"correction_cue": authoredCueSQL(correctionCuePhrases),
 		"positive_cue":   authoredCueSQL(positiveCuePhrases),
 		"has_source":     "EXISTS(SELECT 1 FROM message_authorship_spans s WHERE s.message_id=ma.message_id AND s.source_conversation_id IS NOT NULL)",

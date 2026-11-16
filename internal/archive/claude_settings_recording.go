@@ -48,7 +48,7 @@ func (s *Server) claudeRecordingDocument(ctx context.Context, source string) (ma
 func (s *Server) getClaudeSettingsRecording(w http.ResponseWriter, r *http.Request) {
 	source, err := s.configuredSource(r.URL.Query().Get("source"))
 	if err != nil || source.Kind != claudeSettingsKind {
-		writeError(w, errors.New("choose a configured Claude Chat settings source"), http.StatusBadRequest)
+		writeError(w, errors.New("Choose a Claude Chat settings source that is set up for this Mac."), http.StatusBadRequest)
 		return
 	}
 	doc, err := s.claudeRecordingDocument(r.Context(), source.Name)
@@ -78,7 +78,7 @@ func (s *Server) postClaudeSettingsRecording(w http.ResponseWriter, body map[str
 	recording.mu.Lock()
 	if active && recording.cancel != nil && recording.source != source.Name && time.Now().Before(recording.expires) {
 		recording.mu.Unlock()
-		writeError(w, errors.New("another Claude settings source is recording"), 409)
+		writeError(w, errors.New("Another Claude Chat settings source is recording."), 409)
 		return
 	}
 	if (!active && recording.source == source.Name) || (active && (recording.cancel == nil || recording.source != source.Name || !time.Now().Before(recording.expires))) {
@@ -156,7 +156,7 @@ func (s *Server) checkClaudeSettingsRecording() {
 		return
 	}
 	ctx, op := s.begin(ctx, OperationSpec{Kind: "capture.settings", Variant: claudeSettingsKind, Trigger: triggerSchedule})
-	op.setStopper(func() { s.stopClaudeSettingsRecording(sourceName, generation, "Recording stopped from Activity.") })
+	op.setStopper(func() { s.stopClaudeSettingsRecording(sourceName, generation, "Recording was stopped.") })
 	err = s.backgroundCapture(ctx, op, claudeSettingsKind, []string{sourceName})
 	op.Finish(err)
 	recording.mu.Lock()

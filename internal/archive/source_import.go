@@ -24,7 +24,7 @@ type sourceImport struct {
 func importableProvider(kind string) (*providerSpec, error) {
 	spec, ok := registeredKind(kind)
 	if !ok || spec.Export == "" {
-		return nil, probeRequestError{fmt.Errorf("%q is not a kind of export Pharos imports", kind)}
+		return nil, probeRequestError{fmt.Errorf("%q is not a kind of export Pharos imports.", kind)}
 	}
 	return spec, nil
 }
@@ -32,12 +32,12 @@ func importableProvider(kind string) (*providerSpec, error) {
 // checkExport says whether path holds spec's export, without parsing it: a
 // ZIP's listing, or a folder's names. It returns the export's size.
 func checkExport(spec *providerSpec, path string) (int64, error) {
-	usage := probeRequestError{fmt.Errorf("choose the %s export: the ZIP you downloaded, the folder it unzips to, or its conversations.json", spec.DisplayName)}
+	usage := probeRequestError{fmt.Errorf("Choose the %s export: the ZIP you downloaded, the folder it unzips to, or its conversations.json.", spec.DisplayName)}
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, probeRequestError{fmt.Errorf("nothing is at %s", path)}
+		return 0, probeRequestError{fmt.Errorf("Nothing is at %s.", path)}
 	} else if err != nil {
-		return 0, probeRequestError{fmt.Errorf("Pharos cannot read %s: %w", path, err)}
+		return 0, probeRequestError{fmt.Errorf("Could not read %s (%w).", path, err)}
 	}
 	if spec.Kind == "claude-ai" && info.IsDir() {
 		inputs, err := claudeExportInputs(sourceFiles{}, path)
@@ -91,7 +91,7 @@ func checkExport(spec *providerSpec, path string) (int64, error) {
 	case info.IsDir():
 		entries, err := os.ReadDir(path)
 		if err != nil {
-			return 0, probeRequestError{fmt.Errorf("Pharos cannot read %s: %w", path, err)}
+			return 0, probeRequestError{fmt.Errorf("Could not read %s (%w).", path, err)}
 		}
 		names, size := []string{}, int64(0)
 		for _, entry := range entries {
@@ -109,7 +109,7 @@ func checkExport(spec *providerSpec, path string) (int64, error) {
 	case strings.EqualFold(filepath.Ext(path), ".zip"):
 		archive, err := zip.OpenReader(path)
 		if err != nil {
-			return 0, probeRequestError{fmt.Errorf("%s is not a readable ZIP: %w", filepath.Base(path), err)}
+			return 0, probeRequestError{fmt.Errorf("%s is not a readable ZIP (%w).", filepath.Base(path), err)}
 		}
 		defer archive.Close()
 		names := []string{}
@@ -117,7 +117,7 @@ func checkExport(spec *providerSpec, path string) (int64, error) {
 			names = append(names, entry.Name)
 		}
 		if !conversations(names) {
-			return 0, probeRequestError{fmt.Errorf("%s holds no conversations.json; is it a %s export?", filepath.Base(path), spec.DisplayName)}
+			return 0, probeRequestError{fmt.Errorf("%s holds no conversations.json. Is it a %s export?", filepath.Base(path), spec.DisplayName)}
 		}
 		return info.Size(), nil
 	case strings.EqualFold(filepath.Ext(path), ".json") && conversations([]string{filepath.Base(path)}):
@@ -143,7 +143,7 @@ func ImportSource(config Config, request sourceImport) (ProbeAcceptResult, error
 	}
 	location := strings.TrimSpace(request.Path)
 	if !strings.HasPrefix(location, "/") && !strings.HasPrefix(location, "~/") {
-		return result, probeRequestError{fmt.Errorf("enter an absolute path, or one starting with ~/")}
+		return result, probeRequestError{fmt.Errorf("Enter a full path, starting with / or ~/.")}
 	}
 	location = expandPath(location)
 	if _, err := checkExport(spec, location); err != nil {
@@ -157,7 +157,7 @@ func ImportSource(config Config, request sourceImport) (ProbeAcceptResult, error
 		for _, source := range sources {
 			taken[source.Name] = true
 			if source.Kind == spec.Kind && filepath.Clean(source.Path) == filepath.Clean(location) {
-				result.Skipped = append(result.Skipped, fmt.Sprintf("%s is already imported as %s", tildePath(location), source.Name))
+				result.Skipped = append(result.Skipped, fmt.Sprintf("%s is already imported as %s.", tildePath(location), source.Name))
 				return result, nil
 			}
 		}
@@ -169,9 +169,9 @@ func ImportSource(config Config, request sourceImport) (ProbeAcceptResult, error
 			name = fmt.Sprintf("%s-%d", spec.Kind, n)
 		}
 	} else if !sourceNameValid.MatchString(name) {
-		return result, probeRequestError{fmt.Errorf("source name %q must start with a letter or digit and use only letters, digits, '.', '_' and '-'", name)}
+		return result, probeRequestError{fmt.Errorf("Source name %q must start with a letter or digit and use only letters, digits, “.”, “_” and “-”.", name)}
 	} else if taken[name] {
-		return result, probeRequestError{fmt.Errorf("a source named %q already exists", name)}
+		return result, probeRequestError{fmt.Errorf("A source named %q already exists.", name)}
 	}
 	if err := appendHostSources(path, currentHost(), []SourceConfig{{Name: name, Kind: spec.Kind, Path: location, Enabled: true}}); err != nil {
 		return result, err

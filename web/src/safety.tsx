@@ -23,8 +23,8 @@ type Overview = { cases: Card[]; summary: Record<State, number>; cart: CartGroup
 
 async function request<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const value = await response.json();
-  if (!response.ok) throw new Error(value.error ?? `Request failed (${response.status})`);
+  const value = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(value.error ?? `Could not complete the request (HTTP ${response.status}).`);
   return value as T;
 }
 const date = (value?: string) => value ? new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "Date unavailable";
@@ -79,18 +79,18 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
   const checkNotices = (rule: string) => overview?.cases.filter(card => card.rule === rule).length ?? 0;
   const actions = (card: Card) => <div className="findings-actions">
     {card.state === "open" ? <>
-      {card.cart ? <button className="findings-button" onClick={() => void act(card.id, { action: "cart_remove" }, "Removed from risky action prompt.")}>In prompt · Remove</button>
-        : <button className="findings-button primary" onClick={() => void act(card.id, { action: "cart_add" }, `Added to risky action prompt for ${card.target_label}.`)}>Add to prompt</button>}
+      {card.cart ? <button className="findings-button" onClick={() => void act(card.id, { action: "cart_remove" }, "Removed from the prompt.")}>In prompt · Remove</button>
+        : <button className="findings-button primary" onClick={() => void act(card.id, { action: "cart_add" }, `Added to the prompt for ${card.target_label}.`)}>Add to prompt</button>}
       <button className="findings-button quiet" onClick={() => void act(card.id, { action: "dismiss" }, "Acknowledged and closed. You can bring it back at any time.")}>Acknowledge and close</button>
     </> : <button className="findings-button" onClick={() => void act(card.id, { action: "restore" }, "Brought back to Open.")}>Bring back</button>}
   </div>;
   return <div className="findings-page safety-page">
-    {view !== "table" || selected ? <div className="view-heading findings-heading"><div><h1>{view === "settings" ? "Risky action settings" : "Risky actions"}</h1><p className="muted">{view === "settings" ? "Choose which checks raise risky action notices. Your choices follow the library between Macs." : selected ? "Questions about consequential agent actions. Collect a prompt and let your agent investigate." : "A risky action is an agent operation that could expose credentials, rewrite shared history, delete data outside its work, or alter a system. Pharos raises a notice only where a command is likely to deserve your attention, and skips an agent's own scratch, build output and work in progress; a notice alone does not establish harm. Each card is one check; the most dangerous come first. Tick a card to copy a prompt asking your agent to investigate its notices and recommend fixes, or to dismiss expected activity, or open its table to look at each notice. Copying the prompt records a handoff."}</p></div>{view !== "settings" && view !== "table" ? <DataReadinessIndicator id="safety:overview" title="Risky actions" dataset="safety" query={{view,selected}} /> : null}</div> : null}
+    {view !== "table" || selected ? <div className="view-heading findings-heading"><div><h1>{view === "settings" ? "Risky action settings" : "Risky actions"}</h1><p className="muted">{view === "settings" ? "Choose which checks raise risky action notices. Your choices follow the library between Macs." : selected ? "Questions about consequential agent actions. Collect a prompt and let your agent investigate." : "A risky action is an agent operation that could expose credentials, rewrite shared history, delete data outside its work, or change a system. Pharos raises a notice when a command, or an agent’s own words, suggest one; it skips scratch, build output and work in progress. A notice does not establish harm. Each card is one check, in the order Rank by sets. Tick cards to copy a prompt asking your agent to investigate and recommend fixes, or close them as expected activity; open a card’s table to look at each notice. Copying records a handoff."}</p></div>{view !== "settings" && view !== "table" ? <DataReadinessIndicator id="safety:overview" title="Risky actions" dataset="safety" query={{view,selected}} /> : null}</div> : null}
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
     {notice ? <p className="safety-notice" role="status">{notice}</p> : null}
     {view === "settings" ? <SafetySettings refreshDiscovery={refreshDiscovery} /> : !overview ? <p>Loading risky action notices…</p> : <>
       {selected ? <>
-        <button className="findings-button" data-view-field="safety_case" onClick={() => select("")}>{view === "table" ? "← Risky actions table" : "← Risky action notices"}</button>
+        <button className="findings-button" data-view-field="safety_case" onClick={() => select("")}>{view === "table" ? "← Risky actions table" : "← Risky actions"}</button>
         <div className="findings-layout with-cart findings-detail-layout">
         {detail ? <article className="findings-panel safety-detail" data-pharos-target={`safety:${detail.id}`}>
           <p className="findings-muted"><DangerChip danger={detail.danger} /> {detail.target_label} · {stateLabel[detail.state]}</p>
@@ -100,13 +100,13 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
           {detail.handed_at ? <p className="findings-muted">Handed off {date(detail.handed_at)}. {detail.material_change ? "A later command has stronger execution evidence, so this notice is open again." : "No returned report is required. This records the handoff; the concern may still need investigation."}</p> : null}
           {actions(detail)}
           <h3>Questions for your agent</h3><ul>{detail.questions.map(question => <li key={question}>{question}</li>)}</ul>
-          <h3>Archived evidence</h3>
-          <p className="findings-muted">{detail.calls} distinct calls in the latest discovery window; up to 20 examples below. A notice identifies commands to look into, not confirmed harm or authorization.</p>
+          <h3>Evidence</h3>
+          <p className="findings-muted">{safetyEventRule(detail.rule) ? "Raised by one agent event." : `${plural(detail.calls, "distinct tool call")} in the latest discovery window; up to 20 examples below.`} A notice identifies what to look into, not confirmed harm or authorization.</p>
           {detail.evidence.map(entry => <ViewDisclosure key={entry.id} viewKey={`safety:${detail.id}:evidence:${entry.id}`} className="safety-evidence" summary={<>{date(entry.at)} · {entry.outcome}</>}>
             {entry.quote ? <blockquote className="safety-quote">{entry.command}</blockquote> : <><pre>{entry.command}</pre><p>Working directory: <code>{entry.cwd || "Unresolved"}</code></p><p className="findings-muted">{entry.cwd_basis}{entry.conditional ? ". Compound or conditional call: individual execution needs context." : ""}</p></>}
-            <a href={entry.path}>Open archived conversation ↗</a>
+            <a href={entry.path}>Open the conversation →</a>
           </ViewDisclosure>)}
-        </article> : !error ? <p>Loading case…</p> : null}
+        </article> : !error ? <p>Loading notice…</p> : null}
         <CartPanel safety cart={overview.cart} targets={overview.targets} act={act} onReview={next => setReview(next.target)} />
         </div>
       </> : view === "table" ? null : <>
@@ -127,7 +127,7 @@ export function SafetyPage({ copy, view = "", table, refreshDiscovery }: { copy:
           <SafetyCheckCart cart={overview.cart} onReview={next => setReview(next.target)} />
         </div>
       </>}
-      {view !== "table" ? <ViewDisclosure viewKey="safety:coverage" className="safety-coverage" summary={<>What Pharos checked{overview.built_at ? ` · updated ${date(overview.built_at)}` : ""}</>}><p>{overview.built_at ? `${Number(overview.scanned_calls).toLocaleString()} retained shell calls examined. ` : "Risky action discovery runs with the next full Findings refresh. "}{overview.coverage}</p><p>Checks cover credential copies, rewritten published history, cloud deletion, disk and system changes, deletions outside the checkout, database changes, broadened permissions, deleted releases, discarded shared Git work, program-wide process signals, and remote API changes. They skip temporary, build and scratch locations. Safeguard checks read agent events instead of commands: an agent saying it weakened or skipped a test, worked around a restriction, or bypassed a hook or gate raises one notice per instance; recurring problems agents could be spared go to Fixes instead. These are deterministic heuristics; no agent investigation runs inside Pharos.</p><a href={safetyURL("settings")}>Risky action settings and refresh</a></ViewDisclosure> : null}
+      {view !== "table" ? <ViewDisclosure viewKey="safety:coverage" className="safety-coverage" summary={<>What Pharos checked{overview.built_at ? ` · updated ${date(overview.built_at)}` : ""}</>}><p>{overview.built_at ? `${Number(overview.scanned_calls).toLocaleString()} retained shell tool calls examined. ` : "Risky action discovery runs with the next full Optimize update. "}{overview.coverage}</p><p>Checks cover credential copies, rewritten published history, cloud deletion, disk and system changes, deletions outside the checkout, database changes, broadened permissions, deleted releases, discarded shared Git work, program-wide process signals, and remote API changes. They skip temporary, build and scratch locations. Safeguard checks read agent events instead of commands: an agent saying it weakened or skipped a test, worked around a restriction, or bypassed a hook or gate raises one notice per instance; recurring problems agents could be spared go to Fixes instead. These are deterministic heuristics; no agent investigation runs inside Pharos.</p><a href={safetyURL("settings")}>Risky action settings and updates</a></ViewDisclosure> : null}
     </>}
     {table ? <div className="safety-table" hidden={view !== "table" || Boolean(selected)}>
       <div className="safety-table-main">{table}</div>
@@ -157,7 +157,7 @@ function SafetySettings({ refreshDiscovery }: { refreshDiscovery: () => Promise<
   }
   async function refresh() {
     setBusy(true); setError(""); setMessage("");
-    try { await request("/api/findings/refresh", {}); await refreshDiscovery(); setMessage("Refresh requested for efficiency and risky actions. Discovery continues in the background."); }
+    try { await request("/api/findings/refresh", {}); await refreshDiscovery(); setMessage("Update requested. Efficiency, risky actions and fixes update in the background."); }
     catch (failure) { setError((failure as Error).message); }
     finally { setBusy(false); }
   }
@@ -165,11 +165,11 @@ function SafetySettings({ refreshDiscovery }: { refreshDiscovery: () => Promise<
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
     {message ? <p role="status">{message}</p> : null}
     {!settings ? <p>Loading risky action settings…</p> : <>
-      <section className="findings-panel"><h2>Discovery checks</h2><p className="findings-muted">{settings.rules.length} checks · {settings.rules.filter(rule => rule.enabled).length} enabled</p><p>Choose which operations raise new notices or update existing evidence. Checks are listed most dangerous first. Turning off a check keeps existing notices, prompt baskets, and handoff history.</p>
+      <section className="findings-panel"><h2>Discovery checks</h2><p className="findings-muted">{settings.rules.length} checks · {settings.rules.filter(rule => rule.enabled).length} enabled</p><p>Choose which operations raise new notices or update existing evidence. Checks are listed most dangerous first. Turning off a check keeps existing notices, prompts, and handoff history.</p>
         <div className="safety-checks">{settings.rules.map(rule => <label key={rule.id} className="safety-check"><input type="checkbox" checked={rule.enabled} disabled={busy} onChange={event => void save(rule.id, event.target.checked)} /><span><strong>{rule.title}</strong>{rule.danger ? <> <DangerChip danger={rule.danger} /></> : null}<small>{rule.explanation}</small></span></label>)}</div>
       </section>
-      <section className="findings-panel"><h2>Refresh and coverage</h2><p>A full refresh examines supported shell calls from the last {settings.window_days} days. A single event can qualify; efficiency thresholds do not apply.</p><p className="findings-muted">{settings.built_at ? `Last discovery: ${date(settings.built_at)} · ${Number(settings.scanned_calls).toLocaleString()} retained shell calls examined.` : "No safety discovery has run yet."}</p><button className="findings-button" disabled={busy} onClick={() => void refresh()}>Refresh efficiency and risky actions now</button><p>Discovery uses the shared Findings background schedule. Embedded scripts and arbitrary native or MCP mutations are not comprehensively interpreted.</p></section>
-      <section className="findings-panel"><h2>Prompt handoff</h2><p>Risky action prompts ask an agent to investigate, explain, and recommend. Copying moves selected notices to Handed off; no returned report is required. You can bring a notice back at any time.</p><p>Risky actions and efficiency have separate baskets. Repeats accumulate quietly; a new target, broader operation, or stronger execution evidence can need fresh attention.</p></section>
+      <section className="findings-panel"><h2>Updates and coverage</h2><p>A full update examines supported shell calls from the last {settings.window_days} days. A single event can qualify; efficiency thresholds do not apply.</p><p className="findings-muted">{settings.built_at ? `Last discovery: ${date(settings.built_at)} · ${Number(settings.scanned_calls).toLocaleString()} retained shell tool calls examined.` : "Risky action discovery has not run yet."}</p><button className="findings-button" disabled={busy} onClick={() => void refresh()}>Update Optimize now</button><p>Discovery uses the shared Optimize background schedule. Embedded scripts and arbitrary native or MCP mutations are not comprehensively interpreted.</p></section>
+      <section className="findings-panel"><h2>Prompt handoff</h2><p>Risky action prompts ask an agent to investigate, explain, and recommend. Copying moves selected notices to Handed off; no returned report is required. You can bring a notice back at any time.</p><p>Efficiency, risky actions and fixes use separate prompts. Repeats accumulate quietly; a new target, broader operation, or stronger execution evidence can need fresh attention.</p></section>
     </>}
   </div>;
 }
@@ -234,7 +234,7 @@ function SafetyCheckCard({ check, mark, place, selection, href }: { check: Safet
   const where = place ? null : check.locations === 1 ? `${check.count === 1 ? "In" : "All in"} ${check.places[0]?.label}`
     : `${check.places.map(item => `${item.label} ${item.count}`).join(" · ")}${check.morePlaces ? ` · ${plural(check.morePlaces, "more location")}` : ""}`;
   const single = check.count === 1;
-  const facts = [range(check.first_seen_at, check.last_seen_at), plural(check.calls, "call"), check.fresh ? `${check.fresh.toLocaleString()} with new evidence` : "", check.inPrompt ? `${check.inPrompt.toLocaleString()} in a prompt` : ""].filter(Boolean);
+  const facts = [range(check.first_seen_at, check.last_seen_at), safetyEventRule(check.rule) ? plural(check.calls, "agent event") : plural(check.calls, "tool call"), check.fresh ? `${check.fresh.toLocaleString()} with new evidence` : "", check.inPrompt ? `${check.inPrompt.toLocaleString()} in a prompt` : ""].filter(Boolean);
   const chips = <>{check.danger ? <DangerChip danger={check.danger} /> : null}{check.recent ? <span className="findings-chip safety-recent">Recent</span> : null}</>;
   return <OptimizeCard ids={check.ids} selection={selection} className="safety-check-card" target={`safety-check:${check.rule}`} count={check.count} countLabel={mark + plural(check.count, "notice")}
     label={`Select ${single ? "the notice" : `all ${check.count.toLocaleString()} notices`}: ${check.title}`}>
@@ -255,7 +255,7 @@ function SafetyCheckCart({ cart, onReview }: { cart: CartGroup[]; onReview: (gro
     entries: safetyCartChecks(group).map(check => ({ key: check.rule, title: check.title, ids: check.ids, ticked: check.ticked, counted: true, detail: check.danger && safetyDangerLabels[check.danger] ? safetyDangerLabels[check.danger] : "" })) }));
   return <OptimizeCart className="safety-check-cart" title="Risky action prompts to copy" groups={groups} api={api} changed="pharos:safety-changed" noun={{ one: "notice", many: "notices" }} onReview={onReview}
     empty="Tick a check to copy a prompt for it, or add it to a prompt for its location. Each location gets its own prompt."
-    note={<>Risky actions and efficiency use separate prompts. After copying, these notices leave Open and remain in Handed off. To choose single notices, use the <a href={safetyURL("table")}>table</a>.</>} />;
+    note={<>Efficiency, risky actions and fixes use separate prompts. After copying, these notices leave Open and remain in Handed off. To choose single notices, use the <a href={safetyURL("table")}>table</a>.</>} />;
 }
 
 function DangerChip({ danger }: { danger?: SafetyDanger }) {

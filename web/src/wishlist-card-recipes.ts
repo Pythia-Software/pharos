@@ -13,7 +13,7 @@ const row = (field: string, label: string): SummaryColumn => ({ id: `card_${fiel
 const metric = (id: string, op: AggregationClause["op"], field: string, groupBy: string[], label: string): AggregationClause => ({ id, op, ...(field ? { field } : {}), groupBy, label });
 const view = (keys: string[], summaries: SummaryColumn[], subjects: string, action: string, unit: string, extra: Partial<CardExploration> = {}): CardExploration => ({ keys, summaries, valueField: summaries[0].id, subjects, action, unit, ...extra });
 const conversations = distinct("conversation_id", "Conversations");
-const repositories = distinct("project_name", "Repositories");
+const repositories = distinct("project_name", "Projects");
 const messages = { dataset: "writing_messages" as const, field: "sent_at" };
 const calls = { dataset: "tool_calls" as const, field: "started_at" };
 const skills = { dataset: "skill_usages" as const, field: "created_at" };
@@ -29,7 +29,7 @@ export const wishlistCardRecipes: QueryRecipe[] = [
     measures: [metric("message-reach", "count_distinct", "conversation_id", ["text"], "Conversations repeating each message")],
     exploration: view(["text"], [conversations, count("Messages"), repositories], "repeated messages", "Inspect repeated messages", "conversations", { having: [min(conversations.id, 3)], context: [{ field: "card_count", label: "messages" }] }),
     note: "Exact whole-message repeats, including classified re-sends. Excludes pasted, quoted, template and machine words; does not classify instructions or near duplicates." },
-  { ...messages, id: "conversation-writing", idea: "conversation-04", category: "human", title: "How many messages am I writing per conversation?", description: "A distribution of messages containing your words in this window; open conversation totals.", unit: "messages", where: [gt("typed_words"), present("conversation_id")],
+  { ...messages, id: "conversation-writing", idea: "conversation-04", category: "human", title: "How many messages am I writing per conversation?", description: "How many messages with your words each conversation has in this window.", unit: "messages", where: [gt("typed_words"), present("conversation_id")],
     measures: [metric("conversation-messages", "count", "", ["project_name", "conversation_id"], "Human messages per conversation")],
     exploration: view(["project_name", "conversation_id"], [count("Messages with your words"), humanWords, row("title", "Workspace")], "conversations", "Compare conversation writing", "messages", { representative: latestMessage, labelFields: ["card_title"], coverMetric: { id: "conversation-message-distribution", op: "sum", field: "card_count", groupBy: [], distribution: { kind: "histogram", input: "[card_count]", bins: 10 }, label: "Messages per conversation in window", display: { kind: "histogram", xLabel: "Messages", yLabel: "Conversations" } } }),
     cover: { mode: "result", metricId: "card_count", kind: "histogram" },
@@ -76,9 +76,9 @@ export const wishlistCardRecipes: QueryRecipe[] = [
     measures: [metric("repeated-command-errors", "count", "", ["project_name", "command"], "Failed calls with the same command")],
     exploration: view(["project_name", "command"], [count("Failed calls"), conversations, sum("duration_ms", "Recorded elapsed time")], "repeated commands", "Inspect repeated failed commands", "calls", { having: [min("card_count")], labelFields: ["command", "project_name"], context: [{ field: conversations.id, label: "conversations" }] }),
     note: "Exact command text in this window, across conversations. Does not establish adjacent retries, unchanged files or arguments, excess attempts or recovery episodes." },
-  { ...attempts, id: "tl1-revisits", idea: "rework-07", category: "delegation", title: "Which TL1 tasks are being revisited?", description: "Attempts explicitly marked as revisits, grouped by TL1 project and work item.", unit: "attempts", where: [eq("revisit", "true"), present("task_id")],
+  { ...attempts, id: "tl1-revisits", idea: "rework-07", category: "delegation", title: "Revisited TL1 tasks", description: "Attempts explicitly marked as revisits, grouped by TL1 project and work item.", unit: "attempts", where: [eq("revisit", "true"), present("task_id")],
     measures: [metric("revisit-attempts", "sum", "attempt_count", ["project", "task_id"], "Marked revisit attempts")],
-    exploration: view(["project", "task_id"], [sum("attempt_count", "Revisit attempts"), distinct("candidate_id", "Candidates"), sum("cost_usd", "Recorded API equivalent"), row("title", "Work item")], "revisited tasks", "Inspect TL1 revisits", "attempts", { representative: { orderBy: [{ field: "started_at", dir: "desc", nulls: "last" }] }, labelFields: ["card_title", "project"] }),
+    exploration: view(["project", "task_id"], [sum("attempt_count", "Revisit attempts"), distinct("candidate_id", "Candidates"), sum("cost_usd", "Recorded API cost"), row("title", "Work item")], "revisited tasks", "Inspect TL1 revisits", "attempts", { representative: { orderBy: [{ field: "started_at", dir: "desc", nulls: "last" }] }, labelFields: ["card_title", "project"] }),
     note: "Uses the explicit TL1 revisit flag. Revisits may be intentional iteration; they do not establish that earlier work failed." },
   { ...attempts, id: "tl1-mixed-dispositions", idea: "models-03", category: "models", title: "Which TL1 candidates have mixed dispositions?", description: "Shared candidates with multiple model/effort configurations and distinct recorded dispositions.", unit: "dispositions", where: [present("task_id"), present("candidate_id"), present("model_effort"), present("disposition")],
     measures: [metric("candidate-dispositions", "count_distinct", "disposition", ["project", "task_id", "candidate_id", "execution_class", "shape_version"], "Distinct attempt dispositions")],

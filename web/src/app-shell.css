@@ -64,7 +64,6 @@ main[tabindex="-1"]:focus{outline:none}
 .app-navigation-badge{margin-left:auto;min-width:20px;padding:0 5px;border-radius:10px;background:color-mix(in srgb,var(--accent) 15%,var(--panel));color:var(--accent);font-size:var(--fs-xs);text-align:center}
 .app-navigation-dialog{position:fixed;inset:calc(var(--app-header-height) + 8px) auto auto 24px;margin:0;width:min(570px,calc(100vw - 48px));max-width:none;max-height:calc(100dvh - var(--app-header-height) - 20px);padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);box-shadow:0 18px 50px #0004;overscroll-behavior:contain;overflow:auto;scroll-padding-block:calc(var(--app-control-height) + 24px) 12px}
 .app-navigation-dialog[open]{display:grid;grid-template-columns:160px minmax(0,1fr);gap:12px}
-.app-navigation-dialog::backdrop{background:#0002}
 .app-navigation-sections{border-right:1px solid var(--line);padding-right:10px;min-width:0}
 .app-navigation-pages{min-width:0}
 .app-navigation-dialog-title{display:flex;align-items:center;min-height:calc(var(--app-control-height) + 9px);padding:0 12px 8px;margin-bottom:8px;border-bottom:1px solid var(--line);font-size:var(--fs-md);font-weight:600;color:var(--ink)}

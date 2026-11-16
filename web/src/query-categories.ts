@@ -6,18 +6,18 @@ import type { QueryDataset } from "./query-links";
 export const queryCategories = {
   human: { label: "Human Words", tone: "var(--query-human-tone)" },
   steering: { label: "Steering", tone: "var(--warn)" },
-  errors: { label: "Error Patterns", tone: "var(--bad)" },
+  errors: { label: "Error patterns", tone: "var(--bad)" },
   context: { label: "Context", tone: "var(--gold)" },
-  models: { label: "Model Choice", tone: "color-mix(in srgb,var(--warn) 65%,var(--gold))" },
-  thinking: { label: "Waiting and Thinking", tone: "color-mix(in srgb,var(--sea) 60%,var(--heat-2))" },
-  usage: { label: "Token Usage", tone: "var(--heat-1)" },
-  cost: { label: "API Cost", tone: "var(--query-cost-tone)" },
+  models: { label: "Model choice", tone: "color-mix(in srgb,var(--warn) 65%,var(--gold))" },
+  thinking: { label: "Waiting and thinking", tone: "color-mix(in srgb,var(--sea) 60%,var(--heat-2))" },
+  usage: { label: "Token usage", tone: "var(--heat-1)" },
+  cost: { label: "API cost", tone: "var(--query-cost-tone)" },
   research: { label: "Research", tone: "color-mix(in srgb,var(--heat-0) 70%,var(--sea))" },
   skills: { label: "Skills", tone: "var(--gold)" },
-  tools: { label: "Tool Flow", tone: "color-mix(in srgb,var(--gold) 65%,var(--warn))" },
+  tools: { label: "Tool flow", tone: "color-mix(in srgb,var(--gold) 65%,var(--warn))" },
   delegation: { label: "Delegation", tone: "var(--heat-2)" },
-  views: { label: "Workspace Views", tone: "var(--muted)" },
-  machines: { label: "Machine Time", tone: "var(--heat-1)" },
+  views: { label: "Message labels and other", tone: "var(--muted)" },
+  machines: { label: "Machine time", tone: "var(--heat-1)" },
   sessions: { label: "Session Shape", tone: "color-mix(in srgb,var(--sea) 55%,var(--muted))" },
   carbon: { label: "Carbon", tone: "var(--sea)" },
   safety: { label: "Risky actions", tone: "var(--gold)" },
@@ -46,7 +46,13 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
   if (dataset === "fixes") return "findings";
   if (dataset === "agent_events" || dataset === "agent_event_messages" || dataset === "agent_event_rates") return "agent_events";
   if (dataset === "parallelism" || dataset === "rhythm") return "machines";
-  if (dataset === "session_shape") return "sessions";
+  if (dataset === "session_shape") {
+    if (has("failed_calls", "failure_rate", "ended_on_failure")) return "errors";
+    if (has("context_peak_ratio", "context_pressure", "mid_task_compactions")) return "context";
+    if (has("corrections", "steering_load")) return "steering";
+    if (has("verified_handbacks", "edit_handbacks", "verification", "tool_calls", "autonomy", "autonomy_prompts", "identical_retries", "thrash_retries", "churned_files", "rejections", "interrupts", "hook_blocks", "long_unprompted_runs")) return "tools";
+    return "sessions";
+  }
   if ((dataset === "model_requests" || dataset === "compactions")) return "thinking";
   if (has("co2e_g", "co2e_kg", "energy_wh", "energy_kwh", "carbon_tier")) return "carbon";
   if (has("cost_usd")) return "cost";

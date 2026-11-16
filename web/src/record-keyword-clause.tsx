@@ -42,7 +42,7 @@ export function RecordKeywordClause({ fields, context, value, error, onChange }:
     {open ? <ModalSurface title={`Search ${targetLabel(context, editing.field, choices)}`} onClose={close} returnFocus={invoker.current} className="qt-modal explore-search-modal" initialFocus="textarea, input:not([type=checkbox])">
       <div className="qt-overlay-body"><TextSearchEditor compact sentence={false} textOnly value={editing.draft} active={!!value} initialError={error} kind="text" onKind={() => {}}
         recordTarget={<SearchSelect aria-label="Text field to search" value={editing.field} onChange={event => setEditing(previous => ({ ...previous, field: event.target.value }))}>{choices.map(field => <option key={field.name} value={field.name}>{field.label}</option>)}</SearchSelect>}
-        context={<p className="explore-search-context">Search the selected field of each source record. Field filters still apply. Grouped rows and metrics use the matching records.</p>}
+        context={<p className="explore-search-context">Searches the chosen field of each record. Field filters still apply, and grouped rows and metrics count only the matching records.</p>}
         onApply={draft => { onChange({ field: editing.field, draft }); close(); }} onClear={() => { onChange(null); close(); }}
         file={{ text: "", caseSensitive: false, active: false, dirty: false, onText() {}, onCase() {}, onApply() {}, onClear() {} }}
         workspaceScope={{ filters: [] }} orderControl={null} /></div>

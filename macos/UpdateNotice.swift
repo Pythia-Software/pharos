@@ -263,7 +263,7 @@ struct HeaderUpdateState: Equatable {
         continueDeferral()
         DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
             guard let self, self.deferralID == token, !self.deferrals.isEmpty else { return }
-            self.finishDeferral(UpdateFailure(message: "Sparkle could not cancel its installation. Let the updater finish preparing, then try again."))
+            self.finishDeferral(UpdateFailure(message: "Pharos could not stop the update it is preparing. Wait a moment, then try again."))
         }
     }
 
@@ -305,17 +305,17 @@ struct HeaderUpdateState: Equatable {
         let values = try app.resourceValues(forKeys: [.volumeIsReadOnlyKey, .volumeIsLocalKey])
         guard values.volumeIsReadOnly != true, values.volumeIsLocal == true,
               !canonicalPath(app).contains("/AppTranslocation/") else {
-            throw UpdateFailure(message: "Copy Pharos.app out of its disk image into Applications or a folder on a local APFS drive, then check for updates from that copy.")
+            throw UpdateFailure(message: "Pharos cannot update this copy. Move Pharos.app to Applications, or to a folder on a drive attached to this Mac, and open it from there. Then choose Pharos → Check for Updates…")
         }
         var info = statfs()
         guard statfs(app.path, &info) == 0 else {
-            throw UpdateFailure(message: "Pharos's installation drive is unavailable. Reconnect it before updating.")
+            throw UpdateFailure(message: "The drive Pharos is installed on is unavailable. Reconnect it before updating.")
         }
         let filesystem = withUnsafePointer(to: &info.f_fstypename) {
             $0.withMemoryRebound(to: CChar.self, capacity: Int(MFSTYPENAMELEN)) { String(cString: $0) }
         }
         guard filesystem == "apfs" || filesystem == "hfs" else {
-            throw UpdateFailure(message: "Install Pharos.app on a local APFS or Mac OS Extended volume before updating. This drive cannot safely preserve the app's frameworks and permissions.")
+            throw UpdateFailure(message: "Pharos can update itself only on an APFS or Mac OS Extended drive, which keeps the app’s frameworks and permissions intact. Move Pharos.app to Applications or to such a drive, then check for updates again.")
         }
     }
 
@@ -401,7 +401,7 @@ struct UpdateCommands: Commands {
                 if let error {
                     DispatchQueue.main.async {
                         self?.showFailure(error, title: "The update was not installed",
-                                          next: "Choose Check for Updates… once it has finished to install the update.")
+                                          next: "To try again, choose Pharos → Check for Updates…")
                     }
                 }
             }
@@ -459,7 +459,7 @@ struct UpdateCommands: Commands {
         }
     }
 
-    private func showFailure(_ error: Error, title: String = "Pharos is still in use", next: String? = nil) {
+    private func showFailure(_ error: Error, title: String = "Pharos cannot quit yet", next: String? = nil) {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = [error.localizedDescription, next].compactMap { $0 }.joined(separator: " ")

@@ -2,6 +2,7 @@ import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 import { projectBreakdown, projectLegacy, projectsReached } from "./project-analysis";
 import kinds from "./agent-event-kinds.json";
+import { modelNotRecorded } from "./model-label";
 
 // Agent Experience over agent_events: one record is one event, a sentence in
 // an agent's visible reply or thinking that a model judged to express one kind
@@ -27,9 +28,9 @@ const measures: Record<string, AnalysisMeasure> = {
   messages: { label: "Messages with events", unit: "messages", format: count, op: "count_distinct", field: "message_id", additive: false, note: "Distinct agent messages (visible replies or thinking blocks) with a matching event." },
   projects: projectsReached("with events"),
   thinking_share: { label: "Share in thinking", unit: "percent", format: percent, op: "sum", ratio: [{ op: "sum", field: "in_thinking", label: "events in thinking" }, { op: "count", field: "id", label: "events" }], additive: false,
-    note: "Events found in agents' private reasoning, divided by all matching events. Visible replies are the rest." },
+    note: "Events found in agents’ private reasoning, divided by all matching events. Visible replies are the rest." },
   explained_share: { label: "Share with a stated cause", unit: "percent", format: percent, op: "sum", ratio: [{ op: "sum", expression: "IF([has_subject],1,0)", label: "events whose cause is another sentence" }, { op: "count", field: "id", label: "events" }], additive: false,
-    note: "Events whose cause the model found in a sentence other than the event's own, divided by all matching events." },
+    note: "Events whose cause the model found in a sentence other than the event’s own, divided by all matching events." },
 };
 
 export const agentEventsAnalysisCatalog: AnalysisCatalog = {
@@ -42,19 +43,19 @@ export const agentEventsAnalysisCatalog: AnalysisCatalog = {
     project_name: projectBreakdown(),
     family_project: { label: "Kind + project", fields: ["family", "project_name"] },
     provider: { label: "Provider", fields: ["provider"], order: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"] },
-    model: { label: "Model", fields: ["model"], empty: "Unknown model" },
+    model: { label: "Model", fields: ["model"], empty: modelNotRecorded },
     title: { label: "Conversation", fields: ["title"] },
   },
   labels: {
     family: agentEventKindLabel,
     source: value => value === "thinking" ? "Thinking" : value === "reply" ? "Visible reply" : value,
   },
-  records: { label: "Event", plural: "Events", note: "One record is one sentence judged to express one kind of event. Events are placed at their message's time." },
+  records: { label: "Event", plural: "Events", note: "One record is one sentence judged to express one kind of event. Events are placed at their message’s time." },
   units: {
     message: { label: "Agent message", plural: "Agent messages", key: "message_id", where: present("message_id"), breakdowns: { source: ["source"], project_name: ["project_name"], provider: ["provider"] },
       note: "An agent message is one visible reply or one thinking block; its events of a kind form one observation." },
-    conversation: { label: "Agent conversation", plural: "Agent conversations", key: "conversation_id", where: present("conversation_id"), breakdowns: { project_name: ["project_name"], provider: ["provider"] },
-      note: "An agent conversation is one recorded agent transcript; delegated sub-agents are conversations of their own." },
+    conversation: { label: "Conversation", plural: "Conversations", key: "conversation_id", where: present("conversation_id"), breakdowns: { project_name: ["project_name"], provider: ["provider"] },
+      note: "A conversation is one recorded agent transcript; where the source records a delegated sub-agent separately, it counts as its own conversation." },
   },
   cycle: { hour: { kind: "timestamp", field: "occurred_at" }, weekday: { kind: "timestamp", field: "occurred_at" } },
   periods: { day: "day", week: "week", month: "month" }, timestamp: "occurred_at",

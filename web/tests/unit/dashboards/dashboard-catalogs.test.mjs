@@ -100,7 +100,7 @@ test("every time-series catalog offers line and bar without duplicating the auto
 test("explicit line and bar choices leave automatic heatmaps and preserve the selected population", () => {
   const original = { ...dashboardDefaults.session_shape, view: "trend", selection: { values: ["short"], excluded: false }, rollingPeriods: 3 };
   assert.equal(normalizeAnalysis(sessionShape, original).display, "heatmap");
-  assert.equal(viewOptions(sessionShape, original).find(([id]) => id === "trend")[1], "Over time - heatmap");
+  assert.equal(viewOptions(sessionShape, original).find(([id]) => id === "trend")[1], "Over time · heatmap");
   for (const view of ["trend_line", "trend_bar"]) {
     const chosen = chooseAnalysisView(sessionShape, { ...original, display: "heatmap" }, view);
     assert.equal(normalizeAnalysis(sessionShape, chosen).display, "interval");
@@ -160,7 +160,7 @@ test("every combination of every dashboard opens with a view its chart can draw,
 test("the Tools rollup has no observations to distribute or pair, and says so", () => {
   const options = Object.fromEntries(viewOptions(tools, { metric: "calls", split: "tool_name" }).map(([view, , reason]) => [view, reason]));
   assert.deepEqual(Object.keys(options), ["trend_line", "trend_bar", "compare", "distribution", "cycle"]);
-  assert.match(options.distribution, /summaries, with no value per observation/);
+  assert.match(options.distribution, /summaries, so they have no individual values/);
   assert.match(options.cycle, /no hours or dates/);
   assert.equal(options.compare, undefined);
   for (const view of ["distribution", "scatter", "cycle"]) {
@@ -203,7 +203,7 @@ test("a Tools minimum counts calls, not daily summaries", () => {
   assert.match(analysisNote(tools, state), /fewer than 10 calls are hidden/);
   // Shares take no minimum; units of other catalogs count units.
   assert.equal(analysisQuery(tools, { ...state, metric: "calls", compareAs: "share" }, [], { now }).query.grouping, undefined);
-  assert.match(analysisNote(time, { view: "distribution", unit: "conversation", metric: "calls", split: "project_name", minSamples: 3 }), /fewer than 3 plotted agent conversations/);
+  assert.match(analysisNote(time, { view: "distribution", unit: "conversation", metric: "calls", split: "project_name", minSamples: 3 }), /fewer than 3 plotted conversations/);
 });
 
 test("a trailing window pools a mean's parts: rates and means of calls, never a mean of daily means", () => {
@@ -237,10 +237,10 @@ test("Over time ranks a rate's groups by their calls, and folds the rest into Ot
 
 test("the largest value per group is compared, never drawn over time", () => {
   const compare = { view: "compare", metric: "largest_output", split: "tool_name" };
-  assert.match(trendUnavailable(mcp, compare), /largest value per group/);
+  assert.match(trendUnavailable(mcp, compare), /largest single value in each group/);
   assert.equal(switchView(mcp, compare, "trend").view, "compare", "the view stays where it is");
   assert.equal(normalizeAnalysis(mcp, { metric: "largest_output", split: "tool_name" }).metric, "calls");
-  assert.match(trendAdjustments(mcp, { metric: "largest_output", split: "tool_name" })[0], /Over time does not draw it; calls is shown instead/);
+  assert.match(trendAdjustments(mcp, { metric: "largest_output", split: "tool_name" })[0], /Over time does not draw it; requests is shown instead/);
   const result = run(mcp, analysisQuery(mcp, compare, [], { now }).query)[0];
   for (const bucket of result.buckets) assert.equal(bucket.value, Math.max(...rows.mcp_calls.filter(row => row.tool_name === bucket.keys[0]).map(row => row.estimated_output_tokens ?? 0)));
 });
@@ -445,7 +445,7 @@ test("a Tools minimum sums calls natively: it reports what it hides, and a bar o
 });
 
 test("a scatter says when one measure's population narrows the other", () => {
-  assert.match(analysisNote(skills, { view: "scatter", unit: "conversation", metric: "records", metricY: "body", split: "none" }), /Evidence records counts only saved instruction size's records here/);
+  assert.match(analysisNote(skills, { view: "scatter", unit: "conversation", metric: "records", metricY: "body", split: "none" }), /Evidence records counts only saved instruction size’s records here/);
   assert.doesNotMatch(analysisNote(skills, { view: "scatter", unit: "conversation", metric: "records", metricY: "conversations", split: "none" }), /counts only/);
 });
 
@@ -486,7 +486,7 @@ test("Back to dashboard from a Tools query: an edited date predicate becomes the
   const edit = terms => { const next = new URLSearchParams(opened); next.set(parameter, core.encodeQuery(query.grouping ? { ...query, grouping: { ...query.grouping, source: { ...source, where: terms } } } : { ...query, where: terms })); return back(next); };
   // Deleting the translated days: no range at all, said in the link.
   const dayless = edit(source.where.filter(term => (term.field ?? term.any?.[0]?.field) !== "day"));
-  assert.deepEqual([dayless.label, dayless.where.filter(term => (term.field ?? term.any?.[0]?.field) === "day")], ["Back to dashboard (dates from this query)", []]);
+  assert.deepEqual([dayless.label, dayless.where.filter(term => (term.field ?? term.any?.[0]?.field) === "day")], ["Back to dashboard (uses this query’s dates)", []]);
   // Choosing one earlier day: that day is the range.
   const earlier = { field: "day", op: "=", value: "2026-08-01" };
   assert.deepEqual(edit([...source.where.filter(term => (term.field ?? term.any?.[0]?.field) !== "day"), earlier]).where.filter(term => term.field === "day"), [earlier]);
@@ -632,8 +632,8 @@ test("compaction charts count boundaries and retain unknown triggers through ser
   assert.deepEqual(core.applyQuery(records, drilldown, schemas.compactions, { now }).rows.map(row => row.id), ["c"]);
   const distinct = analysisQuery(compaction, { ...state, metric: "conversations", split: "none" }, where, { now });
   assert.equal(core.evaluateMetrics(records, distinct.query, schemas.compactions, { now }).metrics[0].buckets[0].value, 1);
-  assert.equal(compaction.labels.trigger("human"), "Human triggered");
-  assert.equal(compaction.labels.trigger("machine"), "Machine triggered");
+  assert.equal(compaction.labels.trigger("human"), "Manual");
+  assert.equal(compaction.labels.trigger("machine"), "Automatic");
 });
 
 test("agent event rates divide by every message read, whichever kinds are chosen or broken down", () => {

@@ -106,13 +106,55 @@ func TestUpdateRefusesOnlyWorkItWouldInterrupt(t *testing.T) {
 		{"nothing", "", verdictInput{}},
 		{"a batch writer", "", verdictInput{ops: []opView{runningView("index.changes.manual", nil)}}},
 		{"another process", "", verdictInput{ops: []opView{foreign}, leases: []leaseProbe{terminal}, locks: []heldLock{{Kind: "capture", Path: "/c/.capture.lock"}}}},
-		{"a step-latency writer", "waits for prepare the catalog", verdictInput{ops: []opView{runningView("catalog.initialize", nil)}}},
-		{"a broker operation", "waits for copy library", verdictInput{ops: []opView{runningView("library.transfer", func(view *opView) { view.Spec.Variant = "copy" })}}},
-		{"unregistered work", "waits for indexing sources", verdictInput{unregistered: []string{"Indexing sources"}}},
+		{"a step-latency writer", "in time: prepare the library.", verdictInput{ops: []opView{runningView("catalog.initialize", nil)}}},
+		{"a broker operation", "in time: copy library.", verdictInput{ops: []opView{runningView("library.transfer", func(view *opView) { view.Spec.Variant = "copy" })}}},
+		{"unregistered work", "in time: indexing sources.", verdictInput{unregistered: []string{"Indexing sources"}}},
 	} {
 		got := updateRefusal(computeEjectVerdict(updateInputs(test.in)))
 		if test.refusal == "" && got != "" || test.refusal != "" && !strings.Contains(got, test.refusal) {
 			t.Errorf("%s: %q; want %q", test.name, got, test.refusal)
+		}
+	}
+}
+
+// Labels and reasons read as sentences inside the status lines: a name keeps
+// its capital, and a blocked line never runs a clause or a raw reason code
+// into "Waiting for".
+func TestStatusSentencesKeepNamesAndGrammar(t *testing.T) {
+	for in, want := range map[string]string{"Index changes": "index changes", "MCP history": "MCP history",
+		"Pharos released the library": "Pharos released the library", "Git lookups": "Git lookups", "Search view": "Search view"} {
+		if got := lowerFirst(in); got != want {
+			t.Errorf("lowerFirst(%q) = %q; want %q", in, got, want)
+		}
+	}
+	kind := operationKindIndex["index.captures"]
+	for _, test := range []struct {
+		state, reason, detail, want string
+	}{
+		{opBlocked, "capture-running", "a capture on this Mac to finish", "Waiting for a capture on this Mac to finish"},
+		{opBlocked, "capture-running", "", "Waiting for a capture to finish"},
+		{opBlocked, "interactive-query", "interactive queries to finish", "Waiting for interactive queries to finish"},
+		{opBlocked, "catalog-busy", "another write to the library", "Waiting for another write to the library"},
+		{opBlocked, "catalog-busy", "catalog-busy", "Waiting for another write to the library"},
+		{opBlocked, "ingest-busy", "source indexing and its follow-up analysis to finish", "Waiting for source indexing and its follow-up analysis to finish"},
+		{opBlocked, workBlockedWriter, "findings are already being updated", "Waiting for another write to the library: findings are already being updated"},
+		{opBlocked, workBlockedWriter, "another write to the library", "Waiting for another write to the library"},
+		{opBlocked, workBlockedRecentFirst, "an explicit recent request goes first", "Waiting for recent work to finish first: an explicit recent request goes first"},
+		{opBlocked, workBlockedDependency, workBlockedDependency, "Waiting for work it depends on"},
+		{opBlocked, workBlockedHeld, "stopped until Resume", "Stopped until you resume it, or quit and reopen Pharos"},
+		{opBlocked, "", "", "Waiting"},
+		{opInterrupted, "released", "", "Interrupted: Pharos released the library. " + kind.OnEject},
+		{opSkipped, "deferred-to-analysis.chain", "", "Skipped: left for “Update analyses”"},
+	} {
+		view := opView{Kind: kind, State: test.state, Reason: test.reason, Detail: test.detail}
+		got := stateDetail(view)
+		if got != test.want {
+			t.Errorf("%s/%s: %q; want %q", test.state, test.reason, got, test.want)
+		}
+		// A blocked line says its reason once, and names the library.
+		if head, tail, joined := strings.Cut(got, ": "); test.state == opBlocked && (strings.Contains(got, "catalog") ||
+			joined && strings.Contains(strings.ToLower(head), strings.ToLower(tail))) {
+			t.Errorf("%s/%s repeats its reason or names the catalog: %q", test.state, test.reason, got)
 		}
 	}
 }

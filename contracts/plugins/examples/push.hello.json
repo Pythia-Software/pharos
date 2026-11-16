@@ -1,0 +1,23 @@
+{
+  "contract": "pharos-push/1",
+  "pusher": "psh_4Kq9Zt2LmX7c",
+  "at": "2026-11-15T17:58:40Z",
+  "version": "0.9.9",
+  "os": "linux",
+  "label": "runner-7 (ci)",
+  "pool": "Niteshift · api",
+  "sources": [
+    "claude",
+    "codex"
+  ],
+  "platform": {
+    "name": "niteshift",
+    "environment": "api",
+    "started_from": "sentry"
+  },
+  "initiator": {
+    "kind": "automation",
+    "name": "Sentry autofix"
+  },
+  "owner": "shared"
+}
