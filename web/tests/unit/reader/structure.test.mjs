@@ -248,6 +248,15 @@ test("a context sample on an undrawn usage record is reached through the drawn m
   assert.equal(reader.contextJumpAnchor(owned, owned[3], order), owned[2]);
   assert.equal(reader.contextJumpAnchor(owned, owned[1], order), owned[1], "a drawn message is its own anchor");
   assert.equal(reader.contextJumpAnchor(owned, owned[0], order), null, "nothing drawn comes before it");
+  // Interleaved agents: each record anchors in its own stream.
+  const reply = (id, parent) => ({ id, native_id: id, role: "assistant", kind: "message", text: id, ...(parent ? { parent_native_id: parent } : {}) });
+  const delegation = { id: "run", native_id: "run", call_id: "call-run", role: "assistant", kind: "delegation", text: JSON.stringify({ name: "Task", input: { prompt: "child" } }) };
+  const nested = (message, parent) => ({ ...message, parent_native_id: parent });
+  const mixed = [reply("main"), delegation, nested(usage("child-first"), "call-run"), reply("child", "call-run"), usage("main-context"), nested(usage("child-context"), "call-run")];
+  const at = new Map(mixed.map((message, index) => [message, index]));
+  assert.equal(reader.contextJumpAnchor(mixed, mixed[4], at), mixed[0], "a main record skips the sub-agent's reply and its run");
+  assert.equal(reader.contextJumpAnchor(mixed, mixed[5], at), mixed[3], "a sub-agent record stays in its run");
+  assert.equal(reader.contextJumpAnchor(mixed, mixed[2], at), delegation, "a sub-agent record with nothing before it falls back to its run");
 });
 
 test("find patterns escape plain terms and respect case", () => {
