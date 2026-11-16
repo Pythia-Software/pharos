@@ -324,7 +324,17 @@ type authorResult struct {
 	Spans []authorSpan
 	// Answers are the question-form options the message submitted.
 	Answers []questionAnswer
+	// naming marks, in a pass that restates earlier messages, the results that
+	// decide a workspace's name again: authorshipRenames is the restated
+	// message that gave the name, and authorshipNameOnly a later message whose
+	// stored classification is read for the name and written nowhere.
+	naming int
 }
+
+const (
+	authorshipRenames = iota + 1
+	authorshipNameOnly
+)
 
 // textOrigin names the message a span's text was found in.
 type textOrigin struct {
@@ -672,6 +682,9 @@ type classifier struct {
 	lines          map[uint64]*lineUse
 	lastUserSent   map[string]time.Time
 	questions      map[string][]authorshipQuestion
+	// crossed are the template keys a suffix took over the threshold, with
+	// the sessions that sent each before it.
+	crossed map[string][]string
 	// answers holds the question-form options the last classified message
 	// submitted.
 	answers []questionAnswer
@@ -1600,7 +1613,7 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, pass
 	var run *authorshipIncremental
 	var err error
 	if pass != authorshipFull {
-		run, err = c.incrementalAuthorship(ctx)
+		run, err = c.incrementalAuthorship(ctx, true)
 	}
 	if err != nil {
 		return err
@@ -1706,7 +1719,7 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, pass
 	if !full {
 		since = &run.since
 	}
-	plan, err := c.planAuthorshipScope(ctx, results, run.launches, since, run.stale)
+	plan, err := c.planAuthorshipScope(ctx, run.planned(results), run.launches, since, run.stale)
 	if err != nil {
 		return err
 	}
@@ -1819,6 +1832,12 @@ func (c *Catalog) authorInputs(ctx context.Context, q queryer, representative ma
 }
 
 func (c *Catalog) authorInputsSince(ctx context.Context, q queryer, representative map[string]string, claimed map[string]bool, launches []conversationLaunch, since *time.Time) ([]authorInput, error) {
+	return c.authorInputsScope(ctx, q, representative, claimed, launches, since, nil)
+}
+
+// authorInputsScope reads the inputs sent since since, or those of the given
+// conversations.
+func (c *Catalog) authorInputsScope(ctx context.Context, q queryer, representative map[string]string, claimed map[string]bool, launches []conversationLaunch, since *time.Time, conversations []string) ([]authorInput, error) {
 	// Only a Mac whose Conductor is read can show a session was not its own.
 	conductorHosts := map[string]bool{}
 	hosts, err := q.QueryContext(ctx, `SELECT DISTINCT c.origin_host_id FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
@@ -1846,6 +1865,12 @@ func (c *Catalog) authorInputsSince(ctx context.Context, q queryer, representati
 	if since != nil {
 		query += " AND m.created_at>=?"
 		args = append(args, formatTime(*since))
+	}
+	if conversations != nil {
+		// By conversation: the unary + keeps SQLite off the prose index, which
+		// walks every user message in the library.
+		query = strings.Replace(query, "WHERE m.kind='message' AND m.role='user'", "WHERE +m.kind='message' AND +m.role='user'", 1) + " AND m.conversation_id IN (SELECT value FROM json_each(?))"
+		args = append(args, jsonText(conversations))
 	}
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {

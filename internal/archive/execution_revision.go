@@ -92,6 +92,11 @@ var executionSourceTables = []executionSourceTable{
 var executionSourceIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS messages_call_idx ON messages(conversation_id, call_id) WHERE call_id<>''`,
 	`CREATE INDEX IF NOT EXISTS messages_workflow_call_idx ON messages(conversation_id,call_id) WHERE ` + claudeWorkflowCallSQL(""),
+	// The workspace_names and workspaces triggers find the conversations of
+	// workspaces shown under the changed one. Without this each row written
+	// read every conversation (0.7 s a row on a 50,000-conversation library,
+	// inside the writer: 14 s for a writing pass that named 20 workspaces).
+	`CREATE INDEX IF NOT EXISTS workspace_names_display_idx ON workspace_names(display_workspace_id) WHERE display_workspace_id IS NOT NULL`,
 }
 
 // ensureExecutionSourceGeneration installs the source generation, its change

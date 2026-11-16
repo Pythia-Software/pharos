@@ -59,6 +59,8 @@ The framework's own ticking is small: about 1.8% of a core idle.
 | Fixes is rebuilt at most daily from agent events passes | About 7.6 rebuilds a day at about 671 s each | At most one (projected: about 85 → 11 min/day) |
 | Authorship changes no longer mark agent events dirty; a full refine rewrites only real changes | Refine rewrote 3,652 rows (3,647 a counter in the reason text), each marking labels, agent events and findings | 5 rows |
 | A new app session's identity link, and rows without a time, no longer discard the writing checkpoint | One new linked session (1 link, 949 messages): full refine, 280.6 s, 44.9 GB allocated, 3.4 GB peak. A morning's arrivals (23 links, 48 conversations, 143 prompts): full refine, about 300 s, 44.5 GB | 5.5 s, 2.65 GB allocated, 1.0 GB peak, 1 row rewritten. 19.0 s (14.2 s of it one writer hold), 2.71 GB, 1.0 GB peak, 5 rows. Stored rows identical to the old build's full pass |
+| A repeated prompt crossing the template threshold is restated from the writing checkpoint | A 22-hour period (49 links, 296 prompts, 149 counted) in which a prompt crossed: full refine, 345.7 s, 45.0 GB allocated, 3.4 GB peak | 33.8 s, 2.94 GB, 1.1 GB peak; 16 messages rewritten, 44 workspaces named. Stored rows identical to a full pass |
+| Workspace names are indexed by the workspace they display | Each written name scanned every conversation (about 0.7 s): one writer hold of 14.2 s for 20 names, 17.9–33.8 s holds in a full refine | No hold of 1 s or more for 44 names |
 | The result cache's unasked sweep, derived-value use marks and debounce | See "Result cache" below | |
 | Findings measure is never placed faster than Hourly; placement weighs a day's fixed cost, with hysteresis | 17 cadence moves in 5.9 days (replay) | 2 |
 | Ask suggestions refresh by day and six-hour bucket, not after every index | 12 or more runs a day | About 6 (projected) |
@@ -164,14 +166,19 @@ the columns that build defines differently.
 Not done, largest first by the audit's estimate:
 
 - **Refine is still a full pass on most days.** A new session's identity
-  link and undated rows no longer force one (see below), but each of these
-  still does (44.5 GB allocated):
-  - A repeated prompt crossing the template threshold. This refused the one
-    22-hour replay period that had no other cause (49 links, 296 prompts).
+  link, undated rows and a prompt crossing the template threshold no longer
+  force one, but each of these still does (44.5 GB allocated):
   - A copy that arrives after its original was classified. Its old-dated
     messages and its link both change history. In the newest 1,000 links,
     every TL1 copy and 25% of Conductor copies were first seen more than two
-    minutes after the other copy.
+    minutes after the other copy. Six of the eight days 2026-11-06 to 11-13
+    had one. Every such original was a headless run, so the copy turns
+    automated prompts into typed ones in the past, and a TL1 copy also moves
+    the counted rows to its own messages; restating rows cannot follow that.
+    The copies' sessions had started up to 12 hours before they were first
+    seen (all under 3 hours on five of the eight days). A checkpoint that lags the newest message by a
+    day would put them inside the suffix, at the cost of classifying a day's
+    messages (72–588 here) in every suffix pass. Not built.
   - Old-dated imports, and mirror representatives changing among workspaces
     with history.
 - **Every written record marks all nine analysis stages.** Narrower marks
