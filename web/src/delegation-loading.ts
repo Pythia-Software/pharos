@@ -16,7 +16,11 @@ export class DelegationSnapshotRecovery {
   private pending = false;
   private attempts = 0;
 
+  // Any load under way brings a fresh snapshot, and the lanes follow it, so a
+  // conflict with the snapshot it replaces needs no refresh of its own.
+  started() { this.pending = true; }
   loaded(snapshot: string) { this.snapshot = snapshot; this.pending = false; }
+  failed() { this.pending = false; }
   reset() { this.pending = false; this.attempts = 0; }
   succeeded(snapshot: string) {
     if (!this.pending && snapshot === this.snapshot) this.attempts = 0;

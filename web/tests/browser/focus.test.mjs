@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
-import { activateHeaderTool, open, skip } from "./harness.mjs";
+import { activateHeaderTool, open, skip, stretch } from "./harness.mjs";
 import { claudeImportFixture, claudeSettingsSourceFixture, claudeSettingsCoverageFixture, defaultApi, workID, rootConversation, eventStream, busyStatus, workBackgroundDocument, workInspection } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
@@ -89,8 +89,9 @@ test('Settings switches keep keyboard focus and their saved state across Setting
 
 test('Background CPU allowance and task Stop/Resume keep keyboard focus across their redraws', {skip}, async t => {
   const background = structuredClone(workBackgroundDocument), posts = [];
-  let held = true, cpuUsed = 2, covered = 12, historyLive = false, finishHistory, delayInspection = false, finishPoll;
-  const pollStarted = Promise.withResolvers();
+  let held = true, cpuUsed = 2, covered = 12, historyLive = false, delayInspection = false, finishPoll;
+  // The stub holds the History post; the test waits until it has arrived there.
+  const pollStarted = Promise.withResolvers(), historyHeld = Promise.withResolvers(), historyReply = Promise.withResolvers();
   const {page, settled} = await open(t, {url:'/settings/sync', ready:'#backgroundSchedule [data-card=work] .bg-work-row', api: {
     'GET /api/background': () => background,
     'POST /api/work/settings': ({body}) => { background.work.cpu_slots = body.cpu_slots; return background; },
@@ -112,7 +113,8 @@ test('Background CPU allowance and task Stop/Resume keep keyboard focus across t
       posts.push(body);
       if (body.action === 'backfill') {
         historyLive = true;
-        return new Promise(resolve => { finishHistory = () => resolve({request_id: 9}); });
+        historyHeld.resolve();
+        return historyReply.promise;
       }
       if (['stop', 'resume'].includes(body.action)) held = body.action === 'stop';
       return {changed: true};
@@ -140,13 +142,12 @@ test('Background CPU allowance and task Stop/Resume keep keyboard focus across t
   delayInspection = true;
   await page.evaluate(() => { window.backgroundPoll = window.pharosBackground.refresh(true); });
   await pollStarted.promise;
-  const posting = page.waitForRequest(request => request.url().endsWith('/api/work') && request.method() === 'POST');
   await history.click();
-  await posting;
+  await historyHeld.promise;
   await allowance.focus();
   assert.equal(await history.isDisabled(), true);
   const posted = page.waitForResponse(response => response.url().endsWith('/api/work') && response.request().method() === 'POST');
-  finishHistory();
+  historyReply.resolve({request_id: 9});
   await posted;
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(await history.isDisabled(), true, 'an action stays pending while an earlier poll delays its reconciliation');
@@ -814,7 +815,7 @@ test("Eject when safe ejects once safe while the page is hidden", { skip }, asyn
   });
   await page.waitForFunction(() => window.pharosStatusStore.current()?.mode === "paused");
   fresh = { verdict: "safe", summary: "Safe", blockers: [], checked: "fresh" };
-  await page.waitForFunction(() => window.ejects === 1, null, { timeout: 20000 });
+  await page.waitForFunction(() => window.ejects === 1, null, { timeout: stretch(20000) });
 });
 
 for (const width of [1440, 320]) test(`Data guide takes focus, keeps controls reachable and returns focus @ ${width}`, { skip }, async t => {
@@ -1140,6 +1141,8 @@ test("Search long query can scroll to submit @ 320", { skip }, async t => {
       return element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
     }, await people.elementHandle());
     await shot('nested-dashboards');
+    // Groups below the top level start collapsed unless they hold the current page.
+    await press(dialog.locator('summary').filter({ hasText: /^Conversations & agent sessions$/ }));
     await dialog.getByRole('link', { name: 'TL1 attempts', exact: true }).scrollIntoViewIfNeeded();
     assert.equal(await onScreen(dialog.getByRole('button', { name: 'All pages', exact: true })), true, 'scrolling keeps the way back reachable');
     assert.equal(await onScreen(dialog.getByRole('button', { name: 'Close navigation', exact: true })), true, 'scrolling keeps the close control reachable');
@@ -1524,6 +1527,12 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
       return { ...data, rows: data.rows.slice(0, 1), focus: data.focus.slice(0, 1), session_count: 1, total: 1 };
     },
   } : {};
+  // While held, a preference save stays in flight, as one to a busy library does.
+  let heldSaves=null,saveHeld=null;
+  api["POST /api/preferences"]=async call=>{
+    if(heldSaves){const release=Promise.withResolvers();heldSaves.push(release.resolve);saveHeld?.();await release.promise;}
+    return defaultApi["POST /api/preferences"](call);
+  };
   const { page, settled, shot } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", viewport:{width:1218,height:1050}, api, preferences: { "pharos-show-nav-button": true } });
   await activateHeaderTool(page, "navigatorToggle");
   await page.locator("#navigator.open").waitFor();
@@ -1595,6 +1604,18 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
     assert.doesNotMatch(await page.locator('.coverage-warning').innerText(),/See Preservation details/);
     await shot('source-only-heading');
   } else {
+    // A Key change still being saved when the page reloads holds after it.
+    await timelineKey().click();
+    await page.evaluate(()=>window.pharosPrefs.flush());
+    heldSaves=[];
+    const held=new Promise(resolve=>{saveHeld=resolve;});
+    await timelineKey().click();
+    await page.evaluate(()=>{window.pharosPrefs.flush();});
+    await held;
+    await page.reload();
+    await page.locator('.reader-navigator-timeline').waitFor();
+    for(const release of heldSaves.splice(0))release();
+    heldSaves=null;
     // The child fixture is a single exchange without context measurements.
     // Legacy hidden choices must not hide measured context or turns.
     const all = encodeURIComponent(JSON.stringify(['timeline','context','turns']));
@@ -1675,6 +1696,11 @@ test('untimed session navigator draws calls and failures and reveals by message 
   const prompt=page.locator('.timeline-entry[data-message-id="prompt"]'),marker=prompt.locator('.writing-estimate-trigger');
   const checkEstimatePlacement=async()=>{
     const time=prompt.locator('.timeline-time > span');
+    // A resize lays the transcript out again over a few frames.
+    await page.waitForFunction(()=>{
+      const prompt=document.querySelector('.timeline-entry[data-message-id="prompt"]'),star=prompt?.querySelector('.writing-estimate-trigger')?.getBoundingClientRect(),stamp=prompt?.querySelector('.timeline-time > span')?.getBoundingClientRect();
+      return star&&stamp&&star.y<stamp.y+stamp.height&&stamp.y<star.y+star.height;
+    }).catch(()=>{});
     assert.match(await prompt.locator('.timeline-time').innerText(),/^\*\s*\+0s/);
     const star=await marker.boundingBox(),stamp=await time.boundingBox();
     assert.ok(star&&stamp&&star.x+star.width<=stamp.x,'the estimate precedes the timestamp');
@@ -1961,7 +1987,6 @@ for (const trigger of ["context jump", "scroll"]) test(`a ${trigger} reaches a p
     await page.evaluate(() => { const scroller = document.querySelector(".workspace-reader-content"); scroller.scrollTop = scroller.scrollHeight; });
     await page.getByRole("button", { name: /Open conversation/ }).waitFor();
   }
-  await page.getByRole('checkbox', {name:'Context',exact:true}).check();
   await page.locator(".token-marker").last().click();
   await page.waitForFunction(() => {
     const target = document.querySelector(".token-highlight");
@@ -1995,7 +2020,7 @@ async function annotate(t) {
   return app.page;
 }
 
-test("Ask Pharos feedback requires explicit approval of the reviewed draft", { skip, timeout:60000 }, async t => {
+test("Ask Pharos feedback requires explicit approval of the reviewed draft", { skip, timeout:stretch(60000) }, async t => {
   const selection = {provider:"Codex",model:"test-model",effort:"Low"};
   const feedback = {kind:"feature",comment:"Add Markdown export of selected conversations."};
   const session = {id:"feedback-chat",createdAt:Date.now(),updatedAt:Date.now(),selection,draft:"",conversation:[{id:"feature-1",prompt:"Request Markdown export",cli:"Codex",model:"test-model",effort:"Low",status:"feedback",reply:"I prepared a feature request for review.",cards:[],feedback}]};
@@ -2252,7 +2277,8 @@ test('Capture & index keeps run details focus, table scrolling and query edits t
 });
 
 test('Mac menu editing preserves focus when adding, moving, and removing items', { skip }, async t => {
-  const { page, shot } = await open(t, { url: '/settings/layout', ready: '#showMacMenuBar', preferences: { 'pharos-menu-bar': { enabled: false } } });
+  // Every item is on by default; start with one off so the toolbox can add it.
+  const { page, shot } = await open(t, { url: '/settings/layout', ready: '#showMacMenuBar', preferences: { 'pharos-menu-bar': { enabled: false, cost: false } } });
   const disclosure = page.locator('#menuBarExpand');
   const visibility = page.getByRole('switch', { name: 'macOS menu bar', exact: true });
   const options = page.locator('#menuBarOptions');
@@ -2301,7 +2327,7 @@ test('Mac menu editing preserves focus when adding, moving, and removing items',
   assert.ok(await visibility.evaluate(element => document.activeElement === element), 'disabling the menu keeps its toggle reachable');
 });
 
-test('Ask Pharos attachments restore focus and preserve the draft through full-screen element selection', {skip,timeout:60000}, async t => {
+test('Ask Pharos attachments restore focus and preserve the draft through full-screen element selection', {skip,timeout:stretch(60000)}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'},sessions=new Map(),submitted=[];
   const {page,settled,shot}=await open(t,{url:'/analyze?analyze_topic=thinking-overview',ready:'h1',api:{
     'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
@@ -2628,7 +2654,7 @@ test("the History drawer takes focus, returns it when dismissed, and its chat fo
   await page.waitForFunction(element => document.activeElement === element, await question.elementHandle());
 });
 
-test('Ask Pharos chat links survive reload and browser Back', {skip,timeout:60000}, async t => {
+test('Ask Pharos chat links survive reload and browser Back', {skip,timeout:stretch(60000)}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const saved={id:'saved-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:'saved-turn',prompt:'A prior question',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'An earlier reply',cards:[]}]};
   const sessions=new Map([[saved.id,saved]]);
@@ -2981,7 +3007,7 @@ test('Ask Pharos overlay keeps focus and its controls reachable @ 1440', {skip},
     const button = document.querySelector('.pharos-fullscreen');
     const tooltip = getComputedStyle(button, '::after');
     return tooltip.content === '"Full screen"' && tooltip.visibility === 'visible';
-  }, null, {timeout: 3000});
+  }, null, {timeout: stretch(3000)});
   await page.locator('body>header .brand').evaluate(element=>element.focus());
   assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)),'the overlay must keep focus');
   await editor.evaluate(element=>{element.value='What if we broke it down by model?';element.dispatchEvent(new Event('input',{bubbles:true}));});
@@ -3507,8 +3533,9 @@ for (const width of [1920,320]) test(`Ask Pharos work previews fit beside their 
   const requested=calls.filter(call=>call.path==='/api/fingerprints').flatMap(call=>call.body.items);
   for(const id of ['conv-root','conv-child'])assert.ok(requested.some(item=>item.entity==='conversation'&&item.id===id),'the conversation ID selects its fingerprint');
   for (const card of cards) assert.equal(await page.getByRole('figure',{name:'Preview: '+card.title,exact:true}).locator('p').count(),2,'where/when and who/how much render');
-  const after=new URL(page.url());if(home)after.searchParams.delete('ask_chat');
-  assert.equal(after.href,before,'previews leave the underlying page URL alone');
+  // Home's Ask records its chat in the URL, possibly before the question is sent.
+  const withoutChat=href=>{const url=new URL(href);if(home)url.searchParams.delete('ask_chat');return url.href};
+  assert.equal(withoutChat(page.url()),withoutChat(before),'previews leave the underlying page URL alone');
   assert.ok(await surface.evaluate(element=>element.contains(document.activeElement)),'loading previews must not move focus out of Ask');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'work preview overflowed the viewport');
   assert.ok(await page.evaluate(()=>[...document.querySelectorAll('.pharos-work-preview')].every(el=>el.scrollWidth<=el.clientWidth)),'work preview content overflowed its card');
@@ -3600,10 +3627,12 @@ for (const [width, count, view] of [[390,2,'compare'],[1440,1,'trend']]) test(`A
   await modal.waitFor({state:'hidden'});
 });
 
+// Data updates is off by default (header.js); these tests add it to the default tools.
+const readinessTools={'pharos-header-tools-v1':['back','library','readiness','summary','ask','feedback','settings']};
 for(const width of [1440,390])test(`Data updates follows the native modal and Background Processing at ${width}px`,{skip},async t=>{
   const {idleStatus}=await import('./fixtures.mjs');
   const status={...idleStatus,freshness:[...idleStatus.freshness,{domain:'an.ledger',label:'Tool ledger',behind:{state:'current'}},{domain:'an.authorship',group:'analyses',label:'Writing estimates',as_of:new Date(Date.now()-3600000).toISOString(),pending_since:new Date(Date.now()-187*60000).toISOString(),behind:{state:'behind',count:128,unit:'message'},reason:{code:'changed',text:'New messages are waiting'},next:'Next frequent update'}]};
-  const {page,calls,push,shot,settled}=await open(t,{url:'/analyze?analyze_topic=human&readiness_preview=hours',viewport:{width,height:1000},ready:'.usage-analysis-trend[aria-busy="false"]',api:{'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
+  const {page,calls,push,shot,settled}=await open(t,{url:'/analyze?analyze_topic=human&readiness_preview=hours',viewport:{width,height:1000},ready:'.usage-analysis-trend[aria-busy="false"]',preferences:readinessTools,api:{'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
   assert.equal(await page.locator('.data-freshness-icon use').evaluateAll(elements=>elements.filter(element=>!document.getElementById(element.getAttribute('href').slice(1))).length),0,'freshness symbols resolve in the served page shell');
   await shot('lag-clock');
   await activateHeaderTool(page,'dataReadinessToggle');
@@ -3652,7 +3681,7 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
  const upgrade={...background.view.items.find(item=>item.id==='writing-refine'),id:'upgrade',label:'Library upgrade',verb:'Upgrading the library',fixed:true};
  background.view.items.push(upgrade);background.view.cadences.find(cadence=>cadence.id==='daily').items.push('upgrade');
  const status={...idleStatus,background:background.view};
- const {page,settled,push,shot}=await open(t,{url:'/library?query_layout='+queryLayout,viewport:{width,height:1000},ready:'[data-readiness-result="query:library"]',api:{'GET /api/background':background,'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
+ const {page,settled,push,shot}=await open(t,{url:'/library?query_layout='+queryLayout,viewport:{width,height:1000},ready:'[data-readiness-result="query:library"]',preferences:readinessTools,api:{'GET /api/background':background,'GET /api/status':status,'GET /api/status/stream':eventStream(status)}});
  const dialog=page.locator('#dataReadinessDialog');
  const check=async (selector)=>{
   const button=page.locator(selector).first();await button.waitFor();
@@ -3679,16 +3708,16 @@ for(const width of [1440,390])test(`Freshness is reachable on collapsed tables a
   ['/findings?view=table','query:findings'],
   ['/findings?optimize_area=safety&view=table&query_layout='+encodeURIComponent(JSON.stringify({safety:true})),'query:safety'],
   ['/findings?optimize_area=fixes&view=table','query:fixes'],
-  ['/analyze?analyze_topic=habits','chart:habits-calendar'],
+  ['/analyze?analyze_topic=habits','chart:habits-days'],
   ['/analyze?analyze_topic=thinking-overview','chart:thinking-waits'],
   ['/analyze?analyze_topic=thinking-detail','chart:thinking-distributions'],
   ['/analyze?analyze_topic=parallelism','chart:ribbon'],
   ['/analyze?analyze_topic=carbon','carbon:estimate'],
-  ['/analyze?analyze_topic=agent_experience','events:examples'],
+  ['/analyze?analyze_topic=agent_experience','metric:agent_events:Events'],
  ]){
   await page.evaluate(url=>window.pharosNavigate(url),url);
   await check(`[data-readiness-result="${identity}"]`);
-  if(identity==='events:examples'&&process.env.PHAROS_UI_SCREENSHOTS){
+  if(identity==='metric:agent_events:Events'&&process.env.PHAROS_UI_SCREENSHOTS){
    await activateHeaderTool(page,'dataReadinessToggle');await dialog.waitFor();
    await shot('agent-experience-update-details');
    await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
@@ -3723,7 +3752,7 @@ test('Live data updates keep real backlog, existing results and first-build prog
  const status={...idleStatus,freshness:[{...currentSource,pending_since:iso(540),behind:{state:'behind',count:128,unit:'conversation'},reason:{code:'needs-capture',text:'New conversations are waiting'}},view,{domain:'conv:new',label:'Conversations (new)',as_of:null,output_missing:true,behind:{state:'behind'},reason:{code:'never-indexed',text:'Not indexed yet'}}]};
  const excluded={...EMPTY_QUERY,where:[{field:'source_kind',op:'=',value:'new',negated:true}]};
  const bookmark={id:'durable-readiness',title:'Saved conversations',url:'/library?q_library=@aaaaaaaaaaaaaaaaaaaaaa',query:excluded};
- const {page,push,settled,shot}=await open(t,{url:'/library?view=conversation&q_library='+encodeURIComponent(encodeQuery(excluded)),ready:'.conversation-result-card',preferences:{'pharos-bookmarks-v1':[bookmark]},api:{
+ const {page,push,settled,shot}=await open(t,{url:'/library?view=conversation&q_library='+encodeURIComponent(encodeQuery(excluded)),ready:'.conversation-result-card',preferences:{...readinessTools,'pharos-bookmarks-v1':[bookmark]},api:{
   'GET /api/status':status,'GET /api/status/stream':eventStream(status),
   '* /api/query/:dataset/:operation':call=>{
    const reply=defaultApi['* /api/query/:dataset/:operation'](call);
@@ -3893,12 +3922,12 @@ test('Claude export reminder can be acknowledged and completed history stays usa
   await settled();assert.equal(await routine.isVisible(),false,'a recent import hides the reminder');
 });
 
-test('Ask fullscreen inbox keeps concurrent chats running and reads only visible answers', {skip,timeout:60000}, async t=>{
+test('Ask fullscreen inbox keeps concurrent chats running and reads only visible answers', {skip,timeout:stretch(60000)}, async t=>{
   const selection={provider:'Codex',model:'test-model',effort:'Low'},sessions=new Map(),finish=new Map(),attempts=new Map();
   let recordFirst,releaseReceipt,receiptStarted,secondAttempt;
   const firstRecording=new Promise(resolve=>{recordFirst=resolve;}),oldReceipt=new Promise(resolve=>{releaseReceipt=resolve;});
   const readingError=new Promise(resolve=>{receiptStarted=resolve;});
-  const heldSearch=Promise.withResolvers(),searchStarted=Promise.withResolvers();
+  const heldSearch=Promise.withResolvers(),searchStarted=Promise.withResolvers(),secondSent=Promise.withResolvers();
   t.after(()=>{recordFirst();releaseReceipt();heldSearch.resolve();});
   t.after(()=>{for(const resolve of finish.values())resolve();});
   const {page,settled,shot,calls}=await open(t,{url:'/ask',viewport:{width:1920,height:1050},ready:'.pharos-new-chat',api:{
@@ -3918,6 +3947,7 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
     },
     'POST /api/ask/send':async({body})=>{
       const attempt=(attempts.get(body.prompt)||0)+1;attempts.set(body.prompt,attempt);
+      if(body.prompt==='Second question'&&attempt===1)secondSent.resolve();
       if(body.prompt==='First question')await firstRecording;
       const session={createdAt:Date.now(),updatedAt:Date.now(),...sessions.get(body.id),...body,conversation:[{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',status:'loading',startedAt:(body.prompt==='First question'?10:20)+attempt,cards:[],reply:''}]};
       sessions.set(body.id,session);
@@ -3942,6 +3972,7 @@ test('Ask fullscreen inbox keeps concurrent chats running and reads only visible
   await newChat.click();await question.fill('Second question');await page.getByRole('button',{name:'Send question',exact:true}).click();
   await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
   await page.waitForFunction(()=>document.querySelectorAll('.pharos-history-entry[data-running="true"]').length===2);
+  await secondSent.promise;
   assert.equal(calls.filter(call=>call.path==='/api/ask/cancel').length,0);
   assert.equal(calls.filter(call=>call.path==='/api/ask/send').length,2);
   await question.focus();

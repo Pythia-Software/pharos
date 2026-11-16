@@ -1,0 +1,46 @@
+{
+  "input": {
+    "project": "example-team",
+    "bucket": "example-team-pharos",
+    "organization": "11111111-2222-3333-4444-555555555555",
+    "number": "123456789012",
+    "machine": "Niteshift · api"
+  },
+  "prefix": "pharos/66666666-7777-8888-9999-000000000000",
+  "push": {
+    "contract": "pharos-push-config/1",
+    "access": "write",
+    "prefix": "pharos/{owner}",
+    "retention_days": 90,
+    "pool": "Niteshift · api",
+    "destination": {
+      "type": "gcs",
+      "bucket": "example-team-pharos",
+      "workload_identity_provider": "projects/123456789012/locations/global/workloadIdentityPools/pharos-push/providers/niteshift",
+      "identity_token": {
+        "command": [
+          "ns",
+          "oidc-token",
+          "--audience",
+          "//iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/pharos-push/providers/niteshift"
+        ]
+      }
+    }
+  },
+  "read": {
+    "contract": "pharos-push-config/1",
+    "access": "read",
+    "prefix": "pharos/66666666-7777-8888-9999-000000000000",
+    "destination": {
+      "type": "gcs",
+      "bucket": "example-team-pharos",
+      "access_token": {
+        "command": [
+          "gcloud",
+          "auth",
+          "print-access-token"
+        ]
+      }
+    }
+  }
+}

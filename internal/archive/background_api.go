@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ var runningItem = map[string]string{
 	"analysis.authorship.refine": "writing-refine", "analysis.tools": "tools", "analysis.authorship": "writing", "analysis.peers": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events", "analysis.engagement": "engagement",
 	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
 	"forge.reviews":   "pull-request-reviews",
-	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup",
+	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup", "capture.import/bucket": "bucket-import",
 }
 
 func itemOfView(view opView) string {
@@ -316,7 +317,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			state = "disabled"
 		case in.requested[item.ID] || queued[item.ID]:
 			state = "queued"
-		case item.ID == "backup" && in.backupDestination == "":
+		case item.ID == "backup" && in.backupDestination == "", item.ID == "bucket-import" && in.bucketImports == 0:
 			state = "unavailable"
 		case plan.Cadence == cadenceManual:
 			state = "manual"
@@ -346,6 +347,11 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			"adaptive": item.Adaptive, "fixed": item.Fixed, "opt_in": item.OptIn, "override": settings.Overrides[item.ID],
 			"state": state, "state_label": stateLabels[state], "as_of": nullable(asOf), "next_at": nullableTime(plan.Next), "error": nullable(problem),
 			"choices": itemChoices(item, settings), "cost": nil, "note": nil}
+		// Where an item that is not set up yet is set up.
+		entry["setup"] = nil
+		if state == "unavailable" && item.ID == "bucket-import" {
+			entry["setup"] = map[string]any{"label": "Set up in Sources", "url": "/settings/sources?disclosures=" + url.QueryEscape(`{"bucketSetup":true}`) + "&reveal=" + url.QueryEscape("section:bucketSetup")}
+		}
 		entry["cadence_moves"] = itemCadenceMoves(item, settings)
 		// The running operation Stop ends, where it can be stopped.
 		entry["stop"] = nil

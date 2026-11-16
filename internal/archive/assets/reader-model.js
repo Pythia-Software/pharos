@@ -1051,6 +1051,21 @@ function transcriptCategory(message,context){
 // entry and no count, and Find leaves them out. Other System events, and a
 // usage record that is an error, stay.
 function transcriptUndisplayed(message){return message?.kind!=='message'&&transcriptCategory(message,{})==='usage'&&toolCategory(message)==='run'}
+// Usage records are not drawn, so a context sample one carries is reached
+// through the last drawn message before it in its own agent stream: the
+// sub-agent run holding it, or the main thread. A delegation opens a child
+// run, so it anchors only that run's records, when nothing in the run comes
+// before them; main-thread records with nothing before them stay on the turn
+// (null).
+function contextJumpAnchor(owned,message,order){
+  if(!transcriptUndisplayed(message))return message;
+  const delegations=new Map();
+  for(const other of owned)if(other.kind==='delegation')for(const key of [other.native_id,other.call_id])if(key&&!delegations.has(key))delegations.set(key,other);
+  const holder=other=>delegations.get(other.parent_native_id)||null,stream=holder(message);
+  let anchor=null;
+  for(const other of owned)if(other.kind!=='delegation'&&holder(other)===stream&&!transcriptUndisplayed(other)&&order.get(other)<order.get(message)&&(!anchor||order.get(other)>order.get(anchor)))anchor=other;
+  return anchor||stream;
+}
 // The reader's grouping of normalized events: results paired to their calls,
 // each turn's final reply, and each event's category path (its own category,
 // then those of the sub-agents holding it). A paired result takes its call's

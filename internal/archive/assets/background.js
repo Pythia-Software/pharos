@@ -252,6 +252,7 @@
       const details = [{label: 'CPU time', value: cpu(row.cpu_seconds)}];
       if (measured(row.worker_cpu_seconds) && row.worker_cpu_seconds > 0) details.push({label: 'of it, in the labeling worker', value: amount(row.worker_cpu_seconds)});
       if (measured(row.gpu_seconds)) details.push({label: 'GPU time', value: amount(row.gpu_seconds)});
+      else if (row.gpu_unmeasured) details.push({label: 'GPU time', value: UNMEASURED});
       if (row.source !== 'other') details.push({label: 'Running', value: amount(row.seconds)}, {label: 'Runs', value: String(Math.round(row.runs * 10) / 10)});
       if (measured(row.peak_bytes)) details.push({label: 'Most memory', value: memory(row.peak_bytes)});
       if (row.parts) details.push(...row.parts.slice(0, 6).map(([label, value]) => ({label, value})));
@@ -261,12 +262,13 @@
         popover: {heading: row.label, notes, rows: details, ...recent.length ? {totals: recent} : {}}};
     });
     const table = all.map(row => ({label: row.label, cpu: cpu(row.cpu_seconds), share: share(row.cpu_seconds),
-      // Only work that leases the labeling worker has GPU time to measure.
-      gpu: measured(row.gpu_seconds) ? amount(row.gpu_seconds) : '',
+      // Only work that leases the labeling worker has GPU time to measure;
+      // when part of it could not be read, that is said.
+      gpu: measured(row.gpu_seconds) ? amount(row.gpu_seconds) : row.gpu_unmeasured ? UNMEASURED : '',
       running: row.source === 'other' ? '' : amount(row.seconds), memory: measured(row.peak_bytes) ? memory(row.peak_bytes) : row.source === 'other' ? '' : UNMEASURED,
       runs: row.source === 'other' ? '' : String(Math.round(row.runs * 10) / 10)}));
     return {empty: false, rows, table, days, total: measured(usage.cpu_seconds) ? `${amount(usage.cpu_seconds)} of CPU time a day` : '',
-      gpu: all.some(row => measured(row.gpu_seconds)),
+      gpu: all.some(row => measured(row.gpu_seconds) || row.gpu_unmeasured),
       note: `Average a day over ${days === 1 ? 'the 1 day' : `the ${days} days`} measured on this Mac while Pharos was open. `
         + 'Each figure is the CPU time of the work’s own thread, plus the labeling worker’s where it uses one, so it is a little under the full cost: '
         + 'memory management and helper threads are counted under “Pages and everything else”, with the pages you open. Terminal commands are not included.'};
@@ -549,6 +551,19 @@
     return element;
   };
   const host = () => document.getElementById('backgroundSchedule');
+  // A press on a draggable item becomes a drag only on the next move, so a
+  // redraw in between would replace the item and lose the drag; redraws wait
+  // for the release, or for the drag, which holds them until it ends. A held
+  // redraw runs after the release's click, which it would otherwise lose.
+  let pressed = false, held = false;
+  document.addEventListener('pointerdown', event => { if (event.target.closest?.('#backgroundSchedule .bg-item[draggable="true"]')) pressed = true; }, true);
+  for (const name of ['pointerup', 'pointercancel']) document.addEventListener(name, () => {
+    if (!pressed) return;
+    pressed = false;
+    if (held) { held = false; setTimeout(() => render()); }
+  }, true);
+  // WebKit sends neither once a drag starts; the item's dragstart sets dragging just after this.
+  document.addEventListener('dragstart', () => { pressed = false; held = false; }, true);
   const toast = message => window.pharosLibrary?.toast?.(message) ?? window.feedbackToast?.(message);
   async function call(path, body) {
     const response = await fetch(path, body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
@@ -768,6 +783,11 @@
     const line = (label, value) => { const p = node('p'); p.append(node('strong', '', `${label}: `), value); return p; };
     detail.append(line('Feeds', item.feeds), line('Usually takes', item.cost?.text || 'not measured yet'));
     if (item.why) detail.append(node('p', 'muted', item.why));
+    if (item.setup) {
+      const setup = node('a', 'bg-setup', item.setup.label);
+      setup.href = item.setup.url;
+      detail.append(setup);
+    }
     if (item.schedules?.rows.length && item.state !== 'disabled') detail.append(renderScheduleCosts(item));
     if (item.error) detail.append(node('p', 'bg-error', item.error));
     if (item.sources?.length) detail.append(sourcePicker(item.sources));
@@ -947,7 +967,8 @@
 
   function render({allowFocusedSelect = false} = {}) {
     const target = host();
-    // A drag keeps the items it is over.
+    // A press that may become a drag keeps its item; a drag keeps the items it is over.
+    if (pressed) { held = true; return; }
     if (!target || !document_ || labelsSaving || dragging) return;
     // Keep an open CPU select in place while its live status and the rest
     // of the page update. Other settings selects retain their old edit rule.

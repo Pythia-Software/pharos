@@ -1116,7 +1116,9 @@ test('semantic JSON-path reveal materializes exact details, reports missing path
  // A record outside the result page loads without broadening the page.
  const outside='detail:'+JSON.stringify({rowId:'inspect-2',field:'arguments_json',path:'$["other"]'});
  const narrow={...fixture.query,limit:1,itemDetails:{modes:['expand','modal']}};
- // Focus stays where it was (here Run Now, clicked above): a reveal never takes it.
+ // Focus stays where it was: a reveal never takes it. Run Now, clicked above,
+ // is disabled while the table loads, so focus waits on a control that is not.
+ await page.locator('#settingsToggle').focus();
  await page.evaluate(()=>{window.__focusBefore=document.activeElement});
  await page.evaluate(url=>window.pharosNavigate(url),fixture.route(narrow,outside));
  await page.waitForFunction(()=>document.documentElement.dataset.pharosAttentionMissing==='');
@@ -1963,7 +1965,9 @@ test('native Message Labels dashboards and conversation cards share standard nav
  assert.equal(JSON.parse(new URL(page.url()).searchParams.get('analyze_chart')).selection.excluded,true);
  await page.getByRole('button',{name:'Show all',exact:true}).click();await app.settled();
  const point=page.locator('.usage-chart-bars').getByRole('button',{name:/Report/}).first();await point.focus();await point.press('Enter');
- await page.locator('.usage-chart-tip.pinned').waitFor();assert.ok(await page.locator('.usage-chart-tip.pinned a').count());
+ await page.locator('.usage-chart-tip.pinned').waitFor();
+ // A pinned point links to its matching conversations (dashboardChartURL); follow it once the dashboard checks are done.
+ const matching=await page.locator('.usage-chart-tip.pinned a').first().getAttribute('href');assert.ok(matching);
  await page.keyboard.press('Escape');
  const plot=await page.locator('.usage-chart-bars').boundingBox();await page.mouse.move(plot.x+plot.width*.2,plot.y+plot.height/2);await page.mouse.down();await page.mouse.move(plot.x+plot.width*.7,plot.y+plot.height/2);await page.mouse.up();await app.settled();
  assert.ok(new URL(page.url()).searchParams.get('analyze_filters'));
@@ -1978,7 +1982,7 @@ test('native Message Labels dashboards and conversation cards share standard nav
  assert.equal(await copy.page.getByRole('combobox',{name:'Analysis',exact:true}).inputValue(),'trend_bar');
  await copy.page.getByRole('combobox',{name:'Analysis',exact:true}).selectOption({label:'Over time · line'});await copy.settled();
  const line=await open(t,{api,url:path(copy.page),ready:'.usage-labels-dashboard'});assert.equal(await line.page.getByRole('combobox',{name:'Analysis',exact:true}).inputValue(),'trend_line');
- await page.getByRole('link',{name:/Matching conversations/}).click();await page.locator('.message-label-result-card').first().waitFor();await app.settled();
+ await page.evaluate(url=>window.pharosNavigate(url),matching);await page.locator('.message-label-result-card').first().waitFor();await app.settled();
  const native=read(page);assert.ok(native.grouping);assert.ok(native.grouping.source.where.some(term=>term.field==='source'&&term.value==='thinking'));
  await page.getByRole('button',{name:'Table',exact:true}).click();await page.locator('.qt-row').first().waitFor();await app.settled();
  const rowsURL=path(page),fresh=await open(t,{api,url:rowsURL,ready:'.qt-row'});assert.equal(await fresh.page.getByRole('button',{name:'Table',exact:true}).getAttribute('aria-pressed'),'true');
@@ -2422,16 +2426,19 @@ test('message card labels and sentence events restore independently in the reade
  await app.shot('message-card-tints-phone');
 });
 
-test('Quiet hides usage and quota checkpoints while retaining activity',{skip},async t=>{
+test('Quiet hides usage and quota entries while retaining activity',{skip},async t=>{
+ // Token usage records are never drawn (reader-model.js transcriptUndisplayed);
+ // a usage error is, and Quiet hides it.
  const event=(id,kind,value)=>({id,native_id:id,role:kind==='message'?'user':'system',kind,text:typeof value==='string'?value:JSON.stringify(value)});
- const messages=[event('ask','message','Inspect the project'),event('quota','metadata',{type:'event_msg',payload:{type:'token_count',rate_limits:{}}}),event('usage-record','metadata',{type:'token_usage_record',payload:{usage:{input_tokens:10}}}),event('usage-estimate','metadata',{type:'system',subtype:'thinking_tokens',estimated_tokens:10}),event('cost-state','metadata',{type:'cost-state',totalCostUSD:1}),event('system-status','metadata',{type:'system',subtype:'task_started'}),{...event('read','tool_call',{tool:'Read',input:{file_path:'/repo/example.txt'}}),role:'assistant'}];
+ const messages=[event('ask','message','Inspect the project'),event('quota','metadata',{type:'event_msg',payload:{type:'token_count',rate_limits:{}}}),event('usage-error','error',{payload:{type:'token_usage',note:'Rate limit reached'}}),event('system-status','metadata',{type:'system',subtype:'task_started'}),{...event('read','tool_call',{tool:'Read',input:{file_path:'/repo/example.txt'}}),role:'assistant'}];
  const api={'GET /api/work/:id/conversations/:conversation':request=>({...defaultApi['GET /api/work/:id/conversations/:conversation'](request),messages})};
  const {page}=await open(t,{api,url:`/work/${workID}?conversation=${rootConversation}&reader_filter_level=all`,ready:'.action-row'});
  const line=id=>page.locator(`.timeline-entry[data-message-id="${id}"]`),preset=page.getByRole('region',{name:'Conversation key',exact:true}).getByRole('button',{name:'Key',exact:true});
+ await line('usage-error').waitFor();
  await preset.click();await page.getByRole('menuitemradio',{name:/^Quiet/}).click();
- for(const id of ['quota','usage-record','usage-estimate','cost-state'])await line(id).waitFor({state:'hidden'});
+ await line('usage-error').waitFor({state:'hidden'});
  assert.equal(await line('read').isVisible(),true);assert.equal(await line('system-status').isVisible(),true);
- await preset.click();await page.getByRole('menuitemradio',{name:/^All/}).click();await line('quota').waitFor();
+ await preset.click();await page.getByRole('menuitemradio',{name:/^All/}).click();await line('usage-error').waitFor();
 });
 
 test('conversation line tags filter matching activity without opening the line',{skip},async t=>{

@@ -41,6 +41,7 @@ var originFields = []string{"channel", "machine_id", "machine", "machine_kind", 
 const originDDL = `
 CREATE TABLE IF NOT EXISTS machines(id TEXT PRIMARY KEY,label TEXT NOT NULL,kind TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS host_machines(host_id TEXT PRIMARY KEY,machine_id TEXT NOT NULL REFERENCES machines(id));
+CREATE TABLE IF NOT EXISTS host_channels(host_id TEXT PRIMARY KEY,channel TEXT NOT NULL,evidence TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS origin_observations(
  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
  evidence_key TEXT NOT NULL,channel TEXT,machine_id TEXT,execution_machine_id TEXT,
@@ -148,6 +149,10 @@ func putMachine(tx *sql.Tx, m *MachineRecord) (any, error) {
 func normalizedChannel(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if slices.Contains([]string{"conductor", "tl1", "cli", "desktop", "web", "ide", "api"}, value) {
+		return value
+	}
+	// A sandbox platform capture-push recognizes is a channel of its own.
+	if slices.ContainsFunc(pushPlatforms, func(recipe pushPlatformRecipe) bool { return recipe.Name == value }) {
 		return value
 	}
 	return ""
@@ -294,6 +299,16 @@ func recordOriginObservation(tx *sql.Tx, id, host, source string, cv Conversatio
 			executionPriority = 30
 		}
 		evidence = firstString(v.Evidence, evidence, "canonical initiation")
+	}
+	// A host collected from a sandbox platform declares where its work was
+	// started. A conversation's own initiation still outranks it.
+	if cv.Initiation == nil || cv.Initiation.Channel == "" {
+		var declared, declaredEvidence string
+		if err := tx.QueryRow("SELECT channel,evidence FROM host_channels WHERE host_id=?", host).Scan(&declared, &declaredEvidence); err != nil && err != sql.ErrNoRows {
+			return err
+		} else if err == nil && normalizedChannel(declared) != "" {
+			ch, priority, evidence = normalizedChannel(declared), 30, declaredEvidence
+		}
 	}
 	// The capture's source host is supplied here, including when indexing off-host.
 	// Imported exports deliberately never acquire the importing device.

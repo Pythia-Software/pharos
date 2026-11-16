@@ -457,6 +457,8 @@ func (c *Catalog) Initialize() error {
 		{"background_item_runs", "worker_cpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN worker_cpu_seconds REAL"},
 		{"background_item_runs", "gpu_seconds", "ALTER TABLE background_item_runs ADD COLUMN gpu_seconds REAL"},
 		{"background_item_runs", "peak_bytes", "ALTER TABLE background_item_runs ADD COLUMN peak_bytes INTEGER"},
+		{"background_item_runs", "unmeasured", "ALTER TABLE background_item_runs ADD COLUMN unmeasured INTEGER NOT NULL DEFAULT 0"},
+		{"background_cpu_days", "unmeasured", "ALTER TABLE background_cpu_days ADD COLUMN unmeasured INTEGER NOT NULL DEFAULT 0"},
 	} {
 		has, err := c.hasColumn(migration.table, migration.column)
 		if err != nil {

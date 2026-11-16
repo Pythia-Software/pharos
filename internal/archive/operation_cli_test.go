@@ -15,7 +15,7 @@ import (
 var cliCommandCoverage = map[string]string{
 	"library-transfer": "", "library-recover": "", "add-this-mac": "", "capture": "", "index": "", "history-backfill": "",
 	"sqlite-records": "", "backup": "", "cloud-backup": "", "ingest": "", "repositories": "", "repair-existing": "",
-	"claude-import": "",
+	"claude-import": "", "bucket-import": "",
 	"refine-usage":  "", "repair-usage-attribution": "", "repair-session-models": "", "repair-session-bounds": "", "upgrade": "", "build-tools": "", "agent-events": "", "findings": "",
 	"app":                   "the broker itself: its operations are in its registry",
 	"mcp-app":               "relays MCP calls to the broker; writes nothing",
@@ -25,6 +25,7 @@ var cliCommandCoverage = map[string]string{
 	"cloud-restore":         "restores to a new location, out of status scope (§3.6)",
 	"capture-export":        "reads a capture under its own capture lock and writes only a new outbox directory; never loads a configuration or opens a catalog",
 	"capture-export-verify": "a read of an export directory; never loads a configuration or opens a catalog",
+	"capture-push":          "captures into its own state folder under its own lock and uploads to a bucket; never loads a library configuration or opens a catalog",
 	"pricing":               "a read; leased for its open, Initialize and close (runLeasedCatalogCommand)",
 	"search":                "a read; leased for its open, Initialize and close",
 	"tl1":                   "a read; leased for its open, Initialize and close",

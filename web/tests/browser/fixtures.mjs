@@ -858,6 +858,8 @@ export const defaultApi = {
   "GET /api/chatgpt-imports":{enabled:false,available:true,exports:[],library:{workspaces:0,conversations:0,recent:[]}},
   "POST /api/chatgpt-imports":{enabled:false,available:true,exports:[],library:{workspaces:0,conversations:0,recent:[]}},
   "GET /api/claude-imports":{jobs:[],run:{running:false},watch:claudeWatchFixture},
+  "GET /api/bucket-imports":{buckets:[]},
+  "POST /api/bucket-imports":{buckets:[]},
   "POST /api/claude-imports/watch":{...claudeWatchFixture,enabled:false},
   "GET /api/thinking": ({query}) => thinkingFixture(query),
   "GET /api/markdown-link": {status:"unavailable",detail:"File or local server unavailable on this Mac"},

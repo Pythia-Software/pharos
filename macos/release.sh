@@ -127,6 +127,9 @@ elif ! codesign -dvvv "$APP" 2>&1 | grep -q '^Signature=adhoc'; then
     echo "The app is not ad hoc signed as requested." >&2
     exit 1
 fi
+# The command-line program for Linux sandboxes that push their transcripts.
+# The app build above has already built the frontend that Go embeds.
+"$ROOT/macos/build-linux-cli.sh" "$VERSION" "$OUT/linux"
 if [ -n "$(git status --porcelain)" ]; then
     echo "The build changed tracked files; review them before publishing." >&2
     exit 1
@@ -161,11 +164,11 @@ fi
 git tag -a "$TAG" -m "Pharos $VERSION"
 git push origin "refs/tags/$TAG"
 if [ "$MODE" = adhoc ]; then
-    gh release create "$TAG" "$IMAGE" "$IMAGE.sha256" -R "$REPO" \
+    gh release create "$TAG" "$IMAGE" "$IMAGE.sha256" "$OUT"/linux/pharos-linux-* -R "$REPO" \
         --verify-tag --draft --title "Pharos $VERSION" --generate-notes \
         --notes 'This app is ad hoc signed and is not notarized. On first launch, macOS may block it. After attempting to open it, use System Settings → Privacy & Security → Open Anyway if you trust this download.'
 else
-    gh release create "$TAG" "$IMAGE" "$IMAGE.sha256" -R "$REPO" \
+    gh release create "$TAG" "$IMAGE" "$IMAGE.sha256" "$OUT"/linux/pharos-linux-* -R "$REPO" \
         --verify-tag --draft --title "Pharos $VERSION" --generate-notes
 fi
 if [ "$MODE" = developer-id ]; then
