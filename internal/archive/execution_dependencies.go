@@ -1254,12 +1254,15 @@ var executionDependentLedgers = [][2]string{{"message_labels_conversations", "me
 
 // executionUnmarkedFallbackSQL is a SQL subquery for readers that cannot
 // compute executionUnmarked: every conversation built in ledger while
-// anything is unmarked (executionPropagation.behind), and every derivative
-// built before digests were recorded. It is broader than the exact set,
-// never narrower.
+// anything is unmarked (executionPropagation.behind: the cursor is behind,
+// or the recorded rules or the recorded results' rules are not this
+// executable's), and every derivative built before digests were recorded. It
+// is broader than the exact set, never narrower.
 func executionUnmarkedFallbackSQL(ledger string) string {
+	versions := executionDependentsVersions()
 	return `SELECT conversation_id id FROM ` + ledger + ` WHERE execution_digest=''
- OR COALESCE((SELECT value FROM meta WHERE key='` + executionDependentsVersionsKey + `'),'')<>'` + executionDependentsVersions() + `'
+ OR COALESCE((SELECT value FROM meta WHERE key='` + executionDependentsVersionsKey + `'),'')<>'` + versions + `'
+ OR COALESCE((SELECT value FROM meta WHERE key='` + executionResultStampsKey + `'),'') NOT IN ('','` + versions + `')
  OR (SELECT value FROM execution_source_generation WHERE id=1)>COALESCE((SELECT CAST(value AS INTEGER) FROM meta WHERE key='` + executionDependentsKey + `'),0)`
 }
 

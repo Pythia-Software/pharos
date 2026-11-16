@@ -2666,6 +2666,39 @@ func TestRulesChangeMarksOnlyChangedResults(t *testing.T) {
 		run()
 	})
 
+	// The recorded rules are this executable's but the results were recorded
+	// under others: an executable with later rules built on them, then one
+	// without results recorded these rules again. What is stored was not
+	// built under them, so nothing reads as current and everything is marked.
+	t.Run("results recorded under other rules", func(t *testing.T) {
+		execTx(t, catalog.DB, `UPDATE meta SET value='execution-newer/evidence-newer/occurrences' WHERE key='`+executionResultStampsKey+`'`)
+		forgetDependencyCaches()
+		if recorded() != executionDependentsVersions() {
+			t.Fatalf("precondition: recorded %q", recorded())
+		}
+		if p := read(); !slices.Equal(p.labelsRead, built) || !slices.Equal(p.eventsRead, scored) {
+			t.Fatalf("readers hold back %+v, want every derivative", p)
+		}
+		for name, query := range map[string]string{"labels": executionUnmarkedFallbackSQL("message_labels_conversations"), "agent events": executionUnmarkedFallbackSQL("agent_events_conversations")} {
+			if held, want := column(query), map[string][]string{"labels": built, "agent events": scored}[name]; !slices.Equal(held, want) {
+				t.Fatalf("%s: SQL readers hold back %v, want %v", name, held, want)
+			}
+		}
+		if current, err := labelsExecutionCurrent(ctx, catalog.reader(), "c-events"); err != nil || current {
+			t.Fatalf("c-events' labels read as current (%v)", err)
+		}
+		if err := catalog.propagateExecutionChanges(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if p := read(); !slices.Equal(p.labelsMarked, built) || !slices.Equal(p.eventsMarked, scored) {
+			t.Fatalf("marked %+v, want every derivative", p)
+		}
+		run()
+		if p := read(); !none(p) {
+			t.Fatalf("after the rebuild: %+v", p)
+		}
+	})
+
 	// An executable that records no results marked under its own rules, and
 	// may have published under them at digests that still hold: nothing is
 	// comparable, so every derivative is marked.
@@ -2848,7 +2881,9 @@ func TestRulesChangeRebuildsWhatResolvesOtherwise(t *testing.T) {
 	}
 	run()
 	// A component the writer has no current result for (here: none at all)
-	// is marked, not taken as unchanged.
+	// is marked, not taken as unchanged, also when none is recorded for it
+	// either: two missing results are not two equal ones.
+	execTx(t, catalog.DB, `DELETE FROM execution_result_stamps`)
 	executionRulesVersion = "execution-copied-launch/evidence-last"
 	forgetDependencyCaches()
 	executionPrimedHook = func() {

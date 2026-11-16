@@ -127,11 +127,14 @@ func executionResultLines(r *executionResolution, o *occurrenceIndex, cid string
 		}
 		sort.Strings(streams)
 		a := r.Ancestry(x.ID)
+		// Which children, not their sibling order.
+		children := executionIDStrings(r.Children(x.ID))
+		sort.Strings(children)
 		add("execution", string(x.ID), x.Presence, x.Conversation, strings.Join(x.Segments, ","), strings.Join(streams, ","),
 			string(x.Parent.State), string(x.Parent.ParentID), x.Parent.Certainty.String(), string(x.FamilyRoot), x.FamilyCertainty.String(),
 			strconv.FormatBool(x.Conflicted), x.Evidence,
 			string(a.State), strconv.FormatBool(a.Known), strconv.Itoa(a.Depth), string(a.Root), a.CertaintyName(), strconv.FormatBool(a.Inferred),
-			strconv.FormatBool(a.Conflicted), strings.Join(executionIDStrings(a.Chain), ","), strings.Join(executionIDStrings(r.Children(x.ID)), ","))
+			strconv.FormatBool(a.Conflicted), strings.Join(executionIDStrings(a.Chain), ","), strings.Join(children, ","))
 	}
 	if o == nil {
 		return lines
