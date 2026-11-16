@@ -405,31 +405,36 @@ func newPusherID() (string, error) {
 // the hostname changes a Mac makes as it moves between networks; else the
 // operating system's machine ID and the hostname, which between them differ
 // for a container and a clone. earlier is what a Mac was known by before
-// its hardware UUID was used, so that a state made then is kept.
-func pushMachine(identity pushIdentity) (machine, earlier string) {
+// its hardware UUID was used, so that a state made then is kept. unsure
+// says the Mac did not report its UUID this time: machine is then only the
+// hostname's, and says nothing against a state made under the UUID.
+func pushMachine(identity pushIdentity) (machine, earlier string, unsure bool) {
 	if identity.instance != "" {
-		return stableID("push-machine", identity.instance), ""
+		return stableID("push-machine", identity.instance), "", false
 	}
 	id, _ := os.ReadFile(pushMachineIDFile)
 	hostname, _ := pushHostname()
 	named := stableID("push-machine", strings.TrimSpace(string(id)), hostname)
-	if hardware := pushHardwareID(); hardware != "" {
-		return stableID("push-machine", "hardware", hardware), named
+	hardware, err := pushHardwareID()
+	if err != nil {
+		return named, "", true
 	}
-	return named, ""
+	if hardware != "" {
+		return stableID("push-machine", "hardware", hardware), named, false
+	}
+	return named, "", false
 }
 
 var (
 	pushMachineIDFile = filepath.Join(string(filepath.Separator)+"etc", "machine-id")
 	pushHostname      = os.Hostname
-	// pushHardwareID is the Mac's hardware UUID, and empty elsewhere or when
-	// ioreg does not answer.
-	pushHardwareID = func() string {
+	// pushHardwareID is the Mac's hardware UUID, empty where there is none,
+	// and an error when a Mac did not answer.
+	pushHardwareID = func() (string, error) {
 		if runtime.GOOS != "darwin" {
-			return ""
+			return "", nil
 		}
-		id, _ := platformUUID([]time.Duration{2 * time.Second, 5 * time.Second})
-		return id
+		return platformUUID([]time.Duration{2 * time.Second, 5 * time.Second})
 	}
 )
 
@@ -688,9 +693,15 @@ func preparePush(options pushOptions) (*pushRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	machine, earlier := pushMachine(identity)
+	machine, earlier, unsure := pushMachine(identity)
 	if state.Pusher != "" && earlier != "" && state.Machine == earlier {
 		state.Machine = machine
+	}
+	// A Mac that did not report its hardware UUID this once (a slow ioreg
+	// after wake) is still the Mac its state was made on: one failed lookup
+	// must not start a new pusher and a duplicate host.
+	if unsure && state.Pusher != "" {
+		machine = state.Machine
 	}
 	if state.Pusher == "" || state.Machine != machine {
 		// A new root, or one copied here from another machine: a new pusher

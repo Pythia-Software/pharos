@@ -126,7 +126,8 @@ machine it was not made on, it takes a new pusher ID and a new host before
 it pushes. On a recognized platform "machine" means the platform's task; on
 a Mac it is the hardware UUID, so a hostname that follows the network does
 not make a new pusher; elsewhere it is `/etc/machine-id` together with the
-hostname.
+hostname. A Mac that does not report its UUID on one pass keeps the
+state it has.
 
 The captured host is `PHAROS_HOST_ID` when set, and otherwise follows the
 pusher ID. Its label is `PHAROS_HOST_LABEL`, or the hostname.

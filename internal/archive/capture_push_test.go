@@ -129,7 +129,7 @@ func newPushFixture(t *testing.T, config string) *pushFixture {
 		t.Fatal(err)
 	}
 	override(t, &pushMachineIDFile, machine)
-	override(t, &pushHardwareID, func() string { return "" })
+	override(t, &pushHardwareID, func() (string, error) { return "", nil })
 	f := &pushFixture{t: t, home: home, bucket: usePushBucket(t), transcript: filepath.Join(home, ".claude", "projects", "-work-api", "session.jsonl"),
 		options: pushOptions{ConfigPath: filepath.Join(home, ".pharos", "pharos-push.json"), StateDir: filepath.Join(home, ".pharos", "push")}}
 	if config == "" {
@@ -469,7 +469,7 @@ func TestCapturePushTakesANewPusherOnAnotherMachine(t *testing.T) {
 	// same machine.
 	override(t, &pushHostname, func() (string, error) { return "macbook.local", nil })
 	named := f.push()
-	override(t, &pushHardwareID, func() string { return "11111111-2222-3333-4444-555555555555" })
+	override(t, &pushHardwareID, func() (string, error) { return "11111111-2222-3333-4444-555555555555", nil })
 	if adopted := f.push(); adopted.Pusher != named.Pusher {
 		t.Fatalf("the hardware UUID made a new pusher: %s, then %s", named.Pusher, adopted.Pusher)
 	}
@@ -477,8 +477,19 @@ func TestCapturePushTakesANewPusherOnAnotherMachine(t *testing.T) {
 	if moved := f.push(); moved.Pusher != named.Pusher {
 		t.Fatalf("a hostname change made a new pusher: %s, then %s", named.Pusher, moved.Pusher)
 	}
+	// A lookup that fails once, say after wake, is not another machine,
+	// whatever the hostname is by then; nor is the next one that works.
+	override(t, &pushHardwareID, func() (string, error) { return "", errors.New("ioreg timed out") })
+	override(t, &pushHostname, func() (string, error) { return "macbook.another-network.example", nil })
+	if unsure := f.push(); unsure.Pusher != named.Pusher {
+		t.Fatalf("a failed hardware lookup made a new pusher: %s, then %s", named.Pusher, unsure.Pusher)
+	}
+	override(t, &pushHardwareID, func() (string, error) { return "11111111-2222-3333-4444-555555555555", nil })
+	if again := f.push(); again.Pusher != named.Pusher {
+		t.Fatalf("the lookup working again made a new pusher: %s, then %s", named.Pusher, again.Pusher)
+	}
 	// Another Mac's hardware is still another machine.
-	override(t, &pushHardwareID, func() string { return "99999999-2222-3333-4444-555555555555" })
+	override(t, &pushHardwareID, func() (string, error) { return "99999999-2222-3333-4444-555555555555", nil })
 	if other := f.push(); other.Pusher == named.Pusher {
 		t.Fatal("a state copied to another Mac kept its pusher")
 	}
