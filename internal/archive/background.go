@@ -382,8 +382,8 @@ func runsUse(runs []itemRun) itemUse {
 		}
 		measured++
 		seconds, cpu = seconds+run.Seconds, cpu+*total
-		if run.Use.GPU != nil {
-			addTo(&gpu, *run.Use.GPU)
+		if used := run.Use.gpu(); used != nil {
+			addTo(&gpu, *used)
 		}
 	}
 	for _, cadence := range cadences {
@@ -461,9 +461,9 @@ func insertItemRuns(ctx context.Context, tx *sql.Tx, runs []itemRun) error {
 		if run.Use.Peak != nil {
 			peak = *run.Use.Peak
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO background_item_runs(host_id,item,cadence,started_at,seconds,units,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes)
-			VALUES(?,?,?,?,?,?,?,?,?,?)`, currentHost().ID, run.Item, run.Cadence, formatTime(run.Started), run.Seconds, units,
-			nullFloat(run.Use.CPU), nullFloat(run.Use.Worker), nullFloat(run.Use.GPU), peak); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO background_item_runs(host_id,item,cadence,started_at,seconds,units,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes,unmeasured)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?)`, currentHost().ID, run.Item, run.Cadence, formatTime(run.Started), run.Seconds, units,
+			nullFloat(run.Use.CPU), nullFloat(run.Use.worker()), nullFloat(run.Use.gpu()), peak, int(run.Use.Gaps)); err != nil {
 			return err
 		}
 	}
@@ -475,7 +475,7 @@ func insertItemRuns(ctx context.Context, tx *sql.Tx, runs []itemRun) error {
 // the table (an older one opened read-only) has none.
 func (c *Catalog) itemRuns(ctx context.Context) map[string][]itemRun {
 	runs := map[string][]itemRun{}
-	rows, err := c.reader().QueryContext(ctx, `SELECT item,cadence,started_at,seconds,units,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes
+	rows, err := c.reader().QueryContext(ctx, `SELECT item,cadence,started_at,seconds,units,cpu_seconds,worker_cpu_seconds,gpu_seconds,peak_bytes,unmeasured
 		FROM background_item_runs WHERE host_id=? AND started_at>=? ORDER BY id DESC`, currentHost().ID, formatTime(time.Now().Add(-itemRunsKept)))
 	if err != nil {
 		return runs
@@ -486,7 +486,7 @@ func (c *Catalog) itemRuns(ctx context.Context) map[string][]itemRun {
 		var started string
 		var units, peak sql.NullInt64
 		var cpu, worker, gpu sql.NullFloat64
-		if rows.Scan(&run.Item, &run.Cadence, &started, &run.Seconds, &units, &cpu, &worker, &gpu, &peak) != nil {
+		if rows.Scan(&run.Item, &run.Cadence, &started, &run.Seconds, &units, &cpu, &worker, &gpu, &peak, &run.Use.Gaps) != nil {
 			continue
 		}
 		for _, pair := range []struct {

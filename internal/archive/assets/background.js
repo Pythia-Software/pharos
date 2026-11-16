@@ -252,6 +252,7 @@
       const details = [{label: 'CPU time', value: cpu(row.cpu_seconds)}];
       if (measured(row.worker_cpu_seconds) && row.worker_cpu_seconds > 0) details.push({label: 'of it, in the labeling worker', value: amount(row.worker_cpu_seconds)});
       if (measured(row.gpu_seconds)) details.push({label: 'GPU time', value: amount(row.gpu_seconds)});
+      else if (row.gpu_unmeasured) details.push({label: 'GPU time', value: UNMEASURED});
       if (row.source !== 'other') details.push({label: 'Running', value: amount(row.seconds)}, {label: 'Runs', value: String(Math.round(row.runs * 10) / 10)});
       if (measured(row.peak_bytes)) details.push({label: 'Most memory', value: memory(row.peak_bytes)});
       if (row.parts) details.push(...row.parts.slice(0, 6).map(([label, value]) => ({label, value})));
@@ -261,12 +262,13 @@
         popover: {heading: row.label, notes, rows: details, ...recent.length ? {totals: recent} : {}}};
     });
     const table = all.map(row => ({label: row.label, cpu: cpu(row.cpu_seconds), share: share(row.cpu_seconds),
-      // Only work that leases the labeling worker has GPU time to measure.
-      gpu: measured(row.gpu_seconds) ? amount(row.gpu_seconds) : '',
+      // Only work that leases the labeling worker has GPU time to measure;
+      // when part of it could not be read, that is said.
+      gpu: measured(row.gpu_seconds) ? amount(row.gpu_seconds) : row.gpu_unmeasured ? UNMEASURED : '',
       running: row.source === 'other' ? '' : amount(row.seconds), memory: measured(row.peak_bytes) ? memory(row.peak_bytes) : row.source === 'other' ? '' : UNMEASURED,
       runs: row.source === 'other' ? '' : String(Math.round(row.runs * 10) / 10)}));
     return {empty: false, rows, table, days, total: measured(usage.cpu_seconds) ? `${amount(usage.cpu_seconds)} of CPU time a day` : '',
-      gpu: all.some(row => measured(row.gpu_seconds)),
+      gpu: all.some(row => measured(row.gpu_seconds) || row.gpu_unmeasured),
       note: `Average a day over ${days === 1 ? 'the 1 day' : `the ${days} days`} measured on this Mac while Pharos was open. `
         + 'Each figure is the CPU time of the work’s own thread, plus the labeling worker’s where it uses one, so it is a little under the full cost: '
         + 'memory management and helper threads are counted under “Pages and everything else”, with the pages you open. Terminal commands are not included.'};
