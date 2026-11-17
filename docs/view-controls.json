@@ -8965,6 +8965,51 @@
       "reason": "Bound directly to the registered view field."
     },
     {
+      "key": "2126b737769c20f2:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "SourceAccounts",
+      "tag": "button",
+      "control": "onClick={() => status && void act(\"/index\", { settingsRevision: status.settingsRevision })}",
+      "contract": "settings",
+      "reason": "Local source account review and setup controls are library settings, not query view state."
+    },
+    {
+      "key": "26ad9831cc5159a3:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "SourceAccounts",
+      "tag": "button",
+      "control": "onClick={() => void refresh()}",
+      "contract": "settings",
+      "reason": "Local source account review and setup controls are library settings, not query view state."
+    },
+    {
+      "key": "5438551948b06470:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "SourceAccounts",
+      "tag": "input",
+      "control": "checked={!!checked[source.bindingId]} onChange={e => setChecked({ ...checked, [source.bindingId]: e.target.checked })}",
+      "contract": "settings",
+      "reason": "Local source account review and setup controls are library settings, not query view state."
+    },
+    {
+      "key": "c876d96a0faaa22f:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "SourceAccounts",
+      "tag": "button",
+      "control": "onClick={() => void act(\"/review\", { sourceBindingId: source.bindingId, expectedRevision: status.sourceRevision, mode: \"work\", attested: true })}",
+      "contract": "settings",
+      "reason": "Local source account review and setup controls are library settings, not query view state."
+    },
+    {
+      "key": "fdebb67b112b28a9:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "SourceAccounts",
+      "tag": "button",
+      "control": "onClick={() => void act(\"/review\", { sourceBindingId: source.bindingId, expectedRevision: status.sourceRevision, mode: \"unavailable\", attested: false })}",
+      "contract": "settings",
+      "reason": "Local source account review and setup controls are library settings, not query view state."
+    },
+    {
       "key": "5a34795592500e8a:0",
       "file": "web/src/teams-settings.tsx",
       "owner": "TeamsSettings",

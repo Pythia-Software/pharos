@@ -2402,3 +2402,20 @@ test('Teams connection shows its fingerprint and can be cancelled', { skip }, as
   await app.page.getByRole('button', { name: 'Cancel connection' }).click();
   await app.page.getByRole('button', { name: 'Connect Teams' }).waitFor();
 });
+
+test('Teams source account review requires an explicit attestation', { skip }, async t => {
+  let review;
+  const source = { bindingId:'synthetic-binding', provider:'codex', sourceName:'Synthetic source', accountLabel:'local', host:'synthetic-host', root:'/synthetic', identifiable:2, ambiguous:1, mode:'unassigned', exposed:false };
+  const app = await open(t, { url:'/settings/teams', ready:'#teamsSettingsPage .teams-settings', api: {
+    'GET /api/teams/enrollment': { state:'connected_paused', available:true, library:'Synthetic', fingerprint:'', problem:'' },
+    'GET /api/teams/source-accounts': () => ({ sourceRevision:7, settingsRevision:4, proofRequested:true, sources:[source] }),
+    'POST /api/teams/source-accounts/review': ({body}) => { review=body; source.mode=body.mode; return {reviewed:true}; },
+  }});
+  const button = app.page.getByRole('button', {name:'Use my work account'});
+  await button.waitFor();
+  assert.equal(await button.isDisabled(), true);
+  await app.page.getByLabel('This source contains only my work codex account.').check();
+  await button.click();
+  await app.page.getByText(/Status: Work account/).waitFor();
+  assert.deepEqual(review, {sourceBindingId:'synthetic-binding', expectedRevision:7, mode:'work', attested:true});
+});

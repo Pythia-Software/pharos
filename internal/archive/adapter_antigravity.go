@@ -745,6 +745,13 @@ func (a *antigravityAdapter) readPlannedGroup(rootID string, ids []string, parts
 // readJSONLines decodes each line of the first size bytes of r that holds a
 // JSON object, numbering it in "_line"; other lines are skipped.
 func readJSONLines(r io.Reader, size int64) ([]map[string]any, error) {
+	return readJSONLinesObserved(r, size, nil)
+}
+
+// readJSONLinesObserved preserves the ordinary parser's tolerant behavior.
+// An optional local observer can independently assess whether its input was a
+// gap-free prefix without changing what the archive indexes.
+func readJSONLinesObserved(r io.Reader, size int64, observe func([]byte, bool)) ([]map[string]any, error) {
 	events := []map[string]any{}
 	reader := bufio.NewReaderSize(io.LimitReader(r, size), 64*1024)
 	for line := 1; ; line++ {
@@ -754,6 +761,9 @@ func readJSONLines(r io.Reader, size int64) ([]map[string]any, error) {
 		}
 		if err != nil && err != io.EOF {
 			return nil, fmt.Errorf("line %d: %w", line, err)
+		}
+		if observe != nil {
+			observe(encoded, bytes.HasSuffix(encoded, []byte("\n")))
 		}
 		decoder := json.NewDecoder(bytes.NewReader(encoded))
 		decoder.UseNumber()

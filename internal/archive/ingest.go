@@ -101,6 +101,13 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 		ctx = withIngestMode(ctx, mode)
 	}
 	adapter = input.Adapter
+	if a, ok := adapter.(*jsonlAdapter); ok && a.provider == "codex" {
+		var requested bool
+		if err := c.reader().QueryRowContext(ctx, `SELECT proof_requested FROM teams_source_revision WHERE id=1`).Scan(&requested); err != nil {
+			return IngestResult{Source: adapter.Config().Name, Error: "Teams source proof state is unavailable"}
+		}
+		a.teamsProofEnabled = requested
+	}
 	ctx = c.withSQLiteAcquisition(ctx, adapter)
 	setAdapterContext(adapter, ctx)
 	config := adapter.Config()
@@ -450,6 +457,9 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				} else if err != nil {
 					return err
 				}
+			}
+			if err = teamsRecordNativeEvidence(tx, host, config, captureViewOf(adapter), *record, digest); err != nil {
+				return err
 			}
 			if _, err := tx.Exec(`INSERT INTO source_record_states(host_id,source_name,source_kind,source_account,source_id,digest,updated_at)
 				VALUES(?,?,?,?,?,?,?) ON CONFLICT(host_id,source_name,source_kind,source_account,source_id) DO UPDATE SET

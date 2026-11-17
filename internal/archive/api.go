@@ -304,6 +304,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.teamsEnrollmentHTTP(w, r)
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/api/teams/source-accounts") {
+		s.teamsSourceAccountsHTTP(w, r)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/feedback/") {
 		s.feedbackHTTP(w, r)
 		return

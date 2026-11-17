@@ -268,7 +268,8 @@ func (c *Catalog) Close() error {
 // 28: Teams privacy markings must survive library changes and transfers; older
 // writers cannot preserve that sharing boundary.
 // 29: local Teams consent and delivery receipts must not be silently lost.
-const catalogSchemaVersion = 29
+// 30: adapter-native source observations must not be silently reinterpreted.
+const catalogSchemaVersion = 30
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

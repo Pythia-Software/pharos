@@ -40,10 +40,13 @@ func TestTeamsPrivacyPolicyAndRevisions(t *testing.T) {
 		t.Fatalf("flagged: %+v %v", p, err)
 	}
 	p, err = c.reviewTeamsClassification(ctx, "c", "v1", false)
-	if err != nil || p.Private || p.SensitivityHold {
+	if err != nil || !p.Private || !p.UserPrivate || p.SensitivityHold {
 		t.Fatalf("review: %+v %v", p, err)
 	}
 	reviewRevision := p.Revision
+	if _, err = c.setTeamsPrivate(ctx, "c", false); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = c.setTeamsPrivate(ctx, "c", true); err != nil {
 		t.Fatal(err)
 	}
@@ -85,8 +88,8 @@ func TestTeamsPrivacyPolicyAndRevisions(t *testing.T) {
 		t.Fatal(err)
 	}
 	execTx(t, c.DB, `DELETE FROM conversations WHERE id='c'`, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('new-local-id','w','test','local','c')`)
-	p, err = c.teamsPrivacy(ctx,"new-local-id")
-	if err!=nil || !p.Private {
+	p, err = c.teamsPrivacy(ctx, "new-local-id")
+	if err != nil || !p.Private {
 		t.Fatalf("mark lost on reindex: %+v", p)
 	}
 }

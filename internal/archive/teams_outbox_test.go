@@ -262,6 +262,10 @@ func TestTeamsMoveDisarmsPendingWork(t *testing.T) {
 	}
 	c := reopenCatalog(t, a.CatalogPath)
 	execTx(t, c.DB, `UPDATE teams_local_settings SET library_id='synthetic',instance_id='instance',org_id='org',enabled=1`,
+		`INSERT INTO teams_source_bindings(binding_id,provenance_sha256,host_id,source_name,source_kind,provider,account_label,source_root,created_at) VALUES('binding','hash','host','source','codex','codex','local','/synthetic','now')`,
+		`INSERT INTO teams_source_mapping_revisions(revision,binding_id,library_id,instance_id,origin,org_id,person_id,installation_id,provider,mode,reviewed_at) VALUES(1,'binding','synthetic','instance','https://synthetic.invalid','org','person','installation','codex','work','now')`,
+		`INSERT INTO teams_source_mapping_current(binding_id,revision) VALUES('binding',1)`,
+		`INSERT INTO teams_source_mapping_exposure(binding_id,mapping_revision,exposed_at) VALUES('binding',1,'now')`,
 		`INSERT INTO teams_outbox(work_id,version_id,library_id,instance_id,org_id,installation_id,config,config_hash,payload,payload_hash,expires_at,idempotency_key,state,local_revision,generation,privacy_revision,settings_revision,shared_privacy_revision,ownership_revision,evaluation_revision,baseline_revision,manifest,manifest_hash,owned_hash,approval_mode,policy_version) VALUES('pending','version','synthetic','instance','org','installation','{}','hash','synthetic-unsent-secret-marker','hash','2099-01-01T00:00:00Z','key','approved',1,1,1,1,1,1,1,0,'{}','hash','hash','reviewed',0)`)
 	c.Close()
 	checkedStage := false
@@ -304,11 +308,17 @@ func TestTeamsMoveDisarmsPendingWork(t *testing.T) {
 	if err := source.DB.QueryRow(`SELECT state FROM teams_outbox WHERE work_id='pending'`).Scan(&state); err != nil || state != "approved" {
 		t.Fatalf("pending after move: %s %v", state, err)
 	}
+	if n := countRows(t, source, `SELECT COUNT(*) FROM teams_source_mapping_exposure WHERE binding_id='binding' AND mapping_revision=1`); n != 1 {
+		t.Fatal("source exposure fence was lost during move")
+	}
 	dest := reopenCatalog(t, b.CatalogPath)
 	defer dest.Close()
 	var n int
 	if err := dest.DB.QueryRow(`SELECT COUNT(*) FROM teams_outbox`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("outbox moved: %d %v", n, err)
+	}
+	if n := countRows(t, dest, `SELECT COUNT(*) FROM teams_source_mapping_current`); n != 0 {
+		t.Fatal("source account authorization moved to another library")
 	}
 }
 
