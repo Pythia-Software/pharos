@@ -123,6 +123,49 @@ func (c *DeviceClient) Dirty(ctx context.Context, libraryID, versionID string, r
 }
 func marshalRequest(value any) ([]byte, error) { return json.Marshal(value) }
 
+// manifestVersion discovers support only on this signed connection. Unknown or
+// old servers retain the legacy manifest until a new client session.
+func (c *DeviceClient) manifestVersion(ctx context.Context) (int, error) {
+	c.capabilityMu.Lock()
+	defer c.capabilityMu.Unlock()
+	if c.capabilityDiscovery != 0 {
+		return c.capabilityDiscovery, nil
+	}
+	var response struct {
+		Versions []int `json:"manifest_schema_versions"`
+	}
+	if err := c.exchange(ctx, http.MethodGet, "/v1/device/capabilities", nil, &response); err != nil {
+		var e *HTTPError
+		if errors.As(err, &e) && (e.Status == 404 || e.Status == 405) {
+			c.capabilityDiscovery = 1
+			return 1, nil
+		}
+		return 0, err
+	}
+	if response.Versions == nil || len(response.Versions) > 16 {
+		return 0, errors.New("invalid Teams capability discovery")
+	}
+	prev := 0
+	for _, v := range response.Versions {
+		if v <= prev {
+			return 0, errors.New("invalid Teams capability discovery")
+		}
+		prev = v
+		if v == 2 {
+			c.capabilityDiscovery = 2
+		}
+	}
+	if c.capabilityDiscovery == 0 {
+		c.capabilityDiscovery = 1
+	}
+	return c.capabilityDiscovery, nil
+}
+func (c *DeviceClient) resetManifestVersion() {
+	c.capabilityMu.Lock()
+	c.capabilityDiscovery = 0
+	c.capabilityMu.Unlock()
+}
+
 func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, error) {
 	var out PollResponse
 	if in.AppVersion == "" || in.LibraryIDs == nil || len(in.LibraryIDs) > 100 || in.WaitSeconds < 0 || in.WaitSeconds > 25 {
@@ -148,11 +191,53 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 		}
 		seen[id] = true
 	}
-	b, err := marshalRequest(in)
+	var request any = in
+	v2 := false
+	if in.CapabilityManifest != nil {
+		version, err := c.manifestVersion(ctx)
+		if err != nil {
+			return out, err
+		}
+		v2 = version == 2
+	}
+	if v2 {
+		// Explicit fields retain empty arrays in the v2 closed wire shape.
+		request = struct {
+			AppVersion         string   `json:"app_version"`
+			LibraryIDs         []string `json:"library_ids"`
+			WaitSeconds        int      `json:"wait_seconds"`
+			CapabilityManifest any      `json:"capability_manifest"`
+		}{in.AppVersion, in.LibraryIDs, in.WaitSeconds, struct {
+			SchemaVersion int                 `json:"schema_version"`
+			AppVersion    string              `json:"app_version"`
+			Features      []string            `json:"features"`
+			Profiles      []CapabilityProfile `json:"profiles"`
+		}{2, in.AppVersion, in.CapabilityManifest.Capabilities, []CapabilityProfile{}}}
+	}
+	b, err := marshalRequest(request)
 	if err != nil {
 		return out, err
 	}
 	err = c.exchange(ctx, http.MethodPost, "/v1/device/poll", b, &out)
+	// Only a protocol rejection permits one legacy retry. Auth and transport
+	// failures do not silently downgrade the installation's declaration.
+	retryLegacy := v2 && err == nil && out.CapabilityStatus == "manifest_rejected" && len(out.Work) == 0
+	if v2 && err != nil {
+		var e *HTTPError
+		retryLegacy = errors.As(err, &e) && (e.Code == "unsupported_manifest_schema" || (e.Status == 422 && e.Code == "invalid_input"))
+	}
+	if retryLegacy {
+		c.capabilityMu.Lock()
+		c.capabilityDiscovery = 1
+		c.capabilityMu.Unlock()
+		b, err = marshalRequest(in)
+		if err != nil {
+			return out, err
+		}
+		out = PollResponse{}
+		err = c.exchange(ctx, http.MethodPost, "/v1/device/poll", b, &out)
+	}
+
 	if err != nil {
 		return out, err
 	}

@@ -54,9 +54,34 @@ type PollRequest struct {
 }
 
 type CapabilityManifest struct {
-	SchemaVersion int      `json:"schema_version"`
-	AppVersion    string   `json:"app_version"`
-	Capabilities  []string `json:"capabilities"`
+	SchemaVersion int                 `json:"schema_version"`
+	AppVersion    string              `json:"app_version"`
+	Capabilities  []string            `json:"capabilities,omitempty"`
+	Features      []string            `json:"features,omitempty"`
+	Profiles      []CapabilityProfile `json:"profiles,omitempty"`
+}
+
+// MarshalJSON preserves each closed version's required arrays and never sends
+// v2 members to a legacy server.
+func (m CapabilityManifest) MarshalJSON() ([]byte, error) {
+	if m.SchemaVersion == 2 {
+		return json.Marshal(struct {
+			SchemaVersion int                 `json:"schema_version"`
+			AppVersion    string              `json:"app_version"`
+			Features      []string            `json:"features"`
+			Profiles      []CapabilityProfile `json:"profiles"`
+		}{m.SchemaVersion, m.AppVersion, m.Features, m.Profiles})
+	}
+	return json.Marshal(struct {
+		SchemaVersion int      `json:"schema_version"`
+		AppVersion    string   `json:"app_version"`
+		Capabilities  []string `json:"capabilities"`
+	}{m.SchemaVersion, m.AppVersion, m.Capabilities})
+}
+
+type CapabilityProfile struct {
+	ID      string `json:"id"`
+	Version int    `json:"version"`
 }
 type Source struct {
 	Token            string `json:"token"`

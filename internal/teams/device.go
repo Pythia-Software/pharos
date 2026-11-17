@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,10 +25,12 @@ import (
 // Callers own its key storage and must reuse logical receipt IDs across retries;
 // each HTTP attempt gets an independent nonce.
 type DeviceClient struct {
-	origin       *url.URL
-	installation string
-	key          ed25519.PrivateKey
-	http         *http.Client
+	origin              *url.URL
+	installation        string
+	key                 ed25519.PrivateKey
+	http                *http.Client
+	capabilityMu        sync.Mutex
+	capabilityDiscovery int // 0 unknown, 1 v1, 2 v2
 }
 
 // Destroy clears the in-memory signing key after the client is no longer used.
