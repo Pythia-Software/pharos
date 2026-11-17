@@ -20,7 +20,10 @@ import (
 )
 
 type Catalog struct {
-	queryOnly bool
+	// Set only by a future reviewed activation path; nil keeps existing behavior.
+	// Once set it remains immutable for this Catalog's lifetime.
+	teamsCheckpoint *teamsCheckpointRuntime
+	queryOnly       bool
 	// readOnly is a catalog opened with read-only connections (see
 	// openCatalogReadOnly): it records no MCP history.
 	readOnly           bool
@@ -197,6 +200,11 @@ func (c *Catalog) Close() error {
 		c.labelers.Close()
 	}
 	c.closeMCPHistory()
+	if checkpoint := c.teamsCheckpoint; checkpoint != nil {
+		_ = checkpoint.writer.db.Close()
+		clear(checkpoint.guardKey)
+		c.teamsCheckpoint = nil
+	}
 	c.library.mu.Lock()
 	c.library.close()
 	c.library.mu.Unlock()
@@ -211,7 +219,7 @@ func (c *Catalog) Close() error {
 	return c.DB.Close()
 }
 
-// catalogSchemaVersion is the newest catalog schema this build understands.
+// catalogSchemaVersion is the newest ordinary catalog schema this build writes.
 // Bump it with any migration an older build must not write around: a library
 // drive moves between Macs that may run different builds.
 //
@@ -274,6 +282,10 @@ func (c *Catalog) Close() error {
 // maintained safely by older catalog writers.
 const catalogSchemaVersion = 33
 
+// Version 34 is written only with the protected checkpoint activation. Older
+// builds reject it before initialization; unactivated catalogs remain at 33.
+const protectedCatalogSchemaVersion = 34
+
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
 func (c *Catalog) checkSchemaVersion() error {
@@ -289,8 +301,17 @@ func (c *Catalog) checkSchemaVersion() error {
 		return err
 	}
 	version, err := strconv.Atoi(strings.TrimSpace(stored))
-	if err != nil || version > catalogSchemaVersion {
-		return fmt.Errorf("catalog %s has schema version %s, but this build of Pharos supports up to %d; open it with a newer build (the catalog was not modified)", c.Path, stored, catalogSchemaVersion)
+	if err != nil || version > protectedCatalogSchemaVersion {
+		return fmt.Errorf("catalog %s has schema version %s, but this build of Pharos supports up to %d; open it with a newer build (the catalog was not modified)", c.Path, stored, protectedCatalogSchemaVersion)
+	}
+	if version == protectedCatalogSchemaVersion {
+		active, e := c.hasProtectionCheckpoint()
+		if e != nil {
+			return e
+		}
+		if !active {
+			return errTeamsProtectionContinuity
+		}
 	}
 	return nil
 }

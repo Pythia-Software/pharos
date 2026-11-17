@@ -9001,6 +9001,15 @@
       "reason": "Bound directly to the registered view field."
     },
     {
+      "key": "878ac2eb42033a67:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "LocalProtectionPolicy",
+      "tag": "button",
+      "control": "onClick={() => void acknowledge()}",
+      "contract": "settings",
+      "reason": "Acknowledges the local library protection policy; it is a consent action, not query view state."
+    },
+    {
       "key": "2126b737769c20f2:0",
       "file": "web/src/teams-settings.tsx",
       "owner": "SourceAccounts",
@@ -9107,6 +9116,15 @@
       "control": "checked={allowMetrics} onChange={e => setAllowMetrics(e.target.checked)}",
       "contract": "settings",
       "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
+    },
+    {
+      "key": "26daddc18bb0bdf9:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "LocalProtectionPolicy",
+      "control": "onChange={refresh}",
+      "contract": "settings",
+      "reason": "Refreshes library settings after a local protection acknowledgement."
     },
     {
       "key": "2ef9531e0878c124:0",

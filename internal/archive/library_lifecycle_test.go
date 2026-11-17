@@ -804,7 +804,7 @@ func TestLibraryTransferRejectsNewerCatalogAndBusySource(t *testing.T) {
 	}
 	lock.Close()
 	c := reopenCatalog(t, a.CatalogPath)
-	_, err = c.DB.Exec("UPDATE meta SET value=? WHERE key='schema_version'", fmt.Sprint(catalogSchemaVersion+1))
+	_, err = c.DB.Exec("UPDATE meta SET value=? WHERE key='schema_version'", fmt.Sprint(protectedCatalogSchemaVersion+1))
 	c.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -1363,7 +1363,7 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 					config, _ = lifecycleLibraries(t)
 					initial = config.Path
 					c := reopenCatalog(t, config.CatalogPath)
-					execSQL(t, c.DB, "UPDATE meta SET value='"+fmt.Sprint(catalogSchemaVersion+1)+"' WHERE key='schema_version'")
+					execSQL(t, c.DB, "UPDATE meta SET value='"+fmt.Sprint(protectedCatalogSchemaVersion+1)+"' WHERE key='schema_version'")
 					c.Close()
 				}
 				root := t.TempDir()
@@ -1439,7 +1439,7 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 					}
 					defer db.Close()
 					var version string
-					if err = db.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version); err != nil || version != fmt.Sprint(catalogSchemaVersion+1) {
+					if err = db.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version); err != nil || version != fmt.Sprint(protectedCatalogSchemaVersion+1) {
 						t.Fatal("startup modified an incompatible catalog", version, err)
 					}
 				}

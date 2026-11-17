@@ -176,6 +176,10 @@ func AdoptLibrary(ctx context.Context, dir, legacyPath string, options AdoptOpti
 		return fail(err)
 	}
 	result.CopyTime = time.Since(started)
+	// An activated catalog's host checkpoint cannot be copied as authority.
+	if err := prepareTeamsRecoveredCopy(ctx, partial); err != nil {
+		return fail(err)
+	}
 	if err := syncFile(partial); err != nil {
 		return fail(err)
 	}
@@ -318,8 +322,8 @@ func copyCatalogSnapshot(ctx context.Context, src, dst string, prepare func(int6
 	if err := conn.QueryRowContext(ctx, "SELECT (SELECT value FROM meta WHERE key='schema_version')").Scan(&version); err != nil {
 		return 0, fmt.Errorf("%s is not a readable Pharos catalog: %w", src, err)
 	}
-	if stored, err := strconv.Atoi(strings.TrimSpace(version.String)); version.Valid && (err != nil || stored > catalogSchemaVersion) {
-		return 0, fmt.Errorf("catalog %s has schema version %s, but this build of Pharos supports up to %d; adopt it with a newer build", src, version.String, catalogSchemaVersion)
+	if stored, err := strconv.Atoi(strings.TrimSpace(version.String)); version.Valid && (err != nil || stored > protectedCatalogSchemaVersion) {
+		return 0, fmt.Errorf("catalog %s has schema version %s, but this build of Pharos supports up to %d; adopt it with a newer build", src, version.String, protectedCatalogSchemaVersion)
 	}
 	var pages, pageSize int64
 	if err := conn.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pages); err != nil {

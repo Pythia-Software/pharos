@@ -212,6 +212,28 @@ CREATE TABLE IF NOT EXISTS teams_protection_assertions (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS teams_protection_active_assertion ON teams_protection_assertions(conversation_id,provider,account,native_id,kind,evidence) WHERE active=1;
 CREATE INDEX IF NOT EXISTS teams_protection_assertion_identity ON teams_protection_assertions(provider,account,native_id);
+-- Inert until the checkpoint protocol and every protected writer are enabled.
+CREATE TABLE IF NOT EXISTS teams_protection_open_contract (
+ id INTEGER PRIMARY KEY CHECK(id=1), initializer_epoch INTEGER NOT NULL,
+ compiled_schema_sha256 TEXT NOT NULL, actual_schema_sha256 TEXT NOT NULL,
+ catalog_version INTEGER NOT NULL, library_version TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS teams_protection_fence_revision (
+ id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0)
+);
+INSERT OR IGNORE INTO teams_protection_fence_revision(id) VALUES(1);
+CREATE TABLE IF NOT EXISTS teams_protection_checkpoint (
+ id INTEGER PRIMARY KEY CHECK(id=1), generation INTEGER NOT NULL, instance TEXT NOT NULL,
+ revision INTEGER NOT NULL, commit_id TEXT NOT NULL, digest TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS teams_protection_flush (
+ id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO teams_protection_flush(id) VALUES(1);
+CREATE TABLE IF NOT EXISTS teams_protection_recovery_guards (
+ kind TEXT NOT NULL, scope TEXT NOT NULL, commitment TEXT NOT NULL,
+ PRIMARY KEY(kind,scope,commitment)
+);
 CREATE TABLE IF NOT EXISTS teams_protection_actions (
  action_id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL,
  provider TEXT NOT NULL, account TEXT NOT NULL, native_id TEXT NOT NULL,
@@ -331,6 +353,19 @@ CREATE TABLE IF NOT EXISTS teams_local_settings (
   observed_privacy_revision INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO teams_local_settings(id) VALUES(1);
+-- Separate local protection disclosure; numeric policy is not this consent.
+CREATE TABLE IF NOT EXISTS teams_protection_enrollment (
+ id INTEGER PRIMARY KEY CHECK(id=1), generation TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS teams_protection_policy_ack (
+ id INTEGER PRIMARY KEY CHECK(id=1), policy_id TEXT NOT NULL, policy_sha256 TEXT NOT NULL,
+ origin TEXT NOT NULL, org_id TEXT NOT NULL, person_id TEXT NOT NULL, installation_id TEXT NOT NULL,
+ library_id TEXT NOT NULL, instance_id TEXT NOT NULL, enrollment_generation TEXT NOT NULL,
+ settings_revision INTEGER NOT NULL, acknowledged_at TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS teams_protection_enrollment_identity AFTER UPDATE ON teams_local_settings
+WHEN (old.library_id,old.instance_id,old.org_id,old.installation_id,old.key_fingerprint) IS NOT (new.library_id,new.instance_id,new.org_id,new.installation_id,new.key_fingerprint)
+BEGIN DELETE FROM teams_protection_policy_ack; DELETE FROM teams_protection_enrollment; END;
 -- Local processing permission is never copied to a different library.
 CREATE TABLE IF NOT EXISTS teams_model_permission (
   id INTEGER PRIMARY KEY CHECK(id=1), library_id TEXT NOT NULL, instance_id TEXT NOT NULL,

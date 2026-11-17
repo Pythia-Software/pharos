@@ -871,6 +871,7 @@ export const defaultApi = {
   "POST /api/cloud-backup/schedule": {saved:true},
   "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
   "GET /api/teams/privacy": ({ query }) => ({ conversationId: query.get("conversation"), userPrivate: false, private: false, classifierState: "unclassified", classifierReviewed: false, sensitivityHold: true, revision: 0 }),
+  "GET /api/teams/worker/protection-policy": { policyId: "teams_local_protection_baseline_v1", policyDigest: "synthetic", disclosure: "Synthetic source protection policy.", acknowledged: true, settingsRevision: 4, continuity: "not_ready" },
   "GET /api/teams/enrollment": { state: "disconnected", available: true, library: "Synthetic library", fingerprint: "", problem: "" },
   "POST /api/teams/enrollment": { state: "waiting", available: true, library: "Synthetic library", fingerprint: "ab1234cd56", problem: "" },
   "POST /api/teams/enrollment/cancel": { ok: true },

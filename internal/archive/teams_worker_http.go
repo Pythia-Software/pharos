@@ -114,6 +114,36 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, map[string]any{"enabled": settings.Enabled, "optOut": settings.MetricsOptOut, "settingsRevision": settings.SettingsRevision, "acknowledgedPolicy": settings.AcknowledgedPolicy, "nextCheck": next, "checking": checking, "problem": problem, "items": out, "modelApproved": modelApproved}, 200)
 			return nil
+		case r.URL.Path == "/api/teams/worker/protection-policy" && r.Method == http.MethodGet:
+			acknowledged, e := readTeamsProtectionAcknowledgement(r.Context(), s.Catalog.reader(), d, credential)
+			if e != nil {
+				return e
+			}
+			continuity := "not_ready"
+			if checkpoint := s.Catalog.teamsCheckpoint; checkpoint != nil {
+				_, host, e := teamsCheckpointLoad(checkpoint.store, checkpoint.name)
+				if e != nil || host.Scope != checkpoint.scope || host.Phase == "held" {
+					continuity = "held"
+				} else if host.Phase == "pending" {
+					continuity = "reconciling"
+				}
+			}
+			writeJSON(w, map[string]any{"policyId": teamsLocalProtectionPolicyID, "policyDigest": teamsLocalProtectionPolicyDigest(), "disclosure": teamsLocalProtectionDisclosure, "acknowledged": acknowledged, "settingsRevision": settings.SettingsRevision, "continuity": continuity}, 200)
+			return nil
+		case r.URL.Path == "/api/teams/worker/protection-policy" && r.Method == http.MethodPost:
+			var body struct {
+				Acknowledge      *bool  `json:"acknowledge"`
+				SettingsRevision *int64 `json:"settingsRevision"`
+			}
+			if e = teamsLocalAction(w, r, &body, map[string]bool{"acknowledge": true, "settingsRevision": true}); e != nil || body.Acknowledge == nil || !*body.Acknowledge || body.SettingsRevision == nil {
+				return errTeamsConsentStale
+			}
+			if e = s.Catalog.acknowledgeTeamsProtectionPolicy(r.Context(), d, credential, *body.SettingsRevision); e != nil {
+				return e
+			}
+			s.wakeTeams()
+			writeJSON(w, map[string]bool{"updated": true}, 200)
+			return nil
 		case r.URL.Path == "/api/teams/worker/policy" && r.Method == http.MethodGet:
 			manifest := teamsWorkerCapabilities()
 			if !teamsNumericBuildEligible(manifest) {

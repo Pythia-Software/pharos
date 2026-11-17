@@ -396,6 +396,14 @@ func sanitizeHistory(ctx context.Context, path string) error {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
+	// path is the isolated transfer snapshot, never the live catalog. Its
+	// private writer fences are not transferable and must be removed before
+	// sanitizing history or dropping the snapshot's protected tables.
+	for _, fence := range teamsProtectionFenceStatements() {
+		if _, err = db.ExecContext(ctx, "DROP TRIGGER IF EXISTS "+quotedIdentifier(fence.name)); err != nil {
+			return err
+		}
+	}
 	if err = removePrivateAskHistory(ctx, db); err != nil {
 		return err
 	}
@@ -543,7 +551,32 @@ var transferReferences = map[string]string{
 }
 
 func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
-	conn, err := target.DB.Conn(ctx)
+	if err := mergeHistoryRows(ctx, target, incoming); err != nil {
+		return err
+	}
+	return target.refreshAllLibrary(ctx)
+}
+
+func mergeHistoryRows(ctx context.Context, target *Catalog, incoming string) error {
+	db := target.DB
+	if checkpoint := target.teamsCheckpoint; checkpoint != nil {
+		lease, err := target.teamsSharingLease()
+		if err != nil {
+			return err
+		}
+		defer lease.Close()
+		// Imports invalidate prior source authority. Hold the independent host
+		// checkpoint before admitting a retained-connection merge.
+		if err := teamsCheckpointHoldForReplacement(ctx, checkpoint); err != nil {
+			return err
+		}
+		checkpoint.writer.mu.Lock()
+		defer checkpoint.writer.mu.Unlock()
+		checkpoint.writer.authorized.Store(true)
+		defer checkpoint.writer.authorized.Store(false)
+		db = checkpoint.writer.db
+	}
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
 	}
@@ -595,6 +628,13 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if checkpoint := target.teamsCheckpoint; checkpoint != nil {
+		_, host, e := teamsCheckpointLoad(checkpoint.store, checkpoint.name)
+		keyID, keyErr := teamsCheckpointKeyID(checkpoint.guardKey)
+		if e != nil || keyErr != nil || host.Phase != "held" || host.Scope != checkpoint.scope || host.KeyID != keyID {
+			return errTeamsProtectionContinuity
+		}
+	}
 	if _, err = tx.ExecContext(ctx, "PRAGMA defer_foreign_keys=ON"); err != nil {
 		return err
 	}
@@ -990,7 +1030,7 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return target.refreshAllLibrary(ctx)
+	return nil
 }
 
 func pendingDeliveryPath(config Config) string {
@@ -1205,6 +1245,10 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 	if err != nil {
 		return receipt, fmt.Errorf("prepare source library: %w", err)
 	}
+	if err = prepared.configureTeamsCheckpointIfActive(ctx, source); err != nil {
+		prepared.Close()
+		return receipt, fmt.Errorf("configure source protection: %w", err)
+	}
 	prepared.setCaptureRoot(source.CaptureRoot)
 	if _, e := os.Stat(source.CaptureRoot); e == nil {
 		targets, e := captureTargets(source.CaptureRoot, nil, true, nil)
@@ -1359,6 +1403,10 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 	if err != nil {
 		return receipt, fmt.Errorf("open destination library: %w", err)
 	}
+	if err = catalog.configureTeamsCheckpointIfActive(ctx, target); err != nil {
+		catalog.Close()
+		return receipt, fmt.Errorf("configure destination protection: %w", err)
+	}
 	catalog.setCaptureRoot(target.CaptureRoot)
 	if err = mergeHistory(ctx, catalog, path); err != nil {
 		catalog.Close()
@@ -1396,7 +1444,7 @@ var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots
 	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions",
 	// Copy the revision and retained ledger before privacy rows so their insert
 	// triggers see existing assertions and observe the source revision.
-	"teams_privacy_revision", "teams_protection_actions", "teams_protection_assertions", "teams_conversation_privacy", "teams_local_settings", "teams_outbox", "teams_send_log", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
+	"teams_privacy_revision", "teams_protection_actions", "teams_protection_assertions", "teams_conversation_privacy", "teams_local_settings", "teams_protection_enrollment", "teams_protection_policy_ack", "teams_outbox", "teams_send_log", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
 	// Keep the identity fence even when the delivered history itself is gone.
 	// Native proofs require conversation rows and must instead be re-observed.
 	"teams_source_bindings", "teams_source_revision", "teams_source_mapping_revisions", "teams_source_mapping_current", "teams_source_mapping_exposure",
@@ -1424,6 +1472,34 @@ func cleanupDeliveredHistory(ctx context.Context, source Config, receipt library
 		if err = verifySourceEvidence(source, receipt); err != nil {
 			catalog.Close()
 			return err
+		}
+		// A host checkpoint cannot follow a replaced catalog by inference.
+		// Hold it durably before retaining or deleting source history.
+		active, e := catalog.hasProtectionCheckpoint()
+		if e != nil {
+			catalog.Close()
+			return e
+		}
+		if active {
+			lease, e := catalog.teamsSharingLease()
+			if e != nil {
+				catalog.Close()
+				return e
+			}
+			defer lease.Close()
+			descriptor, e := readLibraryDescriptor(source)
+			if e != nil {
+				catalog.Close()
+				return e
+			}
+			if _, e = catalog.configureTeamsCheckpoint(ctx, source, descriptor); e != nil {
+				catalog.Close()
+				return e
+			}
+			if e = teamsCheckpointHoldForReplacement(ctx, catalog.teamsCheckpoint); e != nil {
+				catalog.Close()
+				return e
+			}
 		}
 		cleanPath := source.CatalogPath + ".delivery-clean"
 		if err = ensureCatalogWorkingSpace(filepath.Dir(cleanPath), source.CatalogPath); err != nil {

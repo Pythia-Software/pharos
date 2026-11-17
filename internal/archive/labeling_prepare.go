@@ -429,9 +429,9 @@ func prepareLabeling(ctx context.Context, opts labelingPrepareOptions) (map[stri
 		return nil, err
 	}
 	schema, err := strconv.Atoi(strings.TrimSpace(version))
-	if err != nil || schema > catalogSchemaVersion || schema < labelingMinSchema {
+	if err != nil || schema > protectedCatalogSchemaVersion || schema < labelingMinSchema {
 		return nil, fmt.Errorf("catalog %s has schema version %q; labeling reads schemas %d to %d (the catalog was not modified)",
-			opts.CatalogPath, version, labelingMinSchema, catalogSchemaVersion)
+			opts.CatalogPath, version, labelingMinSchema, protectedCatalogSchemaVersion)
 	}
 	snapshot["schema_version"] = schema
 	coverage, present, err := labelingCompatibility(ctx, tx)

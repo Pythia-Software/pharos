@@ -18,6 +18,27 @@ async function workerRequest<T>(path = "", body?: object): Promise<T> {
   return value as T;
 }
 
+type ProtectionPolicy = { policyId: string; policyDigest: string; disclosure: string; acknowledged: boolean; settingsRevision: number; continuity: string };
+
+function LocalProtectionPolicy({ onChange }: { onChange: () => Promise<void> }) {
+  const [policy, setPolicy] = useState<ProtectionPolicy | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = useCallback(async () => { try { setPolicy(await workerRequest<ProtectionPolicy>("/protection-policy")); setError(""); } catch { setError("Could not read the local protection policy."); } }, []);
+  useEffect(() => { void refresh(); }, [refresh]);
+  const acknowledge = async () => {
+    if (!policy) return;
+    setBusy(true); setError("");
+    try { await workerRequest("/protection-policy", { acknowledge: true, settingsRevision: policy.settingsRevision }); await refresh(); await onChange(); }
+    catch (e) { await refresh(); setError(e instanceof Error ? e.message : "Could not acknowledge the local protection policy."); }
+    finally { setBusy(false); }
+  };
+  return <section aria-label="Local source protection"><h4>Local source protection</h4>
+    {policy ? <><p>{policy.disclosure}</p><p>{policy.continuity === "held" ? "Source protection needs reconciliation. You can continue using this library." : policy.continuity === "reconciling" ? "Source protection is being reconciled." : "Source protection is not ready yet."}</p>{policy.acknowledged ? <p>Protection policy acknowledged for this library.</p> : <button type="button" disabled={busy} onClick={() => void acknowledge()}>Acknowledge protection policy</button>}</> : null}
+    {error ? <p role="alert">{error}</p> : null}
+  </section>;
+}
+
 function TeamsWork() {
   const [status, setStatus] = useState<WorkerStatus | null>(null);
   const [policy, setPolicy] = useState<OrgPolicy | null>(null);
@@ -51,6 +72,7 @@ function TeamsWork() {
       <button type="button" disabled={busy || status.checking} onClick={() => void act("/check", {})}>Check now</button>{" "}
       <button type="button" disabled={busy} onClick={() => void act("/settings", { enabled: false, optOut: status.optOut, settingsRevision: status.settingsRevision, policyVersion: status.acknowledgedPolicy })}>Pause checking</button>
     </>}
+    <LocalProtectionPolicy onChange={refresh} />
     {status?.enabled ? <section aria-label="Model processing permission"><h4>Claude processing</h4>
       <p>Content answers require a separate processing permission and a request-specific review. Claude processes eligible material remotely using your authenticated account.</p>
       <p>{status.modelApproved ? "This account and model are approved for processing." : "No current model processing permission."}</p>
