@@ -13,9 +13,14 @@ func teamsConfigExactKeys(raw []byte) bool {
 		m, err := teamsStrictObject(raw, allowed)
 		return m, err == nil
 	}
-	top, ok := object(raw, "question", "query_url", "approval_policy", "requester", "audiences", "result_schema", "min_app_version", "retention_policy", "schedule")
+	top, ok := object(raw, "question", "query_url", "approval_policy", "requester", "audiences", "result_schema", "min_app_version", "retention_policy", "schedule", "publication_v2")
 	if !ok {
 		return false
+	}
+	if rawSeries, exists := top["publication_v2"]; exists {
+		if _, err := parseTeamsReportSeries(rawSeries); err != nil {
+			return false
+		}
 	}
 	if schedule, exists := top["schedule"]; exists {
 		fields, valid := object(schedule, "cadence", "timezone", "catch_up", "response_window_seconds")

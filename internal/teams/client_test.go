@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -111,6 +113,7 @@ func TestPollNegotiatesManifestAndFallsBack(t *testing.T) {
 				Manifest struct {
 					SchemaVersion int                 `json:"schema_version"`
 					Features      []string            `json:"features"`
+					Capabilities  []string            `json:"capabilities"`
 					Profiles      []CapabilityProfile `json:"profiles"`
 				} `json:"capability_manifest"`
 			}
@@ -119,6 +122,12 @@ func TestPollNegotiatesManifestAndFallsBack(t *testing.T) {
 				return
 			}
 			versions = append(versions, body.Manifest.SchemaVersion)
+			if body.Manifest.SchemaVersion == 2 && !slices.Contains(body.Manifest.Features, "report_deterministic_v2") {
+				t.Error("missing negotiated v2 feature")
+			}
+			if body.Manifest.SchemaVersion == 1 && slices.Contains(body.Manifest.Capabilities, "report_deterministic_v2") {
+				t.Error("v2 feature leaked into v1 fallback")
+			}
 			if body.Manifest.SchemaVersion == 2 && reject {
 				reject = false
 				json.NewEncoder(w).Encode(PollResponse{CapabilityStatus: "manifest_rejected", Work: []Work{}, Cancellations: []Cancellation{}})
@@ -137,7 +146,7 @@ func TestPollNegotiatesManifestAndFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := PollRequest{AppVersion: "0.10.0", LibraryIDs: []string{}, CapabilityManifest: &CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}}}
+	request := PollRequest{AppVersion: "0.10.0", LibraryIDs: []string{}, CapabilityManifest: &CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}, V2OnlyFeatures: []string{"report_deterministic_v2"}}}
 	for i := 0; i < 3; i++ {
 		if _, err = client.Poll(context.Background(), request); err != nil {
 			t.Fatal(err)
@@ -199,5 +208,36 @@ func TestPollOldServerRejectsV2AfterDiscovery(t *testing.T) {
 	request := PollRequest{AppVersion: "0.10.0", LibraryIDs: []string{}, CapabilityManifest: &CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}}}
 	if _, err = client.Poll(context.Background(), request); err != nil || polls != 2 {
 		t.Fatalf("fallback: %v, polls=%d", err, polls)
+	}
+}
+
+func TestPollRejectsManualSeriesOnLegacyCarrier(t *testing.T) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := json.RawMessage(`{"question":"valid"}`)
+	series := json.RawMessage(`{"publication_v2":{"schema_version":2}}`)
+	alias := json.RawMessage(`{"Publication_V2":{"schema_version":2}}`)
+	duplicate := json.RawMessage(`{"publication_v2":null,"publication_v2":{}}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/device/capabilities" {
+			json.NewEncoder(w).Encode(map[string]any{"manifest_schema_versions": []int{1}})
+			return
+		}
+		json.NewEncoder(w).Encode(PollResponse{Work: []Work{{Config: valid, ConfigSHA256: hashBytes(valid)}, {Config: series, ConfigSHA256: hashBytes(series)}, {Config: alias, ConfigSHA256: hashBytes(alias)}, {Config: duplicate, ConfigSHA256: hashBytes(duplicate)}, {Config: valid, ConfigSHA256: strings.Repeat("0", 64)}}, Cancellations: []Cancellation{{WorkID: "00000000-0000-4000-8000-000000000001"}}})
+	}))
+	defer server.Close()
+	client, err := NewDeviceClient(server.URL, "a4c09e42-d0a6-45f0-89ef-2a03b7cff630", key, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}, V2OnlyFeatures: []string{"report_deterministic_v2"}}
+	out, err := client.Poll(context.Background(), PollRequest{AppVersion: "0.10.0", LibraryIDs: []string{}, CapabilityManifest: &manifest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Work) != 1 || string(out.Work[0].Config) != string(valid) || len(out.Cancellations) != 1 {
+		t.Fatalf("lost valid work or cancellation: %+v", out)
 	}
 }

@@ -54,11 +54,12 @@ type PollRequest struct {
 }
 
 type CapabilityManifest struct {
-	SchemaVersion int                 `json:"schema_version"`
-	AppVersion    string              `json:"app_version"`
-	Capabilities  []string            `json:"capabilities,omitempty"`
-	Features      []string            `json:"features,omitempty"`
-	Profiles      []CapabilityProfile `json:"profiles,omitempty"`
+	SchemaVersion  int                 `json:"schema_version"`
+	AppVersion     string              `json:"app_version"`
+	Capabilities   []string            `json:"capabilities,omitempty"`
+	V2OnlyFeatures []string            `json:"-"`
+	Features       []string            `json:"features,omitempty"`
+	Profiles       []CapabilityProfile `json:"profiles,omitempty"`
 }
 
 // MarshalJSON preserves each closed version's required arrays and never sends

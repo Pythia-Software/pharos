@@ -178,10 +178,11 @@ func teamsPlanFromWork(w teams.Work) (teamsQueryPlan, error) {
 		return teamsQueryPlan{}, errTeamsQueryUnsupported
 	}
 	var config struct {
-		Schedule       *teamsSchedule `json:"schedule"`
-		QueryURL       string         `json:"query_url"`
-		Question       string         `json:"question"`
-		ApprovalPolicy string         `json:"approval_policy"`
+		Schedule       *teamsSchedule  `json:"schedule"`
+		PublicationV2  json.RawMessage `json:"publication_v2"`
+		QueryURL       string          `json:"query_url"`
+		Question       string          `json:"question"`
+		ApprovalPolicy string          `json:"approval_policy"`
 		Requester      struct {
 			ID          string `json:"id"`
 			DisplayName string `json:"display_name"`
@@ -236,6 +237,11 @@ func teamsPlanFromWork(w teams.Work) (teamsQueryPlan, error) {
 	plan, err := compileTeamsQuery(config.QueryURL)
 	if err != nil {
 		return plan, err
+	}
+	if len(config.PublicationV2) > 0 {
+		if _, e := parseTeamsReportSeries(config.PublicationV2); e != nil || config.Schedule != nil || config.ApprovalPolicy != "review" || len(config.Audiences.Publications) != 0 || len(config.Audiences.Exports) != 0 || len(plan.Metrics) != 1 || plan.Metrics[0].ID != "total_tokens" || plan.Metrics[0].Field != "total_tokens" {
+			return teamsQueryPlan{}, errTeamsQueryUnsupported
+		}
 	}
 	if !validTeamsReports(config.Audiences.Publications, config.ApprovalPolicy, plan) {
 		return teamsQueryPlan{}, errTeamsQueryUnsupported

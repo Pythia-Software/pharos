@@ -83,12 +83,16 @@ func teamsNumericWorkEligible(w teams.Work, m teamsCapabilityManifest) bool {
 		return false
 	}
 	var c struct {
-		Audiences struct {
+		PublicationV2 json.RawMessage `json:"publication_v2"`
+		Audiences     struct {
 			Exports      []json.RawMessage `json:"exports"`
 			Publications []json.RawMessage `json:"publications"`
 		} `json:"audiences"`
 	}
 	if json.Unmarshal(w.Config, &c) != nil {
+		return false
+	}
+	if len(c.PublicationV2) > 0 && (!teamsBuildEligible(m, "report_deterministic_v2") || p.Key != "once") {
 		return false
 	}
 	if len(c.Audiences.Publications) > 0 && !teamsBuildEligible(m, "report_deterministic_v1") {

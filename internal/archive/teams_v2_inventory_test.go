@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -130,6 +131,7 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	}
 	sealedState := false
 	var accepted teams.Receipt
+	var firstSubmission []byte
 	server := httptest.NewServer(http.HandlerFunc(func(wr http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		switch {
@@ -182,6 +184,14 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 			digest, _, _ := h.Finish()
 			json.NewEncoder(wr).Encode(map[string]any{"binding_id": upload.BindingID, "snapshot_id": upload.SnapshotID, "inventory_sha256": upload.InventoryHash, "ownership_revision": 1, "privacy_revision": 1, "assignment_sha256": digest, "index": 0, "page_count": 1, "items": items})
 		case strings.HasSuffix(r.URL.Path, "/result"):
+			if firstSubmission == nil {
+				firstSubmission = append([]byte(nil), body...)
+				http.Error(wr, "synthetic interrupted delivery", http.StatusServiceUnavailable)
+				return
+			}
+			if !bytes.Equal(firstSubmission, body) {
+				t.Error("retry changed reviewed submission bytes")
+			}
 			var submitted teams.Submission
 			if json.Unmarshal(body, &submitted) != nil {
 				t.Error("submission")
@@ -191,7 +201,9 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 			json.NewEncoder(wr).Encode(accepted)
 		case strings.HasSuffix(r.URL.Path, "/receipt"):
 			if accepted.ID == "" {
-				http.NotFound(wr, r)
+				wr.Header().Set("Content-Type", "application/json")
+				wr.WriteHeader(http.StatusNotFound)
+				_, _ = wr.Write([]byte(`{"error":{"code":"receipt_not_found"}}`))
 				return
 			}
 			accepted.PublicationState = "published"
@@ -216,10 +228,24 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	if _, err = service.checkTeamsWork(ctx); err != nil {
 		t.Fatalf("lifecycle check: %v", err)
 	}
+	interrupted, err := readTeamsV2Draft(ctx, c.reader(), w.ID)
+	if err != nil || interrupted.State != "needs_reconcile" || !bytes.Equal(interrupted.Submission, firstSubmission) {
+		t.Fatalf("interrupted submission was not retained: %v", err)
+	}
+	var reviewed teams.Submission
+	if json.Unmarshal(firstSubmission, &reviewed) != nil || reviewed.ConfigSHA256 != w.ConfigSHA256 || reviewed.PayloadSHA256 != interrupted.PayloadHash || !bytes.Equal(reviewed.Payload, interrupted.Payload) {
+		t.Fatal("submitted bytes differ from the reviewed configuration or payload")
+	}
+	if _, err = c.sendTeamsV2Approved(ctx, cfg, client, d, credential, w.ID, manifest); err != nil {
+		t.Fatalf("retry after missing receipt: %v", err)
+	}
+	if _, err = service.checkTeamsWork(ctx); err != nil {
+		t.Fatalf("refresh after retry: %v", err)
+	}
 	service.teamsWorker.mu.Lock()
 	workerItem := service.teamsWorker.items[w.ID]
 	service.teamsWorker.mu.Unlock()
-	if workerItem.State != "staged" {
+	if workerItem.State != "published" {
 		t.Fatalf("worker lost publication state: %q", workerItem.State)
 	}
 	if _, err := c.registerTeamsV2(ctx, cfg, client, d, credential, w, merged, manifest); !errors.Is(err, errTeamsSnapshotChanged) {
@@ -228,6 +254,55 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	draft, err := readTeamsV2Draft(ctx, c.reader(), w.ID)
 	if err != nil || draft.State != "accepted" || !strings.Contains(string(draft.Payload), `"total_tokens":123`) {
 		t.Fatalf("draft: %v", err)
+	}
+	// Both real review handlers must reject stale displayed series configs.
+	seriesConfig, err := os.ReadFile("testdata/teams-report-series/manual_series_config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seriesHash := teamsPayloadHash(seriesConfig)
+	if _, err = c.DB.Exec(`UPDATE teams_v2_results SET config=?,state='awaiting_review' WHERE work_id=?`, seriesConfig, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.DB.Exec(`UPDATE teams_v2_uploads SET config_sha256=? WHERE work_id=?`, seriesHash, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	seriesWork := w
+	seriesWork.Config, seriesWork.ConfigSHA256 = seriesConfig, seriesHash
+	service.teamsWorker.mu.Lock()
+	item := service.teamsWorker.items[w.ID]
+	item.Work, item.State = seriesWork, "awaiting_source_consent"
+	service.teamsWorker.items[w.ID] = item
+	service.teamsWorker.mu.Unlock()
+	for _, path := range []string{"/api/teams/worker/allow-source", "/api/teams/worker/approve-result"} {
+		for _, hash := range []string{"", strings.Repeat("0", 64), teamsPayloadHash(config)} {
+			body, _ := json.Marshal(map[string]any{"workId": w.ID, "settingsRevision": s.SettingsRevision, "payloadHash": draft.PayloadHash, "configHash": hash})
+			if strings.HasSuffix(path, "allow-source") {
+				body, _ = json.Marshal(map[string]any{"workId": w.ID, "settingsRevision": s.SettingsRevision, "configHash": hash})
+			} else {
+				body, _ = json.Marshal(map[string]any{"workId": w.ID, "payloadHash": draft.PayloadHash, "configHash": hash})
+			}
+			rec := httptest.NewRecorder()
+			service.teamsWorkerHTTP(rec, httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body)))
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("%s accepted stale config: %d", path, rec.Code)
+			}
+		}
+	}
+	if err = c.reviewTeamsV2Draft(ctx, d, w.ID, draft.PayloadHash); !errors.Is(err, errTeamsConsentStale) {
+		t.Fatalf("legacy review accepted series: %v", err)
+	}
+	body, _ := json.Marshal(map[string]any{"workId": w.ID, "payloadHash": draft.PayloadHash, "configHash": seriesHash})
+	rec := httptest.NewRecorder()
+	service.teamsWorkerHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("matching series review was rejected: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err = c.DB.Exec(`UPDATE teams_v2_results SET config=?,state='accepted' WHERE work_id=?`, config, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.DB.Exec(`UPDATE teams_v2_uploads SET config_sha256=? WHERE work_id=?`, w.ConfigSHA256, w.ID); err != nil {
+		t.Fatal(err)
 	}
 	// Simulate a crash after the server accepted but before the receipt was
 	// stored, followed by an unrelated source update and a damaged/replaced

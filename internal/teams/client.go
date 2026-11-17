@@ -9,6 +9,9 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -16,6 +19,93 @@ const maxDeviceBody = 2 << 20
 
 var ErrReceiptMismatch = errors.New("Teams receipt does not match submitted request")
 var capabilityVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+
+// pollObject checks duplicate (including case-aliased) envelope keys while
+// leaving each work config as exact raw bytes for independent validation.
+func pollObject(raw []byte) (map[string]json.RawMessage, error) {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	token, err := d.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, errors.New("invalid poll object")
+	}
+	fields := map[string]json.RawMessage{}
+	folded := map[string]bool{}
+	for d.More() {
+		keyToken, e := d.Token()
+		if e != nil {
+			return nil, e
+		}
+		key, ok := keyToken.(string)
+		if !ok || folded[strings.ToLower(key)] {
+			return nil, errors.New("duplicate poll key")
+		}
+		folded[strings.ToLower(key)] = true
+		var v json.RawMessage
+		if e = d.Decode(&v); e != nil {
+			return nil, e
+		}
+		fields[key] = v
+	}
+	if token, err = d.Token(); err != nil || token != json.Delim('}') {
+		return nil, errors.New("invalid poll object")
+	}
+	if _, err = d.Token(); err != io.EOF {
+		return nil, errors.New("trailing poll data")
+	}
+	return fields, nil
+}
+func decodePollResponse(raw []byte, out *PollResponse) error {
+	fields, err := pollObject(raw)
+	if err != nil {
+		return errors.New("invalid Teams response")
+	}
+	for key, value := range fields {
+		if strings.EqualFold(key, "work") && key != "work" {
+			return errors.New("invalid Teams response")
+		}
+		if key != "work" && !validUniqueJSON(value) {
+			return errors.New("invalid Teams response")
+		}
+	}
+	var items []json.RawMessage
+	if v, ok := fields["work"]; ok {
+		if json.Unmarshal(v, &items) != nil {
+			return errors.New("invalid Teams response")
+		}
+		delete(fields, "work")
+	}
+	shell, err := json.Marshal(fields)
+	if err != nil || json.Unmarshal(shell, out) != nil {
+		return errors.New("invalid Teams response")
+	}
+	out.Work = []Work{}
+	for _, item := range items {
+		parts, e := pollObject(item)
+		if e != nil {
+			continue
+		}
+		bad := false
+		for key, value := range parts {
+			if strings.EqualFold(key, "config") && key != "config" {
+				bad = true
+				break
+			}
+			if !validUniqueJSON(value) {
+				bad = true
+				break
+			}
+		}
+		if bad {
+			continue
+		}
+		var w Work
+		if json.Unmarshal(item, &w) != nil {
+			continue
+		}
+		out.Work = append(out.Work, w)
+	}
+	return nil
+}
 
 type HTTPError struct {
 	Status int
@@ -69,6 +159,9 @@ func (c *DeviceClient) exchange(ctx context.Context, method, path string, body [
 	}
 	if out == nil {
 		return nil
+	}
+	if poll, ok := out.(*PollResponse); ok {
+		return decodePollResponse(data, poll)
 	}
 	if !validUniqueJSON(data) {
 		return errors.New("invalid Teams response")
@@ -184,6 +277,15 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 			previous = id
 		}
 	}
+	if in.CapabilityManifest != nil {
+		previous := ""
+		for _, id := range in.CapabilityManifest.V2OnlyFeatures {
+			if id != "report_deterministic_v2" || id <= previous {
+				return out, errors.New("invalid v2-only capability")
+			}
+			previous = id
+		}
+	}
 	seen := map[string]bool{}
 	for _, id := range in.LibraryIDs {
 		if _, err := LibraryPath(id, "privacy"); err != nil || seen[id] {
@@ -201,6 +303,10 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 		v2 = version == 2
 	}
 	if v2 {
+		features := append([]string(nil), in.CapabilityManifest.Capabilities...)
+		features = append(features, in.CapabilityManifest.V2OnlyFeatures...)
+		sort.Strings(features)
+		features = slices.Compact(features)
 		// Explicit fields retain empty arrays in the v2 closed wire shape.
 		request = struct {
 			AppVersion         string   `json:"app_version"`
@@ -212,7 +318,7 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 			AppVersion    string              `json:"app_version"`
 			Features      []string            `json:"features"`
 			Profiles      []CapabilityProfile `json:"profiles"`
-		}{2, in.AppVersion, in.CapabilityManifest.Capabilities, []CapabilityProfile{}}}
+		}{2, in.AppVersion, features, []CapabilityProfile{}}}
 	}
 	b, err := marshalRequest(request)
 	if err != nil {
@@ -227,6 +333,7 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 		retryLegacy = errors.As(err, &e) && (e.Code == "unsupported_manifest_schema" || (e.Status == 422 && e.Code == "invalid_input"))
 	}
 	if retryLegacy {
+		v2 = false
 		c.capabilityMu.Lock()
 		c.capabilityDiscovery = 1
 		c.capabilityMu.Unlock()
@@ -244,11 +351,36 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 	if (out.CapabilityStatus != "" && out.CapabilityStatus != "needs_update") || (out.CapabilityStatus == "needs_update" && len(out.Work) != 0) {
 		return PollResponse{}, errors.New("invalid Teams capability status")
 	}
+	filtered := out.Work[:0]
 	for _, w := range out.Work {
-		if err = w.VerifyConfig(); err != nil {
-			return PollResponse{}, err
+		// Invalid or noncanonical publication arms are dropped individually;
+		// unrelated work and cancellation notices remain deliverable.
+		if !validUniqueJSON(w.Config) {
+			continue
 		}
+		var arms map[string]json.RawMessage
+		if json.Unmarshal(w.Config, &arms) != nil || arms == nil {
+			continue
+		}
+		bad := false
+		for key, arm := range arms {
+			if strings.EqualFold(key, "publication_v2") {
+				if key != "publication_v2" || string(bytes.TrimSpace(arm)) == "null" || !v2 {
+					bad = true
+					break
+				}
+			}
+		}
+		if bad {
+			continue
+		}
+		if err = w.VerifyConfig(); err != nil {
+			// A damaged item must not suppress unrelated cancellations or work.
+			continue
+		}
+		filtered = append(filtered, w)
 	}
+	out.Work = filtered
 	return out, nil
 }
 func (c *DeviceClient) RegisterSources(ctx context.Context, workID string, m Manifest) (SourcesResponse, error) {
