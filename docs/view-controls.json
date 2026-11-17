@@ -3883,6 +3883,15 @@
       "reason": "Changes the conversation’s persistent library privacy setting; it is not URL view state."
     },
     {
+      "key": "24dad18788df4d07:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "mount",
+      "tag": "button",
+      "control": "'button', '', 'Confirm review'",
+      "contract": "settings",
+      "reason": "Local Teams privacy or model permission review; it changes local consent or closes the review, not query view state."
+    },
+    {
       "key": "3f6f4aa5f5684795:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "mount",
@@ -3890,6 +3899,33 @@
       "control": "'select', 'conversation-selector'",
       "contract": "action",
       "reason": "Shell command, navigation or transient overlay affordance; contains no additional applied query."
+    },
+    {
+      "key": "afd89e2c59fcb0df:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "mount",
+      "tag": "input",
+      "control": "'input'",
+      "contract": "settings",
+      "reason": "Local Teams privacy or model permission review; it changes local consent or closes the review, not query view state."
+    },
+    {
+      "key": "e0d69071d3f9e958:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "mount",
+      "tag": "button",
+      "control": "'button', '', 'Review content for Teams'",
+      "contract": "settings",
+      "reason": "Local Teams privacy or model permission review; it changes local consent or closes the review, not query view state."
+    },
+    {
+      "key": "ee39c59d2f3aa3e2:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "mount",
+      "tag": "button",
+      "control": "'button', '', 'Cancel'",
+      "contract": "settings",
+      "reason": "Local Teams privacy or model permission review; it changes local consent or closes the review, not query view state."
     },
     {
       "key": "4f179deebd5cf692:0",
@@ -9046,6 +9082,15 @@
       "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
     },
     {
+      "key": "18ba716917d2dcd9:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => { void act(\"/model/approve\", model).then(() => setModel(null)); }}",
+      "contract": "settings",
+      "reason": "Local Teams privacy or model permission review; it changes local consent or closes the review, not query view state."
+    },
+    {
       "key": "203788fdcc47c70e:0",
       "file": "web/src/teams-settings.tsx",
       "owner": "TeamsWork",
@@ -9064,6 +9109,24 @@
       "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
     },
     {
+      "key": "2ef9531e0878c124:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void inspectModel()}",
+      "contract": "settings",
+      "reason": "Local Teams privacy or model permission review; it changes local consent or closes the review, not query view state."
+    },
+    {
+      "key": "396a2a9201218779:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void loadSent()}",
+      "contract": "settings",
+      "reason": "Shows or expands local Teams send history; this does not alter query view state."
+    },
+    {
       "key": "57c9884373426922:0",
       "file": "web/src/teams-settings.tsx",
       "owner": "TeamsWork",
@@ -9073,6 +9136,26 @@
       "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
     },
     {
+      "key": "6e662c71ddfd6288:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => setModel(null)}",
+      "contract": "settings",
+      "reason": "Local Teams privacy or model permission review; it changes local consent or closes the review, not query view state."
+    },
+    {
+      "key": "7328dffa328bbaa0:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`teams:sent:${item.workId}`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "8b2573051f619382:0",
       "file": "web/src/teams-settings.tsx",
       "owner": "TeamsWork",
@@ -9080,6 +9163,15 @@
       "control": "onClick={() => void act(\"/approve-result\", { workId: item.workId, payloadHash: item.payloadHash })}",
       "contract": "settings",
       "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
+    },
+    {
+      "key": "ab52d868831f9932:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void act(\"/model/revoke\", {})}",
+      "contract": "settings",
+      "reason": "Local Teams privacy or model permission review; it changes local consent or closes the review, not query view state."
     },
     {
       "key": "dd6839c645db8876:0",

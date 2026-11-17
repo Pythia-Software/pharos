@@ -595,7 +595,15 @@ func (c *Catalog) grantTeamsQuestion(ctx context.Context, w teams.Work, descript
 		return err
 	}
 	defer lease.Close()
-	if _, err := teamsPlanFromWork(w); err != nil {
+	if w.Kind == "llm" {
+		manifest := teamsWorkerCapabilities()
+		if !teamsBuildEligible(manifest, "scoped_artifact_v1") {
+			return errTeamsQueryUnsupported
+		}
+		if _, err := teamsLLMFromWork(w, manifest.AppVersion); err != nil {
+			return err
+		}
+	} else if _, err := teamsPlanFromWork(w); err != nil {
 		return err
 	}
 	if _, err := teams.WorkPath(w.VersionID, "status"); err != nil {

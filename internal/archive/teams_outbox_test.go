@@ -266,7 +266,9 @@ func TestTeamsMoveDisarmsPendingWork(t *testing.T) {
 		`INSERT INTO teams_source_mapping_revisions(revision,binding_id,library_id,instance_id,origin,org_id,person_id,installation_id,provider,mode,reviewed_at) VALUES(1,'binding','synthetic','instance','https://synthetic.invalid','org','person','installation','codex','work','now')`,
 		`INSERT INTO teams_source_mapping_current(binding_id,revision) VALUES('binding',1)`,
 		`INSERT INTO teams_source_mapping_exposure(binding_id,mapping_revision,exposed_at) VALUES('binding',1,'now')`,
-		`INSERT INTO teams_outbox(work_id,version_id,library_id,instance_id,org_id,installation_id,config,config_hash,payload,payload_hash,expires_at,idempotency_key,state,local_revision,generation,privacy_revision,settings_revision,shared_privacy_revision,ownership_revision,evaluation_revision,baseline_revision,manifest,manifest_hash,owned_hash,approval_mode,policy_version) VALUES('pending','version','synthetic','instance','org','installation','{}','hash','synthetic-unsent-secret-marker','hash','2099-01-01T00:00:00Z','key','approved',1,1,1,1,1,1,1,0,'{}','hash','hash','reviewed',0)`)
+		`INSERT INTO teams_outbox(work_id,version_id,library_id,instance_id,org_id,installation_id,config,config_hash,payload,payload_hash,expires_at,idempotency_key,state,local_revision,generation,privacy_revision,settings_revision,shared_privacy_revision,ownership_revision,evaluation_revision,baseline_revision,manifest,manifest_hash,owned_hash,approval_mode,policy_version) VALUES('pending','version','synthetic','instance','org','installation','{}','hash','synthetic-unsent-secret-marker','hash','2099-01-01T00:00:00Z','key','approved',1,1,1,1,1,1,1,0,'{}','hash','hash','reviewed',0)`,
+		`INSERT INTO teams_v2_uploads(work_id,version_id,library_id,instance_id,org_id,installation_id,config_sha256,snapshot_id,binding_id,inventory_revision,inventory_sha256,local_revision,evaluation_revision,settings_revision,source_revision,privacy_revision,generation,mode,policy_version,authorization_json,pages_json,seal_json,state) VALUES('content','version','synthetic','instance','org','installation','hash','snapshot','binding',1,'hash',1,1,1,1,1,1,'reviewed',0,'{}','[]','{}','bound')`,
+		`INSERT INTO teams_content_runs(work_id,config,binding_json,selected_json,state,payload,payload_sha256) VALUES('content','{}','{}','[]','awaiting_review','synthetic-content-draft-marker','hash')`)
 	c.Close()
 	checkedStage := false
 	if _, err := TransferLibrary(t.Context(), a, b, true, func(stage string) {
@@ -284,7 +286,7 @@ func TestTeamsMoveDisarmsPendingWork(t *testing.T) {
 			return
 		}
 		data, err := os.ReadFile(paths[0])
-		if err != nil || bytes.Contains(data, []byte("synthetic-unsent-secret-marker")) {
+		if err != nil || bytes.Contains(data, []byte("synthetic-unsent-secret-marker")) || bytes.Contains(data, []byte("synthetic-content-draft-marker")) {
 			t.Errorf("unsent payload reached target staging: %v", err)
 			return
 		}
@@ -308,6 +310,9 @@ func TestTeamsMoveDisarmsPendingWork(t *testing.T) {
 	if err := source.DB.QueryRow(`SELECT state FROM teams_outbox WHERE work_id='pending'`).Scan(&state); err != nil || state != "approved" {
 		t.Fatalf("pending after move: %s %v", state, err)
 	}
+	if err := source.DB.QueryRow(`SELECT state FROM teams_content_runs WHERE work_id='content'`).Scan(&state); err != nil || state != "awaiting_review" {
+		t.Fatalf("content draft lost on source: %s %v", state, err)
+	}
 	if n := countRows(t, source, `SELECT COUNT(*) FROM teams_source_mapping_exposure WHERE binding_id='binding' AND mapping_revision=1`); n != 1 {
 		t.Fatal("source exposure fence was lost during move")
 	}
@@ -316,6 +321,9 @@ func TestTeamsMoveDisarmsPendingWork(t *testing.T) {
 	var n int
 	if err := dest.DB.QueryRow(`SELECT COUNT(*) FROM teams_outbox`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("outbox moved: %d %v", n, err)
+	}
+	if err := dest.DB.QueryRow(`SELECT COUNT(*) FROM teams_content_runs`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("content draft moved: %d %v", n, err)
 	}
 	if n := countRows(t, dest, `SELECT COUNT(*) FROM teams_source_mapping_current`); n != 0 {
 		t.Fatal("source account authorization moved to another library")

@@ -93,6 +93,16 @@ func (s *Server) spawnRegistered(register func(), work func()) bool {
 	return true
 }
 
+// teamsOperationChild owns a joined helper under the service lifecycle. The
+// caller cancels its operation context and joins the returned completion.
+func (s *Server) teamsOperationChild(work func()) (<-chan struct{}, bool) {
+	done := make(chan struct{})
+	if !s.spawnRegistered(nil, func() { defer close(done); work() }) {
+		return nil, false
+	}
+	return done, true
+}
+
 // releasing reports a release (or another stop) in progress. It takes no
 // lock: begin calls it with the lifecycle lock held.
 func (s *Server) releasing() bool {

@@ -41,10 +41,23 @@ func readTeamsV2Upload(ctx context.Context, q interface {
 // before the first possible emission. It does not itself send anything.
 func (c *Catalog) prepareTeamsV2Upload(ctx context.Context, w teams.Work, d LibraryDescriptor, credential *teams.EnrollmentCredential, snapshot teamsV2Inventory, policy teams.MetricsDefault, watermark teams.SourceWatermark, manifest teams.CapabilityManifest) (teamsV2Upload, error) {
 	var out teamsV2Upload
-	plan, err := teamsPlanFromWork(w)
-	if err != nil || len(plan.Metrics) != 1 || plan.Metrics[0].Field != "total_tokens" || credential == nil || credential.LibraryID != d.ID || w.LibraryID != d.ID || !teamsNumericWorkEligible(w, manifest) {
+	if credential == nil || credential.LibraryID != d.ID || w.LibraryID != d.ID {
 		return out, errTeamsQueryUnsupported
 	}
+	if w.Kind == "llm" {
+		if !teamsBuildEligible(manifest, "source_snapshot_v2") || !teamsBuildEligible(manifest, "scoped_artifact_v1") || !snapshot.Complete {
+			return out, errTeamsQueryUnsupported
+		}
+		if _, err := teamsLLMFromWork(w, manifest.AppVersion); err != nil {
+			return out, err
+		}
+	} else {
+		plan, err := teamsPlanFromWork(w)
+		if err != nil || len(plan.Metrics) != 1 || plan.Metrics[0].Field != "total_tokens" || !teamsNumericWorkEligible(w, manifest) {
+			return out, errTeamsQueryUnsupported
+		}
+	}
+	var err error
 	if _, err = teams.WorkPath(w.ID, "status"); err != nil {
 		return out, err
 	}

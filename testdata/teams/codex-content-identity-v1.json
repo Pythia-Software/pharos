@@ -1,0 +1,14 @@
+{
+  "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "native_id": "synthetic-thread-001",
+  "raw_utf8": "{\"type\":\"session_meta\",\"payload\":{\"id\":\"synthetic-thread-001\"}}\n",
+  "work_namespace": "2EpjOh9-UPnqqzlHDJCFuI4LijtyA9JVjkuVo8rHSYs",
+  "thread_token": "vbH9FYifxprcjMYC4H-kw04neoy-ZMW8NpmYa4VLkCY",
+  "thread_witness": "9KLk_3F2g8Hj-CgJQCJF1O9izzxdQSDE81u3N7fsfKQ",
+  "content_token": "nOQwPr10oR1SFRwHDL3MdpR0o1nmRN0L2fsONqJF_rk",
+  "content_witness": "nm4wLlOzQPyP8IC5qKsS3pdHnJKuOMg5rCKxlYrXmiY",
+  "component_token": "ct7gBZ0ey2sqgoORhFyRNcsz0WclgWAG1kRdTTqDNgc",
+  "component_witness": "VKrgGmPjPzTdo-zkwB96bfpTyuVZc7_jjiU9LdPooVk",
+  "intrinsic_sha256": "0fcc332730f2227cb4d3abbc50a19dcd0f57338d54ed37ca80fb65c61945982c",
+  "evidence_revision": "aBPQanrXV_J0I1uhQkkzSr5qUSqD-VWh_G1TwTK5F8I"
+}

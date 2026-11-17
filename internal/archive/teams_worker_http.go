@@ -69,6 +69,8 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				PayloadHash  string                   `json:"payloadHash"`
 				Readers      []string                 `json:"readers"`
 				Payload      json.RawMessage          `json:"payload"`
+				Prompt       string                   `json:"prompt"`
+				Retention    json.RawMessage          `json:"retention"`
 				Schedule     json.RawMessage          `json:"schedule"`
 				Period       json.RawMessage          `json:"period"`
 				Exports      []teamsFeedExport        `json:"exports"`
@@ -78,6 +80,8 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			for _, item := range items {
 				var config struct {
 					Question  string          `json:"question"`
+					Prompt    string          `json:"prompt"`
+					Retention json.RawMessage `json:"retention_policy"`
 					Schedule  json.RawMessage `json:"schedule"`
 					Requester struct {
 						DisplayName string `json:"display_name"`
@@ -88,7 +92,12 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 						Publications    []teamsReportPublication    `json:"publications"`
 					} `json:"audiences"`
 				}
-				if _, e = teamsPlanFromWork(item.Work); e != nil {
+				if item.Work.Kind == "llm" {
+					_, e = teamsLLMFromWork(item.Work, teamsWorkerCapabilities().AppVersion)
+				} else {
+					_, e = teamsPlanFromWork(item.Work)
+				}
+				if e != nil {
 					out = append(out, row{WorkID: item.Work.ID, Question: "This request needs a newer Pharos build.", State: item.State})
 					continue
 				}
@@ -97,9 +106,13 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				for _, reader := range config.Audiences.ResponseReaders {
 					readers = append(readers, reader.ID)
 				}
-				out = append(out, row{WorkID: item.Work.ID, Question: config.Question, Requester: config.Requester.DisplayName, State: item.State, PayloadHash: item.PayloadHash, Readers: readers, Payload: json.RawMessage(item.Payload), Schedule: config.Schedule, Period: item.Work.Period, Exports: config.Audiences.Exports, Publications: config.Audiences.Publications})
+				out = append(out, row{WorkID: item.Work.ID, Question: config.Question, Prompt: config.Prompt, Retention: config.Retention, Requester: config.Requester.DisplayName, State: item.State, PayloadHash: item.PayloadHash, Readers: readers, Payload: json.RawMessage(item.Payload), Schedule: config.Schedule, Period: item.Work.Period, Exports: config.Audiences.Exports, Publications: config.Audiences.Publications})
 			}
-			writeJSON(w, map[string]any{"enabled": settings.Enabled, "optOut": settings.MetricsOptOut, "settingsRevision": settings.SettingsRevision, "acknowledgedPolicy": settings.AcknowledgedPolicy, "nextCheck": next, "checking": checking, "problem": problem, "items": out}, 200)
+			var modelApproved bool
+			if e = s.Catalog.reader().QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM teams_model_permission WHERE id=1 AND library_id=? AND instance_id=? AND org_id=? AND installation_id=? AND host_id=? AND settings_revision=?)`, d.ID, d.Instance, credential.OrgID, credential.InstallationID, currentHost().ID, settings.SettingsRevision).Scan(&modelApproved); e != nil {
+				return e
+			}
+			writeJSON(w, map[string]any{"enabled": settings.Enabled, "optOut": settings.MetricsOptOut, "settingsRevision": settings.SettingsRevision, "acknowledgedPolicy": settings.AcknowledgedPolicy, "nextCheck": next, "checking": checking, "problem": problem, "items": out, "modelApproved": modelApproved}, 200)
 			return nil
 		case r.URL.Path == "/api/teams/worker/policy" && r.Method == http.MethodGet:
 			manifest := teamsWorkerCapabilities()
@@ -114,6 +127,44 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				return errTeamsConsentStale
 			}
 			writeJSON(w, map[string]any{"value": poll.MetricsDefault.Value, "policyVersion": poll.MetricsDefault.PolicyVersion, "settingsRevision": settings.SettingsRevision}, 200)
+			return nil
+		case r.URL.Path == "/api/teams/worker/log" && r.Method == http.MethodGet:
+			rows, e := s.Catalog.reader().QueryContext(r.Context(), `SELECT work_id,config,payload,sent_at FROM teams_send_log WHERE library_id=? AND org_id=? ORDER BY sent_at DESC LIMIT 20`, d.ID, credential.OrgID)
+			if e != nil {
+				return e
+			}
+			defer rows.Close()
+			type sentRow struct {
+				WorkID   string          `json:"workId"`
+				Question string          `json:"question"`
+				Payload  json.RawMessage `json:"payload"`
+				SentAt   string          `json:"sentAt"`
+			}
+			items := []sentRow{}
+			total := 0
+			for rows.Next() {
+				var row sentRow
+				var config []byte
+				if e = rows.Scan(&row.WorkID, &config, &row.Payload, &row.SentAt); e != nil {
+					return e
+				}
+				total += len(config) + len(row.Payload)
+				if total > 1<<20 {
+					break
+				}
+				var v struct {
+					Question string `json:"question"`
+				}
+				if json.Unmarshal(config, &v) != nil || !teams.ValidUniqueJSON(row.Payload) {
+					return errTeamsConsentStale
+				}
+				row.Question = v.Question
+				items = append(items, row)
+			}
+			if e = rows.Err(); e != nil {
+				return e
+			}
+			writeJSON(w, map[string]any{"items": items}, 200)
 			return nil
 		case r.URL.Path == "/api/teams/worker/settings" && r.Method == http.MethodPost:
 			var body struct {
@@ -149,6 +200,38 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			s.wakeTeams()
 			writeJSON(w, map[string]bool{"requested": true}, 200)
 			return nil
+		case r.URL.Path == "/api/teams/worker/model/inspect" && r.Method == http.MethodPost:
+			inspection, e := s.inspectTeamsModel(r.Context())
+			if e != nil {
+				return e
+			}
+			writeJSON(w, inspection, 200)
+			return nil
+		case r.URL.Path == "/api/teams/worker/model/approve" && r.Method == http.MethodPost:
+			var requested teamsModelInspection
+			if e = teamsLocalAction(w, r, &requested, map[string]bool{"provider": true, "model": true, "effort": true, "account": true, "sessionDigest": true, "authDigest": true, "settingsRevision": true}); e != nil {
+				return errTeamsConsentStale
+			}
+			current, e := s.inspectTeamsModel(r.Context())
+			if e != nil {
+				return e
+			}
+			if requested != current {
+				return errTeamsConsentStale
+			}
+			if e = s.Catalog.grantTeamsModel(r.Context(), d, credential, current); e != nil {
+				return e
+			}
+			s.wakeTeams()
+			writeJSON(w, map[string]bool{"approved": true}, 200)
+			return nil
+		case r.URL.Path == "/api/teams/worker/model/revoke" && r.Method == http.MethodPost:
+			if e = s.Catalog.revokeTeamsModel(r.Context(), d, credential); e != nil {
+				return e
+			}
+			s.wakeTeams()
+			writeJSON(w, map[string]bool{"revoked": true}, 200)
+			return nil
 		case r.URL.Path == "/api/teams/worker/allow-source" && r.Method == http.MethodPost:
 			var body struct {
 				WorkID           string `json:"workId"`
@@ -177,7 +260,14 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			if e = teamsLocalAction(w, r, &body, map[string]bool{"workId": true, "payloadHash": true}); e != nil {
 				return errTeamsConsentStale
 			}
-			if e = s.Catalog.reviewTeamsV2Draft(r.Context(), d, body.WorkID, body.PayloadHash); e != nil {
+			if _, contentErr := readTeamsContentRun(r.Context(), s.Catalog.reader(), body.WorkID); contentErr == nil {
+				e = s.Catalog.approveTeamsContent(r.Context(), d, credential, body.WorkID, body.PayloadHash)
+			} else if errors.Is(contentErr, sql.ErrNoRows) {
+				e = s.Catalog.reviewTeamsV2Draft(r.Context(), d, body.WorkID, body.PayloadHash)
+			} else {
+				e = contentErr
+			}
+			if e != nil {
 				return e
 			}
 			s.wakeTeams()
@@ -193,7 +283,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			s.teamsWorker.mu.Lock()
 			item, ok := s.teamsWorker.items[body.WorkID]
 			s.teamsWorker.mu.Unlock()
-			if !ok || (item.State != "awaiting_source_consent" && item.State != "awaiting_review" && item.State != "decline_pending") {
+			if !ok || (item.State != "awaiting_source_consent" && item.State != "awaiting_model_permission" && item.State != "awaiting_review" && item.State != "decline_pending" && item.State != "started" && item.State != "unconfirmed") {
 				return errTeamsConsentStale
 			}
 			lease, e := s.Catalog.teamsSharingLease()
@@ -202,6 +292,16 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			defer lease.Close()
 			if e = s.Catalog.writeTransaction(r.Context(), "teams-v2-decline", func(tx *sql.Tx) error {
+				content, contentErr := readTeamsContentRun(r.Context(), tx, body.WorkID)
+				if contentErr != nil && !errors.Is(contentErr, sql.ErrNoRows) {
+					return contentErr
+				}
+				if contentErr == nil && content.State != "awaiting_review" && content.State != "started" && content.State != "withdrawn" {
+					return errTeamsConsentStale
+				}
+				if _, e = tx.ExecContext(r.Context(), `UPDATE teams_content_runs SET state='withdrawn' WHERE work_id=? AND state IN ('awaiting_review','started')`, body.WorkID); e != nil {
+					return e
+				}
 				draft, e := readTeamsV2Draft(r.Context(), tx, body.WorkID)
 				if e != nil && !errors.Is(e, sql.ErrNoRows) {
 					return e
