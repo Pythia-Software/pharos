@@ -1,0 +1,131 @@
+{
+  "version": 2,
+  "registry": "usage_1",
+  "time_zone": "UTC",
+  "link_json": "{\"w\":[{\"field\":\"first_usage_at\",\"op\":\">=\",\"value\":\"2026-11-09T00:00:00Z\"},{\"field\":\"first_usage_at\",\"op\":\"<\",\"value\":\"2026-11-16T00:00:00Z\"}],\"g\":[{\"id\":\"total_tokens\",\"op\":\"sum\",\"groupBy\":[\"day\",\"model_family\",\"project_name\"],\"field\":\"total_tokens\",\"scope\":\"allMatching\"},{\"id\":\"cost_usd\",\"op\":\"sum\",\"groupBy\":[\"day\",\"model_family\",\"project_name\"],\"field\":\"cost_usd\",\"scope\":\"allMatching\"}]}",
+  "query_url": "/analyze?analyze_data=usage&analyze_mode=query&analyze_topic=tokens&q_usage=2d.rM9BSwMxEAXg__LOKez2UDCoB-_ePFmWMCSzMZrshE2ilNL_Lg0oRQpeCnOZy_feO-ILen_EHDg6aMxhLdW0Qp4NVShIhsbjAxQ-KTaGxnbY7jbjuBnuXoZB93vFSf1n3F8hxt0lMSn4XiaclSqVoqnywUv5MUpLUPCrtPx0gN7D0QEKSRxHM1MK8fzmVd7ZVrNQYkzqt9cfsVjJDA2K8ZmqfQuL7zN6upU-wd0m-UK7mjqdvgcA",
+  "window": {
+    "start_at": "2026-11-09T00:00:00Z",
+    "end_at": "2026-11-16T00:00:00Z"
+  },
+  "groups": [
+    "day",
+    "model_family",
+    "project_name"
+  ],
+  "metrics": [
+    {
+      "id": "total_tokens",
+      "field": "total_tokens",
+      "op": "sum"
+    },
+    {
+      "id": "cost_usd",
+      "field": "cost_usd",
+      "op": "sum"
+    }
+  ],
+  "synthetic_facts": [
+    {
+      "id": "public-build",
+      "first_usage_at": "2026-11-09T12:00:00Z",
+      "day": "2026-11-09",
+      "model_family": "family_a",
+      "project_name": "Build",
+      "protection": "non_private",
+      "owned": true,
+      "total_tokens": 10,
+      "cost_micros": 25
+    },
+    {
+      "id": "private-build",
+      "first_usage_at": "2026-11-10T12:00:00Z",
+      "day": "2026-11-10",
+      "model_family": "family_b",
+      "project_name": "Build",
+      "protection": "explicit_private",
+      "owned": true,
+      "total_tokens": 20,
+      "cost_micros": null
+    },
+    {
+      "id": "private-hidden",
+      "first_usage_at": "2026-11-10T12:00:00Z",
+      "day": "2026-11-10",
+      "model_family": "family_b",
+      "project_name": "Hidden",
+      "protection": "explicit_private",
+      "owned": true,
+      "total_tokens": 30,
+      "cost_micros": null
+    },
+    {
+      "id": "old-public-hidden",
+      "first_usage_at": "2026-11-08T12:00:00Z",
+      "day": "2026-11-08",
+      "model_family": "family_a",
+      "project_name": "Hidden",
+      "protection": "non_private",
+      "owned": true,
+      "total_tokens": 40,
+      "cost_micros": null
+    },
+    {
+      "id": "unowned-copy",
+      "first_usage_at": "2026-11-09T12:00:00Z",
+      "day": "2026-11-09",
+      "model_family": "family_a",
+      "project_name": "Build",
+      "protection": "non_private",
+      "owned": false,
+      "total_tokens": 10,
+      "cost_micros": 25
+    }
+  ],
+  "expected_rows": [
+    {
+      "key": [
+        "2026-11-09T00:00:00Z",
+        "family_a",
+        "Build"
+      ],
+      "values": {
+        "total_tokens": 10,
+        "cost_usd": 25
+      }
+    },
+    {
+      "key": [
+        "2026-11-10T00:00:00Z",
+        "family_b",
+        "Build"
+      ],
+      "values": {
+        "total_tokens": 20,
+        "cost_usd": null
+      }
+    }
+  ],
+  "canonical_key_vectors": [
+    {
+      "project": "A<&\"",
+      "canonical": "[\"2026-11-09T00:00:00Z\",\"family_a\",\"A<&\\\"\"]"
+    },
+    {
+      "project": "tab\tnewline\n",
+      "canonical": "[\"2026-11-09T00:00:00Z\",\"family_a\",\"tab\\tnewline\\n\"]"
+    },
+    {
+      "project": "back\bform\freturn\r",
+      "canonical": "[\"2026-11-09T00:00:00Z\",\"family_a\",\"back\\bform\\freturn\\r\"]"
+    },
+    {
+      "project": "😀",
+      "canonical": "[\"2026-11-09T00:00:00Z\",\"family_a\",\"😀\"]"
+    },
+    {
+      "project": "�",
+      "canonical": "[\"2026-11-09T00:00:00Z\",\"family_a\",\"�\"]"
+    }
+  ]
+}

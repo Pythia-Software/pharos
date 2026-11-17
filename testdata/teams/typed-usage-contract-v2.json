@@ -1,0 +1,93 @@
+{
+  "query_contract": {
+    "version": 2,
+    "registry": "usage_1",
+    "source_policy": "verified_usage",
+    "population": {
+      "kind": "fixed",
+      "time_zone": "UTC"
+    },
+    "calculations": {
+      "price_book": "fixture_prices_1",
+      "taxonomy": "fixture_models_1",
+      "buckets": "calendar_1"
+    }
+  },
+  "result_schema": {
+    "schema_version": 2,
+    "columns": [
+      {
+        "id": "day",
+        "type": "civil_bucket",
+        "role": "dimension",
+        "nullable": false,
+        "grain": "day",
+        "time_zone": "UTC"
+      },
+      {
+        "id": "model_family",
+        "type": "enum",
+        "role": "dimension",
+        "nullable": false,
+        "taxonomy": "fixture_models_1"
+      },
+      {
+        "id": "project_name",
+        "type": "string",
+        "role": "dimension",
+        "nullable": false,
+        "scope": "library"
+      },
+      {
+        "id": "total_tokens",
+        "type": "integer",
+        "role": "metric",
+        "nullable": false,
+        "unit": "tokens",
+        "merge": "sum"
+      },
+      {
+        "id": "cost_usd",
+        "type": "fixed_decimal",
+        "role": "metric",
+        "nullable": true,
+        "unit": "USD",
+        "scale": 6,
+        "merge": "sum"
+      }
+    ]
+  },
+  "result_schema_json": "{\"schema_version\":2,\"columns\":[{\"id\":\"day\",\"type\":\"civil_bucket\",\"role\":\"dimension\",\"nullable\":false,\"grain\":\"day\",\"time_zone\":\"UTC\"},{\"id\":\"model_family\",\"type\":\"enum\",\"role\":\"dimension\",\"nullable\":false,\"taxonomy\":\"fixture_models_1\"},{\"id\":\"project_name\",\"type\":\"string\",\"role\":\"dimension\",\"nullable\":false,\"scope\":\"library\"},{\"id\":\"total_tokens\",\"type\":\"integer\",\"role\":\"metric\",\"nullable\":false,\"unit\":\"tokens\",\"merge\":\"sum\"},{\"id\":\"cost_usd\",\"type\":\"fixed_decimal\",\"role\":\"metric\",\"nullable\":true,\"unit\":\"USD\",\"scale\":6,\"merge\":\"sum\"}]}",
+  "schema_sha256": "7a49857f61015344eb1b12707c6b4b5b1720a3722b8a9320b6c2e784bc3cfda9",
+  "window": {
+    "start_at": "2026-11-09T00:00:00Z",
+    "end_at": "2026-11-16T00:00:00Z",
+    "time_zone": "UTC"
+  },
+  "window_json": "{\"start_at\":\"2026-11-09T00:00:00Z\",\"end_at\":\"2026-11-16T00:00:00Z\",\"time_zone\":\"UTC\"}",
+  "window_sha256": "113f4b12eaf2482de2e9a809bb4f834d207b5e99ac6d615b8fcdfdc44be4a0db",
+  "rows": [
+    {
+      "key": [
+        "2026-11-09T00:00:00Z",
+        "family_a",
+        "Build"
+      ],
+      "values": {
+        "total_tokens": 10,
+        "cost_usd": 25
+      }
+    },
+    {
+      "key": [
+        "2026-11-10T00:00:00Z",
+        "family_b",
+        "Build"
+      ],
+      "values": {
+        "total_tokens": 20,
+        "cost_usd": null
+      }
+    }
+  ]
+}
