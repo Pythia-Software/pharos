@@ -18,10 +18,12 @@ import (
 // clock.
 
 type workTestClock struct {
-	mu     sync.Mutex
-	now    time.Time
-	timers []workTestTimer
-	armed  chan time.Duration
+	mu            sync.Mutex
+	now           time.Time
+	timers        []workTestTimer
+	armed         chan time.Duration
+	advanceOnFive bool
+	onAdvance     func()
 }
 
 type workTestTimer struct {
@@ -42,6 +44,13 @@ func (c *workTestClock) Now() time.Time {
 func (c *workTestClock) After(d time.Duration) <-chan time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if d == 5*time.Second && c.advanceOnFive {
+		c.advanceOnFive = false
+		c.now = c.now.Add(d)
+		if c.onAdvance != nil {
+			c.onAdvance()
+		}
+	}
 	ch := make(chan time.Time, 1)
 	if d <= 0 {
 		ch <- c.now
@@ -53,6 +62,53 @@ func (c *workTestClock) After(d time.Duration) <-chan time.Time {
 	default:
 	}
 	return ch
+}
+
+func TestWorkRunLoopRechecksDeadlineAfterArmingTimer(t *testing.T) {
+	domain := newFakeWorkDomain("u1@1")
+	domain.fail["u1"] = 1
+	clock := newWorkTestClock()
+	clock.advanceOnFive = true
+	jobs := make(chan workTestJob, 4)
+	pauseReads := make(chan struct{}, 8)
+	runner, err := newWorkRunner(context.Background(), clock, newWorkAuthority(1), workHooks{Paused: func(context.Context, time.Time) (bool, time.Time, error) {
+		pauseReads <- struct{}{}
+		return false, time.Time{}, nil
+	}, Start: func(job workJob, run func(context.Context)) error {
+		jobs <- workTestJob{job: job, run: run}
+		return nil
+	}}, []workDefinition{{Kind: "maintenance.parallelism", Task: domain}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.onAdvance = func() {
+		select {
+		case <-runner.wake:
+		default:
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	defer func() { cancel(); <-stopped }()
+	go func() { runner.Run(ctx); close(stopped) }()
+	if _, err = runner.Submit(workRequestSpec{Kinds: []string{"maintenance.parallelism"}, Priority: workPriorityLive}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case job := <-jobs:
+		job.run(context.Background())
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial job was not started")
+	}
+	select {
+	case job := <-jobs:
+		job.run(context.Background())
+	case <-time.After(2 * time.Second):
+		t.Fatal("retry was not reconsidered after the clock advanced while arming")
+	}
+	if len(pauseReads) < 2 {
+		t.Fatal("elapsed timer did not refresh pause policy")
+	}
 }
 
 func (c *workTestClock) Advance(d time.Duration) {
