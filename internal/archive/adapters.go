@@ -801,6 +801,9 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 			if total, digest, valid := teamsCodexTotalPrefix(proof, events); valid {
 				proof.TotalTokens, proof.TotalDigest = &total, digest
 			}
+			if part.size <= 32<<20 {
+				proof.RequestUsage = teamsCodexRequestProfile(proof, events, a.initialEffort)
+			}
 			record.Conversations[0].teamsNativeProof = proof
 		}
 	} else {

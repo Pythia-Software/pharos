@@ -120,6 +120,11 @@ func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, vie
 			return e
 		}
 		changed = changed || n > 0
+		profileChanged, e := teamsPersistCodexRequestProfile(tx, binding, conversationID, conversation.Origin, digest, proof.RequestUsage)
+		if e != nil {
+			return e
+		}
+		changed = changed || profileChanged
 	}
 	if changed {
 		_, err = tx.Exec(`UPDATE teams_source_revision SET revision=revision+1 WHERE id=1`)
@@ -172,4 +177,25 @@ func (c *Catalog) requestTeamsSourceProof(ctx context.Context, descriptor Librar
  ON CONFLICT(host_id,source_name) DO UPDATE SET generation=sync_generations.generation+1`)
 		return e
 	})
+}
+
+// teamsInvalidateRequestProofParts removes only local request profiles for a
+// changed part that could not produce an indexed record. It deliberately does
+// not alter the existing v1 numeric proof or the ordinary catalog record.
+func (c *Catalog) teamsInvalidateRequestProofParts(ctx context.Context, host string, config SourceConfig, parts []sourcePart) error {
+	if host == "" || config.Name == "" || !isCodexSource(config.Kind) {
+		return nil
+	}
+	for _, part := range parts {
+		if part.item == "" || part.evidenceObservation {
+			continue
+		}
+		if err := c.writeTransaction(ctx, "teams-invalidate-unparsed-request-proof", func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `DELETE FROM teams_codex_request_profiles WHERE origin=? AND binding_id IN (SELECT binding_id FROM teams_source_bindings WHERE host_id=? AND source_name=? AND lower(source_kind)='codex' AND superseded_at='')`, part.item, host, config.Name)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

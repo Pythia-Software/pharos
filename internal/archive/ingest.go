@@ -360,6 +360,13 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		}
 		result.Parsed += physicalPartCount(parts)
 		if record == nil {
+			// A changed Codex part can become wholly unparseable, leaving no
+			// tolerant record whose ordinary digest would invalidate the proof.
+			if native, ok := adapter.(*jsonlAdapter); ok && native.teamsProofEnabled {
+				if err := c.teamsInvalidateRequestProofParts(ctx, host, config, parts); err != nil {
+					return err
+				}
+			}
 			for _, part := range parts {
 				if part.evidenceObservation {
 					err := c.acceptRepeatedObservation(ctx, adapter, parts, tracker)
@@ -379,6 +386,11 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		if err != nil {
 			return err
 		}
+		// The tolerant display record can stay byte-identical when a malformed
+		// completed source line appears. Opt-in Teams proof observations must
+		// still be revalidated for every parsed changed source part.
+		proofAdapter, proofObservation := adapter.(*jsonlAdapter)
+		proofObservation = proofObservation && proofAdapter.teamsProofEnabled
 		payloadDigest := indexVersion + ":" + digest
 		if record.EvidenceIdentity != "" {
 			digest = record.EvidenceIdentity + ":" + digest
@@ -390,14 +402,14 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			// Evidence-bearing records must still verify current authority and
 			// advance their source time in acceptUnchangedEvidence below. The
 			// last parsed digest can outlive another source's publication.
-			if !mode.force && record.EvidenceIdentity == "" {
+			if !mode.force && !proofObservation && record.EvidenceIdentity == "" {
 				result.SkippedCurrent++
 				return tracker.hold(c, parts)
 			}
 		} else if err != nil && err != sql.ErrNoRows {
 			return err
 		}
-		if !mode.force && record.EvidenceIdentity != "" && recordPayloadDigest(storedDigest, indexVersion) == payloadDigest {
+		if !mode.force && !proofObservation && record.EvidenceIdentity != "" && recordPayloadDigest(storedDigest, indexVersion) == payloadDigest {
 			updated, err := c.acceptUnchangedEvidence(ctx, adapter, *record, parts, tracker, digest, payloadDigest, indexVersion)
 			if errors.Is(err, errOlderCopy) {
 				result.Older++
@@ -414,7 +426,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		}
 		// Parts supersede this: a record skipped here would have its part
 		// recorded as current and never be parsed again.
-		if !mode.force && resume && !incremental && c.recordUsesCurrentExtractor(adapter, *record, host) {
+		if !mode.force && !proofObservation && resume && !incremental && c.recordUsesCurrentExtractor(adapter, *record, host) {
 			result.SkippedCurrent++
 			return tracker.hold(c, parts)
 		}

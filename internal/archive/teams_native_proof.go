@@ -3,6 +3,7 @@ package archive
 import (
 	"bytes"
 	"encoding/json"
+	"unicode/utf8"
 
 	"github.com/gbdubs/pharos/internal/teams"
 )
@@ -14,13 +15,18 @@ type teamsNativeProof struct {
 	NativeID        string
 	Status          string
 	TrailingPartial bool
+	InvalidUTF8     bool
 	TotalTokens     *int64
 	TotalDigest     string
+	RequestUsage    *teamsCodexRequestProof
 }
-type teamsJSONLQuality struct{ gap, trailingPartial bool }
+type teamsJSONLQuality struct{ gap, trailingPartial, invalidUTF8 bool }
 
 func (q *teamsJSONLQuality) observe(line []byte, terminated bool) {
 	b := bytes.TrimSpace(line)
+	if !utf8.Valid(b) {
+		q.invalidUTF8 = true
+	}
 	if len(b) == 0 {
 		return
 	}
@@ -41,7 +47,7 @@ func (q *teamsJSONLQuality) observe(line []byte, terminated bool) {
 // synthetic rewrites can never establish identity. A torn final JSON line is
 // outside the indexed prefix, whereas a malformed completed line is a gap.
 func teamsCodexNativeProof(events []map[string]any, indexedID string, quality teamsJSONLQuality) *teamsNativeProof {
-	proof := &teamsNativeProof{Provider: "codex", NativeID: indexedID, Status: "header_missing", TrailingPartial: quality.trailingPartial}
+	proof := &teamsNativeProof{Provider: "codex", NativeID: indexedID, Status: "header_missing", TrailingPartial: quality.trailingPartial, InvalidUTF8: quality.invalidUTF8}
 	if quality.gap {
 		proof.Status = "capture_gap"
 		return proof
