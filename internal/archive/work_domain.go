@@ -228,9 +228,9 @@ func (c *Catalog) prepareAuthorshipEstimates(ctx context.Context, generation str
 	return err
 }
 
-// Deleted messages no longer belong to a conversation selection, but their
-// native queue entries still need the classifier's guarded cleanup.
-func (c *Catalog) refreshAuthorshipOrphans(ctx context.Context) (int, error) {
+// Deleted messages and dictation version upgrades have no conversation queue
+// entries. Library work processes each in bounded turns under the same lease.
+func (c *Catalog) refreshAuthorshipMaintenance(ctx context.Context) (int, error) {
 	entered, count := false, 0
 	err := c.withAuthorshipLease(func() error {
 		entered = true
@@ -240,6 +240,11 @@ func (c *Catalog) refreshAuthorshipOrphans(ctx context.Context) (int, error) {
 		if err != nil {
 			return err
 		}
+		n, err := c.refreshDictationBatch(ctx, newSpellingCounts(ctx, c.reader()))
+		if err != nil {
+			return err
+		}
+		count += n
 		want, _, err := c.authorshipGenerationsContext(ctx)
 		if err != nil {
 			return err
@@ -252,10 +257,13 @@ func (c *Catalog) refreshAuthorshipOrphans(ctx context.Context) (int, error) {
 	return count, err
 }
 
-func (c *Catalog) authorshipOrphansPending(ctx context.Context) (bool, error) {
+func (c *Catalog) authorshipMaintenancePending(ctx context.Context) (bool, error) {
 	var pending bool
 	err := c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM authorship_pending p WHERE NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=p.message_id))`).Scan(&pending)
-	return pending, err
+	if err != nil || pending {
+		return pending, err
+	}
+	return c.dictationPending(ctx)
 }
 
 // authorshipPendingFor is which selected conversations have a message

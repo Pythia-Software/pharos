@@ -164,6 +164,10 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 	launchTable := authorshipTable{name: "conversation_launches", keys: 1, columns: []string{"child_id", "parent_id", "tool_call_id", "program"}}
 	names := authorshipTable{name: "workspace_names", keys: 1, columns: []string{"workspace_id", "authored_title", "authored_message_id", "authored_hash", "authored_at", "authored_version"}}
 	state := authorshipTable{name: "authorship_message_state", keys: 1, columns: []string{"message_id", "source_hash", "version", "provisional", "disposition", "representative_id"}}
+	// Each message with typed words gets its dictation estimate (dictation.go),
+	// written, diffed and removed with its counting row.
+	dictation := authorshipTable{name: "message_dictation", keys: 1, columns: dictationColumns}
+	spelling := newSpellingCounts(ctx, c.reader())
 	named, renamed := map[string][]any{}, map[string]bool{}
 	for _, launch := range launches {
 		launchTable.rows = append(launchTable.rows, []any{launch.child, launch.parent, launch.toolCall, launch.program})
@@ -203,6 +207,13 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 		summary := summarizeSpans(input.Text, result.Spans)
 		values = append(values, string(encoded), rootWorkspace(input.WorkspaceID, parents), words, nilIfEmpty(summary.main), summary.categories, summary.rules)
 		messages.rows = append(messages.rows, values)
+		if typed := counts.words[spanTyped]; typed > 0 {
+			voice, err := voiceTranscript(ctx, c.reader(), input.Harness, input.ID)
+			if err != nil {
+				return nil, err
+			}
+			dictation.rows = append(dictation.rows, estimateDictation(input.Text, result.Spans, typed, voice, spelling).row(input.ID, input.ConversationID))
+		}
 		wordCounts := authorshipWordCounts(input.Text, result.Spans)
 		for position, span := range result.Spans {
 			spans.rows = append(spans.rows, []any{input.ID, position, span.Category, spanRule(span), nilIfEmpty(span.Reason), span.Start, span.End, utf8.RuneCountInString(strings.TrimSpace(input.Text[span.Start:span.End])), wordCounts[position], nilIfEmpty(span.Source), nilIfEmpty(span.Message)})
@@ -211,7 +222,7 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 	}
 	if quickIDs != nil {
 		plan := []authorshipMutation{}
-		for _, table := range []authorshipTable{messages, spans, state} {
+		for _, table := range []authorshipTable{messages, spans, state, dictation} {
 			table.filter, table.args = " WHERE message_id IN (SELECT value FROM json_each(?))", []any{jsonText(quickIDs)}
 			changes, err := table.plan(ctx, c.reader())
 			if err != nil {
@@ -233,6 +244,7 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 		messages.filter = " WHERE message_id IN (SELECT value FROM json_each(?))"
 		messages.args = []any{jsonText(append(ids, stale...))}
 		spans.filter, spans.args = messages.filter, messages.args
+		dictation.filter, dictation.args = messages.filter, messages.args
 		// As in a full pass, an outcome without a counting row (a suppressed
 		// mirror, an ineligible message) is kept as completion evidence.
 		state.filter, state.args = messages.filter+" AND (disposition IN ('counted','deferred') OR NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=authorship_message_state.message_id))", messages.args
@@ -273,7 +285,7 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 	if since == nil {
 		state.filter = " WHERE disposition IN ('counted','deferred') OR NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=authorship_message_state.message_id)"
 	}
-	tables := []authorshipTable{launchTable, messages, spans, state, names}
+	tables := []authorshipTable{launchTable, messages, spans, state, names, dictation}
 	if since != nil {
 		namesIDs := []string{}
 		for _, row := range names.rows {
@@ -283,7 +295,7 @@ func (c *Catalog) planAuthorshipScopeMode(ctx context.Context, results []authorR
 		names.args = []any{jsonText(namesIDs)}
 		// Launches are all derived again; history's are as stored, so only
 		// new runs' are written.
-		tables = []authorshipTable{launchTable, messages, spans, state, names}
+		tables = []authorshipTable{launchTable, messages, spans, state, names, dictation}
 	}
 	plan := []authorshipMutation{}
 	for _, table := range tables {
@@ -330,7 +342,7 @@ func (c *Catalog) storeAuthorshipRows(ctx context.Context, plan []authorshipMuta
 		}
 		reportWork(ctx, "saving authorship", "row", stop, len(plan))
 	}
-	reportWork(ctx, fmt.Sprintf("saved authorship: messages=%d spans=%d launches=%d names=%d", written["message_authorship"], written["message_authorship_spans"], written["conversation_launches"], written["workspace_names"]), "row", len(plan), len(plan))
+	reportWork(ctx, fmt.Sprintf("saved authorship: messages=%d spans=%d launches=%d names=%d dictation=%d", written["message_authorship"], written["message_authorship_spans"], written["conversation_launches"], written["workspace_names"], written["message_dictation"]), "row", len(plan), len(plan))
 	return nil
 }
 

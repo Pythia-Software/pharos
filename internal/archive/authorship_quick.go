@@ -64,53 +64,12 @@ func (c *Catalog) UpdateAuthorship(parent context.Context, generation string) (f
 	ctx, cancel := context.WithTimeout(parent, authorshipQuickBudget)
 	defer cancel()
 	err := c.withAuthorshipLease(func() error {
-		// Most passes follow an index that queued no writing: say so and stop.
-		if idle, _, err := c.publishIdleAuthorship(ctx, generation); err != nil || idle {
+		if err := c.updateAuthorshipLeased(ctx, generation); err != nil {
 			return err
 		}
-		signature, err := c.authorshipMirrorSignature(ctx)
-		if err != nil {
-			return err
-		}
-		representative, err := c.authorshipRepresentatives(ctx)
-		if err != nil {
-			return err
-		}
-		// Mirrors that moved between the two reads are looked at again.
-		if again, err := c.authorshipMirrorSignature(ctx); err != nil {
-			return err
-		} else if again != signature {
-			signature = ""
-		}
-		if err := c.refreshAuthorshipMirrors(ctx, representative, signature); err != nil {
-			return err
-		}
-		pending, err := c.authorshipPending(ctx)
-		if err != nil {
-			return err
-		}
-		if !pending {
-			return c.publishAuthorshipEstimates(ctx, generation)
-		}
-		exactCtx, stop := context.WithTimeout(ctx, authorshipExactBudget)
-		exact, err := c.tryExactAuthorship(exactCtx, generation)
-		if err != nil && exactCtx.Err() != nil {
-			err = exactCtx.Err()
-		}
-		stop()
-		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			return err
-		}
-		if exact && err == nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if err := c.runAuthorshipLanes(ctx, representative); err != nil {
-			return err
-		}
-		return c.publishAuthorshipEstimates(ctx, generation)
+		// Dictation estimates of earlier writing catch up after this pass's
+		// own work, within what is left of its budget.
+		return c.refreshDictation(ctx)
 	})
 	if parent.Err() != nil {
 		return parent.Err()
@@ -119,6 +78,56 @@ func (c *Catalog) UpdateAuthorship(parent context.Context, generation string) (f
 		return nil
 	}
 	return err
+}
+
+func (c *Catalog) updateAuthorshipLeased(ctx context.Context, generation string) error {
+	// Most passes follow an index that queued no writing: say so and stop.
+	if idle, _, err := c.publishIdleAuthorship(ctx, generation); err != nil || idle {
+		return err
+	}
+	signature, err := c.authorshipMirrorSignature(ctx)
+	if err != nil {
+		return err
+	}
+	representative, err := c.authorshipRepresentatives(ctx)
+	if err != nil {
+		return err
+	}
+	// Mirrors that moved between the two reads are looked at again.
+	if again, err := c.authorshipMirrorSignature(ctx); err != nil {
+		return err
+	} else if again != signature {
+		signature = ""
+	}
+	if err := c.refreshAuthorshipMirrors(ctx, representative, signature); err != nil {
+		return err
+	}
+	pending, err := c.authorshipPending(ctx)
+	if err != nil {
+		return err
+	}
+	if !pending {
+		return c.publishAuthorshipEstimates(ctx, generation)
+	}
+	exactCtx, stop := context.WithTimeout(ctx, authorshipExactBudget)
+	exact, err := c.tryExactAuthorship(exactCtx, generation)
+	if err != nil && exactCtx.Err() != nil {
+		err = exactCtx.Err()
+	}
+	stop()
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if exact && err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err := c.runAuthorshipLanes(ctx, representative); err != nil {
+		return err
+	}
+	return c.publishAuthorshipEstimates(ctx, generation)
 }
 
 // An exact append is an optimization, under a separate short deadline. The

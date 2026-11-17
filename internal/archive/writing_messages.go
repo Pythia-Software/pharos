@@ -53,13 +53,19 @@ var writingMessageDataset = func() sqlDataset {
 		"correction_cue": authoredCueSQL(correctionCuePhrases),
 		"positive_cue":   authoredCueSQL(positiveCuePhrases),
 		"has_source":     "EXISTS(SELECT 1 FROM message_authorship_spans s WHERE s.message_id=ma.message_id AND s.source_conversation_id IS NOT NULL)",
+		// Whether the typed words were dictated (dictation.go). Messages
+		// without an estimate yet, or without typed words, have none.
+		"input_method":     "md.input_method",
+		"dictated_percent": "CASE WHEN md.p_dictated IS NOT NULL THEN round(md.p_dictated*100) END",
+		"dictated_words":   "CASE WHEN md.input_method='" + inputDictation + "' THEN ma.typed_words ELSE 0 END",
+		"typing_marks":     "md.marks",
 	}
 	for _, category := range authorshipCategories {
 		columns[category+"_words"] = "ma." + category + "_words"
 	}
 	return sqlDataset{
 		from: `FROM message_authorship ma JOIN messages m ON m.id=ma.message_id JOIN conversations c ON c.id=ma.conversation_id
-			LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id) LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w") + ` LEFT JOIN conversation_origins o ON o.conversation_id=ma.conversation_id LEFT JOIN authorship_message_state ae ON ae.message_id=ma.message_id`,
+			LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id) LEFT JOIN repositories r ON r.id=w.repository_id` + projectJoin("w") + ` LEFT JOIN conversation_origins o ON o.conversation_id=ma.conversation_id LEFT JOIN authorship_message_state ae ON ae.message_id=ma.message_id LEFT JOIN message_dictation md ON md.message_id=ma.message_id`,
 		countFrom: "FROM message_authorship ma", countAlias: "ma",
 		lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "work_id": true, "day": true},
 		columns:    columns,
@@ -72,6 +78,7 @@ var writingMessageDataset = func() sqlDataset {
 			"r":  " LEFT JOIN repositories r ON r.id=w.repository_id",
 			"pj": projectJoin("w"),
 			"ae": " LEFT JOIN authorship_message_state ae ON ae.message_id=ma.message_id",
+			"md": " LEFT JOIN message_dictation md ON md.message_id=ma.message_id",
 		},
 		pageFrom:    "FROM message_authorship ma",
 		pageIndexes: map[string]string{"sent_at": "message_authorship_page_idx"},
@@ -158,7 +165,7 @@ func (c *Catalog) attachAuthoredText(ctx context.Context, rows []map[string]any)
 		for _, field := range []string{"subagent", "typed_message", "has_source", "correction_cue", "positive_cue"} {
 			row[field] = integer(row[field]) != 0
 		}
-		for _, field := range []string{"categories", "rules"} {
+		for _, field := range []string{"categories", "rules", "typing_marks"} {
 			var values []string
 			_ = json.Unmarshal([]byte(firstString(row[field])), &values)
 			row[field] = values

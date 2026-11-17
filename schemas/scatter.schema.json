@@ -189,6 +189,38 @@
       }
     },
     {
+      "name": "human_dictated",
+      "label": "Dictated words",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Typed words of messages estimated dictated: speech-to-text writes no typos, lowercase sentences, code or shorthand, so a long message without any is likely dictated. Messages under 8 typed words are not estimated.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"human_dictated\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "human_dictated_share",
+      "label": "Dictated share of typed words",
+      "type": "number",
+      "group": "Human Words",
+      "description": "Dictated words divided by typed words, pooled over each group's messages.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"human_dictated_share\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
       "name": "human_words",
       "label": "User words",
       "type": "number",

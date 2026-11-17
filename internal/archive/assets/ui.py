@@ -1030,7 +1030,7 @@ window.pharosOpenEstimateDialog=(trigger,{usage=null,writing=null}={})=>{
   const appendWriting=()=>{
     body.append(node('h3','','Writing'));
     body.append(node('p','','Pharos infers which parts you typed or dictated and which came from elsewhere, using source instructions, attachments, quotes, code, pasted output and matches to retained messages.'));
-    body.append(node('p','','Writing classifications are a guide, not proof of authorship. Unmarked pasted prose can look typed, and text you wrote can look pasted. Pharos cannot tell dictated text from typed text, so both count as your writing.'));
+    body.append(node('p','','Writing classifications are a guide, not proof of authorship. Unmarked pasted prose can look typed, and text you wrote can look pasted. Dictated and typed text both count as your writing. Pharos estimates which a message was from the text itself: speech-to-text writes no typos, lowercase sentences, code or shorthand, so a longer message without any of these is likely dictated. Short messages are not estimated.'));
   };
   if(writing)appendWriting();
   if(usage){body.append(node('h3','',usage.scope||'Selected conversation'),node('p','',usage.label+'. '+usage.detail))}

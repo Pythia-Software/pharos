@@ -165,7 +165,8 @@ default on, saved like the other highlights). It draws underlines only, and only
   dimension the reader has not met shows its own name;
 - `register.filler` is never displayed (`ENGAGEMENT_UNDISPLAYED`, dropped in `messageEngagementView`): no
   underline, popover row, timeline marker, Key chip or count. The pass still computes and stores it, and the
-  API still returns it, so it stays available for telling typed from dictated text;
+  API still returns it. (Typed versus dictated text is estimated separately, from typing marks: see
+  `docs/human-authorship.md#dictated-or-typed`.)
 - the Key lists the dimensions present, one chip each: a solid line in the dimension's hue and its name. Hiding
   is by dimension: `reader_highlight_hidden` holds `engagement:<dimension ID>` (`engagementKey`), as the
   Timeline's `human` section does. A hide saved as `engagement:eng-slot-N` by an earlier build reads as that

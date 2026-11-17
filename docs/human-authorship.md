@@ -94,6 +94,35 @@ Words are whitespace-separated units containing a Unicode letter or digit. Contr
 
 The rebuild stores each span in `message_authorship_spans` (one row per span, with its byte range in `messages.text`, category, rule, reason, words, and the conversation and message it matches), and each message's work, word total, main category, categories, and rules in `message_authorship`.
 
+## Dictated or typed
+
+Typed words stay one category, whether you typed or dictated them. A separate estimate (`message_dictation`, one row per message with typed words, rules in `dictation.go`) says how they were probably entered. Sources rarely record it: Conductor's microphone, Wispr Flow and macOS dictation leave no trace in a transcript. Only ChatGPT voice conversations (`audio_transcription` parts) and Claude voice notes (`voice_note` blocks) do, and those messages are dictation outright (evidence `source`).
+
+Everything else is read from the message's typed spans; pasted, copied and other text is left out. Speech-to-text writes correctly spelled, capitalised, punctuated prose, so the estimate looks for **typing marks**, things a dictation tool does not write:
+
+| Mark | Example |
+|---|---|
+| Typo | a word one letter off an English word (`teh`, `tabel`), or two common words run together (`onthe`) |
+| Lowercase sentence | a sentence or line starting in lowercase |
+| Lowercase “i” | `i think`, `i'm` |
+| Code | backticks, `snake_case`, `camelCase`, `--flags`, file names, URLs, `name()` |
+| Slash | `reader/writer` |
+| Shorthand | `e.g.`, `i.e.`, `etc`, `w/`, `pls`, `idk`, `btw`, `vs` |
+| Interjection | `hmm`, `ugh`, `lol`, `haha` |
+| Capitals | an English word in capitals for emphasis (`VERY`) |
+| Missing apostrophe | `dont`, `thats`, `im` |
+| Symbol | `->`, `=>`, `&`, `??`, `!!`, `#tag` |
+| Inline list | `1) fix it 2) test it` |
+| No closing punctuation | the text ends without `.`, `!`, `?` or `…` |
+
+Typos are found with a bundled English word list (SCOWL, `internal/archive/spelling/`) and suffix stripping; a word ending a sentence is not checked. A word the library itself uses is protected: an unknown word counts as a typo only when its nearest English word appears in at least 20 times as many messages (the word index, `messages_vocab`), so names and project terms are not typos. Capitalised words are checked only when they open a sentence.
+
+The chance of dictation follows from Bayes' rule, with a prior of 20% and two rates. Dictated text has no mark 95% of the time. Typed text, measured on 5,351 messages written before any dictation tool was in use, has none less often the longer it runs: 46% at 8–24 typed words, 36% at 25–49, 25% at 50–99 and 8% at 100 or more. A message with a mark is about 2% likely dictated (**Keyboard**). A clean message is 34%, 40%, 49% or 74% likely by length; at 50% or more it counts as **Dictation**, otherwise **Can't tell**. Under 8 typed words is **Too short to tell**. Dictated words are a message's typed words when it counts as dictation.
+
+The writing message table shows **Entered by**, **Dictated chance** and **Signs of typing**, and filters on them; both tables carry **Dictated words**. Human Words has **Dictated words** and **Dictated share of typed words** measures and an **Entered by** breakdown, and each **Highlighted text** message card says how the message was probably entered.
+
+The estimate is conservative: on a history typed entirely on a keyboard about 2.5% of typed words count as dictated, and a short clean dictated message stays **Can't tell**. Authorship writes keep the table current. A change to the rules, the constants or the word list bumps `dictationVersion`; the next writing pass then recomputes only `message_dictation`, from stored spans, so it neither reclassifies writing nor marks labels or findings pending. Writing remains pending until that version finishes, even when authorship itself is current. Both work engines admit the backfill; interrupted batches resume from the saved estimates. `tools/spelling_words.py` rebuilds the word list.
+
 ## Known limits
 
 - Text pasted from outside the archive (a web chat, a document, a terminal) is found through explicit quotation/report cues or when it looks like code, logs, tables, or agent formatting. Unmarked prose written by an agent elsewhere can still count as typed; the typing-speed check needs an earlier message in the same conversation.
@@ -101,7 +130,7 @@ The rebuild stores each span in `message_authorship_spans` (one row per span, wi
 - Tool-source extraction recognizes literal write/edit payloads, added patch lines, and file-writing heredocs, including supported literal tool calls inside `exec`. Static parsing ignores calls mentioned in comments, strings or regex literals and does not execute code or reconstruct computed arguments and interpolated templates. A heredoc requires a real stdout file redirect or a `tee` file operand on its own command; quoted operators, stderr-only redirects, and read-only pipelines do not establish file provenance.
 - Text you pasted and then edited counts as quoted where runs of 12 or more words still match, or a short review item matches the same already-established source. Other edits remain eligible as typed.
 - An identifier you typed yourself (a function name, a short path) counts as pasted when it is 20 or more characters or dominates its line.
-- Dictation cannot be told apart from typing; both count as yours.
+- Whether typed words were dictated is an estimate from the text (see [Dictated or typed](#dictated-or-typed)). A short message, or a careful typist's clean prose, cannot be told apart reliably.
 - Senders are recorded as sources are re-ingested. Until a session is re-indexed, headless runs from before this change count as typed unless another rule claims them.
 - An Antigravity print-mode run whose log the CLI rotated away before Pharos captured it cannot be told from an interactive run; its prompt usually counts as re-sent.
 - A headless run an app started in a work's folder (Conductor's `codex exec` title and summary runs) is linked to that work's conversation when it had started a command in the 30 seconds before, as if that command had launched it.

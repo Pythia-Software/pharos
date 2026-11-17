@@ -1296,10 +1296,11 @@ func (c *Catalog) refreshAuthorshipInContext(parent context.Context) bool {
 	if parent != nil && parent.Err() != nil {
 		return false
 	}
-	if want, built, err := c.authorshipEstimateGenerations(); err == nil && (want != built || c.authorshipQuickPending()) {
+	dictation := c.dictationRefreshPending()
+	if want, built, err := c.authorshipEstimateGenerations(); err == nil && (want != built || c.authorshipQuickPending() || dictation) {
 		// The generation moves with the tool ledger, on nearly every index.
-		// With no writing queued there is only that to publish, which needs
-		// no operation of its own.
+		// With no writing queued or dictation version pending there is only
+		// that to publish, which needs no operation of its own.
 		ctx := parent
 		if ctx == nil {
 			ctx = context.Background()
@@ -1309,7 +1310,7 @@ func (c *Catalog) refreshAuthorshipInContext(parent context.Context) bool {
 		// a failure. While another pass runs, it publishes instead.
 		published := false
 		c.authorship.mu.Lock()
-		idle := !c.authorship.running
+		idle := !c.authorship.running && !dictation
 		if idle {
 			c.authorship.running = true
 		}
@@ -1339,10 +1340,11 @@ func (c *Catalog) refreshAuthorshipInContext(parent context.Context) bool {
 // ensureAuthorship is refreshAuthorship for a page. It builds a ledger that
 // is missing or classified by older rules, unless that build just failed,
 // and otherwise shows the last index's until the next. It reports whether
-// messages changed since the ledger was built.
+// messages or the dictation rules changed since the ledger was built.
 func (c *Catalog) ensureAuthorship() (stale bool) {
 	want, built, err := c.authorshipEstimateGenerations()
-	if err != nil || want == built && !c.authorshipQuickPending() {
+	dictation := c.dictationRefreshPending()
+	if err != nil || want == built && !c.authorshipQuickPending() && !dictation {
 		return false
 	}
 	c.authorship.mu.Lock()
@@ -1350,7 +1352,7 @@ func (c *Catalog) ensureAuthorship() (stale bool) {
 	attempted := c.authorship.estimatesAttempted
 	c.authorship.mu.Unlock()
 	quickVersion, _ := c.metaValue(context.Background(), "authorship_quick_version")
-	if !strings.HasSuffix(built, "/"+authorshipVersion) && quickVersion != authorshipQuickVersion && !failed && !attempted {
+	if (dictation || !strings.HasSuffix(built, "/"+authorshipVersion) && quickVersion != authorshipQuickVersion) && !failed && !attempted {
 		c.startAuthorship(want)
 	}
 	return true
@@ -1690,7 +1692,7 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, pass
 			return err
 		}
 		reportWork(ctx, "authorship mode: "+run.reason, "message", 0, 0)
-		return nil
+		return c.refreshDictation(ctx)
 	}
 	full := run.classifier == nil
 	if pass == authorshipRefine {
@@ -1739,7 +1741,7 @@ func (c *Catalog) rebuildAuthorship(ctx context.Context, generation string, pass
 		return err
 	}
 	reportWork(ctx, fmt.Sprintf("authorship %s: inputs=%s classify=%s store=%s; messages=%d spans=%d launches=%d names=%d", run.reason, inputsTook.Round(time.Millisecond), classifyTook.Round(time.Millisecond), time.Since(stored).Round(time.Millisecond), written["message_authorship"], written["message_authorship_spans"], written["conversation_launches"], written["workspace_names"]), "message", len(run.inputs), len(run.inputs))
-	return nil
+	return c.refreshDictation(ctx)
 }
 
 // The user messages to classify, and the agent replies, in send order, that

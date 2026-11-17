@@ -1300,7 +1300,7 @@ function HumanUsageDashboard() {
   return <CatalogDashboard catalog={humanAnalysisCatalog} dataset="writing_messages" name="human" defaults={dashboardDefaults.human} readWhere={readHumanWhere}
     summary={where => <HumanWordsSummary where={where} status={status} />}
     panels={() => <>
-      <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, copied agent output, templates, attachments, app instructions and automated prompts. Select a column, bar or box to open its messages; each message is highlighted by where its text came from.</p>
+      <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, copied agent output, templates, attachments, app instructions and automated prompts. Whether they were dictated is estimated from the text: a longer message with no typos, lowercase sentences, code or shorthand is likely dictated. Select a column, bar or box to open its messages; each message is highlighted by where its text came from.</p>
     </>} />;
 }
 
@@ -1317,6 +1317,7 @@ const readHumanWhere: ReadWhere = (where, state) => {
 // The dashboard's population, whatever the chart draws.
 const humanSummaryMetrics: AggregationClause[] = [
   { id: "typed", op: "sum", field: "typed_words", groupBy: [] },
+  { id: "dictated", op: "sum", field: "dictated_words", groupBy: [] },
   { id: "words", op: "sum", field: "words", groupBy: [] },
   { id: "typed_messages", op: "sum", expression: "SUM(IF([typed_words]>0,1,0))", groupBy: [] },
   { id: "messages", op: "count", groupBy: [] },
@@ -1324,7 +1325,7 @@ const humanSummaryMetrics: AggregationClause[] = [
 function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: AuthorshipStatus | null }) {
   const result = useMetrics("writing_messages", where, humanSummaryMetrics);
   const value = (id: string) => Number(result.metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
-  const typed = value("typed"), words = value("words"), typedMessages = value("typed_messages");
+  const typed = value("typed"), dictated = value("dictated"), words = value("words"), typedMessages = value("typed_messages");
   const building = status !== null && !status.built_at;
   // key keeps each card's readiness scope (a URL value) when its label changes.
   const card = (label: string, amount: string, detail: string, key = label) => <div className="mcp-metric"><span>{label}<DataReadinessIndicator id={`metric:writing_messages:${key}`} title={label} dataset="writing_messages" query={{where}} {...result.readiness} /></span><strong>{building ? "Building…" : result.loading ? "Loading…" : result.error ? "Unavailable" : amount}</strong><small>{detail}</small></div>;
@@ -1333,6 +1334,7 @@ function HumanWordsSummary({ where, status }: { where: WhereTerm[]; status: Auth
       {card("Words you wrote", compactNumber(typed), "typed or dictated in the selected period")}
       {card("Messages with your writing", typedMessages.toLocaleString(), `of ${value("messages").toLocaleString()} classified user messages`)}
       {card("Words per message", typedMessages ? Math.round(typed / typedMessages).toLocaleString() : "—", "average over messages containing your writing")}
+      {card("Dictated", typed ? `${Math.round(dictated / typed * 100)}%` : "—", `${compactNumber(dictated)} of your words, estimated from the text`)}
       {card("Your writing share", words ? `${Math.round(typed / words * 100)}%` : "—", `of ${compactNumber(words)} words in your messages`, "Typed share")}
     </div>
     {status ? <p className="usage-dashboard-note" role="status">{authorshipStatusText(status)}</p> : null}
