@@ -26,7 +26,7 @@ var transferHistoryTables = []string{
 	"agent_sessions", "agent_session_usage", "agent_session_token_evidence", "agent_session_messages", "message_authorship", "message_authorship_spans", "reasoning_extraction_state", "conversation_launches", "conversation_identity_links", "model_requests", "tool_calls", "tool_commands", "tool_urls",
 	"skill_usages", "conversation_instructions", "task_attempts", "handoffs", "change_sets", "change_files",
 	"work_pr_links", "metrics", "metric_ledger", "workspace_sightings", "conversation_sightings", "copy_versions", "copy_evidence", "source_evidence",
-	"declared_native_aliases", "conversation_group_membership", "conversation_parent_refs", "ask_native_sessions", "protections", "activity_events", "receipts", "mcp_calls",
+	"declared_native_aliases", "conversation_group_membership", "conversation_parent_refs", "ask_native_sessions", "protections", "activity_events", "receipts", "mcp_calls", "teams_send_log",
 	// Typed execution evidence: an adapter's claims (Cursor copies and echoes)
 	// were retained before it filtered and cannot be derived from the rows.
 	"execution_claims", "execution_evidence_state",
@@ -565,12 +565,30 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	if reviews == 0 {
 		tables = slices.DeleteFunc(tables, func(name string) bool { return strings.HasPrefix(name, "pull_request_") })
 	}
-	var privacyTables int
-	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM delivered.sqlite_master WHERE type='table' AND name='teams_conversation_privacy'").Scan(&privacyTables); err != nil {
-		return err
+	for _, name := range []string{"teams_conversation_privacy", "teams_send_log"} {
+		var present int
+		if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM delivered.sqlite_master WHERE type='table' AND name=?", name).Scan(&present); err != nil {
+			return err
+		}
+		if present == 0 {
+			tables = slices.DeleteFunc(tables, func(table string) bool { return table == name })
+		}
 	}
-	if privacyTables == 0 {
-		tables = slices.DeleteFunc(tables, func(name string) bool { return name == "teams_conversation_privacy" })
+	if slices.Contains(tables, "teams_conversation_privacy") {
+		var columns int
+		if err = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('teams_conversation_privacy','delivered') WHERE name IN ('provider','account','native_id')`).Scan(&columns); err != nil {
+			return err
+		}
+		if columns != 3 {
+			var rows int
+			if err = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM delivered.teams_conversation_privacy`).Scan(&rows); err != nil {
+				return err
+			}
+			if rows != 0 {
+				return fmt.Errorf("older privacy markings need source-identity reconciliation before transfer")
+			}
+			tables = slices.DeleteFunc(tables, func(name string) bool { return name == "teams_conversation_privacy" })
+		}
 	}
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -586,6 +604,9 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	})
 	mapped := map[string]bool{}
 	ref := func(table, col, expression string) string {
+		if table == "teams_send_log" && col == "work_id" {
+			return expression
+		}
 		entity := transferReferences[col]
 		if col == "parent_id" && (table == "conversations" || table == "agent_sessions") {
 			entity = table
@@ -623,6 +644,9 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 		expressions := []string{}
 		for _, col := range columns {
 			e := "s." + quotedIdentifier(col.name)
+			if table == "teams_send_log" && col.name == "imported_from" {
+				e = "CASE WHEN s.imported_from<>'' THEN s.imported_from ELSE s.library_id END"
+			}
 			if col.name == "id" && mapped[table] {
 				e = "(SELECT destination FROM map_" + table + " WHERE source=s.id)"
 			} else {
@@ -731,15 +755,20 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	}
 	for _, table := range ordered {
 		if table == "teams_conversation_privacy" {
-			// When libraries disagree, retain either effective private mark,
-			// and invalidate differing classifier evidence. A review in one
-			// library cannot certify the other library's input or clear its mark.
-			if _, err = tx.ExecContext(ctx, `INSERT INTO teams_conversation_privacy(conversation_id,user_private,classifier_state,classifier_input,classifier_reviewed)
- SELECT conversation_id,user_private,classifier_state,classifier_input,classifier_reviewed FROM incoming_teams_conversation_privacy WHERE true
- ON CONFLICT(conversation_id) DO UPDATE SET user_private=MAX(teams_conversation_privacy.user_private,excluded.user_private,
- CASE WHEN excluded.classifier_state='pending' OR (excluded.classifier_state='flagged' AND excluded.classifier_reviewed=0) THEN 1 ELSE 0 END,
- CASE WHEN teams_conversation_privacy.classifier_state='pending' OR (teams_conversation_privacy.classifier_state='flagged' AND teams_conversation_privacy.classifier_reviewed=0) THEN 1 ELSE 0 END),
- classifier_state=CASE WHEN teams_conversation_privacy.classifier_state=excluded.classifier_state AND teams_conversation_privacy.classifier_input=excluded.classifier_input AND teams_conversation_privacy.classifier_reviewed=excluded.classifier_reviewed THEN teams_conversation_privacy.classifier_state ELSE 'unclassified' END,
+			// Keep explicit marks separate from provisional classifier holds.
+			// Conflicting classifier evidence requires a fresh review, without
+			// turning a suggestion into a permanent user mark.
+			var collisions int
+			if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM incoming_teams_conversation_privacy s JOIN teams_conversation_privacy d ON d.conversation_id=s.conversation_id WHERE d.provider<>'' AND s.provider<>'' AND (d.provider<>s.provider OR d.account<>s.account OR d.native_id<>s.native_id)`).Scan(&collisions); err != nil {
+				return err
+			}
+			if collisions != 0 {
+				return fmt.Errorf("privacy identities conflict; reconciliation is required")
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO teams_conversation_privacy(conversation_id,provider,account,native_id,user_private,classifier_state,classifier_input,classifier_reviewed)
+ SELECT conversation_id,provider,account,native_id,user_private,classifier_state,classifier_input,classifier_reviewed FROM incoming_teams_conversation_privacy WHERE true
+ ON CONFLICT DO UPDATE SET user_private=MAX(teams_conversation_privacy.user_private,excluded.user_private),
+ classifier_state=CASE WHEN teams_conversation_privacy.classifier_state=excluded.classifier_state AND teams_conversation_privacy.classifier_input=excluded.classifier_input AND teams_conversation_privacy.classifier_reviewed=excluded.classifier_reviewed THEN teams_conversation_privacy.classifier_state ELSE 'flagged' END,
  classifier_input=CASE WHEN teams_conversation_privacy.classifier_state=excluded.classifier_state AND teams_conversation_privacy.classifier_input=excluded.classifier_input AND teams_conversation_privacy.classifier_reviewed=excluded.classifier_reviewed THEN teams_conversation_privacy.classifier_input ELSE '' END,
  classifier_reviewed=CASE WHEN teams_conversation_privacy.classifier_state=excluded.classifier_state AND teams_conversation_privacy.classifier_input=excluded.classifier_input AND teams_conversation_privacy.classifier_reviewed=excluded.classifier_reviewed THEN teams_conversation_privacy.classifier_reviewed ELSE 0 END`); err != nil {
 				return fmt.Errorf("merge privacy markings: %w", err)
@@ -1081,6 +1110,31 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 	if a.Instance == b.Instance {
 		return receipt, fmt.Errorf("source and destination have the same writable identity; recover the copy first")
 	}
+	// The exclusive library-use lease makes every old source snapshot here an
+	// abandoned transfer, including one left by a process crash. Only remove
+	// marked directories created by this transfer process; never follow links.
+	sourceDirectory := filepath.Dir(canonical(source.CatalogPath))
+	entries, err := os.ReadDir(sourceDirectory)
+	if err != nil {
+		return receipt, err
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".pharos-transfer-source-") && entry.IsDir() {
+			stage := filepath.Join(sourceDirectory, entry.Name())
+			markerPath := filepath.Join(stage, ".pharos-transfer-stage")
+			info, e := os.Lstat(markerPath)
+			if e != nil || !info.Mode().IsRegular() || info.Size() != int64(len("pharos-transfer-source-v1\n")) {
+				continue
+			}
+			marker, e := os.ReadFile(markerPath)
+			if e != nil || string(marker) != "pharos-transfer-source-v1\n" {
+				continue
+			}
+			if err = os.RemoveAll(stage); err != nil {
+				return receipt, err
+			}
+		}
+	}
 	report := func(s string) {
 		if progress != nil {
 			progress(s)
@@ -1162,7 +1216,46 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 	if err = prepared.Close(); err != nil {
 		return receipt, err
 	}
-	if err = ensureCatalogWorkingSpace(target.CaptureRoot, source.CatalogPath); err != nil {
+	if err = ensureCatalogWorkingSpace(filepath.Dir(source.CatalogPath), source.CatalogPath); err != nil {
+		return receipt, err
+	}
+	// The raw snapshot contains local consent and unsent Teams drafts. Keep it
+	// on the source volume until sanitization has vacuumed their free pages.
+	sourceStage, err := os.MkdirTemp(filepath.Dir(source.CatalogPath), ".pharos-transfer-source-")
+	if err != nil {
+		return receipt, err
+	}
+	defer os.RemoveAll(sourceStage)
+	markerPath := filepath.Join(sourceStage, ".pharos-transfer-stage")
+	if err = os.WriteFile(markerPath, []byte("pharos-transfer-source-v1\n"), 0o600); err != nil {
+		return receipt, err
+	}
+	if err = syncFile(markerPath); err != nil {
+		return receipt, err
+	}
+	if err = syncDirectory(sourceStage); err != nil {
+		return receipt, err
+	}
+	if err = syncDirectory(filepath.Dir(sourceStage)); err != nil {
+		return receipt, err
+	}
+	sourcePath := filepath.Join(sourceStage, "history.sqlite3")
+	if err = snapshotSQLite(ctx, source.CatalogPath, sourcePath); err != nil {
+		return receipt, err
+	}
+	snapshot, err := sql.Open("sqlite", catalogDSN(sourcePath))
+	if err != nil {
+		return receipt, err
+	}
+	digest, err := historyDigest(ctx, snapshot)
+	snapshot.Close()
+	if err != nil {
+		return receipt, err
+	}
+	if err = sanitizeHistory(ctx, sourcePath); err != nil {
+		return receipt, fmt.Errorf("prepare transfer history: %w", err)
+	}
+	if err = ensureCatalogWorkingSpace(target.CaptureRoot, sourcePath); err != nil {
 		return receipt, err
 	}
 	if err = os.MkdirAll(filepath.Join(target.CaptureRoot, ".imports"), 0o700); err != nil {
@@ -1179,22 +1272,19 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 		}
 	}()
 	path := filepath.Join(dir, "history.sqlite3")
-	if err = snapshotSQLite(ctx, source.CatalogPath, path); err != nil {
+	if _, err = copyVerified(ctx, sourcePath, path); err != nil {
 		return receipt, err
 	}
-	snapshot, err := sql.Open("sqlite", catalogDSN(path))
-	if err != nil {
+	// Retained evidence roots can be configured near the catalog. Remove the
+	// raw source snapshot before walking any tree so it cannot be copied as
+	// evidence even if an unusual configuration overlaps those locations.
+	if err = os.RemoveAll(sourceStage); err != nil {
 		return receipt, err
 	}
-	digest, err := historyDigest(ctx, snapshot)
-	snapshot.Close()
-	if err != nil {
+	if err = syncDirectory(filepath.Dir(sourceStage)); err != nil {
 		return receipt, err
 	}
 	receipt = libraryTransferReceipt{Version: 1, Source: a.Instance, Target: b.Instance, SourceDigest: digest, Move: move, State: "copying", Files: []transferFile{}}
-	if err = sanitizeHistory(ctx, path); err != nil {
-		return receipt, fmt.Errorf("prepare transfer history: %w", err)
-	}
 	receipt.CatalogDigest, _, err = fileDigest(path)
 	if err != nil {
 		return receipt, err
@@ -1294,7 +1384,7 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 // query caches, free SQLite pages, or a retained WAL.
 var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots", "query_table_computed_columns", "sync_settings", "background_settings", "background_temporary_cadences", "repository_checkouts", "automatic_source_states",
 	"cloud_destinations", "cloud_backup_runs", "cloud_backup_schedules", "library_size_history",
-	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions", "teams_conversation_privacy", "teams_privacy_revision", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
+	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions", "teams_conversation_privacy", "teams_privacy_revision", "teams_local_settings", "teams_outbox", "teams_send_log", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
 	"safety_state", "safety_cart", "safety_handoffs", "fix_state", "fix_cart", "fix_handoffs",
 	"source_states", "source_record_states", "source_item_states", "source_terminal_states", "sync_generations", "hosts", "protections", "repository_retirements", "library_delivery_checkpoints", "library_workspace_delivery_checkpoints"}
 
@@ -1356,6 +1446,13 @@ func cleanupDeliveredHistory(ctx context.Context, source Config, receipt library
 				if _, e := tx.ExecContext(ctx, "INSERT OR REPLACE INTO "+quotedIdentifier(table)+"("+list+") SELECT "+list+" FROM prior."+quotedIdentifier(table)); e != nil {
 					return e
 				}
+			}
+			// A move changes source data and may have interrupted a response.
+			// Preserve the audit and outbox but require reconciliation before
+			// either source or destination can resume any Teams work.
+			if _, e := tx.ExecContext(ctx, `UPDATE teams_local_settings SET enabled=0,settings_revision=settings_revision+1 WHERE id=1;
+ UPDATE teams_outbox SET state='needs_reconcile' WHERE state='sending'`); e != nil {
+				return e
 			}
 			if _, e := tx.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key,value) SELECT key,value FROM prior.meta WHERE key IN ('mcp_enabled','repository_renames',?)`, legacyHostKey); e != nil {
 				return e

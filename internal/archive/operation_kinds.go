@@ -222,6 +222,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops between conversations; building the tool index again resumes it.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
 
 	// F. Protect and move.
+	{Kind: "teams.enrollment", Class: workClassSpecialized, Label: "Connect Teams", Verb: "Connecting Teams", Holds: "D:w", Affects: "—",
+		OnEject: "Stops waiting for browser confirmation; connect again afterwards.", Latency: "instant", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "backup.local", Class: workClassSpecialized, Label: "Back up", Verb: "Backing up", Holds: "D:w B(d):w C(*):r", Affects: "backup.local", Stop: "backup",
 		OnEject: "Stops; the next backup carries on from what was copied. It waits for any capture in progress to finish.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "cloud.connect", Class: workClassSpecialized, Label: "Test a cloud backup destination", Verb: "Testing the destination", Holds: "D:w K:w", Affects: "—", Stop: "cloud",

@@ -11,14 +11,15 @@ import (
 // A private conversation is excluded from org LLM input and content queries;
 // the separate query policy decides which statistical operations may include it.
 type teamsPrivacy struct {
-	ConversationID     string `json:"conversationId"`
-	UserPrivate        bool   `json:"userPrivate"`
-	ClassifierState    string `json:"classifierState"`
-	ClassifierInput    string `json:"classifierInput,omitempty"`
-	ClassifierReviewed bool   `json:"classifierReviewed"`
-	Private            bool   `json:"private"`
-	SensitivityHold    bool   `json:"sensitivityHold"`
-	Revision           int64  `json:"revision"`
+	provider, account, native string
+	ConversationID            string `json:"conversationId"`
+	UserPrivate               bool   `json:"userPrivate"`
+	ClassifierState           string `json:"classifierState"`
+	ClassifierInput           string `json:"classifierInput,omitempty"`
+	ClassifierReviewed        bool   `json:"classifierReviewed"`
+	Private                   bool   `json:"private"`
+	SensitivityHold           bool   `json:"sensitivityHold"`
+	Revision                  int64  `json:"revision"`
 }
 
 func (p *teamsPrivacy) resolve() {
@@ -32,8 +33,16 @@ func readTeamsPrivacy(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, id string) (teamsPrivacy, error) {
 	p := teamsPrivacy{ConversationID: id}
-	err := q.QueryRowContext(ctx, `SELECT COALESCE(p.user_private,0),COALESCE(p.classifier_state,'unclassified'),COALESCE(p.classifier_input,''),COALESCE(p.classifier_reviewed,0),r.revision
- FROM conversations c CROSS JOIN teams_privacy_revision r LEFT JOIN teams_conversation_privacy p ON p.conversation_id=c.id WHERE c.id=? AND r.id=1`, id).Scan(&p.UserPrivate, &p.ClassifierState, &p.ClassifierInput, &p.ClassifierReviewed, &p.Revision)
+	var matches, mismatches int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(CASE WHEN p.conversation_id=c.id AND p.provider<>'' AND (p.provider<>c.provider OR p.account<>c.account OR p.native_id<>c.native_id) THEN 1 ELSE 0 END),0)
+ FROM conversations c JOIN teams_conversation_privacy p ON (p.provider=c.provider AND p.account=c.account AND p.native_id=c.native_id) OR p.conversation_id=c.id WHERE c.id=?`, id).Scan(&matches, &mismatches); err != nil {
+		return p, err
+	}
+	if matches > 1 || mismatches > 0 {
+		return p, errTeamsSourceUnavailable
+	}
+	err := q.QueryRowContext(ctx, `SELECT c.provider,c.account,c.native_id,COALESCE(p.user_private,0),COALESCE(p.classifier_state,'unclassified'),COALESCE(p.classifier_input,''),COALESCE(p.classifier_reviewed,0),r.revision
+ FROM conversations c CROSS JOIN teams_privacy_revision r LEFT JOIN teams_conversation_privacy p ON (p.provider=c.provider AND p.account=c.account AND p.native_id=c.native_id) OR p.conversation_id=c.id WHERE c.id=? AND r.id=1`, id).Scan(&p.provider, &p.account, &p.native, &p.UserPrivate, &p.ClassifierState, &p.ClassifierInput, &p.ClassifierReviewed, &p.Revision)
 	if err != nil {
 		return p, err
 	}
@@ -51,7 +60,12 @@ var errTeamsPrivacyStale = errors.New("privacy setting changed; review it again"
 
 func (c *Catalog) updateTeamsPrivacy(ctx context.Context, id string, expected *int64, change func(*teamsPrivacy) error) (teamsPrivacy, error) {
 	var result teamsPrivacy
-	err := c.writeTransaction(ctx, "teams-privacy", func(tx *sql.Tx) error {
+	lease, err := c.teamsSharingLease()
+	if err != nil {
+		return result, err
+	}
+	defer lease.Close()
+	err = c.writeTransaction(ctx, "teams-privacy", func(tx *sql.Tx) error {
 		p, err := readTeamsPrivacy(ctx, tx, id)
 		if err != nil {
 			return err
@@ -67,7 +81,7 @@ func (c *Catalog) updateTeamsPrivacy(ctx context.Context, id string, expected *i
 			result = p
 			return nil
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO teams_conversation_privacy(conversation_id,user_private,classifier_state,classifier_input,classifier_reviewed) VALUES(?,?,?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET user_private=excluded.user_private,classifier_state=excluded.classifier_state,classifier_input=excluded.classifier_input,classifier_reviewed=excluded.classifier_reviewed`, id, p.UserPrivate, p.ClassifierState, p.ClassifierInput, p.ClassifierReviewed)
+		_, err = tx.ExecContext(ctx, `INSERT INTO teams_conversation_privacy(conversation_id,provider,account,native_id,user_private,classifier_state,classifier_input,classifier_reviewed) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET provider=excluded.provider,account=excluded.account,native_id=excluded.native_id,user_private=excluded.user_private,classifier_state=excluded.classifier_state,classifier_input=excluded.classifier_input,classifier_reviewed=excluded.classifier_reviewed`, id, p.provider, p.account, p.native, p.UserPrivate, p.ClassifierState, p.ClassifierInput, p.ClassifierReviewed)
 		if err != nil {
 			return err
 		}

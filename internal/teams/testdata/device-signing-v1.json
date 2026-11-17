@@ -1,0 +1,14 @@
+{
+  "body": "{\"library_ids\":[\"synthetic-library\"],\"wait_seconds\":0}",
+  "body_sha256": "785bbe2f1c17efaae302e977b16bd89301ffc1ad991633e2f61c05fb89ea5223",
+  "description": "Synthetic test key; never use for authentication",
+  "installation_id": "a4c09e42-d0a6-45f0-89ef-2a03b7cff630",
+  "method": "POST",
+  "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+  "public_key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+  "seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "signature": "N2e4hAysDNnNrT83F2A7rYoHlQO1Fg6giMNsxKpEBl1748RLwN-ex0I__Q81UkQWNKRVyIrAjjOpumpD-_FsBA",
+  "signing_message": "pharos-device-v1\na4c09e42-d0a6-45f0-89ef-2a03b7cff630\nPOST\n/v1/device/poll\n1794884400\nAAAAAAAAAAAAAAAAAAAAAA\n785bbe2f1c17efaae302e977b16bd89301ffc1ad991633e2f61c05fb89ea5223",
+  "target": "/v1/device/poll",
+  "timestamp": "1794884400"
+}

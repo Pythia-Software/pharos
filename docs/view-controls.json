@@ -8965,6 +8965,24 @@
       "reason": "Bound directly to the registered view field."
     },
     {
+      "key": "5a34795592500e8a:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsSettings",
+      "tag": "button",
+      "control": "onClick={() => void act()}",
+      "contract": "action",
+      "reason": "Starts or cancels an explicit local enrollment attempt; this is an action, not URL view state."
+    },
+    {
+      "key": "68af4cde2a801b20:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsSettings",
+      "tag": "button",
+      "control": "onClick={() => void act(true)}",
+      "contract": "action",
+      "reason": "Starts or cancels an explicit local enrollment attempt; this is an action, not URL view state."
+    },
+    {
       "key": "7c0248af1a26259f:0",
       "file": "web/src/text-search-editor.tsx",
       "owner": "ConditionOptions",

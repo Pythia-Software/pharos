@@ -975,6 +975,7 @@ const ROUTES = [
   { name: "MCP query", url: "/analyze?analyze_mode=query&analyze_data=mcp_calls&analyze_topic=mcp&analyze_search=1", ready: ".usage-workspace-table .qt-row" },
   { name: "MCP legacy link", url: "/mcp", ready: `.usage-mcp-dashboard ${analysisReady}` },
   { name: "MCP settings", url: "/settings/mcp", ready: "#mcpSettingsPage .mcp-setup-grid" },
+  { name: "Teams settings", url: "/settings/teams", ready: "#teamsSettingsPage .teams-settings" },
   // Files: a file's tabs (Git's code, blame and history, its sessions'
   // edits as diffs, the sessions), a directory with Go to file, a commit's
   // diffs, the checkout chooser, the tree hidden, and the projects.
@@ -2392,4 +2393,12 @@ test('Conversation privacy control saves the reviewed state', { skip }, async t 
   await button.click();
   await app.page.getByRole('button', { name: 'Allow content sharing' }).waitFor();
   assert.deepEqual(update, { action: 'mark', private: true, revision: 0 });
+});
+
+test('Teams connection shows its fingerprint and can be cancelled', { skip }, async t => {
+  const app = await open(t, { url: '/settings/teams', ready: '#teamsSettingsPage .teams-settings' });
+  await app.page.getByRole('button', { name: 'Connect Teams' }).click();
+  await app.page.getByText('ab1234cd56').waitFor();
+  await app.page.getByRole('button', { name: 'Cancel connection' }).click();
+  await app.page.getByRole('button', { name: 'Connect Teams' }).waitFor();
 });

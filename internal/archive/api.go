@@ -88,6 +88,7 @@ type Server struct {
 	// Leave catalog connections available for rows/previews while metadata scans run.
 	queryMetadata chan struct{}
 	ask           askState
+	teams         teamsEnrollmentState
 	// ops is the operation registry (operations.go); journal writes it to
 	// the catalog, and leases watches other Pharos processes' leases.
 	ops     *opRegistry
@@ -299,6 +300,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.teamsPrivacyHTTP(w, r)
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/api/teams/enrollment") {
+		s.teamsEnrollmentHTTP(w, r)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/feedback/") {
 		s.feedbackHTTP(w, r)
 		return
@@ -365,7 +370,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/projects", "/settings/models", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings", "/ask", "/files":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/libraries", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/teams", "/settings/header", "/settings/layout", "/settings/preferences", "/settings/projects", "/settings/models", "/settings/ask", "/settings/logs", "/sources", "/activity", "/analyze", "/tools", "/health", "/mcp", "/findings", "/ask", "/files":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")

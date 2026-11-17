@@ -623,6 +623,11 @@ func TestLabelsStopAndResume(t *testing.T) {
 func TestLabelsRunInTheAnalysisChainOnlyWhenEnabled(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		catalog, config := testCatalog(t)
+		// This test exercises the labels stage with its synthetic model. The
+		// independent agent-events stage defaults on and has a separate model.
+		if err := catalog.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{agentEventsFlag: false}}); err != nil {
+			t.Fatal(err)
+		}
 		seedLabelingCatalog(t, catalog)
 		config.Labels = labelsTestSettings(t, "ok")
 		config.Labels.Enabled = enabled
