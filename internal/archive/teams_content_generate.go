@@ -53,7 +53,7 @@ func (s *Server) generateTeamsContent(ctx context.Context, cfg Config, client *t
 		return errTeamsClaudeIsolation
 	}
 	provider.Models = []askModel{{ID: selection.Model, Efforts: []string{selection.Effort}}}
-	stream, err := teamsOpenClaude(ctx, provider, selection, config.ResultSchema.JSONSchema, account)
+	stream, err := teamsOpenClaude(ctx, provider, selection, config.ResultSchema.JSONSchema, account, s.teamsOperationChild)
 	if err != nil {
 		return fmt.Errorf("model preflight: %w", err)
 	}

@@ -81,26 +81,27 @@ type teamsClaudeReviewedAccount struct {
 	Session [32]byte
 	Auth    [32]byte
 }
+type teamsChildStarter func(func()) (<-chan struct{}, bool)
 
 // teamsOpenClaude starts a stateless, tool-free process and checks effective
 // settings and hooks before returning. It receives no question or source data.
 // expectedAccount is bound to the member's prior local model-account review.
-func teamsOpenClaude(ctx context.Context, provider askProvider, selection askSelection, schema []byte, expectedAccount teamsClaudeReviewedAccount) (*teamsClaudeStream, error) {
+func teamsOpenClaude(ctx context.Context, provider askProvider, selection askSelection, schema []byte, expectedAccount teamsClaudeReviewedAccount, start teamsChildStarter) (*teamsClaudeStream, error) {
 	if expectedAccount.Session == ([32]byte{}) || expectedAccount.Auth == ([32]byte{}) {
 		return nil, errTeamsClaudeIsolation
 	}
-	return teamsOpenClaudePreflight(ctx, provider, selection, schema, &expectedAccount)
+	return teamsOpenClaudePreflight(ctx, provider, selection, schema, &expectedAccount, start)
 }
 
 // Inspection performs the same bounded preflight but cannot accept prompts.
 // It lets a member review the locally authenticated account before granting
 // an independently stored, exact model-processing permission.
-func teamsInspectClaude(ctx context.Context, provider askProvider, selection askSelection, schema []byte) (*teamsClaudeStream, error) {
-	return teamsOpenClaudePreflight(ctx, provider, selection, schema, nil)
+func teamsInspectClaude(ctx context.Context, provider askProvider, selection askSelection, schema []byte, start teamsChildStarter) (*teamsClaudeStream, error) {
+	return teamsOpenClaudePreflight(ctx, provider, selection, schema, nil, start)
 }
 
-func teamsOpenClaudePreflight(ctx context.Context, provider askProvider, selection askSelection, schema []byte, expectedAccount *teamsClaudeReviewedAccount) (*teamsClaudeStream, error) {
-	if provider.ID != "Claude" || !askValidSelection(provider, selection) || selection.Provider != "Claude" || selection.Fast || selection.Effort == "Default" || len(schema) == 0 || len(schema) > 32<<10 || !teams.ValidUniqueJSON(schema) {
+func teamsOpenClaudePreflight(ctx context.Context, provider askProvider, selection askSelection, schema []byte, expectedAccount *teamsClaudeReviewedAccount, start teamsChildStarter) (*teamsClaudeStream, error) {
+	if start == nil || provider.ID != "Claude" || !askValidSelection(provider, selection) || selection.Provider != "Claude" || selection.Fast || selection.Effort == "Default" || len(schema) == 0 || len(schema) > 32<<10 || !teams.ValidUniqueJSON(schema) {
 		return nil, errTeamsClaudeIsolation
 	}
 	compiled, err := teamsCompileArtifactSchema(schema)
@@ -164,7 +165,8 @@ func teamsOpenClaudePreflight(ctx context.Context, provider askProvider, selecti
 			os.RemoveAll(dir)
 		})
 	}
-	scannerDone = operationChild(func() {
+	var started bool
+	scannerDone, started = start(func() {
 		scanner := bufio.NewScanner(io.LimitReader(stdout, 2<<20+1))
 		scanner.Buffer(make([]byte, 4096), 512<<10)
 		var n int
@@ -186,6 +188,10 @@ func teamsOpenClaudePreflight(ctx context.Context, provider askProvider, selecti
 			s.errors <- io.EOF
 		}
 	})
+	if !started {
+		s.stop()
+		return nil, errServiceStopping
+	}
 	preflight, cancelPreflight := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelPreflight()
 	defer context.AfterFunc(preflight, s.stop)()

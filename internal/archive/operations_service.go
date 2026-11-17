@@ -93,13 +93,14 @@ func (s *Server) spawnRegistered(register func(), work func()) bool {
 	return true
 }
 
-// operationChild runs a bounded helper belonging to an already admitted
-// operation or request. The owner must cancel its context and join the
-// returned completion before returning; it is not independent background work.
-func operationChild(work func()) <-chan struct{} {
+// teamsOperationChild owns a joined helper under the service lifecycle. The
+// caller cancels its operation context and joins the returned completion.
+func (s *Server) teamsOperationChild(work func()) (<-chan struct{}, bool) {
 	done := make(chan struct{})
-	go func() { defer close(done); work() }()
-	return done
+	if !s.spawnRegistered(nil, func() { defer close(done); work() }) {
+		return nil, false
+	}
+	return done, true
 }
 
 // releasing reports a release (or another stop) in progress. It takes no

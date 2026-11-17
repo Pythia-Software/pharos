@@ -47,7 +47,7 @@ func (s *Server) inspectTeamsModel(ctx context.Context) (teamsModelInspection, e
 	// The preflight verifies the actual selected model and effort through the
 	// effective same-process control response. No ambient discovery is run.
 	provider.Models = []askModel{{ID: selection.Model, Efforts: []string{selection.Effort}}}
-	stream, err := teamsInspectClaude(ctx, provider, selection, []byte(teamsInspectionSchema))
+	stream, err := teamsInspectClaude(ctx, provider, selection, []byte(teamsInspectionSchema), s.teamsOperationChild)
 	if err != nil {
 		return out, err
 	}

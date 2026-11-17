@@ -194,7 +194,8 @@ func TestTeamsContentSyntheticPostgres(t *testing.T) {
 		t.Fatal("pinned Claude executable unavailable")
 	}
 	provider.Models = []askModel{{ID: selection.Model, Efforts: []string{selection.Effort}}}
-	inspected, err := teamsInspectClaude(ctx, provider, selection, []byte(teamsInspectionSchema))
+	service := testServer(t, cfg, c)
+	inspected, err := teamsInspectClaude(ctx, provider, selection, []byte(teamsInspectionSchema), service.teamsOperationChild)
 	if err != nil {
 		t.Fatalf("Claude preflight: %v", err)
 	}
@@ -215,7 +216,6 @@ func TestTeamsContentSyntheticPostgres(t *testing.T) {
 	if err = c.grantTeamsQuestion(ctx, *work, d, settings.SettingsRevision); err != nil {
 		t.Fatalf("source approval: %v", err)
 	}
-	service := testServer(t, cfg, c)
 	if _, err = service.checkTeamsWork(ctx); err != nil {
 		t.Fatalf("worker check: %v", err)
 	}

@@ -76,15 +76,20 @@ for line in sys.stdin:
 	selection := askSelection{Provider: "Claude", Model: "claude-opus-5-5", Effort: "Low"}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	startTestChild := func(work func()) (<-chan struct{}, bool) {
+		done := make(chan struct{})
+		go func() { defer close(done); work() }()
+		return done, true
+	}
 	open := func() *teamsClaudeStream {
-		s, e := teamsOpenClaude(ctx, provider, selection, []byte(`{"type":"object","properties":{"answer":{"type":"string","maxLength":64}},"required":["answer"],"additionalProperties":false}`), teamsClaudeReviewedAccount{Session: account, Auth: auth})
+		s, e := teamsOpenClaude(ctx, provider, selection, []byte(`{"type":"object","properties":{"answer":{"type":"string","maxLength":64}},"required":["answer"],"additionalProperties":false}`), teamsClaudeReviewedAccount{Session: account, Auth: auth}, startTestChild)
 		if e != nil {
 			t.Fatal(e)
 		}
 		return s
 	}
 	allowSynthetic := func(context.Context) (func(), error) { return func() {}, nil }
-	inspection, err := teamsInspectClaude(ctx, provider, selection, []byte(`{"type":"object","properties":{"answer":{"type":"string","maxLength":64}},"required":["answer"],"additionalProperties":false}`))
+	inspection, err := teamsInspectClaude(ctx, provider, selection, []byte(`{"type":"object","properties":{"answer":{"type":"string","maxLength":64}},"required":["answer"],"additionalProperties":false}`), startTestChild)
 	if err != nil || inspection.account != account || inspection.auth != auth || inspection.accountLabel == "" {
 		t.Fatalf("inspection: %v", err)
 	}
