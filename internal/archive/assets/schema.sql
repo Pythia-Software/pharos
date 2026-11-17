@@ -208,6 +208,15 @@ CREATE TABLE IF NOT EXISTS teams_native_source_proofs (
   indexed_digest TEXT NOT NULL, total_tokens INTEGER, total_digest TEXT NOT NULL DEFAULT '', origin TEXT NOT NULL,
   PRIMARY KEY(binding_id,conversation_id,origin)
 );
+-- Certified per-request Codex facts are opt-in local index evidence, not a
+-- source assignment, privacy decision or Teams capability advertisement.
+CREATE TABLE IF NOT EXISTS teams_codex_request_profiles (
+  binding_id TEXT NOT NULL, conversation_id TEXT NOT NULL, origin TEXT NOT NULL,
+  indexed_digest TEXT NOT NULL, evidence_sha256 TEXT NOT NULL, facts_json TEXT NOT NULL,
+  PRIMARY KEY(binding_id,conversation_id,origin),
+  FOREIGN KEY(binding_id,conversation_id,origin) REFERENCES teams_native_source_proofs(binding_id,conversation_id,origin) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS teams_codex_request_profiles_conversation ON teams_codex_request_profiles(conversation_id);
 CREATE TABLE IF NOT EXISTS teams_source_revision (
   id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
   proof_requested INTEGER NOT NULL DEFAULT 0 CHECK(proof_requested IN (0,1))

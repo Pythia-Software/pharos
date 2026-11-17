@@ -63,3 +63,37 @@ func TestSourceIdentityV2SyntheticVector(t *testing.T) {
 		t.Fatal("unknown profile version accepted")
 	}
 }
+
+func TestSourceProfileIdentityIsBoundToAnchor(t *testing.T) {
+	key := make([]byte, 32)
+	anchor, err := SourceToken(key, "codex", "synthetic-account", "thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	witness, err := SourceWitness(key, "codex", "codex_thread", "thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, childWitness, err := SourceProfileIdentity(key, anchor, witness, "codex_request_usage", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, againWitness, err := SourceProfileIdentity(key, anchor, witness, "codex_request_usage", 1)
+	if err != nil || token != again || childWitness != againWitness || token == anchor || childWitness == witness {
+		t.Fatal("profile identity is not stable and distinct")
+	}
+	if token != "QmDktxSMM5dbYzwdex6tGjLH37TMch_GqNNwwiwbWJY" || childWitness != "6N7-W7P9VhSHUAd8IxhfUjobDwbQEHxseULpphLAilg" {
+		t.Fatal("profile identity vector changed")
+	}
+	other, _ := SourceToken(key, "codex", "synthetic-account", "other")
+	changed, _, err := SourceProfileIdentity(key, other, witness, "codex_request_usage", 1)
+	if err != nil || changed == token {
+		t.Fatal("profile token not anchored")
+	}
+	if _, _, err = SourceProfileIdentity(key, anchor, witness, "codex_request_usage", 2); err == nil {
+		t.Fatal("unsupported profile version accepted")
+	}
+	if _, err = SourceEvidenceRevision(key, token, "codex_request_usage", 1, make([]byte, 32)); err != nil {
+		t.Fatal(err)
+	}
+}

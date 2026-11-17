@@ -53,8 +53,33 @@ func SourceEvidenceRevision(key []byte, sourceToken, profile string, version int
 	if decoded, err := base64.RawURLEncoding.Strict().DecodeString(sourceToken); err != nil || len(decoded) != sha256.Size || base64.RawURLEncoding.EncodeToString(decoded) != sourceToken {
 		return "", errInvalidSourceIdentity
 	}
-	if !((profile == "codex_thread_usage" || profile == "claude_reply_usage" || profile == "codex_transcript") && version == 1) || len(intrinsicDigest) != sha256.Size {
+	if !((profile == "codex_thread_usage" || profile == "codex_request_usage" || profile == "claude_reply_usage" || profile == "codex_transcript") && version == 1) || len(intrinsicDigest) != sha256.Size {
 		return "", errInvalidSourceIdentity
 	}
 	return sourceIdentityMAC(key, []byte("pharos-source-evidence-v1"), []byte(sourceToken), []byte(profile), []byte(strconv.Itoa(version)), intrinsicDigest)
+}
+
+// SourceProfileIdentity derives a non-owning, profile-specific child identity
+// from the exact existing thread token and witness. The keyed domains prevent
+// a child from being substituted for its ownership/protection anchor.
+func SourceProfileIdentity(key []byte, anchorToken, anchorWitness, profile string, version int) (string, string, error) {
+	valid := func(value string) bool {
+		b, e := base64.RawURLEncoding.Strict().DecodeString(value)
+		return e == nil && len(b) == sha256.Size && base64.RawURLEncoding.EncodeToString(b) == value
+	}
+	if profile != "codex_request_usage" || version != 1 || !valid(anchorToken) || !valid(anchorWitness) {
+		return "", "", errInvalidSourceIdentity
+	}
+	token, err := sourceIdentityMAC(key, []byte("pharos-source-profile-token-v1"), []byte(profile), []byte(strconv.Itoa(version)), []byte(anchorToken))
+	if err != nil {
+		return "", "", err
+	}
+	witness, err := sourceIdentityMAC(key, []byte("pharos-source-profile-witness-v1"), []byte(profile), []byte(strconv.Itoa(version)), []byte(anchorWitness))
+	if err != nil {
+		return "", "", err
+	}
+	if token == anchorToken || witness == anchorWitness {
+		return "", "", errInvalidSourceIdentity
+	}
+	return token, witness, nil
 }
