@@ -331,7 +331,7 @@ func TestTeamsProtectionPreLedgerUpgrade(t *testing.T) {
 	if n := countRows(t, c, `SELECT count(*) FROM teams_protection_assertions WHERE conversation_id='flag' AND kind='positive_flag'`); n != 1 {
 		t.Fatalf("flag lost: %d", n)
 	}
-	if n := countRows(t, c, `SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'teams_protection_%'`); n != 11 {
+	if n := countRows(t, c, `SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name IN ('teams_protection_privacy_insert','teams_protection_privacy_update','teams_protection_privacy_delete','teams_protection_source_revision','teams_protection_mapping_insert','teams_protection_mapping_update','teams_protection_mapping_delete','teams_protection_settings_update','teams_protection_link_insert','teams_protection_link_update','teams_protection_link_delete','teams_protection_enrollment_identity')`); n != 12 {
 		t.Fatalf("missing triggers: %d", n)
 	}
 }

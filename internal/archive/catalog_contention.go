@@ -354,6 +354,9 @@ func (c *Catalog) beginTrackedWriteUsing(ctx context.Context, label string, db c
 // transaction, retrying the whole unit when the catalog stays busy. run must
 // not keep results from a failed attempt.
 func (c *Catalog) writeTransaction(ctx context.Context, label string, run func(tx *sql.Tx) error) error {
+	if checkpoint := c.teamsCheckpoint; checkpoint != nil {
+		return teamsCheckpointWrite(ctx, checkpoint.writer, checkpoint.store, checkpoint.name, checkpoint.scope, checkpoint.guardKey, run)
+	}
 	return c.retryCatalogWrite(ctx, label, nil, func() error {
 		tx, finish, err := c.beginTrackedWrite(ctx, label)
 		if err != nil {

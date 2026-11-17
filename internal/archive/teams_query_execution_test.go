@@ -78,6 +78,13 @@ func TestTeamsNumericSnapshotAndOwnership(t *testing.T) {
 	if err != nil || result.Values["total_tokens"] != 300 || !result.Estimated || !result.Measured {
 		t.Fatalf("all owned: %+v %v", result, err)
 	}
+	if err = c.teamsMarkRecoveryUnproved(ctx); err != nil {
+		t.Fatal(err)
+	}
+	result, err = c.teamsExecuteNumeric(ctx, plan, key, teamsSyntheticResolver, snap, registration)
+	if err != nil || result.Values["total_tokens"] != 300 || !result.Estimated || !result.Measured {
+		t.Fatalf("numeric query with unscoped recovery hold: %+v %v", result, err)
+	}
 	rows, err := c.usageRows(time.UTC)
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +146,10 @@ func TestTeamsNumericRejectsUntrustedAndMirroredSources(t *testing.T) {
 }
 
 func TestTeamsLegacyOrphanPrivacyNeedsReconciliation(t *testing.T) {
-	c,_:=testCatalog(t);ctx:=context.Background()
-	execTx(t,c.DB,`INSERT INTO teams_conversation_privacy(conversation_id,user_private) VALUES('legacy-orphan',1)`)
-	if _,err:=c.teamsSourceSnapshot(ctx,make([]byte,32),teamsSyntheticResolver);!errors.Is(err,errTeamsSourceUnavailable) {t.Fatalf("orphan privacy was ignored: %v",err)}
+	c, _ := testCatalog(t)
+	ctx := context.Background()
+	execTx(t, c.DB, `INSERT INTO teams_conversation_privacy(conversation_id,user_private) VALUES('legacy-orphan',1)`)
+	if _, err := c.teamsSourceSnapshot(ctx, make([]byte, 32), teamsSyntheticResolver); !errors.Is(err, errTeamsSourceUnavailable) {
+		t.Fatalf("orphan privacy was ignored: %v", err)
+	}
 }

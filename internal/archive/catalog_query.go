@@ -78,7 +78,17 @@ func (c *Catalog) initializedByThisBuild() (bool, error) {
 		return false, fmt.Errorf("%w (%s has catalog schema version %d; this build uses %d)", errCatalogNeedsUpgrade, c.Path, version, catalogSchemaVersion)
 	}
 	digest := buildDigest()
-	return digest != "" && stored["schema_version"] == strconv.Itoa(catalogSchemaVersion) && stored[initializedBuildKey] == digest &&
+	version := stored["schema_version"]
+	if version == strconv.Itoa(protectedCatalogSchemaVersion) {
+		active, e := c.hasProtectionCheckpoint()
+		if e != nil {
+			return false, e
+		}
+		if !active {
+			return false, errTeamsProtectionContinuity
+		}
+	}
+	return digest != "" && (version == strconv.Itoa(catalogSchemaVersion) || version == strconv.Itoa(protectedCatalogSchemaVersion)) && stored[initializedBuildKey] == digest &&
 		stored["workspace_library_version"] == libraryVersion(), nil
 }
 
@@ -126,7 +136,7 @@ func openCatalogReadOnly(path string) (*Catalog, error) {
 	current, err := catalog.initializedByThisBuild()
 	if err == nil && !current {
 		var version string
-		if err = db.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version); err == nil && strings.TrimSpace(version) != strconv.Itoa(catalogSchemaVersion) {
+		if err = db.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version); err == nil && (strings.TrimSpace(version) != strconv.Itoa(catalogSchemaVersion) && strings.TrimSpace(version) != strconv.Itoa(protectedCatalogSchemaVersion)) {
 			err = fmt.Errorf("%w (%s has catalog schema version %s, and Pharos could not take its operation lease to initialize it)", errCatalogNeedsUpgrade, path, version)
 		}
 	}
@@ -196,7 +206,30 @@ func (c *Catalog) initializeLocked(wait bool) error {
 	}
 	if current {
 		if wait {
+			// An activated protection fence forbids the legacy host backfill
+			// until an explicitly configured checkpoint writer is available.
+			// A path-only open grants no protected write authority.
+			active, e := c.hasProtectionCheckpoint()
+			if e != nil {
+				return e
+			}
+			if active {
+				return nil
+			}
 			return c.migrateHosts()
+		}
+		return nil
+	}
+	// A changed binary may skip mutating migrations only when the activated
+	// catalog's explicit schema and initializer contract still matches.
+	active, e := c.hasProtectionCheckpoint()
+	if e != nil {
+		return e
+	}
+	if active {
+		matches, e := teamsOpenContractMatches(context.Background(), c.DB)
+		if e != nil || !matches {
+			return errTeamsProtectionContinuity
 		}
 		return nil
 	}
@@ -207,6 +240,17 @@ func (c *Catalog) initializeLocked(wait bool) error {
 	err = c.Initialize()
 	c.initialized = &initializeRecord{started: started, ended: time.Now(), err: err}
 	return err
+}
+
+func (c *Catalog) hasProtectionCheckpoint() (bool, error) {
+	var exists bool
+	if err := c.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='teams_protection_checkpoint')`).Scan(&exists); err != nil || !exists {
+		return false, err
+	}
+	if err := c.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM teams_protection_checkpoint WHERE id=1)`).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 // initializeRecord is when the catalog's last Initialize ran and how it

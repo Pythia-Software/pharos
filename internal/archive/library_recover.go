@@ -224,8 +224,19 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 			return Config{}, err
 		}
 	}
+	// This is an unpublished copy. Drop nontransferable local checkpoint
+	// authority only after preserving an explicit unknown recovery hold.
+	if err = prepareTeamsRecoveredCopy(ctx, config.CatalogPath); err != nil {
+		return Config{}, err
+	}
 	catalog, err := OpenCatalog(config.CatalogPath)
 	if err != nil {
+		return Config{}, err
+	}
+	// Recovery itself is not proof of local-only history, including when the
+	// backup predates checkpoint schema entirely.
+	if err = catalog.teamsMarkRecoveryUnproved(ctx); err != nil {
+		catalog.Close()
 		return Config{}, err
 	}
 	var integrity string

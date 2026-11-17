@@ -284,7 +284,17 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 		return result
 	}
 	if !mode.automatic {
-		if _, err := c.DB.Exec("UPDATE source_states SET index_version=? WHERE host_id=? AND source_name=?", nilIfEmpty(indexVersion), host.ID, config.Name); err != nil {
+		updateVersion := func(tx *sql.Tx) error {
+			_, e := tx.Exec("UPDATE source_states SET index_version=? WHERE host_id=? AND source_name=?", nilIfEmpty(indexVersion), host.ID, config.Name)
+			return e
+		}
+		updateErr := error(nil)
+		if c.teamsCheckpoint != nil {
+			updateErr = c.writeTransaction(ctx, "source-index-version", updateVersion)
+		} else {
+			_, updateErr = c.DB.Exec("UPDATE source_states SET index_version=? WHERE host_id=? AND source_name=?", nilIfEmpty(indexVersion), host.ID, config.Name)
+		}
+		if err := updateErr; err != nil {
 			result.Error = err.Error()
 			report("failed")
 			return result
@@ -447,15 +457,9 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		// The write below marks derivatives of changed execution evidence;
 		// read what that needs of other conversations before taking the writer.
 		c.primeDependencyInverse(ctx)
-		if err := c.retryCatalogWrite(ctx, operation, func() { report("waiting for catalog") }, func() error {
-			if tracker != nil {
-				tracker.pending = append(tracker.pending[:0], heldParts...)
-			}
-			tx, finish, err := c.beginTrackedWrite(ctx, operation)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = tx.Rollback(); finish() }()
+		var writeRows int64
+		ingestRecord := func(tx *sql.Tx) error {
+			var err error
 			var initialWrites int64
 			if err := tx.QueryRow("SELECT total_changes()").Scan(&initialWrites); err != nil {
 				return err
@@ -472,7 +476,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				if errors.Is(err, errOlderCopy) {
 					// Nothing is recorded, so the newer read's digest and parts stand.
 					older = true
-					return nil
+					return errOlderCopy
 				} else if err != nil {
 					return err
 				}
@@ -506,10 +510,37 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			if err := tx.QueryRow("SELECT total_changes()").Scan(&finalWrites); err != nil {
 				return err
 			}
-			if err := tx.Commit(); err != nil {
+			writeRows = finalWrites - initialWrites
+			return nil
+		}
+		if err := c.retryCatalogWrite(ctx, operation, func() { report("waiting for catalog") }, func() error {
+			if tracker != nil {
+				tracker.pending = append(tracker.pending[:0], heldParts...)
+			}
+			if checkpoint := c.teamsCheckpoint; checkpoint != nil {
+				err := teamsCheckpointWrite(ctx, checkpoint.writer, checkpoint.store, checkpoint.name, checkpoint.scope, checkpoint.guardKey, ingestRecord)
+				if errors.Is(err, errOlderCopy) {
+					return nil
+				}
+				if err == nil {
+					result.WriteRows += writeRows
+				}
 				return err
 			}
-			result.WriteRows += finalWrites - initialWrites
+			tx, finish, err := c.beginTrackedWrite(ctx, operation)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = tx.Rollback(); finish() }()
+			if err = ingestRecord(tx); errors.Is(err, errOlderCopy) {
+				return nil
+			} else if err != nil {
+				return err
+			}
+			if err = tx.Commit(); err != nil {
+				return err
+			}
+			result.WriteRows += writeRows
 			return nil
 		}); err != nil {
 			return err
@@ -689,34 +720,19 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 			return fmt.Errorf("selective adapter emitted unrequested source id %q", record.SourceID)
 		}
 		retainedRecordIdentity(captureViewOf(adapter), &record, nil)
-		// Through the writer gate, so the journal's lane yields to it (§6.2);
-		// released at commit, before the writes below that take it again.
-		tx, finish, beginErr := c.beginTrackedWrite(context.Background(), "repair-existing")
-		if beginErr != nil {
-			return beginErr
-		}
-		released := false
-		done := func() {
-			if !released {
-				released = true
-				finish()
-			}
-		}
-		defer done()
-		conversations, messages, ingestErr := ingestCopy(tx, record, adapter.Capability() == "tl1-release", host.ID, config.Name, captureViewOf(adapter) != nil, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
+		// Commit through the same writer boundary as normal ingestion.
+		var conversations, messages int
+		ingestErr := c.writeTransaction(context.Background(), "repair-existing", func(tx *sql.Tx) error {
+			var e error
+			conversations, messages, e = ingestCopy(tx, record, adapter.Capability() == "tl1-release", host.ID, config.Name, captureViewOf(adapter) != nil, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
+			return e
+		})
 		if errors.Is(ingestErr, errOlderCopy) {
-			tx.Rollback()
 			delete(selected, record.SourceID)
 			return nil
 		}
 		if ingestErr != nil {
-			tx.Rollback()
 			return ingestErr
-		}
-		commitErr := tx.Commit()
-		done()
-		if commitErr != nil {
-			return commitErr
 		}
 		c.boundWAL(context.Background(), walSizeLimit)
 		if record.ClaudeSettings == nil {
@@ -761,11 +777,18 @@ func (c *Catalog) recordSourceState(host, name, kind, capability, coverage, curs
 	if errorText != "" {
 		errorValue = errorText
 	}
-	_, err := c.DB.Exec(`INSERT INTO source_states(host_id,source_name,kind,capability,cursor,fingerprint,coverage,last_attempt_at,last_success_at,error,pending_count,updated_at)
+	query := `INSERT INTO source_states(host_id,source_name,kind,capability,cursor,fingerprint,coverage,last_attempt_at,last_success_at,error,pending_count,updated_at)
 	VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(host_id,source_name) DO UPDATE SET kind=excluded.kind,capability=excluded.capability,
 	cursor=COALESCE(excluded.cursor,source_states.cursor),fingerprint=COALESCE(excluded.fingerprint,source_states.fingerprint),coverage=excluded.coverage,
 	last_attempt_at=excluded.last_attempt_at,last_success_at=COALESCE(excluded.last_success_at,source_states.last_success_at),error=excluded.error,
-		pending_count=excluded.pending_count,updated_at=excluded.updated_at`, host, name, kind, capability, nilIfEmpty(cursor), nilIfEmpty(fingerprint), coverage, timestamp, successAt, errorValue, pending, timestamp)
+		pending_count=excluded.pending_count,updated_at=excluded.updated_at`
+	args := []any{host, name, kind, capability, nilIfEmpty(cursor), nilIfEmpty(fingerprint), coverage, timestamp, successAt, errorValue, pending, timestamp}
+	var err error
+	if c.teamsCheckpoint != nil {
+		err = c.writeTransaction(context.Background(), "source-state", func(tx *sql.Tx) error { _, e := tx.Exec(query, args...); return e })
+	} else {
+		_, err = c.DB.Exec(query, args...)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Catalog source state: source=%s host=%s coverage=%s %s error=%v\n", name, host, coverage, c.writerSummary(), err)
 	}

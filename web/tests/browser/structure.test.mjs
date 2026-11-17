@@ -2422,12 +2422,15 @@ test('Teams source account review requires an explicit attestation', { skip }, a
 });
 
 test('Teams checking requires a displayed policy choice', { skip }, async t => {
-  let settings;
+  let settings, protection;
+  let acknowledged = false;
   const state = { enabled:false, optOut:true, settingsRevision:4, acknowledgedPolicy:0, nextCheck:'', checking:false, problem:'', items:[] };
   const app = await open(t, { url:'/settings/teams', ready:'#teamsSettingsPage .teams-settings', api: {
     'GET /api/teams/enrollment': { state:'connected_paused', available:true, library:'Synthetic', fingerprint:'', problem:'' },
     'GET /api/teams/worker': () => state,
     'GET /api/teams/worker/policy': { value:true, policyVersion:2, settingsRevision:4 },
+    'GET /api/teams/worker/protection-policy': () => ({policyId:'teams_local_protection_baseline_v1',policyDigest:'synthetic',disclosure:'Synthetic source protection policy.',acknowledged,settingsRevision:4,continuity:'held'}),
+    'POST /api/teams/worker/protection-policy': ({body}) => { protection=body; acknowledged=true; return {updated:true}; },
     'POST /api/teams/worker/settings': ({body}) => { settings=body; state.enabled=body.enabled; state.optOut=body.optOut; state.acknowledgedPolicy=body.policyVersion; return {updated:true}; },
     'GET /api/teams/source-accounts': { sourceRevision:0, settingsRevision:4, proofRequested:true, sources:[] },
   }});
@@ -2439,6 +2442,11 @@ test('Teams checking requires a displayed policy choice', { skip }, async t => {
   await app.page.getByText('Connected.', {exact:true}).waitFor();
   assert.equal(await app.page.getByText(/Requests are paused until setup/).count(), 0);
   assert.deepEqual(settings,{enabled:true,optOut:false,settingsRevision:4,policyVersion:2});
+  await app.page.getByText('Synthetic source protection policy.').waitFor();
+  await app.page.getByText('Source protection needs reconciliation. You can continue using this library.').waitFor();
+  await app.page.getByRole('button',{name:'Acknowledge protection policy'}).click();
+  await app.page.getByText('Protection policy acknowledged for this library.').waitFor();
+  assert.deepEqual(protection,{acknowledge:true,settingsRevision:4});
 });
 
 test('Teams model permission displays the account and requires a separate action', { skip }, async t => {

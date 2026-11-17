@@ -184,20 +184,14 @@ func (t *partTracker) flush(c *Catalog) error {
 	if t == nil || len(t.pending) == 0 {
 		return nil
 	}
-	// Runs after a cancellation too: the parts were parsed and are current.
-	// Through the writer gate, so the journal's lane yields to it (§6.2).
-	tx, finish, err := c.beginTrackedWrite(context.Background(), "part-states")
+	// Preserve pending parts across an aborted or retried checkpoint attempt.
+	pending := append([]sourcePart(nil), t.pending...)
+	err := c.writeTransaction(context.Background(), "part-states", func(tx *sql.Tx) error {
+		t.pending = append(t.pending[:0], pending...)
+		return t.record(tx, nil)
+	})
 	if err != nil {
-		return err
-	}
-	if err := t.record(tx, nil); err != nil {
-		tx.Rollback()
-		finish()
-		return err
-	}
-	err = tx.Commit()
-	finish()
-	if err != nil {
+		t.pending = append(t.pending[:0], pending...)
 		return err
 	}
 	c.boundWAL(t.ctx, walSizeLimit)
