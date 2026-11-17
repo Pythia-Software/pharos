@@ -269,7 +269,7 @@
     "gpt-6-astra": {
       "provider": "openai",
       "class": "Astra",
-      "color": "#11ab9d"
+      "color": "#79bcb2"
     },
     "gpt-6-luna": {
       "provider": "openai",
@@ -279,12 +279,12 @@
     "gpt-6-sol": {
       "provider": "openai",
       "class": "Sol",
-      "color": "#6ebaa5"
+      "color": "#79bdaa"
     },
     "gpt-6.1-sol": {
       "provider": "openai",
       "class": "Sol",
-      "color": "#44b298"
+      "color": "#61b7a1"
     },
     "gpt-6.1-terra": {
       "provider": "openai",
@@ -355,6 +355,16 @@
       "provider": "openai",
       "class": "Codex",
       "color": "#67a929"
+    },
+    "gpt-6.2-astra": {
+      "provider": "openai",
+      "class": "Astra",
+      "color": "#11ab9d"
+    },
+    "gpt-6.2-sol": {
+      "provider": "openai",
+      "class": "Sol",
+      "color": "#44b298"
     }
   },
   "sources": {
