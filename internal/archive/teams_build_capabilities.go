@@ -10,10 +10,9 @@ type teamsCapabilityManifest = teams.CapabilityManifest
 const teamsFeatureBuildMinimum = "0.10.0"
 
 func teamsBuildCapabilities() teamsCapabilityManifest {
-	m := teamsCapabilityManifest{SchemaVersion: 1, AppVersion: pushVersion, Capabilities: []string{}}
-	// Source v2 ownership, deterministic worker and scoped artifacts are not
-	// announced until their complete gates are connected. A 0.10.0 version
-	// string alone must never imply any of these capabilities.
+	m := teamsCapabilityManifest{SchemaVersion: 1, AppVersion: pushVersion, Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}}
+	// Scoped artifacts remain unadvertised until the separate content authority,
+	// privacy, model consent and result acceptance gates are complete.
 	return m
 }
 

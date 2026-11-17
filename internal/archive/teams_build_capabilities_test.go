@@ -18,7 +18,8 @@ func TestTeamsFeatureBuildRequiresRealVersionAndCapability(t *testing.T) {
 			t.Fatalf("%q %v: %v", tc.version, tc.caps, got)
 		}
 	}
-	if len(teamsBuildCapabilities().Capabilities) != 0 {
-		t.Fatal("unfinished worker capabilities advertised")
+	got := teamsBuildCapabilities()
+	if len(got.Capabilities) != 2 || got.Capabilities[0] != "deterministic_query_v1" || got.Capabilities[1] != "source_snapshot_v2" {
+		t.Fatal("unexpected capability advertisement")
 	}
 }
