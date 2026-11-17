@@ -1,0 +1,17 @@
+[
+ {"name":"closed object","schema":{"type":"object","properties":{"answer":{"type":"string","maxLength":12},"count":{"type":"integer"}},"required":["answer","count"],"additionalProperties":false},"answer":{"answer":"ready","count":9223372036854775807},"valid":true},
+ {"name":"integer overflow","schema":{"type":"integer"},"answer":9223372036854775808,"valid":false},
+ {"name":"integer enum exact","schema":{"type":"integer","enum":[9007199254740993]},"answer":9007199254740992,"valid":false},
+ {"name":"number enum equivalent","schema":{"type":"number","enum":[1.0]},"answer":1,"valid":true},
+ {"name":"duplicate property","schema":{"type":"object","properties":{"x":{"type":"boolean"}},"required":["x"],"additionalProperties":false},"answer":{"x":true,"x":false},"valid":false},
+ {"name":"oversize declared string","schema":{"type":"string","maxLength":8193},"answer":"x","valid":false},
+ {"name":"oversize declared array","schema":{"type":"array","items":{"type":"boolean"},"maxItems":101},"answer":[],"valid":false},
+ {"name":"unknown field","schema":{"type":"object","properties":{"x":{"type":"boolean"}},"required":["x"],"additionalProperties":false},"answer":{"x":true,"y":1},"valid":false},
+ {"name":"case alias","schema":{"type":"object","properties":{"x":{"type":"boolean"}},"required":["x"],"additionalProperties":false},"answer":{"X":true},"valid":false},
+ {"name":"nullable","schema":{"type":"string","maxLength":4,"nullable":true},"answer":null,"valid":true},
+ {"name":"non nullable","schema":{"type":"string","maxLength":4},"answer":null,"valid":false},
+ {"name":"array bound","schema":{"type":"array","items":{"type":"boolean"},"maxItems":1},"answer":[true,false],"valid":false},
+ {"name":"enum mismatch","schema":{"type":"string","maxLength":5,"enum":["yes"]},"answer":"no","valid":false},
+ {"name":"unsupported schema feature","schema":{"type":"number","minimum":0},"answer":1,"valid":false},
+ {"name":"deep schema","schema":{"type":"array","maxItems":1,"items":{"type":"array","maxItems":1,"items":{"type":"array","maxItems":1,"items":{"type":"array","maxItems":1,"items":{"type":"array","maxItems":1,"items":{"type":"array","maxItems":1,"items":{"type":"boolean"}}}}}}},"answer":[],"valid":false}
+]

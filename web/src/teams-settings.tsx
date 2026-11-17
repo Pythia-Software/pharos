@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { ViewDisclosure } from "./view-disclosure";
 import "./teams-settings.css";
 
 type EnrollmentStatus = { state: string; available: boolean; library: string; fingerprint: string; problem: string; optedOut?: boolean };
 type SourceAccount = { bindingId: string; provider: string; sourceName: string; accountLabel: string; host: string; root: string; identifiable: number; ambiguous: number; mode: string; exposed: boolean; unindexed?: boolean };
 type SourceStatus = { sourceRevision: number; settingsRevision: number; proofRequested: boolean; sources: SourceAccount[] };
-type WorkItem = { workId: string; question: string; requester: string; readers: string[] | null; state: string; payloadHash: string; payload: unknown };
-type WorkerStatus = { enabled: boolean; optOut: boolean; settingsRevision: number; acknowledgedPolicy: number; nextCheck: string; checking: boolean; problem: string; items: WorkItem[] };
+type WorkItem = { workId: string; question: string; prompt: string; retention: unknown; requester: string; readers: string[] | null; state: string; payloadHash: string; payload: unknown };
+type WorkerStatus = { enabled: boolean; optOut: boolean; settingsRevision: number; acknowledgedPolicy: number; nextCheck: string; checking: boolean; problem: string; items: WorkItem[]; modelApproved: boolean };
+type ModelInspection = { provider: string; model: string; effort: string; account: string; sessionDigest: string; authDigest: string; settingsRevision: number };
+type SentItem = {workId:string; question:string; payload:unknown; sentAt:string};
 type OrgPolicy = { value: boolean; policyVersion: number; settingsRevision: number };
 
 async function workerRequest<T>(path = "", body?: object): Promise<T> {
@@ -21,6 +24,8 @@ function TeamsWork() {
   const [allowMetrics, setAllowMetrics] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [model, setModel] = useState<ModelInspection | null>(null);
+  const [sent, setSent] = useState<SentItem[] | null>(null);
   const refresh = useCallback(async () => { try { setStatus(await workerRequest<WorkerStatus>()); } catch { setError("Could not read Teams requests."); } }, []);
   useEffect(() => { void refresh(); const timer = window.setInterval(() => { void refresh(); }, 5000); return () => window.clearInterval(timer); }, [refresh]);
   const act = async (path: string, body: object) => {
@@ -30,6 +35,8 @@ function TeamsWork() {
     finally { setBusy(false); }
   };
   const reviewPolicy = async () => { setBusy(true); setError(""); try { setPolicy(await workerRequest<OrgPolicy>("/policy")); } catch (e) { setError(e instanceof Error ? e.message : "Could not read the organization default."); } finally { setBusy(false); } };
+  const inspectModel = async () => { setBusy(true); setError(""); try { setModel(await workerRequest<ModelInspection>("/model/inspect", {})); } catch (e) { setError(e instanceof Error ? e.message : "Could not inspect the model account."); } finally { setBusy(false); } };
+  const loadSent = async () => { setBusy(true); setError(""); try { setSent((await workerRequest<{items:SentItem[]}>("/log")).items); } catch (e) { setError(e instanceof Error ? e.message : "Could not load the send log."); } finally { setBusy(false); } };
   return <section aria-label="Teams requests">
     <h3>Teams requests</h3>
     {!status?.enabled ? <>
@@ -44,15 +51,30 @@ function TeamsWork() {
       <button type="button" disabled={busy || status.checking} onClick={() => void act("/check", {})}>Check now</button>{" "}
       <button type="button" disabled={busy} onClick={() => void act("/settings", { enabled: false, optOut: status.optOut, settingsRevision: status.settingsRevision, policyVersion: status.acknowledgedPolicy })}>Pause checking</button>
     </>}
+    {status?.enabled ? <section aria-label="Model processing permission"><h4>Claude processing</h4>
+      <p>Content answers require a separate processing permission and a request-specific review. Claude processes eligible material remotely using your authenticated account.</p>
+      <p>{status.modelApproved ? "This account and model are approved for processing." : "No current model processing permission."}</p>
+      <button type="button" disabled={busy} onClick={() => void inspectModel()}>Review model account</button>{" "}
+      {status.modelApproved ? <button type="button" disabled={busy} onClick={() => void act("/model/revoke", {})}>Revoke model permission</button> : null}
+      {model ? <><p>Account: {model.account}. Provider: {model.provider}. Model: {model.model}. Effort: {model.effort}. Processing occurs with the provider, outside this Mac.</p>
+        <button type="button" disabled={busy} onClick={() => { void act("/model/approve", model).then(() => setModel(null)); }}>Allow this account and model</button>{" "}<button type="button" disabled={busy} onClick={() => setModel(null)}>Cancel</button></> : null}
+    </section> : null}
     {status?.problem ? <p role="status">{status.problem}</p> : null}
     {status?.items.map(item => <div className="teams-source" key={item.workId}>
       <h4>{item.question}</h4><p>Requested by {item.requester || "your organization"}. Readers: {item.readers?.join(", ") || "none listed"}.</p>
+	  {item.prompt ? <><p>Instructions: {item.prompt}</p><p>Retention: {JSON.stringify(item.retention)}.</p><p>Only locally reviewed, nonprivate content is eligible. Processing uses the approved Claude account and model.</p></> : null}
       <p>Status: {item.state.replaceAll("_", " ")}.</p>
-      {item.state === "awaiting_source_consent" ? <><p>Allow this request to check opaque source membership. This does not approve sending an answer.</p><button type="button" disabled={busy || !status} onClick={() => void act("/allow-source", { workId: item.workId, settingsRevision: status.settingsRevision })}>Allow source checks</button></> : null}
+	  {item.prompt && item.state === "unavailable" ? <p>This request needs a completely indexed supported source and at least one reviewed, nonprivate conversation. Review a conversation in the library and check again after indexing.</p> : null}
+	  {item.prompt && item.state === "started" ? <p>A previous attempt may have started. It will not automatically run the model again; you can decline this request.</p> : null}
+	  {item.state === "delivery_unconfirmed" ? <p>The send is being reconciled. Pharos will check for a receipt before retrying.</p> : null}
+      {item.state === "awaiting_source_consent" ? <><p>{item.prompt ? "Allow source membership checks and send eligible reviewed content to your approved Claude account to prepare a draft. The answer will still require your review before it is sent." : "Allow this request to check opaque source membership. This does not approve sending an answer."}</p><button type="button" disabled={busy || !status} onClick={() => void act("/allow-source", { workId: item.workId, settingsRevision: status.settingsRevision })}>{item.prompt ? "Allow source checks and draft" : "Allow source checks"}</button></> : null}
       {item.payload ? <pre>{JSON.stringify(item.payload, null, 2)}</pre> : null}
       {item.state === "awaiting_review" ? <button type="button" disabled={busy} onClick={() => void act("/approve-result", { workId: item.workId, payloadHash: item.payloadHash })}>Approve and send this result</button> : null}{" "}
-      {["awaiting_source_consent", "awaiting_review", "decline_pending"].includes(item.state) ? <button type="button" disabled={busy} onClick={() => void act("/decline", { workId: item.workId })}>{item.state === "decline_pending" ? "Retry decline" : "Decline request"}</button> : null}
+      {["awaiting_source_consent", "awaiting_model_permission", "awaiting_review", "decline_pending", "started"].includes(item.state) ? <button type="button" disabled={busy} onClick={() => void act("/decline", { workId: item.workId })}>{item.state === "decline_pending" ? "Retry decline" : "Decline request"}</button> : null}
     </div>)}
+    <section aria-label="Sent responses"><h4>Sent responses</h4><button type="button" disabled={busy} onClick={() => void loadSent()}>Show recent sends</button>
+      {sent ? sent.length ? sent.map(item => <ViewDisclosure key={item.workId} viewKey={`teams:sent:${item.workId}`} summary={`${item.question || "Teams response"} · ${new Date(item.sentAt).toLocaleString()}`}><pre>{JSON.stringify(item.payload,null,2)}</pre></ViewDisclosure>) : <p>No sends recorded for this library.</p> : null}
+    </section>
     {error ? <p role="alert">{error}</p> : null}
   </section>;
 }

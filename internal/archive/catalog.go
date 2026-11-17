@@ -270,7 +270,7 @@ func (c *Catalog) Close() error {
 // 29: local Teams consent and delivery receipts must not be silently lost.
 // 30: adapter-native source observations must not be silently reinterpreted.
 // 31: v2 source uploads and their exact retry identity must survive a restart.
-const catalogSchemaVersion = 31
+const catalogSchemaVersion = 32
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

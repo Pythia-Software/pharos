@@ -1,0 +1,305 @@
+[
+  {
+    "type": "control_response",
+    "response": {
+      "subtype": "success",
+      "request_id": "init",
+      "response": {
+        "agents": [
+          {
+            "name": "claude",
+            "description": "Catch-all for any task that doesn't fit a more specific agent. FleetView's default when no agent name is typed."
+          },
+          {
+            "name": "Explore",
+            "description": "Fast read-only search agent for locating code. Use it to find files by pattern (eg. \"src/components/**/*.tsx\"), grep for symbols or keywords (eg. \"API endpoints\"), or answer \"where is X defined / which files reference Y.\" Do NOT use it for code review, design-doc auditing, cross-file consistency checks, or open-ended analysis \u2014 it reads excerpts rather than whole files and will miss content past its read window. When calling, specify search breadth: \"quick\" for a single targeted lookup, \"medium\" for moderate exploration, or \"very thorough\" to search across multiple locations and naming conventions.",
+            "model": "inherit"
+          },
+          {
+            "name": "general-purpose",
+            "description": "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you."
+          },
+          {
+            "name": "Plan",
+            "description": "Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs.",
+            "model": "inherit"
+          }
+        ],
+        "output_style": "default",
+        "available_output_styles": [
+          "default",
+          "Proactive",
+          "Concise",
+          "Explanatory",
+          "Learning"
+        ],
+        "account": {
+          "email": "synthetic@example.invalid",
+          "organization": "synthetic-identity",
+          "subscriptionType": "Claude Ultra",
+          "apiProvider": "firstParty"
+        },
+        "pid": 12345,
+        "claude_code_version": "2.1.326",
+        "current_permission_mode": "dontAsk",
+        "hook_on_failure_supported": true,
+        "hooks_when_unanswered_kept": 0,
+        "other_hook_ask_outranks_host": true,
+        "feedback_mode": {
+          "kind": "post"
+        },
+        "analytics_disabled": true,
+        "remote_control_auto_enable": false,
+        "remote_control_auto_connect_default": false,
+        "remote_control_available": true,
+        "remote_control_auto_on_by_default": false,
+        "ide_rc_auto_enable_gate": false,
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "session_state": "idle",
+        "capabilities": [
+          "ui_surface_v1",
+          "mcp_call_result_not_for_model_v1",
+          "mcp_call_check_permissions_v1",
+          "voice_call_talk_line_v1",
+          "ui_pane_widget_v1",
+          "reload_plugins_refuse_if_busy_v1"
+        ]
+      },
+      "pending_permission_requests": [],
+      "pending_user_dialog_requests": []
+    }
+  },
+  {
+    "type": "control_response",
+    "response": {
+      "subtype": "success",
+      "request_id": "settings",
+      "response": {
+        "effective": {
+          "disableClaudeAiConnectors": true,
+          "disableBundledSkills": true,
+          "disableAllHooks": true,
+          "disableWorkflows": true,
+          "disableSkillShellExecution": true,
+          "autoMemoryEnabled": false
+        },
+        "sources": [
+          {
+            "source": "flagSettings",
+            "settings": {
+              "disableClaudeAiConnectors": true,
+              "disableBundledSkills": true,
+              "disableAllHooks": true,
+              "disableWorkflows": true,
+              "disableSkillShellExecution": true,
+              "autoMemoryEnabled": false
+            }
+          }
+        ],
+        "applied": {
+          "model": "claude-opus-5-5",
+          "effort": "low",
+          "advisor": null,
+          "ultracode": false,
+          "ultracodeRequested": false,
+          "ultracodeAvailable": false,
+          "ultrathinkAvailable": false,
+          "outsideFileToolReadsBlocked": false,
+          "outsideFileToolWritesBlocked": false,
+          "outsideBlocksCountLaunchFoldersOnly": false,
+          "launchEnvLeftOwnFilesInPlace": true
+        }
+      }
+    }
+  },
+  {
+    "type": "control_response",
+    "response": {
+      "subtype": "success",
+      "request_id": "hooks",
+      "response": {
+        "events": [],
+        "hooks": [],
+        "eventCatalog": [
+          {
+            "name": "PreToolUse",
+            "summary": "Before tool execution",
+            "supportsMatcher": true
+          },
+          {
+            "name": "PostToolUse",
+            "summary": "After tool execution",
+            "supportsMatcher": true
+          },
+          {
+            "name": "PostToolUseFailure",
+            "summary": "After tool execution fails",
+            "supportsMatcher": true
+          },
+          {
+            "name": "PostToolBatch",
+            "summary": "After a batch of tool calls resolves",
+            "supportsMatcher": false
+          },
+          {
+            "name": "PermissionDenied",
+            "summary": "After auto mode denies a tool call",
+            "supportsMatcher": true
+          },
+          {
+            "name": "Notification",
+            "summary": "When notifications are sent",
+            "supportsMatcher": true
+          },
+          {
+            "name": "UserPromptSubmit",
+            "summary": "When the user submits a prompt",
+            "supportsMatcher": false
+          },
+          {
+            "name": "UserPromptExpansion",
+            "summary": "When a user-typed slash command expands into a prompt",
+            "supportsMatcher": true
+          },
+          {
+            "name": "SessionStart",
+            "summary": "When a new session is started",
+            "supportsMatcher": true
+          },
+          {
+            "name": "Stop",
+            "summary": "Right before Claude concludes its response",
+            "supportsMatcher": false
+          },
+          {
+            "name": "StopFailure",
+            "summary": "When the turn ends due to an API error",
+            "supportsMatcher": true
+          },
+          {
+            "name": "SubagentStart",
+            "summary": "When a subagent (Agent tool call) is started",
+            "supportsMatcher": true
+          },
+          {
+            "name": "SubagentStop",
+            "summary": "Right before a subagent (Agent tool call) concludes its response",
+            "supportsMatcher": true
+          },
+          {
+            "name": "PreCompact",
+            "summary": "Before conversation compaction",
+            "supportsMatcher": true
+          },
+          {
+            "name": "PostCompact",
+            "summary": "After conversation compaction",
+            "supportsMatcher": true
+          },
+          {
+            "name": "PreModelSwitch",
+            "summary": "Before a requested model switch (/model, model picker, set_model)",
+            "supportsMatcher": true
+          },
+          {
+            "name": "PostModelSwitch",
+            "summary": "After the session model changes (any cause)",
+            "supportsMatcher": true
+          },
+          {
+            "name": "SessionEnd",
+            "summary": "When a session is ending",
+            "supportsMatcher": true
+          },
+          {
+            "name": "PermissionRequest",
+            "summary": "When a permission dialog is displayed",
+            "supportsMatcher": true
+          },
+          {
+            "name": "Setup",
+            "summary": "Repo setup hooks for init and maintenance",
+            "supportsMatcher": true
+          },
+          {
+            "name": "TeammateIdle",
+            "summary": "When a teammate is about to go idle",
+            "supportsMatcher": false
+          },
+          {
+            "name": "TaskCreated",
+            "summary": "When a task is being created",
+            "supportsMatcher": false
+          },
+          {
+            "name": "TaskCompleted",
+            "summary": "When a task is being marked as completed",
+            "supportsMatcher": false
+          },
+          {
+            "name": "Elicitation",
+            "summary": "When an MCP server requests user input (elicitation)",
+            "supportsMatcher": true
+          },
+          {
+            "name": "ElicitationResult",
+            "summary": "After a user responds to an MCP elicitation",
+            "supportsMatcher": true
+          },
+          {
+            "name": "ConfigChange",
+            "summary": "When configuration files change during a session",
+            "supportsMatcher": true
+          },
+          {
+            "name": "InstructionsLoaded",
+            "summary": "When an instruction file (CLAUDE.md or rule) is loaded",
+            "supportsMatcher": true
+          },
+          {
+            "name": "WorktreeCreate",
+            "summary": "Create an isolated worktree for VCS-agnostic isolation",
+            "supportsMatcher": false
+          },
+          {
+            "name": "WorktreeRemove",
+            "summary": "Remove a previously created worktree",
+            "supportsMatcher": false
+          },
+          {
+            "name": "CwdChanged",
+            "summary": "After the working directory changes",
+            "supportsMatcher": false
+          },
+          {
+            "name": "FileChanged",
+            "summary": "When a watched file changes",
+            "supportsMatcher": true
+          },
+          {
+            "name": "DirectoryAdded",
+            "summary": "After a working directory is added mid-session",
+            "supportsMatcher": true
+          },
+          {
+            "name": "MessageDisplay",
+            "summary": "While assistant message text is displayed",
+            "supportsMatcher": false
+          }
+        ],
+        "policy": {
+          "disabledByPolicy": false,
+          "managedOnly": false,
+          "pluginOnly": false,
+          "allDisabled": true,
+          "policyHookCount": 0
+        },
+        "safeMode": {
+          "managedHooksStillApply": false,
+          "exitHint": "restart without --safe-mode"
+        }
+      }
+    }
+  }
+]

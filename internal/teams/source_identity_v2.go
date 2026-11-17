@@ -41,7 +41,7 @@ func SourceWorkNamespace(key []byte, provider string) (string, error) {
 // SourceWitness is deliberately independent of account assignment, so
 // conflicting user attestations of the same native unit can be withheld.
 func SourceWitness(key []byte, provider, unit, nativeID string) (string, error) {
-	if !((provider == "codex" && unit == "codex_thread") || (provider == "claude" && unit == "content_component")) || nativeID == "" || len(nativeID) > 512 || !utf8.ValidString(nativeID) {
+	if !((provider == "codex" && (unit == "codex_thread" || unit == "codex_transcript" || unit == "content_component")) || (provider == "claude" && unit == "content_component")) || nativeID == "" || len(nativeID) > 512 || !utf8.ValidString(nativeID) {
 		return "", errInvalidSourceIdentity
 	}
 	return sourceIdentityMAC(key, []byte("pharos-source-witness-v1"), []byte(provider), []byte(unit), []byte(nativeID))
@@ -53,7 +53,7 @@ func SourceEvidenceRevision(key []byte, sourceToken, profile string, version int
 	if decoded, err := base64.RawURLEncoding.Strict().DecodeString(sourceToken); err != nil || len(decoded) != sha256.Size || base64.RawURLEncoding.EncodeToString(decoded) != sourceToken {
 		return "", errInvalidSourceIdentity
 	}
-	if !((profile == "codex_thread_usage" || profile == "claude_reply_usage") && version == 1) || len(intrinsicDigest) != sha256.Size {
+	if !((profile == "codex_thread_usage" || profile == "claude_reply_usage" || profile == "codex_transcript") && version == 1) || len(intrinsicDigest) != sha256.Size {
 		return "", errInvalidSourceIdentity
 	}
 	return sourceIdentityMAC(key, []byte("pharos-source-evidence-v1"), []byte(sourceToken), []byte(profile), []byte(strconv.Itoa(version)), intrinsicDigest)

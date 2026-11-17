@@ -1,0 +1,64 @@
+{
+  "description": "Synthetic content closure; digest is SHA-256 over UTF-8 pharos-content-binding-v1 plus NUL and Go encoding/json of the binding object in declared field order with sha256 empty. Component and dependency arrays are sorted by token; effective_protected and selected are explicit booleans.",
+  "binding": {
+    "work_id": "00000000-0000-4000-8000-000000000001",
+    "library_id": "synthetic",
+    "installation_id": "00000000-0000-4000-8000-000000000003",
+    "snapshot_id": "00000000-0000-4000-8000-000000000002",
+    "inventory_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "processing": {
+      "execution": "local",
+      "provider": "synthetic",
+      "model": "synthetic"
+    },
+    "decision_id": "synthetic-decision",
+    "inventory_revision": 1,
+    "catalog_revision": 1,
+    "evaluation_revision": 1,
+    "local_revision": 1,
+    "privacy_revision": 0,
+    "ownership_revision": 0,
+    "components": [
+      {
+        "token": "component",
+        "kind": "content_component",
+        "profile_id": "",
+        "profile_version": 0,
+        "evidence_revision": "",
+        "protection": "public",
+        "dependencies": [
+          "transcript"
+        ],
+        "effective_protected": false,
+        "selected": true
+      },
+      {
+        "token": "source",
+        "kind": "codex_thread",
+        "profile_id": "codex_thread_usage",
+        "profile_version": 1,
+        "evidence_revision": "r2",
+        "protection": "public",
+        "dependencies": [],
+        "effective_protected": false,
+        "selected": false
+      },
+      {
+        "token": "transcript",
+        "kind": "content_evidence",
+        "profile_id": "codex_transcript",
+        "profile_version": 1,
+        "evidence_revision": "r3",
+        "protection": "public",
+        "dependencies": [
+          "source"
+        ],
+        "effective_protected": false,
+        "selected": false
+      }
+    ],
+    "sha256": ""
+  },
+  "sha256": "75951cc5c1588baa8bb9990fc62c8963c71f0e49fac2057f0c6bac96d8d55e21"
+}

@@ -275,6 +275,22 @@ CREATE TABLE IF NOT EXISTS teams_local_settings (
   observed_privacy_revision INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO teams_local_settings(id) VALUES(1);
+-- Local processing permission is never copied to a different library.
+CREATE TABLE IF NOT EXISTS teams_model_permission (
+  id INTEGER PRIMARY KEY CHECK(id=1), library_id TEXT NOT NULL, instance_id TEXT NOT NULL,
+  org_id TEXT NOT NULL, installation_id TEXT NOT NULL, host_id TEXT NOT NULL,
+  provider TEXT NOT NULL, model TEXT NOT NULL, effort TEXT NOT NULL,
+  session_digest TEXT NOT NULL, auth_digest TEXT NOT NULL,
+  settings_revision INTEGER NOT NULL, granted_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS teams_content_runs (
+  work_id TEXT PRIMARY KEY REFERENCES teams_v2_uploads(work_id),
+  config BLOB NOT NULL, binding_json BLOB NOT NULL, selected_json BLOB NOT NULL,
+  start_id TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL CHECK(state IN ('bound','started','awaiting_review','approved','sending','needs_reconcile','accepted','rejected','unconfirmed','withdrawn')),
+  payload BLOB, payload_sha256 TEXT NOT NULL DEFAULT '', approval_id TEXT NOT NULL DEFAULT '', approved_at TEXT NOT NULL DEFAULT '',
+  idempotency_key TEXT NOT NULL DEFAULT '', submission BLOB, submission_sha256 TEXT NOT NULL DEFAULT '', receipt_json TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS teams_request_grants (
   version_id TEXT PRIMARY KEY, library_id TEXT NOT NULL, instance_id TEXT NOT NULL, org_id TEXT NOT NULL, installation_id TEXT NOT NULL, config_hash TEXT NOT NULL,
   settings_revision INTEGER NOT NULL, granted_at TEXT NOT NULL
