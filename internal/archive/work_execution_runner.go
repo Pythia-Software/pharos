@@ -1995,12 +1995,25 @@ func (r *workRunner) Run(ctx context.Context) {
 			r.mu.Unlock()
 		}
 		r.Pump()
+		waitStarted := r.clock.Now()
 		wait := min(r.nextDeadline(), max(0, reconcileAt.Sub(r.clock.Now())))
+		timer := r.clock.After(wait)
+		// Time may pass between computing a relative wait and arming it. In
+		// particular a test clock can advance across the deadline in that gap;
+		// recheck before blocking so an already-due retry is reconsidered.
+		if !r.clock.Now().Before(waitStarted.Add(wait)) {
+			r.readPause(ctx)
+			reconcileAt = r.clock.Now().Add(workReconcileInterval)
+			r.mu.Lock()
+			r.reconsider = true
+			r.mu.Unlock()
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-r.wake:
-		case <-r.clock.After(wait):
+		case <-timer:
 			r.readPause(ctx)
 			reconcileAt = r.clock.Now().Add(workReconcileInterval)
 			r.mu.Lock()
