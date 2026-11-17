@@ -100,6 +100,9 @@ func (c *Catalog) sendTeamsV2Approved(ctx context.Context, cfg Config, client *t
 	if work == nil || work.LibraryID != d.ID || work.VersionID != u.VersionID || work.ConfigSHA256 != u.ConfigHash || !bytes.Equal(work.Config, draft.Config) || work.EvaluationRevision != u.EvaluationRevision || work.RequiredLocalRevision > u.LocalRevision || work.BaselineRevision < 0 {
 		return empty, errTeamsConsentStale
 	}
+	if !teamsNumericWorkEligible(*work, manifest) {
+		return empty, errTeamsQueryUnsupported
+	}
 	plan, err := teamsPlanFromWork(*work)
 	if err != nil || len(plan.Metrics) != 1 || plan.Metrics[0].Field != "total_tokens" {
 		return empty, errTeamsQueryUnsupported

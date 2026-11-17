@@ -177,22 +177,11 @@ func teamsPlanFromWork(w teams.Work) (teamsQueryPlan, error) {
 	if w.VerifyConfig() != nil || w.Kind != "deterministic" || w.PopulationKey != "current" || w.ExpiresAt.IsZero() || !time.Now().Before(w.ExpiresAt) || (len(w.RunDecision) != 0 && !bytes.Equal(bytes.TrimSpace(w.RunDecision), []byte("null"))) {
 		return teamsQueryPlan{}, errTeamsQueryUnsupported
 	}
-	var period struct {
-		Key      string     `json:"key"`
-		AnchorAt *time.Time `json:"anchor_at"`
-	}
-	if _, err := teamsStrictObject(w.Period, map[string]bool{"key": true, "anchor_at": true}); err != nil {
-		return teamsQueryPlan{}, errTeamsQueryUnsupported
-	}
-	periodDecoder := json.NewDecoder(bytes.NewReader(w.Period))
-	periodDecoder.DisallowUnknownFields()
-	if !teams.ValidUniqueJSON(w.Period) || periodDecoder.Decode(&period) != nil || period.Key != "once" {
-		return teamsQueryPlan{}, errTeamsQueryUnsupported
-	}
 	var config struct {
-		QueryURL       string `json:"query_url"`
-		Question       string `json:"question"`
-		ApprovalPolicy string `json:"approval_policy"`
+		Schedule       *teamsSchedule `json:"schedule"`
+		QueryURL       string         `json:"query_url"`
+		Question       string         `json:"question"`
+		ApprovalPolicy string         `json:"approval_policy"`
 		Requester      struct {
 			ID          string `json:"id"`
 			DisplayName string `json:"display_name"`
@@ -202,8 +191,8 @@ func teamsPlanFromWork(w teams.Work) (teamsQueryPlan, error) {
 				Kind string `json:"kind"`
 				ID   string `json:"id"`
 			} `json:"response_readers"`
-			Publications []json.RawMessage `json:"publications"`
-			Exports      []json.RawMessage `json:"exports"`
+			Publications []teamsReportPublication `json:"publications"`
+			Exports      []teamsFeedExport        `json:"exports"`
 		} `json:"audiences"`
 		MinAppVersion   string `json:"min_app_version"`
 		RetentionPolicy struct {
@@ -228,8 +217,14 @@ func teamsPlanFromWork(w teams.Work) (teamsQueryPlan, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(w.Config))
 	decoder.DisallowUnknownFields()
-	if !teams.ValidUniqueJSON(w.Config) || decoder.Decode(&config) != nil || config.Question == "" || config.Requester.ID == "" || config.Requester.DisplayName == "" || !teamsVersionPattern.MatchString(config.MinAppVersion) || config.RetentionPolicy.Mode != "organization_controlled" || config.RetentionPolicy.PolicyVersion < 1 || (config.RetentionPolicy.DurationDays != nil && *config.RetentionPolicy.DurationDays < 1) || config.Audiences.ResponseReaders == nil || config.Audiences.Publications == nil || config.Audiences.Exports == nil || len(config.Audiences.Publications) != 0 || len(config.Audiences.Exports) != 0 || (config.ApprovalPolicy != "metrics_or_review" && config.ApprovalPolicy != "review") {
+	if !teams.ValidUniqueJSON(w.Config) || decoder.Decode(&config) != nil || config.Question == "" || config.Requester.ID == "" || config.Requester.DisplayName == "" || !teamsVersionPattern.MatchString(config.MinAppVersion) || config.RetentionPolicy.Mode != "organization_controlled" || config.RetentionPolicy.PolicyVersion < 1 || (config.RetentionPolicy.DurationDays != nil && *config.RetentionPolicy.DurationDays < 1) || config.Audiences.ResponseReaders == nil || config.Audiences.Publications == nil || config.Audiences.Exports == nil || (config.ApprovalPolicy != "metrics_or_review" && config.ApprovalPolicy != "review") {
 		return teamsQueryPlan{}, errTeamsQueryUnsupported
+	}
+	if !validTeamsSchedule(config.Schedule) {
+		return teamsQueryPlan{}, errTeamsQueryUnsupported
+	}
+	if _, err := parseTeamsPeriod(w.Period, config.Schedule); err != nil {
+		return teamsQueryPlan{}, err
 	}
 	readers := map[string]bool{}
 	for _, reader := range config.Audiences.ResponseReaders {
@@ -241,6 +236,12 @@ func teamsPlanFromWork(w teams.Work) (teamsQueryPlan, error) {
 	plan, err := compileTeamsQuery(config.QueryURL)
 	if err != nil {
 		return plan, err
+	}
+	if !validTeamsReports(config.Audiences.Publications, config.ApprovalPolicy, plan) {
+		return teamsQueryPlan{}, errTeamsQueryUnsupported
+	}
+	if !validTeamsExports(config.Audiences.Exports, config.ApprovalPolicy, plan) {
+		return teamsQueryPlan{}, errTeamsQueryUnsupported
 	}
 	if len(config.ResultSchema.Columns) != len(plan.Metrics) {
 		return plan, errTeamsQueryUnsupported

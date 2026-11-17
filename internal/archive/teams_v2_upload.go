@@ -42,7 +42,7 @@ func readTeamsV2Upload(ctx context.Context, q interface {
 func (c *Catalog) prepareTeamsV2Upload(ctx context.Context, w teams.Work, d LibraryDescriptor, credential *teams.EnrollmentCredential, snapshot teamsV2Inventory, policy teams.MetricsDefault, watermark teams.SourceWatermark, manifest teams.CapabilityManifest) (teamsV2Upload, error) {
 	var out teamsV2Upload
 	plan, err := teamsPlanFromWork(w)
-	if err != nil || len(plan.Metrics) != 1 || plan.Metrics[0].Field != "total_tokens" || credential == nil || credential.LibraryID != d.ID || w.LibraryID != d.ID || !teamsNumericBuildEligible(manifest) {
+	if err != nil || len(plan.Metrics) != 1 || plan.Metrics[0].Field != "total_tokens" || credential == nil || credential.LibraryID != d.ID || w.LibraryID != d.ID || !teamsNumericWorkEligible(w, manifest) {
 		return out, errTeamsQueryUnsupported
 	}
 	if _, err = teams.WorkPath(w.ID, "status"); err != nil {

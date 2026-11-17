@@ -62,23 +62,30 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			next, checking, problem := s.teamsWorker.next, s.teamsWorker.checking, s.teamsWorker.problem
 			s.teamsWorker.mu.Unlock()
 			type row struct {
-				WorkID      string          `json:"workId"`
-				Question    string          `json:"question"`
-				Requester   string          `json:"requester"`
-				State       string          `json:"state"`
-				PayloadHash string          `json:"payloadHash"`
-				Readers     []string        `json:"readers"`
-				Payload     json.RawMessage `json:"payload"`
+				WorkID       string                   `json:"workId"`
+				Question     string                   `json:"question"`
+				Requester    string                   `json:"requester"`
+				State        string                   `json:"state"`
+				PayloadHash  string                   `json:"payloadHash"`
+				Readers      []string                 `json:"readers"`
+				Payload      json.RawMessage          `json:"payload"`
+				Schedule     json.RawMessage          `json:"schedule"`
+				Period       json.RawMessage          `json:"period"`
+				Exports      []teamsFeedExport        `json:"exports"`
+				Publications []teamsReportPublication `json:"publications"`
 			}
 			out := make([]row, 0, len(items))
 			for _, item := range items {
 				var config struct {
-					Question  string `json:"question"`
+					Question  string          `json:"question"`
+					Schedule  json.RawMessage `json:"schedule"`
 					Requester struct {
 						DisplayName string `json:"display_name"`
 					} `json:"requester"`
 					Audiences struct {
 						ResponseReaders []struct{ Kind, ID string } `json:"response_readers"`
+						Exports         []teamsFeedExport           `json:"exports"`
+						Publications    []teamsReportPublication    `json:"publications"`
 					} `json:"audiences"`
 				}
 				if _, e = teamsPlanFromWork(item.Work); e != nil {
@@ -90,7 +97,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				for _, reader := range config.Audiences.ResponseReaders {
 					readers = append(readers, reader.ID)
 				}
-				out = append(out, row{WorkID: item.Work.ID, Question: config.Question, Requester: config.Requester.DisplayName, State: item.State, PayloadHash: item.PayloadHash, Readers: readers, Payload: json.RawMessage(item.Payload)})
+				out = append(out, row{WorkID: item.Work.ID, Question: config.Question, Requester: config.Requester.DisplayName, State: item.State, PayloadHash: item.PayloadHash, Readers: readers, Payload: json.RawMessage(item.Payload), Schedule: config.Schedule, Period: item.Work.Period, Exports: config.Audiences.Exports, Publications: config.Audiences.Publications})
 			}
 			writeJSON(w, map[string]any{"enabled": settings.Enabled, "optOut": settings.MetricsOptOut, "settingsRevision": settings.SettingsRevision, "acknowledgedPolicy": settings.AcknowledgedPolicy, "nextCheck": next, "checking": checking, "problem": problem, "items": out}, 200)
 			return nil

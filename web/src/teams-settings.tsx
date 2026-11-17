@@ -4,7 +4,7 @@ import "./teams-settings.css";
 type EnrollmentStatus = { state: string; available: boolean; library: string; fingerprint: string; problem: string; optedOut?: boolean };
 type SourceAccount = { bindingId: string; provider: string; sourceName: string; accountLabel: string; host: string; root: string; identifiable: number; ambiguous: number; mode: string; exposed: boolean; unindexed?: boolean };
 type SourceStatus = { sourceRevision: number; settingsRevision: number; proofRequested: boolean; sources: SourceAccount[] };
-type WorkItem = { workId: string; question: string; requester: string; readers: string[] | null; state: string; payloadHash: string; payload: unknown };
+type WorkItem = { workId: string; question: string; requester: string; readers: string[] | null; state: string; payloadHash: string; payload: unknown; schedule?: {cadence:string; timezone:string; catch_up:string; response_window_seconds:number} | null; period?: {key:string; start_at?:string; end_at?:string} | null; exports?: {id:string;kind:string;destination:string;fields:string[]}[] | null; publications?: {id:string;kind:string;readers:{kind:string;id:string}[];fields:string[]}[] | null };
 type WorkerStatus = { enabled: boolean; optOut: boolean; settingsRevision: number; acknowledgedPolicy: number; nextCheck: string; checking: boolean; problem: string; items: WorkItem[] };
 type OrgPolicy = { value: boolean; policyVersion: number; settingsRevision: number };
 
@@ -47,8 +47,11 @@ function TeamsWork() {
     {status?.problem ? <p role="status">{status.problem}</p> : null}
     {status?.items.map(item => <div className="teams-source" key={item.workId}>
       <h4>{item.question}</h4><p>Requested by {item.requester || "your organization"}. Readers: {item.readers?.join(", ") || "none listed"}.</p>
+	  {item.schedule ? <><p>Repeats {item.schedule.cadence} in {item.schedule.timezone}; missed periods: {item.schedule.catch_up}. Response window: {item.schedule.response_window_seconds} seconds.</p><p>Current period: {item.period?.start_at} to {item.period?.end_at}. The token total covers all eligible history.</p></> : null}
+	  {item.publications?.map(x => <p key={x.id}>Report readers: {x.readers.map(r => r.id).join(", ")}. Fields: {x.fields.join(", ")}. Each result requires your review before sending.</p>)}
+	  {item.exports?.map(x => <p key={x.id}>Export to {x.destination}. Fields: {x.fields.join(", ")}. Each result requires your review before sending.</p>)}
       <p>Status: {item.state.replaceAll("_", " ")}.</p>
-      {item.state === "awaiting_source_consent" ? <><p>Allow this request to check opaque source membership. This does not approve sending an answer.</p><button type="button" disabled={busy || !status} onClick={() => void act("/allow-source", { workId: item.workId, settingsRevision: status.settingsRevision })}>Allow source checks</button></> : null}
+      {item.state === "awaiting_source_consent" ? <><p>Allow this request{item.schedule ? " and its future scheduled periods" : ""} to check opaque source membership. This does not approve sending an answer.</p><button type="button" disabled={busy || !status} onClick={() => void act("/allow-source", { workId: item.workId, settingsRevision: status.settingsRevision })}>Allow source checks</button></> : null}
       {item.payload ? <pre>{JSON.stringify(item.payload, null, 2)}</pre> : null}
       {item.state === "awaiting_review" ? <button type="button" disabled={busy} onClick={() => void act("/approve-result", { workId: item.workId, payloadHash: item.payloadHash })}>Approve and send this result</button> : null}{" "}
       {["awaiting_source_consent", "awaiting_review", "decline_pending"].includes(item.state) ? <button type="button" disabled={busy} onClick={() => void act("/decline", { workId: item.workId })}>{item.state === "decline_pending" ? "Retry decline" : "Decline request"}</button> : null}
