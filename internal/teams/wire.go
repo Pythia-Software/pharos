@@ -306,7 +306,7 @@ func LibraryPath(id, operation string) (string, error) {
 		}
 	}
 	switch operation {
-	case "privacy", "dirty", "source-watermark":
+	case "privacy", "dirty", "source-watermark", "source-protection":
 		return "/v1/device/libraries/" + id + "/" + operation, nil
 	default:
 		return "", errors.New("invalid library operation")
