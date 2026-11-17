@@ -265,7 +265,9 @@ func (c *Catalog) Close() error {
 // 26: retained Claude Chat settings observations, separate from execution data.
 // 27: estimated usage shares the canonical ledgers with explicit provenance.
 // Older writers could otherwise preserve predictions as authoritative counters.
-const catalogSchemaVersion = 27
+// 28: Teams privacy markings must survive library changes and transfers; older
+// writers cannot preserve that sharing boundary.
+const catalogSchemaVersion = 28
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

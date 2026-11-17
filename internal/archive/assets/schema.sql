@@ -174,6 +174,21 @@ CREATE TABLE IF NOT EXISTS conversations (
 );
 CREATE INDEX IF NOT EXISTS conversations_workspace_idx ON conversations(workspace_id);
 CREATE INDEX IF NOT EXISTS conversations_parent_idx ON conversations(parent_id);
+
+-- Library-owned sharing policy. Do not cascade on transcript removal: a
+-- later reindex of the same source must not silently clear a private mark.
+CREATE TABLE IF NOT EXISTS teams_conversation_privacy (
+  conversation_id TEXT PRIMARY KEY,
+  user_private INTEGER NOT NULL DEFAULT 0 CHECK(user_private IN (0,1)),
+  classifier_state TEXT NOT NULL DEFAULT 'unclassified' CHECK(classifier_state IN ('unclassified','pending','flagged','clear','failed')),
+  classifier_input TEXT NOT NULL DEFAULT '',
+  classifier_reviewed INTEGER NOT NULL DEFAULT 0 CHECK(classifier_reviewed IN (0,1))
+);
+CREATE TABLE IF NOT EXISTS teams_privacy_revision (
+  id INTEGER PRIMARY KEY CHECK(id=1),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0)
+);
+INSERT OR IGNORE INTO teams_privacy_revision(id,revision) VALUES(1,0);
 CREATE INDEX IF NOT EXISTS conversations_native_alias_idx ON conversations(account,native_id);
 -- Home discovery bounds its pool through this index before consulting stored
 -- previews or optional enrichment ledgers.

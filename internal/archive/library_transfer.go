@@ -22,7 +22,7 @@ import (
 // private user/application state or a rebuildable projection. The retained
 // transfer catalog also preserves conflicting revisions as evidence.
 var transferHistoryTables = []string{
-	"repositories", "hosts", "machines", "host_machines", "pull_requests", "workspaces", "workspace_delivery_inputs", "work_items", "conversations", "origin_observations", "messages",
+	"repositories", "hosts", "machines", "host_machines", "pull_requests", "workspaces", "workspace_delivery_inputs", "work_items", "conversations", "teams_conversation_privacy", "origin_observations", "messages",
 	"agent_sessions", "agent_session_usage", "agent_session_token_evidence", "agent_session_messages", "message_authorship", "message_authorship_spans", "reasoning_extraction_state", "conversation_launches", "conversation_identity_links", "model_requests", "tool_calls", "tool_commands", "tool_urls",
 	"skill_usages", "conversation_instructions", "task_attempts", "handoffs", "change_sets", "change_files",
 	"work_pr_links", "metrics", "metric_ledger", "workspace_sightings", "conversation_sightings", "copy_versions", "copy_evidence", "source_evidence",
@@ -565,6 +565,13 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	if reviews == 0 {
 		tables = slices.DeleteFunc(tables, func(name string) bool { return strings.HasPrefix(name, "pull_request_") })
 	}
+	var privacyTables int
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM delivered.sqlite_master WHERE type='table' AND name='teams_conversation_privacy'").Scan(&privacyTables); err != nil {
+		return err
+	}
+	if privacyTables == 0 {
+		tables = slices.DeleteFunc(tables, func(name string) bool { return name == "teams_conversation_privacy" })
+	}
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -723,6 +730,25 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 		return err
 	}
 	for _, table := range ordered {
+		if table == "teams_conversation_privacy" {
+			// When libraries disagree, retain either effective private mark,
+			// and invalidate differing classifier evidence. A review in one
+			// library cannot certify the other library's input or clear its mark.
+			if _, err = tx.ExecContext(ctx, `INSERT INTO teams_conversation_privacy(conversation_id,user_private,classifier_state,classifier_input,classifier_reviewed)
+ SELECT conversation_id,user_private,classifier_state,classifier_input,classifier_reviewed FROM incoming_teams_conversation_privacy WHERE true
+ ON CONFLICT(conversation_id) DO UPDATE SET user_private=MAX(teams_conversation_privacy.user_private,excluded.user_private,
+ CASE WHEN excluded.classifier_state='pending' OR (excluded.classifier_state='flagged' AND excluded.classifier_reviewed=0) THEN 1 ELSE 0 END,
+ CASE WHEN teams_conversation_privacy.classifier_state='pending' OR (teams_conversation_privacy.classifier_state='flagged' AND teams_conversation_privacy.classifier_reviewed=0) THEN 1 ELSE 0 END),
+ classifier_state=CASE WHEN teams_conversation_privacy.classifier_state=excluded.classifier_state AND teams_conversation_privacy.classifier_input=excluded.classifier_input AND teams_conversation_privacy.classifier_reviewed=excluded.classifier_reviewed THEN teams_conversation_privacy.classifier_state ELSE 'unclassified' END,
+ classifier_input=CASE WHEN teams_conversation_privacy.classifier_state=excluded.classifier_state AND teams_conversation_privacy.classifier_input=excluded.classifier_input AND teams_conversation_privacy.classifier_reviewed=excluded.classifier_reviewed THEN teams_conversation_privacy.classifier_input ELSE '' END,
+ classifier_reviewed=CASE WHEN teams_conversation_privacy.classifier_state=excluded.classifier_state AND teams_conversation_privacy.classifier_input=excluded.classifier_input AND teams_conversation_privacy.classifier_reviewed=excluded.classifier_reviewed THEN teams_conversation_privacy.classifier_reviewed ELSE 0 END`); err != nil {
+				return fmt.Errorf("merge privacy markings: %w", err)
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE teams_privacy_revision SET revision=revision+1 WHERE id=1 AND EXISTS(SELECT 1 FROM incoming_teams_conversation_privacy)`); err != nil {
+				return err
+			}
+			continue
+		}
 		columns, err := transferColumns(ctx, tx, table)
 		if err != nil {
 			return err
@@ -1268,7 +1294,7 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 // query caches, free SQLite pages, or a retained WAL.
 var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots", "query_table_computed_columns", "sync_settings", "background_settings", "background_temporary_cadences", "repository_checkouts", "automatic_source_states",
 	"cloud_destinations", "cloud_backup_runs", "cloud_backup_schedules", "library_size_history",
-	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
+	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions", "teams_conversation_privacy", "teams_privacy_revision", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
 	"safety_state", "safety_cart", "safety_handoffs", "fix_state", "fix_cart", "fix_handoffs",
 	"source_states", "source_record_states", "source_item_states", "source_terminal_states", "sync_generations", "hosts", "protections", "repository_retirements", "library_delivery_checkpoints", "library_workspace_delivery_checkpoints"}
 
