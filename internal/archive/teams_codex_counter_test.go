@@ -24,6 +24,7 @@ func TestTeamsCodexTotalPrefix(t *testing.T) {
 		{"fractional", header + checkpoint("1.5", "1.5"), false, 0},
 		{"overflow", header + checkpoint("9007199254740992", "9007199254740992"), false, 0},
 		{"missing", header, false, 0},
+		{"rate-limit-only", header + `{"type":"event_msg","payload":{"type":"token_count","info":null}}` + "\n" + checkpoint("100", "100"), true, 100},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

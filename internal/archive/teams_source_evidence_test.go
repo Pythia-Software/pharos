@@ -59,7 +59,7 @@ func TestTeamsSourceProofRetainedCaptureUsesOriginalProvenance(t *testing.T) {
 	c, config := testCatalog(t)
 	root := filepath.Join(t.TempDir(), "codex")
 	writeSourceFile(t, filepath.Join(root, "sessions", "rollout.jsonl"), codexLines("synthetic-thread", 1))
-	source := SourceConfig{Name: "codex", Kind: "codex", Path: root, Account: "local", Enabled: true}
+	source := SourceConfig{Name: "codex", Kind: "codex", Path: root, Account: "local", Enabled: true, Options: map[string]any{"synthetic-option": true}}
 	config.Sources = []SourceConfig{source}
 	runCapture(t, config)
 	d := LibraryDescriptor{ID: "synthetic-library", Instance: "synthetic-instance"}
@@ -77,6 +77,27 @@ func TestTeamsSourceProofRetainedCaptureUsesOriginalProvenance(t *testing.T) {
 	}
 	if original != root || status != "header_independent_unvalidated" {
 		t.Fatalf("capture provenance %q, status %q", original, status)
+	}
+	hosts, err := c.capturedHosts(config.CaptureRoot)
+	if err != nil || len(hosts) != 1 {
+		t.Fatalf("capture status: %v %v", hosts, err)
+	}
+	sources := hosts[0]["sources"].([]map[string]any)
+	if len(sources) != 1 || sources[0]["needs_index"] != false {
+		t.Fatalf("capture stayed stale: %v", sources)
+	}
+	appendSourceFile(t, filepath.Join(root, "sessions", "rollout.jsonl"), `{"type":"event_msg","payload":{"type":"agent_message","message":"synthetic"}}`+"\n")
+	ingestSource(t, c, source)
+	if n := countRows(t, c, `SELECT COUNT(*) FROM teams_source_bindings`); n != 1 {
+		t.Fatalf("live and captured custody produced different bindings: %d", n)
+	}
+	config.Sources[0].Options = map[string]any{"synthetic-option": false}
+	runCapture(t, config)
+	appendSourceFile(t, filepath.Join(root, "sessions", "rollout.jsonl"), `{"type":"event_msg","payload":{"type":"agent_message","message":"changed"}}`+"\n")
+	runCapture(t, config)
+	indexCaptures(t, c, config.CaptureRoot, "synthetic-host")
+	if n := countRows(t, c, `SELECT COUNT(*) FROM teams_source_bindings WHERE superseded_at=''`); n != 0 {
+		t.Fatalf("changed capture options retained active proof: %d", n)
 	}
 }
 
@@ -127,5 +148,95 @@ func TestTeamsSourceMappingRequiresAttestationAndFencesExposure(t *testing.T) {
 	}
 	if err := c.reviewTeamsSourceMapping(ctx, d, credential, "binding", "work", 2, true); !errors.Is(err, errTeamsSourceRemapRequired) {
 		t.Fatalf("unavailable bypassed exposure: %v", err)
+	}
+}
+
+func TestTeamsSourceProofRetainsDistinctOriginsAndFencesChangedSource(t *testing.T) {
+	useHost(t, "synthetic-host")
+	c, _ := testCatalog(t)
+	ctx := context.Background()
+	d := LibraryDescriptor{ID: "synthetic-library", Instance: "synthetic-instance"}
+	credential := &teams.EnrollmentCredential{LibraryID: d.ID, Origin: "https://synthetic.invalid", OrgID: "synthetic-org", PersonID: "synthetic-person", InstallationID: "00000000-0000-4000-8000-000000000003"}
+	s, err := c.setTeamsLocalSettings(ctx, d.ID, d.Instance, credential.OrgID, credential.InstallationID, teamsPayloadHash([]byte("synthetic-key")), true, false, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.requestTeamsSourceProof(ctx, d, s.SettingsRevision); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "codex")
+	writeSourceFile(t, filepath.Join(root, "sessions", "one.jsonl"), codexLines("same-thread", 1))
+	writeSourceFile(t, filepath.Join(root, "archived_sessions", "two.jsonl"), codexLines("same-thread", 2))
+	source := SourceConfig{Name: "codex", Kind: "codex", Path: root, Account: "local", Enabled: true}
+	ingestSource(t, c, source)
+	if n := countRows(t, c, `SELECT COUNT(*) FROM teams_native_source_proofs`); n != 2 {
+		t.Fatalf("lost distinct file origins: %d", n)
+	}
+	var binding string
+	var revision int64
+	if err = c.DB.QueryRow(`SELECT binding_id FROM teams_source_bindings WHERE superseded_at=''`).Scan(&binding); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.DB.QueryRow(`SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.reviewTeamsSourceMapping(ctx, d, credential, binding, "work", revision, true); err != nil {
+		t.Fatal(err)
+	}
+	var mapping int64
+	if err = c.DB.QueryRow(`SELECT revision FROM teams_source_mapping_current WHERE binding_id=?`, binding).Scan(&mapping); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := c.teamsSharingLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.writeTransaction(ctx, "synthetic-exposure", func(tx *sql.Tx) error { return reserveTeamsSourceExposure(ctx, tx, d, credential, binding, mapping) })
+	lease.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRoot := filepath.Join(t.TempDir(), "codex")
+	writeSourceFile(t, filepath.Join(newRoot, "sessions", "three.jsonl"), codexLines("new-thread", 1))
+	source.Path = newRoot
+	ingestSource(t, c, source)
+	var next string
+	if err = c.DB.QueryRow(`SELECT binding_id FROM teams_source_bindings WHERE superseded_at=''`).Scan(&next); err != nil {
+		t.Fatal(err)
+	}
+	if next == binding || countRows(t, c, `SELECT COUNT(*) FROM teams_native_source_proofs WHERE binding_id=?`, binding) != 0 {
+		t.Fatal("old source proof remained active")
+	}
+	if err = c.DB.QueryRow(`SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.reviewTeamsSourceMapping(ctx, d, credential, next, "work", revision, true); !errors.Is(err, errTeamsSourceRemapRequired) {
+		t.Fatalf("changed source bypassed exposure: %v", err)
+	}
+	if _, err = c.DB.Exec(`DELETE FROM teams_native_source_proofs WHERE binding_id=?`, next); err != nil {
+		t.Fatal(err)
+	}
+	var after int64
+	if err = c.DB.QueryRow(`SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&after); err != nil || after <= revision {
+		t.Fatalf("deletion did not advance revision: %d -> %d, %v", revision, after, err)
+	}
+}
+
+func TestTeamsSourceProofCascadeAdvancesRevision(t *testing.T) {
+	c, _ := testCatalog(t)
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Synthetic','2026-01-01')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','native')`,
+		`INSERT INTO teams_source_bindings(binding_id,provenance_sha256,host_id,source_name,source_kind,provider,account_label,source_root,created_at) VALUES('binding','hash','host','source','codex','codex','local','/synthetic','now')`,
+		`INSERT INTO teams_native_source_proofs(binding_id,conversation_id,provider,native_id,status,trailing_partial,indexed_digest,origin) VALUES('binding','c','codex','native','capture_gap',0,'digest','/synthetic/file')`)
+	var before, after int64
+	if err := c.DB.QueryRow(`SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DB.Exec(`DELETE FROM conversations WHERE id='c'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DB.QueryRow(`SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&after); err != nil || after <= before {
+		t.Fatalf("cascade did not advance revision %d -> %d: %v", before, after, err)
 	}
 }

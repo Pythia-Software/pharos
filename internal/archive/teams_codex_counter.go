@@ -29,6 +29,9 @@ func teamsCodexTotalPrefix(proof *teamsNativeProof, events []map[string]any) (in
 		}
 		info := mapValue(payload["info"])
 		if info == nil {
+			if value, exists := payload["info"]; exists && value == nil {
+				continue
+			}
 			return 0, "", false
 		}
 		total, okTotal := teamsSafeCounter(mapValue(info["total_token_usage"])["total_tokens"])

@@ -585,9 +585,6 @@ func (a *jsonlAdapter) extractorVersion() string {
 	if a.provider == "claude" {
 		return jsonlExtractor + "+" + claudeExtractor
 	}
-	if a.provider == "codex" && a.teamsProofEnabled {
-		return jsonlExtractor + "+teams-native-proof-v1"
-	}
 	return jsonlExtractor
 }
 
