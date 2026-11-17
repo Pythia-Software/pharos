@@ -103,8 +103,15 @@ func TestTeamsProtectionFenceNoopThenWrite(t *testing.T) {
 			t.Fatalf("write %q: %v", statement, err)
 		}
 	}
+	origin := `INSERT INTO teams_origin_outbox(observation_id,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,run_id,run_generation,expires_at,token,expected_revision,observation_json,observation_sha256,state) VALUES('o','origin','org','person','install','library','instance','work','snapshot','hash',1,1,1,1,'run',1,1,'token',0,'{}','hash','prepared')`
+	if _, err = c.DB.Exec(origin); err == nil {
+		t.Fatal("ordinary writer inserted acquisition evidence")
+	}
+	if err = teamsCheckpointWrite(ctx, w, store, "checkpoint", scope, key, func(tx *sql.Tx) error { _, e := tx.Exec(origin); return e }); err != nil {
+		t.Fatalf("fenced acquisition write: %v", err)
+	}
 	state, err := teamsParseCheckpoint(store.raw)
-	if err != nil || state.Current == nil || state.Current.Revision != 2 {
+	if err != nil || state.Current == nil || state.Current.Revision != 3 {
 		t.Fatalf("fence revision not checkpointed: %+v %v", state, err)
 	}
 }
@@ -339,6 +346,7 @@ func TestTeamsCheckpointMoveRetainsIndependentHold(t *testing.T) {
 	}
 	c := reopenCatalog(t, source.CatalogPath)
 	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','test','local','w','Synthetic','2026-01-01')`, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','test','local','n')`, `INSERT INTO teams_conversation_privacy(conversation_id,provider,account,native_id,classifier_state,classifier_input) VALUES('c','test','local','n','flagged','synthetic')`, `UPDATE teams_conversation_privacy SET classifier_state='clear' WHERE conversation_id='c'`)
+	execTx(t, c.DB, `INSERT INTO teams_origin_outbox(observation_id,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,run_id,run_generation,expires_at,token,expected_revision,observation_json,observation_sha256,state) VALUES('o','origin','org','person','install','library','instance','work','snapshot','hash',1,1,1,1,'run',1,1,'token',0,'{}','hash','held')`)
 	store, err := teamsCredentialStore(source)
 	if err != nil {
 		t.Fatal(err)
@@ -394,6 +402,9 @@ func TestTeamsCheckpointMoveRetainsIndependentHold(t *testing.T) {
 	}
 	if n := countRows(t, c, `SELECT count(*) FROM teams_protection_baseline WHERE state='held'`); n != 1 {
 		t.Fatal("source baseline not held")
+	}
+	if n := countRows(t, c, `SELECT count(*) FROM teams_origin_outbox WHERE observation_id='o' AND state='held'`); n != 1 {
+		t.Fatal("source lost held origin evidence")
 	}
 	dest := reopenCatalog(t, target.CatalogPath)
 	defer dest.Close()
@@ -607,5 +618,80 @@ func TestTeamsRecoveryLegacyCopyHeld(t *testing.T) {
 	defer c.Close()
 	if n := countRows(t, c, `SELECT count(*) FROM teams_protection_assertions WHERE conversation_id='' AND kind='legacy_hold' AND evidence='unproved_recovery' AND active=1`); n != 1 {
 		t.Fatal("pre-checkpoint recovery lacks unproved hold")
+	}
+}
+
+func TestTeamsRecoveryPreviousProtectedSchema(t *testing.T) {
+	c, _ := testCatalog(t)
+	ctx := t.Context()
+	for _, name := range []string{"teams_recovery_stage_pages", "teams_recovery_stage_batches", "teams_profile_outbox_pages", "teams_profile_outbox", "teams_origin_outbox"} {
+		if _, err := c.DB.Exec(`DROP TABLE ` + quotedIdentifier(name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w, err := teamsOpenProtectedWriter(c.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := teamsBeginProtectedWrite(ctx, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTables := []string{"teams_v2_uploads", "teams_origin_outbox", "teams_profile_outbox", "teams_profile_outbox_pages", "teams_recovery_stage_batches", "teams_recovery_stage_pages"}
+	for _, fence := range teamsProtectionFenceStatements() {
+		if !teamsFenceBelongsTo(fence.name, newTables) {
+			if _, err = tx.Exec(fence.sql); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	digest, err := teamsActualSchemaDigest(ctx, tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.authorized.Store(true)
+	if _, err = tx.Exec(`INSERT INTO teams_protection_open_contract(id,initializer_epoch,compiled_schema_sha256,actual_schema_sha256,catalog_version,library_version) VALUES(1,1,?,?,?,'previous-build')`, strings.Repeat("f", 64), digest, protectedCatalogSchemaVersion); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(`UPDATE meta SET value=? WHERE key='schema_version'`, strconv.Itoa(protectedCatalogSchemaVersion)); err != nil {
+		t.Fatal(err)
+	}
+	w.authorized.Store(false)
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	check, err := teamsBeginProtectedWrite(ctx, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = check.Exec(`CREATE TABLE teams_origin_outbox(synthetic TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	digest, err = teamsActualSchemaDigest(ctx, check)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.authorized.Store(true)
+	if _, err = check.Exec(`UPDATE teams_protection_open_contract SET actual_schema_sha256=? WHERE id=1`, digest); err != nil {
+		t.Fatal(err)
+	}
+	w.authorized.Store(false)
+	if err = teamsRecoveryStructureSupported(ctx, check); !errors.Is(err, errTeamsProtectionContinuity) {
+		t.Fatalf("partial new schema accepted: %v", err)
+	}
+	_ = check.Rollback()
+	if err = w.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = prepareTeamsRecoveredCopy(ctx, c.Path); err != nil {
+		t.Fatalf("previous v34 recovery: %v", err)
+	}
+	recovered := reopenCatalog(t, c.Path)
+	defer recovered.Close()
+	if n := countRows(t, recovered, `SELECT count(*) FROM teams_protection_assertions WHERE conversation_id='' AND kind='legacy_hold' AND evidence='unproved_recovery' AND active=1`); n != 1 {
+		t.Fatal("previous v34 recovery lost unknown hold")
 	}
 }

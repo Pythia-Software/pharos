@@ -286,6 +286,52 @@ CREATE TABLE IF NOT EXISTS teams_codex_capture_custody (
   FOREIGN KEY(binding_id,conversation_id,origin) REFERENCES teams_codex_request_profiles(binding_id,conversation_id,origin) ON DELETE CASCADE
 );
 
+-- Typed binding acquisition is separate from numeric v2 authority and outbox.
+-- A row in acquiring state is only a journaled request, never read authority.
+-- Exact original 032 transport evidence, scoped to its enrolled installation.
+-- Staging/acceptance never creates local non-private proof or typed authority.
+CREATE TABLE IF NOT EXISTS teams_profile_outbox (
+ upload_id TEXT PRIMARY KEY, origin TEXT NOT NULL, org_id TEXT NOT NULL, person_id TEXT NOT NULL,
+ installation_id TEXT NOT NULL, library_id TEXT NOT NULL, instance_id TEXT NOT NULL, work_id TEXT NOT NULL,
+ settings_revision INTEGER NOT NULL, source_revision INTEGER NOT NULL, privacy_revision INTEGER NOT NULL,
+ snapshot_id TEXT NOT NULL, inventory_sha256 TEXT NOT NULL, profile_revision INTEGER NOT NULL,
+ issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, seal_json BLOB NOT NULL, seal_sha256 TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('prepared','held','accepted')), seal_receipt_json BLOB
+);
+CREATE TABLE IF NOT EXISTS teams_profile_outbox_pages (
+ upload_id TEXT NOT NULL REFERENCES teams_profile_outbox(upload_id) ON DELETE CASCADE,
+ page_index INTEGER NOT NULL, page_json BLOB NOT NULL, page_sha256 TEXT NOT NULL, receipt_json BLOB,
+ PRIMARY KEY(upload_id,page_index)
+);
+-- Exact 031 observations and their results remain local until reconciled.
+CREATE TABLE IF NOT EXISTS teams_origin_outbox (
+ observation_id TEXT PRIMARY KEY, origin TEXT NOT NULL, org_id TEXT NOT NULL,
+ person_id TEXT NOT NULL, installation_id TEXT NOT NULL, library_id TEXT NOT NULL,
+ instance_id TEXT NOT NULL, work_id TEXT NOT NULL, snapshot_id TEXT NOT NULL,
+ inventory_sha256 TEXT NOT NULL, settings_revision INTEGER NOT NULL,
+ source_revision INTEGER NOT NULL, privacy_revision INTEGER NOT NULL, cache_generation INTEGER NOT NULL,
+ run_id TEXT NOT NULL, run_generation INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+ token TEXT NOT NULL, expected_revision INTEGER NOT NULL,
+ observation_json BLOB NOT NULL, observation_sha256 TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('prepared','held','accepted')), receipt_json BLOB,
+ UNIQUE(org_id,installation_id,library_id,instance_id,run_id,run_generation,token,expected_revision)
+);
+-- Immutable 038 contributor pages; the parent remains nonauthorizing.
+CREATE TABLE IF NOT EXISTS teams_recovery_stage_batches (
+ run_id TEXT NOT NULL, installation_id TEXT NOT NULL, upload_id TEXT NOT NULL,
+ org_id TEXT NOT NULL, person_id TEXT NOT NULL, library_id TEXT NOT NULL, instance_id TEXT NOT NULL,
+ generation INTEGER NOT NULL, issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+ settings_revision INTEGER NOT NULL, source_revision INTEGER NOT NULL, privacy_revision INTEGER NOT NULL,
+ prior_profile_revision INTEGER NOT NULL, prior_profile_sha256 TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('prepared','held','accepted')),
+ PRIMARY KEY(run_id,installation_id,upload_id)
+);
+CREATE TABLE IF NOT EXISTS teams_recovery_stage_pages (
+ run_id TEXT NOT NULL, installation_id TEXT NOT NULL, upload_id TEXT NOT NULL, page_index INTEGER NOT NULL,
+ command_id TEXT NOT NULL, page_json BLOB NOT NULL, page_sha256 TEXT NOT NULL, receipt_json BLOB,
+ PRIMARY KEY(run_id,installation_id,upload_id,page_index),
+ FOREIGN KEY(run_id,installation_id,upload_id) REFERENCES teams_recovery_stage_batches(run_id,installation_id,upload_id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS teams_source_revision (
   id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
   proof_requested INTEGER NOT NULL DEFAULT 0 CHECK(proof_requested IN (0,1))

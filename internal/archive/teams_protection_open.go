@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -102,8 +103,33 @@ func teamsRecoveryStructureSupported(ctx context.Context, tx *sql.Tx) error {
 	if err != nil || current != actual {
 		return errTeamsProtectionContinuity
 	}
-	if err = teamsVerifyProtectionFence(ctx, tx); err != nil {
-		return err
+	// #794's inactive v34 format predates these acquisition tables and their
+	// fences. A disposable copy can be stripped when that exact old shape is
+	// present; a partially installed newer shape is not supported.
+	newTables := []string{"teams_origin_outbox", "teams_profile_outbox", "teams_profile_outbox_pages", "teams_recovery_stage_batches", "teams_recovery_stage_pages"}
+	present := 0
+	for _, name := range newTables {
+		var exists bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)`, name).Scan(&exists); err != nil {
+			return errTeamsProtectionContinuity
+		}
+		if exists {
+			present++
+		}
+	}
+	if present != 0 && present != len(newTables) {
+		return errTeamsProtectionContinuity
+	}
+	legacy := present == 0
+	newFenceTables := append([]string{"teams_v2_uploads"}, newTables...)
+	for _, fence := range teamsProtectionFenceStatements() {
+		if legacy && teamsFenceBelongsTo(fence.name, newFenceTables) {
+			continue
+		}
+		var definition string
+		if err = tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`, fence.name).Scan(&definition); err != nil || definition != fence.sql {
+			return errTeamsProtectionContinuity
+		}
 	}
 	// Compare the tables this recovery transition reads or changes against
 	// this executable's supported schema, independently of the copied record.
@@ -131,6 +157,9 @@ func teamsRecoveryStructureSupported(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	for _, spec := range teamsProtectionProjectionQueries {
+		if legacy && (spec.name == "v2_uploads" || spec.name == "origin_outbox" || spec.name == "profile_outbox" || spec.name == "profile_pages" || spec.name == "recovery_batches" || spec.name == "recovery_pages") {
+			continue
+		}
 		rows, e := tx.QueryContext(ctx, spec.query+` LIMIT 0`)
 		if e != nil {
 			return errTeamsProtectionContinuity
@@ -140,6 +169,17 @@ func teamsRecoveryStructureSupported(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+func teamsFenceBelongsTo(name string, tables []string) bool {
+	for _, table := range tables {
+		for _, operation := range []string{"INSERT", "UPDATE", "DELETE"} {
+			if name == fmt.Sprintf("teams_fence_%s_%s", table, operation) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func teamsRecoveryTriggersSupported(ctx context.Context, tx *sql.Tx, reference *sql.DB, table string) error {
