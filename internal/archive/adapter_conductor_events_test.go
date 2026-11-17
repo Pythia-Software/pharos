@@ -30,6 +30,14 @@ func conductorUserEvent(id, messageID, text, state, at string) conductorTestEven
 	return conductorTestEvent{id: id, kind: "userMessage", at: at, content: map[string]any{"eventId": id, "type": "userMessage", "senderId": "local", "id": messageID, "message": text, "state": state, "turnId": "turn-1", "config": map[string]any{"model": "opus"}}}
 }
 
+// conductorAgentSentEvent is a user message another agent session sent
+// through Conductor's control API, with the harness's instructions first.
+func conductorAgentSentEvent(id, messageID, text, at string) conductorTestEvent {
+	event := conductorUserEvent(id, messageID, text, "sent", at)
+	event.content["senderSessionId"] = "parent-session"
+	return event
+}
+
 func insertConductorEvents(t *testing.T, db *sql.DB, sid string, first int, events ...conductorTestEvent) {
 	t.Helper()
 	tx := seedTx(t, db)
@@ -102,7 +110,7 @@ func conductorEventLogFixture(t *testing.T, dir string) *sql.DB {
 		conductorAgentEvent("e-command", "2026-11-16T10:00:12.000Z", map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "<local-command-stdout>Compacted</local-command-stdout>"}}),
 		// Reverted: the user rewound past it.
 		conductorTestEvent{id: "e-reverted", kind: "agent", at: "2026-11-16T10:00:20.000Z", reverted: "2026-11-16T10:01:00.000Z", content: map[string]any{"type": "agent", "rawPayload": claudeAssistant("uuid-reverted", "Withdrawn.")}},
-		conductorUserEvent("e-sent", "u2", "And the tests", "sent", "2026-11-16T10:00:30.000Z"),
+		conductorAgentSentEvent("e-sent", "u2", "<system_instruction>\nWork in the repo.\n</system_instruction>\n\nAnd the tests", "2026-11-16T10:00:30.000Z"),
 		conductorUserEvent("e-queued", "u3", "Not yet sent", "queued", "2026-11-16T10:00:31.000Z"),
 		conductorAgentEvent("e-copied", "2026-11-16T10:00:40.000Z", claudeAssistant("uuid-copied", "Copied elsewhere.")),
 		conductorAgentEvent("e-done", "2026-11-16T10:00:50.000Z", map[string]any{"type": "result", "subtype": "success", "result": "Done."}),
@@ -168,7 +176,7 @@ func TestConductorEventLogAddsOnlyUnprojectedEvents(t *testing.T) {
 	if output := byID["cloud-feed:claude-1:e-command:0:block:0"]; output.Role != "assistant" || output.Text != "Compacted" {
 		t.Fatalf("local command output is stored as assistant text: %+v", output)
 	}
-	if sent := byID["u2"]; sent.Role != "user" || sent.Text != "And the tests" || sent.Model != "opus" {
+	if sent := byID["u2"]; sent.Role != "user" || sent.Text != "And the tests" || sent.Model != "opus" || sent.Sender != "agent:parent-session" {
 		t.Fatalf("a sent message only the log has: %+v", sent)
 	}
 	// Codex events are never translated; its rows are its messages.
@@ -289,5 +297,18 @@ func TestConductorUnprojectedEventsSkipRepeatsAndEmptyMessages(t *testing.T) {
 	})
 	if len(inputs) != 1 || inputs[0].row["id"] != "cloud-feed:s:e1:0" {
 		t.Fatalf("rebuilt rows: %+v", inputs)
+	}
+}
+
+func TestConductorUserTextDropsLeadingInstructions(t *testing.T) {
+	for message, want := range map[string]string{
+		"Plain request": "Plain request",
+		"  <system_instruction>a</system_instruction>\n<system_instruction>b</system_instruction>\n Ask": "Ask",
+		"Ask <system_instruction>kept</system_instruction>":                                              "Ask <system_instruction>kept</system_instruction>",
+		"<system_instruction>unterminated":                                                               "<system_instruction>unterminated",
+	} {
+		if got := conductorUserText(message); got != want {
+			t.Errorf("conductorUserText(%q) = %q, want %q", message, got, want)
+		}
 	}
 }

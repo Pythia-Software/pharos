@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // conductorEventTable is Conductor's raw session event log, kept beside
@@ -192,7 +193,11 @@ func conductorUnprojectedEvents(sid, agentType string, rows, events []map[string
 			State      string          `json:"state"`
 			TurnID     string          `json:"turnId"`
 			RawPayload json.RawMessage `json:"rawPayload"`
-			Config     struct {
+			// Who sent a user message, as its stored row records it.
+			SenderSessionID  string          `json:"senderSessionId"`
+			SenderAPIKeyName string          `json:"senderApiKeyName"`
+			SenderSource     json.RawMessage `json:"senderSource"`
+			Config           struct {
 				Model string `json:"model"`
 			} `json:"config"`
 		}
@@ -211,15 +216,28 @@ func conductorUnprojectedEvents(sid, agentType string, rows, events []map[string
 			if envelope.ID == "" || stored[envelope.ID] || (envelope.State != "" && envelope.State != "sent") {
 				continue
 			}
-			// The sender stays unknown: the event names the sending client
-			// ("local"), not the account its row records.
 			var text string
 			if json.Unmarshal(envelope.Message, &text) != nil || text == "" {
 				continue
 			}
-			row["id"], row["role"], row["content"] = envelope.ID, "user", text
+			// The row stores the text after the harness's leading
+			// instruction blocks; the evidence locator names the event,
+			// which keeps them.
+			row["id"], row["role"], row["content"] = envelope.ID, "user", conductorUserText(text)
 			if envelope.Config.Model != "" {
 				row["model"] = envelope.Config.Model
+			}
+			// The sending agent session and API key pass to the row as is.
+			// senderId stays unknown: the event names the sending client
+			// ("local"), where the row records the account.
+			if envelope.SenderSessionID != "" {
+				row["sender_session_id"] = envelope.SenderSessionID
+			}
+			if envelope.SenderAPIKeyName != "" {
+				row["sender_api_key_name"] = envelope.SenderAPIKeyName
+			}
+			if source := bytes.TrimSpace(envelope.SenderSource); len(source) > 0 && !bytes.Equal(source, []byte("null")) {
+				row["sender_source"] = string(source)
 			}
 		case "agent":
 			if !family || len(envelope.RawPayload) == 0 {
@@ -258,6 +276,27 @@ func conductorUnprojectedEvents(sid, agentType string, rows, events []map[string
 		inputs = append(inputs, conductorParserInput{row: row, table: conductorEventTable, ordinal: ordinal})
 	}
 	return inputs
+}
+
+// conductorUserText is the text Conductor stores for a sent user message:
+// the message after any leading <system_instruction> blocks, left untouched
+// when a block is unterminated.
+func conductorUserText(message string) string {
+	rest, stripped := message, false
+	for {
+		trimmed := strings.TrimLeftFunc(rest, unicode.IsSpace)
+		if !strings.HasPrefix(trimmed, "<system_instruction>") {
+			if stripped {
+				return trimmed
+			}
+			return message
+		}
+		end := strings.Index(trimmed, "</system_instruction>")
+		if end < 0 {
+			return message
+		}
+		rest, stripped = trimmed[end+len("</system_instruction>"):], true
+	}
 }
 
 var conductorLocalCommandStdout = regexp.MustCompile(`<local-command-stdout>([\s\S]*?)</local-command-stdout>`)
