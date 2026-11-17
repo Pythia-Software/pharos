@@ -1,15 +1,15 @@
-# Query Table 1.0.7 in Pharos
+# Query Table 1.0.9 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **1.0.7** packages,
-and the Go backend to **v1.0.7**. The lockfile and `go.sum` record the released
+Pharos pins core, React, UI and codegen to the published npm **1.0.9** packages,
+and the Go backend to **v1.0.9**. The lockfile and `go.sum` record the released
 sources. There are no vendored copies, module replacements, package patches or
 build-time source rewrites. Optional upstream worktree linking is described in
 [local development](query-table-local-development.md); ordinary builds need no
 Query Table checkout.
 
-The [1.0.7 release](https://github.com/Pythia-Software/query-table/releases/tag/v1.0.7),
-[wire protocol](https://github.com/Pythia-Software/query-table/blob/v1.0.7/docs/wire-protocol.md)
-and [error contract](https://github.com/Pythia-Software/query-table/blob/v1.0.7/docs/errors.md)
+The [1.0.9 release](https://github.com/Pythia-Software/query-table/releases/tag/v1.0.9),
+[wire protocol](https://github.com/Pythia-Software/query-table/blob/v1.0.9/docs/wire-protocol.md)
+and [error contract](https://github.com/Pythia-Software/query-table/blob/v1.0.9/docs/errors.md)
 define the integration. Query Table 1.0.2 added the run-bar host slot used for
 the readiness indicator; 1.0.3 added the host population counter that Pharos's
 count cache plugs into (below); 1.0.4 sped up the SQLite executor. 1.0.5 adds
@@ -21,6 +21,12 @@ on the Go servers, currency and compact number formats, and a chart's
 colouring key. The service advertises each through `Capabilities()`; the
 SQLite functions and aggregates it needs are registered from the complete
 `SQLiteV2Functions()` and `SQLiteV2Aggregates()` lists on every connection.
+1.0.7 shares filtered, validated inputs across exact text distinct counts
+(below). 1.0.8 groups the shared metric read by number fields and lets a host
+assert that a derived or computed source is deterministic
+(`SQLiteSharedMetricsSource`): Model Requests asserts it while timings await
+refresh, or when a request reads a computed field, so the agent depth
+breakdown takes about 3 s instead of 17 s. 1.0.9 changed only the UI package.
 The remaining 1.0.0 follow-ups below still apply.
 
 ## SQLite reduction reuse in 1.0.7
@@ -40,9 +46,7 @@ projection, population counter and temporary-storage lease; no host reducer or
 dependency patch is needed.
 
 The [upstream performance report](https://github.com/Pythia-Software/query-table/blob/v1.0.7/docs/sqlite-text-distinct-performance.md)
-describes eligibility and correctness coverage. The
-[Labels handoff](handoffs/query-table-label-trend-latency.md) retains the original
-request and a standalone reproduction for comparing released versions.
+describes eligibility and correctness coverage.
 
 ## Analyze dataset pages
 

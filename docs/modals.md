@@ -97,7 +97,7 @@ Non-modal layers stack with the tokens defined in `modal.js`:
 
 | Token | Value | Used by |
 |---|---|---|
-| `--z-panel` | 8000 | fixed panels: Quick Stats, the drive panel |
+| `--z-panel` | 8000 | fixed panels: Quick Stats, the Background Processing panel |
 | `--z-drawer` | 9000 | the History and Bookmarks drawers, attention status |
 | `--z-overlay` | 9500 | toasts over the page |
 | `--z-find`, `--z-tooltip` | 10000 | Find, chart tooltips |
@@ -116,4 +116,4 @@ Modal dialogs need no z-index, because the top layer is above all of these.
   `--modal-scrim`, but keep their own frame and focus handling.
 - The setup window and onboarding keep their full-window blurred backdrop.
 - These surfaces still do their own positioning and Escape handling: the
-  status and drive panels, Quick Stats and the phone workspace sheet.
+  Background Processing panel, Quick Stats and the phone workspace sheet.

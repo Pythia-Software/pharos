@@ -207,13 +207,13 @@ Review 1 retired `research-repositories`, `research-queries`, `research-query-re
 
 ## API cost card study — review 2 (October 16, 2026)
 
-Home and the card library link to `/home?cards=cost-review`. Seven kept candidates cover **where the API equivalent goes**, **workload and cost outliers**, and **pricing coverage**. Feedback uses `pharos-api-cost-review-v2`, preserving review-one drafts. All cards start at seven days and retain their selected rolling window in the destination.
+Home and the card library link to `/home?cards=cost-review`. Seven kept candidates cover **where the API cost goes**, **workload and cost outliers**, and **pricing coverage**. Feedback uses `pharos-api-cost-review-v2`, preserving review-one drafts. All cards start at seven days and retain their selected rolling window in the destination.
 
 - **Period allocation:** the selected-period total now includes a seven-day mean daily cost sparkline across the last 30 days. Sum each exact trailing seven-day window and divide by seven, including zero-activity days. The dashed norm averages the preceding 30 daily endpoints. History reduces costs at their original fact timestamps, with bounded results and nonoverlapping refetches if timestamp groups are truncated. This preserves the destination’s daily-fact time placement; changing the main period changes the headline while the sparkline remains a seven-day average. Daily and repository-share cards use the same fully priced positive-token population. Partial, assumed, and unpriced facts are excluded; recorded zero costs remain valid. Their repository attribution follows the original facts.
 - **Root-task workloads:** rankings, cost ranges, and the volume/cost scatter use resolved root conversations, including embedded agents, delegated conversations, linked launches across workspaces/repositories, and continuations. Costs are summed inside the selected period and attributed to the root repository. Child-only activity still belongs to the root. Independent roots sharing a workspace remain separate. Missing/cyclic ancestry is excluded. Root title and repository are projected on daily and hourly usage rows. Boxes require three root tasks per repository, use one shared dollar axis, retain zero costs on a shared linear scale when needed, and leave sparse groups/outliers in destinations. The scatter counts distinct roots from the same cost population and retains nonpositive points in its destination.
 - **Pricing coverage:** all positive tokens remain represented by their retained price status, including assumed/partial/unpriced/unknown statuses. This is token coverage, not dollar share. Recently active lifetime cost is retired from the study and suggestions; its definition and source metrics remain resolvable for saved collections. The recorded repricing comparison was removed with its today's-prices field; cards saved from it show their preview as unavailable and can be removed.
 
-Headline labels sit beside their values across card types and wrap when space requires it. Card descriptions no longer advertise display counts across the library. Stationary hover, compact shared axes, exact Other, square translucent collection actions, and isolated durable feedback carry forward. Feedback typing triggers no queries or chart recomputation. API equivalent does not measure subscription spending, invoices, human effort, quality, or value.
+Headline labels sit beside their values across card types and wrap when space requires it. Card descriptions no longer advertise display counts across the library. Stationary hover, compact shared axes, exact Other, square translucent collection actions, and isolated durable feedback carry forward. Feedback typing triggers no queries or chart recomputation. API cost does not measure subscription spending, invoices, human effort, quality, or value.
 
 ## Token usage card study — review 3 (October 16, 2026)
 
@@ -267,9 +267,9 @@ Trend cards use a shared `trend` recipe option (`web/src/card-trend.ts`): daily 
 
 ## Cards from recent Pharos additions
 
-- **Reasoning effort:** priced API equivalent per whole conversation by top-level provider/model/effort, plus a separate total-cost-by-effort pie; missing effort remains a cohort.
+- **Reasoning effort:** priced API cost per whole conversation by top-level provider/model/effort, plus a separate total-cost-by-effort pie; missing effort remains a cohort.
 - **Harness versions:** first/last recorded harness-version cohorts, retaining transitions and unknown versions.
-- **Delegation depth:** attributed subagent tokens, API equivalent and distinct sessions by provider/depth.
+- **Delegation depth:** attributed subagent tokens, API cost and distinct sessions by provider/depth.
 - **Pricing coverage:** priced, partial, assumed and unpriced tokens remain separate.
 - **Co-issued tools:** call counts, mean request batch size and failures, without implying elapsed overlap.
 - **MCP responses:** measured response bytes, errors and truncations per Pharos MCP tool.
@@ -311,7 +311,7 @@ The real-library audit also checked the new recipes at 30 and 90 days. Primary-U
 | explaining-repos | Words written per repository Human-written words over the last 7 days, ranked by repository. | writing_messages | Grouped rows by repository_name | human-02 |
 | usage-models | Which models do the work? Token use by model, day by day. | usage | Grouped rows by day, model_family | models-01 |
 | usage-repos | Daily token volume. Recorded tokens by day and repository, including cached and unpriced usage. | usage | Grouped rows by day, repository_name | cost-01 |
-| cost-repos | Daily API equivalent. Fully priced period costs by recorded day and repository. | usage | Grouped rows by day, repository_name | cost-01 |
+| cost-repos | Daily API cost. Fully priced period costs by recorded day and repository. | usage | Grouped rows by day, repository_name | cost-01 |
 | cache-reads | Where is caching used? Recorded cache-read tokens by model; inspect usage details. | usage | Grouped rows by day, model_family | cost-03 |
 | subagent-usage | **Retired after Delegation review 1.** Delegated tokens over time. Canonical non-root period tokens by day and root repository. | usage | Grouped rows by day, repository_name | models-06 |
 | tool-failure-rates | Tool failure rates. Error calls divided by all calls started in the last 7 days; tools with ten or more calls. | tool_calls | Grouped rows by tool_name | tools-01 |
@@ -329,7 +329,7 @@ The real-library audit also checked the new recipes at 30 and 90 days. Primary-U
 | human-word-mix | Authorship by repository Human-written share of retained user-message text over the last 7 days, grouped by repository. | writing_messages | Grouped rows by repository_name | human-01 |
 | usage-work | Largest token workloads. Period tokens per resolved root task, including recorded delegated work. | usage | Grouped rows by root_repository_name, root_conversation_id | cost-02 |
 | cache-efficiency | Which models reuse their input? Weighted cache hit rates by model and provider, with cached and uncached tokens. | usage | Grouped rows by provider, model_family | cost-03 |
-| effort-cost | Session cost by effort. Whole-conversation mean API equivalent including delegated work. | usage | Grouped rows by root_provider, root_model_family, root_effort | models-01 |
+| effort-cost | Session cost by effort. Whole-conversation mean API cost including delegated work. | usage | Grouped rows by root_provider, root_model_family, root_effort | models-01 |
 | harness-versions | **Retired after Tool Flow review 1.** Recorded harness versions. Distinct positive-token agent sessions by first/last version; unknown versions retained. | usage | Grouped rows by harness, harness_version_first, harness_version_last | models-01 |
 | delegation-depth | Delegated runs by depth. Active canonical executions counted once at their resolved ancestry depth. | usage | Grouped rows by provider, depth | models-06 |
 | price-coverage | Token pricing coverage. Positive token volume by retained pricing status, including assumed/partial/unpriced/unknown labels. | usage | Grouped rows by price_status | cost-01 |
@@ -381,7 +381,7 @@ The real-library audit also checked the new recipes at 30 and 90 days. Primary-U
 | research-query-reach | **Retired after Research review 1.** Queries across conversations. Exact stored web queries with evidence in at least two recorded agent conversations. | tool_calls | Grouped rows by search_query | memory-02 |
 | archive-empty-search-rate | Pharos empty-search rates. Explicit zero results / successful searches with known counts; ten-call minimum per method. | mcp_calls | Grouped rows by tool_name | context-04 |
 
-| api-cost-total | API equivalent this period. Confirmed period total plus seven-day mean daily cost across the last 30 days. | usage | Grouped rows by repository_name | cost-01 |
+| api-cost-total | API cost this period. Confirmed period total plus seven-day mean daily cost across the last 30 days. | usage | Grouped rows by repository_name | cost-01 |
 | repository-cost-share | Repository cost share. Confirmed period costs attributed to recorded repositories. | usage | Grouped rows by repository_name | cost-01 |
 | window-work-cost | Work costs in period. Confirmed period costs per root task, including delegation, with root title and repository. | usage | Grouped rows by root_repository_name, root_conversation_id | cost-02 |
 | work-cost-distribution | Work cost ranges. Period root-task costs including delegation; three-task minimum, shared dollar axis, and recorded zeros. | usage | Grouped rows by root_repository_name, root_conversation_id | cost-02 |

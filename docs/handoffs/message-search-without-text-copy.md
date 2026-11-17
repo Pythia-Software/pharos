@@ -9,9 +9,8 @@ complete second copy of every message's searchable text, in
 Migrate existing catalogs in the background, and don't make readers or the
 sync wait.
 
-[Stop word-indexing tool output](message-search-without-tool-output.md) is a
-separate handoff. Either can land first, but read both: they rebuild the same
-index, and doing them in one rebuild saves a pass over 24 GB of text.
+Tool output already left the word index in #274, which shrank the text copy
+this handoff removes; re-measure it before starting.
 
 ## Evidence
 

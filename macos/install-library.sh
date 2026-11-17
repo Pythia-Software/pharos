@@ -107,7 +107,7 @@ cat <<EOF
 Pharos library: $DIR
 On each Mac, double-click "Add This Mac.command" beside the app (or run
   "$CLI" add-this-mac
-in Terminal). It finds this Mac's Claude Code, Codex, Conductor, and TL1
-history, asks before adding it, captures it onto the drive, and indexes it.
+in Terminal). It finds this Mac's agent history (Claude Code, Codex,
+Cursor, Conductor and others), asks before adding it, captures it onto the drive, and indexes it.
 Then open $APP to browse the library.
 EOF

@@ -195,8 +195,10 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   Run the browser tier when you change page markup, CSS, classic scripts or
   focus behaviour, filtered to the files and pages you touched.
 - **Manual only:** on macOS with Xcode Command Line Tools,
-  `macos/test/run-light.sh` checks `MenuBar.swift` and `UpdateChecker.swift`
-  (AppKit needs a GUI session; no images or service).
+  `macos/test/run-light.sh` runs the menu checks and `UpdateCheckHarness.swift`,
+  which covers `MenuBar.swift`, `PharosApp.swift`, `UpdateNotice.swift`,
+  `UpdateLifecycle.swift` and `UpdateSignature.swift` (AppKit needs a GUI
+  session; no images or service).
   `macos/test/swift-harness.sh [PORT]` checks `LibraryVolume.swift`,
   `Launch.swift` and eject flows (Go, npm, Python 3, rsync; builds in a
   temporary copy, mounts a 300 MB image; default port 18768).

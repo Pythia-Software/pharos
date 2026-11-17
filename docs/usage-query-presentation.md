@@ -19,7 +19,7 @@ The restriction runs before grouping, metrics, sorting and pagination. Query-v3
 executes it; older row/metric protocols reject it instead of ignoring it.
 
 A keyword clause is part of its table's query definition: Query Table 0.9.7's
-host query state ([handoff](handoffs/query-table-saved-host-query-state.md)),
+host query state,
 registered by `web/src/host-query-state.ts`. Save, Update, Saved, Default,
 Share, Reset and Undo/Redo treat the clause and the table query as one
 definition, and adding, editing or removing the clause is one history entry.
@@ -84,8 +84,7 @@ widths and explicit sorts remain in effect. Query drilldowns specify a sort:
 time ascending within one conversation/work/unit, time descending across a
 population, with identity breaking timestamp ties. Grouped results receive an
 explicit key/summary sort; their Records drilldown also applies the appropriate
-record order. Grouped results show native group Detail
-([handoff](handoffs/query-table-group-detail.md)): their columns end with the
+record order. Grouped results show native group Detail: their columns end with the
 link summaries, then Detail, which shows the group's keys, summaries and link
 summaries. Link summaries in Detail open the same exact-match records as the
 Records drill-down, which stays the table's trailing column. Search and the
@@ -97,8 +96,7 @@ in the encoded `q_<dataset>` URL parameter and adapts to the viewer's table area
 after loading. Filters, sorts and selected data columns are preserved. Manual
 column sizing can override the fit during the current visit.
 Since Query Table 0.9.7, fitting keeps each column wide enough for its Detail
-and JSON buttons and scrolls the table when they do not fit
-([handoff](handoffs/query-table-fit-screen-controls.md)).
+and JSON buttons and scrolls the table when they do not fit.
 
 This is host integration against the published Query Table 0.9.2 release. No dependency patches or generated-bundle edits are involved.
 

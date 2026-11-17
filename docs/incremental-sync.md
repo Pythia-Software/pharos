@@ -270,9 +270,9 @@ cancellable chunked reader fills it, handling long lines and conversation IDs
 crossing chunk boundaries.
 
 A confirmed mismatch creates a deduplicated persistent issue. While one is
-open, the drive dot in the header is red and pulses, and the drive panel lists
-it under **Needs attention** with **Review…**, which opens Settings → Capture
-& index, where its details and repair actions are. Diagnostics
+open, the dot on the drive chip in the header is red and pulses, and the
+Background Processing panel lists it with **Review mismatches**, which opens
+Settings → Background Processing, where its details and repair actions are. Diagnostics
 record field categories and signatures without transcript text. Repair alone
 does not dismiss an issue: the repaired unit must pass verification. Sampling
 does not certify the entire library, and a shared parser bug can still agree
