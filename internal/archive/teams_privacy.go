@@ -138,7 +138,11 @@ func (c *Catalog) reviewTeamsClassification(ctx context.Context, id, input strin
 			return errTeamsPrivacyStale
 		}
 		p.ClassifierReviewed = true
-		p.UserPrivate = private
+		// Reviewing a classifier suggestion may add a private mark, but only
+		// the separate explicit mark action may remove one the user made.
+		if private {
+			p.UserPrivate = true
+		}
 		return nil
 	})
 }

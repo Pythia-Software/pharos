@@ -1,0 +1,4 @@
+{
+  "canonical_utf8": "pharos-source-assignments-v2\n{\"binding_id\":\"00000000-0000-4000-8000-000000000001\",\"snapshot_id\":\"00000000-0000-4000-8000-000000000002\",\"inventory_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"ownership_revision\":3,\"privacy_revision\":4,\"items\":[{\"token\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"decision\":\"owned\"},{\"token\":\"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA\",\"decision\":\"unavailable\"}]}",
+  "sha256": "c39927c3789c18b9d70873b400fac6cf20afb1363bf808213faeb6ece200265b"
+}

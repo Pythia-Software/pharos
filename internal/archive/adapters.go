@@ -34,6 +34,9 @@ type MessageRecord struct {
 }
 
 type ConversationRecord struct {
+	// teamsNativeProof is adapter-produced local evidence, never accepted from
+	// serialized imports or plugins. Missing proof means unavailable to Teams.
+	teamsNativeProof *teamsNativeProof
 	// SessionBounds is an explicitly scoped root envelope, independent of
 	// message timestamps and the conversation's display/usage dates.
 	SessionBounds                                                                                    *SessionTimeBounds `json:"SessionBounds,omitempty"`
@@ -508,7 +511,8 @@ func defaultBool(value any, fallback bool) bool {
 
 type jsonlAdapter struct {
 	baseAdapter
-	provider string
+	provider          string
+	teamsProofEnabled bool
 	// TL1 records the attempt's initial setting independently of its transcript.
 	initialEffort string
 	names         map[string]transcriptName
@@ -779,7 +783,12 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 	if parseHook != nil {
 		parseHook(path)
 	}
-	events, err := readJSONLines(file, file.readLimit())
+	var quality teamsJSONLQuality
+	var observer func([]byte, bool)
+	if a.provider == "codex" && a.teamsProofEnabled {
+		observer = quality.observe
+	}
+	events, err := readJSONLinesObserved(file, file.readLimit(), observer)
 	if err != nil {
 		return WorkspaceRecord{}, part, false, fmt.Errorf("read %s %w", path, err)
 	}
@@ -787,6 +796,13 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 	var ok bool
 	if a.provider == "codex" {
 		record, ok, err = a.codex(path, events)
+		if a.teamsProofEnabled && err == nil && ok && len(record.Conversations) == 1 {
+			proof := teamsCodexNativeProof(events, record.Conversations[0].NativeID, quality)
+			if total, digest, valid := teamsCodexTotalPrefix(proof, events); valid {
+				proof.TotalTokens, proof.TotalDigest = &total, digest
+			}
+			record.Conversations[0].teamsNativeProof = proof
+		}
 	} else {
 		record, ok, err = a.claude(path, events)
 	}
