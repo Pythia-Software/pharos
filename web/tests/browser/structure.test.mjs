@@ -2468,3 +2468,20 @@ test('Teams sent log opens an exact local response', { skip }, async t => {
   await app.page.getByText(/Synthetic question/).click();
   await app.page.getByText(/Synthetic answer/).waitFor();
 });
+
+test('Teams shows recurring export consent details before review', { skip }, async t => {
+  let approval;
+  const item={workId:'synthetic-work',question:'Token usage',prompt:'',requester:'Synthetic requester',readers:['person-one'],state:'awaiting_review',payloadHash:'a'.repeat(64),payload:{total_tokens:123},schedule:{cadence:'daily',timezone:'UTC',catch_up:'skip',response_window_seconds:3600},period:{key:'period:0',start_at:'2026-01-01T00:00:00Z',end_at:'2026-01-02T00:00:00Z'},exports:[{id:'export-one',kind:'feed',destination:'bigquery:synthetic.dataset.table@US',fields:['total_tokens']}],publications:[]};
+  const app=await open(t,{url:'/settings/teams',ready:'#teamsSettingsPage .teams-settings',api:{
+    'GET /api/teams/enrollment':{state:'connected_paused',available:true,library:'Synthetic',fingerprint:'',problem:''},
+    'GET /api/teams/worker':{enabled:true,optOut:true,settingsRevision:4,acknowledgedPolicy:1,nextCheck:'',checking:false,problem:'',items:[item],modelApproved:false},
+    'GET /api/teams/source-accounts':{sourceRevision:0,settingsRevision:4,proofRequested:true,sources:[]},
+    'POST /api/teams/worker/approve-result':({body})=>{approval=body;return {approved:true}},
+  }});
+  await app.page.getByText(/Repeats daily in UTC/).waitFor();
+  await app.page.getByText(/Export to bigquery:synthetic.dataset.table@US/).waitFor();
+  assert.equal(approval,undefined);
+  await app.page.getByRole('button',{name:'Approve and send this result'}).click();
+  await app.page.waitForTimeout(100);
+  assert.deepEqual(approval,{workId:'synthetic-work',payloadHash:'a'.repeat(64)});
+});

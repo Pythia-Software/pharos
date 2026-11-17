@@ -53,7 +53,7 @@ func (c *Catalog) prepareTeamsV2Upload(ctx context.Context, w teams.Work, d Libr
 		}
 	} else {
 		plan, err := teamsPlanFromWork(w)
-		if err != nil || len(plan.Metrics) != 1 || plan.Metrics[0].Field != "total_tokens" || !teamsNumericBuildEligible(manifest) {
+		if err != nil || len(plan.Metrics) != 1 || plan.Metrics[0].Field != "total_tokens" || !teamsNumericWorkEligible(w, manifest) {
 			return out, errTeamsQueryUnsupported
 		}
 	}

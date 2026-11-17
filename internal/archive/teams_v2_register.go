@@ -28,7 +28,7 @@ type teamsV2Registration struct {
 // Staging receipts never authorize reading or sending a result by themselves.
 func (c *Catalog) registerTeamsV2(ctx context.Context, cfg Config, client *teams.DeviceClient, d LibraryDescriptor, credential *teams.EnrollmentCredential, requested teams.Work, snapshot teamsV2Inventory, manifest teams.CapabilityManifest) (teamsV2Registration, error) {
 	var out teamsV2Registration
-	if client == nil || credential == nil || !teamsNumericBuildEligible(manifest) {
+	if client == nil || credential == nil || !teamsNumericWorkEligible(requested, manifest) {
 		return out, errTeamsConsentStale
 	}
 	lease, err := c.teamsSharingLease()

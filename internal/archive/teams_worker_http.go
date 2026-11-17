@@ -62,15 +62,19 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			next, checking, problem := s.teamsWorker.next, s.teamsWorker.checking, s.teamsWorker.problem
 			s.teamsWorker.mu.Unlock()
 			type row struct {
-				WorkID      string          `json:"workId"`
-				Question    string          `json:"question"`
-				Requester   string          `json:"requester"`
-				State       string          `json:"state"`
-				PayloadHash string          `json:"payloadHash"`
-				Readers     []string        `json:"readers"`
-				Payload     json.RawMessage `json:"payload"`
-				Prompt      string          `json:"prompt"`
-				Retention   json.RawMessage `json:"retention"`
+				WorkID       string                   `json:"workId"`
+				Question     string                   `json:"question"`
+				Requester    string                   `json:"requester"`
+				State        string                   `json:"state"`
+				PayloadHash  string                   `json:"payloadHash"`
+				Readers      []string                 `json:"readers"`
+				Payload      json.RawMessage          `json:"payload"`
+				Prompt       string                   `json:"prompt"`
+				Retention    json.RawMessage          `json:"retention"`
+				Schedule     json.RawMessage          `json:"schedule"`
+				Period       json.RawMessage          `json:"period"`
+				Exports      []teamsFeedExport        `json:"exports"`
+				Publications []teamsReportPublication `json:"publications"`
 			}
 			out := make([]row, 0, len(items))
 			for _, item := range items {
@@ -78,11 +82,14 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 					Question  string          `json:"question"`
 					Prompt    string          `json:"prompt"`
 					Retention json.RawMessage `json:"retention_policy"`
+					Schedule  json.RawMessage `json:"schedule"`
 					Requester struct {
 						DisplayName string `json:"display_name"`
 					} `json:"requester"`
 					Audiences struct {
 						ResponseReaders []struct{ Kind, ID string } `json:"response_readers"`
+						Exports         []teamsFeedExport           `json:"exports"`
+						Publications    []teamsReportPublication    `json:"publications"`
 					} `json:"audiences"`
 				}
 				if item.Work.Kind == "llm" {
@@ -99,7 +106,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				for _, reader := range config.Audiences.ResponseReaders {
 					readers = append(readers, reader.ID)
 				}
-				out = append(out, row{WorkID: item.Work.ID, Question: config.Question, Prompt: config.Prompt, Retention: config.Retention, Requester: config.Requester.DisplayName, State: item.State, PayloadHash: item.PayloadHash, Readers: readers, Payload: json.RawMessage(item.Payload)})
+				out = append(out, row{WorkID: item.Work.ID, Question: config.Question, Prompt: config.Prompt, Retention: config.Retention, Requester: config.Requester.DisplayName, State: item.State, PayloadHash: item.PayloadHash, Readers: readers, Payload: json.RawMessage(item.Payload), Schedule: config.Schedule, Period: item.Work.Period, Exports: config.Audiences.Exports, Publications: config.Audiences.Publications})
 			}
 			var modelApproved bool
 			if e = s.Catalog.reader().QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM teams_model_permission WHERE id=1 AND library_id=? AND instance_id=? AND org_id=? AND installation_id=? AND host_id=? AND settings_revision=?)`, d.ID, d.Instance, credential.OrgID, credential.InstallationID, currentHost().ID, settings.SettingsRevision).Scan(&modelApproved); e != nil {

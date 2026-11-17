@@ -259,6 +259,11 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 				items[work.ID] = item
 				continue
 			}
+			if !teamsNumericWorkEligible(work, manifest) {
+				item.State = "needs_update"
+				items[work.ID] = item
+				continue
+			}
 			if _, e = teamsPlanFromWork(work); e != nil {
 				item.State = "needs_update"
 				items[work.ID] = item

@@ -13,9 +13,15 @@ func teamsConfigExactKeys(raw []byte) bool {
 		m, err := teamsStrictObject(raw, allowed)
 		return m, err == nil
 	}
-	top, ok := object(raw, "question", "query_url", "approval_policy", "requester", "audiences", "result_schema", "min_app_version", "retention_policy")
+	top, ok := object(raw, "question", "query_url", "approval_policy", "requester", "audiences", "result_schema", "min_app_version", "retention_policy", "schedule")
 	if !ok {
 		return false
+	}
+	if schedule, exists := top["schedule"]; exists {
+		fields, valid := object(schedule, "cadence", "timezone", "catch_up", "response_window_seconds")
+		if !valid || len(fields) != 4 {
+			return false
+		}
 	}
 	if _, ok = object(top["requester"], "id", "display_name"); !ok {
 		return false
@@ -23,6 +29,36 @@ func teamsConfigExactKeys(raw []byte) bool {
 	audience, ok := object(top["audiences"], "response_readers", "publications", "exports")
 	if !ok {
 		return false
+	}
+	var publications []json.RawMessage
+	if json.Unmarshal(audience["publications"], &publications) != nil {
+		return false
+	}
+	for _, entry := range publications {
+		fields, valid := object(entry, "id", "kind", "readers", "fields")
+		if !valid || len(fields) != 4 {
+			return false
+		}
+		var readers []json.RawMessage
+		if json.Unmarshal(fields["readers"], &readers) != nil {
+			return false
+		}
+		for _, reader := range readers {
+			v, ok := object(reader, "kind", "id")
+			if !ok || len(v) != 2 {
+				return false
+			}
+		}
+	}
+	var exports []json.RawMessage
+	if json.Unmarshal(audience["exports"], &exports) != nil {
+		return false
+	}
+	for _, entry := range exports {
+		fields, valid := object(entry, "id", "kind", "destination", "fields")
+		if !valid || len(fields) != 4 {
+			return false
+		}
 	}
 	var readers []json.RawMessage
 	if json.Unmarshal(audience["response_readers"], &readers) != nil {

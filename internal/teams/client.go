@@ -135,7 +135,7 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 		}
 		previous := ""
 		for _, id := range m.Capabilities {
-			if (id != "deterministic_query_v1" && id != "scoped_artifact_v1" && id != "source_snapshot_v2") || id <= previous {
+			if (id != "deterministic_query_v1" && id != "export_deterministic_v1" && id != "recurring_deterministic_v1" && id != "report_deterministic_v1" && id != "scoped_artifact_v1" && id != "source_snapshot_v2") || id <= previous {
 				return out, errors.New("invalid capability manifest")
 			}
 			previous = id
