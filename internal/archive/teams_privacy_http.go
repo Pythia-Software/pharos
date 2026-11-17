@@ -65,7 +65,7 @@ func (s *Server) teamsPrivacyHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		if errors.Is(err, errTeamsPrivacyStale) {
+		if errors.Is(err, errTeamsPrivacyStale) || errors.Is(err, errTeamsSharingBusy) {
 			writeError(w, err, http.StatusConflict)
 		} else {
 			writeError(w, errors.New("could not update privacy"), 500)

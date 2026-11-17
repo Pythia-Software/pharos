@@ -84,8 +84,9 @@ func TestTeamsPrivacyPolicyAndRevisions(t *testing.T) {
 	if _, err = c.setTeamsPrivate(ctx, "c", true); err != nil {
 		t.Fatal(err)
 	}
-	execTx(t, c.DB, `DELETE FROM conversations WHERE id='c'`, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','test','local','c')`)
-	if p = read(); !p.Private {
+	execTx(t, c.DB, `DELETE FROM conversations WHERE id='c'`, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('new-local-id','w','test','local','c')`)
+	p, err = c.teamsPrivacy(ctx,"new-local-id")
+	if err!=nil || !p.Private {
 		t.Fatalf("mark lost on reindex: %+v", p)
 	}
 }
@@ -110,7 +111,7 @@ func TestTeamsPrivacyTransfersWithConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, err := target.teamsPrivacy(ctx, "c")
-	if err != nil || !p.Private || !p.UserPrivate || !p.SensitivityHold || p.ClassifierState != "unclassified" || p.Revision < 3 {
+	if err != nil || !p.Private || p.UserPrivate || !p.SensitivityHold || p.ClassifierState != "flagged" || p.Revision < 3 {
 		t.Fatalf("transferred policy: %+v %v", p, err)
 	}
 }
@@ -166,7 +167,7 @@ func TestTeamsPrivacyTransferInvalidatesConflictingClassifier(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, err := target.teamsPrivacy(ctx, "c")
-	if err != nil || !p.SensitivityHold || p.ClassifierState != "unclassified" {
+	if err != nil || !p.SensitivityHold || !p.Private || p.UserPrivate || p.ClassifierState != "flagged" {
 		t.Fatalf("conflicting evidence: %+v %v", p, err)
 	}
 }

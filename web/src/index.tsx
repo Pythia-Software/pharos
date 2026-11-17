@@ -80,6 +80,7 @@ import { PageLink, useLocationRevision } from "./nested-pages";
 import { LibraryContent } from "./library-content";
 import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
+import { TeamsSettings } from "./teams-settings";
 import { ModelColorSettings } from "./model-color-settings";
 import { loadModelColors, useModelColorRevision } from "./model-colors";
 import { ProjectColorSettings } from "./project-color-settings";
@@ -1845,6 +1846,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],
   ["mcpSettingsPage", <MCPSettings />],
+  ["teamsSettingsPage", <TeamsSettings />],
   ["logsPage", <LogsPage copy={copyText} />],
   ["fileHistoryPage", <FileHistoryPage />],
   ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" optimizeTitle="Efficiency findings" />} safetyTable={<QuerySurface dataset="safety" optimizeTitle="Risky action notices" queryHistory tableHeading={(api, fallback, schemas) => <SafetyTableContext query={api.query} schemas={schemas} total={api.total} fallback={fallback} />} selectionBar={api => <SafetySelectionBar selection={api.selection} copy={copyText} />} trailing={(row, api) => <a href={safetyDetailURL(String(api.rowId(row)), new URL(location.href))} onClick={event => { if(event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigateLink(safetyDetailURL(String(api.rowId(row)), new URL(location.href))); }}>Open notice</a>} />}

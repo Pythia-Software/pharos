@@ -1,0 +1,15 @@
+{
+  "manifest": {
+    "local_revision": 19,
+    "complete": false,
+    "source_manifest": [
+      {
+        "token": "knhABoFGkiIWS5lojTjS5weYgzs1b4lahJBqOXOWSag",
+        "evidence_revision": "",
+        "protection": "unknown"
+      }
+    ]
+  },
+  "canonical_json": "{\"local_revision\":19,\"complete\":false,\"source_manifest\":[{\"token\":\"knhABoFGkiIWS5lojTjS5weYgzs1b4lahJBqOXOWSag\",\"evidence_revision\":\"\",\"protection\":\"unknown\"}]}",
+  "manifest_sha256": "b66d498b6d328182689eabac0128b89a3501c9b92e86e71e1811edf40715086b"
+}

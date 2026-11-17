@@ -14,6 +14,10 @@ import (
 // entire directory. New native implementations need a reviewed entry here.
 var nativeLeaves = map[string]string{
 	"internal/platform/filelock/filelock_unix.go":             "Borrowed-descriptor advisory locking.",
+	"internal/platform/credentialstore/store_unix.go":         "Owner-only installation credential files, opened without following the final symlink and published without replacement.",
+	"internal/platform/credentialstore/rename_darwin.go":      "Atomic no-replace publication of a protected credential on Darwin.",
+	"internal/platform/credentialstore/rename_linux.go":       "Atomic no-replace publication of a protected credential on Linux.",
+	"internal/platform/credentialstore/backup_darwin.go":      "Exclude installation credential inodes and their directory from macOS backups.",
 	"internal/platform/filesync/filesync_unix.go":             "Plain buffered-file flush; not stronger publication durability.",
 	"internal/platform/fsinfo/fsinfo_unix.go":                 "Filesystem capacity observations.",
 	"internal/platform/fsinfo/fsinfo_darwin.go":               "Darwin block size and read-only mount flag.",

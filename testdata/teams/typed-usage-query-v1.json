@@ -1,0 +1,17 @@
+{
+  "description": "Synthetic audited usage sum, no filters or grouping",
+  "intent": {
+    "kind": "deterministic",
+    "dataset": "usage",
+    "metrics": [
+      {
+        "id": "total_tokens",
+        "field": "total_tokens",
+        "operation": "sum"
+      }
+    ],
+    "clarification": ""
+  },
+  "link_json": "{\"g\":[{\"id\":\"total_tokens\",\"op\":\"sum\",\"field\":\"total_tokens\",\"groupBy\":[]}]}",
+  "query_url": "/analyze?analyze_data=usage&analyze_mode=query&analyze_topic=tokens&q_usage=2j.eyJnIjpbeyJpZCI6InRvdGFsX3Rva2VucyIsIm9wIjoic3VtIiwiZmllbGQiOiJ0b3RhbF90b2tlbnMiLCJncm91cEJ5IjpbXX1dfQ"
+}

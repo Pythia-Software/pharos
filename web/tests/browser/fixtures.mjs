@@ -871,6 +871,9 @@ export const defaultApi = {
   "POST /api/cloud-backup/schedule": {saved:true},
   "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
   "GET /api/teams/privacy": ({ query }) => ({ conversationId: query.get("conversation"), userPrivate: false, private: false, classifierState: "unclassified", classifierReviewed: false, sensitivityHold: true, revision: 0 }),
+  "GET /api/teams/enrollment": { state: "disconnected", available: true, library: "Synthetic library", fingerprint: "", problem: "" },
+  "POST /api/teams/enrollment": { state: "waiting", available: true, library: "Synthetic library", fingerprint: "ab1234cd56", problem: "" },
+  "POST /api/teams/enrollment/cancel": { ok: true },
   "POST /api/teams/privacy": ({ query, body }) => ({ conversationId: query.get("conversation"), userPrivate: body.private, private: body.private, classifierState: "unclassified", classifierReviewed: false, sensitivityHold: true, revision: 1 }),
   // Suggestions the library chose; Refresh asks for the next seed.
   "GET /api/ask/suggestions": ({ query }) => ({ suggestions: askSuggestionFixture(Number(query.get("seed") || 0)) }),

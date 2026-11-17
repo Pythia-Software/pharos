@@ -179,6 +179,7 @@ CREATE INDEX IF NOT EXISTS conversations_parent_idx ON conversations(parent_id);
 -- later reindex of the same source must not silently clear a private mark.
 CREATE TABLE IF NOT EXISTS teams_conversation_privacy (
   conversation_id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL DEFAULT '', account TEXT NOT NULL DEFAULT '', native_id TEXT NOT NULL DEFAULT '',
   user_private INTEGER NOT NULL DEFAULT 0 CHECK(user_private IN (0,1)),
   classifier_state TEXT NOT NULL DEFAULT 'unclassified' CHECK(classifier_state IN ('unclassified','pending','flagged','clear','failed')),
   classifier_input TEXT NOT NULL DEFAULT '',
@@ -189,6 +190,40 @@ CREATE TABLE IF NOT EXISTS teams_privacy_revision (
   revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0)
 );
 INSERT OR IGNORE INTO teams_privacy_revision(id,revision) VALUES(1,0);
+
+-- Enrollment is disabled until its installation credential and library
+-- identity are confirmed. Outbox entries are local, never remote previews.
+CREATE TABLE IF NOT EXISTS teams_local_settings (
+  id INTEGER PRIMARY KEY CHECK(id=1),
+  library_id TEXT NOT NULL DEFAULT '', instance_id TEXT NOT NULL DEFAULT '',
+  org_id TEXT NOT NULL DEFAULT '', installation_id TEXT NOT NULL DEFAULT '', key_fingerprint TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+  metrics_opt_out INTEGER NOT NULL DEFAULT 1 CHECK(metrics_opt_out IN (0,1)),
+  acknowledged_policy INTEGER NOT NULL DEFAULT 0,
+  settings_revision INTEGER NOT NULL DEFAULT 1,
+  local_revision INTEGER NOT NULL DEFAULT 1,
+  observed_generation INTEGER NOT NULL DEFAULT 0,
+  observed_privacy_revision INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO teams_local_settings(id) VALUES(1);
+CREATE TABLE IF NOT EXISTS teams_request_grants (
+  version_id TEXT PRIMARY KEY, library_id TEXT NOT NULL, instance_id TEXT NOT NULL, org_id TEXT NOT NULL, installation_id TEXT NOT NULL, config_hash TEXT NOT NULL,
+  settings_revision INTEGER NOT NULL, granted_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS teams_outbox (
+  work_id TEXT PRIMARY KEY, version_id TEXT NOT NULL, library_id TEXT NOT NULL, instance_id TEXT NOT NULL, org_id TEXT NOT NULL, installation_id TEXT NOT NULL,
+  config BLOB NOT NULL, config_hash TEXT NOT NULL, payload BLOB NOT NULL, payload_hash TEXT NOT NULL, expires_at TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('awaiting_review','approved','sending','needs_reconcile','rejected','withdrawn','unconfirmed','sent')),
+  local_revision INTEGER NOT NULL, generation INTEGER NOT NULL, privacy_revision INTEGER NOT NULL,
+  settings_revision INTEGER NOT NULL, shared_privacy_revision INTEGER NOT NULL, ownership_revision INTEGER NOT NULL,
+  evaluation_revision INTEGER NOT NULL, baseline_revision INTEGER NOT NULL, manifest BLOB NOT NULL, manifest_hash TEXT NOT NULL, owned_hash TEXT NOT NULL,
+  approval_mode TEXT NOT NULL, policy_version INTEGER NOT NULL DEFAULT 0,
+  approved_at TEXT NOT NULL DEFAULT '', submission BLOB, submission_hash TEXT NOT NULL DEFAULT '', receipt_json TEXT NOT NULL DEFAULT '', state_reason TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS teams_send_log (
+  work_id TEXT NOT NULL, version_id TEXT NOT NULL, library_id TEXT NOT NULL, instance_id TEXT NOT NULL, org_id TEXT NOT NULL, installation_id TEXT NOT NULL, imported_from TEXT NOT NULL DEFAULT '',
+  config BLOB NOT NULL, config_hash TEXT NOT NULL, payload BLOB NOT NULL, payload_hash TEXT NOT NULL, submission BLOB NOT NULL,
+  receipt_json TEXT NOT NULL, sent_at TEXT NOT NULL, PRIMARY KEY(library_id,work_id)
+);
 CREATE INDEX IF NOT EXISTS conversations_native_alias_idx ON conversations(account,native_id);
 -- Home discovery bounds its pool through this index before consulting stored
 -- previews or optional enrichment ledgers.

@@ -267,7 +267,8 @@ func (c *Catalog) Close() error {
 // Older writers could otherwise preserve predictions as authoritative counters.
 // 28: Teams privacy markings must survive library changes and transfers; older
 // writers cannot preserve that sharing boundary.
-const catalogSchemaVersion = 28
+// 29: local Teams consent and delivery receipts must not be silently lost.
+const catalogSchemaVersion = 29
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -359,6 +360,9 @@ func (c *Catalog) Initialize() error {
 	}
 	progress.begin(initStepColumns)
 	for _, migration := range []struct{ table, column, statement string }{
+		{"teams_conversation_privacy", "provider", "ALTER TABLE teams_conversation_privacy ADD COLUMN provider TEXT NOT NULL DEFAULT ''"},
+		{"teams_conversation_privacy", "account", "ALTER TABLE teams_conversation_privacy ADD COLUMN account TEXT NOT NULL DEFAULT ''"},
+		{"teams_conversation_privacy", "native_id", "ALTER TABLE teams_conversation_privacy ADD COLUMN native_id TEXT NOT NULL DEFAULT ''"},
 		{"agent_sessions", "is_estimate", "ALTER TABLE agent_sessions ADD COLUMN is_estimate INTEGER NOT NULL DEFAULT 0"},
 		{"agent_sessions", "input_tokens_available", "ALTER TABLE agent_sessions ADD COLUMN input_tokens_available INTEGER NOT NULL DEFAULT 1"},
 		{"agent_sessions", "usage_estimate_json", "ALTER TABLE agent_sessions ADD COLUMN usage_estimate_json TEXT"},
@@ -470,6 +474,37 @@ func (c *Catalog) Initialize() error {
 			if _, err := c.DB.Exec(migration.statement); err != nil {
 				return err
 			}
+		}
+	}
+	// Preserve privacy by source identity across legacy local-ID remapping.
+	// Orphans from an older schema stay unresolved and block federation until
+	// reconciled; they are never silently assigned a new identity.
+	{
+		privacyTx, err := c.DB.Begin()
+		if err != nil {
+			return err
+		}
+		res, err := privacyTx.Exec(`UPDATE teams_conversation_privacy SET
+ provider=(SELECT provider FROM conversations WHERE id=conversation_id),
+ account=(SELECT account FROM conversations WHERE id=conversation_id),
+ native_id=(SELECT native_id FROM conversations WHERE id=conversation_id)
+ WHERE provider='' AND EXISTS(SELECT 1 FROM conversations WHERE id=conversation_id)`)
+		if err == nil {
+			var changed int64
+			changed, err = res.RowsAffected()
+			if err == nil && changed > 0 {
+				_, err = privacyTx.Exec(`UPDATE teams_privacy_revision SET revision=revision+1 WHERE id=1`)
+			}
+		}
+		if err == nil {
+			_, err = privacyTx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS teams_privacy_source_identity ON teams_conversation_privacy(provider,account,native_id) WHERE provider<>'' AND account<>'' AND native_id<>''`)
+		}
+		if err != nil {
+			privacyTx.Rollback()
+			return err
+		}
+		if err = privacyTx.Commit(); err != nil {
+			return err
 		}
 	}
 	// Conductor stored its extractor as its conversations' coverage before

@@ -1,0 +1,47 @@
+{
+  "description": "Synthetic illustrative enrollment vector; deterministic test secrets are public and never for production.",
+  "seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "start_request": {
+    "public_key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+    "library_id": "synthetic-library",
+    "library_label": "Synthetic library",
+    "disclosure_version": "1",
+    "callback_port": 43123,
+    "callback_state": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+  },
+  "start_response": {
+    "enrollment_id": "a4c09e42-d0a6-45f0-89ef-2a03b7cff630",
+    "approval_url": "https://teams.example/enroll/a4c09e42-d0a6-45f0-89ef-2a03b7cff630#confirmation=QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+    "expires_at": "2026-11-17T03:15:00Z"
+  },
+  "authorize_request": {
+    "enrollment_confirmation": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+    "fingerprint": "ee25b7f0c6"
+  },
+  "authorize_response": {
+    "callback_url": "http://127.0.0.1:43123/teams/enrollment?code=YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8&state=ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+  },
+  "redeem_request": {
+    "method": "POST",
+    "target": "/v1/device/enrollments/a4c09e42-d0a6-45f0-89ef-2a03b7cff630/redeem",
+    "headers": {
+      "X-Pharos-Installation": "a4c09e42-d0a6-45f0-89ef-2a03b7cff630",
+      "X-Pharos-Timestamp": "1794884400",
+      "X-Pharos-Nonce": "AAECAwQFBgcICQoLDA0ODw",
+      "X-Pharos-Signature": "jhriI_d1tZPGq_qPrMEB1CZg5uk_NV8nnBKyvIxjmqmAa8M01eUppCp57ySnX8u4CmDZVrlhTBfaKAaoSR-GCQ"
+    },
+    "body": "{\"enrollment_code\":\"YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8\"}",
+    "signing_message": "pharos-device-v1\na4c09e42-d0a6-45f0-89ef-2a03b7cff630\nPOST\n/v1/device/enrollments/a4c09e42-d0a6-45f0-89ef-2a03b7cff630/redeem\n1794884400\nAAECAwQFBgcICQoLDA0ODw\n42f9a902153715a45433d86fbefc80dfc58aeac075e8e69f194e385b75e0c4b3"
+  },
+  "redeem_response": {
+    "org_id": "00000000-0000-4000-8000-000000000001",
+    "person_id": "00000000-0000-4000-8000-000000000002",
+    "installation_id": "00000000-0000-4000-8000-000000000003",
+    "library_id": "synthetic-library",
+    "source_token_key": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8",
+    "metrics_default": {
+      "value": false,
+      "policy_version": 1
+    }
+  }
+}

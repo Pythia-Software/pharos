@@ -53,6 +53,7 @@ export const askExcludedPages: Record<string, string> = {
   "settings/layout": "Header and navigation layout preferences.",
   "settings/models": "Persistent model and provider color preferences, with automatic model shades; no analytical data or agent action is needed.",
   "settings/projects": "Persistent project color preferences; no analytical data or agent action is needed.",
+  "settings/teams": "Connection and consent settings; no analytical data is exposed on this page.",
   "analyze/query/tl1_attempts": "TL1 is mothballed; its attempts stay queryable without being promoted.",
 };
 
