@@ -75,6 +75,15 @@ func TestTeamsReviewedDestinationsAreBoundInSignedConfig(t *testing.T) {
 		raw, _ := json.Marshal(cfg)
 		return teams.Work{Kind: "deterministic", Config: raw, ConfigSHA256: teamsPayloadHash(raw), PopulationKey: "current", ExpiresAt: time.Now().Add(time.Hour), Period: json.RawMessage(`{"key":"once"}`)}
 	}
+	report["include_completeness"] = true
+	if _, e := teamsPlanFromWork(encode()); e != nil {
+		t.Fatal("explicit completeness rejected", e)
+	}
+	report["include_completeness"] = nil
+	if _, e := teamsPlanFromWork(encode()); e == nil {
+		t.Fatal("null completeness accepted")
+	}
+	delete(report, "include_completeness")
 	work := encode()
 	if _, e := teamsPlanFromWork(work); e != nil {
 		t.Fatalf("reviewed destinations rejected: %v", e)

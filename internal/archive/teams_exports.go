@@ -47,10 +47,11 @@ type teamsReportReader struct {
 	ID   string `json:"id"`
 }
 type teamsReportPublication struct {
-	ID      string              `json:"id"`
-	Kind    string              `json:"kind"`
-	Readers []teamsReportReader `json:"readers"`
-	Fields  []string            `json:"fields"`
+	ID                  string              `json:"id"`
+	Kind                string              `json:"kind"`
+	Readers             []teamsReportReader `json:"readers"`
+	Fields              []string            `json:"fields"`
+	IncludeCompleteness bool                `json:"include_completeness"`
 }
 
 func validTeamsReports(reports []teamsReportPublication, approval string, plan teamsQueryPlan) bool {

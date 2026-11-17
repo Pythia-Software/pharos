@@ -35,8 +35,11 @@ func teamsConfigExactKeys(raw []byte) bool {
 		return false
 	}
 	for _, entry := range publications {
-		fields, valid := object(entry, "id", "kind", "readers", "fields")
-		if !valid || len(fields) != 4 {
+		fields, valid := object(entry, "id", "kind", "readers", "fields", "include_completeness")
+		if !valid || (len(fields) != 4 && len(fields) != 5) {
+			return false
+		}
+		if value, present := fields["include_completeness"]; present && string(value) != "true" && string(value) != "false" {
 			return false
 		}
 		var readers []json.RawMessage

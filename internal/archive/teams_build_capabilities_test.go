@@ -19,7 +19,7 @@ func TestTeamsFeatureBuildRequiresRealVersionAndCapability(t *testing.T) {
 		}
 	}
 	got := teamsBuildCapabilities()
-	if len(got.Capabilities) != 5 || got.Capabilities[0] != "deterministic_query_v1" || got.Capabilities[1] != "export_deterministic_v1" || got.Capabilities[2] != "recurring_deterministic_v1" || got.Capabilities[3] != "scoped_artifact_v1" || got.Capabilities[4] != "source_snapshot_v2" {
+	if len(got.Capabilities) != 6 || got.Capabilities[0] != "deterministic_query_v1" || got.Capabilities[1] != "export_deterministic_v1" || got.Capabilities[2] != "recurring_deterministic_v1" || got.Capabilities[3] != "report_deterministic_v1" || got.Capabilities[4] != "scoped_artifact_v1" || got.Capabilities[5] != "source_snapshot_v2" {
 		t.Fatal("unexpected capability advertisement")
 	}
 }

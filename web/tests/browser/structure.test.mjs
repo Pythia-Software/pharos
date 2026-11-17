@@ -2471,7 +2471,7 @@ test('Teams sent log opens an exact local response', { skip }, async t => {
 
 test('Teams shows recurring export consent details before review', { skip }, async t => {
   let approval;
-  const item={workId:'synthetic-work',question:'Token usage',prompt:'',requester:'Synthetic requester',readers:['person-one'],state:'awaiting_review',payloadHash:'a'.repeat(64),payload:{total_tokens:123},schedule:{cadence:'daily',timezone:'UTC',catch_up:'skip',response_window_seconds:3600},period:{key:'period:0',start_at:'2026-01-01T00:00:00Z',end_at:'2026-01-02T00:00:00Z'},exports:[{id:'export-one',kind:'feed',destination:'bigquery:synthetic.dataset.table@US',fields:['total_tokens']}],publications:[]};
+  const item={workId:'synthetic-work',question:'Token usage',prompt:'',requester:'Synthetic requester',readers:['person-one'],state:'awaiting_review',payloadHash:'a'.repeat(64),payload:{total_tokens:123},schedule:{cadence:'daily',timezone:'UTC',catch_up:'skip',response_window_seconds:3600},period:{key:'period:0',start_at:'2026-01-01T00:00:00Z',end_at:'2026-01-02T00:00:00Z'},exports:[{id:'export-one',kind:'feed',destination:'bigquery:synthetic.dataset.table@US',fields:['total_tokens']}],publications:[{id:'report-one',kind:'report',readers:[{kind:'person',id:'person-one'}],fields:['total_tokens'],include_completeness:true}]};
   const app=await open(t,{url:'/settings/teams',ready:'#teamsSettingsPage .teams-settings',api:{
     'GET /api/teams/enrollment':{state:'connected_paused',available:true,library:'Synthetic',fingerprint:'',problem:''},
     'GET /api/teams/worker':{enabled:true,optOut:true,settingsRevision:4,acknowledgedPolicy:1,nextCheck:'',checking:false,problem:'',items:[item],modelApproved:false},
@@ -2480,6 +2480,7 @@ test('Teams shows recurring export consent details before review', { skip }, asy
   }});
   await app.page.getByText(/Repeats daily in UTC/).waitFor();
   await app.page.getByText(/Export to bigquery:synthetic.dataset.table@US/).waitFor();
+  await app.page.getByText(/Completeness indicator: included/).waitFor();
   assert.equal(approval,undefined);
   await app.page.getByRole('button',{name:'Approve and send this result'}).click();
   await app.page.waitForTimeout(100);

@@ -5,7 +5,7 @@ import "./teams-settings.css";
 type EnrollmentStatus = { state: string; available: boolean; library: string; fingerprint: string; problem: string; optedOut?: boolean };
 type SourceAccount = { bindingId: string; provider: string; sourceName: string; accountLabel: string; host: string; root: string; identifiable: number; ambiguous: number; mode: string; exposed: boolean; unindexed?: boolean };
 type SourceStatus = { sourceRevision: number; settingsRevision: number; proofRequested: boolean; sources: SourceAccount[] };
-type WorkItem = { workId: string; question: string; prompt: string; retention: unknown; requester: string; readers: string[] | null; state: string; payloadHash: string; payload: unknown; schedule?: {cadence:string; timezone:string; catch_up:string; response_window_seconds:number} | null; period?: {key:string; start_at?:string; end_at?:string} | null; exports?: {id:string;kind:string;destination:string;fields:string[]}[] | null; publications?: {id:string;kind:string;readers:{kind:string;id:string}[];fields:string[]}[] | null };
+type WorkItem = { workId: string; question: string; prompt: string; retention: unknown; requester: string; readers: string[] | null; state: string; payloadHash: string; payload: unknown; schedule?: {cadence:string; timezone:string; catch_up:string; response_window_seconds:number} | null; period?: {key:string; start_at?:string; end_at?:string} | null; exports?: {id:string;kind:string;destination:string;fields:string[]}[] | null; publications?: {id:string;kind:string;readers:{kind:string;id:string}[];fields:string[];include_completeness?:boolean}[] | null };
 type WorkerStatus = { enabled: boolean; optOut: boolean; settingsRevision: number; acknowledgedPolicy: number; nextCheck: string; checking: boolean; problem: string; items: WorkItem[]; modelApproved: boolean };
 type ModelInspection = { provider: string; model: string; effort: string; account: string; sessionDigest: string; authDigest: string; settingsRevision: number };
 type SentItem = {workId:string; question:string; payload:unknown; sentAt:string};
@@ -63,7 +63,7 @@ function TeamsWork() {
     {status?.items.map(item => <div className="teams-source" key={item.workId}>
       <h4>{item.question}</h4><p>Requested by {item.requester || "your organization"}. Readers: {item.readers?.join(", ") || "none listed"}.</p>
 	  {item.schedule ? <><p>Repeats {item.schedule.cadence} in {item.schedule.timezone}; missed periods: {item.schedule.catch_up}. Response window: {item.schedule.response_window_seconds} seconds.</p><p>Current period: {item.period?.start_at} to {item.period?.end_at}. The token total covers all eligible history.</p></> : null}
-	  {item.publications?.map(x => <p key={x.id}>Report readers: {x.readers.map(r => r.id).join(", ")}. Fields: {x.fields.join(", ")}. Each result requires your review before sending.</p>)}
+	  {item.publications?.map(x => <p key={x.id}>Report readers: {x.readers.map(r => r.id).join(", ")}. Fields: {x.fields.join(", ")}. Completeness indicator: {x.include_completeness ? "included" : "not included"}. Each result requires your review before sending.</p>)}
 	  {item.exports?.map(x => <p key={x.id}>Export to {x.destination}. Fields: {x.fields.join(", ")}. Each result requires your review before sending.</p>)}
 	  {item.prompt ? <><p>Instructions: {item.prompt}</p><p>Retention: {JSON.stringify(item.retention)}.</p><p>Only locally reviewed, nonprivate content is eligible. Processing uses the approved Claude account and model.</p></> : null}
       <p>Status: {item.state.replaceAll("_", " ")}.</p>
