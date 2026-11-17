@@ -1,6 +1,6 @@
 # Progress and time estimates
 
-The drive panel shows each active job and its current stage, source, elapsed
+The Background Processing panel (opened from the drive chip in the header) shows each active job and its current stage, source, elapsed
 time, processed workload, and known follow-up work. A bar measures the named
 stage. It does not promise that the entire library update is that far through.
 The panel also shows a whole-operation forecast for incremental indexing,
@@ -274,8 +274,9 @@ and drops them from the rows it rewrites, which costs calibration samples only.
 
 Before discovery an automatic run is either nothing to do (a few seconds) or
 real work (a minute or more), and no range describes both. While the inventory
-is unknown and the range's high is more than ten times its low, the Background
-Processing panel, the drive panel and the menu bar show the step being checked
+is unknown and the range's high is more than ten times its low, Settings →
+Background Processing, the Background Processing panel and the menu bar show
+the step being checked
 and no time. Stored snapshots keep the numbers, to score that checkpoint.
 
 Replayed over three weeks of one library's history, each run forecast only

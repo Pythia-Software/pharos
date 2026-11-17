@@ -227,9 +227,8 @@ overrode some guards. The complete fork failed upstream `TestV2ReductionReuse`:
 39 or 54 source-function evaluations versus a 24-evaluation baseline, despite
 matching values. This proves repeated expression evaluation, not additional full
 table scans or a uniquely isolated cause. Released upstream implementations
-replaced that heuristic and resolved the failure. See the
-[performance stack](query-table-performance-stack.md) and
-[failure report](query-table-fork-reduction-reuse.md).
+replaced that heuristic and resolved the failure (upstream PRs #127, #128,
+#129 and #133, released in v0.9.0).
 
 [Pharos #173, `71976f8`](https://github.com/Pythia-Software/pharos/commit/71976f80c65af629a1cd704beda0ab625c8260d9)
 replaced the four performance patches with v0.9.0 code, leaving only the two
@@ -250,8 +249,7 @@ accumulation by scale (QT-17). #174 switched Usage to those APIs and deleted
 the reducer and `query_metrics_exact.go`. Recorded synthetic probe results:
 Token summary 8.5 ms versus the deleted reducer's 12 ms, weekly provider cost
 5.4 ms versus 8 ms, hourly provider cost 16.7 ms versus 22 ms.
-See [QT-16](query-table-in-memory-metrics.md) and
-[QT-17](query-table-in-memory-metrics-speed.md). No new upstream request is
+No new upstream request is
 needed for those delivered capabilities.
 
 ## Original library work requests (0.9.2 baseline)

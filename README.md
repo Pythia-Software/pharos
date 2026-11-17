@@ -84,8 +84,9 @@ macos/install-library.sh /Volumes/<your-drive>/Pharos
 open /Volumes/<your-drive>/Pharos/Pharos.app
 ```
 
-Rerunning `install-library.sh` later upgrades the app and leaves your
-configuration and catalog alone.
+Rerunning `install-library.sh` later updates the app and leaves your
+configuration and library alone; a new version may run a Library upgrade when
+it opens.
 
 > Prefer a plain per-user install from source? `./launch.sh` builds and opens
 > Pharos with its configuration and data in
@@ -96,7 +97,8 @@ configuration and catalog alone.
 ### 2. Choose your sources
 
 The first time you open the library on a Mac, Pharos checks the handful of
-places where Claude Code, Codex, Antigravity, and Conductor keep their conversations. It
+places where coding agents such as Claude Code, Codex, Cursor, GitHub Copilot,
+Antigravity and Conductor keep their conversations. It
 never scans the rest of your home folder. It shows what it found: how many
 sessions, how far back they go, and a warning when a tool is set to delete old
 transcripts. Nothing is indexed until you pick.
@@ -155,22 +157,16 @@ or a cached excerpt of the first words classified as human-authored. See
 
 ### 5. See where the tokens go
 
-**Analyze → Machine Activity** has three views: **Machine Tokens**, **Machine
-Parallelism**, and **Machine Time**, with shared period, repository, provider,
-and model filters. Machine Tokens breaks down tokens and API-equivalent cost by day,
-model, effort level, provider, repository, and agent. Costs use list prices on the day of use,
-so treat them as a lower bound.
+**Analyze → Tokens and Cost** breaks down tokens and API cost by day, model,
+effort level, provider, repository and agent. Costs use list prices on the day
+of use, so treat them as a lower bound.
 
-Machine Time compares total duration, call volume, and time per timed run by
-repository, activity, parsed command family, or specific tool. Named scripts
-and server-qualified MCP tools keep separate identities. Chart selections and
-the native raw-call query table share filters, so full invocations and source
-conversations remain inspectable. Previous-period averages use total duration
-divided by timed calls; missing durations stay separate. It reports tool time,
-including overlapping calls, rather than
-total agent compute or elapsed work time. Machine Parallelism uses the existing
-captured timing snapshot when available. Both views have an explicitly labeled
-**Example data** option for exploring the design without a populated library.
+**Analyze → Tool Time** compares recorded tool time, call volume and time per
+timed call by repository, activity, command family or specific tool. Named
+scripts and server-qualified MCP tools keep separate identities, and the raw
+calls stay one click away. It reports tool time, including overlapping calls,
+rather than total agent compute or elapsed work time. **Analyze → Parallelism**
+shows overlapping workspaces or conversations and estimated model activity.
 
 ![The Analyze tab: tokens per day split by model, with total cost, cost per month, and cost by provider](docs/images/usage.png)
 
@@ -207,17 +203,13 @@ See [MCP statistics](docs/mcp-statistics.md) for scopes, quality, and paging.
 
 ### 8. Unplug safely
 
-The drive badge in the header shows what Pharos is doing with the library right
+The drive chip in the header shows what Pharos is doing with the library right
 now, with measured stage progress and time ranges based on workload size and
 recent processing speed. The panel explains when the remaining work is still
 unknown; see [progress and estimates](docs/progress-estimates.md). Use
 **Eject** in its panel instead of pulling the drive: Pharos stops its own work
 at a safe point, closes the library, stops agents' Pharos MCP servers running
 from the drive, quits, and ejects it.
-
-<p align="center">
-  <img src="docs/images/drive-panel.png" alt="The library drive panel" width="480">
-</p>
 
 For everything else (the CLI, the HTTP API, configuration keys, code signing,
 backups, and development), see the [technical overview](docs/technical-overview.md)

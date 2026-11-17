@@ -92,8 +92,8 @@ Coverage is attached to owned rendering boundaries, rather than DOM discovery:
 | Efficiency, Risky actions and Fixes dashboards | Existing page heading; the tables use the query boundary |
 | Saved Home and Card Library cards | QueryCard; dashboard sources resolve through dashboardCardSource even without a query token |
 
-Query Table provides the run-bar slot and button styling; the original request
-is recorded in the [upstream handoff](handoffs/query-table-run-bar-slots.md).
+Query Table provides the run-bar slot (`runActionsBeforeActivity`, since 1.0.2)
+and button styling (`qt-btn`).
 
 Nested tables that explain one chart share that chart's scope; static methodology
 and live diagnostics (sync history, request logs, activity/load and feedback

@@ -1308,13 +1308,10 @@ match for windows starting at a local midnight; see Whole days.
 - Human Words' message mix shares words, not characters: messages carry
   per-source word counts only.
 
-Query Table 0.9.7 resolved the requests in
-[`handoffs/query-table-dashboard-views.md`](handoffs/query-table-dashboard-views.md):
+Query Table 0.9.7 resolved the dashboards' requests:
 chart labels fit their gutter, and multi-key pies, bars and boxes colour each
 whole key. Scatters still colour by their first key, by design, so a scatter
-keeps its breakdown first. It also delivered the dashboards' requests in
-[`handoffs/query-table-after-0.9.6.md`](handoffs/query-table-after-0.9.6.md)
-(3, 10, 11, 12 and 13): native hour-of-day and day-of-week cycles, distinct
+keeps its breakdown first. It also delivered native hour-of-day and day-of-week cycles, distinct
 and summed minimums, calendar keys in grouping stages, and OR of AND legend
 selections, which the sections above describe.
 

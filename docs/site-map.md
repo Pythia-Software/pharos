@@ -36,7 +36,6 @@ under `example`.
    `DecodeQueryLink` to the Go module, for `2j.` and `2d.` tokens and the
    legacy form. Pharos uses the published release and keeps no copy of the
    format.
-   See [the handoff](handoffs/query-table-go-link-codec.md).
 3. **MCP tools.** The general Pharos MCP server has `browse_site` and
    `site_link` (see [MCP tools](#mcp-tools)). Go parses a site URL back into
    the same state (`siteLinkFromURL`) and rebuilds it canonically. Parsing

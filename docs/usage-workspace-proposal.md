@@ -355,7 +355,7 @@ group-key predicates (including null keys). Every suggested query view and
 computed query-link destination sets `fitToScreen: true`, so columns refit to
 the viewer’s table viewport after loading. Since Query Table 0.9.7, fitted
 link controls shorten to an ellipsis inside their cells and keep their full
-accessible name ([handoff](handoffs/query-table-fit-link-clipping.md)).
+accessible name.
 Work/conversation suggestions also
 link directly to their source. Message writing, command-family timing and
 skill evidence demonstrate coherent representative-row message links: the
