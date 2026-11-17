@@ -19,6 +19,8 @@ engagement labels are not guide topics.
 | Term | Use it for |
 | --- | --- |
 | Library | The current archive, including its sources, settings and saved cards. “Card Library” is the collection of reusable cards. |
+| Home card | A card someone collected on Home: from the Card Library, a dashboard’s **Create card**, an Ask chart, or a table’s **Save**. Removing it from Home does not touch bookmarks. |
+| Bookmark | A page saved with the header star or the Bookmarks drawer. It never appears on Home; bookmarking a page that is also a Home card keeps the two separate. |
 | Repository | A Git code project. Several workspaces can belong to one repository; some history has no recorded repository. |
 | Workspace | A group of recorded conversations and changes, opened as one Search result. The source determines the grouping: often a checkout/worktree, sometimes one conversation or task. Search table rows and `/work/{work_id}` identify workspaces. |
 | Work item | Optional task details explicitly supplied by a source: title, status, attempts or handoffs. It describes the assignment; a workspace groups its history. TL1 imports each task as both a work item and a workspace containing its conversations, so they can share a title. A prompt alone does not create a work item. TL1 groups tasks into **TL1 projects**; a TL1 project need not be a Git repository. |

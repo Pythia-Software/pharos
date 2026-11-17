@@ -7239,20 +7239,20 @@
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },
     {
-      "key": "b0b57edcddb9e6e2:0",
-      "file": "web/src/home.tsx",
-      "owner": "HomePage",
-      "tag": "button",
-      "control": "onClick={() => { const items = readBookmarks(); items.splice(Math.min(undo.index, items.length), 0, undo.item); writeBookmarks(items); setUndo(null); setMessage(\"Restored to your collection.\"); }}",
-      "contract": "editing",
-      "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
-    },
-    {
       "key": "b7d244f0c4161ecc:0",
       "file": "web/src/home.tsx",
       "owner": "HomePage",
       "tag": "select",
       "control": "aria-label=\"Cover metric\" value={editCover} onChange={event => setEditCover(event.target.value)}",
+      "contract": "editing",
+      "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
+    },
+    {
+      "key": "f8a3e40e7a5cd057:0",
+      "file": "web/src/home.tsx",
+      "owner": "HomePage",
+      "tag": "button",
+      "control": "onClick={() => { restoreHomeCard(undo.item, undo.before); setUndo(null); setMessage(\"Restored to your collection.\"); }}",
       "contract": "editing",
       "reason": "Collection/template changes, refresh and generated destination links; collection contents are library data."
     },

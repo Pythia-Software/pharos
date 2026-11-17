@@ -15,7 +15,7 @@ import { Icon } from "./icons";
 import { preferences } from "./preferences";
 import { batchPreviewArrivals, invalidateCardPreviews, loadCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
-import { migrateSavedQueries, readBookmarks } from "./bookmarks";
+import { migrateSavedQueries, readHomeCards } from "./bookmarks";
 import { collectCardTemplate } from "./dashboard-card-model";
 import { PageLink } from "./nested-pages";
 import { focusPageContent } from "./page-focus";
@@ -42,14 +42,14 @@ export function saveCardLibraryView(change: CardLibraryView) {
 export function CardLibraryPage({ schemas }: { schemas: Record<QueryDataset, FieldSchema> }) {
   const [route, setRoute] = useState(() => location.href);
   const active = new URL(route).pathname === "/cards";
-  const [collection, setCollection] = useState(readBookmarks);
+  const [collection, setCollection] = useState(readHomeCards);
   const [generation, setGeneration] = useState(0), [message, setMessage] = useState("");
   const [hidden, setHidden] = useState(document.hidden);
   const wasActive = useRef(openedOnCardLibrary && active);
   useEffect(() => {
-    migrateSavedQueries(); setCollection(readBookmarks());
+    migrateSavedQueries(); setCollection(readHomeCards());
     const route = () => setRoute(location.href);
-    const bookmarks = () => setCollection(readBookmarks());
+    const bookmarks = () => setCollection(readHomeCards());
     let stale = false;
     const refresh = () => {
       if (document.hidden) { stale = true; return; }

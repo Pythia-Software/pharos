@@ -106,11 +106,23 @@ test('rolling grouped views renew source bounds without rewriting HAVING or metr
  assert.deepEqual(updated.query.grouping.source.where.slice(-2).map(term=>term.value),['-1d','+0s']);
 });
 
-test('native bookmarks created before dataset metadata can still be updated',async()=>{
+test('native bookmarks created before dataset metadata can still be updated',async t=>{
+ const original=new Map(prefs);
+ t.after(()=>{prefs.clear();for(const [key,value] of original)prefs.set(key,value)});
  const items=m.readBookmarks();
  prefs.set(m.BOOKMARKS_KEY,[...items,{id:'old-native',title:'Legacy native bookmark',url:m.queryURL('tool_calls',query)}]);
  const updated=await m.libraryStorageAdapter().updateNamed('pharos_tool_calls','old-native',{...query,limit:75},30);
  assert.equal(updated.id,'old-native');assert.equal(updated.query.limit,75);
+ const merged={id:'old-star',title:'Migrated saved view',url:m.queryURL('tool_calls',query),query,dataset:'tool_calls',savedQueryId:'legacy-save',created_at:10,savedAt:20};
+ prefs.set(m.BOOKMARKS_KEY,[merged]);
+ prefs.set('query-table:bookmarks-migrated:pharos_tool_calls',true);
+ prefs.set('query-table:default:pharos_tool_calls','legacy-save');
+ const storage=m.libraryStorageAdapter();
+ assert.equal((await storage.loadDefaultSaved('pharos_tool_calls'))?.id,'legacy-save','a merged bookmark keeps its default view after upgrading');
+ assert.equal(prefs.get('query-table:default:pharos_tool_calls'),'legacy-save');
+ assert.equal((await storage.updateNamed('pharos_tool_calls','legacy-save',{...query,limit:50},40)).query.limit,50);
+ await storage.deleteSaved('pharos_tool_calls','legacy-save');
+ assert.deepEqual(m.readBookmarks().map(item=>item.id),['old-star'],'deleting the migrated saved view leaves its bookmark');
 });
 
 test('page parameters choose the dataset, and every card URL opens its own dataset',()=>{

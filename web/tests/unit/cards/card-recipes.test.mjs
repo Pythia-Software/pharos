@@ -8,7 +8,7 @@ import { capabilities, core, execution, schemas } from "../helpers/recipes.mjs";
 import tracker from "../../../../docs/homepage-query-cards.json";
 import { queryRecipes, supportsToday, instantiateRecipe, loadQueryPreview, clearPreviewCache, suggestionWindowLabel } from "../../../src/curiosity-data";
 import { queryFromURL, queryHasTimeFilter, queryURL, resolveRollingQuery, rollingQueryMatches } from "../../../src/query-links";
-import { migrateSavedQueries, readBookmarks, removeBookmark, savedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
+import { migrateSavedQueries, readBookmarks, readHomeCards, isPageBookmark, removeBookmark, savedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
 import { cardKind, cardChart, cardCoverQuery, cardGroupsFor, defaultCardCover, withCardGroups } from "../../../src/card-cover";
 import { wishlistCardRecipes } from "../../../src/wishlist-card-recipes";
 import { updateQueryWindowURL } from "../../../src/query-links";
@@ -543,6 +543,32 @@ test("bookmark migration preserves separately named saves of the same query and 
   migrateSavedQueries();
   assert.deepEqual(savedQueries("writing_messages").map(saved => saved.id), ["save-b"], "a removed save is not migrated again");
   assert.equal(values.has("query-table:default:pharos_writing_messages"), false, "removing the default save clears the default");
+
+  // The earlier migration could attach a saved view to an existing star.
+  // Its marker is already set, and its current query may differ from the backup.
+  const merged = { id: "old-star", title: "Edited saved view", url: queryURL("tool_calls", core.EMPTY_QUERY), query: core.EMPTY_QUERY,
+    dataset: "tool_calls", savedQueryId: "legacy-save", savedAt: 300, created_at: 100, description: "Kept description" };
+  const bookmark = { id: "page-star", title: "Bookmarked table", url: merged.url, bookmark: true, created_at: 200, dataset: "tool_calls", query: core.EMPTY_QUERY, savedAt: 400 };
+  values.set("pharos-bookmarks-v1", [merged, bookmark]);
+  values.set("query-table:saved:pharos_tool_calls", [{ id: "legacy-save", name: "Original name", savedAt: 100, query: { ...core.EMPTY_QUERY, limit: 10 } }]);
+  values.set("query-table:bookmarks-migrated:pharos_tool_calls", true);
+  values.set("query-table:default:pharos_tool_calls", "legacy-save");
+  migrateSavedQueries();
+  const cards = readHomeCards(), marks = readBookmarks().filter(isPageBookmark);
+  assert.equal(cards.length, 1, "an already migrated star retains its saved view on Home");
+  assert.equal(cards[0].savedQueryId, "legacy-save");
+  assert.deepEqual([cards[0].title, cards[0].description, cards[0].query, cards[0].savedAt], [merged.title, merged.description, merged.query, merged.savedAt]);
+  assert.notEqual(cards[0].id, marks[0].id, "the saved view and bookmark can be removed separately");
+  assert.deepEqual(marks.map(mark => mark.id), [merged.id, bookmark.id]);
+  assert.deepEqual(marks[1], bookmark, "a plain bookmarked table never becomes a Home card");
+  assert.equal(values.get("query-table:default:pharos_tool_calls"), "legacy-save");
+  const migrated = JSON.stringify(readBookmarks());
+  migrateSavedQueries();
+  assert.equal(JSON.stringify(readBookmarks()), migrated, "splitting a merged record is idempotent");
+  removeBookmark(cards[0].id);
+  migrateSavedQueries();
+  assert.deepEqual(readHomeCards(), [], "the old backup does not resurrect a removed split card");
+  assert.deepEqual(readBookmarks(), marks, "removing the saved view keeps its bookmark");
 });
 
 test("editing a collected cover changes destination dimensions with it", t => {

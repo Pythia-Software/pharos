@@ -102,7 +102,7 @@ Parallelism's lower analysis views use saved count/gap assumptions independently
 | Edit cards mode | Saved card-library preference; legacy `cards=library` also opens editing | No independent canonical parameter | Exclude editing under the agreed scope |
 | Card detail analysis window | Existing query/window/chart parameters | Existing card-window support | Keep |
 | Editing card title, description, default window, cover/chart type, height, series count, key, Other remainder | Saved card template mutations | Fixed generated recipes only | Exclude Save/Reset mutations; edited template affects generated links and needs reconciliation with agent catalog |
-| Home collection contents/order, keep/remove/edit, drag/drop | Saved bookmarks/library objects | Not reconstructible from a page URL alone | Content mutations excluded |
+| Home collection contents/order, keep/remove/edit, drag/drop | Saved Home cards (separate from page bookmarks) | Not reconstructible from a page URL alone | Content mutations excluded |
 | Suggestions play/pause, previous/next/refresh, random welcome | Local state | Missing | Preserve deliberate presentation choices if expected across refresh; exclude automatic animation progress and generated random content |
 
 Sources: [card-library.tsx](../web/src/card-library.tsx), [card-library-model.ts](../web/src/card-library-model.ts), [card-analysis.tsx](../web/src/card-analysis.tsx), [home.tsx](../web/src/home.tsx), [query-conveyor.tsx](../web/src/query-conveyor.tsx).
