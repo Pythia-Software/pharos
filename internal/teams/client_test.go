@@ -92,3 +92,112 @@ func TestDeviceClientSyntheticExchange(t *testing.T) {
 		t.Fatal("mismatched receipt accepted")
 	}
 }
+
+func TestPollNegotiatesManifestAndFallsBack(t *testing.T) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var versions []int
+	discoveries := 0
+	reject := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/device/capabilities":
+			discoveries++
+			json.NewEncoder(w).Encode(map[string]any{"manifest_schema_versions": []int{1, 2}})
+		case "/v1/device/poll":
+			var body struct {
+				Manifest struct {
+					SchemaVersion int                 `json:"schema_version"`
+					Features      []string            `json:"features"`
+					Profiles      []CapabilityProfile `json:"profiles"`
+				} `json:"capability_manifest"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+				return
+			}
+			versions = append(versions, body.Manifest.SchemaVersion)
+			if body.Manifest.SchemaVersion == 2 && reject {
+				reject = false
+				json.NewEncoder(w).Encode(PollResponse{CapabilityStatus: "manifest_rejected", Work: []Work{}, Cancellations: []Cancellation{}})
+				return
+			}
+			if body.Manifest.SchemaVersion == 2 && (body.Manifest.Features == nil || body.Manifest.Profiles == nil) {
+				t.Error("v2 arrays missing")
+			}
+			json.NewEncoder(w).Encode(PollResponse{Work: []Work{}, Cancellations: []Cancellation{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := NewDeviceClient(server.URL, "a4c09e42-d0a6-45f0-89ef-2a03b7cff630", key, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := PollRequest{AppVersion: "0.10.0", LibraryIDs: []string{}, CapabilityManifest: &CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}}}
+	for i := 0; i < 3; i++ {
+		if _, err = client.Poll(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if discoveries != 1 || len(versions) != 4 || versions[0] != 2 || versions[1] != 1 || versions[2] != 1 || versions[3] != 1 {
+		t.Fatalf("discovery=%d versions=%v", discoveries, versions)
+	}
+}
+
+func TestDiscoveryFailureDoesNotDowngradeOrPoll(t *testing.T) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/v1/device/capabilities" {
+			t.Errorf("unexpected poll after discovery failure")
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	client, err := NewDeviceClient(server.URL, "a4c09e42-d0a6-45f0-89ef-2a03b7cff630", key, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := PollRequest{AppVersion: "0.10.0", LibraryIDs: []string{}, CapabilityManifest: &CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}}}
+	if _, err = client.Poll(context.Background(), request); err == nil || calls != 1 {
+		t.Fatalf("discovery failure: %v, calls=%d", err, calls)
+	}
+}
+
+func TestPollOldServerRejectsV2AfterDiscovery(t *testing.T) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	polls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/device/capabilities" {
+			json.NewEncoder(w).Encode(map[string]any{"manifest_schema_versions": []int{1, 2}})
+			return
+		}
+		polls++
+		if polls == 1 {
+			w.WriteHeader(422)
+			w.Write([]byte(`{"error":{"code":"invalid_input"}}`))
+			return
+		}
+		json.NewEncoder(w).Encode(PollResponse{Work: []Work{}, Cancellations: []Cancellation{}})
+	}))
+	defer server.Close()
+	client, err := NewDeviceClient(server.URL, "a4c09e42-d0a6-45f0-89ef-2a03b7cff630", key, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := PollRequest{AppVersion: "0.10.0", LibraryIDs: []string{}, CapabilityManifest: &CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}}}
+	if _, err = client.Poll(context.Background(), request); err != nil || polls != 2 {
+		t.Fatalf("fallback: %v, polls=%d", err, polls)
+	}
+}
