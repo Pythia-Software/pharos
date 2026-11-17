@@ -46,11 +46,13 @@ func (s *Server) teamsSourceAccountsHTTP(w http.ResponseWriter, r *http.Request)
 			rows, err := tx.QueryContext(r.Context(), `SELECT b.binding_id,b.provider,b.source_name,b.account_label,b.host_id,b.source_root,
  COALESCE(SUM(CASE WHEN p.status='header_independent_unvalidated' THEN 1 ELSE 0 END),0),
  COALESCE(SUM(CASE WHEN p.status<>'header_independent_unvalidated' THEN 1 ELSE 0 END),0),
- COALESCE(m.mode,'unassigned'),EXISTS(SELECT 1 FROM teams_source_mapping_exposure x WHERE x.binding_id=b.binding_id)
+ COALESCE(m.mode,'unassigned'),EXISTS(WITH RECURSIVE lineage(binding_id) AS (
+ SELECT b.binding_id UNION SELECT prior.binding_id FROM lineage l JOIN teams_source_bindings current ON current.binding_id=l.binding_id JOIN teams_source_bindings prior ON prior.host_id=current.host_id AND lower(prior.source_kind)=lower(current.source_kind) AND (prior.source_name=current.source_name OR prior.source_root=current.source_root)
+) SELECT 1 FROM teams_source_mapping_exposure WHERE binding_id IN (SELECT binding_id FROM lineage))
  FROM teams_source_bindings b LEFT JOIN teams_native_source_proofs p ON p.binding_id=b.binding_id
  LEFT JOIN teams_source_mapping_current current ON current.binding_id=b.binding_id
  LEFT JOIN teams_source_mapping_revisions m ON m.revision=current.revision AND m.library_id=? AND m.instance_id=? AND m.origin=? AND m.org_id=? AND m.person_id=? AND m.installation_id=?
- GROUP BY b.binding_id ORDER BY b.provider,b.source_name,b.host_id,b.binding_id`, d.ID, d.Instance, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID)
+ WHERE b.superseded_at='' GROUP BY b.binding_id ORDER BY b.provider,b.source_name,b.host_id,b.binding_id`, d.ID, d.Instance, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID)
 			if err != nil {
 				return err
 			}
@@ -71,7 +73,7 @@ func (s *Server) teamsSourceAccountsHTTP(w http.ResponseWriter, r *http.Request)
 			if err = rows.Close(); err != nil {
 				return err
 			}
-			missing, err := tx.QueryContext(r.Context(), `SELECT st.kind,st.source_name,st.host_id FROM source_states st WHERE NOT EXISTS (SELECT 1 FROM teams_source_bindings b WHERE b.host_id=st.host_id AND b.source_name=st.source_name) ORDER BY st.kind,st.source_name,st.host_id`)
+			missing, err := tx.QueryContext(r.Context(), `SELECT st.kind,st.source_name,st.host_id FROM source_states st WHERE NOT EXISTS (SELECT 1 FROM teams_source_bindings b WHERE b.host_id=st.host_id AND b.source_name=st.source_name AND b.superseded_at='') ORDER BY st.kind,st.source_name,st.host_id`)
 			if err != nil {
 				return err
 			}

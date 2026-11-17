@@ -197,21 +197,23 @@ CREATE TABLE IF NOT EXISTS teams_source_bindings (
   binding_id TEXT PRIMARY KEY, provenance_sha256 TEXT NOT NULL UNIQUE,
   host_id TEXT NOT NULL, source_name TEXT NOT NULL, source_kind TEXT NOT NULL,
   provider TEXT NOT NULL, account_label TEXT NOT NULL, source_root TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL, superseded_at TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS teams_native_source_proofs (
   binding_id TEXT NOT NULL REFERENCES teams_source_bindings(binding_id),
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   provider TEXT NOT NULL, native_id TEXT NOT NULL, status TEXT NOT NULL,
   trailing_partial INTEGER NOT NULL CHECK(trailing_partial IN (0,1)),
-  indexed_digest TEXT NOT NULL, total_tokens INTEGER, total_digest TEXT NOT NULL DEFAULT '',
-  PRIMARY KEY(binding_id,conversation_id)
+  indexed_digest TEXT NOT NULL, total_tokens INTEGER, total_digest TEXT NOT NULL DEFAULT '', origin TEXT NOT NULL,
+  PRIMARY KEY(binding_id,conversation_id,origin)
 );
 CREATE TABLE IF NOT EXISTS teams_source_revision (
   id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
   proof_requested INTEGER NOT NULL DEFAULT 0 CHECK(proof_requested IN (0,1))
 );
 INSERT OR IGNORE INTO teams_source_revision(id,revision) VALUES(1,0);
+CREATE TRIGGER IF NOT EXISTS teams_native_source_proofs_deleted AFTER DELETE ON teams_native_source_proofs
+BEGIN UPDATE teams_source_revision SET revision=revision+1 WHERE id=1; END;
 -- Reviewed mappings remain local. Once any external operation may have seen a
 -- mapping, its identity is fenced until a dedicated remap protocol reconciles it.
 CREATE TABLE IF NOT EXISTS teams_source_mapping_revisions (

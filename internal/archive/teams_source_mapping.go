@@ -39,14 +39,16 @@ func (c *Catalog) reviewTeamsSourceMapping(ctx context.Context, d LibraryDescrip
 			return errTeamsConsentStale
 		}
 		var provider string
-		if e = tx.QueryRowContext(ctx, `SELECT provider FROM teams_source_bindings WHERE binding_id=?`, bindingID).Scan(&provider); e != nil {
+		if e = tx.QueryRowContext(ctx, `SELECT provider FROM teams_source_bindings WHERE binding_id=? AND superseded_at=''`, bindingID).Scan(&provider); e != nil {
 			return errTeamsConsentStale
 		}
 		if provider != "codex" && provider != "claude" {
 			return errTeamsConsentStale
 		}
 		var exposure int
-		if e = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM teams_source_mapping_exposure WHERE binding_id=?`, bindingID).Scan(&exposure); e != nil {
+		if e = tx.QueryRowContext(ctx, `WITH RECURSIVE lineage(binding_id) AS (
+ SELECT ? UNION SELECT prior.binding_id FROM lineage l JOIN teams_source_bindings current ON current.binding_id=l.binding_id JOIN teams_source_bindings prior ON prior.host_id=current.host_id AND lower(prior.source_kind)=lower(current.source_kind) AND (prior.source_name=current.source_name OR prior.source_root=current.source_root)
+) SELECT COUNT(*) FROM teams_source_mapping_exposure WHERE binding_id IN (SELECT binding_id FROM lineage)`, bindingID).Scan(&exposure); e != nil {
 			return e
 		}
 		if exposure != 0 && mode != "unavailable" {

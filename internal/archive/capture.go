@@ -102,10 +102,12 @@ type captureManifest struct {
 }
 
 type captureSourceInfo struct {
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	Path    string `json:"path"`
-	Account string `json:"account"`
+	Name                     string `json:"name"`
+	Kind                     string `json:"kind"`
+	Path                     string `json:"path"`
+	Account                  string `json:"account"`
+	TeamsOptionsSHA256       string `json:"teams_options_sha256,omitempty"`
+	TeamsProvenanceAmbiguous bool   `json:"teams_provenance_ambiguous,omitempty"`
 }
 
 // The capture directory belongs to a host, source name and adapter kind.
@@ -771,7 +773,16 @@ func (c *sourceCapture) commit(final bool) error {
 	m.SQLiteRecordCapture = c.source.Options["sqlite_record_capture"] == true
 	m.RetainedInputCapture = retainedAcquisitionEnabled(c.source)
 	m.Host = c.session.host
+	priorSource := m.Source
 	m.Source = captureSourceInfo{Name: c.source.Name, Kind: c.source.Kind, Path: c.source.Path, Account: c.source.Account}
+	if isCodexSource(c.source.Kind) {
+		fingerprint, err := teamsSourceOptionsFingerprint(c.source.Options)
+		if err != nil {
+			return err
+		}
+		m.Source.TeamsOptionsSHA256 = fingerprint
+		m.Source.TeamsProvenanceAmbiguous = priorSource.TeamsProvenanceAmbiguous || len(m.Files) > 0 && (priorSource.TeamsOptionsSHA256 == "" || priorSource.TeamsOptionsSHA256 != fingerprint || priorSource.Path != c.source.Path || priorSource.Account != c.source.Account)
+	}
 	m.UpdatedAt = now()
 	m.Files = sortedCaptures(c.files)
 	m.Snapshots = sortedCaptures(c.snapshots)

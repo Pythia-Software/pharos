@@ -41,7 +41,7 @@ func SourceWorkNamespace(key []byte, provider string) (string, error) {
 // SourceWitness is deliberately independent of account assignment, so
 // conflicting user attestations of the same native unit can be withheld.
 func SourceWitness(key []byte, provider, unit, nativeID string) (string, error) {
-	if !((provider == "codex" && unit == "codex_thread") || (provider == "claude" && unit == "content_component")) || nativeID == "" || !utf8.ValidString(nativeID) {
+	if !((provider == "codex" && unit == "codex_thread") || (provider == "claude" && unit == "content_component")) || nativeID == "" || len(nativeID) > 512 || !utf8.ValidString(nativeID) {
 		return "", errInvalidSourceIdentity
 	}
 	return sourceIdentityMAC(key, []byte("pharos-source-witness-v1"), []byte(provider), []byte(unit), []byte(nativeID))
